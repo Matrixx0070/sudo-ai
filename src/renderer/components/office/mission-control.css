@@ -1,0 +1,164 @@
+/* MissionControl — Crystal Palace Pixel Art Office */
+
+/* ── Keyframe Animations ── */
+
+@keyframes mc-crystal-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+@keyframes mc-online-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+@keyframes mc-pulse-dot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%       { transform: scale(1.5); opacity: 0.6; }
+}
+
+@keyframes mc-pixel-bob {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-2px); }
+}
+
+@keyframes mc-pixel-shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-2px); }
+  40%       { transform: translateX(2px); }
+  60%       { transform: translateX(-1px); }
+  80%       { transform: translateX(1px); }
+}
+
+@keyframes mc-event-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ── Crystal Accent Line ── */
+
+.mc-crystal-line {
+  height: 2px;
+  flex-shrink: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    #3b82f6 20%,
+    #a855f7 50%,
+    #14b8a6 80%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: mc-crystal-shimmer 4s linear infinite;
+}
+
+/* ── Online Status Dot ── */
+
+.mc-online {
+  animation: mc-online-pulse 2.5s ease-in-out infinite;
+}
+
+/* ── Character Animations ── */
+
+.mc-pixel-bob {
+  animation: mc-pixel-bob 1.2s ease-in-out infinite;
+}
+
+.mc-pixel-shake {
+  animation: mc-pixel-shake 0.4s ease-in-out 3;
+}
+
+/* ── Working status dot pulse ── */
+
+.mc-pulse {
+  animation: mc-pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* ── Sidebar Scrollbar ── */
+
+.mc-sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: #1f2937 transparent;
+}
+
+.mc-sidebar::-webkit-scrollbar       { width: 4px; }
+.mc-sidebar::-webkit-scrollbar-track { background: transparent; }
+.mc-sidebar::-webkit-scrollbar-thumb { background: #1f2937; border-radius: 2px; }
+
+/* ── Sidebar Agent Row ── */
+
+.mc-sidebar-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+  margin-bottom: 1px;
+  outline: none;
+}
+
+.mc-sidebar-agent:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mc-sidebar-agent:focus-visible {
+  background: rgba(255, 255, 255, 0.04);
+  outline: 1px solid rgba(59, 130, 246, 0.5);
+  outline-offset: -1px;
+}
+
+.mc-sidebar-agent.selected {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+/* ── Event Timeline Entry ── */
+
+.mc-event-entry {
+  animation: mc-event-in 0.2s ease-out both;
+}
+
+/* ── Pixel character container (hover lift) ── */
+
+[role="button"].mc-pixel-agent-root:hover {
+  z-index: 9999 !important;
+}
+
+/* ── Dust particles ── */
+
+@keyframes mc-dust-float {
+  0%   { transform: translate(0, 0) scale(1); opacity: var(--dust-opacity, 0.2); }
+  25%  { transform: translate(30px, -20px) scale(1.2); }
+  50%  { transform: translate(-20px, -40px) scale(0.8); opacity: calc(var(--dust-opacity, 0.2) * 1.5); }
+  75%  { transform: translate(40px, -60px) scale(1.1); }
+  100% { transform: translate(10px, -80px) scale(0.6); opacity: 0; }
+}
+
+.mc-dust {
+  animation: mc-dust-float linear infinite;
+}
+
+/* ── Screen / lamp glow pulse ── */
+
+@keyframes mc-light-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+.mc-light-pulse {
+  animation: mc-light-pulse 4s ease-in-out infinite;
+}
+
+/* ── Scanline CRT overlay ── */
+
+.mc-scanlines {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+}

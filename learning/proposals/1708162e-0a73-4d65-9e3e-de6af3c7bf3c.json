@@ -1,0 +1,27 @@
+{
+  "id": "1708162e-0a73-4d65-9e3e-de6af3c7bf3c",
+  "agentId": "agent-2",
+  "rationale": "Pattern \"coder.read-file → coder.write-file\" observed 5 times (90% success rate) across 10 traces (avg quality 75.0%). Suggest pre-loading these tools or adjusting tool_order preference.",
+  "delta": {
+    "tools": {
+      "preferred_sequence": [
+        "coder.read-file",
+        "coder.write-file"
+      ],
+      "preload": [
+        "coder.read-file",
+        "coder.write-file"
+      ]
+    },
+    "learning": {
+      "observed_pattern_id": "72a33cdd-7697-4f",
+      "pattern_success_rate": 0.9,
+      "pattern_occurrence_count": 5
+    }
+  },
+  "traceQuality": 0.75,
+  "traceCount": 10,
+  "status": "pending",
+  "createdAt": "2026-04-18T23:28:45.061Z",
+  "updatedAt": "2026-04-18T23:28:45.061Z"
+}

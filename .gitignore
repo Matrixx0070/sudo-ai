@@ -1,0 +1,115 @@
+# ---------------------------------------------------------------------------
+# SUDO-AI v4 — .gitignore
+
+# Node / package manager
+node_modules/
+# TypeScript build output
+dist/
+*.js.map
+*.d.ts.map
+*.tsbuildinfo
+# Electron-builder packaged output (electron-builder.yml → directories.output: release)
+release/
+# Databases and vault credentials — contain user data; NEVER commit
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
+data/*.vault
+data/.vault-hmac     # HMAC signing key — secret
+data/.vault-salt     # vault salt — secret
+data/scripts/        # runtime-generated scripts inside data dir
+# Secrets — all credentials live in environment variables only
+# Keep config/.env.example (documents required vars without storing values)
+config/.env
+.env
+.env.local
+.env.*.local
+apps/**/.env        # sub-app environment files — must never ship
+# Live data & sensitive directories — NEVER commit
+data/
+backups/
+leaked-claude-code/
+# Claude agents' artifacts — ephemeral, contain secrets & session state
+.claude/
+/tmp/claude-*
+# Logs
+*.log
+logs/
+data/logs/
+# Runtime / ephemeral data directories generated at runtime
+data/cache/
+data/backups/
+data/browser-profiles/
+data/screenshots/
+data/exports/
+data/sessions/
+data/uploads/
+data/media/
+data/research/
+data/writing/
+data/cron/
+# Ephemeral data files in data/ root
+data/heartbeat-state.json
+data/tasks.json
+data/daily-intel.md
+data/sudo-test.txt
+data/tool-test.txt
+data/all-tools-test.txt
+data/test.tar.gz
+data/*.txt
+data/*.md
+# Temporary / scratch files at project root
+*.tmp
+temp_*
+eventbus-history.json
+heartbeat_report.json
+hn-screenshot.png
+youtube-screenshot.png
+test-screenshot.png
+inject-chat-test.js
+electron-boot-test.cjs
+electron-debug.cjs
+test-backend-output.txt
+test-system.txt
+test-hello.txt
+test-write-tmp.txt
+test-tools.ts
+test-brain.ts
+# Python scratch scripts (not part of the TS codebase)
+*.py
+check_db.py
+heartbeat-check.py
+twitter_trends_sentiment.py
+hello.py
+temp_heartbeat_query.js
+# Raw text/html research dumps at root
+*.html
+*.txt
+# OS metadata
+.DS_Store
+Thumbs.db
+thumbs.db
+desktop.ini
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+# Agent workspace sandbox — ephemeral working area
+workspace/
+# DO NOT IGNORE — these MUST be committed:
+#   config/sudo-ai.json5          (non-secret runtime config)
+#   config/sudo-ai.json5.example  (template — will be created)
+#   config/.env.example           (documents required env vars — will be created)
+#   data/sudo-ai.json5            (if present: runtime state that should be versioned)
+# Wave FixProperly additions (2026-04-22)
+archive/
+coverage/
+/tmp/demoprep-backup-*.tar.gz
+/*.png
+# Wave FixProperly Track B
+config/.env.*
+# Staging databases — mirror of data/, runtime-generated, never commit
+data-staging/

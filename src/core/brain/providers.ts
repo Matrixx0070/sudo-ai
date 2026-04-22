@@ -1,0 +1,317 @@
+/**
+ * Vercel AI SDK provider factory layer.
+ *
+ * Wraps createXai / createOpenAI / createAnthropic / createGoogleGenerativeAI
+ * into a single lookup interface. Only providers with env keys set are active.
+ */
+
+import { createXai } from '@ai-sdk/xai';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { LLMError } from '../shared/errors.js';
+import { createLogger } from '../shared/logger.js';
+import { getSudoAPIModel } from './sudoapi-provider.js';
+
+const log = createLogger('brain:providers');
+
+// ---------------------------------------------------------------------------
+// Provider name union
+// ---------------------------------------------------------------------------
+
+export type ProviderName =
+  | 'xai'
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'groq'
+  | 'mistral'
+  | 'deepseek'
+  | 'ollama'
+  | 'together'
+  | 'sudoapi';
+
+// ---------------------------------------------------------------------------
+// Lazy provider instance cache
+// ---------------------------------------------------------------------------
+
+type AnyProvider = ReturnType<
+  | typeof createXai
+  | typeof createOpenAI
+  | typeof createAnthropic
+  | typeof createGoogleGenerativeAI
+>;
+
+const providerCache = new Map<ProviderName, AnyProvider>();
+
+/** Env variable names for each provider. */
+const ENV_KEYS: Record<ProviderName, string> = {
+  xai: 'XAI_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY', // Also checks ANTHROPIC_AUTH_TOKEN for OAuth
+  google: 'GEMINI_API_KEY',
+  groq: 'GROQ_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  ollama: 'OLLAMA_URL', // optional; defaults to localhost
+  together: 'TOGETHER_API_KEY',
+  sudoapi: 'SUDOAPI_KEY', // SUDOAPI gateway — falls back to placeholder if unset
+};
+
+/**
+ * Build and cache a provider instance. Returns null when the API key is absent
+ * or the required SDK is not installed.
+ */
+async function buildProviderAsync(name: ProviderName): Promise<AnyProvider | null> {
+  if (providerCache.has(name)) {
+    return providerCache.get(name)!;
+  }
+
+  const envKey = ENV_KEYS[name];
+  // For Anthropic: check both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN (OAuth)
+  const envValue = name === 'anthropic'
+    ? (process.env[envKey] || process.env['ANTHROPIC_AUTH_TOKEN'])
+    : process.env[envKey];
+
+  // Ollama is local — no API key required, but OLLAMA_URL env may override base.
+  if (name !== 'ollama' && !envValue) {
+    log.debug({ provider: name, envKey }, 'API key not set — provider unavailable');
+    return null;
+  }
+
+  let instance: AnyProvider;
+
+  try {
+    switch (name) {
+      case 'xai':
+        instance = createXai({ apiKey: envValue! });
+        break;
+
+      case 'openai':
+        instance = createOpenAI({ apiKey: envValue! });
+        break;
+
+      case 'anthropic': {
+        const proxyPort = process.env['CLAUDE_PROXY_PORT'] ?? '3002';
+        const useProxy = process.env['CLAUDE_CLI_ENABLED'] === 'true';
+
+        if (useProxy) {
+          // Route through local Claude CLI proxy (uses Claude Max subscription)
+          instance = createAnthropic({
+            apiKey: 'proxy-key', // Proxy doesn't check auth
+            baseURL: `http://127.0.0.1:${proxyPort}`,
+          } as Parameters<typeof createAnthropic>[0]);
+          log.info({ proxyPort }, 'Anthropic: using Claude CLI proxy (Claude Max)');
+        } else if (envValue!.startsWith('sk-ant-oat')) {
+          instance = createAnthropic({ authToken: envValue! } as Parameters<typeof createAnthropic>[0]);
+          log.info('Anthropic: using OAuth authToken');
+        } else {
+          instance = createAnthropic({ apiKey: envValue! });
+        }
+        break;
+      }
+
+      case 'google':
+        instance = createGoogleGenerativeAI({ apiKey: envValue! });
+        break;
+
+      case 'groq': {
+        // Dynamic import — gracefully skip if @ai-sdk/groq not installed.
+        const mod = await import('@ai-sdk/groq').catch((err) => {
+          log.warn({ err: String(err) }, 'groq: @ai-sdk/groq not installed — provider unavailable');
+          return null;
+        });
+        if (!mod) return null;
+        instance = mod.createGroq({ apiKey: envValue! }) as unknown as AnyProvider;
+        break;
+      }
+
+      case 'mistral': {
+        // Mistral via OpenAI-compatible endpoint.
+        instance = createOpenAI({
+          apiKey: envValue!,
+          baseURL: 'https://api.mistral.ai/v1',
+          name: 'mistral',
+        } as Parameters<typeof createOpenAI>[0]);
+        break;
+      }
+
+      case 'deepseek': {
+        // DeepSeek uses an OpenAI-compatible API.
+        instance = createOpenAI({
+          apiKey: envValue!,
+          baseURL: 'https://api.deepseek.com/v1',
+          name: 'deepseek',
+        } as Parameters<typeof createOpenAI>[0]);
+        break;
+      }
+
+      case 'ollama': {
+        // Ollama runs locally — no API key required.
+        const baseURL = envValue ?? 'http://localhost:11434/v1';
+        instance = createOpenAI({
+          apiKey: 'ollama', // placeholder — Ollama ignores this
+          baseURL,
+          name: 'ollama',
+        } as Parameters<typeof createOpenAI>[0]);
+        break;
+      }
+
+      case 'together': {
+        // Together AI uses an OpenAI-compatible API.
+        instance = createOpenAI({
+          apiKey: envValue!,
+          baseURL: 'https://api.together.xyz/v1',
+          name: 'together',
+        } as Parameters<typeof createOpenAI>[0]);
+        break;
+      }
+
+      case 'sudoapi': {
+        // SUDOAPI gateway — OpenAI-compatible endpoint at sudoapi.shop.
+        // The provider is handled by getSudoAPIModel(); we store a sentinel
+        // in the cache so getModel() knows to delegate to that helper.
+        const sudoapiUrl = process.env['SUDOAPI_URL'] ?? 'https://sudoapi.shop';
+        const sudoapiKey = process.env['SUDOAPI_KEY'] ?? 'sk-sudo-master';
+        instance = createOpenAI({
+          apiKey: sudoapiKey,
+          baseURL: `${sudoapiUrl}/v1`,
+          name: 'sudoapi',
+        } as Parameters<typeof createOpenAI>[0]);
+        log.info({ url: sudoapiUrl }, 'SUDOAPI provider registered');
+        break;
+      }
+
+      default: {
+        const _exhaustive: never = name;
+        throw new LLMError(`Unknown provider: ${String(_exhaustive)}`, 'llm_unknown_provider');
+      }
+    }
+  } catch (err) {
+    if (err instanceof LLMError) throw err;
+    log.error({ provider: name, err: String(err) }, 'Failed to instantiate provider');
+    return null;
+  }
+
+  providerCache.set(name, instance);
+  log.debug({ provider: name }, 'Provider instance created');
+  return instance;
+}
+
+/**
+ * Synchronous wrapper that returns from cache or null.
+ * For new providers that need async init use getProviderAsync.
+ */
+function buildProvider(name: ProviderName): AnyProvider | null {
+  return providerCache.get(name) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/** All known provider names in priority order. */
+const ALL_PROVIDERS: ProviderName[] = [
+  'sudoapi', 'xai', 'openai', 'anthropic', 'google',
+  'groq', 'mistral', 'deepseek', 'ollama', 'together',
+];
+
+/**
+ * Initialise all providers whose env keys are set.
+ * Call once at startup so getProvider/getModel can work synchronously.
+ */
+export async function initProviders(): Promise<void> {
+  const results = await Promise.allSettled(
+    ALL_PROVIDERS.map((name) => buildProviderAsync(name)),
+  );
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      log.error({ provider: ALL_PROVIDERS[i], err: String(r.reason) }, 'Provider init failed');
+    }
+  });
+  log.info({ initialized: [...providerCache.keys()] }, 'Providers initialized');
+}
+
+/**
+ * Return the provider instance for the given name.
+ * Requires initProviders() to have been awaited first.
+ *
+ * @throws LLMError when the provider has no API key configured.
+ */
+export function getProvider(name: ProviderName): AnyProvider {
+  const provider = buildProvider(name);
+  if (!provider) {
+    throw new LLMError(
+      `Provider "${name}" is not configured — set ${ENV_KEYS[name]}`,
+      'llm_provider_unconfigured',
+      { provider: name },
+    );
+  }
+  return provider;
+}
+
+/**
+ * Return a Vercel AI SDK LanguageModel handle for the given model string.
+ *
+ * @param modelString - Format: "provider/model-id" e.g. "xai/grok-3-fast".
+ * @throws LLMError on invalid format or missing provider.
+ */
+export function getModel(modelString: string): ReturnType<AnyProvider> {
+  if (!modelString || !modelString.includes('/')) {
+    throw new LLMError(
+      `Invalid model string "${modelString}" — expected "provider/model-id"`,
+      'llm_invalid_model_string',
+      { modelString },
+    );
+  }
+
+  const slashIndex = modelString.indexOf('/');
+  const providerName = modelString.slice(0, slashIndex) as ProviderName;
+  const modelId = modelString.slice(slashIndex + 1);
+
+  if (!modelId) {
+    throw new LLMError(
+      `Empty model ID in "${modelString}"`,
+      'llm_invalid_model_string',
+      { modelString },
+    );
+  }
+
+  if (!ALL_PROVIDERS.includes(providerName)) {
+    throw new LLMError(
+      `Unknown provider "${providerName}" in model string "${modelString}"`,
+      'llm_unknown_provider',
+      { providerName, modelString },
+    );
+  }
+
+  // SUDOAPI uses its own model resolver to handle alias → gateway model ID mapping.
+  if (providerName === 'sudoapi') {
+    log.debug({ modelString, providerName, modelId }, 'Delegating to SUDOAPI model resolver');
+    return getSudoAPIModel(modelId) as ReturnType<AnyProvider>;
+  }
+
+  const provider = getProvider(providerName);
+
+  log.debug({ modelString, providerName, modelId }, 'Resolved model handle');
+
+  // All Vercel AI SDK providers expose a callable that returns a LanguageModel.
+  return (provider as (id: string) => ReturnType<AnyProvider>)(modelId);
+}
+
+/**
+ * Return the list of provider names that have been successfully initialized.
+ */
+export function listAvailableProviders(): ProviderName[] {
+  const available = [...providerCache.keys()] as ProviderName[];
+  log.debug({ available }, 'Available providers');
+  return available;
+}
+
+/**
+ * Return the env variable name expected for a given provider.
+ * Useful for diagnostic messages.
+ */
+export function getEnvKeyForProvider(name: ProviderName): string {
+  return ENV_KEYS[name];
+}

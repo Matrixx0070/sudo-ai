@@ -1,0 +1,28 @@
+{
+  "id": "081eef9b-0d23-462d-bee1-4ddf59801f16",
+  "agentId": "agent-6",
+  "rationale": "Pattern \"x → y → z\" observed 5 times (90% success rate) across 10 traces (avg quality 75.0%). Suggest pre-loading these tools or adjusting tool_order preference.",
+  "delta": {
+    "tools": {
+      "preferred_sequence": [
+        "x",
+        "y",
+        "z"
+      ],
+      "preload": [
+        "x",
+        "y"
+      ]
+    },
+    "learning": {
+      "observed_pattern_id": "fe2e84ce-2981-42",
+      "pattern_success_rate": 0.9,
+      "pattern_occurrence_count": 5
+    }
+  },
+  "traceQuality": 0.75,
+  "traceCount": 10,
+  "status": "pending",
+  "createdAt": "2026-04-18T22:05:38.737Z",
+  "updatedAt": "2026-04-18T22:05:38.737Z"
+}

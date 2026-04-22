@@ -1,0 +1,63 @@
+# release.yml — NPM publish workflow
+# Triggered when a version tag (e.g. v1.2.3) is pushed to the repository.
+# Steps mirror CI (install → build → test) then publish to the npm registry.
+# Requires the NPM_TOKEN secret to be set in the repository settings.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'               # matches v1.0.0, v2.3.1-beta, etc.
+
+jobs:
+  publish:
+    name: Build · Test · Publish to npm
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read        # read-only checkout is sufficient
+      packages: write       # needed if also publishing to GitHub Packages
+
+    steps:
+      # 1. Check out the tagged commit
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Set up pnpm (must come before setup-node for cache to work)
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      # 3. Set up Node 20 with npm registry auth configured
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org  # injects NODE_AUTH_TOKEN into .npmrc
+
+      # 4. Install production + dev dependencies (frozen for reproducibility)
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 5. Lint — must pass before build or publish (mirrors CI gate)
+      - name: Lint
+        run: pnpm lint
+
+      # 6. Compile TypeScript → dist/
+      - name: Build
+        run: pnpm build
+
+      # 7. Run full test suite — do NOT publish a broken release
+      - name: Test
+        run: pnpm test
+
+      # 8. Publish to npm
+      # --no-git-checks skips the "is working tree clean?" guard
+      # (not relevant in CI since we are on a detached tag HEAD)
+      - name: Publish
+        run: pnpm publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}  # set in repo Settings → Secrets

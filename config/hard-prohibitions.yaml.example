@@ -1,0 +1,6 @@
+# TEMPLATE — Copy this file to config/hard-prohibitions.yaml and edit before starting SUDO-AI.
+# This .example file is NOT loaded by the system.
+
+# Operator-defined prohibitions list (one string per item).
+# Use the same naming as your tool registry — typically dot-notation like browser.navigate or system.exec
+- example.tool_name

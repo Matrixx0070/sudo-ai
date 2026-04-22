@@ -1,0 +1,43 @@
+# .dockerignore — excludes files/dirs that must NOT enter the Docker build context.
+# Keep this file tight: a large context slows every build significantly.
+
+# Version control — never needed inside the image
+.git
+.gitignore
+
+# Local dependency cache — image installs its own via pnpm
+node_modules
+
+# Previous build output — image does a fresh build in Stage 1
+dist
+
+# Runtime data volumes — mounted at container start, not baked in
+data
+
+# Test suite — not needed at runtime
+tests
+
+# Development artifact archive
+archive
+
+# Documentation source — README.md is intentionally kept (see below)
+docs
+*.md
+!README.md
+
+# CI / GitHub config
+.github
+
+# Secrets — NEVER baked into an image
+.env
+config/.env
+
+# Log files and ephemeral runtime state
+*.log
+logs/
+
+# AI memory and session state — mounted externally if needed
+memory/
+
+# Developer workspace scratch area
+workspace/

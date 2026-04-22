@@ -1,0 +1,613 @@
+/**
+ * ToolRouter — keyword-based smart tool selector for SUDO-AI v4.
+ *
+ * Analyses the user's latest message with pure keyword/regex matching
+ * (zero LLM calls) and returns an OpenAI-compatible tool schema array
+ * capped at MAX_ROUTED_TOOLS entries.
+ *
+ * Routing priority:
+ *   1. BASE_TOOLS (always present, 5 slots)
+ *   2. CONTINUITY tools from recent usage (up to 3 slots)
+ *   3. Category-ranked tools (remaining slots, highest score first)
+ *   4. FALLBACK sampling when no category matched
+ */
+
+import { createLogger } from '../shared/logger.js';
+import type { ToolRegistryLike } from './loop-helpers.js';
+
+const log = createLogger('agent:tool-router');
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Hard cap on tools returned per LLM call. */
+export const MAX_ROUTED_TOOLS = 30;
+
+/** Slots reserved for always-on base tools. */
+export const BASE_TOOL_SLOTS = 10;
+
+/** Slots reserved for recently-used tools (continuity). */
+export const CONTINUITY_SLOTS = 3;
+
+/**
+ * Tools that are ALWAYS included regardless of message content.
+ * These cover the most common operations Frank requests.
+ * Ordered by priority (first = highest).
+ */
+const BASE_TOOLS: readonly string[] = [
+  'meta.self-modify',      // Frank's primary way to update SUDO-AI
+  'system.exec',           // Run any shell command
+  'browser.search',        // Search the web
+  'meta.health-check',     // Check system status
+  'coder.read-file',       // Read any file
+  'coder.smart-edit',      // Edit code + typecheck
+  'meta.service-control',  // Restart/manage service
+  'meta.task-manager',     // Manage tasks
+  'coder.multi-read',      // Read multiple files
+  'meta.self-update',      // Git pull + build
+] as const;
+
+// ---------------------------------------------------------------------------
+// Category map
+// ---------------------------------------------------------------------------
+
+interface CategoryRule {
+  /** Lowercase plain keywords to check (each hit +1). */
+  keywords: string[];
+  /** Regex patterns to test (each match +2). */
+  patterns: RegExp[];
+  /** Weighting multiplier applied to raw score (1–10). */
+  priority: number;
+  /** Maximum tools to pull from this category per routing pass. */
+  maxFromCategory: number;
+}
+
+type CategoryName =
+  | 'browser' | 'coder' | 'system' | 'content' | 'media'
+  | 'research' | 'comms' | 'social' | 'marketing' | 'data'
+  | 'meta' | 'dev' | 'knowledge' | 'voice' | 'business'
+  | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal';
+
+/**
+ * Full category → routing rule map.
+ * Keyword arrays and patterns are taken directly from the architect spec.
+ */
+const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
+  browser: {
+    keywords: [
+      'navigate', 'browse', 'chrome', 'chromium', 'webpage', 'website',
+      'click', 'scrape', 'screenshot', 'tab', 'login', 'form', 'download',
+      'fetch', 'url', 'http', 'page', 'captcha', 'cookie', 'auth', 'popup',
+      'open site',
+      // Frank's natural language search phrases
+      'search', 'search for', 'search online', 'search web', 'google',
+      'look up', 'find online', 'find info', 'what is', 'how much',
+      'latest', 'current price', 'pricing', 'check online', 'look online',
+      'any news', 'news about', 'trending',
+    ],
+    patterns: [
+      /https?:\/\//i,
+      /www\./i,
+      /\.(com|org|net|io)\b/i,
+      /open\s+(the\s+)?site/i,
+      /search\s+(for|about|online)/i,
+      /\b(google|bing|search)\b/i,
+    ],
+    priority: 9,
+    maxFromCategory: 8,
+  },
+  coder: {
+    keywords: [
+      'code', 'file', 'edit', 'write file', 'read file', 'debug', 'test',
+      'git', 'commit', 'push', 'pull', 'branch', 'merge', 'npm',
+      'scaffold', 'grep', 'glob', 'review', 'refactor', 'lint',
+      // Frank's natural language coder phrases
+      'show me the code', 'read the file', 'open the file', 'check the file',
+      'typecheck', 'type error', 'typescript error', 'build error',
+      'find the function', 'find the class', 'where is', 'which file',
+      'look at the code', 'project structure', 'codebase',
+    ],
+    patterns: [
+      /\.(ts|js|py|json|yaml|md|html|css|json5)\b/i,
+      /src\//i,
+      /show.*\b(code|file|function|class)\b/i,
+    ],
+    priority: 8,
+    maxFromCategory: 8,
+  },
+  system: {
+    keywords: [
+      'terminal', 'command', 'exec', 'process', 'docker', 'pm2', 'nginx',
+      'ssh', 'cron', 'backup', 'disk', 'monitor', 'service', 'server',
+      'deploy', 'network', 'api call', 'credentials',
+    ],
+    patterns: [
+      /sudo\s/i,
+      /systemctl/i,
+      /apt\s/i,
+    ],
+    priority: 8,
+    maxFromCategory: 6,
+  },
+  content: {
+    keywords: [
+      'write article', 'blog', 'copy', 'script', 'proofread', 'rewrite',
+      'summarize', 'seo', 'content', 'email sequence', 'presentation',
+      'social post',
+    ],
+    patterns: [/write\s+(a|an|the)\s+/i],
+    priority: 7,
+    maxFromCategory: 5,
+  },
+  media: {
+    keywords: [
+      'image', 'video', 'thumbnail', 'generate image', 'edit image',
+      'shorts', 'clips', 'render', 'animation',
+    ],
+    patterns: [/\.(png|jpg|jpeg|gif|mp4|webm|svg)\b/i],
+    priority: 7,
+    maxFromCategory: 4,
+  },
+  research: {
+    keywords: [
+      'research', 'search', 'find info', 'paper', 'literature', 'study',
+      'market research', 'deep search', 'academic',
+    ],
+    patterns: [],
+    priority: 6,
+    maxFromCategory: 4,
+  },
+  comms: {
+    keywords: [
+      'email', 'send message', 'slack', 'sms', 'notify', 'notification',
+      'webhook', 'meeting', 'transcribe',
+    ],
+    patterns: [],
+    priority: 6,
+    maxFromCategory: 4,
+  },
+  social: {
+    keywords: [
+      'youtube', 'twitter', 'tweet', 'post', 'upload video', 'analytics',
+      'schedule post', 'social media', 'instagram', 'tiktok',
+    ],
+    patterns: [],
+    priority: 6,
+    maxFromCategory: 4,
+  },
+  marketing: {
+    keywords: [
+      'seo', 'keyword research', 'ad', 'campaign', 'competitor',
+      'marketing', 'advertising', 'content calendar',
+    ],
+    patterns: [],
+    priority: 5,
+    maxFromCategory: 3,
+  },
+  data: {
+    keywords: [
+      'data', 'csv', 'sql', 'database', 'query', 'chart',
+      'spreadsheet', 'visualize', 'graph data',
+    ],
+    patterns: [/\.(csv|xlsx|sql)\b/i],
+    priority: 5,
+    maxFromCategory: 3,
+  },
+  meta: {
+    keywords: [
+      'schedule', 'task', 'skill', 'workflow', 'optimize', 'cost',
+      'trend', 'predict', 'avatar', 'creative', 'swarm',
+      'health', 'diagnostic', 'self-check', 'status', 'config',
+      'consciousness', 'cognitive', 'stream', 'restart', 'service',
+      'cron', 'cronjob', 'autonomy', 'autonomous', 'self-manage',
+      'tool creator', 'create tool', 'new tool', 'disable', 'enable',
+      'module', 'control', 'upgrade', 'self',
+      // Frank's natural language phrases
+      'change the code', 'update the code', 'change your', 'update your',
+      'change yourself', 'update yourself', 'fix the bug', 'fix this',
+      'modify', 'edit the config', 'change config', 'change setting',
+      'change the model', 'switch model', 'change prompt', 'system prompt',
+      'make sure', 'verify', 'check if', 'is it working', 'working correctly',
+      'how many tools', 'count tools', 'list tools',
+      'show me the code', 'show me the file', 'read the code',
+      'rebuild', 'build again', 'compile', 'recompile',
+      'sudo ai', 'sudo-ai', 'yourself',
+    ],
+    patterns: [
+      /meta\./i,
+      /self[- ]?(config|manage|test|heal|diagnos|modif|updat)/i,
+      /consciousness/i,
+      /stop.*(stream|module)/i,
+      /start.*(stream|module)/i,
+      /change.*\b(code|file|config|setting|model|prompt|behavior)\b/i,
+      /update.*\b(code|file|config|setting|yourself|itself)\b/i,
+      /\bsudo[\s-]?ai\b/i,
+    ],
+    priority: 9,
+    maxFromCategory: 10,
+  },
+  dev: {
+    keywords: [
+      'api design', 'ci', 'cd', 'pipeline', 'dependency', 'audit',
+      'database design', 'architecture',
+    ],
+    patterns: [],
+    priority: 5,
+    maxFromCategory: 3,
+  },
+  knowledge: {
+    keywords: ['knowledge', 'notes', 'remember', 'recall', 'zettelkasten', 'wiki'],
+    patterns: [],
+    priority: 5,
+    maxFromCategory: 3,
+  },
+  voice: {
+    keywords: ['voice', 'speak', 'speech', 'tts', 'stt', 'transcribe', 'audio', 'phone call'],
+    patterns: [],
+    priority: 5,
+    maxFromCategory: 3,
+  },
+  business: {
+    keywords: [
+      'invoice', 'crm', 'calendar', 'business analytics',
+      'reports', 'client', 'customer',
+    ],
+    patterns: [],
+    priority: 4,
+    maxFromCategory: 3,
+  },
+  finance: {
+    keywords: [
+      'finance', 'tax', 'payment', 'bookkeeping',
+      'accounting', 'revenue', 'expense',
+    ],
+    patterns: [],
+    priority: 4,
+    maxFromCategory: 3,
+  },
+  personal: {
+    keywords: ['reminder', 'personal calendar', 'inbox', 'personal', 'todo'],
+    patterns: [],
+    priority: 4,
+    maxFromCategory: 3,
+  },
+  pm: {
+    keywords: [
+      'project plan', 'timeline', 'milestone', 'time track',
+      'sprint', 'kanban',
+    ],
+    patterns: [],
+    priority: 4,
+    maxFromCategory: 3,
+  },
+  earning: {
+    keywords: ['earn', 'monetize', 'income', 'optimize revenue'],
+    patterns: [],
+    priority: 3,
+    maxFromCategory: 2,
+  },
+  learn: {
+    keywords: ['learn', 'teach', 'explain concept', 'study', 'exam', 'homework', 'tutor'],
+    patterns: [],
+    priority: 3,
+    maxFromCategory: 3,
+  },
+  legal: {
+    keywords: ['legal', 'terms', 'privacy policy', 'contract', 'compliance'],
+    patterns: [],
+    priority: 2,
+    maxFromCategory: 1,
+  },
+};
+
+/** Fallback categories sampled when no keyword matched (2 tools each). */
+const FALLBACK_CATEGORIES: CategoryName[] = [
+  'browser', 'coder', 'system', 'content', 'research', 'meta',
+];
+
+// ---------------------------------------------------------------------------
+// Slim tool descriptor (mirrors ToolDefinition shape from the registry)
+// ---------------------------------------------------------------------------
+
+interface SlimTool {
+  name: string;
+  description: string;
+  category: string;
+  parameters: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// ToolRouter
+// ---------------------------------------------------------------------------
+
+/**
+ * Keyword-driven tool selector.
+ *
+ * The router analyses the user's message, scores each category, and
+ * returns the most relevant OpenAI-compatible tool schemas up to
+ * MAX_ROUTED_TOOLS.  No LLM calls are made.
+ */
+export class ToolRouter {
+  private readonly registry: ToolRegistryLike;
+
+  constructor(registry: ToolRegistryLike) {
+    if (!registry || typeof registry.getSchemaForLLM !== 'function') {
+      throw new TypeError('ToolRouter: registry must implement ToolRegistryLike');
+    }
+    this.registry = registry;
+  }
+
+  // -------------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------------
+
+  /**
+   * Route the user message to a filtered set of tool schemas.
+   *
+   * @param message          - Latest user message text.
+   * @param recentToolNames  - Names of the last few tools used (continuity).
+   * @returns Array of OpenAI-compatible tool schemas, at most MAX_ROUTED_TOOLS.
+   */
+  route(message: string, recentToolNames: string[] = []): object[] {
+    if (typeof message !== 'string') {
+      log.warn({ messageType: typeof message }, 'ToolRouter.route: message must be a string — using empty string');
+      message = '';
+    }
+
+    const allSchemas = this._getAllSchemas();
+    const schemasByName = this._indexByName(allSchemas);
+
+    // Step 1: normalise
+    const normalised = message.toLowerCase();
+
+    // Step 2 & 3: score and rank categories
+    const rankedCategories = this._rankCategories(normalised);
+
+    const selectedNames = new Set<string>();
+    const result: object[] = [];
+
+    // Step 4: always add base tools
+    for (const baseName of BASE_TOOLS) {
+      if (selectedNames.has(baseName)) continue;
+      const schema = schemasByName.get(baseName);
+      if (schema) {
+        result.push(schema);
+        selectedNames.add(baseName);
+      } else {
+        log.debug({ tool: baseName }, 'Base tool not found in registry — skipping');
+      }
+    }
+
+    // Step 5: continuity — add recently used tools
+    let continuitySlotsUsed = 0;
+    for (const recentName of recentToolNames) {
+      if (continuitySlotsUsed >= CONTINUITY_SLOTS) break;
+      if (selectedNames.has(recentName)) continue;
+      const schema = schemasByName.get(recentName);
+      if (schema) {
+        result.push(schema);
+        selectedNames.add(recentName);
+        continuitySlotsUsed++;
+      }
+    }
+
+    // Step 6 or 7: fill from ranked categories, or fallback
+    const anyMatched = rankedCategories.some(([, score]) => score > 0);
+
+    if (anyMatched) {
+      this._fillFromCategories(
+        rankedCategories,
+        normalised,
+        schemasByName,
+        selectedNames,
+        result,
+      );
+    } else {
+      // Step 7: fallback — 2 tools from each of the diverse fallback categories
+      log.info({ message: normalised.slice(0, 60) }, 'No category matched — using diverse fallback');
+      this._fillFallback(normalised, schemasByName, selectedNames, result);
+    }
+
+    log.info(
+      {
+        totalSelected: result.length,
+        matchedCategories: anyMatched
+          ? rankedCategories.filter(([, s]) => s > 0).map(([c]) => c).join(', ')
+          : 'none (fallback)',
+      },
+      'Tool routing complete',
+    );
+
+    log.debug(
+      { tools: [...selectedNames].join(', ') },
+      'Selected tool names',
+    );
+
+    return result;
+  }
+
+  // -------------------------------------------------------------------------
+  // Private helpers
+  // -------------------------------------------------------------------------
+
+  private _getAllSchemas(): object[] {
+    return this.registry.getSchemaForLLM();
+  }
+
+  /** Build a name → schema map for O(1) lookups. */
+  private _indexByName(schemas: object[]): Map<string, object> {
+    const map = new Map<string, object>();
+    for (const s of schemas) {
+      const name = this._schemaName(s);
+      if (name) map.set(name, s);
+    }
+    return map;
+  }
+
+  /** Extract the tool name from an OpenAI-format schema object. */
+  private _schemaName(schema: object): string {
+    const s = schema as { function?: { name?: string }; name?: string };
+    return s?.function?.name ?? s?.name ?? '';
+  }
+
+  /**
+   * Score every category against the normalised message and return
+   * them sorted by (rawScore * priority) descending.
+   */
+  private _rankCategories(normalised: string): Array<[CategoryName, number]> {
+    const scored: Array<[CategoryName, number]> = [];
+
+    for (const [catName, rule] of Object.entries(CATEGORY_MAP) as Array<[CategoryName, CategoryRule]>) {
+      let raw = 0;
+
+      for (const kw of rule.keywords) {
+        if (normalised.includes(kw)) raw += 1;
+      }
+
+      for (const re of rule.patterns) {
+        // Test against original message (patterns may be case-insensitive themselves).
+        if (re.test(normalised)) raw += 2;
+      }
+
+      scored.push([catName, raw * rule.priority]);
+    }
+
+    return scored.sort((a, b) => b[1] - a[1]);
+  }
+
+  /**
+   * Pull tools from matched categories into the result array.
+   * Within each category, prefer tools whose action segment appears in the message.
+   */
+  private _fillFromCategories(
+    rankedCategories: Array<[CategoryName, number]>,
+    normalised: string,
+    schemasByName: Map<string, object>,
+    selectedNames: Set<string>,
+    result: object[],
+  ): void {
+    const toolsByCategory = this._groupByCategory(schemasByName);
+
+    for (const [catName, score] of rankedCategories) {
+      if (score <= 0) continue;
+      if (result.length >= MAX_ROUTED_TOOLS) break;
+
+      const rule = CATEGORY_MAP[catName];
+      const candidates = toolsByCategory.get(catName) ?? [];
+      const remaining = MAX_ROUTED_TOOLS - result.length;
+      const limit = Math.min(rule.maxFromCategory, remaining);
+
+      // Sort: tools whose action appears in the message come first.
+      const sorted = [...candidates].sort((a, b) => {
+        const aAction = this._schemaName(a).split('.')[1] ?? '';
+        const bAction = this._schemaName(b).split('.')[1] ?? '';
+        const aHit = aAction && normalised.includes(aAction) ? -1 : 0;
+        const bHit = bAction && normalised.includes(bAction) ? -1 : 0;
+        return aHit - bHit;
+      });
+
+      let added = 0;
+      for (const schema of sorted) {
+        if (added >= limit) break;
+        const name = this._schemaName(schema);
+        if (!name || selectedNames.has(name)) continue;
+        result.push(schema);
+        selectedNames.add(name);
+        added++;
+      }
+    }
+  }
+
+  /**
+   * Fallback: add 2 tools each from diverse categories when no keyword matched.
+   * Result will be at most: 5 base + 3 continuity + 12 fallback = 20 tools.
+   */
+  private _fillFallback(
+    normalised: string,
+    schemasByName: Map<string, object>,
+    selectedNames: Set<string>,
+    result: object[],
+  ): void {
+    const toolsByCategory = this._groupByCategory(schemasByName);
+
+    for (const catName of FALLBACK_CATEGORIES) {
+      if (result.length >= MAX_ROUTED_TOOLS) break;
+      const candidates = toolsByCategory.get(catName) ?? [];
+      let added = 0;
+
+      for (const schema of candidates) {
+        if (added >= 2) break;
+        if (result.length >= MAX_ROUTED_TOOLS) break;
+        const name = this._schemaName(schema);
+        if (!name || selectedNames.has(name)) continue;
+        result.push(schema);
+        selectedNames.add(name);
+        added++;
+      }
+    }
+
+    log.debug(
+      { fallbackCategories: FALLBACK_CATEGORIES.join(', '), totalAfterFallback: result.length },
+      'Fallback tool fill complete',
+    );
+  }
+
+  /**
+   * Group name-indexed schemas by their category prefix (e.g. "coder" from "coder.read-file").
+   *
+   * Prefers the `listEnabled()` method on the registry when available (richer
+   * ToolDefinition objects).  Falls back to parsing the schema name for the
+   * category prefix, which works for any registry that uses `<category>.<action>`
+   * naming conventions.
+   */
+  private _groupByCategory(schemasByName: Map<string, object>): Map<string, object[]> {
+    const map = new Map<string, object[]>();
+
+    // Prefer registry-native category data when available.
+    if (typeof (this.registry as unknown as { listEnabled?: () => SlimTool[] }).listEnabled === 'function') {
+      const enabledTools = (this.registry as unknown as { listEnabled: () => SlimTool[] }).listEnabled();
+
+      for (const tool of enabledTools) {
+        const schema = schemasByName.get(tool.name);
+        if (!schema) continue;
+
+        const cat = tool.category ?? this._categoryFromName(tool.name);
+        if (!cat) continue;
+
+        const existing = map.get(cat);
+        if (existing) {
+          existing.push(schema);
+        } else {
+          map.set(cat, [schema]);
+        }
+      }
+      return map;
+    }
+
+    // Fallback: derive category from the tool name prefix.
+    for (const [name, schema] of schemasByName) {
+      const cat = this._categoryFromName(name);
+      if (!cat) continue;
+
+      const existing = map.get(cat);
+      if (existing) {
+        existing.push(schema);
+      } else {
+        map.set(cat, [schema]);
+      }
+    }
+
+    return map;
+  }
+
+  /**
+   * Extract the category prefix from a dot-namespaced tool name.
+   * e.g. "coder.read-file" → "coder"
+   */
+  private _categoryFromName(name: string): string {
+    if (!name || typeof name !== 'string') return '';
+    const dotIndex = name.indexOf('.');
+    return dotIndex > 0 ? name.slice(0, dotIndex) : '';
+  }
+}

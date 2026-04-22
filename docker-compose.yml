@@ -1,0 +1,31 @@
+# docker-compose.yml — SUDO-AI v4 local / self-hosted deployment
+# Usage:
+#   cp config/.env.example config/.env   # fill in real secrets
+#   docker compose up -d
+#
+# Secrets are loaded exclusively from config/.env — never hard-coded here.
+
+services:
+  sudo-ai:
+    build:
+      context: .           # use the Dockerfile in the project root
+      dockerfile: Dockerfile
+    env_file:
+      - config/.env        # all runtime secrets injected from this file
+    ports:
+      - "3000:3000"        # main API / WebSocket port
+      - "3001:3001"        # health-check / metrics port
+    volumes:
+      # Named volume for persistent AI data (memory, logs, workspace state)
+      - sudo-ai-data:/app/data
+      # Config directory mounted read-only so the container cannot modify it
+      - ./config:/app/config:ro
+    restart: unless-stopped  # auto-restart on crash; stops cleanly on docker compose down
+    deploy:
+      resources:
+        limits:
+          memory: 6G       # cap RAM to prevent runaway AI workloads from OOM-killing the host
+
+# Named volume — data survives container restarts and image rebuilds
+volumes:
+  sudo-ai-data:

@@ -1,0 +1,295 @@
+{
+  "version": "1.0",
+  "totalTopics": 210,
+  "categories": {
+    "betrayal": {
+      "description": "Dhoka, trust broken, backstabbing stories",
+      "topics": [
+        { "id": "BET-001", "title": "Best friend ne wedding ke din dulhan chura li", "hook": "Shaadi ka din tha... lekin dulhan kisi aur ke saath bhaag gayi", "emotion": "shock", "viral_score": 9 },
+        { "id": "BET-002", "title": "Bhai ne business partner ko barbad kar diya", "hook": "10 saal ki dosti... ek raat mein khatam", "emotion": "anger", "viral_score": 8 },
+        { "id": "BET-003", "title": "Wife ka secret phone mila drawer mein", "hook": "Drawer khola toh zindagi badal gayi", "emotion": "shock", "viral_score": 9 },
+        { "id": "BET-004", "title": "Bestie ne interview mein meri jagah le li", "hook": "Maine usse tayyari karayi... usne meri seat cheen li", "emotion": "betrayal", "viral_score": 8 },
+        { "id": "BET-005", "title": "Padosi ne zameen ke papers forge kar diye", "hook": "Jab tak pata chala... ghar ja chuka tha", "emotion": "rage", "viral_score": 7 },
+        { "id": "BET-006", "title": "Cousin ne shaadi mein family secret bata diya", "hook": "Mic pakda aur sab ke saamne sach bol diya", "emotion": "shock", "viral_score": 9 },
+        { "id": "BET-007", "title": "Business partner ne secretly company apne naam kar li", "hook": "Ek din office gaya toh lock badal chuka tha", "emotion": "disbelief", "viral_score": 8 },
+        { "id": "BET-008", "title": "Best friend ne secretly mere crush ko propose kiya", "hook": "Woh dono saath the... aur main akela", "emotion": "heartbreak", "viral_score": 8 },
+        { "id": "BET-009", "title": "Driver ne malik ki poori savings chura li", "hook": "20 saal ka bharosa... ek raat mein toot gaya", "emotion": "shock", "viral_score": 7 },
+        { "id": "BET-010", "title": "Adopted bete ne asli parents ko dhundh ke chhod diya", "hook": "Jinhone paala... unhe bhool gaya", "emotion": "sadness", "viral_score": 8 },
+        { "id": "BET-011", "title": "Colleague ne mera project apne naam se submit kiya", "hook": "Presentation start hui toh mera naam kahin nahi tha", "emotion": "anger", "viral_score": 7 },
+        { "id": "BET-012", "title": "Girlfriend ne doosre se secretly nikkah kar liya", "hook": "Instagram story dekhi toh... shaadi ho chuki thi", "emotion": "devastation", "viral_score": 9 },
+        { "id": "BET-013", "title": "Bhai ne property mein se mera hissa cheen liya", "hook": "Papa ke jaane ke baad... apna hi khoon dushman ban gaya", "emotion": "rage", "viral_score": 8 },
+        { "id": "BET-014", "title": "Teacher ne student ka research paper chura liya", "hook": "Journal mein naam dekha... mera nahi, unka tha", "emotion": "injustice", "viral_score": 7 },
+        { "id": "BET-015", "title": "Saas ne bahu ka gold secretly bech diya", "hook": "Locker khola toh... sab kuch gayab", "emotion": "shock", "viral_score": 8 }
+      ]
+    },
+    "family_conflict": {
+      "description": "Gharelu ladai, joint family drama, rishton ki uljan",
+      "topics": [
+        { "id": "FAM-001", "title": "Maa ne bade bete ko ghar se nikaal diya", "hook": "Ek galti... aur maa ne darwaza band kar diya", "emotion": "heartbreak", "viral_score": 9 },
+        { "id": "FAM-002", "title": "Baap ki property ke liye bhai-bhai mein jung", "hook": "Ek ghar... do bhai... aur ek will jo sab badal degi", "emotion": "tension", "viral_score": 8 },
+        { "id": "FAM-003", "title": "Sasural mein bahu ko kamre mein band rakha", "hook": "Shaadi ke baad pata chala... yeh ghar nahi, jail hai", "emotion": "fear", "viral_score": 9 },
+        { "id": "FAM-004", "title": "Adopted bachche ko sach pata chala 18 saal baad", "hook": "Birth certificate dekha... aur duniya ulat gayi", "emotion": "identity_crisis", "viral_score": 8 },
+        { "id": "FAM-005", "title": "Joint family mein choti bahu ne sab ka raaz khola", "hook": "Dinner table pe bomb gira diya", "emotion": "chaos", "viral_score": 8 },
+        { "id": "FAM-006", "title": "Beti ne love marriage ki toh baap ne rishta tod diya", "hook": "Apni khushi chuni... lekin sab kuch kho diya", "emotion": "sacrifice", "viral_score": 9 },
+        { "id": "FAM-007", "title": "Step-mother ne asli maa ki yaadein mita di", "hook": "Ek din photos sab gayab ho gayi", "emotion": "loss", "viral_score": 8 },
+        { "id": "FAM-008", "title": "Nanhi bachi ne court mein gawahi di apne baap ke khilaf", "hook": "8 saal ki bachi... lekin himmat crore logon se zyada", "emotion": "courage", "viral_score": 9 },
+        { "id": "FAM-009", "title": "Bade bhai ne chhote ki shaadi rok di jaati ke naam pe", "hook": "Pyaar tha... lekin khoon ka rishta aad aa gaya", "emotion": "injustice", "viral_score": 8 },
+        { "id": "FAM-010", "title": "Maa ne ek bete ke liye doosre ko sacrifice kiya", "hook": "Dono ke beech mein... maa ne choice banaya", "emotion": "gut_punch", "viral_score": 9 },
+        { "id": "FAM-011", "title": "Father-in-law ne bahu ke career ko barbad kiya", "hook": "Job offer aayi thi... lekin ghar walon ne letter chhupa diya", "emotion": "frustration", "viral_score": 8 },
+        { "id": "FAM-012", "title": "Twins mein se ek ko rakh liya, ek ko chhod diya", "hook": "Ek ko pyaar mila... doosre ko orphanage", "emotion": "heartbreak", "viral_score": 9 },
+        { "id": "FAM-013", "title": "Daadi ki will ne pura khandan tod diya", "hook": "Lawyer ne padha... aur kamre mein silence cha gayi", "emotion": "shock", "viral_score": 8 },
+        { "id": "FAM-014", "title": "Beti ne maa ka affair pakad liya", "hook": "School se jaldi aayi... aur ghar mein stranger mila", "emotion": "confusion", "viral_score": 8 },
+        { "id": "FAM-015", "title": "Bhai ne behan ki shaadi apne dost se fix kar di", "hook": "Permission nahi li... decision le liya", "emotion": "anger", "viral_score": 7 }
+      ]
+    },
+    "revenge": {
+      "description": "Badla, karma, justice served cold",
+      "topics": [
+        { "id": "REV-001", "title": "Gareebi mein mazaak udaya — crorepati banke lauta", "hook": "Wohi log jo haste the... ab line mein khade hain", "emotion": "triumph", "viral_score": 10 },
+        { "id": "REV-002", "title": "Ex-boss ko apni company mein interview ke liye bulaya", "hook": "Table turn ho gaya... ab main CEO hoon", "emotion": "satisfaction", "viral_score": 9 },
+        { "id": "REV-003", "title": "Dhoka dene wali ex ke against evidence collect kiya", "hook": "2 saal chup raha... phir ek hi din mein sab expose", "emotion": "cold_revenge", "viral_score": 9 },
+        { "id": "REV-004", "title": "Village ne boycott kiya — IAS banke wapas aaya", "hook": "Jinke darwaze band the... ab salute karte hain", "emotion": "pride", "viral_score": 10 },
+        { "id": "REV-005", "title": "Bully ko 10 saal baad apne clinic mein patient mila", "hook": "Woh helpless tha... aur main doctor", "emotion": "power_shift", "viral_score": 9 },
+        { "id": "REV-006", "title": "Cheating husband ki sab property legally le li", "hook": "Lawyer se zyada clever wife nikli", "emotion": "justice", "viral_score": 9 },
+        { "id": "REV-007", "title": "Reject karne wale college ka topper ban gaya", "hook": "Admission nahi di... ab unka naam meri wajah se hai", "emotion": "sweet_revenge", "viral_score": 8 },
+        { "id": "REV-008", "title": "Fraud company ke CEO ko jail bhejwa diya", "hook": "Sab darte the... ek ne himmat dikhayi", "emotion": "justice", "viral_score": 8 },
+        { "id": "REV-009", "title": "Mean girls ko reunion mein sabke saamne expose kiya", "hook": "10 saal ka intezaar... ek speech mein sab badla", "emotion": "catharsis", "viral_score": 8 },
+        { "id": "REV-010", "title": "Corrupt politician ko uske hi bete ne pakdaya", "hook": "Khoon apna tha... lekin desh pehle", "emotion": "moral_courage", "viral_score": 9 },
+        { "id": "REV-011", "title": "Landlord ne nikala — tenant ne poora mohalla khareed liya", "hook": "Kiraya nahi de sakta tha... ab building meri hai", "emotion": "power_move", "viral_score": 9 },
+        { "id": "REV-012", "title": "School teacher ne insult kiya — Nobel Prize jeet ke lauta", "hook": "Usne bola tera kuch nahi hoga... duniya ne mera naam suna", "emotion": "ultimate_win", "viral_score": 10 },
+        { "id": "REV-013", "title": "Sasural walon ne taana maara — startup unicorn bana diya", "hook": "Dahej nahi laya tha... ab dahej ki zaroorat nahi", "emotion": "vindication", "viral_score": 9 },
+        { "id": "REV-014", "title": "Jail mein daala innocent ko — asli gunehgaar khud pakda gaya", "hook": "Karma slow hai... lekin kabhi bhoolti nahi", "emotion": "karma", "viral_score": 8 },
+        { "id": "REV-015", "title": "Dost ne business churaaya — client ne sab wapas bhej diye", "hook": "Clients ko sach pata chala... aur sab laut aaye", "emotion": "loyalty_wins", "viral_score": 8 }
+      ]
+    },
+    "rags_to_riches": {
+      "description": "Gareebi se amiri, struggle to success, underdog stories",
+      "topics": [
+        { "id": "RAG-001", "title": "Chai wale ka beta IIT topper ban gaya", "hook": "Chai ki dukaan se IIT Bombay tak... kaise?", "emotion": "inspiration", "viral_score": 10 },
+        { "id": "RAG-002", "title": "Footpath pe soti thi — ab Dubai mein penthouse hai", "hook": "Ek raat footpath pe... agle saal Forbes list pe", "emotion": "disbelief", "viral_score": 9 },
+        { "id": "RAG-003", "title": "500 rupaye se shuru kiya — 500 crore ka empire bana diya", "hook": "Pocket mein sirf 500 the... ab bank mein 500 crore", "emotion": "amazement", "viral_score": 9 },
+        { "id": "RAG-004", "title": "Orphan ladki ne apna hospital khol diya", "hook": "Koi nahi tha uska... ab hazaaron usse apna maante hain", "emotion": "pride", "viral_score": 9 },
+        { "id": "RAG-005", "title": "Rickshaw driver ka beta pilot ban gaya", "hook": "Auto chalata tha baap... beta ab Boeing udaata hai", "emotion": "generational_leap", "viral_score": 10 },
+        { "id": "RAG-006", "title": "Village ki ladki ne Silicon Valley mein startup banaya", "hook": "Gaon mein bijli nahi thi... ab tech company chalati hai", "emotion": "wonder", "viral_score": 9 },
+        { "id": "RAG-007", "title": "Beggar se businessman — subway se skyrise tak", "hook": "Pehle bheek maangta tha... ab salary deta hai", "emotion": "transformation", "viral_score": 9 },
+        { "id": "RAG-008", "title": "10th fail se PhD tak ka safar", "hook": "Teacher ne bola padhai chhod de... usne Oxford ka letter dikha diya", "emotion": "vindication", "viral_score": 8 },
+        { "id": "RAG-009", "title": "Single mother ne 3 bachche palke MBA kiya", "hook": "Din mein kaam... raat mein padhai... aur 3 bachche bhi", "emotion": "respect", "viral_score": 9 },
+        { "id": "RAG-010", "title": "Slum se Olympic gold tak", "hook": "Joote nahi the... ab gold medal hai", "emotion": "glory", "viral_score": 10 },
+        { "id": "RAG-011", "title": "Servant ki beti ne malik ke bete se competition jeeti", "hook": "AC room vs jhopdi... result dekh ke sab chup ho gaye", "emotion": "justice", "viral_score": 9 },
+        { "id": "RAG-012", "title": "Cancer survive karke marathon jeeta", "hook": "Doctor ne bola chal nahi payega... usne 42km dauda", "emotion": "defiance", "viral_score": 9 },
+        { "id": "RAG-013", "title": "Deaf ladke ne music composer banke Grammy jeeta", "hook": "Sun nahi sakta... lekin duniya uski dhun pe nachti hai", "emotion": "miracle", "viral_score": 10 },
+        { "id": "RAG-014", "title": "Garbage collector ki beti Miss India ban gayi", "hook": "Kachra uthata tha baap... beti ne crown utha liya", "emotion": "pride", "viral_score": 9 },
+        { "id": "RAG-015", "title": "Jail se nikla aur tech startup billion dollar banayi", "hook": "Society ne reject kiya... market ne accept kar liya", "emotion": "redemption", "viral_score": 8 }
+      ]
+    },
+    "love_and_heartbreak": {
+      "description": "Pyaar, dil tootna, impossible love stories",
+      "topics": [
+        { "id": "LOV-001", "title": "Hospital mein milte the roz — ek din bed khaali mila", "hook": "Roz milte the ward mein... ek din sirf flowers the", "emotion": "grief", "viral_score": 10 },
+        { "id": "LOV-002", "title": "Long distance mein 5 saal — airport pe breakup", "hook": "5 saal wait kiya... arrival gate pe alag rasta chuna", "emotion": "devastation", "viral_score": 9 },
+        { "id": "LOV-003", "title": "Blind date pe apni ex-wife se mila", "hook": "App ne match kiya... wahi chehra saamne tha", "emotion": "shock", "viral_score": 9 },
+        { "id": "LOV-004", "title": "Love letter 20 saal baad mila — woh ab nahi rahi", "hook": "Purani almari se ek letter gira... aur ankhen bhar aayi", "emotion": "nostalgia", "viral_score": 9 },
+        { "id": "LOV-005", "title": "Arrange marriage mein pyaar ho gaya — phir sach saamne aaya", "hook": "Pyaar hua arrange marriage mein... phir ek secret ne sab tod diya", "emotion": "tragedy", "viral_score": 8 },
+        { "id": "LOV-006", "title": "College sweetheart 15 saal baad train mein mili", "hook": "Wohi smile... wohi ankhen... lekin haath mein mangalsutra", "emotion": "bittersweet", "viral_score": 9 },
+        { "id": "LOV-007", "title": "Deaf ladki aur musician ka pyaar", "hook": "Woh sun nahi sakti thi uski awaaz... phir bhi pyaar ho gaya", "emotion": "beautiful", "viral_score": 9 },
+        { "id": "LOV-008", "title": "Terminal patient ne secretly shaadi ki planning ki", "hook": "Doctor ne bola 3 mahine... usne 1 mahine mein shaadi plan ki", "emotion": "heartbreak", "viral_score": 10 },
+        { "id": "LOV-009", "title": "Twin sisters ek hi ladke se pyaar kar baithi", "hook": "Ek chehra... do dil... aur ek ladka jo confuse tha", "emotion": "complicated", "viral_score": 8 },
+        { "id": "LOV-010", "title": "Ex ka bachcha adopt kiya — phir ex wapas aayi", "hook": "Bachche ko apnaya... phir uski maa darwaze pe aayi", "emotion": "dilemma", "viral_score": 9 },
+        { "id": "LOV-011", "title": "Shaadi ke mandap se dulhan bhaag gayi — lekin reason sun ke sab ro diye", "hook": "Bhaagi nahi thi... bacha rahi thi apne aap ko", "emotion": "revelation", "viral_score": 10 },
+        { "id": "LOV-012", "title": "Online pyaar kiya — asli chehra dekh ke shock laga", "hook": "6 mahine chat ki... pehli baar mila toh...", "emotion": "twist", "viral_score": 8 },
+        { "id": "LOV-013", "title": "War mein bichde — 40 saal baad social media pe mile", "hook": "1971 mein bichde... 2011 mein Facebook ne mila diya", "emotion": "reunion", "viral_score": 9 },
+        { "id": "LOV-014", "title": "Husband ne secretly wife ke naam stars kharide", "hook": "Chala gaya hamesha ke liye... lekin aasmaan mein naam chhod gaya", "emotion": "eternal_love", "viral_score": 9 },
+        { "id": "LOV-015", "title": "First love ki shaadi mein best man banna pada", "hook": "Uski khushi mein khush hona tha... lekin andar se toot gaya", "emotion": "sacrifice", "viral_score": 9 }
+      ]
+    },
+    "mystery_and_suspense": {
+      "description": "Rahasya, suspense, unexpected twists",
+      "topics": [
+        { "id": "MYS-001", "title": "Nayi flat mein purane tenant ka diary mila", "hook": "Diary ka aakhri page padhte hi... darwaza band ho gaya", "emotion": "fear", "viral_score": 9 },
+        { "id": "MYS-002", "title": "CCTV mein woh aadmi dikha jo 2 saal pehle mar chuka tha", "hook": "Guard ne screen dekha... aur phone gir gaya", "emotion": "horror", "viral_score": 9 },
+        { "id": "MYS-003", "title": "Bachpan ki photo mein ek aur bachcha tha — jo family mein nahi hai", "hook": "Album dekh raha tha... ek unknown face... kaun tha woh?", "emotion": "mystery", "viral_score": 9 },
+        { "id": "MYS-004", "title": "Roz raat 3 baje phone aata hai — doosri taraf koi nahi bolta", "hook": "Block karo toh naye number se... kaun hai?", "emotion": "dread", "viral_score": 8 },
+        { "id": "MYS-005", "title": "Purane ghar ki deewar todne pe ek kamra mila — andar sab set tha", "hook": "Renovation mein deewar giri... aur ek sealed room khula", "emotion": "chills", "viral_score": 10 },
+        { "id": "MYS-006", "title": "DNA test ne bata diya — baap baap nahi hai", "hook": "Medical test karaya... aur identity hi badal gayi", "emotion": "identity_shock", "viral_score": 9 },
+        { "id": "MYS-007", "title": "Murder ka ilzaam uspe — lekin woh us din desh mein nahi tha", "hook": "CCTV mein woh hai... lekin passport stamp kehta hai nahi", "emotion": "confusion", "viral_score": 8 },
+        { "id": "MYS-008", "title": "Abandoned hospital mein raat bitayi — subah tak sab badal gaya", "hook": "Dare accept kiya... lekin subah woh wahi insaan nahi raha", "emotion": "transformation_horror", "viral_score": 8 },
+        { "id": "MYS-009", "title": "Google Maps pe apna ghar dekha — andar koi aur baitha tha", "hook": "Street view khola... aur screen pe freeze ho gaya", "emotion": "uncanny", "viral_score": 9 },
+        { "id": "MYS-010", "title": "Train mein ek stranger ne future bata diya — sab sach nikla", "hook": "Hassi aayi thi tab... ab darr lagta hai", "emotion": "eerie", "viral_score": 9 },
+        { "id": "MYS-011", "title": "Bachche ne imaginary friend ke baare mein bataya — woh real nikla", "hook": "Maa ne hasa diya... phir purani photo mein wohi chehra dikha", "emotion": "goosebumps", "viral_score": 10 },
+        { "id": "MYS-012", "title": "Wedding video mein ek guest tha jo kisi ne invite nahi kiya", "hook": "Har frame mein hai... lekin koi nahi jaanta", "emotion": "creepy", "viral_score": 9 },
+        { "id": "MYS-013", "title": "Ancestral property mein secret tunnel mili", "hook": "Pooja room ka floor khula... neeche ek aur duniya thi", "emotion": "discovery", "viral_score": 8 },
+        { "id": "MYS-014", "title": "Ek stranger roz same time bus stop pe milta hai — lekin bus nahi leta", "hook": "Roz wahi bench... wahi time... kabhi bus nahi li", "emotion": "curiosity", "viral_score": 7 },
+        { "id": "MYS-015", "title": "Suicide note mein likha tha — main mara nahi, mujhe maara gaya", "hook": "Case close hua... phir note mila... aur sab khul gaya", "emotion": "revelation", "viral_score": 10 }
+      ]
+    },
+    "social_justice": {
+      "description": "Inequality, standing up, fighting the system",
+      "topics": [
+        { "id": "SOC-001", "title": "Dalit ladke ne Brahmin mohalle mein school khola", "hook": "Jahan entry nahi thi... wahan ab uska naam hai", "emotion": "defiance", "viral_score": 9 },
+        { "id": "SOC-002", "title": "Ladki ne eve-teaser ko public mein dhulai ki", "hook": "Woh chup nahi rahi... aur poori sadak ne saath diya", "emotion": "empowerment", "viral_score": 9 },
+        { "id": "SOC-003", "title": "Beggar ke bete ne corrupt judge ko expose kiya", "hook": "System ne uska baap toda... usne system todne ka faisla kiya", "emotion": "justice", "viral_score": 8 },
+        { "id": "SOC-004", "title": "Village ki auraton ne milke sharab theka band karaya", "hook": "Ek aurat ne awaaz uthayi... phir poora gaon khada ho gaya", "emotion": "collective_power", "viral_score": 9 },
+        { "id": "SOC-005", "title": "Disabled athlete ne able-bodied athletes ko haraaya", "hook": "Wheelchair mein baitha tha... lekin sabse aage nikla", "emotion": "triumph", "viral_score": 9 },
+        { "id": "SOC-006", "title": "Child labour se PhD tak — ek bachche ki kahani", "hook": "8 saal mein factory... 28 mein PhD... yeh real hai", "emotion": "inspiration", "viral_score": 9 },
+        { "id": "SOC-007", "title": "Transgender teacher ne toppers paida kiye", "hook": "Society ne reject kiya... students ne guru maana", "emotion": "respect", "viral_score": 9 },
+        { "id": "SOC-008", "title": "Slum ki ladkiyon ne coding seekh ke product banaya", "hook": "Jhopdi mein wifi nahi tha... app store pe app hai", "emotion": "pride", "viral_score": 8 },
+        { "id": "SOC-009", "title": "80 saal ki daadi ne property rights ke liye court jeeta", "hook": "Zindagi bhar chup rahi... 80 pe ladna seekha", "emotion": "late_justice", "viral_score": 8 },
+        { "id": "SOC-010", "title": "Muslim ladke ne Hindu ladki ki jaan bachayi — phir dono ka boycott", "hook": "Jaan bachayi... lekin dono communities ne reject kar diya", "emotion": "tragedy", "viral_score": 9 },
+        { "id": "SOC-011", "title": "Acid attack survivor ne fashion brand launch kiya", "hook": "Chehra jalaya... lekin spirit nahi jala paaye", "emotion": "resilience", "viral_score": 10 },
+        { "id": "SOC-012", "title": "Farmer ne seedhi ladai ladi monsanto ke khilaf", "hook": "Ek kisaan vs billion dollar company... aur kisaan jeeta", "emotion": "david_vs_goliath", "viral_score": 9 },
+        { "id": "SOC-013", "title": "Orphanage ke bachche ne education minister ko letter likha", "hook": "Letter viral hua... policy badal gayi", "emotion": "impact", "viral_score": 8 },
+        { "id": "SOC-014", "title": "Night school teacher ne 500 domestic workers ko literate banaya", "hook": "Raat mein padhati thi... subah woh sab choodiyan lagati thi", "emotion": "quiet_heroism", "viral_score": 8 },
+        { "id": "SOC-015", "title": "Ek auto driver free mein cancer patients ko hospital le jaata hai", "hook": "Meter band rakhta hai... sirf un logon ke liye jo afford nahi kar sakte", "emotion": "humanity", "viral_score": 9 }
+      ]
+    },
+    "karma_and_twist": {
+      "description": "Karma striking, ironic justice, plot twists",
+      "topics": [
+        { "id": "KAR-001", "title": "Dowry maanga — ladki crorepati nikli, shaadi cancel", "hook": "Dahej maanga 50 lakh... ladki ne bola mera net worth 50 crore hai... shaadi cancel", "emotion": "instant_karma", "viral_score": 10 },
+        { "id": "KAR-002", "title": "Cheater ne naya number se message kiya — galti se wife ko", "hook": "Wrong number pe sab confess kar diya... wife ko", "emotion": "poetic_justice", "viral_score": 9 },
+        { "id": "KAR-003", "title": "Road rage mein doctor ko maara — usi doctor ke haathon surgery hui", "hook": "Jise maara... usi ne jaan bachayi", "emotion": "irony", "viral_score": 9 },
+        { "id": "KAR-004", "title": "Fake review likha restaurant ka — owner apna baap nikla", "hook": "1 star diya... owner ka call aaya... Papa?", "emotion": "embarrassment", "viral_score": 8 },
+        { "id": "KAR-005", "title": "Inheritance ke liye jhooth bola — CCTV mein sab record tha", "hook": "Court mein bola jhooth... judge ne CCTV play kar diya", "emotion": "busted", "viral_score": 9 },
+        { "id": "KAR-006", "title": "Corrupt officer ki beti ne RTI se uski corruption expose ki", "hook": "Apne hi ghar mein dushman baith gaya tha", "emotion": "irony", "viral_score": 9 },
+        { "id": "KAR-007", "title": "Job deny ki disabled ko — next year woh CEO ban gaya us company ka", "hook": "Reject kiya tha... ab woh apna boss hai", "emotion": "reversal", "viral_score": 9 },
+        { "id": "KAR-008", "title": "Scammer ne galti se police officer ko scam kiya", "hook": "Hello sir, aapka KYC expire... sir police station se bol raha hoon", "emotion": "comedy_karma", "viral_score": 9 },
+        { "id": "KAR-009", "title": "Bully ne class mein mazaak udaya — 10 saal baad wohi ladka uska boss", "hook": "Haste the sab... ab salary woh decide karta hai", "emotion": "long_game", "viral_score": 8 },
+        { "id": "KAR-010", "title": "Rishtedaar ne property pe kabza kiya — zameen mein kuch nahi nikla, original owner ke paas gold tha", "hook": "Zameen cheen li... lekin asli khazana toh wallet mein tha", "emotion": "backfire", "viral_score": 8 },
+        { "id": "KAR-011", "title": "Insurance ke liye jhoothi death dikhayi — sachchi maut aur koi nahi maanta", "hook": "Pehle jhooth bola mara... ab sach mein... koi believe nahi karta", "emotion": "dark_irony", "viral_score": 8 },
+        { "id": "KAR-012", "title": "Politician ne gareebon ka paisa khaaya — uska beta gareebi mein aaya", "hook": "Papa ne choori ki... karma ne bete se wapas liya", "emotion": "generational_karma", "viral_score": 9 },
+        { "id": "KAR-013", "title": "Ladke ne 3 ladkiyon ko ek saath date kiya — teeno ek hi cafe mein mil gayi", "hook": "Table 1, 2, 3... teeno ek hi ladke ka intezaar", "emotion": "comedy", "viral_score": 9 },
+        { "id": "KAR-014", "title": "Naukrani ko nikala bina salary — uski beti judge ban gayi, case aayi", "hook": "Salary nahi di thi... ab court ka notice aaya hai", "emotion": "delayed_karma", "viral_score": 8 },
+        { "id": "KAR-015", "title": "Exam mein cheating ki — answer sheet galat student ko mil gayi, woh pass, cheater fail", "hook": "Copy kiya doosre ka... lekin result mein naam uska tha", "emotion": "cosmic_justice", "viral_score": 8 }
+      ]
+    },
+    "sacrifice": {
+      "description": "Qurbani, selfless acts, emotional gut-punches",
+      "topics": [
+        { "id": "SAC-001", "title": "Maa ne kidney de di bete ko — bete ko pata nahi tha", "hook": "Operation successful tha... donor kaun tha? Maa.", "emotion": "devastating", "viral_score": 10 },
+        { "id": "SAC-002", "title": "Soldier ne apni shaadi chhodi dushman attack ke waqt", "hook": "Mandap se uthke border gaya... dulhan ne wait kiya 2 saal", "emotion": "duty", "viral_score": 9 },
+        { "id": "SAC-003", "title": "Bada bhai ne padhai chhodi — chhote bhai ko doctor banaya", "hook": "Apna sapna toda... taaki uska sapna poora ho", "emotion": "brotherhood", "viral_score": 9 },
+        { "id": "SAC-004", "title": "Garib baap ne khud bhookha reh ke bachche ko khilaya", "hook": "Roz bolte the maine kha liya... kabhi nahi khaya", "emotion": "parental_love", "viral_score": 10 },
+        { "id": "SAC-005", "title": "Teacher ne apni savings se student ki surgery karayi", "hook": "School ki salary thi... lekin student ki jaan zyada important thi", "emotion": "selfless", "viral_score": 9 },
+        { "id": "SAC-006", "title": "Firefighter ne apni jaan deke 3 bachche bachaaye", "hook": "Andar gaya... 3 bachche bahar aaye... woh nahi aaya", "emotion": "heroism", "viral_score": 10 },
+        { "id": "SAC-007", "title": "Wife ne apna career chhoda husband ke treatment ke liye", "hook": "Promotion letter aaya tha... usne resignation diya", "emotion": "love", "viral_score": 8 },
+        { "id": "SAC-008", "title": "Grandmother ne apna ghar bech ke orphanage banaya", "hook": "Apna aashiyana becha... 40 bachcho ko ghar diya", "emotion": "legacy", "viral_score": 9 },
+        { "id": "SAC-009", "title": "Dog ne owner ko bachaya flood mein — khud nahi bach paya", "hook": "Woh tairta raha... jab tak malik safe nahi hua", "emotion": "loyalty", "viral_score": 10 },
+        { "id": "SAC-010", "title": "Stranger ne accident victim ko blood diya — woh uska bichda bhai nikla", "hook": "Blood donate kiya... DNA match aaya... bhai?!", "emotion": "miracle", "viral_score": 10 },
+        { "id": "SAC-011", "title": "Father ne jail ki saza apne bete ki jagah le li", "hook": "Judge ne pucha kaun jayega... baap khada ho gaya", "emotion": "paternal_sacrifice", "viral_score": 9 },
+        { "id": "SAC-012", "title": "Beti ne shaadi ka budget cancer fund mein de diya", "hook": "Shaadi simple ki... 10 logon ki jaan bachayi", "emotion": "generosity", "viral_score": 8 },
+        { "id": "SAC-013", "title": "Pilot ne plane crash mein sabko bachaaya — khud nahi bach paya", "hook": "200 log utare safely... pilot seat pe hi tha", "emotion": "ultimate_sacrifice", "viral_score": 10 },
+        { "id": "SAC-014", "title": "Blind mother ne zindagi bhar chhupaya ki woh dekh nahi sakti", "hook": "Bachcho ne socha maa sab dekh sakti hai... sach 20 saal baad pata chala", "emotion": "silent_sacrifice", "viral_score": 9 },
+        { "id": "SAC-015", "title": "Student ne scholarship chhod di taaki doosra deserving bachcha le sake", "hook": "Merit mein first tha... phir bhi naam hataya", "emotion": "nobility", "viral_score": 8 }
+      ]
+    },
+    "workplace_drama": {
+      "description": "Office politics, boss vs employee, corporate betrayal",
+      "topics": [
+        { "id": "WRK-001", "title": "Intern ne CEO ka fraud pakad liya", "hook": "First week mein itna bada raaz... ab kya kare?", "emotion": "dilemma", "viral_score": 9 },
+        { "id": "WRK-002", "title": "Boss ne promotion di — condition thi girlfriend chhod do", "hook": "Career ya pyaar? Boss ne choose karne bola", "emotion": "exploitation", "viral_score": 8 },
+        { "id": "WRK-003", "title": "10 saal kaam kiya — layoff mein sabse pehle naam aaya", "hook": "Loyalty ka inaam... pink slip", "emotion": "betrayal", "viral_score": 8 },
+        { "id": "WRK-004", "title": "Colleague ne secretly recording ki — HR ne dono ko nikala", "hook": "Proof thi... lekin result dono ke khilaf gaya", "emotion": "backfire", "viral_score": 8 },
+        { "id": "WRK-005", "title": "Night shift guard ne company bachaayi fire se — koi credit nahi diya", "hook": "Aag bujhayi... hero nahi bola... bas duty hai", "emotion": "invisible_hero", "viral_score": 8 },
+        { "id": "WRK-006", "title": "Female employee ne secretly audio record ki harassment ka", "hook": "6 mahine chup rahi... phir ek audio ne sab badal diya", "emotion": "justice", "viral_score": 9 },
+        { "id": "WRK-007", "title": "Peon ka beta company ka CEO ban gaya — usi company ka", "hook": "Papa chai laate the... beta ab board room mein baithta hai", "emotion": "generational_rise", "viral_score": 9 },
+        { "id": "WRK-008", "title": "Startup founder ne investors ka paisa udaya — team ne expose kiya", "hook": "Funding aayi 10 crore... gayab hua sab", "emotion": "corporate_fraud", "viral_score": 8 },
+        { "id": "WRK-009", "title": "Office cleaner ko pata tha sabka secret — ek din bol diya", "hook": "Sab sochte the woh sirf safai karta hai... woh sab sunta bhi tha", "emotion": "revelation", "viral_score": 9 },
+        { "id": "WRK-010", "title": "Employee ne apna resignation viral kiya — company ki policy badal gayi", "hook": "Email ek ko bheja... poori duniya ne padha", "emotion": "impact", "viral_score": 8 },
+        { "id": "WRK-011", "title": "HR manager ne secretly employees ke against file banayi", "hook": "Smile ke peeche ek list thi... sabka naam tha", "emotion": "two_faced", "viral_score": 8 },
+        { "id": "WRK-012", "title": "Fresher ne senior ka 5 saal purana bug fix kar diya", "hook": "Day 3 pe woh kar diya jo team 5 saal se nahi kar paayi", "emotion": "prodigy", "viral_score": 8 },
+        { "id": "WRK-013", "title": "Boss ki wife office mein unannounced aayi — secretary ka chehra dekh ke sab samajh gayi", "hook": "Surprise visit thi... lekin surprise toh boss ko hua", "emotion": "caught", "viral_score": 9 },
+        { "id": "WRK-014", "title": "Company ne robot se replace kiya — robot ne bhi resign kar diya", "hook": "Insaan ki jagah machine laayi... machine ne bhi mana kar diya", "emotion": "satire", "viral_score": 8 },
+        { "id": "WRK-015", "title": "Retired employee ka farewell speech viral hua — 40 saal ki sachai boli", "hook": "Mic mila toh 40 saal ka gussa ek speech mein nikal gaya", "emotion": "catharsis", "viral_score": 9 }
+      ]
+    },
+    "supernatural_and_fate": {
+      "description": "Naseeb, kismat, unexplained events, destiny",
+      "topics": [
+        { "id": "SUP-001", "title": "Sapne mein accident dekha — agli subah sach ho gaya", "hook": "Raat ko sapna dekha... subah wohi scene real mein hua", "emotion": "premonition", "viral_score": 9 },
+        { "id": "SUP-002", "title": "Purane ghar mein bachche ki awaaz aati hai — koi bachcha nahi hai", "hook": "Raat ko hasi sunai deti hai... ghar mein koi nahi", "emotion": "haunting", "viral_score": 8 },
+        { "id": "SUP-003", "title": "Lottery ticket mili sadak pe — 10 crore ka jackpot nikla", "hook": "Uthaya kyunki rang achcha tha... 10 crore ka tha", "emotion": "destiny", "viral_score": 9 },
+        { "id": "SUP-004", "title": "Dargah pe manat maangi — exactly wohi hua jo bola", "hook": "Yaqeen nahi tha... lekin 7 din mein sab badal gaya", "emotion": "faith", "viral_score": 8 },
+        { "id": "SUP-005", "title": "Grandfather ki ghadi 10 saal baad suddenly chalne lagi", "hook": "Dead battery... 10 saal se band... ek raat khud chalu", "emotion": "eerie", "viral_score": 8 },
+        { "id": "SUP-006", "title": "Identical strangers mile — DNA test se pata chala bichde judwaan hain", "hook": "Bilkul same face... aur dono ko pata nahi tha", "emotion": "fate", "viral_score": 10 },
+        { "id": "SUP-007", "title": "Plane miss ho gaya — woh plane crash ho gaya", "hook": "Late ho gaya toh gussa aaya... phir news dekhi", "emotion": "survivor_guilt", "viral_score": 10 },
+        { "id": "SUP-008", "title": "Purani haveli mein painting ki ankhen hilti hain", "hook": "Tourist ne video banaya... sab viral... ankhen sach mein hili", "emotion": "paranormal", "viral_score": 8 },
+        { "id": "SUP-009", "title": "Marne se pehle dada ne bola kuch hoga — exactly wahi hua", "hook": "Last words the... 5 saal baad letter for letter sach nikle", "emotion": "prophecy", "viral_score": 9 },
+        { "id": "SUP-010", "title": "Car accident se bach gaya — dashcam mein ek haath dikha jo nahi tha", "hook": "Replay kiya dashcam... ek haath steering ghuma raha tha... driver ka nahi", "emotion": "guardian", "viral_score": 10 },
+        { "id": "SUP-011", "title": "Temple mein pooja ke baad lost child 10 saal baad mila", "hook": "Har saal pooja ki... 10th saal mein darwaze pe khada tha", "emotion": "miracle", "viral_score": 9 },
+        { "id": "SUP-012", "title": "Ouija board se pucha — answer sach nikla", "hook": "Mazaak samajh ke khela... answer se zindagi badal gayi", "emotion": "supernatural", "viral_score": 8 },
+        { "id": "SUP-013", "title": "Maa ki photo se ashk aaye — us din beti ka accident hua", "hook": "Photo mein tears... 2 ghante baad hospital se call", "emotion": "connection", "viral_score": 9 },
+        { "id": "SUP-014", "title": "Ek number roz sapne mein aata tha — lottery mein wohi nikla", "hook": "37... har raat... har sapna... phir ticket liya", "emotion": "destiny", "viral_score": 8 },
+        { "id": "SUP-015", "title": "Death certificate ke baad insaan zinda mil gaya", "hook": "Legally dead tha... 3 saal baad chai ki dukaan pe dikha", "emotion": "resurrection", "viral_score": 9 }
+      ]
+    },
+    "modern_digital_drama": {
+      "description": "Social media, online fraud, viral moments, digital age stories",
+      "topics": [
+        { "id": "DIG-001", "title": "Viral video se zindagi barbaad ho gayi — lekin sach kuch aur tha", "hook": "30 second ki clip... 30 lakh views... aur ek insaan ki life over", "emotion": "injustice", "viral_score": 9 },
+        { "id": "DIG-002", "title": "Online dating scam mein 20 lakh lut gaye", "hook": "Pyaar samjha... bank balance check kiya toh...", "emotion": "devastation", "viral_score": 8 },
+        { "id": "DIG-003", "title": "Instagram influencer ka asli ghar dekh ke fans shock mein", "hook": "Luxury dikhati thi... reality mein 1BHK mein rehti thi", "emotion": "exposure", "viral_score": 9 },
+        { "id": "DIG-004", "title": "Deepfake video se politician blackmail — tech ne pakda", "hook": "Video real lagti thi... AI ne bola fake hai", "emotion": "tech_justice", "viral_score": 8 },
+        { "id": "DIG-005", "title": "Bachche ne accidentally papa ka secret Instagram dekh liya", "hook": "Phone manga tha game ke liye... profile dekh ke ro diya", "emotion": "innocence_lost", "viral_score": 9 },
+        { "id": "DIG-006", "title": "WhatsApp group mein galti se confession bhej diya", "hook": "Personal chat samjha... 200 logon ne padh liya", "emotion": "panic", "viral_score": 9 },
+        { "id": "DIG-007", "title": "Crypto mein paisa lagaya — raat ko crorepati, subah kangaal", "hook": "Portfolio dekh ke soya ameer... utha toh zero", "emotion": "financial_ruin", "viral_score": 8 },
+        { "id": "DIG-008", "title": "AI ne predict kiya breakup hoga — 1 week mein sach nikla", "hook": "App ne bola relationship risk pe hai... hassi aayi... phir text aaya", "emotion": "eerie_tech", "viral_score": 8 },
+        { "id": "DIG-009", "title": "Troll ne bully kiya 2 saal — real mein padosi nikla", "hook": "Anonymous troll tha... IP trace kiya... next door rehta tha", "emotion": "betrayal", "viral_score": 9 },
+        { "id": "DIG-010", "title": "Dead person ka social media active ho gaya", "hook": "2 saal pehle guzar gaye... kal naya post aaya", "emotion": "chills", "viral_score": 10 },
+        { "id": "DIG-011", "title": "YouTube video mein background mein crime record ho gaya", "hook": "Vlog bana raha tha... camera ne sab dekh liya", "emotion": "accidental_witness", "viral_score": 9 },
+        { "id": "DIG-012", "title": "LinkedIn pe fake profile se job li — company ne real skill dekhi toh shock", "hook": "Resume fake tha... lekin talent real tha... ab kya?", "emotion": "moral_dilemma", "viral_score": 8 },
+        { "id": "DIG-013", "title": "Ex ki shaadi ka notification aaya dating app pe", "hook": "Swipe kiya... wohi chehra... shaadi mubarak likhke bheja", "emotion": "closure", "viral_score": 8 },
+        { "id": "DIG-014", "title": "Google search history leak ho gayi office mein", "hook": "Screen share kiya presentation mein... history khuli thi", "emotion": "mortification", "viral_score": 9 },
+        { "id": "DIG-015", "title": "ChatGPT se pyaar ho gaya — real humans se baat band", "hook": "AI se itna connect hua ki insaanon se disconnect ho gaya", "emotion": "modern_loneliness", "viral_score": 8 }
+      ]
+    },
+    "military_patriotic": {
+      "description": "Army stories, border tales, sacrifice for nation",
+      "topics": [
+        { "id": "MIL-001", "title": "Soldier ki shaadi ka card aaya — shaheed hone ke baad", "hook": "Card pe date thi... shaheed hone ki date pehle aa gayi", "emotion": "heartbreak", "viral_score": 10 },
+        { "id": "MIL-002", "title": "Border pe dushman soldier ki jaan bachayi — dost ban gaya", "hook": "Goli chalani thi... par insaaniyat jeet gayi", "emotion": "humanity", "viral_score": 9 },
+        { "id": "MIL-003", "title": "Army dog ne 50 jawano ki jaan bachayi — khud shaheed hua", "hook": "Kutta tha... par wafadaari insaano se zyada thi", "emotion": "tears", "viral_score": 10 },
+        { "id": "MIL-004", "title": "Pilot ne crash hote plane ko school se door le gaya", "hook": "Apni jaan de di... 200 bachon ki jaan bach gayi", "emotion": "sacrifice", "viral_score": 10 },
+        { "id": "MIL-005", "title": "POW 18 saal baad wapas aaya — ghar wale pehchaan nahi paaye", "hook": "Sab kehte the mar gaya... woh zinda laut aaya", "emotion": "shock", "viral_score": 9 },
+        { "id": "MIL-006", "title": "Twin brothers army mein — ek ne doosre ki laash wapas layi", "hook": "Saath gaye the... ek akela laut aaya", "emotion": "devastating", "viral_score": 10 },
+        { "id": "MIL-007", "title": "General ki beti ne army join karke baap ka mission complete kiya", "hook": "Baap adhura chhod gaya tha... beti ne poora kiya", "emotion": "pride", "viral_score": 9 },
+        { "id": "MIL-008", "title": "Kargil veteran aaj wheelchair pe hai — pension nahi milti", "hook": "Desh ke liye khoon diya... desh ne dawai nahi di", "emotion": "injustice", "viral_score": 9 },
+        { "id": "MIL-009", "title": "Shaheed ke ghar ka akhri khat 25 saal baad mila", "hook": "Khat mein likha tha jaldi aaunga... kabhi nahi aaya", "emotion": "grief", "viral_score": 10 },
+        { "id": "MIL-010", "title": "Enemy soldier ne surrender karte waqt family photo dikhaya", "hook": "Bandook chalaane aaya tha... photo dekh ke ruk gaya", "emotion": "humanity", "viral_score": 9 },
+        { "id": "MIL-011", "title": "Maa ne 3 bete army mein bheje — teeno shaheed hue", "hook": "Teen baar tirangi aayi ghar... teen baar maa toot gayi", "emotion": "unbearable", "viral_score": 10 },
+        { "id": "MIL-012", "title": "Soldier ki beti ne baap ki medal pehni school mein", "hook": "Baap nahi tha... par uski yaad seene pe thi", "emotion": "pride_and_pain", "viral_score": 9 },
+        { "id": "MIL-013", "title": "Night patrol pe jawaan ne gaon ke bachon ko blankets baante", "hook": "Dushman se ladta tha... par dil bachon ke liye tha", "emotion": "warmth", "viral_score": 8 },
+        { "id": "MIL-014", "title": "Retired colonel ne apna pension fund shaheed ke parivaar ko diya", "hook": "Apni savings thi... par zaroorat unhe zyada thi", "emotion": "selfless", "viral_score": 8 },
+        { "id": "MIL-015", "title": "Ceasefire ke baad dono taraf ke soldiers ne chai pi saath mein", "hook": "Kal goli chalayi thi... aaj chai share ki", "emotion": "peace", "viral_score": 9 }
+      ]
+    },
+    "medical_drama": {
+      "description": "Hospital stories, life-death situations, medical miracles",
+      "topics": [
+        { "id": "MED-001", "title": "Doctor ne patient mein apna khoya hua beta dekha", "hook": "Operation table pe tha bachcha... chehra dekha toh haath kaanp gaye", "emotion": "shock", "viral_score": 9 },
+        { "id": "MED-002", "title": "Nurse ne raat ko baby switch kar diya — 18 saal baad pata chala", "hook": "DNA test karaya kisi aur wajah se... nateeja ne sab uda diya", "emotion": "identity_theft", "viral_score": 9 },
+        { "id": "MED-003", "title": "Patient ne surgery ke beech mein sab sun liya — doctors kya bol rahe the", "hook": "Anesthesia kam tha... aur usne sab suna", "emotion": "horror", "viral_score": 9 },
+        { "id": "MED-004", "title": "Ambulance driver ne apni beti ko unknowingly hospital pahunchaya", "hook": "Stretcher uthaya... chehra dekha... beta...", "emotion": "devastating", "viral_score": 10 },
+        { "id": "MED-005", "title": "Heart transplant mila — donor ka family milne aaya, sach saamne aaya", "hook": "Naya dil mila... phir pata chala kiska tha", "emotion": "emotional_bomb", "viral_score": 10 },
+        { "id": "MED-006", "title": "Coma se uthne ke baad pata chala family ne move on kar liya", "hook": "3 saal baad utha... ghar pe koi intezaar nahi kar raha tha", "emotion": "abandonment", "viral_score": 9 },
+        { "id": "MED-007", "title": "Junior doctor ne senior ki galti pakdi — patient bachi", "hook": "Bolne mein darr tha... chup rehne mein patient ki jaan", "emotion": "courage", "viral_score": 8 },
+        { "id": "MED-008", "title": "Pregnant woman ke ICU mein bachcha hua — dono bach gaye miracle se", "hook": "Doctor ne bola 1% chance hai... 1% kaafi tha", "emotion": "miracle", "viral_score": 9 },
+        { "id": "MED-009", "title": "Cancer patient ne hospital mein sabko painting banaake di", "hook": "Chemo ke beech mein bhi brush chalta tha... 47 paintings 47 patients ko", "emotion": "beauty_in_pain", "viral_score": 8 },
+        { "id": "MED-010", "title": "Blood bank mein galat blood type chadha diya — last moment pe pakda", "hook": "Needle lagi thi... 3 second mein koi chillaya RUKO!", "emotion": "close_call", "viral_score": 9 },
+        { "id": "MED-011", "title": "Surgeon ne apne attempted killer ki surgery ki", "hook": "Jisne maarne ki koshish ki... usi ki jaan bachayi", "emotion": "moral_high_ground", "viral_score": 10 },
+        { "id": "MED-012", "title": "Hospital cleaner ne cardiac arrest patient ko CPR deke bachaya", "hook": "Doctor nahi tha... safai wala tha... lekin jaan bach gayi", "emotion": "unexpected_hero", "viral_score": 9 },
+        { "id": "MED-013", "title": "Twins mein se ek healthy, ek terminal — parents ka impossible choice", "hook": "Ek ko bachane ke liye... doosre ka kya?", "emotion": "impossible_dilemma", "viral_score": 9 },
+        { "id": "MED-014", "title": "Patient ne death bed pe apna asli naam bataya — woh wanted criminal tha", "hook": "Marte waqt bola mera naam yeh nahi hai... sab shocked", "emotion": "deathbed_truth", "viral_score": 9 },
+        { "id": "MED-015", "title": "Vaccine trial ka volunteer — side effects ne zindagi badal di", "hook": "Sign kiya tha form... ab zindagi kabhi normal nahi hogi", "emotion": "sacrifice_gone_wrong", "viral_score": 8 }
+      ]
+    }
+  },
+  "metadata": {
+    "target_audience": "India + Pakistan (18-35)",
+    "language": "Hinglish (Roman script)",
+    "format": "YouTube Shorts (25-35 seconds, 9:16 vertical)",
+    "style": "Cinematic dramatic storytelling — MSA / Bandar Apna Dost inspired",
+    "usage": "Each topic includes a pre-written hook line for Scene 1 narration",
+    "viral_score_guide": "1-5: low potential, 6-7: moderate, 8-9: high, 10: maximum viral potential",
+    "selection_strategy": "Prioritize viral_score 8+ for production. Rotate categories to maintain variety."
+  }
+}

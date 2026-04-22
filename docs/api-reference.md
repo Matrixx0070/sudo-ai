@@ -1,0 +1,588 @@
+# API Reference — SUDO-AI v4
+
+SUDO-AI exposes an OpenAI-compatible HTTP API on port `18900` (default, port 3000 was legacy pre-Wave-3 unification). Any OpenAI client library works with this API by pointing it at `http://localhost:18900` and using your configured token.
+
+---
+
+## Authentication
+
+All endpoints require a Bearer token in the `Authorization` header.
+
+```
+Authorization: Bearer <SUDO_AI_API_TOKEN>
+```
+
+Set `SUDO_AI_API_TOKEN` in `config/.env`. If the env var is not set, the API server starts but **all requests return 401**. There is no anonymous access.
+
+**Configure the port:**
+```bash
+# config/.env
+GATEWAY_PORT=18900
+SUDO_AI_API_TOKEN=your-secret-token-here
+```
+
+---
+
+## Endpoints
+
+### POST /v1/chat/completions
+
+Send a chat completion request. The agent receives the messages, runs its tool-calling loop, and returns the final response.
+
+**Request:**
+
+```http
+POST /v1/chat/completions
+Authorization: Bearer your-secret-token
+Content-Type: application/json
+```
+
+```json
+{
+  "model": "xai/grok-4-1-fast-non-reasoning",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "What is the current disk usage on this machine?"
+    }
+  ],
+  "temperature": 0.7,
+  "max_tokens": 2048,
+  "stream": false
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | string | yes | Provider-qualified model ID. Must match one of the configured models. |
+| `messages` | array | yes | Conversation history. Standard OpenAI message format: `role` (system/user/assistant) + `content` (string). |
+| `temperature` | float | no | Overrides the model's configured temperature for this request. Range: 0–2. |
+| `max_tokens` | integer | no | Maximum tokens to generate. Overrides `maxOutputTokens` from config. |
+| `stream` | boolean | no | Currently not supported. Pass `false` or omit. |
+
+**Response:**
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1711459200,
+  "model": "xai/grok-4-1-fast-non-reasoning",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Current disk usage:\n- /: 142GB used of 500GB (28%)\n- /data: 23GB used of 100GB (23%)"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 156,
+    "completion_tokens": 48,
+    "total_tokens": 204
+  }
+}
+```
+
+**Error responses:**
+
+| Status | Meaning |
+|---|---|
+| `400` | Invalid request body (missing required fields, malformed JSON) |
+| `401` | Missing or invalid Bearer token |
+| `500` | Agent or LLM error during processing |
+
+---
+
+### GET /v1/models
+
+List all models configured and available in the current instance.
+
+**Request:**
+
+```http
+GET /v1/models
+Authorization: Bearer your-secret-token
+```
+
+**Response:**
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "xai/grok-4-1-fast-non-reasoning",
+      "object": "model",
+      "created": 1711459200,
+      "owned_by": "sudo-ai"
+    },
+    {
+      "id": "xai/grok-4-fast-reasoning",
+      "object": "model",
+      "created": 1711459200,
+      "owned_by": "sudo-ai"
+    },
+    {
+      "id": "openai/gpt-4o",
+      "object": "model",
+      "created": 1711459200,
+      "owned_by": "sudo-ai"
+    }
+  ]
+}
+```
+
+The model list reflects the primary models and fallback model from `config/sudo-ai.json5`, deduplicated.
+
+---
+
+### POST /v1/skills/import
+
+Import a skill from a URI source into the skill registry. The importer fetches the manifest and body from the given URI, deduplicates by name and content hash, then persists the skill.
+
+**Request:**
+
+```http
+POST /v1/skills/import
+Authorization: Bearer your-secret-token
+Content-Type: application/json
+```
+
+```json
+{
+  "source": "https://skills.example.com/my-skill/manifest.json",
+  "trustOverride": "indexed"
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `source` | string | yes | URI of the skill manifest to import. Accepted schemes: `https://`, `file://`, `skill://`. Use `source` in preference to the legacy alias `uri`. |
+| `uri` | string | no | Legacy alias for `source`. If both are present, `source` takes precedence. |
+| `trustOverride` | string | no | Override the trust tier assigned to the imported skill. Accepted values: `bundled`, `indexed`, `unreviewed`, `workspace`. If omitted, the importer assigns a tier based on the URI scheme and manifest. |
+
+**Response (200):**
+
+```json
+{
+  "skill": {
+    "name": "my-skill",
+    "version": "1.0.0",
+    "contentHash": "abc123...",
+    "trustTier": "indexed"
+  },
+  "imported": true
+}
+```
+
+The `skill` field contains the manifest returned by the importer. Exact fields depend on the manifest schema.
+
+**Error responses:**
+
+| Status | Meaning |
+|---|---|
+| `400` | Missing or invalid `source`/`uri`, unsupported URI scheme, or invalid JSON body |
+| `401` | Missing or invalid Bearer token |
+| `404` | Source URI resolved but skill was not found at that location |
+| `409` | Skill already imported — same name and content hash already exist in the registry |
+| `422` | Capability check failed — skill requires capabilities not available in this instance |
+| `429` | Rate limited. `Retry-After` header indicates seconds to wait. Limit: 10 requests per 60 seconds per Bearer token (or per client IP if no token). |
+| `500` | Import succeeded but persistence to the registry failed |
+| `502` | Upstream source returned a server error or was unreachable |
+| `504` | Import timed out |
+
+---
+
+### GET /.well-known/agentskills.json
+
+Returns an [agentskills.io](https://agentskills.io)-compatible discovery manifest. External crawlers and tooling use this endpoint to locate the skill registry for this instance.
+
+**Public endpoint. No authentication required. CORS wildcard (`Access-Control-Allow-Origin: *`) is set on all responses.**
+
+**Request:**
+
+```http
+GET /.well-known/agentskills.json
+```
+
+**Response (200):**
+
+```json
+{
+  "registry": "https://sudoapi.shop/v1/registry/skills",
+  "spec_version": "1.0",
+  "provider": "sudo-ai",
+  "total_skills": 5,
+  "last_updated_iso": "2026-04-19T19:24:33.832Z"
+}
+```
+
+**Response headers (200):**
+
+| Header | Value |
+|---|---|
+| `ETag` | SHA-256 of the response body (hex string) |
+| `Cache-Control` | `public, max-age=60` |
+| `Access-Control-Allow-Origin` | `*` |
+
+The `registry` URL is sourced from the `SUDO_PUBLIC_BASE_URL` environment variable, defaulting to `http://localhost:18900`. It is never derived from request headers.
+
+**Conditional requests:**
+
+Send `If-None-Match: <etag>` to avoid re-downloading an unchanged manifest. When the ETag matches the current value the server returns `304 Not Modified` with an empty body and the same caching headers.
+
+**Error responses:**
+
+| Status | Meaning |
+|---|---|
+| `304` | `If-None-Match` matched the current ETag. Empty body. |
+| `404` | Any other `/.well-known/*` path (e.g. `/.well-known/agentskills.xml`). Body: `{"error":{"message":"Not found","code":404}}` |
+
+**Metrics** (visible at `GET /v1/admin/metrics`):
+
+| Metric | Incremented on |
+|---|---|
+| `sudo_wellknown_manifest_requests_total` | Every 200 response |
+| `sudo_wellknown_manifest_not_modified_total` | Every 304 response |
+| `sudo_wellknown_manifest_not_found_total` | Every 404 response |
+
+**Example:**
+
+```bash
+curl https://sudoapi.shop/.well-known/agentskills.json
+```
+
+---
+
+### GET /v1/registry/skills
+
+List all publicly available skills exposed by this instance. Crawlers auto-discover this endpoint via `/.well-known/agentskills.json`.
+
+**Public endpoint. No authentication required.**
+
+**Request:**
+
+```http
+GET /v1/registry/skills
+```
+
+**Response (200):**
+
+```json
+{
+  "skills": [
+    {
+      "id": "browser-search",
+      "name": "browser.search",
+      "version": "1.0.0",
+      "description": "Search the web and return structured results.",
+      "trust_tier": "bundled"
+    }
+  ],
+  "total": 5
+}
+```
+
+See `GET /v1/registry/skills/:id` for the full manifest of an individual skill and `GET /v1/registry/skills/:id/raw` for the raw SKILL.md source.
+
+---
+
+### GET /v1/admin/compare
+
+Run two models against the same prompt concurrently and return a side-by-side comparison of their outputs, latencies, estimated costs, and complexity scores. Intended for operator evaluation of model routing decisions.
+
+**Request:**
+
+```http
+GET /v1/admin/compare?a=<modelId>&b=<modelId>&prompt=<text>
+Authorization: Bearer your-secret-token
+```
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `a` | string | yes | Model ID for the first model (e.g. `xai/grok-4-1-fast-non-reasoning`). Must be a model the Brain can route to via `runWithModel`. |
+| `b` | string | yes | Model ID for the second model. |
+| `prompt` | string | yes | The prompt text to send to both models. Maximum 4096 characters. |
+
+**Response (200):**
+
+```json
+{
+  "runId": "550e8400-e29b-41d4-a716-446655440000",
+  "modelA": "xai/grok-4-1-fast-non-reasoning",
+  "modelB": "openai/sonnet",
+  "prompt": "Explain gradient descent in one paragraph.",
+  "responseA": "Gradient descent is an optimisation algorithm...",
+  "responseB": "Gradient descent works by iteratively adjusting...",
+  "latencyAms": 812,
+  "latencyBms": 1043,
+  "costAusd": 0.000124,
+  "costBusd": 0.000098,
+  "complexityA": { "score": 0.12, "tier": "simple", "signals": ["prompt_length"], "suggested_max_tokens": 2048, "thinking_model": false },
+  "complexityB": { "score": 0.12, "tier": "simple", "signals": ["prompt_length"], "suggested_max_tokens": 2048, "thinking_model": false },
+  "energyA": { "wh": 0.00041 },
+  "energyB": { "wh": 0.00038 },
+  "timestamp": "2026-04-17T10:00:00.000Z"
+}
+```
+
+**Response fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `runId` | string (UUID) | Unique identifier for this comparison run |
+| `modelA` / `modelB` | string | Model IDs as supplied in query params |
+| `prompt` | string | The prompt text as supplied |
+| `responseA` / `responseB` | string | Full text output from each model |
+| `latencyAms` / `latencyBms` | integer | Wall-clock latency in milliseconds for each model call |
+| `costAusd` / `costBusd` | float | Estimated cost in USD based on token counts and configured pricing |
+| `complexityA` / `complexityB` | object | Complexity scoring result for the prompt (scored against each model) |
+| `energyA` / `energyB` | object | Estimated energy consumption |
+| `timestamp` | string (ISO 8601) | UTC timestamp of the comparison |
+
+If `Brain.runWithModel` is not available for a given model, `responseA` or `responseB` will contain a stub message and latency/token counts will be zero.
+
+**Error responses:**
+
+| Status | Meaning |
+|---|---|
+| `400` | Missing or invalid query parameters, or `prompt` exceeds 4096 characters |
+| `401` | Missing or invalid Bearer token |
+| `429` | Rate limited. `Retry-After` header indicates seconds to wait. Limit: 5 requests per 60 seconds per Bearer token (or per client IP if no token). Rate limit is checked before authentication. |
+| `500` | Unhandled internal error during model calls |
+
+---
+
+### GET /v1/admin/public-key
+
+Return the instance's Ed25519 public key. Federation peers use this to verify `signedArtifact` bodies returned by the `/approve` endpoints.
+
+**Auth:** Bearer token (`SUDO_GATEWAY_TOKEN`). Returns `401` if missing or invalid.
+
+**Request:**
+
+```http
+GET /v1/admin/public-key
+Authorization: Bearer your-gateway-token
+```
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "keyId": "302a3005",
+    "algorithm": "ed25519",
+    "publicKey": "<DER hex>",
+    "generatedAt": "2026-04-19T22:10:03.369Z"
+  }
+}
+```
+
+`keyId` is the first 8 hex characters of the DER-encoded key; it matches the `keyId` field in every `signedArtifact` this instance produces.
+
+---
+
+### Artifact Signing — approve endpoints (Wave 10E)
+
+When artifact signing is enabled (the default), two endpoints include a `signedArtifact` object in their response. Setting `SUDO_SIGNING_DISABLE=1` omits the field, restoring the pre-Wave-10E shape.
+
+**POST /v1/admin/learning/proposals/:id/approve**
+
+Signing on (default): `{ "proposal": {...}, "signedArtifact": { "payload": {...}, "signedAt": "...", "keyId": "...", "signature": "...", "artifactType": "config_proposal" } }`
+
+Signing off: `{ "proposal": {...} }`
+
+**POST /v1/admin/skills/optimizations/:id/approve**
+
+Signing on (default): `{ "ok": true, "data": {...}, "signedArtifact": { "payload": {...}, "signedAt": "...", "keyId": "...", "signature": "...", "artifactType": "skill" } }`
+
+Signing off: `{ "ok": true, "data": {...} }`
+
+Use `GET /v1/admin/public-key` to retrieve the key needed to verify the `signature` field.
+
+---
+
+## Kill-switches
+
+All kill-switches use exact-`"1"`-match semantics: the feature is disabled only when the variable is set to the string `"1"`. Any other value, including unset, leaves the feature enabled.
+
+| Variable | Feature disabled |
+|---|---|
+| `SUDO_TAINT_DISABLE=1` | Taint tracking wiring (Wave 10E) |
+| `SUDO_SIGNING_DISABLE=1` | Artifact signing on `/approve` endpoints (Wave 10E) |
+| `SUDO_SKILL_INDEX_DISABLE=1` | Skill-to-tool reverse index (Wave 10C) |
+
+### Key directory override: SUDO_SIGNER_KEY_DIR
+
+**Purpose:** Override the default `data/keys/` directory where ArtifactSigner reads and writes the ed25519 keypair (`wave10-signer.priv`, `wave10-signer.pub`). If unset, `data/keys/` relative to the project root is used.
+
+**Trust boundary:** This variable is operator-set only. It must come from `ecosystem.config.cjs` or a systemd unit file. Never accept its value from user input, HTTP request headers, query parameters, or request bodies.
+
+**Attack vector:** An attacker who can set this variable can (a) redirect private key writes to an attacker-readable path, exfiltrating the signing key, or (b) point the reader at an attacker-supplied public key, breaking signature verification for federation peers.
+
+**Mitigation:** File permissions are enforced on write — `0600` for the private key, `0644` for the public key, `0700` for the directory. These permissions apply regardless of the path value, but they do not protect against a path that points into an attacker-writable subtree. Treat any change to this variable with the same scrutiny as a credential rotation.
+
+**Contrast with binary kill-switches:** Kill-switches such as `SUDO_SIGNING_DISABLE` use exact `=== '1'` matching — they are binary toggles with no free-form input surface. `SUDO_SIGNER_KEY_DIR` accepts an arbitrary filesystem path, making operator discipline more critical.
+
+**Related:** `SUDO_KEY_ROTATION_DB_PATH` (path override for the key-rotation SQLite database) carries the same trust class. Both path-override variables should be audited together when reviewing deployment configuration.
+
+---
+
+## curl Examples
+
+### Simple chat request
+
+```bash
+curl -X POST http://localhost:18900/v1/chat/completions \
+  -H "Authorization: Bearer $SUDO_AI_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "xai/grok-4-1-fast-non-reasoning",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+### Request with tool use (agent runs autonomously)
+
+The agent decides which tools to use. You do not specify tools in the request — the agent's full tool set is always available.
+
+```bash
+curl -X POST http://localhost:18900/v1/chat/completions \
+  -H "Authorization: Bearer $SUDO_AI_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "xai/grok-4-1-fast-non-reasoning",
+    "messages": [
+      {"role": "user", "content": "Search the web for the latest Node.js release and tell me the version number."}
+    ]
+  }'
+```
+
+The agent will call `browser.search`, retrieve the result, and return a text answer. The response contains only the final text — intermediate tool calls are not exposed in the API response.
+
+### Multi-turn conversation
+
+```bash
+curl -X POST http://localhost:18900/v1/chat/completions \
+  -H "Authorization: Bearer $SUDO_AI_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "xai/grok-4-1-fast-non-reasoning",
+    "messages": [
+      {"role": "user", "content": "Read the file /root/sudo-ai-v3/package.json"},
+      {"role": "assistant", "content": "The package.json shows sudo-ai version 3.0.0 with dependencies including Electron 34.5.8, React 19.2.4..."},
+      {"role": "user", "content": "What version of TypeScript is it using?"}
+    ]
+  }'
+```
+
+### List available models
+
+```bash
+curl http://localhost:18900/v1/models \
+  -H "Authorization: Bearer $SUDO_AI_API_TOKEN"
+```
+
+---
+
+## Using with OpenAI Python SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:18900/v1",
+    api_key="your-sudo-ai-api-token",
+)
+
+response = client.chat.completions.create(
+    model="xai/grok-4-1-fast-non-reasoning",
+    messages=[
+        {"role": "user", "content": "What processes are currently running on this machine?"}
+    ],
+)
+
+print(response.choices[0].message.content)
+```
+
+---
+
+## Using with OpenAI Node.js SDK
+
+```typescript
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+  baseURL: 'http://localhost:18900/v1',
+  apiKey: process.env.SUDO_AI_API_TOKEN,
+});
+
+const response = await client.chat.completions.create({
+  model: 'xai/grok-4-1-fast-non-reasoning',
+  messages: [
+    { role: 'user', content: 'List all TypeScript files in /root/sudo-ai-v3/src/core/' },
+  ],
+});
+
+console.log(response.choices[0].message.content);
+```
+
+---
+
+## Differences from OpenAI API
+
+| Feature | OpenAI API | SUDO-AI API |
+|---|---|---|
+| Streaming | Supported | Not supported (pass `stream: false`) |
+| Tool/function calling in request | Supported | Not applicable — agent uses its own tool set |
+| Images in messages | Supported (vision models) | Not supported |
+| Fine-tuned models | Supported | Not supported |
+| Audio | Supported | Not supported |
+| Embeddings endpoint | Supported | Not included |
+| Model list | OpenAI models | Your configured models |
+| Token counting | Exact | Estimated |
+
+The API is designed for programmatic access to the agent's reasoning and tool-execution capabilities, not as a full OpenAI replacement.
+
+---
+
+## Rate Limiting
+
+The SecurityGuard applies rate limiting per user ID. Via the API, the user ID is derived from the Bearer token. Repeated rapid requests may be throttled.
+
+Rate limit responses (429) include a `Retry-After` header containing the number of seconds to wait before the next request. Compare endpoint enforces 5 requests per 60 seconds per Bearer token.
+
+---
+
+## Enabling the API Server
+
+The API server starts automatically in CLI mode if `GATEWAY_PORT` is set in `.env`. To explicitly control it:
+
+```bash
+# config/.env
+
+# Set both to enable the API server
+GATEWAY_PORT=18900
+SUDO_AI_API_TOKEN=choose-a-long-random-secret
+
+# To disable the API server entirely: leave GATEWAY_PORT unset
+```
+
+The API server binds to `0.0.0.0` by default. To restrict to localhost only, set a firewall rule or reverse proxy accordingly. Do not expose the API server to the public internet without a reverse proxy with TLS.

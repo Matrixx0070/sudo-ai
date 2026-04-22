@@ -1,0 +1,4 @@
+{
+  "_template_warning": "TEMPLATE — Copy this file to config/values.json and edit. This .example file is NOT loaded.",
+  "_comment": "Operator-defined values mapping. Populate as needed."
+}

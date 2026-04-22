@@ -1,0 +1,12 @@
+// MCP Server Configuration for SUDO-AI v5
+// Add MCP servers here to auto-connect on boot
+// See: https://modelcontextprotocol.io/docs/servers
+{
+  "servers": [
+    // Example stdio server:
+    // { "id": "filesystem", "transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] }
+
+    // Example SSE server:
+    // { "id": "remote-tools", "transport": "sse", "url": "http://localhost:3001/sse" }
+  ]
+}

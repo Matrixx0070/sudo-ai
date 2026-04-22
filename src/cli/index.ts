@@ -1,0 +1,280 @@
+#!/usr/bin/env node
+/**
+ * @file cli/index.ts
+ * @description SUDO-AI CLI entry point.
+ *
+ * Registers all sub-commands via commander and dispatches to the appropriate
+ * handler. This file is compiled to dist/cli/index.js and exposed as the
+ * `sudo-ai` binary via package.json "bin".
+ *
+ * Commands:
+ *   sudo-ai start [--daemon]   Boot the full SUDO-AI stack
+ *   sudo-ai stop               Gracefully stop a running instance
+ *   sudo-ai status             Show running status and health
+ *   sudo-ai config             Validate or inspect configuration
+ *   sudo-ai doctor             Run comprehensive environment checks
+ */
+
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Command } from 'commander';
+
+// ---------------------------------------------------------------------------
+// Bundler path overrides — ESM bundle __dirname fix
+//
+// esbuild inlines pino and thread-stream as __commonJS wrappers.  Those
+// wrappers reference __dirname in their closures, but esbuild does NOT inject
+// __dirname into __commonJS callbacks when outputting ESM.
+//
+// pino checks globalThis.__bundlerPathsOverrides BEFORE falling back to
+// __dirname, so injecting it here — before any lazy __esm init (config/loader,
+// brain, etc.) can fire pino.transport() — permanently prevents the
+// ReferenceError: __dirname is not defined crash.
+//
+// The build:cli banner injects:
+//   import { createRequire } from 'module'; const require = createRequire(import.meta.url);
+// We must NOT re-import createRequire (duplicate ESM identifier error).
+// Instead we declare the banner-injected `require` as ambient.
+// ---------------------------------------------------------------------------
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+declare const require: NodeRequire;  // provided by esbuild banner
+
+(function injectPinoBundlerPaths() {
+  if (typeof globalThis !== 'object' || '__bundlerPathsOverrides' in globalThis) return;
+  try {
+    // thread-stream is a nested dep of pino under pnpm and is NOT directly
+    // resolvable from the bundle entry.  In pnpm's virtual store, all deps of
+    // a package sit as siblings: <store>/pino@x/node_modules/{pino,thread-stream,...}
+    // so we find thread-stream relative to pino's own directory.
+    const pinoMain  = require.resolve('pino');
+    const pinoDir   = path.dirname(pinoMain);                     // …/node_modules/pino
+    const tsWorker  = path.resolve(pinoDir, '..', 'thread-stream', 'lib', 'worker.js');
+
+    (globalThis as Record<string, unknown>)['__bundlerPathsOverrides'] = {
+      'pino-worker':          require.resolve('pino/lib/worker.js'),
+      'thread-stream-worker': tsWorker,
+      'pino/file':            require.resolve('pino/file.js'),
+      'pino-pretty':          require.resolve('pino-pretty'),
+    };
+  } catch {
+    // Non-fatal — pino will fall back to __dirname at runtime; log dir issues
+    // will surface naturally.
+  }
+}());
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+// ---------------------------------------------------------------------------
+// Project root resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the project root regardless of whether this file is being run
+ * from src/ (tsx) or from dist/cli/ (compiled binary).
+ *
+ * Structure assumptions:
+ *   src/cli/index.ts  → ../../  is the project root
+ *   dist/cli/index.js → ../../  is the project root
+ */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+
+// ---------------------------------------------------------------------------
+// Program definition
+// ---------------------------------------------------------------------------
+
+const program = new Command();
+
+program
+  .name('sudo-ai')
+  .description('SUDO-AI — Autonomous AI Agent Platform')
+  .version('3.1.0', '-v, --version', 'Print version number');
+
+// ---------------------------------------------------------------------------
+// start
+// ---------------------------------------------------------------------------
+
+program
+  .command('start')
+  .description('Boot the full SUDO-AI stack')
+  .option('-d, --daemon', 'Run as a background daemon (detached process)', false)
+  .action(async (opts: { daemon: boolean }) => {
+    if (opts.daemon) {
+      const { runStartDaemon } = await import('./commands/start.js');
+      runStartDaemon(PROJECT_ROOT);
+    } else {
+      const { runStartForeground } = await import('./commands/start.js');
+      await runStartForeground(PROJECT_ROOT);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// stop
+// ---------------------------------------------------------------------------
+
+program
+  .command('stop')
+  .description('Gracefully stop a running SUDO-AI instance')
+  .action(async () => {
+    const { runStop } = await import('./commands/stop.js');
+    const code = await runStop(PROJECT_ROOT);
+    process.exit(code);
+  });
+
+// ---------------------------------------------------------------------------
+// status
+// ---------------------------------------------------------------------------
+
+program
+  .command('status')
+  .description('Show current SUDO-AI running status and API health')
+  .action(async () => {
+    const { runStatus } = await import('./commands/status.js');
+    const code = await runStatus(PROJECT_ROOT);
+    process.exit(code);
+  });
+
+// ---------------------------------------------------------------------------
+// config
+// ---------------------------------------------------------------------------
+
+const configCmd = program
+  .command('config')
+  .description('Inspect or validate the SUDO-AI configuration');
+
+configCmd
+  .option('--validate', 'Load and validate config/sudo-ai.json5, exit 0/1')
+  .option('--path', 'Print the resolved config file path')
+  .action(async (opts: { validate?: boolean; path?: boolean }) => {
+    const { runConfigValidate, runConfigPath } = await import('./commands/config.js');
+
+    if (opts.validate) {
+      const code = await runConfigValidate(PROJECT_ROOT);
+      process.exit(code);
+    } else if (opts.path) {
+      runConfigPath(PROJECT_ROOT);
+    } else {
+      // Default: show both.
+      runConfigPath(PROJECT_ROOT);
+      const code = await runConfigValidate(PROJECT_ROOT);
+      process.exit(code);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// doctor
+// ---------------------------------------------------------------------------
+
+program
+  .command('doctor')
+  .description('Run comprehensive environment health checks')
+  .option('--fix', 'Auto-remediate issues where possible', false)
+  .action(async (opts: { fix?: boolean }) => {
+    const { runDoctor } = await import('./commands/doctor.js');
+    const code = await runDoctor(PROJECT_ROOT, { fix: opts.fix ?? false });
+    process.exit(code);
+  });
+
+// ---------------------------------------------------------------------------
+// bench — Wave 10
+// ---------------------------------------------------------------------------
+
+program
+  .command('bench')
+  .description('Run model × task benchmark sweep and print report')
+  .option('--models <list>',     'Comma-separated model IDs to benchmark')
+  .option('--tasks <list>',      'Comma-separated task IDs (default: all 5 built-in)')
+  .option('--conditions <list>', 'Comma-separated conditions: no_skills,skills_on,skills_optimized')
+  .option('--seeds <n>',         'Number of random seeds per cell (default: 1)')
+  .option('--output <fmt>',      'Output format: markdown | json (default: markdown)', 'markdown')
+  .action(async (opts: { models?: string; tasks?: string; conditions?: string; seeds?: string; output?: string }) => {
+    const { runBench } = await import('./commands/bench.js');
+    const code = await runBench(opts);
+    process.exit(code);
+  });
+
+// ---------------------------------------------------------------------------
+// scan — Wave 10 (Builder 3 implements commands/scan.ts)
+// ---------------------------------------------------------------------------
+
+program
+  .command('scan')
+  .description('Security scan: token strength, env leaks, config permissions')
+  .option('--json', 'Output results as JSON instead of table', false)
+  .action(async (opts: { json?: boolean }) => {
+    try {
+      const { runScan } = await import('./commands/scan.js');
+      const code = await runScan(PROJECT_ROOT, opts);
+      process.exit(code);
+    } catch {
+      console.error('[sudo-ai] scan command not yet available (Builder 3 pending)');
+      process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// quickstart — Wave 10 (Builder 3 implements commands/quickstart.ts)
+// ---------------------------------------------------------------------------
+
+program
+  .command('quickstart')
+  .description('Interactive 5-step setup wizard')
+  .option('--force', 'Overwrite existing config without prompting', false)
+  .action(async (opts: { force?: boolean }) => {
+    try {
+      const { runQuickstart } = await import('./commands/quickstart.js');
+      await runQuickstart(PROJECT_ROOT, { force: opts.force ?? false });
+      process.exit(0);
+    } catch {
+      console.error('[sudo-ai] quickstart failed — run with DEBUG=1 for details');
+      process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// init — Wave 10 (Builder 3 implements commands/init.ts)
+// ---------------------------------------------------------------------------
+
+program
+  .command('init')
+  .description('Apply a preset recipe to the current workspace')
+  .option('--preset <name>', 'Preset name: coding | research | chat')
+  .option('--force', 'Overwrite existing config without prompting', false)
+  .action(async (opts: { preset?: string; force?: boolean }) => {
+    try {
+      const { runInit } = await import('./commands/init.js');
+      const code = await runInit(PROJECT_ROOT, opts);
+      process.exit(code);
+    } catch {
+      if (opts.preset) {
+        console.error('[sudo-ai] init command not yet available (Builder 3 pending)');
+        process.exit(1);
+      } else {
+        console.log('Available presets: coding, research, chat');
+        process.exit(0);
+      }
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// chat — terminal TUI streaming conversation with Claude
+// ---------------------------------------------------------------------------
+
+program
+  .command('chat')
+  .description('Interactive streaming chat with Claude in the terminal')
+  .action(async () => {
+    const { runChat } = await import('./commands/chat.js');
+    await runChat();
+  });
+
+// ---------------------------------------------------------------------------
+// Parse args
+// ---------------------------------------------------------------------------
+
+program.parseAsync(process.argv).catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`[sudo-ai] Fatal error: ${msg}`);
+  process.exit(1);
+});

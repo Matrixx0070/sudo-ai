@@ -1,0 +1,73 @@
+{
+  "title": "Kitchen Mein Mat Aana 🍳👑",
+  "hookLine": "Unhone kaha tha — kitchen mein mat aana.",
+  "ctaQuestion": "Kya Priya ne sahi kiya? Comment mein batao! 💬",
+  "cast": {
+    "protagonist": {
+      "name": "Priya",
+      "appearance": "24-year-old Indian woman, warm brown skin, large expressive dark brown eyes, thick black hair in a long braid, gentle round face, small nose, natural beauty"
+    },
+    "antagonist": {
+      "name": "Saas (Mother-in-law)",
+      "appearance": "55-year-old Indian woman, stern sharp features, gray-streaked hair pulled back tight in a bun, thin lips, piercing dark eyes, heavy gold jewelry, imposing presence"
+    }
+  },
+  "scenes": [
+    {
+      "index": 1,
+      "narration": "Unhone kaha tha — kitchen mein mat aana. Aaj main apni kitchen ki queen hoon.",
+      "description": "HOOK — Close-up of Priya's face in her grand modern restaurant kitchen. She wears a chef's white coat with her name embroidered. Stainless steel kitchen gleams behind her. Her eyes are fierce and proud with a hint of tears.",
+      "dallePrompt": "Cinematic close-up portrait of a 24-year-old Indian woman chef in a pristine white chef coat with 'PRIYA' embroidered in gold, standing in a gleaming modern professional restaurant kitchen with stainless steel equipment. She has warm brown skin, large expressive dark brown eyes glistening with proud tears, thick black hair in a neat braid. Her expression is fierce and triumphant. Dramatic warm golden lighting from above, shallow depth of field, bokeh lights in background. Photorealistic, cinematic color grading, 9:16 vertical portrait orientation, ultra detailed, 8K quality.",
+      "textOverlay": "Kitchen mein mat aana... 🍳"
+    },
+    {
+      "index": 2,
+      "narration": "Shaadi ke baad jab main sasural aayi, sapne the hazaaron.",
+      "description": "Flashback — Priya as a new bride in red wedding lehenga entering the in-laws' house. She's smiling, hopeful, carrying a small steel thali. The house is a traditional middle-class Indian home with warm lights.",
+      "dallePrompt": "Beautiful 24-year-old Indian bride in traditional red and gold wedding lehenga with dupatta over her head, mehndi on hands, carrying a small steel thali, stepping through the decorated entrance of a traditional middle-class Indian home. Warm fairy lights and marigold garlands frame the doorway. Her expression is hopeful and radiant with a gentle smile. Golden warm lighting, dreamy soft focus background, rose petals on the floor. Photorealistic, cinematic, warm color palette, 9:16 vertical portrait, ultra detailed, 8K quality.",
+      "textOverlay": ""
+    },
+    {
+      "index": 3,
+      "narration": "Lekin saas ne pehle din hi clear kar diya — yeh kitchen mera hai, tum mat aana.",
+      "description": "The mother-in-law stands blocking the kitchen doorway with one hand on the door frame. Her face is stern and cold. Behind her the kitchen is visible. Priya stands to the side, still in her bridal outfit, looking shocked and hurt.",
+      "dallePrompt": "Dramatic scene in a traditional Indian home hallway. A stern 55-year-old Indian mother-in-law with gray-streaked hair in a tight bun, heavy gold jewelry, wearing an expensive dark green silk saree, stands blocking the kitchen doorway with one hand firmly on the door frame, her expression cold and authoritative. A young Indian bride in red lehenga stands to the side looking shocked and hurt, her eyes wide with disbelief. The kitchen behind the mother-in-law has warm light spilling out. Harsh directional lighting creates dramatic shadows. Photorealistic, cinematic tension, 9:16 vertical, ultra detailed, 8K quality.",
+      "textOverlay": "Yeh kitchen MERA hai."
+    },
+    {
+      "index": 4,
+      "narration": "Raat ko akele room mein phone pe recipes dekhti thi. Aankhen bheegi, par hausla pakka.",
+      "description": "Night scene — Priya sits alone on a simple bed in a small room, lit only by the glow of her phone screen showing cooking videos. Tears streak her face but her expression is determined. A small notebook and pen lie beside her.",
+      "dallePrompt": "Intimate night scene of a young 24-year-old Indian woman sitting alone on a simple bed in a small dimly lit room, her face illuminated only by the blue-white glow of a smartphone screen showing cooking tutorial videos. She has tears streaking down her brown cheeks but her dark eyes show fierce determination. She wears a simple cotton salwar kameez. A small notebook and pen lie beside her on the bed. Moonlight filters through a small window. Moody blue and warm phone-glow lighting, emotional cinematic portrait. Photorealistic, 9:16 vertical, ultra detailed, 8K quality.",
+      "textOverlay": ""
+    },
+    {
+      "index": 5,
+      "narration": "Chupke chupke tiffin banana shuru kiya. Pehle 5 customers, phir 50.",
+      "description": "Priya in a tiny makeshift cooking space (a corner of her room with a small stove), carefully packing food into steel tiffin boxes. Multiple tiffins are lined up. She wears a simple apron over her kurta. Her face shows quiet pride.",
+      "dallePrompt": "Young 24-year-old Indian woman in a simple blue kurta with a handmade cloth apron, carefully packing delicious-looking Indian food into steel tiffin boxes in a tiny makeshift kitchen corner of a small room. A single gas burner stove, spice jars, and a cutting board are visible. Multiple tiffin boxes are neatly lined up on a small table, ready for delivery. Steam rises from freshly cooked food. Her expression shows quiet pride and determination. Warm golden cooking light, cozy atmosphere. Photorealistic, cinematic, 9:16 vertical, ultra detailed, 8K quality.",
+      "textOverlay": "5 customers... phir 50 🔥"
+    },
+    {
+      "index": 6,
+      "narration": "Ek saal mein mera catering business lakhon ka ho gaya. Sab kehte the — Priya ka khaana magic hai.",
+      "description": "SUCCESS MONTAGE — Priya now stands confidently in front of HER OWN restaurant/catering kitchen. A banner reads 'PRIYA'S KITCHEN' in Hindi and English. Staff work behind her. She wears professional chef attire. Customers line up outside.",
+      "dallePrompt": "Triumphant wide shot of a confident 24-year-old Indian woman chef standing proudly in front of her own modern restaurant with a large illuminated sign reading 'PRIYA'S KITCHEN' in both Hindi and English. She wears a professional white chef coat and stands with arms crossed, beaming with pride. Behind her through glass windows, kitchen staff work busily. A line of eager customers stretches outside. The restaurant exterior has warm inviting golden lights. Evening time, city street backdrop. Photorealistic, cinematic success moment, warm triumphant lighting, 9:16 vertical, ultra detailed, 8K quality.",
+      "textOverlay": "PRIYA'S KITCHEN 👑"
+    },
+    {
+      "index": 7,
+      "narration": "Phir woh din aaya. Saas mere restaurant ke bahar khadi thi. Ghar ka paisa khatam ho gaya tha.",
+      "description": "The mother-in-law stands outside Priya's grand restaurant, looking defeated and small. She wears a faded saree, no gold jewelry anymore. Her posture is hunched, head slightly bowed. The restaurant's warm glow contrasts with her cold loneliness.",
+      "dallePrompt": "Emotional scene of a defeated 55-year-old Indian woman standing alone outside a grand illuminated restaurant at night. She wears a faded plain cotton saree, no jewelry, her gray hair loosely tied. Her posture is hunched and small, head slightly bowed in shame, eyes looking down. The warm golden glow of 'PRIYA'S KITCHEN' restaurant sign illuminates her from behind, creating a dramatic silhouette contrast between her poverty and the restaurant's success. Rain-wet pavement reflects the lights. Photorealistic, cinematic, emotional, moody blue-gold lighting, 9:16 vertical, ultra detailed, 8K quality.",
+      "textOverlay": ""
+    },
+    {
+      "index": 8,
+      "narration": "Maine unka haath pakda aur kaha — Aaiye, ab yeh kitchen humara hai. Kuch darvaze band hote hain taake hum apna ghar bana sakein.",
+      "description": "REDEMPTION — Priya gently holds her mother-in-law's hand, leading her through the restaurant kitchen door. Both have tears in their eyes. Warm light floods from the kitchen. The mother-in-law's expression shows shame turning to gratitude. Priya's shows compassion and strength.",
+      "dallePrompt": "Deeply emotional scene of a young 24-year-old Indian woman chef in white coat gently holding the hand of an elderly 55-year-old Indian woman in a faded saree, leading her through the warm glowing doorway of a professional restaurant kitchen. Both have tears in their eyes. The young woman's expression radiates compassion and quiet strength. The elderly woman's face shows shame dissolving into gratitude. Warm golden light floods from the kitchen doorway, enveloping both figures in a redemptive glow. Staff members watch from inside with respectful smiles. Photorealistic, cinematic, emotional climax, 9:16 vertical, ultra detailed, 8K quality.",
+      "textOverlay": "Ab yeh kitchen HUMARA hai. ❤️"
+    }
+  ]
+}
