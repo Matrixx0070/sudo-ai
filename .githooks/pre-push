@@ -1,0 +1,27 @@
+#!/bin/sh
+# pre-push — SUDO-AI self-build main-branch guard
+# Blocks any push to refs/heads/main.
+# Self-build agent must push only to the 'self-build' branch.
+#
+# Git passes push targets on stdin: "<local-ref> <local-sha> <remote-ref> <remote-sha>"
+# We inspect remote-ref for refs/heads/main.
+#
+# Bypass (human-explicit only): SUDO_SELFBUILD_ALLOW_MAIN_PUSH=1
+set -eu
+
+if [ "${SUDO_SELFBUILD_ALLOW_MAIN_PUSH:-}" = "1" ]; then
+  exit 0
+fi
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    echo "ERROR: pre-push blocked — push to main is not allowed." >&2
+    echo "  remote ref: $remote_ref" >&2
+    echo "  local ref:  $local_ref" >&2
+    echo "The self-build agent must push only to the 'self-build' branch." >&2
+    echo "Set SUDO_SELFBUILD_ALLOW_MAIN_PUSH=1 to bypass (human override only)." >&2
+    exit 1
+  fi
+done
+
+exit 0

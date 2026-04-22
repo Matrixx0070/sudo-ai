@@ -29,10 +29,11 @@ import { createLogger } from '../../../shared/logger.js';
 import { execSync } from 'node:child_process';
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
-  appendFileSync, copyFileSync,
+  appendFileSync, copyFileSync, realpathSync,
 } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { isProtectedPath, PROTECTED_PATHS } from '../../../self-build/protected-paths.js';
 const _require = createRequire(import.meta.url);
 
 const logger = createLogger('meta.self-modify');
@@ -87,12 +88,30 @@ function trim(s: string): string {
   return s.slice(0, half) + '\n...[truncated]...\n' + s.slice(-half);
 }
 
-/** Resolve a user-supplied path — must be within PROJECT_ROOT */
+/** Resolve a user-supplied path — must be within PROJECT_ROOT.
+ *
+ * HIGH-3 fix: follows symlinks via realpathSync to prevent symlink-based
+ * bypasses of the protected-path guard. For new (non-existent) files,
+ * falls back to path.resolve(). Defense-in-depth: BOTH the realpath and
+ * the raw norm are checked by callers via isProtectedPath.
+ */
 function resolveProjectPath(rawPath: string): string | null {
   const abs = path.isAbsolute(rawPath) ? rawPath : path.join(PROJECT_ROOT, rawPath);
   const norm = path.resolve(abs);
   if (!norm.startsWith(PROJECT_ROOT)) return null;
-  return norm;
+
+  // Resolve symlinks to prevent symlink-based traversal into protected paths.
+  let realNorm: string;
+  try {
+    realNorm = realpathSync(norm);
+  } catch {
+    // File does not exist yet (new write); use norm as the real path.
+    realNorm = norm;
+  }
+  // Return the realpath; callers also receive norm implicitly via closures
+  // or by re-deriving from the original raw path.
+  if (!realNorm.startsWith(PROJECT_ROOT)) return null;
+  return realNorm;
 }
 
 /** Back up a file before modification */
@@ -153,6 +172,17 @@ function doEditFile(rawPath: string, oldText: string, newText: string, replaceAl
   if (!abs) return { success: false, output: `Path traversal blocked: ${rawPath}` };
   if (!existsSync(abs)) return { success: false, output: `File not found: ${abs}` };
 
+  // Defense-in-depth: check both realpath-based rel AND raw input rel.
+  const rel = path.relative(PROJECT_ROOT, abs);
+  const rawNorm = path.resolve(path.isAbsolute(rawPath) ? rawPath : path.join(PROJECT_ROOT, rawPath));
+  const relRaw = path.relative(PROJECT_ROOT, rawNorm);
+  if ((isProtectedPath(rel) || isProtectedPath(relRaw)) && process.env['SUDO_SELFBUILD_ALLOW_PROTECTED'] !== '1') {
+    return {
+      success: false,
+      output: `Path is protected during self-build: ${rel}. Protected roots: ${PROTECTED_PATHS.slice(0, 5).join(', ')}...`,
+    };
+  }
+
   let content = readFileSync(abs, 'utf-8');
   if (!content.includes(oldText)) {
     return { success: false, output: `Text not found in ${path.relative(PROJECT_ROOT, abs)}:\n${oldText.slice(0, 200)}` };
@@ -180,6 +210,17 @@ function doEditFile(rawPath: string, oldText: string, newText: string, replaceAl
 function doWriteFile(rawPath: string, content: string): ToolResult {
   const abs = resolveProjectPath(rawPath);
   if (!abs) return { success: false, output: `Path traversal blocked: ${rawPath}` };
+
+  // Defense-in-depth: check both realpath-based rel AND raw input rel.
+  const rel = path.relative(PROJECT_ROOT, abs);
+  const rawNorm = path.resolve(path.isAbsolute(rawPath) ? rawPath : path.join(PROJECT_ROOT, rawPath));
+  const relRaw = path.relative(PROJECT_ROOT, rawNorm);
+  if ((isProtectedPath(rel) || isProtectedPath(relRaw)) && process.env['SUDO_SELFBUILD_ALLOW_PROTECTED'] !== '1') {
+    return {
+      success: false,
+      output: `Path is protected during self-build: ${rel}. Protected roots: ${PROTECTED_PATHS.slice(0, 5).join(', ')}...`,
+    };
+  }
 
   // Ensure parent dir exists
   const dir = path.dirname(abs);
@@ -234,6 +275,9 @@ function doEditConfig(key: string, value: unknown): ToolResult {
 }
 
 function doBuild(): ToolResult {
+  if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
+    return { success: false, output: 'meta.self-modify build is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
+  }
   logger.info('Running npm build');
   const output = run('npm run build 2>&1', 120_000);
   const success = !output.includes('error TS') && !output.includes('Build failed');
@@ -248,6 +292,9 @@ function doBuild(): ToolResult {
 }
 
 function doRestart(): ToolResult {
+  if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
+    return { success: false, output: 'meta.self-modify restart is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
+  }
   logger.info('Restarting sudo-ai service');
   logMod('restart', 'service restart initiated');
   run(`systemctl restart ${SERVICE}`, 30_000);
@@ -263,6 +310,9 @@ function doRestart(): ToolResult {
 }
 
 async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false): Promise<ToolResult> {
+  if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
+    return { success: false, output: 'meta.self-modify full-cycle is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
+  }
   // Step 1: Edit
   const editResult = doEditFile(rawPath, oldText, newText, replaceAll);
   if (!editResult.success) return editResult;

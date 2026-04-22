@@ -109,6 +109,15 @@ export const hotDeployTool: ToolDefinition = {
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const log = ctx.logger as { info: (...a: unknown[]) => void; error: (...a: unknown[]) => void; warn: (...a: unknown[]) => void };
 
+    // HIGH-2: Block entirely during self-build mode — custom tools deployed in-process
+    // could bypass all path guards at execution time.
+    if (process.env['SUDO_SELF_BUILD_MODE'] === '1' && process.env['SUDO_SELFBUILD_ALLOW_PROTECTED'] !== '1') {
+      return {
+        success: false,
+        output: 'meta.hot-deploy is blocked during self-build mode (SUDO_SELF_BUILD_MODE=1) to prevent custom-tool bypass of path guards.',
+      };
+    }
+
     const skillName = typeof params['skillName'] === 'string' ? params['skillName'].trim() : '';
     const code      = typeof params['code']      === 'string' ? params['code'].trim()      : '';
     const overwrite = params['overwrite'] === true;

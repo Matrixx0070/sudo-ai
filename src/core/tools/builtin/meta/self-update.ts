@@ -389,6 +389,18 @@ export const selfUpdateTool: ToolDefinition = {
 
     logger.info({ action, confirm }, 'meta.self-update invoked');
 
+    // MEDIUM-1: Block destructive actions during self-build mode to prevent
+    // git reset / pull / build from destroying in-progress self-build work.
+    if (process.env['SUDO_SELF_BUILD_MODE'] === '1' && process.env['SUDO_SELFBUILD_ALLOW_PROTECTED'] !== '1') {
+      const SELFBUILD_BLOCKED: readonly string[] = ['pull', 'full-update', 'rollback', 'build', 'restart'];
+      if (SELFBUILD_BLOCKED.includes(action)) {
+        return {
+          success: false,
+          output: `meta.self-update action "${action}" is blocked during self-build mode (SUDO_SELF_BUILD_MODE=1). Use status or check for read-only inspection.`,
+        };
+      }
+    }
+
     switch (action) {
       case 'check':
         return handleCheck();

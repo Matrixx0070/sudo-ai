@@ -6,7 +6,13 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { blockIfProtected } from '../../../self-build/path-guard.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, '../../../../../');
 
 // ---------------------------------------------------------------------------
 // Edit operation types
@@ -132,6 +138,12 @@ export const editFileTool: ToolDefinition = {
     if (!filePath.startsWith(ctx.workingDir)) {
       return { success: false, output: `Path traversal blocked: ${rawPath} resolves outside working directory` };
     }
+
+    const guardResult = blockIfProtected(filePath, PROJECT_ROOT);
+    if (guardResult.blocked) {
+      return { success: false, output: guardResult.error };
+    }
+
     const edits = params['edits'] as Edit[];
     const summary: string[] = [];
 

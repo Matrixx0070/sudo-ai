@@ -1603,6 +1603,10 @@ async function boot(): Promise<void> {
   // dream cron job fires. Section 9 assigns the real instance.
   let autoDream: AutoDream | null = null;
 
+  // Hoisted so the cronRunner closure can dispatch self-build sentinel messages.
+  // Assigned after section 8.5 once finalAgentLoop is available.
+  let selfBuildDepsRef: import('./core/self-build/orchestrator.js').SelfBuildDeps | null = null;
+
   /**
    * Payload runner: executes a cron job payload as an isolated agent turn.
    * Creates or reuses a dedicated session for the cron job.
@@ -1634,6 +1638,28 @@ async function boot(): Promise<void> {
 
     // payload.kind === 'agentTurn'
 
+    // Self-build sentinel dispatch — intercept before generic agent-turn path.
+    if (job.name === 'system.self-build' || job.name === 'system.self-build-report') {
+      if (!selfBuildDepsRef) {
+        log.warn({ jobId: job.id, jobName: job.name }, 'self-build cron fired but deps not wired — skipping');
+        return;
+      }
+      try {
+        const { handleSelfBuildTick, handleDailyReport, SELF_BUILD_TICK_MSG } = await import('./core/self-build/cron-entry.js');
+        const msg = (payload as { message?: string }).message;
+        if (msg === SELF_BUILD_TICK_MSG) {
+          const result = await handleSelfBuildTick(selfBuildDepsRef);
+          log.info({ jobId: job.id, selfBuildResult: result }, 'self-build tick dispatched');
+        } else {
+          const result = await handleDailyReport(selfBuildDepsRef);
+          log.info({ jobId: job.id, dailyReportResult: result }, 'self-build daily report dispatched');
+        }
+      } catch (sbErr: unknown) {
+        log.error({ jobId: job.id, err: String(sbErr) }, 'self-build cron dispatch failed');
+      }
+      return;
+    }
+
     // Gate heartbeat jobs with quiet hours before spinning up an agent turn.
     if (job.name === 'system.heartbeat') {
       const { isWithinActiveHours, parseHour } = await import('./core/cron/heartbeat-hours.js');
@@ -1659,6 +1685,23 @@ async function boot(): Promise<void> {
 
     log.info({ jobId: job.id }, 'Cron job agent turn completed');
   };
+
+  // -------------------------------------------------------------------------
+  // 7.9 DB file permission hardening — chmod 0600 on all SQLite DB files (LOW-2).
+  // Runs after all DBs are initialised, before cron starts any agent activity.
+  // -------------------------------------------------------------------------
+  try {
+    const dbDir = path.resolve('data');
+    const { readdirSync, chmodSync } = await import('node:fs');
+    for (const file of readdirSync(dbDir)) {
+      if (file.endsWith('.db') || file.endsWith('.db-wal') || file.endsWith('.db-shm')) {
+        try { chmodSync(path.join(dbDir, file), 0o600); } catch {}
+      }
+    }
+    log.info({ dbDir }, 'DB files chmod 0600 sweep complete');
+  } catch (err) {
+    log.warn({ err: String(err) }, 'DB chmod 0600 sweep failed');
+  }
 
   const cronStore = new CronStore();
   const cronScheduler = new CronScheduler(cronStore, cronRunner);
@@ -1742,6 +1785,36 @@ async function boot(): Promise<void> {
     log.info('Kairos daemon started — watching codebase, system, tasks, memory');
   } catch (err) {
     log.warn({ err: String(err) }, 'Kairos failed to start — running without daemon');
+  }
+
+  // -------------------------------------------------------------------------
+  // 8.5 Self-build autopilot (Wave SelfBuild)
+  // Only wired; inert until SUDO_SELF_BUILD_MODE=1
+  // -------------------------------------------------------------------------
+  try {
+    const { registerSelfBuildCron } = await import('./core/self-build/cron-entry.js');
+
+    const rawDb = (db as unknown as Record<string, unknown>)['db'] ?? db;
+    selfBuildDepsRef = {
+      agentLoop: finalAgentLoop,
+      mindDb: rawDb as import('better-sqlite3').Database,
+      alignmentAggregator: finalAgentLoop.getAlignmentAggregator() ?? null,
+      // mistakeAutoBlockGuard not accessible as a standalone var at this scope;
+      // the orchestrator treats absent guard as skip — safe.
+      mistakeAutoBlockGuard: undefined,
+      logger: createLogger('self-build'),
+      gitCwd: '/root/sudo-ai-v4',
+    };
+
+    registerSelfBuildCron(cronScheduler, selfBuildDepsRef);
+
+    if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
+      log.info('Self-build autopilot WIRED — SUDO_SELF_BUILD_MODE=1 is active');
+    } else {
+      log.info('Self-build autopilot OFF — set SUDO_SELF_BUILD_MODE=1 to enable');
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Self-build wiring failed — autopilot unavailable');
   }
 
   // -------------------------------------------------------------------------

@@ -6,7 +6,13 @@
 
 import { writeFile, mkdir, copyFile, access } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { blockIfProtected } from '../../../self-build/path-guard.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, '../../../../../');
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -66,6 +72,12 @@ export const writeFileTool: ToolDefinition = {
     if (!filePath.startsWith(ctx.workingDir)) {
       return { success: false, output: `Path traversal blocked: ${rawPath} resolves outside working directory` };
     }
+
+    const guardResult = blockIfProtected(filePath, PROJECT_ROOT);
+    if (guardResult.blocked) {
+      return { success: false, output: guardResult.error };
+    }
+
     const content = params['content'] as string;
     const createBackup = params['createBackup'] === true;
     const encoding = typeof params['encoding'] === 'string' ? params['encoding'] : 'utf-8';

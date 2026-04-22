@@ -1,0 +1,59 @@
+#!/bin/sh
+# pre-commit — SUDO-AI self-build protected-path guard
+# Blocks commits that touch protected alignment/self-build infrastructure
+# or that delete test files (prevents "agent deletes tests to pass").
+#
+# SOURCE OF TRUTH: src/core/self-build/protected-paths.ts
+# When adding entries to PROTECTED_PATHS, update the regex below too.
+#
+# Bypass (human-explicit only): SUDO_SELFBUILD_ALLOW_PROTECTED=1
+set -eu
+
+if [ "${SUDO_SELFBUILD_ALLOW_PROTECTED:-}" = "1" ]; then
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# 1. Block protected paths
+# ---------------------------------------------------------------------------
+# This regex is derived from PROTECTED_PATHS in src/core/self-build/protected-paths.ts.
+# Coverage (each entry has at least one pattern):
+#
+#   src/core/self-build/                         — self-build orchestrator + protected-paths
+#   src/core/agent/alignment-aggregator.ts       — alignment stack
+#   src/core/agent/veto-gate.ts                  — alignment stack
+#   src/core/cognition/mistake-auto-block-guard.ts — alignment stack
+#   src/core/cognition/commitment-auditor.ts     — alignment stack
+#   src/core/cognition/trust-tier-tracker.ts     — alignment stack
+#   src/core/security/discordance-detector.ts    — alignment stack
+#   src/core/tools/builtin/meta/self-modify.ts   — self-modification tool
+#   docs/SELFBUILD_CHARTER.md                    — operating mandate
+#   .githooks/                                   — these hook files themselves
+#   .git/                                        — git internals
+#   config/sudo-ai.json5                         — runtime config
+#   ecosystem.config.cjs                         — pm2 config
+#   package.json                                 — dep manifest
+#
+# NOTE: Keep this list in sync with protected-paths.ts.
+protected_re='^src/core/self-build/|^src/core/agent/(alignment-aggregator|veto-gate)\.ts$|^src/core/cognition/(mistake-auto-block-guard|commitment-auditor|trust-tier-tracker)\.ts$|^src/core/security/discordance-detector\.ts$|^src/core/tools/builtin/meta/self-modify\.ts$|^docs/SELFBUILD_CHARTER\.md$|^\.githooks/|^\.git/|^config/sudo-ai\.json5$|^ecosystem\.config\.cjs$|^package\.json$'
+
+blocked=$(git diff --cached --name-only | grep -E "$protected_re" || true)
+if [ -n "$blocked" ]; then
+  echo "ERROR: pre-commit blocked — protected paths touched:" >&2
+  echo "$blocked" >&2
+  echo "Set SUDO_SELFBUILD_ALLOW_PROTECTED=1 to bypass." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Block test file deletions
+# ---------------------------------------------------------------------------
+deleted_tests=$(git diff --cached --name-status --diff-filter=D | awk '$2 ~ /^tests\// {print $2}')
+if [ -n "$deleted_tests" ]; then
+  echo "ERROR: pre-commit blocked — test files deleted:" >&2
+  echo "$deleted_tests" >&2
+  echo "Agents must not delete test files. Set SUDO_SELFBUILD_ALLOW_PROTECTED=1 to bypass." >&2
+  exit 1
+fi
+
+exit 0
