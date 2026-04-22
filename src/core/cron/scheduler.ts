@@ -76,10 +76,18 @@ function isDue(job: CronJob, now: Date): boolean {
     case 'cron': {
       try {
         const cron = new Cron(schedule.expr, { timezone: schedule.tz });
-        const prev = cron.previousRun();
-        if (!prev) return false;
-        // Fire if the previous occurrence is within the current tick window.
-        return Math.abs(now.getTime() - prev.getTime()) < TICK_MS;
+        // _previous(now) returns the most recent cron occurrence strictly before now.
+        // croner requires ≥1 second past a boundary to register it as "previous".
+        // If that occurrence is after lastRun there is an unfired window — fire now.
+        // lastRun is always set (CronStore.upsert seeds it to registration time for
+        // brand-new jobs), so we never back-fire occurrences before registration.
+        const prevCronerDate = (cron as unknown as { _previous: (d: Date) => { getDate: () => Date } | null })._previous(now);
+        if (!prevCronerDate) return false;
+        const prev = prevCronerDate.getDate();
+        const lastRunMs = job.lastRun
+          ? new Date(job.lastRun).getTime()
+          : now.getTime(); // fallback: treat as just-now to avoid back-fire
+        return prev.getTime() > lastRunMs;
       } catch (err) {
         log.warn({ jobId: job.id, expr: schedule.expr, err }, 'Invalid cron expression — skipping');
         return false;
