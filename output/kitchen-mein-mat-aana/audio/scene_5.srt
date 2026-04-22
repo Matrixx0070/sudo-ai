@@ -1,8 +1,0 @@
-1
-00:00:00,100 --> 00:00:03,863
-Chupke chupke tiffin banana shuru kiya.
-
-2
-00:00:03,813 --> 00:00:07,852
-Pehle 5 customers, phir 50.
-

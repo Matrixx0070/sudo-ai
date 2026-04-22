@@ -1,8 +1,0 @@
-1
-00:00:00,100 --> 00:00:03,928
-Unhone kaha tha — kitchen mein mat aana.
-
-2
-00:00:03,878 --> 00:00:07,721
-Aaj main apni kitchen ki queen hoon.
-
