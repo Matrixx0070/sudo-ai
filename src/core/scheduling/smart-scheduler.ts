@@ -99,7 +99,7 @@ export class SmartScheduler {
       task.cronExpression ?? null,
       JSON.stringify(deps),
       task.optimalTime ?? null,
-      task.timezone ?? 'Asia/Kolkata',
+      task.timezone ?? 'UTC',
       task.cooldownMs ?? 0,
       task.priority,
       task.enabled ? 1 : 0,

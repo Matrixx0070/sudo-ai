@@ -10,7 +10,7 @@ import { TrophyWall } from '../furniture/TrophyWall';
 const ROOM_WIDTH = 10;
 const ROOM_DEPTH = 8;
 
-export function FrankOffice() {
+export function OwnerOffice() {
   return (
     <group position={[-6, 0, -5]}>
       <RoomFloor width={ROOM_WIDTH} depth={ROOM_DEPTH} color='#0f172a' />
@@ -31,9 +31,9 @@ export function FrankOffice() {
       <TrophyWall position={[-4, 0, -3.5]} />
 
       {/* Floating room label */}
-      <RoomLabel position={[0, 2, 0]} text="Frank's Office" />
+      <RoomLabel position={[0, 2, 0]} text="Owner's Office" />
     </group>
   );
 }
 
-export default FrankOffice;
+export default OwnerOffice;

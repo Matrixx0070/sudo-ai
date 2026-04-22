@@ -625,7 +625,7 @@ export class AgentLoop {
 
     // Security check: prompt injection detection.
     // We do NOT block the message — instead we inject a warning into session context
-    // so the brain remains aware and resistant without losing Frank's intent.
+    // so the brain remains aware and resistant without losing the owner's intent.
     if (this.security) {
       try {
         const check = (this.security as unknown as { detectInjection?: (m: string) => { safe: boolean; threat: string | null; score: number } }).detectInjection?.(message);
@@ -752,7 +752,7 @@ export class AgentLoop {
       }
 
       // Classify intent and inject a routing hint so the brain auto-picks
-      // the right execution path without Frank needing to name tools.
+      // the right execution path without the owner needing to name tools.
       try {
         const intent = classifyIntent(current);
         const hint = formatIntentHint(intent);

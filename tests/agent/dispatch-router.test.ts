@@ -251,7 +251,7 @@ describe('C-7: noveltyHint takes precedence over internal scoring', () => {
 });
 
 // ---------------------------------------------------------------------------
-// C-9: [M1] Anti-self-promotion emits log.info (visibility for Frank)
+// C-9: [M1] Anti-self-promotion emits log.info (visibility for the owner)
 // ---------------------------------------------------------------------------
 
 describe('C-9: anti-self-promotion block emits log.info', () => {

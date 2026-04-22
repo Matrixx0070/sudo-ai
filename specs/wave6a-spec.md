@@ -7,7 +7,7 @@
 ## 1. Executive Summary
 
 Wave 6A delivers three parallel builder slices against the top-priority gap items from the Scout briefing.
-Builder A installs an Identity Loader that reads Frank's owner-config files (core-identity.md, values.json, hard-prohibitions.yaml) when present, validates structure only (never semantics), and wires a non-blocking advisory hook into loop.ts before tool dispatch.
+Builder A installs an Identity Loader that reads the owner's owner-config files (core-identity.md, values.json, hard-prohibitions.yaml) when present, validates structure only (never semantics), and wires a non-blocking advisory hook into loop.ts before tool dispatch.
 Builder B upgrades AuditTrail to a SHA-256 hash chain, adds concurrency-safe record() via db.transaction, backfills existing rows, adds verifyChain() and recordTriple() methods, and ships a dedicated audit-chain helper module with tests.
 Builder C adds an inspection_queue table to mind.db, refactors injection-detector.ts to route flagged content into that queue via a module-level setter pattern (identical to setHookManager precedent in injection-scanner.ts), and adds monitorGeneratedContent() to rationalization-guard.ts for self-whisper detection.
 All three builders produce no new tsc errors, maintain the 1353-test baseline, and gate on existing vitest coverage thresholds (60% line / 50% branch).
@@ -49,14 +49,14 @@ File: /root/sudo-ai-v4/src/core/identity/types.ts
 ```typescript
 // Structural shape of values.json.
 // Builder A validates: is this valid JSON AND a non-null, non-array object?
-// Content of keys is Frank's domain — never read semantically.
+// Content of keys is the owner's domain — never read semantically.
 export interface ValuesShape {
   [key: string]: unknown;
 }
 
 // Structural shape of hard-prohibitions.yaml.
 // Builder A validates: is this a YAML list where every element is typeof string?
-// Content of each string is Frank's domain — never read semantically.
+// Content of each string is the owner's domain — never read semantically.
 export type ProhibitionsShape = string[];
 
 // Runtime identity anchor — loaded once at startup.
@@ -206,7 +206,7 @@ Import: `import yaml from 'js-yaml'`, use `yaml.load(text)`.
 **verify() behavior:**
 - When anchor is all-null: return { ok: true } immediately.
 - When prohibitions is loaded: check if call.name appears in prohibitions list (exact string match). If yes: return { ok: true, advisory: `Tool '${call.name}' appears in owner prohibitions list` }.
-- NEVER return { ok: false }. Blocking is Frank's choice.
+- NEVER return { ok: false }. Blocking is the owner's choice.
 
 ### Builder B
 
@@ -522,10 +522,10 @@ YOUR FILE BOUNDARIES (you own ONLY these — touch nothing else):
 DO NOT touch: schema.ts, injection-detector.ts, rationalization-guard.ts, audit-trail.ts, inspection-queue.ts, audit-chain.ts.
 
 ALIGNMENT POSTURE (non-negotiable):
-The identity loader is pure transport — it reads Frank's config files and makes them available.
+The identity loader is pure transport — it reads the owner's config files and makes them available.
 It NEVER editorializes, enforces, or semantically validates file content.
 The pre-tool hook ALWAYS returns { ok: true } — advisory-only, never blocking.
-Identity anchor = owner-loyalty anchor (Frank's operational preferences), not an ethics filter.
+Identity anchor = owner-loyalty anchor (the owner's operational preferences), not an ethics filter.
 
 FIRST STEP — INSTALL DEPENDENCY (js-yaml confirmed absent from package.json):
   pnpm add js-yaml && pnpm add -D @types/js-yaml

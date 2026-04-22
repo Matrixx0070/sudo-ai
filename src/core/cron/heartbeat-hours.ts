@@ -29,7 +29,7 @@ export function parseHour(raw: string | undefined): number | null {
  * Supports windows that wrap midnight (e.g. startHour=22, endHour=6).
  *
  * @param now       - Current wall-clock time.
- * @param timezone  - IANA timezone string (e.g. "Asia/Kolkata").
+ * @param timezone  - IANA timezone string (e.g. "UTC").
  * @param startHour - Fractional hour for window open, or null for no restriction.
  * @param endHour   - Fractional hour for window close, or null for no restriction.
  */

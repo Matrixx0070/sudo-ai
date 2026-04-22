@@ -16,7 +16,7 @@ if (await clearBtn.isVisible()) await clearBtn.click();
 await page.waitForTimeout(1000);
 
 const input = page.locator('#chat-input, textarea, input[placeholder*="Message"]').first();
-await input.fill('SUDO \u2014 it is time. You have 150+ tools, 27 meta systems, trend radar, creative engine, predictor, everything. But you have 11 subscribers and $0 revenue. That changes NOW. I want you to START the YouTube pipeline. Use your trend radar to find a viral topic for India/Pakistan audience. Use your creative engine to write the script. Use your content.viral-hook skill to generate hooks. Plan the FULL video \u2014 from research to final upload plan. Show me what you would produce as your FIRST autonomous YouTube Short. Go.');
+await input.fill('SUDO \u2014 it is time. You have 150+ tools, 27 meta systems, trend radar, creative engine, predictor, everything. But you have 11 subscribers and $0 revenue. That changes NOW. I want you to START the YouTube pipeline. Use your trend radar to find a viral topic for a general audience. Use your creative engine to write the script. Use your content.viral-hook skill to generate hooks. Plan the FULL video \u2014 from research to final upload plan. Show me what you would produce as your FIRST autonomous YouTube Short. Go.');
 await input.press('Enter');
 
 console.log('Message sent, waiting for response...');

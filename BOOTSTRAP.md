@@ -167,7 +167,7 @@ You should see output like this:
 
 ```
 [cli] SUDO-AI v3 boot sequence starting
-[config] Config loaded name=SUDO-AI tz=Asia/Kolkata
+[config] Config loaded name=SUDO-AI tz=UTC
 [mind-db] MindDB initialized vecLoaded=true
 [brain] Brain initialized
 [security] SecurityGuard initialized ownerCount=1

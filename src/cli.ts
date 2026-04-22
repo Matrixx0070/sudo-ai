@@ -1397,7 +1397,7 @@ async function boot(): Promise<void> {
           await web.send(msg.peerId, webReplyText);
           log.info({ peerId: msg.peerId }, 'Reply sent to Web');
 
-          // For long tasks (>60s), also notify via Telegram so Frank always knows
+          // For long tasks (>60s), also notify via Telegram so the owner always knows
           // even if the web tab was closed or WebSocket dropped during the build.
           const durationMs = Date.now() - taskStartMs;
           if (durationMs > 60_000 && telegramNotifier) {

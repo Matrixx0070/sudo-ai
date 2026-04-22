@@ -12,7 +12,7 @@ export const AGENTS: AgentDefinition[] = [
 ];
 
 export const ROOMS: RoomDefinition[] = [
-  { id: 'frank-office',  name: "Frank's Office",  position: [-6, 0, -5], size: [10, 8], cameraTarget: [-6, 0, -5], cameraPosition: [-6, 8, 2]  },
+  { id: 'frank-office',  name: "The Owner's Office",  position: [-6, 0, -5], size: [10, 8], cameraTarget: [-6, 0, -5], cameraPosition: [-6, 8, 2]  },
   { id: 'meeting-room',  name: 'Meeting Room',    position: [6,  0, -5], size: [10, 8], cameraTarget: [6,  0, -5], cameraPosition: [6,  8, 2]  },
   { id: 'workspace',     name: 'Main Workspace',  position: [-6, 0,  5], size: [10, 8], cameraTarget: [-6, 0,  5], cameraPosition: [-6, 8, 12] },
   { id: 'server-room',   name: 'Server Room',     position: [6,  0,  5], size: [10, 8], cameraTarget: [6,  0,  5], cameraPosition: [6,  8, 12] },

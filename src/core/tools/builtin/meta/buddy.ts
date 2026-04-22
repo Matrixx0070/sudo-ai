@@ -44,7 +44,7 @@ const SPECIES: Species[] = [
   { name: 'Bear',     emoji: '🐻', rarity: 'common' },
   { name: 'Crow',     emoji: '🦅', rarity: 'uncommon' },
   { name: 'Jellyfish',emoji: '🪼', rarity: 'rare' },
-  { name: 'Kuro',     emoji: '🐈‍⬛', rarity: 'legendary' },  // Frank's cat easter egg
+  { name: 'Kuro',     emoji: '🐈‍⬛', rarity: 'legendary' },  // the owner's cat easter egg
 ];
 
 // ---------------------------------------------------------------------------

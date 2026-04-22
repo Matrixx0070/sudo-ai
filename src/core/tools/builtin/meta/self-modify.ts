@@ -1,7 +1,7 @@
 /**
  * meta.self-modify — SUDO-AI self-modification pipeline.
  *
- * The single tool Frank uses to tell SUDO-AI to update its own code, config,
+ * The single tool the owner uses to tell SUDO-AI to update its own code, config,
  * or settings through web chat or Telegram — no Claude Code needed.
  *
  * Actions:
@@ -16,12 +16,12 @@
  *   full-cycle  — edit-file + build + restart in one shot (most common)
  *   history     — Show last 20 modifications from the modification log
  *
- * Typical flow when Frank says "change X to Y":
+ * Typical flow when the owner says "change X to Y":
  *   1. search-code  → find where X lives
  *   2. read-file    → confirm context
  *   3. full-cycle   → edit + build + restart
  *
- * No confirm required — Frank trusts SUDO-AI to modify itself.
+ * No confirm required — The owner trusts SUDO-AI to modify itself.
  */
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
@@ -308,7 +308,7 @@ function doHistory(): ToolResult {
 export const selfModifyTool: ToolDefinition = {
   name: 'meta.self-modify',
   description:
-    'SUDO-AI self-modification pipeline. Use this when Frank asks you to update code, settings, ' +
+    'SUDO-AI self-modification pipeline. Use this when the owner asks you to update code, settings, ' +
     'or config files through web chat or Telegram. Supports reading files, finding files, ' +
     'searching code, editing files, writing files, editing config, building, restarting, ' +
     'and the full edit→build→restart cycle (full-cycle). ' +

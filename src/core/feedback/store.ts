@@ -1,5 +1,5 @@
 /**
- * Feedback store — persists Frank's task ratings in mind.db.
+ * Feedback store — persists the owner's task ratings in mind.db.
  *
  * Schema (created on first use):
  *   feedback(id, session_id, channel, task_summary, task_type, rating, notes, created_at)

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useOfficeStore } from '@renderer/stores/officeStore.js';
 import { AGENTS } from '../constants.js';
-import { FrankOffice } from '../rooms/FrankOffice.js';
+import { OwnerOffice } from '../rooms/OwnerOffice.js';
 import { MainWorkspace } from '../rooms/MainWorkspace.js';
 import { ServerRoom } from '../rooms/ServerRoom.js';
 import { MeetingRoom } from '../rooms/MeetingRoom.js';
@@ -19,7 +19,7 @@ import CameraController from './CameraController.js';
  *   - Lighting (ambient + two directional lights for soft shadows)
  *   - Atmospheric fog for depth cues
  *   - Ground plane that receives shadows
- *   - All six room components (FrankOffice, MainWorkspace, ServerRoom,
+ *   - All six room components (OwnerOffice, MainWorkspace, ServerRoom,
  *     MeetingRoom, BreakRoom, Lobby)
  *   - All agent meshes read from officeStore
  *   - Headless CameraController and PostProcessing components
@@ -80,7 +80,7 @@ export default function OfficeScene(): React.ReactElement {
       {/* Rooms                                                               */}
       {/* ------------------------------------------------------------------ */}
 
-      <FrankOffice />
+      <OwnerOffice />
       <MainWorkspace />
       <ServerRoom />
       <MeetingRoom />

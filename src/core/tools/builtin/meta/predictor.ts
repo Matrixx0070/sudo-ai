@@ -2,10 +2,10 @@
  * meta.predictor — SUDO-AI Predictive Intelligence tool.
  *
  * Exposes the Predictor engine to the agent loop so SUDO-AI can anticipate
- * Frank's needs, forecast viral topics, simulate decisions, and surface anomalies.
+ * the owner's needs, forecast viral topics, simulate decisions, and surface anomalies.
  *
  * Actions:
- *   anticipate        — predict what Frank likely needs right now (time/day patterns)
+ *   anticipate        — predict what the owner likely needs right now (time/day patterns)
  *   predict-viral     — predict the next viral content topic from video history
  *   simulate          — model outcomes of different strategic options
  *   detect-anomalies  — scan metrics for unusual deviations
@@ -67,7 +67,7 @@ function formatAnomaly(a: Anomaly): string {
 export const predictorTool: ToolDefinition = {
   name: 'meta.predictor',
   description:
-    'Predictive Intelligence engine. Anticipates what Frank needs before he asks, '
+    'Predictive Intelligence engine. Anticipates what the owner needs before they ask, '
     + 'forecasts viral content topics from historical data, simulates decision outcomes, '
     + 'and detects metric anomalies early. '
     + 'Actions: anticipate (time/pattern-based needs), predict-viral (next hot topic), '

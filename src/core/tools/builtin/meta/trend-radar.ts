@@ -5,7 +5,7 @@
  *   scan-now       — Run an immediate scan across all sources, return new trends + alerts
  *   recent-trends  — Return trends detected in the last N hours
  *   alerts         — Return the most recent trend alerts (niche-matched only)
- *   niche-matches  — Return only trends that match Frank's content niches
+ *   niche-matches  — Return only trends that match the owner's content niches
  *   stats          — Return aggregate counts: total, by-source, niche matches, alerts
  */
 

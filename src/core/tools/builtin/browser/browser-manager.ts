@@ -80,13 +80,13 @@ export class BrowserManager {
   /**
    * Get or auto-connect the "default" browser instance.
    * Priority: 1) cached instance, 2) CDP on localhost:9222, 3) headless launch.
-   * This ensures ALL tools automatically use Frank's already-open Chrome.
+   * This ensures ALL tools automatically use the owner's already-open Chrome.
    */
   async getOrConnect(name = 'default'): Promise<BrowserInstance> {
     const cached = this.instances.get(name);
     if (cached) return cached;
 
-    // Try CDP first — Frank's Chrome on port 9222
+    // Try CDP first — the owner's Chrome on port 9222
     const cdpEndpoint = 'http://localhost:9222';
     try {
       const browser = await chromium.connectOverCDP(cdpEndpoint, { timeout: 2000 });

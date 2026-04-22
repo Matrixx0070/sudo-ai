@@ -15,7 +15,7 @@ export interface ScheduleTrigger {
   kind: 'schedule';
   /** Standard cron expression (5 or 6 field). */
   cron: string;
-  /** IANA timezone string, e.g. "Asia/Kolkata". */
+  /** IANA timezone string, e.g. "UTC". */
   tz: string;
 }
 

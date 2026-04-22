@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS smart_schedule (
   cron_expression  TEXT,
   dependencies     TEXT DEFAULT '[]',
   optimal_time     TEXT,
-  timezone         TEXT DEFAULT 'Asia/Kolkata',
+  timezone         TEXT DEFAULT 'UTC',
   cooldown_ms      INTEGER DEFAULT 0,
   priority         TEXT DEFAULT 'normal',
   enabled          INTEGER DEFAULT 1,

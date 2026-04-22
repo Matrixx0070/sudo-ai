@@ -33,7 +33,7 @@ function extractBrain(ctx: ToolContext): BrainLike | undefined {
 export const localizerTool: ToolDefinition = {
   name: 'meta.localizer',
   description:
-    'Multi-language content localization: create translation jobs, translate video scripts using AI, list jobs by status/language, view supported languages, get audience reach multiplier estimates. Targets Tamil, Telugu, Bengali, Punjabi, Urdu for India/Pakistan audiences.',
+    'Multi-language content localization: create translation jobs, translate video scripts using AI, list jobs by status/language, view supported languages, get audience reach multiplier estimates. Target languages configurable via the language registry.',
   category: 'meta',
   timeout: 120_000, // translations can be slow
   parameters: {

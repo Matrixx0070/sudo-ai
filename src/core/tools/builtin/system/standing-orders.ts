@@ -50,7 +50,7 @@ function parseTrigger(raw: unknown): OrderTrigger {
     if (typeof t['cron'] !== 'string' || !t['cron']) {
       throw new ToolError('schedule trigger requires cron string', 'tool_standing_orders_bad_trigger');
     }
-    return { kind: 'schedule', cron: t['cron'], tz: String(t['tz'] ?? 'Asia/Kolkata') };
+    return { kind: 'schedule', cron: t['cron'], tz: String(t['tz'] ?? 'UTC') };
   }
 
   if (kind === 'event') {
@@ -104,7 +104,7 @@ export const standingOrdersTool: ToolDefinition = {
       type: 'object',
       description:
         'Trigger definition for the order (required for add). ' +
-        'Examples: {"kind":"schedule","cron":"0 7 * * *","tz":"Asia/Kolkata"} | ' +
+        'Examples: {"kind":"schedule","cron":"0 7 * * *","tz":"UTC"} | ' +
         '{"kind":"event","event":"error"} | ' +
         '{"kind":"condition","check":"disk > 90%","intervalMs":300000}',
       properties: {

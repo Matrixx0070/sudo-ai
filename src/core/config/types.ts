@@ -11,7 +11,7 @@
 export interface MetaConfig {
   /** Human-readable name of this agent instance. */
   name: string;
-  /** Timezone string, e.g. "Asia/Kolkata". Used by cron and logging. */
+  /** Timezone string, e.g. "UTC". Used by cron and logging. */
   timezone: string;
 }
 

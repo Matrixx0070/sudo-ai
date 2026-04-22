@@ -94,8 +94,8 @@ export const smartSchedulerTool: ToolDefinition = {
     },
     timezone: {
       type: 'string',
-      description: '[schedule] IANA timezone identifier. Defaults to "Asia/Kolkata".',
-      default: 'Asia/Kolkata',
+      description: '[schedule] IANA timezone identifier. Defaults to "UTC".',
+      default: 'UTC',
     },
     cooldownMs: {
       type: 'number',
@@ -173,7 +173,7 @@ export const smartSchedulerTool: ToolDefinition = {
             cronExpression:  (params['cronExpression'] as string | undefined) ?? null,
             dependencies,
             optimalTime:     (params['optimalTime'] as string | undefined) ?? null,
-            timezone:        (params['timezone'] as string | undefined) ?? 'Asia/Kolkata',
+            timezone:        (params['timezone'] as string | undefined) ?? 'UTC',
             cooldownMs,
             priority:        rawPriority,
             enabled,
@@ -231,7 +231,7 @@ export const smartSchedulerTool: ToolDefinition = {
           const formatted = date.toUTCString();
           return {
             success: true,
-            output:  `Next optimal post time for "${contentType}":\n${iso}\n(${formatted})\nTimezone basis: IST (Asia/Kolkata) peak hours`,
+            output:  `Next optimal post time for "${contentType}":\n${iso}\n(${formatted})\nTimezone basis: UTC peak hours`,
             data:    { contentType, iso, utc: formatted },
           };
         }

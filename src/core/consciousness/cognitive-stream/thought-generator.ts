@@ -76,7 +76,7 @@ function buildMicroPrompt(ctx: ThoughtContext): string {
     'What creative idea comes to mind?',
     'What have you learned recently that connects to something else?',
     'What would you do if you had no tasks right now?',
-    'What is Frank probably thinking about today?',
+    'What is the owner probably thinking about today?',
     'What tool or capability do you wish you had?',
     'What mistake from the past can you apply to the future?',
     'What pattern do you notice across recent experiences?',

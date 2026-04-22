@@ -3,9 +3,9 @@
  * for SUDO-AI's autonomous self-improvement engine.
  *
  * Data sources analysed:
- *   - feedback table         — Frank's 👍/👎 ratings per task type
+ *   - feedback table         — the owner's 👍/👎 ratings per task type
  *   - messages table         — tool call success/failure counts
- *   - messages (user role)   — what Frank asks most (routing gaps)
+ *   - messages (user role)   — what the owner asks most (routing gaps)
  *   - api_call_log           — LLM latency and error rates
  *   - cron_runs              — scheduled job outcomes
  */
@@ -35,7 +35,7 @@ export interface FeedbackPattern {
 }
 
 export interface RoutingGap {
-  sample: string;   // Frank's message
+  sample: string;   // the owner's message
   frequency: number;
   suggestedTool: string | null;
 }
@@ -51,9 +51,9 @@ export interface DetectedPatterns {
   failingTools: ToolStats[];
   /** Tools never called in last 30 days (potentially dead) */
   unusedTools: string[];
-  /** Task types Frank rates bad most often */
+  /** Task types the owner rates bad most often */
   badFeedbackTypes: FeedbackPattern[];
-  /** Common phrases Frank uses that map to no known intent pattern */
+  /** Common phrases the owner uses that map to no known intent pattern */
   routingGaps: RoutingGap[];
   /** Cron jobs with failures */
   cronIssues: CronHealth[];
@@ -147,7 +147,7 @@ export function detectPatterns(windowDays = 14): DetectedPatterns {
         .filter(p => p.badRate > 0.3);
     }
 
-    // 4. Routing gaps — Frank's messages that are short and don't match tool calls
+    // 4. Routing gaps — the owner's messages that are short and don't match tool calls
     const userMsgs = db.prepare(`
       SELECT content, created_at
       FROM messages

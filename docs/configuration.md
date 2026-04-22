@@ -24,7 +24,7 @@ Agent instance metadata.
 ```json5
 meta: {
   name: "SUDO-AI",       // string — Human-readable name shown in logs and UI
-  timezone: "Asia/Kolkata",  // string — IANA timezone for cron scheduling
+  timezone: "UTC",           // string — IANA timezone for cron scheduling (e.g. "UTC", "America/New_York", "Europe/London")
 }
 ```
 

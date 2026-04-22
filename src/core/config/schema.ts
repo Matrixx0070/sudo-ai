@@ -23,7 +23,7 @@ const Probability = () => Type.Number({ minimum: 0, maximum: 1 });
 
 const MetaSchema = Type.Object({
   name: Str({ description: 'Human-readable agent instance name' }),
-  timezone: Str({ description: 'IANA timezone, e.g. Asia/Kolkata' }),
+  timezone: Str({ description: 'IANA timezone, e.g. UTC' }),
 });
 
 const AgentsSchema = Type.Object({

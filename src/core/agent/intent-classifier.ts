@@ -3,7 +3,7 @@
  *
  * Classifies incoming user messages into intent types so the agent loop can
  * inject a routing hint into the brain context BEFORE calling the LLM.
- * This tells SUDO which execution path to take without Frank ever needing
+ * This tells SUDO which execution path to take without the owner ever needing
  * to specify tools manually.
  *
  * Adapted from ChatGPT Agent output (2026-04-03) for SUDO-AI's architecture.

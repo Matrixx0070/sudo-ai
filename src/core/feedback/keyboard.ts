@@ -3,7 +3,7 @@
  *
  * Callback data format:  fb:{rating}:{feedbackId}
  *   rating:     good | bad | skip
- *   feedbackId: UUID stored in feedback table (pending, rating=skip until Frank taps)
+ *   feedbackId: UUID stored in feedback table (pending, rating=skip until the owner taps)
  *
  * The TelegramAdapter registers a callback_query handler that processes these.
  */
@@ -33,7 +33,7 @@ export function createFeedbackKeyboard(
   const feedbackId = randomUUID();
   const taskType   = detectTaskType(taskSummary);
 
-  // Pre-save with rating=skip so we have a record even if Frank never taps
+  // Pre-save with rating=skip so we have a record even if the owner never taps
   saveFeedback({
     session_id:   sessionId,
     channel,

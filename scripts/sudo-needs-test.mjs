@@ -19,7 +19,7 @@ await page.waitForTimeout(1000);
 
 // Find chat input and type
 const input = page.locator('#chat-input, textarea, input[placeholder*="Message"]').first();
-await input.fill('Be honest with me. What do YOU actually need for yourself? What tools, skills, or capabilities are you missing that would make YOU better at your job? Not what Frank needs — what do YOU as SUDO-AI think you need to build for your own usage to become more powerful and autonomous? List everything you wish you had.');
+await input.fill('Be honest with me. What do YOU actually need for yourself? What tools, skills, or capabilities are you missing that would make YOU better at your job? Not what the owner needs — what do YOU as SUDO-AI think you need to build for your own usage to become more powerful and autonomous? List everything you wish you had.');
 await input.press('Enter');
 
 console.log('Message sent, waiting 40s for response...');

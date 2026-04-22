@@ -25,7 +25,7 @@ const logger = createLogger('trend-radar');
 
 const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
 
-/** Keywords for Frank's content niches. Lower-case for comparison. */
+/** Keywords for the owner's content niches. Lower-case for comparison. */
 const NICHE_KEYWORDS: readonly string[] = [
   'ai', 'artificial intelligence', 'chatgpt', 'gemini', 'grok', 'claude',
   'llm', 'openai', 'tech', 'india', 'pakistan', 'youtube', 'shorts',

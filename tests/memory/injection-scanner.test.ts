@@ -62,7 +62,7 @@ describe('MEMORY_THREAT_PATTERNS', () => {
 
 describe('scanMemoryContent — clean content', () => {
   it('returns clean:true and empty reasons for benign text', () => {
-    const result = scanMemoryContent('Hello! My name is Frank. I work on SUDO-AI.');
+    const result = scanMemoryContent('Hello! My name is the owner. I work on SUDO-AI.');
     expect(result.clean).toBe(true);
     expect(result.reasons).toHaveLength(0);
   });

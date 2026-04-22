@@ -1,6 +1,6 @@
 /**
  * Localizer — translate and dub content into multiple languages.
- * Target: Tamil, Telugu, Bengali, Punjabi, Urdu for India/Pakistan audience.
+ * Target languages configurable via the language registry (see SUPPORTED_LANGUAGES).
  * Backed by better-sqlite3 (WAL mode).
  */
 

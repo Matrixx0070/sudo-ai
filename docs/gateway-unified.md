@@ -1,6 +1,6 @@
 # Unified Gateway (Wave 3 — single-port)
 
-Frank's directive: all traffic on one port. The gateway server (default port 18900) is the sole
+The owner's directive: all traffic on one port. The gateway server (default port 18900) is the sole
 listener for every user-facing concern: web chat HTML, REST message injection, chat WebSocket,
 admin REST, agent JSON-RPC WebSocket, skill registry, and the OpenAI-compatible completions
 passthrough. `WebAdapter.attach(server)` registers its HTTP and WebSocket listeners directly on

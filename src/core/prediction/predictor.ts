@@ -1,7 +1,7 @@
 /**
  * Predictor — SUDO-AI Predictive Intelligence engine.
  *
- * Anticipates Frank's needs, forecasts viral topics, simulates decisions,
+ * Anticipates the owner's needs, forecasts viral topics, simulates decisions,
  * and detects metric anomalies. Backed by better-sqlite3 (mind.db).
  *
  * Heavy async logic lives in predictor-logic.ts to stay within the 300-line

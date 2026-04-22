@@ -534,7 +534,7 @@ export async function runVetoGate(
   const reason = consensusResult.bestAnswer.content;
 
   // Wave 8A telemetry: emit structured veto.decision event with full context so
-  // Frank can audit whether adaptive tuning is actually changing outcomes.
+  // the owner can audit whether adaptive tuning is actually changing outcomes.
   log.info(
     {
       event: 'veto.decision',

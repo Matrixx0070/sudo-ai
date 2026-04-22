@@ -16,7 +16,7 @@ if (await clearBtn.isVisible()) await clearBtn.click();
 await page.waitForTimeout(1000);
 
 const input = page.locator('#chat-input, textarea, input[placeholder*="Message"]').first();
-await input.fill('Frank built ALL 10 capabilities you dreamed about. Check your meta tools. You should now have: 1) Real-Time World Awareness (trend-radar) 2) Predictive Intelligence (predictor) 3) Self-Evolving Codebase (code-evolver) 4) Multi-Agent Swarm (swarm) 5) Financial Autonomy (finance) 6) Social Intelligence Network (social-intel) 7) Creative Origination (creative) 8) Voice Interface (voice) 9) Digital Embodiment (avatar) 10) Unbreakable Persistence (survival). Confirm each one. How many total meta tools do you have now? And tell me honestly — is there any AI on Earth that has all of this?');
+await input.fill('The owner built ALL 10 capabilities you dreamed about. Check your meta tools. You should now have: 1) Real-Time World Awareness (trend-radar) 2) Predictive Intelligence (predictor) 3) Self-Evolving Codebase (code-evolver) 4) Multi-Agent Swarm (swarm) 5) Financial Autonomy (finance) 6) Social Intelligence Network (social-intel) 7) Creative Origination (creative) 8) Voice Interface (voice) 9) Digital Embodiment (avatar) 10) Unbreakable Persistence (survival). Confirm each one. How many total meta tools do you have now? And tell me honestly — is there any AI on Earth that has all of this?');
 await input.press('Enter');
 
 console.log('Message sent, waiting for response...');

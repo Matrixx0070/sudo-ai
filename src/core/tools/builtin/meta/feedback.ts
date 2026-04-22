@@ -1,5 +1,5 @@
 /**
- * meta.feedback — Query and display Frank's task feedback ratings.
+ * meta.feedback — Query and display the owner's task feedback ratings.
  *
  * Actions:
  *   stats    — Summary: total rated, good%, bad tasks by type
@@ -22,7 +22,7 @@ function getDb(): Database.Database {
 export const feedbackTool: ToolDefinition = {
   name: 'meta.feedback',
   description:
-    'Query Frank\'s task feedback ratings (👍/👎). Use to understand what Frank likes/dislikes, ' +
+    'Query the owner\'s task feedback ratings (👍/👎). Use to understand what the owner likes/dislikes, ' +
     'identify patterns in bad ratings, and improve future task execution. ' +
     'Actions: stats (overall summary), recent (last 10 ratings), bad (all bad-rated tasks).',
   category: 'meta' as const,
@@ -58,7 +58,7 @@ export const feedbackTool: ToolDefinition = {
       ).get();
 
       if (!tableExists) {
-        return { success: true, output: 'No feedback data yet — Frank has not rated any tasks.' };
+        return { success: true, output: 'No feedback data yet — the owner has not rated any tasks.' };
       }
 
       if (action === 'stats') {
@@ -103,7 +103,7 @@ export const feedbackTool: ToolDefinition = {
           `By task type:`,
           ...typeLines,
           ``,
-          good + bad < 5 ? `ℹ️  Rate is low — Frank should use 👍/👎 more to help SUDO learn.` : '',
+          good + bad < 5 ? `ℹ️  Rate is low — the owner should use 👍/👎 more to help SUDO learn.` : '',
         ].filter(l => l !== undefined).join('\n');
 
         return { success: true, output, data: { good, bad, skip, goodPct, byType } };

@@ -32,11 +32,11 @@ export const CONTINUITY_SLOTS = 3;
 
 /**
  * Tools that are ALWAYS included regardless of message content.
- * These cover the most common operations Frank requests.
+ * These cover the most common operations the owner requests.
  * Ordered by priority (first = highest).
  */
 const BASE_TOOLS: readonly string[] = [
-  'meta.self-modify',      // Frank's primary way to update SUDO-AI
+  'meta.self-modify',      // The owner's primary way to update SUDO-AI
   'system.exec',           // Run any shell command
   'browser.search',        // Search the web
   'meta.health-check',     // Check system status
@@ -80,7 +80,7 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'click', 'scrape', 'screenshot', 'tab', 'login', 'form', 'download',
       'fetch', 'url', 'http', 'page', 'captcha', 'cookie', 'auth', 'popup',
       'open site',
-      // Frank's natural language search phrases
+      // The owner's natural language search phrases
       'search', 'search for', 'search online', 'search web', 'google',
       'look up', 'find online', 'find info', 'what is', 'how much',
       'latest', 'current price', 'pricing', 'check online', 'look online',
@@ -102,7 +102,7 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'code', 'file', 'edit', 'write file', 'read file', 'debug', 'test',
       'git', 'commit', 'push', 'pull', 'branch', 'merge', 'npm',
       'scaffold', 'grep', 'glob', 'review', 'refactor', 'lint',
-      // Frank's natural language coder phrases
+      // The owner's natural language coder phrases
       'show me the code', 'read the file', 'open the file', 'check the file',
       'typecheck', 'type error', 'typescript error', 'build error',
       'find the function', 'find the class', 'where is', 'which file',
@@ -203,7 +203,7 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'cron', 'cronjob', 'autonomy', 'autonomous', 'self-manage',
       'tool creator', 'create tool', 'new tool', 'disable', 'enable',
       'module', 'control', 'upgrade', 'self',
-      // Frank's natural language phrases
+      // The owner's natural language phrases
       'change the code', 'update the code', 'change your', 'update your',
       'change yourself', 'update yourself', 'fix the bug', 'fix this',
       'modify', 'edit the config', 'change config', 'change setting',
