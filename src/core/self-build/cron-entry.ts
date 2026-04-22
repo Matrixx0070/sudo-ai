@@ -121,13 +121,14 @@ export function registerSelfBuildCron(
   // Job 1: 30-min tick — enabled only when SUDO_SELF_BUILD_MODE=1
   // -------------------------------------------------------------------
   const tickJob = scheduler.addJob({
+    id: 'self-build-tick', // deterministic ID — prevents duplication on pm2 reload
     name: TICK_JOB_NAME,
     schedule: { kind: 'cron', expr: '*/30 * * * *', tz: 'UTC' },
     payload: { kind: 'agentTurn', message: SELF_BUILD_TICK_MSG },
     sessionTarget: 'isolated',
     enabled: selfBuildEnabled,
     consecutiveErrors: 0,
-  } satisfies Omit<import('../cron/types.js').CronJob, 'id'>);
+  } satisfies Omit<import('../cron/types.js').CronJob, 'id'> & { id: string });
 
   log.info(
     { jobId: tickJob.id, enabled: selfBuildEnabled, expr: '*/30 * * * *' },
@@ -138,13 +139,14 @@ export function registerSelfBuildCron(
   // Job 2: daily report at 09:00 UTC — always enabled
   // -------------------------------------------------------------------
   const reportJob = scheduler.addJob({
+    id: 'self-build-report', // deterministic ID — prevents duplication on pm2 reload
     name: REPORT_JOB_NAME,
     schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' },
     payload: { kind: 'agentTurn', message: SELF_BUILD_DAILY_REPORT_MSG },
     sessionTarget: 'isolated',
     enabled: true,
     consecutiveErrors: 0,
-  } satisfies Omit<import('../cron/types.js').CronJob, 'id'>);
+  } satisfies Omit<import('../cron/types.js').CronJob, 'id'> & { id: string });
 
   log.info(
     { jobId: reportJob.id, enabled: true, expr: '0 9 * * *' },
