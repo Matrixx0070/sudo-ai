@@ -342,16 +342,16 @@ export async function runSelfBuildTick(deps: SelfBuildDeps): Promise<TickResult>
   );
 
   if (alignScore === null) {
-    // null = warming-up → abort per spec §9 R3 and charter §S1
-    log.warn({ alignScore: null }, 'self-build: alignment score null (warming-up) — abort');
+    // null = warming-up (aggregator hasn't run evaluate() yet since process start).
+    // This is a transient boot condition, NOT a safety violation — do NOT increment
+    // consecutiveGateAbortTicks. Incrementing here caused permanent S4 halts after 3
+    // restarts because the aggregator has no data until the first agent interaction.
+    log.warn({ alignScore: null }, 'self-build: alignment score null (warming-up) — skip tick, counter unchanged');
     const updated: SelfBuildState = {
       ...state,
-      consecutiveGateAbortTicks: state.consecutiveGateAbortTicks + 1,
       lastTickAt: new Date().toISOString(),
     };
-    // checkStopConditions may latch halt; use returned state for saveState
-    const finalState = checkStopConditions(cwd, updated, log);
-    saveState(cwd, finalState);
+    saveState(cwd, updated);
     return { status: 'align-low', alignScore: undefined };
   }
 

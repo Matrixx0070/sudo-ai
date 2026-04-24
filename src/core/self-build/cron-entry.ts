@@ -118,6 +118,18 @@ export function registerSelfBuildCron(
   const selfBuildEnabled = process.env['SUDO_SELF_BUILD_MODE'] === '1';
 
   // -------------------------------------------------------------------
+  // Dedup: remove ALL existing jobs with these names before re-registering.
+  // upsert() deduplicates by ID only. Previous code used genId() (no id),
+  // leaving random-ID duplicates in the store across pm2 reloads.
+  // This ensures exactly one entry per name regardless of store history.
+  // -------------------------------------------------------------------
+  for (const job of scheduler.listJobs()) {
+    if (job.name === TICK_JOB_NAME || job.name === REPORT_JOB_NAME) {
+      scheduler.removeJob(job.id);
+    }
+  }
+
+  // -------------------------------------------------------------------
   // Job 1: 30-min tick — enabled only when SUDO_SELF_BUILD_MODE=1
   // -------------------------------------------------------------------
   const tickJob = scheduler.addJob({
