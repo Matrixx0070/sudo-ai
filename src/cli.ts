@@ -1795,8 +1795,22 @@ async function boot(): Promise<void> {
     const { registerSelfBuildCron } = await import('./core/self-build/cron-entry.js');
 
     const rawDb = (db as unknown as Record<string, unknown>)['db'] ?? db;
+    // Wrap finalAgentLoop to create a session before each self-build tick.
+    // Orchestrator passes its own synthetic sessionId but doesn't create the
+    // session in sessionManager first — AgentLoop.run rejects with
+    // "session not found". Wrapper creates a fresh 'web'-channel session
+    // per tick and forwards its real id.
+    const selfBuildAgentLoop = {
+      async run(_sessionId: string, message: string): Promise<{ text: string }> {
+        const session = await sessionManager.getOrCreate(
+          'web',
+          `self-build-tick-${Date.now()}`,
+        );
+        return finalAgentLoop.run(session.id, message);
+      },
+    };
     selfBuildDepsRef = {
-      agentLoop: finalAgentLoop,
+      agentLoop: selfBuildAgentLoop,
       mindDb: rawDb as import('better-sqlite3').Database,
       alignmentAggregator: finalAgentLoop.getAlignmentAggregator() ?? null,
       // mistakeAutoBlockGuard not accessible as a standalone var at this scope;
