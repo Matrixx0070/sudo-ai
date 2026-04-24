@@ -15,21 +15,20 @@ export const APP_VERSION = '3.1.0' as const;
 // ---------------------------------------------------------------------------
 
 // Override via env SUDO_DEFAULT_MODEL / SUDO_FALLBACK_MODEL.
-// Defaults route to direct providers (OpenAI primary, OpenAI mini fallback) to bypass
-// SUDOAPI gateway when it's unavailable. Flip back to sudoapi/sudo-agent once
-// the gateway is stable.
-export const DEFAULT_MODEL = (process.env['SUDO_DEFAULT_MODEL'] ?? 'openai/gpt-4o') as string;
-export const FALLBACK_MODEL = (process.env['SUDO_FALLBACK_MODEL'] ?? 'openai/gpt-4o-mini') as string;
+// SUDOAPI gateway stabilized 2026-04-24 after upstream temperature-clamp fix;
+// routed back to sudoapi/sudo-agent (deterministic cascade claude → grok → chatgpt).
+export const DEFAULT_MODEL = (process.env['SUDO_DEFAULT_MODEL'] ?? 'sudoapi/sudo-agent') as string;
+export const FALLBACK_MODEL = (process.env['SUDO_FALLBACK_MODEL'] ?? 'sudoapi/sudo-agent') as string;
 export const EMBEDDING_MODEL = 'openai/text-embedding-3-small' as const;
 export const EMBEDDING_DIMS = 1536 as const;
 
-/** Task-type model routing. Redirected off SUDOAPI gateway to direct providers
- *  while gateway is 502-overloaded. Restore to sudoapi/sudo-agent when stable. */
+/** SUDOAPI model routing — task type → best model for that task.
+ *  sudo-agent = deterministic cascade claude-opus-4-6 → grok → chatgpt → deepseek. */
 export const SUDOAPI_MODELS = {
-  coding: 'openai/gpt-4o',
-  analysis: 'openai/gpt-4o',
-  fast: 'openai/gpt-4o-mini',
-  research: 'openai/gpt-4o',
+  coding: 'sudoapi/sudo-agent',
+  analysis: 'sudoapi/sudo-agent',
+  fast: 'sudoapi/sudo-agent',
+  research: 'sudoapi/sudo-agent',
 } as const;
 
 // ---------------------------------------------------------------------------
