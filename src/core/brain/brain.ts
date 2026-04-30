@@ -625,11 +625,13 @@ export class Brain {
       ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
     });
 
-    // v5: Add strong tool-use instruction when tools are available
-    // Without this, the model generates text instead of calling tools
+    // v5: Tool-use instruction — softened for Ollama models which tend to
+    // return tool_calls for conversational queries when the instruction is
+    // too aggressive. We still encourage tool use for actions but allow
+    // direct text responses for conversation.
     if (toolSummaries.length > 0) {
-      systemPrompt += `\n\n## CRITICAL TOOL-USE INSTRUCTION
-You have ${toolSummaries.length} tools available. When the user asks you to DO something (check, search, navigate, read, write, screenshot, execute, etc.), you MUST call the appropriate tool. Do NOT describe what you would do — CALL THE TOOL. Do NOT say "I would use..." — USE IT. Return tool_calls, not text. Only respond with text AFTER you have executed the tools and have real results to report.`;
+      systemPrompt += `\n\n## TOOL-USE INSTRUCTION
+You have ${toolSummaries.length} tools available. When the user asks you to DO something concrete (check, search, navigate, read, write, screenshot, execute, etc.), call the appropriate tool. For casual conversation, greetings, opinions, or general questions, respond with normal text — do NOT call tools.`;
     }
     const temperature = this.resolveTemperature(request);
     const maxTokens = this.resolveMaxTokens(request);
