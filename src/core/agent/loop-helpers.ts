@@ -458,7 +458,7 @@ export async function _toolNotFoundFallback(
   // Step (a): search MCP catalog for the missing tool.
   try {
     const result = await registry.execute('tool.search-mcp-catalog', { query: toolName }, ctx);
-    if (result.output && result.output.trim().length > 0) {
+    if (result.success && result.output && result.output.trim().length > 0) {
       log.info({ tool: toolName }, 'Fallback: resolved via tool.search-mcp-catalog');
       return result.output;
     }
@@ -469,7 +469,7 @@ export async function _toolNotFoundFallback(
   // Step (b): search npm registry for a package that provides the capability.
   try {
     const result = await registry.execute('tool.search-npm', { query: toolName }, ctx);
-    if (result.output && result.output.trim().length > 0) {
+    if (result.success && result.output && result.output.trim().length > 0) {
       log.info({ tool: toolName }, 'Fallback: resolved via tool.search-npm');
       return result.output;
     }
@@ -484,7 +484,7 @@ export async function _toolNotFoundFallback(
       { toolName, args: JSON.stringify(args) },
       ctx,
     );
-    if (result.output && result.output.trim().length > 0) {
+    if (result.success && result.output && result.output.trim().length > 0) {
       log.info({ tool: toolName }, 'Fallback: resolved via tool.synthesize');
       return result.output;
     }
