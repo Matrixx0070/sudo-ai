@@ -16,7 +16,6 @@ import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
-import { routeModel, isAutoModel } from './model-router.js';
 import type {
   BrainMessage,
   BrainRequest,
@@ -719,7 +718,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt });
       }
 
-      const modelId = (request.model && request.model.includes('/')) ? request.model : profile.id;
+      const modelId = profile.id;
       log.info({ attempt, modelId }, 'Streaming LLM call starting');
 
       try {
@@ -792,13 +791,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     maxTokens: number,
   ): Promise<BrainResponse> {
     let modelId: string;
-    if (isAutoModel(request.model)) {
-      const lastUser = [...request.messages].reverse().find(m => m.role === 'user');
-      const decision = routeModel('', lastUser?.content ?? '');
-      modelId = decision.model;
-    } else {
-      modelId = (request.model && request.model.includes('/')) ? request.model : profile.id;
-    }
+    // ALWAYS use the profile's model ID. The caller (cloud racing / failover loop)
+    // already selected the correct profile. Using request.model or routeModel() here
+    // overrides the profile and breaks failover — all parallel calls hit the same
+    // model, and fallback to local models still calls the cloud model.
+    modelId = profile.id;
 
     const modelHandle = getModel(modelId);
 
