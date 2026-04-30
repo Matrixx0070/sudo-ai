@@ -102,6 +102,14 @@ module.exports = {
         // DATA_DIR — directory for per-domain SQLite databases.
         // Required by AgentLoop (audit.db, veto-overrides.db) and CommitmentAuditor.
         DATA_DIR: path.join(CWD, 'data'),
+
+        // Ollama Cloud + local fallback configuration
+        SUDO_DEFAULT_MODEL: 'ollama/kimi-k2.6:cloud',
+        SUDO_FALLBACK_MODEL: 'ollama/qwen3.5:latest',
+        OLLAMA_URL: 'http://localhost:11434/v1',
+
+        // Web chat token — set explicitly so relay scripts can authenticate
+        WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
       },
     },
 
@@ -167,6 +175,14 @@ module.exports = {
 
         // Isolated staging data directory — separate SQLite databases from prod.
         DATA_DIR: path.join(CWD, 'data-staging'),
+
+        // Ollama Cloud + local fallback configuration
+        SUDO_DEFAULT_MODEL: 'ollama/kimi-k2.6:cloud',
+        SUDO_FALLBACK_MODEL: 'ollama/qwen3.5:latest',
+        OLLAMA_URL: 'http://localhost:11434/v1',
+
+        // Web chat token
+        WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
 
         // Kill-switch: enables tool.synthesize pipeline (bwrap sandbox + AST analysis).
         // MUST remain staging-only — never copy to apps[0] production env block.

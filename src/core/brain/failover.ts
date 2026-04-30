@@ -295,4 +295,39 @@ export class ModelFailover {
   getStatus(): ModelProfile[] {
     return Array.from(this.profiles.values()).map((p) => ({ ...p }));
   }
+
+  // ---------------------------------------------------------------------------
+  // Cloud vs local splitting (Ollama parallel racing)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Return all available cloud-model profiles sorted by priority.
+   * Cloud = modelId ends with ':cloud' and is not disabled/cooled-down.
+   */
+  getCloudProfiles(): ModelProfile[] {
+    const now = Date.now();
+    return Array.from(this.profiles.values())
+      .filter((p) => !p.disabled && p.cooldownUntil <= now && p.modelId.endsWith(':cloud'))
+      .sort((a, b) => a.priority - b.priority);
+  }
+
+  /**
+   * Return all available local-model profiles sorted by priority.
+   * Local = modelId does NOT end with ':cloud' and is not disabled/cooled-down.
+   */
+  getLocalProfiles(): ModelProfile[] {
+    const now = Date.now();
+    return Array.from(this.profiles.values())
+      .filter((p) => !p.disabled && p.cooldownUntil <= now && !p.modelId.endsWith(':cloud'))
+      .sort((a, b) => a.priority - b.priority);
+  }
+
+  /**
+   * Whether a profile is a cloud model (ends with ':cloud').
+   */
+  isCloudProfile(profileId: string): boolean {
+    const profile = this.profiles.get(profileId);
+    if (!profile) return false;
+    return profile.modelId.endsWith(':cloud');
+  }
 }

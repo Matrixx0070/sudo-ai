@@ -15,20 +15,18 @@ export const APP_VERSION = '3.1.0' as const;
 // ---------------------------------------------------------------------------
 
 // Override via env SUDO_DEFAULT_MODEL / SUDO_FALLBACK_MODEL.
-// SUDOAPI gateway stabilized 2026-04-24 after upstream temperature-clamp fix;
-// routed back to sudoapi/sudo-agent (deterministic cascade claude → grok → chatgpt).
-export const DEFAULT_MODEL = (process.env['SUDO_DEFAULT_MODEL'] ?? 'sudoapi/sudo-agent') as string;
-export const FALLBACK_MODEL = (process.env['SUDO_FALLBACK_MODEL'] ?? 'sudoapi/sudo-agent') as string;
+// Ollama Cloud — 3 models race in parallel, local qwen3.5 fallback.
+export const DEFAULT_MODEL = (process.env['SUDO_DEFAULT_MODEL'] ?? 'ollama/kimi-k2.6:cloud') as string;
+export const FALLBACK_MODEL = (process.env['SUDO_FALLBACK_MODEL'] ?? 'ollama/qwen3.5:latest') as string;
 export const EMBEDDING_MODEL = 'openai/text-embedding-3-small' as const;
 export const EMBEDDING_DIMS = 1536 as const;
 
-/** SUDOAPI model routing — task type → best model for that task.
- *  sudo-agent = deterministic cascade claude-opus-4-6 → grok → chatgpt → deepseek. */
+/** Ollama model routing — task type → best model for that task. */
 export const SUDOAPI_MODELS = {
-  coding: 'sudoapi/sudo-agent',
-  analysis: 'sudoapi/sudo-agent',
-  fast: 'sudoapi/sudo-agent',
-  research: 'sudoapi/sudo-agent',
+  coding: 'ollama/kimi-k2.6:cloud',
+  analysis: 'ollama/kimi-k2.6:cloud',
+  fast: 'ollama/kimi-k2.6:cloud',
+  research: 'ollama/kimi-k2.6:cloud',
 } as const;
 
 // ---------------------------------------------------------------------------
