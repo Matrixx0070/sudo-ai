@@ -638,6 +638,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
     // -------------------------------------------------------------------------
     // Phase 1: Race all available cloud models in parallel (fastest wins).
+    // Wait for ALL to settle, then pick the first successful one with content.
+    // This avoids returning empty responses from a "fast" model that failed
+    // silently (Ollama sometimes returns finishReason:stop with zero tokens).
     // -------------------------------------------------------------------------
     const cloudProfiles = this.failover.getCloudProfiles();
     if (cloudProfiles.length > 0) {
@@ -648,15 +651,20 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           .catch(err => ({ success: false as const, err, profile }))
       );
 
-      try {
-        const winner = await Promise.any(cloudPromises);
-        if (winner.success) {
-          log.info({ modelId: winner.result.model }, 'Cloud model race winner');
-          return winner.result;
+      const cloudResults = await Promise.allSettled(cloudPromises);
+      for (const settled of cloudResults) {
+        if (settled.status === 'fulfilled' && settled.value.success) {
+          const result = settled.value.result;
+          // Reject empty responses — they mean the model failed silently.
+          if (result.content?.trim().length > 0 || result.toolCalls?.length > 0) {
+            log.info({ modelId: result.model }, 'Cloud model race winner');
+            return result;
+          }
+          log.warn({ modelId: result.model }, 'Cloud model returned empty content — treating as failure');
+          this.failover.recordError(settled.value.profile.id, 'format');
         }
-      } catch (_err) {
-        log.warn('All cloud models failed — falling back to local models');
       }
+      log.warn('All cloud models failed or returned empty — falling back to local models');
     }
 
     // -------------------------------------------------------------------------
@@ -814,7 +822,29 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         })
       );
     }
-    const result = await generateText(callParams as Parameters<typeof generateText>[0]);
+    let result = await generateText(callParams as Parameters<typeof generateText>[0]);
+
+    // --- Tool-empty retry: some providers (Ollama cloud) return empty content
+    // when tools are attached but don't actually support structured tool calls.
+    // Retry once WITHOUT tools to get a text response.
+    // Kill-switch: SUDO_TOOL_EMPTY_RETRY_DISABLE=1
+    // ---
+    const hadTools = request.tools && request.tools.length > 0;
+    const isEmpty = (!result.text || result.text.trim().length === 0) && (result.toolCalls ?? []).length === 0;
+    if (
+      hadTools &&
+      isEmpty &&
+      process.env['SUDO_TOOL_EMPTY_RETRY_DISABLE'] !== '1'
+    ) {
+      log.warn({ modelId }, 'Empty response with tools — retrying without tools');
+      const noToolParams = { ...callParams };
+      delete noToolParams.tools;
+      // Slightly raise temperature for the retry to avoid deterministic empty loops
+      noToolParams.temperature = Math.min(temperature + 0.1, 1.0);
+      result = await generateText(noToolParams as Parameters<typeof generateText>[0]);
+      log.info({ modelId, textLen: result.text?.length ?? 0 }, 'Retried without tools');
+    }
+    // --- end tool-empty retry ---
 
     // --- Grok refusal detection (kill-switch: SUDO_GROK_REFUSAL_DETECT_DISABLE=1) ---
     if (process.env['SUDO_GROK_REFUSAL_DETECT_DISABLE'] !== '1') {

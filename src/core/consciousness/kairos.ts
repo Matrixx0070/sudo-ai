@@ -86,17 +86,36 @@ export interface KairosConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Alert cooldown (per obs.type + obs.severity key, module-scoped)
+// Alert cooldown (per obs.type + obs.severity key, persisted to disk)
 // ---------------------------------------------------------------------------
 
 const COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
+const COOLDOWN_FILE = path.join(PROJECT_ROOT, 'data', 'kairos-cooldown.json');
 
-/** Keyed by `${type}:${severity}` → last notification timestamp */
-const lastNotifiedAt = new Map<string, number>();
+function loadCooldownState(): Map<string, number> {
+  try {
+    if (existsSync(COOLDOWN_FILE)) {
+      const raw = readFileSync(COOLDOWN_FILE, 'utf-8');
+      const obj = JSON.parse(raw) as Record<string, number>;
+      return new Map(Object.entries(obj));
+    }
+  } catch { /* ignore corrupt file */ }
+  return new Map<string, number>();
+}
+
+function saveCooldownState(map: Map<string, number>): void {
+  try {
+    const obj = Object.fromEntries(map.entries());
+    writeFileSync(COOLDOWN_FILE, JSON.stringify(obj), 'utf-8');
+  } catch { /* ignore */ }
+}
+
+const lastNotifiedAt = loadCooldownState();
 
 /** Exported for test teardown — resets all cooldown state. */
 export function __resetCooldownForTest(): void {
   lastNotifiedAt.clear();
+  saveCooldownState(lastNotifiedAt);
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +282,7 @@ async function checkStaleTasks(dbPath: string): Promise<KairosObservation[]> {
 
 async function checkMemoryOverflow(): Promise<KairosObservation[]> {
   const obs: KairosObservation[] = [];
-  const THRESHOLD = 20 * 1024;
+  const THRESHOLD = 200 * 1024; // 200KB — MEMORY.md is an index, not raw memory
   try {
     const memPath = path.join(PROJECT_ROOT, 'workspace', 'MEMORY.md');
     if (existsSync(memPath)) {
@@ -306,8 +325,8 @@ async function checkServiceHealth(): Promise<KairosObservation[]> {
       const du = execSync(`du -sb "${dataDir}" 2>/dev/null`, { encoding: 'utf8', timeout: 10_000 }).trim();
       const bytes = parseInt((du.split('\t')[0] ?? '0'), 10);
       const mb = Math.round(bytes / 1024 / 1024);
-      if (mb > 500) {
-        obs.push({ timestamp: new Date().toISOString(), type: 'disk_pressure', severity: mb > 1000 ? 'CRITICAL' : 'WARN', message: `data/ directory is ${mb}MB`, action: 'Auto-cleanup of old backups triggered' });
+      if (mb > 20_000) { // 20GB threshold — pm2 logs can legitimately grow large
+        obs.push({ timestamp: new Date().toISOString(), type: 'disk_pressure', severity: mb > 30_000 ? 'CRITICAL' : 'WARN', message: `data/ directory is ${mb}MB`, action: 'Auto-cleanup of old backups triggered' });
       }
     }
   } catch { /* ignore */ }
@@ -524,6 +543,7 @@ export class Kairos {
           log.debug({ type: obs.type, cooldownKey }, 'Kairos: CRITICAL alert suppressed within 6h cooldown window');
         } else {
           lastNotifiedAt.set(cooldownKey, Date.now());
+          saveCooldownState(lastNotifiedAt);
           const msg = `🚨 *KAIROS CRITICAL*\n${obs.type}: ${obs.message}${obs.acted ? `\n✅ Auto-fixed: ${obs.actionResult}` : ''}`;
           this.config.notifyFn(msg, this.config.telegramBotToken, this.config.telegramChatId).catch(() => {});
         }

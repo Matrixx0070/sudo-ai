@@ -148,9 +148,11 @@ async function buildProviderAsync(name: ProviderName): Promise<AnyProvider | nul
 
       case 'ollama': {
         // Ollama runs locally — no API key required.
+        // Ollama Cloud (hosted models) may require an API key passed via OLLAMA_API_KEY.
         const baseURL = envValue ?? 'http://localhost:11434/v1';
+        const ollamaApiKey = process.env['OLLAMA_API_KEY'] ?? 'ollama';
         instance = createOpenAI({
-          apiKey: 'ollama', // placeholder — Ollama ignores this
+          apiKey: ollamaApiKey,
           baseURL,
           name: 'ollama',
         } as Parameters<typeof createOpenAI>[0]);
