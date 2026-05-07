@@ -37,6 +37,9 @@ export interface AgentState {
   followUpMessages: string[];
   /** Consecutive REPLAN decisions in this session (reset on non-REPLAN turn). */
   consecutiveReplans: number;
+  /** Consecutive iterations where the model returned tool-calls instead of text.
+   *  Reset when a text response is produced. Used to break runaway tool loops. */
+  consecutiveToolIterations: number;
 }
 
 // ---------------------------------------------------------------------------

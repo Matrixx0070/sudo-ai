@@ -205,7 +205,11 @@ export class AgentSwarm {
         }
       }
 
-      const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config);
+      const sandboxManager = {
+        getWorkspaceDir: (sid: string) => `/tmp/sandbox-${sid}`,
+        getPolicyFor: () => ({ readonly: false, allowedPaths: ['/tmp'] }),
+      };
+      const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config, undefined, undefined, undefined, undefined, sandboxManager);
 
       // Apply timeout via AbortController.
       const timer = setTimeout(() => {

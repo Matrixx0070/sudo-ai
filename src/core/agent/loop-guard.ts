@@ -22,11 +22,11 @@ const log = createLogger('agent:loop-guard');
 // Thresholds (exported so tests can verify them)
 // ---------------------------------------------------------------------------
 
-export const REPEAT_WARN_THRESHOLD = 20;
-export const REPEAT_ABORT_THRESHOLD = 40;
-export const PINGPONG_ABORT_THRESHOLD = 30; // higher allows real retry loops
-export const BUDGET_WARN_THRESHOLD = 1000;
-export const BUDGET_ABORT_THRESHOLD = 5000;
+export const REPEAT_WARN_THRESHOLD = 10;
+export const REPEAT_ABORT_THRESHOLD = 20;
+export const PINGPONG_ABORT_THRESHOLD = 15; // tightened for Ollama models, but allows real retry loops
+export const BUDGET_WARN_THRESHOLD = 500;
+export const BUDGET_ABORT_THRESHOLD = 1000;
 
 /**
  * Tools legitimately called many times with identical args — exempt from repeat detection.

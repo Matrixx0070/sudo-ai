@@ -754,3 +754,47 @@ export async function prepareMessages(
   // Instead of dumb truncation, identify high-noise patterns and summarise them.
   return collapseToolResults(windowed) as BrainMessage[];
 }
+
+// ---------------------------------------------------------------------------
+// Proactive session message trimming
+// ---------------------------------------------------------------------------
+
+/** Maximum messages in session before proactive trimming. */
+export const SESSION_MESSAGE_TRIM_THRESHOLD = 40 as const;
+/** Number of non-system messages to keep after trimming. */
+export const SESSION_MESSAGE_KEEP_COUNT = 20 as const;
+
+/**
+ * Proactively trim session.messages to prevent unbounded growth.
+ *
+ * Keeps all system messages + the last N non-system messages.
+ * Called at the start of each agent loop iteration.
+ *
+ * @param session - Mutable session object.
+ * @param state   - Current agent state (for logging).
+ */
+export function trimSessionMessages(
+  session: SessionLike,
+  state: AgentState,
+): void {
+  const messages = session.messages;
+  if (!Array.isArray(messages) || messages.length <= SESSION_MESSAGE_TRIM_THRESHOLD) {
+    return;
+  }
+
+  const systemMsgs = messages.filter((m) => m.role === 'system');
+  const nonSystemMsgs = messages.filter((m) => m.role !== 'system');
+  const keptNonSystem = nonSystemMsgs.slice(-SESSION_MESSAGE_KEEP_COUNT);
+
+  session.messages = [...systemMsgs, ...keptNonSystem];
+
+  log.info(
+    {
+      sessionId: state.sessionId,
+      totalMessages: messages.length,
+      keptMessages: session.messages.length,
+      droppedMessages: messages.length - session.messages.length,
+    },
+    'Proactive session message trim applied',
+  );
+}

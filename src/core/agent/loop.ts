@@ -18,6 +18,7 @@ import {
   runCompaction,
   executeToolCalls,
   prepareMessages,
+  trimSessionMessages,
 } from './loop-helpers.js';
 import { ToolRouter } from './tool-router.js';
 import { classifyIntent, formatIntentHint } from './intent-classifier.js';
@@ -180,7 +181,7 @@ export class AgentLoop {
   private unifiedMemory: UnifiedMemoryLike | null = null;
   private readonly workspaceInjector: ((session: any) => Promise<void>) | undefined;
   private readonly hooks?: HookEmitterLike;
-  private readonly sandboxManager?: SandboxManagerLike;
+  private readonly sandboxManager: SandboxManagerLike;
   private readonly identityLoader?: IdentityLoaderInstance;
   private auditTrail: AuditTrail | null = null;
   private alignmentAggregator: AlignmentAggregator | null = null;
@@ -288,17 +289,20 @@ export class AgentLoop {
       log.warn('AgentLoop: hooks argument does not implement HookEmitterLike — ignoring');
     }
 
-    // Validate sandboxManager duck-type if provided.
-    if (
-      sandboxManager != null &&
-      typeof (sandboxManager as SandboxManagerLike).getWorkspaceDir === 'function' &&
-      typeof (sandboxManager as SandboxManagerLike).getPolicyFor === 'function'
-    ) {
-      this.sandboxManager = sandboxManager as SandboxManagerLike;
-      log.info('AgentLoop: SandboxManager attached');
-    } else if (sandboxManager != null) {
-      log.warn('AgentLoop: sandboxManager argument does not implement SandboxManagerLike — ignoring');
+    if (!sandboxManager) {
+      throw new PipelineError('AgentLoop: sandboxManager is required', 'pipeline_invalid_sandbox');
     }
+    if (
+      typeof (sandboxManager as SandboxManagerLike).getWorkspaceDir !== 'function' ||
+      typeof (sandboxManager as SandboxManagerLike).getPolicyFor !== 'function'
+    ) {
+      throw new PipelineError(
+        'AgentLoop: sandboxManager must implement SandboxManagerLike (getWorkspaceDir() + getPolicyFor())',
+        'pipeline_invalid_sandbox'
+      );
+    }
+    this.sandboxManager = sandboxManager as SandboxManagerLike;
+    log.info('AgentLoop: SandboxManager attached');
 
     // Initialise identity loader from the operator config directory.
     // Constructed internally — no new constructor argument required.
@@ -616,6 +620,7 @@ export class AgentLoop {
       pendingToolCalls: 0,
       followUpMessages: [message],
       consecutiveReplans: 0,
+      consecutiveToolIterations: 0,
     };
 
     log.info({ sessionId, messageLen: message.length }, 'Agent loop started');
@@ -883,6 +888,9 @@ export class AgentLoop {
       while (state.iteration < maxIterations) {
         state.iteration++;
 
+        // Proactive session message trim — prevents unbounded growth in long sessions.
+        trimSessionMessages(session, state);
+
         // Hook: before_prompt_build — fires before the message array is prepared for the API call.
         void this.hooks?.emit('before_prompt_build', { event: 'before_prompt_build', sessionId: state.sessionId, iteration: state.iteration });
 
@@ -999,6 +1007,20 @@ export class AgentLoop {
             // All tool calls were invalid -- treat as a stop response.
             log.warn({ sessionId: state.sessionId }, 'All tool calls from LLM were invalid — treating as stop');
             finalText = response.content || 'I attempted to use tools but the request was malformed. Please try again.';
+            session.messages.push({ role: 'assistant', content: finalText });
+            emit({ type: 'message', content: finalText });
+            break;
+          }
+
+          // Cross-iteration loop detection: if the model keeps returning tool calls
+          // instead of text, break after a threshold to prevent runaway loops.
+          state.consecutiveToolIterations++;
+          if (state.consecutiveToolIterations >= 5) {
+            const loopMsg = `[LoopGuard] Model returned tool calls for ${state.consecutiveToolIterations} consecutive iterations — forcing text response to break potential loop.`;
+            log.warn({ sessionId: state.sessionId, consecutiveToolIterations: state.consecutiveToolIterations }, 'Cross-iteration tool loop detected — breaking');
+            session.messages.push({ role: 'system', content: loopMsg });
+            emit({ type: 'error', error: loopMsg });
+            finalText = response.content || 'I kept trying to use tools but got stuck in a loop. Here is what I know so far. Let me know if you need me to try a different approach.';
             session.messages.push({ role: 'assistant', content: finalText });
             emit({ type: 'message', content: finalText });
             break;
@@ -1382,6 +1404,7 @@ export class AgentLoop {
         }
 
         // finishReason === 'stop'
+        state.consecutiveToolIterations = 0; // reset on text response
         finalText = response.content;
         session.messages.push({ role: 'assistant', content: finalText });
         emit({ type: 'message', content: finalText });

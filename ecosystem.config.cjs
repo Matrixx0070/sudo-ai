@@ -54,8 +54,8 @@ module.exports = {
       exec_mode: 'fork',            // fork mode (not cluster — ESM + native addons)
       autorestart: true,            // restart on crash
       max_restarts: 5,              // cap crash-loop restarts before pm2 gives up
-      min_uptime: '10s',            // must stay alive 10 s to count as stable start
-      restart_delay: 3000,          // ms between restart attempts
+      min_uptime: "30s",            // must stay alive 10 s to count as stable start
+      restart_delay: 10000,          // ms between restart attempts
 
       // ---- Logging ----
       time: true,                               // prefix every log line with timestamp
@@ -136,8 +136,8 @@ module.exports = {
       exec_mode: 'fork',              // fork mode (not cluster)
       autorestart: false,             // staging: do not auto-recover; fail visibly
       max_restarts: 3,
-      min_uptime: '10s',
-      restart_delay: 3000,            // ms between restart attempts
+      min_uptime: "30s",
+      restart_delay: 10000,            // ms between restart attempts
 
       // ---- Logging ----
       time: true,
