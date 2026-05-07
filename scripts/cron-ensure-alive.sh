@@ -20,15 +20,17 @@ if ! flock -n 200; then
   exit 0
 fi
 
-# ---- Helper: count processes matching a pattern ----
-count_pids() { pgrep -f "$1" 2>/dev/null | wc -l; }
+# ---- Helper: count processes matching a pattern (pipefail-safe — 0 on no match) ----
+count_pids() { local c; c=$(pgrep -cf "$1" 2>/dev/null) || c=0; echo "$c"; }
 
 # ---- Step 1: Detect leaked / duplicate Node processes ----
+# We expect exactly ONE tsx process (prod). tsx legitimately spawns esbuild as
+# a child during compile, so esbuild is only a leak when there is NO tsx
+# running (orphaned from a previous tsx death).
 LEAKED_TSX=$(count_pids "tsx src/cli\.ts")
 LEAKED_ESBUILD=$(count_pids "esbuild")
 
-# We expect exactly ONE tsx process (prod). Anything else is a leak.
-if [ "$LEAKED_TSX" -gt 1 ] || [ "$LEAKED_ESBUILD" -gt 0 ]; then
+if [ "$LEAKED_TSX" -gt 1 ] || { [ "$LEAKED_ESBUILD" -gt 0 ] && [ "$LEAKED_TSX" -eq 0 ]; }; then
   echo "[$(date -u +%FT%TZ)] LEAK DETECTED: tsx=$LEAKED_TSX esbuild=$LEAKED_ESBUILD -- hard-resetting" >> "$LOG"
 
   # Kill all leaked application processes (not pm2 daemon itself)
@@ -51,21 +53,29 @@ if [ "$LEAKED_TSX" -gt 1 ] || [ "$LEAKED_ESBUILD" -gt 0 ]; then
   exit 0
 fi
 
-# ---- Step 2: If port is open and PM2 shows online, everything is fine ----
+# ---- Helper: is sudo-ai-v5 online in pm2? (robust, JSON-aware) ----
+# Avoid fragile grep patterns; use Python to parse JSON properly. Returns 0 if online.
+is_pm2_online() {
+  pm2 jlist 2>/dev/null | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(2)
+for p in d:
+    if p.get('name') == 'sudo-ai-v5' and p.get('pm2_env', {}).get('status') == 'online':
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null
+}
+
+# ---- Step 2: If port is open, app is running. Trust the port. ----
 if ss -lnt 2>/dev/null | grep -qE '(^|[[:space:]])(0\.0\.0\.0|127\.0\.0\.1):18900([[:space:]]|$)'; then
-  # Double-check PM2 state is not lying
-  STATUS=$(pm2 jlist 2>/dev/null | grep -o '"name":"sudo-ai-v5"[^}]*"status":"[^"]*"' | head -1 || true)
-  if [[ "$STATUS" == *online* ]]; then
-    exit 0
-  fi
-  # Port open but PM2 disagrees -- port might be held by a zombie. Treat as leak.
-  echo "[$(date -u +%FT%TZ)] PORT 18900 open but PM2 status is NOT online -- zombie detected" >> "$LOG"
-  fuser -k 18900/tcp 2>/dev/null || true
+  exit 0
 fi
 
-# ---- Step 3: Normal "down" restart path ----
-STATUS=$(pm2 jlist 2>/dev/null | grep -o '"name":"sudo-ai-v5"[^}]*"status":"[^"]*"' | head -1 || true)
-if [[ "$STATUS" == *online* ]]; then
+# ---- Step 3: Port not bound. If PM2 says online, app is still booting -- wait. ----
+if is_pm2_online; then
   echo "[$(date -u +%FT%TZ)] pm2 shows online, port not bound yet -- wait for next cron" >> "$LOG"
   exit 0
 fi
