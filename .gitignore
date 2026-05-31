@@ -85,8 +85,8 @@ twitter_trends_sentiment.py
 hello.py
 temp_heartbeat_query.js
 # Raw text/html research dumps at root
-*.html
-*.txt
+/*.html
+/*.txt
 # OS metadata
 .DS_Store
 Thumbs.db
