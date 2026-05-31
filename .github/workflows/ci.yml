@@ -37,13 +37,11 @@ jobs:
         with:
           version: 9.15.0
 
-      # 4. Set up Node 22 with pnpm cache enabled
+      # 4. Set up Node 22
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm              # caches ~/.pnpm-store between runs
-          cache-dependency-path: /root/sudo-ai-v4/pnpm-lock.yaml
 
       # 5. Install dependencies exactly as locked — fails if lockfile is stale
       - name: Install dependencies
