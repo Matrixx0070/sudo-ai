@@ -32,6 +32,7 @@ jobs:
           sudo chmod 755 /root
           mkdir -p /root/sudo-ai-v4/data
           mkdir -p /root/sudo-ai-v4/.githooks
+          mkdir -p /tmp/claude-0
 
       # 3. Install bubblewrap (required for sandbox integration tests)
       - name: Install bubblewrap
