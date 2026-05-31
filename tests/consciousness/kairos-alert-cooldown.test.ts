@@ -94,8 +94,8 @@ import { Kairos, __resetCooldownForTest } from '../../src/core/consciousness/kai
 function configureDiskCritical(): void {
   mockExecSync.mockImplementation((cmd: string) => {
     if (typeof cmd === 'string' && cmd.includes('du -sb')) {
-      // 1,200,000,000 bytes ≈ 1144MB → triggers CRITICAL (>1000MB threshold)
-      return '1200000000\t/root/sudo-ai-v4/data';
+      // 32,000,000,000 bytes ≈ 30.5GB → triggers CRITICAL (>30,000MB threshold)
+      return '32000000000\t/root/sudo-ai-v4/data';
     }
     // All other execSync calls (tsc, systemctl, etc.) return empty safely
     return '';
@@ -169,11 +169,11 @@ describe('Kairos alert cooldown', () => {
   });
 
   it('COOLDOWN-3: WARN severity key is independent from CRITICAL cooldown', async () => {
-    // Reconfigure execSync to return ~600MB (WARN, not CRITICAL)
+    // Reconfigure execSync to return ~25GB (WARN, not CRITICAL)
     mockExecSync.mockImplementation((cmd: string) => {
       if (typeof cmd === 'string' && cmd.includes('du -sb')) {
-        // 600MB → WARN threshold (>500MB but <=1000MB)
-        return '629145600\t/root/sudo-ai-v4/data';
+        // 25GB → WARN threshold (>20,000MB but <=30,000MB)
+        return '26843545600\t/root/sudo-ai-v4/data';
       }
       return '';
     });

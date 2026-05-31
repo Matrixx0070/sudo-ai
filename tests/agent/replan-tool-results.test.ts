@@ -44,6 +44,11 @@ function makeToolCallsResponse(toolCalls: Array<{ id: string; name: string }>): 
   };
 }
 
+const createMockSandboxManager = () => ({
+  getWorkspaceDir: vi.fn().mockReturnValue('/mock/workspace'),
+  getPolicyFor: vi.fn().mockReturnValue({}),
+});
+
 /**
  * Replace the auto-instantiated EpistemicGate on a loop instance with a spy
  * that always returns the given decision.
@@ -83,7 +88,7 @@ describe('RPT-1: Single tool call REPLAN synthesizes a tool-result stub', () => 
       .mockResolvedValueOnce(makeStopResponse());
 
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, createMockToolRegistry(), sm);
+    const loop = new AgentLoop(brain, createMockToolRegistry(), sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     patchEpistemicGate(loop, 'REPLAN', 'CONJECTURE');
 
@@ -121,7 +126,7 @@ describe('RPT-2: Multiple tool calls REPLAN synthesizes a stub for EACH call', (
       .mockResolvedValueOnce(makeStopResponse());
 
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, createMockToolRegistry(), sm);
+    const loop = new AgentLoop(brain, createMockToolRegistry(), sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     patchEpistemicGate(loop, 'REPLAN', 'CONJECTURE');
 
@@ -157,7 +162,7 @@ describe('RPT-3: REPLAN stubs carry correct toolCallId and toolName', () => {
       .mockResolvedValueOnce(makeStopResponse());
 
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, createMockToolRegistry(), sm);
+    const loop = new AgentLoop(brain, createMockToolRegistry(), sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     patchEpistemicGate(loop, 'REPLAN', 'UNKNOWN');
 
@@ -190,7 +195,7 @@ describe('RPT-4: Loop completes without MissingToolResultsError after REPLAN', (
       .mockResolvedValueOnce(makeStopResponse('all good after replan'));
 
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, createMockToolRegistry(), sm);
+    const loop = new AgentLoop(brain, createMockToolRegistry(), sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     patchEpistemicGate(loop, 'REPLAN', 'CONJECTURE');
 
@@ -224,7 +229,7 @@ describe('RPT-5: PROCEED decision does not add extra tool-result stubs', () => {
     });
 
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, registry, sm);
+    const loop = new AgentLoop(brain, registry, sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     // Gate says PROCEED — tool should actually execute.
     patchEpistemicGate(loop, 'PROCEED', 'CERTAIN');

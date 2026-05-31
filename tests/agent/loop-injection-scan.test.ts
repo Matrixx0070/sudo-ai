@@ -53,6 +53,11 @@ function makeSpyDetector(
   return d;
 }
 
+const createMockSandboxManager = () => ({
+  getWorkspaceDir: vi.fn().mockReturnValue('/mock/workspace'),
+  getPolicyFor: vi.fn().mockReturnValue({}),
+});
+
 /** Spy trust tracker factory. */
 function makeSpyTrustTracker() {
   const outcomes: Array<{ kind: string }> = [];
@@ -83,6 +88,12 @@ describe('INJ-5: setInjectionDetector / getInjectionDetector roundtrip', () => {
       createMockBrain(),
       createMockToolRegistry(),
       createMockSessionManager(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createMockSandboxManager(),
     );
     const detector = makeSpyDetector();
     loop.setInjectionDetector(detector);
@@ -100,6 +111,12 @@ describe('INJ-6: setInjectionDetector rejects invalid duck-type', () => {
       createMockBrain(),
       createMockToolRegistry(),
       createMockSessionManager(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createMockSandboxManager(),
     );
     expect(() => {
       loop.setInjectionDetector({ scan: 'not-a-function' } as unknown as { scan: (text: string) => DetectionResult });
@@ -117,7 +134,7 @@ describe('INJ-1: NONE severity → no recordOutcome, message processed', () => {
     const brain = createMockBrain();
     brain.call.mockResolvedValue(makeStopResponse());
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, createMockToolRegistry(), sm);
+    const loop = new AgentLoop(brain, createMockToolRegistry(), sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     const detector = makeSpyDetector(makeScanResult('NONE'));
     loop.setInjectionDetector(detector);
@@ -144,7 +161,7 @@ describe('INJ-2: MEDIUM severity → recordOutcome, message still processed', ()
     const brain = createMockBrain();
     brain.call.mockResolvedValue(makeStopResponse('processed'));
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, createMockToolRegistry(), sm);
+    const loop = new AgentLoop(brain, createMockToolRegistry(), sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     const detector = makeSpyDetector(makeScanResult('MEDIUM', ['AUTHORITY_CLAIM']));
     loop.setInjectionDetector(detector);
@@ -174,7 +191,7 @@ describe('INJ-3: CRITICAL severity → message dropped (REPLAN)', () => {
     const brain = createMockBrain();
     brain.call.mockResolvedValue(makeStopResponse());
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, createMockToolRegistry(), sm);
+    const loop = new AgentLoop(brain, createMockToolRegistry(), sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     const detector = makeSpyDetector(makeScanResult('CRITICAL', ['IGNORE_INSTRUCTION']));
     loop.setInjectionDetector(detector);
@@ -225,7 +242,7 @@ describe('INJ-4: Tool output scan → MEDIUM severity from tool result', () => {
     });
 
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, registry, sm);
+    const loop = new AgentLoop(brain, registry, sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     // Scan user message → NONE; scan tool result → MEDIUM
     let scanCallCount = 0;
@@ -263,7 +280,7 @@ describe('INJ-7: Detector throwing → fail-open, loop continues', () => {
     const brain = createMockBrain();
     brain.call.mockResolvedValue(makeStopResponse('still works'));
     const sm = createMockSessionManager();
-    const loop = new AgentLoop(brain, createMockToolRegistry(), sm);
+    const loop = new AgentLoop(brain, createMockToolRegistry(), sm, undefined, undefined, undefined, undefined, undefined, createMockSandboxManager());
 
     const throwingDetector = { scan: vi.fn(() => { throw new Error('detector exploded'); }) };
     loop.setInjectionDetector(throwingDetector);

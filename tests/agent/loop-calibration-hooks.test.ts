@@ -50,6 +50,11 @@ function makeToolCallResponse(
   };
 }
 
+const createMockSandboxManager = () => ({
+  getWorkspaceDir: vi.fn().mockReturnValue('/mock/workspace'),
+  getPolicyFor: vi.fn().mockReturnValue({}),
+});
+
 /** Build a spy calibration tracker. */
 function makeSpyTracker() {
   const calls: Array<{ predicted: number; outcome: number; tag?: string }> = [];
@@ -81,6 +86,11 @@ describe('CAL-1: setConfidenceCalibrationTracker / getConfidenceCalibrationTrack
       createMockToolRegistry(),
       createMockSessionManager(),
       { maxIterations: 5 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createMockSandboxManager(),
     );
     const tracker = makeSpyTracker();
     expect(loop.getConfidenceCalibrationTracker()).toBeUndefined();
@@ -105,7 +115,7 @@ describe('CAL-2: record(predicted, 1, tag) on tool-call success', () => {
       .mockResolvedValueOnce(makeStopResponse('done'));
     // tool execution succeeds (default mock returns success)
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 });
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 }, undefined, undefined, undefined, undefined, createMockSandboxManager());
     const tracker = makeSpyTracker();
     loop.setConfidenceCalibrationTracker(tracker);
 
@@ -143,7 +153,7 @@ describe('CAL-3: record() still called with outcome=1 when tool fails internally
     // Make tool execution throw an error (absorbed by executeSingleToolCall)
     mockTools.execute.mockRejectedValueOnce(new Error('tool execution failed internally'));
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 });
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 }, undefined, undefined, undefined, undefined, createMockSandboxManager());
     const tracker = makeSpyTracker();
     loop.setConfidenceCalibrationTracker(tracker);
 
@@ -177,7 +187,7 @@ describe('CAL-4: record(predicted, 0, tag) on epistemic REPLAN/block', () => {
       )
       .mockResolvedValueOnce(makeStopResponse('ok'));
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 });
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 }, undefined, undefined, undefined, undefined, createMockSandboxManager());
     const tracker = makeSpyTracker();
     loop.setConfidenceCalibrationTracker(tracker);
 
@@ -210,7 +220,7 @@ describe('CAL-5: setConfidenceCalibrationTracker does not throw (smoke)', () => 
     const mockSessions = createMockSessionManager();
     mockBrain.call.mockResolvedValue(makeStopResponse('all good'));
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 });
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 }, undefined, undefined, undefined, undefined, createMockSandboxManager());
     const tracker = makeSpyTracker();
     loop.setConfidenceCalibrationTracker(tracker);
 
@@ -232,6 +242,11 @@ describe('CAL-6: setConfidenceCalibrationTracker ignores invalid duck-type (no t
       createMockToolRegistry(),
       createMockSessionManager(),
       { maxIterations: 5 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createMockSandboxManager(),
     );
     // Missing record method
     expect(() => {
@@ -258,7 +273,7 @@ describe('CAL-7: no record() calls when no tool-calls are dispatched', () => {
     const mockTools = createMockToolRegistry();
     const mockSessions = createMockSessionManager();
     mockBrain.call.mockResolvedValue(makeStopResponse('just answering'));
-    loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 });
+    loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 5 }, undefined, undefined, undefined, undefined, createMockSandboxManager());
     tracker = makeSpyTracker();
     loop.setConfidenceCalibrationTracker(tracker);
   });

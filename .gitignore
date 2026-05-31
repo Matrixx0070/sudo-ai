@@ -36,6 +36,7 @@ leaked-claude-code/
 # Logs
 *.log
 /logs/
+!/src/renderer/components/admin/logs/
 data/logs/
 # Runtime / ephemeral data directories generated at runtime
 data/cache/
@@ -99,6 +100,7 @@ desktop.ini
 *~
 # Agent workspace sandbox — ephemeral working area
 /workspace/
+!/src/core/workspace/
 # DO NOT IGNORE — these MUST be committed:
 #   config/sudo-ai.json5          (non-secret runtime config)
 #   config/sudo-ai.json5.example  (template — will be created)

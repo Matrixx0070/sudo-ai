@@ -117,14 +117,19 @@ function buildSpyHooks(
 // Helper: build a minimal AgentLoop with a real HookManager attached
 // ---------------------------------------------------------------------------
 
+const createMockSandboxManager = () => ({
+  getWorkspaceDir: vi.fn().mockReturnValue('/mock/workspace'),
+  getPolicyFor: vi.fn().mockReturnValue({}),
+});
+
 function buildLoop(
   brain: ReturnType<typeof makeMockBrain>,
   tools: ReturnType<typeof makeMockToolRegistry>,
   sessions: ReturnType<typeof makeMockSessionManager>,
   hooks: HookManager,
 ): AgentLoop {
-  // Signature: (brain, toolRegistry, sessionManager, config, consciousness, security, workspaceInjector, hooks)
-  return new AgentLoop(brain, tools, sessions, { maxIterations: 10 }, undefined, undefined, undefined, hooks);
+  // Signature: (brain, toolRegistry, sessionManager, config, consciousness, security, workspaceInjector, hooks, sandboxManager)
+  return new AgentLoop(brain, tools, sessions, { maxIterations: 10 }, undefined, undefined, undefined, hooks, createMockSandboxManager());
 }
 
 // ---------------------------------------------------------------------------

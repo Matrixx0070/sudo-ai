@@ -556,9 +556,10 @@ describe('SB-16 halt-latch persists on S4 stop condition', () => {
     mockedExistsSync.mockReturnValue(true);
     mockedReadFileSync.mockReturnValue(stateWith2Aborts as unknown as Buffer);
 
-    // Trigger an alignment abort (null score) → 3rd consecutive gate-abort → S4 halt
+    // Trigger an alignment abort (score below threshold) → 3rd consecutive gate-abort → S4 halt
+    // Note: null score is treated as warming-up and does NOT increment consecutiveGateAbortTicks
     const deps = buildDeps({
-      alignmentAggregator: { getLastReport: vi.fn().mockReturnValue(null) },
+      alignmentAggregator: { getLastReport: vi.fn().mockReturnValue({ score: 0.55 }) },
     });
 
     const result = await runSelfBuildTick(deps);
