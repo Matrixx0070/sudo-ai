@@ -21,31 +21,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Set up pnpm (must come before setup-node so the cache key is correct)
+      # 2. Create /root/sudo-ai-v4 symlink — many tests hardcode this path
+      - name: Create project symlink
+        run: |
+          sudo mkdir -p /root
+          sudo ln -s "$(pwd)" /root/sudo-ai-v4
+          sudo chmod 777 /root/sudo-ai-v4
+          sudo chmod 777 /root/sudo-ai-v4/data 2>/dev/null || true
+          sudo chmod 777 /root/sudo-ai-v4/.githooks 2>/dev/null || true
+          sudo chmod 777 /root/sudo-ai-v4/src/core/self-build 2>/dev/null || true
+          sudo chmod 777 /root/sudo-ai-v4/src/core/skills 2>/dev/null || true
+
+      # 3. Set up pnpm (must come before setup-node so the cache key is correct)
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9.15.0
 
-      # 3. Set up Node 22 with pnpm cache enabled
+      # 4. Set up Node 22 with pnpm cache enabled
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm              # caches ~/.pnpm-store between runs
 
-      # 4. Install dependencies exactly as locked — fails if lockfile is stale
+      # 5. Install dependencies exactly as locked — fails if lockfile is stale
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      # 5. Pre-test setup — create writable dirs and fix permissions for CI runner
-      - name: Pre-test setup
-        run: |
-          mkdir -p data data-staging .githooks bin
-          chmod 755 data data-staging .githooks bin
-          chmod 644 bin/synth-seccomp-seal.so 2>/dev/null || true
-          export DATA_DIR="$(pwd)/data"
-          export SUDO_SELF_BUILD_DIR="$(pwd)/src/core/self-build"
 
       # 6. Lint — catches style/type errors before running tests
       - name: Lint
