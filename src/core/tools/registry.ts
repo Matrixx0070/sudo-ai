@@ -363,7 +363,27 @@ export class ToolRegistry {
       return this._executeMCPTool(name, params);
     }
 
-    const tool = this.tools.get(name);
+    let tool = this.tools.get(name);
+    // Ollama compatibility: Ollama strips dotted prefixes from tool names
+    // (e.g. "system.exec" → "exec"). Try suffix matching when exact lookup fails.
+    if (!tool && !name.includes('.')) {
+      const suffixMatches: string[] = [];
+      for (const registeredName of this.tools.keys()) {
+        if (registeredName.endsWith(`.${name}`)) {
+          suffixMatches.push(registeredName);
+        }
+      }
+      if (suffixMatches.length === 1) {
+        tool = this.tools.get(suffixMatches[0]!)!;
+        logger.warn({ requested: name, resolved: tool.name }, 'Ollama stripped tool prefix — resolved via suffix match');
+      } else if (suffixMatches.length > 1) {
+        tool = this.tools.get(suffixMatches[0]!)!;
+        logger.warn(
+          { requested: name, resolved: tool.name, candidates: suffixMatches },
+          'Ollama stripped tool prefix — ambiguous suffix, picked first match',
+        );
+      }
+    }
     if (!tool) {
       logger.error({ tool: name }, 'Tool not found');
       throw new ToolError(`Tool not found: ${name}`, 'tool_not_found', { name });

@@ -68,10 +68,18 @@ export class CronStore {
    * @returns The upserted job (with id guaranteed).
    */
   upsert(job: Omit<CronJob, 'id'> & { id?: string }): CronJob {
+    const existingById = job.id ? this.jobs.get(job.id) : undefined;
+    // Preserve lastRun from an existing record if the incoming definition omits it.
+    // For brand-new jobs (never seen before, no lastRun supplied), seed lastRun to the
+    // current time so the cron-kind isDue logic does NOT back-fire immediately on
+    // registration — the job will fire at the NEXT scheduled boundary after this moment.
+    const inheritedLastRun = existingById?.lastRun ?? job.lastRun ?? new Date().toISOString();
+
     const record: CronJob = {
       ...job,
-      consecutiveErrors: job.consecutiveErrors ?? 0,
+      consecutiveErrors: job.consecutiveErrors ?? existingById?.consecutiveErrors ?? 0,
       id: job.id ?? genId(),
+      lastRun: inheritedLastRun,
     };
 
     if (!record.name || typeof record.name !== 'string') {

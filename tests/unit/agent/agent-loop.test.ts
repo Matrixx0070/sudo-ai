@@ -16,6 +16,11 @@ import {
 import type { BrainResponse } from '../../../src/core/brain/types.js';
 import type { Session } from '../../../src/core/sessions/types.js';
 
+const createMockSandboxManager = () => ({
+  getWorkspaceDir: vi.fn().mockReturnValue('/mock/workspace'),
+  getPolicyFor: vi.fn().mockReturnValue({}),
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -50,31 +55,41 @@ describe('AgentLoop — construction', () => {
     const tools = createMockToolRegistry();
     const sessions = createMockSessionManager();
 
-    expect(() => new AgentLoop(brain, tools, sessions)).not.toThrow();
+    const sandboxManager = createMockSandboxManager();
+
+    expect(() => new AgentLoop(brain, tools, sessions, {}, undefined, undefined, undefined, undefined, sandboxManager)).not.toThrow();
   });
 
   it('throws PipelineError when brain is null', () => {
     const tools = createMockToolRegistry();
     const sessions = createMockSessionManager();
-    expect(() => new AgentLoop(null, tools, sessions)).toThrow(PipelineError);
+    const sandboxManager = createMockSandboxManager();
+
+    expect(() => new AgentLoop(null, tools, sessions, {}, undefined, undefined, undefined, undefined, sandboxManager)).toThrow(PipelineError);
   });
 
   it('throws PipelineError when brain has no call() method', () => {
     const tools = createMockToolRegistry();
     const sessions = createMockSessionManager();
-    expect(() => new AgentLoop({}, tools, sessions)).toThrow(PipelineError);
+    const sandboxManager = createMockSandboxManager();
+
+    expect(() => new AgentLoop({}, tools, sessions, {}, undefined, undefined, undefined, undefined, sandboxManager)).toThrow(PipelineError);
   });
 
   it('throws PipelineError when toolRegistry is null', () => {
     const brain = createMockBrain();
     const sessions = createMockSessionManager();
-    expect(() => new AgentLoop(brain, null, sessions)).toThrow(PipelineError);
+    const sandboxManager = createMockSandboxManager();
+
+    expect(() => new AgentLoop(brain, null, sessions, {}, undefined, undefined, undefined, undefined, sandboxManager)).toThrow(PipelineError);
   });
 
   it('throws PipelineError when toolRegistry has no execute() method', () => {
     const brain = createMockBrain();
     const sessions = createMockSessionManager();
-    expect(() => new AgentLoop(brain, {}, sessions)).toThrow(PipelineError);
+    const sandboxManager = createMockSandboxManager();
+
+    expect(() => new AgentLoop(brain, {}, sessions, {}, undefined, undefined, undefined, undefined, sandboxManager)).toThrow(PipelineError);
   });
 
   it('throws PipelineError when sessionManager is null', () => {
@@ -87,7 +102,8 @@ describe('AgentLoop — construction', () => {
     const brain = createMockBrain();
     const tools = createMockToolRegistry();
     const sessions = createMockSessionManager();
-    const loop = new AgentLoop(brain, tools, sessions);
+    const sandboxManager = createMockSandboxManager();
+    const loop = new AgentLoop(brain, tools, sessions, {}, undefined, undefined, undefined, undefined, sandboxManager);
     expect(loop.resolvedConfig.maxIterations).toBeGreaterThan(0);
   });
 
@@ -95,7 +111,8 @@ describe('AgentLoop — construction', () => {
     const brain = createMockBrain();
     const tools = createMockToolRegistry();
     const sessions = createMockSessionManager();
-    const loop = new AgentLoop(brain, tools, sessions, { maxIterations: 5 });
+    const sandboxManager = createMockSandboxManager();
+    const loop = new AgentLoop(brain, tools, sessions, { maxIterations: 5 }, undefined, undefined, undefined, undefined, sandboxManager);
     expect(loop.resolvedConfig.maxIterations).toBe(5);
   });
 
@@ -104,7 +121,8 @@ describe('AgentLoop — construction', () => {
     const tools = createMockToolRegistry();
     const sessions = createMockSessionManager();
     const consciousness = createMockConsciousnessOrchestrator();
-    expect(() => new AgentLoop(brain, tools, sessions, {}, consciousness)).not.toThrow();
+    const sandboxManager = createMockSandboxManager();
+    expect(() => new AgentLoop(brain, tools, sessions, {}, consciousness, undefined, undefined, undefined, sandboxManager)).not.toThrow();
   });
 });
 
@@ -117,7 +135,8 @@ describe('AgentLoop — run() validation', () => {
     mockBrain = createMockBrain();
     const tools = createMockToolRegistry();
     mockSessions = createMockSessionManager();
-    loop = new AgentLoop(mockBrain, tools, mockSessions, { maxIterations: 10 });
+    const sandboxManager = createMockSandboxManager();
+    loop = new AgentLoop(mockBrain, tools, mockSessions, { maxIterations: 10 }, undefined, undefined, undefined, undefined, sandboxManager);
   });
 
   it('throws PipelineError when sessionId is empty', async () => {
@@ -152,7 +171,8 @@ describe('AgentLoop — run() success', () => {
     mockBrain = createMockBrain();
     const tools = createMockToolRegistry();
     mockSessions = createMockSessionManager();
-    loop = new AgentLoop(mockBrain, tools, mockSessions, { maxIterations: 10 });
+    const sandboxManager = createMockSandboxManager();
+    loop = new AgentLoop(mockBrain, tools, mockSessions, { maxIterations: 10 }, undefined, undefined, undefined, undefined, sandboxManager);
   });
 
   it('returns the brain response content on a simple stop response', async () => {
@@ -220,7 +240,8 @@ describe('AgentLoop — tool-call handling', () => {
 
     mockTools.execute.mockResolvedValue({ success: true, output: 'tool ran' });
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 10 });
+    const sandboxManager = createMockSandboxManager();
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 10 }, undefined, undefined, undefined, undefined, sandboxManager);
     const result = await loop.run('test-session-id', 'run a tool');
     expect(result.text).toBe('all done');
   });
@@ -238,7 +259,8 @@ describe('AgentLoop — tool-call handling', () => {
       finishReason: 'content-filter',
     });
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 10 });
+    const sandboxManager = createMockSandboxManager();
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 10 }, undefined, undefined, undefined, undefined, sandboxManager);
     const errors: string[] = [];
     await loop.run('test-session-id', 'test', (e) => {
       if (e.type === 'error') errors.push(e.error);
@@ -257,7 +279,8 @@ describe('AgentLoop — max iterations guard', () => {
     mockBrain.call.mockResolvedValue(makeToolCallResponse('system.loop'));
     mockTools.execute.mockResolvedValue({ success: true, output: 'looped' });
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 3 });
+    const sandboxManager = createMockSandboxManager();
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 3 }, undefined, undefined, undefined, undefined, sandboxManager);
 
     await expect(loop.run('test-session-id', 'loop forever')).rejects.toThrow(PipelineError);
   });
@@ -270,7 +293,8 @@ describe('AgentLoop — max iterations guard', () => {
     mockBrain.call.mockResolvedValue(makeToolCallResponse('system.loop'));
     mockTools.execute.mockResolvedValue({ success: true, output: 'looped' });
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 2 });
+    const sandboxManager = createMockSandboxManager();
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 2 }, undefined, undefined, undefined, undefined, sandboxManager);
 
     try {
       await loop.run('test-session-id', 'loop');
@@ -286,10 +310,11 @@ describe('AgentLoop — consciousness integration', () => {
     const mockTools = createMockToolRegistry();
     const mockSessions = createMockSessionManager();
     const consciousness = createMockConsciousnessOrchestrator();
+    const sandboxManager = createMockSandboxManager();
 
     mockBrain.call.mockResolvedValue(makeStopResponse('done'));
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, {}, consciousness);
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, {}, consciousness, undefined, undefined, undefined, sandboxManager);
     await loop.run('test-session-id', 'hello');
 
     expect(consciousness.onInteractionStart).toHaveBeenCalledWith('test-session-id', 'hello');
@@ -300,10 +325,11 @@ describe('AgentLoop — consciousness integration', () => {
     const mockTools = createMockToolRegistry();
     const mockSessions = createMockSessionManager();
     const consciousness = createMockConsciousnessOrchestrator();
+    const sandboxManager = createMockSandboxManager();
 
     mockBrain.call.mockResolvedValue(makeStopResponse('done'));
 
-    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, {}, consciousness);
+    const loop = new AgentLoop(mockBrain, mockTools, mockSessions, {}, consciousness, undefined, undefined, undefined, sandboxManager);
     await loop.run('test-session-id', 'hello');
 
     expect(consciousness.onInteractionEnd).toHaveBeenCalled();

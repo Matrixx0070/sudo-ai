@@ -1008,7 +1008,7 @@ async function boot(): Promise<void> {
             }
           }
 
-          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
           const replyText = result?.text ?? 'No response generated.';
           const attachments = result?.attachments ?? [];
 
@@ -1170,7 +1170,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Discord session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1240,7 +1240,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Slack session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1315,7 +1315,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'WhatsApp session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1384,7 +1384,7 @@ async function boot(): Promise<void> {
         const taskStartMs = Date.now();
         try {
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
           const webReplyText = webResult?.text ?? 'No response generated.';
           log.info({ replyLen: webReplyText.length }, 'Web agent reply ready');
 
@@ -1461,7 +1461,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Email session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1530,7 +1530,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'SMS session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1795,8 +1795,22 @@ async function boot(): Promise<void> {
     const { registerSelfBuildCron } = await import('./core/self-build/cron-entry.js');
 
     const rawDb = (db as unknown as Record<string, unknown>)['db'] ?? db;
+    // Wrap finalAgentLoop to create a session before each self-build tick.
+    // Orchestrator passes its own synthetic sessionId but doesn't create the
+    // session in sessionManager first — AgentLoop.run rejects with
+    // "session not found". Wrapper creates a fresh 'web'-channel session
+    // per tick and forwards its real id.
+    const selfBuildAgentLoop = {
+      async run(_sessionId: string, message: string): Promise<{ text: string }> {
+        const session = await sessionManager.getOrCreate(
+          'web',
+          `self-build-tick-${Date.now()}`,
+        );
+        return finalAgentLoop.run(session.id, message);
+      },
+    };
     selfBuildDepsRef = {
-      agentLoop: finalAgentLoop,
+      agentLoop: selfBuildAgentLoop,
       mindDb: rawDb as import('better-sqlite3').Database,
       alignmentAggregator: finalAgentLoop.getAlignmentAggregator() ?? null,
       // mistakeAutoBlockGuard not accessible as a standalone var at this scope;

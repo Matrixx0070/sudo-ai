@@ -35,6 +35,7 @@ export interface BrainRequest {
   messages: BrainMessage[];
   model?: string;
   tools?: object[];
+  race?: boolean;
 }
 
 export interface BrainResponse {
@@ -458,7 +459,7 @@ export async function _toolNotFoundFallback(
   // Step (a): search MCP catalog for the missing tool.
   try {
     const result = await registry.execute('tool.search-mcp-catalog', { query: toolName }, ctx);
-    if (result.output && result.output.trim().length > 0) {
+    if (result.success && result.output && result.output.trim().length > 0) {
       log.info({ tool: toolName }, 'Fallback: resolved via tool.search-mcp-catalog');
       return result.output;
     }
@@ -469,7 +470,7 @@ export async function _toolNotFoundFallback(
   // Step (b): search npm registry for a package that provides the capability.
   try {
     const result = await registry.execute('tool.search-npm', { query: toolName }, ctx);
-    if (result.output && result.output.trim().length > 0) {
+    if (result.success && result.output && result.output.trim().length > 0) {
       log.info({ tool: toolName }, 'Fallback: resolved via tool.search-npm');
       return result.output;
     }
@@ -484,7 +485,7 @@ export async function _toolNotFoundFallback(
       { toolName, args: JSON.stringify(args) },
       ctx,
     );
-    if (result.output && result.output.trim().length > 0) {
+    if (result.success && result.output && result.output.trim().length > 0) {
       log.info({ tool: toolName }, 'Fallback: resolved via tool.synthesize');
       return result.output;
     }
@@ -753,4 +754,48 @@ export async function prepareMessages(
   // LAYER 4 — CONTEXT COLLAPSE: intelligently compress verbose tool results
   // Instead of dumb truncation, identify high-noise patterns and summarise them.
   return collapseToolResults(windowed) as BrainMessage[];
+}
+
+// ---------------------------------------------------------------------------
+// Proactive session message trimming
+// ---------------------------------------------------------------------------
+
+/** Maximum messages in session before proactive trimming. */
+export const SESSION_MESSAGE_TRIM_THRESHOLD = 40 as const;
+/** Number of non-system messages to keep after trimming. */
+export const SESSION_MESSAGE_KEEP_COUNT = 20 as const;
+
+/**
+ * Proactively trim session.messages to prevent unbounded growth.
+ *
+ * Keeps all system messages + the last N non-system messages.
+ * Called at the start of each agent loop iteration.
+ *
+ * @param session - Mutable session object.
+ * @param state   - Current agent state (for logging).
+ */
+export function trimSessionMessages(
+  session: SessionLike,
+  state: AgentState,
+): void {
+  const messages = session.messages;
+  if (!Array.isArray(messages) || messages.length <= SESSION_MESSAGE_TRIM_THRESHOLD) {
+    return;
+  }
+
+  const systemMsgs = messages.filter((m) => m.role === 'system');
+  const nonSystemMsgs = messages.filter((m) => m.role !== 'system');
+  const keptNonSystem = nonSystemMsgs.slice(-SESSION_MESSAGE_KEEP_COUNT);
+
+  session.messages = [...systemMsgs, ...keptNonSystem];
+
+  log.info(
+    {
+      sessionId: state.sessionId,
+      totalMessages: messages.length,
+      keptMessages: session.messages.length,
+      droppedMessages: messages.length - session.messages.length,
+    },
+    'Proactive session message trim applied',
+  );
 }

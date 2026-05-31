@@ -54,8 +54,8 @@ module.exports = {
       exec_mode: 'fork',            // fork mode (not cluster — ESM + native addons)
       autorestart: true,            // restart on crash
       max_restarts: 5,              // cap crash-loop restarts before pm2 gives up
-      min_uptime: '10s',            // must stay alive 10 s to count as stable start
-      restart_delay: 3000,          // ms between restart attempts
+      min_uptime: "30s",            // must stay alive 10 s to count as stable start
+      restart_delay: 10000,          // ms between restart attempts
 
       // ---- Logging ----
       time: true,                               // prefix every log line with timestamp
@@ -102,6 +102,20 @@ module.exports = {
         // DATA_DIR — directory for per-domain SQLite databases.
         // Required by AgentLoop (audit.db, veto-overrides.db) and CommitmentAuditor.
         DATA_DIR: path.join(CWD, 'data'),
+
+        // Ollama Cloud configuration (local Ollama removed from this VPS 2026-05-11)
+        SUDO_DEFAULT_MODEL: 'ollama/kimi-k2.6:cloud',
+        SUDO_FALLBACK_MODEL: 'ollama/gpt-oss:120b',
+        OLLAMA_URL: 'https://ollama.com/v1',
+
+        // Token-cost optimization (2026-05-11): disable parallel cloud-model
+        // racing by default. Sequential failover (kimi → glm → deepseek →
+        // gpt-oss) is ~67% cheaper. Per-call opt-in via BrainRequest.race=true
+        // for latency-sensitive paths (user-facing chat).
+        SUDO_BRAIN_RACE_DISABLE: '1',
+
+        // Web chat token — set explicitly so relay scripts can authenticate
+        WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
       },
     },
 
@@ -128,8 +142,8 @@ module.exports = {
       exec_mode: 'fork',              // fork mode (not cluster)
       autorestart: false,             // staging: do not auto-recover; fail visibly
       max_restarts: 3,
-      min_uptime: '10s',
-      restart_delay: 3000,            // ms between restart attempts
+      min_uptime: "30s",
+      restart_delay: 10000,            // ms between restart attempts
 
       // ---- Logging ----
       time: true,
@@ -167,6 +181,14 @@ module.exports = {
 
         // Isolated staging data directory — separate SQLite databases from prod.
         DATA_DIR: path.join(CWD, 'data-staging'),
+
+        // Ollama Cloud configuration (local Ollama removed from this VPS 2026-05-11)
+        SUDO_DEFAULT_MODEL: 'ollama/kimi-k2.6:cloud',
+        SUDO_FALLBACK_MODEL: 'ollama/gpt-oss:120b',
+        OLLAMA_URL: 'https://ollama.com/v1',
+
+        // Web chat token
+        WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
 
         // Kill-switch: enables tool.synthesize pipeline (bwrap sandbox + AST analysis).
         // MUST remain staging-only — never copy to apps[0] production env block.

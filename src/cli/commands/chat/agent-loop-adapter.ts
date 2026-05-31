@@ -116,7 +116,15 @@ export class TuiAgentAdapter {
 
     // --- AgentLoop ---
     const { AgentLoop } = await import('../../../core/agent/loop.js');
-    const agentLoop = new AgentLoop(brain, registry, sessionMgr, { maxIterations: 500 });
+    const sandboxManager = {
+      getWorkspaceDir: () =>
+        path.join(tuiDataDir, 'workspace'),
+      getPolicyFor: () => ({
+        readonly: false,
+        allowedPaths: [tuiDataDir, process.cwd()],
+      }),
+    };
+    const agentLoop = new AgentLoop(brain, registry, sessionMgr, { maxIterations: 500 }, undefined, undefined, undefined, undefined, sandboxManager);
 
     // --- InjectionDetector (Wave 6O) — stateless pure detector, no DB. Fail-open. ---
     try {

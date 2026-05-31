@@ -10,16 +10,28 @@
   models: {
     primary: [
       {
-        id: 'sudoapi/sudo-agent',
+        id: 'ollama/kimi-k2.6:cloud',
+        contextWindow: 200000,
+        maxOutputTokens: 16384,
+        temperature: 0.7,
+      },
+      {
+        id: 'ollama/glm-5.1:cloud',
+        contextWindow: 200000,
+        maxOutputTokens: 16384,
+        temperature: 0.7,
+      },
+      {
+        id: 'ollama/deepseek-v4-pro:cloud',
         contextWindow: 200000,
         maxOutputTokens: 16384,
         temperature: 0.7,
       },
     ],
     fallback: {
-      id: 'sudoapi/sudo-agent',
-      contextWindow: 200000,
-      maxOutputTokens: 16384,
+      id: 'ollama/qwen3.5:latest',
+      contextWindow: 128000,
+      maxOutputTokens: 8192,
       temperature: 0.7,
     },
     embedding: {

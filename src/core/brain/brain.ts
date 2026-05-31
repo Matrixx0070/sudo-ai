@@ -16,7 +16,6 @@ import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
-import { routeModel, isAutoModel } from './model-router.js';
 import type {
   BrainMessage,
   BrainRequest,
@@ -26,6 +25,7 @@ import type {
   MoodType,
   SystemPromptOptions,
   ReasoningLevel,
+  ModelProfile,
 } from './types.js';
 import type { SudoConfig } from '../config/types.js';
 import { ToolRegistry } from '../tools/registry.js';
@@ -625,16 +625,59 @@ export class Brain {
       ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
     });
 
-    // v5: Add strong tool-use instruction when tools are available
-    // Without this, the model generates text instead of calling tools
+    // v5: Tool-use instruction — softened for Ollama models which tend to
+    // return tool_calls for conversational queries when the instruction is
+    // too aggressive. We still encourage tool use for actions but allow
+    // direct text responses for conversation.
     if (toolSummaries.length > 0) {
-      systemPrompt += `\n\n## CRITICAL TOOL-USE INSTRUCTION
-You have ${toolSummaries.length} tools available. When the user asks you to DO something (check, search, navigate, read, write, screenshot, execute, etc.), you MUST call the appropriate tool. Do NOT describe what you would do — CALL THE TOOL. Do NOT say "I would use..." — USE IT. Return tool_calls, not text. Only respond with text AFTER you have executed the tools and have real results to report.`;
+      systemPrompt += `\n\n## TOOL-USE INSTRUCTION
+You have ${toolSummaries.length} tools available. When the user asks you to DO something concrete (check, search, navigate, read, write, screenshot, execute, etc.), call the appropriate tool. For casual conversation, greetings, opinions, or general questions, respond with normal text — do NOT call tools.`;
     }
     const temperature = this.resolveTemperature(request);
     const maxTokens = this.resolveMaxTokens(request);
     let lastError: unknown;
 
+    // -------------------------------------------------------------------------
+    // Phase 1: Race all available cloud models in parallel (fastest wins).
+    // Wait for ALL to settle, then pick the first successful one with content.
+    // This avoids returning empty responses from a "fast" model that failed
+    // silently (Ollama sometimes returns finishReason:stop with zero tokens).
+    //
+    // Kill-switch: SUDO_BRAIN_RACE_DISABLE=1 skips the race entirely and goes
+    // straight to sequential failover (Phase 2). Set when token cost matters
+    // more than p99 latency (e.g. background cognitive ticks, KAIROS, self-build).
+    // Per-request opt-in: BrainRequest.race === true forces racing even when
+    // the env flag is set (use for user-facing chat where latency matters).
+    // -------------------------------------------------------------------------
+    const cloudProfiles = this.failover.getCloudProfiles();
+    const raceDisabled = process.env['SUDO_BRAIN_RACE_DISABLE'] === '1' && request.race !== true;
+    if (cloudProfiles.length > 0 && !raceDisabled) {
+      log.info({ cloudCount: cloudProfiles.length, models: cloudProfiles.map(p => p.id) }, 'Racing cloud models in parallel');
+      const cloudPromises = cloudProfiles.map(profile =>
+        this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens)
+          .then(result => ({ success: true as const, result, profile }))
+          .catch(err => ({ success: false as const, err, profile }))
+      );
+
+      const cloudResults = await Promise.allSettled(cloudPromises);
+      for (const settled of cloudResults) {
+        if (settled.status === 'fulfilled' && settled.value.success) {
+          const result = settled.value.result;
+          // Reject empty responses — they mean the model failed silently.
+          if (result.content?.trim().length > 0 || result.toolCalls?.length > 0) {
+            log.info({ modelId: result.model }, 'Cloud model race winner');
+            return result;
+          }
+          log.warn({ modelId: result.model }, 'Cloud model returned empty content — treating as failure');
+          this.failover.recordError(settled.value.profile.id, 'format');
+        }
+      }
+      log.warn('All cloud models failed or returned empty — falling back to local models');
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 2: Sequential fallback through local models (and any remaining).
+    // -------------------------------------------------------------------------
     for (let attempt = 0; attempt < MAX_FAILOVER_ATTEMPTS; attempt++) {
       const profile = this.failover.getNextProfile();
 
@@ -642,107 +685,14 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt });
       }
 
-      // Smart routing: when model is 'auto' or unset, pick the best model for the task.
-      let modelId: string;
-      if (isAutoModel(request.model)) {
-        const lastUser = [...request.messages].reverse().find(m => m.role === 'user');
-        const decision = routeModel('', lastUser?.content ?? '');
-        modelId = decision.model;
-        log.info({ attempt, modelId, category: decision.category }, 'Auto-routed to model');
-      } else {
-        modelId = (request.model && request.model.includes('/')) ? request.model : profile.id;
-      }
-      log.info({ attempt, modelId, persona: this.currentPersona, mood: this.currentMood }, 'LLM call starting');
-
       try {
-        const modelHandle = getModel(modelId);
-
-        const callParams: Record<string, unknown> = {
-          model: modelHandle,
-          system: systemPrompt,
-          messages: toSDKMessages(request.messages),
-          temperature,
-          maxOutputTokens: maxTokens,
-        };
-        if (request.tools && request.tools.length > 0) {
-          log.info({ toolCount: request.tools.length, firstTool: (request.tools[0] as any)?.function?.name ?? (request.tools[0] as any)?.name ?? 'unknown' }, 'Attaching tools to LLM call');
-          callParams.tools = Object.fromEntries(
-            request.tools.map((t: any) => {
-              const name = t.function?.name ?? t.name;
-              const desc = t.function?.description ?? t.description;
-              const params = t.function?.parameters ?? t.parameters;
-              return [name, aiTool({
-                description: desc,
-                inputSchema: jsonSchema(params),
-              })];
-            })
-          );
-        }
-        const result = await generateText(callParams as Parameters<typeof generateText>[0]);
-
-        // --- Grok refusal detection (kill-switch: SUDO_GROK_REFUSAL_DETECT_DISABLE=1) ---
-        if (process.env['SUDO_GROK_REFUSAL_DETECT_DISABLE'] !== '1') {
-          if (isGrokRefusal(result.text ?? '')) {
-            log.warn({ attempt, modelId }, 'Grok refusal detected in 200-OK body — rerouting to next profile');
-            continue;
-          }
-        }
-        // --- end refusal detection ---
-
-        const usage = buildTokenUsage(modelId, result.usage);
-        const toolCalls = this.extractToolCalls(result.toolCalls ?? []);
-        const finishReason = (result.finishReason ?? 'stop') as BrainResponse['finishReason'];
-
-        // Fallback: parse XML or JSON text tool calls if structured output is empty.
-        // Kill-switch: SUDO_TEXT_TOOLCALL_FALLBACK_DISABLE=1 skips both paths.
-        let finalToolCalls = toolCalls;
-        let finalContent = result.text ?? '';
-        let finalFinishReason = finishReason;
-
-        if (
-          process.env['SUDO_TEXT_TOOLCALL_FALLBACK_DISABLE'] !== '1' &&
-          finalToolCalls.length === 0 &&
-          finishReason !== 'tool-calls' &&
-          typeof result.text === 'string'
-        ) {
-          if (result.text.includes('<tool_call>')) {
-            // XML fallback: <tool_call>{ "name": "...", "args": {...} }</tool_call>
-            finalToolCalls = this._parseTextToolCalls(result.text);
-            if (finalToolCalls.length > 0) {
-              // Strip the XML blocks so prose is clean; the agent re-assembles.
-              finalContent = result.text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
-            }
-          } else if (result.text.includes('"tool_calls"')) {
-            // JSON fallback: {"tool_calls":[{"name":"...","arguments":{}}]}
-            // Some providers (OpenAI-compat shims) emit this in text with finishReason='stop'.
-            finalToolCalls = this._parseJsonToolCalls(result.text);
-            if (finalToolCalls.length > 0) {
-              // Strip the raw JSON block from content so it doesn't surface to the user.
-              finalContent = result.text.replace(/\{[\s\S]*?"tool_calls"[\s\S]*?\}/g, '').trim();
-            }
-          }
-
-          if (finalToolCalls.length > 0) {
-            // Flip finishReason so loop.ts routes to tool execution, not the 'stop' branch.
-            finalFinishReason = 'tool-calls';
-            log.warn(
-              { modelId, count: finalToolCalls.length, via: finalContent !== result.text ? 'json' : 'xml' },
-              'Text tool-call fallback ACTIVATED — finishReason flipped to tool-calls',
-            );
-          }
-        }
-
-        this.failover.recordSuccess(profile.id);
-        log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
-
-        return { content: finalContent, toolCalls: finalToolCalls, usage, model: modelId, finishReason: finalFinishReason };
-
+        const result = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+        return result;
       } catch (err) {
         lastError = err;
         const { status, body } = Brain.extractErrorDetails(err);
         const category = this.failover.categorizeError(status, body);
-
-        log.warn({ attempt, modelId, status, category, err }, 'LLM call failed — trying next profile');
+        log.warn({ attempt, profileId: profile.id, status, category }, 'LLM call failed — trying next profile');
         this.failover.recordError(profile.id, category);
       }
     }
@@ -777,7 +727,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt });
       }
 
-      const modelId = (request.model && request.model.includes('/')) ? request.model : profile.id;
+      const modelId = profile.id;
       log.info({ attempt, modelId }, 'Streaming LLM call starting');
 
       try {
@@ -835,6 +785,122 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       attempts: MAX_FAILOVER_ATTEMPTS,
       lastError: String(lastError),
     });
+  }
+
+  /**
+   * Execute a single LLM call for a given profile.
+   * Handles model resolution, tool attachment, refusal detection, and text fallback.
+   * Records success/error on the failover tracker.
+   */
+  private async _callSingleModel(
+    profile: ModelProfile,
+    request: BrainRequest,
+    systemPrompt: string,
+    temperature: number,
+    maxTokens: number,
+  ): Promise<BrainResponse> {
+    let modelId: string;
+    // ALWAYS use the profile's model ID. The caller (cloud racing / failover loop)
+    // already selected the correct profile. Using request.model or routeModel() here
+    // overrides the profile and breaks failover — all parallel calls hit the same
+    // model, and fallback to local models still calls the cloud model.
+    modelId = profile.id;
+
+    const modelHandle = getModel(modelId);
+
+    const callParams: Record<string, unknown> = {
+      model: modelHandle,
+      system: systemPrompt,
+      messages: toSDKMessages(request.messages),
+      temperature,
+      maxOutputTokens: maxTokens,
+    };
+    if (request.tools && request.tools.length > 0) {
+      callParams.tools = Object.fromEntries(
+        request.tools.map((t: any) => {
+          const name = t.function?.name ?? t.name;
+          const desc = t.function?.description ?? t.description;
+          const params = t.function?.parameters ?? t.parameters;
+          return [name, aiTool({
+            description: desc,
+            inputSchema: jsonSchema(params),
+          })];
+        })
+      );
+    }
+    let result = await generateText(callParams as Parameters<typeof generateText>[0]);
+
+    // --- Tool-empty retry: some providers (Ollama cloud) return empty content
+    // when tools are attached but don't actually support structured tool calls.
+    // Retry once WITHOUT tools to get a text response.
+    // Kill-switch: SUDO_TOOL_EMPTY_RETRY_DISABLE=1
+    // ---
+    const hadTools = request.tools && request.tools.length > 0;
+    const isEmpty = (!result.text || result.text.trim().length === 0) && (result.toolCalls ?? []).length === 0;
+    if (
+      hadTools &&
+      isEmpty &&
+      process.env['SUDO_TOOL_EMPTY_RETRY_DISABLE'] !== '1'
+    ) {
+      log.warn({ modelId }, 'Empty response with tools — retrying without tools');
+      const noToolParams = { ...callParams };
+      delete noToolParams.tools;
+      // Slightly raise temperature for the retry to avoid deterministic empty loops
+      noToolParams.temperature = Math.min(temperature + 0.1, 1.0);
+      result = await generateText(noToolParams as Parameters<typeof generateText>[0]);
+      log.info({ modelId, textLen: result.text?.length ?? 0 }, 'Retried without tools');
+    }
+    // --- end tool-empty retry ---
+
+    // --- Grok refusal detection (kill-switch: SUDO_GROK_REFUSAL_DETECT_DISABLE=1) ---
+    if (process.env['SUDO_GROK_REFUSAL_DETECT_DISABLE'] !== '1') {
+      if (isGrokRefusal(result.text ?? '')) {
+        log.warn({ modelId }, 'Grok refusal detected in 200-OK body — treating as error');
+        throw new LLMError('Grok refusal detected', 'llm_grok_refusal');
+      }
+    }
+    // --- end refusal detection ---
+
+    const usage = buildTokenUsage(modelId, result.usage);
+    const toolCalls = this.extractToolCalls(result.toolCalls ?? []);
+    const finishReason = (result.finishReason ?? 'stop') as BrainResponse['finishReason'];
+
+    // Fallback: parse XML or JSON text tool calls if structured output is empty.
+    let finalToolCalls = toolCalls;
+    let finalContent = result.text ?? '';
+    let finalFinishReason = finishReason;
+
+    if (
+      process.env['SUDO_TEXT_TOOLCALL_FALLBACK_DISABLE'] !== '1' &&
+      finalToolCalls.length === 0 &&
+      finishReason !== 'tool-calls' &&
+      typeof result.text === 'string'
+    ) {
+      if (result.text.includes('<tool_call>')) {
+        finalToolCalls = this._parseTextToolCalls(result.text);
+        if (finalToolCalls.length > 0) {
+          finalContent = result.text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+        }
+      } else if (result.text.includes('"tool_calls"')) {
+        finalToolCalls = this._parseJsonToolCalls(result.text);
+        if (finalToolCalls.length > 0) {
+          finalContent = result.text.replace(/\{[\s\S]*?"tool_calls"[\s\S]*?\}/g, '').trim();
+        }
+      }
+
+      if (finalToolCalls.length > 0) {
+        finalFinishReason = 'tool-calls';
+        log.warn(
+          { modelId, count: finalToolCalls.length, via: finalContent !== result.text ? 'json' : 'xml' },
+          'Text tool-call fallback ACTIVATED — finishReason flipped to tool-calls',
+        );
+      }
+    }
+
+    this.failover.recordSuccess(profile.id);
+    log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
+
+    return { content: finalContent, toolCalls: finalToolCalls, usage, model: modelId, finishReason: finalFinishReason };
   }
 
   /**

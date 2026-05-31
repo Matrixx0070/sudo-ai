@@ -1,0 +1,32 @@
+[Unit]
+Description=SUDO-AI v5 Agent Stack
+After=network.target
+
+[Service]
+Type=forking
+User=root
+Group=root
+Environment=HOME=/root
+Environment=PM2_HOME=/root/.pm2
+WorkingDirectory=/root/sudo-ai-v4
+
+# Pre-start cleanup: kill any leaked tsx or esbuild orphans
+ExecStartPre=-/bin/sh -c "pkill -9 -f 'tsx src/cli\.ts' || true"
+ExecStartPre=-/bin/sh -c "pkill -9 -f 'esbuild' || true"
+ExecStartPre=-/bin/sh -c "sleep 1"
+ExecStartPre=-/bin/sh -c "pm2 delete sudo-ai-v5-staging || true"
+ExecStartPre=-/bin/sh -c "pm2 delete sudo-ai-v5 || true"
+ExecStartPre=-/bin/sh -c "pm2 save --force || true"
+ExecStartPre=-/bin/sh -c "sleep 1"
+
+ExecStart=/usr/bin/pm2 start /root/sudo-ai-v4/ecosystem.config.cjs --only sudo-ai-v5 --update-env
+ExecStop=/usr/bin/pm2 stop sudo-ai-v5
+ExecReload=/usr/bin/pm2 reload sudo-ai-v5
+
+# If the service dies, systemd restarts it (pm2 itself also restarts, but this
+# is the ultimate safety net).
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
