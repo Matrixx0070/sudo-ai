@@ -28,6 +28,18 @@ import type { ToolContext, ToolResult } from '../../src/core/tools/types.js';
 import { searchMcpCatalogTool, searchNpmTool } from '../../src/core/tools/builtin/meta/tool-search.js';
 import { installMcpTool } from '../../src/core/tools/builtin/meta/tool-install.js';
 import { synthesizeTool, sanitizeForPrompt, runStaticAnalysis, spawnBwrapSynth } from '../../src/core/tools/builtin/meta/tool-synthesize.js';
+import { execSync } from 'node:child_process';
+
+// Skip bwrap integration tests in environments where bubblewrap cannot run
+// (e.g., GitHub Actions containers that lack unshare capabilities).
+const bwrapAvailable = ((): boolean => {
+  try {
+    execSync('bwrap --version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Mock modules — declared before any test runs
@@ -1506,7 +1518,7 @@ async function spawnRealWorker(
   });
 }
 
-describe('Wave 2.2a — Fix A: process.env scrub (real worker, end-to-end)', () => {
+describe.skipIf(!bwrapAvailable)('Wave 2.2a — Fix A: process.env scrub (real worker, end-to-end)', () => {
   it('W22a-A: process.env is empty inside synthesized execute() — Fix A regresses if this fails', async () => {
     // The synthesized code throws iff the env was NOT scrubbed.
     // After Fix A: process.env is empty → PATH is undefined → no throw → ok:true.
@@ -1535,7 +1547,7 @@ describe('Wave 2.2a — Fix A: process.env scrub (real worker, end-to-end)', () 
   });
 });
 
-describe('Wave 2.2a — Fix B: error redaction (real worker, end-to-end)', () => {
+describe.skipIf(!bwrapAvailable)('Wave 2.2a — Fix B: error redaction (real worker, end-to-end)', () => {
   it('W22a-B: throwing execute() produces errorCode not raw message — exfil channel closed', async () => {
     const { writeFileSync, unlinkSync } = await vi.importActual<typeof import('node:fs')>('node:fs');
     const { join } = await vi.importActual<typeof import('node:path')>('node:path');
@@ -1592,7 +1604,7 @@ describe('Wave 2.2a — Fix C: allowlist imports (AST-level)', () => {
 
 import * as nodeFsPromises from 'node:fs/promises';
 
-describe('Wave 2.2b — bwrap process sandbox', () => {
+describe.skipIf(!bwrapAvailable)('Wave 2.2b — bwrap process sandbox', () => {
   // W22b-1: happy path — valid synthesized tool returns ok:true with toolNames
   it('W22b-1: returns ok:true with toolNames for valid synth', async () => {
     const ts = `
@@ -1734,7 +1746,7 @@ describe('Wave 2.2c — smoke: stdout overflow cap', () => {
   });
 });
 
-describe('Wave 2.2c — smoke: UID drop in sandbox', () => {
+describe.skipIf(!bwrapAvailable)('Wave 2.2c — smoke: UID drop in sandbox', () => {
   // W22c-UID: verifies synth-bwrap-entry.cjs drops to UID 65534 before execute().
   // Uses spawnRealWorker pattern (real bwrap) — identical to W22b bwrap suite.
   // If the probe itself fails (bwrap environment not available or UID not 65534),

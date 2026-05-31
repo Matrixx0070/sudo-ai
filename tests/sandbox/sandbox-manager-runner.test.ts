@@ -13,6 +13,18 @@ import { randomUUID } from 'node:crypto';
 import { SandboxManager } from '../../src/core/sandbox/sandbox-manager.js';
 import { runInSandbox } from '../../src/core/sandbox/sandbox-runner.js';
 import { DEFAULT_SANDBOX_POLICY, SandboxManagerError, type SandboxPolicy } from '../../src/core/sandbox/sandbox-types.js';
+import { execSync } from 'node:child_process';
+
+// Skip bwrap integration tests in environments where bubblewrap cannot run
+// (e.g., GitHub Actions containers that lack unshare capabilities).
+const bwrapAvailable = ((): boolean => {
+  try {
+    execSync('bwrap --version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,7 +48,7 @@ function makeManager(workspaceRoot: string, stateMachine: EventEmitter): Sandbox
 // runInSandbox integration tests (10-13)
 // ---------------------------------------------------------------------------
 
-describe('runInSandbox — integration (requires bwrap)', () => {
+describe.skipIf(!bwrapAvailable)('runInSandbox — integration (requires bwrap)', () => {
   const workspaceDir = join(tmpdir(), `bwrap-ws-${randomUUID()}`);
 
   beforeEach(() => {
