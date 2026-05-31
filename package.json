@@ -9,12 +9,23 @@
     ".": "./dist/core/index.js",
     "./cli": "./dist/cli/index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Matrixx0070/sudo-ai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Matrixx0070/sudo-ai/issues"
+  },
+  "homepage": "https://github.com/Matrixx0070/sudo-ai#readme",
   "files": [
     "dist/",
     "config/sudo-ai.json5",
     "config/.env.example",
     "README.md",
     "BOOTSTRAP.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
     "LICENSE"
   ],
   "scripts": {

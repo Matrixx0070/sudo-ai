@@ -113,6 +113,7 @@ coverage/
 /*.png
 # Wave FixProperly Track B
 config/.env.*
+!config/.env.example
 # Staging databases — mirror of data/, runtime-generated, never commit
 data-staging/
 # Rework additions — generated artifacts
@@ -120,3 +121,4 @@ output/
 /tmp-*.mjs
 # Runtime-generated proposals — not source
 learning/
+/.env*

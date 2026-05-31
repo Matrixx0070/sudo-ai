@@ -26,7 +26,7 @@ SUDO-AI is a self-evolving autonomous agent that runs continuously on your machi
 - **Cost tracking:** per-call token usage and estimated USD cost logged to `mind.db`
 - **Personas and moods:** configurable personality modes and temperature modifiers
 - **Claude Max support:** OAuth token auto-refresh for Claude Max subscribers
-- **OpenAI-compatible API:** local HTTP server at `:3000` (POST /v1/chat/completions)
+- **OpenAI-compatible API:** mounted on the unified gateway at `/v1/*`
 
 ### Consciousness — 20 Continuous Modules
 
@@ -78,7 +78,7 @@ State persists across restarts in `data/consciousness.db`. The agent resumes —
 | Signal | Available | Enable in config |
 | Matrix | Available | Enable in config |
 | IRC | Available | Enable in config |
-| Web | Available | HTTP + WebSocket at `:3001` |
+| Web | Available | HTTP + WebSocket on gateway port (`/chat`, `/chat/ws`) |
 | Electron | Built-in | Native desktop app with system tray |
 
 ### Knowledge — RAG Pipeline
@@ -117,7 +117,7 @@ State persists across restarts in `data/consciousness.db`. The agent resumes —
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/sudo-ai/sudo-ai.git
+git clone https://github.com/Matrixx0070/sudo-ai.git
 cd sudo-ai
 pnpm install
 
@@ -182,7 +182,7 @@ Configuration lives in two files:
 
 See [docs/configuration.md](docs/configuration.md) for full field reference.
 
-Operator identity anchor (optional): see `docs/wave6a.md`.
+Operator identity anchor (optional): see `internal/specs/wave6a.md`.
 
 **Minimal `.env`:**
 ```bash
@@ -216,24 +216,30 @@ TELEGRAM_CHAT_ID=your-telegram-user-id
 
 ## API
 
-SUDO-AI runs an OpenAI-compatible HTTP API on port `3000` (default):
+SUDO-AI runs a unified gateway (default port `18800`) that serves the web UI, WebSocket, and an OpenAI-compatible HTTP API:
 
 ```bash
 # Chat completion
-curl -X POST http://localhost:3000/v1/chat/completions \
-  -H "Authorization: Bearer $SUDO_AI_API_TOKEN" \
+curl -X POST http://localhost:18800/v1/chat/completions \
+  -H "Authorization: Bearer $GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "xai/grok-4-1-fast-non-reasoning",
+    "model": "xai/grok-4-fast-non-reasoning",
     "messages": [{"role": "user", "content": "What files are in /tmp?"}]
   }'
 
 # List models
-curl http://localhost:3000/v1/models \
-  -H "Authorization: Bearer $SUDO_AI_API_TOKEN"
+curl http://localhost:18800/v1/models \
+  -H "Authorization: Bearer $GATEWAY_TOKEN"
 ```
 
-Set `API_PORT` in `.env` to change the port. See [docs/api-reference.md](docs/api-reference.md) for full reference.
+Set `GATEWAY_PORT` in `config/.env` to change the port. See [docs/api-reference.md](docs/api-reference.md) for full reference.
+
+---
+
+## Security
+
+SUDO-AI includes a defense-in-depth security stack. See [SECURITY.md](SECURITY.md) for vulnerability reporting, supported versions, and security architecture overview.
 
 ---
 
@@ -269,12 +275,13 @@ services:
 
 ## Contributing
 
+We welcome contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code standards, and the pull-request process.
+
+Quick checklist:
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Follow the code standards in `workspace/SOUL.md` (ESM, strict TypeScript, no `any`)
-4. Keep files under 300 lines — split into modules if needed
-5. Run `pnpm lint` and `pnpm test` before submitting
-6. Open a pull request with a clear description of what changed and why
+3. Run `pnpm lint` and `pnpm test` before submitting
+4. Open a pull request with a clear description of what changed and why
 
 ---
 
