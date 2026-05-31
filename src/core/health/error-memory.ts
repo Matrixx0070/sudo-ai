@@ -263,6 +263,30 @@ export class ErrorMemory {
       );
       CREATE INDEX IF NOT EXISTS idx_error_memory_sig ON error_memory(error_signature);
       CREATE INDEX IF NOT EXISTS idx_error_memory_cat ON error_memory(category);
+
+      CREATE TABLE IF NOT EXISTS auto_fix_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        issue_number INTEGER NOT NULL,
+        error_signature TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TEXT NOT NULL,
+        fixed_at TEXT,
+        commit_sha TEXT,
+        pr_number INTEGER,
+        deployment_sha TEXT,
+        deployed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_auto_fix_issue ON auto_fix_log(issue_number);
+      CREATE INDEX IF NOT EXISTS idx_auto_fix_signature ON auto_fix_log(error_signature);
+      CREATE INDEX IF NOT EXISTS idx_auto_fix_status ON auto_fix_log(status);
+
+      CREATE TABLE IF NOT EXISTS auto_fix_rate_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        executed_at TEXT NOT NULL,
+        issue_number INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_rate_log_time ON auto_fix_rate_log(executed_at);
     `);
   }
 
