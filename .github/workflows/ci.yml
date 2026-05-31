@@ -10,28 +10,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup to root
+      - name: Create writable symlink
         run: |
+          sudo mkdir -p /root
           sudo rm -rf /root/sudo-ai-v4
-          sudo cp -r "$(pwd)" /root/sudo-ai-v4
-          sudo chmod -R 777 /root/sudo-ai-v4
-          sudo mkdir -p /root/sudo-ai-v4/data /root/sudo-ai-v4/data-staging /root/sudo-ai-v4/.githooks /root/sudo-ai-v4/src/core/self-build
-          sudo chmod -R 777 /root/sudo-ai-v4/data /root/sudo-ai-v4/data-staging /root/sudo-ai-v4/.githooks /root/sudo-ai-v4/src/core/self-build
+          sudo ln -s "$(pwd)" /root/sudo-ai-v4
+          sudo chmod -R 777 "$(pwd)"
+          mkdir -p data data-staging .githooks src/core/self-build
+          chmod -R 777 data data-staging .githooks src/core/self-build
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install
-        working-directory: /root/sudo-ai-v4
-        run: pnpm install --frozen-lockfile
-      - name: Lint
-        working-directory: /root/sudo-ai-v4
-        run: pnpm lint
-      - name: Test
-        working-directory: /root/sudo-ai-v4
-        run: pnpm test
-      - name: Build
-        working-directory: /root/sudo-ai-v4
-        run: pnpm build
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
