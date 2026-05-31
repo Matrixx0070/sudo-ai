@@ -30,11 +30,11 @@ jobs:
         with:
           version: latest
 
-      # 3. Set up Node 20 with npm registry auth configured
-      - name: Setup Node.js 20
+      # 3. Set up Node 22 with npm registry auth configured
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org  # injects NODE_AUTH_TOKEN into .npmrc
 
