@@ -10,21 +10,14 @@ const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 // Mock child_process before importing the module
-vi.mock('node:child_process', async () => {
-  const actual = await vi.importActual('node:child_process');
-  const mockExecFile = vi.fn();
-  return {
-    ...actual,
-    execFile: mockExecFile,
-    __mockExecFile: mockExecFile,
-  };
-});
+vi.mock('node:child_process', () => ({
+  execFile: vi.fn(),
+}));
 
-import { DeploymentHook } from './deployment-hook.js';
 import { execFile } from 'node:child_process';
+import { DeploymentHook } from './deployment-hook.js';
 
-// Get the mock function
-const mockExecFile = execFile as ReturnType<typeof vi.fn>;
+const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -41,6 +34,17 @@ function createMockDeps() {
   };
 }
 
+type ExecResponse =
+  | { type: 'success'; stdout: string; stderr: string }
+  | { type: 'error'; error: Error }
+  | { type: 'exit'; stdout: string; stderr: string; code: number };
+
+let execQueue: ExecResponse[] = [];
+
+function queueExec(...responses: ExecResponse[]) {
+  execQueue.push(...responses);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -50,12 +54,35 @@ describe('DeploymentHook', () => {
   let deps: ReturnType<typeof createMockDeps>;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    execQueue = [];
+    let callIdx = 0;
+    mockExecFile.mockImplementation((_cmd: string, _args: unknown, _opts: unknown, cb: unknown) => {
+      const response = execQueue[callIdx++];
+      if (!response) {
+        const callback = cb as (err: Error, stdout: string, stderr: string) => void;
+        callback(new Error(`Unexpected execFile call #${callIdx}`), '', '');
+        return;
+      }
+      const callback = cb as (err: Error | null, stdout: string, stderr: string) => void;
+      if (response.type === 'success') {
+        callback(null, response.stdout, response.stderr);
+      } else if (response.type === 'exit') {
+        const err = new Error(response.stderr || 'Command failed') as Error & { status: number };
+        err.status = response.code;
+        callback(err, response.stdout, response.stderr);
+      } else {
+        callback(response.error, '', '');
+      }
+    });
+
+    process.env['GITHUB_TOKEN'] = 'test-token';
     deps = createMockDeps();
     hook = new DeploymentHook(deps.githubIssues, deps.metrics);
   });
 
   afterEach(() => {
+    delete process.env['GITHUB_TOKEN'];
     hook.cleanup();
   });
 
@@ -115,10 +142,11 @@ describe('DeploymentHook', () => {
         json: async () => ({ state: 'merged', merged: true, head: { sha: 'abc123' } }),
       });
 
-      mockExecFile
-        .mockResolvedValueOnce({ stdout: 'lint ok', stderr: '', code: 0 })
-        .mockResolvedValueOnce({ stdout: 'tests pass', stderr: '', code: 0 })
-        .mockResolvedValueOnce({ stdout: 'pm2 reload ok', stderr: '', code: 0 });
+      queueExec(
+        { type: 'success', stdout: 'lint ok', stderr: '' },
+        { type: 'success', stdout: 'tests pass', stderr: '' },
+        { type: 'success', stdout: 'pm2 reload ok', stderr: '' },
+      );
 
       await hook.checkAndDeploy(42, 100);
 
@@ -136,10 +164,11 @@ describe('DeploymentHook', () => {
         json: async () => ({ state: 'merged', merged: true, head: { sha: 'abc123' } }),
       });
 
-      mockExecFile
-        .mockResolvedValueOnce({ stdout: 'lint ok', stderr: '', code: 0 })
-        .mockResolvedValueOnce({ stdout: 'test fail', stderr: 'error', code: 1 })
-        .mockResolvedValueOnce({ stdout: 'reset ok', stderr: '', code: 0 });
+      queueExec(
+        { type: 'success', stdout: 'lint ok', stderr: '' },
+        { type: 'exit', stdout: '', stderr: 'test error', code: 1 },
+        { type: 'success', stdout: 'reset ok', stderr: '' },
+      );
 
       await hook.checkAndDeploy(42, 100);
 
@@ -169,9 +198,10 @@ describe('DeploymentHook', () => {
 
   describe('runCI', () => {
     it('returns passed when lint and test succeed', async () => {
-      mockExecFile
-        .mockResolvedValueOnce({ stdout: 'lint ok', stderr: '', code: 0 })
-        .mockResolvedValueOnce({ stdout: 'tests pass', stderr: '', code: 0 });
+      queueExec(
+        { type: 'success', stdout: 'lint ok', stderr: '' },
+        { type: 'success', stdout: 'tests pass', stderr: '' },
+      );
 
       const result = await hook.runCI();
 
@@ -180,7 +210,7 @@ describe('DeploymentHook', () => {
     });
 
     it('returns failed when lint fails', async () => {
-      mockExecFile.mockResolvedValueOnce({ stdout: '', stderr: 'lint error', code: 1 });
+      queueExec({ type: 'exit', stdout: '', stderr: 'lint error', code: 1 });
 
       const result = await hook.runCI();
 
@@ -189,9 +219,10 @@ describe('DeploymentHook', () => {
     });
 
     it('returns failed when test fails', async () => {
-      mockExecFile
-        .mockResolvedValueOnce({ stdout: 'lint ok', stderr: '', code: 0 })
-        .mockResolvedValueOnce({ stdout: '', stderr: 'test error', code: 1 });
+      queueExec(
+        { type: 'success', stdout: 'lint ok', stderr: '' },
+        { type: 'exit', stdout: '', stderr: 'test error', code: 1 },
+      );
 
       const result = await hook.runCI();
 
@@ -200,7 +231,7 @@ describe('DeploymentHook', () => {
     });
 
     it('handles execFile exception', async () => {
-      mockExecFile.mockRejectedValueOnce(new Error('spawn failed'));
+      queueExec({ type: 'error', error: new Error('spawn failed') });
 
       const result = await hook.runCI();
 
@@ -211,7 +242,7 @@ describe('DeploymentHook', () => {
 
   describe('deploy', () => {
     it('returns deployed on success', async () => {
-      mockExecFile.mockResolvedValueOnce({ stdout: 'pm2 ok', stderr: '', code: 0 });
+      queueExec({ type: 'success', stdout: 'pm2 ok', stderr: '' });
 
       const result = await hook.deploy();
 
@@ -220,7 +251,7 @@ describe('DeploymentHook', () => {
     });
 
     it('returns failed on pm2 error', async () => {
-      mockExecFile.mockResolvedValueOnce({ stdout: '', stderr: 'pm2 error', code: 1 });
+      queueExec({ type: 'exit', stdout: '', stderr: 'pm2 error', code: 1 });
 
       const result = await hook.deploy();
 
@@ -229,7 +260,7 @@ describe('DeploymentHook', () => {
     });
 
     it('handles execFile exception', async () => {
-      mockExecFile.mockRejectedValueOnce(new Error('pm2 not found'));
+      queueExec({ type: 'error', error: new Error('pm2 not found') });
 
       const result = await hook.deploy();
 
@@ -241,7 +272,7 @@ describe('DeploymentHook', () => {
 
   describe('rollback', () => {
     it('resets to previous commit', async () => {
-      mockExecFile.mockResolvedValueOnce({ stdout: 'reset ok', stderr: '', code: 0 });
+      queueExec({ type: 'success', stdout: 'reset ok', stderr: '' });
 
       await hook.rollback('abc123');
 
@@ -249,12 +280,13 @@ describe('DeploymentHook', () => {
         'git',
         ['reset', '--hard', 'abc123'],
         expect.objectContaining({ cwd: '/root/sudo-ai-v4' }),
+        expect.any(Function),
       );
       expect(deps.metrics.recordEvent).toHaveBeenCalledWith('rolled_back', expect.any(Object));
     });
 
     it('throws on git error', async () => {
-      mockExecFile.mockRejectedValueOnce(new Error('git failed'));
+      queueExec({ type: 'error', error: new Error('git failed') });
 
       await expect(hook.rollback('abc123')).rejects.toThrow('git failed');
     });
