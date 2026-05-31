@@ -114,6 +114,13 @@ export interface BrainRequest {
    * Only include modalities the chosen model actually accepts.
    */
   inputModalities?: ('text' | 'image' | 'audio')[];
+  /**
+   * Force parallel cloud-model racing for this call even when
+   * SUDO_BRAIN_RACE_DISABLE=1 is set globally. Use for user-facing
+   * latency-sensitive paths (e.g. Telegram chat). Background callers
+   * (cognitive ticks, KAIROS, self-build) should leave this unset.
+   */
+  race?: boolean;
 }
 
 /** Token usage and estimated cost for a single LLM call. */

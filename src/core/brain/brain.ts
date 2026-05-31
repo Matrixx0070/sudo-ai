@@ -642,9 +642,16 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // Wait for ALL to settle, then pick the first successful one with content.
     // This avoids returning empty responses from a "fast" model that failed
     // silently (Ollama sometimes returns finishReason:stop with zero tokens).
+    //
+    // Kill-switch: SUDO_BRAIN_RACE_DISABLE=1 skips the race entirely and goes
+    // straight to sequential failover (Phase 2). Set when token cost matters
+    // more than p99 latency (e.g. background cognitive ticks, KAIROS, self-build).
+    // Per-request opt-in: BrainRequest.race === true forces racing even when
+    // the env flag is set (use for user-facing chat where latency matters).
     // -------------------------------------------------------------------------
     const cloudProfiles = this.failover.getCloudProfiles();
-    if (cloudProfiles.length > 0) {
+    const raceDisabled = process.env['SUDO_BRAIN_RACE_DISABLE'] === '1' && request.race !== true;
+    if (cloudProfiles.length > 0 && !raceDisabled) {
       log.info({ cloudCount: cloudProfiles.length, models: cloudProfiles.map(p => p.id) }, 'Racing cloud models in parallel');
       const cloudPromises = cloudProfiles.map(profile =>
         this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens)

@@ -35,6 +35,7 @@ export interface BrainRequest {
   messages: BrainMessage[];
   model?: string;
   tools?: object[];
+  race?: boolean;
 }
 
 export interface BrainResponse {

@@ -1008,7 +1008,7 @@ async function boot(): Promise<void> {
             }
           }
 
-          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
           const replyText = result?.text ?? 'No response generated.';
           const attachments = result?.attachments ?? [];
 
@@ -1170,7 +1170,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Discord session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1240,7 +1240,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Slack session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1315,7 +1315,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'WhatsApp session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1384,7 +1384,7 @@ async function boot(): Promise<void> {
         const taskStartMs = Date.now();
         try {
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
           const webReplyText = webResult?.text ?? 'No response generated.';
           log.info({ replyLen: webReplyText.length }, 'Web agent reply ready');
 
@@ -1461,7 +1461,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Email session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1530,7 +1530,7 @@ async function boot(): Promise<void> {
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'SMS session resolved');
 
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '');
+            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
             const replyText = result?.text ?? 'No response generated.';
 
             try {

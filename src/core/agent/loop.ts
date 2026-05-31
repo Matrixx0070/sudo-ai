@@ -477,6 +477,7 @@ export class AgentLoop {
     sessionId: string,
     message: string,
     onEvent?: AgentEventHandler,
+    opts?: { race?: boolean },
   ): Promise<AgentRunResult> {
     if (!sessionId || typeof sessionId !== 'string') {
       throw new PipelineError('AgentLoop.run: sessionId must be a non-empty string', 'pipeline_invalid_args');
@@ -812,7 +813,7 @@ export class AgentLoop {
 
       session.messages.push({ role: 'user', content: current });
       emit({ type: 'message', content: current });
-      finalResponse = await this._innerLoop(session, state, emit);
+      finalResponse = await this._innerLoop(session, state, emit, opts);
     }
 
     // Persist session.
@@ -875,6 +876,7 @@ export class AgentLoop {
     session: SessionLike,
     state: AgentState,
     emit: Emitter,
+    opts?: { race?: boolean },
   ): Promise<string> {
     const { maxIterations, model } = this.config;
     let finalText = '';
@@ -963,6 +965,7 @@ export class AgentLoop {
               .slice(-3)
               .map(m => m.toolName),
           ),
+          race: opts?.race,
         });
 
         log.info(
