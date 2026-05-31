@@ -24,40 +24,49 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Set up pnpm (must come before setup-node for cache to work)
+      # 2. Copy to /root/sudo-ai-v4 so hard-coded paths in tests resolve
+      - name: Prepare /root/sudo-ai-v4
+        run: |
+          sudo mkdir -p /root
+          sudo rm -rf /root/sudo-ai-v4
+          sudo cp -a "$(pwd)" /root/sudo-ai-v4
+          sudo chmod -R 777 /root/sudo-ai-v4
+
+      # 3. Set up pnpm (must come before setup-node for cache to work)
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9.15.0
 
-      # 3. Set up Node 22 with npm registry auth configured
+      # 4. Set up Node 22 with npm registry auth configured
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: /root/sudo-ai-v4/pnpm-lock.yaml
           registry-url: https://registry.npmjs.org  # injects NODE_AUTH_TOKEN into .npmrc
-
-      # 4. Install production + dev dependencies (frozen for reproducibility)
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
 
       # 5. Lint — must pass before build or publish (mirrors CI gate)
       - name: Lint
+        working-directory: /root/sudo-ai-v4
         run: pnpm lint
 
       # 6. Compile TypeScript → dist/
       - name: Build
+        working-directory: /root/sudo-ai-v4
         run: pnpm build
 
       # 7. Run full test suite — do NOT publish a broken release
       - name: Test
+        working-directory: /root/sudo-ai-v4
         run: pnpm test
 
       # 8. Publish to npm
       # --no-git-checks skips the "is working tree clean?" guard
       # (not relevant in CI since we are on a detached tag HEAD)
       - name: Publish
+        working-directory: /root/sudo-ai-v4
         run: pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}  # set in repo Settings → Secrets
