@@ -38,14 +38,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # 5. Lint — catches style/type errors before running tests
+      # 5. Pre-test setup — create writable dirs and fix permissions for CI runner
+      - name: Pre-test setup
+        run: |
+          mkdir -p data data-staging .githooks bin
+          chmod 755 data data-staging .githooks bin
+          chmod 644 bin/synth-seccomp-seal.so 2>/dev/null || true
+          export DATA_DIR="$(pwd)/data"
+          export SUDO_SELF_BUILD_DIR="$(pwd)/src/core/self-build"
+
+      # 6. Lint — catches style/type errors before running tests
       - name: Lint
         run: pnpm lint
 
-      # 6. Test — full suite must pass (vitest exits non-zero on any failure)
+      # 7. Test — full suite must pass (vitest exits non-zero on any failure)
       - name: Test
         run: pnpm test
 
-      # 7. Build — verifies the compiled artefact can be produced cleanly
+      # 8. Build — verifies the compiled artefact can be produced cleanly
       - name: Build
         run: pnpm build
