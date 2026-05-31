@@ -35,7 +35,7 @@ leaked-claude-code/
 /tmp/claude-*
 # Logs
 *.log
-logs/
+/logs/
 data/logs/
 # Runtime / ephemeral data directories generated at runtime
 data/cache/
@@ -98,7 +98,7 @@ desktop.ini
 *.swo
 *~
 # Agent workspace sandbox — ephemeral working area
-workspace/
+/workspace/
 # DO NOT IGNORE — these MUST be committed:
 #   config/sudo-ai.json5          (non-secret runtime config)
 #   config/sudo-ai.json5.example  (template — will be created)
