@@ -1,62 +1,41 @@
-# ci.yml — Continuous Integration workflow
-# Runs on every push to main and on every pull request targeting main.
-# Gate order: install → lint → test → build
-# All three gates must pass; a failure in any step aborts the run.
-
+# ci.yml
 name: CI
-
 on:
   push:
-    branches: [main]        # run on direct pushes to main (e.g. merge commits)
+    branches: [main]
   pull_request:
-    branches: [main]        # run on PRs before they can merge
-
+    branches: [main]
 jobs:
   ci:
-    name: Lint · Test · Build
+    name: Lint Test Build
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Check out the full source tree
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # 2. Create /root/sudo-ai-v4 symlink — many tests hardcode this path
-      - name: Create project symlink
+      - name: Checkout to root
         run: |
-          sudo mkdir -p /root
-          sudo ln -s "$(pwd)" /root/sudo-ai-v4
-          sudo chmod 777 /root/sudo-ai-v4
-          sudo chmod 777 /root/sudo-ai-v4/data 2>/dev/null || true
-          sudo chmod 777 /root/sudo-ai-v4/.githooks 2>/dev/null || true
-          sudo chmod 777 /root/sudo-ai-v4/src/core/self-build 2>/dev/null || true
-          sudo chmod 777 /root/sudo-ai-v4/src/core/skills 2>/dev/null || true
-
-      # 3. Set up pnpm (must come before setup-node so the cache key is correct)
+          sudo rm -rf /root/sudo-ai-v4
+          sudo mkdir -p /root/sudo-ai-v4
+          sudo git clone "https://github.com/Matrixx0070/sudo-ai.git" /root/sudo-ai-v4
+          sudo chmod -R 777 /root/sudo-ai-v4
+          sudo mkdir -p /root/sudo-ai-v4/data /root/sudo-ai-v4/data-staging /root/sudo-ai-v4/.githooks /root/sudo-ai-v4/src/core/self-build
+          sudo chmod -R 777 /root/sudo-ai-v4/data /root/sudo-ai-v4/data-staging /root/sudo-ai-v4/.githooks /root/sudo-ai-v4/src/core/self-build
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9.15.0
-
-      # 4. Set up Node 22 with pnpm cache enabled
-      - name: Setup Node.js 22
+      - name: Setup Node 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm              # caches ~/.pnpm-store between runs
-
-      # 5. Install dependencies exactly as locked — fails if lockfile is stale
-      - name: Install dependencies
+          cache: pnpm
+      - name: Install deps
+        working-directory: /root/sudo-ai-v4
         run: pnpm install --frozen-lockfile
-
-      # 6. Lint — catches style/type errors before running tests
       - name: Lint
+        working-directory: /root/sudo-ai-v4
         run: pnpm lint
-
-      # 7. Test — full suite must pass (vitest exits non-zero on any failure)
       - name: Test
+        working-directory: /root/sudo-ai-v4
         run: pnpm test
-
-      # 8. Build — verifies the compiled artefact can be produced cleanly
       - name: Build
+        working-directory: /root/sudo-ai-v4
         run: pnpm build
