@@ -33,36 +33,42 @@ jobs:
           sudo cp -a "$(pwd)" /root/sudo-ai-v4
           sudo chmod -R 777 /root/sudo-ai-v4
           sudo chmod 755 /root
+          mkdir -p /root/sudo-ai-v4/data
+          mkdir -p /root/sudo-ai-v4/.githooks
 
-      # 3. Set up pnpm (must come before setup-node for cache to work)
+      # 3. Install bubblewrap (required for sandbox integration tests)
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      # 4. Set up pnpm (must come before setup-node for cache to work)
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9.15.0
 
-      # 4. Set up Node 22 with npm registry auth configured
+      # 5. Set up Node 22 with npm registry auth configured
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org  # injects NODE_AUTH_TOKEN into .npmrc
 
-      # 5. Lint — must pass before build or publish (mirrors CI gate)
+      # 6. Lint — must pass before build or publish (mirrors CI gate)
       - name: Lint
         working-directory: /root/sudo-ai-v4
         run: pnpm lint
 
-      # 6. Compile TypeScript → dist/
+      # 7. Compile TypeScript → dist/
       - name: Build
         working-directory: /root/sudo-ai-v4
         run: pnpm build
 
-      # 7. Run full test suite — do NOT publish a broken release
+      # 8. Run full test suite — do NOT publish a broken release
       - name: Test
         working-directory: /root/sudo-ai-v4
         run: pnpm test
 
-      # 8. Publish to npm
+      # 9. Publish to npm
       # --no-git-checks skips the "is working tree clean?" guard
       # (not relevant in CI since we are on a detached tag HEAD)
       - name: Publish
