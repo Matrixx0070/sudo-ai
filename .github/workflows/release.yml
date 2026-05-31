@@ -24,13 +24,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Copy to /root/sudo-ai-v4 so hard-coded paths in tests resolve
+      # 2. Copy to /root/sudo-ai-v4 so hard-coded paths in tests resolve.
+      #    /root must be world-executable (o+x) so runner can traverse in.
       - name: Prepare /root/sudo-ai-v4
         run: |
           sudo mkdir -p /root
           sudo rm -rf /root/sudo-ai-v4
           sudo cp -a "$(pwd)" /root/sudo-ai-v4
           sudo chmod -R 777 /root/sudo-ai-v4
+          sudo chmod 755 /root
 
       # 3. Set up pnpm (must come before setup-node for cache to work)
       - name: Setup pnpm
