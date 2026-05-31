@@ -27,11 +27,11 @@ jobs:
         with:
           version: latest
 
-      # 3. Set up Node 20 with pnpm cache enabled
-      - name: Setup Node.js 20
+      # 3. Set up Node 22 with pnpm cache enabled
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm              # caches ~/.pnpm-store between runs
 
       # 4. Install dependencies exactly as locked — fails if lockfile is stale
