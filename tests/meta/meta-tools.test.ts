@@ -34,7 +34,9 @@ import { execSync } from 'node:child_process';
 // (e.g., GitHub Actions containers that lack unshare capabilities).
 const bwrapAvailable = ((): boolean => {
   try {
-    execSync('bwrap --version', { stdio: 'ignore' });
+    // bwrap --version passes even when the kernel denies unshare,
+    // so we must run a minimal sandboxed command.
+    execSync("bwrap --dev /dev --bind / / sh -c 'exit 0'", { stdio: 'ignore' });
     return true;
   } catch {
     return false;
