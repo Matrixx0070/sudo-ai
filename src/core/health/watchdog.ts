@@ -28,6 +28,7 @@ import {
   checkConsciousness,
 } from './checks.js';
 import { fixLogRotation, fixDiskSpace, fixMemory } from './fixes.js';
+import { ErrorReporter, ErrorSeverity } from './error-reporter.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +56,8 @@ export class Watchdog {
   private checks: HealthCheck[] = [];
   private interval: ReturnType<typeof setInterval> | null = null;
   private lastConsciousnessThoughts = 0;
+  private consecutiveFailures: Map<string, number> = new Map();
+  private errorReporter: ErrorReporter | null = null;
 
   /**
    * Start the watchdog loop.
@@ -102,6 +105,15 @@ export class Watchdog {
     return this.checks.every((c) => c.status !== 'critical');
   }
 
+  /**
+   * Set the ErrorReporter for capturing health check failures.
+   * @param reporter ErrorReporter instance
+   */
+  setErrorReporter(reporter: ErrorReporter): void {
+    this.errorReporter = reporter;
+    log.info('ErrorReporter attached to Watchdog');
+  }
+
   // -------------------------------------------------------------------------
   // Internal — run all checks
   // -------------------------------------------------------------------------
@@ -147,7 +159,7 @@ export class Watchdog {
     return check;
   }
 
-  private _logSummary(): void {
+  private async _logSummary(): Promise<void> {
     const criticals = this.checks.filter((c) => c.status === 'critical');
     const degraded  = this.checks.filter((c) => c.status === 'degraded');
 
@@ -156,13 +168,51 @@ export class Watchdog {
         { criticals: criticals.map((c) => c.name) },
         `${criticals.length} critical health check(s) detected`,
       );
+
+      // Report each critical failure
+      for (const check of criticals) {
+        await this._handleCheckFailure(check, 'critical');
+      }
     } else if (degraded.length > 0) {
       log.info(
         { degraded: degraded.map((c) => c.name) },
         `${degraded.length} degraded check(s)`,
       );
+
+      // Report degraded checks (only if consecutive failures >= 3)
+      for (const check of degraded) {
+        await this._handleCheckFailure(check, 'degraded');
+      }
     } else {
+      // All checks passed - reset consecutive counters
+      for (const check of this.checks) {
+        this.consecutiveFailures.set(check.name, 0);
+      }
       log.debug('All health checks passed');
+    }
+  }
+
+  private async _handleCheckFailure(check: HealthCheck, status: 'critical' | 'degraded'): Promise<void> {
+    if (process.env['SUDO_HEALTH_ALERT_DISABLE'] === '1') {
+      return;
+    }
+
+    // Increment consecutive failure count
+    const currentCount = this.consecutiveFailures.get(check.name) ?? 0;
+    const newCount = currentCount + 1;
+    this.consecutiveFailures.set(check.name, newCount);
+
+    // Determine severity: CRITICAL if status=critical or consecutive >= 3, else HIGH
+    const severity: ErrorSeverity = (status === 'critical' || newCount >= 3) ? 'CRITICAL' : 'HIGH';
+
+    // Capture via ErrorReporter
+    if (this.errorReporter) {
+      const error = new Error(`Health check ${status}: ${check.message}`);
+      await this.errorReporter.capture(error, severity, {
+        healthCheck: check.name,
+        status,
+        consecutiveFailures: newCount,
+      });
     }
   }
 }

@@ -128,3 +128,6 @@ class MetricsCollector {
 // ---------------------------------------------------------------------------
 
 export const metrics = new MetricsCollector();
+
+// Also export the class for dependency injection
+export { MetricsCollector };
