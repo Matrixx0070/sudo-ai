@@ -92,7 +92,4 @@
     ],
     secretEnvKey: 'GATEWAY_SECRET',
   },
-  security: {
-    execApprovalMode: 'off',
-  },
 }
