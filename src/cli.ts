@@ -728,6 +728,10 @@ async function boot(): Promise<void> {
   //      Instance ID = SUDO_INSTANCE_ID env or "hostname-pid" fallback.
   // -------------------------------------------------------------------------
   let federationDeps: import('./core/gateway/federation-routes.js').FederationRoutesDeps | undefined;
+  // Wave 2 — Federation Error Protocol (hoisted for later init)
+  let federationErrorIngestor: any;
+  let federationTokenPool: any;
+  let peerRegistryForAuth: any;
   try {
     const dataDir64h = process.env['DATA_DIR'];
     if (dataDir64h) {
@@ -736,7 +740,8 @@ async function boot(): Promise<void> {
       const { PeerRegistry } = await import('./core/federation/peer-registry.js');
       const { AuditChainSync } = await import('./core/federation/audit-chain-sync.js');
 
-      const peerRegistry = PeerRegistry.fromEnv();
+      peerRegistryForAuth = PeerRegistry.fromEnv();
+      const peerRegistry = peerRegistryForAuth;
 
       // Wave 10H: PeerKeyCache + PeerKeyFetcher for federation ingest verification
       const { PeerKeyCache } = await import('./core/federation/peer-key-cache.js');
@@ -1937,6 +1942,32 @@ async function boot(): Promise<void> {
         }
       }
 
+      // Wave 2 — Federation Error Protocol (init now that finalAgentLoop is available)
+      try {
+        const { FederationErrorIngestor } = await import('./core/federation/federation-error-ingestor.js');
+        const { FederationTokenPool } = await import('./core/federation/federation-token-pool.js');
+        const { vault } = await import('./core/security/vault.js');
+        // Create errorReporter wrapper — AgentLoop doesn't have capture/normalizeSignature,
+        // so we provide a stub that logs errors (fail-open, non-critical).
+        const errorReporterWrapper = {
+          capture: async (error: Error, severity: string, context: Record<string, unknown>) => {
+            log.warn({ err: error.message, severity, context }, '[FederationErrorIngestor] Error captured (stub)');
+          },
+          normalizeSignature: (error: Error) => {
+            // Simple normalization: lowercase message, strip volatile tokens
+            return error.message
+              .toLowerCase()
+              .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<uuid>')
+              .replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '<ip>')
+              .replace(/\b\d+\b/g, '<n>');
+          },
+        };
+        federationErrorIngestor = new FederationErrorIngestor({ errorReporter: errorReporterWrapper, githubIssues: { isConfigured: () => !!process.env['GITHUB_TOKEN'], searchIssues: async () => ({ success: false }), createIssue: async () => ({ success: false }), addComment: async () => ({ success: false }) }, db: db.db });
+        federationTokenPool = new FederationTokenPool({ vault, db: db.db });
+        registerShutdown(() => { federationErrorIngestor?.destroy(); federationTokenPool?.destroy(); });
+        log.info('Wave 2: Federation Error Protocol initialised');
+      } catch (err) { log.warn({ err: String(err) }, '[Wave 2] Federation Error Protocol init failed (non-critical)'); }
+
       // -----------------------------------------------------------------------
       // Wave 10: instantiate BenchStore + ProposalStore for HTTP route groups.
       // These are pure store objects (no live LLM needed). Fail-open: if the
@@ -2023,6 +2054,9 @@ async function boot(): Promise<void> {
         reanchorMonitor,
         autoThresholdTuner,
         federation: federationDeps,
+        errorIngestor: federationErrorIngestor,
+        tokenPool: federationTokenPool,
+        fedAuth: peerRegistryForAuth?.isInboundTokenValid?.bind(peerRegistryForAuth),
         alignmentAutoRemediator,
         skillOptimizationStore: wave13SkillOptimizationStore,
         bench: wave10BenchStore ? { benchStore: wave10BenchStore } : undefined,

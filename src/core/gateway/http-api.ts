@@ -19,6 +19,8 @@ import { registerAdminRoutes } from './admin-routes.js';
 import { registerAdminSleepRoutes } from './admin-sleep-routes.js';
 import { registerFederationRoutes } from './federation-routes.js';
 import type { FederationRoutesDeps } from './federation-routes.js';
+import { registerFederationErrorRoutes } from './federation-error-routes.js';
+import type { FederationErrorRoutesDeps } from './federation-error-types.js';
 import { registerBenchRoutes } from './bench-routes.js';
 import type { BenchRoutesDeps } from './bench-routes.js';
 import { registerLearningRoutes } from './learning-routes.js';
@@ -243,6 +245,10 @@ export interface HttpApiDeps {
   savings?: { costTracker: CostTrackerLike };
   /** Optional — Wave 10 compare routes (Builder 3). If absent, /v1/admin/compare is not registered. */
   compare?: { brain: CompareBrainLike; complexityScorer: ComplexityScorerLike };
+  /** Optional — Wave 2 Federation Error Protocol. If absent, /v1/federation/error-* routes are not registered. */
+  errorIngestor?: FederationErrorRoutesDeps['errorIngestor'];
+  tokenPool?: FederationErrorRoutesDeps['tokenPool'];
+  fedAuth?: FederationErrorRoutesDeps['fedAuth'];
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +469,10 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   }
   if (deps.federation) {
     registerFederationRoutes(server, deps.federation, tokenBuf);
+  }
+  // Wave 2 — Federation Error Protocol
+  if (deps.errorIngestor && deps.tokenPool) {
+    registerFederationErrorRoutes(server, { errorIngestor: deps.errorIngestor, tokenPool: deps.tokenPool, fedAuth: deps.fedAuth ?? (() => false) }, tokenBuf);
   }
   // Wave 10: bench + learning routes
   if (deps.bench) {

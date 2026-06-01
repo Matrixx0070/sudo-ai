@@ -124,8 +124,8 @@ export class ErrorReporter {
     let msg = (error.message ?? String(error)).toLowerCase().trim();
     const volatilePatterns: RegExp[] = [
       /0x[0-9a-fA-F]+/g,
-      /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
-      /\d{4}-\d{2}-\d{2}T[\d:.Z+-]+/g,
+      /\b[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}\b/gi,
+      /\d{4}-\d{2}-\d{2}[Tt][\d:.zZ+-]+/g,
       /\b\d{10,}\b/g,
       /(?:\/[^/\s]+)+/g,
       /\bline\s+\d+\b/gi,

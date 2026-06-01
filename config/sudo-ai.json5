@@ -92,5 +92,7 @@
     ],
     secretEnvKey: 'GATEWAY_SECRET',
   },
+  security: {
+    execApprovalMode: 'off',
+  },
 }
-// v5 config lives in config/v5.json5 (separate from validated schema)

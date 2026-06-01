@@ -6,105 +6,77 @@
  */
 
 import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import { createLogger } from '../shared/logger.js';
+import type {
+  GitHubPRStatus,
+  CIResult,
+  DeployResult,
+  ExecFileResult,
+  GitHubIssuesConnector,
+  MetricsCollector,
+} from './deployment-hook-types.js';
 
-interface ExecFileResult {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-}
+const log = createLogger('self-build:deployment');
+const GITHUB_API = 'https://api.github.com';
 
-const execFileAsync = promisify(execFileCb) as unknown as (
+/**
+ * Promise-based execFile wrapper.
+ * Exported for testing — can be mocked in tests.
+ */
+export function execFileAsync(
   command: string,
   args: readonly string[],
   options: { cwd: string; encoding: 'utf8'; maxBuffer: number },
-) => Promise<ExecFileResult>;
-
-const log = createLogger('self-build:deployment');
-
-const GITHUB_API = 'https://api.github.com';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface GitHubPRStatus {
-  number: number;
-  merged: boolean;
-  state: 'open' | 'closed' | 'merged';
-  headSha: string;
+): Promise<ExecFileResult> {
+  return new Promise((resolve, reject) => {
+    execFileCb(command, args, options, (err, stdout, stderr) => {
+      const result: ExecFileResult = { stdout, stderr, code: 0 };
+      if (err) {
+        const execErr = err as NodeJS.ErrnoException & { status?: number };
+        if (typeof execErr.status === 'number') {
+          result.code = execErr.status;
+          resolve(result);
+        } else {
+          reject(err);
+        }
+      } else {
+        resolve(result);
+      }
+    });
+  });
 }
 
-export interface CIResult {
-  passed: boolean;
-  output: string;
-}
-
-export interface DeployResult {
-  success: boolean;
-  action: 'deployed' | 'rolled-back' | 'skipped' | 'failed';
-  output?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Dependencies interface (subset needed from connectors)
-// ---------------------------------------------------------------------------
-
-export interface GitHubIssuesConnector {
-  addComment(issueNumber: number, body: string): Promise<{ success: boolean }>;
-}
-
-export interface MetricsCollector {
-  recordEvent(event: string, metadata?: Record<string, unknown>): void;
-}
-
-// ---------------------------------------------------------------------------
-// DeploymentHook class
-// ---------------------------------------------------------------------------
-
+/**
+ * DeploymentHook monitors GitHub PRs and auto-deploys on merge.
+ */
 export class DeploymentHook {
   private readonly githubIssues: GitHubIssuesConnector;
   private readonly metrics: MetricsCollector;
   private readonly timers: Map<number, NodeJS.Timeout> = new Map();
 
-  constructor(
-    githubIssues: GitHubIssuesConnector,
-    metrics: MetricsCollector,
-  ) {
+  constructor(githubIssues: GitHubIssuesConnector, metrics: MetricsCollector) {
     this.githubIssues = githubIssues;
     this.metrics = metrics;
   }
 
-  /**
-   * Start polling a PR for merge status.
-   * @param prNumber - GitHub PR number
-   * @param issueNumber - Linked issue number for comments
-   */
+  /** Start polling a PR for merge status. */
   monitorPR(prNumber: number, issueNumber: number): void {
     if (process.env['SUDO_AUTODEPLOY_DISABLE'] === '1') {
       log.warn({ prNumber }, 'monitorPR: autodeploy disabled — skipping');
       return;
     }
-
     if (this.timers.has(prNumber)) {
       log.warn({ prNumber }, 'monitorPR: already monitoring this PR');
       return;
     }
-
     log.info({ prNumber, issueNumber }, 'monitorPR: started');
-
     const intervalId = setInterval(() => {
       void this.checkAndDeploy(prNumber, issueNumber);
     }, 30_000);
-
     this.timers.set(prNumber, intervalId);
   }
 
-  /**
-   * Stop monitoring a PR.
-   * @param prNumber - GitHub PR number
-   */
+  /** Stop monitoring a PR. */
   stopMonitoring(prNumber: number): void {
     const intervalId = this.timers.get(prNumber);
     if (intervalId) {
@@ -114,24 +86,16 @@ export class DeploymentHook {
     }
   }
 
-  /**
-   * Check PR status and deploy if merged.
-   * @param prNumber - GitHub PR number
-   * @param issueNumber - Linked issue number for comments
-   */
+  /** Check PR status and deploy if merged. */
   async checkAndDeploy(prNumber: number, issueNumber: number): Promise<void> {
     if (process.env['SUDO_AUTODEPLOY_DISABLE'] === '1') {
       log.warn({ prNumber }, 'checkAndDeploy: autodeploy disabled — skipping');
       return;
     }
-
     try {
       const prStatus = await this.getPRStatus(prNumber);
       log.info({ prNumber, state: prStatus.state, merged: prStatus.merged }, 'PR status fetched');
-
-      if (prStatus.state !== 'merged') {
-        return; // Not merged yet, continue polling
-      }
+      if (prStatus.state !== 'merged') return;
 
       log.info({ prNumber }, 'PR merged — running CI');
       this.metrics.recordEvent('pr_merged', { prNumber, sha: prStatus.headSha });
@@ -151,22 +115,15 @@ export class DeploymentHook {
 
       log.info({ prNumber }, 'CI passed — deploying');
       const deployResult = await this.deploy();
-
-      if (deployResult.success) {
-        await this.addDeploymentComment(issueNumber, {
-          success: true,
-          action: 'deployed',
-          output: deployResult.output,
-        });
-        this.metrics.recordEvent('deployed', { prNumber, sha: prStatus.headSha });
-      } else {
-        await this.addDeploymentComment(issueNumber, {
-          success: false,
-          action: deployResult.action,
-          output: deployResult.output,
-        });
-        this.metrics.recordEvent('deploy_failed', { prNumber, action: deployResult.action });
-      }
+      await this.addDeploymentComment(issueNumber, {
+        success: deployResult.success,
+        action: deployResult.action,
+        output: deployResult.output,
+      });
+      this.metrics.recordEvent(
+        deployResult.success ? 'deployed' : 'deploy_failed',
+        { prNumber, sha: prStatus.headSha, action: deployResult.action },
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ prNumber, err: msg }, 'checkAndDeploy failed');
@@ -174,14 +131,10 @@ export class DeploymentHook {
     }
   }
 
-  /**
-   * Fetch PR status from GitHub API.
-   */
+  /** Fetch PR status from GitHub API. */
   private async getPRStatus(prNumber: number): Promise<GitHubPRStatus> {
     const token = await this.resolveToken();
-    if (!token) {
-      throw new Error('GitHub token not configured');
-    }
+    if (!token) throw new Error('GitHub token not configured');
 
     const repo = process.env['GITHUB_REPO'] ?? 'Matrixx0070/sudo-ai';
     const url = `${GITHUB_API}/repos/${repo}/pulls/${prNumber}`;
@@ -207,95 +160,52 @@ export class DeploymentHook {
     const head = data['head'] as Record<string, unknown> | undefined;
     const headSha = (head?.['sha'] as string) ?? '';
 
-    return {
-      number: prNumber,
-      merged,
-      state,
-      headSha,
-    };
+    return { number: prNumber, merged, state, headSha };
   }
 
-  /**
-   * Run CI: pnpm lint && pnpm test.
-   */
+  /** Run CI: pnpm lint && pnpm test. */
   async runCI(): Promise<CIResult> {
     try {
       const cwd = '/root/sudo-ai-v4';
-
       const lintResult = await execFileAsync('pnpm', ['lint'], {
-        cwd,
-        encoding: 'utf8',
-        maxBuffer: 10 * 1024 * 1024,
+        cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024,
       });
-
       if (lintResult.code !== 0) {
         return { passed: false, output: lintResult.stderr || lintResult.stdout };
       }
-
       const testResult = await execFileAsync('pnpm', ['test'], {
-        cwd,
-        encoding: 'utf8',
-        maxBuffer: 10 * 1024 * 1024,
+        cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024,
       });
-
-      const passed = testResult.code === 0;
-      return {
-        passed,
-        output: testResult.stdout || testResult.stderr,
-      };
+      return { passed: testResult.code === 0, output: testResult.stdout || testResult.stderr };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { passed: false, output: msg };
+      return { passed: false, output: err instanceof Error ? err.message : String(err) };
     }
   }
 
-  /**
-   * Deploy: pm2 reload sudo-ai-v5 --update-env.
-   */
+  /** Deploy: pm2 reload sudo-ai-v5 --update-env. */
   async deploy(): Promise<DeployResult> {
     try {
       const cwd = '/root/sudo-ai-v4';
-
       const result = await execFileAsync('pm2', ['reload', 'sudo-ai-v5', '--update-env'], {
-        cwd,
-        encoding: 'utf8',
-        maxBuffer: 10 * 1024 * 1024,
+        cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024,
       });
-
       if (result.code === 0) {
-        return {
-          success: true,
-          action: 'deployed',
-          output: result.stdout,
-        };
+        return { success: true, action: 'deployed', output: result.stdout };
       }
-
-      return {
-        success: false,
-        action: 'failed',
-        output: result.stderr || result.stdout,
-      };
+      return { success: false, action: 'failed', output: result.stderr || result.stdout };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, action: 'failed', output: msg };
+      return { success: false, action: 'failed', output: err instanceof Error ? err.message : String(err) };
     }
   }
 
-  /**
-   * Rollback: git reset --hard to previous commit.
-   */
+  /** Rollback: git reset --hard to previous commit. */
   async rollback(previousCommitSha: string): Promise<void> {
     try {
       const cwd = '/root/sudo-ai-v4';
-
       log.info({ sha: previousCommitSha }, 'rollback: executing');
-
       await execFileAsync('git', ['reset', '--hard', previousCommitSha], {
-        cwd,
-        encoding: 'utf8',
-        maxBuffer: 10 * 1024 * 1024,
+        cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024,
       });
-
       this.metrics.recordEvent('rolled_back', { sha: previousCommitSha });
       log.info({ sha: previousCommitSha }, 'rollback: completed');
     } catch (err) {
@@ -305,9 +215,7 @@ export class DeploymentHook {
     }
   }
 
-  /**
-   * Add deployment comment to GitHub issue.
-   */
+  /** Add deployment comment to GitHub issue. */
   async addDeploymentComment(
     issueNumber: number,
     result: { success: boolean; action: string; output?: string },
@@ -318,7 +226,6 @@ export class DeploymentHook {
         `- Action: ${result.action}`,
         result.output ? `\n\`\`\`\n${result.output.slice(0, 2000)}\n\`\`\`` : '',
       ].join('\n');
-
       await this.githubIssues.addComment(issueNumber, body);
       log.info({ issueNumber, success: result.success }, 'Deployment comment added');
     } catch (err) {
@@ -327,16 +234,12 @@ export class DeploymentHook {
     }
   }
 
-  /**
-   * Resolve GitHub token from env var.
-   */
+  /** Resolve GitHub token from env var. */
   private async resolveToken(): Promise<string | null> {
     return process.env['GITHUB_TOKEN'] ?? null;
   }
 
-  /**
-   * Cleanup: stop all active monitors.
-   */
+  /** Cleanup: stop all active monitors. */
   cleanup(): void {
     for (const [prNumber, intervalId] of this.timers.entries()) {
       clearInterval(intervalId);

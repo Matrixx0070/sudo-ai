@@ -586,3 +586,57 @@ SUDO_AI_API_TOKEN=choose-a-long-random-secret
 ```
 
 The API server binds to `0.0.0.0` by default. To restrict to localhost only, set a firewall rule or reverse proxy accordingly. Do not expose the API server to the public internet without a reverse proxy with TLS.
+
+---
+
+## Federation Error Protocol
+
+Wave 2 introduces the Federation Error Protocol for distributed error reporting and fix propagation across federation peers.
+
+**Full documentation:** See [`federation-error-protocol.md`](./federation-error-protocol.md)
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/v1/federation/error-report` | Federation bearer | Peer submits error report to admin |
+| `POST` | `/v1/federation/fix-notify` | Admin bearer | Admin broadcasts fix notification to peers |
+| `POST` | `/v1/federation/token-contribute` | Federation bearer | Peer contributes compute tokens to pool |
+| `GET` | `/v1/federation/error-reports` | Admin bearer | Query error reports (admin only) |
+| `GET` | `/v1/federation/token-pool` | Admin bearer | Query token pool status (admin only) |
+
+### Authentication
+
+- **Federation endpoints** (`/error-report`, `/token-contribute`): Validate against `SUDO_FEDERATION_INBOUND_TOKENS`
+- **Admin endpoints** (`/fix-notify`, `/error-reports`, `/token-pool`): Validate against `GATEWAY_TOKEN`
+
+### Kill-Switches
+
+| Variable | Effect when `=1` |
+|---|---|
+| `SUDO_FED_ERROR_REPORT_DISABLE=1` | Peers cannot submit error reports |
+| `SUDO_FED_FIX_NOTIFY_DISABLE=1` | Admin cannot broadcast fix notifications |
+| `SUDO_FED_TOKEN_POOL_DISABLE=1` | Token contribution and pool queries disabled |
+
+### Example: Submit Error Report
+
+```bash
+curl -X POST http://localhost:18900/v1/federation/error-report \
+  -H "Authorization: Bearer $SUDO_FEDERATION_INBOUND_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "errorSignature": "sha256:abc123...",
+    "errorType": "tool_execution_failure",
+    "errorMessage": "bwrap: permission denied",
+    "severity": "HIGH",
+    "occurredAt": "2026-05-31T14:30:00.000Z",
+    "instanceId": "peer-a-uuid"
+  }'
+```
+
+### Example: Query Token Pool
+
+```bash
+curl http://localhost:18900/v1/federation/token-pool \
+  -H "Authorization: Bearer $GATEWAY_TOKEN"
+```
