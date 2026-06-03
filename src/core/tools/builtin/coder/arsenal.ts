@@ -812,11 +812,20 @@ export const arsenalTool: ToolDefinition = {
  * Stub ctx for direct use (PROJECT_ROOT guard preserved).
  */
 export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
-  // KAIROS self-repair hook (Phase 3). For now, log intent (full execute would use the tool pipeline).
-  // In full runtime, this would invoke the arsenal execute with mode.
-  logger.info({ task, mode }, 'KAIROS requested arsenal self-repair (simulated; integrate with agent loop for full effect)');
-  return { success: true, output: `KAIROS-arsenal ${mode} simulated for: ${task.slice(0, 100)}` };
+  // KAIROS self-repair hook (Phase 3 strict wiring). Real dry-run call (applyEdits:false) to avoid side effects in background tick.
+  // Matches "as before" verified patterns (P1/P2 sim + guards); uses internal execute for full pipeline (recon/baseline/AI/verify).
+  logger.info({ task, mode }, 'KAIROS requested arsenal self-repair (dry-run wired)');
+  try {
+    // Minimal ctx (session/logger only; full ToolContext not required for read-only dry)
+    const ctx = { sessionId: 'kairos-self-repair', logger } as any;
+    const result = await arsenalTool.execute({ task, mode, applyEdits: false }, ctx);
+    return { success: !!result.success, output: String(result.output || '').slice(0, 300) };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.warn({ err: msg, task, mode }, 'KAIROS-arsenal trigger failed (non-fatal)');
+    return { success: false, output: `error: ${msg.slice(0, 100)}` };
+  }
 }
 
-// KAIROS trigger added for self-repair wiring (Phase 3). Call triggerKAIROSRepair(task, 'refactor' | 'fix') from kairos actOnObservation.
+// KAIROS trigger added for self-repair wiring (Phase 3 strict). Call triggerKAIROSRepair(task, 'refactor' | 'fix') from kairos actOnObservation. Safe, dry, env-kill in caller.
 

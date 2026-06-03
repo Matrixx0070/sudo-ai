@@ -6,10 +6,11 @@
  * capped at MAX_ROUTED_TOOLS entries.
  *
  * Routing priority:
- *   1. BASE_TOOLS (always present, 5 slots)
+ *   1. BASE_TOOLS (always present, BASE_TOOL_SLOTS slots)
  *   2. CONTINUITY tools from recent usage (up to 3 slots)
  *   3. Category-ranked tools (remaining slots, highest score first)
  *   4. FALLBACK sampling when no category matched
+ * Phase 3 strict: comment sync (naming fix, no code/behavior change; avoids category logic per breakage history)
  */
 
 import { createLogger } from '../shared/logger.js';

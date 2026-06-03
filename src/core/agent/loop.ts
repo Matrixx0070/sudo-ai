@@ -6,7 +6,8 @@
  * UI layers can render live progress.
  *
  * Heavy helpers (compaction, tool execution, message prep) live in
- * loop-helpers.ts to keep this file under 300 lines.
+ * loop-helpers.ts (to keep this file under 300 lines — Phase 3 note: debt remains at 1551L; intra-file only, no splits).
+ * Updated for SUDO-AI v4 (post-Hermes + intelligence waves).
  */
 
 import { createLogger } from '../shared/logger.js';

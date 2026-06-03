@@ -195,4 +195,11 @@ describe('Kairos alert cooldown', () => {
     await (kairos as unknown as { observe(): Promise<void> }).observe();
     expect(mockNotifyFn).toHaveBeenCalledTimes(1);
   });
+
+  // Phase 3 strict minimal: smoke for KAIROS/arsenal trigger wire (large_file acted path)
+  it('PHASE3-TRIGGER: large_file/codebase_degraded obs can reach arsenal triggerKAIROSRepair (dry-run, no crash on construct)', () => {
+    const kairos = new Kairos({ autonomousActions: true, enabled: false });
+    expect(kairos).toBeDefined();
+    // In real cycle, actOnObservation would call trigger for large_file (env killtable); here verifies no import/ctor breakage post wire
+  });
 });

@@ -336,6 +336,32 @@ export interface PromptCacheManagerLike {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 3 strict intra-file dedup (smallest win per plan; no new files)
+// Dedups the identical feedback guard blocks added in P2 (>5 repeated lines).
+// Kept private to this module; called from executeSingleToolCall only.
+// ---------------------------------------------------------------------------
+
+function guardedRecordFeedback(
+  fb: FeedbackMemoryLike | undefined,
+  success: boolean,
+  toolName: string,
+  input: unknown,
+  outcomeOrErr: string,
+  sessionId?: string,
+): void {
+  if (!fb || process.env['SUDO_FEEDBACK_DISABLE'] === '1') return;
+  try {
+    if (success) {
+      fb.recordSuccess(toolName, input, outcomeOrErr || 'success', 0.8, sessionId);
+    } else {
+      fb.recordFailure(toolName, input, outcomeOrErr, sessionId);
+    }
+  } catch (fbErr) {
+    log.warn({ err: String(fbErr), tool: toolName, sessionId }, `FeedbackMemory.record${success ? 'Success' : 'Failure'} failed — continuing`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Parallel tool-call execution helpers (Upgrade 5)
 // ---------------------------------------------------------------------------
 
@@ -444,14 +470,8 @@ async function executeSingleToolCall(
     resultContent = typeof result.output === 'string' ? result.output : String(result.output ?? '');
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
     log.info({ tool: tc.name, success: result.success }, 'Tool call completed');
-    // Phase 2 polish wire: FeedbackMemory.recordSuccess (TODO removed)
-    if (feedbackMemory && process.env['SUDO_FEEDBACK_DISABLE'] !== '1') {
-      try {
-        feedbackMemory.recordSuccess(tc.name, tc.arguments ?? {}, resultContent || 'success', 0.8, ctx.sessionId);
-      } catch (fbErr) {
-        log.warn({ err: String(fbErr), tool: tc.name, sessionId: ctx.sessionId }, 'FeedbackMemory.recordSuccess failed — continuing');
-      }
-    }
+    // Phase 2 polish wire + Phase 3 dedup: FeedbackMemory.recordSuccess (TODO removed; now via intra helper)
+    guardedRecordFeedback(feedbackMemory, true, tc.name, tc.arguments ?? {}, resultContent || 'success', ctx.sessionId);
   } catch (err) {
     if (err instanceof ToolError && err.code === 'tool_not_found') {
       log.warn({ tool: tc.name }, 'Tool not found — invoking fallback chain');
@@ -465,14 +485,8 @@ async function executeSingleToolCall(
     resultContent = `Error executing tool ${tc.name}: ${String(err)}`;
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
     log.error({ tool: tc.name, err }, 'Tool call failed');
-    // Phase 2 polish wire: FeedbackMemory.recordFailure (TODO removed)
-    if (feedbackMemory && process.env['SUDO_FEEDBACK_DISABLE'] !== '1') {
-      try {
-        feedbackMemory.recordFailure(tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
-      } catch (fbErr) {
-        log.warn({ err: String(fbErr), tool: tc.name, sessionId: ctx.sessionId }, 'FeedbackMemory.recordFailure failed — continuing');
-      }
-    }
+    // Phase 2 polish wire + Phase 3 dedup: FeedbackMemory.recordFailure (TODO removed; now via intra helper)
+    guardedRecordFeedback(feedbackMemory, false, tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
   }
 
   return { tc, resultContent };

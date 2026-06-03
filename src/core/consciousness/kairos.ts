@@ -6,7 +6,7 @@
  *
  * Watches (every 5 minutes):
  *   1. Codebase health     — TypeScript error count + trending
- *   2. Large file growth   — files > 750 lines (complexity debt; raised to reduce noise post-refactors)
+ *   2. Large file growth   — files > 750 lines (complexity debt; raised to reduce noise post-refactors + Phase 3 strict intra dedups/comments)
  *   3. Stale tasks         — pending tasks > 2 hours old
  *   4. Memory overflow     — MEMORY.md > 20KB → flag for consolidation
  *   5. Service health      — RAM > 1GB, disk > 500MB
@@ -443,8 +443,8 @@ async function actOnObservation(obs: KairosObservation, config: Required<KairosC
       }
       return { ...obs, acted: true, actionResult: 'Cleaned old rotated logs (>3d) and backup files (>7d)' };
     }
-    if (obs.type === 'large_file' || obs.type === 'codebase_degraded') {
-      const task = `KAIROS: ${obs.message}. Use coder.arsenal to ${obs.type === 'large_file' ? 'refactor/split modules' : 'fix TS errors'}.`;
+    if ((obs.type === 'large_file' || obs.type === 'codebase_degraded') && process.env['SUDO_KAIROS_ARSENAL_TRIGGER_DISABLE'] !== '1') {
+      const task = `KAIROS: ${obs.message}. Use coder.arsenal to ${obs.type === 'large_file' ? 'refactor (dedup/naming/comments inside files only; no new files/splits per strict)' : 'fix TS errors'}.`;
       const res = await triggerKAIROSRepair(task, obs.type === 'large_file' ? 'refactor' : 'fix');
       return { ...obs, acted: res.success, actionResult: (res.output || '').slice(0, 200) };
     }

@@ -13,6 +13,7 @@
  * Human approval required — proposals are never auto-applied.
  *
  * Wave 13 Builder 1.
+ * Phase 3 strict: comment hygiene only (naming/comments in large file per plan; no code changes here).
  */
 
 import { randomUUID } from 'node:crypto';
