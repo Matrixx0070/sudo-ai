@@ -32,6 +32,8 @@ import type {
   SandboxManagerLike,
   Emitter,
   HookEmitterLike,
+  FeedbackMemoryLike,
+  PromptCacheManagerLike,
 } from './loop-helpers.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
 import { LoopGuard } from './loop-guard.js';
@@ -61,6 +63,9 @@ import { EpistemicGate } from '../cognition/epistemic-gate.js';
 import { createHash } from 'node:crypto';
 import type { DetectionResult } from '../cognition/injection-detector.js';
 import { ToolOutcomeLearner, type ToolOutcomeLearnerDeps } from './tool-outcome-learner.js';
+import { FeedbackMemory } from '../self-improvement/feedback-memory.js';
+import { promptCache } from '../brain/prompt-cache-optimizer.js';
+import { existsSync } from 'node:fs';
 
 // ---------------------------------------------------------------------------
 // Content-hash helper — A1: deterministic 32-char hex per tool+args combo.
@@ -226,6 +231,11 @@ export class AgentLoop {
   // ToolOutcomeLearner — optional, set via setter after construction.
   private _toolOutcomeLearner?: ToolOutcomeLearner;
 
+  // Phase 2 polish: FeedbackMemory (live recordSuccess/recordFailure wired into tool exec paths)
+  private _feedbackMemory?: FeedbackMemory;
+  // Phase 2 polish: PromptCacheManager (for prepareMessages check; singleton injected)
+  private _promptCacheManager?: PromptCacheManagerLike;
+
   constructor(
     brain: unknown,
     toolRegistry: unknown,
@@ -371,6 +381,27 @@ export class AgentLoop {
     } catch (err) {
       log.warn({ err: String(err) }, 'AgentLoop: EpistemicGate init failed — disabled');
     }
+
+    // Phase 2 polish wire (FeedbackMemory + PromptCacheManager boot init).
+    // Pattern: exact match to TrustTierTracker / VetoOverrideStore / AuditTrail in this ctor (DATA_DIR, mind.db for feedback).
+    // FeedbackMemory lives for process lifetime (like trust db); records are fail-open side effects.
+    try {
+      const dataDir = process.env['DATA_DIR'] || path.join(process.cwd(), 'data');
+      const mindPath = path.join(dataDir, 'mind.db');
+      if (existsSync(mindPath)) {
+        const fbDb = new Database(mindPath);
+        try { fbDb.pragma('journal_mode = WAL'); } catch {}
+        this._feedbackMemory = new FeedbackMemory(fbDb);
+        log.info('AgentLoop: FeedbackMemory initialised (live tool feedback recording wired)');
+      } else {
+        log.warn({ mindPath }, 'AgentLoop: mind.db not found at ctor — FeedbackMemory recording disabled (self-improvement uses temp handle)');
+      }
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: FeedbackMemory init failed — recording disabled');
+    }
+    // Prompt cache singleton (no db, always safe; guard inside prepareMessages).
+    this._promptCacheManager = promptCache;
+    log.info('AgentLoop: PromptCacheManager attached (singleton for prepareMessages)');
   }
 
   // -------------------------------------------------------------------------
@@ -468,6 +499,21 @@ export class AgentLoop {
   setToolOutcomeLearner(learner: ToolOutcomeLearner): void {
     this._toolOutcomeLearner = learner;
     log.info('AgentLoop: ToolOutcomeLearner attached');
+  }
+
+  /** Wire FeedbackMemory after construction (Phase 2: enables recordSuccess/recordFailure in execute paths). */
+  setFeedbackMemory(fb: FeedbackMemory): void {
+    if (fb && typeof fb.recordSuccess === 'function' && typeof fb.recordFailure === 'function') {
+      this._feedbackMemory = fb;
+      log.info('AgentLoop: FeedbackMemory attached');
+    } else {
+      log.warn('AgentLoop: setFeedbackMemory: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the FeedbackMemory if attached (for admin/inspect). */
+  getFeedbackMemory(): FeedbackMemory | undefined {
+    return this._feedbackMemory;
   }
 
   // -------------------------------------------------------------------------
@@ -927,7 +973,7 @@ export class AgentLoop {
         // Hook: before_prompt_build — fires before the message array is prepared for the API call.
         void this.hooks?.emit('before_prompt_build', { event: 'before_prompt_build', sessionId: state.sessionId, iteration: state.iteration });
 
-        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper);
+        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper, this._promptCacheManager);
 
         // Hook: before_model_resolve — fires after messages are prepared, just before brain.call().
         void this.hooks?.emit('before_model_resolve', { event: 'before_model_resolve', sessionId: state.sessionId, modelName: model ?? '' });
@@ -1394,7 +1440,7 @@ export class AgentLoop {
           }
 
           try {
-            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager);
+            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager, this._feedbackMemory);
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
             // Wave 6L: record calibration outcome=1 for each active tool call that succeeded (fail-open).

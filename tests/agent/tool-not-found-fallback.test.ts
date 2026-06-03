@@ -254,3 +254,101 @@ describe('executeToolCalls — tool_not_found routing', () => {
     expect(resultMsg?.toolCallId).toBe('call-2');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 2 polish wiring tests (FeedbackMemory records + PromptCacheManager check)
+// These exercise the new optional params + guarded calls in executeSingleToolCall / prepareMessages.
+// Mocks confirm records fire on success/fail paths with correct (real) API args.
+// ---------------------------------------------------------------------------
+
+describe('Phase 2: FeedbackMemory + PromptCacheManager wiring (loop-helpers)', () => {
+  it('P2-FB-1: recordSuccess called on successful tool execution (with real API shape)', async () => {
+    const recordSuccess = vi.fn();
+    const recordFailure = vi.fn();
+    const fbMock: any = { recordSuccess, recordFailure };
+
+    const registry: ToolRegistryLike = {
+      execute: vi.fn(async () => ({ success: true, output: 'tool-ok-output' })),
+      getSchemaForLLM: vi.fn(() => []),
+    };
+
+    const session = makeSession();
+    const state = makeState();
+    const emit = () => {};
+
+    await executeToolCalls(
+      [{ id: 'call-p2-1', name: 'good.tool', arguments: { foo: 'bar' } }],
+      session,
+      state,
+      emit,
+      registry,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      fbMock,
+    );
+
+    expect(recordSuccess).toHaveBeenCalledTimes(1);
+    expect(recordSuccess).toHaveBeenCalledWith('good.tool', { foo: 'bar' }, 'tool-ok-output', 0.8, 'test-session');
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('P2-FB-2: recordFailure called on tool execution error (with real API shape)', async () => {
+    const recordSuccess = vi.fn();
+    const recordFailure = vi.fn();
+    const fbMock: any = { recordSuccess, recordFailure };
+
+    const registry: ToolRegistryLike = {
+      execute: vi.fn(async (name: string) => {
+        throw new ToolError(`boom on ${name}`, 'tool_execution_failed');
+      }),
+      getSchemaForLLM: vi.fn(() => []),
+    };
+
+    const session = makeSession();
+    const state = makeState();
+    const events: any[] = [];
+    const emit = (e: any) => { events.push(e); };
+
+    await executeToolCalls(
+      [{ id: 'call-p2-2', name: 'bad.tool', arguments: { x: 42 } }],
+      session,
+      state,
+      emit,
+      registry,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      fbMock,
+    );
+
+    expect(recordFailure).toHaveBeenCalledTimes(1);
+    // resultContent in catch is the error string
+    expect(recordFailure).toHaveBeenCalledWith('bad.tool', { x: 42 }, expect.stringContaining('Error executing tool bad.tool'), 'test-session');
+    expect(recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it('P2-PC-1: PromptCacheManager.getCachedPrompt is invoked (advisory wire, no behavior change)', async () => {
+    const getCachedPrompt = vi.fn(() => null);
+    const pcMock: any = { getCachedPrompt };
+
+    // We can't easily unit the prepare path without full brain, but we can import + call prepareMessages directly
+    // (it is exported). This covers the injected param + guard path.
+    const { prepareMessages } = await import('../../src/core/agent/loop-helpers.js');
+    const brain = { call: vi.fn() } as any;
+    const session: any = { messages: [{ role: 'user', content: 'hello test cache' }] };
+    const state: any = { sessionId: 'p2-cache-sess', iteration: 0, isCompacting: false, pendingToolCalls: 0 };
+    const emit = () => {};
+
+    // Should not throw; getCachedPrompt should be called (unless disabled, which we don't set)
+    const result = await prepareMessages(brain, session, state, emit, undefined, pcMock);
+    expect(Array.isArray(result)).toBe(true);
+    expect(getCachedPrompt).toHaveBeenCalled();
+    // key contains session + prefix of user content
+    const calledKey = getCachedPrompt.mock.calls[0]?.[0] as string;
+    expect(calledKey).toContain('p2-cache-sess');
+    expect(calledKey).toContain('hello test cache');
+  });
+});

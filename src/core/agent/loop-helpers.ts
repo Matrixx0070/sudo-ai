@@ -308,6 +308,34 @@ export interface SandboxManagerLike {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2 polish: duck-typed Likes for injected FeedbackMemory / PromptCacheManager
+// (defined here to keep loop-helpers self-contained; mirrors other *Like patterns above)
+// ---------------------------------------------------------------------------
+
+export interface FeedbackMemoryLike {
+  /** Matches real FeedbackMemory.recordSuccess(toolName, input, outcome, score?, sessionId?) */
+  recordSuccess(
+    toolName: string,
+    input: unknown,
+    outcome: string,
+    score?: number,
+    sessionId?: string,
+  ): unknown;
+  /** Matches real FeedbackMemory.recordFailure(toolName, input, error, sessionId?) */
+  recordFailure(
+    toolName: string,
+    input: unknown,
+    error: string,
+    sessionId?: string,
+  ): unknown;
+}
+
+export interface PromptCacheManagerLike {
+  /** Real API (TODO placeholder used outdated .check); returns cached system prompt or null. */
+  getCachedPrompt(key: string): string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Parallel tool-call execution helpers (Upgrade 5)
 // ---------------------------------------------------------------------------
 
@@ -384,6 +412,7 @@ async function executeSingleToolCall(
   emit: Emitter,
   toolRegistry: ToolRegistryLike,
   security?: SecurityGuardLike,
+  feedbackMemory?: FeedbackMemoryLike,
 ): Promise<SingleCallResult> {
   emit({ type: 'tool-call', name: tc.name, args: tc.arguments, toolId: tc.id });
   log.info({ tool: tc.name, toolCallId: tc.id, sessionId: ctx.sessionId }, 'Executing tool call');
@@ -415,10 +444,14 @@ async function executeSingleToolCall(
     resultContent = typeof result.output === 'string' ? result.output : String(result.output ?? '');
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
     log.info({ tool: tc.name, success: result.success }, 'Tool call completed');
-    // TODO: Wire FeedbackMemory.recordSuccess here in boot sequence
-    // Not yet wired: FeedbackMemory integration pending. When available, call:
-    // feedbackMemory.recordSuccess({ tool: tc.name, sessionId: ctx.sessionId })
-    // Kill-switch reference: SUDO_FEEDBACK_DISABLE=1 (when implemented)
+    // Phase 2 polish wire: FeedbackMemory.recordSuccess (TODO removed)
+    if (feedbackMemory && process.env['SUDO_FEEDBACK_DISABLE'] !== '1') {
+      try {
+        feedbackMemory.recordSuccess(tc.name, tc.arguments ?? {}, resultContent || 'success', 0.8, ctx.sessionId);
+      } catch (fbErr) {
+        log.warn({ err: String(fbErr), tool: tc.name, sessionId: ctx.sessionId }, 'FeedbackMemory.recordSuccess failed — continuing');
+      }
+    }
   } catch (err) {
     if (err instanceof ToolError && err.code === 'tool_not_found') {
       log.warn({ tool: tc.name }, 'Tool not found — invoking fallback chain');
@@ -432,10 +465,14 @@ async function executeSingleToolCall(
     resultContent = `Error executing tool ${tc.name}: ${String(err)}`;
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
     log.error({ tool: tc.name, err }, 'Tool call failed');
-    // TODO: Wire FeedbackMemory.recordFailure here in boot sequence
-    // Not yet wired: FeedbackMemory integration pending. When available, call:
-    // feedbackMemory.recordFailure({ tool: tc.name, sessionId: ctx.sessionId, error: err })
-    // Kill-switch reference: SUDO_FEEDBACK_DISABLE=1 (when implemented)
+    // Phase 2 polish wire: FeedbackMemory.recordFailure (TODO removed)
+    if (feedbackMemory && process.env['SUDO_FEEDBACK_DISABLE'] !== '1') {
+      try {
+        feedbackMemory.recordFailure(tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
+      } catch (fbErr) {
+        log.warn({ err: String(fbErr), tool: tc.name, sessionId: ctx.sessionId }, 'FeedbackMemory.recordFailure failed — continuing');
+      }
+    }
   }
 
   return { tc, resultContent };
@@ -527,6 +564,7 @@ export async function _toolNotFoundFallback(
  * @param brain          - Optional Brain reference passed into tool context.
  * @param hooks          - Optional hook emitter for lifecycle events.
  * @param sandboxManager - Optional SandboxManager for sandbox-aware workspace resolution.
+ * @param feedbackMemory - Optional (Phase 2) for live recordSuccess/recordFailure at exec time.
  */
 export async function executeToolCalls(
   toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
@@ -538,6 +576,7 @@ export async function executeToolCalls(
   brain?: BrainLike,
   hooks?: HookEmitterLike,
   sandboxManager?: SandboxManagerLike,
+  feedbackMemory?: FeedbackMemoryLike,
 ): Promise<void> {
   const policyFromSandbox = sandboxManager?.getPolicyFor(state.sessionId);
   // Provision workspace if sandboxManager is available — ensures directory exists before bwrap tries to mount it.
@@ -634,7 +673,7 @@ export async function executeToolCalls(
 
   // Phase 2a: leading sequential block.
   for (const tc of leadingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory);
     commit(res);
   }
 
@@ -645,18 +684,18 @@ export async function executeToolCalls(
       'Running tool calls in parallel',
     );
     const results = await Promise.all(
-      parallel.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security)),
+      parallel.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory)),
     );
     // Append in original order so the LLM context stays coherent.
     for (const res of results) commit(res);
   } else if (parallel.length === 1) {
-    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security);
+    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory);
     commit(res);
   }
 
   // Phase 2c: trailing sequential block.
   for (const tc of trailingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory);
     commit(res);
   }
 
@@ -701,16 +740,27 @@ export async function prepareMessages(
   state: AgentState,
   emit: Emitter,
   hooks?: HookEmitterLike,
+  promptCacheManager?: PromptCacheManagerLike,
 ): Promise<BrainMessage[]> {
-  // If a promptCacheManager is available (injected via Builder B's brain wiring),
-  // check cache here before forwarding messages to brain.call(). The cache key
-  // should be derived from the last user message + active tool set hash.
-  // TODO: Wire PromptCacheManager.check(cacheKey) here once injected by boot sequence.
-  // Not yet wired: PromptCacheManager integration pending. When available, add:
-  // const cacheKey = `prompt:${sessionId}:${lastUserMessageHash}:${toolSetHash}`;
-  // const cached = await promptCacheManager.check(cacheKey);
-  // if (cached) return cached.messages;
-  // Kill-switch reference: SUDO_PROMPT_CACHE_DISABLE=1 (when implemented)
+  // Phase 2 polish wire: PromptCacheManager (TODO removed; adapted to real getCachedPrompt API)
+  // Note: manager caches *system prompts* (see prompt-cache-optimizer.ts); here we wire the check
+  // per TODO location as advisory (no early return — history layers must still run).
+  if (process.env['SUDO_PROMPT_CACHE_DISABLE'] !== '1' && promptCacheManager) {
+    try {
+      const lastUser = (session.messages || [])
+        .slice()
+        .reverse()
+        .find((m: BrainMessage) => m.role === 'user');
+      const lastUserContent = typeof lastUser?.content === 'string' ? lastUser.content : '';
+      const cacheKey = `prompt:${state.sessionId}:${lastUserContent.slice(0, 128)}`;
+      const cached = promptCacheManager.getCachedPrompt(cacheKey);
+      if (cached) {
+        log.debug({ sessionId: state.sessionId, cacheKey: cacheKey.slice(0, 32) }, 'PromptCacheManager hit (wired from TODO)');
+      }
+    } catch (pcErr) {
+      log.warn({ err: String(pcErr), sessionId: state.sessionId }, 'PromptCacheManager check failed — continuing');
+    }
+  }
 
   // LAYER 0 — PRE-COMPACTION FLUSH REMINDER
   // At 40 % of MAX_CONTEXT_TOKENS (below the 50 % shouldCompact threshold), inject a
