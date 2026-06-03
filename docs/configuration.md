@@ -1,4 +1,4 @@
-# Configuration Reference — SUDO-AI v3
+# Configuration Reference — SUDO-AI v4.1.0 (User Completion: Single-Command + TUI Wizard + TUI Direct Validation)
 
 Configuration lives in two files:
 
@@ -11,7 +11,55 @@ Configuration lives in two files:
 
 `config/.env` is never validated — missing keys cause the relevant feature to be skipped or fall back gracefully. The agent logs a warning for each missing optional key.
 
+**Wave4 / User Completion note:** The TUI wizard (launched by single-cmd `sudo-ai setup` or first `sudo-ai`) populates 100x cross-platform fields (IComputerUse enable, learner, KAIROS, kills like SUDO_CROSS_PLATFORM_DISABLE, SOUL auto) interactively. See README "Setup Wizard" + "TUI Direct Talk" + E2E logs for validation that wizard + direct TUI chat confirm full coverage. Manual edits still supported; hot-reload for many.
+
 ---
+
+## Single-Command Install + First-Time / Ongoing TUI Wizard Setup (User Completion Wave)
+
+**Single command install (Wave1):**
+```bash
+# One-liner bootstrap (curl|bash produces global `sudo-ai` bin + deps + basic service)
+curl -fsSL https://raw.githubusercontent.com/sudo-ai/sudo-ai/main/install.sh | bash
+
+# Alternative (if node present):
+npm i -g sudo-ai
+```
+- Leaves `sudo-ai` in PATH, healthy (pm2 or service, /health 200).
+- Then run `sudo-ai` (triggers wizard if no config) or `sudo-ai setup`.
+
+**First-time TUI Wizard (Wave2, auto on first run or `sudo-ai setup`):**
+Ink-based interactive TUI (rich like chat TUI) covers full 100x:
+- Name / instance meta
+- Primary model + xAI/Grok key (or other providers)
+- Cross-platform IComputerUse enable + policy (P1: exec/file/gui/desktop/browser on 3OS)
+- ToolOutcomeLearner / self-imp on control (default on for 100x)
+- KAIROS / arsenal self-repair
+- Profiles, kill-switches (e.g. SUDO_CROSS_PLATFORM_DISABLE=1), SOUL confirmation (full uncensored power per owner)
+- Service/pm2 install option, Telegram/Discord channels
+- Writes sudo-ai.json5 + .env + toml as needed; validates.
+
+Example flow in TUI: prompts sequential or form-like, preview, confirm, save, doctor run optional.
+
+**Ongoing setup / edit (Wave2):**
+`sudo-ai setup` or `sudo-ai config --edit` re-launches TUI wizard (pre-filled from current), allows updates without full reinstall. Hot-reload for many json5 changes.
+
+**TUI direct real-time chat for validation (Wave3/4):**
+After wizard: `sudo-ai chat` (or default) launches Ink TUI for live chat.
+Directly talk to SUDO to "check real time user by directly talking to sudo ai via tui":
+- "use your IComputerUse to ... " — validates cross control in real-time (tool cards, results, learner update)
+- "what have you learned with ToolOutcomeLearner on control actions?"
+- "confirm your setup from wizard: cross enabled? SOUL power?"
+See `docs/tui-v4-spec.md` (section 19) + `docs/cross-platform-control-guide.md` for exact prompt examples + validation logs. Harness + actual user chats (lead/advocate) executed as part of completion.
+
+**P1 4 fixes note (no regressions, Wave3):** See cross-guide for details on denylist/workspace, executeControl success propagation, Win/Mac stubs accuracy (original 5 bypasses closed pre). All exercised/validated via TUI direct talk + 100% tests.
+
+**100x / control kill-switches (in wizard + env):**
+See kill-switches table below (incl new SUDO_CROSS_PLATFORM_DISABLE=1, SUDO_COMPUTER_USE_DISABLE=1, SUDO_TOOL_LEARNING_DISABLE=1). Wizard surfaces key ones for user choice.
+
+---
+
+
 
 ## config/sudo-ai.json5
 
@@ -415,7 +463,7 @@ The full system prompt always includes `workspace/SOUL.md` (see agents config sy
 - Sandbox policy files (if custom): under sandbox/ (expanded P1).
 - For RDP host GUI when in bwrap: run desktop scripts on host namespace (see desktop-watchdog.sh or state).
 
-See `docs/cross-platform-control-guide.md` for 3OS examples + full setup, `README.md` 100x section, architecture for IComputerUse in boot/flow.
+See `docs/cross-platform-control-guide.md` for 3OS examples + full setup + TUI validation of control, `README.md` 100x + single-cmd/wizard sections, `docs/tui-v4-spec.md` (user wave 19 for direct TUI talk "check real time user by directly talking to sudo ai via tui"), architecture for IComputerUse. User Completion: single cmd (npm/curl|bash) + TUI wizard (first/ongoing, 100x coverage) + TUI direct real-time chat validation. P1 4 fixes (denylist/workspace, executeControl, stubs) noted + no reg.
 
 
 ### Voice

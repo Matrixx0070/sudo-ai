@@ -1,8 +1,9 @@
 /**
  * @file cli/commands/quickstart.ts
- * @description sudo-ai quickstart — interactive 5-step setup wizard.
+ * @description sudo-ai quickstart — interactive 5-step setup wizard (legacy readline).
  *
  * Wave 10 — Builder 3 (Config + Ops + UX)
+ * Wave2 polish: compat preserved; recommends full Ink TUI `sudo-ai setup` for 100x (cross/P1, xai-auth, profiles, kills, SOUL, service, learner/KAIROS).
  *
  * Wizard steps:
  *   1. Agent name → meta.name
@@ -16,6 +17,7 @@
  * Always exits 0.
  *
  * Uses Node.js readline only — no external deps.
+ * For full real-time Ink TUI wizard (like chat TUI) + 100x coverage + ongoing + first-run: use `sudo-ai setup`.
  */
 
 import fs from 'node:fs';
@@ -250,9 +252,10 @@ export async function runQuickstart(
     console.log(`\n  Config written to: ${configPath}`);
     console.log(`  Preset selected: ${preset} (run 'sudo-ai init --preset ${preset}' to apply)`);
     console.log('  Next steps:');
-    console.log('    1. Edit config/.env with your API keys');
-    console.log('    2. Run: sudo-ai doctor');
-    console.log('    3. Run: sudo-ai start\n');
+    console.log('    1. Edit config/.env with your API keys (or re-run with full TUI)');
+    console.log('    2. For 100x cross/P1/profiles/SOUL/kills/service wizard (Ink TUI): run `sudo-ai setup`');
+    console.log('    3. Run: sudo-ai doctor');
+    console.log('    4. Run: sudo-ai start\n');
 
     if (runDoctorNow) {
       console.log('  Running health check...\n');

@@ -514,6 +514,15 @@ export const App: React.FC = () => {
       case '/alignment':  setShowAlignmentModal(true); break;
       case '/federation': setShowFederationModal(true); break;
       case '/exit':       exit(); break;
+      case '/100x':
+      case '/demo-100x':
+      case '/control': {
+        // P1 100x integration: /100x slash injects natural language prompt for IComputerUse cross-platform control demo in TUI chat (real-time streaming + tool cards + learner outcome).
+        const demoPrompt = 'use your IComputerUse to screenshot the desktop and describe the current real time user activity, open windows, processes';
+        addSystemMsg(`🚀 100x IComputerUse demo (P1 cross-platform Linux native + ToolOutcomeLearner on every control + SOUL uncensored): pre-filled natural prompt below. Press Enter to execute as real user (results visible in TUI, feeds self-imp).`);
+        setInputValue(demoPrompt);
+        break;
+      }
       default:
         addSystemMsg(`Unknown command: ${verb}. Type /help for commands.`);
     }

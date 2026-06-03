@@ -205,7 +205,8 @@ export class AutonomousExecutor {
       if (decision.tier === 'notify') {
         this.queueNotification(toolName, `control ${ca.op} executed (notify): ${res?.error || 'ok'}`);
       }
-      return { success: true, action: decision.tier === 'notify' ? 'notified' : 'executed', message: decision.reason, result: res };
+      // P1 refine (Codex post-remed): propagate backend failures from executeControl (was hard-coded success: true even if !res.success; now uses computed success for accurate cross-platform reporting + learner).
+      return { success, action: decision.tier === 'notify' ? 'notified' : 'executed', message: decision.reason, result: res };
     } catch (e: any) {
       if (learner) learner.onToolResult(toolName, ca.params, false, e.message);
       return { success: false, action: 'blocked', message: e.message };

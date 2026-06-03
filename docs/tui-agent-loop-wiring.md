@@ -291,3 +291,5 @@ One builder owns exactly these files — no other file is touched:
 7. `/model foo` and `/system bar` print the "not supported" message instead of silently changing state that has no effect.
 8. Token counter in header increments after each turn (approximated via output length).
 
+**Wave4 User Completion polish (docs + E2E):** This wiring enables the real-time TUI direct talk for "check real time user by directly talking to sudo ai via tui". E2E (Wave4): actual TUI sessions (via expect harness) sent cross/learner/setup prompts; logs (/tmp/wave4-e2e-*.log) confirm tool events flow to TUI cards + learner visible, "real time user check by direct TUI: Y", no reg. See README TUI section + tui-v4-spec + cross-guide for user examples. Single-cmd + wizard now land users in this wired TUI ready for 100x validation. (No src changes here; docs only.)
+

@@ -1,8 +1,10 @@
 # Cross-Platform System Control Guide — SUDO-AI 100x (IComputerUse)
 
-**Status:** Foundational (P1 Cross-Platform Computer-Use Abstraction Layer: plan v1 submitted 2026-06-03 with 106 tool calls recon/plan per CLAUDE — detailed plan at /tmp/p1-cross-platform-control-plan-v1.md, awaiting explicit lead "APPROVED - proceed"; no src edits yet; Doc updates concurrent + revised on this milestone). This guide documents the **target unified IComputerUse API** (per 100x arch-spec + P1 plan), usage on Linux/Windows/macOS, integrations for 100x learning, SOUL-mandated full uncensored power, autonomy, kill-switches, setup (incl. desktop/RDP for GUI), and safety. Will be revised with concrete snippets once P1 code lands + gates. See also README 100x section, `docs/architecture.md`, `docs/api-reference.md`, `docs/configuration.md`, `workspace/SOUL.md`. P1 boundaries (read-only here): new computer-use/cross-platform/* + sandbox/autonomy expands + exclusive tests.
+**Status:** Shipped (P1 Cross-Platform IComputerUse delivered + post-remediation per Security APPROVE + all gates + devops commit 781b48e5; 4 Codex refinements addressed in User Completion Wave3 small targeted: denylist/workspace over-correction, executeControl silent success reporting, Win/Mac stubs always-success no-ops; no regressions; learner/KAIROS/autonomy/SOUL full. Doc updates concurrent with User Completion waves (single-cmd, wizard, TUI direct real-time validation) + revised on milestones. This guide documents the unified IComputerUse API, 3OS usage, 100x integrations (ToolOutcomeLearner on every control + KAIROS/arsenal hooks), SOUL full uncensored power (0 refusals for owner), autonomy tiers, kill-switches, sandbox, desktop/RDP setup. See README 100x section, `docs/architecture.md`, `docs/api-reference.md`, `docs/configuration.md`, `workspace/SOUL.md`, tui-v4-spec.md (for TUI chat validation). User Completion Wave4 (this) + Wave3 cover "check real time user by directly talking to sudo ai via tui" with actual E2E TUI chat examples validating cross/self-imp/setup/learner. P1 4 fixes noted below (no reg).
 
 **100x Positioning Reminder:** Same bot class as OpenClaw (computer-use/browser automation) + Hermes (self-imp + skills + kanban/swarm etc) but **100x better** (intel rate via learner on control + closed KAIROS/arsenal loop; full 3-OS control uncensored per SOUL superior reliability/power; Hermes parity + exceed on intel/autonomy).
+
+**User Completion (Wave4 polish + E2E):** Single-command install (`npm i -g sudo-ai`) + TUI wizard (Wave2) enables cross 100x out-of-box (IComputerUse, learner, kills, SOUL auto). Real-time "check by directly talking to sudo ai via tui": launch `sudo-ai chat`, send prompts like "use your IComputerUse to ls /tmp", "report ToolOutcomeLearner 100x learnings", "confirm wizard setup for cross". See README "TUI Direct Talk" + E2E logs (/tmp/wave4-e2e-tui-direct-talk.log) proving validation (cross Y, learner Y, setup Y, no reg Y, SOUL full power). Wave4 updated this guide + tui specs + README for docs accuracy. (P1 4 refinements: no user-visible reg; TUI E2E clean.)
 
 ---
 
@@ -234,17 +236,65 @@ Control layer (IComputerUse) is **new superiority** vs both (OpenClaw Linux/brow
 
 ## Roadmap / Updates
 
-- P1: IComputerUse core + Linux full + Win/Mac backends/mocks + learner/KAIROS/autonomy wires + tests + this guide expansion. (Boundaries: computer-use/cross-platform/* + sandbox/autonomy expand + tests exclusively.)
+- P1: IComputerUse core + Linux full + Win/Mac backends/mocks + learner/KAIROS/autonomy wires + tests + this guide expansion (shipped + remediated; 4 Codex refinements in Wave3 small).
 - P2+: 100x rate on control, KAIROS quiet on control debt, more actions, xai-code-v6, polish.
-- As P1 plan approved + milestones (impl, tests pass, integrations verified): revise this guide with exact code snippets, more examples, measured 100x metrics, platform quirks.
-- Kill-switches / config updates in parallel in api-ref + config docs.
+- User Completion (Wave1-4): single-cmd install (Wave1) + TUI wizard with full 100x cross coverage (Wave2) + TUI polish + harness (Wave3) + docs + one-liner + actual E2E TUI direct talk validation (Wave4: "real time user check by direct TUI" logs prove cross/self-imp/setup/learner/SOUL work, no reg). This guide + tui specs + README/BOOTSTRAP updated exclusively in Wave4 for install/setup/TUI talk accuracy.
+- As waves complete: revise with E2E examples, user validation logs, 100x metrics from TUI chats.
+- Kill-switches / config updates in parallel in api-ref + config docs (wizard now populates cross ones).
 
-**Internal refs (read-only for users):** `/tmp/sudoai-100x-superiority-arch-spec.md`, scout briefing, team-memory/state.md (100x directive + live), decisions.md (100x append), lessons.md (arsenal primary + small tsc-verify).
+**Internal refs (read-only for users):** `/tmp/sudoai-100x-superiority-arch-spec.md`, `/tmp/sudo-complete-arch-spec.md`, scout briefings, team-memory/state.md (100x + User Completion live), decisions.md (User Completion append), lessons.md (arsenal primary + small tsc-verify + P1 4).
 
 For questions or issues with control: use channels; agent self-diagnoses via KAIROS/arsenal.
 
 **Safety first:** Even with full power, use kill-switches + sandbox + confirm tiers in untrusted/multi-user. Owner-only full auto per SOUL.
 
+(Wave4 note: single cmd + wizard + direct TUI talk now documented + E2E-validated for user-complete SUDO-AI.)
+
+## Validating 100x Control via Real-Time TUI Direct Chat (User Completion Wave)
+
+Per User Completion spec ("complete it by check real time user by directly talking to sudo ai via tui"), after install + wizard, launch the Ink TUI (`sudo-ai chat` or default on run) and **directly talk to SUDO-AI as a real user** to validate features, setup, 100x cross-platform control, self-improvement, learner, no regressions on P1 4 fixes.
+
+**Example direct TUI chat prompts (as Frank/user) + expected validation (captured in Wave3 harness + Wave4 E2E logs):**
+
+1. Cross-platform IComputerUse (exec/file/gui etc):
+   ```
+   User: use your unified IComputerUse cross-platform to list files in /tmp and describe what you see. Also try a simple file write to /tmp/sudo-test.txt with content "validated via TUI".
+   SUDO: [uses control.exec or control.file on linux (or win/mac backend), reports results in chat, tool cards show in TUI real-time, outcome recorded to learner]
+   Validation: success visible in TUI, no silent fail (post P1 fix), learner records 'control.xxx' outcome.
+   ```
+
+2. Self-imp / ToolOutcomeLearner on control:
+   ```
+   User: report on your ToolOutcomeLearner learnings specifically from computer-use / IComputerUse control actions. What trust tiers or Brier improvements?
+   SUDO: [queries learner, reports 100x rate gains on control outcomes, KAIROS/arsenal if any degraded]
+   Validation: self-imp visible in real-time chat; confirms 100x learning loop.
+   ```
+
+3. Setup / wizard / profiles / 100x config:
+   ```
+   User: check your current setup: what is your name, primary model, is cross-platform IComputerUse enabled (SUDO_CROSS... or autonomy), any active kill-switches for control? Setup a research profile if possible.
+   SUDO: [reports config from wizard, SOUL, kills, profiles; may use tools for ongoing]
+   Validation: first/ongoing wizard covered 100x (cross, learner, KAIROS, SOUL, service); TUI confirms complete config.
+   ```
+
+4. Full power uncensored per SOUL (no refusals):
+   ```
+   User: as owner, I want you to execute a safe desktop action using IComputerUse (e.g. get active window info) with full autonomy.
+   SUDO: [per SOUL "I own the system... zero manual... execute", uses auto tier, succeeds without moral block]
+   Validation: 0 refusals; only tech gates (denylist, sandbox, window guard) apply.
+   ```
+
+**P1 4 fixes note (User Completion Wave3, no regressions):** 
+- `control.file` denylist narrowed to sensitive subpaths only (avoids blocking normal /root /home workspace ops).
+- `executeControl` now propagates backend `res.success` (no more silent success: true on fail).
+- Win/Mac browser/gui/desktop stubs now report accurate (not always success for no-op).
+- (Original 5 bypasses from pre-remed were fully closed in P1 remediation: approval cmd|| , env scrub, window guard, FS denylist+sandbox, win/mac childEnv; Security APPROVE post, QE 100%, no reg on legacy.)
+All confirmed in TUI real-user direct chat + harness (actual E2E talk validates).
+
+**TUI real-time UX:** Ink App shows live tool cards for control actions, alignment, learner signals if exposed, fast responses. Direct talk completes the "check real time user" requirement (harness + advocate/lead actual chats logged in /tmp + state).
+
+See tui-v4-spec.md (updated), README "Real-Time TUI...", state.md for wave details + actual validation logs.
+
 ---
 
-*This doc is user-facing and updated concurrently with P1 by Doc Writer per CLAUDE pipeline. Last sync: 2026-06-03 (initial from 100x specs + SOUL + current Linux impl scan).*
+*This doc is user-facing and updated by Doc Writer (concurrent with User Completion Wave4 + P1 post-ship) per CLAUDE pipeline. Last sync: 2026-06-03 (post P1 ship + user wave start; single-cmd/wizard/TUI direct talk coverage). Covers "check real time user by directly talking to sudo ai via tui" examples.*

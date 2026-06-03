@@ -6,11 +6,15 @@ After=network.target
 Type=forking
 User=root
 Group=root
-Environment=HOME=/root
-Environment=PM2_HOME=/root/.pm2
-WorkingDirectory=/root/sudo-ai-v4
+# Portable via SUDO_AI_HOME (matches ecosystem.config.cjs); default for VPS / legacy compat.
+# install.sh (Wave1) and users can override: SUDO_AI_HOME=/path/to/sudo-ai-v4
+Environment=SUDO_AI_HOME=${SUDO_AI_HOME:-/root/sudo-ai-v4}
+Environment=HOME=${SUDO_AI_HOME:-/root/sudo-ai-v4}
+Environment=PM2_HOME=${SUDO_AI_HOME:-/root/sudo-ai-v4}/.pm2
 
-# Pre-start cleanup: kill any leaked tsx or esbuild orphans
+WorkingDirectory=${SUDO_AI_HOME:-/root/sudo-ai-v4}
+
+# Pre-start cleanup: kill any leaked tsx or esbuild orphans (from install.sh / Wave1 bootstrap too)
 ExecStartPre=-/bin/sh -c "pkill -9 -f 'tsx src/cli\.ts' || true"
 ExecStartPre=-/bin/sh -c "pkill -9 -f 'esbuild' || true"
 ExecStartPre=-/bin/sh -c "sleep 1"
@@ -19,7 +23,8 @@ ExecStartPre=-/bin/sh -c "pm2 delete sudo-ai-v5 || true"
 ExecStartPre=-/bin/sh -c "pm2 save --force || true"
 ExecStartPre=-/bin/sh -c "sleep 1"
 
-ExecStart=/usr/bin/pm2 start /root/sudo-ai-v4/ecosystem.config.cjs --only sudo-ai-v5 --update-env
+# Use SUDO_AI_HOME for ecosystem (portable; install.sh copies/enables service optionally)
+ExecStart=/usr/bin/pm2 start ${SUDO_AI_HOME:-/root/sudo-ai-v4}/ecosystem.config.cjs --only sudo-ai-v5 --update-env
 ExecStop=/usr/bin/pm2 stop sudo-ai-v5
 ExecReload=/usr/bin/pm2 reload sudo-ai-v5
 

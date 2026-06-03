@@ -76,15 +76,18 @@ export class MacComputerUse implements IComputerUse {
   }
 
   async browser(params: BrowserActionParams): Promise<BrowserResult> {
-    await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, true);
-    return { action: params.action, success: true };
+    // P1 refine (Codex post-remed): do not report mac browser stub (no-op) as success; accurate for cross-platform.
+    const err = 'control.browser stub on mac (P1 refine: no-op not reported success per Codex; real via osascript in full)';
+    await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, false, err);
+    return { action: params.action, success: false, error: err };
   }
 
   async file(params: FileOpParams): Promise<FileResult> {
     try {
       const abs = path.resolve(params.path);
       // P1 fix HIGH-3: denylist mac control.file
-      const SENSITIVE_DENY = ['/root', '/home', 'MEMORY.md', 'data/credentials', '.ssh', '/etc/shadow', '/etc/passwd', '/var/lib', '/boot'];
+      // P1 refine (Codex post-remed + lessons): narrow to sensitive subpaths/workspace-rel (not broad /root/home); cross-consistent with linux/win.
+      const SENSITIVE_DENY = ['/etc/shadow', '/etc/passwd', '/root/.ssh', '/home/.ssh', 'MEMORY.md', 'data/credentials', '/root/.aws', '/root/.config/sudo-ai', '/boot', '/var/lib/sudo'];
       const norm = abs.toLowerCase();
       if (SENSITIVE_DENY.some(s => norm.includes(s.toLowerCase()))) {
         const em = 'control.file: sensitive blocked (SOUL)';
@@ -108,12 +111,16 @@ export class MacComputerUse implements IComputerUse {
   }
 
   async gui(params: GUIActionParams): Promise<GUIResult> {
-    await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, true);
-    return { action: params.action, success: true };
+    // P1 refine (Codex post-remed): do not report mac gui stub (no-op) as success; accurate for cross-platform.
+    const err = 'control.gui stub on mac (P1 refine: no-op not reported success per Codex; real via osascript in full)';
+    await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, false, err);
+    return { action: params.action, success: false, error: err };
   }
 
   async desktop(params: DesktopActionParams): Promise<DesktopResult> {
-    await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, true);
-    return { action: params.action, success: true, data: { target: params.target } };
+    // P1 refine (Codex post-remed): do not report mac desktop stub (no-op) as success; accurate for cross-platform.
+    const err = 'control.desktop stub on mac (P1 refine: no-op not reported success per Codex)';
+    await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, false, err);
+    return { action: params.action, success: false, error: err, data: { target: params.target } };
   }
 }

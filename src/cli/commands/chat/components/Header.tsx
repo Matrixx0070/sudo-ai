@@ -46,7 +46,8 @@ export const Header: React.FC<HeaderProps> = ({
       <Text color="#e8b860" bold>sudo</Text>
       <Text dimColor> · </Text>
       <Text dimColor>{displayModel}</Text>
-      <Text> </Text>
+      <Text color="#7acc7a"> 100x</Text>
+      <Text dimColor> · </Text>
 
       {/* 8 alignment dots */}
       {digest.signals.map(signal => (

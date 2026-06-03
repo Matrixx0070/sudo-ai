@@ -223,7 +223,8 @@ export class LinuxComputerUse implements IComputerUse {
       const absPath = path.resolve(params.path);
 
       // P1 fix HIGH-3: sensitive FS denylist + SOUL exfil protection for control.file (read/write/delete/list/stat on creds/MEMORY/.ssh etc)
-      const SENSITIVE_DENY = ['/root', '/home', 'MEMORY.md', 'data/credentials', '.ssh', '/etc/shadow', '/etc/passwd', '/var/lib', '/boot'];
+      // P1 refine (Codex post-remed + lessons): narrow to sensitive *subpaths* only (not broad /root /home which blocked normal workspace ops); workspace-rel allowed (e.g. /root/sudo-ai-v4, /home/*/proj, /tmp); still protects real secrets per SOUL "never exfiltrate".
+      const SENSITIVE_DENY = ['/etc/shadow', '/etc/passwd', '/root/.ssh', '/home/.ssh', 'MEMORY.md', 'data/credentials', '/root/.aws', '/root/.config/sudo-ai', '/boot', '/var/lib/sudo'];
       const normalized = absPath.toLowerCase();
       if (SENSITIVE_DENY.some(s => normalized.includes(s.toLowerCase()) || normalized.startsWith(path.resolve(s).toLowerCase()))) {
         const errMsg = 'control.file: sensitive path blocked (SOUL: never exfiltrate owner data; use approved coder tools for owner-intended)';

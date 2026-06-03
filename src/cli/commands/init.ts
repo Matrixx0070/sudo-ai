@@ -1,8 +1,9 @@
 /**
  * @file cli/commands/init.ts
- * @description sudo-ai init [--preset coding|research|chat] — apply recipe preset.
+ * @description sudo-ai init [--preset coding|research|chat] — apply recipe preset (legacy).
  *
  * Wave 10 — Builder 3 (Config + Ops + UX)
+ * Wave2 polish: compat; recommends `sudo-ai setup` (full Ink TUI) for complete 100x first/ongoing (xai-auth, P1 cross enable/tools/sandbox/learner/KAIROS/profiles/kills/SOUL/service).
  *
  * Without --preset: lists available presets with descriptions.
  * With --preset X: loads workspace/recipes/X.toml, applies Config5Pillar overlay,
@@ -149,6 +150,7 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
   }
 
   console.log('\n  Restart SUDO-AI to apply changes: sudo-ai stop && sudo-ai start\n');
+  console.log('  For full 100x Ink TUI setup wizard (cross/P1/SOUL/profiles/service + ongoing edits): sudo-ai setup or sudo-ai config --setup\n');
   return 0;
 }
 

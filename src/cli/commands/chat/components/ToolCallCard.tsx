@@ -64,7 +64,11 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ card }) => {
       {/* Collapsed header */}
       <Box>
         <Text dimColor>⏺ </Text>
-        <Text color="#e8b860">{name}</Text>
+        {name.startsWith('control.') || name.includes('IComputerUse') || name.includes('computer') ? (
+          <Text color="#7acc7a" bold>🖥️ {name}</Text>
+        ) : (
+          <Text color="#e8b860">{name}</Text>
+        )}
         <Text dimColor>({displayArgs})  </Text>
         {ring}
         <Text dimColor>  {elapsedMs}ms  ⎿ {previewLines}</Text>
