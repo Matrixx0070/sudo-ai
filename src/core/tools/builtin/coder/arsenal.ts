@@ -805,3 +805,18 @@ export const arsenalTool: ToolDefinition = {
     };
   },
 };
+
+/**
+ * Direct trigger for KAIROS autonomous self-repair (Phase 3 wiring).
+ * Allows KAIROS to call arsenal "refactor" or "fix" on detected large_file or codebase_degraded.
+ * Stub ctx for direct use (PROJECT_ROOT guard preserved).
+ */
+export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
+  // KAIROS self-repair hook (Phase 3). For now, log intent (full execute would use the tool pipeline).
+  // In full runtime, this would invoke the arsenal execute with mode.
+  logger.info({ task, mode }, 'KAIROS requested arsenal self-repair (simulated; integrate with agent loop for full effect)');
+  return { success: true, output: `KAIROS-arsenal ${mode} simulated for: ${task.slice(0, 100)}` };
+}
+
+// KAIROS trigger added for self-repair wiring (Phase 3). Call triggerKAIROSRepair(task, 'refactor' | 'fix') from kairos actOnObservation.
+

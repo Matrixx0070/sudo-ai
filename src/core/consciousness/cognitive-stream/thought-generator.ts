@@ -238,7 +238,8 @@ export async function generateThought(
 
   if (!response || typeof response.content !== 'string') {
     log.warn({ tier }, 'generateThought: brain returned invalid response, using fallback');
-    return { content: 'Processing...', concepts: [] };
+    const fallback = tier === 'micro' ? 'Background cognition idle.' : 'Processing...';
+    return { content: fallback, concepts: [] };
   }
 
   const parsed = parseResponse(response.content);

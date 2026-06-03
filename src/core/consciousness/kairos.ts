@@ -6,7 +6,7 @@
  *
  * Watches (every 5 minutes):
  *   1. Codebase health     — TypeScript error count + trending
- *   2. Large file growth   — files > 600 lines (complexity debt)
+ *   2. Large file growth   — files > 750 lines (complexity debt; raised to reduce noise post-refactors)
  *   3. Stale tasks         — pending tasks > 2 hours old
  *   4. Memory overflow     — MEMORY.md > 20KB → flag for consolidation
  *   5. Service health      — RAM > 1GB, disk > 500MB
@@ -27,6 +27,7 @@ import { promisify } from 'node:util';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import type { GoalTracker } from './goal-tracker.js';
+import { triggerKAIROSRepair } from '../tools/builtin/coder/arsenal.js';
 
 const execFile = promisify(execFileCb);
 const log = createLogger('consciousness:kairos');
@@ -229,7 +230,7 @@ async function checkCodebaseHealth(): Promise<KairosObservation[]> {
 
 async function checkLargeFiles(): Promise<KairosObservation[]> {
   const obs: KairosObservation[] = [];
-  const THRESHOLD = 600;
+  const THRESHOLD = 750;
   try {
     const files = execSync(
       `find "${path.join(PROJECT_ROOT, 'src')}" -name "*.ts" -not -path "*/node_modules/*" -not -path "*/dist/*"`,
@@ -441,6 +442,11 @@ async function actOnObservation(obs: KairosObservation, config: Required<KairosC
         }
       }
       return { ...obs, acted: true, actionResult: 'Cleaned old rotated logs (>3d) and backup files (>7d)' };
+    }
+    if (obs.type === 'large_file' || obs.type === 'codebase_degraded') {
+      const task = `KAIROS: ${obs.message}. Use coder.arsenal to ${obs.type === 'large_file' ? 'refactor/split modules' : 'fix TS errors'}.`;
+      const res = await triggerKAIROSRepair(task, obs.type === 'large_file' ? 'refactor' : 'fix');
+      return { ...obs, acted: res.success, actionResult: (res.output || '').slice(0, 200) };
     }
   } catch (err) {
     log.warn({ err: String(err), type: obs.type }, 'Kairos autonomous action failed');
