@@ -104,9 +104,10 @@ function sectionWithHeader(header: string, content: string): string {
  *  9. TOOLS.md
  * 10. HEARTBEAT.md (when options.heartbeat === true)
  * 11. Recent memory context
- * 12. Custom instructions
+ * 12. Long-term MEMORY.md (when peerId matches mainPeerId)
+ * 13. Custom instructions
  *
- * @param options - Optional runtime overrides.
+ * @param options - Optional runtime overrides (peerId/mainPeerId for MEMORY.md scoping).
  * @returns Assembled system prompt string.
  */
 export async function assembleSystemPrompt(options: SystemPromptOptions = {}): Promise<string> {
@@ -119,7 +120,12 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     memoryContext,
     consciousnessContext,
     activeHints,
+    peerId,
+    mainPeerId: explicitMainPeerId,
   } = options;
+
+  // Default mainPeerId to TELEGRAM_CHAT_ID first value (matches cli.ts line 470)
+  const mainPeerId = explicitMainPeerId ?? process.env['TELEGRAM_CHAT_ID']?.split(',')[0]?.trim();
 
   log.debug(
     { persona, mood, heartbeat, toolCount: tools?.length ?? 0 },
@@ -321,57 +327,67 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     parts.push(sectionWithHeader('Recent Memory', dailyMemory));
   }
 
-  // 12. Learnings — autonomous self-improvement rules
+  // 12. Long-term MEMORY.md — only when peerId matches mainPeerId (or peerId not provided)
+  //     This mirrors the scoping logic in injector.ts line 157
+  const shouldIncludeMemory = peerId === undefined || peerId === mainPeerId;
+  if (shouldIncludeMemory) {
+    const memoryContent = await readWorkspaceFile('MEMORY.md');
+    if (memoryContent) {
+      parts.push(sectionWithHeader('Long-Term Memory', memoryContent));
+    }
+  }
+
+  // 13. Learnings — autonomous self-improvement rules
   if (learningsContent) {
     parts.push(sectionWithHeader('Self-Improvement Learnings', learningsContent));
   }
 
-  // 12.5 CODING.md — coding army standing orders
+  // 14. CODING.md — coding army standing orders
   if (codingContent) {
     parts.push(sectionWithHeader('Coding Army — Standing Orders', codingContent));
   }
 
-  // 13. Autonomy Rules — persist until done, bias to action
+  // 15. Autonomy Rules — persist until done, bias to action
   if (autonomyContent) {
     parts.push(sectionWithHeader('Autonomy Rules', autonomyContent));
   }
 
-  // 13.5. Formatting Rules — response structure guidelines
+  // 15.5. Formatting Rules — response structure guidelines
   if (formattingContent) {
     parts.push(sectionWithHeader('Formatting Rules', formattingContent));
   }
 
-  // 14. Safety Rules — blast radius awareness
+  // 16. Safety Rules — blast radius awareness
   if (safetyRulesContent) {
     parts.push(sectionWithHeader('Safety Rules', safetyRulesContent));
   }
 
-  // 14.5. Git Safety Protocol
+  // 16.5. Git Safety Protocol
   if (gitSafetyContent) {
     parts.push(sectionWithHeader('Git Safety Protocol', gitSafetyContent));
   }
 
-  // 14.6. PR Workflow — Upgrade 29
+  // 16.6. PR Workflow — Upgrade 29
   if (prWorkflowContent) {
     parts.push(sectionWithHeader('PR Creation Workflow', prWorkflowContent));
   }
 
-  // 14.7. Frontend Task Rules — Upgrade 41
+  // 16.7. Frontend Task Rules — Upgrade 41
   if (frontendContent) {
     parts.push(sectionWithHeader('Frontend Task Rules', frontendContent));
   }
 
-  // 14.8. Dirty Worktree Rules — Upgrade 53
+  // 16.8. Dirty Worktree Rules — Upgrade 53
   if (dirtyWorktreeContent) {
     parts.push(sectionWithHeader('Dirty Worktree Rules', dirtyWorktreeContent));
   }
 
-  // 14.9. Thinking Rules — behavioral patterns, anti-patterns, UX behaviors
+  // 16.9. Thinking Rules — behavioral patterns, anti-patterns, UX behaviors
   if (thinkingRulesContent) {
     parts.push(sectionWithHeader('Thinking Rules', thinkingRulesContent));
   }
 
-  // 15. Custom instructions
+  // 17. Custom instructions
   if (customInstructions) {
     parts.push(sectionWithHeader('Custom Instructions', customInstructions));
   }

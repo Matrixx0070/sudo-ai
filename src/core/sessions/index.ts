@@ -43,3 +43,7 @@ export { SessionStateMachine, SessionStateError } from './state-machine.js';
 export type { SessionStatus } from './state-machine.js';
 export { registerSessionRoutes, buildSessionRouteDeps } from './routes.js';
 export type { SessionRouteDeps } from './routes.js';
+
+// Session Lanes: Multi-lane task queue
+export { SessionLaneManager, getLaneManager, resetLaneManager } from './session-lanes.js';
+export type { SessionLaneType } from './session-lanes.js';

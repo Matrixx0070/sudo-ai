@@ -60,6 +60,7 @@ import Database from 'better-sqlite3';
 import { EpistemicGate } from '../cognition/epistemic-gate.js';
 import { createHash } from 'node:crypto';
 import type { DetectionResult } from '../cognition/injection-detector.js';
+import { ToolOutcomeLearner, type ToolOutcomeLearnerDeps } from './tool-outcome-learner.js';
 
 // ---------------------------------------------------------------------------
 // Content-hash helper — A1: deterministic 32-char hex per tool+args combo.
@@ -221,6 +222,9 @@ export class AgentLoop {
     checkViolation(toolName: string, safety: 'readonly' | 'destructive', taintId: string): { reason: string } | null;
   };
   private _lastTaintIds: Map<string, string> = new Map();
+
+  // ToolOutcomeLearner — optional, set via setter after construction.
+  private _toolOutcomeLearner?: ToolOutcomeLearner;
 
   constructor(
     brain: unknown,
@@ -460,6 +464,12 @@ export class AgentLoop {
     }
   }
 
+  /** Wire ToolOutcomeLearner after construction. Fail-open if duck-type mismatch. */
+  setToolOutcomeLearner(learner: ToolOutcomeLearner): void {
+    this._toolOutcomeLearner = learner;
+    log.info('AgentLoop: ToolOutcomeLearner attached');
+  }
+
   // -------------------------------------------------------------------------
   // Public API
   // -------------------------------------------------------------------------
@@ -595,6 +605,16 @@ export class AgentLoop {
             _w10bToolCallCount++;
             if (_isSuccess) _w10bToolSuccessCount++;
             _w10bToolSequence.push(_tr.name);
+          }
+        } catch { /* fail-open */ }
+
+        // ToolOutcomeLearner: record tool outcome (fail-open)
+        try {
+          if (this._toolOutcomeLearner && event.type === 'tool-result') {
+            const _tr = event as { type: string; name: string; result: unknown };
+            const _isSuccess = isToolResultSuccess(_tr.result);
+            const _error = _isSuccess ? undefined : (typeof _tr.result === 'string' ? _tr.result : JSON.stringify(_tr.result));
+            this._toolOutcomeLearner.onToolResult(_tr.name, {}, _isSuccess, _error, sessionId);
           }
         } catch { /* fail-open */ }
       }
@@ -841,6 +861,17 @@ export class AgentLoop {
     // INFO-2: clear _lastTaintIds on session:end to stay symmetric with TaintTracker._taints.clear().
     // TaintTracker already clears its internal _taints via its own session:end hook.
     this._lastTaintIds.clear();
+
+    // ToolOutcomeLearner: record session end outcomes (fail-open)
+    try {
+      if (this._toolOutcomeLearner && _w10bToolCallCount > 0) {
+        const outcomes = _w10bToolSequence.map((toolName, idx) => ({
+          toolName,
+          success: idx < _w10bToolSuccessCount, // approximate: first N are successes
+        }));
+        this._toolOutcomeLearner.onSessionEnd(sessionId, outcomes);
+      }
+    } catch { /* fail-open */ }
 
     // Wave 10B: flush one trace per session to AgentConfigEvolver (fail-open)
     try {
@@ -1306,6 +1337,19 @@ export class AgentLoop {
           // Hook: before:tool-call — one emission per validated tool call.
           for (const tc of activeToolCalls) {
             void this.hooks?.emit('before:tool-call', { event: 'before:tool-call', sessionId: state.sessionId, toolName: tc.name, params: tc.arguments ?? {} });
+          }
+
+          // ToolOutcomeLearner: check prevention rules before tool execution.
+          if (this._toolOutcomeLearner) {
+            for (const tc of activeToolCalls) {
+              try {
+                const hint = this._toolOutcomeLearner.checkPreventionRules(tc.name, tc.arguments ?? {});
+                if (hint) {
+                  session.messages.push({ role: 'system', content: `[ToolOutcomeLearner] ${hint}` });
+                  log.warn({ tool: tc.name, sessionId: state.sessionId }, 'Prevention rule hint injected');
+                }
+              } catch { /* fail-open — never block tool execution due to learning error */ }
+            }
           }
 
           // Alignment aggregator: owner-loyalty composite check (advisory, fail-open).

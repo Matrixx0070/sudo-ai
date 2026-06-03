@@ -17,6 +17,7 @@ import { createIsolatedAgent } from './isolation.js';
 import type { IsolationMode } from './isolation.js';
 import type { AgentConfig } from './types.js';
 import type { HookManager } from '../hooks/index.js';
+import { pushCompletionBus } from './push-completion.js';
 
 const log = createLogger('agent:swarm');
 
@@ -180,6 +181,12 @@ export class AgentSwarm {
         sessionId = session.id;
       } catch (err) {
         this.active.delete(id);
+        // Push-based failure notification for async subscribers.
+        pushCompletionBus.fail(id, {
+          agentId: id,
+          task: taskDescription,
+          error: `Failed to create session: ${String(err)}`,
+        });
         throw new PipelineError(
           `AgentSwarm: failed to create session for sub-agent ${id}: ${String(err)}`,
           'pipeline_session_not_found',
@@ -218,9 +225,11 @@ export class AgentSwarm {
       }, timeout);
 
       try {
+        const startTime = Date.now();
         const agentResult = await loop.run(sessionId, taskDescription);
         const resultText = agentResult.text;
-        log.info({ id, resultLen: resultText.length }, 'Sub-agent completed');
+        const duration = Date.now() - startTime;
+        log.info({ id, resultLen: resultText.length, duration }, 'Sub-agent completed');
 
         // Emit swarm:complete lifecycle event.
         if (this.hookManager) {
@@ -230,15 +239,40 @@ export class AgentSwarm {
           });
         }
 
+        // Push-based completion notification for async subscribers.
+        pushCompletionBus.complete(id, {
+          agentId: id,
+          task: taskDescription,
+          result: resultText,
+          duration,
+        });
+
         return resultText;
       } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+
         if (controller.signal.aborted) {
-          throw new PipelineError(
+          const timeoutError = new PipelineError(
             `Sub-agent ${id} timed out after ${timeout}ms`,
             'pipeline_max_iterations',
             { id, timeout },
           );
+          // Push-based failure notification for async subscribers.
+          pushCompletionBus.fail(id, {
+            agentId: id,
+            task: taskDescription,
+            error: timeoutError.message,
+          });
+          throw timeoutError;
         }
+
+        // Push-based failure notification for async subscribers.
+        pushCompletionBus.fail(id, {
+          agentId: id,
+          task: taskDescription,
+          error: errorMessage,
+        });
+
         log.error({ id, err }, 'Sub-agent failed');
         throw err;
       } finally {
@@ -254,6 +288,163 @@ export class AgentSwarm {
         }
       }
     }) as Promise<string>;
+  }
+
+  /**
+   * Spawn a sub-agent asynchronously and return immediately with the agent ID.
+   * The caller can subscribe to pushCompletionBus to receive completion events.
+   *
+   * @param taskDescription - Natural-language task for the sub-agent.
+   * @param options - Optional overrides for model, timeout, etc.
+   * @returns The sub-agent ID immediately (does not wait for completion).
+   */
+  async spawnAsync(taskDescription: string, options: SpawnOptions = {}): Promise<string> {
+    if (!taskDescription || typeof taskDescription !== 'string') {
+      throw new PipelineError(
+        'AgentSwarm.spawnAsync: taskDescription must be a non-empty string',
+        'pipeline_invalid_args',
+      );
+    }
+
+    const id = genId();
+    const timeout = options.timeout ?? DEFAULT_TIMEOUT_MS;
+    const controller = new AbortController();
+
+    // Start the sub-agent in the background (do not await).
+    // The caller subscribes to pushCompletionBus for results.
+    this.queue
+      .add(async () => {
+        const record: ActiveAgent = {
+          id,
+          task: taskDescription,
+          startedAt: new Date(),
+          controller,
+          lastHeartbeat: Date.now(),
+        };
+        this.active.set(id, record);
+
+        // Emit swarm:spawn lifecycle event.
+        if (this.hookManager) {
+          await this.hookManager.emit('swarm:spawn', {
+            event: 'swarm:spawn',
+            meta: { agentId: id, task: taskDescription.slice(0, 100) },
+          });
+        }
+
+        log.info({ id, task: taskDescription.slice(0, 100), timeout }, 'Async sub-agent spawning');
+
+        // Create an ephemeral session.
+        const sessionManager = this.sessionManager as {
+          getOrCreate: (channel: string, peerId: string) => Promise<{ id: string }>;
+        };
+
+        let sessionId: string;
+        try {
+          const session = await sessionManager.getOrCreate('swarm', `subagent:${id}`);
+          sessionId = session.id;
+        } catch (err) {
+          this.active.delete(id);
+          pushCompletionBus.fail(id, {
+            agentId: id,
+            task: taskDescription,
+            error: `Failed to create session: ${String(err)}`,
+          });
+          return;
+        }
+
+        const config: Partial<AgentConfig> = {
+          timeout,
+          ...(options.model ? { model: options.model } : {}),
+        };
+
+        // Optional workspace isolation.
+        const isolationMode = options.isolationMode ?? 'shared';
+        let isolatedEnv: Awaited<ReturnType<typeof createIsolatedAgent>> | null = null;
+        if (isolationMode !== 'shared') {
+          try {
+            isolatedEnv = await createIsolatedAgent(isolationMode);
+            log.info({ id, isolationMode, workdir: isolatedEnv.workdir }, 'Async sub-agent isolation environment created');
+          } catch (isoErr) {
+            log.warn({ id, isolationMode, err: String(isoErr) }, 'Failed to create isolated environment — falling back to shared');
+            isolatedEnv = null;
+          }
+        }
+
+        const sandboxManager = {
+          getWorkspaceDir: (sid: string) => `/tmp/sandbox-${sid}`,
+          getPolicyFor: () => ({ readonly: false, allowedPaths: ['/tmp'] }),
+        };
+        const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config, undefined, undefined, undefined, undefined, sandboxManager);
+
+        // Apply timeout via AbortController.
+        const timer = setTimeout(() => {
+          controller.abort();
+          log.error({ id, timeout }, 'Async sub-agent timed out — aborting');
+        }, timeout);
+
+        try {
+          const startTime = Date.now();
+          const agentResult = await loop.run(sessionId, taskDescription);
+          const resultText = agentResult.text;
+          const duration = Date.now() - startTime;
+          log.info({ id, resultLen: resultText.length, duration }, 'Async sub-agent completed');
+
+          // Emit swarm:complete lifecycle event.
+          if (this.hookManager) {
+            await this.hookManager.emit('swarm:complete', {
+              event: 'swarm:complete',
+              meta: { agentId: id, resultLen: resultText.length },
+            });
+          }
+
+          // Push-based completion notification.
+          pushCompletionBus.complete(id, {
+            agentId: id,
+            task: taskDescription,
+            result: resultText,
+            duration,
+          });
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+
+          if (controller.signal.aborted) {
+            pushCompletionBus.fail(id, {
+              agentId: id,
+              task: taskDescription,
+              error: `Timed out after ${timeout}ms`,
+            });
+          } else {
+            pushCompletionBus.fail(id, {
+              agentId: id,
+              task: taskDescription,
+              error: errorMessage,
+            });
+          }
+          log.error({ id, err }, 'Async sub-agent failed');
+        } finally {
+          clearTimeout(timer);
+          this.active.delete(id);
+          if (isolatedEnv) {
+            try {
+              await isolatedEnv.cleanup();
+            } catch (cleanErr) {
+              log.warn({ id, isolationMode, err: String(cleanErr) }, 'Isolation cleanup failed');
+            }
+          }
+        }
+      })
+      .catch((queueErr) => {
+        // Queue-level error (e.g., concurrency limit issues).
+        log.error({ id, err: queueErr }, 'Async sub-agent queue error');
+        pushCompletionBus.fail(id, {
+          agentId: id,
+          task: taskDescription,
+          error: String(queueErr),
+        });
+      });
+
+    // Return immediately without waiting for completion.
+    return id;
   }
 
   /**

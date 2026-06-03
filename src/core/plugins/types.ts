@@ -69,14 +69,17 @@ export interface PluginManifest {
 
 // ---------------------------------------------------------------------------
 // Plugin context (passed to activate)
+// NOTE: Full definition moved to "Plugin Context (expanded)" section below
+// This stub remains for backward compatibility with existing PluginModule
 // ---------------------------------------------------------------------------
 
 /**
  * Runtime context injected into a plugin on activation.
  * Uses `unknown` to avoid circular imports — plugins cast to the concrete
  * types they need.
+ * @deprecated Use the expanded PluginContext interface instead
  */
-export interface PluginContext {
+export interface PluginContextStub {
   /** Resolved plugin configuration object (keys from manifest.config). */
   config: unknown;
   /** Scoped pino logger for the plugin. */
@@ -101,10 +104,18 @@ export interface PluginModule {
    */
   activate(ctx: PluginContext): Promise<void>;
   /**
+   * Optional install hook called before activate.
+   */
+  install?(ctx: PluginContext): Promise<void>;
+  /**
    * Optional teardown hook called by the manager on deactivation or uninstall.
    * The plugin should release resources (open handles, intervals, etc.).
    */
   deactivate?(): Promise<void>;
+  /**
+   * Optional uninstall hook called when plugin is uninstalled.
+   */
+  uninstall?(): Promise<void>;
   /**
    * Optionally return tool definitions contributed by this plugin.
    * Used by the manager to enumerate plugin-provided tools.
@@ -132,4 +143,147 @@ export interface PluginEntry {
   error?: string;
   /** ISO 8601 timestamp of when the plugin was loaded. */
   loadedAt?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin Lifecycle Hooks
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle hook event names that plugins can subscribe to.
+ */
+export type PluginHookEvent =
+  | 'plugin:installed'
+  | 'plugin:activated'
+  | 'plugin:deactivated'
+  | 'plugin:uninstalled'
+  | 'tool:registered'
+  | 'channel:registered'
+  | 'provider:registered'
+  | 'skill:registered'
+  | 'session:start'
+  | 'session:end'
+  | 'tool:call:before'
+  | 'tool:call:after';
+
+/**
+ * Handler function for a lifecycle hook.
+ */
+export type PluginHookHandler = (data: unknown) => void | Promise<void>;
+
+/**
+ * Subscription handle returned by onHook, allows cleanup.
+ */
+export interface PluginHookSubscription {
+  /** Call to unsubscribe from the hook. */
+  unsubscribe(): void;
+  /** Check if subscription is still active. */
+  readonly active: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin Context (expanded)
+// ---------------------------------------------------------------------------
+
+/**
+ * Logger interface for plugin context.
+ */
+export interface PluginLogger {
+  info(obj: Record<string, unknown>, msg?: string): void;
+  warn(obj: Record<string, unknown>, msg?: string): void;
+  error(obj: Record<string, unknown>, msg?: string): void;
+  debug(obj: Record<string, unknown>, msg?: string): void;
+  child(bindings: Record<string, unknown>): PluginLogger;
+}
+
+/**
+ * Runtime context injected into a plugin on activation.
+ * Gives plugins access to core services and registration functions.
+ */
+export interface PluginContext {
+  /** Plugin ID from manifest. */
+  pluginId: string;
+  /** Resolved plugin configuration object (keys from manifest.config). */
+  config: Record<string, unknown>;
+  /** Scoped pino logger for the plugin. */
+  logger: PluginLogger;
+  /** Register a tool from this plugin. Returns cleanup function. */
+  registerTool(toolDef: unknown): () => void;
+  /** Register a channel from this plugin. Returns cleanup function. */
+  registerChannel(channelDef: unknown): () => void;
+  /** Register an LLM provider from this plugin. Returns cleanup function. */
+  registerProvider(providerDef: unknown): () => void;
+  /** Register a skill from this plugin. Returns cleanup function. */
+  registerSkill(skillDef: unknown): () => void;
+  /** Subscribe to a lifecycle hook. Returns subscription handle. */
+  onHook(event: PluginHookEvent, handler: PluginHookHandler): PluginHookSubscription;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin Lifecycle Interface
+// ---------------------------------------------------------------------------
+
+/**
+ * Explicit lifecycle methods a plugin may implement.
+ * Separated from PluginModule for clarity.
+ */
+export interface PluginLifecycle {
+  /**
+   * Called when plugin is activated.
+   * Plugin should register tools, channels, providers, skills here.
+   */
+  install?(ctx: PluginContext): Promise<void>;
+  /**
+   * Called when plugin is activated.
+   * Plugin should register tools, channels, providers, skills here.
+   */
+  activate?(ctx: PluginContext): Promise<void>;
+  /**
+   * Called when plugin is deactivated.
+   * Plugin should cleanup resources, unsubscribe hooks, release handles.
+   */
+  deactivate?(): Promise<void>;
+  /**
+   * Called when plugin is uninstalled.
+   * Plugin should remove all registrations and cleanup completely.
+   */
+  uninstall?(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin Error Types
+// ---------------------------------------------------------------------------
+
+/**
+ * Error codes for plugin-related errors.
+ */
+export type PluginErrorCode =
+  | 'plugin_not_found'
+  | 'plugin_already_installed'
+  | 'plugin_already_active'
+  | 'plugin_not_active'
+  | 'plugin_install_failed'
+  | 'plugin_activation_failed'
+  | 'plugin_deactivation_failed'
+  | 'plugin_uninstall_failed'
+  | 'plugin_manifest_invalid'
+  | 'plugin_manifest_not_found'
+  | 'plugin_manifest_parse_error'
+  | 'plugin_import_failed'
+  | 'plugin_invalid_module'
+  | 'plugin_invalid_argument'
+  | 'plugin_hook_failed'
+  | 'plugin_registration_failed';
+
+/**
+ * Base error type for plugin errors.
+ */
+export interface PluginErrorData {
+  code: PluginErrorCode;
+  pluginId?: string;
+  cause?: string;
+  field?: string;
+  missingField?: string;
+  received?: string;
+  value?: unknown;
 }

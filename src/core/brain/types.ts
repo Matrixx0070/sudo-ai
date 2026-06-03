@@ -191,4 +191,14 @@ export interface SystemPromptOptions {
    * Injected as a dedicated section between mood and AGENTS.md.
    */
   activeHints?: string[];
+  /**
+   * Session peerId for scoping workspace injections.
+   * If provided and does NOT match mainPeerId, MEMORY.md is excluded.
+   */
+  peerId?: string;
+  /**
+   * The main peerId (from TELEGRAM_CHAT_ID env var).
+   * Defaults to process.env.TELEGRAM_CHAT_ID?.split(',')[0]?.trim()
+   */
+  mainPeerId?: string;
 }
