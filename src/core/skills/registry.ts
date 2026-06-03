@@ -335,6 +335,171 @@ export class SkillRegistry {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Skills Hub integration — registry methods for installed skills
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Register a skill downloaded from the remote registry.
+   * Used by SkillsHub.install() to persist registry skills into the local registry.
+   *
+   * @param entry - Registry skill entry from search/download.
+   * @param skillContent - Raw SKILL.md content.
+   * @throws SkillRegistryError on database write failure.
+   */
+  installFromRegistry(entry: import('./skills-hub-types.js').RegistrySkillEntry, skillContent: string): void {
+    try {
+      const maxRow = this.q.maxVersion.get(entry.name) as { max_ver: number | null };
+      const version = (maxRow.max_ver ?? 0) + 1;
+
+      const frontmatter_json = JSON.stringify({
+        id: entry.id,
+        name: entry.name,
+        version: entry.version,
+        author: entry.author,
+        description: entry.description,
+        trust_tier: entry.trustTier,
+        caps: entry.caps,
+        source: entry.sourceUrl,
+        license: entry.license,
+        compatibility: entry.compatibility,
+        display_name: entry.displayName,
+      });
+
+      this.q.insert.run({
+        id: randomUUID(),
+        name: entry.name,
+        version,
+        frontmatter_json,
+        body_md: skillContent,
+        sha256: createHash('sha256').update(skillContent).digest('hex'),
+        created_at: new Date().toISOString(),
+        trust_tier: entry.trustTier,
+        caps_json: JSON.stringify(entry.caps),
+      });
+      log.debug({ name: entry.name, version }, 'skill registered from registry');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new SkillRegistryError('installFromRegistry failed: ' + msg, 'INSERT_FAILED');
+    }
+  }
+
+  /**
+   * Update an existing skill with new content and version.
+   * Creates a new version entry (skills are immutable, versioned by name).
+   *
+   * @param name - Skill name to update.
+   * @param newContent - New SKILL.md content.
+   * @param newVersion - New version string.
+   * @returns True if update was applied.
+   * @throws SkillRegistryError on database write failure.
+   */
+  updateSkill(name: string, newContent: string, newVersion: string): boolean {
+    try {
+      const { meta } = parseFrontmatter(newContent);
+      const sha256 = createHash('sha256').update(newContent).digest('hex');
+
+      // Check if this exact content already exists (skip duplicate)
+      const existing = this.q.checkHash.get(name, sha256) as
+        | { id: string; version: number } | undefined;
+      if (existing) {
+        log.debug({ name, version: existing.version }, 'skill update skipped — same content');
+        return false;
+      }
+
+      const maxRow = this.q.maxVersion.get(name) as { max_ver: number | null };
+      const version = (maxRow.max_ver ?? 0) + 1;
+
+      const capsRaw = meta['caps'];
+      let caps: string[] = [];
+      if (Array.isArray(capsRaw)) {
+        caps = capsRaw as string[];
+      } else if (typeof capsRaw === 'string' && capsRaw.length > 0) {
+        caps = capsRaw.split(',').map((c: string) => c.trim()).filter(Boolean);
+      }
+
+      const validTiers = new Set(['bundled', 'indexed', 'unreviewed', 'workspace']);
+      const tierRaw = meta['trust_tier'] as string | undefined;
+      const trust_tier = tierRaw && validTiers.has(tierRaw)
+        ? (tierRaw as import('../shared/wave10-types.js').SkillTrustTier)
+        : 'unreviewed';
+
+      this.q.insert.run({
+        id: randomUUID(),
+        name,
+        version,
+        frontmatter_json: JSON.stringify(meta),
+        body_md: newContent,
+        sha256,
+        created_at: new Date().toISOString(),
+        trust_tier,
+        caps_json: JSON.stringify(caps),
+      });
+      log.info({ name, version: newVersion }, 'skill updated');
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new SkillRegistryError('updateSkill failed: ' + msg, 'UPDATE_FAILED');
+    }
+  }
+
+  /**
+   * Get list of installed skills, optionally filtered by source.
+   * Returns skills with version, trust tier, and capability metadata.
+   *
+   * @param source - Optional filter by install source ('bundled', 'registry', 'import', 'workspace').
+   * @returns Array of installed skill metadata.
+   */
+  getInstalledSkills(source?: string): import('./skills-hub-types.js').InstalledSkill[] {
+    try {
+      const rows = this.q.list.all(1000, 0) as Record<string, unknown>[];
+      const skills: import('./skills-hub-types.js').InstalledSkill[] = [];
+
+      for (const row of rows) {
+        const frontmatter = JSON.parse((row['frontmatter_json'] as string) || '{}') as Record<string, unknown>;
+        const sourceVal = (frontmatter['source'] as string) || '';
+        const trustTierRaw = (row['trust_tier'] as string) || 'unreviewed';
+        const capsJson = (row['caps_json'] as string) || '[]';
+
+        // Map source string to install source type
+        let installSource: import('./skills-hub-types.js').SkillInstallSource = 'import';
+        if (sourceVal.includes('registry:')) {
+          installSource = 'registry';
+        } else if (sourceVal.includes('github:') || sourceVal.includes('openclaw:') || sourceVal.includes('openjarvis:')) {
+          installSource = 'import';
+        } else if (frontmatter['trust_tier'] === 'bundled') {
+          installSource = 'bundled';
+        }
+
+        if (source && installSource !== source) {
+          continue;
+        }
+
+        const validTiers = new Set(['bundled', 'indexed', 'unreviewed', 'workspace']);
+        const trustTier = validTiers.has(trustTierRaw)
+          ? (trustTierRaw as import('../shared/wave10-types.js').SkillTrustTier)
+          : 'unreviewed';
+
+        skills.push({
+          id: (row['id'] as string) || '',
+          name: (row['name'] as string) || '',
+          version: String(row['version'] ?? '1'),
+          installedAt: (row['created_at'] as string) || new Date().toISOString(),
+          source: installSource,
+          registryId: (frontmatter['id'] as string) || undefined,
+          trustTier,
+          caps: JSON.parse(capsJson) as string[],
+          enabled: !(row['archived_at'] as string),
+        });
+      }
+
+      return skills;
+    } catch (err: unknown) {
+      log.error({ err }, 'failed to get installed skills');
+      return [];
+    }
+  }
+
   getSkillById(id: string): SkillFull | null {
     const row = this.q.getById.get(id) as Record<string, unknown> | undefined;
     if (!row) return null;

@@ -1,7 +1,7 @@
 /**
  * @file tools/mcp-adapter.ts
  * @description MCPAdapter — connects to external MCP (Model Context Protocol)
- * servers using raw stdio JSON-RPC 2.0 over child_process.spawn.
+ * servers using raw stdio JSON-RPC 2.0 over child_process.spawn or HTTP/SSE/WebSocket.
  *
  * Does NOT require @modelcontextprotocol/sdk.
  * Protocol ref: https://spec.modelcontextprotocol.io/specification/2024-11-05/
@@ -10,6 +10,9 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
+import { OAuthClient } from './mcp-oauth.js';
+import { SSETransport } from './mcp-sse-transport.js';
+import { WSTransport } from './mcp-ws-transport.js';
 
 const log = createLogger('tools:mcp-adapter');
 
@@ -24,8 +27,10 @@ export interface MCPServerConfig {
    * Transport mechanism.
    * - 'stdio': spawn a child process and communicate over stdin/stdout (default).
    * - 'http': communicate over HTTP JSON-RPC 2.0 (requires baseUrl).
+   * - 'sse': Server-Sent Events transport (requires url).
+   * - 'websocket': WebSocket transport (requires url).
    */
-  transport: 'stdio' | 'http';
+  transport: 'stdio' | 'http' | 'sse' | 'websocket';
   /** Executable to spawn (e.g. "npx", "node", "/usr/bin/python3"). Required for stdio. */
   command?: string;
   /** Arguments passed to the executable. */
@@ -33,10 +38,33 @@ export interface MCPServerConfig {
   /** Additional environment variables for the child process. */
   env?: Record<string, string>;
   /**
-   * Base URL of the MCP HTTP server (e.g. "http://localhost:8080").
-   * Required when transport === 'http'.
+   * Base URL of the MCP server.
+   * Required when transport === 'http', 'sse', or 'websocket'.
+   * For SSE: the SSE endpoint URL.
+   * For WebSocket: the WebSocket URL (ws:// or wss://).
    */
   baseUrl?: string;
+  /**
+   * OAuth 2.1 PKCE configuration for authenticated transports.
+   * When provided, tokens are automatically obtained and refreshed.
+   */
+  oauth?: {
+    issuer: string;
+    clientId: string;
+    redirectUri: string;
+    clientSecret?: string;
+    scope?: string;
+  };
+  /**
+   * Pre-shared access token (alternative to OAuth flow).
+   * Used for HTTP Authorization header or WebSocket/SSE auth.
+   */
+  accessToken?: string;
+  /**
+   * Per-tool enable/disable filtering.
+   * If undefined, all discovered tools are enabled.
+   */
+  toolFilter?: Record<string, boolean>;
 }
 
 export interface MCPToolDef {
@@ -47,6 +75,8 @@ export interface MCPToolDef {
   inputSchema: object;
   /** ID of the MCP server that provides this tool. */
   serverId: string;
+  /** Whether this tool is currently enabled (for filtering). */
+  enabled: boolean;
 }
 
 /**
@@ -99,6 +129,9 @@ const MCP_PROTOCOL_VERSION = '2024-11-05' as const;
 
 export class MCPAdapter {
   private process: ChildProcess | null = null;
+  private sseTransport: SSETransport | null = null;
+  private wsTransport: WSTransport | null = null;
+  private oauthClient: OAuthClient | null = null;
   private readonly pendingRequests = new Map<
     string,
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
@@ -106,22 +139,58 @@ export class MCPAdapter {
   private tools: MCPToolDef[] = [];
   /** Partial line buffer for stdout chunk accumulation. */
   private lineBuffer = '';
+  /** HTTP session for remote transports */
+  private httpSession: { baseUrl: string; accessToken?: string } | null = null;
 
-  constructor(private readonly config: MCPServerConfig) {}
+  constructor(private readonly config: MCPServerConfig) {
+    // Initialize OAuth client if configured
+    if (config.oauth && process.env['SUDO_MCP_OAUTH_DISABLE'] !== '1') {
+      this.oauthClient = new OAuthClient(config.oauth);
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Connection lifecycle
   // -------------------------------------------------------------------------
 
   /**
-   * Spawn the MCP server process and perform the JSON-RPC initialization
-   * handshake. Resolves when the server is ready to accept tool calls.
+   * Connect to the MCP server using the configured transport.
+   * Resolves when the server is ready to accept tool calls.
    *
-   * @throws {Error} when the handshake times out or the process fails to start.
+   * @throws {Error} when the handshake times out or connection fails.
    */
   async connect(): Promise<void> {
+    // Check global kill-switch
+    if (process.env['SUDO_MCP_DISABLE'] === '1') {
+      throw new Error('MCP functionality disabled via SUDO_MCP_DISABLE');
+    }
+
+    switch (this.config.transport) {
+      case 'stdio':
+        await this._connectStdio();
+        break;
+      case 'http':
+        await this._connectHttp();
+        break;
+      case 'sse':
+        await this._connectSse();
+        break;
+      case 'websocket':
+        await this._connectWebSocket();
+        break;
+      default:
+        throw new Error(`MCPAdapter[${this.config.id}]: unknown transport ${this.config.transport}`);
+    }
+
+    log.info(
+      { serverId: this.config.id, transport: this.config.transport },
+      'MCP server connected and initialized',
+    );
+  }
+
+  private async _connectStdio(): Promise<void> {
     if (this.process) {
-      log.warn({ serverId: this.config.id }, 'MCPAdapter.connect called but already connected');
+      log.warn({ serverId: this.config.id }, 'MCPAdapter._connectStdio called but already connected');
       return;
     }
 
@@ -175,8 +244,128 @@ export class MCPAdapter {
 
     // Notify the server that initialization is done.
     this._notify('notifications/initialized', {});
+  }
 
-    log.info({ serverId: this.config.id }, 'MCP server connected and initialized');
+  private async _connectHttp(): Promise<void> {
+    // Check kill-switch for remote transports
+    if (process.env['SUDO_MCP_REMOTE_DISABLE'] === '1') {
+      throw new Error('HTTP transport disabled via SUDO_MCP_REMOTE_DISABLE');
+    }
+
+    if (!this.config.baseUrl) {
+      throw new Error(`MCPAdapter[${this.config.id}]: 'baseUrl' is required for HTTP transport`);
+    }
+
+    // Obtain OAuth token if configured
+    let accessToken = this.config.accessToken;
+    if (this.oauthClient) {
+      accessToken = await this.oauthClient.getAccessToken() ?? undefined;
+    }
+
+    this.httpSession = {
+      baseUrl: this.config.baseUrl,
+      accessToken,
+    };
+
+    log.debug(
+      { serverId: this.config.id, baseUrl: this.config.baseUrl },
+      'HTTP transport initialized',
+    );
+  }
+
+  private async _connectSse(): Promise<void> {
+    if (process.env['SUDO_MCP_REMOTE_DISABLE'] === '1') {
+      throw new Error('SSE transport disabled via SUDO_MCP_REMOTE_DISABLE');
+    }
+
+    if (!this.config.baseUrl) {
+      throw new Error(`MCPAdapter[${this.config.id}]: 'baseUrl' is required for SSE transport`);
+    }
+
+    // Obtain OAuth token if configured
+    let accessToken = this.config.accessToken;
+    if (this.oauthClient) {
+      accessToken = await this.oauthClient.getAccessToken() ?? undefined;
+    }
+
+    this.sseTransport = new SSETransport({
+      url: this.config.baseUrl,
+      accessToken,
+    });
+
+    // Set up message handler for JSON-RPC responses
+    this.sseTransport.on('message', (msg) => {
+      this._dispatchLine(msg.data);
+    });
+
+    this.sseTransport.on('error', (err) => {
+      log.error({ serverId: this.config.id, err: err.message }, 'SSE transport error');
+      this._rejectAll(err);
+    });
+
+    this.sseTransport.on('close', () => {
+      log.info({ serverId: this.config.id }, 'SSE transport closed');
+      this._rejectAll(new Error('SSE transport closed'));
+    });
+
+    await this.sseTransport.connect();
+
+    // Send initialize handshake over SSE
+    await this._rpc('initialize', {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: 'sudo-ai', version: '5.0.0' },
+    });
+
+    this._notify('notifications/initialized', {});
+  }
+
+  private async _connectWebSocket(): Promise<void> {
+    if (process.env['SUDO_MCP_REMOTE_DISABLE'] === '1') {
+      throw new Error('WebSocket transport disabled via SUDO_MCP_REMOTE_DISABLE');
+    }
+
+    if (!this.config.baseUrl) {
+      throw new Error(`MCPAdapter[${this.config.id}]: 'baseUrl' is required for WebSocket transport`);
+    }
+
+    // Obtain OAuth token if configured
+    let accessToken = this.config.accessToken;
+    if (this.oauthClient) {
+      accessToken = await this.oauthClient.getAccessToken() ?? undefined;
+    }
+
+    this.wsTransport = new WSTransport({
+      url: this.config.baseUrl,
+      accessToken,
+      protocol: 'json-rpc',
+    });
+
+    // Set up message handler for JSON-RPC responses
+    this.wsTransport.on('message', (data) => {
+      this._dispatchLine(data);
+    });
+
+    this.wsTransport.on('error', (err) => {
+      log.error({ serverId: this.config.id, err: err.message }, 'WebSocket transport error');
+      this._rejectAll(err);
+    });
+
+    this.wsTransport.on('close', () => {
+      log.info({ serverId: this.config.id }, 'WebSocket transport closed');
+      this._rejectAll(new Error('WebSocket transport closed'));
+    });
+
+    await this.wsTransport.connect();
+
+    // Send initialize handshake over WebSocket
+    await this._rpc('initialize', {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: 'sudo-ai', version: '5.0.0' },
+    });
+
+    this._notify('notifications/initialized', {});
   }
 
   // -------------------------------------------------------------------------
@@ -186,6 +375,7 @@ export class MCPAdapter {
   /**
    * Request the list of tools from the MCP server.
    * Results are cached internally and returned with `serverId` set.
+   * Applies tool filtering based on config.toolFilter.
    */
   async listTools(): Promise<MCPToolDef[]> {
     this._assertConnected();
@@ -196,18 +386,47 @@ export class MCPAdapter {
 
     const rawTools = Array.isArray(result?.tools) ? result.tools : [];
 
-    this.tools = rawTools.map((t) => ({
-      name: `mcp__${this.config.id}__${t.name}`,
-      description: t.description ?? `MCP tool from ${this.config.id}`,
-      inputSchema: t.inputSchema ?? {},
-      serverId: this.config.id,
-    }));
+    this.tools = rawTools.map((t) => {
+      const fullName = `mcp__${this.config.id}__${t.name}`;
+      const enabled = this.config.toolFilter
+        ? (this.config.toolFilter[t.name] ?? true)
+        : true;
 
+      return {
+        name: fullName,
+        description: t.description ?? `MCP tool from ${this.config.id}`,
+        inputSchema: t.inputSchema ?? {},
+        serverId: this.config.id,
+        enabled,
+      };
+    });
+
+    const enabledCount = this.tools.filter(t => t.enabled).length;
     log.info(
-      { serverId: this.config.id, toolCount: this.tools.length },
+      { serverId: this.config.id, toolCount: this.tools.length, enabledCount },
       'MCP tools discovered',
     );
     return this.tools;
+  }
+
+  /**
+   * Enable or disable a specific tool by name.
+   * @param toolName - The raw tool name (without prefix)
+   * @param enabled - Whether the tool should be enabled
+   */
+  setToolEnabled(toolName: string, enabled: boolean): void {
+    const tool = this.tools.find(t => t.name === `mcp__${this.config.id}__${toolName}`);
+    if (tool) {
+      tool.enabled = enabled;
+      log.info({ serverId: this.config.id, tool: toolName, enabled }, 'Tool enabled/disabled');
+    } else {
+      log.warn({ serverId: this.config.id, tool: toolName }, 'setToolEnabled: tool not found');
+    }
+  }
+
+  /** Get list of enabled tools only */
+  getEnabledTools(): MCPToolDef[] {
+    return this.tools.filter(t => t.enabled);
   }
 
   /**
@@ -215,6 +434,7 @@ export class MCPAdapter {
    *
    * @param name - The raw (un-prefixed) tool name as returned by the MCP server.
    * @param args - Arguments map for the tool.
+   * @throws {Error} if the tool is disabled or not connected.
    */
   async callTool(
     name: string,
@@ -223,32 +443,101 @@ export class MCPAdapter {
     this._assertConnected();
 
     // Strip the "mcp__<serverId>__" prefix if the caller passed the full name.
-    const rawName = name.startsWith(`mcp__${this.config.id}__`)
-      ? name.slice(`mcp__${this.config.id}__`.length)
-      : name;
+    const prefix = `mcp__${this.config.id}__`;
+    const rawName = name.startsWith(prefix) ? name.slice(prefix.length) : name;
+
+    // Check if tool is enabled
+    const tool = this.tools.find(t => t.name === name);
+    if (tool && !tool.enabled) {
+      throw new Error(`Tool ${rawName} is disabled on server ${this.config.id}`);
+    }
 
     log.debug({ serverId: this.config.id, tool: rawName, args }, 'Calling MCP tool');
 
-    const result = await this._rpc('tools/call', {
-      name: rawName,
-      arguments: args,
-    }) as {
+    let result: unknown;
+
+    // Route the call based on transport type
+    switch (this.config.transport) {
+      case 'stdio':
+      case 'sse':
+      case 'websocket':
+        result = await this._rpc('tools/call', { name: rawName, arguments: args });
+        break;
+      case 'http':
+        result = await this._httpRpc('tools/call', { name: rawName, arguments: args });
+        break;
+      default:
+        throw new Error(`MCPAdapter[${this.config.id}]: unknown transport ${this.config.transport}`);
+    }
+
+    const resultObj = result as {
       content?: Array<{ type: string; text?: string }> | string;
     };
 
     // Normalise various content shapes into a single string.
     let content = '';
-    if (typeof result?.content === 'string') {
-      content = result.content;
-    } else if (Array.isArray(result?.content)) {
-      content = result.content
+    if (typeof resultObj?.content === 'string') {
+      content = resultObj.content;
+    } else if (Array.isArray(resultObj?.content)) {
+      content = resultObj.content
         .map((c) => (typeof c.text === 'string' ? c.text : JSON.stringify(c)))
         .join('\n');
-    } else if (result !== undefined && result !== null) {
-      content = JSON.stringify(result);
+    } else if (resultObj !== undefined && resultObj !== null) {
+      content = JSON.stringify(resultObj);
     }
 
     return { content };
+  }
+
+  /** HTTP JSON-RPC call for HTTP transport */
+  private async _httpRpc(method: string, params: unknown): Promise<unknown> {
+    if (!this.httpSession) {
+      throw new Error(`MCPAdapter[${this.config.id}]: HTTP session not initialized`);
+    }
+
+    const url = `${this.httpSession.baseUrl}/rpc`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    // Add OAuth token if available
+    if (this.httpSession.accessToken) {
+      headers['Authorization'] = `Bearer ${this.httpSession.accessToken}`;
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: randomUUID(),
+          method,
+          params,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timer);
+
+      if (!response.ok) {
+        throw new Error(`HTTP RPC failed: HTTP ${response.status}`);
+      }
+
+      const data = await response.json() as JsonRpcResponse;
+
+      if (data.error) {
+        throw new Error(`MCP RPC error [${data.error.code}]: ${data.error.message}`);
+      }
+
+      return data.result;
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -257,19 +546,40 @@ export class MCPAdapter {
 
   /** Gracefully close the MCP server connection. */
   async disconnect(): Promise<void> {
-    if (!this.process) return;
-
     log.info({ serverId: this.config.id }, 'Disconnecting MCP server');
 
+    // Best-effort shutdown notification.
     try {
-      // Best-effort shutdown notification.
       this._notify('notifications/shutdown', {});
     } catch {
-      // Ignore — process may already be dying.
+      // Ignore — may already be disconnected.
     }
 
-    this.process.kill('SIGTERM');
-    this.process = null;
+    // Close based on transport type
+    switch (this.config.transport) {
+      case 'stdio':
+        if (this.process) {
+          this.process.kill('SIGTERM');
+          this.process = null;
+        }
+        break;
+      case 'sse':
+        if (this.sseTransport) {
+          this.sseTransport.disconnect();
+          this.sseTransport = null;
+        }
+        break;
+      case 'websocket':
+        if (this.wsTransport) {
+          this.wsTransport.disconnect();
+          this.wsTransport = null;
+        }
+        break;
+      case 'http':
+        this.httpSession = null;
+        break;
+    }
+
     this._rejectAll(new Error('MCP adapter disconnected'));
     log.info({ serverId: this.config.id }, 'MCP server disconnected');
   }
@@ -285,6 +595,43 @@ export class MCPAdapter {
   /** Return cached tool list. Call listTools() first to populate. */
   getCachedTools(): MCPToolDef[] {
     return [...this.tools];
+  }
+
+  /** Get current connection state */
+  isConnected(): boolean {
+    switch (this.config.transport) {
+      case 'stdio':
+        return this.process !== null;
+      case 'sse':
+        return this.sseTransport?.isConnected() ?? false;
+      case 'websocket':
+        return this.wsTransport?.isConnected() ?? false;
+      case 'http':
+        return this.httpSession !== null;
+      default:
+        return false;
+    }
+  }
+
+  /** Refresh OAuth token (for HTTP/SSE/WS transports) */
+  async refreshOAuthToken(): Promise<string | null> {
+    if (!this.oauthClient) {
+      return null;
+    }
+    const token = await this.oauthClient.getAccessToken(true);
+    if (token) {
+      // Update transport tokens
+      if (this.httpSession) {
+        this.httpSession.accessToken = token;
+      }
+      if (this.sseTransport) {
+        this.sseTransport.setAccessToken(token);
+      }
+      if (this.wsTransport) {
+        this.wsTransport.setAccessToken(token);
+      }
+    }
+    return token;
   }
 
   // -------------------------------------------------------------------------
@@ -324,13 +671,63 @@ export class MCPAdapter {
     this._send({ jsonrpc: '2.0', id: randomUUID(), method, params } as JsonRpcRequest);
   }
 
-  /** Serialise and write a message to the child process stdin. */
+  /** Serialise and send a JSON-RPC message based on transport type. */
   private _send(message: JsonRpcRequest): void {
-    if (!this.process?.stdin) {
-      throw new Error(`MCPAdapter[${this.config.id}]: process stdin unavailable`);
-    }
     const line = JSON.stringify(message) + '\n';
-    this.process.stdin.write(line);
+
+    switch (this.config.transport) {
+      case 'stdio':
+        if (!this.process?.stdin) {
+          throw new Error(`MCPAdapter[${this.config.id}]: process stdin unavailable`);
+        }
+        this.process.stdin.write(line);
+        break;
+      case 'sse':
+        // SSE is receive-only; for sending we need a separate HTTP POST endpoint
+        // This is a limitation - SSE transport needs a return channel
+        // For now, we'll use a simple fetch to the base URL + /message endpoint
+        if (!this.config.baseUrl) {
+          throw new Error(`MCPAdapter[${this.config.id}]: baseUrl required for SSE send`);
+        }
+        this._sendViaHttpPost(line).catch((err) => {
+          log.error({ serverId: this.config.id, err: err.message }, 'Failed to send over SSE return channel');
+        });
+        break;
+      case 'websocket':
+        if (!this.wsTransport) {
+          throw new Error(`MCPAdapter[${this.config.id}]: WebSocket not connected`);
+        }
+        this.wsTransport.send(line);
+        break;
+      case 'http':
+        // HTTP is request/response, not used for _send (uses _httpRpc directly)
+        throw new Error(`MCPAdapter[${this.config.id}]: _send not used for HTTP transport`);
+      default:
+        throw new Error(`MCPAdapter[${this.config.id}]: unknown transport ${this.config.transport}`);
+    }
+  }
+
+  /** Send a message via HTTP POST (used as return channel for SSE) */
+  private async _sendViaHttpPost(data: string): Promise<void> {
+    if (!this.config.baseUrl) {
+      throw new Error('baseUrl required');
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (this.config.accessToken) {
+      headers['Authorization'] = `Bearer ${this.config.accessToken}`;
+    } else if (this.httpSession?.accessToken) {
+      headers['Authorization'] = `Bearer ${this.httpSession.accessToken}`;
+    }
+
+    await fetch(`${this.config.baseUrl}/message`, {
+      method: 'POST',
+      headers,
+      body: data,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -391,7 +788,7 @@ export class MCPAdapter {
   // -------------------------------------------------------------------------
 
   private _assertConnected(): void {
-    if (!this.process) {
+    if (!this.isConnected()) {
       throw new Error(
         `MCPAdapter[${this.config.id}] is not connected. Call connect() first.`,
       );
@@ -570,15 +967,26 @@ export class HTTPMCPAdapter {
 
       const rawTools = Array.isArray(data.result?.tools) ? data.result!.tools : [];
 
-      this.tools = rawTools.map((t) => ({
-        name: `mcp__${this.config.id}__${t.name}`,
-        description: t.description ?? `MCP tool from ${this.config.id}`,
-        inputSchema: t.inputSchema ?? {},
-        serverId: this.config.id,
-      }));
+      const rawToolsArray = Array.isArray(data.result?.tools) ? data.result!.tools : [];
 
+      this.tools = rawToolsArray.map((t) => {
+        const fullName = `mcp__${this.config.id}__${t.name}`;
+        const enabled = this.config.toolFilter
+          ? (this.config.toolFilter[t.name] ?? true)
+          : true;
+
+        return {
+          name: fullName,
+          description: t.description ?? `MCP tool from ${this.config.id}`,
+          inputSchema: t.inputSchema ?? {},
+          serverId: this.config.id,
+          enabled,
+        };
+      });
+
+      const enabledCount = this.tools.filter(t => t.enabled).length;
       log.info(
-        { serverId: this.config.id, toolCount: this.tools.length },
+        { serverId: this.config.id, toolCount: this.tools.length, enabledCount },
         'HTTPMCPAdapter: tools discovered',
       );
 
