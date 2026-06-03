@@ -28,3 +28,9 @@ export {
   listGoals,
 } from './goal-pursuit.js';
 export type { Goal, GoalMilestone, GoalPriority, GoalStatus } from './goal-pursuit.js';
+
+// P1 cross-platform control wiring (approval + executor for IComputerUse)
+export {
+  type ControlAction,
+} from './autonomous-executor.js';
+export type { ApprovalTier, ApprovalRule, ApprovalDecision } from './approval-matrix.js';

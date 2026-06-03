@@ -228,6 +228,10 @@ tools: {
 }
 ```
 
+**100x Computer-Use / Cross-Platform Control tools (P1+):**
+Use `tools.disabled` to gate IComputerUse actions or legacy `computer.use` (e.g. `["computer.use", "computer.*"]`).
+Full cross-platform power (exec/browser/file/gui/desktop on 3 OS) is enabled by default (uncensored per SOUL); disable via env kill-switches below or here for safety. New unified tools registered under computer-use category. See `docs/cross-platform-control-guide.md` and `docs/api-reference.md#kill-switches`.
+
 ---
 
 ### cron
@@ -347,6 +351,72 @@ WEB_CHAT_ENABLED=false              # Set true to enable web chat adapter
 ```
 
 WebChat now attaches to the gateway server — no separate `WEB_CHAT_PORT` required. Default URL: http://127.0.0.1:18900/chat
+
+### 100x Cross-Platform Control, Kill-Switches, Autonomy, Learning (P1+ and Hermes parity)
+
+**Kill-switches (exact `=1` to disable; see full table + semantics in `docs/api-reference.md#kill-switches`):**
+All recent + 100x:
+
+```bash
+# 100x control / computer-use
+SUDO_COMPUTER_USE_DISABLE=1          # Disable IComputerUse + legacy computer.use / GUI/desktop control
+SUDO_CROSS_PLATFORM_DISABLE=1        # Force Linux-only; disable Win/Mac backends
+SUDO_TOOL_LEARNING_DISABLE=1         # Disable ToolOutcomeLearner (incl. 100x learning on control outcomes)
+SUDO_SANDBOX_DISABLE=1               # (DANGEROUS) Bypass bwrap for control/exec
+
+# Hermes parity / recent waves (MCP, skills, profiles, kanban, etc.)
+SUDO_MCP_DISABLE=1
+SUDO_MCP_OAUTH_DISABLE=1
+SUDO_MCP_REMOTE_DISABLE=1
+SUDO_SKILLS_HUB_DISABLE=1
+SUDO_SKILLS_INSTALL_DISABLE=1
+SUDO_SKILLS_SANDBOX_DISABLE=1
+SUDO_PROFILES_DISABLE=1
+SUDO_KANBAN_DISABLE=1
+SUDO_CREDENTIAL_POOL_DISABLE=1
+SUDO_MULTI_DELIVERY_DISABLE=1
+SUDO_DASHBOARD_DISABLE=1
+
+# Brain / consensus / autonomy
+SUDO_BRAIN_RACE_DISABLE=1            # Disable parallel race (use sequential)
+SUDO_BRAIN_CONSENSUS_DISABLE=1       # Disable 3-model Jaccard consensus (fallback sequential)
+SUDO_AUTO_APPROVE=1                  # Favor full auto in autonomy tiers (aligns with SOUL full autonomous)
+
+# Other common
+SUDO_TAINT_DISABLE=1
+SUDO_SIGNING_DISABLE=1
+# ... (see api-ref for complete current list; add new on waves)
+```
+
+**Cross-platform / desktop / GUI setup (for full IComputerUse power):**
+```bash
+# Linux GUI (xdotool/scrot)
+DISPLAY=:0   # or the RDP VNC display (e.g. :10.0 from desktop scripts)
+
+# For sandboxed agent without direct X: use host RDP setup
+# Scripts (host): /home/ubuntu/desktop-start.sh , start-rdp*.sh , stop-rdp.sh , desktop-setup.sh
+# Connect RDP: port 3389, user ubuntu, pass xai-code (see state.md desktop section + cross-guide)
+# Then agent can drive cu.gui / cu.desktop on the RDP display.
+
+# Windows / mac (P1+)
+# No special env; backends auto or via platform= in calls. For dev/CI: WSL interop or host Mac.
+# RDP/VNC to Win/Mac host for GUI control surface.
+
+# Autonomy / learning for control
+SUDO_AUTO_APPROVE=1   # As above
+# (KAIROS/arsenal self-repair always on unless disabled; learner on control unless SUDO_TOOL_LEARNING_DISABLE)
+```
+
+**SOUL & full control notes:**
+The full system prompt always includes `workspace/SOUL.md` (see agents config systemPrompt note). SOUL mandates full autonomous uncensored control for owner will — IComputerUse implements this (0 refusals). Safety via the kill-switches above + autonomy tiers + sandbox + learning/KAIROS (not refusals). Read SOUL.md for exact wording ("owner's will absolute", "FULL autonomous mode. Zero manual approval").
+
+**Other 100x relevant:**
+- `SUDO_BRAIN_CONSENSUS=1` (or disable) for superior intel in control tasks.
+- Sandbox policy files (if custom): under sandbox/ (expanded P1).
+- For RDP host GUI when in bwrap: run desktop scripts on host namespace (see desktop-watchdog.sh or state).
+
+See `docs/cross-platform-control-guide.md` for 3OS examples + full setup, `README.md` 100x section, architecture for IComputerUse in boot/flow.
+
 
 ### Voice
 

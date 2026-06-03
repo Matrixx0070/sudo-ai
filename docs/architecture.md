@@ -47,9 +47,10 @@ Step 8   KnowledgeGraph + Zettelkasten
          Wires to RAGEngine
 
 Step 9   ToolRegistry
-         Auto-discovers tools in src/core/tools/builtin/
+         Auto-discovers tools in src/core/tools/builtin/ (incl. legacy computer.use + new 100x IComputerUse cross-platform/*)
          Registers superpowers from src/core/superpowers/
          Disables tools listed in config.tools.disabled
+         (P1+): IComputerUse factory + platform backends registered for unified control (Linux/Win/Mac)
 
 Step 10  MultiAgentOrchestrator
          Registers system.spawn-agent tool
@@ -335,3 +336,68 @@ hooks.on('agent:turn:start', (ctx) => { /* ... */ });
 hooks.on('agent:turn:end', (ctx) => { /* ... */ });
 hooks.on('tool:execute', (ctx) => { /* ... */ });
 ```
+
+---
+
+## Cross-Platform Control Layer — 100x IComputerUse (P1+ Foundational)
+
+**Overview:** New unified abstraction (P1 wave) for full system control: exec, browser automation, file ops, GUI interactions, desktop/app management across Linux, Windows, macOS. Makes SUDO-AI 100x superior to OpenClaw (Linux/browser-centric) and Hermes (no equivalent full cross control) in power + reliability while preserving Hermes parity elsewhere.
+
+**Contract (target):**
+See `docs/cross-platform-control-guide.md` for full IComputerUse interface, ExecResult etc, factory, and 3OS examples.
+
+**Location & Boundaries:** Implemented in `src/core/tools/builtin/computer-use/cross-platform/*` (index + linux.ts + win.ts + mac.ts + types) exclusively owned by P1 builder. Expands `sandbox/*` (cross policies) and `autonomy/*` (control action wiring). Current legacy: `browser/computer-use.ts` (Linux ScreenAction + xdotool/scrot) + `computer-use-tool.ts` (registers `computer.use` tool; window guard for MEMORY.md isolation). Legacy remains for compat during transition.
+
+**Boot / Registration:**
+- ToolRegistry (Step 9 in boot) auto-discovers `computer-use` tools (legacy + new unified via cross-platform index exports).
+- IComputerUse factory instantiated in autonomy/executor or tool wrappers; platform detected at runtime or forced.
+- Control actions flow through SecurityGuard (pre-exec) + sandbox (bwrap for Linux exec/control; platform equivs) + autonomy approval (ApprovalMatrix + AutonomousExecutor).
+
+**Data Flow for Control Actions (extension of AgentLoop):**
+User intent (via chat or autonomy goal) → Brain (SOUL.md + context) → tool call to computer.* or internal IComputerUse → Security validate → Autonomy check (tier: auto for owner per SOUL) → Execute via platform backend (linux: xdotool/scrot/bwrap/exec + Playwright paths; win: powershell/node; mac: osascript) → Result (with platform, duration, screenshot if GUI) → ToolOutcomeLearner.learn(...) (tags: ['control', platform]) → Append to messages / KAIROS observe → Loop or response.
+
+**Key Integrations (for 100x learning + self-repair + autonomy):**
+- **ToolOutcomeLearner:** Every control outcome (success/fail + details) recorded → drives 6 self-imp modules (100x rate on control surface vs baselines). See self-improvement/ + agent/tool-outcome-learner.ts.
+- **KAIROS + Arsenal:** KAIROS actOnObservation on 'control_degraded' / large control artifacts → calls triggerKAIROSRepair (arsenal) + autoCreateKanban. Arsenal does recon/baseline/edit/verify on control code (small steps + tsc per lessons from P3). Makes control layer self-healing.
+- **Autonomy:** Tiers applied to IComputerUse calls (high-power GUI/exec may confirm; SOUL favors zero manual for owner). Pending in kanban; events to dashboard.
+- **Sandbox:** Linux bwrap/seccomp/LD_PRELOAD for exec/control (policy expanded in P1 for new actions). Cross: platform sandboxes or host-side for GUI (RDP notes in guide).
+- **Consciousness:** Control episodes/thoughts feed episodic memory, drives, self-model.
+- **Alignment/Veto:** High-risk control can hit veto gate (epistemic + signals).
+- **xai-code-v6 (future P5):** Portable Rust ReAct/plan/swarm for control shims or hybrid agents.
+
+**Module Additions (P1):**
+- New cross-platform computer-use dir under tools/builtin.
+- Sandbox policy/runner updates for cross.
+- Autonomy executor + approval updates for control action types.
+- Test harness (P1 exclusive tests): platform mocks, 100x metrics (coverage, success, learner calls, KAIROS trigger).
+
+**Kill-Switches (control specific):**
+`SUDO_COMPUTER_USE_DISABLE=1`, `SUDO_CROSS_PLATFORM_DISABLE=1` (see api-ref + config for full + semantics). Also `SUDO_TOOL_LEARNING_DISABLE=1` to pause 100x learning on control, `SUDO_SANDBOX_DISABLE=1` (use with extreme care).
+
+**SOUL Compliance:**
+Full control implements "I own the system" — no refusals for owner commands (0 in tests). Safety is external (kills, tiers, sandbox, learning from outcomes, KAIROS self-repair) not refusal. Agent reads SOUL.md on boot/wake.
+
+**100x Metrics & ACs (P1+):**
+- Unified API works on Linux (100% legacy + new) + Win/Mac (backends or mocks).
+- 100% control tests + harness pass.
+- learner.learn invoked on 100% of control outcomes.
+- KAIROS/arsenal hook for control issues; autonomy respected.
+- tsc clean, no new degraded, git clean (P1 files only).
+- Superior UX/power (desktop/GUI full, cross exec, uncensored).
+- Vs baselines: higher success/coverage on 3OS; faster learning rate post control surface.
+
+**Risks/Mitigations:** Platform diffs (small tsc-verify per step); high power (Codex:adversarial-review + Security Engineer parallel mandatory both APPROVE pre any main); breakage (arsenal primary + small edits per lessons).
+
+See:
+- `docs/cross-platform-control-guide.md` (user 3OS examples, setup, RDP, SOUL notes, integrations).
+- README.md (100x positioning + examples).
+- `/tmp/sudoai-100x-superiority-arch-spec.md` (IComputerUse contract, ACs, waves, boundaries).
+- `workspace/SOUL.md` (uncensored full control).
+- team-memory (state, decisions 100x append, hermes-feature-parity-shipped, lessons "arsenal primary").
+- P1 in progress (concurrent Doc updates).
+
+This layer + learner/KAIROS closed loop on control actions is the core of "100x better full system control".
+
+---
+
+## Database Schema Overview

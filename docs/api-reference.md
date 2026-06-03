@@ -421,11 +421,34 @@ Use `GET /v1/admin/public-key` to retrieve the key needed to verify the `signatu
 
 All kill-switches use exact-`"1"`-match semantics: the feature is disabled only when the variable is set to the string `"1"`. Any other value, including unset, leaves the feature enabled.
 
+**100x / Control + Hermes parity (P1+ waves) — see also `docs/cross-platform-control-guide.md`, `docs/configuration.md`, `README.md` 100x section, and `workspace/SOUL.md` for full uncensored control semantics.**
+
 | Variable | Feature disabled |
 |---|---|
+| `SUDO_COMPUTER_USE_DISABLE=1` | IComputerUse unified cross-platform control (exec/browser/file/gui/desktop) + legacy computer.use (P1 100x wave; full power Linux/Win/Mac) |
+| `SUDO_CROSS_PLATFORM_DISABLE=1` | Win/Mac backends; force Linux-only control paths |
+| `SUDO_TOOL_LEARNING_DISABLE=1` | ToolOutcomeLearner (6 modules); disables 100x learning on *all* tool outcomes incl. control actions |
+| `SUDO_SANDBOX_DISABLE=1` | bwrap/seccomp/LD_PRELOAD sandbox for exec/control (use only on trusted owner hosts) |
+| `SUDO_MCP_DISABLE=1` | MCP server integration (SSE/WS/OAuth) |
+| `SUDO_MCP_OAUTH_DISABLE=1` | MCP OAuth PKCE |
+| `SUDO_MCP_REMOTE_DISABLE=1` | MCP remote tool access |
+| `SUDO_SKILLS_HUB_DISABLE=1` | Skills Hub (search/install/update) |
+| `SUDO_SKILLS_INSTALL_DISABLE=1` | Skills install from registry |
+| `SUDO_SKILLS_SANDBOX_DISABLE=1` | Skills sandboxing |
+| `SUDO_PROFILES_DISABLE=1` | Multi-profile isolation |
+| `SUDO_KANBAN_DISABLE=1` | Kanban + Swarm orchestration |
+| `SUDO_CREDENTIAL_POOL_DISABLE=1` | Credential pool (4 strategies) |
+| `SUDO_MULTI_DELIVERY_DISABLE=1` | Multi-delivery cron (6 targets) |
+| `SUDO_DASHBOARD_DISABLE=1` | Web dashboard (stats/health/alignment/metrics) |
+| `SUDO_BRAIN_RACE_DISABLE=1` | Brain parallel model race |
+| `SUDO_BRAIN_CONSENSUS_DISABLE=1` | 3-model Jaccard consensus (intel advantage) |
+| `SUDO_AUTO_APPROVE=1` | (enabler) Full auto in autonomy tiers (aligns SOUL "zero manual approval"; opposite of gating) |
 | `SUDO_TAINT_DISABLE=1` | Taint tracking wiring (Wave 10E) |
 | `SUDO_SIGNING_DISABLE=1` | Artifact signing on `/approve` endpoints (Wave 10E) |
 | `SUDO_SKILL_INDEX_DISABLE=1` | Skill-to-tool reverse index (Wave 10C) |
+| `SUDO_FED_*_DISABLE=1` | Federation features (see federation-error-protocol.md) |
+
+**Note on 100x full control:** Per SOUL.md, control actions (IComputerUse) have **zero refusals** for owner intent — "owner's will is absolute... fully uncensored... I own the system". Safety is via kill-switches (above), autonomy tiers (auto favored for owner), sandbox, SecurityGuard, KAIROS/arsenal self-repair, and learning from outcomes. HIGH power: Codex + Security parallel review mandatory before main (both APPROVE). See cross-platform guide for usage + 3OS.
 
 ### Key directory override: SUDO_SIGNER_KEY_DIR
 
@@ -476,6 +499,9 @@ curl -X POST http://localhost:18900/v1/chat/completions \
 ```
 
 The agent will call `browser.search`, retrieve the result, and return a text answer. The response contains only the final text — intermediate tool calls are not exposed in the API response.
+
+**100x control example (P1+; full cross-platform IComputerUse uncensored per SOUL):**
+Use a prompt that triggers computer control (e.g. "Take a desktop screenshot via GUI, list files in /tmp using exec, write a control test note, and navigate browser to example.com"). Agent will use IComputerUse (or legacy computer.use on Linux) — outcomes feed ToolOutcomeLearner automatically for 100x learning. All platforms supported post-P1 (no refusals). Disable via `SUDO_COMPUTER_USE_DISABLE=1`. Full details + 3OS examples: `docs/cross-platform-control-guide.md` and README 100x section. See also KAIROS/arsenal self-repair on control issues + autonomy approval.
 
 ### Multi-turn conversation
 

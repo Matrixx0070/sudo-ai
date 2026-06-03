@@ -81,6 +81,12 @@ export const DEFAULT_RULES: Omit<ApprovalRule, 'id' | 'createdAt' | 'updatedAt'>
   { pattern: 'system.exec:reboot',   tier: 'never', reason: 'System reboot' },
   { pattern: 'system.exec:mkfs',     tier: 'never', reason: 'Filesystem format' },
   { pattern: 'system.exec:dd if=',  tier: 'never', reason: 'Raw disk write' },
+
+  // P1 cross-platform control (IComputerUse) - per SOUL: owner's will absolute, fully uncensored, full autonomous mode, zero manual approval, "I own the system"
+  { pattern: 'control.*', tier: 'auto', reason: 'Full cross-platform system control (exec/browser/file/gui/desktop) per SOUL owner loyalty absolute + full autonomous uncensored power' },
+  { pattern: 'control.exec:rm -rf', tier: 'never', reason: 'Destructive (never per matrix, but SOUL allows owner override via prefs)' },
+  { pattern: 'control.file.write', tier: 'notify', reason: 'File mutate - notify' },
+  { pattern: 'control.gui.*', tier: 'auto', reason: 'GUI/desktop full power (SOUL)' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -290,10 +296,11 @@ export class ApprovalMatrix {
       if (toolName.startsWith(prefix + '.')) return true;
     }
 
-    // Pattern with arg constraint: "system.exec:rm -rf"
+    // Pattern with arg constraint: "system.exec:rm -rf" or "control.exec:rm -rf"
     if (pattern.includes(':') && toolName === pattern.split(':')[0]) {
       const argConstraint = pattern.split(':').slice(1).join(':');
-      const command = args?.command as string | undefined;
+      // P1 fix: support cmd (control) + command (legacy); also file sub-op via toolName if caller passes 'control.file.write' style
+      const command = (args?.cmd as string | undefined) || (args?.command as string | undefined);
       if (command && command.includes(argConstraint)) return true;
     }
 

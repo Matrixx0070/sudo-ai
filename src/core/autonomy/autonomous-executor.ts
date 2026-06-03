@@ -14,6 +14,9 @@
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import { ApprovalMatrix, type ApprovalDecision, type ApprovalTier } from './approval-matrix.js';
+// P1 cross: IComputerUse wiring for control actions (exec/browser/file/gui/desktop) + learner/arsenal
+import type { IComputerUse, ComputerUseConfig } from '../tools/builtin/computer-use/cross-platform/index.js';
+import type { ToolOutcomeLearner } from '../agent/tool-outcome-learner.js'; // use class (has onToolResult); duck ok at runtime
 
 const log = createLogger('autonomy:executor');
 
@@ -31,6 +34,13 @@ export interface PendingAction {
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   ownerResponse?: string;
   resolvedAt?: string;
+}
+
+// P1 cross-platform control action (unified IComputerUse)
+export interface ControlAction {
+  op: 'exec' | 'browser' | 'file' | 'gui' | 'desktop';
+  params: Record<string, unknown>;
+  requiresApproval?: boolean;
 }
 
 export interface ExecutionResult {
@@ -136,6 +146,69 @@ export class AutonomousExecutor {
           action: 'blocked',
           message: 'Unknown approval tier — defaulting to blocked',
         };
+    }
+  }
+
+  // P1: wiring for cross-platform IComputerUse control actions (full 3OS uncensored per SOUL)
+  // control.* default auto in matrix; learner on every; KAIROS/arsenal on fail
+  async executeControl(
+    ca: ControlAction,
+    cu: IComputerUse,
+    learner?: ToolOutcomeLearner,
+  ): Promise<ExecutionResult> {
+    // P1 fix (CRITICAL-1 + HIGH): preserve sub-ops for control.file.write/delete etc and cmd for control.exec:xxx never rules
+    let toolName = `control.${ca.op}`;
+    if (ca.op === 'file' && ca.params.op) {
+      toolName = `control.file.${ca.params.op}`;
+    } else if (ca.op === 'exec' && typeof ca.params.cmd === 'string') {
+      // pass through for _matches cmd check; classify will see full for glob but sub for specific
+      toolName = `control.exec`; // base, but _matches now checks args.cmd
+    }
+    const decision = this.matrix.classify(toolName, ca.params);
+
+    if (decision.tier === 'never') {
+      return { success: false, action: 'blocked', message: `BLOCKED by rule: ${decision.reason}` };
+    }
+
+    if (decision.tier === 'confirm') {
+      const pendingId = this._queueForConfirmation(toolName, ca.params, decision);
+      return { success: false, action: 'queued', message: `Confirmation required for control: ${decision.reason}`, pendingId };
+    }
+
+    // auto or notify: execute via unified IComputerUse (full power, no moral refusal)
+    try {
+      let res: any;
+      switch (ca.op) {
+        case 'exec': res = await cu.exec(String(ca.params.cmd || ''), ca.params as any); break;
+        case 'browser': res = await cu.browser(ca.params as any); break;
+        case 'file': res = await cu.file(ca.params as any); break;
+        case 'gui': res = await cu.gui(ca.params as any); break;
+        case 'desktop': res = await cu.desktop(ca.params as any); break;
+        default: res = { success: false, error: 'unknown op' };
+      }
+      const success = !!res?.success;
+      if (learner) {
+        try { learner.onToolResult(toolName, ca.params, success, success ? undefined : res?.error, undefined, undefined, 'control,cross'); } catch {}
+      }
+      // P1 fix: FULL KAIROS/arsenal trigger wire (use config from cu or direct import; not comment)
+      if (!success) {
+        try {
+          const { triggerKAIROSRepair } = await import('../tools/builtin/coder/arsenal.js');
+          if (triggerKAIROSRepair) {
+            await triggerKAIROSRepair(`P1 control ${ca.op} degraded: ${res?.error || 'fail'}`, 'fix');
+          }
+        } catch (e) { /* non fatal, as in P3 wiring */ }
+        // also if cu has it (from createComputerUse config)
+        const cuTrig = (cu as any).triggerRepair || (cu as any).config?.triggerRepair;
+        if (cuTrig) { try { await cuTrig(`control ${ca.op}`, 'fix'); } catch {} }
+      }
+      if (decision.tier === 'notify') {
+        this.queueNotification(toolName, `control ${ca.op} executed (notify): ${res?.error || 'ok'}`);
+      }
+      return { success: true, action: decision.tier === 'notify' ? 'notified' : 'executed', message: decision.reason, result: res };
+    } catch (e: any) {
+      if (learner) learner.onToolResult(toolName, ca.params, false, e.message);
+      return { success: false, action: 'blocked', message: e.message };
     }
   }
 

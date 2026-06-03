@@ -42,6 +42,8 @@ export interface RunInSandboxOptions {
   policy: SandboxPolicy;
   timeoutMs: number;
   signal?: AbortSignal;
+  // P1 cross-platform
+  platform?: 'linux' | 'win' | 'mac';
 }
 
 export interface SandboxRunResult {
@@ -112,6 +114,7 @@ export function buildBwrapArgs(
   policy: SandboxPolicy,
   _existsSync?: (p: string) => boolean,
   _realpathSync?: (p: string) => string,
+  _platform?: string, // P1 cross (ignored for bwrap linux-only)
 ): string[] {
   const checkExists = _existsSync ?? existsSync;
   // FIX #4: resolve symlinks before validating bind paths to prevent symlink bypass
@@ -221,7 +224,14 @@ export function buildBwrapArgs(
 export async function runInSandbox(
   opts: RunInSandboxOptions,
 ): Promise<SandboxRunResult> {
-  const { command, workspaceDir, policy, timeoutMs, signal } = opts;
+  const { command, workspaceDir, policy, timeoutMs, signal, platform } = opts;
+
+  const effectivePlatform = platform || policy.platform || 'linux';
+  if (effectivePlatform !== 'linux' || process.env['SUDO_SANDBOX_DISABLE'] === '1') {
+    // P1 hardened cross shim: always scrub via buildSandboxEnv; non-linux = host exec (full power per SOUL but logged); route control.file/gui via denylist in backends
+    log.warn({ platform: effectivePlatform }, 'cross-platform sandbox shim (non-linux or disabled) - native with FULL env/policy scrub; file/gui/desktop control have separate denylists');
+    return runUnsandboxed(command, workspaceDir, policy, timeoutMs, signal);
+  }
 
   if (process.env['SUDO_SANDBOX_DISABLE'] === '1') {
     log.warn(

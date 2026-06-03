@@ -25,6 +25,10 @@ export interface SandboxPolicy {
   extraWritableBinds?: string[];
   /** Additional env var names allowed beyond ENV_ALLOWLIST_BASE. */
   allowedEnvVars?: string[];
+
+  // P1 cross-platform expand (compat for Win/Mac shims + policy)
+  platform?: 'linux' | 'win' | 'mac' | 'auto';
+  enableCrossPlatform?: boolean;
 }
 
 // ---------------------------------------------------------------------------
