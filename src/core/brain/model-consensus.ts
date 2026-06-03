@@ -21,6 +21,15 @@ export interface ModelAnswer {
   confidence: number;
 }
 
+/** Extended answer for BrainResponse consensus — includes tool calls and usage. */
+export interface BrainModelResult {
+  model: string;
+  content: string;
+  toolCalls: unknown[];
+  latencyMs: number;
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number; estimatedCost: number };
+}
+
 export interface ConsensusResult {
   answers: ModelAnswer[];
   bestAnswer: ModelAnswer;
@@ -34,10 +43,9 @@ export interface ConsensusResult {
 // ---------------------------------------------------------------------------
 
 const MODELS = [
-  'sudoapi/gpt-5.4',
-  'sudoapi/claude-sonnet',
-  'sudoapi/grok',
-  'sudoapi/gemini',
+  'ollama/kimi-k2.6:cloud',
+  'ollama/glm-5.1:cloud',
+  'ollama/deepseek-v4-pro:cloud',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -80,7 +88,102 @@ function calculateAgreement(answers: ModelAnswer[]): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Query all 4 models in parallel.
+ * Query all models in parallel for BrainResponse results.
+ *
+ * Selection strategy:
+ *  - agreement > 0.7  → pick the fastest responder (consensus mode)
+ *  - agreement <= 0.7 → pick the most-detailed reply (best-model mode)
+ *
+ * @param models   Array of model IDs to query.
+ * @param caller   Async function that calls one model and returns BrainModelResult.
+ */
+export async function queryAllModelsConsensus(
+  models: string[],
+  caller: (model: string) => Promise<BrainModelResult>,
+): Promise<{ result: BrainModelResult; agreement: number; method: 'fastest' | 'most-detailed' }> {
+  if (models.length === 0) throw new Error('models array must not be empty');
+
+  const wallStart = Date.now();
+
+  const settled = await Promise.allSettled(
+    models.map(async (model): Promise<BrainModelResult> => {
+      const t0 = Date.now();
+      const result = await caller(model);
+      return { ...result, latencyMs: Date.now() - t0 };
+    }),
+  );
+
+  const results: BrainModelResult[] = settled
+    .filter((r): r is PromiseFulfilledResult<BrainModelResult> => r.status === 'fulfilled')
+    .map((r) => r.value);
+
+  const failed = settled.filter((r) => r.status === 'rejected').length;
+  if (failed > 0) {
+    log.warn({ failed, succeeded: results.length }, 'Some models failed');
+  }
+
+  if (results.length === 0) {
+    throw new Error('All models failed — no answers received');
+  }
+
+  // Calculate agreement based on content similarity
+  const agreement = calculateAgreementFromResults(results);
+
+  // Pick winner: fastest if agreement high, most-detailed if disagreement
+  const bestResult =
+    agreement > 0.7
+      ? results.reduce((a, b) => (a.latencyMs < b.latencyMs ? a : b))
+      : results.reduce((a, b) => {
+          const aLen = a.content.length + (a.toolCalls?.length ?? 0) * 100;
+          const bLen = b.content.length + (b.toolCalls?.length ?? 0) * 100;
+          return aLen > bLen ? a : b;
+        });
+
+  const method: 'fastest' | 'most-detailed' = agreement > 0.7 ? 'fastest' : 'most-detailed';
+
+  log.info(
+    {
+      models: results.length,
+      agreement: agreement.toFixed(3),
+      best: bestResult.model,
+      method,
+      totalMs: Date.now() - wallStart,
+    },
+    'Consensus reached',
+  );
+
+  return { result: bestResult, agreement, method };
+}
+
+function calculateAgreementFromResults(results: BrainModelResult[]): number {
+  if (results.length < 2) return 1;
+
+  const wordSets = results.map((r) =>
+    new Set(
+      r.content
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w) => w.length > 4),
+    ),
+  );
+
+  let totalSim = 0;
+  let pairs = 0;
+
+  for (let i = 0; i < wordSets.length; i++) {
+    for (let j = i + 1; j < wordSets.length; j++) {
+      const intersection = new Set([...wordSets[i]].filter((w) => wordSets[j].has(w)));
+      const union = new Set([...wordSets[i], ...wordSets[j]]);
+      totalSim += union.size > 0 ? intersection.size / union.size : 0;
+      pairs++;
+    }
+  }
+
+  return pairs > 0 ? totalSim / pairs : 0;
+}
+
+/**
+ * Query all models in parallel.
  *
  * Selection strategy:
  *  - agreement > 0.7  → pick the fastest responder  (consensus mode)

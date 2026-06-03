@@ -16,6 +16,7 @@ import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
+import { queryAllModelsConsensus } from './model-consensus.js';
 import type {
   BrainMessage,
   BrainRequest,
@@ -638,45 +639,58 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     let lastError: unknown;
 
     // -------------------------------------------------------------------------
-    // Phase 1: Race all available cloud models in parallel (fastest wins).
-    // Wait for ALL to settle, then pick the first successful one with content.
-    // This avoids returning empty responses from a "fast" model that failed
-    // silently (Ollama sometimes returns finishReason:stop with zero tokens).
+    // Phase 1: Consensus call across cloud models.
+    // Query all cloud models in parallel, then pick the best answer by:
+    //   - If models agree (Jaccard similarity > 0.7) → use fastest
+    //   - If they disagree → use most detailed (content + tool calls)
     //
-    // Kill-switch: SUDO_BRAIN_RACE_DISABLE=1 skips the race entirely and goes
-    // straight to sequential failover (Phase 2). Set when token cost matters
-    // more than p99 latency (e.g. background cognitive ticks, KAIROS, self-build).
-    // Per-request opt-in: BrainRequest.race === true forces racing even when
-    // the env flag is set (use for user-facing chat where latency matters).
+    // Kill-switch: SUDO_BRAIN_CONSENSUS_DISABLE=1 skips consensus and goes
+    // straight to sequential failover (Phase 2). Use when token cost matters
+    // more than answer quality (e.g. background cognitive ticks, KAIROS).
     // -------------------------------------------------------------------------
     const cloudProfiles = this.failover.getCloudProfiles();
-    const raceDisabled = process.env['SUDO_BRAIN_RACE_DISABLE'] === '1' && request.race !== true;
-    if (cloudProfiles.length > 0 && !raceDisabled) {
-      log.info({ cloudCount: cloudProfiles.length, models: cloudProfiles.map(p => p.id) }, 'Racing cloud models in parallel');
-      const cloudPromises = cloudProfiles.map(profile =>
-        this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens)
-          .then(result => ({ success: true as const, result, profile }))
-          .catch(err => ({ success: false as const, err, profile }))
-      );
+    const consensusDisabled = process.env['SUDO_BRAIN_CONSENSUS_DISABLE'] === '1';
+    if (cloudProfiles.length > 0 && !consensusDisabled) {
+      log.info({ cloudCount: cloudProfiles.length, models: cloudProfiles.map(p => p.id) }, 'Querying cloud models for consensus');
 
-      const cloudResults = await Promise.allSettled(cloudPromises);
-      for (const settled of cloudResults) {
-        if (settled.status === 'fulfilled' && settled.value.success) {
-          const result = settled.value.result;
-          // Reject empty responses — they mean the model failed silently.
-          if (result.content?.trim().length > 0 || result.toolCalls?.length > 0) {
-            log.info({ modelId: result.model }, 'Cloud model race winner');
-            return result;
-          }
-          log.warn({ modelId: result.model }, 'Cloud model returned empty content — treating as failure');
-          this.failover.recordError(settled.value.profile.id, 'format');
+      try {
+        const { result: consensusResult, agreement, method } = await queryAllModelsConsensus(
+          cloudProfiles.map(p => p.id),
+          async (modelId) => {
+            const profile = cloudProfiles.find(p => p.id === modelId)!;
+            const response = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+            return {
+              model: response.model,
+              content: response.content ?? '',
+              toolCalls: response.toolCalls ?? [],
+              latencyMs: 0,
+              usage: response.usage,
+            };
+          },
+        );
+
+        // Record success for the winning model
+        this.failover.recordSuccess(consensusResult.model);
+        log.info({ modelId: consensusResult.model, agreement, method }, 'Consensus winner selected');
+
+        return {
+          content: consensusResult.content,
+          toolCalls: consensusResult.toolCalls as ToolCallFromLLM[],
+          usage: consensusResult.usage,
+          model: consensusResult.model,
+          finishReason: consensusResult.toolCalls.length > 0 ? 'tool-calls' : 'stop',
+        };
+      } catch (consensusErr) {
+        log.warn({ err: consensusErr }, 'Consensus call failed — falling back to sequential failover');
+        // Record errors for all cloud models that participated
+        for (const profile of cloudProfiles) {
+          this.failover.recordError(profile.id, 'format');
         }
       }
-      log.warn('All cloud models failed or returned empty — falling back to local models');
     }
 
     // -------------------------------------------------------------------------
-    // Phase 2: Sequential fallback through local models (and any remaining).
+    // Phase 2: Sequential fallback through remaining models.
     // -------------------------------------------------------------------------
     for (let attempt = 0; attempt < MAX_FAILOVER_ATTEMPTS; attempt++) {
       const profile = this.failover.getNextProfile();
@@ -861,13 +875,26 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     }
     // --- end refusal detection ---
 
+    // --- Reasoning field extraction (Ollama cloud models) ---
+    // Ollama cloud models (kimi-k2.6:cloud, glm-5.1:cloud) return actual content
+    // in result.reasoning, NOT result.text. The Vercel AI SDK exposes this.
+    // If text is empty but reasoning exists, use reasoning as the content.
+    let extractedText = result.text ?? '';
+    if (!extractedText.trim() && result.reasoning) {
+      extractedText = typeof result.reasoning === 'string'
+        ? result.reasoning
+        : (result.reasoning as { text?: string })?.text ?? '';
+      log.debug({ modelId, reasoningLen: extractedText.length }, 'Extracted content from reasoning field');
+    }
+    // --- end reasoning extraction ---
+
     const usage = buildTokenUsage(modelId, result.usage);
     const toolCalls = this.extractToolCalls(result.toolCalls ?? []);
     const finishReason = (result.finishReason ?? 'stop') as BrainResponse['finishReason'];
 
     // Fallback: parse XML or JSON text tool calls if structured output is empty.
     let finalToolCalls = toolCalls;
-    let finalContent = result.text ?? '';
+    let finalContent = extractedText;
     let finalFinishReason = finishReason;
 
     if (

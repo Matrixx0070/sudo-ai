@@ -111,8 +111,9 @@ module.exports = {
         SUDO_FALLBACK_MODEL: 'ollama/qwen3.5:latest',
         OLLAMA_URL: 'https://ollama.com/v1',
 
-        // Enable parallel racing for latency (deepseek-v4-pro primary only)
-        SUDO_BRAIN_RACE_DISABLE: '0',
+        // Disable parallel racing — use consensus mode instead (saves tokens on cloud models)
+        // Consciousness ticks and background tasks use sequential failover, not race.
+        SUDO_BRAIN_RACE_DISABLE: '1',
 
         // Web chat token — set explicitly so relay scripts can authenticate
         WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
