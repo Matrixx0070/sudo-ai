@@ -22,7 +22,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { kanbanBoard } from './kanban-board.js';
 import { swarmOrchestrator } from './swarm-orchestrator.js';
-import type { KanbanStatus, KanbanWorkspace, SwarmWorkerSpec } from './kanban-types.js';
+import type { KanbanStatus, KanbanWorkspace, KanbanPriority, SwarmWorkerSpec } from './kanban-types.js';
 
 const log = createLogger('gateway:kanban-routes');
 
@@ -267,7 +267,7 @@ async function handleUpdateTask(
       title: b['title'] as string | undefined,
       body: b['body'] as string | undefined,
       status: b['status'] as KanbanStatus | undefined,
-      priority: b['priority'] as number | undefined,
+      priority: b['priority'] as KanbanPriority | undefined,
       assignee: b['assignee'] as string | undefined,
       skills: b['skills'] as string[] | undefined,
       parentId: b['parentId'] as string | undefined,

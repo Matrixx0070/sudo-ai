@@ -6,8 +6,8 @@
  *   AT8A-1  SUDO_VETO_AUTO_TUNE=0 (default) → static 0.5 tie-break used regardless of Brier
  *   AT8A-2  SUDO_VETO_AUTO_TUNE=0 → MEDIUM tie still resolves to APPROVE (pre-8A tie-break)
  *   AT8A-3  SUDO_VETO_AUTO_TUNE=1 → effectiveThreshold used in vote comparison
- *   AT8A-4  SUDO_VETO_AUTO_TUNE=1 → lowered threshold causes VETO on borderline case
- *   AT8A-5  SUDO_VETO_AUTO_TUNE=1 → same borderline at static 0.5 would APPROVE
+ *   AT8A-4  SUDO_VETO_AUTO_TUNE=1 + raised effective (0.80) → 2/3 veto (~0.667 < 0.80) → APPROVE (proves tuner changes outcome vs static)
+ *   AT8A-5  SUDO_VETO_AUTO_TUNE=0 → same 2/3 veto (2>1) → VETO (pre-8A MEDIUM majority preserved)
  *   AT8A-6  Tuner throws → falls back to BASE_VETO_THRESHOLD (fail-open)
  *   AT8A-7  Tuner returns NaN → rejected, falls back to BASE_VETO_THRESHOLD
  *   AT8A-8  Tuner returns value below 0.3 → rejected (belt-and-suspenders)
@@ -173,36 +173,36 @@ describe('veto-gate Wave 8A: SUDO_VETO_AUTO_TUNE kill-switch', () => {
     expect(result.decision).toBe('VETO');
   });
 
-  // AT8A-4: Borderline case — auto-tune ON with RAISED threshold (0.70) → 3/4 veto → APPROVE
-  // queryAllModels calls 4 models. 3/4 veto = 75% with effectiveThreshold=0.80 → APPROVE.
-  // With static 0.50 this would be VETO (75% > 50%). This confirms auto-tune changes outcome.
-  it('AT8A-4: auto-tune ON + raised threshold (0.80) → 3/4 veto (75%) → APPROVE', async () => {
+  // AT8A-4: Borderline case — auto-tune ON with RAISED threshold (0.80) → 2/3 veto → APPROVE
+  // queryAllModels calls 3 models (see model-consensus.ts). 2/3 veto ≈0.667 with effectiveThreshold=0.80 → APPROVE.
+  // With static 0.50 this would be VETO (2>1). This confirms auto-tune changes outcome.
+  it('AT8A-4: auto-tune ON + raised threshold (0.80) → 2/3 veto (~0.667) → APPROVE', async () => {
     vi.stubEnv('SUDO_VETO_AUTO_TUNE', '1');
     // Tuner raises threshold to 0.80 (e.g., very well-calibrated model = stricter veto bar)
     setAutoThresholdTuner(makeTuner({ effective: 0.80 }));
 
-    // sendNotification is MEDIUM. 3 VETO + 1 APPROVE = 3/4 = 75% deny
+    // sendNotification is MEDIUM. 2 VETO + 1 APPROVE = 2/3 ≈0.667 deny
     const input: VetoInput = { toolName: 'sendNotification', args: {} };
     const result = await runVetoGate(
       input,
-      multiAnswerFetcher(['VETO deny', 'VETO deny', 'VETO deny', 'APPROVE ok']),
+      multiAnswerFetcher(['VETO deny', 'VETO deny', 'APPROVE ok']),
     );
-    // Ratio = 3/4 = 0.75. effectiveThreshold=0.80. 0.75 < 0.80 → APPROVE
+    // Ratio = 2/3 ≈0.667. effectiveThreshold=0.80. 0.667 < 0.80 → APPROVE
     expect(result.decision).toBe('APPROVE');
     expect(result.risk).toBe('MEDIUM');
   });
 
-  // AT8A-5: Same 3/4 veto scenario, auto-tune OFF → static 0.5 → simple majority VETO
-  it('AT8A-5: auto-tune OFF → 3/4 veto (75%) exceeds static 0.5 simple majority → VETO', async () => {
+  // AT8A-5: Same 2/3 veto scenario, auto-tune OFF → static 0.5 → simple majority VETO
+  it('AT8A-5: auto-tune OFF → 2/3 veto (2>1) exceeds static 0.5 simple majority → VETO', async () => {
     vi.stubEnv('SUDO_VETO_AUTO_TUNE', '0');
     setAutoThresholdTuner(makeTuner({ effective: 0.80 })); // tuner configured but disabled
 
     const input: VetoInput = { toolName: 'sendNotification', args: {} };
     const result = await runVetoGate(
       input,
-      multiAnswerFetcher(['VETO deny', 'VETO deny', 'VETO deny', 'APPROVE ok']),
+      multiAnswerFetcher(['VETO deny', 'VETO deny', 'APPROVE ok']),
     );
-    // Pre-8A MEDIUM: vetoVotes(3) > approveVotes(1) → VETO
+    // Pre-8A MEDIUM: vetoVotes(2) > approveVotes(1) → VETO
     expect(result.decision).toBe('VETO');
   });
 
