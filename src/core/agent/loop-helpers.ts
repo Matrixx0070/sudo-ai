@@ -296,9 +296,11 @@ export interface SecurityGuardLike {
 /**
  * Minimal interface that loop-helpers needs from SandboxManager.
  * Avoids importing the concrete class from Builder A's files directly.
- * The real SandboxManager must implement at minimum these two methods.
+ * The real SandboxManager must implement at minimum these methods.
  */
 export interface SandboxManagerLike {
+  /** Provision workspace directory for sessionId, returns absolute path. */
+  provision(sessionId: string): Promise<string>;
   /** Return the provisioned workspace directory for the given sessionId. */
   getWorkspaceDir(sessionId: string): string;
   /** Return the merged sandbox policy for the given sessionId. */
@@ -532,7 +534,16 @@ export async function executeToolCalls(
   sandboxManager?: SandboxManagerLike,
 ): Promise<void> {
   const policyFromSandbox = sandboxManager?.getPolicyFor(state.sessionId);
-  const workspaceDir = sandboxManager?.getWorkspaceDir(state.sessionId) ?? process.cwd();
+  // Provision workspace if sandboxManager is available — ensures directory exists before bwrap tries to mount it.
+  let workspaceDir = sandboxManager?.getWorkspaceDir(state.sessionId) ?? process.cwd();
+  if (sandboxManager) {
+    try {
+      workspaceDir = await sandboxManager.provision(state.sessionId);
+    } catch (err) {
+      log.warn({ sessionId: state.sessionId, err: String(err) }, 'Workspace provisioning failed — falling back to cwd');
+      workspaceDir = process.cwd();
+    }
+  }
   const ctx: ToolContext = {
     sessionId: state.sessionId,
     workingDir: workspaceDir,

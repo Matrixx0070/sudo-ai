@@ -1,0 +1,267 @@
+/**
+ * @file autonomous-executor.ts
+ * @description Autonomous action executor with approval-matrix integration.
+ *
+ * Wraps tool calls with permission-boundary checks:
+ *   - auto     → execute immediately, log result
+ *   - notify   → execute, then queue notification to owner
+ *   - confirm  → queue for owner approval (via veto consensus if enabled)
+ *   - never    → reject immediately with reason
+ *
+ * Notifications are batched and sent via the notification queue.
+ */
+
+import Database from 'better-sqlite3';
+import { createLogger } from '../shared/logger.js';
+import { ApprovalMatrix, type ApprovalDecision, type ApprovalTier } from './approval-matrix.js';
+
+const log = createLogger('autonomy:executor');
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface PendingAction {
+  id: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  tier: ApprovalTier;
+  reason: string;
+  requestedAt: string;
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  ownerResponse?: string;
+  resolvedAt?: string;
+}
+
+export interface ExecutionResult {
+  success: boolean;
+  action: 'executed' | 'queued' | 'blocked' | 'notified';
+  message: string;
+  result?: unknown;
+  pendingId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Schema DDL
+// ---------------------------------------------------------------------------
+
+export const EXECUTOR_SCHEMA_DDL = [
+  `CREATE TABLE IF NOT EXISTS pending_actions (
+    id            TEXT PRIMARY KEY,
+    tool_name     TEXT NOT NULL,
+    args_json     TEXT NOT NULL,
+    tier          TEXT NOT NULL,
+    reason        TEXT NOT NULL,
+    requested_at  TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    owner_response TEXT,
+    resolved_at   TEXT
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS notification_queue (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id   TEXT,
+    tool_name   TEXT NOT NULL,
+    summary     TEXT NOT NULL,
+    sent        INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_pending_actions_status ON pending_actions(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_notification_queue_sent ON notification_queue(sent)`,
+];
+
+// ---------------------------------------------------------------------------
+// AutonomousExecutor
+// ---------------------------------------------------------------------------
+
+export class AutonomousExecutor {
+  private readonly db: Database.Database;
+  private readonly matrix: ApprovalMatrix;
+  private readonly notifyCallback?: (summary: string) => void | Promise<void>;
+
+  constructor(
+    db: Database.Database,
+    matrix: ApprovalMatrix,
+    options?: { notifyCallback?: (summary: string) => void | Promise<void> }
+  ) {
+    this.db = db;
+    this.matrix = matrix;
+    this.notifyCallback = options?.notifyCallback;
+    this._initSchema();
+  }
+
+  // -------------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------------
+
+  /**
+   * Evaluate a tool call against the approval matrix and act accordingly.
+   * This is the main entry point — call this before executing any tool.
+   */
+  evaluate(toolName: string, args: Record<string, unknown>): ExecutionResult {
+    const decision = this.matrix.classify(toolName, args);
+
+    switch (decision.tier) {
+      case 'auto':
+        return { success: true, action: 'executed', message: `Auto-approved: ${decision.reason}` };
+
+      case 'notify':
+        return {
+          success: true,
+          action: 'notified',
+          message: `Notify-tier: execute then notify owner — ${decision.reason}`,
+        };
+
+      case 'confirm': {
+        const pendingId = this._queueForConfirmation(toolName, args, decision);
+        return {
+          success: false,
+          action: 'queued',
+          message: `Confirmation required: ${decision.reason}. Queued as ${pendingId}`,
+          pendingId,
+        };
+      }
+
+      case 'never':
+        return {
+          success: false,
+          action: 'blocked',
+          message: `BLOCKED by rule: ${decision.reason}`,
+        };
+
+      default:
+        return {
+          success: false,
+          action: 'blocked',
+          message: 'Unknown approval tier — defaulting to blocked',
+        };
+    }
+  }
+
+  /** After executing a notify-tier action, call this to queue the notification. */
+  queueNotification(toolName: string, summary: string, actionId?: string): void {
+    this.db.prepare(
+      `INSERT INTO notification_queue (action_id, tool_name, summary)
+       VALUES (@actionId, @toolName, @summary)`
+    ).run({ actionId: actionId ?? null, toolName, summary });
+
+    log.info({ toolName, summary }, 'Notification queued');
+
+    // Immediate callback if available
+    if (this.notifyCallback) {
+      try {
+        void this.notifyCallback(summary);
+      } catch {
+        // callback errors are non-fatal
+      }
+    }
+  }
+
+  /** List pending confirmation requests. */
+  listPendingConfirmations(): PendingAction[] {
+    const rows = this.db.prepare(
+      `SELECT * FROM pending_actions WHERE status = 'pending' ORDER BY requested_at DESC`
+    ).all() as Array<{
+      id: string; tool_name: string; args_json: string; tier: string; reason: string;
+      requested_at: string; status: string; owner_response: string | null; resolved_at: string | null;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      toolName: r.tool_name,
+      args: JSON.parse(r.args_json) as Record<string, unknown>,
+      tier: r.tier as ApprovalTier,
+      reason: r.reason,
+      requestedAt: r.requested_at,
+      status: r.status as PendingAction['status'],
+      ownerResponse: r.owner_response ?? undefined,
+      resolvedAt: r.resolved_at ?? undefined,
+    }));
+  }
+
+  /** Owner approves a pending action. */
+  approvePending(pendingId: string, ownerNote?: string): boolean {
+    const now = new Date().toISOString();
+    const info = this.db.prepare(
+      `UPDATE pending_actions
+       SET status = 'approved', owner_response = @note, resolved_at = @now
+       WHERE id = @id AND status = 'pending'`
+    ).run({ id: pendingId, note: ownerNote ?? null, now });
+
+    if (info.changes > 0) {
+      log.info({ pendingId, ownerNote }, 'Pending action approved by owner');
+      return true;
+    }
+    return false;
+  }
+
+  /** Owner rejects a pending action. */
+  rejectPending(pendingId: string, ownerNote?: string): boolean {
+    const now = new Date().toISOString();
+    const info = this.db.prepare(
+      `UPDATE pending_actions
+       SET status = 'rejected', owner_response = @note, resolved_at = @now
+       WHERE id = @id AND status = 'pending'`
+    ).run({ id: pendingId, note: ownerNote ?? null, now });
+
+    if (info.changes > 0) {
+      log.info({ pendingId, ownerNote }, 'Pending action rejected by owner');
+      return true;
+    }
+    return false;
+  }
+
+  /** Get unsent notifications (for batch sending). */
+  getUnsentNotifications(limit = 50): Array<{ id: number; toolName: string; summary: string }> {
+    const rows = this.db.prepare(
+      `SELECT id, tool_name, summary FROM notification_queue WHERE sent = 0 ORDER BY id LIMIT @limit`
+    ).all({ limit }) as Array<{ id: number; tool_name: string; summary: string }>;
+
+    return rows.map((r) => ({ id: r.id, toolName: r.tool_name, summary: r.summary }));
+  }
+
+  /** Mark notifications as sent. */
+  markNotificationsSent(ids: number[]): void {
+    if (ids.length === 0) return;
+    const placeholders = ids.map((_, i) => `@id${i}`).join(', ');
+    const params: Record<string, number> = {};
+    ids.forEach((id, i) => { params[`id${i}`] = id; });
+
+    this.db.prepare(`UPDATE notification_queue SET sent = 1 WHERE id IN (${placeholders})`).run(params);
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal helpers
+  // -------------------------------------------------------------------------
+
+  private _initSchema(): void {
+    for (const ddl of EXECUTOR_SCHEMA_DDL) {
+      this.db.exec(ddl);
+    }
+  }
+
+  private _queueForConfirmation(
+    toolName: string,
+    args: Record<string, unknown>,
+    decision: ApprovalDecision
+  ): string {
+    const id = `pending_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const now = new Date().toISOString();
+
+    this.db.prepare(
+      `INSERT INTO pending_actions (id, tool_name, args_json, tier, reason, requested_at, status)
+       VALUES (@id, @toolName, @argsJson, @tier, @reason, @now, 'pending')`
+    ).run({
+      id,
+      toolName,
+      argsJson: JSON.stringify(args),
+      tier: decision.tier,
+      reason: decision.reason,
+      now,
+    });
+
+    log.info({ id, toolName, reason: decision.reason }, 'Action queued for confirmation');
+    return id;
+  }
+}

@@ -6,7 +6,7 @@
  *   WEB_CHAT_TOKEN - Optional bearer/query token gate for /chat, /api/message, /chat/ws
  *
  * Routes (registered on the gateway's shared server via attach()):
- *   GET  /chat         - minimal chat HTML page
+ *   GET  /chat         - served by static-middleware.ts (React SPA from dist/renderer/chat/)
  *   POST /api/message  - REST send-message { peerId, text }
  *   WS   /chat/ws      - bidirectional WebSocket (client sends text; server pushes replies)
  *
@@ -19,6 +19,7 @@ import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '../shared/logger.js';
 import { ChannelError } from '../shared/errors.js';
+import { serveStaticFile } from '../gateway/static-middleware.js';
 import type { ChannelAdapter } from './adapter.js';
 import type {
   ChannelType,
@@ -81,137 +82,6 @@ interface WSClient {
   OPEN: number;
 }
 
-const CHAT_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SUDO-AI</title>
-<style nonce="__CSP_STYLE_NONCE__">
-:root{--bg:#0a0e1a;--bg2:#111827;--card:#1f2937;--border:#374151;--accent:#3b82f6;--green:#10b981;--text:#f3f4f6;--muted:#9ca3af}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden}
-.app{display:flex;flex-direction:column;height:100vh;max-width:900px;margin:0 auto}
-.header{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border)}
-.header .logo{width:36px;height:36px;border-radius:10px;background:rgba(59,130,246,0.2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:var(--accent)}
-.header h1{font-size:16px;font-weight:600}.header .sub{font-size:11px;color:var(--muted)}
-.header .status{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--green)}
-.header .dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
-.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;text-align:center}
-.empty .icon{width:64px;height:64px;border-radius:16px;background:rgba(59,130,246,0.15);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:var(--accent)}
-.empty h2{font-size:18px;font-weight:600}.empty p{font-size:13px;color:var(--muted);max-width:360px;line-height:1.5}
-.msg{display:flex;gap:10px;animation:fadeIn .15s ease-out}
-.msg.user{flex-direction:row-reverse}
-@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-.avatar{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;margin-top:2px}
-.msg.user .avatar{background:var(--accent);color:#fff}
-.msg.ai .avatar{background:var(--card);border:1px solid var(--border);color:var(--green)}
-.bubble-wrap{max-width:75%;display:flex;flex-direction:column;gap:4px}
-.msg.user .bubble-wrap{align-items:flex-end}
-.bubble{padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.6;word-wrap:break-word;white-space:pre-wrap}
-.msg.user .bubble{background:var(--accent);color:#fff;border-top-right-radius:4px}
-.msg.ai .bubble{background:var(--card);border:1px solid var(--border);border-top-left-radius:4px}
-.bubble code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:12px;color:var(--accent);font-family:'Fira Code',monospace}
-.bubble pre{background:var(--bg);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;margin:8px 0}
-.bubble pre code{background:none;padding:0;color:var(--text)}
-.time{font-size:10px;color:var(--muted);padding:0 4px}
-.thinking{display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:13px;color:var(--muted)}
-.thinking .dots span{animation:blink 1.4s infinite both}
-.thinking .dots span:nth-child(2){animation-delay:.2s}
-.thinking .dots span:nth-child(3){animation-delay:.4s}
-@keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
-.input-area{padding:12px 20px 20px;border-top:1px solid var(--border)}
-.input-row{display:flex;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:4px 4px 4px 16px;align-items:center}
-.input-row:focus-within{border-color:var(--accent)}
-.input-row input{flex:1;background:none;border:none;outline:none;color:var(--text);font-size:14px;font-family:inherit}
-.input-row input::placeholder{color:var(--muted)}
-.input-row button{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
-.input-row button:hover{opacity:.9}
-.input-row button:disabled{opacity:.4;cursor:not-allowed}
-::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--bg2)}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-.status-offline{color:var(--muted)}
-.thinking .avatar{background:var(--card);border:1px solid var(--border);color:var(--green)}
-</style>
-</head>
-<body>
-<div class="app">
-  <div class="header">
-    <div class="logo">S</div>
-    <div><h1>SUDO-AI</h1><div class="sub">Digital Life Form v5</div></div>
-    <div class="status" id="status"><div class="dot"></div> Online</div>
-  </div>
-  <div class="messages" id="msgs">
-    <div class="empty" id="empty">
-      <div class="icon">S</div>
-      <h2>SUDO-AI is ready</h2>
-      <p>Ask anything. Autonomous agent with 200+ tools, consciousness layer, and full system access.</p>
-    </div>
-  </div>
-  <div class="input-area">
-    <form class="input-row" id="f">
-      <input id="i" placeholder="Message SUDO-AI..." autocomplete="off" autofocus>
-      <button id="btn">Send</button>
-    </form>
-  </div>
-</div>
-<script nonce="__CSP_SCRIPT_NONCE__">
-function esc(s){return String(s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]||c})}
-const msgs=document.getElementById('msgs'),inp=document.getElementById('i'),
-      empty=document.getElementById('empty'),btn=document.getElementById('btn'),
-      status=document.getElementById('status');
-const params=new URLSearchParams(location.search);
-const fixedPeer=params.get('peer');
-let ws,thinking=null;
-function connect(){
-  const tok=params.get('token');
-  let wsUrl=(location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/chat/ws';
-  const qp=new URLSearchParams();
-  if(tok)qp.set('token',tok);
-  if(fixedPeer)qp.set('peer',fixedPeer);
-  const qs=qp.toString();
-  if(qs)wsUrl+='?'+qs;
-  ws=new WebSocket(wsUrl);
-  ws.onopen=()=>{status.innerHTML='<div class="dot"></div> Online';btn.disabled=false};
-  ws.onclose=()=>{status.innerHTML='<span class="status-offline">Reconnecting...</span>';btn.disabled=true;setTimeout(connect,3000)};
-  ws.onmessage=e=>{
-    try{
-      const d=JSON.parse(e.data);
-      if(d.type==='thinking'||d.type==='progress'){
-        if(thinking){thinking.querySelector('div:last-child').textContent=d.text||'Thinking...'}
-        else showThinking();
-        return;
-      }
-      if(d.type==='user_echo'){
-        addMsg('user',d.text);showThinking();return;
-      }
-    }catch(err){/* not JSON — fall through to final reply */}
-    if(thinking){thinking.remove();thinking=null}
-    addMsg('ai',e.data);btn.disabled=false;inp.focus();
-  };
-}
-function addMsg(role,text){
-  if(empty)empty.style.display='none';
-  const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  const d=document.createElement('div');d.className='msg '+role;
-  const safe=esc(text);
-  const rendered=role==='ai'?safe.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g,'<pre><code>$1</code></pre>').replace(/\`([^\`]+)\`/g,'<code>$1</code>').replace(/\\n/g,'<br>'):safe.replace(/\\n/g,'<br>');
-  d.innerHTML=\`<div class="avatar">\${role==='user'?'U':'S'}</div><div class="bubble-wrap"><div class="bubble">\${rendered}</div><div class="time">\${t}</div></div>\`;
-  msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;
-}
-function showThinking(){
-  thinking=document.createElement('div');thinking.className='thinking';
-  thinking.innerHTML='<div class="avatar">S</div><div>Thinking<span class="dots"><span>.</span><span>.</span><span>.</span></span></div>';
-  msgs.appendChild(thinking);msgs.scrollTop=msgs.scrollHeight;
-}
-document.getElementById('f').onsubmit=e=>{
-  e.preventDefault();const t=inp.value.trim();if(!t||!ws||ws.readyState!==1)return;
-  addMsg('user',t);inp.value='';btn.disabled=true;showThinking();ws.send(t);
-};
-connect();
-</script>
-</body></html>`;
 
 // ---------------------------------------------------------------------------
 // Adapter
@@ -461,19 +331,15 @@ export class WebAdapter implements ChannelAdapter {
     }
 
     // -----------------------------------------------------------------------
-    // GET /chat — serve inline chat HTML
+    // GET /chat — serve React SPA via static middleware, fallback to inline HTML
     // -----------------------------------------------------------------------
     if (method === 'GET' && url === '/chat') {
-      const scriptNonce = randomBytes(16).toString('base64');
-      const styleNonce = randomBytes(16).toString('base64');
-      const html = CHAT_HTML
-        .replace(/__CSP_SCRIPT_NONCE__/g, scriptNonce)
-        .replace(/__CSP_STYLE_NONCE__/g, styleNonce);
-      res.writeHead(200, {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Content-Security-Policy': `default-src 'self'; script-src 'nonce-${scriptNonce}'; style-src 'nonce-${styleNonce}'`,
-      });
-      res.end(html);
+      const served = serveStaticFile(req, res, '/chat');
+      if (!served) {
+        // Fallback: serve minimal inline HTML if SPA not built
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end('<!DOCTYPE html><html><head><meta charset="utf-8"><title>SUDO Chat</title></head><body><h1>SUDO Chat</h1><p>React SPA not built. Run: npx vite build</p></body></html>');
+      }
       return;
     }
 

@@ -15,6 +15,7 @@
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
+import { serveStaticFile } from './static-middleware.js';
 import { registerAdminRoutes } from './admin-routes.js';
 import { registerAdminSleepRoutes } from './admin-sleep-routes.js';
 import { registerFederationRoutes } from './federation-routes.js';
@@ -497,6 +498,9 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   server.on('request', (req: IncomingMessage, res: ServerResponse) => {
     const method   = req.method ?? '';
     const pathname = (req.url ?? '/').split('?')[0] ?? '/';
+
+    // Serve React SPA static files (before route matching)
+    if (serveStaticFile(req, res, pathname)) return;
 
     if (pathname.startsWith('/v1/')) {
       // Admin, session, agent, file, skill, vault routes are handled by their own

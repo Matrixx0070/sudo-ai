@@ -15,18 +15,18 @@ export const APP_VERSION = '3.1.0' as const;
 // ---------------------------------------------------------------------------
 
 // Override via env SUDO_DEFAULT_MODEL / SUDO_FALLBACK_MODEL.
-// Ollama Cloud — 3 models race in parallel, local qwen3.5 fallback.
-export const DEFAULT_MODEL = (process.env['SUDO_DEFAULT_MODEL'] ?? 'ollama/kimi-k2.6:cloud') as string;
+// Single LLM brain: Ollama Cloud deepseek-v4-pro:cloud, qwen3.5:latest fallback.
+export const DEFAULT_MODEL = (process.env['SUDO_DEFAULT_MODEL'] ?? 'ollama/deepseek-v4-pro:cloud') as string;
 export const FALLBACK_MODEL = (process.env['SUDO_FALLBACK_MODEL'] ?? 'ollama/qwen3.5:latest') as string;
 export const EMBEDDING_MODEL = 'openai/text-embedding-3-small' as const;
 export const EMBEDDING_DIMS = 1536 as const;
 
-/** Ollama model routing — task type → best model for that task. */
+/** Single LLM routing — all tasks use deepseek-v4-pro:cloud. */
 export const SUDOAPI_MODELS = {
-  coding: 'ollama/kimi-k2.6:cloud',
-  analysis: 'ollama/kimi-k2.6:cloud',
-  fast: 'ollama/kimi-k2.6:cloud',
-  research: 'ollama/kimi-k2.6:cloud',
+  coding: 'ollama/deepseek-v4-pro:cloud',
+  analysis: 'ollama/deepseek-v4-pro:cloud',
+  fast: 'ollama/deepseek-v4-pro:cloud',
+  research: 'ollama/deepseek-v4-pro:cloud',
 } as const;
 
 // ---------------------------------------------------------------------------

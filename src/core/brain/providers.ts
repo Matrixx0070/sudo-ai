@@ -11,7 +11,6 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { LLMError } from '../shared/errors.js';
 import { createLogger } from '../shared/logger.js';
-import { getSudoAPIModel } from './sudoapi-provider.js';
 
 const log = createLogger('brain:providers');
 
@@ -20,6 +19,7 @@ const log = createLogger('brain:providers');
 // ---------------------------------------------------------------------------
 
 export type ProviderName =
+  | 'ollama'
   | 'xai'
   | 'openai'
   | 'anthropic'
@@ -27,9 +27,7 @@ export type ProviderName =
   | 'groq'
   | 'mistral'
   | 'deepseek'
-  | 'ollama'
-  | 'together'
-  | 'sudoapi';
+  | 'together';
 
 // ---------------------------------------------------------------------------
 // Lazy provider instance cache
@@ -53,9 +51,8 @@ const ENV_KEYS: Record<ProviderName, string> = {
   groq: 'GROQ_API_KEY',
   mistral: 'MISTRAL_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
-  ollama: 'OLLAMA_URL', // optional; defaults to localhost
+  ollama: 'OLLAMA_URL', // Ollama Cloud URL
   together: 'TOGETHER_API_KEY',
-  sudoapi: 'SUDOAPI_KEY', // SUDOAPI gateway — falls back to placeholder if unset
 };
 
 /**
@@ -147,15 +144,17 @@ async function buildProviderAsync(name: ProviderName): Promise<AnyProvider | nul
       }
 
       case 'ollama': {
-        // Ollama runs locally — no API key required.
-        // Ollama Cloud (hosted models) may require an API key passed via OLLAMA_API_KEY.
-        const baseURL = envValue ?? 'http://localhost:11434/v1';
+        // Ollama Cloud (primary) — deepseek-v4-pro:cloud via https://ollama.com/v1
+        // OLLAMA_URL env may override; OLLAMA_API_KEY for cloud auth.
+        const baseURL = envValue ?? 'https://ollama.com/v1';
         const ollamaApiKey = process.env['OLLAMA_API_KEY'] ?? 'ollama';
         instance = createOpenAI({
           apiKey: ollamaApiKey,
           baseURL,
           name: 'ollama',
+          compatibility: 'compatible',  // Force Chat Completions API format
         } as Parameters<typeof createOpenAI>[0]);
+        log.info({ url: baseURL }, 'Ollama provider registered (Cloud-first)');
         break;
       }
 
@@ -166,21 +165,6 @@ async function buildProviderAsync(name: ProviderName): Promise<AnyProvider | nul
           baseURL: 'https://api.together.xyz/v1',
           name: 'together',
         } as Parameters<typeof createOpenAI>[0]);
-        break;
-      }
-
-      case 'sudoapi': {
-        // SUDOAPI gateway — OpenAI-compatible endpoint at sudoapi.shop.
-        // The provider is handled by getSudoAPIModel(); we store a sentinel
-        // in the cache so getModel() knows to delegate to that helper.
-        const sudoapiUrl = process.env['SUDOAPI_URL'] ?? 'https://sudoapi.shop';
-        const sudoapiKey = process.env['SUDOAPI_KEY'] ?? 'sk-sudo-master';
-        instance = createOpenAI({
-          apiKey: sudoapiKey,
-          baseURL: `${sudoapiUrl}/v1`,
-          name: 'sudoapi',
-        } as Parameters<typeof createOpenAI>[0]);
-        log.info({ url: sudoapiUrl }, 'SUDOAPI provider registered');
         break;
       }
 
@@ -214,8 +198,8 @@ function buildProvider(name: ProviderName): AnyProvider | null {
 
 /** All known provider names in priority order. */
 const ALL_PROVIDERS: ProviderName[] = [
-  'sudoapi', 'xai', 'openai', 'anthropic', 'google',
-  'groq', 'mistral', 'deepseek', 'ollama', 'together',
+  'ollama', 'xai', 'openai', 'anthropic', 'google',
+  'groq', 'mistral', 'deepseek', 'together',
 ];
 
 /**
@@ -287,17 +271,21 @@ export function getModel(modelString: string): ReturnType<AnyProvider> {
     );
   }
 
-  // SUDOAPI uses its own model resolver to handle alias → gateway model ID mapping.
-  if (providerName === 'sudoapi') {
-    log.debug({ modelString, providerName, modelId }, 'Delegating to SUDOAPI model resolver');
-    return getSudoAPIModel(modelId) as ReturnType<AnyProvider>;
-  }
-
   const provider = getProvider(providerName);
 
   log.debug({ modelString, providerName, modelId }, 'Resolved model handle');
 
-  // All Vercel AI SDK providers expose a callable that returns a LanguageModel.
+  // Vercel AI SDK providers:
+  // - OpenAI-compatible providers (ollama, mistral, deepseek, together, groq) use provider.chat(modelId)
+  // - Native providers (xai, openai, anthropic, google) use provider(modelId) directly
+  const openAiCompatibleProviders: ProviderName[] = ['ollama', 'mistral', 'deepseek', 'together', 'groq'];
+
+  if (openAiCompatibleProviders.includes(providerName)) {
+    // OpenAI-compatible providers need .chat() to get the LanguageModel
+    return (provider as any).chat(modelId);
+  }
+
+  // Native providers can be called directly
   return (provider as (id: string) => ReturnType<AnyProvider>)(modelId);
 }
 

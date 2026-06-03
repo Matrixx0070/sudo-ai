@@ -72,36 +72,68 @@ export const readFileTool: ToolDefinition = {
       return { success: false, output: 'coder.read-file: "path" parameter is required.' };
     }
 
-    const filePath = resolve(ctx.workingDir, rawPath);
-    if (!filePath.startsWith(ctx.workingDir)) {
-      return { success: false, output: `Path traversal blocked: ${rawPath} resolves outside working directory` };
+    // Handle absolute vs relative paths:
+    // - Absolute paths (starting with /) are resolved as-is
+    // - Relative paths are resolved against ctx.workingDir (workspace session dir)
+    const filePath = rawPath.startsWith('/') ? rawPath : resolve(ctx.workingDir, rawPath);
+
+    // Path traversal guard: only block if trying to escape project root
+    const projectRoot = resolve(__dirname, '../../../../');
+    if (!filePath.startsWith(projectRoot)) {
+      return { success: false, output: `Path traversal blocked: ${rawPath} resolves outside project root` };
     }
+
     const offset = typeof params['offset'] === 'number' ? Math.max(1, params['offset']) : 1;
     const limit = typeof params['limit'] === 'number' ? Math.max(1, params['limit']) : undefined;
     const encoding = typeof params['encoding'] === 'string' ? params['encoding'] : 'utf-8';
 
     try {
-      const stats = await stat(filePath, { signal: ctx.signal } as Parameters<typeof stat>[1]);
+      let stats;
+      let actualFilePath = filePath;
 
-      if (!stats.isFile()) {
-        return { success: false, output: `coder.read-file: "${filePath}" is not a file.` };
+      // Try the requested path first
+      try {
+        stats = await stat(filePath, { signal: ctx.signal } as Parameters<typeof stat>[1]);
+      } catch (err: unknown) {
+        // If ENOENT and path is in workspace sessions dir, try fallback to project root
+        const isEnoent = err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT';
+        const isWorkspacePath = filePath.includes('/workspace/sessions/');
+
+        if (isEnoent && isWorkspacePath) {
+          // Fallback: try resolving against project root instead of workspace
+          const fallbackPath = rawPath.startsWith('/') ? rawPath : resolve(projectRoot, rawPath);
+          try {
+            stats = await stat(fallbackPath, { signal: ctx.signal } as Parameters<typeof stat>[1]);
+            actualFilePath = fallbackPath;
+            log.info({ fallbackPath, originalPath: filePath }, 'read-file: workspace path not found, using project root fallback');
+          } catch (fallbackErr) {
+            // Both paths failed - throw original error
+            throw err;
+          }
+        } else {
+          throw err;
+        }
       }
 
-      if (isBinaryExtension(filePath)) {
+      if (!stats.isFile()) {
+        return { success: false, output: `coder.read-file: "${actualFilePath}" is not a file.` };
+      }
+
+      if (isBinaryExtension(actualFilePath)) {
         const output =
-          `Binary file: ${filePath}\n` +
+          `Binary file: ${actualFilePath}\n` +
           `Size: ${stats.size} bytes\n` +
-          `Extension: ${extname(filePath)}\n` +
+          `Extension: ${extname(actualFilePath)}\n` +
           `Modified: ${stats.mtime.toISOString()}`;
         return {
           success: true,
           output,
-          data: { path: filePath, binary: true, size: stats.size },
-          artifacts: [{ path: filePath, action: 'read', size: Number(stats.size) }],
+          data: { path: actualFilePath, binary: true, size: stats.size },
+          artifacts: [{ path: actualFilePath, action: 'read', size: Number(stats.size) }],
         };
       }
 
-      const raw = await readFile(filePath, { encoding: encoding as BufferEncoding, signal: ctx.signal });
+      const raw = await readFile(actualFilePath, { encoding: encoding as BufferEncoding, signal: ctx.signal });
       const allLines = raw.split('\n');
       const totalLines = allLines.length;
 
@@ -111,12 +143,12 @@ export const readFileTool: ToolDefinition = {
 
       const numbered = addLineNumbers(slicedLines.join('\n'), offset);
       const truncated = endIdx < totalLines;
-      const header = `File: ${filePath} (${totalLines} lines total)`;
+      const header = `File: ${actualFilePath} (${totalLines} lines total)`;
       const footer = truncated
         ? `\n[Showing lines ${offset}–${offset + slicedLines.length - 1} of ${totalLines}. Use offset/limit to read more.]`
         : '';
 
-      log.info({ tool: 'coder.read-file', path: filePath, lines: slicedLines.length }, 'File read');
+      log.info({ tool: 'coder.read-file', path: actualFilePath, lines: slicedLines.length }, 'File read');
 
       return {
         success: true,

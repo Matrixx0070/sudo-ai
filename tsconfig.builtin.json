@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "outDir": "/root/sudo-ai-v4/dist/core/tools/builtin",
+    "rootDir": "/root/sudo-ai-v4/src/core/tools/builtin",
+    "declaration": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "ignoreDeprecations": "6.0"
+  },
+  "include": [
+    "/root/sudo-ai-v4/src/core/tools/builtin/**/*"
+  ]
+}

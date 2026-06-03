@@ -29,10 +29,14 @@
     "LICENSE"
   ],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build && esbuild src/cli/index.ts --bundle --platform=node --outdir=dist/cli --external:better-sqlite3 --external:sqlite-vec --alias:react-devtools-core=./scripts/react-devtools-core-stub.mjs --external:yoga-wasm-web --external:chromium-bidi --external:playwright-core --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
-    "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --outdir=dist/cli --external:better-sqlite3 --external:sqlite-vec --alias:react-devtools-core=./scripts/react-devtools-core-stub.mjs --external:yoga-wasm-web --external:chromium-bidi --external:playwright-core --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
-    "start": "tsx src/cli/index.ts start",
+    "dev": "concurrently \"vite\" \"tsx src/cli/index.ts start\"",
+    "dev:server": "tsx src/cli/index.ts start",
+    "build": "pnpm build:client && pnpm build:server",
+    "build:client": "vite build",
+    "build:server": "node esbuild.config.cjs",
+    "build:cli": "node esbuild.config.cjs",
+    "start": "node dist/server/cli.js start",
+    "preview": "pnpm build && pnpm start",
     "doctor": "tsx src/cli/index.ts doctor",
     "cli": "tsx src/cli.ts",
     "test": "vitest",

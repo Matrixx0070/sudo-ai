@@ -63,9 +63,6 @@ export type {
 export { routeModel, isAutoModel } from './model-router.js';
 export type { RoutingDecision, RouterCategory } from './model-router.js';
 
-// SUDOAPI provider utilities
-export { getSudoAPIModel, isSudoAPIReady, SUDOAPI_URL, SUDOAPI_MODEL_MAP } from './sudoapi-provider.js';
-
 // Upgrade 28: Template Engine
 export { renderTemplate } from './template-engine.js';
 export type { TemplateVars } from './template-engine.js';
