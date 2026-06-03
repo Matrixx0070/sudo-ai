@@ -65,8 +65,8 @@ export const CONFIG_RELOAD_DEBOUNCE_MS = 300 as const;
 // Agent
 // ---------------------------------------------------------------------------
 
-/** Hard cap on tool-call iterations per agent run. 500 allows 1-hour+ autonomous tasks. */
-export const MAX_AGENT_ITERATIONS = 500 as const;
+/** Hard cap on tool-call iterations per agent run. 25 allows fast autonomous tasks with early stop. */
+export const MAX_AGENT_ITERATIONS = 25 as const;
 
 // ---------------------------------------------------------------------------
 // Backoff / cooldown schedules

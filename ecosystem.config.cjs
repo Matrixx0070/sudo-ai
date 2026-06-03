@@ -117,6 +117,9 @@ module.exports = {
 
         // Web chat token — set explicitly so relay scripts can authenticate
         WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
+
+        // Autonomous mode: all tools auto-approved (kill-switch: set to '0' to re-enable approval gates)
+        SUDO_AUTO_APPROVE: '1',
       },
     },
 
@@ -190,6 +193,9 @@ module.exports = {
 
         // Web chat token
         WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
+
+        // Autonomous mode: all tools auto-approved (kill-switch: set to '0' to re-enable approval gates)
+        SUDO_AUTO_APPROVE: '1',
 
         // Kill-switch: enables tool.synthesize pipeline (bwrap sandbox + AST analysis).
         // MUST remain staging-only — never copy to apps[0] production env block.
