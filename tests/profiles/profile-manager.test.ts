@@ -95,12 +95,12 @@ describe('ProfileManager', () => {
 
     it('throws on invalid profile name (path traversal)', () => {
       const manager = new ProfileManager();
-      expect(() => manager.createProfile({ name: '../etc/passwd' })).toThrow('disallowed characters');
+      expect(() => manager.createProfile({ name: '../etc/passwd' })).toThrow('letters, numbers, hyphens, and underscores');
     });
 
     it('throws on empty profile name', () => {
       const manager = new ProfileManager();
-      expect(() => manager.createProfile({ name: '' })).toThrow('cannot be empty');
+      expect(() => manager.createProfile({ name: '' })).toThrow('Profile name is required');
     });
 
     it('throws when kill-switch is enabled', () => {
@@ -131,7 +131,7 @@ describe('ProfileManager', () => {
     it('returns null when kill-switch is enabled', () => {
       process.env['SUDO_PROFILES_DISABLE'] = '1';
       const manager = new ProfileManager();
-      manager.createProfile({ name: 'blocked-get' });
+      // getProfile returns null when disabled, doesn't throw
       expect(manager.getProfile('blocked-get')).toBeNull();
     });
   });
@@ -140,12 +140,20 @@ describe('ProfileManager', () => {
     it('lists all profiles sorted by lastActive', () => {
       const manager = new ProfileManager();
       manager.createProfile({ name: 'alpha' });
+      // Small delay to ensure different timestamps
+      const delay = (ms: number) => {
+        const start = Date.now();
+        while (Date.now() - start < ms) {} // Busy wait
+      };
+      delay(2);
       manager.createProfile({ name: 'beta' });
 
       const list = manager.listProfiles();
 
       expect(list.length).toBe(2);
-      expect(list.map(p => p.name)).toEqual(['beta', 'alpha']); // Sorted by updatedAt desc
+      // beta should be more recent (sorted by updatedAt desc)
+      expect(list[0].name).toBe('beta');
+      expect(list[1].name).toBe('alpha');
     });
 
     it('returns empty array when no profiles exist', () => {
@@ -156,7 +164,7 @@ describe('ProfileManager', () => {
     it('returns empty array when kill-switch is enabled', () => {
       process.env['SUDO_PROFILES_DISABLE'] = '1';
       const manager = new ProfileManager();
-      manager.createProfile({ name: 'hidden' });
+      // listProfiles returns empty array when disabled, doesn't throw
       expect(manager.listProfiles()).toEqual([]);
     });
   });
@@ -383,7 +391,7 @@ describe('registerProfileRoutes', () => {
     expect(data.data.profiles).toBeDefined();
   });
 
-  it('POST /v1/admin/profiles creates profile', () => {
+  it('POST /v1/admin/profiles creates profile', async () => {
     const server = { on: vi.fn() } as unknown as HttpServer;
     registerProfileRoutes(server);
 
@@ -397,6 +405,10 @@ describe('registerProfileRoutes', () => {
     listener!(req, res);
     req._emitData(Buffer.from(JSON.stringify({ name: 'api-profile', displayName: 'API Profile' })));
 
+    // Wait for async handler to complete
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // Route returns 201 for profile creation
     expect(res._getStatusCode()).toBe(201);
     const data = JSON.parse(res._getBody());
     expect(data.ok).toBe(true);

@@ -7,7 +7,6 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -20,17 +19,26 @@ import { isValidTransition, STATUS_TRANSITIONS } from '../../src/core/kanban/kan
 // Helpers
 // ---------------------------------------------------------------------------
 
+let testCounter = 0;
+
 function makeTmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-test-'));
+  testCounter++;
+  return fs.mkdtempSync(path.join(os.tmpdir(), `kanban-test-${testCounter}-`));
 }
 
 function makeBoard(tmpDir: string): KanbanBoard {
+  // Set DATA_DIR before creating the board so DB_PATH uses this directory
   const originalDataDir = process.env['DATA_DIR'];
   process.env['DATA_DIR'] = tmpDir;
   const board = new KanbanBoard();
+  // Force database initialization while DATA_DIR is still set
+  // This ensures the board uses the temp directory, not the original DATA_DIR
+  board.listTasks(); // Triggers ensureDb() which reads DATA_DIR
   // Restore after initialization
-  if (originalDataDir) {
+  if (originalDataDir !== undefined) {
     process.env['DATA_DIR'] = originalDataDir;
+  } else {
+    delete process.env['DATA_DIR'];
   }
   return board;
 }
@@ -175,6 +183,16 @@ describe('KanbanBoard', () => {
     });
 
     it('creates a task with all fields', () => {
+      // Create parent task first (foreign key constraint)
+      const parentTask = board.createTask({
+        title: 'Parent Task',
+        body: 'Parent body',
+        status: 'todo',
+        priority: 1,
+        skills: [],
+        workspace: 'project',
+      });
+
       const task = board.createTask({
         title: 'Full Task',
         body: 'Detailed description',
@@ -182,7 +200,7 @@ describe('KanbanBoard', () => {
         priority: 5,
         assignee: 'agent-123',
         skills: ['research', 'coding'],
-        parentId: 'parent-id',
+        parentId: parentTask.id,
         workspace: 'project',
         tenantId: 'tenant-abc',
       });
@@ -191,7 +209,7 @@ describe('KanbanBoard', () => {
       expect(task.priority).toBe(5);
       expect(task.assignee).toBe('agent-123');
       expect(task.skills).toEqual(['research', 'coding']);
-      expect(task.parentId).toBe('parent-id');
+      expect(task.parentId).toBe(parentTask.id);
       expect(task.workspace).toBe('project');
       expect(task.tenantId).toBe('tenant-abc');
     });
@@ -378,7 +396,16 @@ describe('KanbanBoard kill-switch', () => {
     tmpDir = makeTmpDir();
     originalValue = process.env['SUDO_KANBAN_DISABLE'];
     process.env['SUDO_KANBAN_DISABLE'] = '1';
-    board = makeBoard(tmpDir);
+    // Set DATA_DIR but don't call listTasks() since kill-switch will throw
+    const originalDataDir = process.env['DATA_DIR'];
+    process.env['DATA_DIR'] = tmpDir;
+    board = new KanbanBoard();
+    // Restore after initialization
+    if (originalDataDir !== undefined) {
+      process.env['DATA_DIR'] = originalDataDir;
+    } else {
+      delete process.env['DATA_DIR'];
+    }
   });
 
   afterEach(() => {
@@ -412,11 +439,12 @@ describe('KanbanBoard kill-switch', () => {
 
 describe('SwarmOrchestrator kill-switch', () => {
   let originalValue: string | undefined;
-  const orchestrator = new SwarmOrchestrator();
+  let orchestrator: SwarmOrchestrator;
 
   beforeEach(() => {
     originalValue = process.env['SUDO_KANBAN_DISABLE'];
     process.env['SUDO_KANBAN_DISABLE'] = '1';
+    orchestrator = new SwarmOrchestrator();
   });
 
   afterEach(() => {

@@ -12,7 +12,10 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createLogger } from '../shared/logger.js';
 import type { SkillTrustTier, ToolTranslatorEntry } from '../shared/wave10-types.js';
+
+const log = createLogger('skills:markdown-loader');
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,10 +129,10 @@ export async function loadMarkdownSkills(skillsDir: string): Promise<MarkdownSki
         provenance: (meta['provenance'] as string | undefined) || undefined,
       });
     }
-    console.log(`[skills] Loaded ${skills.length} markdown skills from ${skillsDir}`);
+    log.info({ skillCount: skills.length, skillsDir }, 'Loaded markdown skills');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error(`[skills] Error loading skills from ${skillsDir}:`, (err as Error).message);
+      log.error({ skillsDir, error: (err as Error).message }, 'Error loading skills');
     }
   }
   return skills;

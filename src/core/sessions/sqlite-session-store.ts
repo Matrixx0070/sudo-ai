@@ -339,11 +339,10 @@ export class SqliteSessionStore {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn({ query: query.slice(0, 80), err: msg }, 'searchSessions: FTS5 error');
-      // TODO(finding-4): query leaks into error details — sanitize before HTTP API exposure
+      // Sanitize error details to prevent query text leakage in HTTP responses
       throw new SessionStoreError(
-        `FTS5 search failed: ${msg}`,
+        'FTS5 search failed: invalid query syntax',
         'session_search_syntax',
-        { query: query.slice(0, 80) },
       );
     }
   }

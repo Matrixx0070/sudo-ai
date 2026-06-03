@@ -332,7 +332,6 @@ export class MultiDeliveryCron {
       switch (target.type) {
         case 'local': {
           log.info({ job: job.name, prompt: job.prompt }, 'Cron job delivery (local)');
-          console.log(`[CRON:${job.name}] ${job.prompt}`);
           return { target, success: true, deliveredAt: now };
         }
 

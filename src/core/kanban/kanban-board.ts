@@ -11,6 +11,8 @@
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
+import { mkdirSync, existsSync } from 'node:fs';
+import path from 'node:path';
 import type { KanbanTask, KanbanStatus, KanbanWorkspace, KanbanPriority } from './kanban-types.js';
 import { isValidTransition } from './kanban-types.js';
 
@@ -20,9 +22,17 @@ const log = createLogger('kanban:board');
 // Constants
 // ---------------------------------------------------------------------------
 
-const DATA_DIR = process.env['DATA_DIR'] ?? 'data';
-const DB_PATH = `${DATA_DIR}/kanban.db`;
 const KILL_SWITCH = 'SUDO_KANBAN_DISABLE';
+
+/** Get the database path dynamically (reads DATA_DIR at call time for testability) */
+function getDbPath(): string {
+  const dataDir = process.env['DATA_DIR'] ?? 'data';
+  // Ensure directory exists
+  if (!existsSync(dataDir)) {
+    mkdirSync(dataDir, { recursive: true });
+  }
+  return path.join(dataDir, 'kanban.db');
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -89,7 +99,8 @@ export class KanbanBoard {
   private ensureDb(): void {
     if (this.initialized) return;
 
-    const db = new Database(DB_PATH);
+    const dbPath = getDbPath();
+    const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
 
@@ -166,7 +177,7 @@ export class KanbanBoard {
 
     this.db = db;
     this.initialized = true;
-    log.info({ dbPath: DB_PATH }, 'KanbanBoard initialized');
+    log.info({ dbPath }, 'KanbanBoard initialized');
   }
 
   /**

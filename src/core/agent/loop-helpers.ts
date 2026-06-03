@@ -416,6 +416,9 @@ async function executeSingleToolCall(
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
     log.info({ tool: tc.name, success: result.success }, 'Tool call completed');
     // TODO: Wire FeedbackMemory.recordSuccess here in boot sequence
+    // Not yet wired: FeedbackMemory integration pending. When available, call:
+    // feedbackMemory.recordSuccess({ tool: tc.name, sessionId: ctx.sessionId })
+    // Kill-switch reference: SUDO_FEEDBACK_DISABLE=1 (when implemented)
   } catch (err) {
     if (err instanceof ToolError && err.code === 'tool_not_found') {
       log.warn({ tool: tc.name }, 'Tool not found — invoking fallback chain');
@@ -430,6 +433,9 @@ async function executeSingleToolCall(
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
     log.error({ tool: tc.name, err }, 'Tool call failed');
     // TODO: Wire FeedbackMemory.recordFailure here in boot sequence
+    // Not yet wired: FeedbackMemory integration pending. When available, call:
+    // feedbackMemory.recordFailure({ tool: tc.name, sessionId: ctx.sessionId, error: err })
+    // Kill-switch reference: SUDO_FEEDBACK_DISABLE=1 (when implemented)
   }
 
   return { tc, resultContent };
@@ -700,6 +706,11 @@ export async function prepareMessages(
   // check cache here before forwarding messages to brain.call(). The cache key
   // should be derived from the last user message + active tool set hash.
   // TODO: Wire PromptCacheManager.check(cacheKey) here once injected by boot sequence.
+  // Not yet wired: PromptCacheManager integration pending. When available, add:
+  // const cacheKey = `prompt:${sessionId}:${lastUserMessageHash}:${toolSetHash}`;
+  // const cached = await promptCacheManager.check(cacheKey);
+  // if (cached) return cached.messages;
+  // Kill-switch reference: SUDO_PROMPT_CACHE_DISABLE=1 (when implemented)
 
   // LAYER 0 — PRE-COMPACTION FLUSH REMINDER
   // At 40 % of MAX_CONTEXT_TOKENS (below the 50 % shouldCompact threshold), inject a
