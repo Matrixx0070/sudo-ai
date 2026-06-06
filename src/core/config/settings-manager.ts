@@ -538,7 +538,7 @@ function parseSettingsToml(raw: string, filePath: string, scope: SettingsScope):
     const kvMatch = trimmed.match(/^(?:"([^"]+)"|([a-zA-Z0-9_.-]+))\s*=\s*(.+)$/);
     if (kvMatch && currentSection) {
       const key = kvMatch[1] ?? kvMatch[2]; // quoted key or bare key
-      const rawValue = kvMatch[2].trim();
+      const rawValue = kvMatch[3].trim(); // capture group 3 is the value
 
       if (currentSection === 'settings') {
         result.settings[key] = parseTomlValue(rawValue);
