@@ -4,7 +4,10 @@
  * @description Wave 8F: Soak test runner for SUDO-AI v5 admin endpoints.
  *
  * Usage:
- *   node scripts/soak.ts [--duration=60] [--rps=10] [--target=http://localhost:18900] [--token=<bearer>]
+ *   node scripts/soak.ts [--duration=60] [--rps=10] [--target=http://localhost:18900] [--token=<bearer>] [--pid=<server-pid>]
+ *
+ *   --pid: PID of the target SUDO-AI server process for RSS (memory-leak) sampling.
+ *          When omitted, RSS sampling is skipped (the runner's own PID is not used).
  *
  * Output: JSON summary + PASS/FAIL verdict.
  * Exit code: 0 on PASS, 1 on FAIL.
@@ -34,6 +37,7 @@ function parseArgs(argv: string[]): SoakConfig {
   let rps = 10;
   let target = 'http://localhost:18900';
   let token = '';
+  let pid: number | undefined;
 
   for (const arg of args) {
     const [key, val] = arg.replace(/^--/, '').split('=');
@@ -43,14 +47,16 @@ function parseArgs(argv: string[]): SoakConfig {
       case 'rps':      rps      = parseInt(val, 10); break;
       case 'target':   target   = val; break;
       case 'token':    token    = val; break;
+      case 'pid':      pid      = parseInt(val, 10); break;
     }
   }
 
   // Validate
   if (!Number.isFinite(duration) || duration < 1) duration = 60;
   if (!Number.isFinite(rps) || rps < 1) rps = 10;
+  if (pid !== undefined && (!Number.isFinite(pid) || pid < 1)) pid = undefined;
 
-  return { duration, rps, target, token };
+  return { duration, rps, target, token, pid };
 }
 
 // ---------------------------------------------------------------------------
@@ -109,8 +115,10 @@ function sampleRss(pid: number): number | null {
   }
 }
 
-function getCurrentPid(): number | null {
-  return process.pid ?? null;
+function resolveTargetPid(config: SoakConfig): number | null {
+  // Only sample RSS when an explicit target-server PID is provided.
+  // Defaulting to process.pid would measure the soak runner itself.
+  return config.pid ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +171,7 @@ async function runSoak(config: SoakConfig): Promise<void> {
 
   // RSS samples
   const rssSamples: Array<{ ts: number; rssKb: number }> = [];
-  const pid = getCurrentPid();
+  const pid = resolveTargetPid(config);
   let reqIdx = 0;
 
   // RSS sampling every 10s

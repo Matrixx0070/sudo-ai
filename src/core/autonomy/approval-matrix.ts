@@ -301,9 +301,75 @@ export class ApprovalMatrix {
       const argConstraint = pattern.split(':').slice(1).join(':');
       // P1 fix: support cmd (control) + command (legacy); also file sub-op via toolName if caller passes 'control.file.write' style
       const command = (args?.cmd as string | undefined) || (args?.command as string | undefined);
-      if (command && command.includes(argConstraint)) return true;
+      if (command && this._commandMatchesConstraint(command, argConstraint)) return true;
     }
 
     return false;
+  }
+
+  /**
+   * Match a shell command against a safety constraint (e.g. "rm -rf", "dd if=").
+   *
+   * Substring matching alone is trivially bypassed by semantically-identical
+   * variations (extra whitespace, reordered/combined flags, binary path
+   * prefixes such as "/bin/rm"), which would let "never"-tier deletions fall
+   * through to a broader auto/notify rule. We therefore normalize both the
+   * command and the constraint into canonical tokens (lowercased, whitespace
+   * collapsed, leading binary path stripped, clustered short flags such as
+   * "-rf" / "-fr" expanded into a set) and require every constraint token
+   * to be present. We bias toward blocking: any match keeps the substring
+   * fallback so nothing previously caught is now missed.
+   */
+  private _commandMatchesConstraint(command: string, constraint: string): boolean {
+    // Backwards-compatible substring check — never narrows existing matches.
+    if (command.includes(constraint)) return true;
+
+    const cmdTokens = this._canonicalizeCommand(command);
+    const conTokens = this._canonicalizeCommand(constraint);
+    if (conTokens.length === 0) return false;
+
+    // The first constraint token is the program (basename); it must appear as a
+    // command token. Every remaining constraint token (flags/operands) must
+    // also be present in the command's token set.
+    const cmdSet = new Set(cmdTokens);
+    return conTokens.every((t) => cmdSet.has(t));
+  }
+
+  /**
+   * Break a command string into canonical tokens for safety matching.
+   * - lowercases and collapses whitespace
+   * - strips any directory prefix on the first (program) token: "/bin/rm" -> "rm"
+   * - expands clustered short flags into individual letters:
+   *   "-rf" -> "-r", "-f"  (so "-rf", "-fr", "-r -f" all canonicalize alike)
+   * - maps the common long forms of destructive flags to their short
+   *   equivalents ("--recursive" -> "-r", "--force" -> "-f")
+   * Operand tokens such as "if=" are preserved verbatim.
+   */
+  private _canonicalizeCommand(input: string): string[] {
+    const longFlagMap: Record<string, string> = {
+      '--recursive': '-r',
+      '--force': '-f',
+    };
+    const raw = input.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const out: string[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      let tok = raw[i];
+      if (i === 0) {
+        // Strip binary path prefix: "/usr/bin/rm" / "./rm" -> "rm"
+        const slash = tok.lastIndexOf('/');
+        if (slash >= 0) tok = tok.slice(slash + 1);
+      }
+      if (longFlagMap[tok]) {
+        // Normalize known destructive long flags to their short form.
+        out.push(longFlagMap[tok]);
+      } else if (/^-[a-z]{2,}$/.test(tok)) {
+        // Expand clustered single-dash short flags (e.g. "-rf"); leave
+        // long flags and operands ("if=") intact.
+        for (const ch of tok.slice(1)) out.push(`-${ch}`);
+      } else {
+        out.push(tok);
+      }
+    }
+    return out;
   }
 }

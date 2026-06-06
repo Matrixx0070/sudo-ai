@@ -23,6 +23,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set during cleanup so the deferred onclose event doesn't schedule a
+  // reconnect (and reopen a socket) on an already-unmounted component.
+  const closingRef = useRef(false);
 
   // Use refs for callbacks so connect() never changes identity — prevents
   // infinite reconnect loops when parent passes new inline functions each render.
@@ -52,6 +55,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
     };
 
     ws.onclose = () => {
+      if (closingRef.current) return;
       setConnected(false);
       onDisconnectRef.current?.();
       reconnectTimeoutRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
@@ -81,8 +85,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
   }, []);
 
   useEffect(() => {
+    closingRef.current = false;
     connect();
     return () => {
+      closingRef.current = true;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }

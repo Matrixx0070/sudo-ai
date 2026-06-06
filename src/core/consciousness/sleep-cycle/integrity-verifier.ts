@@ -58,8 +58,12 @@ export function verifyAccumulatorIntegrity(acc: PhaseAccumulator): IntegrityRepo
       failures.push('dreamJournalEntry-empty');
     }
 
-    // Check 2: insight count must be within plausible bounds relative to patterns
-    if (acc.insightsGenerated < 0 || acc.insightsGenerated > acc.patternsFound * 3) {
+    // Check 2: insight count must be within plausible bounds relative to its
+    // source phases. Phase 2 contributes one insight per pattern (bounded by
+    // patternsFound * 3 as a drift-guard slack factor); Phase 3 contributes at
+    // most one counterfactual lesson per simulation run (counterfactualsRun).
+    const insightsUpperBound = acc.patternsFound * 3 + acc.counterfactualsRun;
+    if (acc.insightsGenerated < 0 || acc.insightsGenerated > insightsUpperBound) {
       failures.push('insightsGenerated-out-of-bounds');
     }
 

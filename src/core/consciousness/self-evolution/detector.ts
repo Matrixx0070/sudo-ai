@@ -23,8 +23,12 @@ const log = createLogger('self-evolution:detector');
 /** Minimum occurrence count before a failure is surfaced as a pattern. */
 const FAILURE_THRESHOLD = 3;
 
-/** Capability levels considered weak enough to qualify as a gap. */
-const WEAK_LEVELS = new Set(['novice', 'developing']);
+/**
+ * Numeric competency level below which a domain qualifies as a gap.
+ * Matches the 'novice' (0.1) and 'developing' (0.3) bands from the
+ * self-model's numericLevelToLabel mapping (both fall under 0.4).
+ */
+const WEAK_LEVEL_THRESHOLD = 0.4;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -51,13 +55,15 @@ export function detectFailurePatterns(db: Database.Database): FailurePattern[] {
  * Identify capability domains where the self-model's assessed level is weak.
  *
  * @param selfModel - Duck-typed self-model that exposes `getWeaknesses()`.
- * @returns Array of domain strings where level is 'novice' or 'developing'.
+ * @returns Array of domain strings whose numeric level is below the weak threshold.
  */
 export function detectCapabilityGaps(selfModel: EvoSelfModelLike): string[] {
   const weaknesses = selfModel.getWeaknesses();
 
   const gaps = weaknesses
-    .filter((w) => WEAK_LEVELS.has(w.level))
+    // The self-model reports `level` as a numeric competency score (0..1);
+    // coerce defensively before comparing against the weak threshold.
+    .filter((w) => Number(w.level) < WEAK_LEVEL_THRESHOLD)
     .map((w) => w.domain);
 
   log.debug(

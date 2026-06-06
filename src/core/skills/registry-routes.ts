@@ -78,8 +78,12 @@ async function handleRequest(
     const limit  = Math.min(200, Math.max(1, parseInt(searchParams.get('limit')  ?? '50', 10) || 50));
     const offset = Math.max(0,               parseInt(searchParams.get('offset') ?? '0',  10) || 0);
 
-    // list() already excludes archived; filter to bundled only, then paginate
-    const all     = registry.list(limit + offset, 0);
+    // list() already excludes archived; it orders by created_at DESC across ALL
+    // trust tiers, so a SQL LIMIT here would drop bundled skills that sit below
+    // newer non-bundled rows. Fetch the full set (bundled skills are far fewer —
+    // same bound used by installed()/findBundledByFrontmatterId), filter to
+    // bundled to get the true total, then paginate on the bundled subset.
+    const all     = registry.list(1000, 0);
     const bundled = all.filter(isBundled);
     const page    = bundled.slice(offset, offset + limit);
 

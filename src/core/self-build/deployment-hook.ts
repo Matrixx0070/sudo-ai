@@ -110,6 +110,7 @@ export class DeploymentHook {
           output: `CI failed:\n\`\`\`\n${ciResult.output.slice(0, 1000)}\n\`\`\``,
         });
         this.metrics.recordEvent('ci_failed', { prNumber });
+        this.stopMonitoring(prNumber);
         return;
       }
 
@@ -124,6 +125,7 @@ export class DeploymentHook {
         deployResult.success ? 'deployed' : 'deploy_failed',
         { prNumber, sha: prStatus.headSha, action: deployResult.action },
       );
+      this.stopMonitoring(prNumber);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ prNumber, err: msg }, 'checkAndDeploy failed');

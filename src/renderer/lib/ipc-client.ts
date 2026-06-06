@@ -48,9 +48,18 @@ export function ipcSend(channel: SendChannel, data: unknown): void {
 // ---------------------------------------------------------------------------
 
 let _persistentWs: WebSocket | null = null;
-let _pendingResolve: ((v: string) => void) | null = null;
-let _pendingReject: ((e: Error) => void) | null = null;
-let _pendingTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// FIFO queue of in-flight WebSocket requests. The server replies with raw text
+// and echoes no correlation id, so replies are matched to the oldest pending
+// request. A queue (rather than single module globals) prevents concurrent
+// sends from overwriting each other's resolvers — which previously caused the
+// first request to hang and its reply to be mis-delivered to a later send.
+interface PendingRequest {
+  resolve: (v: string) => void;
+  reject: (e: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+const _pendingQueue: PendingRequest[] = [];
 
 function getWsUrl(): string {
   const wsHost =
@@ -86,14 +95,11 @@ function getPersistentWs(): WebSocket {
         return;
       }
     } catch { /* not JSON */ }
-    // Final reply — either resolves a pending send, or dispatched as a server push
-    if (_pendingTimeout) clearTimeout(_pendingTimeout);
-    const resolve = _pendingResolve;
-    _pendingResolve = null;
-    _pendingReject = null;
-    _pendingTimeout = null;
-    if (resolve) {
-      resolve(data);
+    // Final reply — resolves the oldest pending send, or dispatched as a server push
+    const pending = _pendingQueue.shift();
+    if (pending) {
+      clearTimeout(pending.timeout);
+      pending.resolve(data);
     } else {
       // Server-pushed message (e.g. from POST /api/message) — dispatch to UI
       window.dispatchEvent(new CustomEvent('sudo:push', { detail: data }));
@@ -101,12 +107,12 @@ function getPersistentWs(): WebSocket {
   };
 
   ws.onerror = () => {
-    if (_pendingTimeout) clearTimeout(_pendingTimeout);
-    const reject = _pendingReject;
-    _pendingResolve = null;
-    _pendingReject = null;
-    _pendingTimeout = null;
-    reject?.(new Error('WebSocket error'));
+    // The connection is being torn down — reject every in-flight request.
+    while (_pendingQueue.length > 0) {
+      const pending = _pendingQueue.shift()!;
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('WebSocket error'));
+    }
     _persistentWs = null;
   };
 
@@ -127,15 +133,17 @@ if (typeof window !== 'undefined' && new URLSearchParams(window.location.search)
 function sendViaWebSocket(message: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const ws = getPersistentWs();
-    _pendingResolve = resolve;
-    _pendingReject = reject;
 
-    _pendingTimeout = setTimeout(() => {
-      _pendingResolve = null;
-      _pendingReject = null;
-      _pendingTimeout = null;
-      reject(new Error('WebSocket timeout — no reply in 1800s'));
-    }, 1_800_000);
+    const pending: PendingRequest = {
+      resolve,
+      reject,
+      timeout: setTimeout(() => {
+        const idx = _pendingQueue.indexOf(pending);
+        if (idx !== -1) _pendingQueue.splice(idx, 1);
+        reject(new Error('WebSocket timeout — no reply in 1800s'));
+      }, 1_800_000),
+    };
+    _pendingQueue.push(pending);
 
     const send = () => ws.send(message);
     if (ws.readyState === WebSocket.OPEN) {

@@ -127,7 +127,9 @@ export const archiveManagerTool: ToolDefinition = {
       return { success: false, output: `output is required for ${operation}.` };
     }
 
-    const format: Format = (formatParam as Format | undefined) ?? (output ? detectFormat(output) : 'tar.gz');
+    // For compress, the archive path is `output`; for extract/list it is `input`.
+    const formatSource = operation === 'compress' ? (output ?? input) : input;
+    const format: Format = (formatParam as Format | undefined) ?? detectFormat(formatSource);
 
     logger.info({ session: ctx.sessionId, operation, input, output, format }, 'Archive operation started');
 

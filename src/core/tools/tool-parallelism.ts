@@ -176,7 +176,7 @@ export class ToolParallelism {
     // Execute independent calls concurrently (capped)
     const independentResults = await this.executeBatch(group.independent, registry, ctx);
     for (const r of independentResults) {
-      results.set(r.name ?? r.toolCallId, r);
+      results.set(r.toolCallId, r);
     }
 
     // Execute dependent calls sequentially after their dependencies complete

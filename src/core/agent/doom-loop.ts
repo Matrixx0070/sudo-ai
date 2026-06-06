@@ -242,9 +242,28 @@ export class DoomLoopDetector {
   // Private helpers
   // -------------------------------------------------------------------------
 
+  private _canonicalize(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((v) => this._canonicalize(v));
+    }
+    if (value !== null && typeof value === 'object') {
+      const sortedKeys = Object.keys(value as Record<string, unknown>).sort();
+      const out: Record<string, unknown> = {};
+      for (const k of sortedKeys) {
+        out[k] = this._canonicalize((value as Record<string, unknown>)[k]);
+      }
+      return out;
+    }
+    return value;
+  }
+
   private _hashArgs(args: Record<string, unknown>): string {
     try {
-      const json = JSON.stringify(args, Object.keys(args).sort());
+      // Deeply canonicalize (recursively sort keys) so that distinct nested
+      // arguments produce distinct signatures. NOTE: passing the key array as
+      // a JSON.stringify replacer is an allowlist that strips all nested
+      // fields, collapsing different calls to one signature.
+      const json = JSON.stringify(this._canonicalize(args));
       // Simple hash: first 12 chars of a cheap checksum
       let hash = 0;
       for (let i = 0; i < json.length; i++) {

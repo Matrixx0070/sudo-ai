@@ -365,8 +365,10 @@ const SetupWizard: React.FC<SetupWizardProps> = (props) => {
       return;
     }
     if (phase === 'xai') {
+      if (key.upArrow) setSelIndex(i => Math.max(0, i - 1));
+      if (key.downArrow) setSelIndex(i => Math.min(AVAILABLE_MODELS.length - 1, i + 1));
       if (key.return) {
-        commitAnswer({ xaiKey: inputVal.trim() });
+        commitAnswer({ xaiKey: inputVal.trim(), defaultModel: AVAILABLE_MODELS[selIndex].value });
         go('cross');
       }
       return;

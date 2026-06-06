@@ -68,7 +68,7 @@ function getStatements(db: Database.Database): PreparedStatements {
     selectHistory: db.prepare(`
       SELECT energy, clarity, fullness, connectivity, continuity, sampled_at
       FROM   body_state_log
-      WHERE  sampled_at >= datetime('now', @offset)
+      WHERE  sampled_at >= @since
       ORDER  BY sampled_at ASC
     `),
   };
@@ -199,11 +199,15 @@ export function getStateHistory(
   const db = cdb.getDb();
   const stmts = getStatements(db);
 
-  // SQLite datetime modifier format: '-N hours'
-  const offset = `-${hours} hours`;
+  // Compute the cutoff as an ISO-8601 string matching the stored
+  // `sampled_at` format (see mapper.ts and consciousness-db.ts), so the
+  // lexicographic comparison in the query is correct. Using SQLite's
+  // datetime('now', ...) instead would yield a space-separated string
+  // that never lines up with the stored 'T'/'Z' ISO timestamps.
+  const since = new Date(Date.now() - hours * 3_600_000).toISOString();
 
   try {
-    const rows = stmts.selectHistory.all({ offset }) as BodyStateRow[];
+    const rows = stmts.selectHistory.all({ since }) as BodyStateRow[];
     return rows.map(rowToBodyState);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

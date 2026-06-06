@@ -251,6 +251,7 @@ export class AutoUpdateManager extends EventEmitter {
     this.isUpdating = true;
     const startTime = Date.now();
     const fromVersion = this.currentVersion;
+    let stashed = false;
 
     try {
       // Acquire lock
@@ -262,6 +263,7 @@ export class AutoUpdateManager extends EventEmitter {
       if (dirty) {
         log.info('Stashing dirty working tree before pull');
         this._exec('git stash');
+        stashed = true;
       }
 
       // Pull latest
@@ -309,13 +311,14 @@ export class AutoUpdateManager extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ err: msg, stage: 'apply' }, 'Update failed');
 
-      // Try to restore stashed changes
-      try {
-        if (this._isGitDirty()) {
+      // Try to restore stashed changes (a successful stash leaves the tree
+      // clean, so we must key off whether we stashed — not the dirty state).
+      if (stashed) {
+        try {
           this._exec('git stash pop 2>/dev/null || true');
+        } catch {
+          // Best effort
         }
-      } catch {
-        // Best effort
       }
 
       this._emit('failed', { fromVersion, error: msg, durationMs: Date.now() - startTime });

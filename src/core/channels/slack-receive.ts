@@ -86,8 +86,9 @@ export class SlackSocketMode {
 
     ws.on('close', () => {
       log.warn('Slack Socket Mode WS closed');
+      const wasActive = this._active;
       this._active = false;
-      if (this._active !== false) return; // closed by stop()
+      if (!wasActive) return; // closed by stop()
       setTimeout(() => this.onReconnect(), 5_000);
     });
 

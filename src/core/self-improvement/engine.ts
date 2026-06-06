@@ -185,7 +185,25 @@ export async function runSelfImprovement(options: {
   log.info({ trigger, windowDays }, 'Self-improvement run started');
 
   // --- STEP 1: DETECT ---
-  const patterns = detectPatterns(windowDays);
+  // detectPatterns opens mind.db with { fileMustExist: true } and throws
+  // synchronously when the DB is absent (fresh install / first run). Guard the
+  // call so the whole run does not reject before the existsSync checks below.
+  let patterns: DetectedPatterns;
+  if (existsSync(DB_PATH)) {
+    patterns = detectPatterns(windowDays);
+  } else {
+    log.warn({ dbPath: DB_PATH }, 'mind.db not found — skipping pattern detection');
+    patterns = {
+      failingTools: [],
+      unusedTools: [],
+      badFeedbackTypes: [],
+      routingGaps: [],
+      cronIssues: [],
+      healthScore: 0,
+      analysedAt: new Date().toISOString(),
+      windowDays,
+    };
+  }
   log.info({ healthScore: patterns.healthScore, failingTools: patterns.failingTools.length }, 'Patterns detected');
 
   const actions: ImprovementAction[] = [];

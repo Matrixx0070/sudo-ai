@@ -204,10 +204,18 @@ export function estimateCost(
  */
 export function buildTokenUsage(
   modelId: string,
-  raw?: { promptTokens?: number; completionTokens?: number; totalTokens?: number },
+  raw?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  },
 ): TokenUsage {
-  const promptTokens = raw?.promptTokens ?? 0;
-  const completionTokens = raw?.completionTokens ?? 0;
+  // The Vercel AI SDK v6 exposes inputTokens/outputTokens; older shapes use
+  // promptTokens/completionTokens. Accept either naming convention.
+  const promptTokens = raw?.promptTokens ?? raw?.inputTokens ?? 0;
+  const completionTokens = raw?.completionTokens ?? raw?.outputTokens ?? 0;
   const totalTokens = raw?.totalTokens ?? promptTokens + completionTokens;
   return {
     promptTokens,

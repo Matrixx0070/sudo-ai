@@ -16,7 +16,7 @@
  * vi.mock to inject a test-specific directory for clean isolation.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -74,12 +74,21 @@ function writePendingFile(baseDir: string, id: string, command: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Tests that work against the live module with real workspace/approvals/ path.
-// We clean up any files we create.
+// Isolate the registry to a per-file temporary directory so tests never touch
+// the real workspace/approvals/ directory.
+//
+// The registry module resolves its base dir as path.resolve('workspace/approvals')
+// from process.cwd() at first import. Each test file runs in its own forked
+// process under vitest's default isolation, so we chdir into a fresh temp dir
+// here — BEFORE any getRegistry() dynamic import runs — and the registry then
+// resolves workspace/approvals/ underneath that temp dir. We restore cwd and
+// remove the temp dir in afterAll. Because each file gets its own mkdtemp dir,
+// the duplicate suite cannot race on shared filesystem state.
 // ---------------------------------------------------------------------------
 
-// The module's pending/decided dirs resolve to workspace/approvals/ relative to cwd.
-// We'll use those real dirs for integration tests, and clean up created UUIDs.
+const ORIGINAL_CWD = process.cwd();
+const TMP_ROOT = makeTmpDir();
+process.chdir(TMP_ROOT);
 
 const WORKSPACE_APPROVALS = path.resolve('workspace/approvals');
 const PENDING_DIR = path.join(WORKSPACE_APPROVALS, 'pending');
@@ -88,6 +97,12 @@ const DECIDED_DIR = path.join(WORKSPACE_APPROVALS, 'decided');
 // Ensure dirs exist for tests
 fs.mkdirSync(PENDING_DIR, { recursive: true });
 fs.mkdirSync(DECIDED_DIR, { recursive: true });
+
+afterAll(() => {
+  // Restore the original working directory and remove the temp dir.
+  process.chdir(ORIGINAL_CWD);
+  try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* ok */ }
+});
 
 // Track created IDs for cleanup
 const createdIds: string[] = [];

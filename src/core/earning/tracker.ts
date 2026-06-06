@@ -220,15 +220,22 @@ export class EarningTracker {
     let total: number;
 
     if (period === 'all') {
+      // Sum only the latest snapshot per video_id — revenue_usd is cumulative
+      // per video, so summing every historical snapshot would multiply the
+      // total by the number of pulls (mirrors getTopVideos de-dup).
       const row = db.db
-        .prepare<[], { total: number }>('SELECT COALESCE(SUM(revenue_usd), 0) AS total FROM video_metrics')
+        .prepare<[], { total: number }>(
+          'SELECT COALESCE(SUM(revenue_usd), 0) AS total FROM video_metrics WHERE id IN (SELECT MAX(id) FROM video_metrics GROUP BY video_id)',
+        )
         .get();
       total = row?.total ?? 0;
     } else {
       // period is an ISO prefix like "2026-03" or "2026-03-27".
+      // De-dup to the latest snapshot per video_id within the period so that
+      // multiple snapshots in the same period are not double-counted.
       const row = db.db
         .prepare<{ prefix: string }, { total: number }>(
-          "SELECT COALESCE(SUM(revenue_usd), 0) AS total FROM video_metrics WHERE snapshot_at LIKE :prefix || '%'",
+          "SELECT COALESCE(SUM(revenue_usd), 0) AS total FROM video_metrics WHERE id IN (SELECT MAX(id) FROM video_metrics WHERE snapshot_at LIKE :prefix || '%' GROUP BY video_id)",
         )
         .get({ prefix: period });
       total = row?.total ?? 0;

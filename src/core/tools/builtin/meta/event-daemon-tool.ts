@@ -134,7 +134,8 @@ export const eventDaemonTool: ToolDefinition = {
           const shouldStart = (params['startDaemon'] as boolean | undefined) !== false;
 
           if (!d.isRunning() && shouldStart) {
-            const pollMs = Math.max(5_000, Number(params['pollIntervalMs'] ?? DEFAULT_POLL_MS));
+            const rawPoll = Number(params['pollIntervalMs'] ?? DEFAULT_POLL_MS);
+            const pollMs = Number.isFinite(rawPoll) ? Math.max(5_000, rawPoll) : DEFAULT_POLL_MS;
             d.start(pollMs);
             _startedAt = new Date().toISOString();
           }

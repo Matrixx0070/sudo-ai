@@ -230,9 +230,29 @@ export class LoopGuard {
 
   private _hashArgs(args: Record<string, unknown>): string {
     try {
-      return contentHash(JSON.stringify(args, Object.keys(args).sort()));
+      return contentHash(this._stableStringify(args));
     } catch {
       return 'unhashable';
     }
+  }
+
+  /**
+   * Deterministically serialize a value, recursively sorting object keys so
+   * that two structurally-identical arguments always produce the same string
+   * regardless of key insertion order. Unlike JSON.stringify's replacer-array
+   * form, this preserves nested object/array values.
+   */
+  private _stableStringify(value: unknown): string {
+    if (value === null || typeof value !== 'object') {
+      return JSON.stringify(value) ?? 'null';
+    }
+    if (Array.isArray(value)) {
+      return `[${value.map((v) => this._stableStringify(v)).join(',')}]`;
+    }
+    const obj = value as Record<string, unknown>;
+    const parts = Object.keys(obj)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${this._stableStringify(obj[k])}`);
+    return `{${parts.join(',')}}`;
   }
 }

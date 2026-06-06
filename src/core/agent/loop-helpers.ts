@@ -820,9 +820,23 @@ export async function prepareMessages(
   const WINDOW_SIZE = 12;
   const systemMsgs = session.messages.filter(m => m.role === 'system');
   const nonSystemMsgs = session.messages.filter(m => m.role !== 'system');
+  let windowedNonSystem = nonSystemMsgs.slice(-WINDOW_SIZE);
+  // Never start the window on an orphaned tool result: a role:'tool' message's
+  // declaring assistant (with toolCalls) is the message immediately before it.
+  // If the slice boundary fell inside a tool-call group, the leading tool-result
+  // messages have no matching assistant tool_call, and the Vercel AI SDK's
+  // convertToLanguageModelPrompt throws AI_MissingToolResultsError on the next
+  // brain.call(). Advance the start past any leading orphan tool results.
+  let firstNonOrphan = 0;
+  while (firstNonOrphan < windowedNonSystem.length && windowedNonSystem[firstNonOrphan]!.role === 'tool') {
+    firstNonOrphan++;
+  }
+  if (firstNonOrphan > 0) {
+    windowedNonSystem = windowedNonSystem.slice(firstNonOrphan);
+  }
   const windowed: BrainMessage[] = [
     ...systemMsgs.slice(0, 2),
-    ...nonSystemMsgs.slice(-WINDOW_SIZE),
+    ...windowedNonSystem,
   ];
 
   if (nonSystemMsgs.length > WINDOW_SIZE) {
@@ -831,7 +845,7 @@ export async function prepareMessages(
         sessionId: state.sessionId,
         totalMessages: session.messages.length,
         windowedMessages: windowed.length,
-        droppedMessages: nonSystemMsgs.length - WINDOW_SIZE,
+        droppedMessages: nonSystemMsgs.length - windowedNonSystem.length,
       },
       'LAYER 3: Sliding window applied',
     );

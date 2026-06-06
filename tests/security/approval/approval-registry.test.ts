@@ -9,18 +9,33 @@
  * - waitForDecision checks the decided file IMMEDIATELY at t=0, then polls.
  *   So "pre-write then call" tests resolve synchronously via the t=0 check.
  * - The timeout test uses a very small timeoutMs (100ms) to stay fast.
- * - All file operations use the approval-registry module's internal path logic,
- *   which we override via APPROVALS_BASE env-var shimming (see approach below).
  *
- * Since the registry resolves paths from cwd at module load, we use vitest's
- * vi.mock to inject a test-specific directory for clean isolation.
+ * Since the registry resolves its base dir from cwd at module load (with no
+ * env/param override), we chdir into a temp directory BEFORE the module is
+ * first imported so it isolates itself there. See the chdir block below.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
+
+// ---------------------------------------------------------------------------
+// Isolate the registry from the real workspace.
+//
+// The approval-registry module resolves its base dir from `path.resolve(
+// 'workspace/approvals')` at module-load time, with no env/param override.
+// To keep the tests from reading/writing/deleting the REAL workspace approval
+// files (which would silently destroy genuine pending operator approvals), we
+// switch cwd to a fresh temp directory BEFORE the module is first imported
+// (the import is lazy, via getRegistry()). The module then resolves its base
+// into the temp dir. cwd is restored and the temp dir removed in afterAll.
+// ---------------------------------------------------------------------------
+
+const ORIGINAL_CWD = process.cwd();
+const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'approval-test-'));
+process.chdir(TMP_ROOT);
 
 // ---------------------------------------------------------------------------
 // We need to test the registry with a tmp directory, not the real workspace.
@@ -78,8 +93,9 @@ function writePendingFile(baseDir: string, id: string, command: string): void {
 // We clean up any files we create.
 // ---------------------------------------------------------------------------
 
-// The module's pending/decided dirs resolve to workspace/approvals/ relative to cwd.
-// We'll use those real dirs for integration tests, and clean up created UUIDs.
+// The module's pending/decided dirs resolve to workspace/approvals/ relative to
+// cwd. Because we chdir'd into TMP_ROOT above (before the registry is imported),
+// these constants resolve inside the isolated temp dir, NOT the real workspace.
 
 const WORKSPACE_APPROVALS = path.resolve('workspace/approvals');
 const PENDING_DIR = path.join(WORKSPACE_APPROVALS, 'pending');
@@ -88,6 +104,12 @@ const DECIDED_DIR = path.join(WORKSPACE_APPROVALS, 'decided');
 // Ensure dirs exist for tests
 fs.mkdirSync(PENDING_DIR, { recursive: true });
 fs.mkdirSync(DECIDED_DIR, { recursive: true });
+
+// Restore cwd and remove the temp dir once all tests in this file complete.
+afterAll(() => {
+  process.chdir(ORIGINAL_CWD);
+  try { fs.rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* ok */ }
+});
 
 // Track created IDs for cleanup
 const createdIds: string[] = [];
