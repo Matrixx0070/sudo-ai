@@ -1484,6 +1484,11 @@ export class AgentLoop {
 
     // P0: track total tool calls across inner loop iterations for LazinessNudge.
     let _innerLoopToolCallCount = 0;
+    // P0: bound how many times GoalStopDetector may force continuation, so a
+    // persistent 'incomplete' verdict can never produce an unbounded loop
+    // (mirrors TodoGate's retry cap; TodoGate still applies after this gate).
+    let _goalStopRetryCount = 0;
+    const GOAL_STOP_MAX_RETRIES = 3;
 
     // Reset loop guard at the start of every outer-turn inner loop.
     this.loopGuard.reset();
@@ -2401,12 +2406,33 @@ export class AgentLoop {
         // If verdict is 'incomplete', inject a system message suggesting continued work.
         try {
           if (this._goalStopDetector) {
-            const _userGoal = session.messages.filter(m => m.role === 'user').at(0)?.content ?? '';
-            const stopResult = (this._goalStopDetector as unknown as { detect(progress: { goal: string }): { verdict: string; reason?: string } }).detect({ goal: _userGoal });
-            if (stopResult.verdict === 'incomplete') {
-              const continueMsg = stopResult.reason ?? '[GoalStopDetector] The goal does not appear complete — consider continuing work before responding.';
+            // Build a real GoalProgress from signals the loop actually has.
+            // Step progress comes from TodoGate (the authoritative plan state);
+            // reaching a final assistant response means the user message was
+            // addressed. Signals the loop does not reliably track (errors, test
+            // failures, file/test activity) are left at their neutral defaults
+            // rather than fabricated, so the gate never forces continuation
+            // without genuine evidence. The retry cap above bounds it regardless.
+            const _todos = this._todoGate?.getTodos() ?? [];
+            const _completedTodos = _todos.filter(t => t.completed).length;
+            const stopResult = this._goalStopDetector.detect({
+              totalSteps: _todos.length,
+              completedSteps: _completedTodos,
+              inProgressSteps: 0,
+              errorCount: 0,
+              testFailures: 0,
+              userMessageAddressed: true,
+              filesModified: false,
+              testsRun: false,
+              customEvidence: [],
+            });
+            if (stopResult.verdict === 'incomplete' && _goalStopRetryCount < GOAL_STOP_MAX_RETRIES) {
+              _goalStopRetryCount++;
+              const continueMsg = stopResult.evidence.length > 0
+                ? `[GoalStopDetector] The goal does not appear complete (${stopResult.evidence.join('; ')}). Consider continuing work before responding.`
+                : '[GoalStopDetector] The goal does not appear complete — consider continuing work before responding.';
               session.messages.push({ role: 'system', content: continueMsg });
-              log.info({ sessionId: state.sessionId }, 'GoalStopDetector: goal incomplete — injecting continue message');
+              log.info({ sessionId: state.sessionId, retry: _goalStopRetryCount, confidence: stopResult.confidence }, 'GoalStopDetector: goal incomplete — injecting continue message');
               continue; // re-enter the while loop instead of breaking
             }
           }

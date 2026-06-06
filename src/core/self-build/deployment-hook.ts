@@ -100,10 +100,16 @@ export class DeploymentHook {
       log.info({ prNumber }, 'PR merged — running CI');
       this.metrics.recordEvent('pr_merged', { prNumber, sha: prStatus.headSha });
 
+      // Capture the current local HEAD as the known-good baseline BEFORE any
+      // CI/deploy work, so a rollback restores the previously-deployed commit
+      // rather than the just-merged (failing) PR head — `git reset --hard
+      // <merged-head>` would otherwise move the tree TO the bad code.
+      const knownGoodSha = await this.getCurrentSha();
+
       const ciResult = await this.runCI();
       if (!ciResult.passed) {
         log.warn({ prNumber, output: ciResult.output.slice(0, 300) }, 'CI failed — rolling back');
-        await this.rollback(prStatus.headSha);
+        await this.rollback(knownGoodSha);
         await this.addDeploymentComment(issueNumber, {
           success: false,
           action: 'rolled-back',
@@ -200,8 +206,13 @@ export class DeploymentHook {
     }
   }
 
-  /** Rollback: git reset --hard to previous commit. */
-  async rollback(previousCommitSha: string): Promise<void> {
+  /** Rollback: git reset --hard to the previously-deployed (known-good) commit. */
+  async rollback(previousCommitSha: string | null): Promise<void> {
+    if (!previousCommitSha) {
+      log.warn('rollback: no known-good commit SHA available — skipping git reset to avoid corrupting the working tree');
+      this.metrics.recordEvent('rollback_skipped', { reason: 'no_known_good_sha' });
+      return;
+    }
     try {
       const cwd = '/root/sudo-ai-v4';
       log.info({ sha: previousCommitSha }, 'rollback: executing');
@@ -214,6 +225,21 @@ export class DeploymentHook {
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ sha: previousCommitSha, err: msg }, 'rollback failed');
       throw err;
+    }
+  }
+
+  /** Capture the current local HEAD commit SHA (the known-good baseline). */
+  private async getCurrentSha(): Promise<string | null> {
+    try {
+      const cwd = '/root/sudo-ai-v4';
+      const result = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+        cwd, encoding: 'utf8', maxBuffer: 1024 * 1024,
+      });
+      const sha = result.stdout.trim();
+      return result.code === 0 && sha ? sha : null;
+    } catch (err) {
+      log.error({ err: err instanceof Error ? err.message : String(err) }, 'getCurrentSha failed');
+      return null;
     }
   }
 
