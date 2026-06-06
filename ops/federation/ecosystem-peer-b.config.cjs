@@ -74,9 +74,6 @@ module.exports = {
         // /tmp path is safe for ephemeral testing; use a persistent path for production.
         DATA_DIR: '/tmp/sudo-ai-peer-b-data',
 
-        // Claude proxy port — 3005 avoids collision with peer-a (3003).
-        CLAUDE_PROXY_PORT: '3005',
-
         // Disable web chat to avoid port conflict.
         WEB_CHAT_ENABLED: 'false',
         WEB_CHAT_PORT: '3006',  // spare port as defence-in-depth

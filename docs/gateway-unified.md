@@ -13,7 +13,6 @@ the already-running gateway `http.Server`; no second port is opened.
 | Port  | Process          | Audience        | Notes                                                   |
 |-------|------------------|-----------------|---------------------------------------------------------|
 | 18900 | gateway (cli.ts) | All users/admin | Every user-facing and admin endpoint lives here         |
-| 3003  | claude-proxy     | Internal only   | Loopback Anthropic API shim — NOT user-facing; separate concern |
 
 ---
 

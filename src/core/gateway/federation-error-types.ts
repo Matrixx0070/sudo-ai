@@ -38,7 +38,7 @@ export interface FederationFixNotify {
 // Token Contribution — peer contributes API token to shared pool
 // ---------------------------------------------------------------------------
 
-export type TokenProvider = 'openai' | 'anthropic' | 'google' | 'xai' | 'deepseek' | 'ollama' | 'cliproxy' | 'sudo-mosaic' | 'cascade';
+export type TokenProvider = 'openai' | 'anthropic' | 'google' | 'xai' | 'deepseek' | 'ollama' | 'sudo-mosaic' | 'cascade';
 
 export interface FederationTokenContribution {
   peerId: string;

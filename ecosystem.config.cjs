@@ -3,9 +3,7 @@
  *
  * Process: sudo-ai-v5
  * Entry:   pnpm cli  (= tsx src/cli.ts — headless gateway + agent stack)
- * Ports:   GATEWAY_PORT=18900        (18800 occupied by another process)
- *          CLAUDE_PROXY_PORT=3003    (3002 occupied by the 18800 process)
- *          WEB_CHAT enabled          (attached to gateway :18900 — no second port)
+ * Ports:   GATEWAY_PORT=18900, WEB_CHAT on :18900
  *
  * PORTABLE: CWD and log paths are derived from SUDO_AI_HOME env var or the
  * directory containing this file (__dirname). No hardcoded /root paths.
@@ -73,14 +71,8 @@ module.exports = {
         // Add wasmtime to PATH for WASM sandbox tool execution
         PATH: `${process.env.PATH}:/root/.wasmtime/bin`,
 
-        // Gateway listens on 18900 (18800 occupied by the original sudo-ai process).
-        // Overrides default in src/core/gateway/server.ts.
+        // Gateway listens on 18900.
         GATEWAY_PORT: '18900',
-
-        // Claude proxy (local Anthropic API shim) defaults to 3002.
-        // 3002 is already occupied by the process on 18800 — use 3003 instead.
-        // Configured in src/core/brain/claude-proxy.ts.
-        CLAUDE_PROXY_PORT: '3003',
 
         // Web chat attaches to the gateway server (:18900/chat, :18900/chat/ws).
         // No second port is opened; WEB_CHAT_PORT is obsolete and ignored.
@@ -94,7 +86,7 @@ module.exports = {
         GATEWAY_TOKEN: process.env['GATEWAY_TOKEN'] || '',
 
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
-        SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18800',
+        SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18900',
 
         // DATA_DIR — directory for per-domain SQLite databases.
         // Required by AgentLoop (audit.db, veto-overrides.db) and CommitmentAuditor.
@@ -132,7 +124,7 @@ module.exports = {
 
     // ---- Staging instance — Wave 2.2b tool.synthesize kill-switch testing ----
     // Not started automatically by pm2 — DevOps starts this manually for validation.
-    // Runs on GATEWAY_PORT=18901 and CLAUDE_PROXY_PORT=3004 to avoid colliding with prod.
+    // Runs on GATEWAY_PORT=18901 to avoid colliding with prod.
     // The tool-synthesize kill-switch is intentionally ONLY in this staging block;
     // it must NEVER appear in apps[0] (production).
     {
@@ -172,9 +164,6 @@ module.exports = {
         // Staging gateway port — 18901 avoids collision with prod :18900.
         GATEWAY_PORT: '18901',
 
-        // Claude proxy port — 3004 avoids collision with prod :3003.
-        CLAUDE_PROXY_PORT: '3004',
-
         // Web chat enabled on staging gateway.
         WEB_CHAT_ENABLED: 'true',
         WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || '',
@@ -185,7 +174,7 @@ module.exports = {
         GATEWAY_TOKEN: process.env['GATEWAY_TOKEN'] || '',
 
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
-        SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18800',
+        SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18901',
 
         // Isolated staging data directory — separate SQLite databases from prod.
         DATA_DIR: path.join(CWD, 'data-staging'),

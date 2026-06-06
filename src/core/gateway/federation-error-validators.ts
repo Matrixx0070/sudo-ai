@@ -16,7 +16,7 @@ import type {
 const VALID_SEVERITIES: Set<string> = new Set(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']);
 
 // Valid providers for token contribution
-const VALID_PROVIDERS: Set<TokenProvider> = new Set(['openai', 'anthropic', 'google', 'xai', 'deepseek', 'ollama', 'cliproxy', 'sudo-mosaic', 'cascade']);
+const VALID_PROVIDERS: Set<TokenProvider> = new Set(['openai', 'anthropic', 'google', 'xai', 'deepseek', 'ollama', 'sudo-mosaic', 'cascade']);
 
 // Token contribution validation limits
 const MAX_TOKEN_LENGTH = 4096;

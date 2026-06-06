@@ -74,9 +74,6 @@ module.exports = {
         // Data directory — kept at default to reuse primary's DB.
         DATA_DIR: path.join(CWD, 'data'),
 
-        // Claude proxy port — must not collide with peer-b (3005).
-        CLAUDE_PROXY_PORT: '3003',
-
         // Disable web chat to avoid port conflict.
         WEB_CHAT_ENABLED: 'false',
         WEB_CHAT_PORT: '3004',

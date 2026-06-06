@@ -375,7 +375,6 @@ GEMINI_API_KEY=AIza...
 
 # Claude Max OAuth (for Claude Max subscribers — alternative to ANTHROPIC_API_KEY)
 CLAUDE_CREDENTIALS_PATH=/path/to/.claude/credentials
-CLAUDE_CLI_ENABLED=false          # Set true to use Claude CLI as proxy brain
 
 # Groq
 GROQ_API_KEY=gsk_...

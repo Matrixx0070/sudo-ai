@@ -563,48 +563,6 @@ export class Brain {
       throw new LLMError('BrainRequest.messages must be non-empty', 'llm_invalid_request');
     }
 
-    // Try Claude CLI first if enabled (uses Claude Max subscription via CLI)
-    // Only for non-tool conversations — Claude CLI can't call tools
-    if (process.env['CLAUDE_CLI_ENABLED'] === 'true' && !request.tools?.length) {
-      try {
-        const { callClaudeCLI } = await import('./claude-cli-provider.js');
-
-        // Build full prompt with system context + conversation history
-        const systemPrompt = await this.getSystemPrompt({ heartbeat: false });
-        const conversationParts: string[] = [];
-
-        // Add system prompt (truncated to keep CLI fast)
-        const systemTruncated = systemPrompt.length > 4000
-          ? systemPrompt.substring(0, 4000) + '\n...(system prompt truncated)'
-          : systemPrompt;
-        conversationParts.push(systemTruncated);
-        conversationParts.push('');
-
-        // Add recent conversation history (last 6 messages max)
-        const recentMessages = request.messages.slice(-6);
-        for (const msg of recentMessages) {
-          const role = msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Assistant' : 'System';
-          conversationParts.push(`${role}: ${msg.content}`);
-        }
-
-        const fullPrompt = conversationParts.join('\n');
-        const result = await callClaudeCLI(fullPrompt, { timeout: 90000 });
-
-        if (result.success && result.content) {
-          log.info({ model: 'claude-cli', durationMs: result.durationMs, chars: result.content.length }, 'Claude CLI call succeeded');
-          return {
-            content: result.content,
-            model: 'claude-cli',
-            toolCalls: [],
-            finishReason: 'stop' as const,
-            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCost: 0 },
-          };
-        }
-      } catch (cliErr) {
-        log.debug({ err: String(cliErr) }, 'Claude CLI failed — falling back to API providers');
-      }
-    }
-
     // Extract tool names/descriptions to include in the system prompt so the LLM
     // knows what tools are available and when to use them.
     const toolSummaries = (request.tools ?? []).map((t) => {

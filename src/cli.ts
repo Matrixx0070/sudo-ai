@@ -247,22 +247,6 @@ async function boot(): Promise<void> {
   } catch (err) {
     log.warn({ err: String(err) }, 'Claude token manager failed to initialize — using existing providers');
   }
-
-  // -------------------------------------------------------------------------
-  // 2.9 Claude CLI Proxy — local API server that routes to Claude Max via CLI
-  // -------------------------------------------------------------------------
-  if (process.env['CLAUDE_CLI_ENABLED'] === 'true') {
-    try {
-      const { startClaudeProxy } = await import('./core/brain/claude-proxy.js');
-      await startClaudeProxy();
-      const { stopClaudeProxy } = await import('./core/brain/claude-proxy.js');
-      registerShutdown(() => stopClaudeProxy());
-      log.info('Claude CLI proxy started — Claude is primary brain');
-    } catch (err) {
-      log.warn({ err: String(err) }, 'Claude proxy failed — Claude unavailable, using Grok');
-    }
-  }
-
   // -------------------------------------------------------------------------
   // 2.95 Local Gateway — start before Brain so the API is available
   // -------------------------------------------------------------------------

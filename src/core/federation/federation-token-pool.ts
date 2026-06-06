@@ -36,7 +36,6 @@ const ALLOWED_PROVIDERS = new Set([
   'xai',
   'deepseek',
   'ollama',
-  'cliproxy',
   'sudo-mosaic',
   'cascade',
 ]);

@@ -89,17 +89,7 @@ async function buildProviderAsync(name: ProviderName): Promise<AnyProvider | nul
         break;
 
       case 'anthropic': {
-        const proxyPort = process.env['CLAUDE_PROXY_PORT'] ?? '3002';
-        const useProxy = process.env['CLAUDE_CLI_ENABLED'] === 'true';
-
-        if (useProxy) {
-          // Route through local Claude CLI proxy (uses Claude Max subscription)
-          instance = createAnthropic({
-            apiKey: 'proxy-key', // Proxy doesn't check auth
-            baseURL: `http://127.0.0.1:${proxyPort}`,
-          } as Parameters<typeof createAnthropic>[0]);
-          log.info({ proxyPort }, 'Anthropic: using Claude CLI proxy (Claude Max)');
-        } else if (envValue!.startsWith('sk-ant-oat')) {
+        if (envValue!.startsWith('sk-ant-oat')) {
           instance = createAnthropic({ authToken: envValue! } as Parameters<typeof createAnthropic>[0]);
           log.info('Anthropic: using OAuth authToken');
         } else {

@@ -91,7 +91,7 @@ Step 19  IPC handlers — Electron renderer <-> main process bridge
 
 ## Unified Gateway (single-port model)
 
-All user-facing traffic — including web chat HTML, the chat WebSocket, and all admin/agent REST endpoints — is served from a single port (default 18900) by the gateway server. WebAdapter registers listeners directly on that server via `WebAdapter.attach(server)` rather than opening its own port. Chat HTML is available at `GET /chat`, the chat WebSocket at `ws://.../chat/ws`, and the existing JSON-RPC WebSocket remains at `ws://.../ws`. The `claude-proxy` on port 3003 is an internal loopback shim only (not user-facing) and is a separate concern. See `docs/gateway-unified.md` for the full endpoint reference.
+All user-facing traffic — including web chat HTML, the chat WebSocket, and all admin/agent REST endpoints — is served from a single port (default 18900) by the gateway server. WebAdapter registers listeners directly on that server via `WebAdapter.attach(server)` rather than opening its own port. Chat HTML is available at `GET /chat`, the chat WebSocket at `ws://.../chat/ws`, and the existing JSON-RPC WebSocket remains at `ws://.../ws`. See `docs/gateway-unified.md` for the full endpoint reference.
 
 ---
 
