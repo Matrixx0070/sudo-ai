@@ -86,21 +86,15 @@ module.exports = {
         // No second port is opened; WEB_CHAT_PORT is obsolete and ignored.
         WEB_CHAT_ENABLED: 'true',
         WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || '',
-        WEB_CHAT_ALLOWED_ORIGINS: 'http://127.0.0.1:18900,http://localhost:18900,https://sudoapi.shop',
-        SUDO_AI_CORS_ORIGINS: 'https://sudoapi.shop,http://127.0.0.1:18900,http://localhost:18900',
+        WEB_CHAT_ALLOWED_ORIGINS: 'http://127.0.0.1:18900,http://localhost:18900',
+        SUDO_AI_CORS_ORIGINS: 'http://127.0.0.1:18900,http://localhost:18900',
 
         // GATEWAY_TOKEN protects /v1/admin/* endpoints including synth-probe.
         // Wave 2.2h-tail security HIGH-1: must be set or admin endpoints are unauthenticated.
         GATEWAY_TOKEN: process.env['GATEWAY_TOKEN'] || '',
 
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
-        SUDO_PUBLIC_BASE_URL: 'https://sudoapi.shop',
-
-        // Brain/SUDOAPI provider target. Must be set in pm2 env (not only .env)
-        // because src/core/brain/sudoapi-provider.ts reads this at module load,
-        // before dotenv has populated process.env. Default fallback is
-        // http://127.0.0.1:18800 which ECONNREFUSED-storms the log.
-        SUDOAPI_GATEWAY_URL: 'https://sudoapi.shop',
+        SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18800',
 
         // DATA_DIR — directory for per-domain SQLite databases.
         // Required by AgentLoop (audit.db, veto-overrides.db) and CommitmentAuditor.
@@ -120,6 +114,15 @@ module.exports = {
 
         // Autonomous mode: all tools auto-approved (kill-switch: set to '0' to re-enable approval gates)
         SUDO_AUTO_APPROVE: '1',
+
+        // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
+        SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
+        SUDO_UPDATE_CHANNEL: process.env['SUDO_UPDATE_CHANNEL'] || 'latest',
+        SUDO_UPDATE_INTERVAL_MS: process.env['SUDO_UPDATE_INTERVAL_MS'] || '1800000',
+        SUDO_UPDATE_AUTO_APPLY: process.env['SUDO_UPDATE_AUTO_APPLY'] || '1',
+        SUDO_UPDATE_HEALTH_GATE: process.env['SUDO_UPDATE_HEALTH_GATE'] || '1',
+        SUDO_UPDATE_MAX_VERSION: process.env['SUDO_UPDATE_MAX_VERSION'] || '',
+        SUDO_UPDATE_SKIP_VERSIONS: process.env['SUDO_UPDATE_SKIP_VERSIONS'] || '',
       },
     },
 
@@ -171,17 +174,14 @@ module.exports = {
         // Web chat enabled on staging gateway.
         WEB_CHAT_ENABLED: 'true',
         WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || '',
-        WEB_CHAT_ALLOWED_ORIGINS: 'http://127.0.0.1:18901,http://localhost:18901,https://sudoapi.shop',
-        SUDO_AI_CORS_ORIGINS: 'https://sudoapi.shop,http://127.0.0.1:18900,http://localhost:18900',
+        WEB_CHAT_ALLOWED_ORIGINS: 'http://127.0.0.1:18901,http://localhost:18901',
+        SUDO_AI_CORS_ORIGINS: 'http://127.0.0.1:18901,http://localhost:18901',
 
         // GATEWAY_TOKEN — same as prod, enables admin endpoint auth on staging for synth-probe.
         GATEWAY_TOKEN: process.env['GATEWAY_TOKEN'] || '',
 
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
-        SUDO_PUBLIC_BASE_URL: 'https://sudoapi.shop',
-
-        // Brain/SUDOAPI provider target — same upstream as prod.
-        SUDOAPI_GATEWAY_URL: 'https://sudoapi.shop',
+        SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18800',
 
         // Isolated staging data directory — separate SQLite databases from prod.
         DATA_DIR: path.join(CWD, 'data-staging'),
@@ -205,6 +205,10 @@ module.exports = {
         // 409 Conflict with prod (both share the same TELEGRAM_BOT_TOKEN).
         // Will take effect at the 14:00Z seal-soak gate restart.
         SUDO_TELEGRAM_DISABLE: '1',
+
+        // Auto-update configuration — disabled on staging by default
+        SUDO_UPDATE_DISABLE: '1',
+        SUDO_UPDATE_CHANNEL: 'stable',
       },
     },
   ],

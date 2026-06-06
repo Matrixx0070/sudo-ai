@@ -132,6 +132,26 @@ const GatewaySchema = Type.Object({
 });
 
 // ---------------------------------------------------------------------------
+// Update (Auto-Update System)
+// ---------------------------------------------------------------------------
+
+const UpdateSchema = Type.Object({
+  enabled: Type.Boolean({ default: true, description: 'Enable or disable the auto-update system' }),
+  channel: Type.Union([Type.Literal('latest'), Type.Literal('stable')], { default: 'latest', description: 'Which npm dist-tag to track' }),
+  checkIntervalMs: Type.Integer({ minimum: 60_000, default: 1_800_000, description: 'Check interval in milliseconds (min 60 000)' }),
+  rollbackVersions: Type.Integer({ minimum: 1, default: 3, description: 'Number of previous versions to retain for rollback' }),
+  autoApply: Type.Boolean({ default: true, description: 'Auto-apply updates vs notify only' }),
+  verifyChecksums: Type.Boolean({ default: true, description: 'Verify SHA-256 checksums before applying' }),
+  maxVersion: Type.Optional(Type.String({ description: 'Maximum version to install (kill switch)' })),
+  skipVersions: Type.Array(Type.String(), { default: [], description: 'Known-bad versions to skip' }),
+  healthGate: Type.Boolean({ default: true, description: 'Block updates when system health is critical' }),
+  lockTimeoutMs: Type.Integer({ minimum: 10_000, default: 300_000, description: 'Lock file timeout in milliseconds' }),
+  packageName: Type.String({ default: 'sudo-ai', description: 'npm package name for version resolution' }),
+  gitRemoteUrl: Type.String({ default: 'https://github.com/Matrixx0070/sudo-ai.git', description: 'Git remote URL for git-based fallback' }),
+  gitBranch: Type.String({ default: 'main', description: 'Git branch for version resolution' }),
+});
+
+// ---------------------------------------------------------------------------
 // Root schema
 // ---------------------------------------------------------------------------
 
@@ -145,6 +165,7 @@ export const SudoConfigSchema = Type.Object(
     tools: ToolsSchema,
     cron: CronSchema,
     gateway: GatewaySchema,
+    update: Type.Optional(UpdateSchema),
   },
   { additionalProperties: false },
 );

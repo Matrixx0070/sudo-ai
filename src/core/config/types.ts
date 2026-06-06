@@ -145,10 +145,43 @@ export interface GatewayConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Update (Auto-Update System)
+// ---------------------------------------------------------------------------
+
+export interface UpdateConfig {
+  /** Enable or disable the auto-update system entirely. Kill-switch: SUDO_UPDATE_DISABLE=1 overrides. */
+  enabled: boolean;
+  /** Which channel to track: 'latest' or 'stable'. */
+  channel: 'latest' | 'stable';
+  /** Check interval in milliseconds. Minimum 60 000. */
+  checkIntervalMs: number;
+  /** Number of previous versions to retain for rollback. */
+  rollbackVersions: number;
+  /** Whether to apply updates automatically or just notify. */
+  autoApply: boolean;
+  /** Whether to verify SHA-256 checksums before applying. */
+  verifyChecksums: boolean;
+  /** Maximum version to install (kill switch). Undefined = no limit. */
+  maxVersion?: string;
+  /** Specific versions to skip (known-bad releases). */
+  skipVersions: string[];
+  /** Health gate: block updates when Watchdog reports critical. */
+  healthGate: boolean;
+  /** Lock file timeout in milliseconds. */
+  lockTimeoutMs: number;
+  /** npm package name for version resolution. */
+  packageName: string;
+  /** Git remote URL for git-based fallback resolution. */
+  gitRemoteUrl: string;
+  /** Git branch for version resolution. */
+  gitBranch: string;
+}
+
+// ---------------------------------------------------------------------------
 // Root config
 // ---------------------------------------------------------------------------
 
-/** Complete SUDO-AI v3 configuration schema. */
+/** Complete SUDO-AI v4 configuration schema. */
 export interface SudoConfig {
   meta: MetaConfig;
   agents: AgentsConfig;
@@ -158,4 +191,6 @@ export interface SudoConfig {
   tools: ToolsConfig;
   cron: CronConfig;
   gateway: GatewayConfig;
+  /** Auto-update configuration (optional — merged with DEFAULT_UPDATE_CONFIG). */
+  update?: Partial<UpdateConfig>;
 }

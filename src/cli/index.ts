@@ -270,6 +270,23 @@ program
   });
 
 // ---------------------------------------------------------------------------
+// update — check for and apply SUDO-AI updates
+// ---------------------------------------------------------------------------
+
+program
+  .command('update')
+  .description('Check for and apply SUDO-AI updates')
+  .option('--check', 'Only check for available updates (do not apply)')
+  .option('--channel <channel>', 'Update channel: latest or stable', 'latest')
+  .option('--rollback', 'Rollback to the previous version')
+  .option('--status', 'Show current version and update history')
+  .action(async (opts: { check?: boolean; channel?: string; rollback?: boolean; status?: boolean }) => {
+    const { runUpdate } = await import('./commands/update.js');
+    const code = await runUpdate(PROJECT_ROOT, opts);
+    process.exit(code);
+  });
+
+// ---------------------------------------------------------------------------
 // Parse args
 // ---------------------------------------------------------------------------
 
