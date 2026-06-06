@@ -1,7 +1,7 @@
 {
   "agent": {
-    "name": "test2",
-    "model": "deepseek-v4-pro",
+    "name": "test1",
+    "model": "claude-sonnet-4-6",
     "profile": "full"
   },
   "skills": {
@@ -13,9 +13,10 @@
     "modules": [
       "SelfModel",
       "EpisodicMemory",
+      "ProceduralMemory",
       "Metacognition",
-      "GoalTracker",
-      "Kairos"
+      "WorldModel",
+      "InternalDialogue"
     ]
   },
   "memory": {
@@ -32,10 +33,10 @@
   },
   "customInstructions": "",
   "migration": {
-    "source": "hermes",
-    "migratedAt": "2026-06-06T05:36:32.327Z",
+    "source": "openclaw",
+    "migratedAt": "2026-06-06T12:14:50.340Z",
     "originalConfig": {
-      "name": "test2"
+      "name": "test1"
     }
   }
 }
