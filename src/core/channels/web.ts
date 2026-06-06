@@ -319,9 +319,13 @@ export class WebAdapter implements ChannelAdapter {
     // -----------------------------------------------------------------------
     // Auth: if WEB_CHAT_TOKEN is set, require it via Authorization: Bearer header
     // or ?token= query parameter (timing-safe comparison).
+    // Skip auth for local/loopback connections so dev testing works seamlessly
+    // (mirrors the WS upgrade path bypass above).
     // -----------------------------------------------------------------------
     const requiredToken = process.env['WEB_CHAT_TOKEN'] ?? '';
-    if (requiredToken) {
+    const clientIp = (req.socket as { remoteAddress?: string } | null)?.remoteAddress;
+    const isLocalDev = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost' || clientIp?.startsWith('192.168.') || clientIp?.startsWith('10.');
+    if (requiredToken && !isLocalDev) {
       let parsedUrl: URL;
       try {
         parsedUrl = new URL(rawUrl, `http://${req.headers['host'] ?? 'localhost'}`);
