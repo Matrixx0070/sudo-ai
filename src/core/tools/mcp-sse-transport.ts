@@ -64,6 +64,7 @@ export class SSETransport extends EventEmitter<{
   private abortController: AbortController | null = null;
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private intentionalClose = false;
   private readonly config: SSETransportConfigResolved;
 
   constructor(config: SSETransportConfig) {
@@ -89,7 +90,9 @@ export class SSETransport extends EventEmitter<{
 
   /**
    * Connect to the SSE endpoint and start listening for events.
-   * Automatically reconnects on failure with exponential backoff.
+   * Resolves once the connection is established (not when the stream ends),
+   * so callers can proceed with the MCP handshake. Automatically reconnects
+   * on failure with exponential backoff.
    */
   async connect(): Promise<void> {
     if (this.state === 'connected' || this.state === 'connecting') {
@@ -97,6 +100,7 @@ export class SSETransport extends EventEmitter<{
       return;
     }
 
+    this.intentionalClose = false;
     this.state = 'connecting';
     await this._connectWithRetry();
   }
@@ -114,25 +118,38 @@ export class SSETransport extends EventEmitter<{
       await this._doConnect();
       this.reconnectAttempt = 0; // Reset on success
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.reconnectAttempt++;
-
-      const delayMs = Math.min(
-        this.config.reconnectBaseMs * Math.pow(2, this.reconnectAttempt - 1),
-        this.config.reconnectMaxMs,
-      );
-
-      log.warn(
-        { url: this.config.url, attempt: this.reconnectAttempt, delayMs, error: error.message },
-        'SSE connection failed, scheduling reconnect',
-      );
-
-      this.state = 'error';
-      this.emit('error', error);
-      this.emit('reconnecting', this.reconnectAttempt, delayMs);
-
-      this._scheduleReconnect(delayMs);
+      this._onConnectionFailure(err);
     }
+  }
+
+  /**
+   * Handle a connection or in-flight stream failure: emit the error and
+   * schedule a reconnect with exponential backoff. No-op when the transport
+   * was closed intentionally via disconnect().
+   */
+  private _onConnectionFailure(err: unknown): void {
+    if (this.intentionalClose) {
+      return;
+    }
+
+    const error = err instanceof Error ? err : new Error(String(err));
+    this.reconnectAttempt++;
+
+    const delayMs = Math.min(
+      this.config.reconnectBaseMs * Math.pow(2, this.reconnectAttempt - 1),
+      this.config.reconnectMaxMs,
+    );
+
+    log.warn(
+      { url: this.config.url, attempt: this.reconnectAttempt, delayMs, error: error.message },
+      'SSE connection failed, scheduling reconnect',
+    );
+
+    this.state = 'error';
+    this.emit('error', error);
+    this.emit('reconnecting', this.reconnectAttempt, delayMs);
+
+    this._scheduleReconnect(delayMs);
   }
 
   private async _doConnect(): Promise<void> {
@@ -170,8 +187,14 @@ export class SSETransport extends EventEmitter<{
       this.emit('open');
       log.info({ url: this.config.url }, 'SSE connection established');
 
-      // Start reading the stream
-      await this._readStream(response.body);
+      // Start reading the stream in the background. The read loop runs for the
+      // entire lifetime of the connection, so awaiting it here would prevent
+      // connect() from ever resolving — which would block the MCP `initialize`
+      // handshake forever. Resolve now (the connection is established) and
+      // route any stream error through the reconnect path asynchronously.
+      void this._readStream(response.body).catch((streamErr) => {
+        this._onConnectionFailure(streamErr);
+      });
     } catch (err) {
       clearTimeout(timeoutId);
       throw err;
@@ -221,8 +244,8 @@ export class SSETransport extends EventEmitter<{
         }
       }
     } catch (err) {
-      if (this.abortController?.signal.aborted) {
-        // Clean disconnect
+      if (this.intentionalClose || this.abortController?.signal.aborted) {
+        // Clean disconnect — do not reconnect
         return;
       }
       throw err;
@@ -230,7 +253,10 @@ export class SSETransport extends EventEmitter<{
       reader.releaseLock();
     }
 
-    // Stream ended - attempt reconnect
+    // Stream ended on its own — attempt reconnect unless intentionally closed.
+    if (this.intentionalClose) {
+      return;
+    }
     this.state = 'disconnected';
     this.emit('close');
     this._scheduleReconnect(this.config.reconnectBaseMs);
@@ -283,6 +309,8 @@ export class SSETransport extends EventEmitter<{
   /** Disconnect and stop reconnection attempts */
   disconnect(): void {
     log.info({ url: this.config.url }, 'SSE transport disconnecting');
+
+    this.intentionalClose = true;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
