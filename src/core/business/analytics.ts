@@ -115,7 +115,11 @@ export class BusinessAnalytics {
 
       const label = yyyyMM(start);
       const startIso = start.toISOString().slice(0, 10);
-      const endIso = i === 0 ? new Date().toISOString().slice(0, 10) : end.toISOString().slice(0, 10);
+      // Upper bound is EXCLUSIVE (see _revenueForPeriod): use the first day of
+      // the next month so invoices paid on a month boundary are counted once.
+      // For the current month (i === 0) the next-month boundary lies in the
+      // future, so it naturally includes everything paid so far.
+      const endIso = end.toISOString().slice(0, 10);
 
       // InvoiceManager exposes a raw DB — we call a package-private helper
       // via a cast to avoid exposing internal SQL on the public class.
@@ -158,7 +162,7 @@ export class BusinessAnalytics {
 
   private _revenueForPeriod(
     startDate: string,
-    endDate: string,
+    endDateExclusive: string,
   ): { revenue: number; invoiceCount: number } {
     // Access the underlying DB through the InvoiceManager's public getStats
     // is insufficient for date-filtered queries. We instead expose a
@@ -176,8 +180,8 @@ export class BusinessAnalytics {
       JOIN invoice_items ii ON ii.invoice_id = inv.id
       WHERE inv.status = 'paid'
         AND inv.paid_date >= ?
-        AND inv.paid_date <= ?
-    `).get(startDate, endDate) as Row;
+        AND inv.paid_date < ?
+    `).get(startDate, endDateExclusive) as Row;
 
     return { revenue: row.revenue, invoiceCount: row.cnt };
   }

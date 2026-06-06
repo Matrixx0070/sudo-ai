@@ -75,7 +75,15 @@ function getWsUrl(): string {
 }
 
 function getPersistentWs(): WebSocket {
-  if (_persistentWs && _persistentWs.readyState === WebSocket.OPEN) {
+  // Reuse the existing socket while it is still usable (CONNECTING or OPEN).
+  // Only create a new one once the previous is CLOSING/CLOSED, otherwise a call
+  // during the handshake would orphan the first socket while its onmessage
+  // handler keeps mutating the shared _pendingQueue.
+  if (
+    _persistentWs &&
+    _persistentWs.readyState !== WebSocket.CLOSING &&
+    _persistentWs.readyState !== WebSocket.CLOSED
+  ) {
     return _persistentWs;
   }
   const ws = new WebSocket(getWsUrl());

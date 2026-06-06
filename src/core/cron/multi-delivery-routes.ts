@@ -41,7 +41,6 @@ function sendJson(res: unknown, status: number, data: unknown): void {
   r.setHeader?.('Content-Type', 'application/json');
   const body = JSON.stringify(data);
   r.end?.(body);
-  r.write?.(body);
 }
 
 /** Extract Bearer token from request */

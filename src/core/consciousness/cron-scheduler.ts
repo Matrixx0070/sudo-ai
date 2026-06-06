@@ -292,9 +292,14 @@ export class CronScheduler {
     const durable = options?.durable ?? false;
     const now = new Date();
 
-    const expiresAt = new Date(
-      now.getTime() + this.config.recurringExpiryDays * 24 * 60 * 60 * 1000,
-    ).toISOString();
+    // Only recurring tasks auto-expire after recurringExpiryDays. One-shot
+    // tasks must survive until their (possibly far-future) cron match fires;
+    // they are auto-deleted in tick() after firing once, not by time expiry.
+    const expiresAt = kind === 'recurring'
+      ? new Date(
+          now.getTime() + this.config.recurringExpiryDays * 24 * 60 * 60 * 1000,
+        ).toISOString()
+      : new Date(8640000000000000).toISOString(); // max representable Date (no time-based expiry)
 
     const task: CronTask = {
       id: genId(),

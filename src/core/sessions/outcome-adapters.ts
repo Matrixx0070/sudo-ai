@@ -49,8 +49,14 @@ export function buildOutcomeAdapters(
       n: number,
     ): Array<{ role: string; content: string }> {
       try {
-        const rows = store.getMessages(sessionId, n);
-        return rows.map((r) => ({ role: r.role, content: r.content }));
+        // store.getMessages returns rows in chronological order (id ASC) limited
+        // to the FIRST `limit` rows, so passing `n` yields the OLDEST n messages.
+        // To return the LAST n (most recent) in chronological order, fetch the
+        // full set and take the trailing slice.
+        const total = store.getMessageCount(sessionId);
+        if (total <= 0) return [];
+        const rows = store.getMessages(sessionId, total);
+        return rows.slice(Math.max(0, rows.length - n)).map((r) => ({ role: r.role, content: r.content }));
       } catch (err) {
         logger.warn({ sessionId, error: String(err).slice(0, 200) }, 'getRecentMessages failed');
         return [];

@@ -91,12 +91,21 @@ interface BuddyData {
   sessionsCount: number;
   createdAt: string;
   lastSeen: string;
+  /** ID of the most recent session counted toward sessionsCount, used to
+   *  avoid incrementing the counter more than once per session. */
+  lastSessionId?: string;
 }
 
 function ensureDataDir(): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 }
 
+/**
+ * Load the persisted buddy without mutating it, creating a fresh one on the
+ * first ever load. This is a pure read: it does NOT increment sessionsCount or
+ * re-level, so it is safe to call from read-only handlers. Use
+ * {@link recordSession} to register a genuinely new session.
+ */
 function loadBuddy(): BuddyData {
   const seed = hostname();
   const hash = hashSeed(seed);
@@ -105,14 +114,7 @@ function loadBuddy(): BuddyData {
 
   if (existsSync(BUDDY_FILE)) {
     try {
-      const raw = JSON.parse(readFileSync(BUDDY_FILE, 'utf8')) as BuddyData;
-      // Update lastSeen and increment sessions on load
-      raw.lastSeen = new Date().toISOString();
-      raw.sessionsCount = (raw.sessionsCount ?? 0) + 1;
-      // Level up every 10 sessions
-      raw.level = Math.floor(raw.sessionsCount / 10) + 1;
-      saveBuddy(raw);
-      return raw;
+      return JSON.parse(readFileSync(BUDDY_FILE, 'utf8')) as BuddyData;
     } catch {
       // Fall through to create fresh
     }
@@ -132,6 +134,25 @@ function loadBuddy(): BuddyData {
   return fresh;
 }
 
+/**
+ * Register interaction with the buddy for the given session. Increments
+ * sessionsCount (and re-levels) at most once per distinct sessionId so that
+ * repeated tool calls within the same session do not inflate the count or
+ * trigger spurious level-ups. Always refreshes lastSeen. Mutates and persists
+ * the supplied buddy.
+ */
+function recordSession(buddy: BuddyData, sessionId?: string): BuddyData {
+  buddy.lastSeen = new Date().toISOString();
+  if (sessionId === undefined || buddy.lastSessionId !== sessionId) {
+    buddy.sessionsCount = (buddy.sessionsCount ?? 0) + 1;
+    // Level up every 10 sessions
+    buddy.level = Math.floor(buddy.sessionsCount / 10) + 1;
+    buddy.lastSessionId = sessionId;
+  }
+  saveBuddy(buddy);
+  return buddy;
+}
+
 function saveBuddy(data: BuddyData): void {
   ensureDataDir();
   writeFileSync(BUDDY_FILE, JSON.stringify(data, null, 2), 'utf8');
@@ -141,8 +162,8 @@ function saveBuddy(data: BuddyData): void {
 // Action handlers
 // ---------------------------------------------------------------------------
 
-async function handleStatus(): Promise<ToolResult> {
-  const buddy = loadBuddy();
+async function handleStatus(sessionId?: string): Promise<ToolResult> {
+  const buddy = recordSession(loadBuddy(), sessionId);
   const stats = Object.entries(buddy.stats)
     .map(([k, v]) => `  ${k}: ${v}/100`)
     .join('\n');
@@ -161,8 +182,8 @@ async function handleStatus(): Promise<ToolResult> {
   return { success: true, output, data: buddy };
 }
 
-async function handleMeet(): Promise<ToolResult> {
-  const buddy = loadBuddy();
+async function handleMeet(sessionId?: string): Promise<ToolResult> {
+  const buddy = recordSession(loadBuddy(), sessionId);
   const greetings: Record<string, string> = {
     legendary: `*an ancient presence stirs* The ${buddy.species} ${buddy.emoji} regards you with timeless eyes.`,
     rare:      `The ${buddy.species} ${buddy.emoji} tilts its head curiously at you.`,
@@ -230,13 +251,13 @@ export const buddyTool: ToolDefinition = {
   },
   timeout: 10_000,
 
-  async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+  async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const action = params['action'] as string;
     logger.debug({ action }, 'meta.buddy called');
 
     switch (action) {
-      case 'status':      return handleStatus();
-      case 'meet':        return handleMeet();
+      case 'status':      return handleStatus(ctx.sessionId);
+      case 'meet':        return handleMeet(ctx.sessionId);
       case 'evolve':      return handleEvolve();
       case 'list-species': return handleListSpecies();
       default:

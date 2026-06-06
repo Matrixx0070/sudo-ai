@@ -138,9 +138,14 @@ export class CreativeEngine {
     const base = rowToArtStyle(existing);
     const newVersion = base.version + 1;
     const evolvedId = randomUUID();
+    const baseName = `${base.name} v${newVersion}`;
+    const nameCollision = this.db.prepare(
+      `SELECT id FROM art_styles WHERE name = ?`
+    ).get(baseName) as { id: string } | undefined;
+    const evolvedName = nameCollision ? `${baseName} (${evolvedId.slice(0, 8)})` : baseName;
     const evolved: ArtStyle = {
       ...base, id: evolvedId,
-      name: `${base.name} v${newVersion}`,
+      name: evolvedName,
       description: `${base.description} [Evolved from v${base.version}: ${feedback.trim()}]`,
       version: newVersion, isCurrent: true,
       createdAt: new Date().toISOString(),

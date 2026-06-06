@@ -166,9 +166,11 @@ export class BootstrapRunner {
   private async _runStep(step: BootstrapStep): Promise<string> {
     const MAX_RETRIES = 3;
 
+    let last = '';
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       await this.send(step.prompt);
       const raw = await this.receive();
+      last = raw;
 
       if (step.validate) {
         const errMsg = step.validate(raw);
@@ -183,7 +185,7 @@ export class BootstrapRunner {
 
     // After max retries, accept whatever was last received
     log.warn({ step: step.key }, 'Step exceeded max retries — using last raw input');
-    return (this.state.data[step.key] ?? '').trim();
+    return step.transform ? step.transform(last) : last.trim();
   }
 
   private async _sendConfirmation(): Promise<void> {

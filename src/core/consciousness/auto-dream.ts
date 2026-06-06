@@ -96,23 +96,49 @@ function writeState(state: AutoDreamState): void {
 }
 
 function acquireLock(): boolean {
-  if (existsSync(LOCK_FILE)) {
-    try {
-      const lock = JSON.parse(readFileSync(LOCK_FILE, 'utf8')) as { pid: number; startedAt: string };
-      // Treat locks older than 2 hours as stale.
-      const ageMs = Date.now() - new Date(lock.startedAt).getTime();
-      if (ageMs < 2 * 60 * 60 * 1000) return false;
-    } catch {
-      // Corrupt lock file — steal the lock.
-    }
-  }
   ensureDataDir();
-  writeFileSync(
-    LOCK_FILE,
-    JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 2),
-    'utf8',
+  const payload = JSON.stringify(
+    { pid: process.pid, startedAt: new Date().toISOString() },
+    null,
+    2,
   );
-  return true;
+
+  const tryCreate = (): boolean => {
+    try {
+      // Exclusive create: fails atomically with EEXIST if a lock already exists.
+      writeFileSync(LOCK_FILE, payload, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw err;
+    }
+  };
+
+  // Fast path: no lock present — atomically create it.
+  if (tryCreate()) return true;
+
+  // A lock file exists. Decide whether it is stale (or corrupt) and stealable.
+  let stale = true;
+  try {
+    const lock = JSON.parse(readFileSync(LOCK_FILE, 'utf8')) as { pid: number; startedAt: string };
+    // Treat locks older than 2 hours as stale.
+    const ageMs = Date.now() - new Date(lock.startedAt).getTime();
+    if (ageMs < 2 * 60 * 60 * 1000) stale = false;
+  } catch {
+    // Corrupt lock file — steal the lock.
+  }
+
+  if (!stale) return false;
+
+  // Steal the stale/corrupt lock, then re-acquire atomically. If another
+  // process recreated the lock in the meantime, the exclusive create fails
+  // and we back off rather than clobbering an active lock.
+  try {
+    unlinkSync(LOCK_FILE);
+  } catch {
+    // Another process may have already removed/replaced it — fall through.
+  }
+  return tryCreate();
 }
 
 function releaseLock(): void {

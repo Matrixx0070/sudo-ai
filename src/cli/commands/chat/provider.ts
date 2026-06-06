@@ -220,6 +220,12 @@ async function* _streamAnthropic(
   const onAbort = (): void => { stream.abort(); };
   signal.addEventListener('abort', onAbort, { once: true });
 
+  // Track the latest usage seen during the stream; emit a single terminal
+  // 'done' chunk after the loop so consumers that accumulate usage per 'done'
+  // do not double-count (each message_delta carries cumulative usage and
+  // finalMessage repeats the final usage).
+  let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for await (const event of stream as AsyncIterable<any>) {
@@ -227,12 +233,9 @@ async function* _streamAnthropic(
       if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
         yield { type: 'text', value: event.delta.text };
       } else if (event.type === 'message_delta' && event.usage) {
-        yield {
-          type: 'done',
-          usage: {
-            inputTokens: event.usage.input_tokens,
-            outputTokens: event.usage.output_tokens,
-          },
+        lastUsage = {
+          inputTokens: event.usage.input_tokens,
+          outputTokens: event.usage.output_tokens,
         };
       }
     }
@@ -246,6 +249,8 @@ async function* _streamAnthropic(
             outputTokens: final.usage.output_tokens,
           },
         };
+      } else if (lastUsage) {
+        yield { type: 'done', usage: lastUsage };
       } else {
         yield { type: 'done' };
       }

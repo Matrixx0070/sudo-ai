@@ -6,10 +6,12 @@ import { SessionManager } from '../src/core/sessions/index.js';
 import { MindDB } from '../src/core/memory/index.js';
 import { AgentLoop } from '../src/core/agent/index.js';
 
+const TEST_OUTPUT_PATH = require('path').join(require('os').tmpdir(), 'sudo-ai-backend-test-output.txt');
+
 const TESTS = [
   { name: '1. Brain responds', msg: 'Say exactly: SUDO-AI ONLINE', check: (r: string) => r.includes('SUDO') || r.includes('ONLINE') },
   { name: '2. Read file (coder.read-file)', msg: 'Use coder.read-file to read the first 3 lines of package.json and tell me the project name', check: (r: string) => r.toLowerCase().includes('sudo') },
-  { name: '3. Write file (coder.write-file)', msg: 'Use coder.write-file to create "test-backend-output.txt" with content "Hello from SUDO-AI v3 backend test"', check: (_r: string) => { try { return require('fs').existsSync('/root/sudo-ai-v3/test-backend-output.txt'); } catch { return false; } } },
+  { name: '3. Write file (coder.write-file)', msg: `Use coder.write-file to create "${TEST_OUTPUT_PATH}" with content "Hello from SUDO-AI backend test"`, check: (_r: string) => { try { return require('fs').existsSync(TEST_OUTPUT_PATH); } catch { return false; } } },
   { name: '4. System monitor', msg: 'Use system.monitor with operation snapshot and tell me the CPU and memory usage percentages', check: (r: string) => /\d+%/.test(r) || /\d+.*[MGmg][Bb]/.test(r) },
   { name: '5. Git status', msg: 'Use coder.git with operation status and tell me if there are any changes', check: (r: string) => r.length > 20 },
   { name: '6. Glob files', msg: 'Use coder.glob to find all .ts files in src/core/brain/ and list them', check: (r: string) => r.includes('brain.ts') || r.includes('providers') },
@@ -57,7 +59,7 @@ async function main() {
   console.log('='.repeat(50));
 
   // Cleanup
-  try { require('fs').unlinkSync('/root/sudo-ai-v3/test-backend-output.txt'); } catch {}
+  try { require('fs').unlinkSync(TEST_OUTPUT_PATH); } catch {}
   db.close();
   process.exit(0);
 }

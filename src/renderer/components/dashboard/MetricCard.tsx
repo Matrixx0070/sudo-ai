@@ -26,7 +26,7 @@ const typeBg: Record<MetricType, string> = {
 
 export function MetricCard({ type, title, value, change, icon }: MetricCardProps) {
   const isPositive = change >= 0;
-  const changeText = `${isPositive ? '+' : ''}${change}${typeof change === 'number' && !Number.isInteger(change) ? '' : '%'}`;
+  const changeText = `${isPositive ? '+' : ''}${change}%`;
 
   return (
     <article

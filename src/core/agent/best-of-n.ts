@@ -206,6 +206,18 @@ export class BestOfNExecutor {
       winnerIndex = firstSuccess?.index ?? 0;
     }
 
+    // Guard against a judge returning an out-of-range/NaN candidateIndex.
+    // Fall back to the first successful candidate (or 0) rather than pointing
+    // at a non-existent candidate and silently discarding the real winner.
+    if (
+      !Number.isInteger(winnerIndex) ||
+      winnerIndex < 0 ||
+      winnerIndex >= candidates.length
+    ) {
+      const firstSuccess = candidates.find(c => c.success);
+      winnerIndex = firstSuccess?.index ?? 0;
+    }
+
     const winner = candidates[winnerIndex];
 
     log.info(

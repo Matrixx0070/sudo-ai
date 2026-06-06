@@ -120,9 +120,15 @@ export const imageEditorTool: ToolDefinition = {
             if (w.imagePath) {
               pipeline = pipeline.composite([{ input: w.imagePath, gravity: (w.gravity ?? 'center') as 'center' }]);
             } else if (w.text) {
-              // SVG text overlay
+              // SVG text overlay — escape XML-special characters so text
+              // containing &, <, >, or " produces valid SVG markup.
+              const escaped = w.text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
               const svg = Buffer.from(
-                `<svg><text x="10" y="30" font-size="24" fill="white" opacity="0.7">${w.text}</text></svg>`,
+                `<svg><text x="10" y="30" font-size="24" fill="white" opacity="0.7">${escaped}</text></svg>`,
               );
               pipeline = pipeline.composite([{ input: svg, gravity: (w.gravity ?? 'south') as 'center' }]);
             }

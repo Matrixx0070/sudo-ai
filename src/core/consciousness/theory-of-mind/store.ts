@@ -108,10 +108,14 @@ export function saveUserModel(db: Database.Database, model: UserModel): void {
       INSERT OR REPLACE INTO user_models
         (user_id, traits, preferences, communication_style, trust_level,
          known_triggers, known_delights, last_interaction, interaction_count,
-         updated_at)
+         created_at, updated_at)
       VALUES
         (@userId, @traits, @preferences, @communicationStyle, @trustLevel,
          @knownTriggers, @knownDelights, @lastInteraction, @interactionCount,
+         COALESCE(
+           (SELECT created_at FROM user_models WHERE user_id = @userId),
+           strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         ),
          strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     `).run({
       userId: model.userId,

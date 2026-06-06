@@ -34,8 +34,8 @@ export const Input: React.FC<InputProps> = ({
       onSlashOpen();
     }
 
-    // Detect '@' anywhere in value
-    if (val.includes('@') && !value.includes('@')) {
+    // Detect a newly typed '@' (count increased), so subsequent mentions reopen the menu
+    if (val.split('@').length > value.split('@').length) {
       onMentionOpen();
     }
 

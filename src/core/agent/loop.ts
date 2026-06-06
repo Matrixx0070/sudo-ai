@@ -940,6 +940,10 @@ export class AgentLoop {
     let _w10bToolCallCount = 0;
     let _w10bToolSuccessCount = 0;
     const _w10bToolSequence: string[] = [];
+    // Parallel to _w10bToolSequence: the actual per-call success flag from
+    // isToolResultSuccess() at emit time, so onSessionEnd reports real outcomes
+    // rather than the "first N are successes" approximation.
+    const _w10bToolSuccess: boolean[] = [];
 
     // Pattern that matches file paths embedded in tool result strings.
     // Covers: "Saved: /abs/path.png", "saved to /abs/path.jpg", "path: /abs/path.webp", etc.
@@ -1024,6 +1028,7 @@ export class AgentLoop {
             _w10bToolCallCount++;
             if (_isSuccess) _w10bToolSuccessCount++;
             _w10bToolSequence.push(_tr.name);
+            _w10bToolSuccess.push(_isSuccess);
           }
         } catch { /* fail-open */ }
 
@@ -1388,7 +1393,7 @@ export class AgentLoop {
       if (this._toolOutcomeLearner && _w10bToolCallCount > 0) {
         const outcomes = _w10bToolSequence.map((toolName, idx) => ({
           toolName,
-          success: idx < _w10bToolSuccessCount, // approximate: first N are successes
+          success: _w10bToolSuccess[idx] ?? false, // real per-call outcome captured at emit time
         }));
         this._toolOutcomeLearner.onSessionEnd(sessionId, outcomes);
       }
@@ -2296,8 +2301,14 @@ export class AgentLoop {
                 const toolMsgs = session.messages
                   .filter((m) => (m as { role: string }).role === 'tool')
                   .slice(-activeToolCalls.length);
-                const toolTexts = toolMsgs.map(m => (typeof (m as { content: unknown }).content === 'string' ? (m as { content: string }).content : JSON.stringify((m as { content: unknown }).content)));
-                for (const txt of toolTexts) {
+                // Iterate over the message OBJECTS (not just extracted text) so that on a
+                // CRITICAL hit we can redact the poisoned content in place — otherwise the
+                // attacker-controlled text stays in session.messages and is sent to the next
+                // brain.call() despite the "refusing to trust result" warning.
+                for (const toolMsg of toolMsgs) {
+                  const txt = typeof (toolMsg as { content: unknown }).content === 'string'
+                    ? (toolMsg as { content: string }).content
+                    : JSON.stringify((toolMsg as { content: unknown }).content);
                   const toolInjRes = this._injectionDetector.scan(txt);
                   if (toolInjRes.severity === 'MEDIUM' || toolInjRes.severity === 'HIGH' || toolInjRes.severity === 'CRITICAL') {
                     try {
@@ -2309,10 +2320,13 @@ export class AgentLoop {
                     );
                   }
                   if (toolInjRes.severity === 'CRITICAL') {
+                    // Redact the poisoned tool result so the injected instructions never reach
+                    // the next brain.call(); the warning alone does not remove the text.
+                    (toolMsg as { content: string }).content = '[REDACTED: tool output contained a CRITICAL prompt-injection payload and was removed]';
                     const toolReplanMsg = '[INJECTION-CRITICAL] tool output contains prompt injection: refusing to trust result';
                     session.messages.push({ role: 'system', content: toolReplanMsg });
                     emit({ type: 'error', error: toolReplanMsg });
-                    log.error({ sessionId: state.sessionId, markers: toolInjRes.matchedMarkers }, 'InjectionDetector: CRITICAL tool output — forcing REPLAN');
+                    log.error({ sessionId: state.sessionId, markers: toolInjRes.matchedMarkers }, 'InjectionDetector: CRITICAL tool output — redacted and forcing REPLAN');
                     // Clear validToolCalls to skip further processing and trigger REPLAN via continue.
                     (validToolCalls as unknown[]).length = 0;
                     break;

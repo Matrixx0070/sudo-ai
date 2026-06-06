@@ -132,7 +132,8 @@ export class SlackSocketMode {
 
 export class SlackPoller {
   private _timer: ReturnType<typeof setInterval> | null = null;
-  private _lastTs: string = String(Math.floor(Date.now() / 1000) - 5);
+  private readonly _initialTs: string = String(Math.floor(Date.now() / 1000) - 5);
+  private readonly _lastTs = new Map<string, string>();
   private _handler: SlackEventHandler | null = null;
 
   constructor(
@@ -164,8 +165,9 @@ export class SlackPoller {
   private async _poll(): Promise<void> {
     for (const channelId of this.channels) {
       try {
+        const oldest = this._lastTs.get(channelId) ?? this._initialTs;
         const res = await fetch(
-          `${SLACK_API}/conversations.history?channel=${channelId}&oldest=${this._lastTs}&limit=20`,
+          `${SLACK_API}/conversations.history?channel=${channelId}&oldest=${oldest}&limit=20`,
           { headers: { Authorization: `Bearer ${this.botToken}` } },
         );
         if (!res.ok) continue;
@@ -181,7 +183,7 @@ export class SlackPoller {
             ts: String(msg['ts'] ?? ''),
             threadTs: String(msg['thread_ts'] ?? '') || undefined,
           });
-          this._lastTs = String(msg['ts']);
+          this._lastTs.set(channelId, String(msg['ts']));
         }
       } catch (err) {
         log.error({ channelId, err }, 'Slack poll error');

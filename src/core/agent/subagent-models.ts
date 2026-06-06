@@ -1,6 +1,6 @@
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -84,6 +84,7 @@ export async function worktreeAgent(task: string, options: Partial<SubagentOptio
   const agentId = genId();
   const start = Date.now();
   const sessionId = `worktree-${agentId}`;
+  const createdWorkdir = options.workdir === undefined;
   const workdir = options.workdir ?? mkdtempSync(path.join(tmpdir(), 'sudo-worktree-'));
   log.info({ agentId, workdir, task: task.slice(0, 80) }, 'Spawning worktree agent');
   const message = `[WORKTREE AGENT]\nIsolated working directory: ${workdir}\nAll file operations should use this directory.\n\nTask: ${task}`;
@@ -92,6 +93,15 @@ export async function worktreeAgent(task: string, options: Partial<SubagentOptio
     return { model: 'worktree', success: true, output, durationMs: Date.now() - start, agentId };
   } catch (e) {
     return { model: 'worktree', success: false, output: String(e), durationMs: Date.now() - start, agentId };
+  } finally {
+    // Only remove the temp dir we created; never delete a caller-supplied workdir.
+    if (createdWorkdir) {
+      try {
+        rmSync(workdir, { recursive: true, force: true });
+      } catch (err) {
+        log.warn({ agentId, workdir, err: String(err) }, 'Worktree temp dir cleanup failed — directory may remain');
+      }
+    }
   }
 }
 

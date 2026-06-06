@@ -168,12 +168,15 @@ export class MatrixAdapter implements ChannelAdapter {
   }
 
   private async _getSelfId(): Promise<string> {
-    if (this._selfId !== undefined) return this._selfId;
+    if (this._selfId) return this._selfId;
     try {
       const data = await this._req('GET', '/_matrix/client/v3/account/whoami');
-      this._selfId = String(data['user_id'] ?? '');
-    } catch { this._selfId = ''; }
-    return this._selfId;
+      const userId = String(data['user_id'] ?? '');
+      // Only memoize a real user_id; leave undefined on empty/failure so it retries
+      // (caching '' would make own-message filtering never match → self-reply loop).
+      if (userId) this._selfId = userId;
+      return userId;
+    } catch { return ''; }
   }
 
   private async _dispatch(roomId: string, sender: string, text: string, eventId: string): Promise<void> {

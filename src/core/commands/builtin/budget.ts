@@ -161,22 +161,36 @@ export const budgetCommand: SlashCommand = {
         return 'Budget data unavailable — internal schema detection error.';
       }
 
-      // Both aliases (amount, created_at) are fixed — the rest of the function
-      // body never needs to know which physical column was used.
-      const sql =
-        `SELECT ${amountColumn} AS amount, ${timestampColumn} AS created_at ` +
-        `FROM api_costs ORDER BY ${timestampColumn} DESC LIMIT 500`;
-
-      const rows = rawDb.prepare(sql).all() as CostRow[];
-
-      if (!rows || rows.length === 0) {
-        return 'Budget tracking not available or no costs recorded yet.';
-      }
-
       const now   = Date.now();
       const DAY   = 86_400_000;
       const WEEK  = 7  * DAY;
       const MONTH = 30 * DAY;
+
+      // Restrict the scan to the widest window we report (the 30-day month).
+      // created_at/called_at are stored as ISO-8601 strings (…Z), which are
+      // lexicographically ordered, so a string comparison on the cutoff is
+      // correct. Filtering by date (instead of LIMIT 500) ensures the month
+      // and week totals are not silently truncated on busy installs. The
+      // cutoff is a self-generated ISO timestamp — not an injection path.
+      const monthCutoff = new Date(now - MONTH).toISOString();
+
+      // Both aliases (amount, created_at) are fixed — the rest of the function
+      // body never needs to know which physical column was used.
+      const sql =
+        `SELECT ${amountColumn} AS amount, ${timestampColumn} AS created_at ` +
+        `FROM api_costs WHERE ${timestampColumn} >= '${monthCutoff}'`;
+
+      const rows = rawDb.prepare(sql).all() as CostRow[];
+
+      // Empty-check must consider ALL recorded costs, not just the last 30 days:
+      // a DB holding only older rows still has data and should report $0.0000
+      // totals rather than "no costs recorded yet" (rows — the 30-day window —
+      // may be empty while the table is non-empty).
+      const countRows = rawDb.prepare('SELECT COUNT(*) AS c FROM api_costs').all() as Array<{ c: number }>;
+      const totalRecorded = countRows[0]?.c ?? 0;
+      if (totalRecorded === 0) {
+        return 'Budget tracking not available or no costs recorded yet.';
+      }
 
       let today = 0, week = 0, month = 0;
       for (const row of rows) {

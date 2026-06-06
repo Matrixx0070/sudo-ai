@@ -208,6 +208,28 @@ export class SSETransport extends EventEmitter<{
     let lastEventId: string | undefined;
     let retryMs: number | undefined;
 
+    // Fields accumulated for the SSE frame currently being parsed. A frame is
+    // terminated by a blank line, at which point it is dispatched. Event/id/
+    // retry/data fields belonging to the same frame are associated together
+    // rather than read out-of-band, so a frame delivered in a single chunk is
+    // parsed correctly without blocking for the next chunk.
+    let eventType: string | undefined;
+    const dataLines: string[] = [];
+
+    const dispatchFrame = (): void => {
+      if (dataLines.length > 0) {
+        this._emitMessage({
+          event: eventType,
+          data: dataLines.join('\n').trim(),
+          id: lastEventId,
+          retry: retryMs,
+        });
+      }
+      // Reset per-frame state for the next event.
+      eventType = undefined;
+      dataLines.length = 0;
+    };
+
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -222,27 +244,26 @@ export class SSETransport extends EventEmitter<{
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed) continue;
+          // A blank line terminates the current event frame and dispatches it.
+          if (!trimmed) {
+            dispatchFrame();
+            continue;
+          }
 
           if (trimmed.startsWith('id:')) {
             lastEventId = trimmed.slice(3).trim();
           } else if (trimmed.startsWith('event:')) {
-            // Store event type for next data line
-            const eventType = trimmed.slice(6).trim();
-            // Next data line will use this event type
-            const nextLine = await this._readNextDataLine(reader, decoder, buffer);
-            if (nextLine.data) {
-              this._emitMessage({ event: eventType, data: nextLine.data, id: lastEventId, retry: nextLine.retry });
-              buffer = nextLine.buffer;
-            }
+            eventType = trimmed.slice(6).trim();
           } else if (trimmed.startsWith('data:')) {
-            const data = trimmed.slice(5).trim();
-            this._emitMessage({ data, id: lastEventId, retry: retryMs });
+            dataLines.push(trimmed.slice(5).trim());
           } else if (trimmed.startsWith('retry:')) {
             retryMs = parseInt(trimmed.slice(6).trim(), 10);
           }
         }
       }
+
+      // Stream ended: dispatch any frame not terminated by a trailing blank line.
+      dispatchFrame();
     } catch (err) {
       if (this.intentionalClose || this.abortController?.signal.aborted) {
         // Clean disconnect — do not reconnect
@@ -260,34 +281,6 @@ export class SSETransport extends EventEmitter<{
     this.state = 'disconnected';
     this.emit('close');
     this._scheduleReconnect(this.config.reconnectBaseMs);
-  }
-
-  private async _readNextDataLine(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    decoder: TextDecoder,
-    buffer: string,
-  ): Promise<{ data: string; retry?: number; buffer: string }> {
-    while (true) {
-      if (!buffer) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer = decoder.decode(value, { stream: true });
-      }
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('data:')) {
-          return { data: trimmed.slice(5).trim(), buffer };
-        } else if (trimmed.startsWith('retry:')) {
-          return { data: '', retry: parseInt(trimmed.slice(6).trim(), 10), buffer };
-        } else if (trimmed) {
-          // Non-empty, non-data line - return what we have
-          return { data: '', buffer };
-        }
-      }
-    }
-    return { data: '', buffer };
   }
 
   private _emitMessage(msg: SSEMessage): void {

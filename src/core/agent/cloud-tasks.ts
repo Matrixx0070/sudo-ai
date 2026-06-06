@@ -71,7 +71,7 @@ export function createCloudTask(prompt: string, environmentId?: string): CloudTa
   }
 
   const task: CloudTask = {
-    id: `cloud-${Date.now()}`,
+    id: `cloud-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     prompt,
     status: 'queued',
     createdAt: new Date().toISOString(),

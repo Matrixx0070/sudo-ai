@@ -10,7 +10,7 @@ import path from 'path';
 import { createLogger } from '../core/shared/logger.js';
 import { PipelineError } from '../core/shared/errors.js';
 import { PATHS } from '../core/shared/constants.js';
-import { retry } from '../core/shared/utils.js';
+import { sleep } from '../core/shared/utils.js';
 import type { SeoMetadata, UploadResult } from './types.js';
 
 const log = createLogger('pipeline:youtube-uploader');
@@ -250,24 +250,29 @@ export async function uploadToYouTube(
   const contentLength = fs.statSync(videoPath).size;
   log.info({ videoPath, title: seo.title, scheduleAt }, 'Starting YouTube upload');
 
+  // Retry transient failures up to 3 times with backoff, but hard-fail
+  // immediately on quota/403 errors (no backoff) per the docstring contract.
+  const maxAttempts = 3;
+  const backoffMs = [5_000, 15_000, 30_000];
   let videoId: string;
-  try {
-    videoId = await retry(
-      async () => {
-        const token = await getAccessToken();
-        const uri = await initiateResumableUpload(token, seo, scheduleAt, contentLength);
-        return uploadVideoFile(uri, videoPath);
-      },
-      3,
-      [5_000, 15_000, 30_000],
-    );
-  } catch (err) {
-    if (err instanceof PipelineError && err.code === 'pipeline_upload_quota_exceeded') throw err;
-    throw new PipelineError(
-      `YouTube upload failed after retries: ${String(err)}`,
-      'pipeline_upload_api_error',
-      { cause: String(err) },
-    );
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const token = await getAccessToken();
+      const uri = await initiateResumableUpload(token, seo, scheduleAt, contentLength);
+      videoId = await uploadVideoFile(uri, videoPath);
+      break;
+    } catch (err) {
+      // Quota/403 is not transient — surface it immediately without retrying.
+      if (err instanceof PipelineError && err.code === 'pipeline_upload_quota_exceeded') throw err;
+      if (attempt >= maxAttempts) {
+        throw new PipelineError(
+          `YouTube upload failed after retries: ${String(err)}`,
+          'pipeline_upload_api_error',
+          { cause: String(err) },
+        );
+      }
+      await sleep(backoffMs[Math.min(attempt - 1, backoffMs.length - 1)] ?? 1_000);
+    }
   }
 
   if (thumbnailPath && fs.existsSync(thumbnailPath)) {

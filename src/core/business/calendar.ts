@@ -195,11 +195,24 @@ export class CalendarClient {
     }
     this._requireApi();
 
+    // Build the patch body conditionally so unspecified fields are left
+    // untouched. localToGEvent unconditionally sets start/end, which would
+    // serialize undefined timings to empty objects and clobber the event.
+    const requestBody: GCalEvent = {};
+    if (patch.title !== undefined) requestBody.summary = patch.title;
+    if (patch.description !== undefined) requestBody.description = patch.description;
+    if (patch.location !== undefined) requestBody.location = patch.location;
+    if (patch.start !== undefined) requestBody.start = { dateTime: patch.start };
+    if (patch.end !== undefined) requestBody.end = { dateTime: patch.end };
+    if (patch.attendees !== undefined) {
+      requestBody.attendees = patch.attendees.map((email) => ({ email }));
+    }
+
     try {
       const res = await this.calendarApi.events.patch({
         calendarId: this.calendarId,
         eventId: id,
-        requestBody: localToGEvent(patch as Omit<CalendarEvent, 'id'>),
+        requestBody,
       });
       const updated = gEventToLocal(res.data as GCalEvent);
       log.info({ eventId: id }, 'Calendar event updated');

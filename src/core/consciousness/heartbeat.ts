@@ -511,12 +511,16 @@ export class HeartbeatEngine {
 
     if (this.db) {
       try {
-        // Read from trace store if available
+        // Read from trace store if available.
+        // Token totals must span ALL models, so they are computed with window
+        // functions over the grouped-per-model sums (i.e. summed across every
+        // group); GROUP BY/ORDER BY only selects the most-used model for the
+        // topModel field.
         const row = this.db
           .prepare(`
             SELECT
-              SUM(CASE WHEN date(created_at) = date('now') THEN tokens ELSE 0 END) AS today_tokens,
-              SUM(tokens) AS week_tokens,
+              SUM(SUM(CASE WHEN date(created_at) = date('now') THEN tokens ELSE 0 END)) OVER () AS today_tokens,
+              SUM(SUM(tokens)) OVER () AS week_tokens,
               model,
               COUNT(*) AS cnt
             FROM tool_traces
@@ -760,8 +764,9 @@ export class HeartbeatEngine {
   // -------------------------------------------------------------------------
 
   private _renderProgressBar(percent: number): string {
-    const filled = Math.round(percent / 10);
-    const empty = 10 - filled;
+    const p = Math.min(100, Math.max(0, percent));
+    const filled = Math.round(p / 10);
+    const empty = Math.max(0, 10 - filled);
     return '█'.repeat(filled) + '░'.repeat(empty);
   }
 

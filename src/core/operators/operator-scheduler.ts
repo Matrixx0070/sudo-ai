@@ -45,24 +45,36 @@ function msUntilNextCron(cron: string): number {
   }
 
   const now = new Date();
-  const [minutePart, hourPart] = parts;
+  const [minutePart, hourPart, , , dowPart] = parts;
 
-  // Determine target hour and minute
-  const targetMinute = minutePart === '*' ? now.getMinutes() : parseInt(minutePart ?? '0', 10);
+  // Determine target hour and minute. A wildcard minute means "every minute"
+  // (within the constraints of the hour field), so -1 signals that mode.
+  const targetMinute = minutePart === '*' ? -1 : parseInt(minutePart ?? '0', 10);
   const targetHour = hourPart === '*' ? -1 : parseInt(hourPart ?? '0', 10);
+  // Day-of-week constraint (0-6, Sunday=0). -1 means unconstrained.
+  const targetDow = dowPart === '*' ? -1 : parseInt(dowPart ?? '0', 10);
 
   const next = new Date(now);
   next.setSeconds(0, 0);
 
-  if (targetHour >= 0) {
-    // Daily or weekly — find next occurrence of that hour:minute
-    next.setHours(targetHour, isNaN(targetMinute) ? 0 : targetMinute, 0, 0);
+  if (targetMinute < 0 && targetHour < 0) {
+    // Every-minute pattern (* * * * *) — fire at the top of the next minute.
+    next.setMinutes(next.getMinutes() + 1, 0, 0);
+  } else if (targetHour >= 0) {
+    // Daily or weekly — find next occurrence of that hour:minute.
+    next.setHours(targetHour, isNaN(targetMinute) || targetMinute < 0 ? 0 : targetMinute, 0, 0);
     if (next <= now) {
       next.setDate(next.getDate() + 1);
     }
+    // If a day-of-week constraint is present, advance day-by-day until it matches.
+    if (targetDow >= 0 && targetDow <= 6) {
+      while (next.getDay() !== targetDow || next <= now) {
+        next.setDate(next.getDate() + 1);
+      }
+    }
   } else {
-    // Every-hour pattern — find next occurrence of that minute
-    next.setMinutes(isNaN(targetMinute) ? 0 : targetMinute, 0, 0);
+    // Every-hour pattern — find next occurrence of that minute.
+    next.setMinutes(isNaN(targetMinute) || targetMinute < 0 ? 0 : targetMinute, 0, 0);
     if (next <= now) {
       next.setHours(next.getHours() + 1);
     }
@@ -79,10 +91,12 @@ function cronRepeatMs(cron: string): number {
   const parts = cron.trim().split(/\s+/);
   if (parts.length !== 5) return 60 * 60 * 1000;
 
-  const [, hourPart] = parts;
+  const [minutePart, hourPart, , , dowPart] = parts;
 
-  if (hourPart === '*') return 60 * 60 * 1000;   // every hour
-  return 24 * 60 * 60 * 1000;                      // every day
+  if (minutePart === '*' && hourPart === '*') return 60 * 1000;   // every minute
+  if (hourPart === '*') return 60 * 60 * 1000;                     // every hour
+  if (dowPart !== '*') return 7 * 24 * 60 * 60 * 1000;            // weekly (day-of-week pinned)
+  return 24 * 60 * 60 * 1000;                                     // every day
 }
 
 // ---------------------------------------------------------------------------

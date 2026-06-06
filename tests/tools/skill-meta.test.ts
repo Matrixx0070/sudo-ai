@@ -4,13 +4,44 @@
  *
  * Strategy:
  * - Mock logger to suppress output.
- * - Use in-memory better-sqlite3 for DB-backed tools (usage-stats, refine).
- * - Mock better-sqlite3 require() for file-path-based DB access.
+ * - Run from an isolated temp working dir so file-path DB access (resolved from
+ *   <cwd>/data at import time) never touches the real production databases.
+ * - Use in-memory better-sqlite3 for DB-backed fixtures (usage-stats, refine).
  * - Test each tool's execute() directly with a minimal ToolContext.
  * - Verify fail-open behavior when DBs are missing.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+
+// ---------------------------------------------------------------------------
+// Hermetic working directory.
+//
+// usage-stats.ts and refine.ts capture their DB paths at import time from
+// `path.resolve('data')` (i.e. <cwd>/data) and open them via
+// require('better-sqlite3') with { fileMustExist: true }. require() inside the
+// source module is NOT intercepted by vi.mock (it resolves through Node's CJS
+// resolver, returning the real driver), so the only way to keep these tools
+// hermetic without editing production code is to control the working directory
+// *before* the source modules are imported — vi.hoisted() runs ahead of the
+// import statements below. Pointing cwd at an empty temp dir makes
+// path.resolve('data') resolve to a directory with no audit.db/calibration.db,
+// so the real driver throws on fileMustExist:true and the genuine fail-open
+// path is exercised against controlled state rather than the real production
+// data/audit.db and data/calibration.db at the repo root.
+// ---------------------------------------------------------------------------
+
+const { ORIGINAL_CWD, TMP_DATA_DIR } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodeFs = require('node:fs') as typeof import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodeOs = require('node:os') as typeof import('node:os');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodePath = require('node:path') as typeof import('node:path');
+  const original = process.cwd();
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'skill-meta-test-'));
+  process.chdir(dir);
+  return { ORIGINAL_CWD: original, TMP_DATA_DIR: dir };
+});
 
 // ---------------------------------------------------------------------------
 // Mock logger — suppress output
@@ -39,6 +70,13 @@ import { explainTool } from '../../src/core/tools/builtin/skill/tools/explain.js
 import { registerSkillTools } from '../../src/core/tools/builtin/skill/index.js';
 import { ToolRegistry } from '../../src/core/tools/registry.js';
 import type { ToolContext } from '../../src/core/tools/types.js';
+import fs from 'node:fs';
+
+// Restore the original working directory and remove the temp dir once done.
+afterAll(() => {
+  try { process.chdir(ORIGINAL_CWD); } catch { /* ignore */ }
+  try { fs.rmSync(TMP_DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,26 +159,22 @@ function insertMistakeRow(db: Database, resource: string, mistake: string, ageDa
 }
 
 // ---------------------------------------------------------------------------
-// skill.usage-stats tests (using getUsageStats with mocked better-sqlite3)
+// skill.usage-stats tests
+//
+// The tool resolves audit.db/calibration.db from <cwd>/data at import time; the
+// hoisted chdir at the top of this file points cwd at an empty temp dir, so the
+// tool genuinely fails open instead of reading the real production databases.
+// The in-memory fixtures below exercise the schema/helpers without touching disk.
 // ---------------------------------------------------------------------------
 
 describe('skill.usage-stats', () => {
   let auditDb: Database;
   let calibDb: Database;
-  let requireSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     _seq = 0;
     auditDb = makeAuditDb();
     calibDb = makeCalibDb();
-
-    // Intercept require('better-sqlite3') to return our in-memory instances
-    requireSpy = vi.spyOn(
-      // @ts-expect-error — accessing module internals for mocking
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      { require } as { require: NodeJS.Require },
-      'require',
-    );
   });
 
   afterEach(() => {

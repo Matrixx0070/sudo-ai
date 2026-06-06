@@ -385,6 +385,7 @@ export const App: React.FC = () => {
     if (key.ctrl && input === 'l') {
       setMessages([]);
       conversationRef.current = [];
+      tuiSessionIdRef.current = nanoid();
       setTurn(0);
       setTotalTokens(0);
       return;
@@ -493,6 +494,7 @@ export const App: React.FC = () => {
       case '/clear':
         setMessages([]);
         conversationRef.current = [];
+        tuiSessionIdRef.current = nanoid();
         setTurn(0);
         setTotalTokens(0);
         addSystemMsg('History cleared.');

@@ -142,7 +142,10 @@ async function doRequest(
     stats.statusCodes[resp.status] = (stats.statusCodes[resp.status] ?? 0) + 1;
     // Consume body
     await resp.text();
-    if (resp.status >= 500) {
+    // Any non-2xx/3xx response is an error for soak purposes: 4xx (e.g. 401
+    // auth failures, 404, 429) means the request did not succeed, so counting
+    // only 5xx would mask whole runs that failed authentication.
+    if (resp.status >= 400) {
       stats.errorCount++;
     }
   } catch {

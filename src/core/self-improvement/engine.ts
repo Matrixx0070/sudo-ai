@@ -211,8 +211,9 @@ export async function runSelfImprovement(options: {
   // --- STEP 1b: FEEDBACK MEMORY + AUTO-RESEARCH ---
   // Open a separate writable DB handle for FeedbackMemory (mind.db must exist).
   if (existsSync(DB_PATH)) {
+    let fbDb: Database.Database | undefined;
     try {
-      const fbDb = new Database(DB_PATH);
+      fbDb = new Database(DB_PATH);
       fbDb.pragma('journal_mode = WAL');
       const feedbackMemory = new FeedbackMemory(fbDb);
 
@@ -284,9 +285,10 @@ export async function runSelfImprovement(options: {
         }
       }
 
-      fbDb.close();
     } catch (err) {
       log.warn({ err: String(err) }, 'FeedbackMemory init failed — skipping feedback+auto-research');
+    } finally {
+      fbDb?.close();
     }
   } else {
     log.warn({ dbPath: DB_PATH }, 'mind.db not found — skipping FeedbackMemory step');

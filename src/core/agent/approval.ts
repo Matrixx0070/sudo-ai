@@ -212,10 +212,13 @@ export class ApprovalManager {
 
     const approvalId = idMatch[1];
     const upper = text.toUpperCase();
-    const approved = upper.includes('YES');
-    const denied = upper.includes('NO');
+    // Match whole-word YES/NO tokens so substrings like "YESTERDAY" or
+    // "KNOW"/"NORTH" do not get misread as a decision.
+    const approved = /\bYES\b/.test(upper);
+    const denied = /\bNO\b/.test(upper);
 
-    if (!approved && !denied) return null;
+    // Ambiguous (both or neither present) → no decision.
+    if (approved === denied) return null;
 
     return { approvalId, approved };
   }
