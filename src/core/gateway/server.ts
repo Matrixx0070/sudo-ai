@@ -1,7 +1,7 @@
 /**
  * gateway/server.ts
  *
- * Local HTTP gateway — SUDO-AI API server (127.0.0.1:18800).
+ * Local HTTP gateway — SUDO-AI API server (127.0.0.1:18900).
  *
  * Routes /v1/chat/completions to the Brain's direct provider connections
  * (registered via server.on('request') in cli.ts). Serves local admin,
@@ -14,7 +14,7 @@
  *   - Enhanced /health with live stats.
  *
  * Environment:
- *   GATEWAY_PORT  Listen port         (default: 18800)
+ *   GATEWAY_PORT  Listen port         (default: 18900)
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -25,7 +25,7 @@ import { scoreComplexity } from '../agent/complexity-scorer.js';
 
 const log = createLogger('gateway');
 
-const GATEWAY_PORT: number = parseInt(process.env['GATEWAY_PORT'] ?? '18800', 10);
+const GATEWAY_PORT: number = parseInt(process.env['GATEWAY_PORT'] ?? '18900', 10);
 const MAX_CONCURRENT = 6;
 
 // ---------------------------------------------------------------------------

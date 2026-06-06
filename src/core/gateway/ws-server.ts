@@ -152,7 +152,7 @@ function extractToken(req: IncomingMessage): string | null {
  * Attach a WebSocket JSON-RPC server to the provided http.Server.
  *
  * The WebSocketServer does NOT create its own HTTP server; it hooks into
- * the existing one via the 'upgrade' event so both HTTP and WS share port 18800.
+ * the existing one via the 'upgrade' event so both HTTP and WS share port 18900.
  *
  * @param deps    - Runtime dependencies (session manager, tool registry, etc.)
  * @param options - Optional config (auth secret, path).

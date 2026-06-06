@@ -30,7 +30,7 @@ function validatePort(raw: string | undefined, fallback: number): number {
   return n;
 }
 
-const API_BASE = `http://localhost:${validatePort(process.env['GATEWAY_PORT'], 18800)}`;
+const API_BASE = `http://localhost:${validatePort(process.env['GATEWAY_PORT'], 18900)}`;
 
 async function callAgent(message: string, sessionId: string, timeoutMs = 60000): Promise<string> {
   const controller = new AbortController();

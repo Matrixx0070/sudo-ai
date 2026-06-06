@@ -157,7 +157,7 @@ function checkPort(port: number, label: string, timeoutMs: number = 3000): Promi
 
 async function checkServices(): Promise<CheckResult> {
   const portDefs: Array<{ port: number; label: string }> = [];
-  const gatewayPort = validatePort(process.env['GATEWAY_PORT'], 18800);
+  const gatewayPort = validatePort(process.env['GATEWAY_PORT'], 18900);
   portDefs.push({ port: gatewayPort, label: 'SUDO-AI (gateway)' });
 
   const results = await Promise.all(portDefs.map(p => checkPort(p.port, p.label)));

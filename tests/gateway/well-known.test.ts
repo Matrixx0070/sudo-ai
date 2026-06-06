@@ -311,7 +311,7 @@ describe('Well-Known: /.well-known/agentskills.json', () => {
 
   it('WK-11: SUDO_PUBLIC_BASE_URL env var overrides default origin in registry field', async () => {
     const prev = process.env['SUDO_PUBLIC_BASE_URL'];
-    process.env['SUDO_PUBLIC_BASE_URL'] = 'http://127.0.0.1:18800/';
+    process.env['SUDO_PUBLIC_BASE_URL'] = 'http://127.0.0.1:18900/';
     try {
       const { status, bodyText } = await httpRequest(
         baseUrl,
@@ -324,7 +324,7 @@ describe('Well-Known: /.well-known/agentskills.json', () => {
       const body = JSON.parse(bodyText) as Record<string, unknown>;
       const registryUrl = body['registry'] as string;
       // Must use env var origin (trailing slash stripped)
-      expect(registryUrl).toBe('http://127.0.0.1:18800/v1/registry/skills');
+      expect(registryUrl).toBe('http://127.0.0.1:18900/v1/registry/skills');
       // Must NOT contain attacker headers
       expect(registryUrl).not.toContain('evil.com');
       expect(registryUrl).not.toContain('javascript');
