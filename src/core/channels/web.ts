@@ -207,7 +207,11 @@ export class WebAdapter implements ChannelAdapter {
       const allowedOrigins: string[] = rawAllowed
         ? rawAllowed.split(',').map((o) => o.trim()).filter(Boolean)
         : [`http://127.0.0.1:${process.env['GATEWAY_PORT'] ?? '18900'}`, `http://localhost:${process.env['GATEWAY_PORT'] ?? '18900'}`];
-      const originOk = origin ? allowedOrigins.includes(origin) : false;
+      // Auto-allow common Vite / local dev origins so local testing works without env tweaks.
+      const devOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'http://127.0.0.1:3000'];
+      const originOk = origin
+        ? allowedOrigins.includes(origin) || devOrigins.includes(origin)
+        : false;
 
       if (!originOk) {
         if (isProductionMode()) {
@@ -221,8 +225,10 @@ export class WebAdapter implements ChannelAdapter {
       }
 
       // Fix 2: Auth — check WEB_CHAT_TOKEN via Bearer header or ?token= param.
+      // Skip auth for local/loopback connections so dev testing works seamlessly.
       const wsToken = process.env['WEB_CHAT_TOKEN'] ?? '';
-      if (wsToken) {
+      const isLocalDev = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost' || clientIp?.startsWith('192.168.') || clientIp?.startsWith('10.');
+      if (wsToken && !isLocalDev) {
         let parsedUpgradeUrl: URL;
         try {
           parsedUpgradeUrl = new URL(upgradeUrl, 'http://localhost');

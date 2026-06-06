@@ -24,6 +24,15 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Use refs for callbacks so connect() never changes identity — prevents
+  // infinite reconnect loops when parent passes new inline functions each render.
+  const onMessageRef = useRef(options.onMessage);
+  const onDisconnectRef = useRef(options.onDisconnect);
+  useEffect(() => {
+    onMessageRef.current = options.onMessage;
+    onDisconnectRef.current = options.onDisconnect;
+  }, [options.onMessage, options.onDisconnect]);
+
   const connect = useCallback(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token') || undefined;
@@ -44,17 +53,17 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
     ws.onclose = () => {
       setConnected(false);
-      options.onDisconnect?.();
+      onDisconnectRef.current?.();
       reconnectTimeoutRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
     };
 
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data) as ChatWSMessage;
-        options.onMessage(data);
+        onMessageRef.current(data);
       } catch {
         // Non-JSON fallback — treat as reply
-        options.onMessage({ type: 'reply', content: e.data });
+        onMessageRef.current({ type: 'reply', content: e.data });
       }
     };
 
@@ -63,7 +72,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
     };
 
     wsRef.current = ws;
-  }, [options]);
+  }, []);
 
   const sendMessage = useCallback((text: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

@@ -438,8 +438,9 @@ export function registerFederationRoutes(
       return;
     }
 
-    // Unmatched /v1/federation/* path
-    sendError(res, 404, 'Not found');
+    // Unmatched /v1/federation/* path — return silently so other handlers
+    // (federation-error-routes.ts) can handle it without double-response.
+    return;
   });
 
   log.info(

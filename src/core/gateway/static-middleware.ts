@@ -41,11 +41,14 @@ function generateNonce(): string {
 /**
  * Build CSP header for HTML pages. Uses nonce for script/style, strict defaults.
  */
-function buildCSPHeader(nonce: string): string {
+function buildCSPHeader(_nonce: string): string {
+  // NOTE: nonce is generated per-request but Vite-built HTML does not inject it
+  // into <script>/<style> tags.  Using 'self' as the pragmatic fallback for
+  // built SPAs served from dist/renderer/.
   return [
     `default-src 'self'`,
-    `script-src 'nonce-${nonce}' 'strict-dynamic'`,
-    `style-src 'nonce-${nonce}'`,
+    `script-src 'self' 'unsafe-inline'`,
+    `style-src 'self' 'unsafe-inline'`,
     `img-src 'self' data: blob:`,
     `font-src 'self'`,
     `connect-src 'self' ws: wss: http://127.0.0.1:* ws://127.0.0.1:*`,
@@ -74,10 +77,14 @@ export function serveStaticFile(req: IncomingMessage, res: ServerResponse, pathn
   } else if (pathname === '/chat' || pathname === '/chat/') {
     filePath = join(DIST_DIR, 'chat/index.html');
   } else if (pathname.startsWith('/v1/admin/dashboard/') || pathname.startsWith('/chat/')) {
-    // Asset paths — strip the SPA prefix to find files in dist/renderer/admin/ or chat/
+    // Asset paths under each SPA — look in dist/renderer/admin/ or chat/
+    const spaDir = pathname.startsWith('/v1/admin/dashboard') ? 'admin' : 'chat';
     const prefix = pathname.startsWith('/v1/admin/dashboard') ? '/v1/admin/dashboard' : '/chat';
     const relativePath = pathname.slice(prefix.length + 1);
-    filePath = join(DIST_DIR, relativePath);
+    filePath = join(DIST_DIR, spaDir, relativePath);
+  } else if (pathname.startsWith('/assets/')) {
+    // Shared Vite build assets live in dist/renderer/assets/
+    filePath = join(DIST_DIR, pathname);
   } else {
     return false;
   }

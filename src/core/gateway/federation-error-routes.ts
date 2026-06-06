@@ -64,7 +64,9 @@ export function registerFederationErrorRoutes(
       return;
     }
 
-    sendError(res, 404, 'Not found');
+    // Unmatched /v1/federation/* path — return silently so other federation
+    // route handlers (federation-routes.ts) can handle it without double-response.
+    return;
   });
 
   log.info(
