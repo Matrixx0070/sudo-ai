@@ -143,6 +143,7 @@ describe('DeploymentHook', () => {
       });
 
       queueExec(
+        { type: 'success', stdout: 'a1b2c3d4\n', stderr: '' },   // git rev-parse HEAD — known-good baseline captured before CI
         { type: 'success', stdout: 'lint ok', stderr: '' },
         { type: 'success', stdout: 'tests pass', stderr: '' },
         { type: 'success', stdout: 'pm2 reload ok', stderr: '' },
@@ -150,7 +151,7 @@ describe('DeploymentHook', () => {
 
       await hook.checkAndDeploy(42, 100);
 
-      expect(mockExecFile).toHaveBeenCalledTimes(3);
+      expect(mockExecFile).toHaveBeenCalledTimes(4);
       expect(deps.githubIssues.addComment).toHaveBeenCalledWith(
         100,
         expect.stringContaining('SUCCESS'),
