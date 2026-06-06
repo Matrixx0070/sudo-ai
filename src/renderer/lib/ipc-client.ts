@@ -189,14 +189,40 @@ export async function ipcInvoke<T = unknown>(
   return null;
 }
 
+// Per-channel listener registry. The preload bridge only exposes
+// removeAllListeners(channel), so to scope an unsubscribe to a single callback
+// we register ONE fan-out wrapper per channel and track the individual
+// callbacks ourselves — tearing the channel down only when its last listener
+// is removed. Without this, one component unmounting would kill every other
+// component's subscription to the same channel.
+const _channelListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+
 /** Subscribe to push events from main process. Returns an unsubscribe function. */
 export function ipcOn(
   channel: ListenChannel,
   callback: (...args: unknown[]) => void
 ): () => void {
   if (!isAvailable()) return () => {};
-  window.sudo!.on(channel, callback);
+
+  let set = _channelListeners.get(channel);
+  if (!set) {
+    set = new Set();
+    _channelListeners.set(channel, set);
+    // One bridge registration per channel; fans out to current callbacks.
+    window.sudo!.on(channel, (...args: unknown[]) => {
+      const cbs = _channelListeners.get(channel);
+      if (cbs) for (const cb of [...cbs]) cb(...args);
+    });
+  }
+  set.add(callback);
+
   return () => {
-    window.sudo?.removeAllListeners(channel);
+    const cbs = _channelListeners.get(channel);
+    if (!cbs) return;
+    cbs.delete(callback);
+    if (cbs.size === 0) {
+      _channelListeners.delete(channel);
+      window.sudo?.removeAllListeners(channel);
+    }
   };
 }

@@ -150,10 +150,10 @@ export class EarningTracker {
           estimatedRevenue: 0,
           ctr: 0,
           avgViewDuration: 0,
-          recordedAt: todayISO(),
+          recordedAt: new Date().toISOString(),
         };
       } else {
-        metrics = parseAnalyticsRow(row, headers, title, todayISO());
+        metrics = parseAnalyticsRow(row, headers, title, new Date().toISOString());
         metrics.title = title || metrics.title;
       }
     } catch (err) {
@@ -284,7 +284,7 @@ export class EarningTracker {
       estimatedRevenue:  r.revenue_usd,
       ctr:               r.ctr,
       avgViewDuration:   0,
-      recordedAt:        r.snapshot_at.split('T')[0] ?? r.snapshot_at,
+      recordedAt:        r.snapshot_at, // keep full timestamp so upload-hour analytics work (was date-only → always 00:00 UTC); period filters use startsWith and are unaffected
     }));
 
     log.debug({ limit, resultCount: result.length }, 'Top videos fetched from SQLite');
