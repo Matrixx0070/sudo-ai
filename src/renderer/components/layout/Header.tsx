@@ -28,17 +28,6 @@ interface WebNavItem {
   icon: React.ReactNode;
 }
 
-function IconOfficeSmall() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <rect x="3" y="6" width="14" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M7 6V4a3 3 0 016 0v2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <rect x="6" y="10" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.2" />
-      <rect x="11" y="10" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
 function IconChatSmall() {
   return (
     <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -78,7 +67,6 @@ function IconSettingsSmall() {
 }
 
 const WEB_NAV_ITEMS: WebNavItem[] = [
-  { view: 'office',    label: 'Office',    icon: <IconOfficeSmall /> },
   { view: 'chat',      label: 'Chat',      icon: <IconChatSmall /> },
   { view: 'dashboard', label: 'Dashboard', icon: <IconDashboardSmall /> },
   { view: 'settings',  label: 'Settings',  icon: <IconSettingsSmall /> },
@@ -274,7 +262,7 @@ function ElectronHeader() {
 export function Header({ activeView, onNavigate }: HeaderProps) {
   if (!isElectron) {
     // Web mode — need nav props; provide safe fallbacks if somehow missing
-    const view = activeView ?? 'office';
+    const view = activeView ?? 'dashboard';
     const navigate = onNavigate ?? (() => {});
     return <WebHeader activeView={view} onNavigate={navigate} />;
   }

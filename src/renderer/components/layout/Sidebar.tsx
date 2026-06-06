@@ -83,24 +83,12 @@ function IconSettings() {
   );
 }
 
-function IconOffice() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <rect x="3" y="6" width="14" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M7 6V4a3 3 0 016 0v2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <rect x="6" y="10" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.2" />
-      <rect x="11" y="10" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
 const TOP_ITEMS: NavItem[] = [
   { view: 'dashboard', label: 'Dashboard', icon: <IconDashboard /> },
   { view: 'chat', label: 'Chat', icon: <IconChat /> },
   { view: 'pipeline', label: 'Pipeline', icon: <IconPipeline /> },
   { view: 'skills', label: 'Skills', icon: <IconSkills /> },
   { view: 'system', label: 'System', icon: <IconSystem /> },
-  { view: 'office', label: 'Office', icon: <IconOffice /> },
 ];
 
 export function Sidebar({ activeView, onNavigate }: SidebarProps) {

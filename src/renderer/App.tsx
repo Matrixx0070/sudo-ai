@@ -6,7 +6,6 @@ import { PipelineView } from '@renderer/components/pipeline/PipelineView';
 import { SkillsView } from '@renderer/components/skills/SkillsView';
 import { SystemView } from '@renderer/components/system/SystemView';
 import { SettingsView } from '@renderer/components/settings/SettingsView';
-import { OfficeView } from '@renderer/components/office/index';
 import { isWeb } from '@renderer/lib/env';
 
 // Lazy-load admin pages for code splitting (all use named exports)
@@ -45,7 +44,7 @@ const SessionsPage = React.lazy(() =>
 );
 
 export type View =
-  | 'office' | 'chat' | 'dashboard' | 'pipeline' | 'skills' | 'system' | 'settings'
+  | 'chat' | 'dashboard' | 'pipeline' | 'skills' | 'system' | 'settings'
   | 'admin-dashboard' | 'admin-models' | 'admin-channels'
   | 'admin-tools' | 'admin-consciousness' | 'admin-cron'
   | 'admin-settings' | 'admin-security' | 'admin-logs'
@@ -84,8 +83,6 @@ function ViewContent({ view }: { view: View }) {
         return <SystemView />;
       case 'settings':
         return <SettingsView />;
-      case 'office':
-        return <OfficeView />;
       case 'admin-dashboard':
         return <AdminDashboardPage />;
       case 'admin-models':

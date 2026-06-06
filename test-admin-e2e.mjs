@@ -20,7 +20,6 @@ const PAGES = [
   { nav: 'Logs', view: 'admin-logs', expect: 'Log' },
   { nav: 'System', view: 'admin-system', expect: 'System' },
   { nav: 'Sessions', view: 'admin-sessions', expect: 'Session' },
-  { nav: 'Office', view: 'office', expect: 'office' },
 ];
 
 async function run() {

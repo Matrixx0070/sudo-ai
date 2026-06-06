@@ -35,8 +35,8 @@ export function Shell({ activeView, onNavigate, children }: ShellProps) {
     );
   }
 
-  // Immersive views (office, chat) — full-screen, no sidebar/header
-  const isImmersive = activeView === 'office' || activeView === 'chat';
+  // Immersive views (chat) — full-screen, no sidebar/header
+  const isImmersive = activeView === 'chat';
 
   if (isImmersive) {
     return (
