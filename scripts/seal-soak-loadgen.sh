@@ -15,13 +15,13 @@
 #
 #   GATEWAY_TOKEN (for GET /v1/admin/metrics):
 #     1. $SUDO_GATEWAY_TOKEN
-#     2. $SUDO_API_TOKEN (legacy fallback)
+#     2. $GATEWAY_TOKEN (legacy fallback)
 #     3. $SUDO_AI_DASHBOARD_TOKEN
 #     4. /root/.sudo-ai/token
 #
 #   CHAT_TOKEN (for POST /api/message):
 #     1. $SUDO_WEB_CHAT_TOKEN
-#     2. $SUDO_API_TOKEN (legacy fallback)
+#     2. $GATEWAY_TOKEN (legacy fallback)
 #     3. $SUDO_AI_DASHBOARD_TOKEN
 #     4. /root/.sudo-ai/token
 #
@@ -54,7 +54,7 @@ log() {
 # ---------------------------------------------------------------------------
 # Token resolution — separate tokens for obs (metrics) and chat (POST)
 # ---------------------------------------------------------------------------
-_LEGACY_TOKEN="${SUDO_API_TOKEN:-}"
+_LEGACY_TOKEN="${GATEWAY_TOKEN:-}"
 if [[ -z "$_LEGACY_TOKEN" ]]; then _LEGACY_TOKEN="${SUDO_AI_DASHBOARD_TOKEN:-}"; fi
 if [[ -z "$_LEGACY_TOKEN" ]] && [[ -f "/root/.sudo-ai/token" ]]; then
   _LEGACY_TOKEN=$(cat /root/.sudo-ai/token | tr -d '[:space:]')
@@ -65,7 +65,7 @@ GATEWAY_TOKEN="${SUDO_GATEWAY_TOKEN:-}"
 GATEWAY_TOKEN_SOURCE="SUDO_GATEWAY_TOKEN"
 if [[ -z "$GATEWAY_TOKEN" ]]; then
   GATEWAY_TOKEN="$_LEGACY_TOKEN"
-  GATEWAY_TOKEN_SOURCE="SUDO_API_TOKEN (legacy fallback)"
+  GATEWAY_TOKEN_SOURCE="GATEWAY_TOKEN (legacy fallback)"
 fi
 
 # CHAT_TOKEN: used for POST /api/message (WEB_CHAT_TOKEN)
@@ -73,15 +73,15 @@ CHAT_TOKEN="${SUDO_WEB_CHAT_TOKEN:-}"
 CHAT_TOKEN_SOURCE="SUDO_WEB_CHAT_TOKEN"
 if [[ -z "$CHAT_TOKEN" ]]; then
   CHAT_TOKEN="$_LEGACY_TOKEN"
-  CHAT_TOKEN_SOURCE="SUDO_API_TOKEN (legacy fallback)"
+  CHAT_TOKEN_SOURCE="GATEWAY_TOKEN (legacy fallback)"
 fi
 
 if [[ -z "$GATEWAY_TOKEN" ]]; then
-  log ERROR "No gateway token found. Set SUDO_GATEWAY_TOKEN, SUDO_API_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token"
+  log ERROR "No gateway token found. Set SUDO_GATEWAY_TOKEN, GATEWAY_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token"
   exit 1
 fi
 if [[ -z "$CHAT_TOKEN" ]]; then
-  log ERROR "No chat token found. Set SUDO_WEB_CHAT_TOKEN, SUDO_API_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token"
+  log ERROR "No chat token found. Set SUDO_WEB_CHAT_TOKEN, GATEWAY_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token"
   exit 1
 fi
 

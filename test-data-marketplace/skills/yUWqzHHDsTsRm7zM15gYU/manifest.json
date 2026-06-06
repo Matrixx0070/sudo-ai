@@ -1,0 +1,21 @@
+{
+  "name": "video-extract",
+  "version": "1.0.0",
+  "description": "Extract audio tracks or video frames from media files using ffmpeg.",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "video-extract"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

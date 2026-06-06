@@ -15,6 +15,7 @@ import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/index.js';
 import type { Session, BrainMessage } from './types.js';
 import type { ChannelType } from '../channels/types.js';
+import type { SessionLineageTracker } from './session-lineage.js';
 
 const log = createLogger('sessions:fork');
 
@@ -137,6 +138,7 @@ export async function forkSession(
   session: Session,
   brain: ForkBrain,
   sessionManager: ForkSessionManager,
+  lineageTracker?: SessionLineageTracker,
 ): Promise<ForkResult | null> {
   const { id: oldId, channel, peerId } = session;
   log.info(
@@ -169,6 +171,16 @@ export async function forkSession(
     };
     newSession.messages.unshift(forkNotice);
     await sessionManager.save(newSession);
+
+    // 5. Record parent-child lineage if a tracker is available
+    if (lineageTracker) {
+      try {
+        lineageTracker.recordLineage(newSession.id, oldId, 'fork');
+        log.info({ parentId: oldId, childId: newSession.id }, 'Lineage recorded for fork');
+      } catch (err) {
+        log.warn({ err, parentId: oldId, childId: newSession.id }, 'Failed to record lineage — fork still succeeds');
+      }
+    }
 
     log.info(
       { oldId, newId: newSession.id, channel, peerId },

@@ -70,7 +70,7 @@ the already-running gateway `http.Server`; no second port is opened.
 
 | Method | Path                   | Description                                                |
 |--------|------------------------|------------------------------------------------------------|
-| POST   | /v1/chat/completions   | Proxied to SUDOAPI upstream — not handled locally          |
+| POST   | /v1/chat/completions   | Proxied to local gateway — not handled locally          |
 | GET    | /v1/models             | Model list passthrough                                     |
 
 ### Federation

@@ -38,6 +38,7 @@ import type {
 } from './loop-helpers.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
 import { LoopGuard } from './loop-guard.js';
+import { DoomLoopDetector } from './doom-loop.js';
 import { generateIntelligenceBrief } from './intelligence-brief.js';
 import { shouldFork, forkSession } from '../sessions/session-fork.js';
 import type { ForkSessionManager } from '../sessions/session-fork.js';
@@ -53,6 +54,8 @@ import { runVetoGate, sanitizeArgsForPrompt } from './veto-gate.js';
 import { queryAllModels } from '../brain/model-consensus.js';
 import { AlignmentAggregator } from './alignment-aggregator.js';
 import type { AlignmentSignals } from './alignment-aggregator.js';
+import { AlignmentEngine } from '../alignment/alignment-engine.js';
+import type { AlignmentScore, AlignmentLevel } from '../alignment/alignment-engine.js';
 import type { TrustTierTrackerLike } from './alignment-aggregator.js';
 import { TrustTierTracker } from '../cognition/trust-tier-tracker.js';
 import { detectDiscordance } from '../security/discordance-detector.js';
@@ -66,7 +69,26 @@ import type { DetectionResult } from '../cognition/injection-detector.js';
 import { ToolOutcomeLearner, type ToolOutcomeLearnerDeps } from './tool-outcome-learner.js';
 import { FeedbackMemory } from '../self-improvement/feedback-memory.js';
 import { promptCache } from '../brain/prompt-cache-optimizer.js';
+import { NegativeRouter } from '../brain/negative-router.js';
+import type { RoutingResult } from '../brain/negative-router.js';
+import { ContextCompressor } from '../brain/context-compressor.js';
+import type { CompressionStage } from '../brain/context-compressor.js';
 import { existsSync } from 'node:fs';
+import { TraceStore } from '../learning/trace-store.js';
+import type { IntentCategory, RoutingTier } from '../learning/trace-store.js';
+import { TraceDrivenPolicy } from '../learning/trace-driven-policy.js';
+import type { PolicyEvaluation } from '../learning/trace-driven-policy.js';
+import { LazinessNudge } from './laziness-nudge.js';
+import { TodoGate } from './todo-gate.js';
+import { SelfVerify } from './self-verify.js';
+import { GoalClassifier } from '../autonomy/goal-pipeline.js';
+import { GoalStopDetector } from '../autonomy/goal-stop-detector.js';
+import { PlanModeStateMachine } from './plan-mode-v2.js';
+import { ProfileManager } from '../sandbox/sandbox-profiles.js';
+import { BestOfNExecutor } from './best-of-n.js';
+import { ConsciousnessDeepBridge, type DeepBridgeOrchestratorLike } from '../consciousness/deep-bridge.js';
+import { FeedbackTierManager } from './feedback-tier.js';
+import { getZDRManager, isZDRBlocked } from '../privacy/zdr-mode.js';
 
 // ---------------------------------------------------------------------------
 // Content-hash helper — A1: deterministic 32-char hex per tool+args combo.
@@ -112,6 +134,8 @@ export interface AgentRunResult {
     path: string;
     filename?: string;
   }>;
+  /** P0: SelfVerify — post-run verification summary if SUDO_SELF_VERIFY is enabled. */
+  verificationSummary?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +170,22 @@ interface ConsciousnessLike {
     matchingProcedure: { name: string; steps: string[]; successRate: number } | null;
     relevantPredictions: Array<{ domain: string; prediction: string; confidence: number; outcome: string }>;
     recentEpisodes: Array<{ summary: string; outcome: string; significance: number; timestamp: string }>;
+    counterfactualLessons?: Array<{ lessonLearned: string; deltaAssessment: string }>;
+    metacognitiveReflections?: Array<{ conclusion: string; actionItem: string }>;
+    surpriseLevel?: number;
+    temporalNarrative?: string;
+    activeConcepts?: string[];
   };
+  /** Deep-bridge methods — surfaced by ConsciousnessOrchestrator. */
+  getDeepInsights?(userId: string): import('../consciousness/deep-bridge.js').DeepInsights;
+  getCounterfactualLessons?(count?: number): import('../consciousness/orchestrator.js').CounterfactualInsight[];
+  getMetacognitiveGuidance?(limit?: number): import('../consciousness/orchestrator.js').MetacognitiveInsight[];
+  getSurpriseInsight?(hours?: number): import('../consciousness/orchestrator.js').SurpriseInsight;
+  getTemporalNarrative?(): import('../consciousness/orchestrator.js').TemporalInsight;
+  getUserAdaptation?(userId: string): import('../consciousness/orchestrator.js').UserAdaptation | null;
+  getRelationshipContext?(userId: string): string;
+  getDriveInfluenceForAgent?(): { promptAddition: string; temperatureDelta: number };
+  getActiveConcepts?(count?: number): string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +221,7 @@ export class AgentLoop {
   private readonly sessionManager: SessionManagerLike;
   private readonly config: AgentConfig;
   private readonly loopGuard = new LoopGuard();
+  private readonly doomLoopDetector = new DoomLoopDetector();
   private readonly consciousness: ConsciousnessLike | null;
   private readonly security: SecurityGuardLike | null;
   private readonly toolRouter: ToolRouter;
@@ -232,10 +272,47 @@ export class AgentLoop {
   // ToolOutcomeLearner — optional, set via setter after construction.
   private _toolOutcomeLearner?: ToolOutcomeLearner;
 
+  // Phase 3: AlignmentEngine — real 7-signal alignment after each tool call.
+  private _alignmentEngine?: AlignmentEngine;
+  private _consecutiveRedCount = 0;
+  private _lastAlignmentLevel: AlignmentLevel | null = null;
+
   // Phase 2 polish: FeedbackMemory (live recordSuccess/recordFailure wired into tool exec paths)
   private _feedbackMemory?: FeedbackMemory;
   // Phase 2 polish: PromptCacheManager (for prepareMessages check; singleton injected)
   private _promptCacheManager?: PromptCacheManagerLike;
+
+  // Negative Router — 3-tier DFA routing (block/redirect/model selection)
+  private _negativeRouter?: NegativeRouter;
+
+  // Context Compressor — graduated 4-stage compression
+  private _contextCompressor?: ContextCompressor;
+
+  // Phase 2: TraceStore — persistent execution trace recording (optional, fail-open).
+  private _traceStore?: TraceStore;
+  // Phase 2: TraceDrivenPolicy — learned model/tool/param policy (optional, fail-open).
+  private _traceDrivenPolicy?: TraceDrivenPolicy;
+
+  // P0: LazinessNudge — detects lazy text-only responses (no tool calls).
+  private _lazinessNudge?: LazinessNudge;
+  // P0: TodoGate — blocks premature loop exit when TODOs remain.
+  private _todoGate?: TodoGate;
+  // P0: SelfVerify — post-run goal verification.
+  private _selfVerify?: SelfVerify;
+  // P0: GoalClassifier — classifies user's first message for goal tracking.
+  private _goalClassifier?: GoalClassifier;
+  // P0: GoalStopDetector — checks if goal appears complete before loop exit.
+  private _goalStopDetector?: GoalStopDetector;
+  // P0: PlanModeStateMachine — manages plan mode enter/exit tool definitions.
+  private _planModeStateMachine?: PlanModeStateMachine;
+  // P0: ProfileManager — sandbox profile management (exposed via getter for SandboxManager).
+  private _profileManager?: ProfileManager;
+  // P0: BestOfNExecutor — multi-candidate execution with selection.
+  private _bestOfNExecutor?: BestOfNExecutor;
+  // P1: ConsciousnessDeepBridge — surfaces ALL 20 consciousness modules to the agent loop.
+  private _deepBridge?: ConsciousnessDeepBridge;
+  // FeedbackTierManager — tracks sustained engagement and adapts agent behavior.
+  private _feedbackTierManager?: FeedbackTierManager;
 
   constructor(
     brain: unknown,
@@ -403,6 +480,131 @@ export class AgentLoop {
     // Prompt cache singleton (no db, always safe; guard inside prepareMessages).
     this._promptCacheManager = promptCache;
     log.info('AgentLoop: PromptCacheManager attached (singleton for prepareMessages)');
+
+    // Negative Router — 3-tier DFA routing engine (optional, fail-open).
+    try {
+      this._negativeRouter = new NegativeRouter();
+      log.info('AgentLoop: NegativeRouter initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: NegativeRouter init failed — negative routing disabled');
+    }
+
+    // Context Compressor — graduated 4-stage compression (optional, fail-open).
+    try {
+      this._contextCompressor = new ContextCompressor();
+      log.info('AgentLoop: ContextCompressor initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: ContextCompressor init failed — graduated compression disabled');
+    }
+
+    // P0: LazinessNudge — detect lazy text-only responses (fail-open).
+    try {
+      this._lazinessNudge = new LazinessNudge();
+      log.info('AgentLoop: LazinessNudge initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: LazinessNudge init failed — disabled');
+    }
+
+    // P0: TodoGate — block premature loop exit when TODOs remain (fail-open).
+    try {
+      this._todoGate = new TodoGate();
+      log.info('AgentLoop: TodoGate initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: TodoGate init failed — disabled');
+    }
+
+    // P0: SelfVerify — post-run goal verification (initialised with brain ref, fail-open).
+    try {
+      this._selfVerify = new SelfVerify(this.brain);
+      log.info('AgentLoop: SelfVerify initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: SelfVerify init failed — disabled');
+    }
+
+    // P0: GoalClassifier — classify user goal at turn start (fail-open).
+    try {
+      this._goalClassifier = new GoalClassifier();
+      log.info('AgentLoop: GoalClassifier initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: GoalClassifier init failed — disabled');
+    }
+
+    // P0: GoalStopDetector — check goal completion before loop exit (fail-open).
+    try {
+      this._goalStopDetector = new GoalStopDetector();
+      log.info('AgentLoop: GoalStopDetector initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: GoalStopDetector init failed — disabled');
+    }
+
+    // P0: PlanModeStateMachine — plan mode tool definitions (fail-open).
+    try {
+      this._planModeStateMachine = new PlanModeStateMachine();
+      // Register plan_mode.enter and plan_mode.exit tool definitions with the tool registry.
+      try {
+        const pmsTools = (this._planModeStateMachine as unknown as { getToolDefinitions?: () => Array<unknown> }).getToolDefinitions?.();
+        if (pmsTools && typeof (this.toolRegistry as unknown as { register?: (def: unknown) => void }).register === 'function') {
+          for (const toolDef of pmsTools) {
+            (this.toolRegistry as unknown as { register: (def: unknown) => void }).register(toolDef);
+          }
+          log.info({ toolCount: pmsTools.length }, 'AgentLoop: PlanModeStateMachine tools registered');
+        }
+      } catch (regErr) {
+        log.warn({ err: String(regErr) }, 'AgentLoop: PlanModeStateMachine tool registration failed');
+      }
+      log.info('AgentLoop: PlanModeStateMachine initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: PlanModeStateMachine init failed — disabled');
+    }
+
+    // P0: ProfileManager — sandbox profile management (fail-open).
+    try {
+      this._profileManager = new ProfileManager();
+      log.info('AgentLoop: ProfileManager initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: ProfileManager init failed — disabled');
+    }
+
+    // FeedbackTierManager — tracks sustained engagement and adapts agent behavior (fail-open).
+    try {
+      this._feedbackTierManager = new FeedbackTierManager();
+      log.info('AgentLoop: FeedbackTierManager initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: FeedbackTierManager init failed — disabled');
+    }
+
+    // P0: BestOfNExecutor — multi-candidate execution (deferred init; requires swarm + worktree + brain).
+    // Not initialised in ctor because it needs swarm/worktree/brain references.
+    // Use setBestOfNExecutor() after construction to wire it in.
+    log.info('AgentLoop: BestOfNExecutor deferred — use setBestOfNExecutor() to attach');
+
+    // P1: ConsciousnessDeepBridge — surfaces ALL 20 consciousness modules to the agent loop.
+    // Initialised from the consciousness object if it implements the deep-bridge duck-type.
+    try {
+      if (
+        this.consciousness &&
+        typeof (this.consciousness as DeepBridgeOrchestratorLike).getDeepInsights === 'function'
+      ) {
+        this._deepBridge = new ConsciousnessDeepBridge(
+          this.consciousness as DeepBridgeOrchestratorLike,
+        );
+        log.info('AgentLoop: ConsciousnessDeepBridge initialised — all 20 modules wired');
+      } else {
+        log.info('AgentLoop: ConsciousnessDeepBridge not available — consciousness does not implement deep methods');
+      }
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: ConsciousnessDeepBridge init failed — disabled');
+    }
+
+    // ZDR (Zero Data Retention) mode — resolve from env/config flags.
+    // When active, session persistence, consciousness recording, and memory writes are blocked.
+    try {
+      const zdrManager = getZDRManager();
+      zdrManager.resolve({ cliFlag: !!process.env['SUDO_ZDR'] || !!process.env['SUDO_DATA_RETENTION_OPT_OUT'] });
+      if (zdrManager.isEnabled()) log.info('AgentLoop: ZDR mode active — data retention blocked');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'AgentLoop: ZDR init failed');
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -512,9 +714,179 @@ export class AgentLoop {
     }
   }
 
+  /** Wire AlignmentEngine after construction (Phase 3: real 7-signal alignment). */
+  setAlignmentEngine(ae: AlignmentEngine): void {
+    if (ae && typeof ae.computeSignals === 'function') {
+      this._alignmentEngine = ae;
+      log.info('AgentLoop: AlignmentEngine attached');
+    } else {
+      log.warn('AgentLoop: setAlignmentEngine: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the AlignmentEngine instance if attached. */
+  getAlignmentEngine(): AlignmentEngine | undefined {
+    return this._alignmentEngine;
+  }
+
   /** Returns the FeedbackMemory if attached (for admin/inspect). */
   getFeedbackMemory(): FeedbackMemory | undefined {
     return this._feedbackMemory;
+  }
+
+  /** Wire NegativeRouter after construction. Fail-open if duck-type mismatch. */
+  setNegativeRouter(router: NegativeRouter): void {
+    if (router && typeof router.route === 'function') {
+      this._negativeRouter = router;
+      log.info('AgentLoop: NegativeRouter attached');
+    } else {
+      log.warn('AgentLoop: setNegativeRouter: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the NegativeRouter instance if attached. */
+  getNegativeRouter(): NegativeRouter | undefined {
+    return this._negativeRouter;
+  }
+
+  /** Wire ContextCompressor after construction. Fail-open if duck-type mismatch. */
+  setContextCompressor(compressor: ContextCompressor): void {
+    if (compressor && typeof compressor.shouldCompress === 'function' && typeof compressor.compress === 'function') {
+      this._contextCompressor = compressor;
+      log.info('AgentLoop: ContextCompressor attached');
+    } else {
+      log.warn('AgentLoop: setContextCompressor: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the ContextCompressor instance if attached. */
+  getContextCompressor(): ContextCompressor | undefined {
+    return this._contextCompressor;
+  }
+
+  /** Wire TraceStore after construction (Phase 2: persistent trace recording). Fail-open if duck-type mismatch. */
+  setTraceStore(ts: TraceStore): void {
+    if (ts && typeof ts.recordToolCall === 'function' && typeof ts.recordBrainCall === 'function' && typeof ts.recordRouting === 'function') {
+      this._traceStore = ts;
+      log.info('AgentLoop: TraceStore attached');
+    } else {
+      log.warn('AgentLoop: setTraceStore: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the TraceStore instance if attached. */
+  getTraceStore(): TraceStore | undefined {
+    return this._traceStore;
+  }
+
+  /** Wire TraceDrivenPolicy after construction (Phase 2: learned policy evaluation). Fail-open if duck-type mismatch. */
+  setTraceDrivenPolicy(policy: TraceDrivenPolicy): void {
+    if (policy && typeof policy.evaluate === 'function' && typeof policy.recordOutcome === 'function') {
+      this._traceDrivenPolicy = policy;
+      log.info('AgentLoop: TraceDrivenPolicy attached');
+    } else {
+      log.warn('AgentLoop: setTraceDrivenPolicy: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the TraceDrivenPolicy instance if attached. */
+  getTraceDrivenPolicy(): TraceDrivenPolicy | undefined {
+    return this._traceDrivenPolicy;
+  }
+
+  /** Wire LazinessNudge after construction (P0: lazy response detection). Fail-open if duck-type mismatch. */
+  setLazinessNudge(ln: LazinessNudge): void {
+    if (ln && typeof ln.classify === 'function') {
+      this._lazinessNudge = ln;
+      log.info('AgentLoop: LazinessNudge attached');
+    } else {
+      log.warn('AgentLoop: setLazinessNudge: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire TodoGate after construction (P0: premature exit blocking). Fail-open if duck-type mismatch. */
+  setTodoGate(tg: TodoGate): void {
+    if (tg && typeof tg.check === 'function') {
+      this._todoGate = tg;
+      log.info('AgentLoop: TodoGate attached');
+    } else {
+      log.warn('AgentLoop: setTodoGate: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire SelfVerify after construction (P0: post-run verification). Fail-open if duck-type mismatch. */
+  setSelfVerify(sv: SelfVerify): void {
+    if (sv && typeof sv.verify === 'function') {
+      this._selfVerify = sv;
+      log.info('AgentLoop: SelfVerify attached');
+    } else {
+      log.warn('AgentLoop: setSelfVerify: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire GoalClassifier after construction (P0: goal classification at turn start). Fail-open if duck-type mismatch. */
+  setGoalClassifier(gc: GoalClassifier): void {
+    if (gc && typeof gc.classify === 'function') {
+      this._goalClassifier = gc;
+      log.info('AgentLoop: GoalClassifier attached');
+    } else {
+      log.warn('AgentLoop: setGoalClassifier: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire GoalStopDetector after construction (P0: goal completion checking). Fail-open if duck-type mismatch. */
+  setGoalStopDetector(gsd: GoalStopDetector): void {
+    if (gsd && typeof gsd.detect === 'function') {
+      this._goalStopDetector = gsd;
+      log.info('AgentLoop: GoalStopDetector attached');
+    } else {
+      log.warn('AgentLoop: setGoalStopDetector: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire PlanModeStateMachine after construction (P0: plan mode tool definitions). Fail-open if duck-type mismatch. */
+  setPlanModeStateMachine(pms: PlanModeStateMachine): void {
+    if (pms && typeof pms.enterPlanMode === 'function' && typeof pms.exitPlanMode === 'function') {
+      this._planModeStateMachine = pms;
+      log.info('AgentLoop: PlanModeStateMachine attached');
+    } else {
+      log.warn('AgentLoop: setPlanModeStateMachine: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the PlanModeStateMachine instance if attached. */
+  getPlanModeStateMachine(): PlanModeStateMachine | undefined {
+    return this._planModeStateMachine;
+  }
+
+  /** Returns the ProfileManager instance if attached (for SandboxManager use). */
+  getProfileManager(): ProfileManager | undefined {
+    return this._profileManager;
+  }
+
+  /** Wire BestOfNExecutor after construction (P0: multi-candidate execution). Fail-open if duck-type mismatch. */
+  setBestOfNExecutor(bne: BestOfNExecutor): void {
+    if (bne && typeof bne.execute === 'function') {
+      this._bestOfNExecutor = bne;
+      log.info('AgentLoop: BestOfNExecutor attached');
+    } else {
+      log.warn('AgentLoop: setBestOfNExecutor: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the BestOfNExecutor instance if attached. */
+  getBestOfNExecutor(): BestOfNExecutor | undefined {
+    return this._bestOfNExecutor;
+  }
+
+  /** Returns the FeedbackTierManager instance if initialized. */
+  getFeedbackTierManager(): FeedbackTierManager | undefined {
+    return this._feedbackTierManager;
+  }
+
+  /** Returns the ConsciousnessDeepBridge instance if initialized. */
+  getDeepBridge(): ConsciousnessDeepBridge | undefined {
+    return this._deepBridge;
   }
 
   // -------------------------------------------------------------------------
@@ -655,6 +1027,22 @@ export class AgentLoop {
           }
         } catch { /* fail-open */ }
 
+        // Phase 2: TraceStore — record tool call (fail-open).
+        try {
+          if (this._traceStore && event.type === 'tool-result') {
+            const _tr = event as { type: string; name: string; result: unknown };
+            const _isSuccess = isToolResultSuccess(_tr.result);
+            const _errMsg = !_isSuccess ? (typeof _tr.result === 'string' ? _tr.result : JSON.stringify(_tr.result)) : undefined;
+            this._traceStore.recordToolCall(
+              sessionId,
+              _tr.name,
+              _isSuccess,
+              0, // latencyMs not available in emit; placeholder
+              _errMsg ? { type: 'tool_error', message: _errMsg.slice(0, 500) } : undefined,
+            );
+          }
+        } catch { /* fail-open */ }
+
         // ToolOutcomeLearner: record tool outcome (fail-open)
         try {
           if (this._toolOutcomeLearner && event.type === 'tool-result') {
@@ -692,6 +1080,22 @@ export class AgentLoop {
     };
 
     log.info({ sessionId, messageLen: message.length }, 'Agent loop started');
+
+    // Phase 3: reset alignment consecutive-RED counter for new turn
+    this._consecutiveRedCount = 0;
+    this._lastAlignmentLevel = null;
+
+    // P0: GoalClassifier — classify the user's first message for goal tracking.
+    // Stored locally for use by GoalStopDetector before loop exit.
+    let _goalClassification: unknown = null;
+    try {
+      if (this._goalClassifier) {
+        _goalClassification = this._goalClassifier.classify(message);
+        log.debug({ sessionId, classification: _goalClassification }, 'GoalClassifier: message classified');
+      }
+    } catch (err) {
+      log.warn({ err: String(err) }, 'GoalClassifier: classify threw — continuing without classification');
+    }
 
     // Hook: session:start
     void this.hooks?.emit('session:start', { event: 'session:start', sessionId, channel: session?.channel });
@@ -771,6 +1175,35 @@ export class AgentLoop {
     }
 
     // Recovery protocol: inject active forward-commitments as system context.
+    // Consciousness Deep Bridge: inject deep insights from ALL 20 consciousness modules.
+    if (this._deepBridge) {
+      try {
+        const deepInsights = this._deepBridge.formatTurnStartInsights(sessionId);
+        if (deepInsights) {
+          session.messages.push({ role: 'system', content: deepInsights });
+          log.debug({ sessionId }, 'Consciousness deep insights injected');
+        }
+        // Drive-influence prompt addition — motivational context from the drive system.
+        const drivePrompt = this._deepBridge.getDrivePromptAddition();
+        if (drivePrompt) {
+          session.messages.push({ role: 'system', content: drivePrompt });
+          log.debug({ sessionId }, 'Consciousness drive-influence prompt injected');
+        }
+      } catch (err) {
+        log.warn({ sessionId, err: String(err) }, 'Consciousness deep insights injection failed — continuing');
+      }
+    }
+    // FeedbackTierManager: inject tier-based prompt addition at turn-start (fail-open).
+    // Uses the assessment stored on session from a previous turn, if available.
+    try {
+      const prevTierAdj = (session as Record<string, unknown>)._feedbackTierAdjustment as { adjustments: { promptAddition: string }; tier: string; reason: string } | undefined;
+      if (prevTierAdj?.adjustments?.promptAddition) {
+        session.messages.push({ role: 'system', content: prevTierAdj.adjustments.promptAddition });
+        log.debug({ sessionId, tier: prevTierAdj.tier }, 'FeedbackTierManager: prompt addition injected from previous turn assessment');
+      }
+    } catch (err) {
+      log.warn({ sessionId, err: String(err) }, 'FeedbackTierManager: prompt addition injection failed — continuing');
+    }
     if (this.auditTrail) {
       try {
         const commits = loadActiveCommitments(this.auditTrail);
@@ -783,6 +1216,11 @@ export class AgentLoop {
         log.warn({ err: String(err) }, 'Recovery protocol commitment injection failed — continuing');
       }
     }
+
+    // FeedbackTierManager: record the turn (fail-open).
+    try {
+      this._feedbackTierManager?.recordTurn();
+    } catch { /* fail-open */ }
 
     // Await prefetched memory (already loading in background since session start)
     const prefetchedMemory = await todayMemoryPrefetch;
@@ -883,21 +1321,57 @@ export class AgentLoop {
       finalResponse = await this._innerLoop(session, state, emit, opts);
     }
 
-    // Persist session.
+    // Persist session — ZDR gate: skip persistence when ZDR blocks session_persistence.
     try {
-      await this.sessionManager.save(session);
-      log.info({ sessionId, iterations: state.iteration }, 'Session saved after agent run');
+      if (isZDRBlocked('session_persistence')) {
+        log.info({ sessionId }, 'ZDR: skipping session persistence');
+      } else {
+        await this.sessionManager.save(session);
+        log.info({ sessionId, iterations: state.iteration }, 'Session saved after agent run');
+      }
     } catch (err) {
       log.error({ sessionId, err }, 'Failed to save session after agent run');
     }
 
+    // FeedbackTierManager: assess tier and store adjustment on session (fail-open).
+    try {
+      const tierAssessment = this._feedbackTierManager?.assess();
+      if (tierAssessment && tierAssessment.adjustments.promptAddition) {
+        (session as Record<string, unknown>)._feedbackTierAdjustment = tierAssessment;
+        log.debug({ sessionId, tier: tierAssessment.tier, reason: tierAssessment.reason }, 'FeedbackTierManager: tier assessment stored on session');
+      }
+    } catch (err) {
+      log.warn({ sessionId, err: String(err) }, 'FeedbackTierManager: assess threw — continuing without tier adjustment');
+    }
+
     // Notify consciousness layer that the interaction has ended.
+    // ZDR gate: skip consciousness recording when ZDR blocks it.
     if (this.consciousness) {
       try {
-        await this.consciousness.onInteractionEnd(sessionId, session.messages, 'completed');
-        log.debug({ sessionId }, 'Consciousness interaction end acknowledged');
+        if (!isZDRBlocked('consciousness_recording')) {
+          await this.consciousness.onInteractionEnd(sessionId, session.messages, 'completed');
+          log.debug({ sessionId }, 'Consciousness interaction end acknowledged');
+        } else {
+          log.info({ sessionId }, 'ZDR: skipping consciousness recording on interaction end');
+        }
       } catch (err) {
         log.warn({ sessionId, err: String(err) }, 'Consciousness onInteractionEnd failed — continuing');
+      }
+    }
+
+    // Consciousness Deep Bridge: generate turn-end context for relationship + temporal updates.
+    // This data is saved to the session for next-turn priming.
+    if (this._deepBridge) {
+      try {
+        const endCtx = this._deepBridge.formatTurnEndContext(sessionId);
+        if (endCtx) {
+          // Store in session metadata rather than injecting as a message,
+          // since this turn is already ending.
+          (session as Record<string, unknown>)._consciousnessEndContext = endCtx;
+          log.debug({ sessionId }, 'Consciousness turn-end context recorded');
+        }
+      } catch (err) {
+        log.warn({ sessionId, err: String(err) }, 'Consciousness turn-end context failed — continuing');
       }
     }
 
@@ -938,12 +1412,59 @@ export class AgentLoop {
       { sessionId, attachmentCount: attachments.length, textLen: finalResponse.length },
       'Agent run complete',
     );
-    return { text: finalResponse, attachments };
+
+    // P0: SelfVerify — post-run goal verification if SUDO_SELF_VERIFY is enabled.
+    let _verificationSummary: string | undefined;
+    if (process.env['SUDO_SELF_VERIFY'] === '1' && this._selfVerify) {
+      try {
+        const _verifyResult = await this._selfVerify.verify(
+          message,
+          [],   // filesChanged: populated by file-tracking in future wave
+          this.sandboxManager.getWorkspaceDir(sessionId),
+        );
+        _verificationSummary = _verifyResult.summary;
+        log.info({ sessionId, summaryLen: _verificationSummary?.length }, 'SelfVerify: verification complete');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'SelfVerify: verify threw — continuing without verification');
+      }
+    }
+
+    return { text: finalResponse, attachments, verificationSummary: _verificationSummary };
   }
 
   /** Return the resolved config for this loop instance. */
   get resolvedConfig(): Readonly<AgentConfig> {
     return Object.freeze({ ...this.config });
+  }
+
+  // -------------------------------------------------------------------------
+  // P0: BestOfNExecutor — multi-candidate execution with selection
+  // -------------------------------------------------------------------------
+
+  /**
+   * Run a best-of-N execution: generate N candidates, evaluate, and return the best.
+   * Registered as an optional capability — callable as a tool by the agent.
+   * Fail-open: returns null if BestOfNExecutor is not attached or throws.
+   */
+  async runBestOfN(
+    sessionId: string,
+    prompt: string,
+    n: number = 3,
+  ): Promise<{ bestText: string; scores: number[] } | null> {
+    try {
+      if (!this._bestOfNExecutor) {
+        log.warn('AgentLoop: runBestOfN called but BestOfNExecutor not attached');
+        return null;
+      }
+      const result = await (this._bestOfNExecutor as unknown as {
+        execute(task: string, n: number): Promise<{ bestText: string; scores: number[] }>;
+      }).execute(prompt, n);
+      log.info({ sessionId, n, bestScore: result.scores[0] ?? 'N/A' }, 'BestOfNExecutor: execution complete');
+      return result;
+    } catch (err) {
+      log.warn({ err: String(err) }, 'BestOfNExecutor: execute threw — returning null');
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -961,8 +1482,12 @@ export class AgentLoop {
     state.isProcessing = true;
     const hooksHelper = this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike | undefined;
 
+    // P0: track total tool calls across inner loop iterations for LazinessNudge.
+    let _innerLoopToolCallCount = 0;
+
     // Reset loop guard at the start of every outer-turn inner loop.
     this.loopGuard.reset();
+    this.doomLoopDetector.onNewTurn();
 
     try {
       while (state.iteration < maxIterations) {
@@ -1028,10 +1553,106 @@ export class AgentLoop {
           }
         }
 
+        // Phase 2: TraceDrivenPolicy — evaluate learned policy before model selection.
+        // If a rule matches and recommends a preferredModel, override effectiveModel.
+        // Fail-open: if the policy is absent or throws, keep the current model.
+        let _policyEvaluation: PolicyEvaluation | undefined;
+        try {
+          if (this._traceDrivenPolicy) {
+            const lastUserMsg = session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+            _policyEvaluation = this._traceDrivenPolicy.evaluate(
+              lastUserMsg,
+              undefined,   // toolName unknown at this point
+              undefined,   // category unknown at this point
+              effectiveModel,
+            );
+            if (_policyEvaluation.decision && _policyEvaluation.decision.action.preferredModel) {
+              log.info(
+                { sessionId: state.sessionId, ruleId: _policyEvaluation.decision.ruleId, preferredModel: _policyEvaluation.decision.action.preferredModel, confidence: _policyEvaluation.decision.confidence, source: _policyEvaluation.decision.source },
+                'TraceDrivenPolicy: model override applied',
+              );
+              effectiveModel = _policyEvaluation.decision.action.preferredModel;
+            }
+          }
+        } catch (policyErr) {
+          log.warn({ sessionId: state.sessionId, err: String(policyErr) }, 'TraceDrivenPolicy threw in loop — continuing without policy');
+        }
+
         log.debug(
           { sessionId: state.sessionId, iteration: state.iteration, messageCount: trimmed.length },
           'Calling brain',
         );
+
+        // Negative router: pre-call routing decision (block / redirect / model hint).
+        // Runs BEFORE brain.call() so blocked requests never reach the LLM.
+        // Fail-open: if the router is absent or throws, continue as normal.
+        if (this._negativeRouter) {
+          try {
+            const lastUserMsg = session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+            const routingResult: RoutingResult = this._negativeRouter.route('', lastUserMsg);
+
+            if (routingResult.blocked) {
+              const blockMsg = `[NegativeRouter] Request blocked (category=${routingResult.category}, tier=${routingResult.tier})`;
+              log.warn(
+                { sessionId: state.sessionId, category: routingResult.category, tier: routingResult.tier, rule: routingResult.ruleMatched?.pattern },
+                'NegativeRouter: request blocked before brain call',
+              );
+              emit({ type: 'error', error: blockMsg });
+              finalText = blockMsg;
+              session.messages.push({ role: 'assistant', content: finalText });
+              emit({ type: 'message', content: finalText });
+              break;
+            }
+
+            if (routingResult.redirect) {
+              log.info(
+                { sessionId: state.sessionId, redirect: routingResult.redirect, category: routingResult.category, tier: routingResult.tier },
+                'NegativeRouter: request redirected',
+              );
+              // Override effectiveModel with the redirect target
+              effectiveModel = routingResult.redirect;
+            } else if (routingResult.model && routingResult.tier !== 'llm') {
+              // Use the router's model suggestion unless it's a low-confidence LLM tier
+              effectiveModel = routingResult.model;
+              log.debug(
+                { sessionId: state.sessionId, model: routingResult.model, category: routingResult.category, tier: routingResult.tier },
+                'NegativeRouter: model hint applied',
+              );
+            }
+
+            void this.hooks?.emit('model:route:cheap', {
+              event: 'model:route:cheap',
+              sessionId: state.sessionId,
+              modelName: effectiveModel ?? '',
+              meta: {
+                negativeRouterCategory: routingResult.category,
+                negativeRouterTier: routingResult.tier,
+                negativeRouterConfidence: routingResult.confidence,
+                negativeRouterBlocked: routingResult.blocked ?? false,
+              },
+            });
+          } catch (routerErr) {
+            log.warn(
+              { sessionId: state.sessionId, err: String(routerErr) },
+              'NegativeRouter threw in loop — continuing without routing',
+            );
+          }
+        }
+
+        // Phase 2: TraceStore — record routing decision (fail-open).
+        try {
+          if (this._traceStore) {
+            const routingCategory: IntentCategory = 'fast'; // default fallback
+            const routingTier: RoutingTier = 'keyword'; // default fallback
+            this._traceStore.recordRouting(
+              state.sessionId,
+              effectiveModel ?? model ?? 'unknown',
+              routingCategory,
+              routingTier,
+              0.5, // neutral confidence when no explicit routing data
+            );
+          }
+        } catch { /* fail-open */ }
 
         const response: BrainResponse = await this.brain.call({
           messages: trimmed,
@@ -1056,8 +1677,84 @@ export class AgentLoop {
           'Brain call completed',
         );
 
+        // Phase 2: TraceStore — record brain call (fail-open).
+        try {
+          if (this._traceStore) {
+            this._traceStore.recordBrainCall(
+              state.sessionId,
+              effectiveModel ?? model ?? 'unknown',
+              response.finishReason !== 'error',
+              0, // latencyMs not available from BrainResponse; placeholder
+            );
+          }
+        } catch { /* fail-open */ }
+
         if (response.finishReason === 'length') {
           log.warn({ sessionId: state.sessionId }, 'finishReason=length — compacting');
+
+          // ContextCompressor: use graduated compression if available.
+          // Falls back to the legacy runCompaction path when the compressor is absent or fails.
+          if (this._contextCompressor) {
+            try {
+              const { estimateContextSize, MAX_CONTEXT_TOKENS } = await import('./context.js');
+              const currentTokens = estimateContextSize(session.messages);
+              const contextPercent = currentTokens / MAX_CONTEXT_TOKENS;
+              const stage: CompressionStage = this._contextCompressor.shouldCompress(contextPercent);
+
+              if (stage !== 'none') {
+                // Call the stage-specific method directly to get transformed messages.
+                // compress() only returns metadata; stage methods return the actual BrainMessage[].
+                const inputMessages = session.messages as import('../brain/types.js').BrainMessage[];
+                let compressedMessages: import('../brain/types.js').BrainMessage[];
+                let summary: string | undefined;
+
+                switch (stage) {
+                  case 'mild':
+                    compressedMessages = await this._contextCompressor.compressMild(inputMessages);
+                    break;
+                  case 'moderate':
+                    compressedMessages = await this._contextCompressor.compressModerate(inputMessages);
+                    break;
+                  case 'aggressive': {
+                    const agg = await this._contextCompressor.compressAggressive(inputMessages);
+                    compressedMessages = agg.messages;
+                    summary = agg.summary;
+                    break;
+                  }
+                  case 'emergency': {
+                    const emSid = `fork-${Date.now()}`;
+                    const em = await this._contextCompressor.compressEmergency(inputMessages, emSid);
+                    compressedMessages = em.messages;
+                    summary = this._contextCompressor.getStats().toString(); // placeholder
+                    break;
+                  }
+                  default:
+                    compressedMessages = inputMessages;
+                }
+
+                const newTokens = estimateContextSize(compressedMessages as unknown as typeof session.messages);
+                log.info(
+                  { sessionId: state.sessionId, stage, tokensBefore: currentTokens, tokensAfter: newTokens },
+                  'ContextCompressor: graduated compression applied',
+                );
+
+                if (newTokens < currentTokens) {
+                  session.messages = compressedMessages as unknown as typeof session.messages;
+                  emit({ type: 'compaction', summary: summary ?? `[Context compressed: stage=${stage}]` });
+                  await hooksHelper?.emit('after_compaction', { sessionId: state.sessionId });
+                  continue;
+                }
+              }
+              // If compressor decided 'none' or compression wasn't sufficient, fall through
+              // to legacy compaction.
+            } catch (compressorErr) {
+              log.warn(
+                { sessionId: state.sessionId, err: String(compressorErr) },
+                'ContextCompressor failed — falling back to legacy compaction',
+              );
+            }
+          }
+
           await runCompaction(this.brain, session, state, emit, hooksHelper);
           continue;
         }
@@ -1092,6 +1789,16 @@ export class AgentLoop {
             emit({ type: 'message', content: finalText });
             break;
           }
+
+          // P0: LazinessNudge — track tool calls per iteration for laziness classification.
+          _innerLoopToolCallCount += validToolCalls.length;
+
+          // FeedbackTierManager: record each valid tool call (fail-open).
+          try {
+            for (const _ftc of validToolCalls) {
+              this._feedbackTierManager?.recordToolCall();
+            }
+          } catch { /* fail-open */ }
 
           // Cross-iteration loop detection: if the model keeps returning tool calls
           // instead of text, break after a threshold to prevent runaway loops.
@@ -1211,6 +1918,26 @@ export class AgentLoop {
               session.messages.push({ role: 'system', content: abortMsg });
               finalText = `I stopped because I detected a tool loop: ${guardResult.reason ?? 'repeated identical calls'}`;
               session.messages.push({ role: 'assistant', content: finalText });
+              guardAborted = true;
+              break;
+            }
+
+            // Doom Loop Detector v2 — cross-message repeat detection (Grok-parity).
+            const doomResult = this.doomLoopDetector.recordCall(tc.name, tc.arguments ?? {}, state.iteration);
+            if (doomResult.action === 'warn') {
+              const doomWarn = `[DoomLoop] ${doomResult.reason ?? 'Cross-turn repetition detected'}`;
+              session.messages.push({ role: 'system', content: doomWarn });
+              emit({ type: 'error', error: doomWarn });
+              log.warn({ tool: tc.name, sessionId: state.sessionId }, 'DoomLoop warning injected');
+              try { this._feedbackTierManager?.recordDoomLoop(); } catch { /* fail-open */ }
+            } else if (doomResult.action === 'abort') {
+              const doomAbort = `[DoomLoop] Doom loop terminated — breaking: ${doomResult.reason ?? ''}`;
+              emit({ type: 'error', error: doomAbort });
+              log.error({ tool: tc.name, sessionId: state.sessionId }, 'DoomLoop abort triggered');
+              session.messages.push({ role: 'system', content: doomAbort });
+              finalText = `I stopped because a doom loop was detected: ${doomResult.reason ?? 'cross-turn repetition exceeded threshold'}`;
+              session.messages.push({ role: 'assistant', content: finalText });
+              try { this._feedbackTierManager?.recordDoomLoop(); } catch { /* fail-open */ }
               guardAborted = true;
               break;
             }
@@ -1441,9 +2168,116 @@ export class AgentLoop {
           }
 
           try {
+            // Consciousness Deep Bridge: inject pre-tool metacognitive guidance + counterfactual lessons.
+            if (this._deepBridge) {
+              try {
+                const guidance = this._deepBridge.formatPreToolGuidance();
+                if (guidance) {
+                  session.messages.push({ role: 'system', content: guidance });
+                  log.debug({ sessionId: state.sessionId }, 'Consciousness pre-tool guidance injected');
+                }
+              } catch (dtErr) {
+                log.warn({ err: String(dtErr) }, 'Consciousness pre-tool guidance injection failed — continuing');
+              }
+            }
+
             await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager, this._feedbackMemory);
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
+
+            // Consciousness Deep Bridge: check surprise level after tool execution.
+            // If surprise is high, inject a replanning advisory for the next brain call.
+            if (this._deepBridge) {
+              try {
+                if (this._deepBridge.shouldReplan()) {
+                  const surpriseMsg = this._deepBridge.formatSurpriseReplan();
+                  if (surpriseMsg) {
+                    session.messages.push({ role: 'system', content: surpriseMsg });
+                    log.warn({ sessionId: state.sessionId }, 'Consciousness surprise-replan advisory injected');
+                  }
+                }
+              } catch (dsErr) {
+                log.warn({ err: String(dsErr) }, 'Consciousness surprise check failed — continuing');
+              }
+            }
+
+            // Phase 2: TraceDrivenPolicy — record tool outcomes for feedback loop (fail-open).
+            try {
+              if (this._traceDrivenPolicy) {
+                const lastUserMsg = session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+                for (const tc of activeToolCalls) {
+                  this._traceDrivenPolicy.recordOutcome(
+                    lastUserMsg,
+                    tc.name,
+                    undefined,  // category unknown at this point
+                    effectiveModel ?? model ?? 'unknown',
+                    true,       // success — we are in the success branch
+                    0,          // latencyMs placeholder
+                  );
+                }
+              }
+            } catch { /* fail-open */ }
+
+            // Phase 3: AlignmentEngine — compute real 7-signal alignment after tool calls.
+            // If alignment is RED, inject warning into session for next brain call.
+            // If RED for 3 consecutive checks, trigger re-anchor.
+            if (this._alignmentEngine) {
+              try {
+                const alignScore: AlignmentScore = await this._alignmentEngine.computeSignals({
+                  recentMessages: session.messages as import('../brain/types.js').BrainMessage[],
+                  sessionId: state.sessionId,
+                });
+                this._lastAlignmentLevel = alignScore.level;
+
+                if (alignScore.level === 'RED') {
+                  this._consecutiveRedCount++;
+                  const redWarning = alignScore.recommendation
+                    ? `[AlignmentEngine] RED alignment (${alignScore.overall.toFixed(3)}): ${alignScore.recommendation}`
+                    : `[AlignmentEngine] RED alignment (${alignScore.overall.toFixed(3)}): multiple signals below threshold`;
+                  session.messages.push({ role: 'system', content: redWarning });
+                  emit({ type: 'error', error: redWarning });
+                  log.warn(
+                    { score: alignScore.overall, consecutiveRed: this._consecutiveRedCount, sessionId: state.sessionId },
+                    'AlignmentEngine: RED alignment detected after tool execution',
+                  );
+
+                  // 3 consecutive RED checks → trigger re-anchor
+                  if (this._consecutiveRedCount >= 3) {
+                    const reanchorMsg = `[AlignmentEngine] RE-ANCHOR triggered: ${this._consecutiveRedCount} consecutive RED checks. Resetting alignment tracker and injecting principal directive reminder.`;
+                    session.messages.push({ role: 'system', content: reanchorMsg });
+                    emit({ type: 'error', error: reanchorMsg });
+                    log.error(
+                      { consecutiveRed: this._consecutiveRedCount, sessionId: state.sessionId },
+                      'AlignmentEngine: re-anchor triggered after 3 consecutive RED checks',
+                    );
+                    // Reset counter after triggering re-anchor to avoid repeated triggers
+                    this._consecutiveRedCount = 0;
+                    // Record the re-anchor event for audit trail (fail-open)
+                    try {
+                      if (this.auditTrail?.recordTriple) {
+                        this.auditTrail.recordTriple({
+                          mistake: 'alignment-red-re-anchor-triggered',
+                          learned: `score=${alignScore.overall.toFixed(3)} signals=${alignScore.signals.filter(s => s.value < 0.5).map(s => s.name).join(',')}`,
+                          commitment: 'review principal directive alignment after re-anchor',
+                          ttl_days: 7,
+                        });
+                      }
+                    } catch { /* non-fatal */ }
+                  }
+                } else {
+                  // Non-RED result resets the consecutive counter
+                  this._consecutiveRedCount = 0;
+                  if (alignScore.level === 'YELLOW') {
+                    log.warn(
+                      { score: alignScore.overall, sessionId: state.sessionId },
+                      'AlignmentEngine: YELLOW alignment after tool execution',
+                    );
+                  }
+                }
+              } catch (alignErr) {
+                log.warn({ err: String(alignErr) }, 'AlignmentEngine: computeSignals threw — proceeding');
+              }
+            }
             // Wave 6L: record calibration outcome=1 for each active tool call that succeeded (fail-open).
             try {
               for (const _atc of activeToolCalls) {
@@ -1492,6 +2326,22 @@ export class AgentLoop {
                 if (_fcp) { this._confidenceCalibrationTracker?.record(_fcp.predicted, 0, _fcp.tag); calibrationPending.delete(_ftc.id); }
               }
             } catch {}
+            // Phase 2: TraceDrivenPolicy — record tool failure outcomes for feedback loop (fail-open).
+            try {
+              if (this._traceDrivenPolicy) {
+                const lastUserMsg = session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+                for (const tc of activeToolCalls) {
+                  this._traceDrivenPolicy.recordOutcome(
+                    lastUserMsg,
+                    tc.name,
+                    undefined,  // category unknown
+                    effectiveModel ?? model ?? 'unknown',
+                    false,      // failure
+                    0,          // latencyMs placeholder
+                  );
+                }
+              }
+            } catch { /* fail-open */ }
             throw toolErr;
           }
           continue;
@@ -1530,6 +2380,52 @@ export class AgentLoop {
           log.debug({ blockCount: blocks.length }, 'Rich response event emitted');
         } catch (richErr) {
           log.warn({ err: String(richErr) }, 'Failed to build rich response — plain message still delivered');
+        }
+
+        // P0: LazinessNudge — classify text-only response for laziness (fail-open).
+        // If the agent produced text without making any tool calls, check if it's being lazy.
+        try {
+          if (this._lazinessNudge) {
+            const nudgeResult = (this._lazinessNudge as unknown as { classify(count: number, text: string): { nudgeInjected: boolean; level: string } }).classify(_innerLoopToolCallCount, finalText);
+            if (nudgeResult.nudgeInjected) {
+              const nudgeMsg = (this._lazinessNudge as unknown as { getNudgeMessage(level: string): string }).getNudgeMessage(nudgeResult.level);
+              session.messages.push({ role: 'system', content: nudgeMsg });
+              log.info({ sessionId: state.sessionId, level: nudgeResult.level }, 'LazinessNudge: nudge injected');
+            }
+          }
+        } catch (err) {
+          log.warn({ err: String(err) }, 'LazinessNudge: classify threw — continuing');
+        }
+
+        // P0: GoalStopDetector — check if the goal appears complete before exiting (fail-open).
+        // If verdict is 'incomplete', inject a system message suggesting continued work.
+        try {
+          if (this._goalStopDetector) {
+            const _userGoal = session.messages.filter(m => m.role === 'user').at(0)?.content ?? '';
+            const stopResult = (this._goalStopDetector as unknown as { detect(progress: { goal: string }): { verdict: string; reason?: string } }).detect({ goal: _userGoal });
+            if (stopResult.verdict === 'incomplete') {
+              const continueMsg = stopResult.reason ?? '[GoalStopDetector] The goal does not appear complete — consider continuing work before responding.';
+              session.messages.push({ role: 'system', content: continueMsg });
+              log.info({ sessionId: state.sessionId }, 'GoalStopDetector: goal incomplete — injecting continue message');
+              continue; // re-enter the while loop instead of breaking
+            }
+          }
+        } catch (err) {
+          log.warn({ err: String(err) }, 'GoalStopDetector: detect threw — continuing to exit');
+        }
+
+        // P0: TodoGate — block premature loop exit if TODOs remain (fail-open).
+        try {
+          if (this._todoGate) {
+            const gateResult = (this._todoGate as unknown as { check(): { action: string; reason: string } }).check();
+            if (gateResult.action === 'block') {
+              session.messages.push({ role: 'system', content: gateResult.reason });
+              log.info({ sessionId: state.sessionId }, 'TodoGate: blocked premature exit — continuing loop');
+              continue; // re-enter the while loop instead of breaking
+            }
+          }
+        } catch (err) {
+          log.warn({ err: String(err) }, 'TodoGate: check threw — proceeding with exit');
         }
 
         break;

@@ -1,0 +1,21 @@
+{
+  "name": "explain-code",
+  "version": "1.0.0",
+  "description": "Explain code in plain language, from high-level purpose down to line-by-line detail",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "explain-code"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

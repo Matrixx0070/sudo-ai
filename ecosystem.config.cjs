@@ -123,6 +123,10 @@ module.exports = {
         SUDO_UPDATE_HEALTH_GATE: process.env['SUDO_UPDATE_HEALTH_GATE'] || '1',
         SUDO_UPDATE_MAX_VERSION: process.env['SUDO_UPDATE_MAX_VERSION'] || '',
         SUDO_UPDATE_SKIP_VERSIONS: process.env['SUDO_UPDATE_SKIP_VERSIONS'] || '',
+
+        // IDE Bridge (kill-switch: SUDO_IDE_BRIDGE_DISABLE=1 disables entirely)
+        SUDO_IDE_BRIDGE_DISABLE: process.env['SUDO_IDE_BRIDGE_DISABLE'] || '0',
+        SUDO_BRIDGE_JWT_TTL_MS: process.env['SUDO_BRIDGE_JWT_TTL_MS'] || '3600000',
       },
     },
 
@@ -209,6 +213,10 @@ module.exports = {
         // Auto-update configuration — disabled on staging by default
         SUDO_UPDATE_DISABLE: '1',
         SUDO_UPDATE_CHANNEL: 'stable',
+
+        // IDE Bridge — disabled on staging
+        SUDO_IDE_BRIDGE_DISABLE: '1',
+        SUDO_BRIDGE_JWT_TTL_MS: '3600000',
       },
     },
   ],

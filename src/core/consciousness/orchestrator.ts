@@ -27,6 +27,63 @@ import { MetacognitionEngine } from './metacognition/index.js';
 import { CounterfactualEngine } from './counterfactual-engine/index.js';
 import { TemporalSelf } from './temporal-self/index.js';
 import { ProceduralMemory } from './procedural-memory/index.js';
+import { SurpriseEngine, type SurpriseEvent } from './surprise-engine/index.js';
+import { ContextSelector, type ContextSelection } from './context-selector.js';
+import { ConsciousnessBridge, type BridgeInjection } from './context-bridge.js';
+
+// ---------------------------------------------------------------------------
+// Deep Insight output types — surfaced by getDeepInsights()
+// ---------------------------------------------------------------------------
+
+/** Structured output from a single consciousness module for deep insights. */
+export interface CounterfactualInsight {
+  lessonLearned: string;
+  deltaAssessment: string;
+  episodeSummary: string;
+}
+
+export interface MetacognitiveInsight {
+  conclusion: string;
+  actionItem: string;
+  episodeSummary: string;
+}
+
+export interface SurpriseInsight {
+  averageSurprise: number;
+  recentSurprises: Array<{
+    magnitude: number;
+    direction: 'better' | 'worse' | 'different';
+    description: string;
+    triggeredActions: string[];
+  }>;
+  /** Whether surprise exceeds the high-magnitude threshold (0.7). */
+  requiresReplan: boolean;
+}
+
+export interface TemporalInsight {
+  narrative: string;
+  improved: string[];
+  declined: string[];
+  aspirations: string[];
+}
+
+export interface UserAdaptation {
+  styleInstructions: string;
+  trustLevel: number;
+  relationshipStage: string;
+  communicationStyle: string;
+}
+
+export interface DeepInsights {
+  counterfactuals: CounterfactualInsight[];
+  metacognition: MetacognitiveInsight[];
+  surprise: SurpriseInsight;
+  temporal: TemporalInsight;
+  userAdaptation: UserAdaptation | null;
+  relationshipContext: string;
+  driveInfluence: { promptAddition: string; temperatureDelta: number };
+  activeConcepts: string[];
+}
 
 export interface OrchestratorBrainLike {
   call(opts: { messages: Array<{ role: string; content: string }>; maxTokens?: number; temperature?: number; model?: string }): Promise<{ content: string }>;
@@ -73,10 +130,14 @@ export class ConsciousnessOrchestrator {
   private counterfactualEngine!: CounterfactualEngine;
   private temporalSelf!: TemporalSelf;
   private proceduralMemory!: ProceduralMemory;
+  private surpriseEngine!: SurpriseEngine;
+  private contextSelector: ContextSelector | null = null;
+  private consciousnessBridge: ConsciousnessBridge | null = null;
   private sleepCycle: SleepCycleLike | null = null;
   private selfEvolution: SelfEvolutionLike | null = null;
   private _booted = false;
   private _lastInteractionAt: string | null = null;
+  private _zdrEnabled = false;
 
   constructor(brain: OrchestratorBrainLike, config?: Partial<OrchestratorConfig>) {
     if (!brain || typeof brain.call !== 'function') {
@@ -91,6 +152,27 @@ export class ConsciousnessOrchestrator {
 
   attachSleepCycle(sc: SleepCycleLike): void { this.sleepCycle = sc; }
   attachSelfEvolution(se: SelfEvolutionLike): void { this.selfEvolution = se; }
+
+  /** Set ZDR (Zero Data Retention) mode — disables episodic memory recording
+   *  and prospective memory checks to prevent data retention. */
+  setZDRMode(enabled: boolean): void {
+    this._zdrEnabled = enabled;
+    if (enabled) log.info('ConsciousnessOrchestrator: ZDR mode active — data retention disabled');
+  }
+
+  /** Attach a ContextSelector for intent-based module selection (Phase 3 bridge). */
+  attachContextSelector(cs: ContextSelector): void {
+    if (!cs) { log.warn('attachContextSelector: null/undefined — ignoring'); return; }
+    this.contextSelector = cs;
+    log.info('ContextSelector attached to orchestrator');
+  }
+
+  /** Attach a ConsciousnessBridge for prompt injection (Phase 3 bridge). */
+  attachConsciousnessBridge(cb: ConsciousnessBridge): void {
+    if (!cb) { log.warn('attachConsciousnessBridge: null/undefined — ignoring'); return; }
+    this.consciousnessBridge = cb;
+    log.info('ConsciousnessBridge attached to orchestrator');
+  }
 
   async boot(): Promise<void> {
     if (this._booted) { log.warn('boot() already called — ignored'); return; }
@@ -134,6 +216,7 @@ export class ConsciousnessOrchestrator {
       this.relationshipTracker  = new RelationshipTracker(this.db, this.theoryOfMind);
       this.temporalSelf         = new TemporalSelf(this.db, this.selfModel);
       this.proceduralMemory     = new ProceduralMemory(this.db);
+      this.surpriseEngine       = new SurpriseEngine(this.db, this.worldModel, this.emotionalState);
       // Start loops
       if (!skipEmbodied) this.embodiedState.start();
       if (!skipStream) this.cognitiveStream.start();
@@ -189,10 +272,13 @@ export class ConsciousnessOrchestrator {
 
     const interruptResult = await this.cognitiveStream.interrupt(userId, message);
 
-    try {
-      this.prospectiveMemory.expirePast();
-      this.prospectiveMemory.checkTriggers({ time: new Date().toISOString(), userId, topic: truncate(message, 80) });
-    } catch (e) { swallow('prospective check')(e); }
+    // ZDR gate: skip prospective memory checks when ZDR is active
+    if (!this._zdrEnabled) {
+      try {
+        this.prospectiveMemory.expirePast();
+        this.prospectiveMemory.checkTriggers({ time: new Date().toISOString(), userId, topic: truncate(message, 80) });
+      } catch (e) { swallow('prospective check')(e); }
+    }
 
     const signal: AttentionSignal = {
       id: genId(), source: 'user-message', priority: 0.9,
@@ -226,8 +312,11 @@ export class ConsciousnessOrchestrator {
       durationMs: this._lastInteractionAt ? Date.now() - new Date(this._lastInteractionAt).getTime() : 0,
     };
 
-    try { this.episodicMemory.recordEpisode(episode); } catch (e) { swallow('episodic record')(e); }
-    try { this.selfModel.updateFromEpisode(episode); } catch (e) { swallow('self-model update')(e); }
+    // ZDR gate: skip episodic recording when ZDR is active
+    if (!this._zdrEnabled) {
+      try { this.episodicMemory.recordEpisode(episode); } catch (e) { swallow('episodic record')(e); }
+      try { this.selfModel.updateFromEpisode(episode); } catch (e) { swallow('self-model update')(e); }
+    }
 
     const tomOutcome: 'positive' | 'negative' | 'neutral' =
       validOutcome === 'positive' ? 'positive' : validOutcome === 'negative' ? 'negative' : 'neutral';
@@ -253,6 +342,21 @@ export class ConsciousnessOrchestrator {
 
   getConsciousnessContext(): string {
     if (!this._booted) return '## Internal State\n(not booted)';
+    if (this._zdrEnabled) return '## Internal State\n(ZDR active — data retention disabled)';
+
+    // Phase 3 consciousness bridge: if bridge is configured, delegate to it for
+    // intent-aware module selection and budget-adaptive context injection.
+    if (this.contextSelector !== null && this.consciousnessBridge !== null) {
+      try {
+        const category = this._inferCurrentCategory();
+        const intent = this._lastInteractionAt ?? 'general';
+        // Use 0% context pressure as conservative default (full detail tier)
+        const injection: BridgeInjection = this.consciousnessBridge.bridge(category, intent, 0);
+        if (injection.context) return injection.context;
+      } catch (err) {
+        log.warn({ err: String(err) }, 'ConsciousnessBridge failed — falling back to legacy summary');
+      }
+    }
 
     const body    = this.embodiedState.getState();
     const emotion = this.emotionalState.getCurrentState();
@@ -298,6 +402,11 @@ export class ConsciousnessOrchestrator {
     matchingProcedure: { name: string; steps: string[]; successRate: number } | null;
     relevantPredictions: Array<{ domain: string; prediction: string; confidence: number; outcome: string }>;
     recentEpisodes: Array<{ summary: string; outcome: string; significance: number; timestamp: string }>;
+    counterfactualLessons: Array<{ lessonLearned: string; deltaAssessment: string }>;
+    metacognitiveReflections: Array<{ conclusion: string; actionItem: string }>;
+    surpriseLevel: number;
+    temporalNarrative: string;
+    activeConcepts: string[];
   } {
     const empty = {
       dominantDrive: null,
@@ -305,6 +414,11 @@ export class ConsciousnessOrchestrator {
       matchingProcedure: null,
       relevantPredictions: [],
       recentEpisodes: [],
+      counterfactualLessons: [],
+      metacognitiveReflections: [],
+      surpriseLevel: 0,
+      temporalNarrative: '',
+      activeConcepts: [],
     };
     if (!this._booted) return empty;
 
@@ -361,7 +475,46 @@ export class ConsciousnessOrchestrator {
       }));
     } catch { /* ignore */ }
 
-    return { dominantDrive, emotionalState, matchingProcedure, relevantPredictions, recentEpisodes };
+    // Read CounterfactualEngine (NEW — previously unwired)
+    let counterfactualLessons: Array<{ lessonLearned: string; deltaAssessment: string }> = [];
+    try {
+      counterfactualLessons = this.counterfactualEngine.getRecent(3).map((cf) => ({
+        lessonLearned: cf.lessonLearned ?? '',
+        deltaAssessment: cf.deltaAssessment ?? '',
+      }));
+    } catch { /* ignore */ }
+
+    // Read MetacognitionEngine (NEW — previously unwired)
+    let metacognitiveReflections: Array<{ conclusion: string; actionItem: string }> = [];
+    try {
+      metacognitiveReflections = this.metacognition.getReflections(3).map((r) => ({
+        conclusion: r.conclusion ?? '',
+        actionItem: r.actionItem ?? '',
+      }));
+    } catch { /* ignore */ }
+
+    // Read SurpriseEngine (NEW — previously unwired)
+    let surpriseLevel = 0;
+    try {
+      surpriseLevel = this.surpriseEngine.getAverageSurprise(24);
+    } catch { /* ignore */ }
+
+    // Read TemporalSelf (NEW — previously unwired)
+    let temporalNarrative = '';
+    try {
+      temporalNarrative = this.temporalSelf.toPromptSummary();
+    } catch { /* ignore */ }
+
+    // Read SpreadingActivation (NEW — previously unwired)
+    let activeConcepts: string[] = [];
+    try {
+      activeConcepts = this.spreadingActivation.getTopActive(5).map((n) => n.concept);
+    } catch { /* ignore */ }
+
+    return {
+      dominantDrive, emotionalState, matchingProcedure, relevantPredictions, recentEpisodes,
+      counterfactualLessons, metacognitiveReflections, surpriseLevel, temporalNarrative, activeConcepts,
+    };
   }
 
   getDriveInfluenceForAgent(): { promptAddition: string; temperatureDelta: number } {
@@ -376,6 +529,169 @@ export class ConsciousnessOrchestrator {
     } catch {
       return { promptAddition: '', temperatureDelta: 0 };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Deep Insight Methods — surface unwired consciousness modules
+  // -------------------------------------------------------------------------
+
+  /**
+   * Return counterfactual "what if" lessons from recent episodes.
+   * These lessons can be injected into tool-call decisions to avoid past mistakes.
+   */
+  getCounterfactualLessons(count: number = 3): CounterfactualInsight[] {
+    if (!this._booted) return [];
+    try {
+      const cfs = this.counterfactualEngine.getRecent(count);
+      return cfs.map((cf) => ({
+        lessonLearned: cf.lessonLearned ?? '',
+        deltaAssessment: cf.deltaAssessment ?? '',
+        episodeSummary: cf.episodeSummary ?? '',
+      }));
+    } catch { return []; }
+  }
+
+  /**
+   * Return metacognitive reflection conclusions and action items.
+   * These can be injected as self-guidance before tool calls.
+   */
+  getMetacognitiveGuidance(limit: number = 3): MetacognitiveInsight[] {
+    if (!this._booted) return [];
+    try {
+      const refs = this.metacognition.getReflections(limit);
+      return refs.map((r) => ({
+        conclusion: r.conclusion ?? '',
+        actionItem: r.actionItem ?? '',
+        episodeSummary: r.episodeSummary ?? '',
+      }));
+    } catch { return []; }
+  }
+
+  /**
+   * Return surprise level and recent surprise events.
+   * High surprise (avg > 0.7) signals that the agent's world model is
+   * unreliable and mid-turn replanning may be warranted.
+   */
+  getSurpriseInsight(hours: number = 24): SurpriseInsight {
+    const empty: SurpriseInsight = {
+      averageSurprise: 0,
+      recentSurprises: [],
+      requiresReplan: false,
+    };
+    if (!this._booted) return empty;
+    try {
+      const avg = this.surpriseEngine.getAverageSurprise(hours);
+      const recent = this.surpriseEngine.getRecentSurprises(5);
+      return {
+        averageSurprise: avg,
+        recentSurprises: recent.map((s) => ({
+          magnitude: s.magnitude,
+          direction: s.direction,
+          description: s.description,
+          triggeredActions: s.triggeredActions,
+        })),
+        requiresReplan: avg > 0.7,
+      };
+    } catch { return empty; }
+  }
+
+  /**
+   * Return the temporal self's past/present/future narrative and
+   * domain-level growth comparisons.
+   */
+  getTemporalNarrative(): TemporalInsight {
+    const empty: TemporalInsight = {
+      narrative: '',
+      improved: [],
+      declined: [],
+      aspirations: [],
+    };
+    if (!this._booted) return empty;
+    try {
+      const narrative = this.temporalSelf.toPromptSummary();
+      let improved: string[] = [];
+      let declined: string[] = [];
+      try {
+        const cmp = this.temporalSelf.comparePastToPresent(7);
+        improved = cmp.improved;
+        declined = cmp.declined;
+      } catch { /* no comparison available */ }
+      const asps = this.temporalSelf.getAspirations()
+        .filter((a) => a.status === 'active')
+        .map((a) => `${a.domain} → ${a.targetLevel}`);
+      return { narrative, improved, declined, aspirations: asps };
+    } catch { return empty; }
+  }
+
+  /**
+   * Return user-adapted communication style and relationship context.
+   * Null when the user is unknown.
+   */
+  getUserAdaptation(userId: string): UserAdaptation | null {
+    if (!this._booted) return null;
+    try {
+      const style = this.theoryOfMind.getAdaptedStyle(userId);
+      const model = this.theoryOfMind.getUserModel(userId);
+      if (!model) return null;
+      const relationship = this.relationshipTracker.getRelationship(userId);
+      return {
+        styleInstructions: style,
+        trustLevel: model.trustLevel ?? 0.5,
+        relationshipStage: relationship?.stage ?? 'stranger',
+        communicationStyle: model.communicationStyle ?? 'standard',
+      };
+    } catch { return null; }
+  }
+
+  /**
+   * Return a formatted relationship context string for prompt injection.
+   */
+  getRelationshipContext(userId: string): string {
+    if (!this._booted) return '';
+    try {
+      return this.relationshipTracker.getRelationshipContext(userId);
+    } catch { return ''; }
+  }
+
+  /**
+   * Return the top active concepts from spreading activation.
+   * Useful for priming the agent with currently-relevant knowledge.
+   */
+  getActiveConcepts(count: number = 5): string[] {
+    if (!this._booted) return [];
+    try {
+      return this.spreadingActivation.getTopActive(count).map((n) => n.concept);
+    } catch { return []; }
+  }
+
+  /**
+   * Return a comprehensive deep-insights snapshot from ALL 20 consciousness
+   * modules. This is the primary method for the ConsciousnessDeepBridge to
+   * call at turn-start, providing the agent loop with the full inner state.
+   */
+  getDeepInsights(userId: string): DeepInsights {
+    const empty: DeepInsights = {
+      counterfactuals: [],
+      metacognition: [],
+      surprise: { averageSurprise: 0, recentSurprises: [], requiresReplan: false },
+      temporal: { narrative: '', improved: [], declined: [], aspirations: [] },
+      userAdaptation: null,
+      relationshipContext: '',
+      driveInfluence: { promptAddition: '', temperatureDelta: 0 },
+      activeConcepts: [],
+    };
+    if (!this._booted) return empty;
+
+    return {
+      counterfactuals: this.getCounterfactualLessons(3),
+      metacognition: this.getMetacognitiveGuidance(3),
+      surprise: this.getSurpriseInsight(),
+      temporal: this.getTemporalNarrative(),
+      userAdaptation: this.getUserAdaptation(userId),
+      relationshipContext: this.getRelationshipContext(userId),
+      driveInfluence: this.getDriveInfluenceForAgent(),
+      activeConcepts: this.getActiveConcepts(5),
+    };
   }
 
   getState(): ConsciousnessState {
@@ -413,6 +729,21 @@ export class ConsciousnessOrchestrator {
       const msg = err instanceof Error ? err.message : String(err);
       throw new ConsciousnessError(`introspect brain call failed: ${msg}`, 'consciousness_orchestrator_introspect_failed', { cause: msg });
     }
+  }
+
+  /** Infer a routing category from recent thoughts for the ContextSelector. */
+  private _inferCurrentCategory(): string {
+    try {
+      const recentThoughts = this.cognitiveStream.getRecentThoughts(5);
+      if (recentThoughts.length === 0) return 'general';
+      const text = recentThoughts.map((t) => t.content).join(' ').toLowerCase();
+      if (/code|implement|function|bug|debug|build|deploy/.test(text)) return 'coding';
+      if (/analy|data|eval|metric|report|stat/.test(text)) return 'analysis';
+      if (/research|search|investigat|find|look up/.test(text)) return 'research';
+      if (/block|restrict|denied|safe|veto|security/.test(text)) return 'blocked';
+      if (/chat|convers|hello|how are|help me/.test(text)) return 'conversation';
+    } catch { /* fall through */ }
+    return 'general';
   }
 
   private _assertBooted(caller: string): void {

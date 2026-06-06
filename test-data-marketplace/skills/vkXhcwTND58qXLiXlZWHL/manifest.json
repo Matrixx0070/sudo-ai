@@ -1,0 +1,21 @@
+{
+  "name": "refactor",
+  "version": "1.0.0",
+  "description": "Refactor code for clarity, performance, or maintainability without changing behavior",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "refactor"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

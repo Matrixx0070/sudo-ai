@@ -9,6 +9,50 @@
 
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
+import { runVoidHook, runModifyingHook, runClaimingHook } from './hook-runner.js';
+import type { HookResult, PrioritizedHook } from './hook-runner.js';
+
+// Re-export hook-runner types and functions
+export { runVoidHook, runModifyingHook, runClaimingHook, sortHooksByPriority } from './hook-runner.js';
+export type { HookRunnerType, HookResult as HookRunnerResult, PrioritizedHook, HookRunnerConfig, VoidHookHandler, ModifyingHookHandler, ClaimingHookHandler } from './hook-runner.js';
+
+// Re-export typed-hook definitions and convenience function
+export { TYPED_HOOK_MAP, getHookRunnerType } from './typed-hooks.js';
+
+// Re-export Claude Code–style command/HTTP/function hook engine
+export {
+  HookEngine,
+  registerHookFunction,
+  unregisterHookFunction,
+} from './hook-engine.js';
+
+export type {
+  HookEvent as ExtHookEvent,
+  HookType,
+  HookDefinition,
+  HookGroup as HookGroupExt,
+  HookContext as ExtHookContext,
+  HookResult as ExtHookResult,
+  HookEngineConfig,
+  HookFunction,
+} from './hook-engine.js';
+export type {
+  PreToolCallResult,
+  PostToolCallResult,
+  PreLLMCallResult,
+  TransformToolResultResult,
+  TransformLLMOutputResult,
+  OnErrorResult,
+  SteeringResult,
+  CompactionResult as TypedCompactionResult,
+  SecurityResult as TypedSecurityResult,
+  MemoryResult as TypedMemoryResult,
+  VaultResult as TypedVaultResult,
+  GoalResult as TypedGoalResult,
+  AgentResult as TypedAgentResult,
+  MessageResult as TypedMessageResult,
+  GenericResult as TypedGenericResult,
+} from './typed-hooks.js';
 
 const log = createLogger('hooks');
 
@@ -94,7 +138,10 @@ export type HookEvent =
   // Wave 4 — Cost-optimisation routing event
   | 'model:route:cheap'
   // Wave 4 — Memory security events
-  | 'memory:scan:triggered';
+  | 'memory:scan:triggered'
+  // Task management events
+  | 'task:created'
+  | 'task:completed';
 
 /**
  * Context bag passed to every hook handler.
@@ -149,6 +196,10 @@ export interface Hook {
   handler: (context: HookContext) => Promise<void>;
   /** Human-readable description (e.g. for /hooks list). */
   description: string;
+  /** Execution priority — higher values run first. Default: 50 */
+  priority?: number;
+  /** Secondary sort key within the same priority tier. Higher wins. Default: 1 */
+  weight?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,12 +231,14 @@ export class HookManager {
    * @param event       - Lifecycle event to listen for.
    * @param handler     - Async function executed when the event fires.
    * @param description - Optional human-readable label for this hook.
+   * @param options     - Optional scheduling metadata (priority, weight).
    * @returns The unique hook ID (use with `unregister` to remove it).
    */
   register(
     event: HookEvent,
     handler: (ctx: HookContext) => Promise<void>,
     description = '',
+    options?: { priority?: number; weight?: number },
   ): string {
     if (!event || typeof event !== 'string') {
       throw new TypeError('HookManager.register: event must be a non-empty string');
@@ -195,13 +248,29 @@ export class HookManager {
     }
 
     const id = genId();
-    const hook: Hook = { id, event, handler, description };
+    const hook: Hook = {
+      id,
+      event,
+      handler,
+      description,
+      priority: options?.priority ?? 50,
+      weight: options?.weight ?? 1,
+    };
 
     const list = this.hooks.get(event) ?? [];
     list.push(hook);
+    // Keep list sorted by priority (desc), then weight (desc)
+    list.sort((a, b) => {
+      const pa = a.priority ?? 50;
+      const pb = b.priority ?? 50;
+      if (pb !== pa) return pb - pa;
+      const wa = a.weight ?? 1;
+      const wb = b.weight ?? 1;
+      return wb - wa;
+    });
     this.hooks.set(event, list);
 
-    log.info({ event, hookId: id, description }, 'Hook registered');
+    log.info({ event, hookId: id, description, priority: hook.priority, weight: hook.weight }, 'Hook registered');
     return id;
   }
 
@@ -254,6 +323,77 @@ export class HookManager {
         );
       }
     }
+  }
+
+  /**
+   * Fire-and-forget emission — all handlers run in parallel.
+   * Errors are swallowed and logged. No results are returned.
+   *
+   * Use for: telemetry, analytics, audit-logging.
+   *
+   * @param event   - Event name.
+   * @param context - Context bag passed to each handler.
+   */
+  async emitVoid(event: HookEvent, context: HookContext): Promise<void> {
+    const list = this.hooks.get(event);
+    if (!list || list.length === 0) return;
+
+    const prioritized: PrioritizedHook[] = list.map((h) => ({
+      ...h,
+      priority: h.priority ?? 50,
+      weight: h.weight ?? 1,
+    }));
+
+    await runVoidHook(event, context, prioritized);
+  }
+
+  /**
+   * Sequential context-mutation emission.
+   * Each handler receives and can modify the context; the final
+   * (possibly enriched) context is returned to the caller.
+   *
+   * Use for: sanitising output, injecting context, enriching messages.
+   *
+   * @param event   - Event name.
+   * @param context - Context bag threaded through each handler.
+   * @returns The modified context after all handlers have run.
+   */
+  async emitModifying(event: HookEvent, context: HookContext): Promise<HookContext> {
+    const list = this.hooks.get(event);
+    if (!list || list.length === 0) return context;
+
+    const prioritized: PrioritizedHook[] = list.map((h) => ({
+      ...h,
+      priority: h.priority ?? 50,
+      weight: h.weight ?? 1,
+    }));
+
+    return runModifyingHook(event, context, prioritized);
+  }
+
+  /**
+   * First-claim-wins emission.
+   * Handlers run in priority order; the first one that returns a
+   * non-null HookResult claims the event and the rest are skipped.
+   * Returns null if no handler claims.
+   *
+   * Use for: security vetoes, permission gates, policy enforcement.
+   *
+   * @param event   - Event name.
+   * @param context - Context bag passed to each handler.
+   * @returns The winning HookResult, or null if nobody claimed.
+   */
+  async emitClaiming(event: HookEvent, context: HookContext): Promise<HookResult | null> {
+    const list = this.hooks.get(event);
+    if (!list || list.length === 0) return null;
+
+    const prioritized: PrioritizedHook[] = list.map((h) => ({
+      ...h,
+      priority: h.priority ?? 50,
+      weight: h.weight ?? 1,
+    }));
+
+    return runClaimingHook(event, context, prioritized);
   }
 
   // -------------------------------------------------------------------------

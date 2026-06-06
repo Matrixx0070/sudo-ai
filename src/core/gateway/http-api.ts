@@ -296,6 +296,7 @@ function isAuthorised(req: IncomingMessage, tokenBuf: Buffer | null): boolean {
 // ---------------------------------------------------------------------------
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  if (res.headersSent) return;
   const payload = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) });
   res.end(payload);

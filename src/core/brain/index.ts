@@ -74,3 +74,33 @@ export type { ModelAnswer, ConsensusResult } from './model-consensus.js';
 // Upgrade 63: Model Cost Optimizer
 export { pickOptimalModel, estimateTaskComplexity, getModelCosts } from './cost-optimizer.js';
 export type { ModelCost, OptimizationGoal } from './cost-optimizer.js';
+
+// Negative Router — 3-tier DFA routing engine
+export { NegativeRouter, getDefaultRouter } from './negative-router.js';
+export type { NegativeRouterConfig, NegativeRule, RoutingResult, RoutingTier } from './negative-router.js';
+
+// Context Compressor — graduated 4-stage compression
+export { ContextCompressor } from './context-compressor.js';
+export type { CompressionStage, CompressionResult, CompressionConfig } from './context-compressor.js';
+
+// Adaptive Thinking Budget — model-specific thinking token control
+export { ThinkingBudgetManager, thinkingBudgetManager } from './thinking-budget.js';
+export type {
+  ThinkingLevel,
+  EffortDialLevel,
+  ModelThinkingBudget,
+  ModelBudgetOverrides,
+  PerformanceSignals,
+  ThinkingBudgetAdjustment,
+  AdjustmentStrategy,
+  ThinkingBudgetConfig,
+  ThinkingBudgetState,
+  ThinkingBudgetEvent,
+  ThinkingBudgetEventHandler,
+} from './thinking-budget-types.js';
+export {
+  DEFAULT_THINKING_BUDGET_CONFIG,
+  EFFORT_TO_BUDGET,
+  THINKING_LEVEL_TOKENS,
+  REASONING_LEVEL_TOKENS,
+} from './thinking-budget-types.js';

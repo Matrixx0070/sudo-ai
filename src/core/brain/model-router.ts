@@ -2,21 +2,15 @@
  * model-router.ts
  *
  * Smart model routing for SUDO-AI v4.
- * Routes tasks to the best SUDOAPI model based on keyword analysis of the
+ * Routes tasks to the best available model based on keyword analysis of the
  * user message and the intent string produced by the intent classifier.
- *
- * Routing logic:
- *   Coding / debugging  → sudoapi/gpt-5.4       (strongest at code)
- *   Analysis / writing  → sudoapi/claude-sonnet  (strongest at reasoning)
- *   Research / search   → sudoapi/gemini         (broadest web knowledge)
- *   Everything else     → sudoapi/grok            (fastest, 1-second responses)
  *
  * The router is intentionally zero-cost: pure keyword matching, no LLM calls.
  * Follows the same pattern as tool-router.ts already in the codebase.
  */
 
 import { createLogger } from '../shared/logger.js';
-import { SUDOAPI_MODELS } from '../shared/constants.js';
+import { ROUTING_MODELS } from '../shared/constants.js';
 
 const log = createLogger('brain:model-router');
 
@@ -94,7 +88,7 @@ function scoreAgainst(tokens: string[], keywords: Set<string>, weight: number): 
 export type RouterCategory = 'coding' | 'analysis' | 'research' | 'fast';
 
 export interface RoutingDecision {
-  /** The fully-qualified model string to use, e.g. "sudoapi/gpt-5.4". */
+  /** The fully-qualified model string to use, e.g. "ollama/deepseek-v4-pro:cloud". */
   model: string;
   /** The routing category that was selected. */
   category: RouterCategory;
@@ -103,7 +97,7 @@ export interface RoutingDecision {
 }
 
 /**
- * Route a message to the optimal SUDOAPI model.
+ * Route a message to the optimal model.
  *
  * @param intent  - Intent string from the intent classifier (may be empty).
  * @param message - The raw user message.
@@ -113,7 +107,7 @@ export function routeModel(intent: string, message: string): RoutingDecision {
   if (!message && !intent) {
     log.debug('Empty message and intent — defaulting to fast model');
     return {
-      model: SUDOAPI_MODELS.fast,
+      model: ROUTING_MODELS.fast,
       category: 'fast',
       scores: { coding: 0, analysis: 0, research: 0, fast: 0 },
     };
@@ -134,20 +128,20 @@ export function routeModel(intent: string, message: string): RoutingDecision {
   };
 
   let category: RouterCategory = 'fast';
-  let model: string = SUDOAPI_MODELS.fast;
+  let model: string = ROUTING_MODELS.fast;
   const maxScore = Math.max(codingScore, analysisScore, researchScore);
 
   if (maxScore > 0) {
     // Resolve ties in favour of higher-precision models (coding > analysis > research).
     if (codingScore === maxScore) {
       category = 'coding';
-      model = SUDOAPI_MODELS.coding;
+      model = ROUTING_MODELS.coding;
     } else if (analysisScore === maxScore) {
       category = 'analysis';
-      model = SUDOAPI_MODELS.analysis;
+      model = ROUTING_MODELS.analysis;
     } else {
       category = 'research';
-      model = SUDOAPI_MODELS.research;
+      model = ROUTING_MODELS.research;
     }
   }
 

@@ -29,7 +29,7 @@ import readline from 'node:readline';
 // ---------------------------------------------------------------------------
 
 const AVAILABLE_MODELS = [
-  { id: 'sudoapi/sudo',               label: 'sudoapi/sudo (recommended — smart routing)' },
+  { id: 'ollama/deepseek-v4-pro:cloud', label: 'ollama/deepseek-v4-pro:cloud (recommended — cloud)' },
   { id: 'xai/grok-4-0709',            label: 'xai/grok-4-0709 (premium, max capability)' },
   { id: 'xai/grok-4-1-fast-non-reasoning', label: 'xai/grok-4-1-fast (fast + cheap)' },
   { id: 'anthropic/claude-sonnet-4-5', label: 'anthropic/claude-sonnet-4-5 (balanced)' },

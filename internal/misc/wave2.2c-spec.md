@@ -220,7 +220,7 @@ Full apps[1] definition:
       WEB_CHAT_ENABLED: 'true',
       WEB_CHAT_TOKEN: 'QIf2WPVie96Ar2CCmMsPoiTItD1XgtQvTB_Ggdx-dAQ',
       WEB_CHAT_ALLOWED_ORIGINS: 'http://127.0.0.1:18901,http://localhost:18901',
-      SUDOAPI_GATEWAY_URL: 'https://sudoapi.shop',
+      GATEWAY_URL: 'http://localhost:18901',
       DATA_DIR: path.join(CWD, 'data-staging'),
       SUDO_TOOL_SYNTHESIZE_ENABLED: '1',
     },

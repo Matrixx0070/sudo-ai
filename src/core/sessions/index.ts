@@ -47,3 +47,18 @@ export type { SessionRouteDeps } from './routes.js';
 // Session Lanes: Multi-lane task queue
 export { SessionLaneManager, getLaneManager, resetLaneManager } from './session-lanes.js';
 export type { SessionLaneType } from './session-lanes.js';
+
+// Session Lineage: Parent chains, frozen snapshots, cross-session FTS5 search
+export { SessionLineageTracker } from './session-lineage.js';
+export type { SessionLineage, FrozenSnapshot, CrossSessionResult, LineageConfig } from './session-lineage.js';
+
+// Session Rewind: JSONL-based undo history with turn-level checkpointing
+export { SessionRewindManager, MAX_REWIND_SIZE, REWIND_POINTS_FILE } from './session-rewind.js';
+export type {
+  RewindPoint,
+  RewindResult,
+  AcpRewindPointsRequest,
+  AcpRewindPointsResponse,
+  AcpRewindExecuteRequest,
+  AcpRewindExecuteResponse,
+} from './session-rewind.js';

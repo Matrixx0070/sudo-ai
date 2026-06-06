@@ -290,3 +290,20 @@ export class SecurityGuard {
 
 export { guardFetch, safeFetch } from './web-fetch-guard.js';
 export type { FetchGuardResult } from './web-fetch-guard.js';
+
+// Wave 10 — Tool translation (OpenClaw/Hermes/OpenJarvis tool mapping)
+export { ToolTranslator } from './tool-translator.js';
+export type { ToolMapping, ToolTranslationResult } from './tool-translator.js';
+
+// Wave 10 — Taint tracking (data lineage from untrusted sources)
+export { TaintTracker } from './taint-tracker.js';
+export type { TaintSource } from '../shared/wave10-types.js';
+export type { Taint, TaintLevel, TaintSet, TaintViolation } from '../shared/wave10-types.js';
+
+// Wave 10 — Artifact signing (cryptographic integrity)
+export { ArtifactSigner } from './artifact-signer.js';
+export type { ArtifactSignature, SignerConfig } from './artifact-signer.js';
+
+// Wave 10 — Config 5-Pillar TOML overlay
+export { Config5Pillar } from './config-5pillar.js';
+export type { PillarConfig, FivePillarConfig } from './config-5pillar.js';

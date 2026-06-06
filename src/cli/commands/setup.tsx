@@ -55,7 +55,7 @@ interface WizardAnswers {
 const AVAILABLE_MODELS: SetupSelectItem[] = [
   { value: 'xai/grok-4-1-fast-non-reasoning', label: 'xai/grok-4-1-fast (fast + cheap, recommended for 100x)', desc: '' },
   { value: 'xai/grok-4-0709', label: 'xai/grok-4-0709 (premium, max capability)', desc: '' },
-  { value: 'sudoapi/sudo', label: 'sudoapi/sudo (smart routing)', desc: '' },
+  { value: 'ollama/deepseek-v4-pro:cloud', label: 'ollama/deepseek-v4-pro:cloud (cloud, no local GPU needed)', desc: '' },
   { value: 'anthropic/claude-sonnet-4-5', label: 'anthropic/claude-sonnet-4-5 (balanced)', desc: '' },
   { value: 'openai/gpt-4o', label: 'openai/gpt-4o (OpenAI flagship)', desc: '' },
   { value: 'google/gemini-2.0-flash', label: 'google/gemini-2.0-flash (efficient)', desc: '' },
@@ -161,7 +161,7 @@ function buildSetupToml(answers: WizardAnswers): string {
   lines.push('disabled = []');
   lines.push('');
   lines.push('[engine]');
-  lines.push('runtime = "sudoapi"');
+  lines.push('runtime = "cloud"');
   lines.push('prefer_local = false');
   lines.push('');
   if (answers.enableToolLearning) {

@@ -1,0 +1,21 @@
+{
+  "name": "code-review",
+  "version": "1.0.0",
+  "description": "Review code for bugs, security issues, style problems, and improvements",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "code-review"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

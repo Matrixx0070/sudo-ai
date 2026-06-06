@@ -48,7 +48,7 @@ import { useFilePicker } from './hooks/useFilePicker.js';
 // ---------------------------------------------------------------------------
 
 const MAX_HISTORY = 60;
-const BASE_URL = process.env['SUDOAPI_URL'] ?? 'http://localhost:18900';
+const BASE_URL = process.env['GATEWAY_URL'] ?? 'http://localhost:18900';
 
 // ---------------------------------------------------------------------------
 // ChatPhase state machine
@@ -662,7 +662,7 @@ export const App: React.FC = () => {
       <Box flexDirection="column" paddingLeft={2}>
         <Text color="red" bold>Error: {providerError}</Text>
         <Text dimColor>
-          Set one of: ANTHROPIC_API_KEY, SUDOAPI_URL+SUDOAPI_KEY, OPENAI_API_KEY, XAI_API_KEY
+          Set one of: ANTHROPIC_API_KEY, OLLAMA_URL, OPENAI_API_KEY, XAI_API_KEY
         </Text>
       </Box>
     );

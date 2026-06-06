@@ -59,7 +59,7 @@ function getBearerToken(req: unknown): string | null {
 /** Bearer gate middleware - returns true if authorized */
 function bearerGate(req: unknown, res: unknown, allowedToken?: string): boolean {
   const token = getBearerToken(req);
-  const expected = allowedToken ?? process.env['SUDO_API_TOKEN'];
+  const expected = allowedToken ?? process.env['GATEWAY_TOKEN'];
 
   if (!expected) {
     // No token configured - allow all (dev mode)

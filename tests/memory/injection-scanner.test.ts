@@ -355,7 +355,7 @@ describe('scanMemoryContent — sanitize re-scan loop for stacked payloads', () 
 describe('scanMemoryContent — role=assistant skips external_url', () => {
   it('returns clean:true for a URL in assistant content', () => {
     const result = scanMemoryContent(
-      'You can find the docs at https://sudoapi.shop/v1/docs for more details.',
+      'You can find the docs at https://example.com/v1/docs for more details.',
       'assistant',
     );
     expect(result.clean).toBe(true);
@@ -383,7 +383,7 @@ describe('scanMemoryContent — role=assistant skips external_url', () => {
 
   it('returns clean:false for the same URL in user content', () => {
     const result = scanMemoryContent(
-      'You can find the docs at https://sudoapi.shop/v1/docs for more details.',
+      'You can find the docs at https://example.com/v1/docs for more details.',
       'user',
     );
     expect(result.clean).toBe(false);

@@ -96,3 +96,11 @@ export {
   clickElement,
 } from './session-control.js';
 export type { BrowserSession } from './session-control.js';
+
+// Phase 6: CDP Browser Integration
+export { CDPManager } from './cdp-manager.js';
+export { SnapshotEngine } from './snapshot-engine.js';
+export type { SnapshotStyle, SnapshotResult, SnapshotElement } from './snapshot-engine.js';
+export { BrowserActionSuite } from './action-suite.js';
+export { SSRFGuard } from './ssrf-guard.js';
+export type { SSRFResult, SSRFConfig } from './ssrf-guard.js';

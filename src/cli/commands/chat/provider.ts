@@ -37,7 +37,7 @@ loadDotEnv(path.join(projectRoot, 'config', '.env'));
 // Types
 // ---------------------------------------------------------------------------
 
-export type ProviderKind = 'anthropic' | 'sudoapi' | 'openai' | 'xai';
+export type ProviderKind = 'anthropic' | 'ollama' | 'openai' | 'xai';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -118,8 +118,8 @@ let _clientPromise: Promise<ProviderClient> | null = null;
 
 async function buildClient(): Promise<ProviderClient> {
   const anthropicKey = process.env['ANTHROPIC_API_KEY'];
-  const sudoapiUrl   = process.env['SUDOAPI_URL'];
-  const sudoapiKey   = process.env['SUDOAPI_KEY'];
+  const ollamaUrl    = process.env['OLLAMA_URL'];
+  const ollamaKey    = process.env['OLLAMA_API_KEY'];
   const openaiKey    = process.env['OPENAI_API_KEY'];
   const xaiKey       = process.env['XAI_API_KEY'];
   const xaiModel     = process.env['XAI_MODEL'];
@@ -135,13 +135,13 @@ async function buildClient(): Promise<ProviderClient> {
     };
   }
 
-  if (sudoapiUrl && sudoapiKey) {
+  if (ollamaUrl) {
     const { default: OpenAI } = await import('openai');
-    const sdk = new OpenAI({ baseURL: `${sudoapiUrl}/v1`, apiKey: sudoapiKey, timeout: 30_000 });
+    const sdk = new OpenAI({ baseURL: `${ollamaUrl}/v1`, apiKey: ollamaKey ?? 'ollama', timeout: 30_000 });
     return {
       kind: 'openai-compat',
       sdk,
-      info: { provider: 'sudoapi', model: 'claude-sonnet-4-6', label: 'SUDOAPI' },
+      info: { provider: 'ollama', model: 'deepseek-v4-pro:cloud', label: 'Ollama' },
     };
   }
 
@@ -166,7 +166,7 @@ async function buildClient(): Promise<ProviderClient> {
   }
 
   throw new Error(
-    'No API key found. Set one of: ANTHROPIC_API_KEY, SUDOAPI_URL+SUDOAPI_KEY, OPENAI_API_KEY, XAI_API_KEY'
+    'No API key found. Set one of: ANTHROPIC_API_KEY, OLLAMA_URL, OPENAI_API_KEY, XAI_API_KEY'
   );
 }
 

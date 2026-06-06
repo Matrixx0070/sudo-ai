@@ -1,6 +1,6 @@
 /**
  * Tests for the concatenated-JSON-object splitter used in brain.ts
- * to handle LLMs (e.g. grok-3 via sudoapi) that batch multiple tool
+ * to handle LLMs (e.g. grok-3 via xai) that batch multiple tool
  * call argument objects into a single `arguments` string.
  *
  * Root cause: @ai-sdk/openai line 874 passes function.arguments as-is

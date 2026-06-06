@@ -80,6 +80,46 @@ export type {
   ChatWSOptions,
 } from './chat-ws.js';
 
+// Bridge protocol types (IDE extension protocol — zero runtime deps)
+export type {
+  BridgeConnectionPhase,
+  BridgeMultiplexMode,
+  BridgeClientMessage,
+  BridgeServerResponse,
+  BridgeServerEvent,
+  BridgeServerMessage,
+  BridgeMethod,
+  BridgeEventType,
+  BridgeErrorCodeType,
+  BridgeError,
+  InitializeParams,
+  InitializeResult,
+  BridgeClientCapabilities,
+  BridgeServerCapabilities,
+  BridgeChatSendParams,
+  BridgeChatSendResult,
+  SetModelParams,
+  SetPermissionModeParams,
+  CanUseToolParams,
+  CanUseToolResult,
+  InterruptParams,
+  StreamStartEvent,
+  StreamTokenEvent,
+  StreamThinkingEvent,
+  StreamToolCallEvent,
+  StreamToolResultEvent,
+  StreamCompleteEvent,
+  StreamErrorEvent,
+  HeartbeatEvent,
+  BridgeDiscoveryPayload,
+  BridgeSessionCreateParams,
+  BridgeSessionCreateResult,
+  BridgeSessionInfo,
+  BridgeSessionArchiveParams,
+} from './bridge-protocol.js';
+
+export { BRIDGE_PROTOCOL_VERSION, BridgeErrorCode } from './bridge-protocol.js';
+
 // Type guards (runtime functions for TypeScript type narrowing)
 export {
   isThinkingMessage,

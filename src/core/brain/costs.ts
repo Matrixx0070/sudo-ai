@@ -107,7 +107,7 @@ const PROVIDER_ENERGY: Record<string, EnergyProfile> = {
   // Local runtimes
   ollama:     { whPerKOutputTokens: 2.33,   estimatedParamsB: 70  },   // H100 700W / 300 tok/s
   llamacpp:   { whPerKOutputTokens: 2.22,   estimatedParamsB: 70  },   // A100 400W / 180 tok/s
-  sudoapi:    { whPerKOutputTokens: 0.0015, estimatedParamsB: 314 },   // Routed via SUDOAPI
+  cloud:      { whPerKOutputTokens: 0.0015, estimatedParamsB: 314 },   // Cloud-hosted provider
 };
 
 const DEFAULT_ENERGY: EnergyProfile = { whPerKOutputTokens: 0.002, estimatedParamsB: 175 };

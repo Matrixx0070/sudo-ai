@@ -220,7 +220,7 @@ GET /.well-known/agentskills.json
 
 ```json
 {
-  "registry": "https://sudoapi.shop/v1/registry/skills",
+  "registry": "http://localhost:18900/v1/registry/skills",
   "spec_version": "1.0",
   "provider": "sudo-ai",
   "total_skills": 5,
@@ -260,7 +260,7 @@ Send `If-None-Match: <etag>` to avoid re-downloading an unchanged manifest. When
 **Example:**
 
 ```bash
-curl https://sudoapi.shop/.well-known/agentskills.json
+curl http://localhost:18900/.well-known/agentskills.json
 ```
 
 ---

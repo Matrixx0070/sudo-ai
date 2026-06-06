@@ -14,6 +14,7 @@ import type {
   PluginContext,
   PluginModule,
   PluginLifecycle,
+  PluginLifecycleHooks,
   PluginState,
   PluginEntry,
   PluginHookEvent,
@@ -29,6 +30,7 @@ export type {
   PluginContext,
   PluginModule,
   PluginLifecycle,
+  PluginLifecycleHooks,
   PluginState,
   PluginEntry,
   PluginHookEvent,
@@ -177,7 +179,7 @@ export function createManifest(options: {
  *   }
  * }
  */
-export abstract class PluginBase implements Partial<PluginLifecycle> {
+export abstract class PluginBase implements PluginLifecycleHooks {
   /** Called when plugin is installed (optional) */
   async install?(ctx: PluginContext): Promise<void> {
     // Override in subclass
@@ -227,7 +229,7 @@ export {
 // MCP Server types (for MCP integration)
 // ---------------------------------------------------------------------------
 
-export type { McpServer } from './mcp-registry.js';
+export type { McpServer, McpTrustTier, McpServerStatus } from './mcp-registry.js';
 export {
   registerMcpServer,
   removeMcpServer,
@@ -236,4 +238,12 @@ export {
   connectMcpServer,
   disconnectMcpServer,
   getConnectedServers,
+  updateServerStatus,
+  setServerTrustTier,
+  setServerError,
+  updateServerTools,
+  getServerTools,
+  getEnabledServerTools,
+  setToolEnabled,
+  getServerStatusSummary,
 } from './mcp-registry.js';

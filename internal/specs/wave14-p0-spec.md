@@ -13,7 +13,7 @@ Single file: `/root/sudo-ai-v4/src/core/brain/brain.ts`
 New helper file: `/root/sudo-ai-v4/src/core/brain/tool-name-sanitize.ts`  
 New test file: `/root/sudo-ai-v4/tests/brain/tool-name-sanitize.test.ts`  
 
-**Root cause:** Anthropic API enforces `^[a-zA-Z0-9_-]{1,128}$` on tool names. All 230+ SUDO-AI tools use dotted names (e.g. `browser.search`). Dots are rejected, causing HTTP 502 from SUDOAPI on every tool-bearing LLM call.
+**Root cause:** Anthropic API enforces `^[a-zA-Z0-9_-]{1,128}$` on tool names. All 230+ SUDO-AI tools use dotted names (e.g. `browser.search`). Dots are rejected, causing HTTP 502 from the local gateway on every tool-bearing LLM call.
 
 **Kill-switch:** `SUDO_TOOL_NAME_SANITIZE_DISABLE=1` (exact `=== '1'`) reverts outbound names to raw dotted form and bypasses reverse-lookup. Default: sanitization ON.
 

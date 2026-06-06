@@ -88,7 +88,7 @@ done
 # ---------------------------------------------------------------------------
 # Token resolution (for health + metrics checks)
 # ---------------------------------------------------------------------------
-TOKEN="${SUDO_API_TOKEN:-}"
+TOKEN="${GATEWAY_TOKEN:-}"
 if [[ -z "$TOKEN" ]]; then TOKEN="${SUDO_AI_DASHBOARD_TOKEN:-}"; fi
 if [[ -z "$TOKEN" ]] && [[ -f "/root/.sudo-ai/token" ]]; then
   TOKEN=$(cat /root/.sudo-ai/token | tr -d '[:space:]')

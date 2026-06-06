@@ -175,14 +175,14 @@ criterion #5 accumulates.
 **Pre-flight:** checks `sudo_synth_seal_install_total` exists in
 `/v1/admin/metrics` before firing; aborts if obs not live.
 
-**Token:** resolves from `$SUDO_API_TOKEN` > `$SUDO_AI_DASHBOARD_TOKEN` > `/root/.sudo-ai/token`.
+**Token:** resolves from `$GATEWAY_TOKEN` > `$SUDO_AI_DASHBOARD_TOKEN` > `/root/.sudo-ai/token`.
 
 **Logs to:** `/var/log/seal-soak/loadgen-YYYYMMDD.log` (fallback: `data/logs/seal-soak/`).
 
 **Exit codes:** 0 = HTTP 2xx received; 1 = obs check failed or HTTP error.
 
 ```sh
-SUDO_API_TOKEN=<tok> bash scripts/seal-soak-loadgen.sh
+GATEWAY_TOKEN=<tok> bash scripts/seal-soak-loadgen.sh
 ```
 
 ### scripts/seal-soak-report.sh
@@ -202,10 +202,10 @@ fires a fire-and-forget POST with the verdict summary.
 
 ```sh
 # Smoke test (now; ~1h window)
-SUDO_API_TOKEN=<tok> bash scripts/seal-soak-report.sh --since 1h
+GATEWAY_TOKEN=<tok> bash scripts/seal-soak-report.sh --since 1h
 
 # Final T+48h report
-SUDO_API_TOKEN=<tok> bash scripts/seal-soak-report.sh --since 2026-04-19T14:00:00Z
+GATEWAY_TOKEN=<tok> bash scripts/seal-soak-report.sh --since 2026-04-19T14:00:00Z
 ```
 
 ### scripts/prod-seal-flip.sh

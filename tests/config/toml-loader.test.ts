@@ -72,7 +72,7 @@ disabled = ["coder.execute"]
 mcp_servers = ["http://localhost:3001"]
 
 [engine]
-runtime = "sudoapi"
+runtime = "cloud"
 prefer_local = false
 
 [learning]

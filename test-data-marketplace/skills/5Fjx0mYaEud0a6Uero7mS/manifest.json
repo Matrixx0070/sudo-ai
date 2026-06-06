@@ -1,0 +1,21 @@
+{
+  "name": "notion",
+  "version": "1.0.0",
+  "description": "Read, create, and update Notion pages and database entries using the Notion API.",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "notion"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

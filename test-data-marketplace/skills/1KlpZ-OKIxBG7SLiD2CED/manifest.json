@@ -1,0 +1,21 @@
+{
+  "name": "gmail",
+  "version": "1.0.0",
+  "description": "Send, read, and search Gmail messages using Google OAuth authentication.",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "gmail"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

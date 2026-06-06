@@ -30,6 +30,7 @@ import type {
 } from './types.js';
 import type { SudoConfig } from '../config/types.js';
 import { ToolRegistry } from '../tools/registry.js';
+import type { NegativeRouter, RoutingResult } from './negative-router.js';
 
 const log = createLogger('brain');
 
@@ -38,7 +39,7 @@ const MAX_FAILOVER_ATTEMPTS = 4;
 
 // ---------------------------------------------------------------------------
 // Concatenated-JSON splitter — handles LLMs that batch multiple tool call
-// argument objects into a single arguments string, e.g. grok-3 via sudoapi.
+// argument objects into a single arguments string, e.g. grok-3 via xai.
 // ---------------------------------------------------------------------------
 
 /**
@@ -180,6 +181,8 @@ export class Brain {
   private readonly config: SudoConfig | null;
   /** RAG engine — injected post-construction via setRAGEngine(). Null = no retrieval. */
   private ragEngine: RAGEngineInterface | null = null;
+  /** Negative router — injected post-construction via setNegativeRouter(). Undefined = no routing. */
+  private negativeRouter: NegativeRouter | undefined;
 
   /**
    * @param config - Full SudoConfig (or null for env-only mode).
@@ -295,11 +298,11 @@ export class Brain {
       // Vercel AI SDK v6 uses 'input' for tool call arguments.
       // Fall back to 'args' for compatibility with older SDK versions.
       // Either field may arrive as a raw JSON string from OpenAI-compatible
-      // providers (e.g. grok-3 via sudoapi) — parse it if so.
+      // providers (e.g. grok-3 via xai) — parse it if so.
       let rawArgField: unknown = raw['input'] ?? raw['args'] ?? {};
 
       // If the field is a string, try to parse it.  Some OpenAI-compatible
-      // providers (including grok-3 via sudoapi) return the raw JSON string
+      // providers (including grok-3 via xai) return the raw JSON string
       // from function.arguments without pre-parsing it.
       // The LLM may also concatenate multiple JSON objects into one string when
       // it intends to make several tool calls.  In that case we extract the
@@ -513,6 +516,19 @@ export class Brain {
   }
 
   /**
+   * Attach a NegativeRouter to this Brain instance.
+   * Called once after construction. The router is consulted on every call()
+   * to optionally override model selection based on DFA/keyword/LLM routing.
+   * If not configured, the Brain falls back to the existing model-router behavior.
+   *
+   * @param router - A NegativeRouter instance.
+   */
+  setNegativeRouter(router: NegativeRouter): void {
+    this.negativeRouter = router;
+    log.info('NegativeRouter attached to brain');
+  }
+
+  /**
    * Assemble and return the current system prompt without making an LLM call.
    *
    * @param options - Optional overrides for prompt assembly.
@@ -637,6 +653,39 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     const temperature = this.resolveTemperature(request);
     const maxTokens = this.resolveMaxTokens(request);
     let lastError: unknown;
+
+    // Negative Router: consult the 3-tier DFA engine before model selection.
+    // If the router blocks the request, return an error immediately.
+    // If the router suggests a model or redirect, override request.model.
+    // If not configured, this is a no-op and existing behavior is preserved.
+    if (this.negativeRouter) {
+      try {
+        const lastUserMsg = [...request.messages].reverse().find(m => m.role === 'user');
+        const userText = lastUserMsg?.content ?? '';
+        const routingResult: RoutingResult = this.negativeRouter.route('', userText);
+
+        if (routingResult.blocked) {
+          log.warn({ category: routingResult.category, tier: routingResult.tier }, 'NegativeRouter: request blocked');
+          return {
+            content: `[NegativeRouter] Request blocked (category=${routingResult.category})`,
+            toolCalls: [],
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCost: 0 },
+            model: request.model ?? 'blocked',
+            finishReason: 'stop',
+          };
+        }
+
+        if (routingResult.redirect) {
+          log.info({ redirect: routingResult.redirect, category: routingResult.category }, 'NegativeRouter: request redirected');
+          request = { ...request, model: routingResult.redirect };
+        } else if (routingResult.model && routingResult.confidence >= 0.5) {
+          log.debug({ model: routingResult.model, category: routingResult.category, confidence: routingResult.confidence }, 'NegativeRouter: model hint applied');
+          request = { ...request, model: routingResult.model };
+        }
+      } catch (routerErr) {
+        log.warn({ err: String(routerErr) }, 'NegativeRouter threw — continuing without routing');
+      }
+    }
 
     // -------------------------------------------------------------------------
     // Phase 1: Consensus call across cloud models.

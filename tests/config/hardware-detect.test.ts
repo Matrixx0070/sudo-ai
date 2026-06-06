@@ -145,11 +145,11 @@ describe('detectHardware', () => {
     expect(profile.hasGpu).toBe(false);
   });
 
-  it('returns recommendedRuntime as sudoapi when no GPU', async () => {
+  it('returns recommendedRuntime as cloud when no GPU', async () => {
     setupDefaultMocks();
     const { detectHardware } = await import('../../src/core/config/hardware-detect.js');
     const profile = await detectHardware();
-    expect(profile.recommendedRuntime).toBe('sudoapi');
+    expect(profile.recommendedRuntime).toBe('cloud');
   });
 
   it('returns recommendedRuntime as ollama when GPU present and RAM >= 8 GB', async () => {

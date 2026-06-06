@@ -23,6 +23,8 @@ import { detectPatterns } from './pattern-detector.js';
 import type { DetectedPatterns } from './pattern-detector.js';
 import { FeedbackMemory } from './feedback-memory.js';
 import { AutoResearch } from './auto-research.js';
+import { HeldOutGate } from '../learning/held-out-gate.js';
+import type { PolicyAction } from '../learning/trace-driven-policy.js';
 
 const log = createLogger('self-improvement:engine');
 
@@ -158,14 +160,27 @@ async function writeDraft(filename: string, content: string): Promise<string> {
 // Main engine
 // ---------------------------------------------------------------------------
 
+/** Rollback record for an applied improvement that passed the HeldOutGate. */
+export interface ImprovementRollback {
+  /** Unique identifier for the improvement proposal. */
+  proposalId: string;
+  /** The improvement action that was applied. */
+  action: ImprovementAction;
+  /** ISO timestamp of when the improvement was applied. */
+  appliedAt: string;
+}
+
 export async function runSelfImprovement(options: {
   trigger?: string;
   windowDays?: number;
   brain?: { chat(messages: { role: string; content: string }[], model?: string): Promise<string> };
-}): Promise<{ actions: ImprovementAction[]; healthScore: number; summary: string }> {
+  /** Optional HeldOutGate — when provided, improvements are evaluated before being applied. */
+  heldOutGate?: HeldOutGate;
+}): Promise<{ actions: ImprovementAction[]; healthScore: number; summary: string; rollbacks: ImprovementRollback[] }> {
 
   const trigger    = options.trigger ?? 'manual';
   const windowDays = options.windowDays ?? 14;
+  const rollbacks: ImprovementRollback[] = [];
 
   log.info({ trigger, windowDays }, 'Self-improvement run started');
 
@@ -215,10 +230,33 @@ export async function runSelfImprovement(options: {
               });
               log.info({ tool: tool.name, feedbackFailures, findingsLen: findings.length },
                 'AutoResearch findings generated');
+              // Phase 2: gate AutoResearch draft patches through HeldOutGate.
+              const draftProposalId = `auto-research-${tool.name}-${Date.now()}`;
+              const draftShouldApply = options.heldOutGate
+                ? await (async () => {
+                    try {
+                      const policyAction: PolicyAction = { params: { description: `AutoResearch for ${tool.name}` } };
+                      const evalResult = await options.heldOutGate!.evaluate(draftProposalId, policyAction);
+                      if (evalResult.passed) {
+                        rollbacks.push({
+                          proposalId: draftProposalId,
+                          action: { type: 'draft_patch', description: `AutoResearch ran for recurring failure domain: ${tool.name}`, applied: true },
+                          appliedAt: new Date().toISOString(),
+                        });
+                        return true;
+                      }
+                      log.warn({ tool: tool.name, passRate: evalResult.passRate.toFixed(3) }, 'HeldOutGate rejected AutoResearch draft — skipping');
+                      return false;
+                    } catch (err) {
+                      log.warn({ tool: tool.name, err: String(err) }, 'HeldOutGate eval failed for AutoResearch — allowing by default');
+                      return true;
+                    }
+                  })()
+                : true;
               actions.push({
                 type: 'draft_patch',
                 description: `AutoResearch ran for recurring failure domain: ${tool.name}`,
-                applied: true,
+                applied: draftShouldApply,
                 detail: findings.slice(0, 500),
               });
             } catch (err) {
@@ -256,6 +294,38 @@ export async function runSelfImprovement(options: {
 
   // --- STEP 3: APPLY ---
 
+  /** Helper: evaluate an improvement through the HeldOutGate before applying.
+   *  Returns true if the improvement should be applied (gate passed or no gate). */
+  async function shouldApply(proposalId: string, description: string): Promise<boolean> {
+    if (!options.heldOutGate) return true;
+
+    // Derive a lightweight PolicyAction from the improvement description.
+    const policyAction: PolicyAction = { params: { description } };
+
+    try {
+      const evaluation = await options.heldOutGate.evaluate(proposalId, policyAction);
+      if (evaluation.passed) {
+        log.info({ proposalId, passRate: evaluation.passRate.toFixed(3) },
+          'HeldOutGate approved improvement');
+        // Store rollback info for gate-approved improvements.
+        rollbacks.push({
+          proposalId,
+          action: { type: 'learnings_update', description, applied: true },
+          appliedAt: new Date().toISOString(),
+        });
+        return true;
+      } else {
+        log.warn({ proposalId, passRate: evaluation.passRate.toFixed(3), regressions: evaluation.regressionDetails },
+          'HeldOutGate rejected improvement — skipping');
+        return false;
+      }
+    } catch (err) {
+      log.warn({ proposalId, err: String(err) },
+        'HeldOutGate evaluation failed — allowing improvement by default');
+      return true;
+    }
+  }
+
   // 3a. Update LEARNINGS.md
   try {
     const existing = await readLearnings();
@@ -263,15 +333,21 @@ export async function runSelfImprovement(options: {
     // Keep last 20 blocks to avoid bloat — truncate old entries
     const blocks = (existing + newBlock).split(/^---$/m);
     const kept   = blocks.slice(-20).join('---');
-    await writeFile(LEARNINGS_PATH, kept, 'utf-8');
+
+    const learningsProposalId = `learnings-${Date.now()}`;
+    const shouldWrite = await shouldApply(learningsProposalId, 'Update LEARNINGS.md with new patterns and rules');
+
+    if (shouldWrite) {
+      await writeFile(LEARNINGS_PATH, kept, 'utf-8');
+    }
 
     actions.push({
       type: 'learnings_update',
       description: 'Updated LEARNINGS.md with new patterns and rules',
-      applied: true,
+      applied: shouldWrite,
       detail: `Health score: ${patterns.healthScore}/100`,
     });
-    log.info('LEARNINGS.md updated');
+    log.info({ applied: shouldWrite }, 'LEARNINGS.md update resolved');
   } catch (err) {
     log.error({ err: String(err) }, 'Failed to update LEARNINGS.md');
   }
@@ -311,10 +387,14 @@ export async function runSelfImprovement(options: {
 
   // 3d. Unused tool reminder
   if (patterns.unusedTools.length > 0) {
+    const unusedProposalId = `unused-tools-${Date.now()}`;
+    const unusedShouldApply = await shouldApply(unusedProposalId,
+      `${patterns.unusedTools.length} high-value tools unused — will proactively suggest`);
+
     actions.push({
       type: 'tool_note',
       description: `${patterns.unusedTools.length} high-value tools unused — will proactively suggest`,
-      applied: true,
+      applied: unusedShouldApply,
       detail: patterns.unusedTools.join(', '),
     });
   }
@@ -332,9 +412,10 @@ export async function runSelfImprovement(options: {
   const appliedCount = actions.filter(a => a.applied).length;
   const summary = buildSummary(patterns, actions, appliedCount);
 
-  log.info({ appliedCount, healthScore: patterns.healthScore }, 'Self-improvement run complete');
+  log.info({ appliedCount, healthScore: patterns.healthScore, rollbackCount: rollbacks.length },
+    'Self-improvement run complete');
 
-  return { actions, healthScore: patterns.healthScore, summary };
+  return { actions, healthScore: patterns.healthScore, summary, rollbacks };
 }
 
 // ---------------------------------------------------------------------------

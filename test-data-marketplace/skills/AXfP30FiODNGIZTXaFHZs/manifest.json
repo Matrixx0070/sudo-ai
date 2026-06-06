@@ -1,0 +1,21 @@
+{
+  "name": "documentation",
+  "version": "1.0.0",
+  "description": "Generate clear documentation for code, APIs, modules, or entire projects",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "documentation"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "security-audit",
+  "version": "1.0.0",
+  "description": "Audit code or systems for security vulnerabilities with severity ratings and fixes",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "security-audit"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

@@ -54,7 +54,7 @@ max_tokens = 16384
 [config.agent]
 max_iterations = 200
 [config.engine]
-runtime = "sudoapi"
+runtime = "cloud"
 `;
 
   const researchToml = `
@@ -68,7 +68,7 @@ default_model = "xai/grok-4-0709"
 temperature = 0.7
 max_tokens = 16384
 [config.engine]
-runtime = "sudoapi"
+runtime = "cloud"
 `;
 
   const chatToml = `
@@ -84,7 +84,7 @@ max_tokens = 4096
 [config.tools]
 disabled = ["coder.execute"]
 [config.engine]
-runtime = "sudoapi"
+runtime = "cloud"
 `;
 
   fs.writeFileSync(path.join(recipesDir, 'coding.toml'), codingToml, 'utf8');

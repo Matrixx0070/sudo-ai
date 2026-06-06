@@ -1,9 +1,11 @@
 # SUDO-AI TUI v4 — Architect Spec
 
-**Status:** LOCKED — no feature additions, no removals.  
+**Status:** LOCKED — no feature additions, no removals. (Historical base for initial Ink TUI v4.)  
+**Note (2026-06-03):** Professional upgrade to **P1 Sovereign Deck** (alt SOUL Control Observatory / 100x Owner Interface) — original SUDO-native "much better" than current (no walls, rich P1 viz w/ screenshot previews + "feeds learner ✓" + "P1 Sovereign auto per SOUL", live 100x self-evo cockpit, parsed long owner directives/self-build as trackable steps + progress, powerful sovereign theming, desktop :10 integration for real-time user checks + self-obs, modes ^P/^E, new /p1 /evolve /cockpit etc). See README.md "P1 Sovereign Deck TUI (Professional Upgrade)" section (features, desktop :10 run, before/after from PNGs/state "REAL TIME USER CHECK...", "much better for owner direct talk + P1 desktop + self-evo"), /tmp/sudo-tui-pro-arch-spec.md (authoritative high-level design summary + philosophy + layout + contracts + ACs + boundaries + pipeline; no code), /tmp/sudo-tui-pro-scout-briefing.md (PNG descs of walls vs Grok structured + opportunities). This doc remains the locked historical v4 base spec (minimal note only; no changes to v4 details). Boundaries respected. Full CLAUDE pipeline (builders + Doc concurrent, sec+Codex parallel, advocate on :10 RDP w/ P1 + long directive + "much better" vs current/Grok, etc.). Positioning: 100x + SOUL + professional owner cockpit.
+
 **Builder:** Single senior builder, 60-minute cap.  
 **Stack:** TypeScript/ESM, Ink 7, React 19, `@inkjs/ui`, `ink-text-input`, `ink-spinner`, `marked`, `cli-highlight`, `nanoid`.  
-**Gateway base URL:** `http://localhost:18900` (from `SUDOAPI_URL` env var with fallback to this value).
+**Gateway base URL:** `http://localhost:18900` (from `GATEWAY_URL` env var with fallback to this value).
 
 ---
 
@@ -246,7 +248,7 @@ The `idle` state is the only state where the input accepts text. The `awaiting_a
 | `fs.readdirSync(cwd)` | `useFilePicker()` | On `@` keypress | `MentionMenu` | Empty list, no overlay |
 | In-process `dispatcher.ts` | direct event | Per tool event | `App` (state machine), `Message` (tool cards) | No network; never fails |
 
-All polling hooks use `useEffect` with `setInterval`. Each hook accepts a `baseUrl: string` parameter defaulting to `process.env['SUDOAPI_URL'] ?? 'http://localhost:18900'`. Authorization header: `Bearer ${process.env['SUDOAPI_KEY'] ?? ''}` — passed as-is; empty string if not set.
+All polling hooks use `useEffect` with `setInterval`. Each hook accepts a `baseUrl: string` parameter defaulting to `process.env['GATEWAY_URL'] ?? 'http://localhost:18900'`. Authorization header: `Bearer ${process.env['GATEWAY_TOKEN'] ?? ''}` — passed as-is; empty string if not set.
 
 ---
 
@@ -258,7 +260,7 @@ All polling hooks use `useEffect` with `setInterval`. Each hook accepts a `baseU
 interface BannerProps {
   model: string;
   providerLabel: string;
-  connectedProviders: string[];   // e.g. ["Anthropic", "SUDOAPI"]
+  connectedProviders: string[];   // e.g. ["Anthropic", "Local"]
   lastSessionSummary: string | null;  // null on fresh install
   onDismiss: () => void;
 }
@@ -551,7 +553,7 @@ export function useDigest(baseUrl: string): DigestData
 ```
 
 - Polls `GET ${baseUrl}/v1/admin/digest` every 30 000 ms
-- Auth: `Authorization: Bearer ${process.env['SUDOAPI_KEY'] ?? ''}`
+- Auth: `Authorization: Bearer ${process.env['GATEWAY_TOKEN'] ?? ''}`
 - On success: parse `data.signals` array of `{name, score}` objects, map score to color (>=0.7 green, >=0.4 amber, <0.4 red)
 - On error or non-200: return previous value; no retry until next interval
 - Initial value: `{ signals: [8 amber dots], overall: 'AMBER', raw: null }`

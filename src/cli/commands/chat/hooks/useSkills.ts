@@ -47,7 +47,7 @@ export function useSkills(baseUrl: string): SkillsResult {
   const [active, setActive] = useState<Skill | null>(null);
 
   useEffect(() => {
-    const key = process.env['SUDOAPI_KEY'] ?? '';
+    const key = process.env['GATEWAY_TOKEN'] ?? '';
     const url = `${baseUrl}/v1/skills`;
 
     const fetchSkills = (): void => {

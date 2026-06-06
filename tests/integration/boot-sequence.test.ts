@@ -126,7 +126,7 @@ describe('Boot sequence — constants importability', () => {
     expect(MAX_AGENT_ITERATIONS).toBeLessThanOrEqual(1000);
   });
 
-  // DEFAULT_MODEL === FALLBACK_MODEL intentionally — unified SUDOAPI gateway routes all models.
+  // DEFAULT_MODEL === FALLBACK_MODEL intentionally — unified local gateway routes all models.
 });
 
 // ---------------------------------------------------------------------------

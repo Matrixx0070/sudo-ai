@@ -84,10 +84,10 @@ function checkWasmtime(): boolean {
 function recommendRuntime(hasGpu: boolean, ramMb: number): EngineRuntime {
   // If GPU detected with sufficient VRAM, prefer local ollama
   if (hasGpu && ramMb >= 8192) return 'ollama';
-  // If decent RAM but no GPU, suggest sudoapi (cloud)
-  if (ramMb >= 4096) return 'sudoapi';
-  // Minimal resources: still use sudoapi but note constraint
-  return 'sudoapi';
+  // If decent RAM but no GPU, suggest cloud provider
+  if (ramMb >= 4096) return 'cloud';
+  // Minimal resources: still use cloud but note constraint
+  return 'cloud';
 }
 
 // ---------------------------------------------------------------------------

@@ -173,7 +173,7 @@ export interface PillarTools {
   disabled?: string[];
   mcp_servers?: string[];
 }
-export type EngineRuntime = 'sudoapi' | 'ollama' | 'llamacpp' | 'openai_compat';
+export type EngineRuntime = 'cloud' | 'ollama' | 'llamacpp' | 'openai_compat';
 export interface PillarEngine {
   runtime?: EngineRuntime;
   host?: string;

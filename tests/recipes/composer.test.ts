@@ -77,7 +77,7 @@ max_iterations = 150
 disabled = ["coder.execute"]
 
 [config.engine]
-runtime = "sudoapi"
+runtime = "cloud"
 
 [config.learning]
 min_quality = 0.7

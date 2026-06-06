@@ -18,9 +18,6 @@ import type {
   PluginEntry,
   PluginModule,
   PluginContext,
-  PluginHookEvent,
-  PluginHookHandler,
-  PluginHookSubscription,
 } from './types.js';
 
 const log = createLogger('plugin:manager');
@@ -39,8 +36,6 @@ export class PluginManager {
   private readonly entries = new Map<string, PluginEntry>();
   private readonly pluginPaths = new Map<string, string>();
   private readonly loader = new PluginLoader();
-  private readonly hookSubscribers = new Map<PluginHookEvent, Set<{ id: string; handler: PluginHookHandler }>>();
-  private readonly pluginRegistrations = new Map<string, Set<() => void>>();
 
   /**
    * @param toolRegistry - The application tool registry (passed to plugin context).
@@ -100,17 +95,13 @@ export class PluginManager {
     this.pluginPaths.set(id, pluginPath);
     await this.persist();
 
-    // Emit installation hook
-    await this.emitHook('plugin:installed', { id });
-
     log.info({ id, version: module.manifest.version }, 'Plugin installed');
     return entry;
   }
 
   /**
    * Activate an installed or inactive plugin.
-   * Calls plugin.install(ctx) if present, then plugin.activate(ctx).
-   * Transitions state to 'active'.
+   * Calls plugin.activate(ctx) and transitions state to 'active'.
    */
   async activate(id: string): Promise<void> {
     this.assertId(id);
@@ -133,49 +124,28 @@ export class PluginManager {
     }
 
     log.info({ id }, 'Activating plugin');
-    const ctx = this.getPluginContext(id);
+    const ctx = this.buildContext(id);
 
-    // Call install hook if present (for plugins that use full lifecycle)
-    if (entry.module.install) {
-      try {
-        await entry.module.install(ctx);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        entry.state = 'error';
-        entry.error = msg;
-        await this.persist();
-        log.error({ id, err }, 'Plugin install hook failed');
-        throw new SudoError(`Plugin "${id}" install hook failed: ${msg}`, 'plugin_install_failed', { id, cause: msg });
-      }
-    }
-
-    // Call activate hook if present
-    if (entry.module.activate) {
-      try {
-        await entry.module.activate(ctx);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        entry.state = 'error';
-        entry.error = msg;
-        await this.persist();
-        log.error({ id, err }, 'Plugin activation failed');
-        throw new SudoError(`Plugin "${id}" activation failed: ${msg}`, 'plugin_activation_failed', { id, cause: msg });
-      }
+    try {
+      await entry.module.activate(ctx);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      entry.state = 'error';
+      entry.error = msg;
+      await this.persist();
+      log.error({ id, err }, 'Plugin activation failed');
+      throw new SudoError(`Plugin "${id}" activation failed: ${msg}`, 'plugin_activation_failed', { id, cause: msg });
     }
 
     entry.state = 'active';
     delete entry.error;
     await this.persist();
-
-    // Emit activation hook to other plugins
-    await this.emitHook('plugin:activated', { id });
-
     log.info({ id }, 'Plugin activated');
   }
 
   /**
    * Deactivate an active plugin.
-   * Calls plugin.deactivate() if present, runs cleanup functions, transitions to 'inactive'.
+   * Calls plugin.deactivate() if present and transitions state to 'inactive'.
    */
   async deactivate(id: string): Promise<void> {
     this.assertId(id);
@@ -188,7 +158,6 @@ export class PluginManager {
 
     log.info({ id }, 'Deactivating plugin');
 
-    // Call plugin's own deactivate hook
     if (entry.module?.deactivate) {
       try {
         await entry.module.deactivate();
@@ -197,39 +166,13 @@ export class PluginManager {
       }
     }
 
-    // Run all registration cleanup functions
-    const cleanups = this.pluginRegistrations.get(id);
-    if (cleanups) {
-      for (const cleanup of cleanups) {
-        try {
-          cleanup();
-        } catch (err) {
-          log.warn({ id, err }, 'Registration cleanup threw');
-        }
-      }
-      cleanups.clear();
-    }
-
-    // Remove hook subscriptions for this plugin
-    for (const [, subs] of this.hookSubscribers.entries()) {
-      for (const sub of subs) {
-        if (sub.id === id) {
-          subs.delete(sub);
-        }
-      }
-    }
-
     entry.state = 'inactive';
     await this.persist();
-
-    // Emit deactivation hook
-    await this.emitHook('plugin:deactivated', { id });
-
     log.info({ id }, 'Plugin deactivated');
   }
 
   /**
-   * Uninstall a plugin. Deactivates first if active, calls uninstall hook, removes from registry.
+   * Uninstall a plugin. Deactivates first if active, then removes from registry.
    */
   async uninstall(id: string): Promise<void> {
     this.assertId(id);
@@ -239,34 +182,9 @@ export class PluginManager {
       await this.deactivate(id);
     }
 
-    const entry = this.entries.get(id);
-    if (entry?.module?.uninstall) {
-      try {
-        await entry.module.uninstall();
-      } catch (err) {
-        log.warn({ id, err }, 'Plugin uninstall() threw — continuing anyway');
-      }
-    }
-
-    // Final cleanup of any remaining registrations
-    this.pluginRegistrations.delete(id);
-
-    // Remove all hook subscriptions for this plugin
-    for (const [, subs] of this.hookSubscribers.entries()) {
-      for (const sub of subs) {
-        if (sub.id === id) {
-          subs.delete(sub);
-        }
-      }
-    }
-
     this.entries.delete(id);
     this.pluginPaths.delete(id);
     await this.persist();
-
-    // Emit uninstallation hook
-    await this.emitHook('plugin:uninstalled', { id });
-
     log.info({ id }, 'Plugin uninstalled');
   }
 
@@ -287,147 +205,6 @@ export class PluginManager {
       throw new SudoError('listByCapability: cap must be non-empty', 'plugin_invalid_argument');
     }
     return this.listPlugins().filter((e) => e.manifest.capabilities.includes(cap));
-  }
-
-  /** Return only plugins that are currently in 'active' state. */
-  listActive(): string[] {
-    return Array.from(this.entries.values())
-      .filter((e) => e.state === 'active')
-      .map((e) => e.manifest.id);
-  }
-
-  /**
-   * Build a PluginContext for a plugin.
-   * Exposed for testing and for use by the plugin-api module.
-   *
-   * @param id - Plugin ID.
-   * @returns Fully wired PluginContext.
-   */
-  getPluginContext(id: string): PluginContext {
-    this.assertId(id);
-    const entry = this.requireEntry(id);
-    const pluginLog = (this.loggerRef as { child: (b: Record<string, unknown>) => unknown }).child({ plugin: id });
-
-    const logger: import('./types.js').PluginLogger = {
-      info: (obj: Record<string, unknown>, msg?: string) => (pluginLog as any).info(obj, msg),
-      warn: (obj: Record<string, unknown>, msg?: string) => (pluginLog as any).warn(obj, msg),
-      error: (obj: Record<string, unknown>, msg?: string) => (pluginLog as any).error(obj, msg),
-      debug: (obj: Record<string, unknown>, msg?: string) => (pluginLog as any).debug(obj, msg),
-      child: (bindings: Record<string, unknown>) => (pluginLog as any).child(bindings),
-    };
-
-    return {
-      pluginId: id,
-      config: this.normalizeConfig(entry, id),
-      logger,
-      registerTool: (toolDef: unknown) => this.createCleanup(id, 'tool', toolDef),
-      registerChannel: (channelDef: unknown) => this.createCleanup(id, 'channel', channelDef),
-      registerProvider: (providerDef: unknown) => this.createCleanup(id, 'provider', providerDef),
-      registerSkill: (skillDef: unknown) => this.createCleanup(id, 'skill', skillDef),
-      onHook: (event: PluginHookEvent, handler: PluginHookHandler) => this.subscribeHook(id, event, handler),
-    };
-  }
-
-  /**
-   * Emit a hook event to all subscribed handlers.
-   * Called by the core system when lifecycle events occur.
-   */
-  async emitHook(event: PluginHookEvent, data: unknown): Promise<void> {
-    const subscribers = this.hookSubscribers.get(event);
-    if (!subscribers || subscribers.size === 0) return;
-
-    const promises: Promise<void>[] = [];
-    for (const sub of subscribers) {
-      try {
-        const result = sub.handler(data);
-        if (result instanceof Promise) {
-          promises.push(result.catch((err) => {
-            log.warn({ pluginId: sub.id, event, err }, 'Hook handler threw');
-          }));
-        }
-      } catch (err) {
-        log.warn({ pluginId: sub.id, event, err }, 'Hook handler threw synchronously');
-      }
-    }
-
-    if (promises.length > 0) {
-      await Promise.all(promises);
-    }
-  }
-
-  /**
-   * Get cleanup functions for a plugin (called on deactivate/uninstall).
-   */
-  private getPluginCleanups(id: string): Set<() => void> {
-    return this.pluginRegistrations.get(id) ?? new Set();
-  }
-
-  /**
-   * Create a cleanup function for a plugin registration.
-   */
-  private createCleanup(pluginId: string, kind: string, def: unknown): () => void {
-    if (!this.pluginRegistrations.has(pluginId)) {
-      this.pluginRegistrations.set(pluginId, new Set());
-    }
-
-    const cleanup = () => {
-      log.debug({ pluginId, kind }, 'Plugin registration cleaned up');
-    };
-
-    this.pluginRegistrations.get(pluginId)!.add(cleanup);
-
-    // Emit registration hook
-    const hookEvent: PluginHookEvent = `${kind}:registered` as PluginHookEvent;
-    this.emitHook(hookEvent, { pluginId, kind, def }).catch((err) => {
-      log.warn({ pluginId, kind, err }, 'Registration hook failed');
-    });
-
-    return cleanup;
-  }
-
-  /**
-   * Subscribe a plugin to a lifecycle hook.
-   */
-  private subscribeHook(pluginId: string, event: PluginHookEvent, handler: PluginHookHandler): PluginHookSubscription {
-    if (!this.hookSubscribers.has(event)) {
-      this.hookSubscribers.set(event, new Set());
-    }
-
-    const subscriber = { id: pluginId, handler };
-    this.hookSubscribers.get(event)!.add(subscriber);
-
-    return {
-      active: true,
-      unsubscribe: () => {
-        const set = this.hookSubscribers.get(event);
-        if (set) {
-          set.delete(subscriber);
-        }
-        (this as any)._subscriptionActive = false;
-      },
-    };
-  }
-
-  /**
-   * Normalize plugin config from manifest.config schema.
-   */
-  private normalizeConfig(entry: PluginEntry, id: string): Record<string, unknown> {
-    const configSchema = entry.manifest.config ?? {};
-    const appConfig = (this.config as Record<string, unknown>) ?? {};
-    const result: Record<string, unknown> = {};
-
-    for (const [key, schema] of Object.entries(configSchema)) {
-      const cfg = schema as { required?: boolean; default?: unknown };
-      if (key in appConfig) {
-        result[key] = appConfig[key];
-      } else if (cfg.default !== undefined) {
-        result[key] = cfg.default;
-      } else if (cfg.required) {
-        log.warn({ pluginId: id, key }, 'Required config key missing');
-      }
-    }
-
-    return result;
   }
 
   /**
@@ -477,6 +254,11 @@ export class PluginManager {
     if (!id || typeof id !== 'string') {
       throw new SudoError('Plugin id must be a non-empty string', 'plugin_invalid_argument', { id });
     }
+  }
+
+  private buildContext(id: string): PluginContext {
+    const pluginLog = (this.loggerRef as { child: (b: Record<string, unknown>) => unknown }).child({ plugin: id });
+    return { config: this.config, logger: pluginLog, toolRegistry: this.toolRegistry };
   }
 
   private async reloadModule(id: string): Promise<PluginModule> {

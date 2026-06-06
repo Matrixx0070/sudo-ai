@@ -120,7 +120,7 @@ describe('runQuickstart', () => {
   models: {
     primary: [
       {
-        id: 'sudoapi/sudo',
+        id: 'ollama/deepseek-v4-pro:cloud',
         contextWindow: 131072,
         maxOutputTokens: 8192,
         temperature: 0.7,
@@ -171,7 +171,7 @@ describe('runQuickstart', () => {
   it('6. generated config includes models section', () => {
     const config = JSON5.parse(`{
       models: {
-        primary: [{ id: 'sudoapi/sudo', contextWindow: 131072, maxOutputTokens: 8192, temperature: 0.7 }],
+        primary: [{ id: 'ollama/deepseek-v4-pro:cloud', contextWindow: 131072, maxOutputTokens: 8192, temperature: 0.7 }],
         fallback: { id: 'xai/grok-4-1-fast-non-reasoning', contextWindow: 131072, maxOutputTokens: 4096, temperature: 0.7 },
         embedding: { id: 'openai/text-embedding-3-small', dims: 1536 },
       }

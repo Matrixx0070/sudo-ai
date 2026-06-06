@@ -12,7 +12,7 @@
 #   --target  H:P  Target host:port (default 127.0.0.1:18901 staging)
 #
 # Token resolution (priority order):
-#   1. $SUDO_API_TOKEN env var
+#   1. $GATEWAY_TOKEN env var
 #   2. $SUDO_AI_DASHBOARD_TOKEN env var
 #   3. /root/.sudo-ai/token file
 #   4. pm2 env — WEB_CHAT_TOKEN from staging (apps[1])
@@ -69,9 +69,9 @@ CSV_FILE="$TMPDIR/p99-baseline-$$.csv"
 TOKEN_SOURCE="none"
 TOKEN=""
 
-if [[ -n "${SUDO_API_TOKEN:-}" ]]; then
-  TOKEN="$SUDO_API_TOKEN"
-  TOKEN_SOURCE="env:SUDO_API_TOKEN"
+if [[ -n "${GATEWAY_TOKEN:-}" ]]; then
+  TOKEN="$GATEWAY_TOKEN"
+  TOKEN_SOURCE="env:GATEWAY_TOKEN"
 fi
 
 if [[ -z "$TOKEN" ]] && [[ -n "${SUDO_AI_DASHBOARD_TOKEN:-}" ]]; then
@@ -102,7 +102,7 @@ if [[ -z "$TOKEN" ]]; then
 fi
 
 if [[ -z "$TOKEN" ]]; then
-  echo "ERROR: No auth token found. Set SUDO_API_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token" >&2
+  echo "ERROR: No auth token found. Set GATEWAY_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token" >&2
   echo "Alternatively ensure pm2 process sudo-ai-v5-staging is running (WEB_CHAT_TOKEN in pm2 env)" >&2
   exit 1
 fi

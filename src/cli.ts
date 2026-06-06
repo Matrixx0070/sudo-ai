@@ -264,8 +264,7 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 2.95 Local SUDOAPI Gateway — start before Brain so the provider URL is live
-  //       when Brain constructs its OpenAI-compatible provider instance.
+  // 2.95 Local Gateway — start before Brain so the API is available
   // -------------------------------------------------------------------------
   let gatewayPort: number | undefined;
   try {
@@ -273,7 +272,7 @@ async function boot(): Promise<void> {
     console.log(`[boot] Gateway started on port ${gatewayPort}`);
   } catch (err) {
     console.warn(
-      '[boot] Gateway failed to start, brain will call SUDOAPI directly:',
+      '[boot] Gateway failed to start, local API unavailable:',
       (err as Error).message,
     );
   }
@@ -921,6 +920,18 @@ async function boot(): Promise<void> {
 
     consciousness = consciousnessInstance;
     log.info('Consciousness layer booted');
+
+    // Wire ZDR mode into consciousness orchestrator if active.
+    try {
+      const { getZDRManager } = await import('./core/privacy/zdr-mode.js');
+      const zdrManager = getZDRManager();
+      if (zdrManager.isEnabled()) {
+        consciousnessInstance.setZDRMode(true);
+        log.info('ZDR mode wired into consciousness — episodic recording disabled');
+      }
+    } catch (err) {
+      log.warn({ err: String(err) }, 'ZDR consciousness wiring failed — continuing');
+    }
   } catch (err) {
     log.warn({ err: String(err) }, 'Consciousness layer failed to boot — running without consciousness');
   }
@@ -2065,8 +2076,7 @@ async function boot(): Promise<void> {
         // C1: Wire compare route via brain.chat() shim.
         // brain.chat(messages, model?) is the per-model entry point already used
         // elsewhere; compare-routes.ts duck-types BrainLike.runWithModel.
-        compare: process.env['SUDOAPI_KEY'] || process.env['SUDOAPI_URL']
-          ? {
+        compare: {
               brain: {
                 async runWithModel(modelId: string, prompt: string) {
                   const text = await brain.chat([{ role: 'user', content: prompt }], modelId);
@@ -2077,11 +2087,7 @@ async function boot(): Promise<void> {
                 score: (prompt: string, modelName?: string) =>
                   scoreComplexity({ prompt, modelName }),
               },
-            }
-          : (() => {
-              log.warn('Wave 10: /v1/admin/compare disabled — SUDOAPI client not configured');
-              return undefined;
-            })(),
+            },
       });
       log.info('HTTP API attached (OpenAI-compatible + alignment admin routes)');
 
@@ -2263,6 +2269,45 @@ async function boot(): Promise<void> {
     log.info('Health watchdog started');
   } catch (err) {
     log.warn({ err: String(err) }, 'Health watchdog failed to start — running without');
+  }
+
+  // -------------------------------------------------------------------------
+  // 9.9 IDE Bridge Adapter (VS Code / JetBrains extension protocol)
+  //     Kill-switch: SUDO_IDE_BRIDGE_DISABLE=1
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_IDE_BRIDGE_DISABLE'] !== '1') {
+    try {
+      const { IdeBridgeAdapter } = await import('./core/ide/bridge-adapter.js');
+      const { progress } = await import('./core/gateway/progress.js');
+
+      const bridgeAdapter = new IdeBridgeAdapter(
+        {
+          sessionManager: dualSessionManager,
+          agentLoop: finalAgentLoop,
+          progressBroadcaster: progress,
+          hookManager: hooks,
+        },
+        {
+          gatewayToken: process.env['GATEWAY_TOKEN'],
+          jwtTtlMs: parseInt(process.env['SUDO_BRIDGE_JWT_TTL_MS'] ?? '3600000', 10),
+        },
+      );
+
+      if (!gatewayServer) throw new Error('gatewayServer not ready — cannot attach IDE Bridge');
+      bridgeAdapter.attach(gatewayServer);
+
+      // Start discovery after gateway is listening
+      if (gatewayPort) {
+        bridgeAdapter.startDiscovery(gatewayPort);
+      }
+
+      registerShutdown(() => { bridgeAdapter.stop(); });
+      log.info({ path: '/ide/bridge', port: gatewayPort }, 'IDE Bridge adapter attached to gateway');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'IDE Bridge failed to start — running without IDE extension support');
+    }
+  } else {
+    log.info('IDE Bridge disabled (SUDO_IDE_BRIDGE_DISABLE=1)');
   }
 
   // -------------------------------------------------------------------------

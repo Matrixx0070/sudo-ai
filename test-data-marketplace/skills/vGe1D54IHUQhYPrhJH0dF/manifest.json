@@ -1,0 +1,21 @@
+{
+  "name": "api-design",
+  "version": "1.0.0",
+  "description": "Design REST API endpoints with request/response schemas, validation rules, and error codes",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "api-design"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

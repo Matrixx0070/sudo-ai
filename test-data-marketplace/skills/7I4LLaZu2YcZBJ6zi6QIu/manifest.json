@@ -1,0 +1,21 @@
+{
+  "name": "web-search",
+  "version": "1.0.0",
+  "description": "Search the web for information and synthesize results into a concise answer",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "web-search"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

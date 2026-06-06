@@ -1,0 +1,21 @@
+{
+  "name": "hue-lights",
+  "version": "1.0.0",
+  "description": "Control Philips Hue smart lights via the Hue Bridge local REST API.",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "hue-lights"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

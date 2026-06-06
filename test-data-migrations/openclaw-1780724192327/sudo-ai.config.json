@@ -1,0 +1,42 @@
+{
+  "agent": {
+    "name": "test1",
+    "model": "claude-sonnet-4-6",
+    "profile": "full"
+  },
+  "skills": {
+    "local": [],
+    "marketplace": []
+  },
+  "consciousness": {
+    "enabled": true,
+    "modules": [
+      "SelfModel",
+      "EpisodicMemory",
+      "ProceduralMemory",
+      "Metacognition",
+      "WorldModel",
+      "InternalDialogue"
+    ]
+  },
+  "memory": {
+    "enabled": true,
+    "namespaces": [
+      "main",
+      "episodic",
+      "procedural"
+    ]
+  },
+  "tools": {
+    "allowed": [],
+    "denied": []
+  },
+  "customInstructions": "",
+  "migration": {
+    "source": "openclaw",
+    "migratedAt": "2026-06-06T05:36:32.327Z",
+    "originalConfig": {
+      "name": "test1"
+    }
+  }
+}

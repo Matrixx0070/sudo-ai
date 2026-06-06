@@ -20,6 +20,8 @@ import {
   buildUserAgent,
   buildClientHintsHeaders,
 } from './anti-detect.js';
+import { CDPManager, type CDPConfig } from './cdp-manager.js';
+import { SSRFGuard } from './ssrf-guard.js';
 
 const log = createLogger('browser-manager');
 
@@ -63,11 +65,20 @@ export class BrowserManager {
   private readonly instances = new Map<string, BrowserInstance>();
   private readonly profilesRoot: string;
 
+  /** Phase 6: CDPManager for first-class CDP browser control. */
+  private cdpManager: CDPManager | null = null;
+  /** Phase 6: SSRF guard for navigation safety. */
+  private ssrfGuard: SSRFGuard;
+
   private constructor(profilesRoot = 'data/browser-profiles') {
     this.profilesRoot = resolve(profilesRoot);
     if (!existsSync(this.profilesRoot)) {
       mkdirSync(this.profilesRoot, { recursive: true });
     }
+    this.ssrfGuard = new SSRFGuard({
+      // Allow localhost in development; production should restrict this
+      allowedHosts: process.env['SUDO_BROWSER_ALLOW_HOSTS']?.split(',').filter(Boolean) ?? [],
+    });
   }
 
   static getInstance(): BrowserManager {
@@ -77,16 +88,83 @@ export class BrowserManager {
     return BrowserManager._instance;
   }
 
+  /** Access the SSRFGuard instance for URL safety checks. */
+  getSSRFGuard(): SSRFGuard {
+    return this.ssrfGuard;
+  }
+
+  /** Access the CDPManager instance (may be null if not yet initialized). */
+  getCDPManager(): CDPManager | null {
+    return this.cdpManager;
+  }
+
+  /**
+   * Ensure a CDPManager is initialized and connected.
+   * If one already exists, returns it. Otherwise creates and connects one
+   * using the provided config or the SUDO_CDP_ENDPOINT env var.
+   */
+  async ensureCDPManager(config?: Partial<CDPConfig>): Promise<CDPManager> {
+    if (this.cdpManager) return this.cdpManager;
+
+    const endpoint = config?.endpoint ?? process.env['SUDO_CDP_ENDPOINT'];
+    const cdpConfig: Partial<CDPConfig> = {
+      headless: config?.headless ?? true,
+      exposeCDP: config?.exposeCDP ?? true,
+      cdpPort: config?.cdpPort ?? 9222,
+      ...config,
+    };
+    // If an endpoint was provided (via argument or env), prefer it
+    if (endpoint) cdpConfig.endpoint = endpoint;
+
+    this.cdpManager = new CDPManager(cdpConfig);
+    await this.cdpManager.connect(endpoint);
+    log.info({ endpoint: endpoint ?? '(launch)' }, 'CDPManager connected via ensureCDPManager');
+    return this.cdpManager;
+  }
+
   /**
    * Get or auto-connect the "default" browser instance.
-   * Priority: 1) cached instance, 2) CDP on localhost:9222, 3) headless launch.
+   * Priority: 1) cached instance, 2) CDPManager if SUDO_CDP_ENDPOINT is set,
+   *           3) raw CDP on localhost:9222, 4) headless launch.
    * This ensures ALL tools automatically use the owner's already-open Chrome.
    */
   async getOrConnect(name = 'default'): Promise<BrowserInstance> {
     const cached = this.instances.get(name);
     if (cached) return cached;
 
-    // Try CDP first — the owner's Chrome on port 9222
+    // Phase 6: Prefer CDPManager when a CDP endpoint is explicitly configured
+    const configuredEndpoint = process.env['SUDO_CDP_ENDPOINT'];
+    if (configuredEndpoint) {
+      try {
+        const cdp = await this.ensureCDPManager({ endpoint: configuredEndpoint });
+        const client = cdp.getCDPClient();
+        if (client) {
+          const contexts = client.contexts();
+          const context: BrowserContext =
+            contexts.length > 0 ? contexts[0]! : await client.newContext({ ignoreHTTPSErrors: true });
+
+          context.on('dialog', async (dialog) => {
+            log.info({ type: dialog.type(), message: dialog.message() }, 'Auto-dismissing CDP dialog');
+            await dialog.dismiss().catch(() => {});
+          });
+
+          const instance: BrowserInstance = {
+            name,
+            profileDir: `(cdp:${configuredEndpoint})`,
+            context,
+            browser: client,
+            launchedAt: new Date(),
+          };
+          this.instances.set(name, instance);
+          log.info({ name, cdpEndpoint: configuredEndpoint }, 'Auto-connected via CDPManager');
+          return instance;
+        }
+      } catch (err) {
+        log.warn({ err, endpoint: configuredEndpoint }, 'CDPManager connection failed — falling back');
+      }
+    }
+
+    // Try raw CDP on localhost:9222 — the owner's Chrome on port 9222
     const cdpEndpoint = 'http://localhost:9222';
     try {
       const browser = await chromium.connectOverCDP(cdpEndpoint, { timeout: 2000 });
@@ -222,6 +300,10 @@ export class BrowserManager {
    * Stores the connected instance under `name` exactly like `launch()`.
    * The browser's first existing context is used; no new context is created.
    *
+   * Phase 6: When a CDP endpoint is provided, CDPManager is used for the
+   * connection, providing lifecycle management, session tracking, and
+   * network interception. Falls back to raw Playwright if CDPManager fails.
+   *
    * @param name         - Identifier for the instance (e.g. "chrome-cdp").
    * @param cdpEndpoint  - CDP HTTP endpoint (e.g. "http://localhost:9222").
    */
@@ -238,6 +320,40 @@ export class BrowserManager {
 
     log.info({ name, cdpEndpoint }, 'Connecting to browser via CDP');
 
+    // Phase 6: Prefer CDPManager for structured CDP connections
+    try {
+      const cdp = await this.ensureCDPManager({ endpoint: cdpEndpoint });
+      const client = cdp.getCDPClient();
+      if (client) {
+        const contexts = client.contexts();
+        const context: BrowserContext =
+          contexts.length > 0 ? contexts[0]! : await client.newContext({
+            ignoreHTTPSErrors: true,
+          });
+
+        // Auto-dismiss any browser dialogs so they never block automation
+        context.on('dialog', async (dialog) => {
+          log.info({ type: dialog.type(), message: dialog.message() }, 'Auto-dismissing CDP dialog');
+          await dialog.dismiss().catch(() => {});
+        });
+
+        const instance: BrowserInstance = {
+          name,
+          profileDir: `(cdp:${cdpEndpoint})`,
+          context,
+          browser: client,
+          launchedAt: new Date(),
+        };
+
+        this.instances.set(name, instance);
+        log.info({ name, cdpEndpoint }, 'CDP browser connected via CDPManager');
+        return instance;
+      }
+    } catch (err) {
+      log.warn({ err, name, cdpEndpoint }, 'CDPManager connection failed — falling back to raw Playwright');
+    }
+
+    // Fallback: raw Playwright CDP connection
     const browser = await chromium.connectOverCDP(cdpEndpoint);
     const contexts = browser.contexts();
     const context: BrowserContext =

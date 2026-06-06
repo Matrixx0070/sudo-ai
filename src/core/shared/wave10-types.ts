@@ -356,7 +356,7 @@ export interface PillarTools {
 export type ToolsConfig5Pillar = PillarTools;
 
 /** Supported execution runtimes for the engine pillar. */
-export type EngineRuntime = 'sudoapi' | 'ollama' | 'llamacpp' | 'openai_compat';
+export type EngineRuntime = 'ollama' | 'llamacpp' | 'openai_compat' | 'cloud';
 
 /** Engine pillar: runtime selection and host configuration. */
 export interface PillarEngine {

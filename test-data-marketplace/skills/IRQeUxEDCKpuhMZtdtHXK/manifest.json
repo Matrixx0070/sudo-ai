@@ -1,0 +1,21 @@
+{
+  "name": "email-draft",
+  "version": "1.0.0",
+  "description": "Draft professional, clear, and effective emails for any business situation",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "email-draft"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

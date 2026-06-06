@@ -101,7 +101,7 @@ describe('runBench CLI command', () => {
     const report = makeReport(0.8);
     const srv    = await startMockServer({ runId: 'run-001', report, postStatus: 202 });
 
-    process.env['SUDO_API_URL'] = `http://localhost:${srv.port}`;
+    process.env['GATEWAY_URL'] = `http://localhost:${srv.port}`;
     delete process.env['GATEWAY_TOKEN'];
 
     const { runBench } = await import('../../src/cli/commands/bench.js');
@@ -109,14 +109,14 @@ describe('runBench CLI command', () => {
 
     expect(code).toBe(0);
     await srv.close();
-    delete process.env['SUDO_API_URL'];
+    delete process.env['GATEWAY_URL'];
   });
 
   it('exits 1 when successRate < 0.5', async () => {
     const report = makeReport(0.3);
     const srv    = await startMockServer({ runId: 'run-002', report, postStatus: 202 });
 
-    process.env['SUDO_API_URL'] = `http://localhost:${srv.port}`;
+    process.env['GATEWAY_URL'] = `http://localhost:${srv.port}`;
     delete process.env['GATEWAY_TOKEN'];
 
     const { runBench } = await import('../../src/cli/commands/bench.js');
@@ -124,27 +124,27 @@ describe('runBench CLI command', () => {
 
     expect(code).toBe(1);
     await srv.close();
-    delete process.env['SUDO_API_URL'];
+    delete process.env['GATEWAY_URL'];
   });
 
   it('exits 1 when server returns 400 for POST', async () => {
     const srv = await startMockServer({ runId: 'x', postStatus: 400 });
 
-    process.env['SUDO_API_URL'] = `http://localhost:${srv.port}`;
+    process.env['GATEWAY_URL'] = `http://localhost:${srv.port}`;
     const { runBench } = await import('../../src/cli/commands/bench.js');
     const code = await runBench({ models: 'model' });
 
     // 400 response → error in response body → return 1
     expect(code).toBe(1);
     await srv.close();
-    delete process.env['SUDO_API_URL'];
+    delete process.env['GATEWAY_URL'];
   });
 
   it('exits 1 when server is unreachable', async () => {
-    process.env['SUDO_API_URL'] = 'http://localhost:1'; // port 1 should refuse
+    process.env['GATEWAY_URL'] = 'http://localhost:1'; // port 1 should refuse
     const { runBench } = await import('../../src/cli/commands/bench.js');
     const code = await runBench({ models: 'model' });
     expect(code).toBe(1);
-    delete process.env['SUDO_API_URL'];
+    delete process.env['GATEWAY_URL'];
   });
 });

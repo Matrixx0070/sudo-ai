@@ -1,0 +1,21 @@
+{
+  "name": "spotify-control",
+  "version": "1.0.0",
+  "description": "Control Spotify playback (play, pause, skip, volume) via spotify-cli or MPRIS D-Bus.",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "spotify-control"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

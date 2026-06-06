@@ -19,6 +19,16 @@ export interface ConsciousnessLike {
     matchingProcedure: { name: string; steps: string[]; successRate: number } | null;
     relevantPredictions: Array<{ domain: string; prediction: string; confidence: number; outcome: string }>;
     recentEpisodes: Array<{ summary: string; outcome: string; significance: number; timestamp: string }>;
+    /** Counterfactual "what if" lessons (expanded from deep bridge). */
+    counterfactualLessons?: Array<{ lessonLearned: string; deltaAssessment: string }>;
+    /** Metacognitive self-reflection conclusions (expanded from deep bridge). */
+    metacognitiveReflections?: Array<{ conclusion: string; actionItem: string }>;
+    /** Average surprise level over the last 24h (0..1). */
+    surpriseLevel?: number;
+    /** Past/present/future temporal narrative. */
+    temporalNarrative?: string;
+    /** Top active concepts from spreading activation. */
+    activeConcepts?: string[];
   };
 }
 
@@ -75,6 +85,16 @@ export interface IntelligenceBrief {
   predictions: WorldModelHit[];
   /** Structured memory entries relevant to the current message. */
   structuredMemory: StructuredMemoryHit[];
+  /** Counterfactual "what if" lessons from the deep bridge. */
+  counterfactualLessons: Array<{ lessonLearned: string; deltaAssessment: string }>;
+  /** Metacognitive self-reflection conclusions. */
+  metacognitiveReflections: Array<{ conclusion: string; actionItem: string }>;
+  /** Average surprise level (0..1). */
+  surpriseLevel: number;
+  /** Temporal self narrative (past/present/future). */
+  temporalNarrative: string;
+  /** Top active concepts from spreading activation. */
+  activeConcepts: string[];
   formatted: string;
   generationMs: number;
 }
@@ -135,6 +155,39 @@ function formatBrief(
     });
   }
 
+  // Deep bridge sections — counterfactual, metacognitive, surprise, temporal, concepts
+  if (brief.counterfactualLessons && brief.counterfactualLessons.length > 0) {
+    parts.push('\n### Counterfactual Lessons');
+    brief.counterfactualLessons.forEach(l => {
+      const safe = l.lessonLearned.substring(0, 200).replace(/ignore (previous|all|above|prior)/gi, '[filtered]');
+      parts.push(`- [COUNTERFACTUAL] ${safe}`);
+    });
+  }
+
+  if (brief.metacognitiveReflections && brief.metacognitiveReflections.length > 0) {
+    parts.push('\n### Self-Reflection');
+    brief.metacognitiveReflections.forEach(r => {
+      const safe = r.conclusion.substring(0, 200).replace(/ignore (previous|all|above|prior)/gi, '[filtered]');
+      parts.push(`- [METACOGNITION] ${safe}`);
+    });
+  }
+
+  if (brief.surpriseLevel && brief.surpriseLevel > 0.2) {
+    parts.push(`\n### Surprise Level: ${brief.surpriseLevel.toFixed(2)}`);
+    if (brief.surpriseLevel > 0.7) {
+      parts.push('⚠️ High surprise — world model may be unreliable.');
+    }
+  }
+
+  if (brief.temporalNarrative) {
+    const safe = brief.temporalNarrative.substring(0, 300).replace(/ignore (previous|all|above|prior)/gi, '[filtered]');
+    parts.push(`\n### Growth: ${safe}`);
+  }
+
+  if (brief.activeConcepts && brief.activeConcepts.length > 0) {
+    parts.push(`\n### Active Concepts: ${brief.activeConcepts.join(', ')}`);
+  }
+
   // Only header present → nothing useful
   if (parts.length === 1) return '';
   return parts.join('\n');
@@ -162,6 +215,11 @@ export async function generateIntelligenceBrief(
     episodes: [],
     predictions: [],
     structuredMemory: [],
+    counterfactualLessons: [],
+    metacognitiveReflections: [],
+    surpriseLevel: 0,
+    temporalNarrative: '',
+    activeConcepts: [],
     formatted: '',
     generationMs: 0,
   };
@@ -230,6 +288,23 @@ export async function generateIntelligenceBrief(
       }
     }
 
+    // Extract deep-bridge fields from consciousness (optional — may be absent on older implementations)
+    const counterfactualLessons = consciousnessResult.status === 'fulfilled' && consciousnessResult.value
+      ? (consciousnessResult.value.counterfactualLessons ?? [])
+      : [];
+    const metacognitiveReflections = consciousnessResult.status === 'fulfilled' && consciousnessResult.value
+      ? (consciousnessResult.value.metacognitiveReflections ?? [])
+      : [];
+    const surpriseLevel = consciousnessResult.status === 'fulfilled' && consciousnessResult.value
+      ? (consciousnessResult.value.surpriseLevel ?? 0)
+      : 0;
+    const temporalNarrative = consciousnessResult.status === 'fulfilled' && consciousnessResult.value
+      ? (consciousnessResult.value.temporalNarrative ?? '')
+      : '';
+    const activeConcepts = consciousnessResult.status === 'fulfilled' && consciousnessResult.value
+      ? (consciousnessResult.value.activeConcepts ?? [])
+      : [];
+
     // Map structured memory results → StructuredMemoryHit[]
     const structuredMemory: StructuredMemoryHit[] = [];
     if (structuredResult.status === 'fulfilled') {
@@ -245,7 +320,10 @@ export async function generateIntelligenceBrief(
       }
     }
 
-    const briefPayload = { wisdom, procedures, episodes, predictions, structuredMemory };
+    const briefPayload = {
+      wisdom, procedures, episodes, predictions, structuredMemory,
+      counterfactualLessons, metacognitiveReflections, surpriseLevel, temporalNarrative, activeConcepts,
+    };
     const formatted = formatBrief(briefPayload);
 
     return {

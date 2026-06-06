@@ -21,8 +21,8 @@ export const FALLBACK_MODEL = (process.env['SUDO_FALLBACK_MODEL'] ?? 'ollama/qwe
 export const EMBEDDING_MODEL = 'openai/text-embedding-3-small' as const;
 export const EMBEDDING_DIMS = 1536 as const;
 
-/** Single LLM routing — all tasks use deepseek-v4-pro:cloud. */
-export const SUDOAPI_MODELS = {
+/** Model routing for task categories — all use ollama cloud by default. */
+export const ROUTING_MODELS = {
   coding: 'ollama/deepseek-v4-pro:cloud',
   analysis: 'ollama/deepseek-v4-pro:cloud',
   fast: 'ollama/deepseek-v4-pro:cloud',
@@ -92,7 +92,7 @@ export const TRANSIENT_COOLDOWN: readonly number[] = [
  * Values: 5 h, 10 h, 20 h, 24 h.
  */
 export const BILLING_COOLDOWN: readonly number[] = [
-  30_000,    // 30s  — gateway + SUDOAPI handle provider switching
+  30_000,    // 30s  — gateway handles provider switching
   60_000,    // 1min
   300_000,   // 5min
   600_000,   // 10min max

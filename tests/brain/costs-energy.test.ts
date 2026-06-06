@@ -11,7 +11,7 @@
  *  6.  estimateEnergy for google provider uses correct baseline
  *  7.  estimateEnergy for ollama provider (higher Wh — local hardware)
  *  8.  estimateEnergy for llamacpp provider (local hardware)
- *  9.  estimateEnergy for sudoapi provider (cloud routing)
+ *  9.  estimateEnergy for cloud provider (cloud routing)
  *  10. estimateEnergy unknown provider falls back to default
  *  11. estimateEnergy wh scales with output tokens
  *  12. estimateEnergy flops scales with total tokens
@@ -88,8 +88,8 @@ describe('estimateEnergy', () => {
     expect(llamacpp.wh).toBeGreaterThan(0.001); // much higher than cloud
   });
 
-  it('9. sudoapi provider treated as cloud routing', () => {
-    const result = estimateEnergy('sudoapi/sudo', 1000, 500);
+  it('9. cloud provider treated as cloud routing', () => {
+    const result = estimateEnergy('cloud/routed', 1000, 500);
     expect(result.wh).toBeGreaterThan(0);
     expect(result.wh).toBeLessThan(5); // cloud-scale, not local
   });

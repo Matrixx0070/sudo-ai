@@ -57,6 +57,18 @@ export const navigateTool: ToolDefinition = {
       return { success: false, output: `browser.navigate: invalid URL "${url}".` };
     }
 
+    // Phase 6: SSRF protection — block navigation to private IPs
+    const ssrfGuard = BrowserManager.getInstance().getSSRFGuard();
+    const ssrfResult = await ssrfGuard.checkUrl(url);
+    if (!ssrfResult.allowed) {
+      ctxLog.info({ tool: 'browser.navigate', url, reason: ssrfResult.reason, category: ssrfResult.category }, 'SSRF check blocked navigation');
+      return {
+        success: false,
+        output: `browser.navigate: blocked by SSRF guard — ${ssrfResult.reason}`,
+        data: { ssrf: ssrfResult },
+      };
+    }
+
     const browserName = typeof params['browser'] === 'string' ? params['browser'] : 'default';
     const waitUntil = (['load', 'domcontentloaded', 'networkidle', 'commit'].includes(
       String(params['waitUntil']),

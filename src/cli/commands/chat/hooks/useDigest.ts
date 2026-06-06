@@ -68,7 +68,7 @@ export function useDigest(baseUrl: string): DigestData {
   const prevRef = useRef<DigestData>(INITIAL_DIGEST);
 
   useEffect(() => {
-    const key = process.env['SUDOAPI_KEY'] ?? '';
+    const key = process.env['GATEWAY_TOKEN'] ?? '';
     const url = `${baseUrl}/v1/admin/digest`;
 
     const fetchDigest = (): void => {

@@ -2,7 +2,7 @@
  * ollama-direct.ts
  *
  * Direct Ollama Cloud provider for SUDO-AI v4 brain.
- * Bypasses SUDOAPI gateway — calls Ollama Cloud directly.
+ * Bypasses gateway proxy — calls Ollama Cloud directly.
  *
  * Model: deepseek-v4-pro:cloud via https://ollama.com/v1
  *

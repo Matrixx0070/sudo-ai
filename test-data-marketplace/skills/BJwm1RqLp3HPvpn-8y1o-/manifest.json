@@ -1,0 +1,21 @@
+{
+  "name": "summarize",
+  "version": "1.0.0",
+  "description": "Summarize documents, articles, code files, or long text into key points",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "summarize"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

@@ -48,7 +48,7 @@ Inner while-loop at `src/core/agent/loop.ts:747` runs until `finishReason === 's
 
 ### Tool registry
 
-`ToolRegistry` is instantiated in `src/cli.ts:382`, loaded at line 385, and its count is logged at line 397. The gateway's `/v1/chat/completions` is an OpenAI proxy to upstream SUDOAPI — it does not route through AgentLoop. The TUI currently uses that proxy and therefore has zero tool access.
+`ToolRegistry` is instantiated in `src/cli.ts:382`, loaded at line 385, and its count is logged at line 397. The gateway's `/v1/chat/completions` is an OpenAI proxy to the local gateway — it does not route through AgentLoop. The TUI currently uses that proxy and therefore has zero tool access.
 
 ---
 
@@ -68,7 +68,7 @@ Web and telegram deliver **final text only**. The TUI spinner + live tool cards 
 
 **Decision: In-process bootstrap.**
 
-The gateway `/v1/chat/completions` is an OpenAI proxy to upstream SUDOAPI, not an AgentLoop endpoint. No streaming agent-run route exists on the gateway. The `src/core/gateway/sse-stream.ts` SSE broker fans out HookEvents, not AgentEvents. Building a new gateway route would add a TCP round-trip and require the daemon to be running. The TUI must bootstrap its own AgentLoop in-process.
+The gateway `/v1/chat/completions` is an OpenAI proxy to the local gateway, not an AgentLoop endpoint. No streaming agent-run route exists on the gateway. The `src/core/gateway/sse-stream.ts` SSE broker fans out HookEvents, not AgentEvents. Building a new gateway route would add a TCP round-trip and require the daemon to be running. The TUI must bootstrap its own AgentLoop in-process.
 
 ---
 

@@ -158,7 +158,7 @@ describe('Cooldown arrays', () => {
   });
 
   // BILLING_COOLDOWN floor (30s) is intentionally lower than TRANSIENT_COOLDOWN max (60s)
-  // because the SUDOAPI gateway handles provider switching — billing retries are cheap.
+  // because the gateway handles provider switching — billing retries are cheap.
 });
 
 // ---------------------------------------------------------------------------

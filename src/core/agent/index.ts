@@ -115,3 +115,33 @@ export {
   formatResearch,
 } from './research-agent.js';
 export type { ResearchTask, ResearchStatus } from './research-agent.js';
+
+// Profile Manager
+export { ProfileManager } from './profile.js';
+export type { AgentProfile, ProfileConfig } from './profile.js';
+
+// User-facing Task Management (reverse-engineered from Claude Code)
+export { TaskManager } from './task-manager.js';
+export type {
+  ManagedTask,
+  CreateTaskOptions,
+  TaskListFilter,
+  TaskManagerStatus,
+  TaskHookEvent,
+  TaskPriority as ManagedTaskPriority,
+} from './task-manager.js';
+
+// Effort Dial (quality/speed control)
+export { EffortDial, setLevel, getLevel, getThinkingTokens, getMaxToolTurns, getVerificationDepth, getSubagentCount, getPricing } from './effort-dial.js';
+export type {
+  EffortDialLevel,
+  EffortDialConfig,
+  EffortDialOverrides,
+  VerificationDepth,
+} from './effort-dial.js';
+
+// Worktree Isolation (parallel agent safety)
+export { WorktreeManager } from './worktree-manager.js';
+export type {
+  WorktreeInfo,
+} from './worktree-manager.js';

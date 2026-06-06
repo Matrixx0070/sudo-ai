@@ -2,8 +2,8 @@
  * @file mcp-registry.ts
  * @description Upgrade 43 — MCP (Model Context Protocol) Server Registry.
  *
- * Tracks external MCP servers: registration, connection state, trust tiers,
- * and per-tool enable/disable filtering.
+ * Tracks external MCP servers: registration, connection state, tool management,
+ * trust tiers, and lookup.
  * All state is in-process; persistence can be layered on top by callers.
  */
 
@@ -15,17 +15,37 @@ const log = createLogger('plugins:mcp-registry');
 // Public types
 // ---------------------------------------------------------------------------
 
-export type McpServerStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
-
+/** Trust tier classification for MCP servers. */
 export type McpTrustTier = 'bundled' | 'indexed' | 'unreviewed';
 
-export interface McpToolInfo {
+/** Transport type for MCP servers. */
+export type McpTransport = 'stdio' | 'http' | 'sse' | 'websocket';
+
+/** Server connection status. */
+export type McpServerStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+/** A single tool exposed by an MCP server. */
+export interface McpTool {
   name: string;
   description?: string;
   enabled: boolean;
-  discoveredAt?: string;
+  inputSchema?: unknown;
 }
 
+/** Summary entry for server status listing. */
+export interface McpServerSummary {
+  id: string;
+  name: string;
+  url: string;
+  status: McpServerStatus;
+  trustTier: McpTrustTier;
+  transport: McpTransport;
+  toolCount: number;
+  enabledToolCount: number;
+  error?: string;
+}
+
+/** A registered MCP server with full state. */
 export interface McpServer {
   id: string;
   name: string;
@@ -33,11 +53,10 @@ export interface McpServer {
   description?: string;
   status: McpServerStatus;
   trustTier: McpTrustTier;
-  transport?: 'stdio' | 'http' | 'sse' | 'websocket';
-  tools: Map<string, McpToolInfo>;
+  transport: McpTransport;
+  tools: Map<string, McpTool>;
+  error?: string;
   addedAt: string;
-  lastConnectedAt?: string;
-  lastError?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,8 +75,8 @@ const servers: Map<string, McpServer> = new Map();
  * @param name        - Human-readable server name.
  * @param url         - Base URL of the MCP server.
  * @param description - Optional description.
- * @param trustTier   - Trust tier (default: 'unreviewed').
- * @param transport   - Transport type (default: 'http').
+ * @param trustTier   - Trust tier (default 'unreviewed').
+ * @param transport   - Transport type (default 'http').
  * @returns The registered McpServer record.
  */
 export function registerMcpServer(
@@ -65,7 +84,7 @@ export function registerMcpServer(
   url: string,
   description?: string,
   trustTier: McpTrustTier = 'unreviewed',
-  transport: 'stdio' | 'http' | 'sse' | 'websocket' = 'http',
+  transport: McpTransport = 'http',
 ): McpServer {
   if (!name || typeof name !== 'string') throw new Error('McpRegistry: name is required');
   if (!url || typeof url !== 'string') throw new Error('McpRegistry: url is required');
@@ -108,8 +127,12 @@ export function getMcpServer(id: string): McpServer | undefined {
   return servers.get(id);
 }
 
+// ---------------------------------------------------------------------------
+// Server status management
+// ---------------------------------------------------------------------------
+
 /**
- * Update server connection status.
+ * Update a server's connection status.
  * No-ops silently if the ID is unknown.
  */
 export function updateServerStatus(id: string, status: McpServerStatus): void {
@@ -118,37 +141,34 @@ export function updateServerStatus(id: string, status: McpServerStatus): void {
     log.warn({ id }, 'updateServerStatus: unknown server id');
     return;
   }
-  const oldStatus = s.status;
   s.status = status;
-  if (status === 'connected') {
-    s.lastConnectedAt = new Date().toISOString();
-  }
-  log.info({ id, name: s.name, oldStatus, newStatus: status }, 'Server status updated');
+  log.debug({ id, status }, 'Server status updated');
 }
 
 /**
  * Mark a server as connected.
- * No-ops silently if the ID is unknown.
+ * No-ops silently if the ID is unknown (avoids throwing on race conditions).
  */
 export function connectMcpServer(id: string): void {
-  updateServerStatus(id, 'connected');
+  const s = servers.get(id);
+  if (!s) {
+    log.warn({ id }, 'connectMcpServer: unknown server id');
+    return;
+  }
+  s.status = 'connected';
+  s.error = undefined;
+  log.info({ id, name: s.name }, 'MCP server connected');
 }
 
 /** Mark a server as disconnected. */
 export function disconnectMcpServer(id: string): void {
-  updateServerStatus(id, 'disconnected');
-}
-
-/** Mark a server as having an error. */
-export function setServerError(id: string, error: string): void {
   const s = servers.get(id);
   if (!s) {
-    log.warn({ id }, 'setServerError: unknown server id');
+    log.warn({ id }, 'disconnectMcpServer: unknown server id');
     return;
   }
-  s.status = 'error';
-  s.lastError = error;
-  log.error({ id, name: s.name, error }, 'Server error recorded');
+  s.status = 'disconnected';
+  log.info({ id, name: s.name }, 'MCP server disconnected');
 }
 
 /** Return only servers that are currently connected. */
@@ -156,7 +176,14 @@ export function getConnectedServers(): McpServer[] {
   return Array.from(servers.values()).filter((s) => s.status === 'connected');
 }
 
-/** Update server trust tier. */
+// ---------------------------------------------------------------------------
+// Trust tier management
+// ---------------------------------------------------------------------------
+
+/**
+ * Set the trust tier for a server.
+ * No-ops silently if the ID is unknown.
+ */
 export function setServerTrustTier(id: string, tier: McpTrustTier): void {
   const s = servers.get(id);
   if (!s) {
@@ -164,7 +191,26 @@ export function setServerTrustTier(id: string, tier: McpTrustTier): void {
     return;
   }
   s.trustTier = tier;
-  log.info({ id, name: s.name, tier }, 'Server trust tier updated');
+  log.info({ id, tier }, 'Server trust tier updated');
+}
+
+// ---------------------------------------------------------------------------
+// Error tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Set an error message on a server (e.g. from a failed connection).
+ * No-ops silently if the ID is unknown.
+ */
+export function setServerError(id: string, error: string): void {
+  const s = servers.get(id);
+  if (!s) {
+    log.warn({ id }, 'setServerError: unknown server id');
+    return;
+  }
+  s.error = error;
+  s.status = 'error';
+  log.warn({ id, error }, 'Server error set');
 }
 
 // ---------------------------------------------------------------------------
@@ -172,75 +218,75 @@ export function setServerTrustTier(id: string, tier: McpTrustTier): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Update the list of discovered tools for a server.
- * @param id - Server ID
- * @param tools - Array of tool info objects
+ * Update the tool list for a server. Replaces the existing tool set.
+ * No-ops silently if the ID is unknown.
  */
-export function updateServerTools(id: string, tools: McpToolInfo[]): void {
+export function updateServerTools(id: string, tools: McpTool[]): void {
   const s = servers.get(id);
   if (!s) {
     log.warn({ id }, 'updateServerTools: unknown server id');
     return;
   }
-  s.tools = new Map(tools.map(t => [t.name, { ...t, discoveredAt: new Date().toISOString() }]));
+  s.tools.clear();
+  for (const tool of tools) {
+    s.tools.set(tool.name, tool);
+  }
   log.info({ id, toolCount: tools.length }, 'Server tools updated');
 }
 
-/** Get tools for a server. */
-export function getServerTools(id: string): McpToolInfo[] {
+/**
+ * Get all tools for a server.
+ * Returns an empty array if the server is unknown.
+ */
+export function getServerTools(id: string): McpTool[] {
   const s = servers.get(id);
-  if (!s) {
-    log.warn({ id }, 'getServerTools: unknown server id');
-    return [];
-  }
+  if (!s) return [];
   return Array.from(s.tools.values());
 }
 
-/** Get only enabled tools for a server. */
-export function getEnabledServerTools(id: string): McpToolInfo[] {
-  return getServerTools(id).filter(t => t.enabled);
+/**
+ * Get only enabled tools for a server.
+ * Returns an empty array if the server is unknown.
+ */
+export function getEnabledServerTools(id: string): McpTool[] {
+  const s = servers.get(id);
+  if (!s) return [];
+  return Array.from(s.tools.values()).filter((t) => t.enabled);
 }
 
 /**
  * Enable or disable a specific tool on a server.
- * @param id - Server ID
- * @param toolName - Tool name to toggle
- * @param enabled - Whether to enable or disable
- * @returns `true` if the tool was found and updated
+ * @returns `true` if the tool was found and updated, `false` otherwise.
  */
 export function setToolEnabled(id: string, toolName: string, enabled: boolean): boolean {
   const s = servers.get(id);
-  if (!s) {
-    log.warn({ id }, 'setToolEnabled: unknown server id');
-    return false;
-  }
+  if (!s) return false;
+
   const tool = s.tools.get(toolName);
-  if (!tool) {
-    log.warn({ id, tool: toolName }, 'setToolEnabled: tool not found');
-    return false;
-  }
+  if (!tool) return false;
+
   tool.enabled = enabled;
-  log.info({ id, tool: toolName, enabled }, 'Tool enabled/disabled');
+  log.debug({ id, toolName, enabled }, 'Tool enabled state toggled');
   return true;
 }
 
-/** Get server status summary for admin dashboard. */
-export function getServerStatusSummary(): Array<{
-  id: string;
-  name: string;
-  status: McpServerStatus;
-  trustTier: McpTrustTier;
-  transport: string;
-  toolCount: number;
-  enabledToolCount: number;
-}> {
-  return Array.from(servers.values()).map(s => ({
+// ---------------------------------------------------------------------------
+// Status summary
+// ---------------------------------------------------------------------------
+
+/**
+ * Get a summary of all registered servers (for listing endpoints).
+ */
+export function getServerStatusSummary(): McpServerSummary[] {
+  return Array.from(servers.values()).map((s) => ({
     id: s.id,
     name: s.name,
+    url: s.url,
     status: s.status,
     trustTier: s.trustTier,
-    transport: s.transport ?? 'http',
+    transport: s.transport,
     toolCount: s.tools.size,
-    enabledToolCount: Array.from(s.tools.values()).filter(t => t.enabled).length,
+    enabledToolCount: Array.from(s.tools.values()).filter((t) => t.enabled).length,
+    error: s.error,
   }));
 }

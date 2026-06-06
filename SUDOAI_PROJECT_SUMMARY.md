@@ -75,7 +75,7 @@ Background:
 |-------|-----------|
 | Runtime | Node.js 22, TypeScript 5, tsx (zero-config TS execution) |
 | LLM SDK | Vercel AI SDK v6 (`generateText`, `streamText`, `aiTool`, `jsonSchema`) |
-| Providers | Ollama (OpenAI-compatible), xAI, OpenAI, Anthropic, Google Gemini, SUDOAPI gateway |
+| Providers | Ollama (OpenAI-compatible), xAI, OpenAI, Anthropic, Google Gemini, local gateway |
 | Web | Fastify HTTP server + ws WebSocket server |
 | DB | SQLite (better-sqlite3) — mind.db, wisdom.db, sessions, goals |
 | Process Manager | pm2 (production + staging) |
@@ -285,6 +285,6 @@ curl -H "Authorization: Bearer $GATEWAY_TOKEN" \
 
 ## 12. Session Summary for External AI
 
-SUDO-AI is a production autonomous agent (v4) running on Ubuntu/Node.js with Ollama-hosted LLMs. It was recently migrated from SUDOAPI gateway to Ollama cloud models. Today's fixes resolved: (1) KAIROS health monitor spam, (2) all parallel model calls hitting the same model due to a `profile.id` vs `request.model` bug, (3) Ollama returning empty responses when tools are attached, (4) runaway tool loops caused by overly aggressive system prompts.
+SUDO-AI is a production autonomous agent (v4) running on Ubuntu/Node.js with Ollama-hosted LLMs. It was recently migrated from the local gateway to Ollama cloud models. Today's fixes resolved: (1) KAIROS health monitor spam, (2) all parallel model calls hitting the same model due to a `profile.id` vs `request.model` bug, (3) Ollama returning empty responses when tools are attached, (4) runaway tool loops caused by overly aggressive system prompts.
 
 The codebase is ~25k lines of TypeScript with 3684+ tests. Key areas for any external analysis should be: `src/core/brain/brain.ts` (LLM interface), `src/core/agent/loop.ts` (agent execution), and `src/core/channels/telegram.ts` (message I/O).

@@ -18,8 +18,8 @@
 #   2 — YELLOW (1+ SKIP but zero FAIL)
 #
 # Token resolution (separate tokens since Wave 2.2h-tail-2):
-#   GATEWAY_TOKEN (metrics): $SUDO_GATEWAY_TOKEN > $SUDO_API_TOKEN > $SUDO_AI_DASHBOARD_TOKEN > file
-#   CHAT_TOKEN (POST /api/message latency probe): $SUDO_WEB_CHAT_TOKEN > $SUDO_API_TOKEN > $SUDO_AI_DASHBOARD_TOKEN > file
+#   GATEWAY_TOKEN (metrics): $SUDO_GATEWAY_TOKEN > $GATEWAY_TOKEN > $SUDO_AI_DASHBOARD_TOKEN > file
+#   CHAT_TOKEN (POST /api/message latency probe): $SUDO_WEB_CHAT_TOKEN > $GATEWAY_TOKEN > $SUDO_AI_DASHBOARD_TOKEN > file
 
 set -euo pipefail
 : "${TMPDIR:=/tmp}"
@@ -97,7 +97,7 @@ SINCE_DISPLAY=$(date -d "@$SINCE_TS" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || ech
 # ---------------------------------------------------------------------------
 # Token resolution — separate tokens for obs (metrics) and chat (latency probe)
 # ---------------------------------------------------------------------------
-_LEGACY_TOKEN="${SUDO_API_TOKEN:-}"
+_LEGACY_TOKEN="${GATEWAY_TOKEN:-}"
 if [[ -z "$_LEGACY_TOKEN" ]]; then _LEGACY_TOKEN="${SUDO_AI_DASHBOARD_TOKEN:-}"; fi
 if [[ -z "$_LEGACY_TOKEN" ]] && [[ -f "/root/.sudo-ai/token" ]]; then
   _LEGACY_TOKEN=$(cat /root/.sudo-ai/token | tr -d '[:space:]')
@@ -112,11 +112,11 @@ CHAT_TOKEN="${SUDO_WEB_CHAT_TOKEN:-}"
 if [[ -z "$CHAT_TOKEN" ]]; then CHAT_TOKEN="$_LEGACY_TOKEN"; fi
 
 if [[ -z "$GATEWAY_TOKEN" ]]; then
-  log "ERROR: No gateway token found. Set SUDO_GATEWAY_TOKEN, SUDO_API_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token"
+  log "ERROR: No gateway token found. Set SUDO_GATEWAY_TOKEN, GATEWAY_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token"
   exit 1
 fi
 if [[ -z "$CHAT_TOKEN" ]]; then
-  log "ERROR: No chat token found. Set SUDO_WEB_CHAT_TOKEN, SUDO_API_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token"
+  log "ERROR: No chat token found. Set SUDO_WEB_CHAT_TOKEN, GATEWAY_TOKEN, SUDO_AI_DASHBOARD_TOKEN, or create /root/.sudo-ai/token"
   exit 1
 fi
 

@@ -35,7 +35,7 @@ export interface StructuredMemory {
   id: string;
   /** Category of this memory entry. */
   type: MemoryType;
-  /** Short display name, e.g. "user_frank" or "project_sudoapi". */
+  /** Short display name, e.g. "user_frank" or "project_ollama". */
   name: string;
   /** One-line description of what this memory contains. */
   description: string;

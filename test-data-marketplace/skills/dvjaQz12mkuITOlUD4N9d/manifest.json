@@ -1,0 +1,21 @@
+{
+  "name": "data-analysis",
+  "version": "1.0.0",
+  "description": "Analyze datasets and generate insights, summaries, and recommendations",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "data-analysis"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

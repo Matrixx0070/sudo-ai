@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "declaration": true,
     "sourceMap": true,
     "jsx": "react-jsx",
@@ -21,6 +21,6 @@
     },
     "baseUrl": "."
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "shared-types/**/*"],
   "exclude": ["node_modules", "dist", "data"]
 }

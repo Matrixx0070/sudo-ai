@@ -1,0 +1,21 @@
+{
+  "name": "trello",
+  "version": "1.0.0",
+  "description": "Manage Trello boards, lists, and cards using the Trello REST API.",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "trello"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

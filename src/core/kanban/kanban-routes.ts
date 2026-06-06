@@ -5,14 +5,20 @@
  * All routes are Bearer-gated using admin token.
  *
  * Routes:
- *   GET    /v1/admin/kanban/tasks          — list tasks
- *   POST   /v1/admin/kanban/tasks          — create task
- *   GET    /v1/admin/kanban/tasks/:id      — get task
- *   PATCH  /v1/admin/kanban/tasks/:id      — update task
- *   DELETE /v1/admin/kanban/tasks/:id      — delete task
- *   POST   /v1/admin/kanban/tasks/:id/move — move task to new status
- *   POST   /v1/admin/kanban/swarm/decompose — decompose task into workers
- *   POST   /v1/admin/kanban/swarm/execute   — spawn swarm for task
+ *   GET    /v1/admin/kanban/tasks                — list tasks
+ *   POST   /v1/admin/kanban/tasks                — create task
+ *   GET    /v1/admin/kanban/tasks/:id            — get task
+ *   PATCH  /v1/admin/kanban/tasks/:id            — update task
+ *   DELETE /v1/admin/kanban/tasks/:id            — delete task
+ *   POST   /v1/admin/kanban/tasks/:id/move       — move task to new status
+ *   POST   /v1/admin/kanban/swarm/decompose      — decompose task into workers
+ *   POST   /v1/admin/kanban/swarm/execute        — spawn swarm for task
+ *   GET    /v1/admin/kanban/dispatcher/state     — get dispatcher state & stats
+ *   POST   /v1/admin/kanban/dispatcher/start     — start dispatcher daemon
+ *   POST   /v1/admin/kanban/dispatcher/stop      — stop dispatcher daemon
+ *   POST   /v1/admin/kanban/worker/heartbeat     — record worker heartbeat
+ *   POST   /v1/admin/kanban/worker/complete      — record worker completion
+ *   POST   /v1/admin/kanban/worker/block         — record worker blocked
  *
  * Kill-switch: SUDO_KANBAN_DISABLE=1 returns 503 on all routes.
  */
@@ -22,7 +28,37 @@ import { timingSafeEqual } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { kanbanBoard } from './kanban-board.js';
 import { swarmOrchestrator } from './swarm-orchestrator.js';
+import { KanbanDispatcher } from './dispatcher.js';
+import { WorkerProtocolManager } from './worker-protocol.js';
+import { SwarmManager } from '../swarm/swarm-manager.js';
 import type { KanbanStatus, KanbanWorkspace, KanbanPriority, SwarmWorkerSpec } from './kanban-types.js';
+import type { WorkerHeartbeat, WorkerCompletion, WorkerBlock } from './worker-protocol.js';
+
+// Lazy singletons — created on first access so config can be applied first.
+let _swarmManager: SwarmManager | null = null;
+let _dispatcher: KanbanDispatcher | null = null;
+let _workerProtocol: WorkerProtocolManager | null = null;
+
+function getSwarmManager(): SwarmManager {
+  if (!_swarmManager) {
+    _swarmManager = new SwarmManager('data/swarm.db');
+  }
+  return _swarmManager;
+}
+
+function getDispatcher(): KanbanDispatcher {
+  if (!_dispatcher) {
+    _dispatcher = new KanbanDispatcher(kanbanBoard, getSwarmManager());
+  }
+  return _dispatcher;
+}
+
+function getWorkerProtocol(): WorkerProtocolManager {
+  if (!_workerProtocol) {
+    _workerProtocol = new WorkerProtocolManager(getDispatcher());
+  }
+  return _workerProtocol;
+}
 
 const log = createLogger('gateway:kanban-routes');
 
@@ -500,6 +536,248 @@ async function handleExecuteSwarm(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 5: Dispatcher & Worker Protocol handlers
+// ---------------------------------------------------------------------------
+
+function handleDispatcherState(
+  req: IncomingMessage,
+  res: ServerResponse,
+  adminTokenBuf: Buffer | null,
+): void {
+  if (!isAuthorised(req, adminTokenBuf)) {
+    sendError(res, 401, 'Unauthorized');
+    return;
+  }
+
+  if (isDisabled()) {
+    sendError(res, 503, 'Kanban disabled (SUDO_KANBAN_DISABLE=1)');
+    return;
+  }
+
+  try {
+    const dispatcher = getDispatcher();
+    const state = dispatcher.getState();
+    const stats = dispatcher.getStats();
+    sendJson(res, 200, { ok: true, data: { state, stats } });
+  } catch (err) {
+    log.error({ err: String(err) }, 'handleDispatcherState failed');
+    sendError(res, 500, 'Internal server error');
+  }
+}
+
+function handleDispatcherStart(
+  req: IncomingMessage,
+  res: ServerResponse,
+  adminTokenBuf: Buffer | null,
+): void {
+  if (!isAuthorised(req, adminTokenBuf)) {
+    sendError(res, 401, 'Unauthorized');
+    return;
+  }
+
+  if (isDisabled()) {
+    sendError(res, 503, 'Kanban disabled (SUDO_KANBAN_DISABLE=1)');
+    return;
+  }
+
+  try {
+    const dispatcher = getDispatcher();
+    dispatcher.start();
+    sendJson(res, 200, { ok: true, data: { state: dispatcher.getState() } });
+    log.info('Dispatcher started via REST');
+  } catch (err) {
+    log.error({ err: String(err) }, 'handleDispatcherStart failed');
+    sendError(res, 500, 'Internal server error');
+  }
+}
+
+function handleDispatcherStop(
+  req: IncomingMessage,
+  res: ServerResponse,
+  adminTokenBuf: Buffer | null,
+): void {
+  if (!isAuthorised(req, adminTokenBuf)) {
+    sendError(res, 401, 'Unauthorized');
+    return;
+  }
+
+  if (isDisabled()) {
+    sendError(res, 503, 'Kanban disabled (SUDO_KANBAN_DISABLE=1)');
+    return;
+  }
+
+  try {
+    const dispatcher = getDispatcher();
+    dispatcher.stop();
+    sendJson(res, 200, { ok: true, data: { state: dispatcher.getState() } });
+    log.info('Dispatcher stopped via REST');
+  } catch (err) {
+    log.error({ err: String(err) }, 'handleDispatcherStop failed');
+    sendError(res, 500, 'Internal server error');
+  }
+}
+
+async function handleWorkerHeartbeat(
+  req: IncomingMessage,
+  res: ServerResponse,
+  adminTokenBuf: Buffer | null,
+): Promise<void> {
+  if (!isAuthorised(req, adminTokenBuf)) {
+    sendError(res, 401, 'Unauthorized');
+    return;
+  }
+
+  if (isDisabled()) {
+    sendError(res, 503, 'Kanban disabled (SUDO_KANBAN_DISABLE=1)');
+    return;
+  }
+
+  let raw: string;
+  try {
+    raw = await readBody(req);
+  } catch {
+    sendError(res, 400, 'Request body too large or unreadable');
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    sendError(res, 400, 'Invalid JSON body');
+    return;
+  }
+
+  const b = body as Record<string, unknown>;
+  if (typeof b['workerId'] !== 'string' || typeof b['taskId'] !== 'string') {
+    sendError(res, 400, 'workerId and taskId are required strings');
+    return;
+  }
+
+  try {
+    const proto = getWorkerProtocol();
+    const heartbeat: WorkerHeartbeat = {
+      workerId: b['workerId'] as string,
+      taskId: b['taskId'] as string,
+      progress: typeof b['progress'] === 'number' ? b['progress'] : 0,
+      timestamp: (b['timestamp'] as string) ?? new Date().toISOString(),
+    };
+    proto.heartbeat(heartbeat);
+    sendJson(res, 200, { ok: true, data: { acknowledged: true } });
+  } catch (err) {
+    log.error({ err: String(err) }, 'handleWorkerHeartbeat failed');
+    sendError(res, 500, 'Internal server error');
+  }
+}
+
+async function handleWorkerComplete(
+  req: IncomingMessage,
+  res: ServerResponse,
+  adminTokenBuf: Buffer | null,
+): Promise<void> {
+  if (!isAuthorised(req, adminTokenBuf)) {
+    sendError(res, 401, 'Unauthorized');
+    return;
+  }
+
+  if (isDisabled()) {
+    sendError(res, 503, 'Kanban disabled (SUDO_KANBAN_DISABLE=1)');
+    return;
+  }
+
+  let raw: string;
+  try {
+    raw = await readBody(req);
+  } catch {
+    sendError(res, 400, 'Request body too large or unreadable');
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    sendError(res, 400, 'Invalid JSON body');
+    return;
+  }
+
+  const b = body as Record<string, unknown>;
+  if (typeof b['workerId'] !== 'string' || typeof b['taskId'] !== 'string') {
+    sendError(res, 400, 'workerId and taskId are required strings');
+    return;
+  }
+
+  try {
+    const proto = getWorkerProtocol();
+    const completion: WorkerCompletion = {
+      workerId: b['workerId'] as string,
+      taskId: b['taskId'] as string,
+      result: (b['result'] as string) ?? '',
+      durationMs: typeof b['durationMs'] === 'number' ? b['durationMs'] : 0,
+      success: b['success'] !== false,
+    };
+    proto.complete(completion);
+    sendJson(res, 200, { ok: true, data: { acknowledged: true } });
+  } catch (err) {
+    log.error({ err: String(err) }, 'handleWorkerComplete failed');
+    sendError(res, 500, 'Internal server error');
+  }
+}
+
+async function handleWorkerBlock(
+  req: IncomingMessage,
+  res: ServerResponse,
+  adminTokenBuf: Buffer | null,
+): Promise<void> {
+  if (!isAuthorised(req, adminTokenBuf)) {
+    sendError(res, 401, 'Unauthorized');
+    return;
+  }
+
+  if (isDisabled()) {
+    sendError(res, 503, 'Kanban disabled (SUDO_KANBAN_DISABLE=1)');
+    return;
+  }
+
+  let raw: string;
+  try {
+    raw = await readBody(req);
+  } catch {
+    sendError(res, 400, 'Request body too large or unreadable');
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    sendError(res, 400, 'Invalid JSON body');
+    return;
+  }
+
+  const b = body as Record<string, unknown>;
+  if (typeof b['workerId'] !== 'string' || typeof b['taskId'] !== 'string') {
+    sendError(res, 400, 'workerId and taskId are required strings');
+    return;
+  }
+
+  try {
+    const proto = getWorkerProtocol();
+    const block: WorkerBlock = {
+      workerId: b['workerId'] as string,
+      taskId: b['taskId'] as string,
+      reason: (b['reason'] as string) ?? 'unknown',
+      requiresHumanAttention: b['needsHuman'] === true,
+    };
+    proto.block(block);
+    sendJson(res, 200, { ok: true, data: { acknowledged: true } });
+  } catch (err) {
+    log.error({ err: String(err) }, 'handleWorkerBlock failed');
+    sendError(res, 500, 'Internal server error');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
@@ -574,6 +852,51 @@ export function registerKanbanRoutes(
     if (method === 'POST' && pathname === '/v1/admin/kanban/swarm/execute') {
       handleExecuteSwarm(req, res, adminTokenBuf).catch((err: unknown) => {
         log.error({ err: err instanceof Error ? err.message : String(err) }, 'Unhandled error in execute');
+        if (!res.headersSent) sendError(res, 500, 'Internal server error');
+      });
+      return;
+    }
+
+    // GET /v1/admin/kanban/dispatcher/state
+    if (method === 'GET' && pathname === '/v1/admin/kanban/dispatcher/state') {
+      handleDispatcherState(req, res, adminTokenBuf);
+      return;
+    }
+
+    // POST /v1/admin/kanban/dispatcher/start
+    if (method === 'POST' && pathname === '/v1/admin/kanban/dispatcher/start') {
+      handleDispatcherStart(req, res, adminTokenBuf);
+      return;
+    }
+
+    // POST /v1/admin/kanban/dispatcher/stop
+    if (method === 'POST' && pathname === '/v1/admin/kanban/dispatcher/stop') {
+      handleDispatcherStop(req, res, adminTokenBuf);
+      return;
+    }
+
+    // POST /v1/admin/kanban/worker/heartbeat
+    if (method === 'POST' && pathname === '/v1/admin/kanban/worker/heartbeat') {
+      handleWorkerHeartbeat(req, res, adminTokenBuf).catch((err: unknown) => {
+        log.error({ err: err instanceof Error ? err.message : String(err) }, 'Unhandled error in worker heartbeat');
+        if (!res.headersSent) sendError(res, 500, 'Internal server error');
+      });
+      return;
+    }
+
+    // POST /v1/admin/kanban/worker/complete
+    if (method === 'POST' && pathname === '/v1/admin/kanban/worker/complete') {
+      handleWorkerComplete(req, res, adminTokenBuf).catch((err: unknown) => {
+        log.error({ err: err instanceof Error ? err.message : String(err) }, 'Unhandled error in worker complete');
+        if (!res.headersSent) sendError(res, 500, 'Internal server error');
+      });
+      return;
+    }
+
+    // POST /v1/admin/kanban/worker/block
+    if (method === 'POST' && pathname === '/v1/admin/kanban/worker/block') {
+      handleWorkerBlock(req, res, adminTokenBuf).catch((err: unknown) => {
+        log.error({ err: err instanceof Error ? err.message : String(err) }, 'Unhandled error in worker block');
         if (!res.headersSent) sendError(res, 500, 'Internal server error');
       });
       return;

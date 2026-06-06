@@ -87,7 +87,7 @@ export interface BenchCommandOptions {
 }
 
 export async function runBench(opts: BenchCommandOptions): Promise<number> {
-  const baseUrl    = process.env['SUDO_API_URL'] ?? 'http://localhost:18900';
+  const baseUrl    = process.env['GATEWAY_URL'] ?? 'http://localhost:18900';
   const token      = process.env['GATEWAY_TOKEN'];
   const models     = opts.models     ? opts.models.split(',').map(s => s.trim()).filter(Boolean)     : [];
   const tasks      = opts.tasks      ? opts.tasks.split(',').map(s => s.trim()).filter(Boolean)      : [];

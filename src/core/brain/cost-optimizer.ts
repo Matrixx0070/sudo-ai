@@ -29,10 +29,9 @@ export type OptimizationGoal = 'cheapest' | 'fastest' | 'smartest' | 'balanced';
 // ---------------------------------------------------------------------------
 
 const MODEL_COSTS: ModelCost[] = [
-  { model: 'sudoapi/grok',         inputPer1k: 0, outputPer1k: 0, avgLatencyMs: 1000, capability: 7  },
-  { model: 'sudoapi/gemini',       inputPer1k: 0, outputPer1k: 0, avgLatencyMs: 3000, capability: 7  },
-  { model: 'sudoapi/claude-sonnet',inputPer1k: 0, outputPer1k: 0, avgLatencyMs: 1800, capability: 9  },
-  { model: 'sudoapi/gpt-5.4',      inputPer1k: 0, outputPer1k: 0, avgLatencyMs: 1500, capability: 10 },
+  { model: 'ollama/deepseek-v4-pro:cloud', inputPer1k: 0, outputPer1k: 0, avgLatencyMs: 1000, capability: 7  },
+  { model: 'xai/grok-4-0709',             inputPer1k: 2.0, outputPer1k: 6.0, avgLatencyMs: 1500, capability: 10 },
+  { model: 'anthropic/claude-sonnet-4-5',  inputPer1k: 3.0, outputPer1k: 15.0, avgLatencyMs: 1800, capability: 9  },
 ];
 
 // ---------------------------------------------------------------------------

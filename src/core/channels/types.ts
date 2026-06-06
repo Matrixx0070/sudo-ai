@@ -21,7 +21,8 @@ export type ChannelType =
   | 'irc'
   | 'web'
   | 'email'
-  | 'sms';
+  | 'sms'
+  | 'ide';
 
 /** Whether the conversation is a direct message or a group/guild channel. */
 export type ChatType = 'dm' | 'group';

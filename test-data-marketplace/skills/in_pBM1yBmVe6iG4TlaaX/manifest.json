@@ -1,0 +1,21 @@
+{
+  "name": "screenshot",
+  "version": "1.0.0",
+  "description": "Capture a screenshot of the full screen or a specific window using scrot or screencapture.",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "screenshot"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

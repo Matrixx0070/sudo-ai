@@ -45,7 +45,7 @@ export function useFederation(baseUrl: string): FederationData {
   const [federation, setFederation] = useState<FederationData>(EMPTY);
 
   useEffect(() => {
-    const key = process.env['SUDOAPI_KEY'] ?? '';
+    const key = process.env['GATEWAY_TOKEN'] ?? '';
     const url = `${baseUrl}/v1/federation/peers`;
 
     const fetchPeers = (): void => {

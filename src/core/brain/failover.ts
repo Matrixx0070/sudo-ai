@@ -66,7 +66,7 @@ export class ModelFailover {
       const provider = modelString.slice(0, slashIndex) as ModelProfile['provider'];
       const modelId = modelString.slice(slashIndex + 1);
 
-      const validProviders = ['xai', 'openai', 'anthropic', 'google', 'sudoapi', 'groq', 'mistral', 'deepseek', 'ollama', 'together'];
+      const validProviders = ['xai', 'openai', 'anthropic', 'google', 'groq', 'mistral', 'deepseek', 'ollama', 'together'];
       if (!validProviders.includes(provider)) {
         throw new LLMError(
           `Unknown provider "${provider}" in model string "${modelString}"`,

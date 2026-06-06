@@ -85,6 +85,7 @@ export function serveStaticFile(req: IncomingMessage, res: ServerResponse, pathn
   // Path traversal protection
   const resolved = resolve(filePath);
   if (!resolved.startsWith(DIST_DIR)) {
+    if (res.headersSent) return true;
     res.writeHead(403);
     res.end('Forbidden');
     return true;
@@ -109,6 +110,7 @@ export function serveStaticFile(req: IncomingMessage, res: ServerResponse, pathn
     headers['Content-Security-Policy'] = buildCSPHeader(nonce);
   }
 
+  if (res.headersSent) return true;
   res.writeHead(200, headers);
   createReadStream(resolved).pipe(res);
   return true;

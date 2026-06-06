@@ -17,3 +17,24 @@ export { SkillRegistry, SkillRegistryError } from './registry.js';
 export type { SkillMeta, SkillFull, AttachedSkill } from './registry-types.js';
 export { registerSkillRoutes } from './routes.js';
 export { registerRegistryRoutes } from './registry-routes.js';
+
+// Community-driven: Skills Marketplace
+export { SkillsMarketplace } from './marketplace.js';
+export type {
+  MarketplaceSkill,
+  SkillManifest,
+  SkillInput,
+  SkillRating,
+  MarketplaceSearch,
+  MarketplaceConfig,
+} from './marketplace.js';
+
+// Public Skill Registry (agentskills.io publish-registry)
+export { SkillRegistry as PublicSkillRegistry } from './skill-registry.js';
+export type {
+  SkillYamlFrontmatter,
+  PublishedSkill,
+  SkillSearchParams,
+  SkillListResult,
+  ResolvedSkill,
+} from './skill-registry.js';

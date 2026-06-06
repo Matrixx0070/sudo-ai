@@ -1,0 +1,21 @@
+{
+  "name": "slack-integration",
+  "version": "1.0.0",
+  "description": "Post messages, read DMs, and interact with Slack channels using a bot token.",
+  "author": "local",
+  "category": "custom",
+  "tags": [
+    "slack-integration"
+  ],
+  "requires": [],
+  "provides": [],
+  "inputs": [],
+  "compatibility": {
+    "sudoAiVersion": ">=4.0.0",
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ]
+  }
+}

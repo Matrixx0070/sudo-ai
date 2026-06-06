@@ -81,9 +81,6 @@ module.exports = {
         WEB_CHAT_ENABLED: 'false',
         WEB_CHAT_PORT: '3004',
 
-        // Brain target.
-        SUDOAPI_GATEWAY_URL: 'https://sudoapi.shop',
-
         // ---- Federation outbound ----
         // peer-a publishes to peer-b on 18901 using TOKEN_A_TO_B.
         // SECURITY: Replace demo tokens with cryptographically random secrets (32+ bytes).
