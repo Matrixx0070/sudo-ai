@@ -83,7 +83,7 @@ describe('ErrorReporter', () => {
 
     it('should handle UUIDs and timestamps', () => {
       const error1 = new Error('Session abc12345-6789-abcd-ef01-234567890abc expired at 2026-05-31T12:00:00Z');
-      const error2 = new Error('Session xyz98765-4321-dcba-1098-76543210fedcba expired at 2026-06-01T08:30:00Z');
+      const error2 = new Error('Session xyz98765-4321-dcba-1098-76543210fedc expired at 2026-06-01T08:30:00Z');
 
       const sig1 = reporter.normalizeSignature(error1);
       const sig2 = reporter.normalizeSignature(error2);
