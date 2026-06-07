@@ -61,5 +61,5 @@ export type {
   LoginResult,
   LogoutResult,
   AuthStatus,
-  VaultSetOptions,
 } from './oauth-types.js';
+export type { VaultSetOptions } from '../security/vault.js';

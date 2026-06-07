@@ -301,6 +301,8 @@ export interface RiskPattern {
   matched: string;
   /** Suggested safer alternative. */
   alternative?: string;
+  /** Risk level this pattern escalates the command to, if any. */
+  escalateTo?: RiskLevel;
 }
 
 // ---------------------------------------------------------------------------
