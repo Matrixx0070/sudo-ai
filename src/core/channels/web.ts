@@ -354,7 +354,7 @@ export class WebAdapter implements ChannelAdapter {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Security-Policy': buildSpaCSPHeader(nonce),
         });
-        res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="csp-nonce" content="${nonce}"><title>SUDO Chat</title></head><body><h1>SUDO Chat</h1><p>React SPA not built. Run: npx vite build</p></body></html>`);
+        res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="csp-nonce" content="${nonce}"><title>SUDO-AI Chat</title></head><body><h1>SUDO-AI Chat</h1><p>React SPA not built. Run: npx vite build</p></body></html>`);
       }
       return;
     }
