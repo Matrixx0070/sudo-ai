@@ -16,7 +16,7 @@ import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
-import { queryAllModelsConsensus } from './model-consensus.js';
+import { queryAllModelsConsensus, type ConsensusOptions } from './model-consensus.js';
 import { DispatchRouter } from './dispatch-router.js';
 import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
 import { routeModel } from './model-router.js';
@@ -727,6 +727,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
               usage: response.usage,
             };
           },
+          this._consensusOptions(request),
         );
 
         // Record success for the winning model
@@ -1163,6 +1164,27 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       default:
         return null;
     }
+  }
+
+  /**
+   * Resolve latency-aware consensus options from the request, falling back to
+   * per-process env defaults. All-undefined (the default) makes the consensus
+   * phase wait for every model — behavior-preserving.
+   */
+  private _consensusOptions(request: BrainRequest): ConsensusOptions {
+    const num = (v: unknown): number | undefined => {
+      const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const minAgreement = num(request.consensusMinAgreement) ?? num(process.env['SUDO_CONSENSUS_MIN_AGREEMENT']);
+    const minResponders = num(request.consensusMinResponders) ?? num(process.env['SUDO_CONSENSUS_MIN_RESPONDERS']);
+    const timeoutMs = num(request.consensusTimeoutMs) ?? num(process.env['SUDO_CONSENSUS_TIMEOUT_MS']);
+    return {
+      // Only a threshold in (0, 1] enables agreement-based early-exit.
+      minAgreement: minAgreement !== undefined && minAgreement > 0 && minAgreement <= 1 ? minAgreement : undefined,
+      minResponders: minResponders !== undefined && minResponders >= 1 ? Math.floor(minResponders) : undefined,
+      timeoutMs: timeoutMs !== undefined && timeoutMs > 0 ? timeoutMs : undefined,
+    };
   }
 
   /**

@@ -121,6 +121,16 @@ export interface BrainRequest {
    * (cognitive ticks, KAIROS, self-build) should leave this unset.
    */
   race?: boolean;
+  /**
+   * Latency-aware consensus: early-exit once `consensusMinResponders` cloud models
+   * agree at ≥ this Jaccard score (0–1). Unset → wait for all models (default).
+   * Also settable per-process via SUDO_CONSENSUS_MIN_AGREEMENT.
+   */
+  consensusMinAgreement?: number;
+  /** Min completed responders before consensus early-exit can fire (default 2). */
+  consensusMinResponders?: number;
+  /** Overall wall-clock cap (ms) for the consensus phase. Env: SUDO_CONSENSUS_TIMEOUT_MS. */
+  consensusTimeoutMs?: number;
 }
 
 /** Token usage and estimated cost for a single LLM call. */

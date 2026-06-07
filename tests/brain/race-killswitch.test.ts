@@ -73,6 +73,10 @@ describe('SUDO_BRAIN_CONSENSUS_DISABLE kill-switch', () => {
   beforeEach(() => {
     originalEnv['SUDO_BRAIN_CONSENSUS_DISABLE'] = process.env['SUDO_BRAIN_CONSENSUS_DISABLE'];
     delete process.env['SUDO_BRAIN_CONSENSUS_DISABLE'];
+    // Guard against consensus early-exit env leaking in and reducing the model
+    // count this suite asserts on (it expects all cloud models to be called).
+    delete process.env['SUDO_CONSENSUS_MIN_AGREEMENT'];
+    delete process.env['SUDO_CONSENSUS_TIMEOUT_MS'];
     vi.clearAllMocks();
   });
 
