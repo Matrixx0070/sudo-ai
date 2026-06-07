@@ -152,7 +152,16 @@ export async function runWorkflow(
   const { resumeState, approvalCallback } = options;
 
   const runState: WorkflowRunState = resumeState
-    ? { ...resumeState, pendingStepIndex: undefined, resumeToken: undefined }
+    ? {
+        ...resumeState,
+        // Drop the awaiting_approval placeholder recorded at pause time so the
+        // resumed step re-executes cleanly: {{prev}} then resolves to the last
+        // genuinely-completed step (not the stdout-less approval entry) and no
+        // duplicate StepResult is appended for the resumed step.
+        completedSteps: resumeState.completedSteps.filter((s) => s.status !== 'awaiting_approval'),
+        pendingStepIndex: undefined,
+        resumeToken: undefined,
+      }
     : {
         workflowName: workflow.name,
         startedAt: new Date().toISOString(),

@@ -141,7 +141,7 @@ export function trimToolResults(
  */
 export function shouldCompact(messages: Array<MessageLike>): boolean {
   const tokens = estimateContextSize(messages);
-  const threshold = MAX_CONTEXT_TOKENS * 0.5;
+  const threshold = MAX_CONTEXT_TOKENS * 0.8;
   const needed = tokens >= threshold;
 
   if (needed) {

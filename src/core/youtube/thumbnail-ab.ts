@@ -184,6 +184,19 @@ export class ThumbnailABTester {
       (v.measuredCtr ?? 0) > (best.measuredCtr ?? 0) ? v : best,
     );
 
+    // If multiple variants share the top CTR, the result is a tie and picking
+    // one arbitrarily (the reduce seed / first variant) would be misleading.
+    // Decline to declare a winner rather than crowning variant 'A' by default.
+    const bestCtr = winner.measuredCtr ?? 0;
+    const tiedForLead = withCtr.filter(v => (v.measuredCtr ?? 0) === bestCtr);
+    if (tiedForLead.length > 1) {
+      log.warn(
+        { testId, ctr: bestCtr, tied: tiedForLead.map(v => v.variant) },
+        'CTR is tied across variants — inconclusive, no winner selected',
+      );
+      return null;
+    }
+
     const markWinner = this.db.prepare<[string]>(`UPDATE ab_variants SET is_winner = 1 WHERE id = ?`);
     const completeTest = this.db.prepare<[string, string, string]>(
       `UPDATE ab_tests SET status = 'completed', winner_variant = ?, completed_at = ? WHERE id = ?`,

@@ -192,6 +192,10 @@ async function handleReject(req: IncomingMessage, res: ServerResponse, deps: Lea
   try {
     const existing = deps.proposalStore.getById(id);
     if (!existing) { sendError(res, 404, `Proposal not found: ${id}`); return; }
+    if (existing.status === 'approved' || existing.status === 'applied' || existing.status === 'rejected') {
+      sendError(res, 409, `Proposal already ${existing.status}`);
+      return;
+    }
     const proposal = deps.proposalStore.reject(id, reason);
     sendJson(res, 200, { proposal });
   } catch (err) {

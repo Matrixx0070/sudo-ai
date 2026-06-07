@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 
 interface SearchInputProps {
   value: string;
@@ -17,9 +17,18 @@ export function SearchInput({
   const latestRef = useRef(value);
   latestRef.current = value;
 
+  // Local display state so the input stays responsive while upstream onChange
+  // is debounced. Kept in sync with the `value` prop for external changes
+  // (e.g. the Clear button or a parent-driven reset).
+  const [displayValue, setDisplayValue] = useState(value);
+  useEffect(() => {
+    setDisplayValue(value);
+  }, [value]);
+
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const next = e.target.value;
+      setDisplayValue(next);
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         onChange(next);
@@ -65,7 +74,7 @@ export function SearchInput({
       <input
         type="search"
         aria-label={placeholder}
-        defaultValue={value}
+        value={displayValue}
         onChange={handleChange}
         placeholder={placeholder}
         style={{

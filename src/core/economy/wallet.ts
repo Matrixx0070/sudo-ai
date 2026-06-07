@@ -105,7 +105,7 @@ export class AgentWallet {
 
   getBalance(currency = 'USD'): number {
     const row = this.db.prepare(
-      'SELECT balance_after FROM agent_wallet WHERE currency = ? ORDER BY created_at DESC LIMIT 1',
+      'SELECT balance_after FROM agent_wallet WHERE currency = ? ORDER BY rowid DESC LIMIT 1',
     ).get(currency) as { balance_after: number } | undefined;
     return row?.balance_after ?? 0;
   }

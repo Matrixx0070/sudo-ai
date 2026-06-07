@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
 
@@ -101,16 +101,24 @@ export class Coordinator {
   }
 
   private load(): void {
+    if (!existsSync(this.mailboxPath)) {
+      this.requests = [];
+      return;
+    }
     try {
-      if (existsSync(this.mailboxPath)) {
-        this.requests = JSON.parse(readFileSync(this.mailboxPath, 'utf8')) as CoordinatorRequest[];
-      }
-    } catch { this.requests = []; }
+      this.requests = JSON.parse(readFileSync(this.mailboxPath, 'utf8')) as CoordinatorRequest[];
+    } catch (e) {
+      // Transient read/parse failures (e.g. a concurrent non-atomic write
+      // producing a partial file) must not wipe valid in-memory state.
+      log.warn({ err: String(e) }, 'Coordinator load failed; keeping existing in-memory requests');
+    }
   }
 
   private save(): void {
     try {
-      writeFileSync(this.mailboxPath, JSON.stringify(this.requests, null, 2));
+      const tmpPath = `${this.mailboxPath}.${process.pid}.tmp`;
+      writeFileSync(tmpPath, JSON.stringify(this.requests, null, 2));
+      renameSync(tmpPath, this.mailboxPath);
     } catch (e) { log.error({ err: String(e) }, 'Coordinator save failed'); }
   }
 }

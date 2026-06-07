@@ -267,8 +267,13 @@ export const fetchLogs = (level?: string, search?: string, limit = 200) => {
     });
 };
 
-export const downloadLogs = () =>
-  fetch('/api/admin/logs/download').then((r) => r.text());
+export const downloadLogs = async () => {
+  const headers: Record<string, string> = {};
+  if (_token) headers['Authorization'] = `Bearer ${_token}`;
+  const res = await fetch('/api/admin/logs/download', { headers });
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  return res.text();
+};
 
 // ─── System ───────────────────────────────────────────────────────────────────
 

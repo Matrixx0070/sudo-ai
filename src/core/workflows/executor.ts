@@ -169,9 +169,7 @@ export function evaluateCondition(expr: string, stepsMap: AccessorMap): boolean 
 
     if (op !== '===' && op !== '!==') {
       log.warn({ expr, token: tok }, 'evaluateCondition: unrecognised operator, treating as false');
-      results.push(false);
-      i++;
-      continue;
+      return false;
     }
 
     const lhs = coerceToken(lhsToken ?? '', stepsMap);

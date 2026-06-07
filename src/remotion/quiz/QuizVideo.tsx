@@ -91,7 +91,16 @@ export const SAMPLE_QUIZ_CONFIG: QuizConfig = {
 // ---------------------------------------------------------------------------
 
 function calcDuration(questions: QuizQuestion[]): number {
-  return FRAMES.INTRO + questions.length * FRAMES.PER_QUESTION + FRAMES.OUTRO;
+  const total = questions.length;
+  const transitions = questions.filter(
+    (_, i) => i > 0 && getDifficultyAtIndex(i - 1, total) !== getDifficultyAtIndex(i, total),
+  ).length;
+  return (
+    FRAMES.INTRO +
+    total * FRAMES.PER_QUESTION +
+    transitions * FRAMES.DIFFICULTY_BADGE +
+    FRAMES.OUTRO
+  );
 }
 
 function getDifficultyAtIndex(index: number, total: number): QuizQuestion['difficulty'] {
@@ -230,7 +239,11 @@ export const QuizVideo: React.FC<{ config?: QuizConfig }> = ({ config = SAMPLE_Q
     cursor += FRAMES.PER_QUESTION;
   });
 
-  const diffProgress = (totalQuestions - 1) / Math.max(1, totalQuestions - 1);
+  const DIFFICULTY_ORDER: QuizQuestion['difficulty'][] = ['easy', 'medium', 'hard', 'impossible'];
+  const highestDifficulty = totalQuestions > 0
+    ? getDifficultyAtIndex(totalQuestions - 1, totalQuestions)
+    : 'easy';
+  const diffProgress = DIFFICULTY_ORDER.indexOf(highestDifficulty) / (DIFFICULTY_ORDER.length - 1);
 
   return (
     <AbsoluteFill style={{ fontFamily: "'Arial Black', Impact, sans-serif" }}>

@@ -50,7 +50,8 @@ function parseDigest(data: unknown): DigestData {
         (s as Record<string, unknown>)['name'] === name
     ) as Record<string, unknown> | undefined;
 
-    const score = found ? Number(found['score'] ?? 0.5) : 0.5;
+    const n = found ? Number(found['score'] ?? 0.5) : 0.5;
+    const score = Number.isFinite(n) ? n : 0.5;
     return { name, color: scoreToColor(score), value: score };
   });
 

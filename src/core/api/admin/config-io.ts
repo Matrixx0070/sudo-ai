@@ -3,13 +3,13 @@
  * @description Shared helpers for reading and writing the sudo-ai.json5 config
  * file. Used by models.handler.ts and settings.handler.ts.
  *
- * JSON5 is parsed by stripping line-comments and block-comments, then using
- * JSON.parse. Writes are done as plain JSON (loses comments, but keeps
- * machine-written values reliable).
+ * JSON5 is parsed with the json5 library. Writes are done as plain JSON
+ * (loses comments, but keeps machine-written values reliable).
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import JSON5 from 'json5';
 import { createLogger } from '../../shared/logger.js';
 
 const log = createLogger('api:admin:config-io');
@@ -34,26 +34,13 @@ export function readConfig(): Record<string, unknown> {
     throw new Error(`Cannot read config file: ${(err as NodeJS.ErrnoException).message}`);
   }
 
-  // Convert JSON5 to valid JSON:
-  // 1. Strip // line comments and /* ... */ block comments
-  // 2. Quote unquoted keys
-  // 3. Remove trailing commas
-  let stripped = raw
-    .replace(/\/\/.*$/gm, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
-
-  // Quote unquoted object keys: matches word chars before a colon
-  stripped = stripped.replace(/(?<=[\{,]\s*)([a-zA-Z_$][\w$]*)(?=\s*:)/g, '"$1"');
-
-  // Remove trailing commas before } or ]
-  stripped = stripped.replace(/,\s*([\}\]])/g, '$1');
-
+  // Parse with the JSON5 library so single-quoted strings, comments,
+  // trailing commas, and unquoted keys are all handled correctly.
   try {
-    const parsed = JSON.parse(stripped) as Record<string, unknown>;
-    return parsed;
+    return JSON5.parse(raw) as Record<string, unknown>;
   } catch (err) {
-    log.error({ err }, 'readConfig: JSON parse failed after JSON5 conversion');
-    throw new Error('Config file contains invalid JSON after JSON5 conversion');
+    log.error({ err }, 'readConfig: JSON5 parse failed');
+    throw new Error('Config file contains invalid JSON5');
   }
 }
 

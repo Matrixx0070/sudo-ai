@@ -70,27 +70,52 @@ function sha256(text: string): string {
 }
 
 function acquireLock(): boolean {
-  if (existsSync(LOCK_FILE)) {
+  const tryCreate = (): boolean => {
     try {
-      const raw = readFileSync(LOCK_FILE, 'utf-8').trim();
-      const pid = parseInt(raw, 10);
-      if (!isNaN(pid) && pid !== process.pid) {
-        // Check if the PID is still alive
-        try {
-          process.kill(pid, 0);
-          log.warn({ pid }, 'Dream lock held by another process — skipping');
-          return false;
-        } catch {
-          // PID is dead — stale lock, proceed
-          log.info({ pid }, 'Removing stale dream lock');
-        }
-      }
+      // Exclusive create: fails atomically with EEXIST if a lock already exists,
+      // so two concurrent runs can never both claim the lock.
+      writeFileSync(LOCK_FILE, String(process.pid), { encoding: 'utf-8', flag: 'wx' });
+      return true;
     } catch (err) {
-      log.warn({ err: String(err) }, 'Could not read lock file — proceeding anyway');
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw err;
     }
+  };
+
+  // Fast path: no lock present — atomically create it.
+  if (tryCreate()) return true;
+
+  // A lock file exists. Decide whether it is stale (dead/own PID) and stealable.
+  let stale = true;
+  try {
+    const raw = readFileSync(LOCK_FILE, 'utf-8').trim();
+    const pid = parseInt(raw, 10);
+    if (!isNaN(pid) && pid !== process.pid) {
+      // Check if the PID is still alive
+      try {
+        process.kill(pid, 0);
+        log.warn({ pid }, 'Dream lock held by another process — skipping');
+        stale = false;
+      } catch {
+        // PID is dead — stale lock, proceed to steal it
+        log.info({ pid }, 'Removing stale dream lock');
+      }
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Could not read lock file — treating as stale');
   }
-  writeFileSync(LOCK_FILE, String(process.pid), 'utf-8');
-  return true;
+
+  if (!stale) return false;
+
+  // Steal the stale lock, then re-acquire atomically. If another process
+  // recreated the lock in the meantime, the exclusive create fails and we back
+  // off rather than clobbering an active lock.
+  try {
+    unlinkSync(LOCK_FILE);
+  } catch {
+    // Another process may have already removed/replaced it — fall through.
+  }
+  return tryCreate();
 }
 
 function releaseLock(): void {

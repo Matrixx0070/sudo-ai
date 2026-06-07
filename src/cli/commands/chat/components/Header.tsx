@@ -36,7 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   // Truncate model name for narrow terminals
   const displayModel = cols < 100
-    ? (model.includes('/') ? model.split('/').pop() ?? model : model.split('.')[0] ?? model)
+    ? (model.includes('/') ? model.split('/').pop() ?? model : model.replace(/\.[0-9]{6,8}$/, ''))
     : model;
 
   const overallColor = OVERALL_COLORS[digest.overall] ?? '#e8b860';

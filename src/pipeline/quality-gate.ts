@@ -128,15 +128,7 @@ async function probeVolume(filePath: string): Promise<VolumeData> {
       '-',
     ];
 
-    const proc = spawn('ffprobe', ['-v', 'quiet',
-      '-of', 'json',
-      '-show_entries', 'format_tags',
-      filePath,
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
-
     // volumedetect must run through ffmpeg, not ffprobe — use ffmpeg directly
-    proc.kill();
-
     const proc2 = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr2 = '';
 

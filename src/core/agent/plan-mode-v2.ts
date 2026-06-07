@@ -12,7 +12,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 const log = createLogger('agent:plan-mode-v2');
@@ -327,10 +327,13 @@ export class PlanModeStateMachine {
       const statePath = path.join(this.dataDir, 'plan_mode.json');
       writeFileSync(statePath, JSON.stringify(stateDoc, null, 2), 'utf-8');
 
-      // Persist plan.json
+      // Persist plan.json (or remove it when there is no active plan, so a
+      // stale plan.json cannot be re-loaded after exiting to 'normal').
+      const planPath = path.join(this.dataDir, 'plan.json');
       if (this.activePlan) {
-        const planPath = path.join(this.dataDir, 'plan.json');
         writeFileSync(planPath, JSON.stringify(this.activePlan, null, 2), 'utf-8');
+      } else if (existsSync(planPath)) {
+        rmSync(planPath);
       }
     } catch (err) {
       log.error({ err: String(err) }, 'Failed to persist plan mode state');

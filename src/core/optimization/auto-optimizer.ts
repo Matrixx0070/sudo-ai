@@ -215,9 +215,18 @@ export class AutoOptimizer {
 
   disableRule(ruleId: string): void {
     if (!ruleId?.trim()) throw new Error('ruleId is required');
-    const rule = this.rules.get(ruleId);
-    if (!rule) throw new Error(`Rule not found: ${ruleId}`);
-    rule.active = false;
+    if (!this.rules.has(ruleId)) {
+      const row = this.db.prepare('SELECT * FROM optimization_rules WHERE id = ?')
+        .get(ruleId) as RuleRow | undefined;
+      if (!row) throw new Error(`Rule not found: ${ruleId}`);
+      this.rules.set(ruleId, {
+        id: row.id, dimension: row.dimension, rule: row.rule,
+        evidence: row.evidence, strength: row.strength,
+        active: false, createdAt: row.created_at,
+      });
+    } else {
+      this.rules.get(ruleId)!.active = false;
+    }
     this.db.prepare('UPDATE optimization_rules SET active = 0 WHERE id = ?').run(ruleId);
     logger.info({ ruleId }, 'Rule disabled');
   }

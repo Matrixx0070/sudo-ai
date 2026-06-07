@@ -191,8 +191,8 @@ function handleMarketplaceSearch(req: IncomingMessage, res: ServerResponse, ctx:
     query: url.searchParams.get('q') ?? undefined,
     category: url.searchParams.get('category') ?? undefined,
     sortBy: (url.searchParams.get('sort') as 'downloads' | 'rating' | 'recent' | 'name') ?? undefined,
-    limit: parseInt(url.searchParams.get('limit') ?? '20', 10),
-    offset: parseInt(url.searchParams.get('offset') ?? '0', 10),
+    limit: parseInt(url.searchParams.get('limit') ?? '20', 10) || 20,
+    offset: parseInt(url.searchParams.get('offset') ?? '0', 10) || 0,
   });
 
   jsonReply(res, 200, { results, total: results.length });

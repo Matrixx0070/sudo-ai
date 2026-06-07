@@ -56,8 +56,10 @@ function validateScene(raw: unknown, pos: number): SceneScript {
     throw new PipelineError(`Scene ${pos} has empty narration`, 'pipeline_script_invalid');
   }
   const dur = Number(obj['durationTarget'] ?? 3);
+  const rawIndex = Number(obj['index'] ?? pos + 1);
+  const index = Number.isInteger(rawIndex) && rawIndex > 0 ? rawIndex : pos + 1;
   return {
-    index: Number(obj['index'] ?? pos + 1),
+    index,
     narration,
     description: String(obj['description'] ?? '').trim(),
     emotion: String(obj['emotion'] ?? 'neutral').trim(),

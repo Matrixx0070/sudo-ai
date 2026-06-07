@@ -33,6 +33,16 @@ function truncateMessage(text: string): string {
 }
 
 /**
+ * Escape characters that are significant to Telegram's HTML parse mode so that
+ * dynamic content (URLs, error messages) cannot produce invalid HTML and
+ * trigger a 400 from the Bot API. Per the Telegram Bot API, '&', '<' and '>'
+ * must be replaced with the corresponding HTML entities.
+ */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
  * Format a NotificationPayload into a human-readable HTML Telegram message.
  */
 function formatMessage(payload: NotificationPayload): string {
@@ -46,18 +56,19 @@ function formatMessage(payload: NotificationPayload): string {
 
     case 'video_complete': {
       const url = typeof details['youtubeUrl'] === 'string' ? details['youtubeUrl'] : '#';
+      const safeUrl = escapeHtml(url);
       const cost =
         typeof details['costUsd'] === 'number' ? details['costUsd'].toFixed(4) : '?.????';
       return (
         `✅ <b>Video uploaded</b>\n` +
-        `<a href="${url}">${url}</a>\n` +
+        `<a href="${safeUrl}">${safeUrl}</a>\n` +
         `Cost: $${cost}`
       );
     }
 
     case 'video_failed': {
       const errMsg = typeof details['error'] === 'string' ? details['error'] : payload.message;
-      return `❌ <b>Video FAILED</b>\n<code>${errMsg.slice(0, 500)}</code>`;
+      return `❌ <b>Video FAILED</b>\n<code>${escapeHtml(errMsg.slice(0, 500))}</code>`;
     }
 
     case 'batch_complete': {
@@ -86,7 +97,7 @@ function formatMessage(payload: NotificationPayload): string {
     }
 
     default: {
-      return `ℹ️ <b>${payload.type}</b>\n${payload.message}`;
+      return `ℹ️ <b>${escapeHtml(payload.type)}</b>\n${escapeHtml(payload.message)}`;
     }
   }
 }

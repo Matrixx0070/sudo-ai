@@ -119,6 +119,13 @@ export class RelationshipTracker {
       if (rel.sharedReferences.length > MAX_SHARED_REFERENCES) {
         rel.sharedReferences = rel.sharedReferences.slice(-MAX_SHARED_REFERENCES);
       }
+      // Conflict recency: a positive/mixed interaction ages out one past
+      // conflict so the relationship can recover its stage after sustained
+      // positive interactions. Without this, conflictHistory is never trimmed
+      // and any lifetime conflict permanently pins the stage to 'acquaintance'.
+      if (rel.conflictHistory.length > 0) {
+        rel.conflictHistory.shift();
+      }
     }
 
     if (episode.outcome === 'negative') {

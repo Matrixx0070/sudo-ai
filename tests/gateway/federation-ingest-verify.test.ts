@@ -38,6 +38,7 @@ interface TestServer {
 }
 
 let testServer: TestServer | undefined;
+let testDb: ReturnType<typeof Database> | undefined;
 
 function makeBaseDb(): ReturnType<typeof Database> {
   return new Database(':memory:');
@@ -50,6 +51,7 @@ function makeDeps(opts?: {
   const inboundTokens = JSON.stringify([INBOUND_TOKEN]);
   const peerRegistry = new PeerRegistry(undefined, inboundTokens);
   const db = makeBaseDb();
+  testDb = db;
   const auditChainSync = new AuditChainSync(db, peerRegistry, INSTANCE_ID);
   return {
     peerRegistry,
@@ -123,6 +125,10 @@ afterEach(async () => {
   if (testServer) {
     await testServer.close();
     testServer = undefined;
+  }
+  if (testDb) {
+    testDb.close();
+    testDb = undefined;
   }
   delete process.env['SUDO_FED_VERIFY_DISABLE'];
   delete process.env['SUDO_FED_STRICT_VERIFY'];

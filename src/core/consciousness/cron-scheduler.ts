@@ -292,9 +292,14 @@ export class CronScheduler {
     const durable = options?.durable ?? false;
     const now = new Date();
 
-    const expiresAt = new Date(
-      now.getTime() + this.config.recurringExpiryDays * 24 * 60 * 60 * 1000,
-    ).toISOString();
+    // Only recurring tasks auto-expire after recurringExpiryDays. One-shot
+    // tasks must survive until their (possibly far-future) cron match fires;
+    // they are auto-deleted in tick() after firing once, not by time expiry.
+    const expiresAt = kind === 'recurring'
+      ? new Date(
+          now.getTime() + this.config.recurringExpiryDays * 24 * 60 * 60 * 1000,
+        ).toISOString()
+      : new Date(8640000000000000).toISOString(); // max representable Date (no time-based expiry)
 
     const task: CronTask = {
       id: genId(),
@@ -456,7 +461,21 @@ export class CronScheduler {
           // Fire immediately
           this.fireTask(task);
         } else {
-          const timer = setTimeout(() => this.fireTask(task), delayMs);
+          // Clear any still-pending timer for this id before overwriting the
+          // map entry, otherwise the previous timer is orphaned (keeps the
+          // event loop alive and cannot be cancelled by stop()).
+          const existing = this.timers.get(task.id);
+          if (existing !== undefined) {
+            clearTimeout(existing);
+          }
+          const timer = setTimeout(() => {
+            // Remove our own entry once we fire, but only if it still points
+            // to this timer (a newer timer may have replaced it).
+            if (this.timers.get(task.id) === timer) {
+              this.timers.delete(task.id);
+            }
+            this.fireTask(task);
+          }, delayMs);
           this.timers.set(task.id, timer);
         }
 

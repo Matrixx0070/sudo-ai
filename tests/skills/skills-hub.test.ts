@@ -67,10 +67,14 @@ This skill summarizes text.
 let db: InstanceType<typeof Database>;
 let registry: SkillRegistry;
 let testDir: string;
+// Isolated fake working directory. SkillsHub resolves its install directory as
+// join(process.cwd(), INSTALLED_SKILLS_DIR), so we stub process.cwd() to point
+// at this temp dir and never touch the real repo-relative data/installed-skills.
+let cwdDir: string;
 const INSTALLED_SKILLS_DIR = 'data/installed-skills';
 
 function cleanupInstalledDir(): void {
-  const installedDir = join(process.cwd(), INSTALLED_SKILLS_DIR);
+  const installedDir = join(cwdDir, INSTALLED_SKILLS_DIR);
   try {
     if (existsSync(installedDir)) {
       rmSync(installedDir, { recursive: true, force: true });
@@ -83,6 +87,11 @@ function cleanupInstalledDir(): void {
 
 beforeEach(() => {
   testDir = join(tmpdir(), `skills-hub-test-${randomUUID()}`);
+  cwdDir = join(tmpdir(), `skills-hub-cwd-${randomUUID()}`);
+  mkdirSync(cwdDir, { recursive: true });
+  // Redirect process.cwd() so the hub (and this test's own join(process.cwd(), ...))
+  // both resolve the install directory under the isolated temp dir.
+  vi.spyOn(process, 'cwd').mockReturnValue(cwdDir);
   db = new Database(':memory:');
   db.pragma('journal_mode = WAL');
   registry = new SkillRegistry(db, testDir);
@@ -96,8 +105,10 @@ afterEach(() => {
   if (testDir) {
     rmSync(testDir, { recursive: true, force: true });
   }
+  if (cwdDir) {
+    rmSync(cwdDir, { recursive: true, force: true });
+  }
   vi.restoreAllMocks();
-  cleanupInstalledDir();
 });
 
 // ---------------------------------------------------------------------------

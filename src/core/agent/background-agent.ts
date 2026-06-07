@@ -55,7 +55,7 @@ export function launchBackground(
   }
 
   const agent: BackgroundAgent = {
-    id: `bg-${Date.now()}`,
+    id: `bg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     prompt,
     status: 'running',
     startedAt: new Date().toISOString(),

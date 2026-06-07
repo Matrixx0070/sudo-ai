@@ -105,6 +105,7 @@ export const Dashboard: React.FC = () => {
     if (!token) {
       setStatus('error');
       setStatusText('No admin token');
+      setErrors([]);
       return;
     }
     if (digestLoading || vetoLoading) {
@@ -113,12 +114,18 @@ export const Dashboard: React.FC = () => {
       return;
     }
     if (digestError || vetoError) {
+      const errorsList = [
+        digestError && `digest: ${digestError}`,
+        vetoError && `veto: ${vetoError}`,
+      ].filter(Boolean) as string[];
       setStatus('error');
-      setStatusText([digestError, vetoError].filter(Boolean).join('; '));
+      setStatusText(errorsList.join('; '));
+      setErrors(errorsList);
       return;
     }
     setStatus('ok');
     setStatusText('Connected');
+    setErrors([]);
   }, [token, digestLoading, vetoLoading, digestError, vetoError]);
 
   if (!token) {

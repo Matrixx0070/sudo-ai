@@ -208,7 +208,7 @@ async function main() {
   console.log(`Voice        : ${result.voiceName}`);
   console.log(`Output file  : ${OUTPUT_PATH}`);
   console.log(`File size    : ${fileSizeKB} KB (${fileSizeBytes} bytes)`);
-  console.log(`Est. duration: ~${estDuration}s (~${Math.round(estDuration / 60)}m ${estDuration % 60}s)`);
+  console.log(`Est. duration: ~${estDuration}s (~${Math.floor(estDuration / 60)}m ${estDuration % 60}s)`);
   console.log("================================\n");
 }
 

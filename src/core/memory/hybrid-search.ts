@@ -315,10 +315,13 @@ export async function hybridSearch(
   if (vectorResults.length > 0 && bm25Results.length > 0) {
     results = mergeHybridResults(vectorResults, bm25Results, vectorWeight, textWeight);
   } else if (vectorResults.length > 0) {
-    results = vectorResults;
+    // Vector-only fallback — scale by weight so the score scale (and thus the
+    // downstream minScore gate) matches the hybrid path's single-source scores.
+    results = vectorResults.map((r) => ({ ...r, score: vectorWeight * r.score }));
   } else {
-    // BM25-only fallback — normalise match type
-    results = bm25Results.map((r) => ({ ...r, matchType: 'bm25' as const }));
+    // BM25-only fallback — scale by weight (matches hybrid single-source scale)
+    // and normalise match type.
+    results = bm25Results.map((r) => ({ ...r, score: textWeight * r.score, matchType: 'bm25' as const }));
   }
 
   // -------------------------------------------------------------------------

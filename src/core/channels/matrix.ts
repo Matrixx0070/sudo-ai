@@ -56,6 +56,7 @@ export class MatrixAdapter implements ChannelAdapter {
   private _handler: MessageHandler | null = null;
   private _syncActive = false;
   private _nextBatch: string | undefined;
+  private _primed = false;
   private _txnCounter = 0;
   private _selfId: string | undefined;
 
@@ -118,6 +119,7 @@ export class MatrixAdapter implements ChannelAdapter {
     try {
       const data = await this._req('GET', `/_matrix/client/v3/sync?timeout=0&filter={"room":{"timeline":{"limit":1}}}`);
       this._nextBatch = data['next_batch'] as string | undefined;
+      this._primed = true;
     } catch (err) {
       log.warn({ err }, 'Matrix prime sync failed');
     }
@@ -130,7 +132,12 @@ export class MatrixAdapter implements ChannelAdapter {
         if (this._nextBatch) qs.set('since', this._nextBatch);
         const data = await this._req('GET', `/_matrix/client/v3/sync?${qs}`);
         this._nextBatch = data['next_batch'] as string | undefined;
-        await this._processSync(data);
+        // If prime sync failed, this first sync ran without a `since` token and
+        // returns each joined room's recent timeline. Treat it as a baseline only
+        // (auto-join invites but do not dispatch historical messages as new ones).
+        const dispatch = this._primed;
+        this._primed = true;
+        await this._processSync(data, dispatch);
       } catch (err) {
         if (!this._syncActive) break;
         log.error({ err }, 'Matrix sync error — retrying in 5 s');
@@ -139,7 +146,7 @@ export class MatrixAdapter implements ChannelAdapter {
     }
   }
 
-  private async _processSync(data: Record<string, unknown>): Promise<void> {
+  private async _processSync(data: Record<string, unknown>, dispatch = true): Promise<void> {
     const rooms = data['rooms'] as Record<string, unknown> | undefined;
     if (!rooms) return;
 
@@ -150,6 +157,10 @@ export class MatrixAdapter implements ChannelAdapter {
         log.info({ roomId }, 'Matrix auto-joined room');
       } catch (err) { log.error({ roomId, err }, 'Matrix join failed'); }
     }
+
+    // Skip dispatching the baseline (unprimed first) sync's timeline so the bot
+    // does not reply to historical messages as if they were newly received.
+    if (!dispatch) return;
 
     // Dispatch timeline messages
     const selfId = await this._getSelfId();
@@ -168,12 +179,15 @@ export class MatrixAdapter implements ChannelAdapter {
   }
 
   private async _getSelfId(): Promise<string> {
-    if (this._selfId !== undefined) return this._selfId;
+    if (this._selfId) return this._selfId;
     try {
       const data = await this._req('GET', '/_matrix/client/v3/account/whoami');
-      this._selfId = String(data['user_id'] ?? '');
-    } catch { this._selfId = ''; }
-    return this._selfId;
+      const userId = String(data['user_id'] ?? '');
+      // Only memoize a real user_id; leave undefined on empty/failure so it retries
+      // (caching '' would make own-message filtering never match → self-reply loop).
+      if (userId) this._selfId = userId;
+      return userId;
+    } catch { return ''; }
   }
 
   private async _dispatch(roomId: string, sender: string, text: string, eventId: string): Promise<void> {

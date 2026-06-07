@@ -349,6 +349,10 @@ export class MistakePatternRecognizer {
 
     const queryNormalized = normalizeMistake(mistakeText);
     const queryHash = signatureHash(queryNormalized);
+    // Compare Jaccard against the same representation stored on the pattern:
+    // pattern.signature is the first SIG_TRUNCATE_LEN chars of normalized text,
+    // so truncate the query to match (otherwise long mistakes deflate the score).
+    const querySignature = queryNormalized.slice(0, SIG_TRUNCATE_LEN);
 
     let rows: ParsedMistakeRow[];
     try {
@@ -371,7 +375,7 @@ export class MistakePatternRecognizer {
         scored.push({ pattern, score: 1.0 });
         continue;
       }
-      const j = jaccardSimilarity(queryNormalized, pattern.signature);
+      const j = jaccardSimilarity(querySignature, pattern.signature);
       if (j >= JACCARD_THRESHOLD) {
         scored.push({ pattern, score: j });
       }

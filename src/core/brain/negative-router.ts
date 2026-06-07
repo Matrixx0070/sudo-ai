@@ -222,9 +222,11 @@ export class NegativeRouter {
     for (const cat of ['coding', 'analysis', 'research'] as const) {
       if (scores[cat] > bestScore) { bestScore = scores[cat]; bestCat = cat; }
     }
-    if (scores.coding === bestScore) bestCat = 'coding';
-    else if (scores.analysis === bestScore) bestCat = 'analysis';
-    else if (scores.research === bestScore) bestCat = 'research';
+    if (bestScore > 0) {
+      if (scores.coding === bestScore) bestCat = 'coding';
+      else if (scores.analysis === bestScore) bestCat = 'analysis';
+      else if (scores.research === bestScore) bestCat = 'research';
+    }
 
     // Normalise: score of 6+ is full confidence
     const confidence = bestScore > 0 ? Math.min(bestScore / 6, 1) : 0;

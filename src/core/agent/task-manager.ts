@@ -189,13 +189,13 @@ export class TaskManager {
     if (patch.owner !== undefined) task.owner = patch.owner;
     if (patch.priority !== undefined) task.priority = patch.priority;
 
-    const wasPending = task.status === 'pending';
+    const wasCompleted = task.status === 'completed';
     if (patch.status !== undefined && patch.status !== task.status) {
       task.status = patch.status;
     }
 
-    // Handle completion.
-    if (patch.status === 'completed' && wasPending !== undefined) {
+    // Handle completion (only on an actual transition into 'completed').
+    if (patch.status === 'completed' && !wasCompleted) {
       task.completedAt = new Date().toISOString();
       // Unblock dependant tasks.
       this.propagateUnblock(task);

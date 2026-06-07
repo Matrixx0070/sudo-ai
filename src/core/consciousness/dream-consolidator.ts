@@ -243,11 +243,13 @@ export class DreamConsolidator {
     const afterTokens = compacted.reduce((sum, m) => sum + estimateTokens(m.content), 0);
     saveMemories(this.config.dataDir, compacted);
 
-    // Phase 2: detect patterns in surviving memories
-    const existingPatterns = loadPatterns(this.config.dataDir);
+    // Phase 2: detect patterns in surviving memories.
+    // detectPatterns() produces a complete snapshot of all current patterns
+    // (one per qualifying topic) over the surviving memories, so we replace the
+    // stored set rather than appending — appending would regenerate equivalent
+    // patterns every pass (fresh id/foundAt each time) and grow unbounded.
     const newPatterns = this.detectPatterns(compacted);
-    const allPatterns = [...existingPatterns, ...newPatterns];
-    savePatterns(this.config.dataDir, allPatterns);
+    savePatterns(this.config.dataDir, newPatterns);
 
     const endTime = new Date().toISOString();
     const session: DreamSession = {

@@ -162,6 +162,12 @@ export class TaskExecutor {
         logger.warn({ id: task.id, name: task.name, timeoutMs: task.timeoutMs }, msg);
         this.queue.fail(task.id, msg);
         this.running.delete(task.id);
+
+        // Notify only if retries are exhausted (mirrors catch-block behavior)
+        const updated = this.queue.getTask(task.id);
+        if (updated?.status === 'failed') {
+          this.options.onFail?.(task, msg);
+        }
       }
     }, task.timeoutMs);
 

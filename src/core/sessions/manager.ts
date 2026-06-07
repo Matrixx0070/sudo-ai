@@ -122,8 +122,18 @@ export class SessionManager {
       if (entry.session.id === sessionId) return entry.session;
     }
 
-    // Check DB
-    return this._loadBySessionId(sessionId);
+    // Check DB. Populate the cache with the correct persisted-message count so
+    // that a subsequent save() only persists newly-appended messages rather than
+    // re-inserting the entire hydrated history (which would duplicate it).
+    const loaded = this._loadBySessionId(sessionId);
+    if (loaded) {
+      const key = this._peerKey(loaded.channel, loaded.peerId);
+      if (!this.cache.has(key)) {
+        this.cache.set(key, { session: loaded, persistedMessageCount: loaded.messages.length });
+        this._evictIfOverLimit();
+      }
+    }
+    return loaded;
   }
 
   /**
@@ -340,11 +350,16 @@ export class SessionManager {
 
   private _loadFromDb(channel: ChannelType, peerId: string): Session | undefined {
     try {
-      // Find active session chunk for this peer.
-      // We search chunks by path prefix.
+      // Find the active session chunk for this peer.
+      // Scan all session meta rows newest-first. We cannot filter by
+      // channel/peerId in SQL because those live inside the JSON `text` blob,
+      // and meta rows accumulate (storeChunk dedups by content hash, but
+      // `updatedAt` changes on every save). A LIMIT here would only cover the
+      // most-recently-saved sessions across ALL peers and could miss this
+      // peer's active session entirely. Mirrors _listActiveFromDb's unlimited scan.
       const rows = this.db.db
         .prepare<{ path: string }, { text: string; path: string }>(
-          `SELECT text, path FROM chunks WHERE path LIKE :path AND source = 'conversation' ORDER BY rowid DESC LIMIT 20`,
+          `SELECT text, path FROM chunks WHERE path LIKE :path AND source = 'conversation' ORDER BY rowid DESC`,
         )
         .all({ path: `session:%:meta` });
 

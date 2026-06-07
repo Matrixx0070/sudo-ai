@@ -48,9 +48,18 @@ export function ipcSend(channel: SendChannel, data: unknown): void {
 // ---------------------------------------------------------------------------
 
 let _persistentWs: WebSocket | null = null;
-let _pendingResolve: ((v: string) => void) | null = null;
-let _pendingReject: ((e: Error) => void) | null = null;
-let _pendingTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// FIFO queue of in-flight WebSocket requests. The server replies with raw text
+// and echoes no correlation id, so replies are matched to the oldest pending
+// request. A queue (rather than single module globals) prevents concurrent
+// sends from overwriting each other's resolvers — which previously caused the
+// first request to hang and its reply to be mis-delivered to a later send.
+interface PendingRequest {
+  resolve: (v: string) => void;
+  reject: (e: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+const _pendingQueue: PendingRequest[] = [];
 
 function getWsUrl(): string {
   const wsHost =
@@ -66,7 +75,15 @@ function getWsUrl(): string {
 }
 
 function getPersistentWs(): WebSocket {
-  if (_persistentWs && _persistentWs.readyState === WebSocket.OPEN) {
+  // Reuse the existing socket while it is still usable (CONNECTING or OPEN).
+  // Only create a new one once the previous is CLOSING/CLOSED, otherwise a call
+  // during the handshake would orphan the first socket while its onmessage
+  // handler keeps mutating the shared _pendingQueue.
+  if (
+    _persistentWs &&
+    _persistentWs.readyState !== WebSocket.CLOSING &&
+    _persistentWs.readyState !== WebSocket.CLOSED
+  ) {
     return _persistentWs;
   }
   const ws = new WebSocket(getWsUrl());
@@ -86,14 +103,11 @@ function getPersistentWs(): WebSocket {
         return;
       }
     } catch { /* not JSON */ }
-    // Final reply — either resolves a pending send, or dispatched as a server push
-    if (_pendingTimeout) clearTimeout(_pendingTimeout);
-    const resolve = _pendingResolve;
-    _pendingResolve = null;
-    _pendingReject = null;
-    _pendingTimeout = null;
-    if (resolve) {
-      resolve(data);
+    // Final reply — resolves the oldest pending send, or dispatched as a server push
+    const pending = _pendingQueue.shift();
+    if (pending) {
+      clearTimeout(pending.timeout);
+      pending.resolve(data);
     } else {
       // Server-pushed message (e.g. from POST /api/message) — dispatch to UI
       window.dispatchEvent(new CustomEvent('sudo:push', { detail: data }));
@@ -101,12 +115,12 @@ function getPersistentWs(): WebSocket {
   };
 
   ws.onerror = () => {
-    if (_pendingTimeout) clearTimeout(_pendingTimeout);
-    const reject = _pendingReject;
-    _pendingResolve = null;
-    _pendingReject = null;
-    _pendingTimeout = null;
-    reject?.(new Error('WebSocket error'));
+    // The connection is being torn down — reject every in-flight request.
+    while (_pendingQueue.length > 0) {
+      const pending = _pendingQueue.shift()!;
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('WebSocket error'));
+    }
     _persistentWs = null;
   };
 
@@ -127,15 +141,17 @@ if (typeof window !== 'undefined' && new URLSearchParams(window.location.search)
 function sendViaWebSocket(message: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const ws = getPersistentWs();
-    _pendingResolve = resolve;
-    _pendingReject = reject;
 
-    _pendingTimeout = setTimeout(() => {
-      _pendingResolve = null;
-      _pendingReject = null;
-      _pendingTimeout = null;
-      reject(new Error('WebSocket timeout — no reply in 1800s'));
-    }, 1_800_000);
+    const pending: PendingRequest = {
+      resolve,
+      reject,
+      timeout: setTimeout(() => {
+        const idx = _pendingQueue.indexOf(pending);
+        if (idx !== -1) _pendingQueue.splice(idx, 1);
+        reject(new Error('WebSocket timeout — no reply in 1800s'));
+      }, 1_800_000),
+    };
+    _pendingQueue.push(pending);
 
     const send = () => ws.send(message);
     if (ws.readyState === WebSocket.OPEN) {
@@ -173,14 +189,40 @@ export async function ipcInvoke<T = unknown>(
   return null;
 }
 
+// Per-channel listener registry. The preload bridge only exposes
+// removeAllListeners(channel), so to scope an unsubscribe to a single callback
+// we register ONE fan-out wrapper per channel and track the individual
+// callbacks ourselves — tearing the channel down only when its last listener
+// is removed. Without this, one component unmounting would kill every other
+// component's subscription to the same channel.
+const _channelListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+
 /** Subscribe to push events from main process. Returns an unsubscribe function. */
 export function ipcOn(
   channel: ListenChannel,
   callback: (...args: unknown[]) => void
 ): () => void {
   if (!isAvailable()) return () => {};
-  window.sudo!.on(channel, callback);
+
+  let set = _channelListeners.get(channel);
+  if (!set) {
+    set = new Set();
+    _channelListeners.set(channel, set);
+    // One bridge registration per channel; fans out to current callbacks.
+    window.sudo!.on(channel, (...args: unknown[]) => {
+      const cbs = _channelListeners.get(channel);
+      if (cbs) for (const cb of [...cbs]) cb(...args);
+    });
+  }
+  set.add(callback);
+
   return () => {
-    window.sudo?.removeAllListeners(channel);
+    const cbs = _channelListeners.get(channel);
+    if (!cbs) return;
+    cbs.delete(callback);
+    if (cbs.size === 0) {
+      _channelListeners.delete(channel);
+      window.sudo?.removeAllListeners(channel);
+    }
   };
 }

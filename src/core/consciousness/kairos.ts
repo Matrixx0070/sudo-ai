@@ -178,13 +178,13 @@ function writeAlert(obs: KairosObservation): void {
 
 async function notifyTelegram(message: string, botToken: string, chatId: string): Promise<void> {
   if (!botToken || !chatId) return;
-  try {
-    await execFile('curl', [
-      '-s', '-X', 'POST',
-      `https://api.telegram.org/bot${botToken}/sendMessage`,
-      '-d', `chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`,
-    ], { timeout: 10_000 });
-  } catch { /* non-fatal */ }
+  // Let send failures (network/auth) reject so callers can avoid committing the
+  // alert cooldown for a notification that was never actually delivered.
+  await execFile('curl', [
+    '-s', '-X', 'POST',
+    `https://api.telegram.org/bot${botToken}/sendMessage`,
+    '-d', `chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`,
+  ], { timeout: 10_000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -548,10 +548,16 @@ export class Kairos {
         if (lastSent !== undefined && Date.now() - lastSent < COOLDOWN_MS) {
           log.debug({ type: obs.type, cooldownKey }, 'Kairos: CRITICAL alert suppressed within 6h cooldown window');
         } else {
-          lastNotifiedAt.set(cooldownKey, Date.now());
-          saveCooldownState(lastNotifiedAt);
           const msg = `🚨 *KAIROS CRITICAL*\n${obs.type}: ${obs.message}${obs.acted ? `\n✅ Auto-fixed: ${obs.actionResult}` : ''}`;
-          this.config.notifyFn(msg, this.config.telegramBotToken, this.config.telegramChatId).catch(() => {});
+          // Only commit the cooldown once the notification is confirmed sent —
+          // otherwise a transient send failure would suppress CRITICAL alerts
+          // for the full 6h window even though the user was never notified.
+          this.config.notifyFn(msg, this.config.telegramBotToken, this.config.telegramChatId)
+            .then(() => {
+              lastNotifiedAt.set(cooldownKey, Date.now());
+              saveCooldownState(lastNotifiedAt);
+            })
+            .catch(() => { /* send failed — leave cooldown unset so next cycle retries */ });
         }
       }
       if (obs.severity === 'CRITICAL') {

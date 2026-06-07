@@ -108,7 +108,9 @@ export function detectFrustration(message: string): boolean {
   const hasDoubleQuestion = message.includes('??');
 
   const words = message.split(/\s+/).filter(Boolean);
-  const upperCount = words.filter((w) => w === w.toUpperCase() && w.length > 2).length;
+  const upperCount = words.filter(
+    (w) => w.length > 2 && /[A-Za-z]/.test(w) && w === w.toUpperCase(),
+  ).length;
   const hasCaps = words.length > 1 && upperCount / words.length > 0.4;
 
   return hasExclamationExcess || hasDoubleQuestion || hasCaps;
@@ -141,7 +143,9 @@ export function rulePrediction(message: string): UserPrediction {
   const hasDoubleQuestion = message.includes('??');
 
   const words = message.split(/\s+/).filter(Boolean);
-  const upperCount = words.filter((w) => w === w.toUpperCase() && w.length > 2).length;
+  const upperCount = words.filter(
+    (w) => w.length > 2 && /[A-Za-z]/.test(w) && w === w.toUpperCase(),
+  ).length;
   const capsDominant = words.length > 1 && upperCount / words.length > 0.4;
 
   if (capsDominant || hasDoubleQuestion) {

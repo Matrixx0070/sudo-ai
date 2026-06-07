@@ -12,6 +12,7 @@
  */
 
 import { createLogger } from '../shared/index.js';
+import { MAX_SWARM_AGENTS } from '../shared/constants.js';
 import type { ToolDefinition, ToolResult, ToolContext } from '../tools/types.js';
 import type { AgentSwarm } from './swarm.js';
 
@@ -84,11 +85,11 @@ export function createSpawnTool(swarm: AgentSwarm): ToolDefinition {
       );
 
       const active = swarm.getActive();
-      if (active.length >= 4) {
+      if (active.length >= MAX_SWARM_AGENTS) {
         log.warn({ activeCount: active.length }, 'agent.spawn: max concurrent sub-agents reached');
         return {
           success: false,
-          output: `Cannot spawn sub-agent: ${active.length} sub-agents already running (max 4). Try again when one completes.`,
+          output: `Cannot spawn sub-agent: ${active.length} sub-agents already running (max ${MAX_SWARM_AGENTS}). Try again when one completes.`,
         };
       }
 

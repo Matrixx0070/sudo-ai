@@ -194,15 +194,16 @@ describe('verifyAccumulatorIntegrity', () => {
     expect(report.coherent).toBe(false);
   });
 
-  it('fails when insightsGenerated exceeds patternsFound * 3', () => {
-    // 3 patterns * 3 = 9 max; 10 is out of bounds
-    const acc = makeGoodAcc({ patternsFound: 3, insightsGenerated: 10 });
+  it('fails when insightsGenerated exceeds patternsFound * 3 + counterfactualsRun', () => {
+    // bound = 3 patterns * 3 + 3 counterfactuals = 12 max; 13 is out of bounds
+    const acc = makeGoodAcc({ patternsFound: 3, counterfactualsRun: 3, insightsGenerated: 13 });
     const report = verifyAccumulatorIntegrity(acc);
     expect(report.failures).toContain('insightsGenerated-out-of-bounds');
   });
 
-  it('passes when insightsGenerated equals patternsFound * 3 (boundary)', () => {
-    const acc = makeGoodAcc({ patternsFound: 3, insightsGenerated: 9 });
+  it('passes when insightsGenerated equals patternsFound * 3 + counterfactualsRun (boundary)', () => {
+    // bound = 3 patterns * 3 + 3 counterfactuals = 12; the inclusive boundary passes
+    const acc = makeGoodAcc({ patternsFound: 3, counterfactualsRun: 3, insightsGenerated: 12 });
     const report = verifyAccumulatorIntegrity(acc);
     expect(report.failures).not.toContain('insightsGenerated-out-of-bounds');
   });

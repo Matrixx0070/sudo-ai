@@ -177,7 +177,7 @@ interface ConsciousnessLike {
     activeConcepts?: string[];
   };
   /** Deep-bridge methods — surfaced by ConsciousnessOrchestrator. */
-  getDeepInsights?(userId: string): import('../consciousness/deep-bridge.js').DeepInsights;
+  getDeepInsights?(userId: string): import('../consciousness/orchestrator.js').DeepInsights;
   getCounterfactualLessons?(count?: number): import('../consciousness/orchestrator.js').CounterfactualInsight[];
   getMetacognitiveGuidance?(limit?: number): import('../consciousness/orchestrator.js').MetacognitiveInsight[];
   getSurpriseInsight?(hours?: number): import('../consciousness/orchestrator.js').SurpriseInsight;
@@ -940,6 +940,10 @@ export class AgentLoop {
     let _w10bToolCallCount = 0;
     let _w10bToolSuccessCount = 0;
     const _w10bToolSequence: string[] = [];
+    // Parallel to _w10bToolSequence: the actual per-call success flag from
+    // isToolResultSuccess() at emit time, so onSessionEnd reports real outcomes
+    // rather than the "first N are successes" approximation.
+    const _w10bToolSuccess: boolean[] = [];
 
     // Pattern that matches file paths embedded in tool result strings.
     // Covers: "Saved: /abs/path.png", "saved to /abs/path.jpg", "path: /abs/path.webp", etc.
@@ -1008,11 +1012,14 @@ export class AgentLoop {
         } catch { /* fail-open */ }
         // Hook: after:tool-call (fires once per completed tool result).
         // Pass taintId in meta so the TaintTracker hook handler skips duplicate tag().
+        // Compute the real outcome (matching the SkillDiscovery/TraceStore/ToolOutcomeLearner
+        // sinks below) so subscribers — including the SSE bridge that forwards the whole
+        // context to external clients — observe failures instead of a hardcoded success.
         void this.hooks?.emit('after:tool-call', {
           event: 'after:tool-call',
           sessionId,
           toolName,
-          success: true,
+          success: isToolResultSuccess(result),
           meta: _taintIdForHook ? { taintId: _taintIdForHook } : undefined,
         });
         // Wave 10B: feed SkillDiscovery (fail-open)
@@ -1024,6 +1031,7 @@ export class AgentLoop {
             _w10bToolCallCount++;
             if (_isSuccess) _w10bToolSuccessCount++;
             _w10bToolSequence.push(_tr.name);
+            _w10bToolSuccess.push(_isSuccess);
           }
         } catch { /* fail-open */ }
 
@@ -1196,7 +1204,7 @@ export class AgentLoop {
     // FeedbackTierManager: inject tier-based prompt addition at turn-start (fail-open).
     // Uses the assessment stored on session from a previous turn, if available.
     try {
-      const prevTierAdj = (session as Record<string, unknown>)._feedbackTierAdjustment as { adjustments: { promptAddition: string }; tier: string; reason: string } | undefined;
+      const prevTierAdj = session._feedbackTierAdjustment as { adjustments: { promptAddition: string }; tier: string; reason: string } | undefined;
       if (prevTierAdj?.adjustments?.promptAddition) {
         session.messages.push({ role: 'system', content: prevTierAdj.adjustments.promptAddition });
         log.debug({ sessionId, tier: prevTierAdj.tier }, 'FeedbackTierManager: prompt addition injected from previous turn assessment');
@@ -1337,7 +1345,7 @@ export class AgentLoop {
     try {
       const tierAssessment = this._feedbackTierManager?.assess();
       if (tierAssessment && tierAssessment.adjustments.promptAddition) {
-        (session as Record<string, unknown>)._feedbackTierAdjustment = tierAssessment;
+        session._feedbackTierAdjustment = tierAssessment;
         log.debug({ sessionId, tier: tierAssessment.tier, reason: tierAssessment.reason }, 'FeedbackTierManager: tier assessment stored on session');
       }
     } catch (err) {
@@ -1367,7 +1375,7 @@ export class AgentLoop {
         if (endCtx) {
           // Store in session metadata rather than injecting as a message,
           // since this turn is already ending.
-          (session as Record<string, unknown>)._consciousnessEndContext = endCtx;
+          session._consciousnessEndContext = endCtx;
           log.debug({ sessionId }, 'Consciousness turn-end context recorded');
         }
       } catch (err) {
@@ -1388,7 +1396,7 @@ export class AgentLoop {
       if (this._toolOutcomeLearner && _w10bToolCallCount > 0) {
         const outcomes = _w10bToolSequence.map((toolName, idx) => ({
           toolName,
-          success: idx < _w10bToolSuccessCount, // approximate: first N are successes
+          success: _w10bToolSuccess[idx] ?? false, // real per-call outcome captured at emit time
         }));
         this._toolOutcomeLearner.onSessionEnd(sessionId, outcomes);
       }
@@ -1484,6 +1492,11 @@ export class AgentLoop {
 
     // P0: track total tool calls across inner loop iterations for LazinessNudge.
     let _innerLoopToolCallCount = 0;
+    // P0: bound how many times GoalStopDetector may force continuation, so a
+    // persistent 'incomplete' verdict can never produce an unbounded loop
+    // (mirrors TodoGate's retry cap; TodoGate still applies after this gate).
+    let _goalStopRetryCount = 0;
+    const GOAL_STOP_MAX_RETRIES = 3;
 
     // Reset loop guard at the start of every outer-turn inner loop.
     this.loopGuard.reset();
@@ -2291,8 +2304,14 @@ export class AgentLoop {
                 const toolMsgs = session.messages
                   .filter((m) => (m as { role: string }).role === 'tool')
                   .slice(-activeToolCalls.length);
-                const toolTexts = toolMsgs.map(m => (typeof (m as { content: unknown }).content === 'string' ? (m as { content: string }).content : JSON.stringify((m as { content: unknown }).content)));
-                for (const txt of toolTexts) {
+                // Iterate over the message OBJECTS (not just extracted text) so that on a
+                // CRITICAL hit we can redact the poisoned content in place — otherwise the
+                // attacker-controlled text stays in session.messages and is sent to the next
+                // brain.call() despite the "refusing to trust result" warning.
+                for (const toolMsg of toolMsgs) {
+                  const txt = typeof (toolMsg as { content: unknown }).content === 'string'
+                    ? (toolMsg as { content: string }).content
+                    : JSON.stringify((toolMsg as { content: unknown }).content);
                   const toolInjRes = this._injectionDetector.scan(txt);
                   if (toolInjRes.severity === 'MEDIUM' || toolInjRes.severity === 'HIGH' || toolInjRes.severity === 'CRITICAL') {
                     try {
@@ -2304,10 +2323,13 @@ export class AgentLoop {
                     );
                   }
                   if (toolInjRes.severity === 'CRITICAL') {
+                    // Redact the poisoned tool result so the injected instructions never reach
+                    // the next brain.call(); the warning alone does not remove the text.
+                    (toolMsg as { content: string }).content = '[REDACTED: tool output contained a CRITICAL prompt-injection payload and was removed]';
                     const toolReplanMsg = '[INJECTION-CRITICAL] tool output contains prompt injection: refusing to trust result';
                     session.messages.push({ role: 'system', content: toolReplanMsg });
                     emit({ type: 'error', error: toolReplanMsg });
-                    log.error({ sessionId: state.sessionId, markers: toolInjRes.matchedMarkers }, 'InjectionDetector: CRITICAL tool output — forcing REPLAN');
+                    log.error({ sessionId: state.sessionId, markers: toolInjRes.matchedMarkers }, 'InjectionDetector: CRITICAL tool output — redacted and forcing REPLAN');
                     // Clear validToolCalls to skip further processing and trigger REPLAN via continue.
                     (validToolCalls as unknown[]).length = 0;
                     break;
@@ -2401,12 +2423,33 @@ export class AgentLoop {
         // If verdict is 'incomplete', inject a system message suggesting continued work.
         try {
           if (this._goalStopDetector) {
-            const _userGoal = session.messages.filter(m => m.role === 'user').at(0)?.content ?? '';
-            const stopResult = (this._goalStopDetector as unknown as { detect(progress: { goal: string }): { verdict: string; reason?: string } }).detect({ goal: _userGoal });
-            if (stopResult.verdict === 'incomplete') {
-              const continueMsg = stopResult.reason ?? '[GoalStopDetector] The goal does not appear complete — consider continuing work before responding.';
+            // Build a real GoalProgress from signals the loop actually has.
+            // Step progress comes from TodoGate (the authoritative plan state);
+            // reaching a final assistant response means the user message was
+            // addressed. Signals the loop does not reliably track (errors, test
+            // failures, file/test activity) are left at their neutral defaults
+            // rather than fabricated, so the gate never forces continuation
+            // without genuine evidence. The retry cap above bounds it regardless.
+            const _todos = this._todoGate?.getTodos() ?? [];
+            const _completedTodos = _todos.filter(t => t.completed).length;
+            const stopResult = this._goalStopDetector.detect({
+              totalSteps: _todos.length,
+              completedSteps: _completedTodos,
+              inProgressSteps: 0,
+              errorCount: 0,
+              testFailures: 0,
+              userMessageAddressed: true,
+              filesModified: false,
+              testsRun: false,
+              customEvidence: [],
+            });
+            if (stopResult.verdict === 'incomplete' && _goalStopRetryCount < GOAL_STOP_MAX_RETRIES) {
+              _goalStopRetryCount++;
+              const continueMsg = stopResult.evidence.length > 0
+                ? `[GoalStopDetector] The goal does not appear complete (${stopResult.evidence.join('; ')}). Consider continuing work before responding.`
+                : '[GoalStopDetector] The goal does not appear complete — consider continuing work before responding.';
               session.messages.push({ role: 'system', content: continueMsg });
-              log.info({ sessionId: state.sessionId }, 'GoalStopDetector: goal incomplete — injecting continue message');
+              log.info({ sessionId: state.sessionId, retry: _goalStopRetryCount, confidence: stopResult.confidence }, 'GoalStopDetector: goal incomplete — injecting continue message');
               continue; // re-enter the while loop instead of breaking
             }
           }

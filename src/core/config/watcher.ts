@@ -122,9 +122,19 @@ export class ConfigWatcher extends EventEmitter {
     ) as () => void;
 
     try {
-      this.watcher = fs.watch(this.configPath, { persistent: false }, (eventType) => {
+      // Watch the parent directory rather than the file itself. Many editors
+      // and config writers save via an atomic write-to-temp-then-rename, which
+      // replaces the file's inode. A file-level fs.watch follows the original
+      // inode and stops firing after the first such save; watching the directory
+      // and filtering on the basename survives inode replacement.
+      const configDir = path.dirname(this.configPath);
+      const configFile = path.basename(this.configPath);
+      this.watcher = fs.watch(configDir, { persistent: false }, (eventType, filename) => {
+        if (filename !== null && filename !== configFile) {
+          return;
+        }
         if (eventType === 'change' || eventType === 'rename') {
-          log.debug({ eventType }, 'ConfigWatcher: file event detected');
+          log.debug({ eventType, filename }, 'ConfigWatcher: file event detected');
           debouncedHandler();
         }
       });

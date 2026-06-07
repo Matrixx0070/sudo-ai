@@ -234,10 +234,13 @@ function checkWasmtime(): CheckResult {
 function checkDiskSpace(projectRoot: string): CheckResult {
   const name = 'Disk space > 200 MB';
 
-  // Use spawnSync with array args (constraint L9 — no shell interpolation)
+  // Use spawnSync with array args (constraint L9 — no shell interpolation).
+  // -P forces POSIX output: exactly one line per filesystem, never wrapped,
+  // so a long Filesystem/device name cannot push the numeric columns to a
+  // second line and shift the field indices.
   const result = spawnSync(
     'df',
-    ['-m', projectRoot],
+    ['-m', '-P', projectRoot],
     { encoding: 'utf8', timeout: 5_000 },
   );
 
@@ -246,7 +249,7 @@ function checkDiskSpace(projectRoot: string): CheckResult {
   }
 
   const lines = result.stdout.trim().split('\n');
-  // df -m output: Filesystem, 1M-blocks, Used, Available, Use%, Mounted
+  // df -m -P output: Filesystem, 1M-blocks, Used, Available, Capacity, Mounted
   const dataLine = lines[1];
   if (!dataLine) {
     return { name, level: 'warn', message: 'Could not parse df output' };

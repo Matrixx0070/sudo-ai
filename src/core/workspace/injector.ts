@@ -115,10 +115,19 @@ export async function injectWorkspaceContext(
   }
 
   // --- Idempotency check ------------------------------------------------
-  // If today's note was already injected (from a previous call this session),
-  // bail out immediately to avoid duplicating context.
+  // If workspace context was already injected (from a previous call this
+  // session), bail out immediately to avoid duplicating context.  We match any
+  // of the section markers we emit — not just '## Today\n' — because today's
+  // log may be absent while yesterday's log or MEMORY.md were still injected.
+  // Keying only off the '## Today\n' marker would fail to detect those cases
+  // and re-inject them on every subsequent call.
   const alreadyInjected = session.messages.some(
-    (m) => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('## Today\n'),
+    (m) =>
+      m.role === 'system' &&
+      typeof m.content === 'string' &&
+      (m.content.startsWith('## Today\n') ||
+        m.content.startsWith('## Yesterday\n') ||
+        m.content.startsWith('## Long-Term Memory\n')),
   );
   if (alreadyInjected) {
     log.debug({ sessionId: session.id }, 'injectWorkspaceContext: already injected — skipping');

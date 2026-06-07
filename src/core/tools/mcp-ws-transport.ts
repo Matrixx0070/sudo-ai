@@ -158,17 +158,20 @@ export class WSTransport extends EventEmitter<{
         handshakeTimeout: this.config.connectionTimeoutMs,
       };
 
-      if (this.config.protocol) {
-        options.protocol = this.config.protocol;
-      }
-
       if (this.config.accessToken) {
         options.headers = {
           Authorization: `Bearer ${this.config.accessToken}`,
         };
       }
 
-      const ws = new WebSocket(this.config.url, options);
+      // The subprotocol must be passed as the second positional argument; the
+      // ws library ignores `options.protocol` (it overwrites it with undefined
+      // and only sets Sec-WebSocket-Protocol from the `protocols` argument).
+      const ws = new WebSocket(
+        this.config.url,
+        this.config.protocol ? [this.config.protocol] : [],
+        options,
+      );
 
       ws.on('open', () => {
         clearTimeout(timeoutId);
@@ -239,6 +242,8 @@ export class WSTransport extends EventEmitter<{
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.ping();
         this._scheduleHeartbeatTimeout();
+        // Re-arm so heartbeats recur for the lifetime of the connection.
+        this._scheduleHeartbeat();
       }
     }, this.config.heartbeatIntervalMs);
   }

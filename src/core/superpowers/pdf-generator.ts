@@ -87,6 +87,7 @@ export const pdfGeneratorTool: ToolDefinition = {
     // Write temp HTML file
     const tmpFile = join(dirname(outputPath), `.tmp_pdf_${randomBytes(8).toString('hex')}.html`);
 
+    let browser: Awaited<ReturnType<typeof import('playwright-core')['chromium']['launch']>> | undefined;
     try {
       await writeFile(tmpFile, htmlContent, 'utf8');
 
@@ -95,7 +96,7 @@ export const pdfGeneratorTool: ToolDefinition = {
         throw new Error('playwright-core is not installed. Run: pnpm add playwright-core && npx playwright-core install chromium');
       });
 
-      const browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true });
       const page = await browser.newPage();
 
       await page.goto(`file://${tmpFile}`, { waitUntil: 'networkidle' });
@@ -105,9 +106,6 @@ export const pdfGeneratorTool: ToolDefinition = {
         printBackground: true,
         margin: { top: '20mm', bottom: '20mm', left: '20mm', right: '20mm' },
       });
-
-      await browser.close();
-      await unlink(tmpFile).catch(() => { /* non-fatal */ });
 
       logger.info({ outputPath }, 'PDF generated successfully');
 
@@ -122,8 +120,10 @@ export const pdfGeneratorTool: ToolDefinition = {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error({ outputPath, err: msg }, 'PDF generation failed');
-      await unlink(tmpFile).catch(() => { /* non-fatal */ });
       return { success: false, output: `PDF generation failed: ${msg}` };
+    } finally {
+      await browser?.close().catch(() => { /* non-fatal */ });
+      await unlink(tmpFile).catch(() => { /* non-fatal */ });
     }
   },
 };

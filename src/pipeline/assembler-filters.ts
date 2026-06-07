@@ -25,13 +25,20 @@ export const SUBTITLE_BOX_BORDER = 12;
 
 /**
  * Escape a string for safe use as an ffmpeg drawtext `text=` value.
- * Handles backslashes, single quotes, and colons.
+ * Handles backslashes, single quotes, colons, and percent signs.
+ *
+ * Note: '%' must be escaped because drawtext applies text expansion to
+ * '%{...}' directives and treats '%' as the expansion introducer; an
+ * unescaped '%' in narration would be interpreted rather than rendered.
+ * The '%' replacement runs after backslash escaping so the inserted
+ * backslash is not doubled.
  */
 function escapeDt(text: string): string {
   return text
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'")
-    .replace(/:/g, '\\:');
+    .replace(/:/g, '\\:')
+    .replace(/%/g, '\\%');
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { genId } from '../shared/utils.js';
 
 const log = createLogger('agent:triggers');
 
@@ -69,7 +70,7 @@ export function createTrigger(
     throw new Error('createTrigger: prompt must be a non-empty string');
   }
 
-  const id = `trigger-${Date.now()}`;
+  const id = `trigger-${genId()}`;
   const trigger: RemoteTrigger = {
     id,
     name,

@@ -118,7 +118,14 @@ export function compressResponse(response: string): string {
       { originalLines: lines.length, compressedLines: compressed.length, droppedLines },
       'Response compressed (lines)',
     );
-    return compressed.join('\n');
+
+    // Line compression alone may still exceed the character budget if individual
+    // lines are long — re-enforce the char cap before returning.
+    const joined = compressed.join('\n');
+    if (joined.length > MAX_RESPONSE_CHARS) {
+      return joined.slice(0, MAX_RESPONSE_CHARS) + '\n... (response truncated for length)';
+    }
+    return joined;
   }
 
   // Character limit only — hard truncate with marker.

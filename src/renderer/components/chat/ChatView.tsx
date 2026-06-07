@@ -24,11 +24,16 @@ export function ChatView() {
   // Listen for stream chunks from main process
   useIpcOn('agent:stream-chunk', (...args) => {
     const data = args[0] as { messageId?: string; chunk?: string; done?: boolean };
-    if (data.chunk && streamingMessageId) {
-      appendToMessage(streamingMessageId, data.chunk);
+    // Read from the store at event time: the handler is registered once on mount
+    // (useIpcOn deps are [channel]), so closing over streamingMessageId would
+    // capture the stale initial value (null) and drop every chunk.
+    const state = useChatStore.getState();
+    const id = state.streamingMessageId;
+    if (data.chunk && id) {
+      state.appendToMessage(id, data.chunk);
     }
     if (data.done) {
-      setStreaming(false);
+      state.setStreaming(false);
     }
   });
 

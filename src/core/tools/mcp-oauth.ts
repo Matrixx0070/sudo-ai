@@ -72,6 +72,8 @@ function generateState(): string {
 export class OAuthClient {
   private config: OAuthConfig;
   private tokenCache: TokenResponse | null = null;
+  /** Epoch ms when the cached token was issued; used to compute expiry. */
+  private tokenIssuedAt: number | null = null;
   private pendingRefresh: Promise<TokenResponse> | null = null;
 
   constructor(config: OAuthConfig) {
@@ -169,6 +171,7 @@ export class OAuthClient {
         ? Math.max(0, data.expires_in - 60) // Refresh 60s early
         : undefined,
     };
+    this.tokenIssuedAt = Date.now();
 
     log.info(
       { clientId: this.config.clientId, expiresIn: data.expires_in },
@@ -234,6 +237,7 @@ export class OAuthClient {
         ? Math.max(0, data.expires_in - 60)
         : undefined,
     };
+    this.tokenIssuedAt = Date.now();
 
     log.info(
       { clientId: this.config.clientId, expiresIn: data.expires_in },
@@ -254,19 +258,23 @@ export class OAuthClient {
       return null;
     }
 
-    if (!this.tokenCache || forceRefresh) {
+    if (!this.tokenCache) {
       // No cached token - caller needs to go through authorization flow
       return null;
     }
 
-    // Token exists but may be expired - refresh if needed
-    if (this.tokenCache.refresh_token) {
+    // Only refresh when explicitly forced or the cached token is expired.
+    // Refreshing a still-valid token wastes a network round-trip and, with
+    // one-time-use (rotated) refresh tokens, would invalidate the stored
+    // refresh_token and break subsequent calls.
+    if ((forceRefresh || this.isTokenExpired()) && this.tokenCache.refresh_token) {
       try {
         const refreshed = await this.refreshToken(this.tokenCache.refresh_token);
         return refreshed.access_token;
       } catch (err) {
         log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Token refresh failed');
         this.tokenCache = null;
+        this.tokenIssuedAt = null;
         return null;
       }
     }
@@ -283,13 +291,15 @@ export class OAuthClient {
   isTokenExpired(): boolean {
     if (!this.tokenCache) return true;
     // If no expires_in, assume token is valid until refresh fails
-    if (!this.tokenCache.expires_in) return false;
-    return false; // Simplified - real impl would track issuedAt
+    if (!this.tokenCache.expires_in || this.tokenIssuedAt === null) return false;
+    const expiresAtMs = this.tokenIssuedAt + this.tokenCache.expires_in * 1000;
+    return Date.now() >= expiresAtMs;
   }
 
   /** Clear the token cache (logout) */
   clearCache(): void {
     this.tokenCache = null;
+    this.tokenIssuedAt = null;
     log.debug({ clientId: this.config.clientId }, 'OAuth token cache cleared');
   }
 

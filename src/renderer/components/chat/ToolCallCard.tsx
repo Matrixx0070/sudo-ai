@@ -10,10 +10,11 @@ const MAX_PREVIEW_CHARS = 300;
 
 export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [resultExpanded, setResultExpanded] = useState(false);
 
   const resultStr = toolCall.result ?? '';
   const isLong = resultStr.length > MAX_PREVIEW_CHARS;
-  const displayResult = expanded ? resultStr : resultStr.slice(0, MAX_PREVIEW_CHARS);
+  const displayResult = resultExpanded ? resultStr : resultStr.slice(0, MAX_PREVIEW_CHARS);
 
   return (
     <div
@@ -77,13 +78,13 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
               <div className="text-[var(--text-secondary)] font-semibold py-1.5">Result</div>
               <pre className="bg-[var(--bg-primary)] rounded p-2 overflow-x-auto text-[var(--text-primary)] text-xs leading-relaxed whitespace-pre-wrap">
                 {displayResult}
-                {isLong && !expanded && '…'}
+                {isLong && !resultExpanded && '…'}
               </pre>
-              {isLong && (
+              {isLong && !resultExpanded && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setExpanded(true);
+                    setResultExpanded(true);
                   }}
                   className="text-[var(--accent)] hover:underline mt-1"
                 >

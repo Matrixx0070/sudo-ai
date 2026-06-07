@@ -887,11 +887,26 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // in result.reasoning, NOT result.text. The Vercel AI SDK exposes this.
     // If text is empty but reasoning exists, use reasoning as the content.
     let extractedText = result.text ?? '';
-    if (!extractedText.trim() && result.reasoning) {
-      extractedText = typeof result.reasoning === 'string'
-        ? result.reasoning
-        : (result.reasoning as { text?: string })?.text ?? '';
-      log.debug({ modelId, reasoningLen: extractedText.length }, 'Extracted content from reasoning field');
+    if (!extractedText.trim()) {
+      // SDK v6: the plain reasoning string lives in result.reasoningText, while
+      // result.reasoning is an Array<ReasoningPart> ({ type, text }). Prefer the
+      // string field; fall back to joining the array parts. Keep string/object
+      // handling for compatibility with older SDK shapes.
+      const reasoning = result.reasoning as unknown;
+      if (result.reasoningText && result.reasoningText.trim()) {
+        extractedText = result.reasoningText;
+      } else if (Array.isArray(reasoning)) {
+        extractedText = reasoning
+          .map((p) => (p as { text?: string })?.text ?? '')
+          .join('');
+      } else if (typeof reasoning === 'string') {
+        extractedText = reasoning;
+      } else if (reasoning && typeof reasoning === 'object') {
+        extractedText = (reasoning as { text?: string }).text ?? '';
+      }
+      if (extractedText.trim()) {
+        log.debug({ modelId, reasoningLen: extractedText.length }, 'Extracted content from reasoning field');
+      }
     }
     // --- end reasoning extraction ---
 

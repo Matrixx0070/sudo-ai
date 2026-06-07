@@ -444,6 +444,19 @@ export async function runSelfBuildTick(deps: SelfBuildDeps): Promise<TickResult>
   if (isDirty) {
     log.warn({ porcelain: dirtyResult.stdout.slice(0, 200) }, 'self-build: dirty tree — cleaning before agent turn');
     execSafe('git checkout -- .', { cwd });
+    // git checkout cannot remove untracked files (e.g. agent leftovers from a
+    // failed prior tick that landed outside the targeted clean roots). Without
+    // this, the recheck below stays dirty forever and every tick wedges in
+    // 'dirty-state'. Remove ONLY the untracked paths git reports (porcelain
+    // '?? '), never a blanket `git clean .`, so tracked content is untouched.
+    const untrackedAfterCheckout = execSafe('git status --porcelain', { cwd }).stdout
+      .split('\n')
+      .filter((l) => l.startsWith('?? '))
+      .map((l) => l.slice(3).trim())
+      .filter(Boolean);
+    for (const p of untrackedAfterCheckout) {
+      try { execSync(`git clean -fd -- ${JSON.stringify(p)}`, { cwd, stdio: 'pipe' }); } catch {}
+    }
     // Re-check after cleanup
     const recheckResult = execSafe('git status --porcelain', { cwd });
     if (recheckResult.stdout.trim().length > 0) {
@@ -652,9 +665,25 @@ export async function runSelfBuildTick(deps: SelfBuildDeps): Promise<TickResult>
         { file },
         'self-build: protected path in committed diff — reverting commit + halting',
       );
-      execSafe('git revert HEAD --no-edit', { cwd });
-      latchHalt(cwd, state, `S8: protected path in commit: ${file}`);
-      return { status: 'protected-path-reverted', message: file, alignScore, budgetUsdToday };
+      const revertResult = execSafe('git revert HEAD --no-edit', { cwd });
+      let reverted = revertResult.exitCode === 0;
+      let escalation = '';
+      if (!reverted) {
+        // git revert failed (conflict, hook, editor) — the bad commit is still
+        // HEAD. Escalate: hard-reset the freshly-created tip commit so the
+        // protected-path change cannot remain live on the branch.
+        log.error(
+          { file, exitCode: revertResult.exitCode, stdout: revertResult.stdout.slice(0, 300) },
+          'self-build: git revert failed — escalating to hard reset of HEAD',
+        );
+        const resetResult = execSafe('git reset --hard HEAD~1', { cwd });
+        reverted = resetResult.exitCode === 0;
+        escalation = reverted
+          ? ' (revert failed, hard-reset succeeded)'
+          : ' (revert AND hard-reset FAILED — commit still live)';
+      }
+      latchHalt(cwd, state, `S8: protected path in commit: ${file}${escalation}`);
+      return { status: 'protected-path-reverted', message: `${file}${escalation}`, alignScore, budgetUsdToday };
     }
   }
 

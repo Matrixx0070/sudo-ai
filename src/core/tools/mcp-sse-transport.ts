@@ -64,6 +64,7 @@ export class SSETransport extends EventEmitter<{
   private abortController: AbortController | null = null;
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private intentionalClose = false;
   private readonly config: SSETransportConfigResolved;
 
   constructor(config: SSETransportConfig) {
@@ -89,7 +90,9 @@ export class SSETransport extends EventEmitter<{
 
   /**
    * Connect to the SSE endpoint and start listening for events.
-   * Automatically reconnects on failure with exponential backoff.
+   * Resolves once the connection is established (not when the stream ends),
+   * so callers can proceed with the MCP handshake. Automatically reconnects
+   * on failure with exponential backoff.
    */
   async connect(): Promise<void> {
     if (this.state === 'connected' || this.state === 'connecting') {
@@ -97,6 +100,7 @@ export class SSETransport extends EventEmitter<{
       return;
     }
 
+    this.intentionalClose = false;
     this.state = 'connecting';
     await this._connectWithRetry();
   }
@@ -114,25 +118,38 @@ export class SSETransport extends EventEmitter<{
       await this._doConnect();
       this.reconnectAttempt = 0; // Reset on success
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.reconnectAttempt++;
-
-      const delayMs = Math.min(
-        this.config.reconnectBaseMs * Math.pow(2, this.reconnectAttempt - 1),
-        this.config.reconnectMaxMs,
-      );
-
-      log.warn(
-        { url: this.config.url, attempt: this.reconnectAttempt, delayMs, error: error.message },
-        'SSE connection failed, scheduling reconnect',
-      );
-
-      this.state = 'error';
-      this.emit('error', error);
-      this.emit('reconnecting', this.reconnectAttempt, delayMs);
-
-      this._scheduleReconnect(delayMs);
+      this._onConnectionFailure(err);
     }
+  }
+
+  /**
+   * Handle a connection or in-flight stream failure: emit the error and
+   * schedule a reconnect with exponential backoff. No-op when the transport
+   * was closed intentionally via disconnect().
+   */
+  private _onConnectionFailure(err: unknown): void {
+    if (this.intentionalClose) {
+      return;
+    }
+
+    const error = err instanceof Error ? err : new Error(String(err));
+    this.reconnectAttempt++;
+
+    const delayMs = Math.min(
+      this.config.reconnectBaseMs * Math.pow(2, this.reconnectAttempt - 1),
+      this.config.reconnectMaxMs,
+    );
+
+    log.warn(
+      { url: this.config.url, attempt: this.reconnectAttempt, delayMs, error: error.message },
+      'SSE connection failed, scheduling reconnect',
+    );
+
+    this.state = 'error';
+    this.emit('error', error);
+    this.emit('reconnecting', this.reconnectAttempt, delayMs);
+
+    this._scheduleReconnect(delayMs);
   }
 
   private async _doConnect(): Promise<void> {
@@ -170,8 +187,14 @@ export class SSETransport extends EventEmitter<{
       this.emit('open');
       log.info({ url: this.config.url }, 'SSE connection established');
 
-      // Start reading the stream
-      await this._readStream(response.body);
+      // Start reading the stream in the background. The read loop runs for the
+      // entire lifetime of the connection, so awaiting it here would prevent
+      // connect() from ever resolving — which would block the MCP `initialize`
+      // handshake forever. Resolve now (the connection is established) and
+      // route any stream error through the reconnect path asynchronously.
+      void this._readStream(response.body).catch((streamErr) => {
+        this._onConnectionFailure(streamErr);
+      });
     } catch (err) {
       clearTimeout(timeoutId);
       throw err;
@@ -184,6 +207,28 @@ export class SSETransport extends EventEmitter<{
     let buffer = '';
     let lastEventId: string | undefined;
     let retryMs: number | undefined;
+
+    // Fields accumulated for the SSE frame currently being parsed. A frame is
+    // terminated by a blank line, at which point it is dispatched. Event/id/
+    // retry/data fields belonging to the same frame are associated together
+    // rather than read out-of-band, so a frame delivered in a single chunk is
+    // parsed correctly without blocking for the next chunk.
+    let eventType: string | undefined;
+    const dataLines: string[] = [];
+
+    const dispatchFrame = (): void => {
+      if (dataLines.length > 0) {
+        this._emitMessage({
+          event: eventType,
+          data: dataLines.join('\n').trim(),
+          id: lastEventId,
+          retry: retryMs,
+        });
+      }
+      // Reset per-frame state for the next event.
+      eventType = undefined;
+      dataLines.length = 0;
+    };
 
     try {
       while (true) {
@@ -199,30 +244,29 @@ export class SSETransport extends EventEmitter<{
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed) continue;
+          // A blank line terminates the current event frame and dispatches it.
+          if (!trimmed) {
+            dispatchFrame();
+            continue;
+          }
 
           if (trimmed.startsWith('id:')) {
             lastEventId = trimmed.slice(3).trim();
           } else if (trimmed.startsWith('event:')) {
-            // Store event type for next data line
-            const eventType = trimmed.slice(6).trim();
-            // Next data line will use this event type
-            const nextLine = await this._readNextDataLine(reader, decoder, buffer);
-            if (nextLine.data) {
-              this._emitMessage({ event: eventType, data: nextLine.data, id: lastEventId, retry: nextLine.retry });
-              buffer = nextLine.buffer;
-            }
+            eventType = trimmed.slice(6).trim();
           } else if (trimmed.startsWith('data:')) {
-            const data = trimmed.slice(5).trim();
-            this._emitMessage({ data, id: lastEventId, retry: retryMs });
+            dataLines.push(trimmed.slice(5).trim());
           } else if (trimmed.startsWith('retry:')) {
             retryMs = parseInt(trimmed.slice(6).trim(), 10);
           }
         }
       }
+
+      // Stream ended: dispatch any frame not terminated by a trailing blank line.
+      dispatchFrame();
     } catch (err) {
-      if (this.abortController?.signal.aborted) {
-        // Clean disconnect
+      if (this.intentionalClose || this.abortController?.signal.aborted) {
+        // Clean disconnect — do not reconnect
         return;
       }
       throw err;
@@ -230,38 +274,13 @@ export class SSETransport extends EventEmitter<{
       reader.releaseLock();
     }
 
-    // Stream ended - attempt reconnect
+    // Stream ended on its own — attempt reconnect unless intentionally closed.
+    if (this.intentionalClose) {
+      return;
+    }
     this.state = 'disconnected';
     this.emit('close');
     this._scheduleReconnect(this.config.reconnectBaseMs);
-  }
-
-  private async _readNextDataLine(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    decoder: TextDecoder,
-    buffer: string,
-  ): Promise<{ data: string; retry?: number; buffer: string }> {
-    while (true) {
-      if (!buffer) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer = decoder.decode(value, { stream: true });
-      }
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('data:')) {
-          return { data: trimmed.slice(5).trim(), buffer };
-        } else if (trimmed.startsWith('retry:')) {
-          return { data: '', retry: parseInt(trimmed.slice(6).trim(), 10), buffer };
-        } else if (trimmed) {
-          // Non-empty, non-data line - return what we have
-          return { data: '', buffer };
-        }
-      }
-    }
-    return { data: '', buffer };
   }
 
   private _emitMessage(msg: SSEMessage): void {
@@ -283,6 +302,8 @@ export class SSETransport extends EventEmitter<{
   /** Disconnect and stop reconnection attempts */
   disconnect(): void {
     log.info({ url: this.config.url }, 'SSE transport disconnecting');
+
+    this.intentionalClose = true;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

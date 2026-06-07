@@ -28,15 +28,15 @@ function periodToMs(period: Period): number {
 }
 
 function startOfMonth(offsetMonths: number): Date {
-  const d = new Date();
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  d.setMonth(d.getMonth() - offsetMonths);
-  return d;
+  // Anchor to UTC so the month label (yyyyMM) and the ISO bounds derived via
+  // toISOString() refer to the same calendar month. paid_date is stored as a
+  // UTC YYYY-MM-DD string, so UTC-anchored bounds also match the stored data.
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - offsetMonths, 1, 0, 0, 0, 0));
 }
 
 function yyyyMM(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +115,11 @@ export class BusinessAnalytics {
 
       const label = yyyyMM(start);
       const startIso = start.toISOString().slice(0, 10);
-      const endIso = i === 0 ? new Date().toISOString().slice(0, 10) : end.toISOString().slice(0, 10);
+      // Upper bound is EXCLUSIVE (see _revenueForPeriod): use the first day of
+      // the next month so invoices paid on a month boundary are counted once.
+      // For the current month (i === 0) the next-month boundary lies in the
+      // future, so it naturally includes everything paid so far.
+      const endIso = end.toISOString().slice(0, 10);
 
       // InvoiceManager exposes a raw DB — we call a package-private helper
       // via a cast to avoid exposing internal SQL on the public class.
@@ -158,7 +162,7 @@ export class BusinessAnalytics {
 
   private _revenueForPeriod(
     startDate: string,
-    endDate: string,
+    endDateExclusive: string,
   ): { revenue: number; invoiceCount: number } {
     // Access the underlying DB through the InvoiceManager's public getStats
     // is insufficient for date-filtered queries. We instead expose a
@@ -176,8 +180,8 @@ export class BusinessAnalytics {
       JOIN invoice_items ii ON ii.invoice_id = inv.id
       WHERE inv.status = 'paid'
         AND inv.paid_date >= ?
-        AND inv.paid_date <= ?
-    `).get(startDate, endDate) as Row;
+        AND inv.paid_date < ?
+    `).get(startDate, endDateExclusive) as Row;
 
     return { revenue: row.revenue, invoiceCount: row.cnt };
   }

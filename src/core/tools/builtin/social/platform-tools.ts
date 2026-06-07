@@ -59,8 +59,17 @@ export const multiPostTool: ToolDefinition = {
     const results: Record<string, unknown> = {};
     const errors: string[] = [];
 
+    // When 'schedule' is requested, it is a posting MODE, not a peer platform:
+    // the live platforms are deferred (scheduled) rather than posted immediately.
+    // Skip their immediate-post iterations so the same content is not both
+    // published now and scheduled for later (and so results are not clobbered).
+    const scheduleMode = platforms.includes('schedule');
+
     for (const platform of platforms) {
       try {
+        if (scheduleMode && platform !== 'schedule') {
+          continue;
+        }
         if (platform === 'twitter') {
           const oauthToken = process.env['TWITTER_OAUTH2_TOKEN'];
           if (!oauthToken) {

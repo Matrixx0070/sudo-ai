@@ -351,13 +351,16 @@ steps:
         approvalCallback: async () => true,
       });
 
-      // Should have run 'gated' and 'after' (resumed from index 1)
-      // completedSteps from savedState preserved + 2 new ones
-      expect(finalState.completedSteps).toHaveLength(4);
-      expect(finalState.completedSteps[2]?.id).toBe('gated');
+      // Should have run 'gated' and 'after' (resumed from index 1). The stale
+      // 'awaiting_approval' placeholder for 'gated' is dropped on resume, so the
+      // final set is the real results only: before(success) + gated + after,
+      // with no duplicate 'gated' entry.
+      expect(finalState.completedSteps).toHaveLength(3);
+      expect(finalState.completedSteps[0]?.id).toBe('before');
+      expect(finalState.completedSteps[1]?.id).toBe('gated');
+      expect(finalState.completedSteps[1]?.status).toBe('success');
+      expect(finalState.completedSteps[2]?.id).toBe('after');
       expect(finalState.completedSteps[2]?.status).toBe('success');
-      expect(finalState.completedSteps[3]?.id).toBe('after');
-      expect(finalState.completedSteps[3]?.status).toBe('success');
       expect(finalState.resumeToken).toBeUndefined();
       expect(finalState.pendingStepIndex).toBeUndefined();
     });

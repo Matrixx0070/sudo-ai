@@ -14,6 +14,7 @@
  * Kill-switch: SUDO_SESSION_LANES_DISABLE=1 routes everything to 'default'
  */
 
+import { nanoid } from 'nanoid';
 import { KeyedAsyncQueue } from './queue.js';
 import { createLogger } from '../shared/index.js';
 
@@ -100,16 +101,14 @@ export class SessionLaneManager {
 
     const taskKey = this.makeTaskKey(effectiveLaneType, laneKey);
 
+    // Unique per-invocation id so concurrent/serialized tasks sharing the same
+    // composite key each get their own active-task entry (no overwrite, no
+    // premature delete by a sibling task).
+    const taskId = nanoid();
+
     // Track queue depth
     const currentDepth = this.queueDepths.get(taskKey) ?? 0;
     this.queueDepths.set(taskKey, currentDepth + 1);
-
-    // Track active task start
-    this.activeTasks.set(taskKey, {
-      laneType: effectiveLaneType,
-      laneKey,
-      startedAt: Date.now(),
-    });
 
     log.trace(
       { laneType: effectiveLaneType, laneKey, depth: currentDepth + 1 },
@@ -118,6 +117,13 @@ export class SessionLaneManager {
 
     return queue
       .enqueue(laneKey, async () => {
+        // Track active task at start (when it actually begins running), so
+        // queued-but-not-yet-running tasks are not counted as active.
+        this.activeTasks.set(taskId, {
+          laneType: effectiveLaneType,
+          laneKey,
+          startedAt: Date.now(),
+        });
         try {
           return await task();
         } finally {
@@ -129,8 +135,8 @@ export class SessionLaneManager {
             this.queueDepths.set(taskKey, depth - 1);
           }
 
-          // Remove from active tasks
-          this.activeTasks.delete(taskKey);
+          // Remove this invocation from active tasks
+          this.activeTasks.delete(taskId);
 
           log.trace(
             { laneType: effectiveLaneType, laneKey },
@@ -200,7 +206,10 @@ export class SessionLaneManager {
     let drainedCount = 0;
     for (const lt of Object.keys(this.queues) as SessionLaneType[]) {
       const taskKey = this.makeTaskKey(lt, laneKey);
-      if (this.queueDepths.has(taskKey) || this.activeTasks.has(taskKey)) {
+      const hasActive = [...this.activeTasks.values()].some(
+        (t) => t.laneType === lt && t.laneKey === laneKey
+      );
+      if (this.queueDepths.has(taskKey) || hasActive) {
         this.queueDepths.delete(taskKey);
         // Note: We don't remove activeTasks here as they're already running
         // The activeTasks map is cleaned up when tasks complete

@@ -73,6 +73,9 @@ const CALIBRATION_DB = path.join(DATA_DIR, 'calibration.db');
 /** Aggregate raw audit rows into per-tool stats map. */
 function aggregateAuditRows(rows: AuditRow[]): Map<string, Omit<ToolUsageStat, 'brierForTool'>> {
   const map = new Map<string, Omit<ToolUsageStat, 'brierForTool'>>();
+  // Count of rows that actually contributed a durationMs sample, per tool.
+  // Used as the running-average weight so rows lacking durationMs don't skew it.
+  const durationSamples = new Map<string, number>();
 
   for (const row of rows) {
     const key = row.resource || 'unknown';
@@ -97,8 +100,12 @@ function aggregateAuditRows(rows: AuditRow[]): Map<string, Omit<ToolUsageStat, '
         const meta = JSON.parse(row.metadata_json) as Record<string, unknown>;
         const dur = meta['durationMs'];
         if (typeof dur === 'number' && dur > 0) {
-          // Running average: (prev_avg * (total-1) + new) / total
-          entry.avgDurationMs = (entry.avgDurationMs * (entry.totalCalls - 1) + dur) / entry.totalCalls;
+          // Running average weighted by the number of duration samples seen so
+          // far for this tool (not totalCalls, since not every row has a duration).
+          const n = (durationSamples.get(key) ?? 0) + 1;
+          durationSamples.set(key, n);
+          // Running average: (prev_avg * (n-1) + new) / n
+          entry.avgDurationMs = (entry.avgDurationMs * (n - 1) + dur) / n;
         }
         const ek = meta['errorKind'] ?? meta['error_kind'];
         if (typeof ek === 'string' && ek.length > 0 && outcome !== 'success') {

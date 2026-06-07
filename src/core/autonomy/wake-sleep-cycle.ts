@@ -215,8 +215,11 @@ export class WakeSleepCycle {
     try {
       await this.workHandler(goal);
 
-      // Emit goal:completed event if work handler didn't throw.
-      if (this.hookManager) {
+      // Only emit goal:completed when the goal is actually completed.
+      // The work handler may make partial progress, schedule a wake, or pause
+      // the goal without finishing it — returning without throwing does not
+      // imply completion. Re-read the persisted goal and check its status.
+      if (this.hookManager && this.goalEngine.getGoal(goal.id)?.status === 'completed') {
         await this.hookManager.emit('goal:completed', {
           event: 'goal:completed',
           meta: { goalId: goal.id, title: goal.title },

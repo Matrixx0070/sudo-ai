@@ -218,15 +218,33 @@ export class AgentSwarm {
       };
       const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config, undefined, undefined, undefined, undefined, sandboxManager);
 
-      // Apply timeout via AbortController.
-      const timer = setTimeout(() => {
-        controller.abort();
-        log.error({ id, timeout }, 'Sub-agent timed out — aborting');
-      }, timeout);
+      // Apply timeout via AbortController + a racing timeout promise.
+      // The AbortController alone does not stop loop.run() (the loop does not
+      // accept the signal), so we also race the run against a rejecting timer.
+      // This frees the queue slot and removes the active record on timeout
+      // instead of waiting for the loop's natural completion.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          log.error({ id, timeout }, 'Sub-agent timed out — aborting');
+          reject(
+            new PipelineError(
+              `Sub-agent ${id} timed out after ${timeout}ms`,
+              'pipeline_max_iterations',
+              { id, timeout },
+            ),
+          );
+        }, timeout);
+      });
 
       try {
         const startTime = Date.now();
-        const agentResult = await loop.run(sessionId, taskDescription);
+        const runPromise = loop.run(sessionId, taskDescription);
+        // Swallow any late rejection if the timeout wins the race below, so the
+        // still-running loop does not surface as an unhandled rejection.
+        runPromise.catch(() => { /* handled via race / timeout below */ });
+        const agentResult = await Promise.race([runPromise, timeoutPromise]);
         const resultText = agentResult.text;
         const duration = Date.now() - startTime;
         log.info({ id, resultLen: resultText.length, duration }, 'Sub-agent completed');
@@ -376,15 +394,33 @@ export class AgentSwarm {
         };
         const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config, undefined, undefined, undefined, undefined, sandboxManager);
 
-        // Apply timeout via AbortController.
-        const timer = setTimeout(() => {
-          controller.abort();
-          log.error({ id, timeout }, 'Async sub-agent timed out — aborting');
-        }, timeout);
+        // Apply timeout via AbortController + a racing timeout promise.
+        // The AbortController alone does not stop loop.run() (the loop does not
+        // accept the signal), so we also race the run against a rejecting timer.
+        // This frees the queue slot and removes the active record on timeout
+        // instead of waiting for the loop's natural completion.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            log.error({ id, timeout }, 'Async sub-agent timed out — aborting');
+            reject(
+              new PipelineError(
+                `Sub-agent ${id} timed out after ${timeout}ms`,
+                'pipeline_max_iterations',
+                { id, timeout },
+              ),
+            );
+          }, timeout);
+        });
 
         try {
           const startTime = Date.now();
-          const agentResult = await loop.run(sessionId, taskDescription);
+          const runPromise = loop.run(sessionId, taskDescription);
+          // Swallow any late rejection if the timeout wins the race below, so the
+          // still-running loop does not surface as an unhandled rejection.
+          runPromise.catch(() => { /* handled via race / timeout below */ });
+          const agentResult = await Promise.race([runPromise, timeoutPromise]);
           const resultText = agentResult.text;
           const duration = Date.now() - startTime;
           log.info({ id, resultLen: resultText.length, duration }, 'Async sub-agent completed');

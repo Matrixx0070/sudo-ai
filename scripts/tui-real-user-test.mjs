@@ -90,7 +90,11 @@ async function runDirectTalkValidation() {
       const lower = out.toLowerCase();
       hadControl = lower.includes('control') || lower.includes('icomputeruse') || lower.includes('computer-use') || lower.includes('screenshot') || lower.includes('desktop');
       hadLearner = lower.includes('learner') || lower.includes('outcome') || lower.includes('learned') || lower.includes('self-imp') || lower.includes('tooloutcom');
-      hadSuccess = lower.includes('success') || lower.includes('done') || lower.includes('result') || !lower.includes('fail') && !lower.includes('error') || lower.includes('tmp') || lower.includes('list') || lower.includes('stat');
+      // Require explicit positive evidence (a success/visibility marker) AND no fail/error,
+      // rather than treating mere absence of 'fail'/'error' as success.
+      const hadPositiveMarker = lower.includes('success') || lower.includes('done') || lower.includes('result') || lower.includes('tmp') || lower.includes('list') || lower.includes('stat');
+      const hadFailure = lower.includes('fail') || lower.includes('error');
+      hadSuccess = hadPositiveMarker && !hadFailure;
 
       const ok = hadControl || hadLearner || hadSuccess;
       if (ok) passCount++;

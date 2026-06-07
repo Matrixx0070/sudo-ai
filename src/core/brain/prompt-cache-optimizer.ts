@@ -117,19 +117,8 @@ export function buildOptimizedPrompt(parts: {
     .update(parts.tools ?? '')
     .digest('hex');
 
-  // --- Cache check ---
-  const cachedCombined = promptCache.getCachedPrompt(cacheKey);
-  if (cachedCombined) {
-    log.debug({ cacheKey: cacheKey.slice(0, 12) }, 'buildOptimizedPrompt: cache hit');
-    // Re-split so callers get accurate stable/dynamic sections even on a hit.
-    return splitPrompt(cachedCombined);
-  }
-
-  // --- Build ---
-  const stableParts = [parts.identity, parts.agents, parts.tools].filter(Boolean);
-  const stable = stableParts.join('\n\n---\n\n');
-
-  // Dynamic section — session-specific
+  // Dynamic section — session-specific. Always rebuilt fresh from the current
+  // inputs so a cache hit on the stable key never re-emits stale dynamic content.
   const dynamicParts = [
     parts.dateTime,
     parts.memoryContext,
@@ -138,12 +127,27 @@ export function buildOptimizedPrompt(parts: {
   ].filter(Boolean) as string[];
   const dynamic = dynamicParts.join('\n\n');
 
+  // --- Cache check ---
+  // Only the stable section is cached (keyed on the stable inputs above).
+  const cachedStable = promptCache.getCachedPrompt(cacheKey);
+  if (cachedStable) {
+    log.debug({ cacheKey: cacheKey.slice(0, 12) }, 'buildOptimizedPrompt: cache hit');
+    const combined = dynamic ? `${cachedStable}\n\n---\n\n${dynamic}` : cachedStable;
+    return { stable: cachedStable, dynamic, combined };
+  }
+
+  // --- Build ---
+  const stableParts = [parts.identity, parts.agents, parts.tools].filter(Boolean);
+  const stable = stableParts.join('\n\n---\n\n');
+
   const combined = dynamic ? `${stable}\n\n---\n\n${dynamic}` : stable;
 
   // --- Cache store ---
-  if (combined) {
+  // Store only the stable section so future calls with the same stable inputs
+  // but different dynamic inputs reuse the cached stable prefix without staleness.
+  if (stable) {
     try {
-      promptCache.setCachedPrompt(cacheKey, combined);
+      promptCache.setCachedPrompt(cacheKey, stable);
       log.debug({ cacheKey: cacheKey.slice(0, 12) }, 'buildOptimizedPrompt: prompt cached');
     } catch (err) {
       log.warn({ err: String(err) }, 'buildOptimizedPrompt: cache store failed — continuing');

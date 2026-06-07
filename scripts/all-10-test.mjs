@@ -59,6 +59,7 @@ try {
 
   // Poll every 5 seconds, checking if the assistant message has content
   let found = false;
+  let everDisabled = false; // only trust re-enable after we saw streaming disable the input
   for (let i = 0; i < 36; i++) { // 36 * 5s = 180s
     await page.waitForTimeout(5000);
 
@@ -88,7 +89,12 @@ try {
       return input && !input.disabled;
     });
 
-    if (inputEnabled && elapsed > 10) {
+    if (!inputEnabled) everDisabled = true;
+
+    // Only trust the re-enable shortcut once we have actually seen the input
+    // become disabled by streaming. Otherwise the brief window after send (or an
+    // immediate error) where input was never disabled would falsely report success.
+    if (everDisabled && inputEnabled && elapsed > 10) {
       // Input re-enabled could mean response arrived or error
       console.log(`    Input re-enabled after ${elapsed}s, checking for response...`);
       await page.waitForTimeout(2000);

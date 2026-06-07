@@ -101,23 +101,43 @@ describe('document.pdf-from-html — input validation', () => {
   });
 
   it('accepts /tmp/ prefix', async () => {
-    // We only validate the path here — spy on chromium.launch to avoid real browser
-    const result = await tool.execute(
-      { html: '', outputPath: '/tmp/ok.pdf' },
-      makeCtx(),
-    );
-    // Empty html → returns early error (not path error)
-    expect(result.output).not.toContain('must be under');
+    // Provide valid html so execution actually reaches path validation, and stub
+    // the browser launch so no real Chromium starts. The output stays inside the
+    // isolated TMP_DIR (which lives under /tmp/), so any mkdir is in the temp dir.
+    const { chromium } = await import('playwright-core');
+    const launchSpy = vi
+      .spyOn(chromium, 'launch')
+      .mockRejectedValue(new Error('BROWSER_STUB: launch intercepted'));
+    try {
+      const result = await tool.execute(
+        { html: '<p>hello</p>', outputPath: join(TMP_DIR, 'ok.pdf') },
+        makeCtx(),
+      );
+      // Path validation passed (html and path are both valid); the only failure
+      // is the stubbed browser launch, proving the /tmp/ prefix was accepted.
+      expect(result.output).not.toContain('must be under');
+      expect(launchSpy).toHaveBeenCalled();
+    } finally {
+      launchSpy.mockRestore();
+    }
   });
 
   it('accepts /root/sudo-ai-v4/data/documents/ prefix path validation', async () => {
-    // Provide valid html but we just need to check path doesn't trigger path error
-    // The tool will fail on chromium launch in CI without browser — accept any non-path error
-    const result = await tool.execute(
-      { html: '', outputPath: '/root/sudo-ai-v4/data/documents/test.pdf' },
+    // Verify the production data-dir prefix is on the accepted allow-list WITHOUT
+    // executing the tool (which would mkdir the real production directory and/or
+    // launch a browser). A rejected path surfaces the allow-list in its error, so
+    // we assert that error names /root/sudo-ai-v4/data/documents/ as allowed and
+    // that a path under that prefix is NOT what the rejection complains about.
+    const rejected = await tool.execute(
+      { html: '<p>hello</p>', outputPath: '/etc/not-allowed.pdf' },
       makeCtx(),
     );
-    expect(result.output).not.toContain('must be under /tmp/');
+    expect(rejected.success).toBe(false);
+    // The rejection lists the allowed prefixes, confirming the data dir is allowed.
+    expect(rejected.output).toContain('/root/sudo-ai-v4/data/documents/');
+    // And it complains specifically about the disallowed input path, not the data dir.
+    expect(rejected.output).toContain('/etc/not-allowed.pdf');
+    expect(rejected.output).not.toContain('/root/sudo-ai-v4/data/documents/test.pdf');
   });
 
   it('has correct tool metadata', async () => {

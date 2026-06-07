@@ -173,9 +173,10 @@ export const ffmpegTool: ToolDefinition = {
         await runFfmpeg(args, ctx.signal);
         const fps = options.fps ?? 15;
         const scale = options.scale ?? '480:-1';
-        const pass2 = ['-i', input, '-i', palette, '-lavfi', `fps=${fps},scale=${scale}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer`, output];
-        if (options.startTime) pass2.splice(1, 0, '-ss', options.startTime);
-        if (options.duration) pass2.splice(pass2.indexOf('-i', 1) + 1, 0, '-t', options.duration);
+        const pre: string[] = [];
+        if (options.startTime) pre.push('-ss', options.startTime);
+        if (options.duration) pre.push('-t', options.duration);
+        const pass2 = [...pre, '-i', input, '-i', palette, '-lavfi', `fps=${fps},scale=${scale}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer`, output];
         await runFfmpeg(pass2, ctx.signal);
       } else {
         await runFfmpeg(args, ctx.signal);

@@ -384,7 +384,7 @@ function EnvironmentPanel() {
         const record = res as Record<string, string>;
         const mapped: EnvRow[] = Object.entries(record ?? {}).map(([key, value]) => ({
           key,
-          value: maskValue(key + value),
+          value: maskValue(value),
         }));
         setRows(mapped);
       })

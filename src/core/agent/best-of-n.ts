@@ -206,6 +206,18 @@ export class BestOfNExecutor {
       winnerIndex = firstSuccess?.index ?? 0;
     }
 
+    // Guard against a judge returning an out-of-range/NaN candidateIndex.
+    // Fall back to the first successful candidate (or 0) rather than pointing
+    // at a non-existent candidate and silently discarding the real winner.
+    if (
+      !Number.isInteger(winnerIndex) ||
+      winnerIndex < 0 ||
+      winnerIndex >= candidates.length
+    ) {
+      const firstSuccess = candidates.find(c => c.success);
+      winnerIndex = firstSuccess?.index ?? 0;
+    }
+
     const winner = candidates[winnerIndex];
 
     log.info(
@@ -234,8 +246,9 @@ export class BestOfNExecutor {
     const branchName = `best-of-n-${index}-${genId().slice(0, 8)}`;
 
     try {
-      // Create a worktree for this candidate
-      const worktreeInfo = await this.worktreeManager.createWorktree(`best-of-n-${index}-${genId()}`);
+      // Create a worktree for this candidate. Reuse branchName so the
+      // error-path `branch` field references the name actually requested.
+      const worktreeInfo = await this.worktreeManager.createWorktree(branchName);
 
       const spawnOpts: SpawnOptions = {
         ...opts,
@@ -243,11 +256,10 @@ export class BestOfNExecutor {
         timeout: 5 * 60 * 1000, // 5 minutes per candidate
       };
 
-      // Spawn the sub-agent via AgentSwarm
-      const agentId = await this.swarm.spawn(task, spawnOpts);
-
-      // Wait for completion (with timeout)
-      const result = await this.swarm.waitForCompletion(agentId, spawnOpts.timeout);
+      // Spawn the sub-agent via AgentSwarm. spawn() runs the agent to
+      // completion (enforcing spawnOpts.timeout internally) and resolves
+      // with the agent's final text output.
+      const resultText = await this.swarm.spawn(task, spawnOpts);
 
       // Collect file changes
       const filesChanged = await this._getFilesChanged(worktreeInfo.path);
@@ -263,7 +275,7 @@ export class BestOfNExecutor {
         index,
         branch: worktreeInfo.branch,
         prompt: task,
-        output: result?.text ?? '',
+        output: resultText ?? '',
         filesChanged,
         success: true,
       };
@@ -335,7 +347,7 @@ export class BestOfNExecutor {
 
       const parsed = JSON.parse(jsonMatch[0]);
       if (Array.isArray(parsed.scores)) {
-        return parsed.scores.map((s: Record<string, unknown>) => ({
+        return parsed.scores.map((s: { candidateIndex?: number; scores?: Partial<Record<JudgeCriteria, number>>; totalScore?: number; reasoning?: string }) => ({
           candidateIndex: Number(s.candidateIndex ?? 0),
           scores: {
             correctness: Number(s.scores?.correctness ?? 0),

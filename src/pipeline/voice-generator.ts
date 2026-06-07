@@ -37,6 +37,8 @@ const WPM_EFFECTIVE = WPM_BASE * TTS_SPEED;
 
 const PAUSE_MARKER = ' ... ';
 const COST_PER_CALL_USD = 0.003;
+/** Approximate silence inserted between consecutive scenes, in seconds. */
+const INTER_SCENE_PAUSE_S = 0.5;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,10 +48,19 @@ const COST_PER_CALL_USD = 0.003;
  * Build a single narration script from all scenes, joined by pause markers.
  */
 function buildNarrationText(scenes: SceneScript[]): string {
-  return scenes
+  return narratedScenes(scenes)
     .map((s) => s.narration.trim())
-    .filter((line) => line.length > 0)
     .join(PAUSE_MARKER);
+}
+
+/**
+ * Return only the scenes that contribute spoken narration (non-empty after
+ * trimming). These are the scenes actually present in the narration string,
+ * so duration estimation and timestamp computation must use the same set to
+ * stay consistent.
+ */
+function narratedScenes(scenes: SceneScript[]): SceneScript[] {
+  return scenes.filter((s) => s.narration.trim().length > 0);
 }
 
 /**
@@ -66,8 +77,7 @@ function wordCount(text: string): number {
 function estimateTotalDuration(fullScript: string, sceneCount: number): number {
   const words = wordCount(fullScript);
   const speechSeconds = (words / WPM_EFFECTIVE) * 60;
-  // Each inter-scene pause is approximately 0.5 s
-  const pauseSeconds = Math.max(0, sceneCount - 1) * 0.5;
+  const pauseSeconds = Math.max(0, sceneCount - 1) * INTER_SCENE_PAUSE_S;
   return Math.ceil(speechSeconds + pauseSeconds);
 }
 
@@ -86,18 +96,25 @@ function computeTimestamps(
   const wordCounts = scenes.map((s) => wordCount(s.narration));
   const totalWords = wordCounts.reduce((acc, n) => acc + n, 0) || 1;
 
+  // totalDurationS already includes the inter-scene pause budget (see
+  // estimateTotalDuration), so distribute only the speech portion across
+  // scenes by word count and account for the pauses explicitly. This keeps
+  // the final endSeconds equal to totalDurationS rather than overshooting it.
+  const pauseSeconds = Math.max(0, scenes.length - 1) * INTER_SCENE_PAUSE_S;
+  const speechSeconds = Math.max(0, totalDurationS - pauseSeconds);
+
   const timestamps: SceneTimestamp[] = [];
   let cursor = 0;
 
   for (let i = 0; i < scenes.length; i++) {
     const fraction = (wordCounts[i] ?? 0) / totalWords;
-    const sceneDuration = fraction * totalDurationS;
+    const sceneDuration = fraction * speechSeconds;
     const start = parseFloat(cursor.toFixed(3));
     const end = parseFloat((cursor + sceneDuration).toFixed(3));
     timestamps.push({ sceneIndex: scenes[i]!.index, startSeconds: start, endSeconds: end });
     cursor += sceneDuration;
-    // Add the inter-scene pause gap to cursor (0.5 s) for all except last
-    if (i < scenes.length - 1) cursor += 0.5;
+    // Add the inter-scene pause gap to cursor for all except the last scene.
+    if (i < scenes.length - 1) cursor += INTER_SCENE_PAUSE_S;
   }
 
   return timestamps;
@@ -219,8 +236,12 @@ export async function generateVoice(script: GeneratedScript): Promise<GeneratedV
   log.debug({ audioPath, bufferBytes: audioBuffer.length }, 'Audio file saved');
 
   // --- Compute duration and per-scene timestamps ---
-  const durationSeconds = estimateTotalDuration(narrationText, script.scenes.length);
-  const sceneTimestamps = computeTimestamps(script.scenes, durationSeconds);
+  // Use the same scene set that produced the narration (non-empty narration
+  // only) so the modeled pause count matches the pauses actually spoken and
+  // the per-scene cursor advancement.
+  const spokenScenes = narratedScenes(script.scenes);
+  const durationSeconds = estimateTotalDuration(narrationText, spokenScenes.length);
+  const sceneTimestamps = computeTimestamps(spokenScenes, durationSeconds);
 
   log.info(
     { videoId, audioPath, durationSeconds, sceneCount: sceneTimestamps.length },

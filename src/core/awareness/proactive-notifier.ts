@@ -66,7 +66,7 @@ export function notify(
   };
 
   notifications.push(n);
-  if (notifications.length > MAX_NOTIFS) notifications.splice(0, MAX_NOTIFS - TRIM_TO);
+  if (notifications.length > MAX_NOTIFS) notifications.splice(0, notifications.length - TRIM_TO);
 
   for (const l of listeners) {
     try {

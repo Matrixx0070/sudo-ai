@@ -44,7 +44,7 @@ export function compareSemver(a: string, b: string): number {
   const preB = b.includes('-') ? b.split('-')[1] : '';
   if (preA && !preB) return -1;
   if (!preA && preB) return 1;
-  if (preA && preB) return preA < preB ? -1 : 1;
+  if (preA && preB) return preA === preB ? 0 : (preA < preB ? -1 : 1);
   return 0;
 }
 

@@ -106,8 +106,27 @@ async function run() {
     await download.saveAs(imgOutPath);
     log('Downloaded via button: ' + imgOutPath);
   } else {
-    // Grab largest img src
-    await saveFromSrc(page, 'img:last-child', imgOutPath);
+    // No download button — pick the largest visible <img> (the generated result,
+    // not avatars/icons). `img:last-child` would match the wrong element.
+    const bigSrc = await page.evaluate(() => {
+      let best = null, bestArea = 0;
+      for (const img of document.querySelectorAll('img')) {
+        if (!img.src) continue;
+        const r = img.getBoundingClientRect();
+        const area = r.width * r.height;
+        if (area > bestArea) { bestArea = area; best = img.src; }
+      }
+      return best;
+    });
+    if (!bigSrc) throw new Error('No result image found on page');
+    log(`Fetching from src: ${bigSrc.slice(0,80)}...`);
+    const data = await page.evaluate(async (url) => {
+      const r = await fetch(url);
+      const buf = await r.arrayBuffer();
+      return [...new Uint8Array(buf)];
+    }, bigSrc);
+    writeFileSync(imgOutPath, Buffer.from(data));
+    log(`Saved: ${imgOutPath}`);
   }
 
   // ─────────────────────────────────────────────────────

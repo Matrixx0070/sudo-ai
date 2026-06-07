@@ -17,7 +17,7 @@ import {
   isStalePid,
   BridgeDiscovery,
 } from '../../src/core/ide/bridge-discovery.js';
-import type { BridgeDiscoveryPayload } from '../../../shared-types/bridge-protocol.js';
+import type { BridgeDiscoveryPayload } from '../../shared-types/bridge-protocol.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

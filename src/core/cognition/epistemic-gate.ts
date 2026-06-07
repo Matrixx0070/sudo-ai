@@ -62,9 +62,30 @@ const PROBABLE_RE   = /\b(it appears|it seems|evidence suggests|based on|typical
 // Impact derivation patterns
 // ---------------------------------------------------------------------------
 
-const CRITICAL_TOOL_RE = /delete|drop|rm|wipe|format|shutdown|exec|eval|shell/i;
-const HIGH_TOOL_RE     = /write|create|update|insert|post|put|patch/i;
-const MEDIUM_TOOL_RE   = /send|email|message|notify|alert|read|fetch|query/i;
+// Keyword lists are matched against tokenized tool-name segments rather than
+// raw substrings. Tool names are split on non-alphanumeric separators (_, -, .)
+// AND camelCase humps, so e.g. `deleteFile` → [delete, file], `rm_files` →
+// [rm, files]. A token matches a keyword when it *starts with* that keyword
+// (preserves suffix forms like writer/emails). This prevents short tokens from
+// matching interior substrings of unrelated names — e.g. `rm` no longer matches
+// transform/perform/confirm, and `put` no longer matches compute/output/reputation.
+const CRITICAL_TOOL_KEYWORDS = ['delete', 'drop', 'rm', 'wipe', 'format', 'shutdown', 'exec', 'eval', 'shell'];
+const HIGH_TOOL_KEYWORDS     = ['write', 'create', 'update', 'insert', 'post', 'put', 'patch'];
+const MEDIUM_TOOL_KEYWORDS   = ['send', 'email', 'message', 'notify', 'alert', 'read', 'fetch', 'query'];
+
+/** Split a tool name into lowercase segments on separators and camelCase humps. */
+function tokenizeToolName(toolName: string): string[] {
+  return toolName
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2') // split camelCase humps
+    .split(/[^a-zA-Z0-9]+/)                  // split on separators
+    .filter((seg) => seg.length > 0)
+    .map((seg) => seg.toLowerCase());
+}
+
+/** True if any token in the tool name starts with one of the given keywords. */
+function matchesToolKeyword(tokens: string[], keywords: string[]): boolean {
+  return tokens.some((token) => keywords.some((kw) => token.startsWith(kw)));
+}
 
 // ---------------------------------------------------------------------------
 // Pure functions
@@ -91,9 +112,10 @@ export function classifyRationale(text: string): EpistemicTag {
  * Separate heuristic from veto-gate's classifyRisk — do NOT import or reuse it.
  */
 export function classifyImpact(toolName: string): ImpactLevel {
-  if (CRITICAL_TOOL_RE.test(toolName)) return 'CRITICAL';
-  if (HIGH_TOOL_RE.test(toolName))     return 'HIGH';
-  if (MEDIUM_TOOL_RE.test(toolName))   return 'MEDIUM';
+  const tokens = tokenizeToolName(toolName);
+  if (matchesToolKeyword(tokens, CRITICAL_TOOL_KEYWORDS)) return 'CRITICAL';
+  if (matchesToolKeyword(tokens, HIGH_TOOL_KEYWORDS))     return 'HIGH';
+  if (matchesToolKeyword(tokens, MEDIUM_TOOL_KEYWORDS))   return 'MEDIUM';
   return 'MEDIUM';
 }
 

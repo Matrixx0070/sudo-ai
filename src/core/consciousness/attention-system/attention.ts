@@ -75,6 +75,9 @@ function validateSignal(signal: AttentionSignal): void {
   if (typeof signal.timestamp !== 'string' || signal.timestamp.trim().length === 0) {
     throw new TypeError('submitSignal: signal.timestamp must be a non-empty ISO-8601 string');
   }
+  if (!isFinite(new Date(signal.timestamp).getTime())) {
+    throw new TypeError('submitSignal: signal.timestamp must be a parseable ISO-8601 date');
+  }
   if (typeof signal.ttl !== 'number' || !isFinite(signal.ttl) || signal.ttl < 0) {
     throw new TypeError('submitSignal: signal.ttl must be a finite non-negative number');
   }

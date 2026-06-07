@@ -150,10 +150,10 @@ export class EarningTracker {
           estimatedRevenue: 0,
           ctr: 0,
           avgViewDuration: 0,
-          recordedAt: todayISO(),
+          recordedAt: new Date().toISOString(),
         };
       } else {
-        metrics = parseAnalyticsRow(row, headers, title, todayISO());
+        metrics = parseAnalyticsRow(row, headers, title, new Date().toISOString());
         metrics.title = title || metrics.title;
       }
     } catch (err) {
@@ -220,15 +220,22 @@ export class EarningTracker {
     let total: number;
 
     if (period === 'all') {
+      // Sum only the latest snapshot per video_id — revenue_usd is cumulative
+      // per video, so summing every historical snapshot would multiply the
+      // total by the number of pulls (mirrors getTopVideos de-dup).
       const row = db.db
-        .prepare<[], { total: number }>('SELECT COALESCE(SUM(revenue_usd), 0) AS total FROM video_metrics')
+        .prepare<[], { total: number }>(
+          'SELECT COALESCE(SUM(revenue_usd), 0) AS total FROM video_metrics WHERE id IN (SELECT MAX(id) FROM video_metrics GROUP BY video_id)',
+        )
         .get();
       total = row?.total ?? 0;
     } else {
       // period is an ISO prefix like "2026-03" or "2026-03-27".
+      // De-dup to the latest snapshot per video_id within the period so that
+      // multiple snapshots in the same period are not double-counted.
       const row = db.db
         .prepare<{ prefix: string }, { total: number }>(
-          "SELECT COALESCE(SUM(revenue_usd), 0) AS total FROM video_metrics WHERE snapshot_at LIKE :prefix || '%'",
+          "SELECT COALESCE(SUM(revenue_usd), 0) AS total FROM video_metrics WHERE id IN (SELECT MAX(id) FROM video_metrics WHERE snapshot_at LIKE :prefix || '%' GROUP BY video_id)",
         )
         .get({ prefix: period });
       total = row?.total ?? 0;
@@ -277,7 +284,7 @@ export class EarningTracker {
       estimatedRevenue:  r.revenue_usd,
       ctr:               r.ctr,
       avgViewDuration:   0,
-      recordedAt:        r.snapshot_at.split('T')[0] ?? r.snapshot_at,
+      recordedAt:        r.snapshot_at, // keep full timestamp so upload-hour analytics work (was date-only → always 00:00 UTC); period filters use startsWith and are unaffected
     }));
 
     log.debug({ limit, resultCount: result.length }, 'Top videos fetched from SQLite');

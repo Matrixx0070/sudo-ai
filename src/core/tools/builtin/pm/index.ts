@@ -387,7 +387,12 @@ const timeTrackerTool: ToolDefinition = {
 
         case 'stop': {
           const entryId = params['entryId'] as string | undefined;
-          const running = entryId ? entries.find(e => e.id === entryId) : entries.find(e => !e.endTime);
+          if (entryId) {
+            const target = entries.find(e => e.id === entryId);
+            if (!target) return { success: false, output: `No timer found with id: ${entryId}` };
+            if (target.endTime) return { success: false, output: `Timer already stopped: ${entryId}` };
+          }
+          const running = entryId ? entries.find(e => e.id === entryId && !e.endTime) : entries.find(e => !e.endTime);
           if (!running) return { success: false, output: 'No running timer found.' };
           running.endTime = new Date().toISOString();
           const start = new Date(running.startTime).getTime();

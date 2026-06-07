@@ -22,7 +22,6 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/index.js';
 import { PATHS } from '../shared/index.js';
-import { debounce } from '../shared/index.js';
 import type { WorkspaceFile, WorkspaceFileName } from './types.js';
 
 const log = createLogger('workspace:files');
@@ -58,6 +57,8 @@ const WATCH_DEBOUNCE_MS = 200;
 export class WorkspaceManager extends EventEmitter {
   private readonly workspaceDir: string;
   private watcher: FSWatcher | null = null;
+  /** Per-filename debounce timers so concurrent changes to distinct files are not collapsed. */
+  private readonly changeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /**
    * @param workspaceDir - Absolute or relative path to the workspace directory.
@@ -168,14 +169,9 @@ export class WorkspaceManager extends EventEmitter {
       return;
     }
 
-    const debouncedHandler = debounce(
-      ((...args: unknown[]) => void this._onFileChange(args[0] as string | null)) as (...args: unknown[]) => void,
-      WATCH_DEBOUNCE_MS,
-    );
-
     try {
       this.watcher = watch(this.workspaceDir, { persistent: false }, (_event, filename) => {
-        debouncedHandler(filename);
+        this._debounceFileChange(filename);
       });
 
       this.watcher.on('error', (err) => {
@@ -197,11 +193,28 @@ export class WorkspaceManager extends EventEmitter {
       this.watcher = null;
       log.info('Workspace watcher stopped');
     }
+    for (const timer of this.changeTimers.values()) clearTimeout(timer);
+    this.changeTimers.clear();
   }
 
   // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
+
+  /**
+   * Debounce change events per filename so that concurrent changes to distinct
+   * files within WATCH_DEBOUNCE_MS are not collapsed into a single notification.
+   */
+  private _debounceFileChange(filename: string | null): void {
+    const key = filename ?? '';
+    const existing = this.changeTimers.get(key);
+    if (existing !== undefined) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.changeTimers.delete(key);
+      void this._onFileChange(filename);
+    }, WATCH_DEBOUNCE_MS);
+    this.changeTimers.set(key, timer);
+  }
 
   private async _onFileChange(filename: string | null): Promise<void> {
     if (!filename || !filename.endsWith('.md')) return;

@@ -53,7 +53,7 @@ function createMockVault(opts?: {
   const vaultData = new Map<string, string>();
 
   const mockVault = {
-    set: vi.fn<(...args: unknown[]) => Promise<void>>().mockImplementation(async (namespace, key, value, opts) => {
+    set: vi.fn<(...args: unknown[]) => Promise<void>>().mockImplementation(async (namespace, key, value, _callOpts) => {
       if (opts?.setThrows) {
         throw new Error('Vault set failed');
       }

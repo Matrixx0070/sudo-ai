@@ -97,10 +97,9 @@ async function scanDeps(scanPath: string, signal?: AbortSignal): Promise<Finding
       vulnerabilities?: Record<string, { severity: string; name: string }>;
     };
 
+    const severityMap = { critical: 'critical', high: 'high', moderate: 'medium', low: 'low' } as const;
     for (const [, vuln] of Object.entries(audit.vulnerabilities ?? {})) {
-      const severity = (['critical', 'high', 'medium', 'low'] as const).includes(
-        vuln.severity as 'critical',
-      ) ? (vuln.severity as Finding['severity']) : 'info';
+      const severity: Finding['severity'] = severityMap[vuln.severity as keyof typeof severityMap] ?? 'info';
       findings.push({ severity, category: 'npm-vulnerability', message: `${vuln.name} has a ${vuln.severity} vulnerability.` });
     }
   } catch (err) {

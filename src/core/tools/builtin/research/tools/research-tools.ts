@@ -10,10 +10,36 @@ import {
   fetchPubmed,
   fetchSemanticScholar,
   fetchPageText,
+  stripHtml,
   type PaperEntry,
 } from '../helpers.js';
 
 const logger = createLogger('research-builtin');
+
+/**
+ * Fetch an arXiv paper's abstract by its identifier.
+ *
+ * arXiv resolves papers by ID via the dedicated `id_list` parameter, not via an
+ * `all:` full-text search (which `fetchArxiv` always builds). Using `id_list`
+ * here ensures the abstract is actually retrieved for arXiv-ID lookups.
+ */
+async function fetchArxivAbstractById(arxivId: string): Promise<string> {
+  try {
+    const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}&max_results=1`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(20_000),
+      headers: { Accept: 'application/atom+xml' },
+    });
+    if (!res.ok) return '';
+    const xml = await res.text();
+    const entry = /<entry>([\s\S]*?)<\/entry>/.exec(xml)?.[1] ?? '';
+    const summary = /<summary>([\s\S]*?)<\/summary>/.exec(entry)?.[1] ?? '';
+    return stripHtml(summary.trim());
+  } catch (err) {
+    logger.warn({ arxivId, err: err instanceof Error ? err.message : String(err) }, 'arXiv id_list fetch failed');
+    return '';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // research.deep-search
@@ -179,8 +205,7 @@ export const paperSummarizerTool: ToolDefinition = {
 
       const arxivIdPattern = /^\d{4}\.\d{4,5}(v\d+)?$/;
       if (arxivIdPattern.test(url)) {
-        const papers = await fetchArxiv(`id:${url}`, 1);
-        if (papers.length > 0 && papers[0]) abstract = papers[0].abstract;
+        abstract = await fetchArxivAbstractById(url);
         url = `https://arxiv.org/abs/${url}`;
       }
 

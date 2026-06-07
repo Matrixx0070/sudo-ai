@@ -2,7 +2,8 @@ import { chromium } from 'playwright-core';
 
 const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
 const contexts = browser.contexts();
-const page = contexts[0]?.pages()[0] || await contexts[0].newPage();
+const ctx = contexts[0] ?? await browser.newContext();
+const page = ctx.pages()[0] ?? await ctx.newPage();
 
 await page.goto('http://localhost:3001', { waitUntil: 'networkidle', timeout: 15000 });
 await page.waitForTimeout(2000);
