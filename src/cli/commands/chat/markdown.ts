@@ -136,11 +136,12 @@ function renderToken(token: any): string {
 
     case 'list': {
       const ordered: boolean = token.ordered === true;
+      const startNum: number = typeof token.start === 'number' ? token.start : 1;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const items: string[] = (token.items ?? []).map((item: any, idx: number) => {
         const body = renderTokens(item.tokens ?? []).trimEnd();
         const prefix = ordered
-          ? `  ${idx + 1}  `
+          ? `  ${startNum + idx}  `
           : '  \u2022 ';
         return prefix + body;
       });

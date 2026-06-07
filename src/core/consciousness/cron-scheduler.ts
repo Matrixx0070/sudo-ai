@@ -461,7 +461,21 @@ export class CronScheduler {
           // Fire immediately
           this.fireTask(task);
         } else {
-          const timer = setTimeout(() => this.fireTask(task), delayMs);
+          // Clear any still-pending timer for this id before overwriting the
+          // map entry, otherwise the previous timer is orphaned (keeps the
+          // event loop alive and cannot be cancelled by stop()).
+          const existing = this.timers.get(task.id);
+          if (existing !== undefined) {
+            clearTimeout(existing);
+          }
+          const timer = setTimeout(() => {
+            // Remove our own entry once we fire, but only if it still points
+            // to this timer (a newer timer may have replaced it).
+            if (this.timers.get(task.id) === timer) {
+              this.timers.delete(task.id);
+            }
+            this.fireTask(task);
+          }, delayMs);
           this.timers.set(task.id, timer);
         }
 

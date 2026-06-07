@@ -81,7 +81,10 @@ function ModelsTab() {
             min="512"
             max="200000"
             value={modelConfig.maxTokens}
-            onChange={(e) => setModelConfig({ maxTokens: parseInt(e.target.value) })}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              if (!Number.isNaN(n)) setModelConfig({ maxTokens: n });
+            }}
             className="w-full bg-[var(--bg-primary)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
           />
         </div>

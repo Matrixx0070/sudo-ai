@@ -390,10 +390,20 @@ export class WebAdapter implements ChannelAdapter {
           if (senderWs) {
             try { senderWs.send(JSON.stringify({ type: 'user_echo', text: data.text })); } catch { /* best-effort */ }
           }
-          void this._dispatch(data.peerId, data.text).then(() => {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: true }));
-          });
+          void this._dispatch(data.peerId, data.text)
+            .then(() => {
+              if (res.headersSent || res.writableEnded) return;
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: true }));
+            })
+            .catch((err) => {
+              log.error({ peerId: data.peerId, err }, 'POST /api/message dispatch reply failed');
+              if (res.headersSent || res.writableEnded) return;
+              try {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: false }));
+              } catch { /* best-effort */ }
+            });
         } catch {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'Invalid JSON' }));

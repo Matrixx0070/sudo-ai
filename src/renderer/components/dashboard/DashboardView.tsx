@@ -64,18 +64,26 @@ export function DashboardView() {
   const getCrons = useIpcInvoke('cron:list');
 
   useEffect(() => {
-    getMetrics().then((data) => {
-      if (data) {
-        const { setSystemMetrics: setter } = useDashboardStore.getState();
-        setter(data as Parameters<typeof setter>[0]);
-      }
-    });
-    getCrons().then((data) => {
-      if (data) {
-        const { setCronJobs } = useDashboardStore.getState();
-        setCronJobs(data as Parameters<typeof setCronJobs>[0]);
-      }
-    });
+    getMetrics()
+      .then((data) => {
+        if (data) {
+          const { setSystemMetrics: setter } = useDashboardStore.getState();
+          setter(data as Parameters<typeof setter>[0]);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load system metrics', err);
+      });
+    getCrons()
+      .then((data) => {
+        if (data) {
+          const { setCronJobs } = useDashboardStore.getState();
+          setCronJobs(data as Parameters<typeof setCronJobs>[0]);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load cron jobs', err);
+      });
   }, []);
 
   useIpcOn('system:metrics', (...args) => {

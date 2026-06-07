@@ -222,13 +222,19 @@ export class AutoDream {
 
     // Hours since last run check.
     if (state) {
-      const hoursSince =
-        (Date.now() - new Date(state.lastRun).getTime()) / (1000 * 60 * 60);
-      if (hoursSince < HOURS_BETWEEN_CYCLES) {
-        appendLog(
-          `shouldRun: only ${hoursSince.toFixed(1)}h since last run (need ${HOURS_BETWEEN_CYCLES}h)`,
-        );
-        return false;
+      const lastRunMs = new Date(state.lastRun).getTime();
+      if (!Number.isFinite(lastRunMs)) {
+        // Invalid/missing lastRun (e.g. corrupt state). Treat as no prior run
+        // rather than letting NaN silently bypass the cooldown guard.
+        appendLog('shouldRun: state has invalid lastRun — treating as no prior run');
+      } else {
+        const hoursSince = (Date.now() - lastRunMs) / (1000 * 60 * 60);
+        if (hoursSince < HOURS_BETWEEN_CYCLES) {
+          appendLog(
+            `shouldRun: only ${hoursSince.toFixed(1)}h since last run (need ${HOURS_BETWEEN_CYCLES}h)`,
+          );
+          return false;
+        }
       }
     }
 

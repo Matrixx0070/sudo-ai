@@ -28,15 +28,15 @@ function periodToMs(period: Period): number {
 }
 
 function startOfMonth(offsetMonths: number): Date {
-  const d = new Date();
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  d.setMonth(d.getMonth() - offsetMonths);
-  return d;
+  // Anchor to UTC so the month label (yyyyMM) and the ISO bounds derived via
+  // toISOString() refer to the same calendar month. paid_date is stored as a
+  // UTC YYYY-MM-DD string, so UTC-anchored bounds also match the stored data.
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - offsetMonths, 1, 0, 0, 0, 0));
 }
 
 function yyyyMM(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -46,11 +46,66 @@ interface CronManagerLike {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** 5-field cron expression validator — each field must be *, digits, ranges, steps, or lists. */
-const FIELD_RE = /^(\*|[0-9,\-\/\*]+)$/;
+/**
+ * 5-field cron expression validator. Each field must be a `*`, a single value,
+ * a range (`a-b`), a step (`*\/n` or `a-b/n`), or a comma-separated list of the
+ * above — with all numeric values constrained to that field's valid range. This
+ * mirrors the range-aware validation performed by the cron manager so obviously
+ * impossible schedules (e.g. minute 60, hour 24, step 0) are rejected up front
+ * rather than silently installed as a job that never fires as intended.
+ */
+const FIELD_RANGES: ReadonlyArray<{ min: number; max: number }> = [
+  { min: 0, max: 59 }, // minute
+  { min: 0, max: 23 }, // hour
+  { min: 1, max: 31 }, // day-of-month
+  { min: 1, max: 12 }, // month
+  { min: 0, max: 7 }, // day-of-week (0 and 7 both = Sunday)
+];
+
+function isValidNumber(part: string, min: number, max: number): boolean {
+  if (!/^\d+$/.test(part)) return false;
+  const val = Number.parseInt(part, 10);
+  return val >= min && val <= max;
+}
+
+function isValidRangeOrValue(part: string, min: number, max: number): boolean {
+  const rangeMatch = part.match(/^(\d+)-(\d+)$/);
+  if (rangeMatch) {
+    const lo = Number.parseInt(rangeMatch[1]!, 10);
+    const hi = Number.parseInt(rangeMatch[2]!, 10);
+    return lo >= min && hi <= max && lo <= hi;
+  }
+  return isValidNumber(part, min, max);
+}
+
+function isValidFieldPart(part: string, min: number, max: number): boolean {
+  if (part === '*') return true;
+
+  // Step values: */n or a-b/n
+  const stepMatch = part.match(/^(.+)\/(\d+)$/);
+  if (stepMatch) {
+    const base = stepMatch[1]!;
+    const step = Number.parseInt(stepMatch[2]!, 10);
+    if (step < 1) return false;
+    return base === '*' || isValidRangeOrValue(base, min, max);
+  }
+
+  return isValidRangeOrValue(part, min, max);
+}
+
+function isValidField(field: string, min: number, max: number): boolean {
+  const parts = field.split(',');
+  // Reject empty tokens produced by malformed lists such as ",,," or "1,".
+  return parts.length > 0 && parts.every(p => p.length > 0 && isValidFieldPart(p, min, max));
+}
+
 function isValidCronExpression(expr: string): boolean {
   const fields = expr.trim().split(/\s+/);
-  return fields.length === 5 && fields.every(f => FIELD_RE.test(f));
+  if (fields.length !== 5) return false;
+  return fields.every((field, i) => {
+    const range = FIELD_RANGES[i]!;
+    return isValidField(field, range.min, range.max);
+  });
 }
 
 // ---------------------------------------------------------------------------

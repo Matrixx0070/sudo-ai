@@ -576,23 +576,39 @@ describe('Security: Prototype pollution prevention', () => {
 
   it('FED-ERR-31: prototype pollution attempt blocked', async () => {
     ts = await startServer(deps, makeAdminTokenBuf());
-    // Send a payload with __proto__ pollution attempt
-    const maliciousPayload = {
+    // Build the body as a raw JSON string so the literal "__proto__" and
+    // "constructor" keys are actually transmitted. An object literal would
+    // treat `__proto__:` as a prototype assignment (dropped by JSON.stringify),
+    // never exercising the server-side prototype-pollution defense.
+    const rawBody = JSON.stringify({
       errorSignature: 'TestError: PrototypePollution',
       botVersion: '1.0.0',
       peerId: 'test-peer-prototype',
       timestamp: Date.now(),
       severity: 'HIGH',
-      __proto__: { admin: true },
-      constructor: { prototype: { isAdmin: true } },
-    };
-    const { status } = await doPost(
-      `${ts.baseUrl}/v1/federation/error-report`,
-      maliciousPayload,
-      FEDERATION_TOKEN
+    });
+    // Inject literal pollution keys into the serialized JSON text.
+    const maliciousBody = rawBody.replace(
+      /}$/,
+      ',"__proto__":{"admin":true},"constructor":{"prototype":{"isAdmin":true}}}'
     );
-    // Should still process the request (200) but without pollution
+
+    const resp = await fetch(`${ts.baseUrl}/v1/federation/error-report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${FEDERATION_TOKEN}`,
+      },
+      body: maliciousBody,
+    });
+    const status = resp.status;
+    await resp.json();
+
+    // Should still process the request (200) but without polluting prototypes.
     expect(status).toBe(200);
+    expect(({} as Record<string, unknown>).admin).toBeUndefined();
+    expect((Object.prototype as Record<string, unknown>).admin).toBeUndefined();
+    expect((Object.prototype as Record<string, unknown>).isAdmin).toBeUndefined();
   });
 });
 

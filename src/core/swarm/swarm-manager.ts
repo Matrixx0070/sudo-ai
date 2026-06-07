@@ -205,7 +205,7 @@ export class SwarmManager {
       for (const opt of options) {
         const specScore = agent.specialization
           .filter(s => words.some(w => s.toLowerCase().includes(w))).length;
-        const roleScore = opt.toLowerCase().includes(agent.role) ? 2 : 0;
+        const roleScore = opt.toLowerCase().includes(agent.role.toLowerCase()) ? 2 : 0;
         const score     = specScore + roleScore;
         if (score > bestScore) { bestScore = score; bestOption = opt; }
       }

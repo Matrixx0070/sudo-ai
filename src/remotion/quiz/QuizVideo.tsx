@@ -239,7 +239,11 @@ export const QuizVideo: React.FC<{ config?: QuizConfig }> = ({ config = SAMPLE_Q
     cursor += FRAMES.PER_QUESTION;
   });
 
-  const diffProgress = (totalQuestions - 1) / Math.max(1, totalQuestions - 1);
+  const DIFFICULTY_ORDER: QuizQuestion['difficulty'][] = ['easy', 'medium', 'hard', 'impossible'];
+  const highestDifficulty = totalQuestions > 0
+    ? getDifficultyAtIndex(totalQuestions - 1, totalQuestions)
+    : 'easy';
+  const diffProgress = DIFFICULTY_ORDER.indexOf(highestDifficulty) / (DIFFICULTY_ORDER.length - 1);
 
   return (
     <AbsoluteFill style={{ fontFamily: "'Arial Black', Impact, sans-serif" }}>

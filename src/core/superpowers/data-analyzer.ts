@@ -21,12 +21,90 @@ interface ColumnStats {
   unique?: number;
 }
 
+/**
+ * Tokenize CSV text into rows of raw string fields, honoring RFC-4180 quoting:
+ * quoted fields may contain commas, newlines, and escaped quotes ("").
+ * Unquoted fields are trimmed of surrounding whitespace to match prior behavior.
+ */
+function parseCSVRecords(rawContent: string): string[][] {
+  // Trim surrounding whitespace/blank lines (outside any field) to match the
+  // prior behavior of `content.trim()` before line splitting.
+  const content = rawContent.trim();
+  const records: string[][] = [];
+  let field = '';
+  let fieldQuoted = false;
+  let row: string[] = [];
+  let inQuotes = false;
+  let i = 0;
+  const n = content.length;
+
+  const pushField = () => {
+    row.push(fieldQuoted ? field : field.trim());
+    field = '';
+    fieldQuoted = false;
+  };
+  const pushRow = () => {
+    pushField();
+    records.push(row);
+    row = [];
+  };
+
+  while (i < n) {
+    const ch = content[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (content[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      field += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      fieldQuoted = true;
+      i++;
+      continue;
+    }
+    if (ch === ',') {
+      pushField();
+      i++;
+      continue;
+    }
+    if (ch === '\r') {
+      // Handle CRLF and bare CR as a single line terminator.
+      pushRow();
+      if (content[i + 1] === '\n') i++;
+      i++;
+      continue;
+    }
+    if (ch === '\n') {
+      pushRow();
+      i++;
+      continue;
+    }
+    field += ch;
+    i++;
+  }
+  // Flush the trailing field/row unless the content ended with a terminator
+  // that already produced an empty trailing record.
+  if (field !== '' || fieldQuoted || row.length > 0) {
+    pushRow();
+  }
+  return records;
+}
+
 function parseCSV(content: string): Row[] {
-  const lines = content.trim().split('\n');
-  if (lines.length === 0) return [];
-  const headers = (lines[0] ?? '').split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
-  return lines.slice(1).map((line) => {
-    const values = line.split(',').map((v) => v.trim().replace(/^"|"$/g, ''));
+  const records = parseCSVRecords(content);
+  if (records.length === 0) return [];
+  const headers = records[0] ?? [];
+  return records.slice(1).map((values) => {
     const row: Row = {};
     headers.forEach((h, i) => {
       const v = values[i] ?? '';

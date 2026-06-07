@@ -156,16 +156,15 @@ export class AutoSummarizer {
 
     log.info({ sessionId }, 'Summarising session');
 
-    // Read messages from mind.db (might be same DB or separate — use readonly connection)
+    // Read messages from the same database this instance was constructed with,
+    // so summaries are derived from (and written to) a single consistent DB.
     let messages: MessageRow[] = [];
     try {
-      const mindDb = new Database(MIND_DB, { readonly: true });
-      messages = mindDb.prepare<{ sid: string }, MessageRow>(
+      messages = this.db.prepare<{ sid: string }, MessageRow>(
         `SELECT content, role FROM messages WHERE session_id = :sid ORDER BY id ASC`,
       ).all({ sid: sessionId });
-      mindDb.close();
     } catch (err) {
-      log.warn({ sessionId, err: String(err) }, 'Could not read messages from mind.db');
+      log.warn({ sessionId, err: String(err) }, 'Could not read messages from database');
     }
 
     const summaryText    = buildSummaryText(sessionId, messages);

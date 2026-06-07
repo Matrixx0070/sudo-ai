@@ -11,7 +11,10 @@ import { HookManager } from '../../src/core/hooks/index.js';
 import { GitHubIssuesConnector } from '../../src/core/channels/github-issues.js';
 import { MetricsCollector } from '../../src/core/health/metrics.js';
 
-const TEST_DB_PATH = '/tmp/test-error-memory.db';
+// Use an in-memory SQLite DB so each test run gets a fully isolated, ephemeral
+// store. This avoids leaking error_memory / auto_fix_rate_log rows across runs
+// and prevents parallel test processes from corrupting a shared on-disk file.
+const TEST_DB_PATH = ':memory:';
 
 describe('ErrorReporter', () => {
   let errorMemory: ErrorMemory;

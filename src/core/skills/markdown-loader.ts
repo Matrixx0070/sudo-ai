@@ -48,7 +48,7 @@ export interface MarkdownSkill {
 // ---------------------------------------------------------------------------
 
 function parseFrontmatter(raw: string): { meta: Record<string, string | string[]>; body: string } {
-  const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) return { meta: {}, body: raw };
   const meta: Record<string, string | string[]> = {};
   for (const line of match[1].split('\n')) {

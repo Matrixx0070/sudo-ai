@@ -191,7 +191,17 @@ export class CalendarClient {
 
     if (this.stub) {
       log.warn({ id, patch }, 'CalendarClient stub: updateEvent (not persisted)');
-      return { id, title: patch.title ?? '', start: patch.start ?? '', end: patch.end ?? '' };
+      // Stub mode keeps no prior state, so only the patched fields are known.
+      // Echo back every field supplied in the patch (including optional ones
+      // like location/description/attendees) rather than dropping them, and
+      // fall back to empty strings only for required fields the patch omits.
+      return {
+        ...patch,
+        id,
+        title: patch.title ?? '',
+        start: patch.start ?? '',
+        end: patch.end ?? '',
+      };
     }
     this._requireApi();
 

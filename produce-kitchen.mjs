@@ -364,6 +364,9 @@ async function generateVoice() {
     { encoding: 'utf-8' }
   ).trim();
   const duration = parseFloat(durationStr);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error(`Invalid narration duration from ffprobe: "${durationStr}"`);
+  }
   console.log(`⏱️ Narration duration: ${duration.toFixed(1)}s`);
 
   return { audioPath, duration };

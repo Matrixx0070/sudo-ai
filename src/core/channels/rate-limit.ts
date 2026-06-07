@@ -12,7 +12,7 @@
  *  - Hook emission: rate-limit:triggered fires once per block-window transition.
  */
 
-import { writeFile, rename, readFile, mkdir } from 'node:fs/promises';
+import { writeFile, rename, readFile, mkdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -343,8 +343,10 @@ class RateLimiterImpl implements RateLimiter {
       await rename(tmpFile, PERSIST_FILE);
     } catch (err) {
       log.warn({ err: String(err) }, 'Failed to persist rate limits');
-      // Best-effort cleanup of tmp file.
-      try { await rename(tmpFile, tmpFile + '.failed'); } catch { /* ignore */ }
+      // Best-effort cleanup of tmp file. Unlink rather than rename to a
+      // .failed variant, since each tmpFile has a unique UUID and renaming on
+      // every recurring failure would leak unbounded orphan files in WORKSPACE_DIR.
+      try { await unlink(tmpFile); } catch { /* ignore */ }
     }
   }
 

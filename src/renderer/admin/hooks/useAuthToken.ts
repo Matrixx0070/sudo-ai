@@ -35,9 +35,11 @@ export function useAuthToken(): string {
           } catch {
             // ignore
           }
-          // strip token from URL bar
+          // strip token from URL bar, preserving other query params
           try {
-            history.replaceState(null, '', window.location.pathname);
+            params.delete('token');
+            const rest = params.toString();
+            history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : ''));
           } catch {
             // ignore
           }

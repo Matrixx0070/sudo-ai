@@ -252,8 +252,8 @@ function AccessLogTab() {
           { key: 'path', header: 'Path', width: '32%', render: (row) => <code style={{ fontSize: '12px', fontFamily: 'monospace', color: '#d1d5db' }}>{String(row['path'])}</code> },
           { key: 'status', header: 'Status', width: '10%', sortable: true, render: (row) => <span style={{ fontWeight: 700, fontSize: '13px', color: statusColor(Number(row['status'])) }}>{String(row['status'])}</span> },
         ]}
-        data={log as unknown as Record<string, unknown>[]}
-        keyField="timestamp"
+        data={log.map((e, i) => ({ ...e, _key: `${e.timestamp}|${e.ip}|${e.method}|${e.path}|${e.status}|${i}` })) as unknown as Record<string, unknown>[]}
+        keyField="_key"
         emptyMessage="No access log entries."
       />
     </div>

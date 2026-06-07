@@ -29,6 +29,7 @@ const DB_PATH = path.resolve('data/mind.db');
 let _daemon: EventDaemon | null = null;
 let _startedAt: string | null = null;
 const DEFAULT_POLL_MS = 60_000;
+let _pollMs = DEFAULT_POLL_MS;
 
 function getDaemon(): EventDaemon {
   if (!_daemon) {
@@ -42,6 +43,7 @@ function ensureStarted(): EventDaemon {
   const d = getDaemon();
   if (!d.isRunning()) {
     d.start(DEFAULT_POLL_MS);
+    _pollMs = DEFAULT_POLL_MS;
     _startedAt = new Date().toISOString();
     logger.info({ startedAt: _startedAt }, 'Event daemon auto-started by tool call');
   }
@@ -137,6 +139,7 @@ export const eventDaemonTool: ToolDefinition = {
             const rawPoll = Number(params['pollIntervalMs'] ?? DEFAULT_POLL_MS);
             const pollMs = Number.isFinite(rawPoll) ? Math.max(5_000, rawPoll) : DEFAULT_POLL_MS;
             d.start(pollMs);
+            _pollMs = pollMs;
             _startedAt = new Date().toISOString();
           }
 
@@ -150,7 +153,7 @@ export const eventDaemonTool: ToolDefinition = {
             `Status: ${running ? 'RUNNING' : 'STOPPED'}`,
             `Started at: ${_startedAt ?? 'not started'}`,
             `Uptime: ${uptime}`,
-            `Poll interval: ${DEFAULT_POLL_MS / 1_000}s`,
+            `Poll interval: ${_pollMs / 1_000}s`,
             `Total events: ${stats.totalEvents}`,
             `Handled: ${stats.handled} | Unhandled: ${stats.unhandled}`,
           ];

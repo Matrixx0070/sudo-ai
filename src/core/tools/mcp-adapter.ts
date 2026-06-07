@@ -107,7 +107,8 @@ export interface MCPAdapterLike {
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
-  id: string;
+  /** Present for requests; omitted for notifications (JSON-RPC 2.0 spec). */
+  id?: string;
   method: string;
   params?: unknown;
 }
@@ -668,7 +669,8 @@ export class MCPAdapter {
 
   /** Send a JSON-RPC notification (no response expected). */
   private _notify(method: string, params: unknown): void {
-    this._send({ jsonrpc: '2.0', id: randomUUID(), method, params } as JsonRpcRequest);
+    // Per JSON-RPC 2.0, a notification MUST NOT include an `id` member.
+    this._send({ jsonrpc: '2.0', method, params });
   }
 
   /** Serialise and send a JSON-RPC message based on transport type. */

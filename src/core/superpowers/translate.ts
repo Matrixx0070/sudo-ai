@@ -50,7 +50,7 @@ function extractBlocks(text: string): { sanitized: string; blocks: ExtractedBloc
 function restoreBlocks(translated: string, blocks: ExtractedBlock[]): string {
   let result = translated;
   for (const { placeholder, content } of blocks) {
-    result = result.replace(placeholder, content);
+    result = result.replace(placeholder, () => content);
   }
   return result;
 }

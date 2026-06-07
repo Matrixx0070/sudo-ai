@@ -52,8 +52,8 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ card }) => {
 
   // Strip ANSI from args/result before display to prevent terminal corruption.
   const safeArgs = stripAnsi(args);
-  const maxArgLen = 40 - name.length;
-  const displayArgs = safeArgs.length > maxArgLen ? safeArgs.slice(0, maxArgLen - 1) + '…' : safeArgs;
+  const maxArgLen = Math.max(4, 40 - name.length);
+  const displayArgs = safeArgs.length > maxArgLen ? safeArgs.slice(0, Math.max(0, maxArgLen - 1)) + '…' : safeArgs;
 
   const safeResultPreview = stripAnsi(resultPreview ?? '');
   const previewLines = safeResultPreview || '0 lines';

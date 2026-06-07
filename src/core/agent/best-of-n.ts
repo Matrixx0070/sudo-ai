@@ -246,8 +246,9 @@ export class BestOfNExecutor {
     const branchName = `best-of-n-${index}-${genId().slice(0, 8)}`;
 
     try {
-      // Create a worktree for this candidate
-      const worktreeInfo = await this.worktreeManager.createWorktree(`best-of-n-${index}-${genId()}`);
+      // Create a worktree for this candidate. Reuse branchName so the
+      // error-path `branch` field references the name actually requested.
+      const worktreeInfo = await this.worktreeManager.createWorktree(branchName);
 
       const spawnOpts: SpawnOptions = {
         ...opts,

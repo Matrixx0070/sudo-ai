@@ -49,6 +49,7 @@ function ChannelCard({ channel, onToggle, onUpdate, onTest, toggling, testing, t
 
   const status = channelStatus(channel);
   const tokenKey = (channel.config?.tokenEnv as string) ?? `${channel.type.toUpperCase()}_TOKEN`;
+  const allowedUsersConfigured = channel.config?.allowedUsers != null;
   const allowedCount = Array.isArray(channel.config?.allowedUsers)
     ? (channel.config.allowedUsers as unknown[]).length
     : (channel.config?.allowedUsers as number) ?? 0;
@@ -142,7 +143,7 @@ function ChannelCard({ channel, onToggle, onUpdate, onTest, toggling, testing, t
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
           <span style={{ color: '#9ca3af' }}>Allowed users</span>
-          <span style={{ color: '#f9fafb', fontWeight: 600 }}>{allowedCount === 0 ? 'All' : allowedCount}</span>
+          <span style={{ color: '#f9fafb', fontWeight: 600 }}>{!allowedUsersConfigured ? 'All' : allowedCount}</span>
         </div>
       </div>
 

@@ -20,7 +20,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { writeFile, readFile, mkdir } from 'node:fs/promises';
+import { writeFile, readFile, mkdir, rm, mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -266,39 +266,49 @@ describe('Rate Limiter — Token Bucket', () => {
   // bucket state is restored (tests the serialisation + validation logic).
   // -------------------------------------------------------------------------
   it('9. persistence: write valid JSON → _loadPersisted restores bucket state', async () => {
-    vi.resetModules();
-    process.env['SUDO_RATE_LIMIT_PER_MIN'] = '10';
-    process.env['SUDO_RATE_LIMIT_BURST'] = '0';
-    process.env['SUDO_RATE_LIMIT_PERSIST'] = '1';
+    const ORIGINAL_CWD = process.cwd();
+    // The rate limiter resolves WORKSPACE_DIR = process.cwd()/workspace at import
+    // time. chdir into a fresh temp dir BEFORE importing so this test reads,
+    // writes, and deletes an isolated rate-limits.json and never touches the
+    // real workspace/rate-limits.json.
+    const tempCwd = await mkdtemp(join(tmpdir(), 'rate-limit-test-'));
+    process.chdir(tempCwd);
+    try {
+      vi.resetModules();
+      process.env['SUDO_RATE_LIMIT_PER_MIN'] = '10';
+      process.env['SUDO_RATE_LIMIT_BURST'] = '0';
+      process.env['SUDO_RATE_LIMIT_PERSIST'] = '1';
 
-    const { rateLimiter: rl } = await import('../../src/core/channels/rate-limit.js');
-    const impl = rl as unknown as {
-      _loadPersisted(): Promise<void>;
-      buckets: Map<string, { tokens: number; lastRefill: number; lastAccess: number; burstWarned: boolean }>;
-    };
+      const { rateLimiter: rl } = await import('../../src/core/channels/rate-limit.js');
+      const impl = rl as unknown as {
+        _loadPersisted(): Promise<void>;
+        buckets: Map<string, { tokens: number; lastRefill: number; lastAccess: number; burstWarned: boolean }>;
+      };
 
-    const peer = `persist-peer-${randomUUID()}`;
-    const key = `telegram::${peer}`;
-    const now = Date.now();
+      const peer = `persist-peer-${randomUUID()}`;
+      const key = `telegram::${peer}`;
+      const now = Date.now();
 
-    // Directly inject a realistic persisted bucket into the workspace file
-    // (simulate what _flushPersisted would write).
-    const workspaceDir = join(process.cwd(), 'workspace');
-    await mkdir(workspaceDir, { recursive: true });
-    const persistFile = join(workspaceDir, 'rate-limits.json');
-    const savedBucket = { tokens: 3.5, lastRefill: now, lastAccess: now, burstWarned: false };
-    await writeFile(persistFile, JSON.stringify({ [key]: savedBucket }), 'utf-8');
+      // cwd is the temp dir, so this writes into the isolated workspace.
+      const workspaceDir = join(process.cwd(), 'workspace');
+      await mkdir(workspaceDir, { recursive: true });
+      const persistFile = join(workspaceDir, 'rate-limits.json');
+      const savedBucket = { tokens: 3.5, lastRefill: now, lastAccess: now, burstWarned: false };
+      await writeFile(persistFile, JSON.stringify({ [key]: savedBucket }), 'utf-8');
 
-    // Clear buckets and reload.
-    impl.buckets.clear();
-    await impl._loadPersisted();
+      // Clear buckets and reload.
+      impl.buckets.clear();
+      await impl._loadPersisted();
 
-    const restored = impl.buckets.get(key);
-    expect(restored).toBeDefined();
-    expect(restored!.tokens).toBeCloseTo(3.5);
-    expect(restored!.burstWarned).toBe(false);
-
-    delete process.env['SUDO_RATE_LIMIT_PERSIST'];
+      const restored = impl.buckets.get(key);
+      expect(restored).toBeDefined();
+      expect(restored!.tokens).toBeCloseTo(3.5);
+      expect(restored!.burstWarned).toBe(false);
+    } finally {
+      process.chdir(ORIGINAL_CWD);
+      await rm(tempCwd, { recursive: true, force: true });
+      delete process.env['SUDO_RATE_LIMIT_PERSIST'];
+    }
   });
 
   // -------------------------------------------------------------------------

@@ -43,7 +43,8 @@ export const feedbackTool: ToolDefinition = {
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const action = (params['action'] as string | undefined) ?? 'stats';
-    const days   = Math.min(Number(params['days'] ?? 30), 365);
+    const rawDays = Number(params['days'] ?? 30);
+    const days   = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 365) : 30;
     const since  = new Date(Date.now() - days * 86_400_000).toISOString();
 
     logger.info({ session: ctx.sessionId, action, days }, 'meta.feedback invoked');

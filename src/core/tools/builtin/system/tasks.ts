@@ -8,7 +8,7 @@
  * Operations: create | list | update | complete | delete
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
@@ -59,7 +59,39 @@ async function loadTasks(): Promise<Task[]> {
 
 async function saveTasks(tasks: Task[]): Promise<void> {
   await mkdir(TASKS_DIR, { recursive: true });
-  await writeFile(TASKS_FILE, JSON.stringify(tasks, null, 2), 'utf8');
+  // Write atomically: write to a temp file then rename so a crash mid-write
+  // cannot leave TASKS_FILE truncated/corrupt.
+  const tmpFile = `${TASKS_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await writeFile(tmpFile, JSON.stringify(tasks, null, 2), 'utf8');
+  await rename(tmpFile, TASKS_FILE);
+}
+
+// Serialize all read-modify-write operations so concurrent invocations cannot
+// clobber each other's updates. Each operation awaits the previous one.
+let opQueue: Promise<unknown> = Promise.resolve();
+
+function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = opQueue.then(fn, fn);
+  // Keep the chain alive regardless of whether fn rejected.
+  opQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/**
+ * Find a single task by exact id, or by unique prefix when no exact match
+ * exists. Returns 'ambiguous' when a prefix matches more than one task so the
+ * caller can refuse to act on the wrong task.
+ */
+function findTask(tasks: Task[], id: string): Task | undefined | 'ambiguous' {
+  const exact = tasks.find((t) => t.id === id);
+  if (exact) return exact;
+  const matches = tasks.filter((t) => t.id.startsWith(id));
+  if (matches.length === 0) return undefined;
+  if (matches.length > 1) return 'ambiguous';
+  return matches[0];
 }
 
 function sortTasks(tasks: Task[]): Task[] {
@@ -139,7 +171,8 @@ async function opUpdate(
   if (!id) return { success: false, output: 'system.tasks update: "id" is required.', data: {} };
 
   const tasks = await loadTasks();
-  const task = tasks.find((t) => t.id.startsWith(id));
+  const task = findTask(tasks, id);
+  if (task === 'ambiguous') return { success: false, output: `system.tasks: id "${id}" matches multiple tasks; provide a more specific id.`, data: {} };
   if (!task) return { success: false, output: `system.tasks: no task found matching id "${id}".`, data: {} };
 
   const validStatuses: TaskStatus[] = ['pending', 'in-progress', 'blocked', 'done'];
@@ -165,7 +198,8 @@ async function opComplete(
   if (!id) return { success: false, output: 'system.tasks complete: "id" is required.', data: {} };
 
   const tasks = await loadTasks();
-  const task = tasks.find((t) => t.id.startsWith(id));
+  const task = findTask(tasks, id);
+  if (task === 'ambiguous') return { success: false, output: `system.tasks: id "${id}" matches multiple tasks; provide a more specific id.`, data: {} };
   if (!task) return { success: false, output: `system.tasks: no task found matching id "${id}".`, data: {} };
 
   task.status = 'done';
@@ -184,7 +218,13 @@ async function opDelete(
   if (!id) return { success: false, output: 'system.tasks delete: "id" is required.', data: {} };
 
   const tasks = await loadTasks();
-  const idx = tasks.findIndex((t) => t.id.startsWith(id));
+  const exactIdx = tasks.findIndex((t) => t.id === id);
+  const prefixMatches = tasks.filter((t) => t.id.startsWith(id));
+  let idx = exactIdx;
+  if (idx === -1) {
+    if (prefixMatches.length > 1) return { success: false, output: `system.tasks: id "${id}" matches multiple tasks; provide a more specific id.`, data: {} };
+    idx = tasks.findIndex((t) => t.id.startsWith(id));
+  }
   if (idx === -1) return { success: false, output: `system.tasks: no task found matching id "${id}".`, data: {} };
 
   const [removed] = tasks.splice(idx, 1);
@@ -238,15 +278,19 @@ export const tasksTool: ToolDefinition = {
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const operation = String(params['operation'] ?? '');
     try {
-      switch (operation) {
-        case 'create':   return await opCreate(params, ctx);
-        case 'list':     return await opList(params, ctx);
-        case 'update':   return await opUpdate(params, ctx);
-        case 'complete': return await opComplete(params, ctx);
-        case 'delete':   return await opDelete(params, ctx);
-        default:
-          return { success: false, output: `system.tasks: unknown operation "${operation}".`, data: {} };
-      }
+      // Serialize all operations so concurrent read-modify-write invocations
+      // cannot clobber each other's updates.
+      return await withLock(async () => {
+        switch (operation) {
+          case 'create':   return await opCreate(params, ctx);
+          case 'list':     return await opList(params, ctx);
+          case 'update':   return await opUpdate(params, ctx);
+          case 'complete': return await opComplete(params, ctx);
+          case 'delete':   return await opDelete(params, ctx);
+          default:
+            return { success: false, output: `system.tasks: unknown operation "${operation}".`, data: {} };
+        }
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error({ session: ctx.sessionId, operation, err }, 'Tasks operation failed');
