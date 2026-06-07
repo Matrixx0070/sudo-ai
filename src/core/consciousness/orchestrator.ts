@@ -371,6 +371,19 @@ export class ConsciousnessOrchestrator {
       } catch (e) { swallow('procedural compile')(e); }
     }
 
+    // Theme 4.3: episodic -> semantic consolidation — fold a dominant recurring
+    // episode topic into a generalized 'semantic' meta-episode (deduped by topic).
+    // Additive learning only. Opt-in (SUDO_CONSCIOUSNESS_SEMANTIC=1), ZDR-gated,
+    // fail-open.
+    if (process.env['SUDO_CONSCIOUSNESS_SEMANTIC'] === '1' && !this._zdrEnabled) {
+      try {
+        const semantic = this.episodicMemory.consolidateToSemantic();
+        if (semantic) {
+          log.info({ topic: semantic.topic }, 'EpisodicMemory: folded episodes into a semantic generalization');
+        }
+      } catch (e) { swallow('semantic consolidate')(e); }
+    }
+
     // Theme 4.2: CLOSE the WorldModel -> surprise loop — resolve the turn's tool-use
     // prediction against what actually happened (matched = the turn used tools).
     // surpriseEngine.evaluate() also records the outcome on the world model (so we
