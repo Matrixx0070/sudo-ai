@@ -106,6 +106,13 @@ export interface SessionLike {
   channel?: string;
   /** Originating peer/user ID for approval routing. */
   peerId?: string;
+  /**
+   * Ad-hoc session metadata stored by the agent loop for next-turn priming
+   * (e.g. _feedbackTierAdjustment, _consciousnessEndContext). Keyed loosely
+   * because these fields are written/read dynamically and are not persisted
+   * inline. `unknown` keeps reads type-safe (callers must narrow).
+   */
+  [key: string]: unknown;
 }
 
 export type Emitter = (event: AgentEvent) => void;
