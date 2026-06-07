@@ -10,7 +10,7 @@
  * Security: path traversal protection, kill-switches, MIME types.
  */
 
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, statSync, readFileSync } from 'node:fs';
 import { join, resolve, extname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -39,16 +39,18 @@ function generateNonce(): string {
 }
 
 /**
- * Build CSP header for HTML pages. Uses nonce for script/style, strict defaults.
+ * Build a strict, nonce-based CSP header for HTML pages. The per-request nonce
+ * authorizes inline <script>/<style> tags (stamped into the served markup by
+ * injectNonce); 'self' continues to cover external bundles and stylesheets.
+ * No 'unsafe-inline' — inline content is permitted only via the matching nonce.
+ * The nonce MUST be the first source token in script-src/style-src so a literal
+ * `style-src 'nonce-…'` appears in the header.
  */
-function buildCSPHeader(_nonce: string): string {
-  // NOTE: nonce is generated per-request but Vite-built HTML does not inject it
-  // into <script>/<style> tags.  Using 'self' as the pragmatic fallback for
-  // built SPAs served from dist/renderer/.
+export function buildSpaCSPHeader(nonce: string): string {
   return [
     `default-src 'self'`,
-    `script-src 'self' 'unsafe-inline'`,
-    `style-src 'self' 'unsafe-inline'`,
+    `script-src 'nonce-${nonce}' 'self'`,
+    `style-src 'nonce-${nonce}' 'self'`,
     `img-src 'self' data: blob:`,
     `font-src 'self'`,
     `connect-src 'self' ws: wss: http://127.0.0.1:* ws://127.0.0.1:*`,
@@ -56,6 +58,23 @@ function buildCSPHeader(_nonce: string): string {
     `base-uri 'self'`,
     `frame-ancestors 'none'`,
   ].join('; ');
+}
+
+/**
+ * Stamp the CSP nonce onto inline <script>/<style> tags of an HTML document and
+ * expose it via a <meta name="csp-nonce"> tag so runtime style/script injectors
+ * (e.g. styled-components) can read it. Tags that already carry a nonce are left
+ * untouched; external <script src>/<link rel=stylesheet> are covered by 'self'.
+ */
+function injectNonce(html: string, nonce: string): string {
+  let out = html
+    .replace(/<script(?![^>]*\bnonce=)/gi, `<script nonce="${nonce}"`)
+    .replace(/<style(?![^>]*\bnonce=)/gi, `<style nonce="${nonce}"`);
+  const meta = `<meta name="csp-nonce" content="${nonce}">`;
+  if (/<head[^>]*>/i.test(out)) {
+    out = out.replace(/<head([^>]*)>/i, `<head$1>${meta}`);
+  }
+  return out;
 }
 
 /**
@@ -111,10 +130,17 @@ export function serveStaticFile(req: IncomingMessage, res: ServerResponse, pathn
     'Cache-Control': isProduction ? 'public, max-age=31536000, immutable' : 'no-cache',
   };
 
-  // Add CSP header for HTML files
+  // HTML files: stamp a per-request CSP nonce into the document and serve the
+  // rewritten markup. We can't stream raw bytes here because the inline tags are
+  // rewritten to carry the nonce that the CSP header authorizes.
   if (ext === '.html') {
     const nonce = generateNonce();
-    headers['Content-Security-Policy'] = buildCSPHeader(nonce);
+    headers['Content-Security-Policy'] = buildSpaCSPHeader(nonce);
+    if (res.headersSent) return true;
+    const html = injectNonce(readFileSync(resolved, 'utf-8'), nonce);
+    res.writeHead(200, headers);
+    res.end(html);
+    return true;
   }
 
   if (res.headersSent) return true;

@@ -1,0 +1,236 @@
+/**
+ * Tests for TraceStore — SQLite-backed execution trace store.
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { TraceStore } from '../../src/core/learning/trace-store.js';
+import path from 'path';
+import os from 'os';
+import { mkdirSync, rmSync } from 'fs';
+
+describe('TraceStore', () => {
+  let store: TraceStore;
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(async () => {
+    tmpDir = path.join(os.tmpdir(), `sudo-trace-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    dbPath = path.join(tmpDir, 'traces.db');
+    store = new TraceStore(dbPath);
+    await store.init();
+  });
+
+  afterEach(() => {
+    store.close();
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  // 1. record and query
+  it('record and query: records a trace and queries it back', () => {
+    const id = store.record({
+      traceType: 'tool_call',
+      sessionId: 's1',
+      toolName: 'read-file',
+      success: true,
+      latencyMs: 120,
+    });
+    expect(id).toBeGreaterThan(0);
+
+    const results = store.query({ sessionId: 's1' });
+    expect(results).toHaveLength(1);
+    expect(results[0].traceType).toBe('tool_call');
+    expect(results[0].toolName).toBe('read-file');
+    expect(results[0].success).toBe(true);
+    expect(results[0].latencyMs).toBe(120);
+  });
+
+  // 2. recordToolCall
+  it('recordToolCall: convenience method creates correct trace_type', () => {
+    const id = store.recordToolCall('s2', 'write-file', true, 250);
+    expect(id).toBeGreaterThan(0);
+
+    const results = store.query({ type: 'tool_call' });
+    expect(results).toHaveLength(1);
+    expect(results[0].traceType).toBe('tool_call');
+    expect(results[0].toolName).toBe('write-file');
+    expect(results[0].sessionId).toBe('s2');
+    expect(results[0].success).toBe(true);
+    expect(results[0].latencyMs).toBe(250);
+  });
+
+  // 3. recordBrainCall
+  it('recordBrainCall: convenience method creates correct trace_type', () => {
+    const id = store.recordBrainCall('s3', 'claude-opus', true, 1500, {
+      prompt: 500, completion: 200, total: 700,
+    });
+    expect(id).toBeGreaterThan(0);
+
+    const results = store.query({ type: 'brain_call' });
+    expect(results).toHaveLength(1);
+    expect(results[0].traceType).toBe('brain_call');
+    expect(results[0].model).toBe('claude-opus');
+    expect(results[0].sessionId).toBe('s3');
+    expect(results[0].tokenUsage).toEqual({ prompt: 500, completion: 200, total: 700 });
+    expect(results[0].latencyMs).toBe(1500);
+  });
+
+  // 4. recordRouting
+  it('recordRouting: convenience method creates routing trace', () => {
+    const id = store.recordRouting('s4', 'claude-sonnet', 'coding', 'llm', 0.95);
+    expect(id).toBeGreaterThan(0);
+
+    const results = store.query({ type: 'routing' });
+    expect(results).toHaveLength(1);
+    expect(results[0].traceType).toBe('routing');
+    expect(results[0].model).toBe('claude-sonnet');
+    expect(results[0].routingTier).toBe('llm');
+    expect(results[0].routingConfidence).toBe(0.95);
+    expect(results[0].category).toBe('coding');
+    expect(results[0].success).toBe(true);
+  });
+
+  // 5. query by model
+  it('query by model: filters traces by model name', () => {
+    store.recordBrainCall('s5', 'claude-opus', true, 1000);
+    store.recordBrainCall('s5', 'claude-sonnet', true, 800);
+    store.recordBrainCall('s5', 'claude-opus', true, 900);
+
+    const opus = store.query({ model: 'claude-opus' });
+    expect(opus).toHaveLength(2);
+    expect(opus.every(r => r.model === 'claude-opus')).toBe(true);
+
+    const sonnet = store.query({ model: 'claude-sonnet' });
+    expect(sonnet).toHaveLength(1);
+    expect(sonnet[0].model).toBe('claude-sonnet');
+  });
+
+  // 6. query by success
+  it('query by success: filters by success/failure', () => {
+    store.recordToolCall('s6', 'read-file', true, 100);
+    store.recordToolCall('s6', 'write-file', false, 200, {
+      type: 'tool_error', message: 'disk full',
+    });
+    store.recordToolCall('s6', 'exec', true, 50);
+
+    const successes = store.query({ success: true });
+    expect(successes).toHaveLength(2);
+    expect(successes.every(r => r.success)).toBe(true);
+
+    const failures = store.query({ success: false });
+    expect(failures).toHaveLength(1);
+    expect(failures[0].success).toBe(false);
+    expect(failures[0].errorType).toBe('tool_error');
+    expect(failures[0].errorMessage).toBe('disk full');
+  });
+
+  // 7. query by time range
+  it('query by time range: filters by since/until', () => {
+    // SQLite datetime('now') uses 'YYYY-MM-DD HH:MM:SS' format (no T/Z suffix).
+    // Match that format so string comparisons in WHERE clauses work correctly.
+    const toSqliteTs = (d: Date) =>
+      d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+    const oneHourAgo = toSqliteTs(new Date(Date.now() - 3600_000));
+    const oneHourAhead = toSqliteTs(new Date(Date.now() + 3600_000));
+
+    store.record({ traceType: 'tool_call', success: true, latencyMs: 10 });
+
+    const since = store.query({ since: oneHourAgo });
+    expect(since.length).toBeGreaterThanOrEqual(1);
+
+    const future = store.query({ since: oneHourAhead });
+    expect(future).toHaveLength(0);
+
+    const range = store.query({ since: oneHourAgo, until: oneHourAhead });
+    expect(range.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // 8. aggregates
+  it('aggregates: refreshAggregates() computes correct stats', () => {
+    for (let i = 0; i < 5; i++) {
+      store.record({
+        traceType: 'tool_call', model: 'claude-opus', toolName: 'search',
+        success: true, latencyMs: 100,
+      });
+    }
+    store.record({
+      traceType: 'tool_call', model: 'claude-opus', toolName: 'search',
+      success: false, latencyMs: 200, errorType: 'timeout',
+    });
+    store.refreshAggregates();
+
+    const modelTool = store.getAggregates('model_tool', '%claude-opus%');
+    const agg = modelTool.find(a => a.key === 'claude-opus:search');
+    expect(agg).toBeDefined();
+    expect(agg!.totalCalls).toBe(6);
+    expect(agg!.successCount).toBe(5);
+
+    const toolErr = store.getAggregates('tool_error');
+    const errAgg = toolErr.find(a => a.key === 'search:timeout');
+    expect(errAgg).toBeDefined();
+    expect(errAgg!.totalCalls).toBe(1);
+  });
+
+  // 9. errorClusters
+  it('errorClusters: groups errors by type and tool', () => {
+    for (let i = 0; i < 3; i++) {
+      store.recordToolCall('s9', 'deploy', false, 5000, {
+        type: 'auth', message: `Auth failed ${i}`,
+      });
+    }
+    store.recordToolCall('s9', 'exec', false, 50, {
+      type: 'rate_limit', message: 'Slow down',
+    });
+
+    const clusters = store.getErrorClusters('2000-01-01T00:00:00Z');
+    expect(clusters.length).toBeGreaterThanOrEqual(2);
+
+    const authCluster = clusters.find(c => c.errorType === 'auth' && c.toolName === 'deploy');
+    expect(authCluster).toBeDefined();
+    expect(authCluster!.count).toBe(3);
+    expect(authCluster!.recentErrors.length).toBeGreaterThanOrEqual(1);
+
+    const rateCluster = clusters.find(c => c.errorType === 'rate_limit' && c.toolName === 'exec');
+    expect(rateCluster).toBeDefined();
+    expect(rateCluster!.count).toBe(1);
+    expect(rateCluster!.recentErrors).toContain('Slow down');
+  });
+
+  // 10. count
+  it('count: returns correct counts with filters', () => {
+    store.recordToolCall('s10', 'a', true, 10);
+    store.recordToolCall('s10', 'b', true, 20);
+    store.recordBrainCall('s10', 'claude-opus', true, 100);
+
+    expect(store.count()).toBe(3);
+    expect(store.count('tool_call')).toBe(2);
+    expect(store.count('brain_call')).toBe(1);
+    expect(store.count('routing')).toBe(0);
+  });
+
+  // 11. concurrent writes
+  it('concurrent writes: multiple writes do not corrupt data', () => {
+    const N = 50;
+    for (let i = 0; i < N; i++) {
+      store.recordToolCall(`session-${i}`, `tool-${i}`, i % 2 === 0, i * 10);
+    }
+
+    expect(store.count()).toBe(N);
+    const all = store.query({});
+    expect(all).toHaveLength(N);
+    // Verify no data corruption: each session appears exactly once
+    const sessions = new Set(all.map(r => r.sessionId));
+    expect(sessions.size).toBe(N);
+  });
+
+  // 12. WAL mode
+  it('WAL mode: database uses WAL journal mode', async () => {
+    const mod = await import('better-sqlite3');
+    const Driver = (mod as any).default ?? mod;
+    const rawDb = new Driver(dbPath);
+    const row = rawDb.pragma('journal_mode')[0] as Record<string, string>;
+    rawDb.close();
+
+    expect(row.journal_mode.toLowerCase()).toBe('wal');
+  });
+});

@@ -673,7 +673,10 @@ export class OAuthManager {
         session.idToken = tokenResponse.id_token ?? session.idToken;
         session.expiresAt = expiresAt;
         session.lastRefreshedAt = Date.now();
-        session.scopes = (tokenResponse.scope ?? session.scopes).join(' ').split(' ');
+        session.scopes =
+          typeof tokenResponse.scope === 'string'
+            ? tokenResponse.scope.split(' ')
+            : session.scopes;
         session.isActive = true;
 
         // Parse user info from new ID token if provided

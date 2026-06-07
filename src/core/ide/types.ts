@@ -204,11 +204,11 @@ export interface LSPClientConfig {
   /** Custom LSP settings. */
   settings?: Record<string, unknown>;
   /** Connection timeout in ms (default: 10000). */
-  connectionTimeoutMs: number;
+  connectionTimeoutMs?: number;
   /** Whether to auto-restart on crash (default: true). */
-  autoRestart: boolean;
+  autoRestart?: boolean;
   /** Maximum restart attempts before giving up (default: 3). */
-  maxRestartAttempts: number;
+  maxRestartAttempts?: number;
 }
 
 /** LSP client connection status. */

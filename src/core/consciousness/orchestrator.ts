@@ -508,7 +508,7 @@ export class ConsciousnessOrchestrator {
     // Read SpreadingActivation (NEW — previously unwired)
     let activeConcepts: string[] = [];
     try {
-      activeConcepts = this.spreadingActivation.getTopActive(5).map((n) => n.concept);
+      activeConcepts = this.spreadingActivation.getTopActive(5).map((n) => n.id);
     } catch { /* ignore */ }
 
     return {
@@ -546,7 +546,7 @@ export class ConsciousnessOrchestrator {
       return cfs.map((cf) => ({
         lessonLearned: cf.lessonLearned ?? '',
         deltaAssessment: cf.deltaAssessment ?? '',
-        episodeSummary: cf.episodeSummary ?? '',
+        episodeSummary: cf.actualOutcome ?? '',
       }));
     } catch { return []; }
   }
@@ -562,7 +562,7 @@ export class ConsciousnessOrchestrator {
       return refs.map((r) => ({
         conclusion: r.conclusion ?? '',
         actionItem: r.actionItem ?? '',
-        episodeSummary: r.episodeSummary ?? '',
+        episodeSummary: r.analysis ?? '',
       }));
     } catch { return []; }
   }
@@ -660,7 +660,7 @@ export class ConsciousnessOrchestrator {
   getActiveConcepts(count: number = 5): string[] {
     if (!this._booted) return [];
     try {
-      return this.spreadingActivation.getTopActive(count).map((n) => n.concept);
+      return this.spreadingActivation.getTopActive(count).map((n) => n.id);
     } catch { return []; }
   }
 
