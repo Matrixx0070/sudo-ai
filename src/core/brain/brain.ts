@@ -17,6 +17,8 @@ import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
 import { queryAllModelsConsensus } from './model-consensus.js';
+import { DispatchRouter } from './dispatch-router.js';
+import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
 import type {
   BrainMessage,
   BrainRequest,
@@ -31,6 +33,7 @@ import type {
 import type { SudoConfig } from '../config/types.js';
 import { ToolRegistry } from '../tools/registry.js';
 import type { NegativeRouter, RoutingResult } from './negative-router.js';
+import type { HistoryMessage } from '../agent/cheap-model-router.js';
 
 const log = createLogger('brain');
 
@@ -183,6 +186,10 @@ export class Brain {
   private ragEngine: RAGEngineInterface | null = null;
   /** Negative router — injected post-construction via setNegativeRouter(). Undefined = no routing. */
   private negativeRouter: NegativeRouter | undefined;
+  /** Highest-priority model id, captured at construction — the primary for smart-routing. */
+  private readonly primaryModel: string;
+  /** Cheap-path dispatch router (novelty scoring + LRU cache + anti-self-promotion guard). */
+  private readonly dispatchRouter = new DispatchRouter();
 
   /**
    * @param config - Full SudoConfig (or null for env-only mode).
@@ -193,6 +200,7 @@ export class Brain {
     this.config = config as SudoConfig | null;
     const modelIds = this.buildModelList();
     this.failover = new ModelFailover(modelIds);
+    this.primaryModel = modelIds[0] ?? DEFAULT_MODEL;
     // Auto-init providers on construction (async, awaited on first call)
     this.providersReady = initProviders();
     log.info({ modelCount: modelIds.length, models: modelIds }, 'Brain initialised');
@@ -646,6 +654,36 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     }
 
     // -------------------------------------------------------------------------
+    // Smart-route fast-path: send genuinely simple turns straight to a single
+    // cheap model, skipping the cloud-consensus race. Wires the cost-optimizer
+    // (task-difficulty estimate + cheap-tier model pick) and the dispatch-router
+    // (cheap-vs-primary decision with novelty + anti-self-promotion guards) into
+    // the live call path. Inert when no model cheaper than the primary exists, so
+    // default behavior is unchanged. On ANY error it falls through to the normal
+    // consensus + failover path below — never a reliability regression.
+    // Kill-switch: SUDO_SMART_ROUTE_DISABLE=1
+    // -------------------------------------------------------------------------
+    const fastRoute = this._smartRoute(request);
+    if (fastRoute) {
+      log.info(
+        { model: fastRoute.model, complexity: fastRoute.complexity, reason: fastRoute.reason },
+        'Smart-route fast-path selected — bypassing consensus for a simple turn',
+      );
+      try {
+        const profile = this._syntheticProfile(fastRoute.model);
+        return await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+      } catch (err) {
+        log.warn(
+          { model: fastRoute.model, err: String(err) },
+          'Smart-route fast-path failed — falling through to consensus + failover',
+        );
+        // Intentionally no recordError(): the cheap target may be a synthetic
+        // profile unknown to the failover registry; the standard path below
+        // owns recovery and cooldown for the registered models.
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // Phase 1: Consensus call across cloud models.
     // Query all cloud models in parallel, then pick the best answer by:
     //   - If models agree (Jaccard similarity > 0.7) → use fastest
@@ -950,6 +988,75 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
 
     return { content: finalContent, toolCalls: finalToolCalls, usage, model: modelId, finishReason: finalFinishReason };
+  }
+
+  /**
+   * Decide whether this turn is eligible for the cheap-model fast-path.
+   *
+   * Combines two previously-dormant routers:
+   *  - cost-optimizer: `estimateTaskComplexity()` gives a 1–10 difficulty signal
+   *    and `pickOptimalModel(..., 'cheapest')` resolves the cheap-tier model when
+   *    no explicit `SUDO_CHEAP_MODEL` is configured.
+   *  - dispatch-router: applies the cheap-model-router guards plus novelty scoring,
+   *    an LRU cache, and the anti-self-promotion guard.
+   *
+   * Returns the chosen cheap model when (and only when) the turn is simple AND a
+   * genuinely cheaper model than the primary is available; otherwise null, which
+   * leaves the existing consensus + failover path fully intact.
+   *
+   * Kill-switch: SUDO_SMART_ROUTE_DISABLE=1.
+   */
+  private _smartRoute(
+    request: BrainRequest,
+  ): { model: string; reason: string; complexity: number } | null {
+    if (process.env['SUDO_SMART_ROUTE_DISABLE'] === '1') return null;
+    // Respect explicit model pins and callers that force the cloud race.
+    if (request.model && request.model !== 'auto') return null;
+    if (request.race === true) return null;
+
+    const lastUserMsg = [...request.messages].reverse().find((m) => m.role === 'user');
+    const userText = lastUserMsg?.content ?? '';
+    if (!userText.trim()) return null;
+
+    // cost-optimizer: difficulty signal + cheap-tier model resolution.
+    const complexity = estimateTaskComplexity(userText);
+    const cheapModel = process.env['SUDO_CHEAP_MODEL']?.trim() || pickOptimalModel(complexity, 'cheapest');
+
+    // Nothing to optimize when the cheap tier IS the primary model.
+    if (!cheapModel || cheapModel === this.primaryModel) return null;
+
+    // dispatch-router: cheap-vs-primary decision with guards + novelty + cache.
+    const decision = this.dispatchRouter.route({
+      userText,
+      history: request.messages as unknown as HistoryMessage[],
+      primaryModel: this.primaryModel,
+      cheapModel,
+      hasAttachments: (lastUserMsg?.images?.length ?? 0) > 0,
+    });
+
+    if (!decision.cheapUsed) return null;
+    return { model: decision.model, reason: decision.reason, complexity };
+  }
+
+  /**
+   * Build a minimal ModelProfile wrapper for an arbitrary model string so the
+   * fast-path can reuse `_callSingleModel()`. Only `id` is consumed there; the
+   * remaining fields carry inert defaults and never touch the failover registry.
+   */
+  private _syntheticProfile(modelString: string): ModelProfile {
+    const slash = modelString.indexOf('/');
+    const provider = (slash >= 0 ? modelString.slice(0, slash) : modelString) as ModelProfile['provider'];
+    const modelId = slash >= 0 ? modelString.slice(slash + 1) : modelString;
+    return {
+      id: modelString,
+      provider,
+      modelId,
+      priority: 0,
+      lastUsed: 0,
+      cooldownUntil: 0,
+      consecutiveErrors: 0,
+      disabled: false,
+    };
   }
 
   /**
