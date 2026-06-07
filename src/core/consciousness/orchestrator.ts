@@ -329,6 +329,20 @@ export class ConsciousnessOrchestrator {
       try { this.db.getDb().prepare('INSERT INTO tool_sequences (session_id, sequence) VALUES (?, ?)').run(sessionId, JSON.stringify(toolCalls)); } catch (e) { swallow('tool seq record')(e); }
     }
 
+    // Theme 4: close the procedural-memory learning loop — compile recurring tool
+    // sequences (>=3 occurrences) into reusable procedures, instead of letting them
+    // accumulate forever uncompiled. Additive learning only (no per-turn decision
+    // change). Opt-in via SUDO_CONSCIOUSNESS_PROCEDURAL_LEARN=1; fail-open. Runs at
+    // turn-end, already behind the caller's ZDR consciousness-recording gate.
+    if (process.env['SUDO_CONSCIOUSNESS_PROCEDURAL_LEARN'] === '1') {
+      try {
+        const compiled = this.proceduralMemory.checkForNewProcedures(3);
+        if (compiled.length > 0) {
+          log.info({ count: compiled.length }, 'ProceduralMemory: compiled new procedures from recurring tool sequences');
+        }
+      } catch (e) { swallow('procedural compile')(e); }
+    }
+
     // Check if we should sleep
     if (this._lastInteractionAt && this.sleepCycle) {
       const idleMs = Date.now() - new Date(this._lastInteractionAt).getTime();
