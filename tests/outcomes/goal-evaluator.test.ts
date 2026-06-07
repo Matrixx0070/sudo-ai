@@ -96,14 +96,17 @@ describe('HeuristicGoalEvaluator', () => {
     expect(result.outcome).toBe('failure');
   });
 
-  it('5b: returns failure for empty messages (no tools = ratio 0 < 0.3)', async () => {
+  it('5b: returns partial for empty messages (no tools → no signal, not auto-failure)', async () => {
+    // A zero-tool session is no longer auto-classified as failure on a 0/0
+    // ratio (that override was the bug); with no failure or success signal it
+    // is 'partial' (honest uncertainty), not 'failure'.
     const ctx = makeCtx({
       recentMessages: [],
       toolSuccessCount: 0,
       toolFailureCount: 0,
     });
     const result = await evaluator.evaluate(ctx);
-    expect(result.outcome).toBe('failure');
+    expect(result.outcome).toBe('partial');
     expect(result.confidence).toBe(0.4);
   });
 

@@ -160,8 +160,13 @@ function buildSavingsResponse(
   const total = tracker.getTotalCost();
   const avgModel = 'aggregate';
   const avgProvider = 'aggregate';
-  const estInputTokens = Math.round(total.estimatedUsd * 1_000_000 / 5); // assume $5/M input
-  const estOutputTokens = Math.round(total.estimatedUsd * 1_000_000 / 20); // assume $20/M output
+  // Split the total cost evenly across input/output before reconstructing
+  // tokens, so the reported token counts re-price back to total.estimatedUsd
+  // (rather than each direction independently accounting for the full cost).
+  const inputCostUsd = total.estimatedUsd / 2;
+  const outputCostUsd = total.estimatedUsd / 2;
+  const estInputTokens = Math.round(inputCostUsd * 1_000_000 / 5); // assume $5/M input
+  const estOutputTokens = Math.round(outputCostUsd * 1_000_000 / 20); // assume $20/M output
   const energy = estimateEnergy(avgModel, estInputTokens, estOutputTokens);
 
   const row: SavingsRow = {

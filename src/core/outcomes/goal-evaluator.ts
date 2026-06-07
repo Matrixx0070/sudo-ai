@@ -81,7 +81,7 @@ export class HeuristicGoalEvaluator implements GoalEvaluator {
     const hasFailureKeyword = FAILURE_KEYWORDS.some((kw) =>
       lastContent.includes(kw),
     );
-    const hasLowToolRatio = toolRatio < FAILURE_RATIO_THRESHOLD;
+    const hasLowToolRatio = totalTools > 0 && toolRatio < FAILURE_RATIO_THRESHOLD;
 
     if (hasFailureKeyword) {
       evidence.push(`Last message contains failure keyword in: "${lastContent.slice(0, 80)}"`);

@@ -1012,11 +1012,14 @@ export class AgentLoop {
         } catch { /* fail-open */ }
         // Hook: after:tool-call (fires once per completed tool result).
         // Pass taintId in meta so the TaintTracker hook handler skips duplicate tag().
+        // Compute the real outcome (matching the SkillDiscovery/TraceStore/ToolOutcomeLearner
+        // sinks below) so subscribers — including the SSE bridge that forwards the whole
+        // context to external clients — observe failures instead of a hardcoded success.
         void this.hooks?.emit('after:tool-call', {
           event: 'after:tool-call',
           sessionId,
           toolName,
-          success: true,
+          success: isToolResultSuccess(result),
           meta: _taintIdForHook ? { taintId: _taintIdForHook } : undefined,
         });
         // Wave 10B: feed SkillDiscovery (fail-open)

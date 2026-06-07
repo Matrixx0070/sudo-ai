@@ -186,6 +186,11 @@ adminRouter.put('/api/admin/models/providers/:id/key', async (req, res, params) 
     return;
   }
 
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    sendJson(res, 400, { error: { message: 'Request body must be a JSON object', code: 400 } });
+    return;
+  }
+
   const b = body as Record<string, unknown>;
   const apiKey = b['key'];
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim() === '') {
@@ -232,9 +237,10 @@ adminRouter.get('/api/admin/models/cost', async (_req, res) => {
     source: 'placeholder',
   };
 
+  let db: import('better-sqlite3').Database | undefined;
   try {
     const { default: Database } = await import('better-sqlite3') as { default: typeof import('better-sqlite3') };
-    const db = new Database(DB_PATH, { readonly: true });
+    db = new Database(DB_PATH, { readonly: true });
 
     const tableExists = db.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='api_costs'`,
@@ -242,13 +248,13 @@ adminRouter.get('/api/admin/models/cost', async (_req, res) => {
 
     if (!tableExists) {
       log.warn('api_costs table not found in knowledge.db — returning placeholder');
-      db.close();
       sendJson(res, 200, { status: 'ok', data: placeholder });
       return;
     }
 
+    const conn = db;
     const queryCosts = (since: string): CostRecord[] => {
-      return db.prepare(`
+      return conn.prepare(`
         SELECT provider,
                COALESCE(SUM(cost_usd), 0)    AS total_usd,
                COUNT(*)                       AS request_count
@@ -273,11 +279,12 @@ adminRouter.get('/api/admin/models/cost', async (_req, res) => {
       source:  'database',
     };
 
-    db.close();
     log.info('Cost data fetched from knowledge.db');
     sendJson(res, 200, { status: 'ok', data: summary });
   } catch (err) {
     log.warn({ err }, 'GET models/cost: DB unavailable — returning placeholder');
     sendJson(res, 200, { status: 'ok', data: placeholder });
+  } finally {
+    if (db) db.close();
   }
 });
