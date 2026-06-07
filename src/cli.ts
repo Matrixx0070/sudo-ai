@@ -81,6 +81,8 @@ import { ProposalStore } from './core/learning/proposal-store.js';
 import { scoreComplexity } from './core/agent/complexity-scorer.js';
 import { SkillDiscovery } from './core/learning/skill-discovery.js';
 import { TraceStore } from './core/learning/trace-store.js';
+import { TraceAnalyzer } from './core/learning/trace-analyzer.js';
+import { TraceDrivenPolicy } from './core/learning/trace-driven-policy.js';
 import { AgentConfigEvolver } from './core/learning/agent-config-evolver.js';
 import { SkillOptimizer } from './core/skills/skill-optimizer.js';
 import { SkillOptimizationStore } from './core/skills/skill-optimization-store.js';
@@ -992,6 +994,21 @@ async function boot(): Promise<void> {
         finalAgentLoop.setTraceStore(traceStore);
         registerShutdown(() => traceStore.close());
         log.info({ db: path.join(traceDataDir, 'traces.db') }, 'Learning flywheel: TraceStore wired — recording execution traces');
+
+        // Theme 1 slice 2: TraceDrivenPolicy — learned ROUTING INFLUENCE.
+        // Strictly opt-in BEYOND recording (SUDO_TRACE_POLICY=1) and honoring the
+        // module kill-switch (SUDO_POLICY_DISABLE=1). Conservative by construction
+        // (rules need >=5 calls and confidence >= 0.3), fail-open, and a no-op until
+        // enough trace history accumulates. Rules are built once at boot here;
+        // refreshPolicies() does SYNCHRONOUS SQLite aggregation, so it is NOT run on
+        // a recurring event-loop timer (async/worker periodic refresh is a follow-up).
+        if (process.env['SUDO_TRACE_POLICY'] === '1' && process.env['SUDO_POLICY_DISABLE'] !== '1') {
+          const traceAnalyzer = new TraceAnalyzer(traceStore);
+          const tracePolicy = new TraceDrivenPolicy(traceStore, traceAnalyzer);
+          tracePolicy.refreshPolicies();
+          finalAgentLoop.setTraceDrivenPolicy(tracePolicy);
+          log.info('Learning flywheel: TraceDrivenPolicy wired — learned routing influence active (conservative; SUDO_POLICY_DISABLE=1 to disable)');
+        }
       }
     } catch (err: unknown) {
       log.warn({ err: String(err) }, 'Learning flywheel: trace recording setup failed — continuing without it');

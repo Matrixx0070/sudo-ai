@@ -1738,7 +1738,9 @@ export class AgentLoop {
           if (this._traceStore) {
             this._traceStore.recordBrainCall(
               state.sessionId,
-              effectiveModel ?? model ?? 'unknown',
+              // Attribute to the model that ACTUALLY answered (consensus/failover may
+              // differ from the requested effectiveModel) so the flywheel learns true outcomes.
+              response.model ?? effectiveModel ?? model ?? 'unknown',
               response.finishReason !== 'error',
               0, // latencyMs not available from BrainResponse; placeholder
             );
@@ -2266,7 +2268,7 @@ export class AgentLoop {
                     lastUserMsg,
                     tc.name,
                     undefined,  // category unknown at this point
-                    effectiveModel ?? model ?? 'unknown',
+                    response.model ?? effectiveModel ?? model ?? 'unknown', // actual model, not the suggested one
                     true,       // success — we are in the success branch
                     0,          // latencyMs placeholder
                   );
@@ -2400,7 +2402,7 @@ export class AgentLoop {
                     lastUserMsg,
                     tc.name,
                     undefined,  // category unknown
-                    effectiveModel ?? model ?? 'unknown',
+                    response.model ?? effectiveModel ?? model ?? 'unknown', // actual model, not the suggested one
                     false,      // failure
                     0,          // latencyMs placeholder
                   );
