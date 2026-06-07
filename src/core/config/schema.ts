@@ -53,6 +53,9 @@ const ModelsSchema = Type.Object({
   cheap: Type.Optional(
     Str({ description: 'Cheap-tier model ref ("provider/model") for the smart-route fast-path.' }),
   ),
+  premium: Type.Optional(
+    Str({ description: 'Premium-tier model ref ("provider/model") for high/xhigh reasoning turns.' }),
+  ),
   embedding: Type.Object({
     id: Str(),
     dims: PosInt(),

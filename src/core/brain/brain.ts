@@ -1042,6 +1042,21 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       this.config?.models?.cheap ||
       pickOptimalModel(complexity, 'cheapest');
 
+    // C9: reasoning-tier — couple reasoningLevel to model selection. High/xhigh
+    // reasoning prefers the stronger (premium) tier, taking precedence over the
+    // cheap fast-path so deep-reasoning turns are never down-routed. Inert when no
+    // premium model is configured. Resolution: SUDO_PREMIUM_MODEL → models.premium.
+    // Kill-switch: SUDO_REASONING_TIER_DISABLE=1.
+    if (
+      process.env['SUDO_REASONING_TIER_DISABLE'] !== '1' &&
+      (request.reasoningLevel === 'high' || request.reasoningLevel === 'xhigh')
+    ) {
+      const premiumModel = process.env['SUDO_PREMIUM_MODEL']?.trim() || this.config?.models?.premium;
+      if (premiumModel && premiumModel !== this.primaryModel) {
+        return { model: premiumModel, reason: `reasoning-tier:${request.reasoningLevel}`, complexity };
+      }
+    }
+
     // Cheap fast-path — only when a genuinely cheaper model than the primary exists.
     // dispatch-router applies the cheap-model-router guards + novelty + LRU cache.
     if (cheapModel && cheapModel !== this.primaryModel) {
