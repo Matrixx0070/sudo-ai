@@ -20,6 +20,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
+import { FEDERATION_KNOWN_PATHS } from './federation-paths.js';
 import type { PeerRegistry } from '../federation/peer-registry.js';
 import type { AuditChainSync, FederatedEvent } from '../federation/audit-chain-sync.js';
 import type { PeerKeyFetcher } from '../federation/peer-key-fetcher.js';
@@ -438,8 +439,13 @@ export function registerFederationRoutes(
       return;
     }
 
-    // Unmatched /v1/federation/* path — return silently so other handlers
-    // (federation-error-routes.ts) can handle it without double-response.
+    // Unmatched /v1/federation/* path. If no federation router owns this path,
+    // send 404; otherwise defer to the sibling router (federation-error-routes.ts)
+    // that does. Guarded by res.headersSent/writableEnded so the first router to
+    // reach here wins and any sibling no-ops — never a double-response.
+    if (!FEDERATION_KNOWN_PATHS.has(pathname) && !res.headersSent && !res.writableEnded) {
+      sendError(res, 404, 'Not found');
+    }
     return;
   });
 

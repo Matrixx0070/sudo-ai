@@ -119,6 +119,9 @@ data-staging/
 # Rework additions — generated artifacts
 output/
 /tmp-*.mjs
-# Runtime-generated proposals — not source
-learning/
+# Runtime-generated proposals — not source.
+# Anchored to repo root so it only matches the top-level runtime dir
+# (process.cwd()/learning/proposals) and NOT source dirs like
+# src/core/learning/ or tests/learning/.
+/learning/
 /.env*

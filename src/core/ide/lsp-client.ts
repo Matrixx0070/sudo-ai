@@ -67,7 +67,8 @@ interface LSPNotificationMessage {
  * collecting diagnostics, and managing the lifecycle (including auto-restart).
  */
 export class LSPClient {
-  private config: LSPClientConfig;
+  private config: LSPClientConfig &
+    Required<Pick<LSPClientConfig, 'connectionTimeoutMs' | 'autoRestart' | 'maxRestartAttempts'>>;
   private process: ChildProcess | null = null;
   private state: LSPConnectionState = 'disconnected';
   private messageId = 0;

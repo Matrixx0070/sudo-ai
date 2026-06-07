@@ -43,6 +43,8 @@ import type {
   SequenceNode,
   AndListNode,
   OrListNode,
+  BackgroundNode,
+  SubshellNode,
   RedirectNode,
   RiskAssessment,
   RiskCategory,
@@ -518,7 +520,7 @@ export class BashASTParser {
         start: 0,
         end: trimmed.length,
         command: this.parseToAST(trimmed.slice(0, -1).trim()),
-      };
+      } as BackgroundNode;
     }
 
     // Subshell ((...))
@@ -529,7 +531,7 @@ export class BashASTParser {
         start: 0,
         end: trimmed.length,
         body: this.parseToAST(trimmed.slice(1, -1).trim()),
-      };
+      } as SubshellNode;
     }
 
     // Simple command
