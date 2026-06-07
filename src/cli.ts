@@ -83,6 +83,7 @@ import { SkillDiscovery } from './core/learning/skill-discovery.js';
 import { TraceStore } from './core/learning/trace-store.js';
 import { TraceAnalyzer } from './core/learning/trace-analyzer.js';
 import { TraceDrivenPolicy } from './core/learning/trace-driven-policy.js';
+import { startPolicyRefreshLoop, POLICY_REFRESH_MIN_MS } from './core/learning/policy-refresh.js';
 import { AgentConfigEvolver } from './core/learning/agent-config-evolver.js';
 import { SkillOptimizer } from './core/skills/skill-optimizer.js';
 import { SkillOptimizationStore } from './core/skills/skill-optimization-store.js';
@@ -1010,14 +1011,25 @@ async function boot(): Promise<void> {
         // Strictly opt-in BEYOND recording (SUDO_TRACE_POLICY=1) and honoring the
         // module kill-switch (SUDO_POLICY_DISABLE=1). Conservative by construction
         // (rules need >=5 calls and confidence >= 0.3), fail-open, and a no-op until
-        // enough trace history accumulates. Rules are built once at boot here;
-        // refreshPolicies() does SYNCHRONOUS SQLite aggregation, so it is NOT run on
-        // a recurring event-loop timer (async/worker periodic refresh is a follow-up).
+        // enough trace history accumulates. Rules are built once at boot, then
+        // (opt-in) refreshed in the BACKGROUND so they don't go stale as new traces
+        // accumulate: SUDO_POLICY_REFRESH_MS schedules a bounded, sync aggregation in
+        // a standalone unref'd timer — off every request's critical path.
         if (process.env['SUDO_TRACE_POLICY'] === '1' && process.env['SUDO_POLICY_DISABLE'] !== '1') {
           const traceAnalyzer = new TraceAnalyzer(traceStore);
           const tracePolicy = new TraceDrivenPolicy(traceStore, traceAnalyzer);
           tracePolicy.refreshPolicies();
           finalAgentLoop.setTraceDrivenPolicy(tracePolicy);
+          const policyRefreshMs = Number(process.env['SUDO_POLICY_REFRESH_MS'] ?? 0);
+          if (policyRefreshMs > 0) {
+            const stopPolicyRefresh = startPolicyRefreshLoop(
+              tracePolicy,
+              policyRefreshMs,
+              (err) => log.warn({ err: String(err) }, 'Learning flywheel: background policy refresh failed — continuing'),
+            );
+            registerShutdown(stopPolicyRefresh);
+            log.info({ intervalMs: Math.max(POLICY_REFRESH_MIN_MS, policyRefreshMs) }, 'Learning flywheel: background policy refresh scheduled');
+          }
           log.info('Learning flywheel: TraceDrivenPolicy wired — learned routing influence active (conservative; SUDO_POLICY_DISABLE=1 to disable)');
         }
       }
