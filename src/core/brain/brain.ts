@@ -757,10 +757,10 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         return result;
       } catch (err) {
         lastError = err;
-        const { status, body } = Brain.extractErrorDetails(err);
+        const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
         const category = this.failover.categorizeError(status, body);
-        log.warn({ attempt, profileId: profile.id, status, category }, 'LLM call failed — trying next profile');
-        this.failover.recordError(profile.id, category);
+        log.warn({ attempt, profileId: profile.id, status, category, retryAfterMs }, 'LLM call failed — trying next profile');
+        this.failover.recordError(profile.id, category, { retryAfterMs });
       }
     }
 
@@ -840,11 +840,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
       } catch (err) {
         lastError = err;
-        const { status, body } = Brain.extractErrorDetails(err);
+        const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
         const category = this.failover.categorizeError(status, body);
 
-        log.warn({ attempt, modelId, status, category, err }, 'Streaming LLM call failed — trying next profile');
-        this.failover.recordError(profile.id, category);
+        log.warn({ attempt, modelId, status, category, retryAfterMs, err }, 'Streaming LLM call failed — trying next profile');
+        this.failover.recordError(profile.id, category, { retryAfterMs });
       }
     }
 
@@ -1187,7 +1187,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
    * The real status lives inside the lastError/errors array as an APICallError
    * with a `statusCode` property.
    */
-  private static extractErrorDetails(err: unknown): { status: number; body: string | undefined } {
+  private static extractErrorDetails(err: unknown): { status: number; body: string | undefined; retryAfterMs: number | undefined } {
     const asAny = err as Record<string, unknown>;
 
     // Direct status or statusCode on the error object itself.
@@ -1225,6 +1225,62 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
 
-    return { status: status ?? 500, body };
+    return { status: status ?? 500, body, retryAfterMs: Brain._extractRetryAfter(err) };
+  }
+
+  /**
+   * Extract a Retry-After hint (in ms) from an error's response headers, digging
+   * through the SDK's RetryError wrapping (lastError / errors[]). Returns undefined
+   * when no usable Retry-After is present.
+   */
+  private static _extractRetryAfter(err: unknown): number | undefined {
+    const top = err as Record<string, unknown> | null;
+    if (!top || typeof top !== 'object') return undefined;
+
+    const candidates: Record<string, unknown>[] = [top];
+    const lastError = top['lastError'] as Record<string, unknown> | undefined;
+    if (lastError && typeof lastError === 'object') candidates.push(lastError);
+    const errors = top['errors'] as unknown[] | undefined;
+    if (Array.isArray(errors)) {
+      for (const e of errors) {
+        if (e && typeof e === 'object') candidates.push(e as Record<string, unknown>);
+      }
+    }
+
+    for (const c of candidates) {
+      const headers = (c['responseHeaders'] ?? c['headers']) as Record<string, unknown> | undefined;
+      const raw = Brain._headerValue(headers, 'retry-after');
+      const ms = Brain._parseRetryAfter(raw);
+      if (ms !== undefined) return ms;
+    }
+    return undefined;
+  }
+
+  /** Case-insensitive header lookup returning the value as a string. */
+  private static _headerValue(headers: Record<string, unknown> | undefined, name: string): string | undefined {
+    if (!headers || typeof headers !== 'object') return undefined;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === name) {
+        const v = headers[k];
+        if (typeof v === 'string') return v;
+        if (typeof v === 'number') return String(v);
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+
+  /** Parse a Retry-After value (delta-seconds or HTTP-date) into milliseconds-from-now. */
+  private static _parseRetryAfter(raw: string | undefined): number | undefined {
+    if (!raw) return undefined;
+    const trimmed = raw.trim();
+    const secs = Number(trimmed);
+    if (Number.isFinite(secs) && secs >= 0) return Math.round(secs * 1000);
+    const dateMs = Date.parse(trimmed);
+    if (!Number.isNaN(dateMs)) {
+      const delta = dateMs - Date.now();
+      return delta > 0 ? delta : 0;
+    }
+    return undefined;
   }
 }

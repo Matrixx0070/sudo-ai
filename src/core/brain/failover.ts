@@ -30,6 +30,31 @@ const BILLING_CATEGORIES = new Set<ErrorCategory>(['billing']);
 
 const PERMANENT_CATEGORIES = new Set<ErrorCategory>(['auth_permanent']);
 
+/**
+ * Additive jitter applied to scheduled cooldowns: the final wait is
+ * base .. base*(1+JITTER_RATIO). Jitter only ever LENGTHENS the wait, so we
+ * never retry sooner than the schedule, while still de-synchronizing retries
+ * across profiles to avoid a thundering-herd storm.
+ */
+const JITTER_RATIO = 0.2;
+
+/**
+ * Hard cap on a server-provided Retry-After, so a pathological/huge value can't
+ * wedge a model out of rotation indefinitely.
+ */
+const MAX_RETRY_AFTER_MS = 3_600_000; // 1 hour
+
+/** Structured classification of an ErrorCategory for retry strategy + observability. */
+export type ErrorClass = 'transient' | 'billing' | 'permanent' | 'other';
+
+/** Optional inputs to recordError(). */
+export interface RecordErrorOptions {
+  /** Server-provided Retry-After in ms (parsed from the response header/body), if any. */
+  retryAfterMs?: number;
+  /** Injectable RNG for deterministic tests. Defaults to Math.random. */
+  rng?: () => number;
+}
+
 // ---------------------------------------------------------------------------
 // ModelFailover class
 // ---------------------------------------------------------------------------
@@ -116,7 +141,7 @@ export class ModelFailover {
    * @param profileId - The model string, e.g. "xai/grok-3-fast".
    * @param category  - Pre-classified error category.
    */
-  recordError(profileId: string, category: ErrorCategory): void {
+  recordError(profileId: string, category: ErrorCategory, opts: RecordErrorOptions = {}): void {
     const profile = this.profiles.get(profileId);
     if (!profile) {
       log.warn({ profileId }, 'recordError: unknown profile — ignoring');
@@ -137,22 +162,20 @@ export class ModelFailover {
     }
 
     if (BILLING_CATEGORIES.has(category)) {
-      const idx = Math.min(errorCount - 1, BILLING_COOLDOWN.length - 1);
-      const cooldownMs = BILLING_COOLDOWN[idx];
+      const cooldownMs = this._cooldownMs(BILLING_COOLDOWN, errorCount, opts);
       profile.cooldownUntil = now + cooldownMs;
       log.warn(
-        { profileId, category, errorCount, cooldownMs, cooldownUntil: profile.cooldownUntil },
+        { profileId, category, errClass: 'billing', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs, cooldownUntil: profile.cooldownUntil },
         'Billing cooldown applied',
       );
       return;
     }
 
     if (TRANSIENT_CATEGORIES.has(category)) {
-      const idx = Math.min(errorCount - 1, TRANSIENT_COOLDOWN.length - 1);
-      const cooldownMs = TRANSIENT_COOLDOWN[idx];
+      const cooldownMs = this._cooldownMs(TRANSIENT_COOLDOWN, errorCount, opts);
       profile.cooldownUntil = now + cooldownMs;
       log.warn(
-        { profileId, category, errorCount, cooldownMs },
+        { profileId, category, errClass: 'transient', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
         'Transient cooldown applied',
       );
       return;
@@ -160,12 +183,47 @@ export class ModelFailover {
 
     // format / model_not_found / session_expired / auth (non-permanent):
     // Apply a short transient cooldown (first slot) to avoid hammering.
-    const cooldownMs = TRANSIENT_COOLDOWN[0];
+    const cooldownMs = this._cooldownMs(TRANSIENT_COOLDOWN, 1, opts);
     profile.cooldownUntil = now + cooldownMs;
     log.warn(
-      { profileId, category, errorCount, cooldownMs },
+      { profileId, category, errClass: 'other', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
       'Non-categorized error — short cooldown applied',
     );
+  }
+
+  /**
+   * Compute a cooldown for the given schedule + consecutive error count.
+   *
+   * Applies additive jitter (never shorter than the base schedule) to avoid
+   * synchronized retry storms, then honors a server Retry-After when it asks us
+   * to wait LONGER than our own schedule (capped at MAX_RETRY_AFTER_MS).
+   */
+  private _cooldownMs(
+    schedule: readonly number[],
+    errorCount: number,
+    opts: RecordErrorOptions,
+  ): number {
+    const idx = Math.min(Math.max(errorCount - 1, 0), schedule.length - 1);
+    const base = schedule[idx];
+    const rng = opts.rng ?? Math.random;
+    // Additive jitter: base .. base*(1 + JITTER_RATIO). Never below base.
+    let ms = base + base * JITTER_RATIO * Math.max(0, Math.min(1, rng()));
+    // Respect a longer server-provided Retry-After (capped).
+    if (typeof opts.retryAfterMs === 'number' && opts.retryAfterMs > ms) {
+      ms = Math.min(opts.retryAfterMs, MAX_RETRY_AFTER_MS);
+    }
+    return Math.round(ms);
+  }
+
+  /**
+   * Classify an ErrorCategory into a coarse retry strategy class. Exposed for
+   * callers/observability so the transient-vs-permanent split is explicit.
+   */
+  classifyCategory(category: ErrorCategory): ErrorClass {
+    if (PERMANENT_CATEGORIES.has(category)) return 'permanent';
+    if (BILLING_CATEGORIES.has(category)) return 'billing';
+    if (TRANSIENT_CATEGORIES.has(category)) return 'transient';
+    return 'other';
   }
 
   /**
