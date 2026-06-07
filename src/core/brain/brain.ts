@@ -220,20 +220,27 @@ export class Brain {
 
   private buildModelList(): string[] {
     const models: string[] = [];
-
-    if (this.config?.models?.primary) {
-      for (const entry of this.config.models.primary) {
-        if (entry.id) models.push(entry.id);
+    // Append a model ref to the failover chain, skipping blanks, duplicates, and
+    // malformed refs (a missing "/" would otherwise throw in the failover ctor).
+    const add = (ref: string | undefined): void => {
+      if (!ref) return;
+      if (!ref.includes('/')) {
+        log.warn({ ref }, 'buildModelList: skipping malformed model ref (expected "provider/model-id")');
+        return;
       }
-    }
+      if (!models.includes(ref)) models.push(ref);
+    };
 
-    if (this.config?.models?.fallback?.id) {
-      const fb = this.config.models.fallback.id;
-      if (!models.includes(fb)) models.push(fb);
-    }
-
+    // 1. Ordered primary models.
+    for (const entry of this.config?.models?.primary ?? []) add(entry.id);
+    // 2. Explicit user-configured fallback chain (primary + fallbacks[]).
+    for (const ref of this.config?.models?.fallbacks ?? []) add(ref);
+    // 3. Legacy single fallback (back-compat).
+    add(this.config?.models?.fallback?.id);
+    // 4. Hard default when nothing usable is configured.
     if (models.length === 0) {
-      models.push(DEFAULT_MODEL, FALLBACK_MODEL);
+      add(DEFAULT_MODEL);
+      add(FALLBACK_MODEL);
     }
 
     return models;
@@ -1028,8 +1035,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     if (!userText.trim()) return null;
 
     // cost-optimizer: difficulty signal + cheap-tier model resolution.
+    // Resolution order: SUDO_CHEAP_MODEL env → config models.cheap → cost-optimizer.
     const complexity = estimateTaskComplexity(userText);
-    const cheapModel = process.env['SUDO_CHEAP_MODEL']?.trim() || pickOptimalModel(complexity, 'cheapest');
+    const cheapModel =
+      process.env['SUDO_CHEAP_MODEL']?.trim() ||
+      this.config?.models?.cheap ||
+      pickOptimalModel(complexity, 'cheapest');
 
     // Cheap fast-path — only when a genuinely cheaper model than the primary exists.
     // dispatch-router applies the cheap-model-router guards + novelty + LRU cache.
