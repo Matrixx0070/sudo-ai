@@ -16,6 +16,7 @@ import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError } from '../shared/errors.js';
 import { MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { decomposeIfComplex, type DecomposerBrainLike } from './task-decomposer.js';
+import { buildReasoningSummary, formatReasoningSummary, type AgentAction } from './reasoning-summary.js';
 import {
   runCompaction,
   executeToolCalls,
@@ -137,6 +138,8 @@ export interface AgentRunResult {
   }>;
   /** P0: SelfVerify — post-run verification summary if SUDO_SELF_VERIFY is enabled. */
   verificationSummary?: string;
+  /** Theme 2.2: reasoning recap (approach/steps/confidence) if SUDO_REASONING_SUMMARY is enabled. */
+  reasoningSummary?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +208,8 @@ interface UnifiedMemoryLike {
 const MAX_PLAN_STEPS = 8;
 /** Theme 2 (auto-plan): max chars per subtask after sanitization (bloat + injection guard). */
 const MAX_PLAN_STEP_CHARS = 200;
+/** Theme 2.2 (reasoning-summary): max recent tool actions folded into the summary. */
+const MAX_SUMMARY_ACTIONS = 20;
 
 const DEFAULT_CONFIG: AgentConfig = {
   maxIterations: MAX_AGENT_ITERATIONS,
@@ -1480,7 +1485,33 @@ export class AgentLoop {
       }
     }
 
-    return { text: finalResponse, attachments, verificationSummary: _verificationSummary };
+    // Theme 2.2: reasoning-summary — surface a transparent recap of what the
+    // agent did this turn (approach, recent steps, confidence). Opt-in
+    // (SUDO_REASONING_SUMMARY=1), additive (attached to the result + logged),
+    // fail-open. Actions are scoped to THIS run's tool calls.
+    let _reasoningSummary: string | undefined;
+    if (process.env['SUDO_REASONING_SUMMARY'] === '1') {
+      try {
+        const toolMsgs = session.messages.filter(
+          (m): m is typeof m & { toolName: string } => m.role === 'tool' && typeof m.toolName === 'string',
+        );
+        const recent = toolMsgs.slice(-MAX_SUMMARY_ACTIONS);
+        const actions: AgentAction[] = recent.map((m) => ({
+          tool: m.toolName,
+          result: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+          timestamp: new Date().toISOString(),
+        }));
+        if (actions.length > 0) {
+          const summary = buildReasoningSummary(actions, message);
+          _reasoningSummary = formatReasoningSummary(summary);
+          log.info({ sessionId, steps: summary.stepsCompleted.length, confidence: summary.confidence }, 'Reasoning summary built');
+        }
+      } catch (err) {
+        log.warn({ sessionId, err: String(err) }, 'Reasoning summary failed — continuing');
+      }
+    }
+
+    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary };
   }
 
   /** Return the resolved config for this loop instance. */
