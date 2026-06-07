@@ -15,6 +15,7 @@ import { isToolResultSuccess } from './tool-result-classifier.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError } from '../shared/errors.js';
 import { MAX_AGENT_ITERATIONS } from '../shared/constants.js';
+import { decomposeIfComplex, type DecomposerBrainLike } from './task-decomposer.js';
 import {
   runCompaction,
   executeToolCalls,
@@ -199,6 +200,11 @@ interface UnifiedMemoryLike {
 // ---------------------------------------------------------------------------
 // Default config
 // ---------------------------------------------------------------------------
+
+/** Theme 2 (auto-plan): max decomposed subtasks injected as a plan checklist. */
+const MAX_PLAN_STEPS = 8;
+/** Theme 2 (auto-plan): max chars per subtask after sanitization (bloat + injection guard). */
+const MAX_PLAN_STEP_CHARS = 200;
 
 const DEFAULT_CONFIG: AgentConfig = {
   maxIterations: MAX_AGENT_ITERATIONS,
@@ -1321,6 +1327,43 @@ export class AgentLoop {
           }
         } catch (injErr) {
           log.warn({ sessionId, err: String(injErr) }, 'InjectionDetector: scan threw — continuing');
+        }
+      }
+
+      // Theme 2 (auto-plan): decompose a genuinely complex request into an
+      // explicit subtask checklist, injected as a system message so the agent
+      // works against a plan instead of discovering structure by trial-and-error
+      // — a structural counter to "phantom task completion". Opt-in via
+      // SUDO_AUTO_PLAN=1 (default OFF → zero overhead); fail-open. The cheap
+      // isComplexRequest() heuristic inside decomposeIfComplex gates the single
+      // 150-token micro-call, so simple turns never incur an extra LLM call.
+      if (process.env['SUDO_AUTO_PLAN'] === '1') {
+        try {
+          const decomposed = await decomposeIfComplex(this.brain as unknown as DecomposerBrainLike, current);
+          // Sanitize before injecting as a SYSTEM message (higher trust): collapse
+          // whitespace so a subtask can't smuggle extra lines, cap length to bound
+          // tokens + adversarial content, drop empties, then cap step count.
+          const steps = decomposed.isComplex
+            ? decomposed.subtasks
+                .map((s) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, MAX_PLAN_STEP_CHARS) : ''))
+                .filter((s) => s.length > 0)
+                .slice(0, MAX_PLAN_STEPS)
+            : [];
+          if (steps.length > 0) {
+            const checklist = steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+            session.messages.push({
+              role: 'system',
+              content:
+                '# PLAN FOR THIS TASK\n' +
+                'A suggested breakdown of the request (adapt it as you learn more). Work through the ' +
+                'steps in order, completing each before the next, and verify the whole task is done ' +
+                'before you finish:\n' +
+                checklist,
+            });
+            log.info({ sessionId, stepCount: steps.length }, 'Auto-plan: decomposed task injected');
+          }
+        } catch (planErr) {
+          log.warn({ sessionId, err: String(planErr) }, 'Auto-plan: decomposition failed — continuing without a plan');
         }
       }
 
