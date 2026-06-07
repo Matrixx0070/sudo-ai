@@ -10,7 +10,7 @@ import { createLogger } from '../shared/logger.js';
 import { LLMError } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
-import { getModel, initProviders } from './providers.js';
+import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
@@ -19,6 +19,9 @@ import { isGrokRefusal } from './grok-refusal-detect.js';
 import { queryAllModelsConsensus } from './model-consensus.js';
 import { DispatchRouter } from './dispatch-router.js';
 import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
+import { routeModel } from './model-router.js';
+import { AuthProfileRotation } from './auth-profile-rotation.js';
+import type { AuthErrorCategory } from './auth-profile-rotation.js';
 import type {
   BrainMessage,
   BrainRequest,
@@ -29,6 +32,7 @@ import type {
   SystemPromptOptions,
   ReasoningLevel,
   ModelProfile,
+  ErrorCategory,
 } from './types.js';
 import type { SudoConfig } from '../config/types.js';
 import { ToolRegistry } from '../tools/registry.js';
@@ -190,6 +194,10 @@ export class Brain {
   private readonly primaryModel: string;
   /** Cheap-path dispatch router (novelty scoring + LRU cache + anti-self-promotion guard). */
   private readonly dispatchRouter = new DispatchRouter();
+  /** Multi-key rotation manager — rotates API keys per provider on rate-limit/auth errors. */
+  private readonly authRotation = AuthProfileRotation.getInstance();
+  /** Providers whose env keys have been loaded into the rotation manager (load-once). */
+  private readonly rotationLoaded = new Set<string>();
 
   /**
    * @param config - Full SudoConfig (or null for env-only mode).
@@ -865,10 +873,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // model, and fallback to local models still calls the cloud model.
     modelId = profile.id;
 
-    const modelHandle = getModel(modelId);
-
     const callParams: Record<string, unknown> = {
-      model: modelHandle,
       system: systemPrompt,
       messages: toSDKMessages(request.messages),
       temperature,
@@ -887,7 +892,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         })
       );
     }
-    let result = await generateText(callParams as Parameters<typeof generateText>[0]);
+    // A4: obtain the completion through the auth-profile rotation path — rotates
+    // across multiple API keys for this provider on rate-limit/auth/billing errors
+    // before model-level failover gives up. Sets callParams.model to the chosen
+    // key's handle; the single env-key path runs unchanged when <2 keys exist.
+    let result = await this._generateWithKeyRotation(profile, callParams);
 
     // --- Tool-empty retry: some providers (Ollama cloud) return empty content
     // when tools are attached but don't actually support structured tool calls.
@@ -1022,20 +1031,112 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     const complexity = estimateTaskComplexity(userText);
     const cheapModel = process.env['SUDO_CHEAP_MODEL']?.trim() || pickOptimalModel(complexity, 'cheapest');
 
-    // Nothing to optimize when the cheap tier IS the primary model.
-    if (!cheapModel || cheapModel === this.primaryModel) return null;
+    // Cheap fast-path — only when a genuinely cheaper model than the primary exists.
+    // dispatch-router applies the cheap-model-router guards + novelty + LRU cache.
+    if (cheapModel && cheapModel !== this.primaryModel) {
+      const decision = this.dispatchRouter.route({
+        userText,
+        history: request.messages as unknown as HistoryMessage[],
+        primaryModel: this.primaryModel,
+        cheapModel,
+        hasAttachments: (lastUserMsg?.images?.length ?? 0) > 0,
+      });
+      if (decision.cheapUsed) {
+        return { model: decision.model, reason: decision.reason, complexity };
+      }
+    }
 
-    // dispatch-router: cheap-vs-primary decision with guards + novelty + cache.
-    const decision = this.dispatchRouter.route({
-      userText,
-      history: request.messages as unknown as HistoryMessage[],
-      primaryModel: this.primaryModel,
-      cheapModel,
-      hasAttachments: (lastUserMsg?.images?.length ?? 0) > 0,
-    });
+    // A3: explicit "auto" → let the zero-cost keyword model-router pick a
+    // category-appropriate model (coding/analysis/research/fast). Inert while the
+    // category models all resolve to the primary; activates once they differ.
+    if (request.model === 'auto') {
+      const routed = routeModel('', userText);
+      if (routed.model && routed.model !== this.primaryModel) {
+        return { model: routed.model, reason: `category-route:${routed.category}`, complexity };
+      }
+    }
 
-    if (!decision.cheapUsed) return null;
-    return { model: decision.model, reason: decision.reason, complexity };
+    return null;
+  }
+
+  /**
+   * Run generateText for a profile through the auth-profile rotation path.
+   *
+   * When 2+ API keys are configured for the provider (e.g. XAI_API_KEY_1,
+   * XAI_API_KEY_2), each rate-limit / auth / billing failure rotates to the next
+   * key and retries the SAME model before the caller's model-level failover gives
+   * up. Non-key errors (overload, timeout, format, …) propagate immediately so the
+   * model-failover loop can switch models. With fewer than 2 keys it falls back to
+   * the single env-key path — byte-for-byte the previous behavior.
+   *
+   * Sets `callParams.model` to the chosen key's handle as a side effect, so the
+   * downstream tool-empty retry reuses the same working key.
+   */
+  private async _generateWithKeyRotation(
+    profile: ModelProfile,
+    callParams: Record<string, unknown>,
+  ): Promise<Awaited<ReturnType<typeof generateText>>> {
+    const provider = profile.provider;
+    const keyCount = this._ensureRotationKeys(provider);
+
+    // Single-key / env path — unchanged behavior.
+    if (keyCount < 2) {
+      callParams.model = getModel(profile.id);
+      return generateText(callParams as Parameters<typeof generateText>[0]);
+    }
+
+    let lastErr: unknown;
+    for (let k = 0; k < keyCount; k++) {
+      const key = this.authRotation.getNextKey(provider);
+      if (!key) break;
+      try {
+        callParams.model = await getModelWithKey(profile.id, key.apiKey);
+        const res = await generateText(callParams as Parameters<typeof generateText>[0]);
+        this.authRotation.reportSuccess(provider, key.keyId);
+        return res;
+      } catch (err) {
+        lastErr = err;
+        const { status, body } = Brain.extractErrorDetails(err);
+        const authCat = Brain._toAuthErrorCategory(this.failover.categorizeError(status, body));
+        // Not a key-specific failure (overload/timeout/format) — let the
+        // model-failover loop handle it rather than burning more keys.
+        if (!authCat) throw err;
+        log.warn({ provider, keyId: key.keyId, status, authCat }, 'API key error — rotating to next key');
+        this.authRotation.reportError(provider, key.keyId, authCat);
+      }
+    }
+    throw lastErr ?? new LLMError('All API keys for provider exhausted', 'llm_all_keys_exhausted', { provider });
+  }
+
+  /**
+   * Lazily load a provider's numbered env keys into the rotation manager (once per
+   * provider per Brain instance) and return how many keys are registered.
+   */
+  private _ensureRotationKeys(provider: string): number {
+    if (!this.rotationLoaded.has(provider)) {
+      this.rotationLoaded.add(provider);
+      this.authRotation.loadKeysFromEnv(provider);
+    }
+    return this.authRotation.getStatus(provider).length;
+  }
+
+  /**
+   * Map a Brain failover ErrorCategory to the rotation manager's AuthErrorCategory.
+   * Returns null for errors that are NOT key-specific (so they skip rotation and
+   * trigger model-level failover instead).
+   */
+  private static _toAuthErrorCategory(category: ErrorCategory): AuthErrorCategory | null {
+    switch (category) {
+      case 'rate_limit':
+        return 'rate_limit';
+      case 'billing':
+        return 'billing_error';
+      case 'auth':
+      case 'auth_permanent':
+        return 'auth_invalid';
+      default:
+        return null;
+    }
   }
 
   /**
