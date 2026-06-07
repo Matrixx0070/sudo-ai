@@ -4,7 +4,7 @@ const DIR = '/root/sudo-ai-v3/screenshots';
 
 const PAGES = [
   'Dashboard', 'AI Models', 'Channels', 'Tools', 'Consciousness',
-  'Cron Jobs', 'Settings', 'Security', 'Logs', 'System', 'Sessions', 'Office'
+  'Cron Jobs', 'Settings', 'Security', 'Logs', 'System', 'Sessions'
 ];
 
 async function run() {

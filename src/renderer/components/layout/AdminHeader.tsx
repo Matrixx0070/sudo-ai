@@ -6,7 +6,6 @@ interface AdminHeaderProps {
 }
 
 const VIEW_TITLES: Record<string, string> = {
-  'office':              'Crystal Palace Office',
   'chat':                'Chat',
   'admin-dashboard':     'Dashboard',
   'admin-models':        'AI Models',

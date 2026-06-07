@@ -10,17 +10,6 @@ interface AdminSidebarProps {
 // Icons
 // ---------------------------------------------------------------------------
 
-function IconBuilding() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <rect x="2" y="5" width="16" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M6 5V3.5A1.5 1.5 0 017.5 2h5A1.5 1.5 0 0114 3.5V5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <rect x="5" y="10" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.2" />
-      <rect x="12" y="10" width="3" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M8 18v-4h4v4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 function IconMessage() {
   return (
@@ -202,7 +191,6 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: 'MAIN',
     items: [
-      { view: 'office',            label: 'Office',        icon: <IconBuilding /> },
       { view: 'chat',              label: 'Chat',           icon: <IconMessage /> },
       { view: 'admin-dashboard',   label: 'Dashboard',     icon: <IconGrid /> },
     ],
