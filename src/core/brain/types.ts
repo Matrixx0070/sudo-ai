@@ -4,9 +4,11 @@
  */
 
 import type { ErrorCategory } from '../shared/errors.js';
+import type { RoutingTrace } from './routing-trace.js';
 
 // Re-export for consumers that only import from brain.
 export type { ErrorCategory };
+export type { RoutingTrace };
 
 // ---------------------------------------------------------------------------
 // Persona & Mood discriminated unions
@@ -150,6 +152,8 @@ export interface BrainResponse {
   /** Provider-qualified model that actually responded. */
   model: string;
   finishReason: 'stop' | 'tool-calls' | 'length' | 'content-filter' | 'error';
+  /** Routing/observability trace for this call (which path, cost, switches). */
+  routing?: RoutingTrace;
 }
 
 // ---------------------------------------------------------------------------

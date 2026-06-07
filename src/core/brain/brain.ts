@@ -22,6 +22,8 @@ import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
 import { routeModel } from './model-router.js';
 import { AuthProfileRotation } from './auth-profile-rotation.js';
 import type { AuthErrorCategory } from './auth-profile-rotation.js';
+import { describeRouting } from './routing-trace.js';
+import type { RoutingTrace, RoutingPath } from './routing-trace.js';
 import type {
   BrainMessage,
   BrainRequest,
@@ -653,6 +655,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
             usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCost: 0 },
             model: request.model ?? 'blocked',
             finishReason: 'stop',
+            routing: this._trace({
+              path: 'blocked',
+              reason: `negative-router:${routingResult.category}`,
+              activeModel: request.model ?? 'blocked',
+              selectedModel: request.model ?? 'blocked',
+              costUSD: 0,
+            }),
           };
         }
 
@@ -686,7 +695,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       );
       try {
         const profile = this._syntheticProfile(fastRoute.model);
-        return await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+        const resp = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+        return {
+          ...resp,
+          routing: this._trace({ path: fastRoute.kind, reason: fastRoute.reason, activeModel: resp.model, costUSD: resp.usage.estimatedCost }),
+        };
       } catch (err) {
         log.warn(
           { model: fastRoute.model, err: String(err) },
@@ -740,6 +753,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           usage: consensusResult.usage,
           model: consensusResult.model,
           finishReason: consensusResult.toolCalls.length > 0 ? 'tool-calls' : 'stop',
+          routing: this._trace({
+            path: 'consensus',
+            reason: `consensus:${method}`,
+            activeModel: consensusResult.model,
+            costUSD: consensusResult.usage.estimatedCost,
+            consensus: { agreement, method },
+          }),
         };
       } catch (consensusErr) {
         log.warn({ err: consensusErr }, 'Consensus call failed — falling back to sequential failover');
@@ -762,7 +782,16 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
       try {
         const result = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
-        return result;
+        return {
+          ...result,
+          routing: this._trace({
+            path: 'failover',
+            reason: `failover:attempt-${attempt + 1}`,
+            activeModel: result.model,
+            costUSD: result.usage.estimatedCost,
+            failoverAttempts: attempt + 1,
+          }),
+        };
       } catch (err) {
         lastError = err;
         const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
@@ -1025,7 +1054,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
    */
   private _smartRoute(
     request: BrainRequest,
-  ): { model: string; reason: string; complexity: number } | null {
+  ): { model: string; reason: string; complexity: number; kind: RoutingPath } | null {
     if (process.env['SUDO_SMART_ROUTE_DISABLE'] === '1') return null;
     // Respect explicit model pins and callers that force the cloud race.
     if (request.model && request.model !== 'auto') return null;
@@ -1054,7 +1083,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     ) {
       const premiumModel = process.env['SUDO_PREMIUM_MODEL']?.trim() || this.config?.models?.premium;
       if (premiumModel && premiumModel !== this.primaryModel) {
-        return { model: premiumModel, reason: `reasoning-tier:${request.reasoningLevel}`, complexity };
+        return { model: premiumModel, reason: `reasoning-tier:${request.reasoningLevel}`, complexity, kind: 'reasoning-tier' };
       }
     }
 
@@ -1069,7 +1098,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         hasAttachments: (lastUserMsg?.images?.length ?? 0) > 0,
       });
       if (decision.cheapUsed) {
-        return { model: decision.model, reason: decision.reason, complexity };
+        return { model: decision.model, reason: decision.reason, complexity, kind: 'cheap' };
       }
     }
 
@@ -1079,7 +1108,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     if (request.model === 'auto') {
       const routed = routeModel('', userText);
       if (routed.model && routed.model !== this.primaryModel) {
-        return { model: routed.model, reason: `category-route:${routed.category}`, complexity };
+        return { model: routed.model, reason: `category-route:${routed.category}`, complexity, kind: 'category' };
       }
     }
 
@@ -1185,6 +1214,35 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       minResponders: minResponders !== undefined && minResponders >= 1 ? Math.floor(minResponders) : undefined,
       timeoutMs: timeoutMs !== undefined && timeoutMs > 0 ? timeoutMs : undefined,
     };
+  }
+
+  /**
+   * Build a RoutingTrace for the answer and emit a compact, human-readable
+   * routing line (observability + cost transparency). Returned for attachment
+   * to the BrainResponse so UIs/channels can surface the decision.
+   */
+  private _trace(opts: {
+    path: RoutingPath;
+    reason: string;
+    activeModel: string;
+    costUSD: number;
+    selectedModel?: string;
+    consensus?: { agreement: number; method: 'fastest' | 'most-detailed' };
+    failoverAttempts?: number;
+  }): RoutingTrace {
+    const selectedModel = opts.selectedModel ?? this.primaryModel;
+    const trace: RoutingTrace = {
+      path: opts.path,
+      reason: opts.reason,
+      selectedModel,
+      activeModel: opts.activeModel,
+      switched: opts.activeModel !== selectedModel,
+      costUSD: opts.costUSD,
+      ...(opts.consensus ? { consensus: opts.consensus } : {}),
+      ...(opts.failoverAttempts !== undefined ? { failoverAttempts: opts.failoverAttempts } : {}),
+    };
+    log.info({ routing: trace }, describeRouting(trace));
+    return trace;
   }
 
   /**
