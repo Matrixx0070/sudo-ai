@@ -609,6 +609,15 @@ export class ConsciousnessOrchestrator {
   // -------------------------------------------------------------------------
 
   /**
+   * Theme 4 (reflect loops): expose the real engines + episodic store so the
+   * sleep cycle can drive their (LLM-backed) generation OFF the hot path. They
+   * read/write the orchestrator's own DB, where live episodes are recorded.
+   */
+  getEpisodicMemory(): EpisodicMemory { return this.episodicMemory; }
+  getCounterfactualEngine(): CounterfactualEngine { return this.counterfactualEngine; }
+  getMetacognitionEngine(): MetacognitionEngine { return this.metacognition; }
+
+  /**
    * Return counterfactual "what if" lessons from recent episodes.
    * These lessons can be injected into tool-call decisions to avoid past mistakes.
    */
