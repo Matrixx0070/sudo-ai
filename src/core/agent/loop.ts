@@ -140,6 +140,12 @@ export interface AgentRunResult {
   verificationSummary?: string;
   /** Theme 2.2: reasoning recap (approach/steps/confidence) if SUDO_REASONING_SUMMARY is enabled. */
   reasoningSummary?: string;
+  /**
+   * Theme 2 step-tracking: APPROXIMATE coverage of the auto-plan's steps by this
+   * turn's tool actions (present only when SUDO_AUTO_PLAN produced a plan).
+   * `unaddressed` is a soft anti-"phantom-completion" signal, not a hard verdict.
+   */
+  planProgress?: { totalSteps: number; addressedCount: number; unaddressed: string[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +216,9 @@ const MAX_PLAN_STEPS = 8;
 const MAX_PLAN_STEP_CHARS = 200;
 /** Theme 2.2 (reasoning-summary): max recent tool actions folded into the summary. */
 const MAX_SUMMARY_ACTIONS = 20;
+/** Theme 2 step-tracking: a plan step counts as "addressed" when at least this
+ *  fraction of its content words (>=4 chars) appear in the turn's tool actions. */
+const PLAN_COVERAGE_THRESHOLD = 0.3;
 
 const DEFAULT_CONFIG: AgentConfig = {
   maxIterations: MAX_AGENT_ITERATIONS,
@@ -1256,6 +1265,9 @@ export class AgentLoop {
     }
 
     let finalResponse = '';
+    // Theme 2 step-tracking: the most recent auto-plan steps injected this run
+    // (empty unless SUDO_AUTO_PLAN produced a plan). Used for turn-end coverage.
+    let _lastPlanSteps: string[] = [];
 
     // Outer loop: drains follow-up messages queued during this turn.
     while (state.followUpMessages.length > 0) {
@@ -1365,6 +1377,7 @@ export class AgentLoop {
                 'before you finish:\n' +
                 checklist,
             });
+            _lastPlanSteps = steps;
             log.info({ sessionId, stepCount: steps.length }, 'Auto-plan: decomposed task injected');
           }
         } catch (planErr) {
@@ -1511,7 +1524,38 @@ export class AgentLoop {
       }
     }
 
-    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary };
+    // Theme 2 step-tracking: APPROXIMATE coverage of the injected plan by this
+    // turn's tool actions. Token-overlap (bidirectional) — NOT substring-on-tool-
+    // name — and surfaced only as a soft "unaddressed steps" signal, never a hard
+    // "step done" claim. Present only when a plan was injected; fail-open.
+    let _planProgress: { totalSteps: number; addressedCount: number; unaddressed: string[] } | undefined;
+    if (_lastPlanSteps.length > 0) {
+      try {
+        const haystack = session.messages
+          .filter((m): m is typeof m & { toolName: string } => m.role === 'tool' && typeof m.toolName === 'string')
+          .slice(-MAX_SUMMARY_ACTIONS)
+          .map((m) => `${m.toolName} ${typeof m.content === 'string' ? m.content : ''}`)
+          .join(' ')
+          .toLowerCase();
+        const unaddressed: string[] = [];
+        for (const step of _lastPlanSteps) {
+          const tokens = step.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [];
+          if (tokens.length === 0) continue; // can't judge — don't flag
+          const hits = tokens.filter((t) => haystack.includes(t)).length;
+          if (hits / tokens.length < PLAN_COVERAGE_THRESHOLD) unaddressed.push(step);
+        }
+        _planProgress = { totalSteps: _lastPlanSteps.length, addressedCount: _lastPlanSteps.length - unaddressed.length, unaddressed };
+        if (unaddressed.length > 0) {
+          log.warn({ sessionId, unaddressed: unaddressed.length, total: _lastPlanSteps.length }, 'Plan tracking: some planned steps appear unaddressed (approximate)');
+        } else {
+          log.info({ sessionId, total: _lastPlanSteps.length }, 'Plan tracking: all planned steps appear addressed (approximate)');
+        }
+      } catch (err) {
+        log.warn({ sessionId, err: String(err) }, 'Plan tracking failed — continuing');
+      }
+    }
+
+    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress };
   }
 
   /** Return the resolved config for this loop instance. */
