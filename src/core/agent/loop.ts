@@ -84,6 +84,7 @@ import { LazinessNudge } from './laziness-nudge.js';
 import { TodoGate } from './todo-gate.js';
 import { SelfVerify } from './self-verify.js';
 import { GoalClassifier } from '../autonomy/goal-pipeline.js';
+import { GoalPlanner } from '../autonomy/goal-planner.js';
 import { GoalStopDetector } from '../autonomy/goal-stop-detector.js';
 import { PlanModeStateMachine } from './plan-mode-v2.js';
 import { ProfileManager } from '../sandbox/sandbox-profiles.js';
@@ -214,6 +215,8 @@ interface UnifiedMemoryLike {
 const MAX_PLAN_STEPS = 8;
 /** Theme 2 (auto-plan): max chars per subtask after sanitization (bloat + injection guard). */
 const MAX_PLAN_STEP_CHARS = 200;
+/** Theme 2 heavy (GoalPlanner): skip strategy injection below this classification confidence. */
+const GOAL_PLANNER_MIN_CONFIDENCE = 0.5;
 /** Theme 2.2 (reasoning-summary): max recent tool actions folded into the summary. */
 const MAX_SUMMARY_ACTIONS = 20;
 /** Theme 2 step-tracking: a plan step counts as "addressed" when at least this
@@ -1382,6 +1385,39 @@ export class AgentLoop {
           }
         } catch (planErr) {
           log.warn({ sessionId, err: String(planErr) }, 'Auto-plan: decomposition failed — continuing without a plan');
+        }
+      }
+
+      // Theme 2 heavy: GoalPlanner — when SUDO_GOAL_PLANNER=1 and the goal was
+      // classified with reasonable confidence, inject a TYPE-AWARE strategy plan
+      // (e.g. bug_fix -> reproduce/diagnose/fix/verify) as advisory guidance.
+      // TEMPLATE mode (no Brain) => ZERO LLM cost, pure + hot-path-safe. The steps
+      // are predefined (not user-derived), but still capped for bloat. Fail-open.
+      if (process.env['SUDO_GOAL_PLANNER'] === '1' && this._goalClassifier) {
+        try {
+          // Classify THIS message (not the stale first-message classification) so the
+          // strategy adapts per follow-up — mirrors auto-plan's per-message behavior.
+          const gc = this._goalClassifier.classify(current);
+          if (gc && typeof gc.confidence === 'number' && gc.confidence >= GOAL_PLANNER_MIN_CONFIDENCE) {
+            const plan = await new GoalPlanner().plan(gc, current); // no brain => template, zero LLM
+            const strategySteps = plan.steps
+              .map((s) => (typeof s.description === 'string' ? s.description.replace(/\s+/g, ' ').trim().slice(0, MAX_PLAN_STEP_CHARS) : ''))
+              .filter((s) => s.length > 0)
+              .slice(0, MAX_PLAN_STEPS);
+            if (strategySteps.length > 0) {
+              const checklist = strategySteps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+              session.messages.push({
+                role: 'system',
+                content:
+                  `# STRATEGY (${gc.type})\n` +
+                  'A type-aware approach for this kind of goal (advisory — adapt it as you learn more):\n' +
+                  checklist,
+              });
+              log.info({ sessionId, goalType: gc.type, stepCount: strategySteps.length }, 'GoalPlanner: strategy plan injected');
+            }
+          }
+        } catch (gpErr) {
+          log.warn({ sessionId, err: String(gpErr) }, 'GoalPlanner: planning failed — continuing without a strategy');
         }
       }
 
