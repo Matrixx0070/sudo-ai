@@ -19,7 +19,7 @@ import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '../shared/logger.js';
 import { ChannelError } from '../shared/errors.js';
-import { serveStaticFile } from '../gateway/static-middleware.js';
+import { serveStaticFile, buildSpaCSPHeader } from '../gateway/static-middleware.js';
 import type { ChannelAdapter } from './adapter.js';
 import type {
   ChannelType,
@@ -346,9 +346,15 @@ export class WebAdapter implements ChannelAdapter {
     if (method === 'GET' && url === '/chat') {
       const served = serveStaticFile(req, res, '/chat');
       if (!served) {
-        // Fallback: serve minimal inline HTML if SPA not built
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end('<!DOCTYPE html><html><head><meta charset="utf-8"><title>SUDO Chat</title></head><body><h1>SUDO Chat</h1><p>React SPA not built. Run: npx vite build</p></body></html>');
+        // Fallback: serve minimal inline HTML if SPA not built. Apply the same
+        // nonce-based CSP as the static SPA path so the security posture (and the
+        // gateway's CSP contract) holds even before `vite build` has produced dist/.
+        const nonce = randomBytes(16).toString('base64');
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Security-Policy': buildSpaCSPHeader(nonce),
+        });
+        res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="csp-nonce" content="${nonce}"><title>SUDO Chat</title></head><body><h1>SUDO Chat</h1><p>React SPA not built. Run: npx vite build</p></body></html>`);
       }
       return;
     }

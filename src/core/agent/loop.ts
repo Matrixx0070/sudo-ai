@@ -177,7 +177,7 @@ interface ConsciousnessLike {
     activeConcepts?: string[];
   };
   /** Deep-bridge methods — surfaced by ConsciousnessOrchestrator. */
-  getDeepInsights?(userId: string): import('../consciousness/deep-bridge.js').DeepInsights;
+  getDeepInsights?(userId: string): import('../consciousness/orchestrator.js').DeepInsights;
   getCounterfactualLessons?(count?: number): import('../consciousness/orchestrator.js').CounterfactualInsight[];
   getMetacognitiveGuidance?(limit?: number): import('../consciousness/orchestrator.js').MetacognitiveInsight[];
   getSurpriseInsight?(hours?: number): import('../consciousness/orchestrator.js').SurpriseInsight;
@@ -1204,7 +1204,7 @@ export class AgentLoop {
     // FeedbackTierManager: inject tier-based prompt addition at turn-start (fail-open).
     // Uses the assessment stored on session from a previous turn, if available.
     try {
-      const prevTierAdj = (session as Record<string, unknown>)._feedbackTierAdjustment as { adjustments: { promptAddition: string }; tier: string; reason: string } | undefined;
+      const prevTierAdj = session._feedbackTierAdjustment as { adjustments: { promptAddition: string }; tier: string; reason: string } | undefined;
       if (prevTierAdj?.adjustments?.promptAddition) {
         session.messages.push({ role: 'system', content: prevTierAdj.adjustments.promptAddition });
         log.debug({ sessionId, tier: prevTierAdj.tier }, 'FeedbackTierManager: prompt addition injected from previous turn assessment');
@@ -1345,7 +1345,7 @@ export class AgentLoop {
     try {
       const tierAssessment = this._feedbackTierManager?.assess();
       if (tierAssessment && tierAssessment.adjustments.promptAddition) {
-        (session as Record<string, unknown>)._feedbackTierAdjustment = tierAssessment;
+        session._feedbackTierAdjustment = tierAssessment;
         log.debug({ sessionId, tier: tierAssessment.tier, reason: tierAssessment.reason }, 'FeedbackTierManager: tier assessment stored on session');
       }
     } catch (err) {
@@ -1375,7 +1375,7 @@ export class AgentLoop {
         if (endCtx) {
           // Store in session metadata rather than injecting as a message,
           // since this turn is already ending.
-          (session as Record<string, unknown>)._consciousnessEndContext = endCtx;
+          session._consciousnessEndContext = endCtx;
           log.debug({ sessionId }, 'Consciousness turn-end context recorded');
         }
       } catch (err) {
