@@ -243,11 +243,10 @@ export class BestOfNExecutor {
         timeout: 5 * 60 * 1000, // 5 minutes per candidate
       };
 
-      // Spawn the sub-agent via AgentSwarm
-      const agentId = await this.swarm.spawn(task, spawnOpts);
-
-      // Wait for completion (with timeout)
-      const result = await this.swarm.waitForCompletion(agentId, spawnOpts.timeout);
+      // Spawn the sub-agent via AgentSwarm. spawn() runs the agent to
+      // completion (enforcing spawnOpts.timeout internally) and resolves
+      // with the agent's final text output.
+      const resultText = await this.swarm.spawn(task, spawnOpts);
 
       // Collect file changes
       const filesChanged = await this._getFilesChanged(worktreeInfo.path);
@@ -263,7 +262,7 @@ export class BestOfNExecutor {
         index,
         branch: worktreeInfo.branch,
         prompt: task,
-        output: result?.text ?? '',
+        output: resultText ?? '',
         filesChanged,
         success: true,
       };
@@ -335,7 +334,7 @@ export class BestOfNExecutor {
 
       const parsed = JSON.parse(jsonMatch[0]);
       if (Array.isArray(parsed.scores)) {
-        return parsed.scores.map((s: Record<string, unknown>) => ({
+        return parsed.scores.map((s: { candidateIndex?: number; scores?: Partial<Record<JudgeCriteria, number>>; totalScore?: number; reasoning?: string }) => ({
           candidateIndex: Number(s.candidateIndex ?? 0),
           scores: {
             correctness: Number(s.scores?.correctness ?? 0),
