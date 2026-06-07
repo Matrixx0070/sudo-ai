@@ -24,6 +24,7 @@ import { AuthProfileRotation } from './auth-profile-rotation.js';
 import type { AuthErrorCategory } from './auth-profile-rotation.js';
 import { describeRouting } from './routing-trace.js';
 import type { RoutingTrace, RoutingPath } from './routing-trace.js';
+import { selectLenses } from './reasoning-lens.js';
 import type {
   BrainMessage,
   BrainRequest,
@@ -619,10 +620,21 @@ export class Brain {
       }
     }
 
+    // Reasoning lens: inject an analytical framework when the task matches
+    // (root-cause / hypothesis / decision / adversarial / strategic). Scoped by
+    // keyword, capped, and kill-switchable (SUDO_REASONING_LENS_DISABLE=1) — inert
+    // for plain turns. See reasoning-lens.ts.
+    const lensUserText = [...request.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+    const lens = selectLenses(lensUserText);
+    if (lens) {
+      log.debug({ lensIds: lens.ids }, 'Reasoning lenses injected into system prompt');
+    }
+
     let systemPrompt = await this.getSystemPrompt({
       heartbeat: false,
       tools: toolSummaries.length > 0 ? toolSummaries : undefined,
       ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
+      ...(lens ? { reasoningLens: lens.text } : {}),
     });
 
     // v5: Tool-use instruction — softened for Ollama models which tend to

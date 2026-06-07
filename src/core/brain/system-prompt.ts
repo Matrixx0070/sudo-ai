@@ -120,6 +120,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     memoryContext,
     consciousnessContext,
     activeHints,
+    reasoningLens,
     peerId,
     mainPeerId: explicitMainPeerId,
   } = options;
@@ -304,6 +305,11 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   if (activeHints && activeHints.length > 0) {
     const hintsBlock = activeHints.map((h) => `- ${h}`).join('\n');
     parts.push(sectionWithHeader('Contextual Guidance', hintsBlock));
+  }
+
+  // 7.6 Reasoning lens — analytical framework(s) for the matched task type.
+  if (reasoningLens && reasoningLens.trim()) {
+    parts.push(sectionWithHeader('Reasoning Lens', reasoningLens));
   }
 
   // 8. AGENTS.md
