@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentLoop } from '../../src/core/agent/loop.js';
 import { GoalClassifier } from '../../src/core/autonomy/goal-pipeline.js';
-import { GoalPlanner } from '../../src/core/autonomy/goal-planner.js';
+import { GoalPlanner, type BrainForPlanning } from '../../src/core/autonomy/goal-planner.js';
 import {
   createMockBrain,
   createMockToolRegistry,
@@ -83,5 +83,54 @@ describe('Theme 2 heavy: GoalPlanner loop wiring', () => {
     loop.setGoalClassifier(stubClassifier(0.3));
     await loop.run('test-session-id', 'fix the login bug');
     expect(injectedStrategy(brain)).toBe(false);
+  });
+});
+
+describe('Theme 2 heavy: GoalPlanner semantic (LLM) mode', () => {
+  const cls = () => new GoalClassifier().classify('fix the login bug that crashes on empty password');
+
+  it('GP-sem-unit: LLM-generated steps flow into the plan', async () => {
+    const brain: BrainForPlanning = {
+      chat: async () => '[{"description":"reproduce the failing case","complexity":"low","estimatedTime":"5 min","risks":[]}]',
+    };
+    const plan = await new GoalPlanner(brain).plan(cls(), 'fix it');
+    expect(plan.steps.some((s) => s.description.includes('reproduce the failing case'))).toBe(true);
+  });
+
+  it('GP-sem-fallback: invalid LLM JSON → falls back to a (non-empty) template plan', async () => {
+    const brain: BrainForPlanning = { chat: async () => 'not json at all' };
+    const plan = await new GoalPlanner(brain).plan(cls(), 'fix it');
+    expect(plan.steps.length).toBeGreaterThan(0);
+    expect(plan.steps.every((s) => !s.description.includes('not json'))).toBe(true);
+  });
+
+  it('GP-sem-throws: brain.chat throwing → still falls back to template', async () => {
+    const brain: BrainForPlanning = { chat: async () => { throw new Error('llm down'); } };
+    const plan = await new GoalPlanner(brain).plan(cls(), 'fix it');
+    expect(plan.steps.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Theme 2 heavy: GoalPlanner semantic loop wiring', () => {
+  const KEYS = ['SUDO_GOAL_PLANNER', 'SUDO_GOAL_PLANNER_SEMANTIC'];
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => { for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
+  afterEach(() => { for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
+
+  it('GP-sem-loop: both flags → the LLM-derived step is injected via brain.chat', async () => {
+    process.env['SUDO_GOAL_PLANNER'] = '1';
+    process.env['SUDO_GOAL_PLANNER_SEMANTIC'] = '1';
+    const brain = createMockBrain();
+    brain.call.mockResolvedValue(stop());
+    (brain as unknown as { chat: () => Promise<string> }).chat = vi.fn(
+      async () => '[{"description":"SEMANTIC-STEP reproduce it","complexity":"low","estimatedTime":"5m","risks":[]}]',
+    );
+    const loop = makeLoop(brain);
+    loop.setGoalClassifier(stubClassifier(0.9));
+    await loop.run('test-session-id', 'fix the login bug');
+
+    const msgs = (brain.call.mock.calls[0]?.[0]?.messages ?? []) as Array<{ content?: unknown }>;
+    const strategy = msgs.find((m) => typeof m.content === 'string' && m.content.includes('# STRATEGY'));
+    expect(strategy?.content as string).toContain('SEMANTIC-STEP reproduce it');
   });
 });
