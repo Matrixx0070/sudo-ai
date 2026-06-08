@@ -21,7 +21,7 @@ import { hotDeployTool } from '../../src/core/tools/builtin/meta/hot-deploy.js';
 
 function makeCtx(): ToolContext {
   return {
-    workingDir: '/root/sudo-ai-v4',
+    workingDir: process.cwd(),
     sessionId: 'test-session',
     userId: 'test-user',
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },

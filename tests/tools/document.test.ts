@@ -122,22 +122,24 @@ describe('document.pdf-from-html — input validation', () => {
     }
   });
 
-  it('accepts /root/sudo-ai-v4/data/documents/ prefix path validation', async () => {
+  it('accepts the project data/documents/ prefix in path validation', async () => {
     // Verify the production data-dir prefix is on the accepted allow-list WITHOUT
     // executing the tool (which would mkdir the real production directory and/or
-    // launch a browser). A rejected path surfaces the allow-list in its error, so
-    // we assert that error names /root/sudo-ai-v4/data/documents/ as allowed and
-    // that a path under that prefix is NOT what the rejection complains about.
+    // launch a browser). The source resolves the data dir from SUDO_AI_HOME ||
+    // process.cwd(), so under test (cwd = project root) the allowed prefix is
+    // `${process.cwd()}/data/documents/`. A rejected path surfaces the allow-list
+    // in its error, so we assert that error names that prefix as allowed and that
+    // a path under it is NOT what the rejection complains about.
     const rejected = await tool.execute(
       { html: '<p>hello</p>', outputPath: '/etc/not-allowed.pdf' },
       makeCtx(),
     );
     expect(rejected.success).toBe(false);
     // The rejection lists the allowed prefixes, confirming the data dir is allowed.
-    expect(rejected.output).toContain('/root/sudo-ai-v4/data/documents/');
+    expect(rejected.output).toContain(`${process.cwd()}/data/documents/`);
     // And it complains specifically about the disallowed input path, not the data dir.
     expect(rejected.output).toContain('/etc/not-allowed.pdf');
-    expect(rejected.output).not.toContain('/root/sudo-ai-v4/data/documents/test.pdf');
+    expect(rejected.output).not.toContain(`${process.cwd()}/data/documents/test.pdf`);
   });
 
   it('has correct tool metadata', async () => {

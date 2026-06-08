@@ -280,7 +280,7 @@ describe('DeploymentHook', () => {
       expect(mockExecFile).toHaveBeenCalledWith(
         'git',
         ['reset', '--hard', 'abc123'],
-        expect.objectContaining({ cwd: '/root/sudo-ai-v4' }),
+        expect.objectContaining({ cwd: process.cwd() }),
         expect.any(Function),
       );
       expect(deps.metrics.recordEvent).toHaveBeenCalledWith('rolled_back', expect.any(Object));

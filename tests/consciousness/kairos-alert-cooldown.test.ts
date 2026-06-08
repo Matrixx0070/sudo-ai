@@ -95,7 +95,7 @@ function configureDiskCritical(): void {
   mockExecSync.mockImplementation((cmd: string) => {
     if (typeof cmd === 'string' && cmd.includes('du -sb')) {
       // 32,000,000,000 bytes ≈ 30.5GB → triggers CRITICAL (>30,000MB threshold)
-      return '32000000000\t/root/sudo-ai-v4/data';
+      return `32000000000\t${process.cwd()}/data`;
     }
     // All other execSync calls (tsc, systemctl, etc.) return empty safely
     return '';
@@ -173,7 +173,7 @@ describe('Kairos alert cooldown', () => {
     mockExecSync.mockImplementation((cmd: string) => {
       if (typeof cmd === 'string' && cmd.includes('du -sb')) {
         // 25GB → WARN threshold (>20,000MB but <=30,000MB)
-        return '26843545600\t/root/sudo-ai-v4/data';
+        return `26843545600\t${process.cwd()}/data`;
       }
       return '';
     });

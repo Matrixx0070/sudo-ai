@@ -660,7 +660,7 @@ describe('SB-MEDIUM2 budget gate fails-closed on missing tables', () => {
 describe('SB-H4 pre-commit hook regex covers all PROTECTED_PATHS entries', () => {
   it('matches every entry in PROTECTED_PATHS', async () => {
     const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
-    const hookContent = actualFs.readFileSync('/root/sudo-ai-v4/.githooks/pre-commit', 'utf8');
+    const hookContent = actualFs.readFileSync(`${process.cwd()}/.githooks/pre-commit`, 'utf8');
 
     // Extract the protected_re value from the hook
     const match = hookContent.match(/^protected_re='(.+)'$/m);

@@ -24,17 +24,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Copy to /root/sudo-ai-v4 so hard-coded paths in tests resolve.
-      #    /root must be world-executable (o+x) so runner can traverse in.
-      - name: Prepare /root/sudo-ai-v4
+      # 2. Create runtime dirs the tests expect (relative to the checkout).
+      #    Tests are now cwd-relative, so no copy to /root is needed.
+      - name: Prepare runtime dirs
         run: |
-          sudo mkdir -p /root
-          sudo rm -rf /root/sudo-ai-v4
-          sudo cp -a "$(pwd)" /root/sudo-ai-v4
-          sudo chmod -R 777 /root/sudo-ai-v4
-          sudo chmod 755 /root
-          mkdir -p /root/sudo-ai-v4/data
-          mkdir -p /root/sudo-ai-v4/.githooks
+          mkdir -p data .githooks
 
       # 3. Install bubblewrap (required for sandbox integration tests)
       - name: Install bubblewrap
@@ -53,26 +47,26 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org  # injects NODE_AUTH_TOKEN into .npmrc
 
-      # 6. Lint — must pass before build or publish (mirrors CI gate)
+      # 6. Install dependencies exactly as locked — fails if lockfile is stale
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 7. Lint — must pass before build or publish (mirrors CI gate)
       - name: Lint
-        working-directory: /root/sudo-ai-v4
         run: pnpm lint
 
-      # 7. Compile TypeScript → dist/
+      # 8. Compile TypeScript → dist/
       - name: Build
-        working-directory: /root/sudo-ai-v4
         run: pnpm build
 
-      # 8. Run full test suite — do NOT publish a broken release
+      # 9. Run full test suite — do NOT publish a broken release
       - name: Test
-        working-directory: /root/sudo-ai-v4
         run: pnpm test
 
-      # 9. Publish to npm
+      # 10. Publish to npm
       # --no-git-checks skips the "is working tree clean?" guard
       # (not relevant in CI since we are on a detached tag HEAD)
       - name: Publish
-        working-directory: /root/sudo-ai-v4
         run: pnpm publish --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}  # set in repo Settings → Secrets

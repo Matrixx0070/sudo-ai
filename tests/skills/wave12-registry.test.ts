@@ -197,11 +197,11 @@ const BUNDLED_SKILLS = [
 
 /** Absolute paths to the 5 bundled SKILL.md files (B1 output). */
 const SKILL_MD_PATHS: Record<string, string> = {
-  'research.web-summary': '/root/sudo-ai-v4/src/core/skills/research/web-summary/SKILL.md',
-  'automation.cron-health': '/root/sudo-ai-v4/src/core/skills/automation/cron-health/SKILL.md',
-  'system.self-diagnostic': '/root/sudo-ai-v4/src/core/skills/system/self-diagnostic/SKILL.md',
-  'intelligence.daily-brief': '/root/sudo-ai-v4/src/core/skills/intelligence/daily-brief/SKILL.md',
-  'content.viral-hook': '/root/sudo-ai-v4/src/core/skills/content/viral-hook/SKILL.md',
+  'research.web-summary': `${process.cwd()}/src/core/skills/research/web-summary/SKILL.md`,
+  'automation.cron-health': `${process.cwd()}/src/core/skills/automation/cron-health/SKILL.md`,
+  'system.self-diagnostic': `${process.cwd()}/src/core/skills/system/self-diagnostic/SKILL.md`,
+  'intelligence.daily-brief': `${process.cwd()}/src/core/skills/intelligence/daily-brief/SKILL.md`,
+  'content.viral-hook': `${process.cwd()}/src/core/skills/content/viral-hook/SKILL.md`,
 };
 
 // ---------------------------------------------------------------------------

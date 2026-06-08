@@ -47,13 +47,13 @@ afterEach(() => {
 
 // ---------------------------------------------------------------------------
 // Helper: derive a path that would look like a protected path to PROJECT_ROOT
-// The tools resolve PROJECT_ROOT at `__dirname/../../../../..` which points to
-// /root/sudo-ai-v4. We cannot write there in tests, so we test the guard logic
-// directly by pointing ctx.workingDir at PROJECT_ROOT and targeting a protected
-// relative path.
+// The tools resolve PROJECT_ROOT from SUDO_AI_HOME || process.cwd(), which under
+// test points at the project root. We cannot write there in tests, so we test the
+// guard logic directly by pointing ctx.workingDir at PROJECT_ROOT and targeting a
+// protected relative path.
 // ---------------------------------------------------------------------------
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
+const PROJECT_ROOT = process.cwd();
 
 // ---------------------------------------------------------------------------
 // coder.write-file
