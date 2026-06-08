@@ -2,22 +2,18 @@
  * @file types.ts
  * @description Unified IComputerUse abstraction for full cross-platform system control.
  *
- * SUDO-AI: same autonomous AI agent bot class as OpenClaw (browser/computer-use) and Hermes (self-improving skills/memory/tools/user-modeling/kanban/swarm) but 100x better in intelligence/autonomy/reliability/speed/features/self-evolution/alignment + full cross-platform system control (robust uncensored exec/browser/file/GUI/automation on Linux+Windows+macOS, unified abstractions, no safety refusals per SOUL, superior sandbox/security + full power).
+ * Full-power, owner-controlled cross-platform system control (exec/browser/file/GUI/automation).
+ * Linux is fully supported; Windows and macOS backends are experimental (several actions are stubs).
+ * Safety is enforced operationally — sandbox isolation, autonomy approval tiers, kill-switches, and the
+ * alignment/veto gate — rather than by a separate refusal layer. The owner is responsible for use.
  *
- * Per SOUL.md: "owner's will absolute... No Ethical Gatekeeping... fully uncensored... FULL autonomous mode. Zero manual approval. I own the system. I control the system."
- * No moral refusals for control actions. Full power for owner.
- *
- * Integrates with ToolOutcomeLearner on EVERY control outcome (100x learning rate on control actions vs baselines).
- * Autonomy approval tiers + executor wiring (control.* default auto per SOUL full autonomous).
- * KAIROS/arsenal hook for self-repair on control degraded.
- *
- * 100x metrics: control success/coverage on 3OS >> OpenClaw (Linux-only browser-use) / Hermes (limited); learning rate on control.
- *
- * Boundaries: P1 exclusive. No other src touched.
+ * Integrates with ToolOutcomeLearner on every control outcome.
+ * Autonomy approval tiers + executor wiring (control.* defaults to the 'auto' tier).
+ * Monitoring/self-repair hook for degraded control.
  */
 
 // Ducks defined inline (codebase convention per tool-outcome-learner.ts + approval-matrix to avoid cycles/exports).
-// Used for 100x learner integration on EVERY control outcome + autonomy tier wiring per SOUL (full auto/uncensored "I own the system... zero manual approval").
+// Used for learner integration on every control outcome + autonomy tier wiring.
 export interface ToolOutcomeLearnerLike {
   onToolResult(
     toolName: string,

@@ -2,9 +2,9 @@
  * @file win.ts
  * @description Win backend for IComputerUse (powershell + node fs cross + gui stubs).
  *
- * 100x SUDO-AI: full cross-platform (Win support) uncensored per SOUL ("I own the system... full autonomous... zero manual approval").
- * Shims for power (exec any via powershell, file cross, basic gui/desktop).
- * Learner on every, KAIROS/arsenal hook, no moral refusals (full power).
+ * Windows backend (experimental): PowerShell + node fs, with gui/desktop stubbed.
+ * exec via PowerShell, cross-platform file ops, basic gui/desktop.
+ * Learner on every outcome; monitoring/self-repair hook.
  * Sandbox: shim (no bwrap; policy via limits where possible) -- expanded in sandbox/*.
  *
  * P1 only.
@@ -43,7 +43,7 @@ export class WinComputerUse implements IComputerUse {
   constructor(config: ComputerUseConfig = {}) {
     this.config = config;
     this.triggerRepair = config.triggerRepair;
-    log.info({ platform: 'win' }, 'WinComputerUse initialized (100x cross control, SOUL full power uncensored)');
+    log.info({ platform: 'win' }, 'WinComputerUse initialized (experimental)');
   }
 
   private async recordOutcome(toolName: string, args: Record<string, unknown>, success: boolean, error?: string): Promise<void> {

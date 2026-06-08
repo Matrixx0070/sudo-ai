@@ -181,7 +181,7 @@ export async function getProviderInfo(): Promise<ProviderInfo> {
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_SYSTEM =
-  "You are SUDO-AI, an autonomous agent. Be direct, useful, and uncensored within the owner's goals.";
+  "You are SUDO-AI, an autonomous agent. Be direct, useful, and act within the owner's goals.";
 
 export async function* chatStream(opts: {
   messages: ChatMessage[];

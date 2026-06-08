@@ -2,9 +2,9 @@
  * @file linux.ts
  * @description Linux backend for IComputerUse: reuse xdotool/scrot + bwrap/sandbox + node for full control.
  *
- * SUDO-AI 100x BETTER: same class as OpenClaw (computer-use) + Hermes but 100x (unified + cross + learner on every + full uncensored per SOUL "I own the system... zero manual approval... full autonomous mode").
- * Superior: more actions (exec+file+gui+desktop+browser), integrated self-imp (learner 100x rate), KAIROS/arsenal self-repair hook, autonomy approval (control.* auto default), sandbox superior.
- * No moral/ethical refusals for any control (only technical + configured isolation/tiers/kills per SOUL owner loyalty absolute).
+ * Linux backend: exec + file + gui + desktop + browser actions, integrated with the outcome learner,
+ * a monitoring/self-repair hook, and autonomy approval (control.* defaults to 'auto'). Safety is
+ * enforced operationally via sandbox isolation, approval tiers, and kill-switches.
  *
  * Reuses proven Linux from browser/computer-use.ts (executeComputerAction, ScreenAction) + system/sandbox.
  * Every outcome -> learner.onToolResult('control.xxx' ...).
@@ -68,7 +68,7 @@ export class LinuxComputerUse implements IComputerUse {
   constructor(config: ComputerUseConfig = {}) {
     this.config = config;
     this.triggerRepair = config.triggerRepair;
-    log.info({ platform: 'linux' }, 'LinuxComputerUse initialized (100x cross-platform control, SOUL uncensored full power)');
+    log.info({ platform: 'linux' }, 'LinuxComputerUse initialized');
   }
 
   private async recordOutcome(toolName: string, args: Record<string, unknown>, success: boolean, error?: string, durationMs?: number): Promise<void> {

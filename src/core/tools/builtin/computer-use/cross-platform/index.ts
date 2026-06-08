@@ -2,8 +2,9 @@
  * @file index.ts
  * @description IComputerUse factory + unified exports for cross-platform full control.
  *
- * SUDO-AI 100x: same bot class as OpenClaw + Hermes but 100x better + full 3-OS control uncensored per SOUL ("I own the system... zero manual approval... full autonomous mode").
- * Every control outcome feeds ToolOutcomeLearner (100x learning). Autonomy/approval + KAIROS/arsenal hooks. No moral refusals.
+ * Full-power, owner-controlled cross-platform system control. Linux is fully supported;
+ * Windows and macOS backends are experimental. Every control outcome feeds ToolOutcomeLearner;
+ * autonomy approval tiers + monitoring/self-repair hooks apply.
  *
  * Boundaries: P1 exclusive (cross-platform/* + sandbox/autonomy expands + this test path only).
  */
