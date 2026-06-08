@@ -1,5 +1,5 @@
 {
-  "name": "sudo-ai",
+  "name": "@matrixx0070/sudo-ai",
   "version": "4.1.0",
   "description": "SUDO-AI - Autonomous AI Agent Platform",
   "license": "MIT",
@@ -18,6 +18,9 @@
     "url": "https://github.com/Matrixx0070/sudo-ai/issues"
   },
   "homepage": "https://github.com/Matrixx0070/sudo-ai#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist/",
     "!dist/**/*.map",
