@@ -24,12 +24,15 @@
 set -euo pipefail
 : "${TMPDIR:=/tmp}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUDO_HOME="${SUDO_AI_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 STAGING_URL="http://127.0.0.1:18901"
 # pm2 may append -1, -2, etc. for rotation; glob to find the live log
-_STAGING_ERR_GLOB="/root/sudo-ai-v4/data/logs/sudo-ai-v5-staging-err*.log"
+_STAGING_ERR_GLOB="${SUDO_HOME}/data/logs/sudo-ai-v5-staging-err*.log"
 STAGING_ERR_LOG=""
 for _f in $_STAGING_ERR_GLOB; do
   if [[ -f "$_f" ]]; then
@@ -43,7 +46,7 @@ TS_NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Fallback log dir if /var/log/seal-soak is not writable
 if ! mkdir -p "$LOG_DIR" 2>/dev/null || ! touch "$LOG_DIR/.write-test" 2>/dev/null; then
-  LOG_DIR="/root/sudo-ai-v4/data/logs/seal-soak"
+  LOG_DIR="${SUDO_HOME}/data/logs/seal-soak"
   mkdir -p "$LOG_DIR" 2>/dev/null || true
 fi
 rm -f "$LOG_DIR/.write-test" 2>/dev/null || true
