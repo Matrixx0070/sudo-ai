@@ -125,3 +125,8 @@ output/
 # src/core/learning/ or tests/learning/.
 /learning/
 /.env*
+# Misc cruft that was committed before the rules above existed (2026-06-08)
+/json                      # misnamed ImageMagick PostScript dump (~7MB)
+internal/misc/json         # duplicate of the above
+*.tgz                      # vendored package tarballs — install from registry instead
+/ast_probe_tmp.js          # one-off AST probe script
