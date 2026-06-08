@@ -68,7 +68,7 @@ export const Message: React.FC<Props> = ({ message, onToggleExpand }) => {
       {message.toolCards && message.toolCards.length > 0 && (
         <Box flexDirection="column">
           {message.toolCards.some(c => c.name.startsWith('control.') || /computer|IComputerUse/i.test(c.name)) && (
-            <Text dimColor>  🖥️ IComputerUse 100x cross-platform results (feeds ToolOutcomeLearner + KAIROS):</Text>
+            <Text dimColor>  🖥️ System control results:</Text>
           )}
           {message.toolCards.map(card => (
             <ToolCallCard

@@ -253,7 +253,7 @@ export async function runQuickstart(
     console.log(`  Preset selected: ${preset} (run 'sudo-ai init --preset ${preset}' to apply)`);
     console.log('  Next steps:');
     console.log('    1. Edit config/.env with your API keys (or re-run with full TUI)');
-    console.log('    2. For 100x cross/P1/profiles/SOUL/kills/service wizard (Ink TUI): run `sudo-ai setup`');
+    console.log('    2. For the full setup wizard (providers, profiles, service): run `sudo-ai setup`');
     console.log('    3. Run: sudo-ai doctor');
     console.log('    4. Run: sudo-ai start\n');
 

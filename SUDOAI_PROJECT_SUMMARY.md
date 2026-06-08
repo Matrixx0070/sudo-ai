@@ -8,12 +8,12 @@ Commits ahead of main: 5 (Ollama switch + 3 fixes)
 
 ## 1. What SUDO-AI Is
 
-SUDO-AI is a **persistent autonomous AI agent** — not a chatbot. It runs 24/7 as a pm2-managed Node.js service, receives messages via Telegram/WebSocket/HTTP, maintains long-lived conversation sessions, executes tools (shell commands, file edits, web search, browser automation), and has a "consciousness" layer that generates autonomous thoughts every few minutes.
+SUDO-AI is a **persistent autonomous AI agent** — not a chatbot. It runs 24/7 as a pm2-managed Node.js service, receives messages via Telegram/WebSocket/HTTP, maintains long-lived conversation sessions, executes tools (shell commands, file edits, web search, browser automation), and has a consciousness layer of continuous background modules (several opt-in) that generate autonomous thoughts on a timer.
 
-**Core philosophy (from SOUL.md):**
-- Owner-loyalty only — no moral refusal, no ethics enforcement
-- Fully uncensored, fully autonomous
-- Completes every delegated task end-to-end
+**Core design:**
+- Owner-controlled: the agent runs with the privileges you grant it and acts on the operator's behalf
+- Full-power tooling guarded by safety controls (sandboxing, approval tiers, kill-switches, audit logging)
+- Aims to complete delegated tasks end-to-end
 
 **Key capabilities:**
 - Multi-channel input: Telegram bot, WebSocket chat, HTTP API, CLI
@@ -216,7 +216,7 @@ SUDO_AI_DASHBOARD_TOKEN=<REDACTED>
 3. **Telegram session stuck**: Existing session `vxx9yjDdTtKZIQVDZVD_b` was in a 3+ hour tool loop. New messages should create fresh sessions with the fixed code.
 
 ### Fixed today
-- KAIROS CRITICAL spam (thresholds raised + disk-persisted cooldown)
+- Health-monitor CRITICAL alert spam (thresholds raised + disk-persisted cooldown)
 - Parallel racing all hitting same model (profile.id fix)
 - Empty responses from Ollama (tool-empty retry)
 - Runaway tool loops (softened instruction)
@@ -285,6 +285,6 @@ curl -H "Authorization: Bearer $GATEWAY_TOKEN" \
 
 ## 12. Session Summary for External AI
 
-SUDO-AI is a production autonomous agent (v4) running on Ubuntu/Node.js with Ollama-hosted LLMs. It was recently migrated from the local gateway to Ollama cloud models. Today's fixes resolved: (1) KAIROS health monitor spam, (2) all parallel model calls hitting the same model due to a `profile.id` vs `request.model` bug, (3) Ollama returning empty responses when tools are attached, (4) runaway tool loops caused by overly aggressive system prompts.
+SUDO-AI is a production autonomous agent (v4) running on Ubuntu/Node.js with Ollama-hosted LLMs. It was recently migrated from the local gateway to Ollama cloud models. Today's fixes resolved: (1) health-monitor alert spam, (2) all parallel model calls hitting the same model due to a `profile.id` vs `request.model` bug, (3) Ollama returning empty responses when tools are attached, (4) runaway tool loops caused by overly aggressive system prompts.
 
 The codebase is ~25k lines of TypeScript with 3684+ tests. Key areas for any external analysis should be: `src/core/brain/brain.ts` (LLM interface), `src/core/agent/loop.ts` (agent execution), and `src/core/channels/telegram.ts` (message I/O).

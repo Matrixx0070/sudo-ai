@@ -53,7 +53,7 @@ interface WizardAnswers {
 }
 
 const AVAILABLE_MODELS: SetupSelectItem[] = [
-  { value: 'xai/grok-4-1-fast-non-reasoning', label: 'xai/grok-4-1-fast (fast + cheap, recommended for 100x)', desc: '' },
+  { value: 'xai/grok-4-1-fast-non-reasoning', label: 'xai/grok-4-1-fast (fast + cheap, recommended default)', desc: '' },
   { value: 'xai/grok-4-0709', label: 'xai/grok-4-0709 (premium, max capability)', desc: '' },
   { value: 'ollama/deepseek-v4-pro:cloud', label: 'ollama/deepseek-v4-pro:cloud (cloud, no local GPU needed)', desc: '' },
   { value: 'anthropic/claude-sonnet-4-5', label: 'anthropic/claude-sonnet-4-5 (balanced)', desc: '' },
@@ -229,7 +229,7 @@ export async function ensureFirstRunWizard(projectRoot: string): Promise<void> {
   if (fs.existsSync(json5) || fs.existsSync(toml) || process.env.SUDO_NO_WIZARD === '1') {
     return;
   }
-  console.log('\n  First-run detected (no config). Launching full Ink TUI 100x setup wizard...\n');
+  console.log('\n  First-run detected (no config). Launching the setup wizard...\n');
   await runSetup(projectRoot, {});
 }
 

@@ -150,7 +150,7 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
   }
 
   console.log('\n  Restart SUDO-AI to apply changes: sudo-ai stop && sudo-ai start\n');
-  console.log('  For full 100x Ink TUI setup wizard (cross/P1/SOUL/profiles/service + ongoing edits): sudo-ai setup or sudo-ai config --setup\n');
+  console.log('  For the full setup wizard (providers, profiles, service, and ongoing edits): sudo-ai setup or sudo-ai config --setup\n');
   return 0;
 }
 
