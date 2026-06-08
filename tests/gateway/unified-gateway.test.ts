@@ -320,7 +320,7 @@ describe('unified-gateway — WebAdapter', () => {
   // 11. Static scan: literal "3004" does NOT appear in web.ts
   // -------------------------------------------------------------------------
   it('11. web.ts source does not contain port 3004 literal', () => {
-    const webTsPath = path.resolve('/root/sudo-ai-v4/src/core/channels/web.ts');
+    const webTsPath = path.resolve(process.cwd(), 'src/core/channels/web.ts');
     const source = fs.readFileSync(webTsPath, 'utf8');
     expect(source).not.toMatch(/3004/);
   });
@@ -332,7 +332,7 @@ describe('unified-gateway — WebAdapter', () => {
   // text is inside a block comment and must not trigger a false positive.
   // -------------------------------------------------------------------------
   it('12. web.ts executable code does not call .listen()', () => {
-    const webTsPath = path.resolve('/root/sudo-ai-v4/src/core/channels/web.ts');
+    const webTsPath = path.resolve(process.cwd(), 'src/core/channels/web.ts');
     const raw = fs.readFileSync(webTsPath, 'utf8');
     // Strip /* ... */ block comments (handles multi-line JSDoc).
     const noBlockComments = raw.replace(/\/\*[\s\S]*?\*\//g, '');

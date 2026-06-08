@@ -162,7 +162,7 @@ describe('Wave 2.2h LD_PRELOAD execve-deny seal', () => {
     'bin/synth-seccomp-seal.so exists on disk and path contains ".so"',
     async () => {
       const { execSync: realExecSync } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
-      const out = realExecSync('ls -la /root/sudo-ai-v4/bin/synth-seccomp-seal.so', {
+      const out = realExecSync(`ls -la ${process.cwd()}/bin/synth-seccomp-seal.so`, {
         encoding: 'utf8',
       });
       expect(out).toContain('.so');

@@ -62,7 +62,7 @@ describe('git.status tool', () => {
     });
 
     const ctx = makeCtx();
-    const result = await gitStatusTool.execute({ cwd: '/root/sudo-ai-v4' }, ctx);
+    const result = await gitStatusTool.execute({ cwd: process.cwd() }, ctx);
 
     expect(result.success).toBe(true);
     const data = result.data as Record<string, unknown>;
@@ -103,7 +103,7 @@ describe('git.status tool', () => {
       exitCode: 0,
     });
 
-    const result = await gitStatusTool.execute({ cwd: '/root/sudo-ai-v4' }, makeCtx());
+    const result = await gitStatusTool.execute({ cwd: process.cwd() }, makeCtx());
 
     expect(result.success).toBe(true);
     const data = result.data as Record<string, unknown>;
@@ -120,7 +120,7 @@ describe('git.status tool', () => {
       exitCode: 0,
     });
 
-    const result = await gitStatusTool.execute({ cwd: '/root/sudo-ai-v4' }, makeCtx());
+    const result = await gitStatusTool.execute({ cwd: process.cwd() }, makeCtx());
 
     expect(result.success).toBe(true);
     const data = result.data as Record<string, unknown>;
@@ -135,7 +135,7 @@ describe('git.status tool', () => {
       exitCode: 0,
     });
 
-    const result = await gitStatusTool.execute({ cwd: '/root/sudo-ai-v4' }, makeCtx());
+    const result = await gitStatusTool.execute({ cwd: process.cwd() }, makeCtx());
 
     expect(result.success).toBe(true);
     const data = result.data as Record<string, unknown>;
@@ -149,7 +149,7 @@ describe('git.status tool', () => {
       exitCode: 0,
     });
 
-    const result = await gitStatusTool.execute({ cwd: '/root/sudo-ai-v4' }, makeCtx());
+    const result = await gitStatusTool.execute({ cwd: process.cwd() }, makeCtx());
 
     expect(result.success).toBe(true);
     const data = result.data as Record<string, unknown>;

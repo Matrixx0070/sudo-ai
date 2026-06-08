@@ -9,7 +9,7 @@ import { selfUpdateTool } from '../../src/core/tools/builtin/meta/self-update.js
 
 function makeCtx(): ToolContext {
   return {
-    workingDir: '/root/sudo-ai-v4',
+    workingDir: process.cwd(),
     sessionId: 'test-session',
     userId: 'test-user',
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },

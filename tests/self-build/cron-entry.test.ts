@@ -86,7 +86,7 @@ function makeDeps(overrides: Partial<SelfBuildDeps> = {}): SelfBuildDeps {
       warn: vi.fn(),
       error: vi.fn(),
     },
-    gitCwd: '/root/sudo-ai-v4',
+    gitCwd: process.cwd(),
     ...overrides,
   };
 }

@@ -6,7 +6,7 @@
  * path is caught by the guard. Uses real FS in a temp directory to let
  * realpathSync resolve properly.
  *
- * Note: self-modify.ts hardcodes PROJECT_ROOT = '/root/sudo-ai-v4'.
+ * Note: self-modify.ts resolves PROJECT_ROOT from SUDO_AI_HOME || process.cwd().
  * To test the symlink guard, we exercise the doEditFile / doWriteFile paths
  * through meta.self-modify's execute() which calls resolveProjectPath().
  */
@@ -25,7 +25,7 @@ import { isProtectedPath } from '../../src/core/self-build/protected-paths.js';
 import type { ToolContext } from '../../src/core/tools/types.js';
 import { vi } from 'vitest';
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
+const PROJECT_ROOT = process.cwd();
 
 function makeCtx(): ToolContext {
   return {

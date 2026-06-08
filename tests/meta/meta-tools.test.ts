@@ -1429,8 +1429,8 @@ async function spawnRealWorker(
   const testDir = dirname(fileURLToPath(import.meta.url));
   const BWRAP_BIN  = '/usr/bin/bwrap';
   const ENTRY_HOST = pathResolve(testDir, '../../src/core/tools/builtin/meta/synth-bwrap-entry.cjs');
-  const TSX_LOADER = '/root/sudo-ai-v4/node_modules/tsx/dist/loader.mjs';
-  const NODE_MODULES = '/root/sudo-ai-v4/node_modules';
+  const TSX_LOADER = pathResolve(process.cwd(), 'node_modules/tsx/dist/loader.mjs');
+  const NODE_MODULES = pathResolve(process.cwd(), 'node_modules');
 
   // Mirror Builder 1's buildSynthBwrapArgs — must stay in sync.
   const bwrapArgs: string[] = [
@@ -1610,7 +1610,7 @@ describe.skipIf(!bwrapAvailable)('Wave 2.2b — bwrap process sandbox', () => {
   // W22b-1: happy path — valid synthesized tool returns ok:true with toolNames
   it('W22b-1: returns ok:true with toolNames for valid synth', async () => {
     const ts = `
-import type { ToolDefinition } from '/root/sudo-ai-v4/src/core/tools/types.js';
+import type { ToolDefinition } from '${process.cwd()}/src/core/tools/types.js';
 export const demoTool: ToolDefinition = {
   name: 'demo.w22b-tool',
   category: 'system',
