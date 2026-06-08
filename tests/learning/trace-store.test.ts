@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { TraceStore, resolveAggWindowModifier } from '../../src/core/learning/trace-store.js';
+import { TraceStore, resolveAggWindowModifier, toSqliteTimestamp } from '../../src/core/learning/trace-store.js';
 import path from 'path';
 import os from 'os';
 import { mkdirSync, rmSync } from 'fs';
@@ -234,6 +234,46 @@ describe('TraceStore', () => {
     expect(row.journal_mode.toLowerCase()).toBe('wal');
   });
 
+  // 13b. ISO-vs-space created_at regression: an ISO since/until must compare
+  //      correctly against the space-format created_at the store actually stores.
+  it('query() normalizes ISO since/until to match space-format created_at', async () => {
+    // Insert a trace at a fixed space-format created_at via a raw connection
+    // (record() always defaults created_at to now, so we set it directly here).
+    const mod = await import('better-sqlite3');
+    const Driver = (mod as any).default ?? mod;
+    const raw = new Driver(dbPath);
+    raw.prepare(
+      `INSERT INTO traces (trace_type, tool_name, success, created_at) VALUES (?, ?, ?, ?)`,
+    ).run('tool_call', 'noon-tool', 1, '2026-06-08 12:00:00');
+    raw.close();
+
+    // ISO cutoff earlier the SAME day must INCLUDE the noon row. Before the fix,
+    // '2026-06-08 12:00:00' < '2026-06-08T00:00:00.000Z' (' ' < 'T'), so it was
+    // wrongly dropped.
+    expect(store.query({ since: '2026-06-08T00:00:00.000Z' }).some(r => r.toolName === 'noon-tool')).toBe(true);
+    // ISO cutoff later the same day must EXCLUDE it (ordering still correct).
+    expect(store.query({ since: '2026-06-08T18:00:00.000Z' }).some(r => r.toolName === 'noon-tool')).toBe(false);
+    // until (upper bound) is normalized too.
+    expect(store.query({ until: '2026-06-08T06:00:00.000Z' }).some(r => r.toolName === 'noon-tool')).toBe(false);
+    expect(store.query({ until: '2026-06-08T18:00:00.000Z' }).some(r => r.toolName === 'noon-tool')).toBe(true);
+  });
+
+  // 13c. count() must normalize an ISO since the same way query() does.
+  it('count() normalizes ISO since to match space-format created_at', async () => {
+    const mod = await import('better-sqlite3');
+    const Driver = (mod as any).default ?? mod;
+    const raw = new Driver(dbPath);
+    raw.prepare(
+      `INSERT INTO traces (trace_type, tool_name, success, created_at) VALUES (?, ?, ?, ?)`,
+    ).run('tool_call', 'noon-tool', 1, '2026-06-08 12:00:00');
+    raw.close();
+
+    // ISO cutoff earlier the same day → counts the noon row (silently dropped before the fix).
+    expect(store.count('tool_call', '2026-06-08T00:00:00.000Z')).toBe(1);
+    // ISO cutoff later the same day → excludes it.
+    expect(store.count('tool_call', '2026-06-08T18:00:00.000Z')).toBe(0);
+  });
+
   // 13. aggregation recency window (SUDO_POLICY_AGG_WINDOW_DAYS) — epic follow-up #3.
   //     Default OFF scans the whole table; when set, old traces are excluded.
   it('refreshAggregates honors SUDO_POLICY_AGG_WINDOW_DAYS (default OFF = full scan)', async () => {
@@ -286,5 +326,18 @@ describe('resolveAggWindowModifier', () => {
     expect(resolveAggWindowModifier('1')).toBe('-1 days');
     expect(resolveAggWindowModifier('7')).toBe('-7 days');
     expect(resolveAggWindowModifier('  30  ')).toBe('-30 days');
+  });
+});
+
+describe('toSqliteTimestamp', () => {
+  it('converts ISO 8601 to SQLite datetime format', () => {
+    expect(toSqliteTimestamp('2026-06-08T12:00:00.000Z')).toBe('2026-06-08 12:00:00');
+    expect(toSqliteTimestamp('2026-06-08T12:00:00Z')).toBe('2026-06-08 12:00:00');
+    expect(toSqliteTimestamp('2000-01-01T00:00:00.123Z')).toBe('2000-01-01 00:00:00');
+  });
+
+  it('leaves an already space-formatted timestamp unchanged (idempotent)', () => {
+    expect(toSqliteTimestamp('2026-06-08 12:00:00')).toBe('2026-06-08 12:00:00');
+    expect(toSqliteTimestamp(toSqliteTimestamp('2026-06-08T12:00:00.000Z'))).toBe('2026-06-08 12:00:00');
   });
 });
