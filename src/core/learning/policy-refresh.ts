@@ -11,8 +11,10 @@
  * path: it runs in a standalone, UNREF'd interval callback (never inline in a
  * request, never keeps the process alive). It is overlap-guarded and fail-open.
  *
- * For very large trace stores, moving the aggregation into a worker thread (true
- * off-main-thread) is the upgrade — a documented follow-up.
+ * For very large trace stores, set SUDO_POLICY_AGG_WINDOW_DAYS to bound the
+ * aggregation scan to a recent window (see TraceStore.refreshAggregates) so the
+ * refresh stays cheap. Moving the aggregation fully off-main-thread via a worker
+ * thread remains a heavier, optional upgrade beyond that.
  */
 
 /** The slice of TraceDrivenPolicy this loop needs. */

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { TraceStore } from '../../src/core/learning/trace-store.js';
+import { TraceStore, resolveAggWindowModifier } from '../../src/core/learning/trace-store.js';
 import path from 'path';
 import os from 'os';
 import { mkdirSync, rmSync } from 'fs';
@@ -232,5 +232,59 @@ describe('TraceStore', () => {
     rawDb.close();
 
     expect(row.journal_mode.toLowerCase()).toBe('wal');
+  });
+
+  // 13. aggregation recency window (SUDO_POLICY_AGG_WINDOW_DAYS) — epic follow-up #3.
+  //     Default OFF scans the whole table; when set, old traces are excluded.
+  it('refreshAggregates honors SUDO_POLICY_AGG_WINDOW_DAYS (default OFF = full scan)', async () => {
+    // A recent trace (created_at defaults to datetime('now')).
+    store.record({ traceType: 'tool_call', model: 'm', toolName: 't', success: true, latencyMs: 100 });
+    // An ancient trace inserted via a raw connection so we control created_at
+    // (record() always defaults created_at to now). SQLite datetime format.
+    const mod = await import('better-sqlite3');
+    const Driver = (mod as any).default ?? mod;
+    const raw = new Driver(dbPath);
+    raw.prepare(
+      `INSERT INTO traces (trace_type, model, tool_name, success, latency_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('tool_call', 'm', 't', 1, 100, '2000-01-01 00:00:00');
+    raw.close();
+
+    const prev = process.env['SUDO_POLICY_AGG_WINDOW_DAYS'];
+    try {
+      // Default OFF: full-table scan includes the year-2000 trace → 2 calls.
+      delete process.env['SUDO_POLICY_AGG_WINDOW_DAYS'];
+      store.refreshAggregates();
+      let agg = store.getAggregates('model_tool', '%m:t%').find(a => a.key === 'm:t');
+      expect(agg?.totalCalls).toBe(2);
+
+      // Windowed to the last day: the year-2000 trace is excluded → 1 call.
+      process.env['SUDO_POLICY_AGG_WINDOW_DAYS'] = '1';
+      store.refreshAggregates();
+      agg = store.getAggregates('model_tool', '%m:t%').find(a => a.key === 'm:t');
+      expect(agg?.totalCalls).toBe(1);
+    } finally {
+      if (prev === undefined) delete process.env['SUDO_POLICY_AGG_WINDOW_DAYS'];
+      else process.env['SUDO_POLICY_AGG_WINDOW_DAYS'] = prev;
+    }
+  });
+});
+
+describe('resolveAggWindowModifier', () => {
+  it('returns undefined for unset / blank / zero / negative / fractional / junk (fail-open)', () => {
+    expect(resolveAggWindowModifier(undefined)).toBeUndefined();
+    expect(resolveAggWindowModifier('')).toBeUndefined();
+    expect(resolveAggWindowModifier('   ')).toBeUndefined();
+    expect(resolveAggWindowModifier('0')).toBeUndefined();    // zero-day window would exclude everything
+    expect(resolveAggWindowModifier('-7')).toBeUndefined();
+    expect(resolveAggWindowModifier('7.5')).toBeUndefined();
+    expect(resolveAggWindowModifier('abc')).toBeUndefined();
+    expect(resolveAggWindowModifier('7d')).toBeUndefined();
+  });
+
+  it('returns a SQLite datetime modifier for a positive integer (whitespace tolerated)', () => {
+    expect(resolveAggWindowModifier('1')).toBe('-1 days');
+    expect(resolveAggWindowModifier('7')).toBe('-7 days');
+    expect(resolveAggWindowModifier('  30  ')).toBe('-30 days');
   });
 });
