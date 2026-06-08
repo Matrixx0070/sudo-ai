@@ -1,27 +1,24 @@
 #!/bin/bash
-# SUDO-AI Single-Command Install (Wave1 User Completion)
+# SUDO-AI Single-Command Install
 # Usage (primary one-liner for real users):
 #   curl -fsSL https://raw.githubusercontent.com/Matrixx0070/sudo-ai/main/install.sh | bash
-# Or: npm i -g sudo-ai
+# Or: npm i -g @matrixx0070/sudo-ai
 #
 # What it does (idempotent, safe, portable):
 # - Ensures Node >=20 and pnpm (apt/corepack or instructions).
-# - Prefers `npm install -g sudo-ai` (pulls prebuilt dist/cli for bin).
+# - Prefers `npm install -g @matrixx0070/sudo-ai` (pulls prebuilt dist/server/cli.js for bin).
 # - Fallback (dev/no-publish): shallow clone, pnpm i, build:cli, `npm install -g .` (registers global bin from source).
 # - Runs `sudo-ai doctor` (env checks).
-# - Hooks Wave2 wizard: `sudo-ai quickstart --force || sudo-ai setup` (first-time/ongoing TUI; current is readline, becomes full Ink later).
+# - Runs the first-time setup wizard: `sudo-ai quickstart --force || sudo-ai setup`.
 # - Starts healthy via pm2 (using ecosystem) or optional systemd service.
 # - Verifies: `curl http://127.0.0.1:18900/health` == 200.
 # - Leaves `sudo-ai` in PATH (global bin: chat, setup, doctor, status, start etc).
 # - Logs: /tmp/sudo-ai-install.log
-# - Supports SUDO_AI_HOME (defaults to /root/sudo-ai-v4 for VPS compat; ecosystem portable).
-# - No P1/cross files touched; no src edits; respects post-remed Codex 4 issues (Wave3 only).
-# - User-complete: one cmd -> healthy SUDO + bin ready for 100x TUI real-time validation (`sudo-ai chat`).
+# - Supports SUDO_AI_HOME (defaults to $HOME/sudo-ai; ecosystem/service paths derive from it).
+# - One command -> healthy service + global `sudo-ai` bin ready to use (`sudo-ai chat`).
 #
-# Position: SUDO-AI = same class as OpenClaw/Hermes but 100x better (intel + full cross control per SOUL) + now installable in single command for people.
-#
-# After: sudo-ai chat   # direct real-time TUI talk to validate 100x (P1 IComputerUse, learner, etc.)
-#        curl http://127.0.0.1:18900/health   # 200 OK
+# After: sudo-ai chat   # talk to the agent in a terminal UI
+#        curl http://127.0.0.1:18900/health   # expect 200 OK
 #
 # Devs: git clone + pnpm still supported (this script also works from local clone via npm i -g . path).
 set -euo pipefail
@@ -31,24 +28,25 @@ echo "=== SUDO-AI Wave1 Single-Command Install $(date) ===" | tee -a "$LOG"
 echo "Args: $*" | tee -a "$LOG"
 
 # --- Config / portable (match ecosystem) ---
-SUDO_AI_HOME=${SUDO_AI_HOME:-/root/sudo-ai-v4}
+SUDO_AI_HOME=${SUDO_AI_HOME:-$HOME/sudo-ai}
 REPO_URL="https://github.com/Matrixx0070/sudo-ai.git"
 GITHUB_RAW="https://raw.githubusercontent.com/Matrixx0070/sudo-ai/main"
 HEALTH_URL="http://127.0.0.1:18900/health"
 PM2_NAME="sudo-ai-v5"
 BIN_NAME="sudo-ai"
+PKG_NAME="@matrixx0070/sudo-ai"
 
 # Idempotency: if bin in PATH and healthy, skip heavy work
 if command -v "$BIN_NAME" >/dev/null 2>&1; then
   if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1 && curl -fsS --max-time 5 "$HEALTH_URL" | grep -q '"status":"ok"\|200'; then
     echo "[install] Idempotent: $BIN_NAME already in PATH and $HEALTH_URL healthy (200). Nothing to do." | tee -a "$LOG"
     "$BIN_NAME" --version 2>/dev/null || true
-    echo "SUDO-AI user-complete single-cmd ready. Run: $BIN_NAME chat  (real-time TUI for 100x validation)"
+    echo "SUDO-AI ready. Run: $BIN_NAME chat  (terminal UI)"
     exit 0
   fi
 fi
 
-echo "[install] Starting bootstrap for user-complete SUDO-AI (single cmd + 100x)." | tee -a "$LOG"
+echo "[install] Starting SUDO-AI bootstrap (single command)." | tee -a "$LOG"
 
 # --- OS / Linux only for v1 (per spec) ---
 if [[ "$(uname -s)" != "Linux" ]]; then
@@ -102,8 +100,8 @@ echo "[install] pnpm $(pnpm --version) OK." | tee -a "$LOG"
 
 # --- Global bin install (preferred published path) ---
 DID_GLOBAL=0
-echo "[install] Attempting npm i -g sudo-ai (primary for users; pulls prebuilt dist/cli/index.js for bin)..." | tee -a "$LOG"
-if npm install -g sudo-ai 2>&1 | tee -a "$LOG"; then
+echo "[install] Attempting npm i -g $PKG_NAME (primary for users; pulls prebuilt dist/server/cli.js for bin)..." | tee -a "$LOG"
+if npm install -g "$PKG_NAME" 2>&1 | tee -a "$LOG"; then
   if command -v "$BIN_NAME" >/dev/null 2>&1; then
     DID_GLOBAL=1
     echo "[install] Global via npm i -g succeeded." | tee -a "$LOG"
@@ -126,7 +124,7 @@ if [ "$DID_GLOBAL" -eq 0 ]; then
   pushd "$TMPD" >/dev/null
   echo "[install] pnpm install (in $TMPD)..." | tee -a "$LOG"
   pnpm install --prefer-offline 2>&1 | tail -5 | tee -a "$LOG" || true
-  echo "[install] pnpm build:cli (ensures dist/cli/index.js for global bin)..." | tee -a "$LOG"
+  echo "[install] pnpm build:cli (ensures dist/server/cli.js for global bin)..." | tee -a "$LOG"
   pnpm build:cli 2>&1 | tail -3 | tee -a "$LOG" || npm run build:cli 2>&1 | tail -3 | tee -a "$LOG" || true
   echo "[install] npm install -g . (registers sudo-ai bin globally)..." | tee -a "$LOG"
   npm install -g . 2>&1 | tee -a "$LOG" || true
@@ -149,7 +147,7 @@ echo "[install] Running $BIN_NAME doctor (env checks)..." | tee -a "$LOG"
 "$BIN_NAME" doctor --fix 2>&1 | tail -10 | tee -a "$LOG" || true
 
 # --- Wave2 wizard hook (first-time/ongoing setup; integrates with Wave2 TUI) ---
-echo "[install] Hooking Wave2 wizard (sudo-ai quickstart --force or sudo-ai setup) for first-time/ongoing TUI setup (100x/cross coverage)..." | tee -a "$LOG"
+echo "[install] Running first-time setup wizard (sudo-ai quickstart --force or sudo-ai setup)..." | tee -a "$LOG"
 "$BIN_NAME" quickstart --force 2>&1 | tail -8 | tee -a "$LOG" || "$BIN_NAME" setup 2>&1 | tail -5 | tee -a "$LOG" || true
 echo "[install] Wizard hook complete (Wave2 owns full impl; current may be basic readline, becomes rich Ink TUI)." | tee -a "$LOG"
 
@@ -168,7 +166,9 @@ if command -v pm2 >/dev/null 2>&1; then
 else
   echo "[install] pm2 not found; attempting service setup..." | tee -a "$LOG"
   if [ -f "$SUDO_AI_HOME/scripts/sudo-ai-v5.service" ]; then
-    sudo cp "$SUDO_AI_HOME/scripts/sudo-ai-v5.service" /etc/systemd/system/ || true
+    # systemd does not expand ${VAR:-default}; substitute the real path on install.
+    sed "s|__SUDO_AI_HOME__|$SUDO_AI_HOME|g" "$SUDO_AI_HOME/scripts/sudo-ai-v5.service" \
+      | sudo tee /etc/systemd/system/sudo-ai-v5.service >/dev/null || true
     sudo systemctl daemon-reload || true
     sudo systemctl enable --now sudo-ai-v5 2>&1 | tee -a "$LOG" || true
   fi
@@ -200,10 +200,10 @@ echo "SUDO-AI installed via SINGLE COMMAND (Wave1)." | tee -a "$LOG"
 echo "User-complete: one cmd -> global bin + healthy stack + wizard hook." | tee -a "$LOG"
 echo "  $BIN_NAME --help          # CLI (start/stop/status/config/doctor/quickstart/setup/chat...)"
 echo "  $BIN_NAME setup           # First-time / ongoing TUI wizard (Wave2)"
-echo "  $BIN_NAME chat            # Real-time TUI direct talk (validate 100x: IComputerUse cross-platform, ToolOutcomeLearner, self-imp, SOUL full power, no refusals)"
+echo "  $BIN_NAME chat            # Talk to the agent in a terminal UI"
 echo "  curl $HEALTH_URL          # expect 200 OK"
 echo "  pm2 logs $PM2_NAME        # or journalctl for service"
-echo "Position: same autonomous agent class as OpenClaw/Hermes — but 100x better in intelligence, autonomy, reliability, self-evolution + full cross-platform system control (Linux/Win/Mac) per SOUL (uncensored owner power)."
+echo "A self-hosted, owner-operated autonomous agent platform."
 echo "See: BOOTSTRAP.md, README (install section), docs/cross-platform-control-guide.md"
 echo "Log: $LOG"
 echo "================================================================" | tee -a "$LOG"

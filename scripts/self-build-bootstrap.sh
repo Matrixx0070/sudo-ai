@@ -1,13 +1,17 @@
 #!/bin/sh
 set -eu
 
-echo "Wave SelfBuild bootstrap"
+# Resolve the project root from this script's location (scripts/ lives at <root>/scripts);
+# allow an explicit override via SUDO_AI_HOME.
+SUDO_HOME="${SUDO_AI_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+echo "SelfBuild bootstrap"
 
 # 1. Install hooks
-bash /root/sudo-ai-v4/scripts/install-self-build-hooks.sh
+bash ${SUDO_HOME}/scripts/install-self-build-hooks.sh
 
 # 2. Create + checkout self-build branch
-cd /root/sudo-ai-v4
+cd ${SUDO_HOME}
 if git show-ref --verify --quiet refs/heads/self-build; then
   echo "Branch self-build already exists"
   git checkout self-build
@@ -28,8 +32,8 @@ EOF
 fi
 
 # 4. Create the report + journal dirs
-mkdir -p /root/sudo-ai-v4/data/self-build-reports
-touch /root/sudo-ai-v4/data/self-build-reports/journal.md
+mkdir -p ${SUDO_HOME}/data/self-build-reports
+touch ${SUDO_HOME}/data/self-build-reports/journal.md
 
 # 5. Tell pm2 to reload with new env
 pm2 reload sudo-ai-v5 --update-env
@@ -41,5 +45,5 @@ echo "pm2 status:"
 pm2 describe sudo-ai-v5 | grep -E 'status|uptime' | head -3
 echo "---"
 echo "Kickoff complete. Autopilot starts on next cron tick (<= 30 min)."
-echo "Watch: tail -f /root/sudo-ai-v4/data/logs/sudo-ai-v5-out-0.log | grep self-build"
+echo "Watch: tail -f ${SUDO_HOME}/data/logs/sudo-ai-v5-out-0.log | grep self-build"
 echo "Kill: pm2 set sudo-ai-v5:SUDO_SELF_BUILD_DISABLE 1 && pm2 reload sudo-ai-v5 --update-env"

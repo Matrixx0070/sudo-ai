@@ -30,6 +30,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUDO_HOME="${SUDO_AI_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -40,7 +43,7 @@ TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Fallback log to data/logs/ if /var/log/seal-soak is not writable
 if ! mkdir -p "$LOG_DIR" 2>/dev/null || ! touch "$LOG_FILE" 2>/dev/null; then
-  LOG_DIR="/root/sudo-ai-v4/data/logs/seal-soak"
+  LOG_DIR="${SUDO_HOME}/data/logs/seal-soak"
   mkdir -p "$LOG_DIR" 2>/dev/null || true
   LOG_FILE="$LOG_DIR/loadgen-$(date +%Y%m%d).log"
 fi

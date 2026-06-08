@@ -37,20 +37,23 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUDO_HOME="${SUDO_AI_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 PROD_URL="http://127.0.0.1:18900"
-SO_PATH="/root/sudo-ai-v4/bin/synth-seccomp-seal.so"
+SO_PATH="${SUDO_HOME}/bin/synth-seccomp-seal.so"
 EXPECTED_SHA256="f4fe8b99535def86788be03a26fb666383e90e63f924cc7bd3bb1b2defeb3af9"
 PM2_APP="sudo-ai-v5"
 SOAK_LOG_DIR="/var/log/seal-soak"
-SOAK_LOG_FALLBACK="/root/sudo-ai-v4/data/logs/seal-soak"
+SOAK_LOG_FALLBACK="${SUDO_HOME}/data/logs/seal-soak"
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 LOG_DIR="/var/log/seal-soak"
 
 if ! mkdir -p "$LOG_DIR" 2>/dev/null || ! touch "$LOG_DIR/.write-test" 2>/dev/null; then
-  LOG_DIR="/root/sudo-ai-v4/data/logs/seal-soak"
+  LOG_DIR="${SUDO_HOME}/data/logs/seal-soak"
   mkdir -p "$LOG_DIR" 2>/dev/null || true
 fi
 rm -f "$LOG_DIR/.write-test" 2>/dev/null || true

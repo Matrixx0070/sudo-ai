@@ -11,7 +11,8 @@ export HOME=/root
 export PM2_HOME=/root/.pm2
 readonly LOG=/tmp/sudo-ai-v5-cron-keepalive.log
 readonly LOCK=/tmp/sudo-ai-cron.lock
-readonly SUDO_HOME=/root/sudo-ai-v4
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SUDO_HOME="${SUDO_AI_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 # ---- Singleton: only one copy of this script may run at a time ----
 exec 200>"$LOCK"
