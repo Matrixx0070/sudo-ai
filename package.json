@@ -1,13 +1,14 @@
 {
-  "name": "sudo-ai",
+  "name": "@matrixx0070/sudo-ai",
   "version": "4.1.0",
   "description": "SUDO-AI - Autonomous AI Agent Platform",
+  "license": "MIT",
   "bin": {
-    "sudo-ai": "./dist/cli/index.js"
+    "sudo-ai": "./dist/server/cli.js"
   },
   "exports": {
-    ".": "./dist/core/index.js",
-    "./cli": "./dist/cli/index.js"
+    ".": "./dist/server/cli.js",
+    "./cli": "./dist/server/cli.js"
   },
   "repository": {
     "type": "git",
@@ -17,8 +18,12 @@
     "url": "https://github.com/Matrixx0070/sudo-ai/issues"
   },
   "homepage": "https://github.com/Matrixx0070/sudo-ai#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist/",
+    "!dist/**/*.map",
     "config/sudo-ai.json5",
     "config/.env.example",
     "README.md",
@@ -39,13 +44,14 @@
     "preview": "pnpm build && pnpm start",
     "doctor": "tsx src/cli/index.ts doctor",
     "cli": "tsx src/cli.ts",
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "prepublishOnly": "pnpm build && pnpm build:cli && pnpm test",
     "test:fuzz": "vitest run tests/fuzz/",
     "test:soak": "node scripts/soak.ts",
     "build:seal": "bash scripts/build-synth-seal.sh",
-    "postinstall": "node -e \"try { require('fs').accessSync('dist/cli/index.js'); console.log('[sudo-ai] postinstall: cli bin present'); } catch(e) { console.log('[sudo-ai] postinstall: building cli for global/dev install'); require('child_process').execSync('pnpm build:cli || npm run build:cli || echo build:cli skipped', {stdio:'inherit'}); }\" ; pnpm build:seal || true",
+    "postinstall": "node -e \"try { require('fs').accessSync('dist/server/cli.js'); console.log('[sudo-ai] postinstall: cli bin present'); } catch(e) { console.log('[sudo-ai] postinstall: building cli for global/dev install'); require('child_process').execSync('pnpm build:cli || npm run build:cli || echo build:cli skipped', {stdio:'inherit'}); }\" ; pnpm build:seal || true",
     "install": "node -e \"console.log('[sudo-ai] post-npm-install: run sudo-ai quickstart or sudo-ai setup (Wave2 wizard) to complete first-time/ongoing setup; sudo-ai chat for real-time TUI; health: curl http://localhost:18900/health')\" || true"
   },
   "type": "module",
