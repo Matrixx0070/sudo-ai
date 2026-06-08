@@ -1740,11 +1740,37 @@ export class AgentLoop {
               effectiveModel,
             );
             if (_policyEvaluation.decision && _policyEvaluation.decision.action.preferredModel) {
-              log.info(
-                { sessionId: state.sessionId, ruleId: _policyEvaluation.decision.ruleId, preferredModel: _policyEvaluation.decision.action.preferredModel, confidence: _policyEvaluation.decision.confidence, source: _policyEvaluation.decision.source },
-                'TraceDrivenPolicy: model override applied',
-              );
-              effectiveModel = _policyEvaluation.decision.action.preferredModel;
+              const _preferred = _policyEvaluation.decision.action.preferredModel;
+              // Validate against the brain's ACTIVE (configured) model profiles. A
+              // stale learned/manual rule can name a model that is no longer
+              // configured; routing to it wastes a call + triggers failover. Match
+              // either the full id ("xai/grok-3-fast") or the raw modelId. Fail-open:
+              // if active models can't be enumerated, keep prior behavior (apply);
+              // never reject the current default model.
+              let _activeModels: Set<string> | undefined;
+              try {
+                const _status = (this.brain as { getFailoverStatus?: () => Array<{ id?: string; modelId?: string }> }).getFailoverStatus?.();
+                if (Array.isArray(_status) && _status.length > 0) {
+                  _activeModels = new Set<string>();
+                  for (const p of _status) {
+                    if (typeof p.id === 'string') _activeModels.add(p.id);
+                    if (typeof p.modelId === 'string') _activeModels.add(p.modelId);
+                  }
+                }
+              } catch { /* fail-open — leave _activeModels undefined */ }
+
+              if (_activeModels && _preferred !== model && !_activeModels.has(_preferred)) {
+                log.warn(
+                  { sessionId: state.sessionId, ruleId: _policyEvaluation.decision.ruleId, preferredModel: _preferred },
+                  'TraceDrivenPolicy: preferredModel is not among active models — ignoring (stale rule?)',
+                );
+              } else {
+                log.info(
+                  { sessionId: state.sessionId, ruleId: _policyEvaluation.decision.ruleId, preferredModel: _preferred, confidence: _policyEvaluation.decision.confidence, source: _policyEvaluation.decision.source },
+                  'TraceDrivenPolicy: model override applied',
+                );
+                effectiveModel = _preferred;
+              }
             }
           }
         } catch (policyErr) {
