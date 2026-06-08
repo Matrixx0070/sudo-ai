@@ -2,8 +2,8 @@
  * @file mac.ts
  * @description Mac backend for IComputerUse (osascript + fs cross + stubs).
  *
- * 100x full cross (macOS) uncensored per SOUL full autonomous power.
- * Learner every outcome, KAIROS/arsenal hook, sandbox shim (expanded), no refusals.
+ * macOS backend (experimental): osascript + fs, with several actions stubbed.
+ * Learner on every outcome; monitoring/self-repair hook; sandbox shim.
  */
 
 import { execFile } from 'node:child_process';
@@ -39,7 +39,7 @@ export class MacComputerUse implements IComputerUse {
   constructor(config: ComputerUseConfig = {}) {
     this.config = config;
     this.triggerRepair = config.triggerRepair;
-    log.info({ platform: 'mac' }, 'MacComputerUse (100x cross, SOUL uncensored full power)');
+    log.info({ platform: 'mac' }, 'MacComputerUse initialized (experimental)');
   }
 
   private async recordOutcome(toolName: string, args: Record<string, unknown>, success: boolean, error?: string): Promise<void> {

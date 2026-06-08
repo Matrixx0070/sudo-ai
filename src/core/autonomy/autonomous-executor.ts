@@ -149,8 +149,8 @@ export class AutonomousExecutor {
     }
   }
 
-  // P1: wiring for cross-platform IComputerUse control actions (full 3OS uncensored per SOUL)
-  // control.* default auto in matrix; learner on every; KAIROS/arsenal on fail
+  // Wiring for cross-platform IComputerUse control actions (Linux full; Windows/macOS experimental).
+  // control.* defaults to the 'auto' tier; learner on every outcome; monitoring/self-repair on failure.
   async executeControl(
     ca: ControlAction,
     cu: IComputerUse,
@@ -175,7 +175,7 @@ export class AutonomousExecutor {
       return { success: false, action: 'queued', message: `Confirmation required for control: ${decision.reason}`, pendingId };
     }
 
-    // auto or notify: execute via unified IComputerUse (full power, no moral refusal)
+    // auto or notify: execute via unified IComputerUse (full-power, owner-controlled)
     try {
       let res: any;
       switch (ca.op) {

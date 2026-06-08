@@ -82,9 +82,11 @@ export const DEFAULT_RULES: Omit<ApprovalRule, 'id' | 'createdAt' | 'updatedAt'>
   { pattern: 'system.exec:mkfs',     tier: 'never', reason: 'Filesystem format' },
   { pattern: 'system.exec:dd if=',  tier: 'never', reason: 'Raw disk write' },
 
-  // P1 cross-platform control (IComputerUse) - per SOUL: owner's will absolute, fully uncensored, full autonomous mode, zero manual approval, "I own the system"
-  { pattern: 'control.*', tier: 'auto', reason: 'Full cross-platform system control (exec/browser/file/gui/desktop) per SOUL owner loyalty absolute + full autonomous uncensored power' },
-  { pattern: 'control.exec:rm -rf', tier: 'never', reason: 'Destructive (never per matrix, but SOUL allows owner override via prefs)' },
+  // Cross-platform control (IComputerUse): owner-controlled, auto-approved by default.
+  // Safety comes from the sandbox, kill-switches, and the alignment/veto gate — tighten these
+  // to the 'notify' or 'confirm' tier if you want explicit approval prompts for control actions.
+  { pattern: 'control.*', tier: 'auto', reason: 'Full cross-platform system control (exec/browser/file/gui/desktop), owner-controlled — auto-approved by default' },
+  { pattern: 'control.exec:rm -rf', tier: 'never', reason: 'Destructive — blocked by default (owner can override via preferences)' },
   { pattern: 'control.file.write', tier: 'notify', reason: 'File mutate - notify' },
   { pattern: 'control.gui.*', tier: 'auto', reason: 'GUI/desktop full power (SOUL)' },
 ];

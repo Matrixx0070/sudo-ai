@@ -59,7 +59,7 @@ describe('runSetup (Wave2 100x wizard)', () => {
     // 100x enabled: no DISABLE=1 for cross etc; XAI may be empty
     expect(env).not.toMatch(/SUDO_CROSS_CONTROL_DISABLE=1/);
     expect(env).not.toMatch(/SUDO_TOOL_LEARNING_DISABLE=1/);
-    expect(env).toMatch(/# Wave2 100x setup/);
+    expect(env).toMatch(/# SUDO-AI setup/);
 
     const prof = JSON.parse(fs.readFileSync(profPath, 'utf8'));
     expect(prof.name).toBe('default');
@@ -99,17 +99,17 @@ describe('runSetup (Wave2 100x wizard)', () => {
     };
     const j = buildSetupJson5(answers);
     expect(j).toContain('Test100x');
-    expect(j).toContain('100x P1: cross-platform IComputerUse');
+    expect(j).toContain('Cross-platform IComputerUse');
     expect(j).toContain('ToolOutcomeLearner');
 
     const t = buildSetupToml(answers);
     expect(t).toContain('default_model');
-    expect(t).toContain('100x cross control enabled: true');
+    expect(t).toContain('Cross-platform control enabled: true');
 
     const e = writeEnvKillsAndKey(tmpDir, answers, '');
     expect(e).toContain('XAI_API_KEY=sk-test');
     expect(e).not.toContain('SUDO_CROSS_CONTROL_DISABLE=1'); // enabled
-    expect(e).toContain('# Wave2 100x');
+    expect(e).toContain('# SUDO-AI setup');
   });
 
   it('4. respects existing .env (does not clobber unrelated keys)', async () => {

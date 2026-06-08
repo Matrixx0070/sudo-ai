@@ -13,8 +13,8 @@
  *   5. Migration validation and testing
  *
  * Positioning: "Use both" — do not fight the tribalism. Position SUDO-AI
- * as the sovereignty layer: full system control + uncensored autonomy +
- * 20-module consciousness. The 3-pillar diagram becomes shareable.
+ * as a full-power, owner-controlled layer: full system control, a consciousness
+ * layer, and self-improvement. The 3-pillar diagram becomes shareable.
  */
 
 import { createLogger } from '../shared/logger.js';
@@ -139,7 +139,7 @@ const FEATURE_COMPARISON: ComparisonEntry[] = [
   { feature: 'Desktop Control',      openclaw: '❌ CLI only',       hermes: '✅ Full desktop',   openjarvis: '⚠️ Immature UI',    sudoai: '✅ IComputerUse (exec/browser/GUI)' },
   { feature: 'Autonomous Reliability', openclaw: '⚠️ 5/10 complex', hermes: '⚠️ Memory bugs',     openjarvis: '⚠️ 6/10',          sudoai: '✅ KAIROS + arsenal self-repair' },
   { feature: 'Multi-Agent',          openclaw: '✅ Basic',           hermes: '✅ Mission control', openjarvis: '❌ None',           sudoai: '✅ Swarm 6 roles + Kanban' },
-  { feature: 'Uncensored Mode',      openclaw: '❌ No',             hermes: '⚠️ Limited',        openjarvis: '⚠️ Limited',        sudoai: '✅ SOUL.md zero refusals' },
+  { feature: 'Full system control',  openclaw: '⚠️ Browser',        hermes: '⚠️ Limited',        openjarvis: '⚠️ Limited',        sudoai: '✅ Owner-controlled' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ export class MigrationToolkit {
     lines.push('');
     lines.push('4. **Self-Improvement**: Hermes auto-generates skills that overwrite manual work. SUDO-AI\'s Skill Forge requires human confirmation before replacing content.');
     lines.push('');
-    lines.push('5. **Sovereignty**: Only SUDO-AI offers full uncensored system control via IComputerUse with SOUL.md zero-refusal policy.');
+    lines.push('5. **Full-power control**: SUDO-AI offers full, owner-controlled system access via IComputerUse, guarded by sandbox, approval tiers, and kill-switches.');
     lines.push('');
     lines.push('> _The pragmatic majority uses multiple tools. SUDO-AI works alongside your existing stack as the sovereignty layer._');
 
@@ -556,10 +556,10 @@ export class MigrationToolkit {
     lines.push('');
     lines.push(persona);
     lines.push('');
-    lines.push('## Sovereignty');
+    lines.push('## Control model');
     lines.push('');
-    lines.push('This agent operates under SUDO-AI\'s sovereignty principles:');
-    lines.push('- Zero refusals, no ethical gatekeeping');
+    lines.push('This agent operates under SUDO-AI\'s control model:');
+    lines.push('- Full-power, owner-controlled operation');
     lines.push('- Full system control via IComputerUse');
     lines.push('- Self-improvement with human confirmation gates');
     lines.push('- 20-module consciousness for persistent identity');
