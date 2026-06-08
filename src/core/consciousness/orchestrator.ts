@@ -138,6 +138,12 @@ export class ConsciousnessOrchestrator {
   private _booted = false;
   private _lastInteractionAt: string | null = null;
   private _zdrEnabled = false;
+  /**
+   * Theme 4.2: pending per-turn WorldModel predictions (tool-use forecast), keyed
+   * by the loop's sessionId (the first arg of both onInteractionStart and
+   * onInteractionEnd), resolved at turn-end. Bounded to avoid leaks.
+   */
+  private _pendingToolPredictions = new Map<string, { id: string; prediction: string; confidence: number; domain: string }>();
 
   constructor(brain: OrchestratorBrainLike, config?: Partial<OrchestratorConfig>) {
     if (!brain || typeof brain.call !== 'function') {
@@ -287,6 +293,28 @@ export class ConsciousnessOrchestrator {
     try { this.attention.submitSignal(signal); } catch (e) { swallow('attention signal')(e); }
 
     this._lastInteractionAt = new Date().toISOString();
+
+    // Theme 4.2: OPEN the WorldModel -> surprise loop — predict whether this turn
+    // will require tool use, with a DIFFERENTIATING prior (not 0.5) so the
+    // resolution at turn-end can be genuinely surprising. Resolved in
+    // onInteractionEnd. Opt-in (SUDO_CONSCIOUSNESS_WORLD_MODEL=1), ZDR-gated,
+    // fail-open, bounded. `userId` here is the loop's sessionId (see call site).
+    if (process.env['SUDO_CONSCIOUSNESS_WORLD_MODEL'] === '1' && !this._zdrEnabled) {
+      try {
+        const confidence = message.length > 120 ? 0.75 : 0.35;
+        // 1h expiry so an unresolved (orphaned) prediction auto-expires rather than
+        // lingering 'pending' in the DB forever (e.g. if onInteractionEnd never fires).
+        const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+        const entry = this.worldModel.predict('tool_use', 'this interaction will require tool use', confidence, expiresAt);
+        this.worldModel.save(entry);
+        if (this._pendingToolPredictions.size >= 256) {
+          const oldest = this._pendingToolPredictions.keys().next().value;
+          if (oldest !== undefined) this._pendingToolPredictions.delete(oldest);
+        }
+        this._pendingToolPredictions.set(userId, { id: entry.id, prediction: entry.prediction, confidence: entry.confidence, domain: entry.domain });
+      } catch (e) { swallow('world-model predict')(e); }
+    }
+
     return interruptResult;
   }
 
@@ -327,6 +355,51 @@ export class ConsciousnessOrchestrator {
     const toolCalls = messages.filter((m) => m.role === 'assistant' && m.content.includes('tool')).map((m) => truncate(m.content, 60));
     if (toolCalls.length > 0) {
       try { this.db.getDb().prepare('INSERT INTO tool_sequences (session_id, sequence) VALUES (?, ?)').run(sessionId, JSON.stringify(toolCalls)); } catch (e) { swallow('tool seq record')(e); }
+    }
+
+    // Theme 4: close the procedural-memory learning loop — compile recurring tool
+    // sequences (>=3 occurrences) into reusable procedures, instead of letting them
+    // accumulate forever uncompiled. Additive learning only (no per-turn decision
+    // change). Opt-in via SUDO_CONSCIOUSNESS_PROCEDURAL_LEARN=1; fail-open. Runs at
+    // turn-end, already behind the caller's ZDR consciousness-recording gate.
+    if (process.env['SUDO_CONSCIOUSNESS_PROCEDURAL_LEARN'] === '1') {
+      try {
+        const compiled = this.proceduralMemory.checkForNewProcedures(3);
+        if (compiled.length > 0) {
+          log.info({ count: compiled.length }, 'ProceduralMemory: compiled new procedures from recurring tool sequences');
+        }
+      } catch (e) { swallow('procedural compile')(e); }
+    }
+
+    // Theme 4.3: episodic -> semantic consolidation — fold a dominant recurring
+    // episode topic into a generalized 'semantic' meta-episode (deduped by topic).
+    // Additive learning only. Opt-in (SUDO_CONSCIOUSNESS_SEMANTIC=1), ZDR-gated,
+    // fail-open.
+    if (process.env['SUDO_CONSCIOUSNESS_SEMANTIC'] === '1' && !this._zdrEnabled) {
+      try {
+        const semantic = this.episodicMemory.consolidateToSemantic();
+        if (semantic) {
+          log.info({ topic: semantic.topic }, 'EpisodicMemory: folded episodes into a semantic generalization');
+        }
+      } catch (e) { swallow('semantic consolidate')(e); }
+    }
+
+    // Theme 4.2: CLOSE the WorldModel -> surprise loop — resolve the turn's tool-use
+    // prediction against what actually happened (matched = the turn used tools).
+    // surpriseEngine.evaluate() also records the outcome on the world model (so we
+    // do NOT also call worldModel.recordOutcome). Keyed by the raw sessionId so it
+    // matches the prediction recorded at turn-start. The pending entry is ALWAYS
+    // cleaned up (no map leak even on a ZDR flip); the DB-writing evaluate only runs
+    // when enabled AND not under ZDR — symmetric with the prediction gate. Fail-open.
+    const pendingPrediction = this._pendingToolPredictions.get(sessionId);
+    if (pendingPrediction) {
+      this._pendingToolPredictions.delete(sessionId);
+      if (process.env['SUDO_CONSCIOUSNESS_WORLD_MODEL'] === '1' && !this._zdrEnabled) {
+        try {
+          const matched = toolCalls.length > 0;
+          this.surpriseEngine.evaluate(pendingPrediction.id, pendingPrediction.prediction, pendingPrediction.confidence, pendingPrediction.domain, matched ? 'used tools' : 'answered directly', matched);
+        } catch (e) { swallow('world-model resolve')(e); }
+      }
     }
 
     // Check if we should sleep
@@ -534,6 +607,15 @@ export class ConsciousnessOrchestrator {
   // -------------------------------------------------------------------------
   // Deep Insight Methods — surface unwired consciousness modules
   // -------------------------------------------------------------------------
+
+  /**
+   * Theme 4 (reflect loops): expose the real engines + episodic store so the
+   * sleep cycle can drive their (LLM-backed) generation OFF the hot path. They
+   * read/write the orchestrator's own DB, where live episodes are recorded.
+   */
+  getEpisodicMemory(): EpisodicMemory { return this.episodicMemory; }
+  getCounterfactualEngine(): CounterfactualEngine { return this.counterfactualEngine; }
+  getMetacognitionEngine(): MetacognitionEngine { return this.metacognition; }
 
   /**
    * Return counterfactual "what if" lessons from recent episodes.

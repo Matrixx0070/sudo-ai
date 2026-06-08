@@ -872,6 +872,13 @@ async function boot(): Promise<void> {
     // Attach SleepCycle — requires its own ConsciousnessDB + duck-typed dependencies.
     try {
       const sleepCDB = new ConsciousnessDB();
+      // Theme 4 (reflect loops): when SUDO_CONSCIOUSNESS_REFLECT=1, drive the real
+      // (LLM-backed) Counterfactual + Metacognition engines from the sleep cycle's
+      // idle phases — OFF the per-turn hot path. Default OFF keeps the no-op stubs
+      // (zero LLM cost / no behavior change). Adapters bind the orchestrator's real
+      // episodic store so reflection runs over live episodes (orchestrator DB).
+      const reflectOn = process.env['SUDO_CONSCIOUSNESS_REFLECT'] === '1';
+      const reflectEpisodic = consciousnessInstance.getEpisodicMemory();
       const sleepCycle = new SleepCycle({
         cdb: sleepCDB,
         brain,
@@ -880,10 +887,14 @@ async function boot(): Promise<void> {
           strengthenEpisode: () => undefined,
           weakenEpisode: () => undefined,
         },
-        counterfactualEngine: { runIdleBatch: async () => [] },
+        counterfactualEngine: reflectOn
+          ? { runIdleBatch: (count: number) => consciousnessInstance.getCounterfactualEngine().runIdleBatch(reflectEpisodic, count) }
+          : { runIdleBatch: async () => [] },
         selfModel: { updateFromEpisode: () => undefined },
         temporalSelf: { takeSnapshot: () => undefined },
-        metacognition: { runBatchReflection: async () => [] },
+        metacognition: reflectOn
+          ? { runBatchReflection: (count: number) => consciousnessInstance.getMetacognitionEngine().runBatchReflection(reflectEpisodic, count) }
+          : { runBatchReflection: async () => [] },
         wisdomStore: { storeInsight: () => undefined },
         commitmentAuditor,
         trustTracker: sleepTrustTracker,

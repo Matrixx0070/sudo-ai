@@ -8,6 +8,7 @@
  */
 
 import { createLogger } from '../../shared/logger.js';
+import { genId } from '../../shared/utils.js';
 import { ConsciousnessError } from '../errors.js';
 import type { ConsciousnessDB } from '../consciousness-db.js';
 import type { EmotionTag } from '../types.js';
@@ -139,6 +140,75 @@ export class EpisodicMemory {
 
     log.debug({ count }, 'Getting recent episodes');
     return getRecent(this.cdb.getDb(), count);
+  }
+
+  /**
+   * Theme 4.3: episodic -> semantic consolidation. Scan the most recent episodes
+   * for a dominant recurring topic (>= minSupport raw episodes) and, if found and
+   * not already consolidated, fold it into ONE high-significance 'semantic'
+   * meta-episode (persisted via recordEpisode). Cheap heuristic; deduped by topic
+   * so it does not grow unbounded. Returns the created episode, or null when there
+   * is nothing to generalize.
+   *
+   * @param opts.recentCount - How many recent episodes to scan (default 50).
+   * @param opts.minSupport  - Min occurrences before a topic is generalized (default 3).
+   */
+  consolidateToSemantic(opts: { recentCount?: number; minSupport?: number } = {}): Episode | null {
+    const recentCount = opts.recentCount ?? 50;
+    const minSupport = opts.minSupport ?? 3;
+    const SEMANTIC_TAG = 'semantic';
+
+    const recent = this.getRecent(recentCount);
+    // Only generalize raw episodes — never re-consolidate prior generalizations.
+    const raw = recent.filter((e) => !(e.tags ?? []).includes(SEMANTIC_TAG));
+    if (raw.length < minSupport) return null;
+
+    // Dominant recurring topic.
+    const topicCounts = new Map<string, number>();
+    for (const e of raw) {
+      if (e.topic) topicCounts.set(e.topic, (topicCounts.get(e.topic) ?? 0) + 1);
+    }
+    let domTopic = '';
+    let domCount = 0;
+    for (const [t, c] of topicCounts) {
+      if (c > domCount) { domTopic = t; domCount = c; }
+    }
+    if (!domTopic || domCount < minSupport) return null;
+
+    // Dedup: skip if a recent semantic generalization for this topic already exists.
+    if (recent.some((e) => (e.tags ?? []).includes(SEMANTIC_TAG) && e.topic === domTopic)) return null;
+
+    // Dominant outcome among that topic's episodes.
+    const outcomeCounts = new Map<Episode['outcome'], number>();
+    for (const e of raw) {
+      if (e.topic === domTopic) outcomeCounts.set(e.outcome, (outcomeCounts.get(e.outcome) ?? 0) + 1);
+    }
+    let domOutcome: Episode['outcome'] = 'neutral';
+    let oc = 0;
+    for (const [o, c] of outcomeCounts) {
+      if (c > oc) { domOutcome = o; oc = c; }
+    }
+
+    const nowIso = new Date().toISOString();
+    const episode: Episode = {
+      id: genId(),
+      summary: `Recurring pattern: "${domTopic}" appears frequently (${domCount} of the last ${raw.length} episodes), mostly ${domOutcome}.`,
+      participants: [],
+      topic: domTopic,
+      tags: [SEMANTIC_TAG, 'consolidated'],
+      emotionalValence: { tags: ['calm'], dominantEmotion: 'calm', intensity: 0.2 },
+      surpriseLevel: 0,
+      outcome: domOutcome,
+      significance: 0.9,
+      sessionId: null,
+      startedAt: nowIso,
+      endedAt: nowIso,
+      durationMs: 0,
+    };
+
+    this.recordEpisode(episode);
+    log.info({ topic: domTopic, support: domCount, outcome: domOutcome }, 'consolidateToSemantic: folded episodes into a semantic generalization');
+    return episode;
   }
 
   /**
