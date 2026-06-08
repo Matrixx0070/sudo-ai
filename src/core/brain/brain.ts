@@ -10,13 +10,20 @@ import { createLogger } from '../shared/logger.js';
 import { LLMError } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
-import { getModel, initProviders } from './providers.js';
+import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
-import { queryAllModelsConsensus } from './model-consensus.js';
+import { queryAllModelsConsensus, type ConsensusOptions } from './model-consensus.js';
+import { DispatchRouter } from './dispatch-router.js';
+import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
+import { routeModel } from './model-router.js';
+import { AuthProfileRotation } from './auth-profile-rotation.js';
+import type { AuthErrorCategory } from './auth-profile-rotation.js';
+import { describeRouting } from './routing-trace.js';
+import type { RoutingTrace, RoutingPath } from './routing-trace.js';
 import type {
   BrainMessage,
   BrainRequest,
@@ -27,10 +34,12 @@ import type {
   SystemPromptOptions,
   ReasoningLevel,
   ModelProfile,
+  ErrorCategory,
 } from './types.js';
 import type { SudoConfig } from '../config/types.js';
 import { ToolRegistry } from '../tools/registry.js';
 import type { NegativeRouter, RoutingResult } from './negative-router.js';
+import type { HistoryMessage } from '../agent/cheap-model-router.js';
 
 const log = createLogger('brain');
 
@@ -183,6 +192,14 @@ export class Brain {
   private ragEngine: RAGEngineInterface | null = null;
   /** Negative router — injected post-construction via setNegativeRouter(). Undefined = no routing. */
   private negativeRouter: NegativeRouter | undefined;
+  /** Highest-priority model id, captured at construction — the primary for smart-routing. */
+  private readonly primaryModel: string;
+  /** Cheap-path dispatch router (novelty scoring + LRU cache + anti-self-promotion guard). */
+  private readonly dispatchRouter = new DispatchRouter();
+  /** Multi-key rotation manager — rotates API keys per provider on rate-limit/auth errors. */
+  private readonly authRotation = AuthProfileRotation.getInstance();
+  /** Providers whose env keys have been loaded into the rotation manager (load-once). */
+  private readonly rotationLoaded = new Set<string>();
 
   /**
    * @param config - Full SudoConfig (or null for env-only mode).
@@ -193,6 +210,7 @@ export class Brain {
     this.config = config as SudoConfig | null;
     const modelIds = this.buildModelList();
     this.failover = new ModelFailover(modelIds);
+    this.primaryModel = modelIds[0] ?? DEFAULT_MODEL;
     // Auto-init providers on construction (async, awaited on first call)
     this.providersReady = initProviders();
     log.info({ modelCount: modelIds.length, models: modelIds }, 'Brain initialised');
@@ -204,20 +222,27 @@ export class Brain {
 
   private buildModelList(): string[] {
     const models: string[] = [];
-
-    if (this.config?.models?.primary) {
-      for (const entry of this.config.models.primary) {
-        if (entry.id) models.push(entry.id);
+    // Append a model ref to the failover chain, skipping blanks, duplicates, and
+    // malformed refs (a missing "/" would otherwise throw in the failover ctor).
+    const add = (ref: string | undefined): void => {
+      if (!ref) return;
+      if (!ref.includes('/')) {
+        log.warn({ ref }, 'buildModelList: skipping malformed model ref (expected "provider/model-id")');
+        return;
       }
-    }
+      if (!models.includes(ref)) models.push(ref);
+    };
 
-    if (this.config?.models?.fallback?.id) {
-      const fb = this.config.models.fallback.id;
-      if (!models.includes(fb)) models.push(fb);
-    }
-
+    // 1. Ordered primary models.
+    for (const entry of this.config?.models?.primary ?? []) add(entry.id);
+    // 2. Explicit user-configured fallback chain (primary + fallbacks[]).
+    for (const ref of this.config?.models?.fallbacks ?? []) add(ref);
+    // 3. Legacy single fallback (back-compat).
+    add(this.config?.models?.fallback?.id);
+    // 4. Hard default when nothing usable is configured.
     if (models.length === 0) {
-      models.push(DEFAULT_MODEL, FALLBACK_MODEL);
+      add(DEFAULT_MODEL);
+      add(FALLBACK_MODEL);
     }
 
     return models;
@@ -630,6 +655,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
             usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCost: 0 },
             model: request.model ?? 'blocked',
             finishReason: 'stop',
+            routing: this._trace({
+              path: 'blocked',
+              reason: `negative-router:${routingResult.category}`,
+              activeModel: request.model ?? 'blocked',
+              selectedModel: request.model ?? 'blocked',
+              costUSD: 0,
+            }),
           };
         }
 
@@ -642,6 +674,40 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         }
       } catch (routerErr) {
         log.warn({ err: String(routerErr) }, 'NegativeRouter threw — continuing without routing');
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Smart-route fast-path: send genuinely simple turns straight to a single
+    // cheap model, skipping the cloud-consensus race. Wires the cost-optimizer
+    // (task-difficulty estimate + cheap-tier model pick) and the dispatch-router
+    // (cheap-vs-primary decision with novelty + anti-self-promotion guards) into
+    // the live call path. Inert when no model cheaper than the primary exists, so
+    // default behavior is unchanged. On ANY error it falls through to the normal
+    // consensus + failover path below — never a reliability regression.
+    // Kill-switch: SUDO_SMART_ROUTE_DISABLE=1
+    // -------------------------------------------------------------------------
+    const fastRoute = this._smartRoute(request);
+    if (fastRoute) {
+      log.info(
+        { model: fastRoute.model, complexity: fastRoute.complexity, reason: fastRoute.reason },
+        'Smart-route fast-path selected — bypassing consensus for a simple turn',
+      );
+      try {
+        const profile = this._syntheticProfile(fastRoute.model);
+        const resp = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+        return {
+          ...resp,
+          routing: this._trace({ path: fastRoute.kind, reason: fastRoute.reason, activeModel: resp.model, costUSD: resp.usage.estimatedCost }),
+        };
+      } catch (err) {
+        log.warn(
+          { model: fastRoute.model, err: String(err) },
+          'Smart-route fast-path failed — falling through to consensus + failover',
+        );
+        // Intentionally no recordError(): the cheap target may be a synthetic
+        // profile unknown to the failover registry; the standard path below
+        // owns recovery and cooldown for the registered models.
       }
     }
 
@@ -674,6 +740,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
               usage: response.usage,
             };
           },
+          this._consensusOptions(request),
         );
 
         // Record success for the winning model
@@ -686,6 +753,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           usage: consensusResult.usage,
           model: consensusResult.model,
           finishReason: consensusResult.toolCalls.length > 0 ? 'tool-calls' : 'stop',
+          routing: this._trace({
+            path: 'consensus',
+            reason: `consensus:${method}`,
+            activeModel: consensusResult.model,
+            costUSD: consensusResult.usage.estimatedCost,
+            consensus: { agreement, method },
+          }),
         };
       } catch (consensusErr) {
         log.warn({ err: consensusErr }, 'Consensus call failed — falling back to sequential failover');
@@ -708,13 +782,22 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
       try {
         const result = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
-        return result;
+        return {
+          ...result,
+          routing: this._trace({
+            path: 'failover',
+            reason: `failover:attempt-${attempt + 1}`,
+            activeModel: result.model,
+            costUSD: result.usage.estimatedCost,
+            failoverAttempts: attempt + 1,
+          }),
+        };
       } catch (err) {
         lastError = err;
-        const { status, body } = Brain.extractErrorDetails(err);
+        const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
         const category = this.failover.categorizeError(status, body);
-        log.warn({ attempt, profileId: profile.id, status, category }, 'LLM call failed — trying next profile');
-        this.failover.recordError(profile.id, category);
+        log.warn({ attempt, profileId: profile.id, status, category, retryAfterMs }, 'LLM call failed — trying next profile');
+        this.failover.recordError(profile.id, category, { retryAfterMs });
       }
     }
 
@@ -794,11 +877,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
       } catch (err) {
         lastError = err;
-        const { status, body } = Brain.extractErrorDetails(err);
+        const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
         const category = this.failover.categorizeError(status, body);
 
-        log.warn({ attempt, modelId, status, category, err }, 'Streaming LLM call failed — trying next profile');
-        this.failover.recordError(profile.id, category);
+        log.warn({ attempt, modelId, status, category, retryAfterMs, err }, 'Streaming LLM call failed — trying next profile');
+        this.failover.recordError(profile.id, category, { retryAfterMs });
       }
     }
 
@@ -827,10 +910,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // model, and fallback to local models still calls the cloud model.
     modelId = profile.id;
 
-    const modelHandle = getModel(modelId);
-
     const callParams: Record<string, unknown> = {
-      model: modelHandle,
       system: systemPrompt,
       messages: toSDKMessages(request.messages),
       temperature,
@@ -849,7 +929,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         })
       );
     }
-    let result = await generateText(callParams as Parameters<typeof generateText>[0]);
+    // A4: obtain the completion through the auth-profile rotation path — rotates
+    // across multiple API keys for this provider on rate-limit/auth/billing errors
+    // before model-level failover gives up. Sets callParams.model to the chosen
+    // key's handle; the single env-key path runs unchanged when <2 keys exist.
+    let result = await this._generateWithKeyRotation(profile, callParams);
 
     // --- Tool-empty retry: some providers (Ollama cloud) return empty content
     // when tools are attached but don't actually support structured tool calls.
@@ -953,6 +1037,236 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
   }
 
   /**
+   * Decide whether this turn is eligible for the cheap-model fast-path.
+   *
+   * Combines two previously-dormant routers:
+   *  - cost-optimizer: `estimateTaskComplexity()` gives a 1–10 difficulty signal
+   *    and `pickOptimalModel(..., 'cheapest')` resolves the cheap-tier model when
+   *    no explicit `SUDO_CHEAP_MODEL` is configured.
+   *  - dispatch-router: applies the cheap-model-router guards plus novelty scoring,
+   *    an LRU cache, and the anti-self-promotion guard.
+   *
+   * Returns the chosen cheap model when (and only when) the turn is simple AND a
+   * genuinely cheaper model than the primary is available; otherwise null, which
+   * leaves the existing consensus + failover path fully intact.
+   *
+   * Kill-switch: SUDO_SMART_ROUTE_DISABLE=1.
+   */
+  private _smartRoute(
+    request: BrainRequest,
+  ): { model: string; reason: string; complexity: number; kind: RoutingPath } | null {
+    if (process.env['SUDO_SMART_ROUTE_DISABLE'] === '1') return null;
+    // Respect explicit model pins and callers that force the cloud race.
+    if (request.model && request.model !== 'auto') return null;
+    if (request.race === true) return null;
+
+    const lastUserMsg = [...request.messages].reverse().find((m) => m.role === 'user');
+    const userText = lastUserMsg?.content ?? '';
+    if (!userText.trim()) return null;
+
+    // cost-optimizer: difficulty signal + cheap-tier model resolution.
+    // Resolution order: SUDO_CHEAP_MODEL env → config models.cheap → cost-optimizer.
+    const complexity = estimateTaskComplexity(userText);
+    const cheapModel =
+      process.env['SUDO_CHEAP_MODEL']?.trim() ||
+      this.config?.models?.cheap ||
+      pickOptimalModel(complexity, 'cheapest');
+
+    // C9: reasoning-tier — couple reasoningLevel to model selection. High/xhigh
+    // reasoning prefers the stronger (premium) tier, taking precedence over the
+    // cheap fast-path so deep-reasoning turns are never down-routed. Inert when no
+    // premium model is configured. Resolution: SUDO_PREMIUM_MODEL → models.premium.
+    // Kill-switch: SUDO_REASONING_TIER_DISABLE=1.
+    if (
+      process.env['SUDO_REASONING_TIER_DISABLE'] !== '1' &&
+      (request.reasoningLevel === 'high' || request.reasoningLevel === 'xhigh')
+    ) {
+      const premiumModel = process.env['SUDO_PREMIUM_MODEL']?.trim() || this.config?.models?.premium;
+      if (premiumModel && premiumModel !== this.primaryModel) {
+        return { model: premiumModel, reason: `reasoning-tier:${request.reasoningLevel}`, complexity, kind: 'reasoning-tier' };
+      }
+    }
+
+    // Cheap fast-path — only when a genuinely cheaper model than the primary exists.
+    // dispatch-router applies the cheap-model-router guards + novelty + LRU cache.
+    if (cheapModel && cheapModel !== this.primaryModel) {
+      const decision = this.dispatchRouter.route({
+        userText,
+        history: request.messages as unknown as HistoryMessage[],
+        primaryModel: this.primaryModel,
+        cheapModel,
+        hasAttachments: (lastUserMsg?.images?.length ?? 0) > 0,
+      });
+      if (decision.cheapUsed) {
+        return { model: decision.model, reason: decision.reason, complexity, kind: 'cheap' };
+      }
+    }
+
+    // A3: explicit "auto" → let the zero-cost keyword model-router pick a
+    // category-appropriate model (coding/analysis/research/fast). Inert while the
+    // category models all resolve to the primary; activates once they differ.
+    if (request.model === 'auto') {
+      const routed = routeModel('', userText);
+      if (routed.model && routed.model !== this.primaryModel) {
+        return { model: routed.model, reason: `category-route:${routed.category}`, complexity, kind: 'category' };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Run generateText for a profile through the auth-profile rotation path.
+   *
+   * When 2+ API keys are configured for the provider (e.g. XAI_API_KEY_1,
+   * XAI_API_KEY_2), each rate-limit / auth / billing failure rotates to the next
+   * key and retries the SAME model before the caller's model-level failover gives
+   * up. Non-key errors (overload, timeout, format, …) propagate immediately so the
+   * model-failover loop can switch models. With fewer than 2 keys it falls back to
+   * the single env-key path — byte-for-byte the previous behavior.
+   *
+   * Sets `callParams.model` to the chosen key's handle as a side effect, so the
+   * downstream tool-empty retry reuses the same working key.
+   */
+  private async _generateWithKeyRotation(
+    profile: ModelProfile,
+    callParams: Record<string, unknown>,
+  ): Promise<Awaited<ReturnType<typeof generateText>>> {
+    const provider = profile.provider;
+    const keyCount = this._ensureRotationKeys(provider);
+
+    // Single-key / env path — unchanged behavior.
+    if (keyCount < 2) {
+      callParams.model = getModel(profile.id);
+      return generateText(callParams as Parameters<typeof generateText>[0]);
+    }
+
+    let lastErr: unknown;
+    for (let k = 0; k < keyCount; k++) {
+      const key = this.authRotation.getNextKey(provider);
+      if (!key) break;
+      try {
+        callParams.model = await getModelWithKey(profile.id, key.apiKey);
+        const res = await generateText(callParams as Parameters<typeof generateText>[0]);
+        this.authRotation.reportSuccess(provider, key.keyId);
+        return res;
+      } catch (err) {
+        lastErr = err;
+        const { status, body } = Brain.extractErrorDetails(err);
+        const authCat = Brain._toAuthErrorCategory(this.failover.categorizeError(status, body));
+        // Not a key-specific failure (overload/timeout/format) — let the
+        // model-failover loop handle it rather than burning more keys.
+        if (!authCat) throw err;
+        log.warn({ provider, keyId: key.keyId, status, authCat }, 'API key error — rotating to next key');
+        this.authRotation.reportError(provider, key.keyId, authCat);
+      }
+    }
+    throw lastErr ?? new LLMError('All API keys for provider exhausted', 'llm_all_keys_exhausted', { provider });
+  }
+
+  /**
+   * Lazily load a provider's numbered env keys into the rotation manager (once per
+   * provider per Brain instance) and return how many keys are registered.
+   */
+  private _ensureRotationKeys(provider: string): number {
+    if (!this.rotationLoaded.has(provider)) {
+      this.rotationLoaded.add(provider);
+      this.authRotation.loadKeysFromEnv(provider);
+    }
+    return this.authRotation.getStatus(provider).length;
+  }
+
+  /**
+   * Map a Brain failover ErrorCategory to the rotation manager's AuthErrorCategory.
+   * Returns null for errors that are NOT key-specific (so they skip rotation and
+   * trigger model-level failover instead).
+   */
+  private static _toAuthErrorCategory(category: ErrorCategory): AuthErrorCategory | null {
+    switch (category) {
+      case 'rate_limit':
+        return 'rate_limit';
+      case 'billing':
+        return 'billing_error';
+      case 'auth':
+      case 'auth_permanent':
+        return 'auth_invalid';
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Resolve latency-aware consensus options from the request, falling back to
+   * per-process env defaults. All-undefined (the default) makes the consensus
+   * phase wait for every model — behavior-preserving.
+   */
+  private _consensusOptions(request: BrainRequest): ConsensusOptions {
+    const num = (v: unknown): number | undefined => {
+      const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const minAgreement = num(request.consensusMinAgreement) ?? num(process.env['SUDO_CONSENSUS_MIN_AGREEMENT']);
+    const minResponders = num(request.consensusMinResponders) ?? num(process.env['SUDO_CONSENSUS_MIN_RESPONDERS']);
+    const timeoutMs = num(request.consensusTimeoutMs) ?? num(process.env['SUDO_CONSENSUS_TIMEOUT_MS']);
+    return {
+      // Only a threshold in (0, 1] enables agreement-based early-exit.
+      minAgreement: minAgreement !== undefined && minAgreement > 0 && minAgreement <= 1 ? minAgreement : undefined,
+      minResponders: minResponders !== undefined && minResponders >= 1 ? Math.floor(minResponders) : undefined,
+      timeoutMs: timeoutMs !== undefined && timeoutMs > 0 ? timeoutMs : undefined,
+    };
+  }
+
+  /**
+   * Build a RoutingTrace for the answer and emit a compact, human-readable
+   * routing line (observability + cost transparency). Returned for attachment
+   * to the BrainResponse so UIs/channels can surface the decision.
+   */
+  private _trace(opts: {
+    path: RoutingPath;
+    reason: string;
+    activeModel: string;
+    costUSD: number;
+    selectedModel?: string;
+    consensus?: { agreement: number; method: 'fastest' | 'most-detailed' };
+    failoverAttempts?: number;
+  }): RoutingTrace {
+    const selectedModel = opts.selectedModel ?? this.primaryModel;
+    const trace: RoutingTrace = {
+      path: opts.path,
+      reason: opts.reason,
+      selectedModel,
+      activeModel: opts.activeModel,
+      switched: opts.activeModel !== selectedModel,
+      costUSD: opts.costUSD,
+      ...(opts.consensus ? { consensus: opts.consensus } : {}),
+      ...(opts.failoverAttempts !== undefined ? { failoverAttempts: opts.failoverAttempts } : {}),
+    };
+    log.info({ routing: trace }, describeRouting(trace));
+    return trace;
+  }
+
+  /**
+   * Build a minimal ModelProfile wrapper for an arbitrary model string so the
+   * fast-path can reuse `_callSingleModel()`. Only `id` is consumed there; the
+   * remaining fields carry inert defaults and never touch the failover registry.
+   */
+  private _syntheticProfile(modelString: string): ModelProfile {
+    const slash = modelString.indexOf('/');
+    const provider = (slash >= 0 ? modelString.slice(0, slash) : modelString) as ModelProfile['provider'];
+    const modelId = slash >= 0 ? modelString.slice(slash + 1) : modelString;
+    return {
+      id: modelString,
+      provider,
+      modelId,
+      priority: 0,
+      lastUsed: 0,
+      cooldownUntil: 0,
+      consecutiveErrors: 0,
+      disabled: false,
+    };
+  }
+
+  /**
    * Return a diagnostic snapshot of all model profiles and their cooldown state.
    */
   getFailoverStatus(): ReturnType<ModelFailover['getStatus']> {
@@ -979,7 +1293,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
    * The real status lives inside the lastError/errors array as an APICallError
    * with a `statusCode` property.
    */
-  private static extractErrorDetails(err: unknown): { status: number; body: string | undefined } {
+  private static extractErrorDetails(err: unknown): { status: number; body: string | undefined; retryAfterMs: number | undefined } {
     const asAny = err as Record<string, unknown>;
 
     // Direct status or statusCode on the error object itself.
@@ -1017,6 +1331,62 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
 
-    return { status: status ?? 500, body };
+    return { status: status ?? 500, body, retryAfterMs: Brain._extractRetryAfter(err) };
+  }
+
+  /**
+   * Extract a Retry-After hint (in ms) from an error's response headers, digging
+   * through the SDK's RetryError wrapping (lastError / errors[]). Returns undefined
+   * when no usable Retry-After is present.
+   */
+  private static _extractRetryAfter(err: unknown): number | undefined {
+    const top = err as Record<string, unknown> | null;
+    if (!top || typeof top !== 'object') return undefined;
+
+    const candidates: Record<string, unknown>[] = [top];
+    const lastError = top['lastError'] as Record<string, unknown> | undefined;
+    if (lastError && typeof lastError === 'object') candidates.push(lastError);
+    const errors = top['errors'] as unknown[] | undefined;
+    if (Array.isArray(errors)) {
+      for (const e of errors) {
+        if (e && typeof e === 'object') candidates.push(e as Record<string, unknown>);
+      }
+    }
+
+    for (const c of candidates) {
+      const headers = (c['responseHeaders'] ?? c['headers']) as Record<string, unknown> | undefined;
+      const raw = Brain._headerValue(headers, 'retry-after');
+      const ms = Brain._parseRetryAfter(raw);
+      if (ms !== undefined) return ms;
+    }
+    return undefined;
+  }
+
+  /** Case-insensitive header lookup returning the value as a string. */
+  private static _headerValue(headers: Record<string, unknown> | undefined, name: string): string | undefined {
+    if (!headers || typeof headers !== 'object') return undefined;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === name) {
+        const v = headers[k];
+        if (typeof v === 'string') return v;
+        if (typeof v === 'number') return String(v);
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+
+  /** Parse a Retry-After value (delta-seconds or HTTP-date) into milliseconds-from-now. */
+  private static _parseRetryAfter(raw: string | undefined): number | undefined {
+    if (!raw) return undefined;
+    const trimmed = raw.trim();
+    const secs = Number(trimmed);
+    if (Number.isFinite(secs) && secs >= 0) return Math.round(secs * 1000);
+    const dateMs = Date.parse(trimmed);
+    if (!Number.isNaN(dateMs)) {
+      const delta = dateMs - Date.now();
+      return delta > 0 ? delta : 0;
+    }
+    return undefined;
   }
 }

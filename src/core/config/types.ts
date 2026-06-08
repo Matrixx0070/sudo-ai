@@ -38,6 +38,24 @@ export interface ModelsConfig {
   primary: ModelEntry[];
   /** Fallback model used when all primary models are unavailable. */
   fallback: ModelEntry;
+  /**
+   * Optional explicit, ordered fallback chain of "provider/model" refs, tried
+   * after the primary models (mirrors a primary + fallbacks[] chain). Lets
+   * operators declare the failover order instead of relying on primary-array
+   * ordering plus the single `fallback`.
+   */
+  fallbacks?: string[];
+  /**
+   * Optional cheap-tier model ref ("provider/model") for the smart-route
+   * fast-path. Resolution order is SUDO_CHEAP_MODEL env → this → cost-optimizer.
+   */
+  cheap?: string;
+  /**
+   * Optional premium-tier model ref ("provider/model") used for high/xhigh
+   * reasoning turns (reasoning-tier routing). Resolution: SUDO_PREMIUM_MODEL
+   * env → this. Inert when unset.
+   */
+  premium?: string;
   /** Embedding model configuration. */
   embedding: {
     id: string;

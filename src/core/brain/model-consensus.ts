@@ -38,6 +38,20 @@ export interface ConsensusResult {
   method: 'fastest' | 'consensus' | 'best-model';
 }
 
+/**
+ * Options for latency-aware consensus preemption (early-exit). When neither
+ * `minAgreement` nor `timeoutMs` is set, queryAllModelsConsensus waits for ALL
+ * models (behavior-preserving default). Kill-switch: SUDO_CONSENSUS_EARLY_EXIT_DISABLE=1.
+ */
+export interface ConsensusOptions {
+  /** If set (0–1), early-exit once `minResponders` models agree at ≥ this Jaccard score. */
+  minAgreement?: number;
+  /** Minimum completed responders before early-exit can fire. Default 2 (capped to model count). */
+  minResponders?: number;
+  /** Overall wall-clock cap (ms); resolves with whatever completed when it fires. */
+  timeoutMs?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -100,37 +114,136 @@ function calculateAgreement(answers: ModelAnswer[]): number {
 export async function queryAllModelsConsensus(
   models: string[],
   caller: (model: string) => Promise<BrainModelResult>,
+  options: ConsensusOptions = {},
 ): Promise<{ result: BrainModelResult; agreement: number; method: 'fastest' | 'most-detailed' }> {
   if (models.length === 0) throw new Error('models array must not be empty');
 
   const wallStart = Date.now();
+  // Normalize: only a POSITIVE agreement threshold or a POSITIVE timeout enables
+  // early-exit. 0 / negative / NaN are treated as "unset" → wait-all default,
+  // so a degenerate config can never prematurely collapse consensus.
+  const minAgreement =
+    typeof options.minAgreement === 'number' && options.minAgreement > 0 ? options.minAgreement : undefined;
+  const timeoutMs =
+    typeof options.timeoutMs === 'number' && options.timeoutMs > 0 ? options.timeoutMs : undefined;
+  const earlyExitEnabled =
+    process.env['SUDO_CONSENSUS_EARLY_EXIT_DISABLE'] !== '1' &&
+    (minAgreement !== undefined || timeoutMs !== undefined);
 
-  const settled = await Promise.allSettled(
-    models.map(async (model): Promise<BrainModelResult> => {
+  // -------------------------------------------------------------------------
+  // Default path: wait for ALL models, then pick the winner. Behavior-preserving
+  // — used whenever early-exit is not configured.
+  // -------------------------------------------------------------------------
+  if (!earlyExitEnabled) {
+    const settled = await Promise.allSettled(
+      models.map(async (model): Promise<BrainModelResult> => {
+        const t0 = Date.now();
+        const result = await caller(model);
+        return { ...result, latencyMs: Date.now() - t0 };
+      }),
+    );
+
+    const results: BrainModelResult[] = settled
+      .filter((r): r is PromiseFulfilledResult<BrainModelResult> => r.status === 'fulfilled')
+      .map((r) => r.value);
+
+    const failed = settled.filter((r) => r.status === 'rejected').length;
+    if (failed > 0) {
+      log.warn({ failed, succeeded: results.length }, 'Some models failed');
+    }
+
+    if (results.length === 0) {
+      throw new Error('All models failed — no answers received');
+    }
+
+    const winner = selectConsensusWinner(results);
+    log.info(
+      { models: results.length, agreement: winner.agreement.toFixed(3), best: winner.result.model, method: winner.method, totalMs: Date.now() - wallStart },
+      'Consensus reached',
+    );
+    return winner;
+  }
+
+  // -------------------------------------------------------------------------
+  // Early-exit path: resolve as soon as a quorum of models AGREE (or on timeout),
+  // without waiting for slower models. Pending calls are left to settle and their
+  // late results ignored — no hard cancellation (that would require threading an
+  // AbortSignal into the SDK). Slower models only cost wall-clock we no longer wait
+  // on, never correctness.
+  // -------------------------------------------------------------------------
+  const minResponders = Math.min(Math.max(1, options.minResponders ?? 2), models.length);
+
+  return await new Promise((resolve, reject) => {
+    const results: BrainModelResult[] = [];
+    let settledCount = 0;
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const conclude = (): void => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      if (results.length === 0) {
+        reject(new Error('All models failed — no answers received'));
+        return;
+      }
+      const winner = selectConsensusWinner(results);
+      log.info(
+        { models: results.length, agreement: winner.agreement.toFixed(3), best: winner.result.model, method: winner.method, earlyExit: settledCount < models.length, totalMs: Date.now() - wallStart },
+        'Consensus reached (early-exit)',
+      );
+      resolve(winner);
+    };
+
+    for (const model of models) {
       const t0 = Date.now();
-      const result = await caller(model);
-      return { ...result, latencyMs: Date.now() - t0 };
-    }),
-  );
+      caller(model)
+        .then((r) => {
+          if (!done) results.push({ ...r, latencyMs: Date.now() - t0 });
+        })
+        .catch(() => {
+          /* swallow — a failed model simply does not contribute a result */
+        })
+        .finally(() => {
+          settledCount += 1;
+          if (done) return;
+          try {
+            if (
+              typeof minAgreement === 'number' &&
+              results.length >= minResponders &&
+              calculateAgreementFromResults(results) >= minAgreement
+            ) {
+              conclude();
+              return;
+            }
+          } catch (err) {
+            // Defensive: never let an agreement-calc throw escape as an unhandled
+            // rejection on this per-model chain — just skip this tick.
+            log.warn({ err: String(err) }, 'Consensus agreement check failed — ignoring this completion');
+          }
+          if (settledCount === models.length) conclude();
+        });
+    }
 
-  const results: BrainModelResult[] = settled
-    .filter((r): r is PromiseFulfilledResult<BrainModelResult> => r.status === 'fulfilled')
-    .map((r) => r.value);
+    if (typeof timeoutMs === 'number' && timeoutMs > 0) {
+      timer = setTimeout(conclude, timeoutMs);
+    }
+  });
+}
 
-  const failed = settled.filter((r) => r.status === 'rejected').length;
-  if (failed > 0) {
-    log.warn({ failed, succeeded: results.length }, 'Some models failed');
-  }
-
-  if (results.length === 0) {
-    throw new Error('All models failed — no answers received');
-  }
-
-  // Calculate agreement based on content similarity
+/**
+ * Pick the consensus winner from a set of completed results:
+ *  - agreement > 0.7  → fastest responder
+ *  - agreement <= 0.7 → most-detailed reply (content length + tool calls)
+ *
+ * Shared by the wait-all and early-exit paths so selection is identical for any
+ * given result set.
+ */
+function selectConsensusWinner(
+  results: BrainModelResult[],
+): { result: BrainModelResult; agreement: number; method: 'fastest' | 'most-detailed' } {
   const agreement = calculateAgreementFromResults(results);
-
-  // Pick winner: fastest if agreement high, most-detailed if disagreement
-  const bestResult =
+  const result =
     agreement > 0.7
       ? results.reduce((a, b) => (a.latencyMs < b.latencyMs ? a : b))
       : results.reduce((a, b) => {
@@ -138,21 +251,8 @@ export async function queryAllModelsConsensus(
           const bLen = b.content.length + (b.toolCalls?.length ?? 0) * 100;
           return aLen > bLen ? a : b;
         });
-
   const method: 'fastest' | 'most-detailed' = agreement > 0.7 ? 'fastest' : 'most-detailed';
-
-  log.info(
-    {
-      models: results.length,
-      agreement: agreement.toFixed(3),
-      best: bestResult.model,
-      method,
-      totalMs: Date.now() - wallStart,
-    },
-    'Consensus reached',
-  );
-
-  return { result: bestResult, agreement, method };
+  return { result, agreement, method };
 }
 
 function calculateAgreementFromResults(results: BrainModelResult[]): number {

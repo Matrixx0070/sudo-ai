@@ -4,9 +4,11 @@
  */
 
 import type { ErrorCategory } from '../shared/errors.js';
+import type { RoutingTrace } from './routing-trace.js';
 
 // Re-export for consumers that only import from brain.
 export type { ErrorCategory };
+export type { RoutingTrace };
 
 // ---------------------------------------------------------------------------
 // Persona & Mood discriminated unions
@@ -121,6 +123,16 @@ export interface BrainRequest {
    * (cognitive ticks, KAIROS, self-build) should leave this unset.
    */
   race?: boolean;
+  /**
+   * Latency-aware consensus: early-exit once `consensusMinResponders` cloud models
+   * agree at ≥ this Jaccard score (0–1). Unset → wait for all models (default).
+   * Also settable per-process via SUDO_CONSENSUS_MIN_AGREEMENT.
+   */
+  consensusMinAgreement?: number;
+  /** Min completed responders before consensus early-exit can fire (default 2). */
+  consensusMinResponders?: number;
+  /** Overall wall-clock cap (ms) for the consensus phase. Env: SUDO_CONSENSUS_TIMEOUT_MS. */
+  consensusTimeoutMs?: number;
 }
 
 /** Token usage and estimated cost for a single LLM call. */
@@ -140,6 +152,8 @@ export interface BrainResponse {
   /** Provider-qualified model that actually responded. */
   model: string;
   finishReason: 'stop' | 'tool-calls' | 'length' | 'content-filter' | 'error';
+  /** Routing/observability trace for this call (which path, cost, switches). */
+  routing?: RoutingTrace;
 }
 
 // ---------------------------------------------------------------------------

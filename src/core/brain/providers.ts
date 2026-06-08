@@ -59,16 +59,12 @@ const ENV_KEYS: Record<ProviderName, string> = {
  * Build and cache a provider instance. Returns null when the API key is absent
  * or the required SDK is not installed.
  */
-async function buildProviderAsync(name: ProviderName): Promise<AnyProvider | null> {
-  if (providerCache.has(name)) {
-    return providerCache.get(name)!;
-  }
-
+async function instantiateProvider(name: ProviderName, explicitKey?: string): Promise<AnyProvider | null> {
   const envKey = ENV_KEYS[name];
   // For Anthropic: check both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN (OAuth)
-  const envValue = name === 'anthropic'
+  const envValue = explicitKey ?? (name === 'anthropic'
     ? (process.env[envKey] || process.env['ANTHROPIC_AUTH_TOKEN'])
-    : process.env[envKey];
+    : process.env[envKey]);
 
   // Ollama is local — no API key required, but OLLAMA_URL env may override base.
   if (name !== 'ollama' && !envValue) {
@@ -169,8 +165,37 @@ async function buildProviderAsync(name: ProviderName): Promise<AnyProvider | nul
     return null;
   }
 
-  providerCache.set(name, instance);
-  log.debug({ provider: name }, 'Provider instance created');
+  log.debug({ provider: name, keyed: explicitKey !== undefined }, 'Provider instance created');
+  return instance;
+}
+
+/**
+ * Build and cache the env-key provider instance for a provider name.
+ * Returns null when the API key is absent or the required SDK is not installed.
+ */
+async function buildProviderAsync(name: ProviderName): Promise<AnyProvider | null> {
+  if (providerCache.has(name)) {
+    return providerCache.get(name)!;
+  }
+  const instance = await instantiateProvider(name);
+  if (instance) providerCache.set(name, instance);
+  return instance;
+}
+
+/** Cache for provider instances built with an explicit (rotated) API key. */
+const keyedProviderCache = new Map<string, AnyProvider>();
+
+/**
+ * Build (and cache) a provider instance bound to a SPECIFIC API key — used by the
+ * auth-profile rotation path so a rotated key actually takes effect. Keyed by
+ * provider name + key so repeated calls reuse the same SDK instance.
+ */
+async function buildProviderWithKey(name: ProviderName, apiKey: string): Promise<AnyProvider | null> {
+  const cacheKey = `${name}#${apiKey}`;
+  const cached = keyedProviderCache.get(cacheKey);
+  if (cached) return cached;
+  const instance = await instantiateProvider(name, apiKey);
+  if (instance) keyedProviderCache.set(cacheKey, instance);
   return instance;
 }
 
@@ -276,6 +301,45 @@ export function getModel(modelString: string): ReturnType<AnyProvider> {
   }
 
   // Native providers can be called directly
+  return (provider as (id: string) => ReturnType<AnyProvider>)(modelId);
+}
+
+/**
+ * Resolve a Vercel AI SDK model handle for `modelString` using a SPECIFIC API key
+ * (auth-profile rotation). Mirrors getModel()'s provider-kind handling, but builds
+ * the provider with the supplied key instead of the env key.
+ *
+ * @param modelString - "provider/model-id".
+ * @param apiKey      - The rotated API key to bind this provider instance to.
+ * @throws LLMError on invalid format or when the provider cannot be built.
+ */
+export async function getModelWithKey(modelString: string, apiKey: string): Promise<ReturnType<AnyProvider>> {
+  const slashIndex = modelString.indexOf('/');
+  if (slashIndex < 0) {
+    throw new LLMError(
+      `Invalid model string "${modelString}" — expected "provider/model-id"`,
+      'llm_invalid_model_string',
+      { modelString },
+    );
+  }
+  const providerName = modelString.slice(0, slashIndex) as ProviderName;
+  const modelId = modelString.slice(slashIndex + 1);
+
+  const provider = await buildProviderWithKey(providerName, apiKey);
+  if (!provider) {
+    throw new LLMError(
+      `Provider "${providerName}" could not be built with the supplied key`,
+      'llm_provider_unconfigured',
+      { provider: providerName },
+    );
+  }
+
+  // OpenAI-compatible providers need .chat() to get the LanguageModel;
+  // native providers are callable directly. Mirrors getModel().
+  const openAiCompatibleProviders: ProviderName[] = ['ollama', 'mistral', 'deepseek', 'together', 'groq'];
+  if (openAiCompatibleProviders.includes(providerName)) {
+    return (provider as any).chat(modelId);
+  }
   return (provider as (id: string) => ReturnType<AnyProvider>)(modelId);
 }
 

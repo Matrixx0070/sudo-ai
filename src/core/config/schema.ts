@@ -45,6 +45,17 @@ const ModelEntrySchema = Type.Object({
 const ModelsSchema = Type.Object({
   primary: Type.Array(ModelEntrySchema, { minItems: 1 }),
   fallback: ModelEntrySchema,
+  fallbacks: Type.Optional(
+    Type.Array(Str(), {
+      description: 'Ordered fallback chain of "provider/model" refs, tried after the primary models.',
+    }),
+  ),
+  cheap: Type.Optional(
+    Str({ description: 'Cheap-tier model ref ("provider/model") for the smart-route fast-path.' }),
+  ),
+  premium: Type.Optional(
+    Str({ description: 'Premium-tier model ref ("provider/model") for high/xhigh reasoning turns.' }),
+  ),
   embedding: Type.Object({
     id: Str(),
     dims: PosInt(),
