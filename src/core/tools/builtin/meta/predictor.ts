@@ -28,7 +28,12 @@ const DB_PATH = path.resolve('/root/sudo-ai-v4/data/mind.db');
 
 let _predictor: Predictor | null = null;
 
-function getPredictor(): Predictor {
+/**
+ * Lazy shared Predictor singleton (one connection to mind.db per process).
+ * Exported so the agent loop can reuse the exact same instance/db when the
+ * opt-in SUDO_PREDICTOR_LOOP anticipatory injection is enabled.
+ */
+export function getPredictor(): Predictor {
   if (!_predictor) {
     _predictor = new Predictor(DB_PATH);
   }
