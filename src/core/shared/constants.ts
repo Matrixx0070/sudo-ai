@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 
 export const APP_NAME = 'SUDO-AI' as const;
-export const APP_VERSION = '3.1.0' as const;
+export const APP_VERSION = '4.1.0' as const;
 
 // ---------------------------------------------------------------------------
 // Models
