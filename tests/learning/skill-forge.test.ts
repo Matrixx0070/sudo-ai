@@ -145,4 +145,65 @@ describe('SkillForge', () => {
     expect(stats.skillsRejected).toBe(1);
     expect(typeof stats.avgConfidence).toBe('number');
   });
+
+  // 8. cooperative async scan (SUDO_SKILL_FORGE_ASYNC) yields output IDENTICAL to
+  //    the default path — proves the event-loop yields don't change results. The
+  //    fixture has > YIELD_EVERY (50) sessions so the cooperative path really yields.
+  it('cooperative scan yields output identical to the default path (with real yields)', async () => {
+    const sessions: Record<string, { tool: string; success: boolean }[]> = {};
+    for (let i = 0; i < 130; i++) {
+      sessions[`ok${i}`] = [
+        { tool: 'web_search', success: true },
+        { tool: 'scrape', success: true },
+        { tool: 'summarize', success: true },
+      ];
+      if (i % 3 === 0) {
+        sessions[`bad${i}`] = [
+          { tool: 'read', success: true },
+          { tool: 'edit', success: false },
+        ];
+      }
+    }
+    const traces = buildTraces(sessions);
+    const prev = process.env['SUDO_SKILL_FORGE_ASYNC'];
+    try {
+      delete process.env['SUDO_SKILL_FORGE_ASYNC'];
+      const sync = await new SkillForge(mockTraceStore(traces), mockAnalyzer(), tmpDir).scan();
+
+      process.env['SUDO_SKILL_FORGE_ASYNC'] = '1';
+      const coop = await new SkillForge(mockTraceStore(traces), mockAnalyzer(), tmpDir).scan();
+
+      expect(sync.length).toBeGreaterThan(0); // guard: the fixture really produces candidates
+      expect(coop).toEqual(sync);
+    } finally {
+      if (prev === undefined) delete process.env['SUDO_SKILL_FORGE_ASYNC'];
+      else process.env['SUDO_SKILL_FORGE_ASYNC'] = prev;
+    }
+  });
+
+  // 9. cooperative scan with a trace set BELOW the counter yield threshold still
+  //    matches the default output. (The structural yields — between the two queries
+  //    and between the two extractWindows passes — still fire; only the YIELD_EVERY
+  //    counter-based yields are skipped, since there are far fewer than 50 sessions.)
+  it('cooperative scan below the yield threshold still matches default output', async () => {
+    const traces = buildTraces({
+      s1: [{ tool: 'web_search', success: true }, { tool: 'scrape', success: true }],
+      s2: [{ tool: 'web_search', success: true }, { tool: 'scrape', success: true }],
+      s3: [{ tool: 'web_search', success: true }, { tool: 'scrape', success: true }],
+    });
+    const prev = process.env['SUDO_SKILL_FORGE_ASYNC'];
+    try {
+      delete process.env['SUDO_SKILL_FORGE_ASYNC'];
+      const sync = await new SkillForge(mockTraceStore(traces), mockAnalyzer(), tmpDir).scan();
+
+      process.env['SUDO_SKILL_FORGE_ASYNC'] = '1';
+      const coop = await new SkillForge(mockTraceStore(traces), mockAnalyzer(), tmpDir).scan();
+
+      expect(sync.length).toBeGreaterThanOrEqual(1);
+      expect(coop).toEqual(sync);
+    } finally {
+      if (prev === undefined) delete process.env['SUDO_SKILL_FORGE_ASYNC'];
+      else process.env['SUDO_SKILL_FORGE_ASYNC'] = prev;
+    }
+  });
 });
