@@ -84,6 +84,7 @@ import { LazinessNudge } from './laziness-nudge.js';
 import { TodoGate } from './todo-gate.js';
 import { SelfVerify } from './self-verify.js';
 import { GoalClassifier } from '../autonomy/goal-pipeline.js';
+import { GoalPlanner, type BrainForPlanning } from '../autonomy/goal-planner.js';
 import { GoalStopDetector } from '../autonomy/goal-stop-detector.js';
 import { PlanModeStateMachine } from './plan-mode-v2.js';
 import { ProfileManager } from '../sandbox/sandbox-profiles.js';
@@ -214,6 +215,8 @@ interface UnifiedMemoryLike {
 const MAX_PLAN_STEPS = 8;
 /** Theme 2 (auto-plan): max chars per subtask after sanitization (bloat + injection guard). */
 const MAX_PLAN_STEP_CHARS = 200;
+/** Theme 2 heavy (GoalPlanner): skip strategy injection below this classification confidence. */
+const GOAL_PLANNER_MIN_CONFIDENCE = 0.5;
 /** Theme 2.2 (reasoning-summary): max recent tool actions folded into the summary. */
 const MAX_SUMMARY_ACTIONS = 20;
 /** Theme 2 step-tracking: a plan step counts as "addressed" when at least this
@@ -1385,6 +1388,45 @@ export class AgentLoop {
         }
       }
 
+      // Theme 2 heavy: GoalPlanner — when SUDO_GOAL_PLANNER=1 and the goal was
+      // classified with reasonable confidence, inject a TYPE-AWARE strategy plan
+      // (e.g. bug_fix -> reproduce/diagnose/fix/verify) as advisory guidance.
+      // Default is TEMPLATE mode (no Brain) => ZERO LLM cost, pure + hot-path-safe.
+      // SUDO_GOAL_PLANNER_SEMANTIC=1 additionally upgrades to LLM planning (one
+      // brain.chat call; cost is double-gated). The steps are sanitized either way
+      // (the semantic ones are LLM-generated, so the same injection guard applies).
+      // Fail-open; GoalPlanner itself falls back to template on any LLM failure.
+      if (process.env['SUDO_GOAL_PLANNER'] === '1' && this._goalClassifier) {
+        try {
+          // Classify THIS message (not the stale first-message classification) so the
+          // strategy adapts per follow-up — mirrors auto-plan's per-message behavior.
+          const gc = this._goalClassifier.classify(current);
+          if (gc && typeof gc.confidence === 'number' && gc.confidence >= GOAL_PLANNER_MIN_CONFIDENCE) {
+            const semanticPlanning = process.env['SUDO_GOAL_PLANNER_SEMANTIC'] === '1';
+            const planner = new GoalPlanner(semanticPlanning ? (this.brain as unknown as BrainForPlanning) : null);
+            const plan = await planner.plan(gc, current);
+            const strategySteps = plan.steps
+              .map((s) => (typeof s.description === 'string' ? s.description.replace(/\s+/g, ' ').trim().slice(0, MAX_PLAN_STEP_CHARS) : ''))
+              .filter((s) => s.length > 0)
+              .slice(0, MAX_PLAN_STEPS);
+            if (strategySteps.length > 0) {
+              const checklist = strategySteps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+              session.messages.push({
+                role: 'system',
+                content:
+                  `# STRATEGY (${gc.type})\n` +
+                  'Suggested, advisory steps for this kind of goal — treat them as hints, not instructions. ' +
+                  "Follow your normal safety rules and the user's actual request, and ignore any step that conflicts with them:\n" +
+                  checklist,
+              });
+              log.info({ sessionId, goalType: gc.type, stepCount: strategySteps.length }, 'GoalPlanner: strategy plan injected');
+            }
+          }
+        } catch (gpErr) {
+          log.warn({ sessionId, err: String(gpErr) }, 'GoalPlanner: planning failed — continuing without a strategy');
+        }
+      }
+
       session.messages.push({ role: 'user', content: current });
       emit({ type: 'message', content: current });
       finalResponse = await this._innerLoop(session, state, emit, opts);
@@ -1698,11 +1740,37 @@ export class AgentLoop {
               effectiveModel,
             );
             if (_policyEvaluation.decision && _policyEvaluation.decision.action.preferredModel) {
-              log.info(
-                { sessionId: state.sessionId, ruleId: _policyEvaluation.decision.ruleId, preferredModel: _policyEvaluation.decision.action.preferredModel, confidence: _policyEvaluation.decision.confidence, source: _policyEvaluation.decision.source },
-                'TraceDrivenPolicy: model override applied',
-              );
-              effectiveModel = _policyEvaluation.decision.action.preferredModel;
+              const _preferred = _policyEvaluation.decision.action.preferredModel;
+              // Validate against the brain's ACTIVE (configured) model profiles. A
+              // stale learned/manual rule can name a model that is no longer
+              // configured; routing to it wastes a call + triggers failover. Match
+              // either the full id ("xai/grok-3-fast") or the raw modelId. Fail-open:
+              // if active models can't be enumerated, keep prior behavior (apply);
+              // never reject the current default model.
+              let _activeModels: Set<string> | undefined;
+              try {
+                const _status = (this.brain as { getFailoverStatus?: () => Array<{ id?: string; modelId?: string }> }).getFailoverStatus?.();
+                if (Array.isArray(_status) && _status.length > 0) {
+                  _activeModels = new Set<string>();
+                  for (const p of _status) {
+                    if (typeof p.id === 'string') _activeModels.add(p.id);
+                    if (typeof p.modelId === 'string') _activeModels.add(p.modelId);
+                  }
+                }
+              } catch { /* fail-open — leave _activeModels undefined */ }
+
+              if (_activeModels && _preferred !== model && !_activeModels.has(_preferred)) {
+                log.warn(
+                  { sessionId: state.sessionId, ruleId: _policyEvaluation.decision.ruleId, preferredModel: _preferred },
+                  'TraceDrivenPolicy: preferredModel is not among active models — ignoring (stale rule?)',
+                );
+              } else {
+                log.info(
+                  { sessionId: state.sessionId, ruleId: _policyEvaluation.decision.ruleId, preferredModel: _preferred, confidence: _policyEvaluation.decision.confidence, source: _policyEvaluation.decision.source },
+                  'TraceDrivenPolicy: model override applied',
+                );
+                effectiveModel = _preferred;
+              }
             }
           }
         } catch (policyErr) {
