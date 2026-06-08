@@ -147,6 +147,26 @@ CREATE TABLE IF NOT EXISTS trace_aggregates (
 );
 `;
 
+/**
+ * Resolve the optional aggregation recency window from the raw
+ * SUDO_POLICY_AGG_WINDOW_DAYS value, as a SQLite datetime() modifier.
+ *
+ * Returns a modifier like `-7 days` for a positive integer N (so callers can
+ * scope refreshAggregates() to `created_at >= datetime('now', <modifier>)`), or
+ * `undefined` (= no window, full-table aggregation, the pre-existing behavior)
+ * when the value is unset, blank, zero, negative, fractional, or non-numeric.
+ * Fail-open: a malformed value never narrows the window. `0` is rejected on
+ * purpose — a zero-day window would exclude essentially every trace.
+ */
+export function resolveAggWindowModifier(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const days = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(days) || days < 1) return undefined;
+  return `-${days} days`;
+}
+
 // ---------------------------------------------------------------------------
 // TraceStore
 // ---------------------------------------------------------------------------
@@ -331,15 +351,27 @@ export class TraceStore {
    */
   refreshAggregates(): void {
     const db = this.ensure();
+
+    // Optional recency window (SUDO_POLICY_AGG_WINDOW_DAYS, default OFF): when set,
+    // the GROUP BYs scan only traces newer than the window instead of the entire
+    // table, so a refresh over a very large trace store doesn't block for long.
+    // The cutoff is computed in SQL via datetime('now', @window) so it matches the
+    // datetime('now') format of created_at and uses the idx_traces_created index.
+    // Unset/invalid => no clause => full-table aggregation (prior behavior).
+    const windowMod = resolveAggWindowModifier(process.env['SUDO_POLICY_AGG_WINDOW_DAYS']);
+    const windowSql = windowMod ? " AND created_at >= datetime('now', @window)" : '';
+    const queryRows = (sql: string): Record<string, unknown>[] =>
+      (windowMod ? db.prepare(sql).all({ window: windowMod }) : db.prepare(sql).all()) as Record<string, unknown>[];
+
     const tx = db.transaction(() => {
       // model_tool: per (model, tool) pair
-      for (const r of db.prepare(`
+      for (const r of queryRows(`
         SELECT model, tool_name,
                COUNT(*) AS total_calls, SUM(success) AS success_count,
                AVG(CAST(latency_ms AS REAL)) AS avg_latency_ms
-        FROM traces WHERE model IS NOT NULL AND tool_name IS NOT NULL
+        FROM traces WHERE model IS NOT NULL AND tool_name IS NOT NULL${windowSql}
         GROUP BY model, tool_name
-      `).all() as Record<string, unknown>[]) {
+      `)) {
         this.stmtUpsertAggregate.run({
           aggregateType: 'model_tool',
           key: `${r.model}:${r.tool_name}`,
@@ -349,13 +381,13 @@ export class TraceStore {
       }
 
       // model_category: per (model, category) pair
-      for (const r of db.prepare(`
+      for (const r of queryRows(`
         SELECT model, category,
                COUNT(*) AS total_calls, SUM(success) AS success_count,
                AVG(CAST(latency_ms AS REAL)) AS avg_latency_ms
-        FROM traces WHERE model IS NOT NULL AND category IS NOT NULL
+        FROM traces WHERE model IS NOT NULL AND category IS NOT NULL${windowSql}
         GROUP BY model, category
-      `).all() as Record<string, unknown>[]) {
+      `)) {
         this.stmtUpsertAggregate.run({
           aggregateType: 'model_category',
           key: `${r.model}:${r.category}`,
@@ -365,11 +397,11 @@ export class TraceStore {
       }
 
       // tool_error: per (tool, error_type) pair
-      for (const r of db.prepare(`
+      for (const r of queryRows(`
         SELECT tool_name, error_type, COUNT(*) AS total_calls
-        FROM traces WHERE tool_name IS NOT NULL AND error_type IS NOT NULL
+        FROM traces WHERE tool_name IS NOT NULL AND error_type IS NOT NULL${windowSql}
         GROUP BY tool_name, error_type
-      `).all() as Record<string, unknown>[]) {
+      `)) {
         this.stmtUpsertAggregate.run({
           aggregateType: 'tool_error',
           key: `${r.tool_name}:${r.error_type}`,
@@ -379,7 +411,7 @@ export class TraceStore {
     });
 
     tx();
-    log.info('Aggregates refreshed');
+    log.info({ window: windowMod ?? 'all' }, 'Aggregates refreshed');
   }
 
   // -- Error analysis --------------------------------------------------------
