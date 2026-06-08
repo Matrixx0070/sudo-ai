@@ -6,6 +6,14 @@
  *
  * Heavy async logic lives in predictor-logic.ts to stay within the 300-line
  * file boundary. Schema, types, and DDL live in predictor-schema.ts.
+ *
+ * SCOPE: these forecasts are content-creator / cost-ops specific (YouTube upload
+ * windows, viral topics, API spend). The engine is always available on demand via
+ * the meta.predictor tool. It can ALSO be surfaced proactively in the agent loop
+ * as an advisory "# HEADS UP" on the first turn of a session, but ONLY via the
+ * opt-in, default-OFF SUDO_PREDICTOR_LOOP flag (see AgentLoop.run). Do not wire it
+ * into the general loop unconditionally — these forecasts are noise for owners who
+ * are not content creators.
  */
 
 import Database from 'better-sqlite3';
