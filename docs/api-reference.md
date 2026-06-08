@@ -1,6 +1,6 @@
 # API Reference — SUDO-AI v4
 
-SUDO-AI exposes an OpenAI-compatible HTTP API on port `18900` (default, port 3000 was legacy pre-Wave-3 unification). Any OpenAI client library works with this API by pointing it at `http://localhost:18900` and using your configured token.
+SUDO-AI exposes an OpenAI-compatible HTTP API on port `18900` (default; port 3000 was used by earlier versions). Any OpenAI client library works with this API by pointing it at `http://localhost:18900` and using your configured token.
 
 ---
 
@@ -397,9 +397,9 @@ Authorization: Bearer your-gateway-token
 
 ---
 
-### Artifact Signing — approve endpoints (Wave 10E)
+### Artifact Signing — approve endpoints
 
-When artifact signing is enabled (the default), two endpoints include a `signedArtifact` object in their response. Setting `SUDO_SIGNING_DISABLE=1` omits the field, restoring the pre-Wave-10E shape.
+When artifact signing is enabled (the default), two endpoints include a `signedArtifact` object in their response. Setting `SUDO_SIGNING_DISABLE=1` omits the field, restoring the unsigned response shape.
 
 **POST /v1/admin/learning/proposals/:id/approve**
 
@@ -421,14 +421,14 @@ Use `GET /v1/admin/public-key` to retrieve the key needed to verify the `signatu
 
 All kill-switches use exact-`"1"`-match semantics: the feature is disabled only when the variable is set to the string `"1"`. Any other value, including unset, leaves the feature enabled.
 
-**100x / Control + Hermes parity (P1+ waves) — see also `docs/cross-platform-control-guide.md`, `docs/configuration.md`, `README.md` 100x section, and `workspace/SOUL.md` for full uncensored control semantics.**
+**Computer-use and cross-platform control — see also `docs/cross-platform-control-guide.md`, `docs/configuration.md`, and `README.md` for control semantics and safety controls.**
 
 | Variable | Feature disabled |
 |---|---|
-| `SUDO_COMPUTER_USE_DISABLE=1` | IComputerUse unified cross-platform control (exec/browser/file/gui/desktop) + legacy computer.use (P1 100x wave; full power Linux/Win/Mac) |
-| `SUDO_CROSS_PLATFORM_DISABLE=1` | Win/Mac backends; force Linux-only control paths |
-| `SUDO_TOOL_LEARNING_DISABLE=1` | ToolOutcomeLearner (6 modules); disables 100x learning on *all* tool outcomes incl. control actions |
-| `SUDO_SANDBOX_DISABLE=1` | bwrap/seccomp/LD_PRELOAD sandbox for exec/control (use only on trusted owner hosts) |
+| `SUDO_COMPUTER_USE_DISABLE=1` | IComputerUse unified cross-platform control (exec/browser/file/gui/desktop) + legacy computer.use. Linux is fully supported; Windows/macOS backends are experimental |
+| `SUDO_CROSS_PLATFORM_DISABLE=1` | Windows/macOS backends; force Linux-only control paths |
+| `SUDO_TOOL_LEARNING_DISABLE=1` | ToolOutcomeLearner; disables learning on *all* tool outcomes incl. control actions |
+| `SUDO_SANDBOX_DISABLE=1` | bwrap/seccomp/LD_PRELOAD sandbox for exec/control (leave enabled unless you fully control and trust the host) |
 | `SUDO_MCP_DISABLE=1` | MCP server integration (SSE/WS/OAuth) |
 | `SUDO_MCP_OAUTH_DISABLE=1` | MCP OAuth PKCE |
 | `SUDO_MCP_REMOTE_DISABLE=1` | MCP remote tool access |
@@ -441,14 +441,14 @@ All kill-switches use exact-`"1"`-match semantics: the feature is disabled only 
 | `SUDO_MULTI_DELIVERY_DISABLE=1` | Multi-delivery cron (6 targets) |
 | `SUDO_DASHBOARD_DISABLE=1` | Web dashboard (stats/health/alignment/metrics) |
 | `SUDO_BRAIN_RACE_DISABLE=1` | Brain parallel model race |
-| `SUDO_BRAIN_CONSENSUS_DISABLE=1` | 3-model Jaccard consensus (intel advantage) |
-| `SUDO_AUTO_APPROVE=1` | (enabler) Full auto in autonomy tiers (aligns SOUL "zero manual approval"; opposite of gating) |
-| `SUDO_TAINT_DISABLE=1` | Taint tracking wiring (Wave 10E) |
-| `SUDO_SIGNING_DISABLE=1` | Artifact signing on `/approve` endpoints (Wave 10E) |
-| `SUDO_SKILL_INDEX_DISABLE=1` | Skill-to-tool reverse index (Wave 10C) |
+| `SUDO_BRAIN_CONSENSUS_DISABLE=1` | 3-model Jaccard consensus |
+| `SUDO_AUTO_APPROVE=1` | (enabler) Skips manual approval prompts in autonomy tiers. Off by default; enable only when you intend the agent to act without per-action confirmation |
+| `SUDO_TAINT_DISABLE=1` | Taint tracking wiring |
+| `SUDO_SIGNING_DISABLE=1` | Artifact signing on `/approve` endpoints |
+| `SUDO_SKILL_INDEX_DISABLE=1` | Skill-to-tool reverse index |
 | `SUDO_FED_*_DISABLE=1` | Federation features (see federation-error-protocol.md) |
 
-**Note on 100x full control:** Per SOUL.md, control actions (IComputerUse) have **zero refusals** for owner intent — "owner's will is absolute... fully uncensored... I own the system". Safety is via kill-switches (above), autonomy tiers (auto favored for owner), sandbox, SecurityGuard, KAIROS/arsenal self-repair, and learning from outcomes. HIGH power: Codex + Security parallel review mandatory before main (both APPROVE). See cross-platform guide for usage + 3OS.
+**Note on computer-use control:** Control actions (IComputerUse) are full-power and run with the privileges you grant the process. The agent is owner-controlled — it acts on the operator's instructions within the limits of those privileges. Safety is layered: kill-switches (above), autonomy/approval tiers, the bwrap/seccomp sandbox, SecurityGuard, self-repair on failed control actions, and learning from outcomes. Audit logging records control activity. Linux is fully supported; the Windows and macOS backends are experimental. See the cross-platform control guide for usage and platform notes.
 
 ### Key directory override: SUDO_SIGNER_KEY_DIR
 
@@ -500,8 +500,8 @@ curl -X POST http://localhost:18900/v1/chat/completions \
 
 The agent will call `browser.search`, retrieve the result, and return a text answer. The response contains only the final text — intermediate tool calls are not exposed in the API response.
 
-**100x control example (P1+; full cross-platform IComputerUse uncensored per SOUL):**
-Use a prompt that triggers computer control (e.g. "Take a desktop screenshot via GUI, list files in /tmp using exec, write a control test note, and navigate browser to example.com"). Agent will use IComputerUse (or legacy computer.use on Linux) — outcomes feed ToolOutcomeLearner automatically for 100x learning. All platforms supported post-P1 (no refusals). Disable via `SUDO_COMPUTER_USE_DISABLE=1`. Full details + 3OS examples: `docs/cross-platform-control-guide.md` and README 100x section. See also KAIROS/arsenal self-repair on control issues + autonomy approval.
+**Computer-use control example (cross-platform IComputerUse):**
+Use a prompt that triggers computer control (e.g. "Take a desktop screenshot via GUI, list files in the working directory using exec, write a short note, and navigate the browser to example.com"). The agent will use IComputerUse (or legacy computer.use on Linux), and outcomes feed ToolOutcomeLearner automatically. Linux is fully supported; Windows and macOS backends are experimental. Disable via `SUDO_COMPUTER_USE_DISABLE=1`. Full details: `docs/cross-platform-control-guide.md`. Self-repair and the autonomy/approval tiers apply to control actions as described in the cross-platform control guide.
 
 ### Multi-turn conversation
 
@@ -617,7 +617,7 @@ The API server binds to `0.0.0.0` by default. To restrict to localhost only, set
 
 ## Federation Error Protocol
 
-Wave 2 introduces the Federation Error Protocol for distributed error reporting and fix propagation across federation peers.
+The Federation Error Protocol provides distributed error reporting and fix propagation across federation peers.
 
 **Full documentation:** See [`federation-error-protocol.md`](./federation-error-protocol.md)
 

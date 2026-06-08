@@ -42,9 +42,9 @@ export const Banner: React.FC<BannerProps> = ({
       ) : (
         <Text dimColor>No previous session.</Text>
       )}
-      <Text color="#7acc7a">100x: IComputerUse full cross (Linux native + Win/Mac) + ToolOutcomeLearner on every control. Natural: "use your IComputerUse to screenshot..." or /100x</Text>
+      <Text color="#7acc7a">Full-power local automation: file, shell, browser, and system tools (Linux). Try: "list the files in /tmp and summarize them".</Text>
       <Text> </Text>
-      <Text dimColor>Type a message to begin. /help for commands. (100x P1 refined)</Text>
+      <Text dimColor>Type a message to begin. /help for commands.</Text>
       <Text dimColor>(press any key to dismiss)</Text>
     </Box>
   );

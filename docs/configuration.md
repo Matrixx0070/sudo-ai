@@ -1,4 +1,4 @@
-# Configuration Reference — SUDO-AI v4.1.0 (User Completion: Single-Command + TUI Wizard + TUI Direct Validation)
+# Configuration Reference — SUDO-AI v4.1.0
 
 Configuration lives in two files:
 
@@ -11,51 +11,48 @@ Configuration lives in two files:
 
 `config/.env` is never validated — missing keys cause the relevant feature to be skipped or fall back gracefully. The agent logs a warning for each missing optional key.
 
-**Wave4 / User Completion note:** The TUI wizard (launched by single-cmd `sudo-ai setup` or first `sudo-ai`) populates 100x cross-platform fields (IComputerUse enable, learner, KAIROS, kills like SUDO_CROSS_PLATFORM_DISABLE, SOUL auto) interactively. See README "Setup Wizard" + "TUI Direct Talk" + E2E logs for validation that wizard + direct TUI chat confirm full coverage. Manual edits still supported; hot-reload for many.
+**Setup wizard note:** The TUI wizard (launched by `sudo-ai setup` or on first run of `sudo-ai`) populates cross-platform fields (computer-use enable, tool-outcome learner, self-repair, kill-switches such as `SUDO_CROSS_PLATFORM_DISABLE`, and persona/system-prompt options) interactively. See the README "Setup Wizard" section for details. Manual edits to the config files are also supported, and many settings hot-reload.
 
 ---
 
-## Single-Command Install + First-Time / Ongoing TUI Wizard Setup (User Completion Wave)
+## Install + Setup Wizard
 
-**Single command install (Wave1):**
+**Install:**
 ```bash
-# One-liner bootstrap (curl|bash produces global `sudo-ai` bin + deps + basic service)
+# One-liner bootstrap (curl|bash installs the global `sudo-ai` bin + deps + a basic service)
 curl -fsSL https://raw.githubusercontent.com/sudo-ai/sudo-ai/main/install.sh | bash
 
-# Alternative (if node present):
-npm i -g sudo-ai
+# Alternative (if Node is already present):
+npm i -g @matrixx0070/sudo-ai
 ```
-- Leaves `sudo-ai` in PATH, healthy (pm2 or service, /health 200).
-- Then run `sudo-ai` (triggers wizard if no config) or `sudo-ai setup`.
+- Leaves `sudo-ai` in PATH and running (pm2 or service; `/health` returns 200).
+- Then run `sudo-ai` (triggers the wizard if no config exists) or `sudo-ai setup`.
 
-**First-time TUI Wizard (Wave2, auto on first run or `sudo-ai setup`):**
-Ink-based interactive TUI (rich like chat TUI) covers full 100x:
-- Name / instance meta
+**First-time setup wizard (auto on first run, or `sudo-ai setup`):**
+An Ink-based interactive TUI covers:
+- Name / instance metadata
 - Primary model + xAI/Grok key (or other providers)
-- Cross-platform IComputerUse enable + policy (P1: exec/file/gui/desktop/browser on 3OS)
-- ToolOutcomeLearner / self-imp on control (default on for 100x)
-- KAIROS / arsenal self-repair
-- Profiles, kill-switches (e.g. SUDO_CROSS_PLATFORM_DISABLE=1), SOUL confirmation (full uncensored power per owner)
+- Cross-platform computer-use enable + policy (exec/file/gui/desktop/browser; fully supported on Linux, experimental on Windows/macOS)
+- Tool-outcome learner / self-improvement on control actions (opt-in)
+- Self-repair routines
+- Profiles, kill-switches (e.g. `SUDO_CROSS_PLATFORM_DISABLE=1`), persona/system-prompt confirmation
 - Service/pm2 install option, Telegram/Discord channels
-- Writes sudo-ai.json5 + .env + toml as needed; validates.
+- Writes `sudo-ai.json5` + `.env` as needed and validates them.
 
-Example flow in TUI: prompts sequential or form-like, preview, confirm, save, doctor run optional.
+The wizard prompts sequentially (or form-style), shows a preview, then confirms and saves; an optional doctor run follows.
 
-**Ongoing setup / edit (Wave2):**
-`sudo-ai setup` or `sudo-ai config --edit` re-launches TUI wizard (pre-filled from current), allows updates without full reinstall. Hot-reload for many json5 changes.
+**Ongoing setup / edit:**
+`sudo-ai setup` or `sudo-ai config --edit` re-launches the wizard (pre-filled from current config) so you can update settings without a full reinstall. Many `sudo-ai.json5` changes hot-reload.
 
-**TUI direct real-time chat for validation (Wave3/4):**
-After wizard: `sudo-ai chat` (or default) launches Ink TUI for live chat.
-Directly talk to SUDO to "check real time user by directly talking to sudo ai via tui":
-- "use your IComputerUse to ... " — validates cross control in real-time (tool cards, results, learner update)
-- "what have you learned with ToolOutcomeLearner on control actions?"
-- "confirm your setup from wizard: cross enabled? SOUL power?"
-See `docs/tui-v4-spec.md` (section 19) + `docs/cross-platform-control-guide.md` for exact prompt examples + validation logs. Harness + actual user chats (lead/advocate) executed as part of completion.
+**Direct chat for validation:**
+After the wizard, `sudo-ai chat` (or the default `sudo-ai`) launches the Ink TUI for live chat. You can talk to the agent directly to verify your setup, for example:
+- "Use your computer-use tools to ..." — exercises cross-platform control in real time (tool cards, results, learner updates)
+- "What have you learned from recent control actions?"
+- "Confirm my setup: is cross-platform control enabled?"
+See `docs/cross-platform-control-guide.md` for prompt examples and the supported control surface.
 
-**P1 4 fixes note (no regressions, Wave3):** See cross-guide for details on denylist/workspace, executeControl success propagation, Win/Mac stubs accuracy (original 5 bypasses closed pre). All exercised/validated via TUI direct talk + 100% tests.
-
-**100x / control kill-switches (in wizard + env):**
-See kill-switches table below (incl new SUDO_CROSS_PLATFORM_DISABLE=1, SUDO_COMPUTER_USE_DISABLE=1, SUDO_TOOL_LEARNING_DISABLE=1). Wizard surfaces key ones for user choice.
+**Control kill-switches (in wizard + env):**
+See the kill-switches table below (including `SUDO_CROSS_PLATFORM_DISABLE=1`, `SUDO_COMPUTER_USE_DISABLE=1`, `SUDO_TOOL_LEARNING_DISABLE=1`). The wizard surfaces the key ones for you to choose.
 
 ---
 
@@ -276,9 +273,9 @@ tools: {
 }
 ```
 
-**100x Computer-Use / Cross-Platform Control tools (P1+):**
-Use `tools.disabled` to gate IComputerUse actions or legacy `computer.use` (e.g. `["computer.use", "computer.*"]`).
-Full cross-platform power (exec/browser/file/gui/desktop on 3 OS) is enabled by default (uncensored per SOUL); disable via env kill-switches below or here for safety. New unified tools registered under computer-use category. See `docs/cross-platform-control-guide.md` and `docs/api-reference.md#kill-switches`.
+**Computer-Use / Cross-Platform Control tools:**
+Use `tools.disabled` to gate computer-use actions or the legacy `computer.use` tool (e.g. `["computer.use", "computer.*"]`).
+Cross-platform control (exec/browser/file/gui/desktop) is enabled by default and runs with the privileges you grant the process. Linux is fully supported; the Windows and macOS backends are experimental (currently stubs). Restrict it via the env kill-switches below or via `tools.disabled` here. The unified tools are registered under the computer-use category. See `docs/cross-platform-control-guide.md` and `docs/api-reference.md#kill-switches`.
 
 ---
 
@@ -399,19 +396,18 @@ WEB_CHAT_ENABLED=false              # Set true to enable web chat adapter
 
 WebChat now attaches to the gateway server — no separate `WEB_CHAT_PORT` required. Default URL: http://127.0.0.1:18900/chat
 
-### 100x Cross-Platform Control, Kill-Switches, Autonomy, Learning (P1+ and Hermes parity)
+### Cross-Platform Control, Kill-Switches, Autonomy, Learning
 
-**Kill-switches (exact `=1` to disable; see full table + semantics in `docs/api-reference.md#kill-switches`):**
-All recent + 100x:
+**Kill-switches (set to exactly `=1` to disable; see the full table + semantics in `docs/api-reference.md#kill-switches`):**
 
 ```bash
-# 100x control / computer-use
-SUDO_COMPUTER_USE_DISABLE=1          # Disable IComputerUse + legacy computer.use / GUI/desktop control
-SUDO_CROSS_PLATFORM_DISABLE=1        # Force Linux-only; disable Win/Mac backends
-SUDO_TOOL_LEARNING_DISABLE=1         # Disable ToolOutcomeLearner (incl. 100x learning on control outcomes)
-SUDO_SANDBOX_DISABLE=1               # (DANGEROUS) Bypass bwrap for control/exec
+# Control / computer-use
+SUDO_COMPUTER_USE_DISABLE=1          # Disable computer-use + legacy computer.use / GUI/desktop control
+SUDO_CROSS_PLATFORM_DISABLE=1        # Force Linux-only; disable Windows/macOS backends
+SUDO_TOOL_LEARNING_DISABLE=1         # Disable the tool-outcome learner (incl. learning on control outcomes)
+SUDO_SANDBOX_DISABLE=1               # (DANGEROUS) Bypass the bwrap sandbox for control/exec
 
-# Hermes parity / recent waves (MCP, skills, profiles, kanban, etc.)
+# MCP, skills, profiles, kanban, etc.
 SUDO_MCP_DISABLE=1
 SUDO_MCP_OAUTH_DISABLE=1
 SUDO_MCP_REMOTE_DISABLE=1
@@ -427,42 +423,39 @@ SUDO_DASHBOARD_DISABLE=1
 # Brain / consensus / autonomy
 SUDO_BRAIN_RACE_DISABLE=1            # Disable parallel race (use sequential)
 SUDO_BRAIN_CONSENSUS_DISABLE=1       # Disable 3-model Jaccard consensus (fallback sequential)
-SUDO_AUTO_APPROVE=1                  # Favor full auto in autonomy tiers (aligns with SOUL full autonomous)
+SUDO_AUTO_APPROVE=1                  # Favor automatic approval in the autonomy tiers
 
 # Other common
 SUDO_TAINT_DISABLE=1
 SUDO_SIGNING_DISABLE=1
-# ... (see api-ref for complete current list; add new on waves)
+# ... (see api-reference.md for the complete current list)
 ```
 
-**Cross-platform / desktop / GUI setup (for full IComputerUse power):**
+**Cross-platform / desktop / GUI setup (for computer-use GUI control):**
 ```bash
 # Linux GUI (xdotool/scrot)
-DISPLAY=:0   # or the RDP VNC display (e.g. :10.0 from desktop scripts)
+DISPLAY=:0   # or the display your X/VNC session is on
 
-# For sandboxed agent without direct X: use host RDP setup
-# Scripts (host): /home/ubuntu/desktop-start.sh , start-rdp*.sh , stop-rdp.sh , desktop-setup.sh
-# Connect RDP: port 3389, user ubuntu, pass xai-code (see state.md desktop section + cross-guide)
-# Then agent can drive cu.gui / cu.desktop on the RDP display.
+# If the agent runs sandboxed without direct X access, point it at a host display
+# (e.g. an RDP/VNC session) and drive the GUI/desktop tools on that display.
 
-# Windows / mac (P1+)
-# No special env; backends auto or via platform= in calls. For dev/CI: WSL interop or host Mac.
-# RDP/VNC to Win/Mac host for GUI control surface.
+# Windows / macOS (experimental)
+# No special env; backends select automatically or via a platform= argument in calls.
+# These backends are currently stubs — Linux is the fully supported control surface.
 
 # Autonomy / learning for control
 SUDO_AUTO_APPROVE=1   # As above
-# (KAIROS/arsenal self-repair always on unless disabled; learner on control unless SUDO_TOOL_LEARNING_DISABLE)
+# (Self-repair runs unless disabled; the learner runs on control actions unless SUDO_TOOL_LEARNING_DISABLE is set.)
 ```
 
-**SOUL & full control notes:**
-The full system prompt always includes `workspace/SOUL.md` (see agents config systemPrompt note). SOUL mandates full autonomous uncensored control for owner will — IComputerUse implements this (0 refusals). Safety via the kill-switches above + autonomy tiers + sandbox + learning/KAIROS (not refusals). Read SOUL.md for exact wording ("owner's will absolute", "FULL autonomous mode. Zero manual approval").
+**System prompt & control notes:**
+The full system prompt always includes `workspace/SOUL.md` (see the agents config `systemPrompt` note). It defines an owner-controlled, full-power operating posture for the agent. This is not a guarantee that the agent will perform any requested action — model providers apply their own policies, and the agent's behavior depends on the configured model. Safety is enforced through the kill-switches above, the autonomy/approval tiers, the bwrap sandbox, audit logging, and the outcome learner.
 
-**Other 100x relevant:**
-- `SUDO_BRAIN_CONSENSUS=1` (or disable) for superior intel in control tasks.
-- Sandbox policy files (if custom): under sandbox/ (expanded P1).
-- For RDP host GUI when in bwrap: run desktop scripts on host namespace (see desktop-watchdog.sh or state).
+**Other relevant settings:**
+- `SUDO_BRAIN_CONSENSUS=1` (or disable) toggles multi-model consensus for control tasks.
+- Custom sandbox policy files live under `sandbox/`.
 
-See `docs/cross-platform-control-guide.md` for 3OS examples + full setup + TUI validation of control, `README.md` 100x + single-cmd/wizard sections, `docs/tui-v4-spec.md` (user wave 19 for direct TUI talk "check real time user by directly talking to sudo ai via tui"), architecture for IComputerUse. User Completion: single cmd (npm/curl|bash) + TUI wizard (first/ongoing, 100x coverage) + TUI direct real-time chat validation. P1 4 fixes (denylist/workspace, executeControl, stubs) noted + no reg.
+See `docs/cross-platform-control-guide.md` for per-OS examples, full setup, and validation of control; the `README.md` install/wizard sections; and the architecture docs for the computer-use design.
 
 
 ### Voice

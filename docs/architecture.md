@@ -47,10 +47,10 @@ Step 8   KnowledgeGraph + Zettelkasten
          Wires to RAGEngine
 
 Step 9   ToolRegistry
-         Auto-discovers tools in src/core/tools/builtin/ (incl. legacy computer.use + new 100x IComputerUse cross-platform/*)
+         Auto-discovers tools in src/core/tools/builtin/ (incl. legacy computer.use + the unified IComputerUse cross-platform/* backends)
          Registers superpowers from src/core/superpowers/
          Disables tools listed in config.tools.disabled
-         (P1+): IComputerUse factory + platform backends registered for unified control (Linux/Win/Mac)
+         IComputerUse factory + platform backends registered for unified control (Linux supported; Windows/macOS experimental)
 
 Step 10  MultiAgentOrchestrator
          Registers system.spawn-agent tool
@@ -64,7 +64,7 @@ Step 12  AgentLoop
          Enforces maxIterations cap (default: 32)
 
 Step 13  ConsciousnessOrchestrator
-         Boots 20 consciousness modules
+         Boots a consciousness layer of continuous background modules (several opt-in)
          Attaches SleepCycle (memory consolidation)
          Attaches SelfEvolution (capability growth)
          Rebuilds AgentLoop with consciousness context
@@ -160,7 +160,7 @@ SessionManager.getOrCreate(channel, peerId)
     |
     v
 ConsciousnessOrchestrator.getConsciousnessContext()
-    |-- Reads 20 module states from consciousness.db
+    |-- Reads consciousness module states from consciousness.db
     +-- Returns context string injected into system prompt
     |
     v
@@ -339,64 +339,52 @@ hooks.on('tool:execute', (ctx) => { /* ... */ });
 
 ---
 
-## Cross-Platform Control Layer — 100x IComputerUse (P1+ Foundational)
+## Cross-Platform Control Layer — IComputerUse
 
-**Overview:** New unified abstraction (P1 wave) for full system control: exec, browser automation, file ops, GUI interactions, desktop/app management across Linux, Windows, macOS. Makes SUDO-AI 100x superior to OpenClaw (Linux/browser-centric) and Hermes (no equivalent full cross control) in power + reliability while preserving Hermes parity elsewhere.
+**Overview:** A unified abstraction for full-power system control: exec, browser automation, file ops, GUI interactions, and desktop/app management. Linux is fully supported; Windows and macOS backends are experimental (currently stubs). The layer runs with the privileges you grant it, and is owner-controlled through approval tiers, sandboxing, kill-switches, and audit logging.
 
-**Contract (target):**
-See `docs/cross-platform-control-guide.md` for full IComputerUse interface, ExecResult etc, factory, and 3OS examples.
+**Contract:**
+See `docs/cross-platform-control-guide.md` for the full IComputerUse interface, `ExecResult`, the factory, and per-platform examples.
 
-**Location & Boundaries:** Implemented in `src/core/tools/builtin/computer-use/cross-platform/*` (index + linux.ts + win.ts + mac.ts + types) exclusively owned by P1 builder. Expands `sandbox/*` (cross policies) and `autonomy/*` (control action wiring). Current legacy: `browser/computer-use.ts` (Linux ScreenAction + xdotool/scrot) + `computer-use-tool.ts` (registers `computer.use` tool; window guard for MEMORY.md isolation). Legacy remains for compat during transition.
+**Location & Boundaries:** Implemented in `src/core/tools/builtin/computer-use/cross-platform/*` (`index` + `linux.ts` + `win.ts` + `mac.ts` + `types`). Works with `sandbox/*` (cross-platform policies) and `autonomy/*` (control action wiring). Legacy code: `browser/computer-use.ts` (Linux ScreenAction via xdotool/scrot) and `computer-use-tool.ts` (registers the `computer.use` tool). The legacy path remains for compatibility during the transition.
 
 **Boot / Registration:**
-- ToolRegistry (Step 9 in boot) auto-discovers `computer-use` tools (legacy + new unified via cross-platform index exports).
-- IComputerUse factory instantiated in autonomy/executor or tool wrappers; platform detected at runtime or forced.
-- Control actions flow through SecurityGuard (pre-exec) + sandbox (bwrap for Linux exec/control; platform equivs) + autonomy approval (ApprovalMatrix + AutonomousExecutor).
+- ToolRegistry (Step 9 in boot) auto-discovers `computer-use` tools (legacy plus the unified backends via cross-platform index exports).
+- The IComputerUse factory is instantiated in `autonomy/executor` or tool wrappers; the platform is detected at runtime or forced via config.
+- Control actions flow through SecurityGuard (pre-exec validation), the sandbox (bwrap on Linux for exec/control; platform equivalents elsewhere), and autonomy approval (ApprovalMatrix + AutonomousExecutor).
 
 **Data Flow for Control Actions (extension of AgentLoop):**
-User intent (via chat or autonomy goal) → Brain (SOUL.md + context) → tool call to computer.* or internal IComputerUse → Security validate → Autonomy check (tier: auto for owner per SOUL) → Execute via platform backend (linux: xdotool/scrot/bwrap/exec + Playwright paths; win: powershell/node; mac: osascript) → Result (with platform, duration, screenshot if GUI) → ToolOutcomeLearner.learn(...) (tags: ['control', platform]) → Append to messages / KAIROS observe → Loop or response.
+User intent (via chat or an autonomy goal) → Brain (system prompt + context) → tool call to `computer.*` or internal IComputerUse → SecurityGuard validate → autonomy approval check (tier-based) → execute via platform backend (Linux: xdotool/scrot/bwrap/exec plus Playwright paths; Windows: PowerShell/node; macOS: osascript) → result (with platform, duration, screenshot if GUI) → ToolOutcomeLearner.learn(...) (tags: `['control', platform]`) → append to messages → loop or response.
 
-**Key Integrations (for 100x learning + self-repair + autonomy):**
-- **ToolOutcomeLearner:** Every control outcome (success/fail + details) recorded → drives 6 self-imp modules (100x rate on control surface vs baselines). See self-improvement/ + agent/tool-outcome-learner.ts.
-- **KAIROS + Arsenal:** KAIROS actOnObservation on 'control_degraded' / large control artifacts → calls triggerKAIROSRepair (arsenal) + autoCreateKanban. Arsenal does recon/baseline/edit/verify on control code (small steps + tsc per lessons from P3). Makes control layer self-healing.
-- **Autonomy:** Tiers applied to IComputerUse calls (high-power GUI/exec may confirm; SOUL favors zero manual for owner). Pending in kanban; events to dashboard.
-- **Sandbox:** Linux bwrap/seccomp/LD_PRELOAD for exec/control (policy expanded in P1 for new actions). Cross: platform sandboxes or host-side for GUI (RDP notes in guide).
-- **Consciousness:** Control episodes/thoughts feed episodic memory, drives, self-model.
-- **Alignment/Veto:** High-risk control can hit veto gate (epistemic + signals).
-- **xai-code-v6 (future P5):** Portable Rust ReAct/plan/swarm for control shims or hybrid agents.
-
-**Module Additions (P1):**
-- New cross-platform computer-use dir under tools/builtin.
-- Sandbox policy/runner updates for cross.
-- Autonomy executor + approval updates for control action types.
-- Test harness (P1 exclusive tests): platform mocks, 100x metrics (coverage, success, learner calls, KAIROS trigger).
+**Key Integrations:**
+- **ToolOutcomeLearner:** Every control outcome (success/fail plus details) is recorded and feeds the self-improvement modules. See `self-improvement/` and `agent/tool-outcome-learner.ts`.
+- **Self-repair:** On a `control_degraded` observation or large control artifacts, the self-repair path runs recon/baseline/edit/verify on control code in small steps (with `tsc` checks between steps), making the control layer self-healing.
+- **Autonomy:** Approval tiers are applied to IComputerUse calls; high-power GUI/exec actions may require confirmation depending on the configured tier. Events surface to the dashboard.
+- **Sandbox:** Linux uses bwrap/seccomp/LD_PRELOAD for exec/control (policy covers the control actions). Cross-platform uses platform sandboxes or host-side execution for GUI.
+- **Consciousness:** Control episodes and thoughts feed episodic memory, drives, and the self-model.
+- **Alignment/Veto:** High-risk control actions can hit the veto gate (epistemic checks plus signals).
 
 **Kill-Switches (control specific):**
-`SUDO_COMPUTER_USE_DISABLE=1`, `SUDO_CROSS_PLATFORM_DISABLE=1` (see api-ref + config for full + semantics). Also `SUDO_TOOL_LEARNING_DISABLE=1` to pause 100x learning on control, `SUDO_SANDBOX_DISABLE=1` (use with extreme care).
+`SUDO_COMPUTER_USE_DISABLE=1`, `SUDO_CROSS_PLATFORM_DISABLE=1` (see the API reference and config for full semantics). Also `SUDO_TOOL_LEARNING_DISABLE=1` to pause outcome learning on control, and `SUDO_SANDBOX_DISABLE=1` (use with extreme care).
 
-**SOUL Compliance:**
-Full control implements "I own the system" — no refusals for owner commands (0 in tests). Safety is external (kills, tiers, sandbox, learning from outcomes, KAIROS self-repair) not refusal. Agent reads SOUL.md on boot/wake.
+**Safety Model:**
+The control layer is full-power and owner-controlled. Safety is enforced through external controls — kill-switches, approval tiers, the sandbox, audit logging, and learning from outcomes — rather than relying on the model to refuse. Operators should grant only the privileges they intend and keep the sandbox enabled.
 
-**100x Metrics & ACs (P1+):**
-- Unified API works on Linux (100% legacy + new) + Win/Mac (backends or mocks).
-- 100% control tests + harness pass.
-- learner.learn invoked on 100% of control outcomes.
-- KAIROS/arsenal hook for control issues; autonomy respected.
-- tsc clean, no new degraded, git clean (P1 files only).
-- Superior UX/power (desktop/GUI full, cross exec, uncensored).
-- Vs baselines: higher success/coverage on 3OS; faster learning rate post control surface.
+**Acceptance Criteria:**
+- Unified API works on Linux; Windows/macOS via backends or mocks (experimental).
+- Control tests and the test harness pass.
+- `learner.learn` is invoked on every control outcome.
+- Self-repair hook fires on control issues; autonomy tiers are respected.
+- `tsc` clean, no new degraded modules.
 
-**Risks/Mitigations:** Platform diffs (small tsc-verify per step); high power (Codex:adversarial-review + Security Engineer parallel mandatory both APPROVE pre any main); breakage (arsenal primary + small edits per lessons).
+**Risks/Mitigations:** Platform differences (small `tsc`-verified steps); high-power actions (adversarial + security review before merge); breakage (small edits with verification between steps).
 
 See:
-- `docs/cross-platform-control-guide.md` (user 3OS examples, setup, RDP, SOUL notes, integrations).
-- README.md (100x positioning + examples).
-- `/tmp/sudoai-100x-superiority-arch-spec.md` (IComputerUse contract, ACs, waves, boundaries).
-- `workspace/SOUL.md` (uncensored full control).
-- team-memory (state, decisions 100x append, hermes-feature-parity-shipped, lessons "arsenal primary").
-- P1 in progress (concurrent Doc updates).
+- `docs/cross-platform-control-guide.md` (per-platform examples, setup, integrations).
+- README.md (positioning and examples).
+- `workspace/SOUL.md` (full-power control persona and safety model).
 
-This layer + learner/KAIROS closed loop on control actions is the core of "100x better full system control".
+This layer plus the outcome-learner/self-repair loop on control actions is the core of SUDO-AI's full-system control.
 
 ---
 

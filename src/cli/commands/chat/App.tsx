@@ -519,9 +519,9 @@ export const App: React.FC = () => {
       case '/100x':
       case '/demo-100x':
       case '/control': {
-        // P1 100x integration: /100x slash injects natural language prompt for IComputerUse cross-platform control demo in TUI chat (real-time streaming + tool cards + learner outcome).
-        const demoPrompt = 'use your IComputerUse to screenshot the desktop and describe the current real time user activity, open windows, processes';
-        addSystemMsg(`🚀 100x IComputerUse demo (P1 cross-platform Linux native + ToolOutcomeLearner on every control + SOUL uncensored): pre-filled natural prompt below. Press Enter to execute as real user (results visible in TUI, feeds self-imp).`);
+        // /control injects a natural-language prompt that exercises the system-control tools (results stream as tool cards).
+        const demoPrompt = 'use your system-control tools to screenshot the desktop and describe the current activity, open windows, and processes';
+        addSystemMsg(`🖥️ System-control demo: a prompt is pre-filled below. Press Enter to run it (results appear as tool cards).`);
         setInputValue(demoPrompt);
         break;
       }

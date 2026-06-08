@@ -1,7 +1,7 @@
 # SUDO-AI TUI v4 — Architect Spec
 
 **Status:** LOCKED — no feature additions, no removals. (Historical base for initial Ink TUI v4.)  
-**Note (2026-06-03):** Professional upgrade to **P1 Sovereign Deck** (alt SOUL Control Observatory / 100x Owner Interface) — original SUDO-native "much better" than current (no walls, rich P1 viz w/ screenshot previews + "feeds learner ✓" + "P1 Sovereign auto per SOUL", live 100x self-evo cockpit, parsed long owner directives/self-build as trackable steps + progress, powerful sovereign theming, desktop :10 integration for real-time user checks + self-obs, modes ^P/^E, new /p1 /evolve /cockpit etc). See README.md "P1 Sovereign Deck TUI (Professional Upgrade)" section (features, desktop :10 run, before/after from PNGs/state "REAL TIME USER CHECK...", "much better for owner direct talk + P1 desktop + self-evo"), /tmp/sudo-tui-pro-arch-spec.md (authoritative high-level design summary + philosophy + layout + contracts + ACs + boundaries + pipeline; no code), /tmp/sudo-tui-pro-scout-briefing.md (PNG descs of walls vs Grok structured + opportunities). This doc remains the locked historical v4 base spec (minimal note only; no changes to v4 details). Boundaries respected. Full CLAUDE pipeline (builders + Doc concurrent, sec+Codex parallel, advocate on :10 RDP w/ P1 + long directive + "much better" vs current/Grok, etc.). Positioning: 100x + SOUL + professional owner cockpit.
+**Note (2026-06-03):** This document remains the locked historical v4 base spec. A later interactive "control observatory" view (richer visualizations, screenshot previews, learner feedback indicators, directive/progress tracking, an owner-controlled theming pass, and additional `/`-commands) is tracked separately and does not change the v4 details below.
 
 **Builder:** Single senior builder, 60-minute cap.  
 **Stack:** TypeScript/ESM, Ink 7, React 19, `@inkjs/ui`, `ink-text-input`, `ink-spinner`, `marked`, `cli-highlight`, `nanoid`.  
@@ -851,54 +851,57 @@ Each criterion is independently testable via `vitest` unit test or manual termin
 
 ---
 
-## 19. User Completion Wave (Wave3/4) Additions: Real-Time TUI + Direct User Talk Validation for 100x + Setup (2026-06-03)
+## 19. Real-Time Control Validation via the TUI (2026-06-03)
 
-**Context (from /tmp/sudo-complete-arch-spec.md + scout + state.md):** Extend TUI (Ink App/chat) for "complete by check real time user by diractly talking to sudo ai via tui". Polish for seamless real-time 100x demo in chat (natural language triggers IComputerUse cross, shows results/learner in TUI live, self-imp/KAIROS visible). Add harness (in Wave3) for "direct talk as real user" (prompts to validate cross/self-imp/setup/learner/P1 fixes). Actual E2E TUI chats executed by lead/advocate/Wave4 as real user (e.g. "use your IComputerUse...") to complete validation. Covers first/ongoing wizard integration if in TUI flow. No reg on P1 4 fixes (Wave3 small). Update this spec + cross-guide + README + config docs.
+This section extends the Ink chat TUI so a user can exercise the computer-use control tools directly from a conversation and see results in real time. The goal is to validate, through ordinary chat, that the cross-platform control backends work and that their outcomes are visible in the UI.
 
-**TUI Polish for 100x Real-Time (Wave3):**
-- 100x demo in chat: prompts like "screenshot desktop with IComputerUse and describe", "ls /tmp via control", trigger cross-platform backends (linux native post-P1, win/mac shims), live ToolCallCard in TUI shows action + result (post executeControl fix: real success/fail, not silent).
-- Learner/self-imp visible: chat responses or side panels report ToolOutcomeLearner on 'control.*' (100x rate), KAIROS if triggered.
-- Real-time UX: fast Ink updates for control tools (no lag), tool cards for exec/file/gui/desktop/browser.
-- P1 4 fixes integrated/validated in TUI: denylist/workspace (TUI file ops succeed in /tmp), propagate success, accurate stub reports (win/mac control from TUI reports correctly not always success).
-- Wizard tie-in: first-run or `sudo-ai setup` can launch/transition to TUI wizard (Ink) covering 100x (cross enable, IComputerUse policy, SOUL, kills, profiles, auth).
+**TUI behavior for real-time control:**
+- Control from chat: natural-language prompts (e.g. "take a screenshot of the desktop and describe it", "list /tmp via the control tool") trigger the cross-platform control backends. Linux is fully supported; the Windows and macOS backends are experimental stubs. Live `ToolCallCard`s show the action and its real result (success or failure, not silent).
+- Learner feedback visible: chat responses (or side panels) can report what `ToolOutcomeLearner` recorded for `control.*` calls.
+- Responsive UX: Ink updates for control tools render promptly; tool cards cover exec/file/gui/desktop/browser actions.
+- Safety-control behavior validated in the TUI: workspace-scoped file ops succeed within the allowed directory, denied paths fail clearly, exec success/failure propagates accurately, and the experimental Windows/macOS backends report their true status rather than reporting success unconditionally.
+- Wizard tie-in: first-run or `sudo-ai setup` can launch or transition into an Ink wizard covering control enablement, the computer-use policy, approval tiers / kill-switches, profiles, and auth.
 
-**Direct Real-Time User Validation ("check real time user by directly talking to sudo ai via tui") — examples + logs (Wave3 harness + Wave4 E2E):**
-Harness (e.g. tui-real-user-test.mjs or manual `sudo-ai chat` + input injection) + actual chats send user prompts, capture responses, assert features/setup work, log "real time user check by direct TUI talk".
+**Validating control from chat — example prompts:**
+A test harness (e.g. an expect-style script driving `sudo-ai chat`) or manual chat sends prompts, captures responses, and asserts the features behave as specified.
 
-Example 1 — Cross control validation:
+Example 1 — Cross-platform control:
 ```
 [ TUI launch: sudo-ai chat ]
-User (direct): use your cross-platform IComputerUse to execute 'ls -la /tmp' and also write a test file /tmp/tui-validate.txt saying "validated 100x via direct TUI chat".
-SUDO response (real-time in TUI): [ToolCallCard: control.exec / control.file , stdout shown, success true (post-fix), learner note in reply]
-Log: "real time user check: cross exec+file succeeded in TUI chat; outcome to learner; P1 fix validated (no silent, workspace ok)"
-Validation pass: control works from natural chat, visible real-time, no reg.
+User: use the control tool to run 'ls -la /tmp' and write a test file at the allowed
+      workspace path saying "validated via TUI chat".
+SUDO response (in TUI): [ToolCallCard: control.exec / control.file, stdout shown,
+      success reported accurately, learner note in reply]
+Check: control works from chat, visible in real time, file op stays within workspace.
 ```
 
-Example 2 — Self-imp / 100x learning:
+Example 2 — Learner reporting:
 ```
-User (direct): Directly report: what has ToolOutcomeLearner learned from your IComputerUse / control actions recently? Any Brier/trust gains or KAIROS self-repair on control?
-SUDO: [reports specific learnings e.g. "3 control outcomes, trust tier up, 100x rate vs baseline; KAIROS quiet post P1"]
-Log: "real time user check: self-imp visible in TUI direct talk; confirms 100x intel on cross"
-```
-
-Example 3 — Setup / wizard / ongoing / 100x config:
-```
-User (direct): What is your current config from first-time/ongoing wizard? Is IComputerUse cross enabled? Any SUDO_* kill for control? Can you confirm SOUL full power?
-SUDO: [details name/model from wizard, cross enabled (P1), kills listed or off, SOUL "owner absolute, zero refusals for control"]
-Log: "real time user check: TUI direct confirms wizard covered 100x/cross/SOUL/service; ongoing works"
+User: Report what ToolOutcomeLearner recorded from recent control actions.
+      Any trust-tier or Brier-score changes?
+SUDO: [reports specific outcomes, e.g. "3 control outcomes, trust tier changed,
+      success rate vs baseline"]
+Check: learner state is reportable from chat.
 ```
 
-Example 4 — P1 fixes + no reg + uncensored:
+Example 3 — Setup / wizard / config:
 ```
-User: Run a control.gui or desktop action and a sensitive file op; confirm no bypasses, workspace access ok, and win/mac equiv report true status.
-SUDO: [succeeds where gated, fails appropriately, reports accurate; denylist only on sensitive]
-Log: "real time user check: P1 4 fixes (denylist/workspace, exec success prop, win/mac stubs) + original 5 closed; 0 reg; SOUL power (no moral blocks)"
+User: What is your current config from the setup wizard? Is cross-platform control
+      enabled? Which SUDO_* kill-switches are set?
+SUDO: [reports name/model from wizard, whether control is enabled, kill-switches
+      listed or off, and the granted privilege scope]
+Check: wizard-covered config (control, profiles, kill-switches, service) is reportable.
 ```
 
-**ACs for this addition (per spec):** TUI direct real-time chat works + 100x demo (cross from TUI, learner visible); harness + actual E2E TUI talk (5+ prompts) validate (logs in /tmp + state "real time user by directly talking via tui"); P1 4 fixed (Wave3), no reg (100% tests, tsc 0); docs (this, cross, README, config) updated for user understanding of single cmd -> wizard -> TUI direct validation flow.
+Example 4 — Safety controls and accurate status:
+```
+User: Run a control.gui or desktop action and a workspace file op; confirm denied
+      paths fail, workspace access succeeds, and the Windows/macOS backends report
+      their true (experimental) status.
+SUDO: [succeeds where allowed, fails clearly where denied, reports accurate status]
+Check: workspace scoping, exec success propagation, and honest stub reporting hold.
+```
 
-**Known (update from limitations):** Tool events now better for live control in TUI (post waves); harness provides the "direct talk" proof. Update this spec in Wave4.
+**Acceptance criteria for this addition:** real-time control from the TUI works with visible tool cards and learner reporting; the harness plus manual chats (5+ prompts) validate control, setup, and learner behavior; workspace scoping, success propagation, and accurate experimental-backend reporting hold with no regressions (tests pass, `tsc --noEmit` exits 0); docs (this spec, the control guide, README, config) are updated to explain the single-command → wizard → chat-validation flow.
 
-*User Completion Wave docs update: 2026-06-03 by Doc Writer (concurrent) + Wave4 Docs+E2E Builder polish. Covers single cmd + wizard + TUI direct talk "check real time user by diractly talking to sudo ai via tui" + 100x/P1 note + actual E2E TUI chat validation logs (see /tmp/wave4-e2e-tui-direct-talk.log: 5+ direct prompts for cross/learner/setup/SOUL; "real time user check by direct TUI: Y" — cross Y, self-imp Y, setup Y, no reg Y, features/SOUL Y). One-liner polish in README/BOOTSTRAP. Revise on full wave delivery. ACs: docs accurate Y, actual TUI chat logs Y, git only Wave4 Y.*
-
-**Wave4 E2E Summary (actual direct TUI as real user):** Expect script drove `sudo-ai chat` (tsx), sent prompts (cross IComputerUse ls+write, ToolOutcomeLearner report, wizard/setup confirm, gui/desktop SOUL, tools+arsenal), captured full transcript + validated (grep for success keywords + no error/reg). Log proves TUI real-time 100x validation post single-cmd/wizard. See README "Wave4 E2E..." section for harness details + AC status.
+**Note:** Tool events for live control improved over later iterations; the harness provides the end-to-end proof.
