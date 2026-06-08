@@ -1,6 +1,7 @@
 import { isMainThread, parentPort, workerData, Worker } from 'worker_threads';
 import { performance } from 'perf_hooks';
 import { resolve } from 'path';
+import { cpus } from 'node:os';
 import type { ChatMessage } from './xai-ensemble.js';
 import { XaiEnsemble } from './xai-ensemble.js';
 
@@ -49,36 +50,41 @@ export class ParallelBuilder {
     if (!isMainThread) {
       throw new Error('spawnBuilders must be called from the main thread');
     }
-    const tasks = specs.map((spec) => {
-      return new Promise<BuildResult>((resolve, reject) => {
-        try {
-          const worker = new Worker(new URL(import.meta.url, import.meta.url), {
-            workerData: spec,
-          });
-          worker.once('message', (result: BuildResult) => {
-            resolve(result);
-          });
-          worker.once('error', (err) => {
-            resolve({
-              filePath: spec.filePath,
-              code: '',
-              success: false,
-              error: String(err),
-              durationMs: 0,
-            });
-          });
-        } catch (err) {
-          resolve({
+    const runOne = (spec: ModuleSpec): Promise<BuildResult> =>
+      new Promise<BuildResult>((resolveResult) => {
+        const fail = (err: unknown): void =>
+          resolveResult({
             filePath: spec.filePath,
             code: '',
             success: false,
             error: String(err),
             durationMs: 0,
           });
+        try {
+          const worker = new Worker(new URL(import.meta.url, import.meta.url), {
+            workerData: spec,
+          });
+          worker.once('message', (result: BuildResult) => resolveResult(result));
+          worker.once('error', (err) => fail(err));
+        } catch (err) {
+          fail(err);
         }
       });
-    });
-    return Promise.all(tasks);
+
+    // Cap concurrent worker threads to avoid exhausting CPU/memory on large builds.
+    const maxConcurrency = Math.max(1, Math.min(specs.length, cpus().length));
+    const results: BuildResult[] = new Array<BuildResult>(specs.length);
+    let next = 0;
+    const runWorkers = async (): Promise<void> => {
+      while (next < specs.length) {
+        const i = next++;
+        const spec = specs[i];
+        if (!spec) break;
+        results[i] = await runOne(spec);
+      }
+    };
+    await Promise.all(Array.from({ length: maxConcurrency }, () => runWorkers()));
+    return results;
   }
 }
 

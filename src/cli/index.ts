@@ -18,6 +18,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
+import { APP_VERSION } from '../core/shared/constants.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -89,7 +90,7 @@ const program = new Command();
 program
   .name('sudo-ai')
   .description('SUDO-AI — Autonomous AI Agent Platform')
-  .version('3.1.0', '-v, --version', 'Print version number');
+  .version(APP_VERSION, '-v, --version', 'Print version number');
 
 // ---------------------------------------------------------------------------
 // start
