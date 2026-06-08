@@ -1366,11 +1366,21 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 7.3 WhatsApp channel adapter (conditional)
+  // 7.3 WhatsApp channel adapter (opt-in, default OFF)
+  //     Disabled by default. The WhatsApp integration relies on Baileys, which
+  //     reverse-engineers WhatsApp Web and is against WhatsApp's Terms of
+  //     Service (using it may get your number banned). It must be explicitly
+  //     enabled with SUDO_WHATSAPP_ENABLE=1, in addition to WHATSAPP_TOKEN.
   //     WHATSAPP_TOKEN is an activation flag only; the adapter uses Baileys
   //     file-based auth stored in data/whatsapp-auth/ — no token is consumed.
   // -------------------------------------------------------------------------
-  if (process.env['WHATSAPP_TOKEN']) {
+  const whatsAppOptIn = process.env['SUDO_WHATSAPP_ENABLE'] === '1';
+  if (whatsAppOptIn && process.env['WHATSAPP_TOKEN']) {
+    log.warn(
+      "WhatsApp channel enabled via SUDO_WHATSAPP_ENABLE=1 — this uses Baileys " +
+        "(unofficial WhatsApp Web), which violates WhatsApp's Terms of Service and " +
+        "may get your number banned. You are responsible for compliant, consented use.",
+    );
     try {
       const { WhatsAppAdapter } = await import('./core/channels/whatsapp.js');
 
@@ -1436,8 +1446,13 @@ async function boot(): Promise<void> {
     } catch (err) {
       log.warn({ err: String(err) }, 'WhatsApp adapter failed to start (non-fatal)');
     }
+  } else if (process.env['WHATSAPP_TOKEN']) {
+    log.info(
+      'WhatsApp channel disabled: WHATSAPP_TOKEN is set but SUDO_WHATSAPP_ENABLE=1 ' +
+        'is required to opt in (Baileys is against WhatsApp ToS).',
+    );
   } else {
-    log.info('WhatsApp channel disabled (set WHATSAPP_TOKEN in .env to enable)');
+    log.info('WhatsApp channel disabled (set SUDO_WHATSAPP_ENABLE=1 and WHATSAPP_TOKEN in .env to enable)');
   }
 
   // -------------------------------------------------------------------------
