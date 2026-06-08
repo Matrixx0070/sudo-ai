@@ -11,10 +11,10 @@ import { createLogger } from '../../../shared/logger.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
+import { PROJECT_ROOT, WORKSPACE_DIR, projectPath } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.multi-read');
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
 const MAX_FILES = 20;
 const DEFAULT_MAX_LINES = 500;
 
@@ -108,7 +108,7 @@ export const multiReadTool: ToolDefinition = {
       type: 'array',
       required: false,
       description:
-        'List of file paths to read (up to 20). Absolute or relative to /root/sudo-ai-v4/. ' +
+        `List of file paths to read (up to 20). Absolute or relative to ${PROJECT_ROOT}/. ` +
         'Can be combined with globPattern.',
     },
     globPattern: {
@@ -117,7 +117,7 @@ export const multiReadTool: ToolDefinition = {
       description:
         'Find files matching this name pattern and add them to paths. ' +
         'Example: "health-check.ts", "*.test.ts", "index.ts". ' +
-        'Searches inside /root/sudo-ai-v4/src/ and config/.',
+        `Searches inside ${PROJECT_ROOT}/src/ and config/.`,
     },
     maxLinesPerFile: {
       type: 'number',
@@ -157,7 +157,7 @@ export const multiReadTool: ToolDefinition = {
       try {
         const safePattern = globPattern.replace(/[`$(){}!;|&]/g, '');
         const findOut = execSync(
-          `find /root/sudo-ai-v4/src /root/sudo-ai-v4/config /root/sudo-ai-v4/workspace -name "${safePattern}" 2>/dev/null | head -15`,
+          `find ${projectPath('src')} ${projectPath('config')} ${WORKSPACE_DIR} -name "${safePattern}" 2>/dev/null | head -15`,
           { encoding: 'utf-8', timeout: 8_000 },
         ).trim();
         if (findOut) {

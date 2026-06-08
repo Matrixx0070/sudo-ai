@@ -24,6 +24,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { isProtectedPath, PROTECTED_PATHS } from './protected-paths.js';
+import { PROJECT_ROOT } from '../shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -80,7 +81,7 @@ export interface SelfBuildDeps {
     warn(obj: Record<string, unknown>, msg?: string): void;
     error(obj: Record<string, unknown>, msg?: string): void;
   };
-  /** Absolute path to the project root. Defaults to /root/sudo-ai-v4. */
+  /** Absolute path to the project root. Defaults to the resolved PROJECT_ROOT (SUDO_AI_HOME or cwd). */
   gitCwd?: string;
 }
 
@@ -303,7 +304,7 @@ function execSafe(
  * The function never throws — all errors are caught and returned as status codes.
  */
 export async function runSelfBuildTick(deps: SelfBuildDeps): Promise<TickResult> {
-  const cwd = deps.gitCwd ?? '/root/sudo-ai-v4';
+  const cwd = deps.gitCwd ?? PROJECT_ROOT;
   const log = deps.logger;
 
   // -------------------------------------------------------------------------

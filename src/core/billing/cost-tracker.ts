@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { MIND_DB } from '../shared/paths.js';
 
 const logger = createLogger('cost-tracker');
 
@@ -344,7 +345,7 @@ let _instance: CostTracker | null = null;
  * Return the process-wide singleton CostTracker.
  * Creates it on first call using the provided (or default) dbPath.
  */
-export function getCostTracker(dbPath = '/root/sudo-ai-v4/data/mind.db'): CostTracker {
+export function getCostTracker(dbPath = MIND_DB): CostTracker {
   if (!_instance) {
     _instance = new CostTracker(dbPath);
   }

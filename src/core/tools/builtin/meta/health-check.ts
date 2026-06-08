@@ -23,12 +23,11 @@ import { existsSync, statSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { PROJECT_ROOT, DATA_DIR } from '../../../shared/paths.js';
 const _require = createRequire(import.meta.url);
 
 const logger = createLogger('meta.health-check');
 
-const PROJECT_ROOT = path.resolve('/root/sudo-ai-v4');
-const DATA_DIR = path.join(PROJECT_ROOT, 'data');
 const CONFIG_FILE = path.join(PROJECT_ROOT, 'config', 'sudo-ai.json5');
 
 // ---------------------------------------------------------------------------

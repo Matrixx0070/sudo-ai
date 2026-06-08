@@ -18,11 +18,12 @@ import { createLogger } from '../../../shared/logger.js';
 import { execSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT, DATA_DIR as RESOLVED_DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.self-update');
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
-const DATA_DIR = path.join(PROJECT_ROOT, 'data');
+const PROJECT_ROOT = RESOLVED_PROJECT_ROOT;
+const DATA_DIR = RESOLVED_DATA_DIR;
 const UPDATE_LOG = path.join(DATA_DIR, 'self-update.log');
 const SERVICE_NAME = 'sudo-ai';
 const MAX_OUTPUT = 2000;

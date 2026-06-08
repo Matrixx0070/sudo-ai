@@ -17,11 +17,12 @@ import path from 'node:path';
 import { CodeEvolver } from '../../../evolution/code-evolver.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { PROJECT_ROOT, MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-code-evolver');
 
-const ROOT_DIR = path.resolve('/root/sudo-ai-v4');
-const DB_PATH  = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const ROOT_DIR = PROJECT_ROOT;
+const DB_PATH  = MIND_DB;
 
 // ---------------------------------------------------------------------------
 // Lazy singleton — one DB connection per process

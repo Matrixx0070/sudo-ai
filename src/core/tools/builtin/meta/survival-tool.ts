@@ -19,11 +19,12 @@ import path from 'node:path';
 import { SurvivalSystem } from '../../../persistence/survival.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR as DATA_DIR_RESOLVED, MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-survival');
 
-const DATA_DIR = path.resolve('/root/sudo-ai-v4/data');
-const DB_PATH  = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const DATA_DIR = DATA_DIR_RESOLVED;
+const DB_PATH  = MIND_DB;
 
 // ---------------------------------------------------------------------------
 // Lazy singleton

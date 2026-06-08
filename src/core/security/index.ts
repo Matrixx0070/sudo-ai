@@ -22,6 +22,7 @@ import {
 } from './patterns.js';
 import { RateLimiter } from './rate-limiter.js';
 import type { CounterKey, RateLimitResult } from './rate-limiter.js';
+import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT } from '../shared/paths.js';
 
 const log = createLogger('security');
 
@@ -38,7 +39,7 @@ try {
 }
 
 // Project root boundary for file-write validation.
-const PROJECT_ROOT = path.resolve('/root/sudo-ai-v4');
+const PROJECT_ROOT = RESOLVED_PROJECT_ROOT;
 
 // ---------------------------------------------------------------------------
 // Public types

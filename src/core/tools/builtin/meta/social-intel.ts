@@ -15,10 +15,11 @@ import path from 'node:path';
 import { SocialIntelligence } from '../../../social/social-intelligence.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-social-intel');
 
-const DB_PATH = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const DB_PATH = MIND_DB;
 
 // ---------------------------------------------------------------------------
 // Lazy singleton

@@ -35,9 +35,9 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getModel } from '../../../brain/providers.js';
+import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.arsenal');
-const PROJECT_ROOT = '/root/sudo-ai-v4';
 const TSC = path.join(PROJECT_ROOT, 'node_modules/.bin/tsc');
 const BACKUP_DIR = path.join(PROJECT_ROOT, 'data', 'arsenal-backups');
 
@@ -545,7 +545,7 @@ export const arsenalTool: ToolDefinition = {
     files: {
       type: 'array',
       description:
-        'Specific files or directories to work on (relative to /root/sudo-ai-v4/ or absolute). ' +
+        `Specific files or directories to work on (relative to ${PROJECT_ROOT}/ or absolute). ` +
         'If omitted with a directory target, arsenal auto-discovers relevant files.',
     },
     code: {

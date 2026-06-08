@@ -20,6 +20,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { createLogger } from '../../../../shared/logger.js';
+import { PROJECT_ROOT, dataPath } from '../../../../shared/paths.js';
 
 const log = createLogger('document:markdown-to-pdf');
 
@@ -237,7 +238,7 @@ export const markdownToPdfTool: ToolDefinition = {
     'Convert a Markdown string to a PDF document. ' +
     'Uses the marked npm package if installed; otherwise uses a built-in converter. ' +
     'Supports headings, paragraphs, bold/italic, code blocks, lists, and links. ' +
-    'Output path must be under /tmp/ or /root/sudo-ai-v4/data/documents/.',
+    `Output path must be under /tmp/ or ${PROJECT_ROOT}/data/documents/.`,
   category: 'document',
   timeout: 30_000,
   safety: 'readonly',
@@ -252,7 +253,7 @@ export const markdownToPdfTool: ToolDefinition = {
       required: true,
       description:
         'Absolute path where the PDF will be saved. Must start with /tmp/ or ' +
-        '/root/sudo-ai-v4/data/documents/. Example: /tmp/doc.pdf',
+        `${PROJECT_ROOT}/data/documents/. Example: /tmp/doc.pdf`,
     },
     title: {
       type: 'string',
@@ -277,15 +278,15 @@ export const markdownToPdfTool: ToolDefinition = {
     const title = typeof params['title'] === 'string' ? params['title'] : '';
 
     // Validate output path
-    const ALLOWED_PREFIXES = ['/tmp/', '/root/sudo-ai-v4/data/documents/'];
-    const absPath = rawPath.startsWith('/') ? rawPath : resolve('/root/sudo-ai-v4/data/documents', rawPath);
+    const ALLOWED_PREFIXES = ['/tmp/', `${dataPath('documents')}/`];
+    const absPath = rawPath.startsWith('/') ? rawPath : resolve(dataPath('documents'), rawPath);
     const isAllowed = ALLOWED_PREFIXES.some((p) => absPath.startsWith(p));
     if (!isAllowed) {
       return {
         success: false,
         output:
           `document.markdown-to-pdf: outputPath must be under /tmp/ or ` +
-          `/root/sudo-ai-v4/data/documents/. Got: "${rawPath}"`,
+          `${PROJECT_ROOT}/data/documents/. Got: "${rawPath}"`,
       };
     }
 

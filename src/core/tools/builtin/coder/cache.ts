@@ -16,9 +16,9 @@ import { execSync } from 'node:child_process';
 import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.cache');
-const PROJECT_ROOT = '/root/sudo-ai-v4';
 const CACHE_PATH = path.join(PROJECT_ROOT, 'data', 'coder-cache.json');
 
 // ---------------------------------------------------------------------------

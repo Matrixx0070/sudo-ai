@@ -20,10 +20,10 @@ import { createLogger } from '../../../shared/logger.js';
 import { execSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.project-map');
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
 const SRC_DIR = path.join(PROJECT_ROOT, 'src');
 
 function run(cmd: string, timeoutMs = 15_000): string {
@@ -250,7 +250,7 @@ export const projectMapTool: ToolDefinition = {
       type: 'string',
       required: false,
       description:
-        'Subdirectory to focus on — absolute or relative to /root/sudo-ai-v4/. ' +
+        `Subdirectory to focus on — absolute or relative to ${PROJECT_ROOT}/. ` +
         'Default: entire src/. Example: "src/core/tools/builtin/coder".',
     },
     file: {

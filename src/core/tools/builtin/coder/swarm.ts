@@ -19,9 +19,10 @@ import { execSync } from 'node:child_process';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getModel } from '../../../brain/providers.js';
+import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.swarm');
-const PROJECT_ROOT = '/root/sudo-ai-v4';
+const PROJECT_ROOT = RESOLVED_PROJECT_ROOT;
 const TSC = path.join(PROJECT_ROOT, 'node_modules/.bin/tsc');
 const BACKUP_DIR = path.join(PROJECT_ROOT, 'data', 'arsenal-backups');
 

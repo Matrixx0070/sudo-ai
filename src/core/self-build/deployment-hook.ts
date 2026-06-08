@@ -7,6 +7,7 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { createLogger } from '../shared/logger.js';
+import { PROJECT_ROOT } from '../shared/paths.js';
 import type {
   GitHubPRStatus,
   CIResult,
@@ -174,7 +175,7 @@ export class DeploymentHook {
   /** Run CI: pnpm lint && pnpm test. */
   async runCI(): Promise<CIResult> {
     try {
-      const cwd = '/root/sudo-ai-v4';
+      const cwd = PROJECT_ROOT;
       const lintResult = await execFileAsync('pnpm', ['lint'], {
         cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024,
       });
@@ -193,7 +194,7 @@ export class DeploymentHook {
   /** Deploy: pm2 reload sudo-ai-v5 --update-env. */
   async deploy(): Promise<DeployResult> {
     try {
-      const cwd = '/root/sudo-ai-v4';
+      const cwd = PROJECT_ROOT;
       const result = await execFileAsync('pm2', ['reload', 'sudo-ai-v5', '--update-env'], {
         cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024,
       });
@@ -214,7 +215,7 @@ export class DeploymentHook {
       return;
     }
     try {
-      const cwd = '/root/sudo-ai-v4';
+      const cwd = PROJECT_ROOT;
       log.info({ sha: previousCommitSha }, 'rollback: executing');
       await execFileAsync('git', ['reset', '--hard', previousCommitSha], {
         cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024,
@@ -231,7 +232,7 @@ export class DeploymentHook {
   /** Capture the current local HEAD commit SHA (the known-good baseline). */
   private async getCurrentSha(): Promise<string | null> {
     try {
-      const cwd = '/root/sudo-ai-v4';
+      const cwd = PROJECT_ROOT;
       const result = await execFileAsync('git', ['rev-parse', 'HEAD'], {
         cwd, encoding: 'utf8', maxBuffer: 1024 * 1024,
       });

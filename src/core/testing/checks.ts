@@ -10,12 +10,13 @@
 import Database from 'better-sqlite3';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { PROJECT_ROOT } from '../shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Shared path constants
 // ---------------------------------------------------------------------------
 
-const ROOT       = '/root/sudo-ai-v4';
+const ROOT       = PROJECT_ROOT;
 export const DATA_DIR   = join(ROOT, 'data');
 export const TOOLS_DIR  = join(ROOT, 'src/core/tools/builtin');
 export const SKILLS_DIR = join(ROOT, 'src/core/tools/builtin/custom');

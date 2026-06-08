@@ -12,6 +12,7 @@
 
 import { MindDB } from './db.js';
 import { WisdomStore } from '../learning/store.js';
+import { PROJECT_ROOT, WORKSPACE_DIR } from '../shared/paths.js';
 
 const DB_PATH      = 'data/mind.db';
 const WISDOM_PATH  = 'data/wisdom.db';
@@ -49,11 +50,11 @@ async function seed(): Promise<void> {
   // -------------------------------------------------------------------------
   const evergreenFacts = [
     {
-      text: 'SUDO-AI v3 is located at /root/sudo-ai-v4. It is a Node.js + Electron + TypeScript autonomous AI agent.',
+      text: `SUDO-AI v3 is located at ${PROJECT_ROOT}. It is a Node.js + Electron + TypeScript autonomous AI agent.`,
       path: 'memory/project-facts.md',
     },
     {
-      text: 'The main database file is /root/sudo-ai-v4/data/mind.db (mind.db). The wisdom database is wisdom.db.',
+      text: `The main database file is ${PROJECT_ROOT}/data/mind.db (mind.db). The wisdom database is wisdom.db.`,
       path: 'memory/project-facts.md',
     },
     {
@@ -99,7 +100,7 @@ async function seed(): Promise<void> {
   db.updatePipelineRun(runId, {
     status:      'done',
     finished_at: new Date().toISOString(),
-    result:      { videoPath: '/root/sudo-ai-v4/workspace/quiz-001.mp4', uploadId: 'yt-seed-001' },
+    result:      { videoPath: `${WORKSPACE_DIR}/quiz-001.mp4`, uploadId: 'yt-seed-001' },
   });
 
   // -------------------------------------------------------------------------

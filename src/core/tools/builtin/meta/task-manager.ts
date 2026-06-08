@@ -17,10 +17,11 @@ import path from 'node:path';
 import { TaskQueue, type EnqueueInput, type TaskPriority } from '../../../orchestration/task-queue.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-task-manager');
 
-const DB_PATH = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const DB_PATH = MIND_DB;
 
 // ---------------------------------------------------------------------------
 // Lazy singleton queue — opens once per process lifetime

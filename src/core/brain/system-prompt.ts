@@ -9,6 +9,7 @@ import { readFile } from 'fs/promises';
 import path from 'path';
 import { createLogger } from '../shared/logger.js';
 import { PATHS } from '../shared/constants.js';
+import { PROJECT_ROOT } from '../shared/paths.js';
 import { getPersonaSystemBlock } from './personas.js';
 import { getMoodSystemBlock } from './moods.js';
 import type { SystemPromptOptions } from './types.js';
@@ -219,7 +220,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
       '',
       'When calling tools:',
       '- Always provide ALL required parameters with correct types.',
-      '- Use paths relative to the working directory (e.g. "output.ts" not "/root/sudo-ai-v4/output.ts").',
+      `- Use paths relative to the working directory (e.g. "output.ts" not "${PROJECT_ROOT}/output.ts").`,
       '- Do not invent parameters that are not in the tool schema.',
       '- For file writes, provide the complete file content — do not use placeholders or "// ... rest of code".',
       '- When writing multiple files, call the tool once per file.',

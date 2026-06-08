@@ -13,6 +13,7 @@ import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { MIND_DB } from '../shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,7 +59,7 @@ interface ErrorMemoryRow {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DB_PATH = '/root/sudo-ai-v4/data/mind.db';
+const DB_PATH = MIND_DB;
 
 /**
  * Tokens that vary between occurrences of the same logical error.

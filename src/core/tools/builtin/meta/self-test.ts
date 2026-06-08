@@ -18,10 +18,11 @@ import path from 'node:path';
 import { TestHarness, type TestSuite, type TestResult } from '../../../testing/test-harness.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-self-test');
 
-const DB_PATH = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const DB_PATH = MIND_DB;
 
 // ---------------------------------------------------------------------------
 // Lazy singleton harness
