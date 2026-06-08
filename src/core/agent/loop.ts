@@ -22,6 +22,8 @@ import {
   executeToolCalls,
   prepareMessages,
   trimSessionMessages,
+  resolveSemanticPlanCap,
+  semanticPlanAllowed,
 } from './loop-helpers.js';
 import { ToolRouter } from './tool-router.js';
 import { classifyIntent, formatIntentHint } from './intent-classifier.js';
@@ -1272,6 +1274,16 @@ export class AgentLoop {
     // (empty unless SUDO_AUTO_PLAN produced a plan). Used for turn-end coverage.
     let _lastPlanSteps: string[] = [];
 
+    // Theme 2 follow-up: per-run cap on GoalPlanner semantic (brain.chat) calls.
+    // SUDO_GOAL_PLANNER_SEMANTIC upgrades planning to one brain.chat per follow-up
+    // message; across a multi-message turn that LLM cost compounds. This cap bounds
+    // the number of semantic plans per run() — once spent, remaining messages this
+    // turn fall back to zero-cost template planning. Unset => no cap (prior
+    // behavior); 0 => template-only this run. Fail-open: a malformed value is
+    // treated as unset (see resolveSemanticPlanCap).
+    const goalPlannerSemanticCap = resolveSemanticPlanCap(process.env['SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN']);
+    let goalPlannerSemanticUsed = 0;
+
     // Outer loop: drains follow-up messages queued during this turn.
     while (state.followUpMessages.length > 0) {
       const current = state.followUpMessages.shift()!;
@@ -1402,8 +1414,19 @@ export class AgentLoop {
           // strategy adapts per follow-up — mirrors auto-plan's per-message behavior.
           const gc = this._goalClassifier.classify(current);
           if (gc && typeof gc.confidence === 'number' && gc.confidence >= GOAL_PLANNER_MIN_CONFIDENCE) {
-            const semanticPlanning = process.env['SUDO_GOAL_PLANNER_SEMANTIC'] === '1';
-            const planner = new GoalPlanner(semanticPlanning ? (this.brain as unknown as BrainForPlanning) : null);
+            const semanticRequested = process.env['SUDO_GOAL_PLANNER_SEMANTIC'] === '1';
+            const useSemantic = semanticRequested && semanticPlanAllowed(goalPlannerSemanticCap, goalPlannerSemanticUsed);
+            if (semanticRequested && !useSemantic) {
+              log.info(
+                { sessionId, cap: goalPlannerSemanticCap, used: goalPlannerSemanticUsed },
+                'GoalPlanner: semantic per-run cap reached — using template planning for this message',
+              );
+            }
+            const planner = new GoalPlanner(useSemantic ? (this.brain as unknown as BrainForPlanning) : null);
+            // Count the attempt before planning: plan() issues exactly one brain.chat
+            // when constructed with a brain, and bills tokens even if it then times out
+            // or the JSON fails to parse and it falls back to template internally.
+            if (useSemantic) goalPlannerSemanticUsed++;
             const plan = await planner.plan(gc, current);
             const strategySteps = plan.steps
               .map((s) => (typeof s.description === 'string' ? s.description.replace(/\s+/g, ' ').trim().slice(0, MAX_PLAN_STEP_CHARS) : ''))
