@@ -55,6 +55,10 @@ const MIN_OCCURRENCES = 3;      // Distinct sessions before a sequence qualifies
 const MIN_SUCCESS_RATE = 0.80;  // Minimum success rate to become a candidate
 const DEFAULT_SKILL_DIR = 'data/skills';
 const MAX_SEQUENCE_LENGTH = 8;  // Longest sub-sequence to extract
+// Cooperative-scan batch size: when SUDO_SKILL_FORGE_ASYNC=1, scan() yields to the
+// event loop after this many sessions/entries of CPU-bound work so a /forge scan
+// over a large trace store doesn't block the loop. Off by default (no yields).
+const YIELD_EVERY = 50;
 
 // -- Helpers -----------------------------------------------------------------
 
@@ -137,10 +141,24 @@ export class SkillForge {
   /**
    * Scan trace history for recurring successful tool sequences and return
    * skill candidates that pass quality thresholds.
+   *
+   * Cooperative mode (SUDO_SKILL_FORGE_ASYNC=1, default OFF): the CPU-bound
+   * sliding-window extraction yields to the event loop every YIELD_EVERY units
+   * of work, so a /forge scan over a large trace store stays responsive instead
+   * of blocking the loop. The algorithm and its output are byte-identical to the
+   * default path — the only difference is interleaved setImmediate yields. When
+   * OFF there are zero macrotask yields (behavior identical to before the flag).
    */
   async scan(): Promise<SkillCandidate[]> {
-    // Step 1: Fetch successful and all tool_call traces for rate computation
+    const yieldNow = process.env['SUDO_SKILL_FORGE_ASYNC'] === '1'
+      ? (): Promise<void> => new Promise((r) => setImmediate(r))
+      : null;
+
+    // Step 1: Fetch successful and all tool_call traces for rate computation.
+    // better-sqlite3 is synchronous, so each fetch is one blocking call; when
+    // cooperative we let the event loop breathe between the two large fetches.
     const successfulTraces = this.traceStore.query({ type: 'tool_call', success: true, limit: 50000 });
+    if (yieldNow) await yieldNow();
     const allToolTraces = this.traceStore.query({ type: 'tool_call', limit: 50000 });
 
     // Step 2: Group and sort traces by session chronologically
@@ -165,12 +183,13 @@ export class SkillForge {
     const successOcc = new Map<string, { tools: string[]; sessions: Set<string>; latSum: number; latCount: number }>();
     const totalOcc = new Map<string, number>();
 
-    const extractWindows = (
+    const extractWindows = async (
       sessions: Map<string, TraceRecord[]>,
       target: Map<string, { tools: string[]; sessions: Set<string>; latSum: number; latCount: number }>,
       trackTotal?: Map<string, number>,
       checkSuccess?: boolean,
-    ) => {
+    ): Promise<void> => {
+      let sinceYield = 0;
       for (const [sid, recs] of sessions) {
         const names = recs.map(r => r.toolName).filter((t): t is string => t != null);
         const successes = recs.map(r => r.success);
@@ -204,22 +223,32 @@ export class SkillForge {
             }
           }
         }
+        // Cooperative yield: hand the event loop a turn every YIELD_EVERY sessions.
+        if (yieldNow && ++sinceYield >= YIELD_EVERY) { sinceYield = 0; await yieldNow(); }
       }
     };
 
     // Extract successful-occurrence info from all traces (with success check)
     const successOccMap = new Map<string, { tools: string[]; sessions: Set<string>; latSum: number; latCount: number }>();
     const totalOccMap = new Map<string, number>();
-    extractWindows(allSessions, successOccMap, totalOccMap, true);
+    await extractWindows(allSessions, successOccMap, totalOccMap, true);
+    if (yieldNow) await yieldNow();
 
     // Extract latency data from successful-only traces
     const latencyMap = new Map<string, { tools: string[]; sessions: Set<string>; latSum: number; latCount: number }>();
-    extractWindows(successSessions, latencyMap);
+    await extractWindows(successSessions, latencyMap);
 
     // Step 4: Merge data and build candidates
     const candidates: SkillCandidate[] = [];
 
+    // Accumulate per-scan stats locally and fold them into the instance counters
+    // once at the end, so no shared instance state is read-modified-written across
+    // a cooperative await (keeps the merge loop hazard-free if scans ever overlap).
+    let scanPatternsFound = 0;
+    let scanTotalConfidence = 0;
+    let mergeSinceYield = 0;
     for (const [key, entry] of successOccMap) {
+      if (yieldNow && ++mergeSinceYield >= YIELD_EVERY) { mergeSinceYield = 0; await yieldNow(); }
       if (entry.sessions.size < MIN_OCCURRENCES) continue;
 
       const total = totalOccMap.get(key) ?? entry.sessions.size;
@@ -248,10 +277,12 @@ export class SkillForge {
       const generatedSkill = renderSkillMarkdown(skillName, pattern, confidence);
 
       candidates.push({ pattern, generatedSkill, confidence });
-      this.patternsFound++;
-      this.totalConfidence += confidence;
+      scanPatternsFound++;
+      scanTotalConfidence += confidence;
     }
 
+    this.patternsFound += scanPatternsFound;
+    this.totalConfidence += scanTotalConfidence;
     candidates.sort((a, b) => b.confidence - a.confidence);
     log.info({ candidates: candidates.length, patterns: this.patternsFound }, 'Skill scan complete');
     return candidates;
