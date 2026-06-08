@@ -906,3 +906,42 @@ export function trimSessionMessages(
     'Proactive session message trim applied',
   );
 }
+
+// ---------------------------------------------------------------------------
+// GoalPlanner semantic per-run cap (Theme 2 follow-up)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the per-run cap on GoalPlanner semantic (brain.chat) planning calls
+ * from the raw SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN value.
+ *
+ * Accepts ONLY a clean base-10 non-negative integer (surrounding whitespace is
+ * trimmed). Anything else — unset, blank, signed ("+5"/"-1"), fractional ("2.9"),
+ * hex ("0x10"), or other junk ("3x") — is treated as `undefined` (= no cap, the
+ * pre-existing behavior). This is fail-open: a malformed value never changes
+ * behavior and never crashes the turn. Strict parsing (rather than a lenient
+ * `parseInt`) avoids the footgun where "0x10" would silently collapse to 0 and
+ * thereby DISABLE semantic planning. A literal `0` is a valid cap meaning "no
+ * semantic planning this run" (template only).
+ *
+ * @param raw - The raw env value (typically `process.env[...]`).
+ * @returns The cap as a non-negative integer, or `undefined` for no cap.
+ */
+export function resolveSemanticPlanCap(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Whether a semantic plan is allowed given the resolved cap and the number of
+ * semantic calls already made this run. An `undefined` cap means no limit.
+ *
+ * @param cap         - Resolved cap from {@link resolveSemanticPlanCap}.
+ * @param usedThisRun - Count of semantic plans already run this turn.
+ */
+export function semanticPlanAllowed(cap: number | undefined, usedThisRun: number): boolean {
+  return cap === undefined || usedThisRun < cap;
+}
