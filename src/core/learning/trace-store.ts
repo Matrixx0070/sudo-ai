@@ -148,6 +148,24 @@ CREATE TABLE IF NOT EXISTS trace_aggregates (
 `;
 
 /**
+ * Normalize a timestamp string to SQLite's datetime('now') format
+ * ("YYYY-MM-DD HH:MM:SS") so it compares correctly against `traces.created_at`,
+ * which is stored in that format (the column DEFAULT is datetime('now')).
+ *
+ * Accepts ISO 8601 (e.g. "2026-06-08T12:00:00.000Z") and converts it by dropping
+ * the 'T' separator, fractional seconds, and trailing 'Z'. An already-normalized
+ * (space-separated) value is returned unchanged, so the function is idempotent.
+ *
+ * Why this matters: ISO strings sort INCORRECTLY against the space format —
+ * char 11 is 'T' (0x54) vs ' ' (0x20), so e.g. "2026-06-08 12:00:00" (stored)
+ * compares LESS than "2026-06-08T00:00:00.000Z" (an ISO cutoff for the same day),
+ * which silently dropped same-date rows from `created_at >=` time-window queries.
+ */
+export function toSqliteTimestamp(ts: string): string {
+  return ts.replace('T', ' ').replace(/\.\d+/, '').replace(/Z$/, '');
+}
+
+/**
  * Resolve the optional aggregation recency window from the raw
  * SUDO_POLICY_AGG_WINDOW_DAYS value, as a SQLite datetime() modifier.
  *
@@ -309,8 +327,10 @@ export class TraceStore {
     if (q.sessionId) { clauses.push('session_id = @sessionId'); params.sessionId = q.sessionId; }
     if (q.success !== undefined) { clauses.push('success = @success'); params.success = q.success ? 1 : 0; }
     if (q.errorType) { clauses.push('error_type = @errorType'); params.errorType = q.errorType; }
-    if (q.since)     { clauses.push('created_at >= @since');    params.since = q.since; }
-    if (q.until)     { clauses.push('created_at <= @until');    params.until = q.until; }
+    // Normalize cutoffs to created_at's SQLite datetime format so ISO callers
+    // (e.g. TraceAnalyzer) don't silently mis-compare against the stored value.
+    if (q.since)     { clauses.push('created_at >= @since');    params.since = toSqliteTimestamp(q.since); }
+    if (q.until)     { clauses.push('created_at <= @until');    params.until = toSqliteTimestamp(q.until); }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = db.prepare(
@@ -422,7 +442,9 @@ export class TraceStore {
    */
   getErrorClusters(since?: string): ErrorCluster[] {
     const db = this.ensure();
-    const cutoff = since ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    // Normalize to created_at's SQLite datetime format (an ISO default/arg would
+    // mis-compare against the space-separated stored value — see toSqliteTimestamp).
+    const cutoff = toSqliteTimestamp(since ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
 
     const groups = db.prepare(`
       SELECT error_type, tool_name, COUNT(*) AS cnt
@@ -460,7 +482,9 @@ export class TraceStore {
     const clauses: string[] = [];
     const params: Record<string, unknown> = {};
     if (type)  { clauses.push('trace_type = @type');  params.type = type; }
-    if (since) { clauses.push('created_at >= @since'); params.since = since; }
+    // Normalize like query()/getErrorClusters() so an ISO since compares correctly
+    // against the space-format created_at (see toSqliteTimestamp).
+    if (since) { clauses.push('created_at >= @since'); params.since = toSqliteTimestamp(since); }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const row = db.prepare(
