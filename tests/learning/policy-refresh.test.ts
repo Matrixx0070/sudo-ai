@@ -2,7 +2,7 @@
  * @file tests/learning/policy-refresh.test.ts
  * @description Theme 1 follow-up — background (scheduled) policy refresh. The
  * loop periodically calls policy.refreshPolicies() off the request critical path
- * (unref'd timer + setImmediate), clamped, overlap-guarded, fail-open.
+ * (standalone unref'd timer), clamped, overlap-guarded, fail-open.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
