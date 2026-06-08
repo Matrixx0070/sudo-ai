@@ -14,10 +14,10 @@ import { createLogger } from '../../../shared/logger.js';
 import { readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
+import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.smart-edit');
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
 const TSC = path.join(PROJECT_ROOT, 'node_modules/.bin/tsc');
 const BACKUP_DIR = path.join(PROJECT_ROOT, 'data', 'file-backups');
 
@@ -215,7 +215,7 @@ export const smartEditTool: ToolDefinition = {
     path: {
       type: 'string',
       required: true,
-      description: 'File path relative to /root/sudo-ai-v4/ or absolute.',
+      description: `File path relative to ${PROJECT_ROOT}/ or absolute.`,
     },
     edits: {
       type: 'array',

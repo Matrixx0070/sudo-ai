@@ -9,14 +9,14 @@
  *   stats          — Return aggregate counts: total, by-source, niche matches, alerts
  */
 
-import path from 'node:path';
 import { TrendRadar } from '../../../awareness/trend-radar.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-trend-radar');
 
-const DB_PATH = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const DB_PATH = MIND_DB;
 
 // ---------------------------------------------------------------------------
 // Lazy singleton

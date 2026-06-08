@@ -15,10 +15,9 @@
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { createLogger } from '../shared/logger.js';
+import { MIND_DB } from '../shared/paths.js';
 
 const log = createLogger('memory:auto-summarizer');
-
-const MIND_DB = '/root/sudo-ai-v4/data/mind.db';
 
 // ---------------------------------------------------------------------------
 // Public types

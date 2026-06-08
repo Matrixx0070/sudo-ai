@@ -24,11 +24,12 @@ import {
 } from './unified-stores.js';
 import { guardMemoryWrite } from './injection-scanner.js';
 import type { MemoryType6 } from './memory-taxonomy.js';
+import { DATA_DIR as RESOLVED_DATA_DIR, WORKSPACE_DIR as RESOLVED_WORKSPACE_DIR } from '../shared/paths.js';
 
 const log = createLogger('memory:unified');
 
-const DATA_DIR      = '/root/sudo-ai-v4/data';
-const WORKSPACE_DIR = '/root/sudo-ai-v4/workspace';
+const DATA_DIR      = RESOLVED_DATA_DIR;
+const WORKSPACE_DIR = RESOLVED_WORKSPACE_DIR;
 
 const MIND_DB             = join(DATA_DIR, 'mind.db');
 const CONSCIOUSNESS_DB    = join(DATA_DIR, 'consciousness.db');

@@ -13,14 +13,14 @@
  *   recent            — list recent predictions
  */
 
-import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { Predictor, type Prediction, type Anomaly } from '../../../prediction/predictor.js';
 import { createLogger } from '../../../shared/logger.js';
+import { MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-predictor');
 
-const DB_PATH = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const DB_PATH = MIND_DB;
 
 // ---------------------------------------------------------------------------
 // Lazy singleton

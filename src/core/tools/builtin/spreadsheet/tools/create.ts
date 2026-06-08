@@ -7,10 +7,11 @@ import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { createLogger } from '../../../../shared/logger.js';
+import { PROJECT_ROOT, dataPath } from '../../../../shared/paths.js';
 
 const logger = createLogger('spreadsheet:create');
 
-const ALLOWED_DIRS = ['/tmp', '/root/sudo-ai-v4/data/spreadsheets'];
+const ALLOWED_DIRS = ['/tmp', dataPath('spreadsheets')];
 
 function isAllowedPath(outputPath: string): boolean {
   const resolved = path.resolve(outputPath);
@@ -28,7 +29,7 @@ export const spreadsheetCreateTool: ToolDefinition = {
     outputPath: {
       type: 'string',
       required: true,
-      description: 'Absolute output path ending in .xlsx. Must be under /tmp/ or /root/sudo-ai-v4/data/spreadsheets/.',
+      description: `Absolute output path ending in .xlsx. Must be under /tmp/ or ${PROJECT_ROOT}/data/spreadsheets/.`,
     },
     sheets: {
       type: 'array',
@@ -74,7 +75,7 @@ export const spreadsheetCreateTool: ToolDefinition = {
     if (!isAllowedPath(outputPath)) {
       return {
         success: false,
-        output: `outputPath must be under /tmp/ or /root/sudo-ai-v4/data/spreadsheets/. Got: ${outputPath}`,
+        output: `outputPath must be under /tmp/ or ${PROJECT_ROOT}/data/spreadsheets/. Got: ${outputPath}`,
       };
     }
     if (!rawSheets || !Array.isArray(rawSheets) || rawSheets.length === 0) {

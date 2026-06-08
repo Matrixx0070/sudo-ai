@@ -8,10 +8,11 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
+import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT } from '../../../shared/paths.js';
 
 const log = createLogger('coder.typecheck');
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
+const PROJECT_ROOT = RESOLVED_PROJECT_ROOT;
 const TSC = path.join(PROJECT_ROOT, 'node_modules/.bin/tsc');
 
 // ---------------------------------------------------------------------------

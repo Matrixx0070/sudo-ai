@@ -26,13 +26,14 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
+import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT } from '../shared/paths.js';
 import type { GoalTracker } from './goal-tracker.js';
 import { triggerKAIROSRepair } from '../tools/builtin/coder/arsenal.js';
 
 const execFile = promisify(execFileCb);
 const log = createLogger('consciousness:kairos');
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
+const PROJECT_ROOT = RESOLVED_PROJECT_ROOT;
 const TSC = path.join(PROJECT_ROOT, 'node_modules/.bin/tsc');
 const ALERTS_FILE = path.join(PROJECT_ROOT, 'workspace', 'KAIROS_ALERTS.md');
 const ERROR_TREND_FILE = path.join(PROJECT_ROOT, 'data', 'kairos-error-trend.json');

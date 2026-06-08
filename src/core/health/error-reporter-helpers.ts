@@ -8,6 +8,7 @@ import { promisify } from 'util';
 import { readFileSync } from 'fs';
 import { ErrorSeverity, ErrorContext } from './error-reporter.js';
 import { GitHubIssuesConnector } from '../channels/github-issues.js';
+import { projectPath } from '../shared/paths.js';
 
 const execAsync = promisify(exec);
 
@@ -28,7 +29,7 @@ export async function getCommitSha(): Promise<string | null> {
  */
 export async function getVersion(): Promise<string | null> {
   try {
-    const pkg = JSON.parse(readFileSync('/root/sudo-ai-v4/package.json', 'utf-8'));
+    const pkg = JSON.parse(readFileSync(projectPath('package.json'), 'utf-8'));
     return pkg.version ?? null;
   } catch {
     return null;

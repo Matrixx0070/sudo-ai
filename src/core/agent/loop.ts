@@ -96,6 +96,7 @@ import { BestOfNExecutor } from './best-of-n.js';
 import { ConsciousnessDeepBridge, type DeepBridgeOrchestratorLike } from '../consciousness/deep-bridge.js';
 import { FeedbackTierManager } from './feedback-tier.js';
 import { getZDRManager, isZDRBlocked } from '../privacy/zdr-mode.js';
+import { WORKSPACE_DIR } from '../shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Content-hash helper — A1: deterministic 32-char hex per tool+args combo.
@@ -1185,7 +1186,7 @@ export class AgentLoop {
         const today = new Date().toISOString().slice(0, 10);
         const { readFile } = await import('node:fs/promises');
         const { resolve } = await import('node:path');
-        const memPath = resolve('/root/sudo-ai-v4/workspace/memory', `${today}.md`);
+        const memPath = resolve(WORKSPACE_DIR, 'memory', `${today}.md`);
         return await readFile(memPath, 'utf-8');
       } catch { return ''; }
     })();

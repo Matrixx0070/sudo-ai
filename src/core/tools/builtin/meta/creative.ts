@@ -16,9 +16,10 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { CreativeEngine } from '../../../creative/creative-engine.js';
 import { createLogger } from '../../../shared/logger.js';
 import { formatMusic, formatStyle, formatFramework, formatFormat } from './creative-formatters.js';
+import { MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-creative');
-const DB_PATH = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const DB_PATH = MIND_DB;
 
 let _engine: CreativeEngine | null = null;
 function getEngine(): CreativeEngine {

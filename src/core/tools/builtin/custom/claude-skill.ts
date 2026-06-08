@@ -13,6 +13,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('custom.claude-skill');
 
@@ -70,7 +71,7 @@ export const claudeSkillTool: ToolDefinition = {
     workdir: {
       type: 'string',
       description:
-        'Working directory for the skill (defaults to /root/sudo-ai-v4). ' +
+        `Working directory for the skill (defaults to ${PROJECT_ROOT}). ` +
         'Use an absolute path if the skill should operate on a different project.',
     },
     timeout_seconds: {
@@ -82,7 +83,7 @@ export const claudeSkillTool: ToolDefinition = {
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const skill = (params['skill'] as string | undefined)?.trim() ?? '';
     const task  = (params['task']  as string | undefined)?.trim() ?? '';
-    const workdir = (params['workdir'] as string | undefined)?.trim() || '/root/sudo-ai-v4';
+    const workdir = (params['workdir'] as string | undefined)?.trim() || PROJECT_ROOT;
     const timeoutSec = Math.min(
       Math.max(Number(params['timeout_seconds'] ?? 300), 30),
       600,

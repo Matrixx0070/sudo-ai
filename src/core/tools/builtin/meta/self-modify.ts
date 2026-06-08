@@ -34,13 +34,12 @@ import {
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { isProtectedPath, PROTECTED_PATHS } from '../../../self-build/protected-paths.js';
+import { PROJECT_ROOT, DATA_DIR } from '../../../shared/paths.js';
 const _require = createRequire(import.meta.url);
 
 const logger = createLogger('meta.self-modify');
 
-const PROJECT_ROOT = '/root/sudo-ai-v4';
 const SRC_DIR    = path.join(PROJECT_ROOT, 'src');
-const DATA_DIR   = path.join(PROJECT_ROOT, 'data');
 const CONFIG_FILE = path.join(PROJECT_ROOT, 'config', 'sudo-ai.json5');
 const MOD_LOG    = path.join(DATA_DIR, 'self-modify.log');
 const BACKUP_DIR = path.join(DATA_DIR, 'file-backups');
@@ -375,7 +374,7 @@ export const selfModifyTool: ToolDefinition = {
     path: {
       type: 'string',
       required: false,
-      description: 'File path relative to /root/sudo-ai-v4/ or absolute. Used by: read-file, edit-file, write-file, full-cycle.',
+      description: `File path relative to ${PROJECT_ROOT}/ or absolute. Used by: read-file, edit-file, write-file, full-cycle.`,
     },
     pattern: {
       type: 'string',

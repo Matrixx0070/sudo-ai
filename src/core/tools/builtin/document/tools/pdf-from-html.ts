@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { createLogger } from '../../../../shared/logger.js';
+import { PROJECT_ROOT, dataPath } from '../../../../shared/paths.js';
 
 const log = createLogger('document:pdf-from-html');
 
@@ -19,8 +20,8 @@ const log = createLogger('document:pdf-from-html');
 // Constants
 // ---------------------------------------------------------------------------
 
-const ALLOWED_PREFIXES = ['/tmp/', '/root/sudo-ai-v4/data/documents/'];
-const DEFAULT_DATA_DIR = '/root/sudo-ai-v4/data/documents';
+const ALLOWED_PREFIXES = ['/tmp/', `${dataPath('documents')}/`];
+const DEFAULT_DATA_DIR = dataPath('documents');
 const FORMAT_SIZES: Record<string, { width: string; height: string }> = {
   A4: { width: '210mm', height: '297mm' },
   Letter: { width: '216mm', height: '279mm' },
@@ -61,7 +62,7 @@ export const pdfFromHtmlTool: ToolDefinition = {
   description:
     'Generate a PDF document from raw HTML using Playwright Chromium. ' +
     'Supports A4/Letter formats, landscape orientation, and custom margins. ' +
-    'Output path must be under /tmp/ or /root/sudo-ai-v4/data/documents/. ' +
+    `Output path must be under /tmp/ or ${PROJECT_ROOT}/data/documents/. ` +
     'Returns the saved path, file size in bytes, and estimated page count.',
   category: 'document',
   timeout: 30_000,
@@ -77,7 +78,7 @@ export const pdfFromHtmlTool: ToolDefinition = {
       required: true,
       description:
         'Absolute path where the PDF will be saved. Must start with /tmp/ or ' +
-        '/root/sudo-ai-v4/data/documents/. Example: /tmp/report.pdf',
+        `${PROJECT_ROOT}/data/documents/. Example: /tmp/report.pdf`,
     },
     format: {
       type: 'string',
@@ -125,7 +126,7 @@ export const pdfFromHtmlTool: ToolDefinition = {
         success: false,
         output:
           `document.pdf-from-html: outputPath must be under /tmp/ or ` +
-          `/root/sudo-ai-v4/data/documents/. Got: "${rawPath}"`,
+          `${PROJECT_ROOT}/data/documents/. Got: "${rawPath}"`,
       };
     }
 

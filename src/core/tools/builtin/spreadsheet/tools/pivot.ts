@@ -8,10 +8,11 @@ import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { createLogger } from '../../../../shared/logger.js';
+import { PROJECT_ROOT, dataPath } from '../../../../shared/paths.js';
 
 const logger = createLogger('spreadsheet:pivot');
 
-const ALLOWED_DIRS = ['/tmp', '/root/sudo-ai-v4/data/spreadsheets'];
+const ALLOWED_DIRS = ['/tmp', dataPath('spreadsheets')];
 
 function isAllowedPath(outputPath: string): boolean {
   const resolved = path.resolve(outputPath);
@@ -93,7 +94,7 @@ export const spreadsheetPivotTool: ToolDefinition = {
     if (!inputPath?.trim()) return { success: false, output: 'inputPath is required.' };
     if (!outputPath?.trim()) return { success: false, output: 'outputPath is required.' };
     if (!isAllowedPath(outputPath)) {
-      return { success: false, output: `outputPath must be under /tmp/ or /root/sudo-ai-v4/data/spreadsheets/. Got: ${outputPath}` };
+      return { success: false, output: `outputPath must be under /tmp/ or ${PROJECT_ROOT}/data/spreadsheets/. Got: ${outputPath}` };
     }
     if (!sourceSheetName?.trim()) return { success: false, output: 'sourceSheet is required.' };
     if (!rowKeys?.length) return { success: false, output: 'rows array is required.' };

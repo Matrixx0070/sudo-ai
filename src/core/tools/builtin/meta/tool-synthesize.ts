@@ -14,6 +14,7 @@ import { InjectionDetector } from '../../../cognition/injection-detector.js';
 import { createLogger } from '../../../shared/logger.js';
 import { metrics } from '../../../health/metrics.js';
 import { compileSynthBpfFilter } from './synth-seccomp-filter.js';
+import { projectPath } from '../../../shared/paths.js';
 import ts from 'typescript';
 
 const logger = createLogger('meta:tool-synthesize');
@@ -625,7 +626,7 @@ type SynthWorkerResult =
 const ENTRY_HOST = pathResolve(__dirname, 'synth-bwrap-entry.cjs');
 
 /** tsx ESM loader for TypeScript execution inside the sandbox child. */
-const TSX_LOADER = '/root/sudo-ai-v4/node_modules/tsx/dist/loader.mjs';
+const TSX_LOADER = projectPath('node_modules/tsx/dist/loader.mjs');
 
 /**
  * Build the bwrap argv for running synth-bwrap-entry.cjs in an isolated sandbox.

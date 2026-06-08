@@ -18,6 +18,7 @@ import { generateText } from 'ai';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getModel, listAvailableProviders } from '../../../brain/providers.js';
+import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('custom.codex');
 
@@ -135,7 +136,7 @@ export const codexTool: ToolDefinition = {
     const systemPrompt = action === 'review' ? REVIEW_SYSTEM : CODING_SYSTEM;
 
     const userPrompt = action === 'review'
-      ? `Review the codebase at /root/sudo-ai-v4/src for security, quality, and correctness issues.\n\n${task ? `Focus on: ${task}` : 'Full adversarial review.'}`
+      ? `Review the codebase at ${PROJECT_ROOT}/src for security, quality, and correctness issues.\n\n${task ? `Focus on: ${task}` : 'Full adversarial review.'}`
       : `Task: ${task}${context ? `\n\nContext:\n${context}` : ''}`;
 
     // ---- Try forced model first, then cascade ----

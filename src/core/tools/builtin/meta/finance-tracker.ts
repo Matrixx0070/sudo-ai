@@ -5,13 +5,13 @@
  *          self-funding-status, optimize, revenue-report, cost-report.
  */
 
-import path from 'node:path';
 import { RevenueTracker } from '../../../finance/index.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { MIND_DB } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-finance-tracker');
-const DB_PATH = path.resolve('/root/sudo-ai-v4/data/mind.db');
+const DB_PATH = MIND_DB;
 
 let _tracker: RevenueTracker | null = null;
 function getTracker(): RevenueTracker {
