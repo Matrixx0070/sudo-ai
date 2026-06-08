@@ -15,6 +15,8 @@ import { isToolResultSuccess } from './tool-result-classifier.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError } from '../shared/errors.js';
 import { MAX_AGENT_ITERATIONS } from '../shared/constants.js';
+import { decomposeIfComplex, type DecomposerBrainLike } from './task-decomposer.js';
+import { buildReasoningSummary, formatReasoningSummary, type AgentAction } from './reasoning-summary.js';
 import {
   runCompaction,
   executeToolCalls,
@@ -136,6 +138,14 @@ export interface AgentRunResult {
   }>;
   /** P0: SelfVerify — post-run verification summary if SUDO_SELF_VERIFY is enabled. */
   verificationSummary?: string;
+  /** Theme 2.2: reasoning recap (approach/steps/confidence) if SUDO_REASONING_SUMMARY is enabled. */
+  reasoningSummary?: string;
+  /**
+   * Theme 2 step-tracking: APPROXIMATE coverage of the auto-plan's steps by this
+   * turn's tool actions (present only when SUDO_AUTO_PLAN produced a plan).
+   * `unaddressed` is a soft anti-"phantom-completion" signal, not a hard verdict.
+   */
+  planProgress?: { totalSteps: number; addressedCount: number; unaddressed: string[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +209,16 @@ interface UnifiedMemoryLike {
 // ---------------------------------------------------------------------------
 // Default config
 // ---------------------------------------------------------------------------
+
+/** Theme 2 (auto-plan): max decomposed subtasks injected as a plan checklist. */
+const MAX_PLAN_STEPS = 8;
+/** Theme 2 (auto-plan): max chars per subtask after sanitization (bloat + injection guard). */
+const MAX_PLAN_STEP_CHARS = 200;
+/** Theme 2.2 (reasoning-summary): max recent tool actions folded into the summary. */
+const MAX_SUMMARY_ACTIONS = 20;
+/** Theme 2 step-tracking: a plan step counts as "addressed" when at least this
+ *  fraction of its content words (>=4 chars) appear in the turn's tool actions. */
+const PLAN_COVERAGE_THRESHOLD = 0.3;
 
 const DEFAULT_CONFIG: AgentConfig = {
   maxIterations: MAX_AGENT_ITERATIONS,
@@ -1245,6 +1265,9 @@ export class AgentLoop {
     }
 
     let finalResponse = '';
+    // Theme 2 step-tracking: the most recent auto-plan steps injected this run
+    // (empty unless SUDO_AUTO_PLAN produced a plan). Used for turn-end coverage.
+    let _lastPlanSteps: string[] = [];
 
     // Outer loop: drains follow-up messages queued during this turn.
     while (state.followUpMessages.length > 0) {
@@ -1321,6 +1344,44 @@ export class AgentLoop {
           }
         } catch (injErr) {
           log.warn({ sessionId, err: String(injErr) }, 'InjectionDetector: scan threw — continuing');
+        }
+      }
+
+      // Theme 2 (auto-plan): decompose a genuinely complex request into an
+      // explicit subtask checklist, injected as a system message so the agent
+      // works against a plan instead of discovering structure by trial-and-error
+      // — a structural counter to "phantom task completion". Opt-in via
+      // SUDO_AUTO_PLAN=1 (default OFF → zero overhead); fail-open. The cheap
+      // isComplexRequest() heuristic inside decomposeIfComplex gates the single
+      // 150-token micro-call, so simple turns never incur an extra LLM call.
+      if (process.env['SUDO_AUTO_PLAN'] === '1') {
+        try {
+          const decomposed = await decomposeIfComplex(this.brain as unknown as DecomposerBrainLike, current);
+          // Sanitize before injecting as a SYSTEM message (higher trust): collapse
+          // whitespace so a subtask can't smuggle extra lines, cap length to bound
+          // tokens + adversarial content, drop empties, then cap step count.
+          const steps = decomposed.isComplex
+            ? decomposed.subtasks
+                .map((s) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, MAX_PLAN_STEP_CHARS) : ''))
+                .filter((s) => s.length > 0)
+                .slice(0, MAX_PLAN_STEPS)
+            : [];
+          if (steps.length > 0) {
+            const checklist = steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+            session.messages.push({
+              role: 'system',
+              content:
+                '# PLAN FOR THIS TASK\n' +
+                'A suggested breakdown of the request (adapt it as you learn more). Work through the ' +
+                'steps in order, completing each before the next, and verify the whole task is done ' +
+                'before you finish:\n' +
+                checklist,
+            });
+            _lastPlanSteps = steps;
+            log.info({ sessionId, stepCount: steps.length }, 'Auto-plan: decomposed task injected');
+          }
+        } catch (planErr) {
+          log.warn({ sessionId, err: String(planErr) }, 'Auto-plan: decomposition failed — continuing without a plan');
         }
       }
 
@@ -1437,7 +1498,64 @@ export class AgentLoop {
       }
     }
 
-    return { text: finalResponse, attachments, verificationSummary: _verificationSummary };
+    // Theme 2.2: reasoning-summary — surface a transparent recap of what the
+    // agent did this turn (approach, recent steps, confidence). Opt-in
+    // (SUDO_REASONING_SUMMARY=1), additive (attached to the result + logged),
+    // fail-open. Actions are scoped to THIS run's tool calls.
+    let _reasoningSummary: string | undefined;
+    if (process.env['SUDO_REASONING_SUMMARY'] === '1') {
+      try {
+        const toolMsgs = session.messages.filter(
+          (m): m is typeof m & { toolName: string } => m.role === 'tool' && typeof m.toolName === 'string',
+        );
+        const recent = toolMsgs.slice(-MAX_SUMMARY_ACTIONS);
+        const actions: AgentAction[] = recent.map((m) => ({
+          tool: m.toolName,
+          result: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+          timestamp: new Date().toISOString(),
+        }));
+        if (actions.length > 0) {
+          const summary = buildReasoningSummary(actions, message);
+          _reasoningSummary = formatReasoningSummary(summary);
+          log.info({ sessionId, steps: summary.stepsCompleted.length, confidence: summary.confidence }, 'Reasoning summary built');
+        }
+      } catch (err) {
+        log.warn({ sessionId, err: String(err) }, 'Reasoning summary failed — continuing');
+      }
+    }
+
+    // Theme 2 step-tracking: APPROXIMATE coverage of the injected plan by this
+    // turn's tool actions. Token-overlap (bidirectional) — NOT substring-on-tool-
+    // name — and surfaced only as a soft "unaddressed steps" signal, never a hard
+    // "step done" claim. Present only when a plan was injected; fail-open.
+    let _planProgress: { totalSteps: number; addressedCount: number; unaddressed: string[] } | undefined;
+    if (_lastPlanSteps.length > 0) {
+      try {
+        const haystack = session.messages
+          .filter((m): m is typeof m & { toolName: string } => m.role === 'tool' && typeof m.toolName === 'string')
+          .slice(-MAX_SUMMARY_ACTIONS)
+          .map((m) => `${m.toolName} ${typeof m.content === 'string' ? m.content : ''}`)
+          .join(' ')
+          .toLowerCase();
+        const unaddressed: string[] = [];
+        for (const step of _lastPlanSteps) {
+          const tokens = step.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [];
+          if (tokens.length === 0) continue; // can't judge — don't flag
+          const hits = tokens.filter((t) => haystack.includes(t)).length;
+          if (hits / tokens.length < PLAN_COVERAGE_THRESHOLD) unaddressed.push(step);
+        }
+        _planProgress = { totalSteps: _lastPlanSteps.length, addressedCount: _lastPlanSteps.length - unaddressed.length, unaddressed };
+        if (unaddressed.length > 0) {
+          log.warn({ sessionId, unaddressed: unaddressed.length, total: _lastPlanSteps.length }, 'Plan tracking: some planned steps appear unaddressed (approximate)');
+        } else {
+          log.info({ sessionId, total: _lastPlanSteps.length }, 'Plan tracking: all planned steps appear addressed (approximate)');
+        }
+      } catch (err) {
+        log.warn({ sessionId, err: String(err) }, 'Plan tracking failed — continuing');
+      }
+    }
+
+    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress };
   }
 
   /** Return the resolved config for this loop instance. */
@@ -1695,7 +1813,9 @@ export class AgentLoop {
           if (this._traceStore) {
             this._traceStore.recordBrainCall(
               state.sessionId,
-              effectiveModel ?? model ?? 'unknown',
+              // Attribute to the model that ACTUALLY answered (consensus/failover may
+              // differ from the requested effectiveModel) so the flywheel learns true outcomes.
+              response.model ?? effectiveModel ?? model ?? 'unknown',
               response.finishReason !== 'error',
               0, // latencyMs not available from BrainResponse; placeholder
             );
@@ -2223,7 +2343,7 @@ export class AgentLoop {
                     lastUserMsg,
                     tc.name,
                     undefined,  // category unknown at this point
-                    effectiveModel ?? model ?? 'unknown',
+                    response.model ?? effectiveModel ?? model ?? 'unknown', // actual model, not the suggested one
                     true,       // success — we are in the success branch
                     0,          // latencyMs placeholder
                   );
@@ -2357,7 +2477,7 @@ export class AgentLoop {
                     lastUserMsg,
                     tc.name,
                     undefined,  // category unknown
-                    effectiveModel ?? model ?? 'unknown',
+                    response.model ?? effectiveModel ?? model ?? 'unknown', // actual model, not the suggested one
                     false,      // failure
                     0,          // latencyMs placeholder
                   );

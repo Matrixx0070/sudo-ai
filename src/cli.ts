@@ -80,6 +80,9 @@ import { BenchStore } from './core/eval/bench-store.js';
 import { ProposalStore } from './core/learning/proposal-store.js';
 import { scoreComplexity } from './core/agent/complexity-scorer.js';
 import { SkillDiscovery } from './core/learning/skill-discovery.js';
+import { TraceStore } from './core/learning/trace-store.js';
+import { TraceAnalyzer } from './core/learning/trace-analyzer.js';
+import { TraceDrivenPolicy } from './core/learning/trace-driven-policy.js';
 import { AgentConfigEvolver } from './core/learning/agent-config-evolver.js';
 import { SkillOptimizer } from './core/skills/skill-optimizer.js';
 import { SkillOptimizationStore } from './core/skills/skill-optimization-store.js';
@@ -967,6 +970,48 @@ async function boot(): Promise<void> {
       finalAgentLoop.setTaintTracker(taintTracker);
     } catch (err: unknown) {
       log.warn({ err: String(err) }, 'TaintTracker wiring into loop failed — taint violation checks disabled');
+    }
+  }
+
+  // Theme 1 (learning flywheel, slice 1): wire TraceStore so the agent loop
+  // records execution traces (routing / brain / tool outcomes) into a local
+  // SQLite DB — the foundation the policy learner + skill-forge build on later.
+  // RECORDING-ONLY (no routing influence yet). Opt-in via SUDO_TRACE_LEARNING=1
+  // (default OFF → zero change); never persists under ZDR; fully fail-open.
+  if (process.env['SUDO_TRACE_LEARNING'] === '1') {
+    // Whole block is fail-open (incl. the dynamic ZDR import) so this feature can
+    // never crash boot. ZDR was already resolved during finalAgentLoop construction.
+    try {
+      const traceDataDir = process.env['DATA_DIR'];
+      const { isZDRBlocked } = await import('./core/privacy/zdr-mode.js');
+      if (isZDRBlocked('trace_upload')) {
+        log.info('Learning flywheel: ZDR active — trace recording disabled');
+      } else if (!traceDataDir) {
+        log.warn('Learning flywheel: DATA_DIR not set — trace recording skipped');
+      } else {
+        const traceStore = new TraceStore(path.join(traceDataDir, 'traces.db'));
+        await traceStore.init();
+        finalAgentLoop.setTraceStore(traceStore);
+        registerShutdown(() => traceStore.close());
+        log.info({ db: path.join(traceDataDir, 'traces.db') }, 'Learning flywheel: TraceStore wired — recording execution traces');
+
+        // Theme 1 slice 2: TraceDrivenPolicy — learned ROUTING INFLUENCE.
+        // Strictly opt-in BEYOND recording (SUDO_TRACE_POLICY=1) and honoring the
+        // module kill-switch (SUDO_POLICY_DISABLE=1). Conservative by construction
+        // (rules need >=5 calls and confidence >= 0.3), fail-open, and a no-op until
+        // enough trace history accumulates. Rules are built once at boot here;
+        // refreshPolicies() does SYNCHRONOUS SQLite aggregation, so it is NOT run on
+        // a recurring event-loop timer (async/worker periodic refresh is a follow-up).
+        if (process.env['SUDO_TRACE_POLICY'] === '1' && process.env['SUDO_POLICY_DISABLE'] !== '1') {
+          const traceAnalyzer = new TraceAnalyzer(traceStore);
+          const tracePolicy = new TraceDrivenPolicy(traceStore, traceAnalyzer);
+          tracePolicy.refreshPolicies();
+          finalAgentLoop.setTraceDrivenPolicy(tracePolicy);
+          log.info('Learning flywheel: TraceDrivenPolicy wired — learned routing influence active (conservative; SUDO_POLICY_DISABLE=1 to disable)');
+        }
+      }
+    } catch (err: unknown) {
+      log.warn({ err: String(err) }, 'Learning flywheel: trace recording setup failed — continuing without it');
     }
   }
 

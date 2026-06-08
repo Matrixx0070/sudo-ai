@@ -44,6 +44,7 @@ import { resetCommand } from './builtin/reset.js';
 import { backupCommand } from './builtin/backup.js';
 import { cronCommand } from './builtin/cron.js';
 import { benchCommand } from './builtin/bench.js';
+import { forgeCommand } from './builtin/forge.js';
 
 /**
  * Register all built-in slash commands on the given registry.
@@ -68,6 +69,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register(backupCommand);
   registry.register(cronCommand);
   registry.register(benchCommand);
+  registry.register(forgeCommand);
 
   // Help must be registered last so it sees all other commands.
   registry.register(createHelpCommand(registry));

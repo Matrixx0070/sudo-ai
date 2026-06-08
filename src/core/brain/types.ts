@@ -206,6 +206,11 @@ export interface SystemPromptOptions {
    */
   activeHints?: string[];
   /**
+   * Pre-rendered analytical reasoning-lens block (see reasoning-lens.ts),
+   * injected as a dedicated "Reasoning Lens" section when the task matches.
+   */
+  reasoningLens?: string;
+  /**
    * Session peerId for scoping workspace injections.
    * If provided and does NOT match mainPeerId, MEMORY.md is excluded.
    */
