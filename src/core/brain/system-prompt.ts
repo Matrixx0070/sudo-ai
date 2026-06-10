@@ -12,7 +12,7 @@ import { PATHS } from '../shared/constants.js';
 import { PROJECT_ROOT } from '../shared/paths.js';
 import { getPersonaSystemBlock } from './personas.js';
 import { getMoodSystemBlock } from './moods.js';
-import { isPromptCacheEnabled, sortByName } from './prompt-cache-discipline.js';
+import { isPromptCacheEnabled, sortByName, DYNAMIC_BOUNDARY_MARKER } from './prompt-cache-discipline.js';
 import type { SystemPromptOptions } from './types.js';
 
 const log = createLogger('brain:system-prompt');
@@ -284,7 +284,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // Everything above: stable (SOUL, IDENTITY, USER, tools) → reused across calls.
   // Everything below: dynamic (date, mood, memory, consciousness) → fresh each call.
   // With SUDO_PROMPT_CACHE=1 the date/time block also sits below this line.
-  parts.push('\n<!-- __SYSTEM_PROMPT_DYNAMIC_BOUNDARY__ -->');
+  parts.push('\n' + DYNAMIC_BOUNDARY_MARKER);
 
   if (promptCacheStable) {
     parts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));

@@ -444,7 +444,9 @@ SUDO_POLICY_AGG_WINDOW_DAYS=30             # Recency window for trace-policy agg
 SUDO_STUCK_DETECTOR=1                      # Result-aware stuck detection (identical tool-error streaks: warn at 3, abort at 5)
 SUDO_STUCK_DETECTOR_WARN_THRESHOLD=3       # Consecutive identical errors before a change-strategy warning
 SUDO_STUCK_DETECTOR_ABORT_THRESHOLD=5      # Consecutive identical errors before terminating the run
-SUDO_PROMPT_CACHE=1                        # Stable-prefix discipline for provider prompt caches (timestamp below boundary, sorted tools)
+SUDO_PROMPT_CACHE=1                        # Stable-prefix discipline for provider prompt caches (timestamp below boundary, sorted tools;
+                                           #   Anthropic models also get explicit cache_control breakpoints on last tool + stable system prefix)
+SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1    # Keep the stable prefix but skip the explicit Anthropic breakpoints
 ```
 
 Boolean flags use exact-`=1` matching (mirror of the kill-switches). Numeric flags ignore malformed values. Everything is fail-open: a failed feature init logs a warning and the agent keeps running without it. Which of these to enable is an operator decision; none change behavior unless set.

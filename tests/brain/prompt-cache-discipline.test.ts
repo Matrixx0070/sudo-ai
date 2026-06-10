@@ -6,22 +6,33 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   isPromptCacheEnabled,
+  isCacheBreakpointsEnabled,
+  isAnthropicModelId,
+  buildCachedSystemMessages,
+  markLastToolForCache,
   sortToolEntries,
   sortByName,
+  DYNAMIC_BOUNDARY_MARKER,
 } from '../../src/core/brain/prompt-cache-discipline.js';
 import { assembleSystemPrompt } from '../../src/core/brain/system-prompt.js';
 
 const FLAG = 'SUDO_PROMPT_CACHE';
+const KILL_SWITCH = 'SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE';
 const BOUNDARY = '<!-- __SYSTEM_PROMPT_DYNAMIC_BOUNDARY__ -->';
 
 let saved: string | undefined;
+let savedKill: string | undefined;
 beforeEach(() => {
   saved = process.env[FLAG];
+  savedKill = process.env[KILL_SWITCH];
   delete process.env[FLAG];
+  delete process.env[KILL_SWITCH];
 });
 afterEach(() => {
   if (saved === undefined) delete process.env[FLAG];
   else process.env[FLAG] = saved;
+  if (savedKill === undefined) delete process.env[KILL_SWITCH];
+  else process.env[KILL_SWITCH] = savedKill;
 });
 
 describe('isPromptCacheEnabled', () => {
@@ -31,6 +42,88 @@ describe('isPromptCacheEnabled', () => {
     expect(isPromptCacheEnabled()).toBe(false);
     process.env[FLAG] = '1';
     expect(isPromptCacheEnabled()).toBe(true);
+  });
+});
+
+describe('isCacheBreakpointsEnabled', () => {
+  it('requires the master flag', () => {
+    expect(isCacheBreakpointsEnabled()).toBe(false);
+    process.env[FLAG] = '1';
+    expect(isCacheBreakpointsEnabled()).toBe(true);
+  });
+
+  it('kill-switch disables breakpoints while the master flag stays on', () => {
+    process.env[FLAG] = '1';
+    process.env[KILL_SWITCH] = '1';
+    expect(isCacheBreakpointsEnabled()).toBe(false);
+    expect(isPromptCacheEnabled()).toBe(true);
+  });
+});
+
+describe('isAnthropicModelId', () => {
+  it('matches only the anthropic/ provider prefix', () => {
+    expect(isAnthropicModelId('anthropic/claude-sonnet-4-5')).toBe(true);
+    expect(isAnthropicModelId('xai/grok-3-fast')).toBe(false);
+    expect(isAnthropicModelId('ollama/anthropic-style')).toBe(false);
+  });
+});
+
+describe('buildCachedSystemMessages', () => {
+  const exported = DYNAMIC_BOUNDARY_MARKER;
+
+  it('exported marker matches the literal used by the system prompt', () => {
+    expect(exported).toBe(BOUNDARY);
+  });
+
+  it('splits at the boundary: stable part gets the breakpoint, dynamic part does not', () => {
+    const prompt = `STABLE PART\n${BOUNDARY}\nDYNAMIC PART`;
+    const msgs = buildCachedSystemMessages(prompt);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toMatchObject({
+      role: 'system',
+      content: 'STABLE PART\n',
+      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    });
+    expect(msgs[1]).toEqual({ role: 'system', content: `${BOUNDARY}\nDYNAMIC PART` });
+    expect(msgs[0]!.content + msgs[1]!.content).toBe(prompt);
+  });
+
+  it('no boundary → single uncached system message', () => {
+    const msgs = buildCachedSystemMessages('plain prompt');
+    expect(msgs).toEqual([{ role: 'system', content: 'plain prompt' }]);
+  });
+
+  it('boundary at position 0 (nothing stable) → single uncached system message', () => {
+    const prompt = `${BOUNDARY}\nall dynamic`;
+    expect(buildCachedSystemMessages(prompt)).toEqual([{ role: 'system', content: prompt }]);
+  });
+});
+
+describe('markLastToolForCache', () => {
+  it('marks only the last entry and preserves tool fields', () => {
+    const entries: Array<[string, { description: string }]> = [
+      ['alpha', { description: 'a' }],
+      ['zeta', { description: 'z' }],
+    ];
+    const marked = markLastToolForCache(entries);
+    expect(marked[0]![1]).not.toHaveProperty('providerOptions');
+    expect(marked[1]![1]).toMatchObject({
+      description: 'z',
+      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    });
+  });
+
+  it('does not mutate the input entries or tool objects', () => {
+    const tool = { description: 'z' };
+    const entries: Array<[string, typeof tool]> = [['zeta', tool]];
+    markLastToolForCache(entries);
+    expect(tool).not.toHaveProperty('providerOptions');
+    expect(entries[0]![1]).toBe(tool);
+  });
+
+  it('empty entries pass through unchanged', () => {
+    const empty: Array<[string, unknown]> = [];
+    expect(markLastToolForCache(empty)).toBe(empty);
   });
 });
 

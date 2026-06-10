@@ -12,7 +12,7 @@ import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/c
 import { ModelFailover } from './failover.js';
 import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
-import { sortToolEntries } from './prompt-cache-discipline.js';
+import { sortToolEntries, isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages, markLastToolForCache } from './prompt-cache-discipline.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
@@ -850,16 +850,25 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       try {
         const modelHandle = getModel(modelId);
 
+        // SUDO_PROMPT_CACHE=1 + Anthropic model: explicit cache_control breakpoints —
+        // system prompt split at the dynamic boundary (stable part cached) and the
+        // last sorted tool marked. Non-Anthropic paths are byte-identical to before.
+        const cacheBreakpoints = isCacheBreakpointsEnabled() && isAnthropicModelId(modelId);
+
         const streamParams: Record<string, unknown> = {
           model: modelHandle,
-          system: systemPrompt,
-          messages: toSDKMessages(request.messages),
+          messages: cacheBreakpoints
+            ? [...buildCachedSystemMessages(systemPrompt), ...toSDKMessages(request.messages)]
+            : toSDKMessages(request.messages),
           temperature,
           maxOutputTokens: maxTokens,
         };
+        if (!cacheBreakpoints) {
+          streamParams.system = systemPrompt;
+        }
 
         if (request.tools && request.tools.length > 0) {
-          const toolEntries = request.tools.map((t): [string, unknown] => {
+          const toolEntries = request.tools.map((t): [string, object] => {
             const raw = t as Record<string, unknown>;
             const fn = raw['function'] as Record<string, unknown> | undefined;
             const name = (fn?.['name'] as string | undefined) ?? (raw['name'] as string | undefined) ?? '';
@@ -871,7 +880,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
             })];
           });
           // SUDO_PROMPT_CACHE=1: deterministic tool order → byte-stable prefix for provider caches.
-          streamParams.tools = Object.fromEntries(sortToolEntries(toolEntries));
+          let sortedEntries = sortToolEntries(toolEntries);
+          if (cacheBreakpoints) {
+            sortedEntries = markLastToolForCache(sortedEntries);
+          }
+          streamParams.tools = Object.fromEntries(sortedEntries);
         }
 
         const result = streamText(streamParams as Parameters<typeof streamText>[0]);
@@ -923,14 +936,22 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // model, and fallback to local models still calls the cloud model.
     modelId = profile.id;
 
+    // SUDO_PROMPT_CACHE=1 + Anthropic model: explicit cache_control breakpoints
+    // (see stream() — same gating; non-Anthropic paths unchanged).
+    const cacheBreakpoints = isCacheBreakpointsEnabled() && isAnthropicModelId(modelId);
+
     const callParams: Record<string, unknown> = {
-      system: systemPrompt,
-      messages: toSDKMessages(request.messages),
+      messages: cacheBreakpoints
+        ? [...buildCachedSystemMessages(systemPrompt), ...toSDKMessages(request.messages)]
+        : toSDKMessages(request.messages),
       temperature,
       maxOutputTokens: maxTokens,
     };
+    if (!cacheBreakpoints) {
+      callParams.system = systemPrompt;
+    }
     if (request.tools && request.tools.length > 0) {
-      const toolEntries = request.tools.map((t: any): [string, unknown] => {
+      const toolEntries = request.tools.map((t: any): [string, object] => {
         const name = t.function?.name ?? t.name;
         const desc = t.function?.description ?? t.description;
         const params = t.function?.parameters ?? t.parameters;
@@ -940,7 +961,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         })];
       });
       // SUDO_PROMPT_CACHE=1: deterministic tool order → byte-stable prefix for provider caches.
-      callParams.tools = Object.fromEntries(sortToolEntries(toolEntries));
+      let sortedEntries = sortToolEntries(toolEntries);
+      if (cacheBreakpoints) {
+        sortedEntries = markLastToolForCache(sortedEntries);
+      }
+      callParams.tools = Object.fromEntries(sortedEntries);
     }
     // A4: obtain the completion through the auth-profile rotation path — rotates
     // across multiple API keys for this provider on rate-limit/auth/billing errors
@@ -961,6 +986,8 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       process.env['SUDO_TOOL_EMPTY_RETRY_DISABLE'] !== '1'
     ) {
       log.warn({ modelId }, 'Empty response with tools — retrying without tools');
+      // When cacheBreakpoints=true the system prompt lives in callParams.messages
+      // (leading system messages), not callParams.system — do not re-add a system key here.
       const noToolParams = { ...callParams };
       delete noToolParams.tools;
       // Slightly raise temperature for the retry to avoid deterministic empty loops
