@@ -1,8 +1,8 @@
 # SUDO-AI v4 — Project Summary for External AI Analysis
 
-Generated: 2026-04-30 04:25 UTC
-Branch: `self-build`
-Commits ahead of main: 5 (Ollama switch + 3 fixes)
+Generated: 2026-04-30 04:25 UTC. Accuracy pass: 2026-06-10 (branch `main`; stats and
+file references refreshed; the 2026-04-30 Ollama-migration narrative in §6–§8 is kept
+as dated history).
 
 ---
 
@@ -86,8 +86,12 @@ Background:
 
 ## 4. Directory Structure
 
+Paths are portable: `src/core/shared/paths.ts` resolves `PROJECT_ROOT` from
+`SUDO_AI_HOME` (or cwd). Note `src/core/shared/constants.ts` `PATHS` entries are
+still cwd-relative — launch from the project root (or set cwd = `SUDO_AI_HOME`).
+
 ```
-/root/sudo-ai-v4/
+<project-root>/
 ├── src/
 │   ├── core/
 │   │   ├── brain/           # LLM interface, failover, model routing
@@ -122,7 +126,7 @@ Background:
 ├── data/                    # Runtime data (SQLite DBs, logs, cache, sessions)
 │   ├── logs/                # pm2 logs (can grow large — 9GB+ before rotation)
 │   └── cron/                # Persistent cron job store
-├── tests/                   # Vitest test suite (3684+ tests)
+├── tests/                   # Vitest test suite (6,000+ tests)
 ├── ops/                     # Grafana dashboards, deployment scripts
 └── scripts/
     └── relay-ws.cjs         # CLI-to-SUDO-AI WS relay for testing
@@ -183,14 +187,14 @@ SUDO_AI_DASHBOARD_TOKEN=<REDACTED>
 4. First non-empty response wins
 5. If all cloud fail → sequential fallback through local models
 
-**Known Ollama quirks (fixed today):**
+**Known Ollama quirks (fixed 2026-04-30):**
 - **Empty responses with tools**: Ollama returns `finishReason: "stop"` with empty `text` when tools are attached via Vercel AI SDK `aiTool()`. Fix: retry once without tools.
 - **Tool loops**: Aggressive system prompts cause Ollama to return `tool_calls` for conversational queries. Fix: softened instruction.
 - **Parallel racing bug (FIXED)**: `_callSingleModel()` was using `request.model` instead of `profile.id`, causing all 3 parallel calls to hit the SAME model.
 
 ---
 
-## 7. Recent Changes (Today's Commits)
+## 7. Changes of 2026-04-30 (historical)
 
 | Commit | Message | What changed |
 |--------|---------|-------------|
@@ -202,9 +206,24 @@ SUDO_AI_DASHBOARD_TOKEN=<REDACTED>
 
 ---
 
-## 8. Known Issues & Workarounds
+### Since then (2026-05/06 hardening loop, PRs #15–#38)
 
-### Current (post-fixes)
+- Intelligence/learning epic: GoalPlanner semantic per-run cap, async SkillForge scan,
+  bounded policy aggregation window, `toSqliteTimestamp` time-format bug-fix class,
+  opt-in anticipatory Predictor injection + closed `recordOutcome()` learning loop,
+  FailureLearner durable SQLite backend, ToolOutcomeLearner activation wiring.
+  All behavior changes are **flag-gated, default-OFF, fail-open** — see
+  `docs/api-reference.md#opt-in-intelligence-flags` (7 flags).
+- Portability: hardcoded `/root/...` paths removed (`paths.ts` `PROJECT_ROOT`);
+  CI actions on the node24 runtime; `verify` gate script
+  (`pnpm lint && pnpm test && pnpm build`); test-data dirs untracked;
+  internal campaign framing scrubbed from source comments.
+
+---
+
+## 8. Known Issues & Workarounds (as of 2026-04-30, kept for history)
+
+### Post-fixes
 1. **Latency**: 15-30 seconds per response because:
    - Ollama models return tool calls for conversational queries
    - Agent loop executes tools before returning text
@@ -215,7 +234,7 @@ SUDO_AI_DASHBOARD_TOKEN=<REDACTED>
 
 3. **Telegram session stuck**: Existing session `vxx9yjDdTtKZIQVDZVD_b` was in a 3+ hour tool loop. New messages should create fresh sessions with the fixed code.
 
-### Fixed today
+### Fixed 2026-04-30
 - Health-monitor CRITICAL alert spam (thresholds raised + disk-persisted cooldown)
 - Parallel racing all hitting same model (profile.id fix)
 - Empty responses from Ollama (tool-empty retry)
@@ -227,25 +246,28 @@ SUDO_AI_DASHBOARD_TOKEN=<REDACTED>
 
 If you're analyzing this codebase, start here:
 
-| File | Purpose | Lines |
+| File | Purpose | Lines (2026-06-10) |
 |------|---------|-------|
-| `src/core/brain/brain.ts` | Main LLM interface, parallel racing, failover | 950 |
-| `src/core/brain/providers.ts` | Provider factory (Ollama, xAI, OpenAI, etc.) | 318 |
-| `src/core/brain/failover.ts` | Model cooldown, error tracking, cloud/local split | 334 |
-| `src/core/agent/loop.ts` | Agent loop: iterations, tool calls, session mgmt | 1436 |
-| `src/core/agent/tool-router.ts` | Keyword-based tool selection | 614 |
-| `src/core/channels/telegram.ts` | Telegram bot adapter | 995 |
+| `src/core/brain/brain.ts` | Main LLM interface, parallel racing, failover | ~1,400 |
+| `src/core/brain/providers.ts` | Provider factory (Ollama, xAI, OpenAI, etc.) | ~320 |
+| `src/core/brain/failover.ts` | Model cooldown, error tracking, cloud/local split | ~330 |
+| `src/core/agent/loop.ts` | Agent loop: iterations, tool calls, session mgmt | ~2,780 |
+| `src/core/agent/tool-router.ts` | Keyword-based tool selection | ~610 |
+| `src/core/channels/telegram.ts` | Telegram bot adapter | ~990 |
 | `src/core/channels/web.ts` | WebSocket/HTTP adapter | ~400 |
-| `src/core/tools/registry.ts` | Tool registration and execution | ~500 |
+| `src/core/tools/registry.ts` | Tool registration and execution | ~530 |
 | `src/core/consciousness/kairos.ts` | Health monitoring daemon | ~400 |
 | `src/core/alignment/` | Veto gate, epistemic, calibration, diagnostics | 15+ files |
-| `src/cli.ts` | Entry point, bootstraps all modules | ~300 |
+| `src/cli.ts` | Entry point, bootstraps all modules | ~2,450 |
 
 ---
 
 ## 10. How to Test
 
 ```bash
+# Full gate: lint + tests + build (the repo's green gate)
+npm run verify
+
 # WS relay test (local)
 timeout 60 node scripts/relay-ws.cjs "Your message here"
 
@@ -281,10 +303,16 @@ curl -H "Authorization: Bearer $GATEWAY_TOKEN" \
 | `SUDO_GROK_REFUSAL_DETECT_DISABLE` | unset | Kill-switch for refusal detection |
 | `SUDO_TEXT_TOOLCALL_FALLBACK_DISABLE` | unset | Kill-switch for text tool parsing |
 
+Opt-in intelligence/learning flags (`SUDO_PREDICTOR_LOOP`, `SUDO_PREDICTOR_AUTO_RESOLVE`,
+`SUDO_FAILURE_LEARNER_DB`, `SUDO_TOOL_OUTCOME_LEARNER`,
+`SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN`, `SUDO_SKILL_FORGE_ASYNC`,
+`SUDO_POLICY_AGG_WINDOW_DAYS`) are all default-OFF and documented in
+`docs/api-reference.md#opt-in-intelligence-flags`.
+
 ---
 
 ## 12. Session Summary for External AI
 
-SUDO-AI is a production autonomous agent (v4) running on Ubuntu/Node.js with Ollama-hosted LLMs. It was recently migrated from the local gateway to Ollama cloud models. Today's fixes resolved: (1) health-monitor alert spam, (2) all parallel model calls hitting the same model due to a `profile.id` vs `request.model` bug, (3) Ollama returning empty responses when tools are attached, (4) runaway tool loops caused by overly aggressive system prompts.
+SUDO-AI is a production autonomous agent (v4) running on Ubuntu/Node.js with Ollama-hosted LLMs (migrated from a local gateway to Ollama cloud models in April 2026; §6–§8 record that migration's fixes). Since then a 2026-05/06 hardening loop landed PRs #15–#38: flag-gated learning/intelligence slices, path portability, CI/runtime updates, and doc/comment hygiene.
 
-The codebase is ~25k lines of TypeScript with 3684+ tests. Key areas for any external analysis should be: `src/core/brain/brain.ts` (LLM interface), `src/core/agent/loop.ts` (agent execution), and `src/core/channels/telegram.ts` (message I/O).
+The codebase is ~1,180 TypeScript files / ~265K lines in `src/` with 6,000+ Vitest tests. Key areas for any external analysis: `src/core/brain/brain.ts` (LLM interface), `src/core/agent/loop.ts` (agent execution), and `src/core/channels/telegram.ts` (message I/O).
