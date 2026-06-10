@@ -479,6 +479,7 @@ The inverse of kill-switches: these enable learning/prediction features that are
 | `SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN` | non-negative integer | unbounded | Caps GoalPlanner semantic-planning calls per run; `0` is valid and means template-only planning (no semantic calls). Suggested starting value: `3` |
 | `SUDO_SKILL_FORGE_ASYNC=1` | boolean | off | SkillForge scan runs cooperatively, yielding to the event loop between batches; output is identical to the synchronous scan |
 | `SUDO_POLICY_AGG_WINDOW_DAYS` | positive integer | all history | Bounds trace-policy aggregate refresh to the most recent N days (suggested starting value: `30`) |
+| `SUDO_STUCK_DETECTOR=1` | boolean | off | Result-aware stuck detection in the agent loop: consecutive identical tool *errors* from the same tool inject a change-strategy warning at `SUDO_STUCK_DETECTOR_WARN_THRESHOLD` (positive integer, default `3`) and terminate the run at `SUDO_STUCK_DETECTOR_ABORT_THRESHOLD` (positive integer, default `5`). Complements LoopGuard/DoomLoop (which key on tool+args before execution); wait/poll-style tools are exempt |
 
 **Related (documented elsewhere):** the trace-learning flywheel flags `SUDO_TRACE_LEARNING=1`, `SUDO_TRACE_POLICY=1`, and `SUDO_POLICY_REFRESH_MS` follow the same opt-in pattern.
 

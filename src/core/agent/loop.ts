@@ -45,6 +45,7 @@ import type {
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
 import { LoopGuard } from './loop-guard.js';
 import { DoomLoopDetector } from './doom-loop.js';
+import { StuckDetector } from './stuck-detector.js';
 import { generateIntelligenceBrief } from './intelligence-brief.js';
 import { shouldFork, forkSession } from '../sessions/session-fork.js';
 import type { ForkSessionManager } from '../sessions/session-fork.js';
@@ -260,6 +261,7 @@ export class AgentLoop {
   private readonly config: AgentConfig;
   private readonly loopGuard = new LoopGuard();
   private readonly doomLoopDetector = new DoomLoopDetector();
+  private readonly stuckDetector = new StuckDetector();
   private readonly consciousness: ConsciousnessLike | null;
   private readonly security: SecurityGuardLike | null;
   private readonly toolRouter: ToolRouter;
@@ -1760,6 +1762,7 @@ export class AgentLoop {
     // Reset loop guard at the start of every outer-turn inner loop.
     this.loopGuard.reset();
     this.doomLoopDetector.onNewTurn();
+    this.stuckDetector.reset();
 
     try {
       while (state.iteration < maxIterations) {
@@ -2454,6 +2457,13 @@ export class AgentLoop {
             log.warn({ err: String(aggErr) }, 'AlignmentAggregator threw — proceeding');
           }
 
+          // StuckDetector: remember where tool-result messages start for this batch.
+          // Tightened again right before executeToolCalls; post-execution system
+          // pushes (alignment, surprise-replan, injection redaction) land inside
+          // the window but are excluded by the role==='tool' filter below — do
+          // NOT add synthetic tool-role messages in that region.
+          let _stuckPreCount = session.messages.length;
+
           try {
             // Consciousness Deep Bridge: inject pre-tool metacognitive guidance + counterfactual lessons.
             if (this._deepBridge) {
@@ -2468,6 +2478,7 @@ export class AgentLoop {
               }
             }
 
+            _stuckPreCount = session.messages.length;
             await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager, this._feedbackMemory);
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
@@ -2640,6 +2651,42 @@ export class AgentLoop {
             } catch { /* fail-open */ }
             throw toolErr;
           }
+
+          // StuckDetector: result-aware repeated-error detection (opt-in via
+          // SUDO_STUCK_DETECTOR=1, fail-open). Unlike LoopGuard/DoomLoop (which
+          // key on tool+args BEFORE execution), this inspects the results that
+          // just came back and breaks no-progress retry streaks.
+          if (this.stuckDetector.enabled) {
+            let stuckAborted = false;
+            try {
+              for (let _si = _stuckPreCount; _si < session.messages.length; _si++) {
+                const _sm = session.messages[_si] as { role: string; content: unknown; toolName?: string } | undefined;
+                if (!_sm || _sm.role !== 'tool') continue;
+                const _content = typeof _sm.content === 'string' ? _sm.content : JSON.stringify(_sm.content);
+                const _toolName = _sm.toolName ?? 'unknown';
+                const stuckResult = this.stuckDetector.recordResult(_toolName, _content, !isToolResultSuccess(_sm.content));
+                if (stuckResult.action === 'warn') {
+                  const stuckWarn = `[StuckDetector] ${stuckResult.reason ?? 'Repeated identical tool errors detected'}`;
+                  session.messages.push({ role: 'system', content: stuckWarn });
+                  emit({ type: 'error', error: stuckWarn });
+                  log.warn({ tool: _toolName, sessionId: state.sessionId }, 'StuckDetector warning injected');
+                } else if (stuckResult.action === 'abort') {
+                  const stuckAbort = `[StuckDetector] Stuck loop terminated — breaking: ${stuckResult.reason ?? ''}`;
+                  emit({ type: 'error', error: stuckAbort });
+                  log.error({ tool: _toolName, sessionId: state.sessionId }, 'StuckDetector abort triggered');
+                  session.messages.push({ role: 'system', content: stuckAbort });
+                  finalText = `I stopped because I kept hitting the same tool error: ${stuckResult.reason ?? 'repeated identical errors'}`;
+                  session.messages.push({ role: 'assistant', content: finalText });
+                  stuckAborted = true;
+                  break;
+                }
+              }
+            } catch (stuckErr) {
+              log.warn({ err: String(stuckErr) }, 'StuckDetector threw — continuing (fail-open)');
+            }
+            if (stuckAborted) break;
+          }
+
           continue;
         }
 
