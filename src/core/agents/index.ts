@@ -49,8 +49,7 @@ export {
 } from './team-manager.js';
 export type { Team, TeamMember } from './team-manager.js';
 
-// Wave 5 Priority-1: Versioned Agent Config REST resource
-// Builder B will wire registerAgentRoutes() into the gateway in a single commit.
+// Versioned Agent Config REST resource
 export { AgentConfigStore } from './store.js';
 export { registerAgentRoutes } from './routes.js';
 export type {

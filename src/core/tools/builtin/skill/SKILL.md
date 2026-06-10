@@ -90,7 +90,7 @@ These tools enable SUDO-AI to **reflect on its own tool use** — examining perf
 
 ## skill.federate
 
-**Description:** Publishes tool refinement events to the federation layer (AuditChainSync from Wave 7E) or fetches peer events. Fails open when federation is not configured.
+**Description:** Publishes tool refinement events to the federation layer (AuditChainSync) or fetches peer events. Fails open when federation is not configured.
 
 **Parameters:**
 - `action` (string, required): `"publish"` or `"fetch"`.

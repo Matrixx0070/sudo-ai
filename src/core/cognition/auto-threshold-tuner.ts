@@ -8,7 +8,6 @@
  * adjustment is applied. Result is always clamped to [0.3, 0.95].
  *
  * Pure module — no REST wiring here (wired in admin-routes.ts + cli.ts).
- * File boundary: Senior Builder (Wave 7C). No other agent touches this file.
  */
 
 import { createLogger } from '../shared/logger.js';

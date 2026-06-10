@@ -16,8 +16,7 @@
  * Auth: GATEWAY_TOKEN env var (timing-safe). Same pattern as gateway/http-api.ts.
  * Body: capped at 256 KB.
  *
- * NOTE: Builder B will wire registerAgentRoutes() into the gateway in a
- * single commit after all Wave 5 modules are complete.
+ * NOTE: registerAgentRoutes() is wired into the gateway separately.
  */
 
 import { timingSafeEqual } from 'node:crypto';

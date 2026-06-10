@@ -4,11 +4,9 @@
  *
  * Entries are keyed by keyId (string). Default TTL is 1 hour.
  * Size cap is 1000 entries; when exceeded the oldest 100 entries (by fetchedAt)
- * are batch-evicted (10% oldest pattern from Wave 10C metrics.ts).
+ * are batch-evicted (10% oldest pattern from metrics.ts).
  *
  * Kill-switch: SUDO_FED_KEY_CACHE_TTL_MS — numeric override for TTL in ms.
- *
- * Wave 10H — Builder B1.
  */
 
 import { createLogger } from '../shared/logger.js';

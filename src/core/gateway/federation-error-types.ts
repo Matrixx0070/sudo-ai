@@ -1,8 +1,6 @@
 /**
  * @file gateway/federation-error-types.ts
  * @description Type definitions for federation error reporting protocol.
- *
- * Wave 2 — Federation Error Protocol.
  */
 
 // ---------------------------------------------------------------------------

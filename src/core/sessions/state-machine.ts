@@ -1,6 +1,6 @@
 /**
  * @file state-machine.ts
- * @description Wave 5 — Session state machine for SUDO-AI v4.
+ * @description Session state machine for SUDO-AI v4.
  *
  * States:
  *   idle        — session created, waiting for input

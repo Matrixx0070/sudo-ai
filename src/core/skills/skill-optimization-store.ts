@@ -6,8 +6,6 @@
  * This store is skill-centric (per-field patches, 3-status lifecycle).
  *
  * DB path: data/skill-optimizations.db
- *
- * Wave 13 Builder 1.
  */
 
 import Database from 'better-sqlite3';
@@ -57,7 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_so_created   ON skill_optimizations(created_at DE
 
 /**
  * Idempotent migration: widens the status CHECK constraint to include 'auto-applied'.
- * Required for existing DBs that were created by Wave 13 with the narrower constraint.
+ * Required for existing DBs that were created with the narrower constraint.
  *
  * SQLite cannot ALTER a CHECK constraint in-place. We use the standard
  * "12-step ALTER TABLE" approach: create new table, copy data, drop old, rename.
@@ -162,7 +160,7 @@ export class SkillOptimizationStore {
       }
       this.db = new Database(dbPath);
       this.db.exec(SCHEMA);
-      // Widen CHECK constraint to include 'auto-applied' for existing DBs (Wave 13 → P2-d).
+      // Widen CHECK constraint to include 'auto-applied' for existing DBs.
       applyAutoAppliedMigration(this.db);
       log.info({ dbPath }, 'SkillOptimizationStore initialised');
     } catch (err: unknown) {
@@ -333,7 +331,7 @@ export class SkillOptimizationStore {
   }
 
   /**
-   * Mark a proposal as auto-applied (P2-d: SkillOptimizer.autoApplyApproved).
+   * Mark a proposal as auto-applied (SkillOptimizer.autoApplyApproved).
    * Transitions the status from 'pending' to 'auto-applied'.
    * Throws if not found.
    */

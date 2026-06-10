@@ -9,9 +9,7 @@
  * Reuses proven Linux from browser/computer-use.ts (executeComputerAction, ScreenAction) + system/sandbox.
  * Every outcome -> learner.onToolResult('control.xxx' ...).
  * Hooks for approval (via config) + KAIROS/arsenal (triggerRepair).
- * 100x metrics support in harness.
- *
- * P1 boundaries only.
+ * Metrics support in harness.
  */
 
 import { execFile } from 'node:child_process';
@@ -132,7 +130,7 @@ export class LinuxComputerUse implements IComputerUse {
         stderr = res.stderr;
         exitCode = res.exitCode;
       } else {
-        // P1 fix HIGH-1: scrub even in direct path (never raw process.env)
+        // Fix HIGH-1: scrub even in direct path (never raw process.env)
         const baseEnv = buildSandboxEnv(policy || DEFAULT_SANDBOX_POLICY);
         const childEnv = opts.env ? { ...baseEnv, ...opts.env } : baseEnv;
         const { stdout: so, stderr: se } = await execFileAsync('/bin/sh', ['-c', cmd], {
@@ -179,7 +177,7 @@ export class LinuxComputerUse implements IComputerUse {
       log.info({ url: params.url }, 'browser navigate (screen-level; use browser.* tools for full web)');
     }
 
-    // P1 fix HIGH-2: re-apply window guard (MEMORY.md isolation) before screen actions for control.gui/browser
+    // Fix HIGH-2: re-apply window guard (MEMORY.md isolation) before screen actions for control.gui/browser
     // (dupe minimal logic since runWindowGuard not exported from browser/ and boundaries forbid edit there)
     const BLOCKED_WINDOW_RE = /^(Terminal|claude|Claude|SUDO_TUI_TEST)/i;
     const GUARDED = new Set(['click','type','scroll','key']);
@@ -222,8 +220,8 @@ export class LinuxComputerUse implements IComputerUse {
 
       const absPath = path.resolve(params.path);
 
-      // P1 fix HIGH-3: sensitive FS denylist + SOUL exfil protection for control.file (read/write/delete/list/stat on creds/MEMORY/.ssh etc)
-      // P1 refine (Codex post-remed + lessons): narrow to sensitive *subpaths* only (not broad /root /home which blocked normal workspace ops); workspace-rel allowed (e.g. the project root, /home/*/proj, /tmp); still protects real secrets per SOUL "never exfiltrate".
+      // Fix HIGH-3: sensitive FS denylist + SOUL exfil protection for control.file (read/write/delete/list/stat on creds/MEMORY/.ssh etc)
+      // Refine (Codex post-remed + lessons): narrow to sensitive *subpaths* only (not broad /root /home which blocked normal workspace ops); workspace-rel allowed (e.g. the project root, /home/*/proj, /tmp); still protects real secrets per SOUL "never exfiltrate".
       const SENSITIVE_DENY = ['/etc/shadow', '/etc/passwd', '/root/.ssh', '/home/.ssh', 'MEMORY.md', 'data/credentials', '/root/.aws', '/root/.config/sudo-ai', '/boot', '/var/lib/sudo'];
       const normalized = absPath.toLowerCase();
       if (SENSITIVE_DENY.some(s => normalized.includes(s.toLowerCase()) || normalized.startsWith(path.resolve(s).toLowerCase()))) {
@@ -268,7 +266,7 @@ export class LinuxComputerUse implements IComputerUse {
       direction: params.direction as 'up' | 'down' | undefined,
     };
 
-    // P1 fix HIGH-2: same window guard for control.gui (dupe for small step; protects MEMORY)
+    // Fix HIGH-2: same window guard for control.gui (dupe for small step; protects MEMORY)
     const BLOCKED_WINDOW_RE = /^(Terminal|claude|Claude|SUDO_TUI_TEST)/i;
     const GUARDED = new Set(['click','type','scroll','key']);
     if (GUARDED.has(params.action) || params.action === 'key') {

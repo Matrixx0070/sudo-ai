@@ -4,7 +4,7 @@
  *
  * Provides a pure function to check whether a skill's declared capabilities
  * are permitted by its trust tier policy. Uses DEFAULT_TIER_CAPS from the
- * shared Wave 10 types contract.
+ * shared marketplace types contract.
  *
  * Trust hierarchy (most to least trusted):
  *   bundled    — full caps: fs.read, fs.write, net.fetch, db.read, db.write, shell.exec, skill.load

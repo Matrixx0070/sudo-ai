@@ -6,7 +6,7 @@
  * loads active commitments to inject as system-context messages, ensuring
  * the agent remains aware of prior failure modes throughout its session.
  *
- * Wave 6B feature — no external dependencies beyond audit-trail types.
+ * No external dependencies beyond audit-trail types.
  */
 
 import { createLogger } from '../shared/logger.js';

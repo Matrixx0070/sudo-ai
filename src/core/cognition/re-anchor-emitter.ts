@@ -8,8 +8,7 @@
  * and the cli.ts startup emission. Factory pattern keeps each call site decoupled —
  * no circular imports, no shared state.
  *
- * Wave 7D — extends re-anchor trigger coverage beyond startup.
- * File boundary: Senior Builder (Wave 7D). No other agent touches this file.
+ * Extends re-anchor trigger coverage beyond startup.
  */
 
 import { randomUUID } from 'crypto';

@@ -2,7 +2,6 @@
  * @file operators/operator-types.ts
  * @description Re-exports OperatorManifest and related types from wave10-types.
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
  * Import from this file for all operator-related type usage.
  */
 

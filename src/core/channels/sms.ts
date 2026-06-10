@@ -9,7 +9,7 @@
  *
  * Vault-first: start() calls vault.get('channels', 'TWILIO_AUTH_TOKEN') first,
  * and vault.get('channels', 'TWILIO_WEBHOOK_SECRET') first, both falling back
- * to process.env. This is load-bearing for Wave 4.
+ * to process.env. This is load-bearing.
  *
  * Security: TWILIO_AUTH_TOKEN is NEVER logged. Only last 4 chars of account SID
  * are logged. Signature validation uses twilio.validateRequest (timing-safe).

@@ -25,7 +25,7 @@ import type {
   DesktopActionParams,
   DesktopResult,
 } from './types.js';
-// P1 fix HIGH-1: scrub env on mac exec
+// Fix HIGH-1: scrub env on mac exec
 import { buildSandboxEnv } from '../../../../sandbox/sandbox-runner.js';
 import { DEFAULT_SANDBOX_POLICY } from '../../../../sandbox/sandbox-types.js';
 
@@ -59,7 +59,7 @@ export class MacComputerUse implements IComputerUse {
       return { success: false, stdout: '', stderr: 'kill', exitCode: 1, durationMs: Date.now() - start, platform: 'mac' };
     }
     try {
-      // P1 fix HIGH-1: scrub secrets
+      // Fix HIGH-1: scrub secrets
       const policy = (this.config as any).sandboxPolicy || DEFAULT_SANDBOX_POLICY;
       const baseEnv = buildSandboxEnv(policy);
       const childEnv = opts.env ? { ...baseEnv, ...opts.env } : baseEnv;
@@ -76,7 +76,7 @@ export class MacComputerUse implements IComputerUse {
   }
 
   async browser(params: BrowserActionParams): Promise<BrowserResult> {
-    // P1 refine (Codex post-remed): do not report mac browser stub (no-op) as success; accurate for cross-platform.
+    // Refine (Codex post-remed): do not report mac browser stub (no-op) as success; accurate for cross-platform.
     const err = 'control.browser stub on mac (P1 refine: no-op not reported success per Codex; real via osascript in full)';
     await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, false, err);
     return { action: params.action, success: false, error: err };
@@ -85,8 +85,8 @@ export class MacComputerUse implements IComputerUse {
   async file(params: FileOpParams): Promise<FileResult> {
     try {
       const abs = path.resolve(params.path);
-      // P1 fix HIGH-3: denylist mac control.file
-      // P1 refine (Codex post-remed + lessons): narrow to sensitive subpaths/workspace-rel (not broad /root/home); cross-consistent with linux/win.
+      // Fix HIGH-3: denylist mac control.file
+      // Refine (Codex post-remed + lessons): narrow to sensitive subpaths/workspace-rel (not broad /root/home); cross-consistent with linux/win.
       const SENSITIVE_DENY = ['/etc/shadow', '/etc/passwd', '/root/.ssh', '/home/.ssh', 'MEMORY.md', 'data/credentials', '/root/.aws', '/root/.config/sudo-ai', '/boot', '/var/lib/sudo'];
       const norm = abs.toLowerCase();
       if (SENSITIVE_DENY.some(s => norm.includes(s.toLowerCase()))) {
@@ -111,14 +111,14 @@ export class MacComputerUse implements IComputerUse {
   }
 
   async gui(params: GUIActionParams): Promise<GUIResult> {
-    // P1 refine (Codex post-remed): do not report mac gui stub (no-op) as success; accurate for cross-platform.
+    // Refine (Codex post-remed): do not report mac gui stub (no-op) as success; accurate for cross-platform.
     const err = 'control.gui stub on mac (P1 refine: no-op not reported success per Codex; real via osascript in full)';
     await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, false, err);
     return { action: params.action, success: false, error: err };
   }
 
   async desktop(params: DesktopActionParams): Promise<DesktopResult> {
-    // P1 refine (Codex post-remed): do not report mac desktop stub (no-op) as success; accurate for cross-platform.
+    // Refine (Codex post-remed): do not report mac desktop stub (no-op) as success; accurate for cross-platform.
     const err = 'control.desktop stub on mac (P1 refine: no-op not reported success per Codex)';
     await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, false, err);
     return { action: params.action, success: false, error: err, data: { target: params.target } };

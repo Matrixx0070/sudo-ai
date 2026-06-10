@@ -3,13 +3,13 @@
  * @description SQL statement strings for SkillRegistry.
  * Extracted to keep registry.ts under 300 lines.
  *
- * Wave 10 extension: added trust_tier + caps_json columns via ALTER TABLE.
+ * Marketplace extension: added trust_tier + caps_json columns via ALTER TABLE.
  * SQLite has no "IF NOT EXISTS" for ALTER TABLE ADD COLUMN, so we wrap each
  * ALTER in try/catch and swallow "duplicate column name" errors.
  */
 
 /**
- * Apply Wave 10 schema alterations to the skills table.
+ * Apply marketplace schema alterations to the skills table.
  * Must be called after the base 001-skills.sql migration runs.
  * Safe to call multiple times — duplicate column errors are swallowed.
  */
@@ -32,7 +32,7 @@ export function applyWave10Migrations(db: import('better-sqlite3').Database): vo
 }
 
 /**
- * Apply Wave 10 Phase 1 data migration: rename display-string skill names to canonical slugs.
+ * Apply data migration: rename display-string skill names to canonical slugs.
  * Safe to call multiple times — UPDATE WHERE is a no-op when already slugged.
  * Must be called after applyWave10Migrations().
  */

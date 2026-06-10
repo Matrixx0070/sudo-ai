@@ -655,7 +655,7 @@ const META_TOOLS: ToolDefinition[] = [
   forgeTool,
   feedbackTool,
   selfImproveTool,
-  // Wave 1 — dependency-injected meta tools
+  // Dependency-injected meta tools
   sessionsSpawnTool,
   memorySearchTool,
   memoryGetTool,
@@ -675,7 +675,7 @@ export function registerMetaTools(registry: ToolRegistry): void {
   for (const tool of META_TOOLS) {
     registry.register(tool);
   }
-  // P2-c sub-wave: meta search, install, and synthesize tools
+  // Meta search, install, and synthesize tools
   registerSearchTools(registry);
   registerInstallTools(registry);
   registerSynthesizeTools(registry);

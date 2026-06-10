@@ -33,12 +33,12 @@ export type {
 export { JournalSessionStore } from './journal-store.js';
 export { DualSessionManager } from './dual-manager.js';
 
-// Wave 4b: SQLite Session Store
+// SQLite Session Store
 export { SqliteSessionStore, SessionStoreError } from './sqlite-session-store.js';
 export type { SessionRow, MessageRow, ListSessionsOptions } from './sqlite-session-store.js';
 export { migrateJsonlToSqlite } from './migrate-jsonl.js';
 
-// Wave 5: Session State Machine + REST Routes
+// Session State Machine + REST Routes
 export { SessionStateMachine, SessionStateError } from './state-machine.js';
 export type { SessionStatus } from './state-machine.js';
 export { registerSessionRoutes, buildSessionRouteDeps } from './routes.js';

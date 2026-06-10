@@ -3,8 +3,6 @@
  * @description Pure helper that builds a DiscordanceSignals object from the
  * current agent loop state. All fields fail-open to neutral zeros when data
  * is absent or malformed.
- *
- * Wave 6E — Primitive A (Builder A).
  */
 
 import type { DiscordanceSignals } from '../security/discordance-detector.js';

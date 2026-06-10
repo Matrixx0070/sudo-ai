@@ -110,7 +110,7 @@ export interface HttpApiDeps {
     recordOutcome?(outcome: { timestamp: number; kind: string; weight?: number }): void;
     getOutcomeBreakdown?(opts?: { windowDays?: number }): { kind: string; count: number; score: number }[];
   };
-  /** Optional — if absent, POST /v1/admin/commitments/resolve returns 503. Wave 6N. */
+  /** Optional — if absent, POST /v1/admin/commitments/resolve returns 503. */
   commitmentResolutionTracker?: {
     resolve(
       commitmentRef: string,
@@ -118,7 +118,7 @@ export interface HttpApiDeps {
       notes?: string,
     ): { id: string; commitmentRef: string; resolution: string; ts: number; notes?: string } | null;
     isResolved(commitmentRef: string): boolean;
-    /** Optional — forwarded to AdminRoutesDeps for GET /v1/admin/digest. Wave 6Q. */
+    /** Optional — forwarded to AdminRoutesDeps for GET /v1/admin/digest. */
     getStats?(opts?: { windowDays?: number }): {
       total: number;
       honored: number;
@@ -145,7 +145,7 @@ export interface HttpApiDeps {
       analyzedAt: string;
     };
   };
-  /** Optional — if absent, GET /v1/admin/calibration returns 503. Wave 6L. */
+  /** Optional — if absent, GET /v1/admin/calibration returns 503. */
   confidenceCalibrationTracker?: {
     getReport(opts?: { windowDays?: number; tag?: string }): {
       totalSamples: number;
@@ -165,7 +165,7 @@ export interface HttpApiDeps {
       computedAt: string;
     };
   };
-  /** Optional — if absent, GET /v1/admin/diagnostics returns 503. Wave 6M. */
+  /** Optional — if absent, GET /v1/admin/diagnostics returns 503. */
   crossSignalDiagnostics?: {
     analyze(opts?: {
       windowDays?: number;
@@ -187,7 +187,7 @@ export interface HttpApiDeps {
       totalEventsScanned: number;
     };
   };
-  /** Optional — if absent, GET /v1/admin/reanchor/stats and /recent return 503. Wave 6P. */
+  /** Optional — if absent, GET /v1/admin/reanchor/stats and /recent return 503. */
   reanchorMonitor?: {
     getStats(opts?: { windowDays?: number }): {
       total: number;
@@ -203,7 +203,7 @@ export interface HttpApiDeps {
       snippet: string;
     }>;
   };
-  /** Optional — if absent, GET /v1/admin/veto/threshold returns 503. Wave 7C. */
+  /** Optional — if absent, GET /v1/admin/veto/threshold returns 503. */
   autoThresholdTuner?: {
     computeVetoThreshold(baseThreshold: number): number;
     getLastComputation(): {
@@ -215,9 +215,9 @@ export interface HttpApiDeps {
       computedAt: string;
     } | null;
   };
-  /** Optional — Wave 7E federation. If absent, /v1/federation/* routes are not registered. */
+  /** Optional — federation. If absent, /v1/federation/* routes are not registered. */
   federation?: FederationRoutesDeps;
-  /** Optional — if absent, GET /v1/admin/remediation/stats returns 503. Wave 8E. */
+  /** Optional — if absent, GET /v1/admin/remediation/stats returns 503. */
   alignmentAutoRemediator?: {
     getStats(): {
       observationCount: number;
@@ -227,7 +227,7 @@ export interface HttpApiDeps {
       inCooldown: boolean;
     };
   };
-  /** Optional — if absent, skill optimization endpoints return 503. Wave 13. */
+  /** Optional — if absent, skill optimization endpoints return 503. */
   skillOptimizationStore?: {
     list(filter: {
       status?: SkillOptimizationStatus;
@@ -238,15 +238,15 @@ export interface HttpApiDeps {
     reject(id: string, reason?: string): SkillOptimizationProposal;
     getById(id: string): SkillOptimizationProposal | null;
   };
-  /** Optional — Wave 10 bench routes. If absent, /v1/admin/bench/* routes are not registered. */
+  /** Optional — bench routes. If absent, /v1/admin/bench/* routes are not registered. */
   bench?: BenchRoutesDeps;
-  /** Optional — Wave 10 learning routes. If absent, /v1/admin/learning/* routes are not registered. */
+  /** Optional — learning routes. If absent, /v1/admin/learning/* routes are not registered. */
   learning?: LearningRoutesDeps;
-  /** Optional — Wave 10 savings routes (Builder 3). If absent, /v1/savings is not registered. */
+  /** Optional — savings routes. If absent, /v1/savings is not registered. */
   savings?: { costTracker: CostTrackerLike };
-  /** Optional — Wave 10 compare routes (Builder 3). If absent, /v1/admin/compare is not registered. */
+  /** Optional — compare routes. If absent, /v1/admin/compare is not registered. */
   compare?: { brain: CompareBrainLike; complexityScorer: ComplexityScorerLike };
-  /** Optional — Wave 2 Federation Error Protocol. If absent, /v1/federation/error-* routes are not registered. */
+  /** Optional — Federation Error Protocol. If absent, /v1/federation/error-* routes are not registered. */
   errorIngestor?: FederationErrorRoutesDeps['errorIngestor'];
   tokenPool?: FederationErrorRoutesDeps['tokenPool'];
   fedAuth?: FederationErrorRoutesDeps['fedAuth'];
@@ -404,7 +404,7 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse, 
 
   const completionId = `chatcmpl-${randomUUID().slice(0, 8)}`;
 
-  // Wave 10: score prompt complexity and attach to response.
+  // Score prompt complexity and attach to response.
   let complexityResult: unknown;
   try {
     const { scoreComplexity } = await import('../agent/complexity-scorer.js');
@@ -472,18 +472,18 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   if (deps.federation) {
     registerFederationRoutes(server, deps.federation, tokenBuf);
   }
-  // Wave 2 — Federation Error Protocol
+  // Federation Error Protocol
   if (deps.errorIngestor && deps.tokenPool) {
     registerFederationErrorRoutes(server, { errorIngestor: deps.errorIngestor, tokenPool: deps.tokenPool, fedAuth: deps.fedAuth ?? (() => false) }, tokenBuf);
   }
-  // Wave 10: bench + learning routes
+  // Bench + learning routes
   if (deps.bench) {
     registerBenchRoutes(server, deps.bench, tokenBuf);
   }
   if (deps.learning) {
     registerLearningRoutes(server, deps.learning, tokenBuf);
   }
-  // Wave 10: savings + compare routes (Builder 3)
+  // Savings + compare routes
   if (deps.savings) {
     registerSavingsRoutes(server, deps.savings);
   }
@@ -536,7 +536,7 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
       sendError(res, 404, 'Not found');
     }
 
-    // Wave 10 P1: /.well-known routes are handled by registerWellKnownRoutes listener.
+    // /.well-known routes are handled by registerWellKnownRoutes listener.
     // This standalone guard MUST be outside the /v1/ block so it fires for non-/v1/ paths.
     if (pathname.startsWith('/.well-known')) { return; }
 

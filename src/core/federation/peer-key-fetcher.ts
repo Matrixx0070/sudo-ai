@@ -7,8 +7,6 @@
  * keyId are coalesced via an in-flight Map.
  *
  * Kill-switch: SUDO_FED_KEY_FETCH_DISABLE=1 → return null without any network call.
- *
- * Wave 10H — Builder B1.
  */
 
 import { createLogger } from '../shared/logger.js';
@@ -25,7 +23,7 @@ const FETCH_TIMEOUT_MS = 3_000;
 
 /**
  * Shape of the JSON body returned by GET /v1/federation/public-key on a peer.
- * Matches Wave 10G ArtifactSigner.getPublicKey() response + retiring extension.
+ * Matches the ArtifactSigner.getPublicKey() response + retiring extension.
  */
 export interface PeerPublicKeyResponse {
   keyId: string;

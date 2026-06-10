@@ -59,7 +59,7 @@ export interface SleepSession {
     recurringCount: number;
     analyzedAt: string;
   };
-  /** Summary from CrossSignalDiagnostics run at end of cycle. Wave 6M. */
+  /** Summary from CrossSignalDiagnostics run at end of cycle. */
   diagnostics?: {
     trustSpikeCount: number;
     epistemicBlockSpikeCount: number;
@@ -74,14 +74,14 @@ export interface SleepSession {
     totalEventsScanned: number;
     analyzedAt: string;
   };
-  /** Summary from ReAnchorMonitor run at end of cycle. Wave 6P. */
+  /** Summary from ReAnchorMonitor run at end of cycle. */
   reanchor?: {
     total: number;
     byTrigger: Record<string, number>;
     lastReAnchorAt?: number;
     analyzedAt: string;
   };
-  /** Peer audit summaries pulled during post-Phase-5 audit. Wave 8D. */
+  /** Peer audit summaries pulled during post-Phase-5 audit. */
   peerAudits?: PeerAuditSummary[];
 }
 
@@ -91,7 +91,6 @@ export interface SleepSession {
 
 /**
  * Summary of a peer's recent audit tail, pulled during sleep-cycle post-Phase-5.
- * Wave 8D.
  */
 export interface PeerAuditSummary {
   /** Name of the peer (from PeerRegistry). */

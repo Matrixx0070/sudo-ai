@@ -208,7 +208,7 @@ async function handleRequest(
   const [pathname] = url.split('?');
   const searchParams = new URLSearchParams(url.includes('?') ? url.split('?')[1] : '');
 
-  // POST /v1/skills/import — Wave 10
+  // POST /v1/skills/import
   if (method === 'POST' && pathname === '/v1/skills/import') {
     // FIX 4: rate limit — 10 req/min per token (or per-IP)
     const rl = checkImportRateLimit(req);

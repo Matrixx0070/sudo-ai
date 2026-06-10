@@ -1,8 +1,6 @@
 /**
  * @file recipes/index.ts
  * @description Barrel export for recipes module.
- *
- * Wave 10 — Builder 3 (Config + Ops + UX)
  */
 
 export { RecipeComposer } from './recipe-composer.js';

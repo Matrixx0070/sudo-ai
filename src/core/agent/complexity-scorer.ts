@@ -1,6 +1,6 @@
 /**
  * @file complexity-scorer.ts
- * @description Heuristic prompt complexity scorer for SUDO-AI Wave 10.
+ * @description Heuristic prompt complexity scorer for SUDO-AI.
  *
  * Evaluates a prompt + tool context and returns a ComplexityResult with:
  *   - score: 0..1 normalised composite

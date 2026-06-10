@@ -14,7 +14,7 @@
  *   - Rate limit: 60 req/min/IP (reuses checkListRateLimit map)
  *   - Cache-Control: public, max-age=60
  *
- * Wave 10 Phase 1 — agentskills.io compliance.
+ * Implements agentskills.io compliance.
  *
  * SECURITY: origin is pinned to SUDO_PUBLIC_BASE_URL env var; request headers
  * (Host, X-Forwarded-Proto) are NOT trusted to prevent Host Header Injection.

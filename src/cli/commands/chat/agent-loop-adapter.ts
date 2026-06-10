@@ -126,7 +126,7 @@ export class TuiAgentAdapter {
     };
     const agentLoop = new AgentLoop(brain, registry, sessionMgr, { maxIterations: 500 }, undefined, undefined, undefined, undefined, sandboxManager);
 
-    // --- InjectionDetector (Wave 6O) — stateless pure detector, no DB. Fail-open. ---
+    // --- InjectionDetector — stateless pure detector, no DB. Fail-open. ---
     try {
       const { InjectionDetector } = await import('../../../core/cognition/injection-detector.js');
       agentLoop.setInjectionDetector(new InjectionDetector({
@@ -137,7 +137,7 @@ export class TuiAgentAdapter {
       void msg; // fail-open — injection scanning is defense-in-depth
     }
 
-    // --- ConfidenceCalibrationTracker (Wave 6L + 6Q 8th signal). Fail-open. ---
+    // --- ConfidenceCalibrationTracker (8th digest signal). Fail-open. ---
     try {
       const Database = (await import('better-sqlite3')).default;
       const calDb = new Database(path.join(tuiDataDir, 'calibration.db'));

@@ -3,11 +3,9 @@
  * seccomp BPF filter denying execve (NR 59) and execveat (NR 322) inside
  * the bwrap child process for tool.synthesize.
  *
- * Wave 2.2h — SUDO-AI v4
- *
  * Design: loaded via LD_PRELOAD inside the already-exec'd node process.
  * The constructor fires before main(), installing NNP + a KILL_PROCESS
- * filter. Wave 2.2g's filter (bwrap-installed) allows execve for bwrap's
+ * filter. The baseline 2.2g filter (bwrap-installed) allows execve for bwrap's
  * own exec of node; this stacked filter denies all subsequent execve/execveat
  * from JS code. Kernel AND semantics: both must ALLOW; result is DENY.
  *

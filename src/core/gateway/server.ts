@@ -120,7 +120,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     pathname.startsWith('/v1/vaults') ||
     pathname.startsWith('/v1/registry') ||
     pathname.startsWith('/v1/federation/') ||   // Federation routes (registered via server.on('request'))
-    pathname.startsWith('/.well-known') ||   // Wave 10 P1: agentskills.io discovery (public no-auth)
+    pathname.startsWith('/.well-known') ||   // agentskills.io discovery (public no-auth)
     pathname === '/v1/models' ||
     pathname === '/v1/chat/completions' ||    // Handled by http-api.ts via Brain's direct provider connections
     (pathname === '/chat' || pathname.startsWith('/chat/')) ||   // WebAdapter: GET /chat (HTML) and WS upgrade /chat/ws

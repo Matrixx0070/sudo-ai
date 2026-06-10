@@ -9,7 +9,7 @@
  * Peers must have distinct names.
  * Missing/malformed env → empty registry, fail-open.
  *
- * Wave 7E — federation MVP.
+ * Federation MVP.
  */
 
 import { timingSafeEqual } from 'node:crypto';

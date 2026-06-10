@@ -9,7 +9,6 @@
  *  - Automatic message chunking at 4096 characters.
  *  - Allowlist enforcement from config.
  *  - Graceful start / stop lifecycle.
- * Phase 3 strict: comment hygiene (naming intent preserved; no splits/moves).
  */
 
 import { Bot, type Context, GrammyError, InputFile, InlineKeyboard } from 'grammy';
@@ -841,7 +840,7 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
 
-    // Wave 3: per-peer rate limiting
+    // Per-peer rate limiting
     const rl = await rateLimiter.check('telegram', userId);
     if (!rl.allowed) {
       if (!rl.burstWarned) {

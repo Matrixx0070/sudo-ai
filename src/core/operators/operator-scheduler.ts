@@ -2,8 +2,6 @@
  * @file operators/operator-scheduler.ts
  * @description Schedules loaded OperatorManifest entries via interval or cron.
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
- *
  * Design:
  *   - interval operators: setInterval with value (seconds) × 1000
  *   - cron operators: best-effort next-fire calculation (no external dep)

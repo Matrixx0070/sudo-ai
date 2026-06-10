@@ -1,6 +1,6 @@
 /**
  * @file security/taint-tracker.ts
- * @description Data provenance taint tracking for SUDO-AI Wave 10.
+ * @description Data provenance taint tracking for SUDO-AI.
  *
  * Propagation rules (from wave10-spec.md Section B11):
  *   Rule 1: Every ToolCallResult from external tool → Taint{level='medium', source='tool_output'}.

@@ -1,12 +1,12 @@
 /**
  * @file skill-bench.ts
- * @description Skill condition benchmark wrapper for SUDO-AI Wave 10+.
+ * @description Skill condition benchmark wrapper for SUDO-AI.
  *
  * Runs the same task set under 4 SkillConditions:
  *   - no_skills:             no skills loaded
  *   - skills_on:             skills loaded, unoptimized
  *   - skills_optimized:      skills loaded with optimization
- *   - skills_post_optimizer: skills loaded with SkillOptimizer-approved proposals (Wave 13)
+ *   - skills_post_optimizer: skills loaded with SkillOptimizer-approved proposals
  *
  * Emits a Markdown report comparing performance across conditions.
  * Re-uses BenchRunner for the actual sweep logic.
@@ -50,7 +50,7 @@ export interface SkillBenchOptions {
   /** BenchStore for persisting results. */
   store: BenchStore;
   /**
-   * Optional — if absent, skills_post_optimizer behaves identically to skills_on. Wave 13.
+   * Optional — if absent, skills_post_optimizer behaves identically to skills_on.
    * Provide the SkillOptimizer (or any duck-typed object with getApprovedForSkill).
    */
   skillOptimizer?: {

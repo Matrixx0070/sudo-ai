@@ -43,7 +43,7 @@ const ERR_METHOD_NOT_FOUND = -32601;
 // ---------------------------------------------------------------------------
 
 export interface MCPServerOptions {
-  /** Transport: 'stdio' (default) or 'http'. 'http' is Phase 2 — stub only in Wave 3. */
+  /** Transport: 'stdio' (default) or 'http'. 'http' is not yet implemented — stub only. */
   transport: 'stdio' | 'http';
   /** HTTP port — only used when transport='http'. Default: 18801 */
   port?: number;
@@ -108,7 +108,7 @@ async function dispatchLine(
   // owner and cannot be hijacked mid-session.  Once authenticated, we check the
   // boolean `authenticated` flag on every call rather than re-reading the token
   // (the MCP protocol does not include a token field in tools/call params).
-  // HTTP transport (Phase 2) MUST re-validate the bearer token on every request.
+  // HTTP transport (when implemented) MUST re-validate the bearer token on every request.
   if (method !== 'initialize' && !isAuthenticated()) {
     writeResponse(out, errorResponse(id, ERR_INVALID_REQUEST, 'Unauthorized'));
     return;

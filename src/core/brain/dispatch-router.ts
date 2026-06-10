@@ -171,7 +171,7 @@ export class DispatchRouter {
   private readonly cache = new Map<string, RouteCacheEntry>();
 
   /**
-   * Wave 7D: post-dispatch re-anchor callback. Fired after every successful
+   * Post-dispatch re-anchor callback. Fired after every successful
    * route() call (every outbound dispatch). Fail-open: undefined → skipped.
    */
   private _reAnchorCallback: (() => void) | undefined;
@@ -197,7 +197,7 @@ export class DispatchRouter {
    * Wraps chooseModel() with novelty scoring, caching, and anti-self-promotion.
    * Never throws — falls back to primary model on any error.
    *
-   * Wave 7D: fires post-dispatch re-anchor callback after every successful route.
+   * Fires post-dispatch re-anchor callback after every successful route.
    */
   route(input: DispatchInput): DispatchResult {
     let result: DispatchResult;
@@ -215,7 +215,7 @@ export class DispatchRouter {
       };
     }
 
-    // Wave 7D: post-dispatch re-anchor emission (fail-open).
+    // Post-dispatch re-anchor emission (fail-open).
     // Fires both class-level and module-level callbacks independently (if set).
     // In production, only the module-level global callback is wired from cli.ts.
     // If both are set simultaneously (e.g. in tests), both fire — each emits once.

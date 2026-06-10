@@ -13,8 +13,7 @@
  *   /ingest, /tail, /public-key  → SUDO_FEDERATION_INBOUND_TOKENS (via PeerRegistry.isInboundTokenValid)
  *   /peers and /stats  → GATEWAY_TOKEN (admin bearer, same as admin-routes.ts)
  *
- * Wave 7E — federation MVP.
- * Wave 10H — public-key endpoint + verify-on-ingest.
+ * Includes a public-key endpoint and verify-on-ingest.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -41,7 +40,7 @@ const DEFAULT_SINCE_OFFSET_MS = 60_000; // 1 minute lookback if not specified
 export interface FederationRoutesDeps {
   peerRegistry: PeerRegistry;
   auditChainSync: AuditChainSync;
-  // Wave 10H additions:
+  // Verify-on-ingest additions:
   /** When absent, verify-on-ingest is skipped entirely (backward compat). */
   peerKeyFetcher?: PeerKeyFetcher;
   /** For GET /v1/federation/public-key. When absent, endpoint returns 503. */
@@ -198,7 +197,7 @@ async function handleIngest(
   };
 
   // ---------------------------------------------------------------------------
-  // Wave 10H — optional verify-on-ingest
+  // Optional verify-on-ingest
   // Read signature fields from raw ev (not fedEvent — FederatedEvent has no sig fields).
   // ---------------------------------------------------------------------------
   if (process.env['SUDO_FED_VERIFY_DISABLE'] !== '1' && deps.peerKeyFetcher && deps.artifactSigner) {

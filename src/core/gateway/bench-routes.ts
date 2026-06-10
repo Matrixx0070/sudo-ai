@@ -1,6 +1,6 @@
 /**
  * @file bench-routes.ts
- * @description HTTP routes for the benchmark subsystem (Wave 10).
+ * @description HTTP routes for the benchmark subsystem.
  *
  * Endpoints:
  *   GET  /v1/admin/bench          — C5: list recent bench run summaries

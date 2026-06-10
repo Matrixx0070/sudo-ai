@@ -7,7 +7,7 @@
  * Security: guardMemoryWrite on `system` field; MemoryInjectionError bubbles unchanged.
  *
  * Dynamic list queries (include_archived variants) live in store-queries.ts.
- * Follows the same patterns as SqliteSessionStore (Wave 4b).
+ * Follows the same patterns as SqliteSessionStore.
  */
 
 import { readFileSync } from 'node:fs';

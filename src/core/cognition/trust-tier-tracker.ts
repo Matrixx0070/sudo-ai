@@ -2,7 +2,7 @@
  * @file cognition/trust-tier-tracker.ts
  * @description TrustTierTracker — records observed outcomes and computes a
  * dynamic trust tier (HIGH | MEDIUM | LOW | PROBATION) for an agent based on
- * a rolling 7-day scoring window. Pure module; no REST wiring (deferred Wave 6J).
+ * a rolling 7-day scoring window. Pure module; no REST wiring (deferred).
  *
  * Storage: SQLite table `trust_outcomes(id, ts, kind, weight)`.
  * Scoring: weighted deltas per outcome kind, clamped to [0,1], tier thresholds

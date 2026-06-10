@@ -1,11 +1,11 @@
 /**
  * @file security/signer.ts
- * @description ed25519 artifact signing and verification for SUDO-AI Wave 10G.
+ * @description ed25519 artifact signing and verification for SUDO-AI.
  *
  * Key rotation support:
  *  - Active private keys stored at data/keys/wave10-signer-v{N}.priv (0600).
  *  - Public keys and metadata persisted in KeyRotationStore (SQLite).
- *  - Legacy wave10-signer.{pub,priv} promoted to v1 on first use after Wave 10G deploy.
+ *  - Legacy wave10-signer.{pub,priv} promoted to v1 on first use.
  *  - rotate() generates a new keypair, retires the previous key (24h window by default).
  *  - verify() accepts artifacts from active or retiring keys (dual-verify window).
  *
@@ -335,8 +335,8 @@ export class ArtifactSigner {
    * Verify a SignedArtifact.
    *
    * Supports:
-   *  - Artifacts from Wave 10G+ with keyVersion field (lookup by version).
-   *  - Artifacts from Wave 10F without keyVersion (fallback to keyId lookup).
+   *  - Artifacts with a keyVersion field (lookup by version).
+   *  - Legacy artifacts without keyVersion (fallback to keyId lookup).
    *
    * Kill-switch: SUDO_DUAL_VERIFY_DISABLE=1 → reject anything not status='active'.
    */
@@ -354,7 +354,7 @@ export class ArtifactSigner {
       }
 
       if (!row) {
-        // Backward compat: fall back to keyId lookup (Wave 10F artifacts without keyVersion).
+        // Backward compat: fall back to keyId lookup (legacy artifacts without keyVersion).
         row = this._store.getByKeyId(artifact.keyId);
       }
 

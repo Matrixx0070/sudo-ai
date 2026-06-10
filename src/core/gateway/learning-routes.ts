@@ -1,6 +1,6 @@
 /**
  * @file learning-routes.ts
- * @description HTTP routes for the learning/proposals subsystem (Wave 10).
+ * @description HTTP routes for the learning/proposals subsystem.
  *
  * Endpoints:
  *   GET  /v1/admin/learning/proposals                  — C2: list proposals
@@ -11,8 +11,8 @@
  * Body: capped at 256 KB.
  * Error shape: { error: { message: string; code: number } }
  *
- * ProposalStore is injected via constructor — Builder 1 implements the concrete class.
- * This file depends only on the duck-typed interface from spec G2.
+ * ProposalStore is injected via constructor — this file depends only on the
+ * duck-typed interface, not the concrete class.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -157,7 +157,7 @@ async function handleApprove(req: IncomingMessage, res: ServerResponse, deps: Le
       return;
     }
     const proposal = deps.proposalStore.approve(id);
-    // Wave 10E: sign approved proposal (fail-open).
+    // Sign approved proposal (fail-open).
     let signedArtifact: ReturnType<typeof artifactSigner.sign> | undefined;
     if (process.env['SUDO_SIGNING_DISABLE'] !== '1') {
       try {

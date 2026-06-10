@@ -66,7 +66,7 @@ interface MistakePatternRecognizerLike {
   };
 }
 
-// Duck-typed AuditChainSync interface — avoids hard dep on concrete class. Wave 8D.
+// Duck-typed AuditChainSync interface — avoids hard dep on concrete class..
 interface AuditChainSyncLike {
   listPeers(): string[];
   fetchPeerTail(peerName: string, sinceMs: number, limit?: number): Promise<Array<{
@@ -77,7 +77,7 @@ interface AuditChainSyncLike {
 }
 
 // ---------------------------------------------------------------------------
-// Peer-tail pull helpers (Wave 8D)
+// Peer-tail pull helpers
 // ---------------------------------------------------------------------------
 
 const PEER_PULL_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
@@ -118,7 +118,7 @@ function summarisePeerTail(
 
 /**
  * Pull audit tails from all peers with a hard 15s total timeout.
- * Each peer already has a 3s per-peer timeout inside fetchPeerTail (Wave 7E).
+ * Each peer already has a 3s per-peer timeout inside fetchPeerTail.
  * Fails-open on any individual peer error.
  */
 async function pullAllPeerAudits(
@@ -176,18 +176,18 @@ async function pullAllPeerAudits(
   }
 }
 
-// Duck-typed SkillDiscovery interface — avoids hard dep on concrete class. Wave 11.
+// Duck-typed SkillDiscovery interface — avoids hard dep on concrete class..
 interface SkillDiscoveryLike {
   mine(windowMs?: number): unknown[];
 }
 
-// Duck-typed AgentConfigEvolver interface — avoids hard dep on concrete class. Wave 11.
+// Duck-typed AgentConfigEvolver interface — avoids hard dep on concrete class..
 interface AgentConfigEvolverLike {
   emit(event: string, ...args: unknown[]): boolean;
   listenerCount(event: string): number;
 }
 
-// Duck-typed SkillOptimizer interface — avoids hard dep on concrete class. Wave 13.
+// Duck-typed SkillOptimizer interface — avoids hard dep on concrete class..
 interface SkillOptimizerLike {
   propose(): unknown[];
 }
@@ -303,13 +303,13 @@ export class SleepCycle {
   private readonly mistakePatternRecognizer: MistakePatternRecognizerLike | undefined;
   private readonly crossSignalDiagnostics: CrossSignalDiagnosticsLike | undefined;
   private readonly reanchorMonitor: ReAnchorMonitorLike | undefined;
-  /** Optional skill discovery hook — mines trace patterns during sleep. Wave 11. */
+  /** Optional skill discovery hook — mines trace patterns during sleep. */
   private readonly skillDiscovery: SkillDiscoveryLike | undefined;
-  /** Optional agent config evolver hook — notified on sleep-cycle-complete. Wave 11. */
+  /** Optional agent config evolver hook — notified on sleep-cycle-complete. */
   private readonly agentConfigEvolver: AgentConfigEvolverLike | undefined;
-  /** Optional skill optimizer hook — generates proposals during sleep. Wave 13. */
+  /** Optional skill optimizer hook — generates proposals during sleep. */
   private skillOptimizer: SkillOptimizerLike | undefined;
-  /** Optional audit-chain sync for peer tail pulls. Wave 8D. */
+  /** Optional audit-chain sync for peer tail pulls. */
   private auditChainSync: AuditChainSyncLike | undefined;
 
   constructor(opts: {
@@ -628,7 +628,7 @@ export class SleepCycle {
         }
       }
 
-      // SkillDiscovery hook — mines trace patterns during sleep. Wave 11. Fail-open.
+      // SkillDiscovery hook — mines trace patterns during sleep. Fail-open.
       if (this.skillDiscovery) {
         try {
           const patterns = this.skillDiscovery.mine(24 * 60 * 60 * 1000);
@@ -644,7 +644,7 @@ export class SleepCycle {
         }
       }
 
-      // SkillOptimizer hook — generates skill optimization proposals during sleep. Wave 13. Fail-open.
+      // SkillOptimizer hook — generates skill optimization proposals during sleep. Fail-open.
       if (this.skillOptimizer) {
         try {
           const proposals = this.skillOptimizer.propose();
@@ -660,7 +660,7 @@ export class SleepCycle {
         }
       }
 
-      // AgentConfigEvolver hook — emits sleep-cycle-complete when listeners registered. Wave 11. Fail-open.
+      // AgentConfigEvolver hook — emits sleep-cycle-complete when listeners registered. Fail-open.
       if (this.agentConfigEvolver) {
         try {
           if (this.agentConfigEvolver.listenerCount('sleep-cycle-complete') > 0) {
@@ -678,7 +678,7 @@ export class SleepCycle {
         }
       }
 
-      // Peer-audit tail pull — runs on all cycles including degraded; fail-open. Wave 8D.
+      // Peer-audit tail pull — runs on all cycles including degraded; fail-open.
       if (this.auditChainSync) {
         try {
           peerAuditSummaries = await pullAllPeerAudits(this.auditChainSync, log);
@@ -703,7 +703,7 @@ export class SleepCycle {
   }
 
   // -------------------------------------------------------------------------
-  // Wave 13: skill optimizer injection
+  // Skill optimizer injection
   // -------------------------------------------------------------------------
 
   /**
@@ -720,7 +720,7 @@ export class SleepCycle {
   }
 
   // -------------------------------------------------------------------------
-  // Wave 8D: peer-audit sync injection
+  // Peer-audit sync injection
   // -------------------------------------------------------------------------
 
   /**

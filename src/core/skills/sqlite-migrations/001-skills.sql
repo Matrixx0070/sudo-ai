@@ -1,5 +1,5 @@
 -- ============================================================
--- Wave 5 P2: skills table + session_skills junction table
+-- Skills table + session_skills junction table
 --
 -- skills: append-only, one row per (id, version).
 --   same name + different sha256 = new version row

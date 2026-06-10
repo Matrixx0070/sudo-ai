@@ -3,7 +3,7 @@
  *
  * Builds the RPC method router: a Map from method name → handler function.
  *
- * Wave 3: real wiring to sessionManager, toolRegistry, agentLoop, cronManager.
+ * Real wiring to sessionManager, toolRegistry, agentLoop, cronManager.
  *
  * Each handler receives the raw `params` value from the incoming RpcRequest
  * and returns a result that will be placed in RpcResponse.result.

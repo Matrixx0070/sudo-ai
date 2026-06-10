@@ -2,7 +2,7 @@
  * @file gateway/federation-error-handlers.ts
  * @description Route handlers for federation error endpoints.
  *
- * Wave 2 — Federation Error Protocol.
+ * Part of the Federation Error Protocol.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';

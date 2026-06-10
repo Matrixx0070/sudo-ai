@@ -60,9 +60,9 @@ export class SkillRegistry {
     this.skillsDir = skillsDir;
     this.db.pragma('foreign_keys = ON');
     this.db.exec(readFileSync(MIGRATION_SQL, 'utf8'));
-    // Wave 10: add trust_tier and caps_json columns (idempotent)
+    // Add trust_tier and caps_json columns (idempotent)
     applyWave10Migrations(this.db);
-    // Wave 10 Phase 1: rename display-string skill names to canonical slugs (idempotent)
+    // Rename display-string skill names to canonical slugs (idempotent)
     applyWave10Phase1NameMigration(this.db);
     log.info('skills migrations applied');
     this.q = Object.fromEntries(
@@ -110,7 +110,7 @@ export class SkillRegistry {
         const maxRow = this.q.maxVersion.get(name) as { max_ver: number | null };
         const version = (maxRow.max_ver ?? 0) + 1;
 
-        // Extract trust tier and caps from frontmatter (Wave 10)
+        // Extract trust tier and caps from frontmatter
         const validTiers = new Set(['bundled', 'indexed', 'unreviewed', 'workspace']);
         const tierRaw = meta['trust_tier'] as string | undefined;
         const trust_tier: SkillTrustTier =
@@ -147,7 +147,7 @@ export class SkillRegistry {
    * Recursively scan `rootDir` for files named exactly `SKILL.md` and register
    * them as bundled skills.  Unlike scanAndRegister() (which reads flat `.md`
    * files), this method descends into subdirectories one level at a time so it
-   * can discover the Wave 12 layout:
+   * can discover the bundled-skills layout:
    *   src/core/skills/<category>/<name>/SKILL.md
    *
    * Only real files are visited (symlinks are skipped, matching the security
@@ -302,7 +302,7 @@ export class SkillRegistry {
           ? (rawFm['id'] as string)
           : manifest.name;
 
-      // Wave 10 P1: pass through license, compatibility, display_name from raw frontmatter
+      // Pass through license, compatibility, display_name from raw frontmatter
       // so toPublicEntry() can expose them in registry responses.
       const frontmatter_json = JSON.stringify({
         id: frontmatterId,
@@ -568,7 +568,7 @@ export class SkillRegistry {
       throw new SkillRegistryError(`skill is archived: ${skillId}`, 'ARCHIVED');
     }
 
-    // Wave 10: capability check against trust tier policy
+    // Capability check against trust tier policy
     const rawTier = (metaRow as Record<string, unknown>)?.['trust_tier'] as string | undefined;
     const validTiers = new Set(['bundled', 'indexed', 'unreviewed', 'workspace']);
     const trust_tier: SkillTrustTier =

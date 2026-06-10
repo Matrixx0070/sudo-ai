@@ -301,7 +301,7 @@ export class ApprovalMatrix {
     // Pattern with arg constraint: "system.exec:rm -rf" or "control.exec:rm -rf"
     if (pattern.includes(':') && toolName === pattern.split(':')[0]) {
       const argConstraint = pattern.split(':').slice(1).join(':');
-      // P1 fix: support cmd (control) + command (legacy); also file sub-op via toolName if caller passes 'control.file.write' style
+      // Support cmd (control) + command (legacy); also file sub-op via toolName if caller passes 'control.file.write' style
       const command = (args?.cmd as string | undefined) || (args?.command as string | undefined);
       if (command && this._commandMatchesConstraint(command, argConstraint)) return true;
     }

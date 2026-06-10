@@ -2,8 +2,6 @@
  * @file cli/commands/scan.ts
  * @description sudo-ai scan — environment security audit.
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
- *
  * Checks:
  *   - GATEWAY_TOKEN strength (>= 32 chars)
  *   - LLM API keys configured

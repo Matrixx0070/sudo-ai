@@ -126,18 +126,18 @@ export type HookEvent =
   // Install lifecycle events
   | 'before_install'
   | 'after_install'
-  // Wave 3 — Vault events
+  // Vault events
   | 'vault:set'
   | 'vault:get'
   | 'vault:rotate'
   | 'vault:delete'
-  // Wave 3 — Rate limit events
+  // Rate limit events
   | 'rate-limit:triggered'
-  // Wave 3 — MCP loopback events
+  // MCP loopback events
   | 'mcp:tool-call'
-  // Wave 4 — Cost-optimisation routing event
+  // Cost-optimisation routing event
   | 'model:route:cheap'
-  // Wave 4 — Memory security events
+  // Memory security events
   | 'memory:scan:triggered'
   // Task management events
   | 'task:created'

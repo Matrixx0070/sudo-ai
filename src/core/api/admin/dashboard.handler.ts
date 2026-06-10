@@ -10,7 +10,7 @@
  * Registration: imported by admin/index.ts at startup. Routes shadow the
  * corresponding stubs in admin-router.ts only when this module is imported
  * before the stubs (i.e. admin-router stubs must be removed or deferred).
- * During Wave 3 integration the stubs for these paths will be removed.
+ * The stubs for these paths will be removed during integration.
  */
 
 import os from 'node:os';

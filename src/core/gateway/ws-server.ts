@@ -66,20 +66,20 @@ function trackIpDisconnect(ip: string): void {
 /**
  * Server-level dependencies passed in at startup.
  * All fields are typed as `unknown` so ws-server.ts remains decoupled from
- * the concrete types of each subsystem until Wave 3 wires them fully.
+ * the concrete types of each subsystem.
  */
 export interface WsServerDeps {
   /** The Node.js http.Server that the WebSocket server will attach to. */
   httpServer: HttpServer;
-  /** Session manager — will be used by chat/sessions handlers in Wave 3. */
+  /** Session manager — used by chat/sessions handlers. */
   sessionManager: unknown;
-  /** Tool registry — will be used by tools.catalog in Wave 3. */
+  /** Tool registry — used by tools.catalog. */
   toolRegistry: unknown;
-  /** Agent loop — will be used by chat.send / chat.abort in Wave 3. */
+  /** Agent loop — used by chat.send / chat.abort. */
   agentLoop: unknown;
-  /** Optional cron manager — will be used by cron.* handlers in Wave 3. */
+  /** Optional cron manager — used by cron.* handlers. */
   cronManager?: unknown;
-  /** Optional hook manager — lifecycle hooks for Wave 3 extensibility. */
+  /** Optional hook manager — lifecycle hooks for extensibility. */
   hookManager?: unknown;
 }
 

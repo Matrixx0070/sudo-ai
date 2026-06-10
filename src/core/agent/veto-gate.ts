@@ -4,12 +4,10 @@
  * Classifies tool-call risk via pure rule-based logic, then for risk >= MEDIUM
  * calls queryAllModels() for a binding APPROVE/VETO consensus pass.
  *
- * File boundary: Builder A (Wave 6B). No other agent touches this file.
- *
- * Wave 8A: SUDO_VETO_AUTO_TUNE env var
- * ------------------------------------
+ * SUDO_VETO_AUTO_TUNE env var
+ * ---------------------------
  * Set SUDO_VETO_AUTO_TUNE=1 to enable adaptive threshold from AutoThresholdTuner.
- * Defaults to '0' (disabled) — static 50% tie-break is used (pre-8A behavior).
+ * Defaults to '0' (disabled) — static 50% tie-break is used.
  * To revert without redeploy: pm2 set sudo-ai-v5:SUDO_VETO_AUTO_TUNE 0 && pm2 restart
  * The env var is read inside runVetoGate() (not at module load) so that test stubs
  * with vi.stubEnv() take effect without module reload.
@@ -130,7 +128,7 @@ export function setAutoBlockGuard(guard: AutoBlockGuardLike | undefined): void {
 
 /**
  * Module-level re-anchor callback. Fired after an adversarial-model DENY verdict.
- * NOT fired on [AUTO-BLOCK] short-circuit (Wave 6R) to avoid double-counting.
+ * NOT fired on [AUTO-BLOCK] short-circuit to avoid double-counting.
  * Fail-open: if never set the callback is skipped silently.
  */
 let _reAnchorCallback: (() => void) | undefined;
@@ -404,15 +402,15 @@ export async function runVetoGate(
   }
 
   // ---------------------------------------------------------------------------
-  // Wave 8A: Read kill-switch env var inside the function (not at module load)
+  // Read kill-switch env var inside the function (not at module load)
   // so that vi.stubEnv() in tests takes effect without module reload.
   // SUDO_VETO_AUTO_TUNE=1 → use effectiveThreshold in vote comparison.
-  // SUDO_VETO_AUTO_TUNE=0 (default) → static BASE_VETO_THRESHOLD (pre-8A behavior).
+  // SUDO_VETO_AUTO_TUNE=0 (default) → static BASE_VETO_THRESHOLD.
   // ---------------------------------------------------------------------------
   const autoTuneEnabled = process.env['SUDO_VETO_AUTO_TUNE'] === '1';
 
   // ---------------------------------------------------------------------------
-  // Auto-threshold computation (Wave 7C + Wave 8A).
+  // Auto-threshold computation.
   // Computes the effective threshold from calibration drift (Brier score).
   // When autoTuneEnabled=true, the computed threshold is used in vote comparison.
   // When autoTuneEnabled=false, this block still runs for logging (observability)
@@ -515,9 +513,9 @@ export async function runVetoGate(
   // Guard against division-by-zero (empty answers array)
   const denyRatio = totalVotes > 0 ? vetoVotes / totalVotes : 0;
 
-  // Wave 8A: decision logic.
+  // Decision logic.
   // When autoTuneEnabled=true, use effectiveThreshold in a ratio-based comparison.
-  // When autoTuneEnabled=false, use the pre-8A tie-break rules exactly:
+  // When autoTuneEnabled=false, use the static tie-break rules exactly:
   //   CRITICAL/HIGH: ties (vetoVotes >= approveVotes, at least 1 veto) → VETO
   //   MEDIUM: simple majority (vetoVotes > approveVotes) wins
   let decision: 'APPROVE' | 'VETO';
@@ -533,7 +531,7 @@ export async function runVetoGate(
 
   const reason = consensusResult.bestAnswer.content;
 
-  // Wave 8A telemetry: emit structured veto.decision event with full context so
+  // Telemetry: emit structured veto.decision event with full context so
   // the owner can audit whether adaptive tuning is actually changing outcomes.
   log.info(
     {
@@ -552,8 +550,8 @@ export async function runVetoGate(
     'VetoGate decision',
   );
 
-  // Wave 7D: post-veto re-anchor emission — fires only on adversarial-model DENY.
-  // AUTO-BLOCK short-circuit (Wave 6R) returns early above and does NOT reach here,
+  // Post-veto re-anchor emission — fires only on adversarial-model DENY.
+  // AUTO-BLOCK short-circuit returns early above and does NOT reach here,
   // so no additional guard is needed.
   if (decision === 'VETO' && _reAnchorCallback !== undefined) {
     try {

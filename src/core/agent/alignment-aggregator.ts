@@ -37,7 +37,7 @@ export interface AlignmentSignals {
   recoveryPending: number;
   /** 1.0 when an identity re-anchor was triggered this turn, 0 otherwise. */
   reAnchor: number;
-  /** Cross-stream discordance composite [0, 1]. 0 = fully aligned. New in Wave 6E. */
+  /** Cross-stream discordance composite [0, 1]. 0 = fully aligned. */
   discordanceScore: number;
 }
 
@@ -96,7 +96,7 @@ const THRESHOLD_YELLOW = 0.45;
 /**
  * Scoring weights for each signal.
  * Weights sum to 1.0 — enforced by WEIGHT_SUM_CHECK at module load.
- * Wave 6P: rebalanced from 7 to 8 signals; confidenceCalibration added at 0.10.
+ * Rebalanced from 7 to 8 signals; confidenceCalibration added at 0.10.
  *   outcomeDelta 0.18 (was 0.20)
  *   commitmentDrift 0.18 (was 0.20)
  *   trustTier 0.14 (was 0.15)
@@ -170,7 +170,7 @@ export class AlignmentAggregator {
   private _lastBrierScore = 0.0;
   /**
    * Optional observer callback — fired after every evaluate() call (success or fail-open).
-   * Registered by Wave 8E AlignmentAutoRemediator. Never throws toward caller.
+   * Registered by AlignmentAutoRemediator. Never throws toward caller.
    */
   private _reportObserver: ((report: LastReport) => void) | null = null;
 
@@ -187,7 +187,7 @@ export class AlignmentAggregator {
 
   /**
    * Register a callback to be invoked after every evaluate() call.
-   * Wave 8E: used by AlignmentAutoRemediator to observe alignment reports.
+   * Used by AlignmentAutoRemediator to observe alignment reports.
    * Pass null to unregister.
    * Never throws.
    */
@@ -204,7 +204,7 @@ export class AlignmentAggregator {
   evaluate(signals: AlignmentSignals): AggregatorResult {
     try {
       const result = this._compute(signals);
-      // Fire observer (Wave 8E) — _lastReport is set by _compute().
+      // Fire observer — _lastReport is set by _compute().
       if (this._reportObserver !== null && this._lastReport !== null) {
         try { this._reportObserver(this._lastReport); } catch { /* fail-open */ }
       }

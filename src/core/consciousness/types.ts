@@ -1,7 +1,7 @@
 /**
  * @file types.ts
  * @description Shared TypeScript interfaces and type aliases for the SUDO-AI v4
- * consciousness layer (Wave 1).
+ * consciousness layer.
  *
  * All types are pure declarations — no logic, no imports.
  * Other modules import from here via the barrel (index.ts).

@@ -1,16 +1,16 @@
 /**
  * @file cli/commands/setup.ts
- * @description sudo-ai setup — full Ink TUI wizard for first-time + ongoing 100x setup.
+ * @description sudo-ai setup — full Ink TUI wizard for first-time + ongoing setup.
  *
- * Wave2 Setup Wizard Polish (general-purpose).
+ * Setup wizard (general-purpose).
  * - Real-time Ink TUI like chat/ (React + ink, useInput/useApp, TextInput, palette from tui-v4-spec).
- * - Covers exactly: name/model/xai-auth/100x P1 cross enable (tools/sandbox/learner/KAIROS)/profiles/kills/SOUL/service.
+ * - Covers exactly: name/model/xai-auth/cross enable (tools/sandbox/learner/KAIROS)/profiles/kills/SOUL/service.
  * - Writes: sudo-ai.json5 (enhanced), sudo-ai.toml (extended), config/.env (keys + kills), optional profile skeleton.
  * - Auto first-run support: ensureFirstRunWizard(projectRoot) — call from index for bare `sudo-ai`.
  * - Ongoing: `sudo-ai setup` (or via config --setup once wired).
- * - Non-TTY / --yes: defaults + env for CI/tests (100x enabled by default).
+ * - Non-TTY / --yes: defaults + env for CI/tests (all features enabled by default).
  * - Reuses patterns from chat/components (imports only; NO edits to chat/* / App / core per boundaries).
- * - No new npm deps. Arsenal small + tsc verify. Strict Wave2 boundaries only.
+ * - No new npm deps. Arsenal small + tsc verify. Strict boundaries only.
  *
  * Usage:
  *   tsx src/cli/commands/setup.ts
@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import JSON5 from 'json5';
 
-// Reusable Ink wizard component (setup* area, no Wave3 overlap)
+// Reusable Ink wizard component (setup* area)
 import { SetupSelect, type SetupSelectItem } from './setup/components/SetupSelect.js';
 
 // Reusable chat patterns (imports ONLY; never edit chat/ per explicit boundaries + confirm)
@@ -32,7 +32,7 @@ import { Banner } from './chat/components/Banner.js';
 import { Rule } from './chat/components/Rule.js';
 
 // ---------------------------------------------------------------------------
-// Types & Constants (100x coverage)
+// Types & Constants
 // ---------------------------------------------------------------------------
 
 export interface SetupOptions {
@@ -44,7 +44,7 @@ interface WizardAnswers {
   agentName: string;
   xaiKey: string;           // written to .env if provided
   defaultModel: string;
-  enableCross: boolean;     // 100x P1 IComputerUse + learner on control
+  enableCross: boolean;     // IComputerUse + learner on control
   enableProfiles: boolean;
   enableToolLearning: boolean;
   enableSandbox: boolean;   // note: dangerous if false
@@ -62,14 +62,14 @@ const AVAILABLE_MODELS: SetupSelectItem[] = [
 ];
 
 const KILL_KEYS = {
-  cross: 'SUDO_CROSS_CONTROL_DISABLE',      // P1 IComputerUse (see post-remed Codex notes)
+  cross: 'SUDO_CROSS_CONTROL_DISABLE',      // IComputerUse
   profiles: 'SUDO_PROFILES_DISABLE',
-  toolLearning: 'SUDO_TOOL_LEARNING_DISABLE', // ToolOutcomeLearner 100x
+  toolLearning: 'SUDO_TOOL_LEARNING_DISABLE', // ToolOutcomeLearner
   sandbox: 'SUDO_SANDBOX_DISABLE',
 } as const;
 
 // ---------------------------------------------------------------------------
-// Config builders (enhanced from quickstart/init for 100x; small surgical)
+// Config builders (enhanced from quickstart/init; small surgical)
 // ---------------------------------------------------------------------------
 
 function buildSetupJson5(answers: WizardAnswers): string {
@@ -185,13 +185,13 @@ function writeEnvKillsAndKey(projectRoot: string, answers: WizardAnswers, existi
     setOrUpdate('XAI_API_KEY', answers.xaiKey);
   }
 
-  // 100x kills: set =1 only if DISABLE chosen; default enabled (no entry or =0)
+  // Kill-switches: set =1 only if DISABLE chosen; default enabled (no entry or =0)
   if (!answers.enableCross) setOrUpdate(KILL_KEYS.cross, '1');
   if (!answers.enableProfiles) setOrUpdate(KILL_KEYS.profiles, '1');
   if (!answers.enableToolLearning) setOrUpdate(KILL_KEYS.toolLearning, '1');
   if (!answers.enableSandbox) setOrUpdate(KILL_KEYS.sandbox, '1');
 
-  // comments for 100x
+  // header comment for kill-switches
   if (!lines.some(l => l.includes('Wave2 100x'))) {
     lines.unshift('# SUDO-AI setup: kill-switches + auth (SUDO_*_DISABLE=1 to turn off; see docs/cross-platform-control-guide.md)');
   }
@@ -261,7 +261,7 @@ export async function runSetup(projectRoot: string, opts: SetupOptions = {}): Pr
   } catch { /* non fatal */ }
 
   if (opts.yes || !process.stdin.isTTY) {
-    // Non-interactive 100x defaults (tests/CI path)
+    // Non-interactive defaults (tests/CI path)
     const answers: WizardAnswers = {
       agentName: currentName,
       xaiKey: process.env.XAI_API_KEY || '',
@@ -294,7 +294,7 @@ export async function runSetup(projectRoot: string, opts: SetupOptions = {}): Pr
 }
 
 // ---------------------------------------------------------------------------
-// Ink Wizard Component (full TUI, phases, 100x prompts)
+// Ink Wizard Component (full TUI, phases)
 // ---------------------------------------------------------------------------
 
 type Phase =
@@ -612,7 +612,7 @@ const SetupWizard: React.FC<SetupWizardProps> = (props) => {
 
 // ---------------------------------------------------------------------------
 // Exports for tests / hook / config
-// (build* fns exported for test coverage of 100x writers)
+// (build* fns exported for test coverage of config writers)
 // ---------------------------------------------------------------------------
 
 export { buildSetupJson5, buildSetupToml, writeEnvKillsAndKey, ensureProfileSkeleton };

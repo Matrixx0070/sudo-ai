@@ -7,8 +7,6 @@
  *
  * Both consume a DigestSnapshot (from admin-routes collectDigestSnapshot).
  * Neither performs I/O; fully testable in isolation.
- *
- * Wave 7F.
  */
 
 import { metrics } from '../health/metrics.js';
@@ -320,7 +318,7 @@ export function digestToPrometheusText(snapshot: DigestSnapshot): string {
     blocks.push(promBlock('sudo_resolutions_up', 'Resolutions subsystem available', 'gauge', [{ labels: null, value: 0 }]));
   }
 
-  // Wave 2.2h-obs — seal counters (always emitted; 0 if never fired)
+  // LD_PRELOAD seal counters (always emitted; 0 if never fired)
   const sealInstall = metrics.getCounter('synth_seal_install_total');
   const sealMissing = metrics.getCounter('synth_seal_missing_so_total');
   const sealSigsys = metrics.getCounter('synth_seal_sigsys_total');
@@ -337,7 +335,7 @@ export function digestToPrometheusText(snapshot: DigestSnapshot): string {
   blocks.push(promBlock('sudo_synth_probe_success_total', 'Successful synth-probe calls', 'counter', [{ labels: null, value: probeSuccess }]));
   blocks.push(promBlock('sudo_synth_probe_failure_total', 'Failed synth-probe calls', 'counter', [{ labels: null, value: probeFailure }]));
 
-  // Wave 10 P1 devops-polish — well-known manifest request counters (always emitted; 0 if never fired)
+  // Well-known manifest request counters (always emitted; 0 if never fired)
   const wkRequests    = metrics.getCounter('wellknown_manifest_requests_total');
   const wkNotModified = metrics.getCounter('wellknown_manifest_not_modified_total');
   const wkNotFound    = metrics.getCounter('wellknown_manifest_not_found_total');

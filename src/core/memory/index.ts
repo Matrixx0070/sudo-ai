@@ -62,7 +62,7 @@ export type { ForgeResult, ForgeOptions, SubQuestion } from './insight-forge.js'
 export { AutoSummarizer } from './auto-summarizer.js';
 export type { SessionSummary } from './auto-summarizer.js';
 
-// Injection scanner (Wave 4 security)
+// Injection scanner (memory security)
 export {
   MEMORY_THREAT_PATTERNS,
   scanMemoryContent,
