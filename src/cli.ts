@@ -15,6 +15,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from './core/shared/logger.js';
+import { PROJECT_ROOT } from './core/shared/paths.js';
 import { ConfigLoader } from './core/config/loader.js';
 import { MindDB } from './core/memory/db.js';
 import { Brain } from './core/brain/brain.js';
@@ -1909,7 +1910,7 @@ async function boot(): Promise<void> {
       // the orchestrator treats absent guard as skip — safe.
       mistakeAutoBlockGuard: undefined,
       logger: createLogger('self-build'),
-      gitCwd: '/root/sudo-ai-v4',
+      gitCwd: PROJECT_ROOT,
     };
 
     registerSelfBuildCron(cronScheduler, selfBuildDepsRef);

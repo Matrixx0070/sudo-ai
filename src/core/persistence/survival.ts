@@ -59,7 +59,7 @@ export class SurvivalSystem {
   private readonly backupDir: string;
 
   /**
-   * @param dataDir - Root data directory (e.g. '/root/sudo-ai-v4/data').
+   * @param dataDir - Root data directory (e.g. '<project-root>/data').
    * @param dbPath  - Absolute path to the SQLite DB file for survival tables.
    */
   constructor(dataDir: string, dbPath: string) {

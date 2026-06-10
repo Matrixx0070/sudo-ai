@@ -27,7 +27,7 @@ description: Generate and extract data from professional documents — PDFs via 
 
 PDF creation tools (`pdf-from-html`, `markdown-to-pdf`) save to:
 - `/tmp/<filename>.pdf` — for temporary outputs
-- `/root/sudo-ai-v4/data/documents/<filename>.pdf` — for persistent outputs
+- `<project-root>/data/documents/<filename>.pdf` — for persistent outputs
 
 Always use an absolute path in the `outputPath` parameter.
 
@@ -67,7 +67,7 @@ Always use an absolute path in the `outputPath` parameter.
 {
   "tool": "document.pdf-extract-text",
   "params": {
-    "pdfPath": "/root/sudo-ai-v4/data/documents/report.pdf",
+    "pdfPath": "<project-root>/data/documents/report.pdf",
     "format": "text"
   }
 }
@@ -79,7 +79,7 @@ Always use an absolute path in the `outputPath` parameter.
 {
   "tool": "document.pdf-extract-text",
   "params": {
-    "pdfPath": "/root/sudo-ai-v4/data/documents/report.pdf",
+    "pdfPath": "<project-root>/data/documents/report.pdf",
     "pages": "2-4",
     "format": "json"
   }

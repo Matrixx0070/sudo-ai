@@ -15,7 +15,7 @@ export interface MemoryChunk {
   text: string;
   /**
    * Logical path the chunk belongs to, e.g. "memory/2026-03-26.md"
-   * or "file:/root/sudo-ai-v4/src/core/brain/index.ts".
+   * or "file:<project-root>/src/core/brain/index.ts".
    */
   path: string;
   /** Origin category of this chunk */

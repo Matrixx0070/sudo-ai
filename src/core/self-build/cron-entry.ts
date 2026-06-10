@@ -16,6 +16,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { PROJECT_ROOT } from '../shared/paths.js';
 import type { CronScheduler } from '../cron/scheduler.js';
 import type { CronJob } from '../cron/types.js';
 import { runSelfBuildTick, type SelfBuildDeps, type TickResult } from './orchestrator.js';
@@ -78,7 +79,7 @@ export async function handleDailyReport(deps: SelfBuildDeps): Promise<DailyRepor
   const reportDeps: DailyReportDeps = {
     mindDb: deps.mindDb,
     alignmentAggregator: deps.alignmentAggregator ?? undefined,
-    gitCwd: deps.gitCwd ?? process.cwd(),
+    gitCwd: deps.gitCwd ?? PROJECT_ROOT,
     logger: deps.logger as unknown as import('pino').Logger,
   };
 

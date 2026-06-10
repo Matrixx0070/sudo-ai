@@ -19,13 +19,13 @@ Create Word-compatible `.docx` documents from structured content.
 
 1. Use `docx.create` whenever the user wants a Word document, report, letter, or article as a .docx file.
 2. For rich formatting (tables, images, footnotes), the current tool covers basic structure. Advise the user to open in Word to add advanced formatting.
-3. Output path must be under `/tmp/` or `/root/sudo-ai-v4/data/docx/`.
+3. Output path must be under `/tmp/` or `<project-root>/data/docx/`.
 
 ## Path Constraints
 
 `outputPath` must be under:
 - `/tmp/` — for ephemeral files
-- `/root/sudo-ai-v4/data/docx/` — for persistent files
+- `<project-root>/data/docx/` — for persistent files
 
 ## Examples
 
@@ -60,7 +60,7 @@ Create Word-compatible `.docx` documents from structured content.
 
 | Error message | Cause | Fix |
 |---------------|-------|-----|
-| `outputPath must be under /tmp/...` | Path outside allowed dirs | Use /tmp/ or /root/sudo-ai-v4/data/docx/ |
+| `outputPath must be under /tmp/...` | Path outside allowed dirs | Use /tmp/ or <project-root>/data/docx/ |
 | `title is required` | Missing required param | Always include a title |
 | `Each section must have at least one paragraph` | Empty paragraphs array | Add at least one paragraph string |
 | `sections array is required` | No sections provided | Provide at least one section |

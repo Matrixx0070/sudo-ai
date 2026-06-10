@@ -4,7 +4,7 @@
  * Launches a headless Chromium instance, sets page content, emits PDF to the
  * specified output path, and cleans up the browser on finish or error.
  *
- * Output paths are restricted to /tmp/ or /root/sudo-ai-v4/data/documents/.
+ * Output paths are restricted to /tmp/ or <project-root>/data/documents/.
  */
 
 import { chromium } from 'playwright-core';

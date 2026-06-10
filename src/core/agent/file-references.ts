@@ -32,7 +32,7 @@ export function formatFileReferences(text: string): string {
     return text ?? '';
   }
 
-  // Match absolute paths like /root/sudo-ai-v4/src/core/brain.ts or /root/foo.ts:42
+  // Match absolute paths like /path/to/project/src/core/brain.ts or /root/foo.ts:42
   // Negative lookbehind prevents matching paths already inside markdown link syntax.
   const result = text.replace(
     /(?<![(\[])(\/([\w.-]+\/)+[\w.-]+\.[a-z]{1,4})(?::(\d+))?/g,
@@ -58,9 +58,9 @@ export function formatFileReferences(text: string): string {
 /**
  * Build a single markdown file reference string.
  *
- * @param filepath - Absolute path to the file, e.g. '/root/sudo-ai-v4/src/brain.ts'.
+ * @param filepath - Absolute path to the file, e.g. '/path/to/project/src/brain.ts'.
  * @param line     - Optional line number to append.
- * @returns Markdown link string, e.g. '[brain.ts](/root/sudo-ai-v4/src/brain.ts):10'.
+ * @returns Markdown link string, e.g. '[brain.ts](/path/to/project/src/brain.ts):10'.
  */
 export function fileRef(filepath: string, line?: number): string {
   if (!filepath || typeof filepath !== 'string') {

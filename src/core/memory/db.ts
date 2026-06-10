@@ -136,7 +136,7 @@ export interface StoreChunkOptions {
  *
  * Usage:
  * ```ts
- * const db = new MindDB('/root/sudo-ai-v4/data/mind.db');
+ * const db = new MindDB('<project-root>/data/mind.db');
  * // ... use db ...
  * db.close();
  * ```
