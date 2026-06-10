@@ -441,6 +441,9 @@ SUDO_TOOL_OUTCOME_LEARNER=1                # Attach ToolOutcomeLearner to the ag
 SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN=3   # Cap semantic planning calls per run (0 = template-only; unset = unbounded)
 SUDO_SKILL_FORGE_ASYNC=1                   # Cooperative SkillForge scan (yields to the event loop; identical output)
 SUDO_POLICY_AGG_WINDOW_DAYS=30             # Recency window for trace-policy aggregates (positive integer days; unset = all history)
+SUDO_STUCK_DETECTOR=1                      # Result-aware stuck detection (identical tool-error streaks: warn at 3, abort at 5)
+SUDO_STUCK_DETECTOR_WARN_THRESHOLD=3       # Consecutive identical errors before a change-strategy warning
+SUDO_STUCK_DETECTOR_ABORT_THRESHOLD=5      # Consecutive identical errors before terminating the run
 ```
 
 Boolean flags use exact-`=1` matching (mirror of the kill-switches). Numeric flags ignore malformed values. Everything is fail-open: a failed feature init logs a warning and the agent keeps running without it. Which of these to enable is an operator decision; none change behavior unless set.
