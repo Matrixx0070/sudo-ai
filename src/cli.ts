@@ -986,6 +986,22 @@ async function boot(): Promise<void> {
     }
   }
 
+  // Opt-in ToolOutcomeLearner activation: attach failure learning to the loop
+  // (record failed tool calls + inject prevention-rule hints). Default OFF —
+  // without this flag the learner is never attached, so the FailureLearner
+  // never runs. Honors the SUDO_TOOL_LEARNING_DISABLE kill-switch internally.
+  // Fail-open: a wiring failure logs and the loop runs without learning.
+  if (process.env['SUDO_TOOL_OUTCOME_LEARNER'] === '1') {
+    try {
+      const { ToolOutcomeLearner } = await import('./core/agent/tool-outcome-learner.js');
+      const failureLearner = await import('./core/learning/failure-learner.js');
+      finalAgentLoop.setToolOutcomeLearner(new ToolOutcomeLearner({ failureLearner }));
+      log.info('ToolOutcomeLearner wired into agent loop — failure learning active (SUDO_TOOL_OUTCOME_LEARNER=1)');
+    } catch (err: unknown) {
+      log.warn({ err: String(err) }, 'ToolOutcomeLearner wiring failed — outcome learning disabled');
+    }
+  }
+
   // Theme 1 (learning flywheel, slice 1): wire TraceStore so the agent loop
   // records execution traces (routing / brain / tool outcomes) into a local
   // SQLite DB — the foundation the policy learner + skill-forge build on later.

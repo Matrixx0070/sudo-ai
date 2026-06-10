@@ -466,6 +466,24 @@ All kill-switches use exact-`"1"`-match semantics: the feature is disabled only 
 
 ---
 
+## Opt-in intelligence flags
+
+The inverse of kill-switches: these enable learning/prediction features that are **OFF by default**. Boolean flags use the same exact-`"1"`-match semantics as kill-switches (any other value, including unset, leaves the feature off). Numeric flags accept a clean base-10 integer in the noted domain; malformed or out-of-range values are ignored (the feature stays at its unbounded/off default). All are fail-open: a failed init logs a warning and never blocks boot or a request.
+
+| Variable | Type | Default | Effect when enabled |
+|---|---|---|---|
+| `SUDO_PREDICTOR_LOOP=1` | boolean | off | Anticipatory Predictor injection: a `# HEADS UP` block with relevant predictions is added to the first turn of a session |
+| `SUDO_PREDICTOR_AUTO_RESOLVE=1` | boolean | off | Expiry sweep: pending predictions past their `expiresAt` are resolved as `incorrect` before `anticipate()` / `detectAnomalies()`, feeding `getAccuracy()` and the accuracy anomaly check |
+| `SUDO_FAILURE_LEARNER_DB=1` | boolean | off | FailureLearner uses a durable SQLite store in `data/mind.db` (default: in-memory, process-lifetime). Falls back to in-memory if the DB cannot be opened |
+| `SUDO_TOOL_OUTCOME_LEARNER=1` | boolean | off | Attaches ToolOutcomeLearner to the agent loop: failed tool calls are recorded in the FailureLearner and known prevention-rule hints are injected before tool execution. Honors `SUDO_TOOL_LEARNING_DISABLE=1` |
+| `SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN` | non-negative integer | unbounded | Caps GoalPlanner semantic-planning calls per run; `0` is valid and means template-only planning (no semantic calls). Suggested starting value: `3` |
+| `SUDO_SKILL_FORGE_ASYNC=1` | boolean | off | SkillForge scan runs cooperatively, yielding to the event loop between batches; output is identical to the synchronous scan |
+| `SUDO_POLICY_AGG_WINDOW_DAYS` | positive integer | all history | Bounds trace-policy aggregate refresh to the most recent N days (suggested starting value: `30`) |
+
+**Related (documented elsewhere):** the trace-learning flywheel flags `SUDO_TRACE_LEARNING=1`, `SUDO_TRACE_POLICY=1`, and `SUDO_POLICY_REFRESH_MS` follow the same opt-in pattern.
+
+---
+
 ## curl Examples
 
 ### Simple chat request
