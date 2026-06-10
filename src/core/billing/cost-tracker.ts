@@ -124,7 +124,7 @@ const DDL_IDX_SUCCESS    = `CREATE INDEX IF NOT EXISTS idx_acl_success     ON ap
  *
  * Usage — singleton via {@link getCostTracker}:
  * ```ts
- * const tracker = getCostTracker('/root/sudo-ai-v4/data/mind.db');
+ * const tracker = getCostTracker('<project-root>/data/mind.db');
  * tracker.record({ provider: 'xai', model: 'xai/grok-4-1-fast-non-reasoning', ... });
  * ```
  */

@@ -7,7 +7,7 @@
  *   check        — Run `git status` and `git log --oneline -5` (read-only, no side effects)
  *   pull         — Run `git pull origin main` to fetch latest code
  *   install      — Run `npm install` if package.json changed (detected via git diff)
- *   build        — Run `npm run build` (tsc compile) from /root/sudo-ai-v4
+ *   build        — Run `npm run build` (tsc compile) from the project root
  *   full-update  — Pull + install (if needed) + build + restart service (requires confirm: true)
  *   rollback     — `git reset --hard HEAD~1` then rebuild (requires confirm: true)
  *   status       — Show git log, current branch, last update timestamp from data/self-update.log

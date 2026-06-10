@@ -1,4 +1,4 @@
-// /root/sudo-ai-v4/src/core/memory/knowledge-graph.ts
+// src/core/memory/knowledge-graph.ts
 // Memory-layer wrapper that exposes KnowledgeGraph to the memory subsystem.
 
 import { KnowledgeGraph } from '../knowledge/knowledge-graph.js';

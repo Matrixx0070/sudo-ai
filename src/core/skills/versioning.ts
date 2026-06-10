@@ -31,7 +31,7 @@ const logger = createLogger('skill-versioning');
  * Version-control layer for SUDO-AI skills.
  *
  * ```ts
- * const sv = new SkillVersioning('/root/sudo-ai-v4/data/mind.db');
+ * const sv = new SkillVersioning('<project-root>/data/mind.db');
  * const id = sv.saveVersion('research.web-summary', '1.0.0', src, 'initial');
  * sv.recordExecution('research.web-summary', true, 142);
  * const best = sv.getBestVersion('research.web-summary');

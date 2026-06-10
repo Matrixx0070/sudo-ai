@@ -36,6 +36,7 @@ function clampErrorName(n) {
 
 const { pathToFileURL } = require('url');
 const fs = require('fs');
+const path = require('path');
 
 const quarantinePath = process.argv[2];
 
@@ -57,9 +58,13 @@ function precompileQuarantine() {
   let compiled = src;
   try {
     // Resolve via the node_modules embedded in the sandbox via --ro-bind.
+    // buildSynthBwrapArgs binds the host node_modules at its host-resolved
+    // path, and this entry file is bound at its own host path, so the same
+    // 5-levels-up resolution tool-synthesize.ts uses for the bind source
+    // also works here inside the sandbox.
     // We use require.resolve so pnpm symlinks are followed correctly.
     const esbuildMainPath = require.resolve('esbuild', {
-      paths: ['/root/sudo-ai-v4/node_modules'],
+      paths: [path.resolve(__dirname, '../../../../../node_modules')],
     });
     const { transformSync } = require(esbuildMainPath);
     compiled = transformSync(src, { loader: 'ts', format: 'esm' }).code;

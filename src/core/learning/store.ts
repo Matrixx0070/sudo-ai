@@ -129,7 +129,7 @@ CREATE INDEX IF NOT EXISTS idx_insights_created_at  ON insights(created_at);
  *
  * Usage:
  * ```ts
- * const wisdom = new WisdomStore('/root/sudo-ai-v4/data/wisdom.db');
+ * const wisdom = new WisdomStore('<project-root>/data/wisdom.db');
  * const id = wisdom.storeInsight({ ... });
  * const best = wisdom.getTopInsights('success', 5);
  * wisdom.close();

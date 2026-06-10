@@ -9,7 +9,7 @@
  * ```ts
  * import { TaskQueue, TaskExecutor } from '@core/orchestration';
  *
- * const queue = new TaskQueue('/root/sudo-ai-v4/data/mind.db');
+ * const queue = new TaskQueue('<project-root>/data/mind.db');
  * const executor = new TaskExecutor(queue);
  * executor.registerHandler('my.task', async (task, signal) => {
  *   // ...do work...

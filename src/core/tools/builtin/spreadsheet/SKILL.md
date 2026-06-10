@@ -30,7 +30,7 @@ Create, read, pivot, chart-annotate, and validate Excel XLSX files using Node.js
 
 All write operations (`create`, `pivot`) require `outputPath` to be under:
 - `/tmp/` — for ephemeral files
-- `/root/sudo-ai-v4/data/spreadsheets/` — for persistent files
+- `<project-root>/data/spreadsheets/` — for persistent files
 
 ## Examples
 
@@ -94,7 +94,7 @@ All write operations (`create`, `pivot`) require `outputPath` to be under:
 
 | Error message | Cause | Fix |
 |---------------|-------|-----|
-| `outputPath must be under /tmp/...` | Path outside allowed dirs | Use /tmp/ or /root/sudo-ai-v4/data/spreadsheets/ |
+| `outputPath must be under /tmp/...` | Path outside allowed dirs | Use /tmp/ or <project-root>/data/spreadsheets/ |
 | `Sheet "X" not found` | Sheet name mismatch | Call `spreadsheet.read` first to list sheets |
 | `path is required` | Missing required param | Always pass path/outputPath |
 | Formula errors in validate | #REF! or #NAME? in cells | Open in Excel/LibreOffice, fix formulas |

@@ -52,7 +52,7 @@ const TABLE_STATEMENTS: readonly string[] = [
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     -- Raw text content. No length cap.
     text         TEXT    NOT NULL,
-    -- Logical address: "memory/2026-03-26.md", "file:/root/sudo-ai-v4/src/foo.ts", etc.
+    -- Logical address: "memory/2026-03-26.md", "file:<project-root>/src/foo.ts", etc.
     path         TEXT    NOT NULL DEFAULT '',
     -- Origin category
     source       TEXT    NOT NULL DEFAULT 'conversation'
