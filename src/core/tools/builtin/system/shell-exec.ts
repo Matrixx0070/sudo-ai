@@ -28,6 +28,7 @@ import {
   parseApprovalMode,
 } from '../../../security/approval/index.js';
 import { runInSandbox } from '../../../sandbox/sandbox-runner.js';
+import { clampHeadTail } from '../../../shared/head-tail-buffer.js';
 
 const logger = createLogger('system.exec');
 
@@ -62,10 +63,16 @@ if (APPROVAL_MODE === 'off') {
 
 function truncate(text: string): { text: string; truncated: boolean } {
   if (text.length <= MAX_OUTPUT) return { text, truncated: false };
-  return {
-    text: text.slice(0, MAX_OUTPUT) + `\n...[truncated — ${text.length} total chars]`,
-    truncated: true,
-  };
+  // Keep both ends: the head shows what the command started doing, the tail
+  // carries the error message and exit status — the part the model most needs
+  // to recover. Split the MAX_OUTPUT budget 50/50 across head and tail.
+  const half = Math.floor(MAX_OUTPUT / 2);
+  const { text: clamped, truncated } = clampHeadTail(text, {
+    headBudget: half,
+    tailBudget: MAX_OUTPUT - half,
+    elisionMarker: `...[truncated — ${text.length} total chars, {n} elided]...`,
+  });
+  return { text: clamped, truncated };
 }
 
 // ---------------------------------------------------------------------------
