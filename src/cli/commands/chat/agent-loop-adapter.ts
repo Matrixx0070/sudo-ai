@@ -82,7 +82,7 @@ export class TuiAgentAdapter {
 
     // --- Config ---
     const { ConfigLoader } = await import('../../../core/config/loader.js');
-    const configLoader = new ConfigLoader(process.cwd());
+    const configLoader = new ConfigLoader();
     await configLoader.load();
     const config = configLoader.get();
 

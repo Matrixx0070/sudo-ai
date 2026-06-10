@@ -249,7 +249,7 @@ export class BootstrapRunner {
   }
 
   private async _deleteBootstrapFile(): Promise<void> {
-    const filePath = path.join(path.resolve(PATHS.WORKSPACE), 'BOOTSTRAP.md');
+    const filePath = path.join(PATHS.WORKSPACE, 'BOOTSTRAP.md');
     try {
       await unlink(filePath);
       log.info({ path: filePath }, 'BOOTSTRAP.md deleted — bootstrap marked complete');
