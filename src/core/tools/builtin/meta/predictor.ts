@@ -11,6 +11,7 @@
  *   detect-anomalies  — scan metrics for unusual deviations
  *   accuracy          — get prediction accuracy statistics
  *   recent            — list recent predictions
+ *   record-outcome    — mark a prediction correct/incorrect (closes the learning loop)
  */
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
@@ -77,7 +78,8 @@ export const predictorTool: ToolDefinition = {
     + 'and detects metric anomalies early. '
     + 'Actions: anticipate (time/pattern-based needs), predict-viral (next hot topic), '
     + 'simulate (model strategy options), detect-anomalies (metric deviation scan), '
-    + 'accuracy (prediction track record), recent (latest predictions).',
+    + 'accuracy (prediction track record), recent (latest predictions), '
+    + 'record-outcome (mark a prediction correct/incorrect to train accuracy tracking).',
   category: 'meta',
   timeout: 30_000,
 
@@ -86,7 +88,7 @@ export const predictorTool: ToolDefinition = {
       type: 'string',
       required: true,
       description: 'Operation to perform.',
-      enum: ['anticipate', 'predict-viral', 'simulate', 'detect-anomalies', 'accuracy', 'recent'],
+      enum: ['anticipate', 'predict-viral', 'simulate', 'detect-anomalies', 'accuracy', 'recent', 'record-outcome'],
     },
     scenario: {
       type: 'string',
@@ -120,7 +122,7 @@ export const predictorTool: ToolDefinition = {
     if (!action?.trim()) {
       return {
         success: false,
-        output: 'action is required. Choose one of: anticipate, predict-viral, simulate, detect-anomalies, accuracy, recent.',
+        output: 'action is required. Choose one of: anticipate, predict-viral, simulate, detect-anomalies, accuracy, recent, record-outcome.',
       };
     }
 
@@ -270,10 +272,40 @@ export const predictorTool: ToolDefinition = {
         }
 
         // -------------------------------------------------------------------
+        case 'record-outcome': {
+          const predictionId = (params['predictionId'] as string | undefined)?.trim();
+          if (!predictionId) {
+            return { success: false, output: 'predictionId is required for record-outcome.' };
+          }
+          const outcome = params['outcome'];
+          if (outcome !== 'correct' && outcome !== 'incorrect') {
+            return { success: false, output: "outcome is required for record-outcome and must be 'correct' or 'incorrect'." };
+          }
+
+          const updated = predictor.recordOutcome(predictionId, outcome);
+          if (!updated) {
+            return {
+              success: false,
+              output: `No prediction found with id "${predictionId}". Use action=recent to list stored predictions.`,
+            };
+          }
+
+          const stats = predictor.getAccuracy();
+          logger.info({ predictionId, outcome, stats }, 'Prediction outcome recorded via tool');
+          return {
+            success: true,
+            output:
+              `Outcome recorded: prediction ${predictionId.slice(0, 8)} marked ${outcome.toUpperCase()}.\n`
+              + `Accuracy now ${stats.rate}% (${stats.correct}/${stats.total} resolved).`,
+            data: { predictionId, outcome, accuracy: stats },
+          };
+        }
+
+        // -------------------------------------------------------------------
         default:
           return {
             success: false,
-            output: `Unknown action: "${action}". Valid: anticipate, predict-viral, simulate, detect-anomalies, accuracy, recent.`,
+            output: `Unknown action: "${action}". Valid: anticipate, predict-viral, simulate, detect-anomalies, accuracy, recent, record-outcome.`,
           };
       }
 

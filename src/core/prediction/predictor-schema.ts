@@ -33,6 +33,9 @@ export interface Anomaly {
 // DDL
 // ---------------------------------------------------------------------------
 
+// NOTE: CREATE TABLE IF NOT EXISTS means the outcome CHECK constraint only
+// applies to freshly created databases; pre-existing mind.db files keep the
+// unconstrained column (application-layer validation still guards writes).
 export const DDL_PREDICTIONS = `
   CREATE TABLE IF NOT EXISTS predictions (
     id              TEXT    PRIMARY KEY,
@@ -42,7 +45,8 @@ export const DDL_PREDICTIONS = `
     reasoning       TEXT,
     suggested_action TEXT,
     expires_at      TEXT,
-    outcome         TEXT    DEFAULT 'pending',
+    outcome         TEXT    DEFAULT 'pending'
+                      CHECK (outcome IN ('correct','incorrect','pending')),
     created_at      TEXT    NOT NULL
                       DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )
