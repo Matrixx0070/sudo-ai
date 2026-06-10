@@ -5,45 +5,48 @@
  * Stores a per-tool failure log with deduplication support.
  * When a solution is discovered it is saved as a prevention rule so future
  * calls can short-circuit and avoid repeating the same mistake.
+ *
+ * Storage: in-memory by default (process-lifetime, legacy behavior unchanged).
+ * Opt-in durable mode via SUDO_FAILURE_LEARNER_DB=1 (default OFF) persists to
+ * the shared mind.db SQLite instance so rules/solutions survive restarts.
+ * Fail-open at init: if the database cannot be opened the learner falls back
+ * to the in-memory store. Runtime DB errors propagate to callers (consistent
+ * with FeedbackMemory/Predictor; ToolOutcomeLearner already wraps calls).
+ * Store implementations live in failure-learner-store.ts (300-line rule).
  */
 
 import { createLogger } from '../shared/logger.js';
+import { MIND_DB } from '../shared/paths.js';
+import {
+  MemoryFailureStore, SqliteFailureStore, errorKey,
+  type FailureStore, type FailureRecord,
+} from './failure-learner-store.js';
+
+export type { FailureRecord } from './failure-learner-store.js';
 
 const log = createLogger('learning:failures');
 
 // ---------------------------------------------------------------------------
-// Types
+// Store selection (lazy; flag read at first use)
 // ---------------------------------------------------------------------------
 
-export interface FailureRecord {
-  id: string;
-  tool: string;
-  error: string;
-  context: string;
-  solution?: string;
-  preventionRule?: string;
-  occurredAt: string;
-  resolvedAt?: string;
-}
+let store: FailureStore | null = null;
 
-// ---------------------------------------------------------------------------
-// In-memory stores
-// ---------------------------------------------------------------------------
-
-const MAX_PER_TOOL = 200;
-
-/** tool → list of records */
-const failures: Map<string, FailureRecord[]> = new Map();
-
-/** `${tool}:${error.slice(0,50)}` → prevention rule */
-const preventionRules: Map<string, string> = new Map();
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function errorKey(tool: string, error: string): string {
-  return `${tool}:${error.substring(0, 50)}`;
+function getStore(): FailureStore {
+  if (!store) {
+    if (process.env['SUDO_FAILURE_LEARNER_DB'] === '1') {
+      try {
+        store = new SqliteFailureStore(MIND_DB);
+        log.info({ db: MIND_DB }, 'FailureLearner using durable SQLite store');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'FailureLearner SQLite store unavailable — falling back to in-memory');
+        store = new MemoryFailureStore();
+      }
+    } else {
+      store = new MemoryFailureStore();
+    }
+  }
+  return store;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,11 +70,7 @@ export function recordFailure(tool: string, error: string, context: string): Fai
     occurredAt: new Date().toISOString(),
   };
 
-  if (!failures.has(tool)) failures.set(tool, []);
-  const bucket = failures.get(tool)!;
-  bucket.push(record);
-  if (bucket.length > MAX_PER_TOOL) bucket.splice(0, bucket.length - MAX_PER_TOOL);
-
+  getStore().insert(record);
   log.warn({ tool, error: error.substring(0, 80) }, 'Failure recorded');
   return record;
 }
@@ -88,50 +87,32 @@ export function recordSolution(
   if (!failureId) throw new TypeError('failureId is required');
   if (!solution)  throw new TypeError('solution is required');
 
-  for (const records of failures.values()) {
-    const r = records.find(r => r.id === failureId);
-    if (r) {
-      r.solution        = solution;
-      r.preventionRule  = preventionRule;
-      r.resolvedAt      = new Date().toISOString();
-
-      if (preventionRule) {
-        preventionRules.set(errorKey(r.tool, r.error), preventionRule);
-        log.info({ tool: r.tool }, 'Prevention rule stored');
-      }
-      return;
-    }
+  const resolved = getStore().resolve(failureId, solution, preventionRule, new Date().toISOString());
+  if (!resolved) {
+    log.warn({ failureId }, 'recordSolution: failure not found');
+    return;
   }
-
-  log.warn({ failureId }, 'recordSolution: failure not found');
+  if (preventionRule) log.info({ tool: resolved.tool }, 'Prevention rule stored');
 }
 
 /** Retrieve the prevention rule for a tool+error combination (if known). */
 export function getPreventionRule(tool: string, error: string): string | undefined {
-  return preventionRules.get(errorKey(tool, error));
+  return getStore().getPreventionRule(errorKey(tool, error));
 }
 
 /** Returns true if an identical (tool, error prefix) failure has been seen before. */
 export function hasSeenBefore(tool: string, error: string): boolean {
-  const records = failures.get(tool) ?? [];
-  const prefix  = error.substring(0, 30);
-  return records.some(r => r.error.includes(prefix));
+  return getStore().hasErrorPrefix(tool, error.substring(0, 30));
 }
 
 /**
  * Return the previously discovered solution for a tool+error, if one was recorded.
  */
 export function getSolution(tool: string, error: string): string | undefined {
-  const records = failures.get(tool) ?? [];
-  const prefix  = error.substring(0, 30);
-  return records.find(r => r.error.includes(prefix) && r.solution)?.solution;
+  return getStore().findSolutionByErrorPrefix(tool, error.substring(0, 30));
 }
 
 /** Per-tool failure counts. */
 export function getFailureStats(): Record<string, number> {
-  const stats: Record<string, number> = {};
-  for (const [tool, records] of failures) {
-    stats[tool] = records.length;
-  }
-  return stats;
+  return getStore().stats();
 }
