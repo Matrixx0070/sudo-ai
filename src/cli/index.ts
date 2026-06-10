@@ -119,7 +119,7 @@ program
   .description('Gracefully stop a running SUDO-AI instance')
   .action(async () => {
     const { runStop } = await import('./commands/stop.js');
-    const code = await runStop(PROJECT_ROOT);
+    const code = await runStop();
     process.exit(code);
   });
 
@@ -132,7 +132,7 @@ program
   .description('Show current SUDO-AI running status and API health')
   .action(async () => {
     const { runStatus } = await import('./commands/status.js');
-    const code = await runStatus(PROJECT_ROOT);
+    const code = await runStatus();
     process.exit(code);
   });
 

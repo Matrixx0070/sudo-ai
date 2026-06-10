@@ -1,7 +1,7 @@
 /** @file provider.ts — Multi-provider streaming abstraction for SUDO-AI chat TUI. */
 
 import fs from 'node:fs';
-import path from 'node:path';
+import { PATHS } from '../../../core/shared/constants.js';
 
 // ---------------------------------------------------------------------------
 // .env loader
@@ -30,8 +30,7 @@ function loadDotEnv(envPath: string): void {
 }
 
 // Load .env from project root config/
-const projectRoot = path.resolve(process.cwd());
-loadDotEnv(path.join(projectRoot, 'config', '.env'));
+loadDotEnv(PATHS.ENV);
 
 // ---------------------------------------------------------------------------
 // Types

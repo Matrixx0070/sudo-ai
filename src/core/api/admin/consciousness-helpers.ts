@@ -3,14 +3,14 @@
  * @description DB helpers and constants for consciousness.handler.ts.
  */
 
-import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { createLogger } from '../../shared/logger.js';
+import { dataPath } from '../../shared/paths.js';
 import type { IncomingMessage } from 'node:http';
 
 const log = createLogger('api:admin:consciousness-helpers');
 
-export const DB_PATH = path.join(process.cwd(), 'data', 'consciousness.db');
+export const DB_PATH = dataPath('consciousness.db');
 
 export const CONSCIOUSNESS_MODULES = [
   'embodied-state',

@@ -16,12 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readPid, isRunning } from '../pid.js';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const PID_PATH_RELATIVE = path.join('data', 'sudo-ai.pid');
+import { PID_PATH } from '../../core/shared/constants.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,10 +54,10 @@ function writePidSync(pidPath: string, pid: number): void {
  * Imports the existing `src/cli.ts` entry point which boots the full stack.
  * Signal handlers and shutdown logic are owned by that module.
  *
- * @param projectRoot Absolute path to the project root.
+ * @param projectRoot Absolute path to the install root (where src/cli.ts lives).
  */
 export async function runStartForeground(projectRoot: string): Promise<void> {
-  const pidPath = path.join(projectRoot, PID_PATH_RELATIVE);
+  const pidPath = PID_PATH;
 
   // Guard: prevent double-start.
   const existingPid = readPid(pidPath);
@@ -103,10 +98,10 @@ export async function runStartForeground(projectRoot: string): Promise<void> {
  * Spawns `tsx src/cli.ts` with stdio:'ignore' and detached:true so the
  * daemon survives the parent process. Writes the child PID to the PID file.
  *
- * @param projectRoot Absolute path to the project root.
+ * @param projectRoot Absolute path to the install root (where src/cli.ts lives).
  */
 export function runStartDaemon(projectRoot: string): void {
-  const pidPath = path.join(projectRoot, PID_PATH_RELATIVE);
+  const pidPath = PID_PATH;
 
   // Guard: prevent double-start.
   const existingPid = readPid(pidPath);

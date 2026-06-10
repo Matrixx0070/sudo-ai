@@ -20,9 +20,9 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR, dataPath } from '../../../shared/paths.js';
 import Database from 'better-sqlite3';
 
 const logger = createLogger('meta.consciousness-control');
@@ -31,8 +31,7 @@ const logger = createLogger('meta.consciousness-control');
 // Control file path
 // ---------------------------------------------------------------------------
 
-const DATA_DIR = path.resolve('data');
-const CONTROL_FILE = path.resolve(DATA_DIR, 'consciousness-control.json');
+const CONTROL_FILE = dataPath('consciousness-control.json');
 
 // ---------------------------------------------------------------------------
 // Control state shape
@@ -134,7 +133,7 @@ interface ModuleActivity {
 }
 
 function readModuleActivity(): ModuleActivity | null {
-  const dbPath = path.resolve('data', 'consciousness.db');
+  const dbPath = dataPath('consciousness.db');
   try {
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     const count = (table: string): number => {

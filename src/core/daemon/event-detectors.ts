@@ -16,13 +16,13 @@
 
 import Database from 'better-sqlite3';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { dataPath } from '../shared/paths.js';
 import type { DaemonEvent, EventPriority } from './event-daemon-schema.js';
 
 const log = createLogger('daemon:detectors');
 
-const COST_FILE = resolve('data/cost-tracker.json');
+const COST_FILE = dataPath('cost-tracker.json');
 
 // ---------------------------------------------------------------------------
 // Shared mutable state passed from EventDaemon
@@ -110,7 +110,7 @@ export function detectConsciousness(
   persist: PersistFn,
 ): DaemonEvent[] {
   try {
-    const dbPath = resolve('data/consciousness.db');
+    const dbPath = dataPath('consciousness.db');
     if (!existsSync(dbPath)) return [];
 
     const db = new Database(dbPath, { readonly: true });
