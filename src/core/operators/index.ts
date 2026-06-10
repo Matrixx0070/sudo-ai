@@ -1,8 +1,6 @@
 /**
  * @file operators/index.ts
  * @description Barrel export for operators module.
- *
- * Wave 10 — Builder 3 (Config + Ops + UX)
  */
 
 export { OperatorLoader } from './operator-loader.js';

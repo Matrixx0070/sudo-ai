@@ -2,7 +2,7 @@
  * @file gateway/federation-error-validators.ts
  * @description Request validators for federation error routes.
  *
- * Wave 2 — Federation Error Protocol.
+ * Part of the Federation Error Protocol.
  */
 
 import type {

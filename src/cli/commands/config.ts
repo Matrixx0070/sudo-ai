@@ -6,8 +6,8 @@
  *   --validate   Load and validate config/sudo-ai.json5; exit 0 on success, 1 on failure.
  *   --path       Print the resolved absolute path to the config file.
  *
- * Wave2 polish: added runConfigWizard entrypoint (for `sudo-ai setup` / ongoing TUI).
- * Full 100x Ink wizard (cross/P1 enable, xai-auth, profiles, kills, SOUL, service, learner/KAIROS) lives in setup.ts (imported by setup cmd + future index hook).
+ * Also exposes the runConfigWizard entrypoint (for `sudo-ai setup` / ongoing TUI).
+ * The full Ink wizard (cross-platform enable, xai-auth, profiles, kills, SOUL, service, learner/KAIROS) lives in setup.ts (imported by setup cmd + future index hook).
  * Use `sudo-ai setup` (or `sudo-ai config --setup` once wired) for first/ongoing.
  */
 
@@ -60,9 +60,9 @@ export function runConfigPath(projectRoot: string): void {
 }
 
 /**
- * Wave2: Launch the full Ink TUI setup wizard (first-time + ongoing 100x).
- * Delegates to setup.ts (new setup* file in boundaries). Used by `sudo-ai setup` cmd
- * (and can be wired for auto first-run hook in cli/index.ts post this wave).
+ * Launch the full Ink TUI setup wizard (first-time + ongoing).
+ * Delegates to setup.ts. Used by `sudo-ai setup` cmd
+ * (and can be wired for an auto first-run hook in cli/index.ts).
  * Returns 0 on success.
  */
 export async function runConfigWizard(projectRoot: string): Promise<number> {

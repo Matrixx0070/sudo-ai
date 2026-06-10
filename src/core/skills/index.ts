@@ -12,7 +12,7 @@ export { SkillCompiler, type SkillDefinition, type SkillRecord } from './compile
 export { loadCompiledSkills } from './loader.js';
 export { SkillVersioning, type SkillVersion, type SkillDiff } from './versioning.js';
 
-// Wave 5 P2 — versioned registry + HTTP routes
+// Versioned registry + HTTP routes
 export { SkillRegistry, SkillRegistryError } from './registry.js';
 export type { SkillMeta, SkillFull, AttachedSkill } from './registry-types.js';
 export { registerSkillRoutes } from './routes.js';

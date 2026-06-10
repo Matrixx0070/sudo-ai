@@ -807,13 +807,13 @@ export const arsenalTool: ToolDefinition = {
 };
 
 /**
- * Direct trigger for KAIROS autonomous self-repair (Phase 3 wiring).
+ * Direct trigger for KAIROS autonomous self-repair.
  * Allows KAIROS to call arsenal "refactor" or "fix" on detected large_file or codebase_degraded.
  * Stub ctx for direct use (PROJECT_ROOT guard preserved).
  */
 export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
-  // KAIROS self-repair hook (Phase 3 strict wiring). Real dry-run call (applyEdits:false) to avoid side effects in background tick.
-  // Matches "as before" verified patterns (P1/P2 sim + guards); uses internal execute for full pipeline (recon/baseline/AI/verify).
+  // KAIROS self-repair hook. Real dry-run call (applyEdits:false) to avoid side effects in background tick.
+  // Matches "as before" verified patterns (sim + guards); uses internal execute for full pipeline (recon/baseline/AI/verify).
   logger.info({ task, mode }, 'KAIROS requested arsenal self-repair (dry-run wired)');
   try {
     // Minimal ctx (session/logger only; full ToolContext not required for read-only dry)
@@ -827,5 +827,5 @@ export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor'
   }
 }
 
-// KAIROS trigger added for self-repair wiring (Phase 3 strict). Call triggerKAIROSRepair(task, 'refactor' | 'fix') from kairos actOnObservation. Safe, dry, env-kill in caller.
+// KAIROS trigger added for self-repair wiring. Call triggerKAIROSRepair(task, 'refactor' | 'fix') from kairos actOnObservation. Safe, dry, env-kill in caller.
 

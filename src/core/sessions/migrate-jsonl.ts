@@ -1,6 +1,6 @@
 /**
  * @file migrate-jsonl.ts
- * @description Wave 4b — One-shot JSONL → SQLite migrator.
+ * @description One-shot JSONL → SQLite migrator.
  *
  * Reads the JournalSessionStore index at `{journalBaseDir}/sessions.json`,
  * iterates every JSONL file, reconstructs SessionRow + MessageRow data,
@@ -84,7 +84,7 @@ export async function migrateJsonlToSqlite(
     return { imported: 0, skipped: 0 };
   }
 
-  // Ensure schema + Wave 4b columns are present
+  // Ensure schema + session-store columns are present
   initializeSchema(db);
   const store = new SqliteSessionStore(db);
 
@@ -191,7 +191,7 @@ async function _migrateEntry(
     output_tokens:     0,
     cost_usd:          0,
     title:             null,
-    status:            'idle',       // Wave 5: default status for migrated sessions
+    status:            'idle',       // default status for migrated sessions
   };
 
   try {

@@ -9,7 +9,7 @@
  *   comms.notify  — Unified multi-channel notification dispatcher
  *   comms.voice   — Text-to-speech (TTS) and speech-to-text (STT) via OpenAI
  *
- * Wave 10 connectors (5 new):
+ * OAuth/vault-backed connectors (5):
  *   comms.gmail        — Gmail OAuth (requires googleapis + vault token)
  *   comms.gcalendar    — Google Calendar OAuth (requires googleapis + vault token)
  *   comms.github-notify — GitHub unread notifications (PAT from vault or GITHUB_TOKEN)
@@ -24,7 +24,7 @@ import { smsTool } from './sms.js';
 import { webhookTool } from './webhook.js';
 import { notificationTool } from './notification.js';
 import { voiceTool } from './voice.js';
-// Wave 10 connector tools
+// OAuth/vault-backed connector tools
 import { gmailTool } from './gmail.js';
 import { gcalendarTool } from './gcalendar.js';
 import { githubNotifyTool } from './github-notify.js';
@@ -39,7 +39,7 @@ export const COMMS_TOOLS = [
   webhookTool,
   notificationTool,
   voiceTool,
-  // Wave 10 connectors
+  // OAuth/vault-backed connectors
   gmailTool,
   gcalendarTool,
   githubNotifyTool,

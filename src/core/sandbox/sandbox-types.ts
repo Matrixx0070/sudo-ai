@@ -26,7 +26,7 @@ export interface SandboxPolicy {
   /** Additional env var names allowed beyond ENV_ALLOWLIST_BASE. */
   allowedEnvVars?: string[];
 
-  // P1 cross-platform expand (compat for Win/Mac shims + policy)
+  // Cross-platform expansion (compat for Win/Mac shims + policy)
   platform?: 'linux' | 'win' | 'mac' | 'auto';
   enableCrossPlatform?: boolean;
 }

@@ -1,6 +1,6 @@
 /**
  * @file routes.ts
- * @description Wave 5 — REST endpoints mirroring Anthropic's /v1/sessions API.
+ * @description REST endpoints mirroring Anthropic's /v1/sessions API.
  *
  * Endpoints:
  *   POST   /v1/sessions              — create session

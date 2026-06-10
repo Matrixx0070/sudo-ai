@@ -1,6 +1,6 @@
 /**
  * @file index.ts
- * @description Barrel export for the SUDO-AI v4 consciousness layer (Wave 1).
+ * @description Barrel export for the SUDO-AI v4 consciousness layer.
  *
  * Consumers import everything they need from this single entry point:
  *
@@ -21,11 +21,11 @@ export { ConsciousnessError } from './errors.js';
 // Database wrapper
 export { ConsciousnessDB } from './consciousness-db.js';
 
-// Context selector (Phase 3 consciousness bridge)
+// Context selector (consciousness bridge)
 export { ContextSelector } from './context-selector.js';
 export type { ContextSelection, ModuleRelevance } from './context-selector.js';
 
-// Consciousness bridge (Phase 3 consciousness bridge)
+// Consciousness bridge
 export { ConsciousnessBridge } from './context-bridge.js';
 export type { BridgeInjection } from './context-bridge.js';
 

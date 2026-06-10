@@ -2,8 +2,7 @@
  * @file cli/commands/quickstart.ts
  * @description sudo-ai quickstart — interactive 5-step setup wizard (legacy readline).
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
- * Wave2 polish: compat preserved; recommends full Ink TUI `sudo-ai setup` for 100x (cross/P1, xai-auth, profiles, kills, SOUL, service, learner/KAIROS).
+ * Compat preserved; recommends full Ink TUI `sudo-ai setup` for complete coverage (cross-platform control, xai-auth, profiles, kills, SOUL, service, learner/KAIROS).
  *
  * Wizard steps:
  *   1. Agent name → meta.name
@@ -17,7 +16,7 @@
  * Always exits 0.
  *
  * Uses Node.js readline only — no external deps.
- * For full real-time Ink TUI wizard (like chat TUI) + 100x coverage + ongoing + first-run: use `sudo-ai setup`.
+ * For full real-time Ink TUI wizard (like chat TUI) + complete coverage + ongoing + first-run: use `sudo-ai setup`.
  */
 
 import fs from 'node:fs';

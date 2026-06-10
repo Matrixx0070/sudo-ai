@@ -4,7 +4,7 @@
  * Rate table is in USD per 1M tokens (input / output).
  * Unknown models fall back to DEFAULT_COST_RATE.
  *
- * Wave 10 addition: energy model (estimateEnergy).
+ * Includes an energy model (estimateEnergy).
  * Energy estimates use published hardware TDP + measured queries/sec baselines:
  *
  *   H100 SXM5:   700W TDP,  ~300 tok/s output
@@ -68,7 +68,7 @@ export const COST_RATES: Record<string, CostRate> = {
 const DEFAULT_COST_RATE: CostRate = { inputPerM: 5.0, outputPerM: 20.0 };
 
 // ---------------------------------------------------------------------------
-// Energy model — Wave 10 addition
+// Energy model
 // ---------------------------------------------------------------------------
 
 /**

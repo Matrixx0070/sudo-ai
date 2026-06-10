@@ -14,7 +14,7 @@
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import { ApprovalMatrix, type ApprovalDecision, type ApprovalTier } from './approval-matrix.js';
-// P1 cross: IComputerUse wiring for control actions (exec/browser/file/gui/desktop) + learner/arsenal
+// Cross-platform IComputerUse wiring for control actions (exec/browser/file/gui/desktop) + learner/arsenal
 import type { IComputerUse, ComputerUseConfig } from '../tools/builtin/computer-use/cross-platform/index.js';
 import type { ToolOutcomeLearner } from '../agent/tool-outcome-learner.js'; // use class (has onToolResult); duck ok at runtime
 
@@ -36,7 +36,7 @@ export interface PendingAction {
   resolvedAt?: string;
 }
 
-// P1 cross-platform control action (unified IComputerUse)
+// Cross-platform control action (unified IComputerUse)
 export interface ControlAction {
   op: 'exec' | 'browser' | 'file' | 'gui' | 'desktop';
   params: Record<string, unknown>;
@@ -156,7 +156,7 @@ export class AutonomousExecutor {
     cu: IComputerUse,
     learner?: ToolOutcomeLearner,
   ): Promise<ExecutionResult> {
-    // P1 fix (CRITICAL-1 + HIGH): preserve sub-ops for control.file.write/delete etc and cmd for control.exec:xxx never rules
+    // Fix (CRITICAL-1 + HIGH): preserve sub-ops for control.file.write/delete etc and cmd for control.exec:xxx never rules
     let toolName = `control.${ca.op}`;
     if (ca.op === 'file' && ca.params.op) {
       toolName = `control.file.${ca.params.op}`;
@@ -190,7 +190,7 @@ export class AutonomousExecutor {
       if (learner) {
         try { learner.onToolResult(toolName, ca.params, success, success ? undefined : res?.error, undefined, undefined, 'control,cross'); } catch {}
       }
-      // P1 fix: FULL KAIROS/arsenal trigger wire (use config from cu or direct import; not comment)
+      // Fix: FULL KAIROS/arsenal trigger wire (use config from cu or direct import; not comment)
       if (!success) {
         try {
           const { triggerKAIROSRepair } = await import('../tools/builtin/coder/arsenal.js');
@@ -205,7 +205,7 @@ export class AutonomousExecutor {
       if (decision.tier === 'notify') {
         this.queueNotification(toolName, `control ${ca.op} executed (notify): ${res?.error || 'ok'}`);
       }
-      // P1 refine (Codex post-remed): propagate backend failures from executeControl (was hard-coded success: true even if !res.success; now uses computed success for accurate cross-platform reporting + learner).
+      // Refine (Codex post-remed): propagate backend failures from executeControl (was hard-coded success: true even if !res.success; now uses computed success for accurate cross-platform reporting + learner).
       return { success, action: decision.tier === 'notify' ? 'notified' : 'executed', message: decision.reason, result: res };
     } catch (e: any) {
       if (learner) learner.onToolResult(toolName, ca.params, false, e.message);

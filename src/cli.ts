@@ -287,7 +287,7 @@ async function boot(): Promise<void> {
   const hooks = new HookManager();
   log.info('HookManager initialized');
 
-  // Wave 10E: Wire TaintTracker into HookManager (fail-open, kill-switch: SUDO_TAINT_DISABLE=1).
+  // Wire TaintTracker into HookManager (fail-open, kill-switch: SUDO_TAINT_DISABLE=1).
   if (process.env['SUDO_TAINT_DISABLE'] !== '1') {
     try {
       taintTracker.attachHooks(hooks);
@@ -487,7 +487,7 @@ async function boot(): Promise<void> {
       const Database = (await import('better-sqlite3')).default;
       const caDb = new Database(path.join(dataDir, 'audit.db'));
 
-      // Wave 7A P1: Lazy audit_chain schema seed (idempotent, fail-open).
+      // Lazy audit_chain schema seed (idempotent, fail-open).
       // Ensures the table exists before any module tries to query it.
       try {
         caDb.exec(`
@@ -506,7 +506,7 @@ async function boot(): Promise<void> {
         log.warn({ err: String(seedErr) }, 'audit_chain schema seed failed (non-fatal)');
       }
 
-      // Wave 7A P2 (refactored 7D): Identity re-anchor instrumentation at startup.
+      // Identity re-anchor instrumentation at startup.
       // Uses createReAnchorEmitter for DRY — same helper used for post-veto/discordance/dispatch.
       // Note: sleepTrustTracker not yet initialized here; the trust write happens after 6.4b below.
       try {
@@ -526,7 +526,7 @@ async function boot(): Promise<void> {
         const mprMsg = mprErr instanceof Error ? mprErr.message : String(mprErr);
         log.error({ err: mprMsg }, 'MistakePatternRecognizer init failed — pattern endpoints will return 503');
       }
-      // Wave 6R: wire MistakeAutoBlockGuard into veto-gate pre-check (fail-open).
+      // Wire MistakeAutoBlockGuard into veto-gate pre-check (fail-open).
       // Cast via unknown: MistakePattern satisfies the structural duck type but lacks
       // an index signature, which is a TypeScript structural quirk, not a runtime issue.
       if (mistakePatternRecognizer) {
@@ -570,7 +570,7 @@ async function boot(): Promise<void> {
       sleepTrustTracker = new TrustTierTracker(ttDb);
       log.info('TrustTierTracker (sleep) initialised');
 
-      // Wave 7A P2 (refactored 7D): Record startup re-anchor outcome in trust tracker (fail-open).
+      // Record startup re-anchor outcome in trust tracker (fail-open).
       try {
         const _emitStartupTrust = createReAnchorEmitter('startup', undefined, sleepTrustTracker);
         _emitStartupTrust();
@@ -587,7 +587,7 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6.4b2 Wave 7D: Wire re-anchor callbacks for post-veto, post-discordance,
+  // 6.4b2 Wire re-anchor callbacks for post-veto, post-discordance,
   //        post-dispatch trigger paths. Requires caDb (from 6.4) and
   //        sleepTrustTracker (from 6.4b) — both may be undefined (fail-open).
   // -------------------------------------------------------------------------
@@ -621,7 +621,7 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6.4c ConfidenceCalibrationTracker — predicted-vs-actual calibration (Wave 6L).
+  // 6.4c ConfidenceCalibrationTracker — predicted-vs-actual calibration.
   //      Opens calibration.db; fail-open on any init error.
   // -------------------------------------------------------------------------
   let confidenceCalibrationTracker: ConfidenceCalibrationTracker | undefined;
@@ -641,8 +641,8 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6.4g AutoThresholdTuner — dynamic veto threshold from calibration drift
-  //      (Wave 7C). Requires confidenceCalibrationTracker from 6.4c.
+  // 6.4g AutoThresholdTuner — dynamic veto threshold from calibration drift.
+  //      Requires confidenceCalibrationTracker from 6.4c.
   //      Fail-open: if tracker undefined, tuner is skipped and veto-gate uses
   //      static BASE_VETO_THRESHOLD. Module-level setter pattern (mirrors 6R).
   // -------------------------------------------------------------------------
@@ -689,7 +689,7 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6.4e CommitmentResolutionTracker — persistent commitment outcome log (Wave 6N).
+  // 6.4e CommitmentResolutionTracker — persistent commitment outcome log.
   //      Opens resolutions.db (separate DB to isolate schema from audit.db).
   //      Fail-open on any init error.
   // -------------------------------------------------------------------------
@@ -710,7 +710,7 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6.4f InjectionDetector — stateless pure detector, no DB (Wave 6O).
+  // 6.4f InjectionDetector — stateless pure detector, no DB.
   //      strictMode controlled by SUDO_INJECTION_STRICT=1 env var.
   // -------------------------------------------------------------------------
   const injectionDetector = new InjectionDetector({
@@ -719,13 +719,13 @@ async function boot(): Promise<void> {
   log.info({ strictMode: process.env['SUDO_INJECTION_STRICT'] === '1' }, 'InjectionDetector initialised');
 
   // -------------------------------------------------------------------------
-  // 6.4h Wave 7E: Federation — PeerRegistry + AuditChainSync.
+  // 6.4h Federation — PeerRegistry + AuditChainSync.
   //      Reads peer config from env (fail-open if missing/malformed).
   //      Opens a second handle on audit.db for federation tables.
   //      Instance ID = SUDO_INSTANCE_ID env or "hostname-pid" fallback.
   // -------------------------------------------------------------------------
   let federationDeps: import('./core/gateway/federation-routes.js').FederationRoutesDeps | undefined;
-  // Wave 2 — Federation Error Protocol (hoisted for later init)
+  // Federation Error Protocol (hoisted for later init)
   let federationErrorIngestor: any;
   let federationTokenPool: any;
   let peerRegistryForAuth: any;
@@ -740,7 +740,7 @@ async function boot(): Promise<void> {
       peerRegistryForAuth = PeerRegistry.fromEnv();
       const peerRegistry = peerRegistryForAuth;
 
-      // Wave 10H: PeerKeyCache + PeerKeyFetcher for federation ingest verification
+      // PeerKeyCache + PeerKeyFetcher for federation ingest verification
       const { PeerKeyCache } = await import('./core/federation/peer-key-cache.js');
       const { PeerKeyFetcher } = await import('./core/federation/peer-key-fetcher.js');
       const peerKeyCache = new PeerKeyCache();
@@ -793,7 +793,7 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6.4i Wave 8E: AlignmentAutoRemediator — auto-remediation on sustained RED.
+  // 6.4i AlignmentAutoRemediator — auto-remediation on sustained RED.
   //      Instantiated here so it can be wired into alignmentAggregator
   //      (done in section 9.5 where finalAgentLoop is available) and into
   //      the HTTP admin routes. All deps are optional (fail-open).
@@ -836,14 +836,14 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 6.45 Wave 13 pre-init — SkillDiscovery + SkillOptimizationStore (fail-open)
+  // 6.45 Pre-init — SkillDiscovery + SkillOptimizationStore (fail-open)
   // These are initialised before the consciousness layer so they can be wired
   // into the SleepCycle constructor at 6.5. SkillOptimizer is created later
   // (after calibration tracker is available) and injected via setSkillOptimizer().
   // -------------------------------------------------------------------------
   let wave13SkillDiscovery: SkillDiscovery | undefined;
   let wave13SkillOptimizationStore: SkillOptimizationStore | undefined;
-  /** Duck-typed ref to sleepCycle so setSkillOptimizer can be called post-Wave-13 init. */
+  /** Duck-typed ref to sleepCycle so setSkillOptimizer can be called after SkillOptimizer init. */
   let wave13SleepCycleRef: { setSkillOptimizer(o: unknown): void } | undefined;
   try {
     wave13SkillDiscovery = new SkillDiscovery();
@@ -905,10 +905,10 @@ async function boot(): Promise<void> {
         reanchorMonitor,
         skillDiscovery: wave13SkillDiscovery,
       });
-      // Capture ref for Wave 13 setter injection (post-calibration-tracker init).
+      // Capture ref for SkillOptimizer setter injection (post-calibration-tracker init).
       wave13SleepCycleRef = sleepCycle;
       consciousnessInstance.attachSleepCycle(sleepCycle);
-      // Wave 8D: wire federation peer-audit into sleep cycle (section 6.4h.2).
+      // Wire federation peer-audit into sleep cycle (section 6.4h.2).
       if (federationDeps?.auditChainSync) sleepCycle.setAuditChainSync(federationDeps.auditChainSync);
     } catch (err) {
       log.warn({ err: String(err) }, 'SleepCycle attach failed — running without sleep');
@@ -950,25 +950,25 @@ async function boot(): Promise<void> {
     ? new AgentLoop(brain, registry, dualSessionManager, { maxIterations: config.agents.maxIterations }, consciousness, security ?? undefined, workspaceInjector, hooks, sandboxManager)
     : agentLoop;
 
-  // Wire ConfidenceCalibrationTracker into the resolved agent loop (Wave 6L).
+  // Wire ConfidenceCalibrationTracker into the resolved agent loop.
   if (confidenceCalibrationTracker) {
     try {
       finalAgentLoop.setConfidenceCalibrationTracker(confidenceCalibrationTracker);
-      // Wave 6Q: also inject into AlignmentAggregator's 8th signal (Brier-drift) — fail-open.
+      // Also inject into AlignmentAggregator's 8th signal (Brier-drift) — fail-open.
       (finalAgentLoop.getAlignmentAggregator() as unknown as Record<string, unknown>)['confidenceCalibrationTracker'] = confidenceCalibrationTracker;
     } catch (err: unknown) {
       log.warn({ err: String(err) }, 'ConfidenceCalibrationTracker wiring failed — calibration hooks disabled');
     }
   }
 
-  // Wire InjectionDetector into the resolved agent loop (Wave 6O).
+  // Wire InjectionDetector into the resolved agent loop.
   try {
     finalAgentLoop.setInjectionDetector(injectionDetector);
   } catch (err: unknown) {
     log.warn({ err: String(err) }, 'InjectionDetector wiring failed — injection scan hooks disabled');
   }
 
-  // Wave 10B: wire SkillDiscovery into agent loop (fail-open)
+  // Wire SkillDiscovery into agent loop (fail-open)
   if (wave13SkillDiscovery) {
     try {
       finalAgentLoop.setSkillDiscovery(wave13SkillDiscovery);
@@ -977,7 +977,7 @@ async function boot(): Promise<void> {
     }
   }
 
-  // Wave 10E: wire TaintTracker into agent loop (fail-open, kill-switch: SUDO_TAINT_DISABLE=1).
+  // Wire TaintTracker into agent loop (fail-open, kill-switch: SUDO_TAINT_DISABLE=1).
   if (process.env['SUDO_TAINT_DISABLE'] !== '1') {
     try {
       finalAgentLoop.setTaintTracker(taintTracker);
@@ -1988,7 +1988,7 @@ async function boot(): Promise<void> {
 
     // Markdown skill loader
     const mdSkills = await loadMarkdownSkills(path.resolve(process.cwd(), 'skills'));
-    // Wave 10C: build skill→tool reverse index and wire into ToolRegistry (fail-open)
+    // Build skill→tool reverse index and wire into ToolRegistry (fail-open)
     registry.setSkillIndex(buildSkillToolIndex(mdSkills));
 
     // Register shutdown handlers for closeable v5 modules
@@ -2025,7 +2025,7 @@ async function boot(): Promise<void> {
       // Attach OpenAI-compatible HTTP API (auth gating is handled inside attachHttpApi
       // via GATEWAY_TOKEN env var; when unset, all requests are accepted).
 
-      // Wave 8E: Wire AlignmentAutoRemediator as observer on the aggregator.
+      // Wire AlignmentAutoRemediator as observer on the aggregator.
       // finalAgentLoop.getAlignmentAggregator() is available now that the loop is built.
       if (alignmentAutoRemediator) {
         try {
@@ -2046,7 +2046,7 @@ async function boot(): Promise<void> {
         }
       }
 
-      // Wave 2 — Federation Error Protocol (init now that finalAgentLoop is available)
+      // Federation Error Protocol (init now that finalAgentLoop is available)
       try {
         const { FederationErrorIngestor } = await import('./core/federation/federation-error-ingestor.js');
         const { FederationTokenPool } = await import('./core/federation/federation-token-pool.js');
@@ -2073,7 +2073,7 @@ async function boot(): Promise<void> {
       } catch (err) { log.warn({ err: String(err) }, '[Wave 2] Federation Error Protocol init failed (non-critical)'); }
 
       // -----------------------------------------------------------------------
-      // Wave 10: instantiate BenchStore + ProposalStore for HTTP route groups.
+      // Instantiate BenchStore + ProposalStore for HTTP route groups.
       // These are pure store objects (no live LLM needed). Fail-open: if the
       // DB open fails, the respective route group is simply not registered.
       // -----------------------------------------------------------------------
@@ -2094,7 +2094,7 @@ async function boot(): Promise<void> {
       }
 
       // -----------------------------------------------------------------------
-      // Wave 13: SkillOptimizer full init (AgentConfigEvolver + SkillOptimizer).
+      // SkillOptimizer full init (AgentConfigEvolver + SkillOptimizer).
       // SkillDiscovery + SkillOptimizationStore were pre-initialised at 6.45.
       // SkillOptimizer is injected into SleepCycle via setSkillOptimizer() setter.
       // -----------------------------------------------------------------------
@@ -2115,7 +2115,7 @@ async function boot(): Promise<void> {
             calibTracker,
             wave13SkillOptimizationStore,
             wave13SkillRegistry,
-            sleepTrustTracker, // P2-d: trust gate for autoApplyApproved()
+            sleepTrustTracker, // trust gate for autoApplyApproved()
             new URL('./core/skills', import.meta.url).pathname, // skillsDir: enable on-disk SKILL.md writes
           );
           // Inject into SleepCycle via setter (sleepCycle was captured at 6.5).
@@ -2123,7 +2123,7 @@ async function boot(): Promise<void> {
             wave13SleepCycleRef.setSkillOptimizer(wave13SkillOptimizer);
           }
           log.info('Wave 13: AgentConfigEvolver + SkillOptimizer initialised and wired into SleepCycle');
-          // Wave 10B: wire AgentConfigEvolver into agent loop (fail-open)
+          // Wire AgentConfigEvolver into agent loop (fail-open)
           if (wave13AgentConfigEvolver) {
             try {
               finalAgentLoop.setAgentConfigEvolver(wave13AgentConfigEvolver);
@@ -2184,11 +2184,11 @@ async function boot(): Promise<void> {
       });
       log.info('HTTP API attached (OpenAI-compatible + alignment admin routes)');
 
-      // Wave 5: REST APIs (/v1/sessions, /v1/agents, SSE streams)
+      // REST APIs (/v1/sessions, /v1/agents, SSE streams)
       try {
         const sessionDeps = buildSessionRouteDeps(db.db);
         // -----------------------------------------------------------------------
-        // Wave 5 P3: Wire real SessionStateMachine events to sandboxProxyBus
+        // Wire real SessionStateMachine events to sandboxProxyBus
         // -----------------------------------------------------------------------
         // sandboxManager was pre-initialized at step 5.6 with a proxy EventEmitter.
         // Forward terminal session events from the real stateMachine so the
@@ -2210,24 +2210,24 @@ async function boot(): Promise<void> {
         log.info('SSE event stream attached (/v1/sessions/:id/stream)');
         registerShutdown(() => sseBroker.destroy());
 
-        // Wave 5 P2: MCP credential vault routes
+        // MCP credential vault routes
         registerVaultCredentialRoutes(gatewayServer);
         log.info('Vault credential routes attached (/v1/vaults/:ns/credentials)');
 
-        // Wave 5 P2: OAuth refresh daemon — start background token refresh
+        // OAuth refresh daemon — start background token refresh
         oauthRefreshDaemon.start();
         registerShutdown(() => oauthRefreshDaemon.stop());
         log.info('OAuth refresh daemon started');
 
-        // Wave 5 P2: Files API
+        // Files API
         const fileStore = new FileStore(db.db, 'data/files');
         registerFileRoutes(gatewayServer, fileStore);
         log.info('Files API attached (/v1/files)');
 
-        // Wave 5 P2: Skills Registry
+        // Skills Registry
         const skillRegistry = new SkillRegistry(db.db);
         skillRegistry.scanAndRegister();
-        // Wave 12: scan bundled SKILL.md files from src/core/skills subdirectories
+        // Scan bundled SKILL.md files from src/core/skills subdirectories
         const bundledSkillsDir = new URL('./core/skills', import.meta.url).pathname;
         skillRegistry.scanBundledSkills(bundledSkillsDir);
         registerSkillRoutes(gatewayServer, skillRegistry, sessionDeps.store);
@@ -2236,7 +2236,7 @@ async function boot(): Promise<void> {
         registerRegistryRoutes(gatewayServer, skillRegistry);
         log.info('Public skill registry attached (/v1/registry/skills)');
 
-        // Wave 10 P1: agentskills.io discovery endpoint (public no-auth)
+        // agentskills.io discovery endpoint (public no-auth)
         const { registerWellKnownRoutes } = await import('./core/gateway/well-known-routes.js');
         registerWellKnownRoutes(gatewayServer, skillRegistry);
         log.info('agentskills.io well-known route attached (GET /.well-known/agentskills.json)');
@@ -2266,7 +2266,7 @@ async function boot(): Promise<void> {
           stateMachine: sessionDeps.stateMachine,
           // outcomesLedger is guaranteed non-null here: assigned in step 9 try block above.
           // If it is null (v5 init failed), constructing SessionOutcomeListener will throw,
-          // which is caught by the outer Wave 5 try/catch, making this safe.
+          // which is caught by the outer REST-API try/catch, making this safe.
           // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
           ledger: outcomesLedger!,
           evaluator: goalEvaluator,

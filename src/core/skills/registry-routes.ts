@@ -2,7 +2,7 @@
  * @file registry-routes.ts
  * @description Public agentskills.io registry endpoints — no auth required.
  *
- * Wave 12 B2: Exposes bundled skills to the ecosystem.
+ * Exposes bundled skills to the ecosystem.
  *
  * Endpoints (3 total — all PUBLIC, CORS wildcard):
  *   GET     /v1/registry/skills           — list bundled skills (paginated, 60/min/IP)

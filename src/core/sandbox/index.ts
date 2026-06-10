@@ -12,7 +12,7 @@ export {
   DEFAULT_SANDBOX_POLICY,
   ENV_ALLOWLIST_BASE,
 } from './sandbox-types.js';
-// P1 cross-platform: platform + enableCrossPlatform now in SandboxPolicy (see types + runner shims for win/mac)
+// Cross-platform: platform + enableCrossPlatform now in SandboxPolicy (see types + runner shims for win/mac)
 
 export {
   mergePolicy,
@@ -33,7 +33,7 @@ export {
 } from './sandbox-manager.js';
 
 // ---------------------------------------------------------------------------
-// Wave 10 — WASM sandbox runner (coexists with bwrap sandbox above)
+// WASM sandbox runner (coexists with bwrap sandbox above)
 // Enable via SUDO_WASM_SANDBOX=1 env var; graceful no-op if wasmtime absent.
 // ---------------------------------------------------------------------------
 

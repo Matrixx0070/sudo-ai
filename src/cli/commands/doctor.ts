@@ -5,8 +5,8 @@
  * Runs each check in order, collects results, and prints a formatted table
  * with status symbols: ok (pass), warn (warning/optional), error (fail/critical).
  *
- * Wave 10 extension: --fix flag to auto-remediate safe issues.
- * New checks: wasmtimeAvailable, disk > 200 MB, mem > 512 MB.
+ * --fix flag auto-remediates safe issues.
+ * Additional checks: wasmtimeAvailable, disk > 200 MB, mem > 512 MB.
  * Auto-fix only applies to idempotent safe items (data/ dir creation, permissions).
  *
  * Exit code: 0 if no critical failures, 1 if any critical check fails.
@@ -29,11 +29,11 @@ interface CheckResult {
   name: string;
   level: CheckLevel;
   message: string;
-  fixApplied?: string;  // Wave 10: description of auto-fix if applied
+  fixApplied?: string;  // description of auto-fix if applied
 }
 
 export interface DoctorOptions {
-  fix?: boolean;  // Wave 10: auto-remediate safe issues
+  fix?: boolean;  // auto-remediate safe issues
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ async function checkSqliteVec(): Promise<CheckResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Wave 10 new checks
+// Environment resource checks
 // ---------------------------------------------------------------------------
 
 /**
@@ -366,7 +366,7 @@ function printTable(results: CheckResult[]): void {
  * Run all doctor checks and print the results table.
  *
  * @param projectRoot  Absolute path to the project root directory.
- * @param opts         Wave 10: { fix?: boolean } to auto-remediate safe issues.
+ * @param opts         { fix?: boolean } to auto-remediate safe issues.
  * @returns Exit code: 0 for healthy, 1 if any critical failure detected.
  */
 export async function runDoctor(projectRoot: string, opts: DoctorOptions = {}): Promise<number> {
@@ -387,7 +387,7 @@ export async function runDoctor(projectRoot: string, opts: DoctorOptions = {}): 
   results.push(checkPnpm());
   results.push(checkPlaywright());
   results.push(await checkSqliteVec());
-  // Wave 10 new checks
+  // Environment resource checks
   results.push(checkWasmtime());
   results.push(checkDiskSpace(projectRoot));
   results.push(checkMemory());

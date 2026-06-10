@@ -287,7 +287,7 @@ export class DiscordAdapter implements ChannelAdapter {
       return;
     }
 
-    // Wave 3: per-peer rate limiting
+    // Per-peer rate limiting
     const rl = await rateLimiter.check('discord', msg.channelId);
     if (!rl.allowed) {
       if (!rl.burstWarned) {

@@ -4,7 +4,7 @@
  * identifies identity re-anchor events by textual markers in the `learned` and
  * `mistake` columns. Surfaces aggregated stats and recent event details.
  *
- * Pure module — no REST wiring. Wave 6P will add explicit re-anchor logging to
+ * Pure module — no REST wiring. A later change will add explicit re-anchor logging to
  * the identity loader; this module surfaces historical occurrences via text
  * pattern matching until then.
  *

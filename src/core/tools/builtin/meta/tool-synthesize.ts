@@ -39,7 +39,7 @@ const SEAL_HOST_PATH = pathResolve(__dirname, '../../../../../bin/synth-seccomp-
  * env var matrix:
  *   SUDO_EXEC_GATE_DISABLE=1  → skip seal entirely (takes precedence)
  *   SUDO_SEAL_REQUIRED=1      → throw this error when .so missing (fail-closed)
- *   (unset)                   → warn + fail-open to Wave 2.2g posture (default)
+ *   (unset)                   → warn + fail-open (default)
  */
 class SandboxError extends Error {
   public errorCode: string;
@@ -97,7 +97,7 @@ const BANNED_MODULES = new Set([
 ]);
 
 /**
- * Fix C (Wave 2.2a): Allowlist — only these modules may be imported/required/dynamic-imported
+ * Fix C: Allowlist — only these modules may be imported/required/dynamic-imported
  * by synthesized code. Replaces the open-ended "everything not in BANNED_MODULES passes"
  * posture. Closes M1 (events/stream/zlib/buffer/readline/assert) and any future unknown
  * module surface by default-deny.
@@ -205,7 +205,7 @@ function visitNode(node: ts.Node): string | undefined {
         if (modName === 'child_process') return 'child_process/exec';
         return `require(${modName})`;
       }
-      // Fix C (Wave 2.2a): Allowlist fallthrough — reject anything not explicitly allowed.
+      // Fix C: Allowlist fallthrough — reject anything not explicitly allowed.
       // Closes M1: events/stream/zlib/buffer(raw)/readline/assert and future unknowns.
       if (!ALLOWED_MODULES.has(firstArg.text) && !ALLOWED_MODULES.has(modName)) {
         return `banned import: ${firstArg.text}`;
@@ -309,7 +309,7 @@ function visitNode(node: ts.Node): string | undefined {
         if (modName === 'child_process') return 'child_process/exec';
         return `require(${modName})`;
       }
-      // Fix C (Wave 2.2a): Allowlist fallthrough for dynamic import().
+      // Fix C: Allowlist fallthrough for dynamic import().
       if (!ALLOWED_MODULES.has(firstArg.text) && !ALLOWED_MODULES.has(modName)) {
         return `banned import: ${firstArg.text}`;
       }
@@ -456,7 +456,7 @@ function visitNode(node: ts.Node): string | undefined {
         if (modName === 'child_process') return 'child_process/exec';
         return `require(${modName})`;
       }
-      // Fix C (Wave 2.2a): Allowlist fallthrough — reject imports not explicitly allowed.
+      // Fix C: Allowlist fallthrough — reject imports not explicitly allowed.
       // Closes M1 and any future unknown module surface. Relative paths also rejected:
       // /tmp is world-writable; planting './helper.js' would let synthesized code
       // sideload attacker-controlled content.
@@ -618,11 +618,11 @@ async function draftToolCode(
 
 type SynthWorkerResult =
   | { ok: true;  toolNames: string[] }
-  // Fix B (Wave 2.2a): errorCode/errorName only — raw error string never crosses boundary.
+  // Fix B: errorCode/errorName only — raw error string never crosses boundary.
   // Closes H1 exfil channel: throw new Error(JSON.stringify(process.env)) carries nothing.
   | { ok: false; errorCode: string; errorName: string; phase: 'import' | 'exec' };
 
-/** Absolute path to the bwrap entry script (Builder 2 deliverable). */
+/** Absolute path to the bwrap entry script. */
 const ENTRY_HOST = pathResolve(__dirname, 'synth-bwrap-entry.cjs');
 
 /** tsx ESM loader for TypeScript execution inside the sandbox child. */
@@ -678,7 +678,7 @@ export function buildSynthBwrapArgs(quarantinePath: string, seccompFd?: number, 
 
     '--chdir', '/workspace',
 
-    // Wave 2.2h-flakes: pre-create /sandbox with 0755 perms so UID 65534 can
+    // Pre-create /sandbox with 0755 perms so UID 65534 can
     // traverse it. Without this, bwrap's auto-created /sandbox/ inherits 0700
     // root-only perms and setuid(65534) in synth-bwrap-entry.cjs loses read
     // access to the quarantine file → ERR_MODULE_NOT_FOUND.
@@ -717,7 +717,7 @@ const STDOUT_MAX_BYTES = 1_048_576;
 
 /**
  * Spawn synth-bwrap-entry.cjs inside bwrap and parse its JSON output.
- * Replaces the worker_threads approach — closes Wave 2.2b structural sandbox gap.
+ * Replaces the worker_threads approach — closes the structural sandbox gap.
  *
  * Timeout: 5000ms. On timeout sends SIGKILL.
  * Protocol: last non-empty stdout line must be valid JSON matching SynthWorkerResult.

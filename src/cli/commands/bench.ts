@@ -1,6 +1,6 @@
 /**
  * @file cli/commands/bench.ts
- * @description `sudo-ai bench` CLI command implementation (Wave 10).
+ * @description `sudo-ai bench` CLI command implementation.
  *
  * Calls POST /v1/admin/bench/run, polls for completion, then
  * fetches and prints the BenchReport in Markdown or JSON format.

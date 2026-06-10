@@ -274,7 +274,7 @@ export class AgentLoop {
   private trustTierTracker: TrustTierTrackerLike | null = null;
   private readonly dispatchRouter = new DispatchRouter();
   private epistemicGate?: EpistemicGate;
-  // Wave 6L: confidence calibration tracker — optional, set via setter after construction.
+  // Confidence calibration tracker — optional, set via setter after construction.
   private _confidenceCalibrationTracker?: {
     record(predicted: number, outcome: 0|1, tag?: string): void;
     getReport(opts?: { windowDays?: number; tag?: string }): {
@@ -283,13 +283,13 @@ export class AgentLoop {
       windowDays: number; computedAt: string;
     };
   };
-  // Wave 6O: injection detector — optional, set via setter after construction.
+  // Injection detector — optional, set via setter after construction.
   private _injectionDetector?: { scan(text: string): DetectionResult };
-  // Wave 10B: SkillDiscovery — optional, set via setter after construction.
+  // SkillDiscovery — optional, set via setter after construction.
   private _skillDiscovery?: {
     recordToolCall(sessionId: string, toolName: string, success: boolean): void;
   };
-  // Wave 10B: AgentConfigEvolver — optional, set via setter after construction.
+  // AgentConfigEvolver — optional, set via setter after construction.
   private _agentConfigEvolver?: {
     recordTrace(trace: {
       sessionId: string;
@@ -300,7 +300,7 @@ export class AgentLoop {
       metadata?: Record<string, unknown>;
     }): void;
   };
-  // Wave 10E: TaintTracker — optional, set via setter after construction.
+  // TaintTracker — optional, set via setter after construction.
   private _taintTracker?: {
     onToolResult(event: { name: string; result: unknown; ancestorTaintIds?: string[] }): { taintId: string };
     checkViolation(toolName: string, safety: 'readonly' | 'destructive', taintId: string): { reason: string } | null;
@@ -350,7 +350,7 @@ export class AgentLoop {
   private _profileManager?: ProfileManager;
   // P0: BestOfNExecutor — multi-candidate execution with selection.
   private _bestOfNExecutor?: BestOfNExecutor;
-  // P1: ConsciousnessDeepBridge — surfaces ALL 20 consciousness modules to the agent loop.
+  // ConsciousnessDeepBridge — surfaces ALL 20 consciousness modules to the agent loop.
   private _deepBridge?: ConsciousnessDeepBridge;
   // FeedbackTierManager — tracks sustained engagement and adapts agent behavior.
   private _feedbackTierManager?: FeedbackTierManager;
@@ -619,7 +619,7 @@ export class AgentLoop {
     // Use setBestOfNExecutor() after construction to wire it in.
     log.info('AgentLoop: BestOfNExecutor deferred — use setBestOfNExecutor() to attach');
 
-    // P1: ConsciousnessDeepBridge — surfaces ALL 20 consciousness modules to the agent loop.
+    // ConsciousnessDeepBridge — surfaces ALL 20 consciousness modules to the agent loop.
     // Initialised from the consciousness object if it implements the deep-bridge duck-type.
     try {
       if (
@@ -664,7 +664,7 @@ export class AgentLoop {
   /** Returns the TrustTierTracker instance created during construction, or null. */
   getTrustTierTracker(): TrustTierTracker | null { return this.trustTierTracker as TrustTierTracker | null; }
 
-  /** Wire a ConfidenceCalibrationTracker after construction (Wave 6L). Fail-open if duck-type mismatch. */
+  /** Wire a ConfidenceCalibrationTracker after construction. Fail-open if duck-type mismatch. */
   setConfidenceCalibrationTracker(tracker: {
     record(predicted: number, outcome: 0|1, tag?: string): void;
     getReport(opts?: { windowDays?: number; tag?: string }): {
@@ -686,7 +686,7 @@ export class AgentLoop {
     return this._confidenceCalibrationTracker;
   }
 
-  /** Wire an InjectionDetector after construction (Wave 6O). Fail-open if duck-type mismatch. */
+  /** Wire an InjectionDetector after construction. Fail-open if duck-type mismatch. */
   setInjectionDetector(detector: { scan(text: string): DetectionResult }): void {
     if (detector && typeof detector.scan === 'function') {
       this._injectionDetector = detector;
@@ -701,7 +701,7 @@ export class AgentLoop {
     return this._injectionDetector;
   }
 
-  /** Wire SkillDiscovery after construction (Wave 10B). Fail-open if duck-type mismatch. */
+  /** Wire SkillDiscovery after construction. Fail-open if duck-type mismatch. */
   setSkillDiscovery(sd: { recordToolCall(sessionId: string, toolName: string, success: boolean): void }): void {
     if (sd && typeof sd.recordToolCall === 'function') {
       this._skillDiscovery = sd;
@@ -711,7 +711,7 @@ export class AgentLoop {
     }
   }
 
-  /** Wire AgentConfigEvolver after construction (Wave 10B). Fail-open if duck-type mismatch. */
+  /** Wire AgentConfigEvolver after construction. Fail-open if duck-type mismatch. */
   setAgentConfigEvolver(ace: {
     recordTrace(trace: {
       sessionId: string; agentId: string; toolSequence: string[];
@@ -726,7 +726,7 @@ export class AgentLoop {
     }
   }
 
-  /** Wire TaintTracker after construction (Wave 10E). Fail-open if duck-type mismatch. */
+  /** Wire TaintTracker after construction. Fail-open if duck-type mismatch. */
   setTaintTracker(tt: {
     onToolResult(event: { name: string; result: unknown; ancestorTaintIds?: string[] }): { taintId: string };
     checkViolation(toolName: string, safety: 'readonly' | 'destructive', taintId: string): { reason: string } | null;
@@ -987,7 +987,7 @@ export class AgentLoop {
     // Collect file attachments produced during this turn (screenshots, images, etc.).
     const attachments: AgentRunResult['attachments'] = [];
 
-    // Wave 10B: per-run accumulators for SkillDiscovery and AgentConfigEvolver feeds
+    // Per-run accumulators for SkillDiscovery and AgentConfigEvolver feeds
     let _w10bToolCallCount = 0;
     let _w10bToolSuccessCount = 0;
     const _w10bToolSequence: string[] = [];
@@ -1048,7 +1048,7 @@ export class AgentLoop {
           }
         }
 
-        // Wave 10E: TaintTracker — tag tool result BEFORE the after:tool-call emit so the
+        // TaintTracker — tag tool result BEFORE the after:tool-call emit so the
         // taintId can be carried in the hook meta.  This eliminates the duplicate taint
         // that the attachHooks handler previously created: the handler now skips tag() when
         // meta.taintId is already populated (see taint-tracker.ts handler guard).
@@ -1073,7 +1073,7 @@ export class AgentLoop {
           success: isToolResultSuccess(result),
           meta: _taintIdForHook ? { taintId: _taintIdForHook } : undefined,
         });
-        // Wave 10B: feed SkillDiscovery (fail-open)
+        // Feed SkillDiscovery (fail-open)
         try {
           if (this._skillDiscovery && event.type === 'tool-result') {
             const _tr = event as { type: string; name: string; result: unknown };
@@ -1112,7 +1112,7 @@ export class AgentLoop {
           }
         } catch { /* fail-open */ }
       }
-      // Wave 10B: augment trace-meta with skillId (fail-open, deviation from §4.6: moved here
+      // Augment trace-meta with skillId (fail-open, deviation from §4.6: moved here
       // because _innerLoop is a separate method and cannot access run()-scoped accumulators)
       try {
         if (event.type === 'trace-meta' && _w10bToolSequence.length > 0) {
@@ -1409,7 +1409,7 @@ export class AgentLoop {
         }
       }
 
-      // Wave 6O: injection scan on inbound user message (before it enters the loop).
+      // Injection scan on inbound user message (before it enters the loop).
       // MEDIUM/HIGH → recordOutcome; CRITICAL → skip this message entirely (REPLAN).
       if (this._injectionDetector) {
         try {
@@ -1604,7 +1604,7 @@ export class AgentLoop {
       }
     } catch { /* fail-open */ }
 
-    // Wave 10B: flush one trace per session to AgentConfigEvolver (fail-open)
+    // Flush one trace per session to AgentConfigEvolver (fail-open)
     try {
       if (this._agentConfigEvolver && _w10bToolCallCount > 0) {
         const _quality = _w10bToolSuccessCount / _w10bToolCallCount;
@@ -1776,7 +1776,7 @@ export class AgentLoop {
         // Hook: before_model_resolve — fires after messages are prepared, just before brain.call().
         void this.hooks?.emit('before_model_resolve', { event: 'before_model_resolve', sessionId: state.sessionId, modelName: model ?? '' });
 
-        // Dispatch router: novelty scoring + fast-path cache + anti-self-promotion (Wave 6C).
+        // Dispatch router: novelty scoring + fast-path cache + anti-self-promotion.
         // Principal-task fidelity: routes to primary model when novelty or role signals require
         // full capability. Falls back to primary on any router error (fail-open, capability preserved).
         let effectiveModel = model;
@@ -2128,7 +2128,7 @@ export class AgentLoop {
           // tool call does not count toward the repetition tracker. A REPLAN
           // injects a system message and breaks to the next LLM iteration.
 
-          // Wave 6L: per-tool-call pending calibration entries keyed by tc.id.
+          // Per-tool-call pending calibration entries keyed by tc.id.
           // Populated at decision time; consumed at outcome (success/failure/veto/block).
           const calibrationPending = new Map<string, { predicted: number; tag: string }>();
 
@@ -2137,7 +2137,7 @@ export class AgentLoop {
               try {
                 const rationaleText = response.content ?? '';
                 const eg = this.epistemicGate.evaluate(rationaleText, tc.name, state.sessionId);
-                // Wave 6L: derive predicted confidence from EpistemicTag map.
+                // Derive predicted confidence from EpistemicTag map.
                 const egPredicted = EPISTEMIC_TAG_CONFIDENCE_MAP[eg.tag] ?? 0.5;
                 if (eg.result.decision === 'REPLAN') {
                   const replMsg = eg.error
@@ -2162,7 +2162,7 @@ export class AgentLoop {
                   }
                   // Record epistemic-block or conjecture-commit outcome (fail-open).
                   try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: eg.error ? 'conjecture-commit' : 'epistemic-block' }); } catch {}
-                  // Wave 6L: record calibration outcome=0 for blocked call (fail-open).
+                  // Record calibration outcome=0 for blocked call (fail-open).
                   try { this._confidenceCalibrationTracker?.record(egPredicted, 0, eg.tag); } catch {}
                   // Synthesize tool-result stubs for ALL pending validToolCalls.
                   // The assistant message pushed at line ~876 already contains toolCalls for the
@@ -2196,7 +2196,7 @@ export class AgentLoop {
             // If REPLAN cleared all calls, skip guard + dispatch entirely.
             if (validToolCalls.length === 0) continue;
           } else {
-            // Wave 6L: epistemic gate absent (or bypassed via override) — use OVERRIDE/0.5 neutral.
+            // Epistemic gate absent (or bypassed via override) — use OVERRIDE/0.5 neutral.
             for (const tc of validToolCalls) {
               calibrationPending.set(tc.id, { predicted: 0.5, tag: 'OVERRIDE' });
             }
@@ -2306,7 +2306,7 @@ export class AgentLoop {
                 emit({ type: 'error', error: overrideMsg });
                 vetoedIds.add(tc.id);
                 try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'veto' }); } catch {}
-                // Wave 6L: record calibration outcome=0 for veto-deny (fail-open).
+                // Record calibration outcome=0 for veto-deny (fail-open).
                 try { const _cp = calibrationPending.get(tc.id); if (_cp) { this._confidenceCalibrationTracker?.record(_cp.predicted, 0, _cp.tag); calibrationPending.delete(tc.id); } } catch {}
                 if (this.auditTrail?.recordTriple) {
                   try {
@@ -2358,7 +2358,7 @@ export class AgentLoop {
                 emit({ type: 'error', error: vetoMsg });
                 vetoedIds.add(tc.id);
                 try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'veto' }); } catch {}
-                // Wave 6L: record calibration outcome=0 for veto-gate deny (fail-open).
+                // Record calibration outcome=0 for veto-gate deny (fail-open).
                 try { const _vcp = calibrationPending.get(tc.id); if (_vcp) { this._confidenceCalibrationTracker?.record(_vcp.predicted, 0, _vcp.tag); calibrationPending.delete(tc.id); } } catch {}
                 // H3: Audit trail entry on every VETO (non-fatal).
                 if (this.auditTrail) {
@@ -2376,7 +2376,7 @@ export class AgentLoop {
             }
           }
 
-          // Wave 10E: TaintTracker — scan all pending tool calls for taint violations before dispatch.
+          // TaintTracker — scan all pending tool calls for taint violations before dispatch.
           // MUST be placed BEFORE the activeToolCalls filter below.
           // Adding to vetoedIds here causes the existing filter to drop the tainted tool call.
           if (this._taintTracker) {
@@ -2427,7 +2427,7 @@ export class AgentLoop {
           }
 
           // Alignment aggregator: owner-loyalty composite check (advisory, fail-open).
-          // Wave 6E: discordance 7th signal — collect signals, run detector, pass score.
+          // Discordance 7th signal — collect signals, run detector, pass score.
           try {
             if (this.alignmentAggregator) {
               // Collect discordance signals from current loop state.
@@ -2578,14 +2578,14 @@ export class AgentLoop {
                 log.warn({ err: String(alignErr) }, 'AlignmentEngine: computeSignals threw — proceeding');
               }
             }
-            // Wave 6L: record calibration outcome=1 for each active tool call that succeeded (fail-open).
+            // Record calibration outcome=1 for each active tool call that succeeded (fail-open).
             try {
               for (const _atc of activeToolCalls) {
                 const _scp = calibrationPending.get(_atc.id);
                 if (_scp) { this._confidenceCalibrationTracker?.record(_scp.predicted, 1, _scp.tag); calibrationPending.delete(_atc.id); }
               }
             } catch {}
-            // Wave 6O: injection scan on tool outputs (before feeding back to model).
+            // Injection scan on tool outputs (before feeding back to model).
             if (this._injectionDetector) {
               try {
                 const toolMsgs = session.messages
@@ -2628,7 +2628,7 @@ export class AgentLoop {
             }
           } catch (toolErr) {
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'failure' }); } catch {}
-            // Wave 6L: record calibration outcome=0 for each active tool call that failed (fail-open).
+            // Record calibration outcome=0 for each active tool call that failed (fail-open).
             try {
               for (const _ftc of activeToolCalls) {
                 const _fcp = calibrationPending.get(_ftc.id);
@@ -2662,7 +2662,7 @@ export class AgentLoop {
         session.messages.push({ role: 'assistant', content: finalText });
         emit({ type: 'message', content: finalText });
 
-        // Wave 10: complexity scoring hook — attach ComplexityResult to trace-meta event.
+        // Complexity scoring hook — attach ComplexityResult to trace-meta event.
         try {
           const { scoreComplexity } = await import('./complexity-scorer.js');
           const userContent = session.messages

@@ -8,7 +8,7 @@
  *   EMAIL_SMTP_FROM, EMAIL_ALLOWED_SENDERS (comma-separated)
  *
  * Vault-first: start() calls vault.get('channels', '<key>') first for IMAP_PASS and
- * SMTP_PASS, falling back to process.env. This is load-bearing for Wave 4.
+ * SMTP_PASS, falling back to process.env. This fallback order is load-bearing.
  */
 
 import { ImapFlow } from 'imapflow';

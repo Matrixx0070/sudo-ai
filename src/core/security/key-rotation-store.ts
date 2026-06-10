@@ -1,6 +1,6 @@
 /**
  * @file security/key-rotation-store.ts
- * @description SQLite-backed key rotation log for ArtifactSigner Wave 10G.
+ * @description SQLite-backed key rotation log for ArtifactSigner.
  *
  * Schema: key_rotation_log (key_version AUTOINCREMENT PK, status in active/retiring/retired).
  * DB path: data/keys/key-rotation.db (override via SUDO_KEY_ROTATION_DB_PATH env).
@@ -116,7 +116,7 @@ export class KeyRotationStore {
   }
 
   // ---------------------------------------------------------------------------
-  // promoteLegacy — persist pre-existing Wave 10F key as v1
+  // promoteLegacy — persist pre-existing legacy key as v1
   // ---------------------------------------------------------------------------
 
   /**

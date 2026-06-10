@@ -5,7 +5,7 @@
  * expired-acknowledged, and surfaces the honor rate over time.
  *
  * Storage: SQLite table `commitment_resolutions`.
- * Pure module — no REST wiring (deferred to Wave 6N).
+ * Pure module — no REST wiring (deferred).
  */
 
 import { randomUUID } from 'node:crypto';

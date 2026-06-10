@@ -1,6 +1,6 @@
 /**
  * @file task-set.ts
- * @description 5 built-in benchmark task definitions for SUDO-AI Wave 10.
+ * @description 5 built-in benchmark task definitions for SUDO-AI.
  *
  * Each task has a stable ID, a prompt, expected output description, and
  * a baseline complexity tier. Tasks are ordered from simple to very_complex.

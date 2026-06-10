@@ -1,6 +1,6 @@
 /**
  * @file types.ts
- * @description Type definitions for the Files API (Wave 5 P2).
+ * @description Type definitions for the Files API.
  *
  * Mirrors Anthropic /v1/files resource structure.
  * All inputs are validated before reaching the store.

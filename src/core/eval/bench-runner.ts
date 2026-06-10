@@ -1,6 +1,6 @@
 /**
  * @file bench-runner.ts
- * @description Model × agent × task sweep engine for SUDO-AI Wave 10 benchmarks.
+ * @description Model × agent × task sweep engine for SUDO-AI benchmarks.
  *
  * BenchRunner orchestrates evaluation across:
  *   - Multiple models
@@ -54,7 +54,7 @@ export interface BenchRunOptions {
   /** BenchStore instance. Required — caller must provide. */
   store: BenchStore;
   /**
-   * Optional — if absent, skills_post_optimizer behaves identically to skills_on. Wave 13.
+   * Optional — if absent, skills_post_optimizer behaves identically to skills_on.
    * Meaningful results only after >= 1 sleep cycle has run with a wired SkillOptimizer
    * AND at least one proposal has been approved via POST /v1/admin/skills/optimizations/:id/approve.
    */

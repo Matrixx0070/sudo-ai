@@ -1,7 +1,7 @@
 /**
  * @module wave10-types — SHARED CONTRACT — builders import only, never modify.
  *
- * Canonical type definitions for SUDO-AI Wave 10 (OpenJarvis Parity).
+ * Canonical shared type definitions for SUDO-AI (OpenJarvis Parity).
  * Source of truth: docs/wave10-spec.md Section B.
  * Written by Architect. Builders IMPORT from this file — never re-declare, never modify.
  *
@@ -175,7 +175,7 @@ export interface AgentConfigProposal {
 }
 
 // ---------------------------------------------------------------------------
-// B4b. SkillOptimizationProposal — SkillOptimizer output (Wave 13)
+// B4b. SkillOptimizationProposal — SkillOptimizer output
 // ---------------------------------------------------------------------------
 
 /** Lifecycle status of a skill optimization proposal. */
@@ -686,7 +686,7 @@ export interface SignedArtifact {
   signedAt: string;
   /** First 8 hex characters of the public key DER encoding. */
   keyId: string;
-  /** Monotonic key version from key_rotation_log. Added in Wave 10G. */
+  /** Monotonic key version from key_rotation_log. */
   keyVersion: number;
   /** ed25519 signature over JSON.stringify(payload)+signedAt, hex-encoded. */
   signature: string;

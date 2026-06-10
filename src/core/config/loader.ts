@@ -7,7 +7,7 @@
  *   cfg.onReload(newCfg => {}); // Optional hot-reload callback
  *   cfg.close();               // Stop file watcher
  *
- * Wave 10 addition: loadConfig5Pillar() — loads TOML overlay (sudo-ai.toml)
+ * loadConfig5Pillar() — loads TOML overlay (sudo-ai.toml)
  * and returns a Config5Pillar object. Missing file returns empty {}.
  * Merge order: JSON5 base → TOML overlay → env vars (env wins).
  */
@@ -32,14 +32,14 @@ const log = createLogger('config');
 const TOML_CONFIG_NAME = 'config/sudo-ai.toml';
 
 // ---------------------------------------------------------------------------
-// loadConfig5Pillar — Wave 10 standalone function
+// loadConfig5Pillar — standalone function
 // ---------------------------------------------------------------------------
 
 /**
  * Load the TOML 5-pillar overlay configuration.
  *
  * If the file does not exist, returns an empty Config5Pillar (all fields undefined).
- * This is the preferred entry point for Wave 10 recipe and operator bootstrap.
+ * This is the preferred entry point for recipe and operator bootstrap.
  *
  * Config merge order (caller's responsibility):
  *   1. JSON5 base (SudoConfig) — loaded by ConfigLoader.load()

@@ -38,7 +38,7 @@ export interface SandboxManagerOptions {
    * Manager subscribes to 'session:status:terminated' and 'session:status:archived'.
    */
   stateMachine: EventEmitter;
-  // P1 cross
+  // Cross-platform control support
   platform?: 'linux' | 'win' | 'mac';
 }
 

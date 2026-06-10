@@ -286,7 +286,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
       return;
     }
 
-    // Wave 3: per-peer rate limiting
+    // Per-peer rate limiting
     const rl = await rateLimiter.check('whatsapp', sender || from);
     if (!rl.allowed) {
       if (!rl.burstWarned) {

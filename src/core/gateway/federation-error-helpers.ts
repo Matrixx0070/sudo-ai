@@ -2,7 +2,7 @@
  * @file gateway/federation-error-helpers.ts
  * @description Utility helpers for federation error routes.
  *
- * Wave 2 — Federation Error Protocol.
+ * Part of the Federation Error Protocol.
  */
 
 import { timingSafeEqual } from 'node:crypto';

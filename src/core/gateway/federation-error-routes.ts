@@ -2,7 +2,7 @@
  * @file gateway/federation-error-routes.ts
  * @description Federation error route registration.
  *
- * Wave 2 — Federation Error Protocol.
+ * Federation Error Protocol.
  */
 
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';

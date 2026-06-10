@@ -5,8 +5,6 @@
  * Full-power, owner-controlled cross-platform system control. Linux is fully supported;
  * Windows and macOS backends are experimental. Every control outcome feeds ToolOutcomeLearner;
  * autonomy approval tiers + monitoring/self-repair hooks apply.
- *
- * Boundaries: P1 exclusive (cross-platform/* + sandbox/autonomy expands + this test path only).
  */
 
 import type {
@@ -47,7 +45,7 @@ export type {
 } from './types.js';
 
 /**
- * Factory: unified IComputerUse for 3OS full control (P1 polished).
+ * Factory: unified IComputerUse for 3OS full control.
  * Linux: xdotool/scrot + bwrap/sandbox + fs.
  * Win/Mac: powershell/osascript + cross fs + shims.
  * Learner on EVERY; autonomy + KAIROS/arsenal; SOUL full power no refusals; 0 moral blocks.

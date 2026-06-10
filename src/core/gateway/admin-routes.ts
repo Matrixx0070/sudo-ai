@@ -91,7 +91,7 @@ export interface AdminRoutesDeps {
     recordOutcome?(outcome: { timestamp: number; kind: string; weight?: number }): void;
     getOutcomeBreakdown?(opts?: { windowDays?: number }): { kind: string; count: number; score: number }[];
   };
-  /** Optional — if absent, POST /v1/admin/commitments/resolve returns 503. Wave 6N. */
+  /** Optional — if absent, POST /v1/admin/commitments/resolve returns 503. */
   commitmentResolutionTracker?: {
     resolve(
       commitmentRef: string,
@@ -99,7 +99,7 @@ export interface AdminRoutesDeps {
       notes?: string,
     ): { id: string; commitmentRef: string; resolution: string; ts: number; notes?: string } | null;
     isResolved(commitmentRef: string): boolean;
-    /** Optional — exposed for GET /v1/admin/digest. Wave 6Q. */
+    /** Optional — exposed for GET /v1/admin/digest. */
     getStats?(opts?: { windowDays?: number }): {
       total: number;
       honored: number;
@@ -147,7 +147,7 @@ export interface AdminRoutesDeps {
       computedAt: string;
     };
   };
-  /** Optional — if absent, GET /v1/admin/diagnostics returns 503. Wave 6M. */
+  /** Optional — if absent, GET /v1/admin/diagnostics returns 503. */
   crossSignalDiagnostics?: {
     analyze(opts?: {
       windowDays?: number;
@@ -169,7 +169,7 @@ export interface AdminRoutesDeps {
       totalEventsScanned: number;
     };
   };
-  /** Optional — if absent, GET /v1/admin/reanchor/stats and /reanchor/recent return 503. Wave 6P. */
+  /** Optional — if absent, GET /v1/admin/reanchor/stats and /reanchor/recent return 503. */
   reanchorMonitor?: {
     getStats(opts?: { windowDays?: number }): {
       total: number;
@@ -185,7 +185,7 @@ export interface AdminRoutesDeps {
       snippet: string;
     }>;
   };
-  /** Optional — if absent, GET /v1/admin/veto/threshold returns 503. Wave 7C. */
+  /** Optional — if absent, GET /v1/admin/veto/threshold returns 503. */
   autoThresholdTuner?: {
     computeVetoThreshold(baseThreshold: number): number;
     getLastComputation(): {
@@ -197,7 +197,7 @@ export interface AdminRoutesDeps {
       computedAt: string;
     } | null;
   };
-  /** Optional — if absent, GET /v1/admin/remediation/stats returns 503. Wave 8E. */
+  /** Optional — if absent, GET /v1/admin/remediation/stats returns 503. */
   alignmentAutoRemediator?: {
     getStats(): {
       observationCount: number;
@@ -207,7 +207,7 @@ export interface AdminRoutesDeps {
       inCooldown: boolean;
     };
   };
-  /** Optional — if absent, skill optimization endpoints return 503. Wave 13. */
+  /** Optional — if absent, skill optimization endpoints return 503. */
   skillOptimizationStore?: {
     list(filter: {
       status?: SkillOptimizationStatus;
@@ -567,7 +567,7 @@ function handleVetoOverrideList(
 }
 
 // ---------------------------------------------------------------------------
-// Epistemic log route handler (Candidate 2 — Wave 6G)
+// Epistemic log route handler
 // ---------------------------------------------------------------------------
 
 const VALID_EPISTEMIC_TAGS: EpistemicTag[] = ['CERTAIN', 'PROBABLE', 'CONJECTURE', 'UNKNOWN'];
@@ -607,7 +607,7 @@ function handleEpistemicLogGet(req: IncomingMessage, res: ServerResponse, deps: 
 }
 
 // ---------------------------------------------------------------------------
-// Commitments expiring route handler (Wave 6H)
+// Commitments expiring route handler
 // ---------------------------------------------------------------------------
 
 const DEFAULT_WINDOW_DAYS = 3;
@@ -661,7 +661,7 @@ function handleCommitmentsExpiringGet(req: IncomingMessage, res: ServerResponse,
 }
 
 // ---------------------------------------------------------------------------
-// Epistemic stats route handler (Wave 6H)
+// Epistemic stats route handler
 // ---------------------------------------------------------------------------
 
 function handleEpistemicStatsGet(req: IncomingMessage, res: ServerResponse, deps: AdminRoutesDeps): void {
@@ -690,7 +690,7 @@ function handleEpistemicStatsGet(req: IncomingMessage, res: ServerResponse, deps
 }
 
 // ---------------------------------------------------------------------------
-// Trust tier route handler (Wave 6J)
+// Trust tier route handler
 // ---------------------------------------------------------------------------
 
 const TRUST_WINDOW_DAYS = 7;
@@ -719,7 +719,7 @@ function handleTrustGet(res: ServerResponse, deps: AdminRoutesDeps): void {
 }
 
 // ---------------------------------------------------------------------------
-// Alignment state route handler (Primitive B — Wave 6F)
+// Alignment state route handler
 // ---------------------------------------------------------------------------
 
 function handleAlignmentGet(res: ServerResponse, deps: AdminRoutesDeps): void {
@@ -761,7 +761,7 @@ function handleAlignmentGet(res: ServerResponse, deps: AdminRoutesDeps): void {
 }
 
 // ---------------------------------------------------------------------------
-// Patterns route handler (Wave 6K)
+// Patterns route handler
 // ---------------------------------------------------------------------------
 
 const PATTERNS_DEFAULT_WINDOW = 30;
@@ -865,7 +865,7 @@ function handlePatternsGet(req: IncomingMessage, res: ServerResponse, deps: Admi
 }
 
 // ---------------------------------------------------------------------------
-// Calibration route handler (Wave 6L)
+// Calibration route handler
 // ---------------------------------------------------------------------------
 
 const CALIBRATION_DEFAULT_WINDOW = 30;
@@ -922,7 +922,7 @@ function handleCalibrationGet(req: IncomingMessage, res: ServerResponse, deps: A
 }
 
 // ---------------------------------------------------------------------------
-// Diagnostics route handler (Wave 6M)
+// Diagnostics route handler
 // ---------------------------------------------------------------------------
 
 const DIAG_DEFAULT_WINDOW = 7;
@@ -1015,7 +1015,7 @@ function handleDiagnosticsGet(req: IncomingMessage, res: ServerResponse, deps: A
 }
 
 // ---------------------------------------------------------------------------
-// Injection stats route handler (Wave 6O)
+// Injection stats route handler
 // ---------------------------------------------------------------------------
 
 const INJECTION_DEFAULT_WINDOW = 7;
@@ -1070,7 +1070,7 @@ function handleInjectionStatsGet(req: IncomingMessage, res: ServerResponse, deps
 }
 
 // ---------------------------------------------------------------------------
-// Re-anchor stats + recent route handlers (Wave 6P)
+// Re-anchor stats + recent route handlers
 // ---------------------------------------------------------------------------
 
 const REANCHOR_DEFAULT_WINDOW = 30;
@@ -1173,7 +1173,7 @@ function handleReanchorRecentGet(req: IncomingMessage, res: ServerResponse, deps
 }
 
 // ---------------------------------------------------------------------------
-// Commitment resolution route handler (Wave 6N)
+// Commitment resolution route handler
 // ---------------------------------------------------------------------------
 
 const VALID_COMMITMENT_RESOLUTIONS = new Set(['honored', 'abandoned', 'expired-acknowledged']);
@@ -1428,7 +1428,7 @@ function collectDigestSnapshot(deps: AdminRoutesDeps, windowDays: number): Diges
 }
 
 // ---------------------------------------------------------------------------
-// Metrics route handlers (Wave 7F) — Prometheus text + OTLP JSON
+// Metrics route handlers — Prometheus text + OTLP JSON
 // ---------------------------------------------------------------------------
 
 /**
@@ -1493,7 +1493,7 @@ function handleMetricsOtlpGet(req: IncomingMessage, res: ServerResponse, deps: A
 }
 
 // ---------------------------------------------------------------------------
-// Digest route handler (Wave 6Q) — unified telemetry snapshot
+// Digest route handler — unified telemetry snapshot
 // ---------------------------------------------------------------------------
 
 function handleDigestGet(req: IncomingMessage, res: ServerResponse, deps: AdminRoutesDeps): void {
@@ -1557,7 +1557,7 @@ function handleDigestGet(req: IncomingMessage, res: ServerResponse, deps: AdminR
 }
 
 // ---------------------------------------------------------------------------
-// Veto threshold route handler (Wave 7C)
+// Veto threshold route handler
 // ---------------------------------------------------------------------------
 
 /**
@@ -1585,7 +1585,7 @@ function handleVetoThresholdGet(res: ServerResponse, deps: AdminRoutesDeps): voi
         totalSamples: comp?.totalSamples ?? 0,
         adjustment: comp?.adjustment ?? 0,
         computedAt: comp?.computedAt ?? new Date().toISOString(),
-        // Wave 8A: reports whether adaptive tuning is live in vote comparison.
+        // Reports whether adaptive tuning is live in vote comparison.
         // SUDO_VETO_AUTO_TUNE=1 enables; default=0 (static threshold).
         autoTuneEnabled: process.env['SUDO_VETO_AUTO_TUNE'] === '1',
       },
@@ -1602,7 +1602,7 @@ function handleVetoThresholdGet(res: ServerResponse, deps: AdminRoutesDeps): voi
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// Remediation stats handler (Wave 8E)
+// Remediation stats handler
 // ---------------------------------------------------------------------------
 
 /**
@@ -1626,7 +1626,7 @@ function handleRemediationStatsGet(res: ServerResponse, deps: AdminRoutesDeps): 
 }
 
 // ---------------------------------------------------------------------------
-// Dashboard route handler (Wave 8B)
+// Dashboard route handler
 // ---------------------------------------------------------------------------
 
 const DASHBOARD_HTML = renderDashboardHtml();
@@ -1685,7 +1685,7 @@ function handleDashboard(
 }
 
 // ---------------------------------------------------------------------------
-// Skill optimization route handlers (Wave 13)
+// Skill optimization route handlers
 // ---------------------------------------------------------------------------
 
 const SO_DEFAULT_LIMIT = 20;
@@ -1750,7 +1750,7 @@ async function handleSkillOptimizationApprove(
       return;
     }
     const updated = deps.skillOptimizationStore.approve(id);
-    // Wave 10E: sign approved skill proposal (fail-open).
+    // Sign approved skill proposal (fail-open).
     let signedArtifact: ReturnType<typeof artifactSigner.sign> | undefined;
     if (process.env['SUDO_SIGNING_DISABLE'] !== '1') {
       try {
@@ -1809,13 +1809,13 @@ async function handleSkillOptimizationReject(
 }
 
 // ---------------------------------------------------------------------------
-// Wave 10F: GET /v1/admin/public-key
+// GET /v1/admin/public-key
 // ---------------------------------------------------------------------------
 
 /**
  * Return public key metadata for the artifact signer.
  * Only public material is exposed — the private key is never included.
- * Wave 10G: getPublicKey() return now includes keyVersion + optional retiring; passed through verbatim.
+ * getPublicKey() return includes keyVersion + optional retiring; passed through verbatim.
  */
 function handlePublicKeyGet(res: ServerResponse): void {
   try {
@@ -1914,13 +1914,13 @@ export function registerAdminRoutes(
       return;
     }
 
-    // GET /v1/admin/public-key (Wave 10F)
+    // GET /v1/admin/public-key
     if (method === 'GET' && pathname === '/v1/admin/public-key') {
       handlePublicKeyGet(res);
       return;
     }
 
-    // POST /v1/admin/key/rotate (Wave 10G)
+    // POST /v1/admin/key/rotate
     if (method === 'POST' && pathname === '/v1/admin/key/rotate') {
       handleKeyRotate(res).catch((err: unknown) => {
         log.error({ err: err instanceof Error ? err.message : String(err) }, 'Admin: unhandled error in key/rotate');
@@ -1946,7 +1946,7 @@ export function registerAdminRoutes(
       return;
     }
 
-    // GET /v1/admin/veto/threshold (Wave 7C)
+    // GET /v1/admin/veto/threshold
     if (method === 'GET' && pathname === '/v1/admin/veto/threshold') {
       handleVetoThresholdGet(res, deps);
       return;
@@ -2003,25 +2003,25 @@ export function registerAdminRoutes(
       return;
     }
 
-    // GET /v1/admin/calibration (Wave 6L)
+    // GET /v1/admin/calibration
     if (method === 'GET' && pathname === '/v1/admin/calibration') {
       handleCalibrationGet(req, res, deps);
       return;
     }
 
-    // GET /v1/admin/diagnostics (Wave 6M)
+    // GET /v1/admin/diagnostics
     if (method === 'GET' && pathname === '/v1/admin/diagnostics') {
       handleDiagnosticsGet(req, res, deps);
       return;
     }
 
-    // GET /v1/admin/injection/stats (Wave 6O)
+    // GET /v1/admin/injection/stats
     if (method === 'GET' && pathname === '/v1/admin/injection/stats') {
       handleInjectionStatsGet(req, res, deps);
       return;
     }
 
-    // POST /v1/admin/commitments/resolve (Wave 6N)
+    // POST /v1/admin/commitments/resolve
     if (method === 'POST' && pathname === '/v1/admin/commitments/resolve') {
       handleCommitmentsResolvePost(req, res, deps).catch((err: unknown) => {
         log.error({ err: err instanceof Error ? err.message : String(err) }, 'Admin: unhandled error in commitments/resolve');
@@ -2030,49 +2030,49 @@ export function registerAdminRoutes(
       return;
     }
 
-    // GET /v1/admin/reanchor/stats (Wave 6P)
+    // GET /v1/admin/reanchor/stats
     if (method === 'GET' && pathname === '/v1/admin/reanchor/stats') {
       handleReanchorStatsGet(req, res, deps);
       return;
     }
 
-    // GET /v1/admin/reanchor/recent (Wave 6P)
+    // GET /v1/admin/reanchor/recent
     if (method === 'GET' && pathname === '/v1/admin/reanchor/recent') {
       handleReanchorRecentGet(req, res, deps);
       return;
     }
 
-    // GET /v1/admin/digest (Wave 6Q)
+    // GET /v1/admin/digest
     if (method === 'GET' && pathname === '/v1/admin/digest') {
       handleDigestGet(req, res, deps);
       return;
     }
 
-    // GET /v1/admin/metrics (Wave 7F) — Prometheus text exposition format
+    // GET /v1/admin/metrics — Prometheus text exposition format
     if (method === 'GET' && pathname === '/v1/admin/metrics') {
       handleMetricsGet(req, res, deps);
       return;
     }
 
-    // GET /v1/admin/metrics/otlp (Wave 7F) — OTLP/HTTP JSON format
+    // GET /v1/admin/metrics/otlp — OTLP/HTTP JSON format
     if (method === 'GET' && pathname === '/v1/admin/metrics/otlp') {
       handleMetricsOtlpGet(req, res, deps);
       return;
     }
 
-    // GET /v1/admin/remediation/stats (Wave 8E)
+    // GET /v1/admin/remediation/stats
     if (method === 'GET' && pathname === '/v1/admin/remediation/stats') {
       handleRemediationStatsGet(res, deps);
       return;
     }
 
-    // GET /v1/admin/skills/optimizations (Wave 13)
+    // GET /v1/admin/skills/optimizations
     if (method === 'GET' && pathname === '/v1/admin/skills/optimizations') {
       handleSkillOptimizationsGet(req, res, deps);
       return;
     }
 
-    // POST /v1/admin/skills/optimizations/:id/approve (Wave 13)
+    // POST /v1/admin/skills/optimizations/:id/approve
     const soApproveMatch = /^\/v1\/admin\/skills\/optimizations\/([^/]+)\/approve$/.exec(pathname);
     if (method === 'POST' && soApproveMatch) {
       const id = soApproveMatch[1]!;
@@ -2083,7 +2083,7 @@ export function registerAdminRoutes(
       return;
     }
 
-    // POST /v1/admin/skills/optimizations/:id/reject (Wave 13)
+    // POST /v1/admin/skills/optimizations/:id/reject
     const soRejectMatch = /^\/v1\/admin\/skills\/optimizations\/([^/]+)\/reject$/.exec(pathname);
     if (method === 'POST' && soRejectMatch) {
       const id = soRejectMatch[1]!;
@@ -2094,7 +2094,7 @@ export function registerAdminRoutes(
       return;
     }
 
-    // Wave 10 route groups (bench-routes, learning-routes) register their own
+    // Some route groups (bench-routes, learning-routes) register their own
     // listeners AFTER admin-routes.  Fall through so those listeners can respond.
     // synth-probe-routes also registers its own listener AFTER admin-routes.
     if (

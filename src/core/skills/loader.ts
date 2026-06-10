@@ -41,13 +41,13 @@ interface SkillDbRow {
   entry_path: string;
   input_schema: string;
   output_schema: string;
-  // Wave 10: optional trust tier and caps columns (may not exist in older DBs)
+  // Optional trust tier and caps columns (may not exist in older DBs)
   trust_tier?: string;
   caps_json?: string;
 }
 
 // ---------------------------------------------------------------------------
-// Wave 10: Capability enforcement at load time
+// Capability enforcement at load time
 // ---------------------------------------------------------------------------
 
 /**

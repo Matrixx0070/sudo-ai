@@ -60,7 +60,7 @@ export type AgentEvent =
   | { type: 'done' }
   /** Structured rich response — emitted alongside 'message' when block decomposition is available. */
   | { type: 'rich-response'; response: import('./content-types.js').RichResponse }
-  // APPEND ONLY — Wave 10 B14. Do not modify existing variants above.
+  // APPEND ONLY — do not modify existing variants above.
   | { type: 'trace-meta'; skillId?: string; skillSource?: string; skillKind?: string;
       complexity?: import('../shared/wave10-types.js').ComplexityResult;
       taint?: import('../shared/wave10-types.js').Taint };

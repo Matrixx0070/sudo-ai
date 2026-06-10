@@ -11,9 +11,6 @@
  *
  * Lifecycle: asynchronous, system-scoped, sleep-cycle-driven.
  * Human approval required — proposals are never auto-applied.
- *
- * Wave 13 Builder 1.
- * Phase 3 strict: comment hygiene only (naming/comments in large file per plan; no code changes here).
  */
 
 import { randomUUID } from 'node:crypto';
@@ -39,7 +36,7 @@ const MINE_WINDOW_MS = 86_400_000; // 24 hours
 const BRIER_HIGH_THRESHOLD = 0.35;
 
 // ---------------------------------------------------------------------------
-// Duck-typed interfaces — avoids hard deps on concrete classes. Wave 13.
+// Duck-typed interfaces — avoids hard deps on concrete classes.
 // ---------------------------------------------------------------------------
 
 interface SkillDiscoveryLike {
@@ -74,7 +71,7 @@ interface SkillRegistryLike {
 }
 
 // ---------------------------------------------------------------------------
-// TrustTierTracker duck type — avoids hard dep on concrete class. P2-d.
+// TrustTierTracker duck type — avoids hard dep on concrete class.
 // ---------------------------------------------------------------------------
 
 /**
@@ -423,7 +420,7 @@ export class SkillOptimizer {
   }
 
   // ---------------------------------------------------------------------------
-  // P2-d: autoApplyApproved — auto-apply pending proposals under trust + env guard
+  // autoApplyApproved — auto-apply pending proposals under trust + env guard
   // ---------------------------------------------------------------------------
 
   /**
@@ -438,7 +435,7 @@ export class SkillOptimizer {
    *   4. gateToolCall({tag:'PROBABLE', toolName:'skill.auto-apply', impact:'MEDIUM', ...})
    *      must NOT return REPLAN.
    *
-   * Apply (P2-d, Fix 3): writes proposedValue to the SKILL.md file on disk first
+   * Apply: writes proposedValue to the SKILL.md file on disk first
    * (atomic temp+rename), then marks proposal 'auto-applied' in the store.
    * If disk write fails, markAutoApplied is NOT called — DB status never diverges
    * from actual file state (fail-safe). Requires skillsDir 7th ctor param.

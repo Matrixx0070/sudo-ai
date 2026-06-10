@@ -222,7 +222,7 @@ export function parsePolicy(raw: unknown): SandboxPolicy {
     ...(extraReadOnlyBinds !== undefined && { extraReadOnlyBinds }),
     ...(extraWritableBinds !== undefined && { extraWritableBinds }),
     ...(allowedEnvVars !== undefined && { allowedEnvVars }),
-    // P1 cross
+    // Cross-platform fields
     platform: (r['platform'] as any) || DEFAULT_SANDBOX_POLICY.platform,
     enableCrossPlatform: typeof r['enableCrossPlatform'] === 'boolean' ? r['enableCrossPlatform'] : DEFAULT_SANDBOX_POLICY.enableCrossPlatform,
   };

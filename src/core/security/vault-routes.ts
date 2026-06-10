@@ -1,6 +1,6 @@
 /**
  * @file security/vault-routes.ts
- * @description REST endpoints for MCP credential vault (Wave 5 P2).
+ * @description REST endpoints for MCP credential vault.
  *
  * Endpoints:
  *   POST   /v1/vaults/:ns/credentials           — add credential

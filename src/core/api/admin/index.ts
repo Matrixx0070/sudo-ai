@@ -30,7 +30,7 @@ export async function registerAdminHandlers(): Promise<void> {
 
   // Real handlers — each module self-registers its routes on import.
   // These must be imported AFTER admin-router.ts has registered stubs so that
-  // the Wave 3 integrator can remove the corresponding stubs from admin-router.ts
+  // the integrator can remove the corresponding stubs from admin-router.ts
   // and let these registrations become the authoritative first-match entries.
   await import('./dashboard.handler.js');
   await import('./logs.handler.js');

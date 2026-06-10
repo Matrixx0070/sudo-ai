@@ -69,7 +69,7 @@ export class ToolRegistry {
   private readonly mcpAdapters = new Map<string, MCPAdapter | MCPAdapterLike>();
   /** Cached MCP tool definitions keyed by their prefixed name. */
   private readonly mcpTools = new Map<string, MCPToolDef>();
-  /** Wave 10C: reverse index — tool name → skill name. Null until setSkillIndex() called. */
+  /** Reverse index — tool name → skill name. Null until setSkillIndex() called. */
   private _skillIndex: Map<string, string> | null = null;
 
   // -------------------------------------------------------------------------
@@ -205,7 +205,7 @@ export class ToolRegistry {
    *
    * Kill-switch: set SUDO_SKILL_INDEX_DISABLE=1 to prevent index load without
    * a process reload. When disabled, skillIdForTool() continues to return null
-   * (identical to Wave 10B behavior).
+   * (identical to the pre-index behavior).
    *
    * @param index - Map from tool name → skill name (unambiguous entries only).
    */
@@ -221,7 +221,7 @@ export class ToolRegistry {
   /**
    * Return the skill name that unambiguously claims this tool via its
    * allowed-tools frontmatter list. Returns null when:
-   *   - no index has been loaded (Wave 10B fallback behavior)
+   *   - no index has been loaded
    *   - the tool is claimed by multiple skills (ambiguous — tie-breaker: null)
    *   - the tool is not claimed by any skill
    *

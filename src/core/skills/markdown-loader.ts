@@ -5,7 +5,7 @@
  * allowed-tools) followed by the skill body.  The parsed skills can be
  * injected into system prompts via `skillToSystemPrompt`.
  *
- * Wave 10 extension: now also parses agentskills.io canonical frontmatter
+ * Also parses agentskills.io canonical frontmatter
  * fields (version, source, trust_tier, caps, tools, provenance).
  * All new fields are optional — existing 33 skills still load unchanged.
  */
@@ -28,7 +28,7 @@ export interface MarkdownSkill {
   allowedTools?: string[];
   content: string;
   filePath: string;
-  // --- Wave 10: agentskills.io canonical frontmatter (all optional) ---
+  // --- agentskills.io canonical frontmatter (all optional) ---
   /** Semantic version string from frontmatter, e.g. "1.0.0". */
   version?: string;
   /** Source URI, e.g. "github:owner/repo/skill.md". */
@@ -85,7 +85,7 @@ export async function loadMarkdownSkills(skillsDir: string): Promise<MarkdownSki
       const filePath = path.join(skillsDir, file);
       const raw = await readFile(filePath, 'utf-8');
       const { meta, body } = parseFrontmatter(raw);
-      // Parse Wave 10 canonical fields (optional, backward-compatible)
+      // Parse agentskills.io canonical fields (optional, backward-compatible)
       const trustTierRaw = meta['trust_tier'] as string | undefined;
       const validTiers = new Set<string>(['bundled', 'indexed', 'unreviewed', 'workspace']);
       const trust_tier =
@@ -120,7 +120,7 @@ export async function loadMarkdownSkills(skillsDir: string): Promise<MarkdownSki
         allowedTools: Array.isArray(meta['allowed-tools']) ? meta['allowed-tools'] : undefined,
         content: body.trim(),
         filePath,
-        // Wave 10 canonical fields
+        // agentskills.io canonical fields
         version: (meta['version'] as string | undefined) || undefined,
         source: (meta['source'] as string | undefined) || undefined,
         trust_tier,

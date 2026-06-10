@@ -31,7 +31,7 @@ export interface ApprovalMatrixLike {
 }
 
 // ---------------------------------------------------------------------------
-// Core types (per 100x arch-spec + IComputerUse contract)
+// Core types (per the IComputerUse contract)
 // ---------------------------------------------------------------------------
 
 export type Platform = 'linux' | 'win' | 'mac';
@@ -133,7 +133,7 @@ export interface IComputerUse {
 
 export interface ComputerUseConfig {
   platform?: Platform;
-  learner?: ToolOutcomeLearnerLike; // call onToolResult on EVERY control outcome for 100x rate
+  learner?: ToolOutcomeLearnerLike; // call onToolResult on EVERY control outcome
   approval?: ApprovalMatrixLike; // wiring to tiers + executor (control.* auto per SOUL)
   sandboxPolicy?: Record<string, unknown>; // cross-platform expand
   sessionId?: string;

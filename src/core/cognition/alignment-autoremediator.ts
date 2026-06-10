@@ -6,9 +6,6 @@
  * observations spanning >= sustainedWindowMs, the remediator fires a
  * corrective action sequence: re-anchor, trust-tier record, optional
  * commitment audit, and structured log. All actions are fail-open.
- *
- * Wave 8E — auto-remediation on sustained RED.
- * File boundary: Senior Builder (Wave 8E). No other agent touches this file.
  */
 
 import { createLogger } from '../shared/logger.js';

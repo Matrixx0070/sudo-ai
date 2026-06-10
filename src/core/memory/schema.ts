@@ -37,7 +37,7 @@ const log = createLogger('memory:schema');
  *  content_ideas     – backlog of video / post ideas with AI scoring
  *  inspection_queue  – flagged content review queue
  *
- * skills table is NOT defined here — it is owned by Wave 5 P2 migration at
+ * skills table is NOT defined here — it is owned by the migration at
  * src/core/skills/sqlite-migrations/001-skills.sql.
  *
  * chunks_vec is created separately by initializeVecTable() only when sqlite-vec is loaded.
@@ -310,7 +310,7 @@ const TABLE_STATEMENTS: readonly string[] = [
       WHERE id = OLD.id;
     END`,
 
-  // skills table: owned by Wave 5 P2 migration at src/core/skills/sqlite-migrations/001-skills.sql
+  // skills table: owned by the migration at src/core/skills/sqlite-migrations/001-skills.sql
 
   // ==========================================================================
   // scheduled_posts
@@ -336,7 +336,7 @@ const TABLE_STATEMENTS: readonly string[] = [
     ON scheduled_posts(status, schedule_time)`,
 
   // ==========================================================================
-  // Wave 4b: session_messages_fts (FTS5 — full-text search over messages)
+  // session_messages_fts (FTS5 — full-text search over messages)
   // Content-table mirrors messages; rowid = messages.id.
   // Note: corresponding ALTER TABLE columns are run by SqliteSessionStore
   // _runMigrations() because SQLite does not support IF NOT EXISTS for ALTER.

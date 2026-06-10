@@ -1,4 +1,4 @@
--- Wave 5 P2 — Files API table
+-- Files API table
 -- All file metadata persisted here; actual bytes live on disk at storage_path.
 
 CREATE TABLE IF NOT EXISTS files (

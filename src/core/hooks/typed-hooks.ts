@@ -282,17 +282,17 @@ export const TYPED_HOOK_MAP: Record<HookEvent, { runnerType: HookRunnerType; res
   'before_install':       { runnerType: 'claiming',  resultType: 'GenericResult' },
   'after_install':        { runnerType: 'void',      resultType: 'GenericResult' },
 
-  // -- Wave 3: Vault events --
+  // -- Vault events --
   'vault:set':            { runnerType: 'claiming',  resultType: 'VaultResult' },
   'vault:get':            { runnerType: 'claiming',  resultType: 'VaultResult' },
   'vault:rotate':         { runnerType: 'claiming',  resultType: 'VaultResult' },
   'vault:delete':         { runnerType: 'claiming',  resultType: 'VaultResult' },
 
-  // -- Wave 3: Rate limit / MCP loopback --
+  // -- Rate limit / MCP loopback --
   'rate-limit:triggered': { runnerType: 'claiming',  resultType: 'SecurityResult' },
   'mcp:tool-call':        { runnerType: 'claiming',  resultType: 'PreToolCallResult' },
 
-  // -- Wave 4: Cost optimisation / Memory security --
+  // -- Cost optimisation / Memory security --
   'model:route:cheap':    { runnerType: 'claiming',  resultType: 'SteeringResult' },
   'memory:scan:triggered': { runnerType: 'claiming', resultType: 'SecurityResult' },
 

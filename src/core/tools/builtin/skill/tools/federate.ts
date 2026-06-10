@@ -1,7 +1,7 @@
 /**
  * @file skill/tools/federate.ts
  * @description skill.federate — publishes tool refinement events to the
- * federation layer (AuditChainSync, Wave 7E) or fetches peer events.
+ * federation layer (AuditChainSync) or fetches peer events.
  *
  * Duck-typed federation access: if AuditChainSync is not available in the
  * runtime environment, returns {ok: false, reason: 'federation not configured'}.

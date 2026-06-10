@@ -6,8 +6,6 @@
  * exec via PowerShell, cross-platform file ops, basic gui/desktop.
  * Learner on every outcome; monitoring/self-repair hook.
  * Sandbox: shim (no bwrap; policy via limits where possible) -- expanded in sandbox/*.
- *
- * P1 only.
  */
 
 import { execFile } from 'node:child_process';
@@ -29,7 +27,7 @@ import type {
   DesktopActionParams,
   DesktopResult,
 } from './types.js';
-// P1 fix HIGH-1: use buildSandboxEnv for scrub (SECRET_DENYLIST + allowlist) instead of raw process.env on cross exec
+// Fix HIGH-1: use buildSandboxEnv for scrub (SECRET_DENYLIST + allowlist) instead of raw process.env on cross exec
 import { buildSandboxEnv } from '../../../../sandbox/sandbox-runner.js';
 import { DEFAULT_SANDBOX_POLICY } from '../../../../sandbox/sandbox-types.js';
 
@@ -67,7 +65,7 @@ export class WinComputerUse implements IComputerUse {
       return { success: false, stdout: '', stderr: 'kill', exitCode: 1, durationMs: Date.now() - start, platform: 'win' };
     }
     try {
-      // P1 fix HIGH-1: scrub secrets via buildSandboxEnv (never full process.env for control.exec on win)
+      // Fix HIGH-1: scrub secrets via buildSandboxEnv (never full process.env for control.exec on win)
       const policy = (this.config as any).sandboxPolicy || DEFAULT_SANDBOX_POLICY;
       const baseEnv = buildSandboxEnv(policy);
       const childEnv = opts.env ? { ...baseEnv, ...opts.env } : baseEnv;
@@ -88,7 +86,7 @@ export class WinComputerUse implements IComputerUse {
   }
 
   async browser(params: BrowserActionParams): Promise<BrowserResult> {
-    // P1 refine (Codex post-remed): do not report win browser stub (no-op) as success; accurate reporting for cross-platform.
+    // Do not report win browser stub (no-op) as success; accurate reporting for cross-platform.
     const err = 'control.browser stub on win (P1 refine: no-op not reported success per Codex; real via powershell in full cross)';
     await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, false, err);
     return { action: params.action, success: false, error: err };
@@ -97,8 +95,8 @@ export class WinComputerUse implements IComputerUse {
   async file(params: FileOpParams): Promise<FileResult> {
     try {
       const abs = path.resolve(params.path);
-      // P1 fix HIGH-3: denylist for win control.file (SOUL exfil protection)
-      // P1 refine (Codex post-remed + lessons): narrow to sensitive subpaths/workspace-rel (not broad /root/home blocking normal ops); same list as linux for cross consistency.
+      // Fix HIGH-3: denylist for win control.file (SOUL exfil protection)
+      // Narrow to sensitive subpaths/workspace-rel (not broad /root/home blocking normal ops); same list as linux for cross consistency.
       const SENSITIVE_DENY = ['/etc/shadow', '/etc/passwd', '/root/.ssh', '/home/.ssh', 'MEMORY.md', 'data/credentials', '/root/.aws', '/root/.config/sudo-ai', '/boot', '/var/lib/sudo'];
       const norm = abs.toLowerCase();
       if (SENSITIVE_DENY.some(s => norm.includes(s.toLowerCase()))) {
@@ -123,14 +121,14 @@ export class WinComputerUse implements IComputerUse {
   }
 
   async gui(params: GUIActionParams): Promise<GUIResult> {
-    // P1 refine (Codex post-remed): do not report win gui stub (no-op) as success; accurate reporting for cross-platform.
+    // Do not report win gui stub (no-op) as success; accurate reporting for cross-platform.
     const err = 'control.gui stub on win (P1 refine: no-op not reported success per Codex; real via powershell SendKeys in full)';
     await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, false, err);
     return { action: params.action, success: false, error: err };
   }
 
   async desktop(params: DesktopActionParams): Promise<DesktopResult> {
-    // P1 refine (Codex post-remed): do not report win desktop stub (no-op) as success; accurate reporting for cross-platform.
+    // Do not report win desktop stub (no-op) as success; accurate reporting for cross-platform.
     const err = 'control.desktop stub on win (P1 refine: no-op not reported success per Codex)';
     await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, false, err);
     return { action: params.action, success: false, error: err, data: { target: params.target } };

@@ -104,13 +104,13 @@ function buildMockRegistry() {
 }
 
 async function run() {
-  // Wave 2.2c: drop to nobody:nogroup (65534:65534) before synthesized code runs.
+  // Drop to nobody:nogroup (65534:65534) before synthesized code runs.
   // setgid MUST precede setuid — CAP_SETGID is lost once UID drops from 0 to 65534.
   // try/catch: graceful no-op when bwrap not setuid-root (e.g. nested test context).
   try { process.setgid(65534); } catch (_e) { /* non-root or no privilege */ }
   try { process.setuid(65534); } catch (_e) { /* non-root or no privilege */ }
 
-  // Fix A (Wave 2.2a): Scrub process.env BEFORE importing synthesized code.
+  // Fix A: Scrub process.env BEFORE importing synthesized code.
   // Closes H1/H2/H3: process.env.SECRET / process['env'] / globalThis.process.env
   // all return undefined because the env map is empty when synthesized code runs.
   for (const k of Object.keys(process.env)) {

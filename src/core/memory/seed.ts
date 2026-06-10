@@ -162,7 +162,7 @@ async function seed(): Promise<void> {
     session_id:    'seed-session-0001-0000-0000-000000000000',
   });
 
-  // Wave 5 P2: skills are auto-scanned from filesystem, no seed needed.
+  // Skills are auto-scanned from filesystem, no seed needed.
 
   // -------------------------------------------------------------------------
   // Seed: wisdom / insights

@@ -2,8 +2,6 @@
  * @file builtin/bench.ts
  * @description /bench — run an eval sweep via BenchRunner and report results.
  *
- * Wave 10 Builder 2.
- *
  * Usage:
  *   /bench
  *   /bench models=grok,claude tasks=task-hello,task-arithmetic seeds=2

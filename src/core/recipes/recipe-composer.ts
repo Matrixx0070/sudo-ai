@@ -3,8 +3,6 @@
  * @description Loads TOML recipe files from workspace/recipes/ and applies
  * preset configuration overlays.
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
- *
  * Usage:
  *   const composer = new RecipeComposer('/path/to/project-root');
  *   const recipe = await composer.load('coding');

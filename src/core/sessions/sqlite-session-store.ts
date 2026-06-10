@@ -1,6 +1,6 @@
 /**
  * @file sqlite-session-store.ts
- * @description Wave 4b — SQLite-backed session store layered on top of the
+ * @description SQLite-backed session store layered on top of the
  * existing MindDB / better-sqlite3 stack.
  *
  * Accepts the raw `Database` instance exposed by `MindDB.db`.
@@ -50,7 +50,7 @@ export interface SessionRow {
   output_tokens:     number;
   cost_usd:          number;
   title:             string | null;
-  status:            string;        // Wave 5: idle | running | rescheduling | terminated | archived
+  status:            string;        // idle | running | rescheduling | terminated | archived
   created_at:        string;        // ISO-8601
   updated_at:        string;
 }
@@ -116,7 +116,7 @@ const NEW_COLUMNS: ReadonlyArray<readonly [string, string, string]> = [
   ['sessions', 'input_tokens',      'INTEGER NOT NULL DEFAULT 0'],
   ['sessions', 'output_tokens',     'INTEGER NOT NULL DEFAULT 0'],
   ['sessions', 'cost_usd',          'REAL NOT NULL DEFAULT 0'],
-  // Wave 5: session state machine status column
+  // Session state machine status column
   ['sessions', 'status',            "TEXT NOT NULL DEFAULT 'idle'"],
 ] as const;
 
@@ -391,7 +391,7 @@ export class SqliteSessionStore {
 
   /**
    * Update the title of a session.
-   * Wave 5: used by REST routes PATCH/update endpoint.
+   * Used by REST routes PATCH/update endpoint.
    * No-ops if the session does not exist.
    */
   updateTitle(sessionId: string, title: string): void {

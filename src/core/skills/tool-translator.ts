@@ -3,7 +3,7 @@
  * @description ToolTranslator — maps agentskills.io canonical tool names to
  * SUDO-AI internal tool names.
  *
- * The translation table covers the 7 mandatory mappings from the Wave 10 spec:
+ * The translation table covers the 7 mandatory mappings:
  *   Bash        → system.shell     (shell_exec)
  *   Read        → coder.read-file  (file_read)
  *   Write       → coder.write-file (file_write)

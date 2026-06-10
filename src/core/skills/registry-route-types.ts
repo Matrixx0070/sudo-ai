@@ -2,7 +2,7 @@
  * @file registry-route-types.ts
  * @description Types, helpers, and rate-limit logic for the public registry endpoints.
  *
- * Wave 12 B2 — shared by registry-routes.ts.
+ * Shared by registry-routes.ts.
  */
 
 import { createHash } from 'node:crypto';
@@ -19,7 +19,7 @@ import type { SkillRegistry } from './registry.js';
  * GET /v1/registry/skills/:id.
  *
  * 14 fields — the canonical 10 plus `metadata` block (trust_tier + display_name),
- * `license`, and `compatibility` added in Wave 10 Phase 1 for agentskills.io compliance.
+ * `license`, and `compatibility` added for agentskills.io compliance.
  *
  * NEVER includes body_md, frontmatter_json, archived_at, scoring fields,
  * session attachment records, or the internal SQLite row id.
@@ -36,12 +36,12 @@ export interface PublicSkillEntry {
   source: string;           // frontmatter field `source`
   sha256: string;           // mapped from SkillMeta.sha256
   importedAt: string;       // mapped from SkillMeta.created_at (ISO-8601)
-  license: string;          // Wave 10 P1 — SPDX identifier, empty string when absent
-  compatibility: string[];  // Wave 10 P1 — runtime targets (e.g. ["node-22"]), empty array when absent
+  license: string;          // SPDX identifier, empty string when absent
+  compatibility: string[];  // Runtime targets (e.g. ["node-22"]), empty array when absent
   /** Spec-canonical metadata block — trust_tier + display_name for agentskills.io indexers. */
   metadata: {
     trust_tier: 'bundled';
-    display_name: string;   // Wave 10 P1 — human label (e.g. "Web Summary"), empty string when absent
+    display_name: string;   // Human label (e.g. "Web Summary"), empty string when absent
   };
 }
 
@@ -91,7 +91,7 @@ export function sendError(res: ServerResponse, status: number, msg: string): voi
 
 // ---------------------------------------------------------------------------
 // Sliding-window rate limiters (two independent maps — spec E5)
-// Key: sha256(ip) — hashed for privacy per Wave 11 lesson
+// Key: sha256(ip) — hashed for privacy
 // ---------------------------------------------------------------------------
 
 export const REGISTRY_LIST_RL = { windowMs: 60_000, max: 60 };
@@ -201,11 +201,11 @@ export function checkRawRateLimit(req: IncomingMessage): { allowed: boolean; ret
 // ---------------------------------------------------------------------------
 // Frontmatter YAML emitter (canonical schema only — scalar + bracket arrays)
 // Reconstructs frontmatter header for /raw responses from stored JSON.
-// Wave 10 P1: added license/compatibility/display_name support.
+// Includes license/compatibility/display_name support.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Wave 10 P1 helpers
+// agentskills.io compliance helpers
 // ---------------------------------------------------------------------------
 
 /**
@@ -234,11 +234,11 @@ function sanitizeFrontmatterScalar(s: string): string {
 
 // `metadata` and `display_name` are intentionally excluded here — they are
 // emitted as a nested block below rather than as flat scalars.
-// Wave 10 P1: `license` and `compatibility` added before `caps`.
+// `license` and `compatibility` are emitted before `caps`.
 const ORDERED_FM_KEYS = ['id', 'name', 'version', 'description', 'author', 'trust_tier', 'license', 'compatibility', 'caps', 'tags', 'source'];
 
 // Keys that must never be emitted as flat scalars (handled by dedicated emitters).
-// Wave 10 P1: `display_name` added so the metadata block emitter controls it exclusively.
+// `display_name` is skipped so the metadata block emitter controls it exclusively.
 const SKIP_IN_FALLTHROUGH = new Set([...ORDERED_FM_KEYS, 'metadata', 'display_name']);
 
 export function emitFrontmatterYaml(fm: Record<string, unknown>): string {
@@ -274,7 +274,7 @@ export function emitFrontmatterYaml(fm: Record<string, unknown>): string {
   if (metadataTrustTier !== undefined) {
     lines.push('metadata:');
     lines.push(`  trust_tier: ${sanitizeFrontmatterScalar(metadataTrustTier)}`);
-    // Wave 10 P1: emit display_name inside metadata block when present.
+    // Emit display_name inside metadata block when present.
     // Strip quotes because parseFrontmatter preserves them literally.
     const rawDisplayName = fm['display_name'];
     const metadataDisplayName =
@@ -317,7 +317,7 @@ export function toPublicEntry(meta: SkillMeta): PublicSkillEntry {
   const caps: string[] = Array.isArray(fm['caps']) ? (fm['caps'] as string[]) : [];
   const tags: string[] = Array.isArray(fm['tags']) ? (fm['tags'] as string[]) : [];
 
-  // Wave 10 P1: new fields — license, compatibility, display_name.
+  // agentskills.io fields — license, compatibility, display_name.
   // parseFrontmatter preserves literal double-quotes; stripQuotes removes them.
   const license: string =
     typeof fm['license'] === 'string' ? stripQuotes(fm['license']) : '';

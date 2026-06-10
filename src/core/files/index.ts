@@ -1,6 +1,6 @@
 /**
  * @file index.ts
- * @description Public API for the Files module (Wave 5 P2).
+ * @description Public API for the Files module.
  *
  * Usage:
  *   import { registerFileRoutes, FileStore, mountFilesForSession } from './core/files/index.js';

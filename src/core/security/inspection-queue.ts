@@ -1,6 +1,6 @@
 /**
  * @file inspection-queue.ts
- * @description Wave 6A — Inspection queue factory for flagged content review.
+ * @description Inspection queue factory for flagged content review.
  *
  * Stores hash + 500-char excerpt only — full payloads are NEVER persisted.
  * The table DDL lives in src/core/memory/schema.ts (inspection_queue).

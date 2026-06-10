@@ -2,15 +2,13 @@
  * @file gateway/compare-routes.ts
  * @description GET /v1/admin/compare — side-by-side model comparison endpoint.
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
- *
  * Auth: timing-safe Bearer token (same pattern as admin-routes.ts).
  * Endpoint: GET /v1/admin/compare?a=<modelId>&b=<modelId>&prompt=<text>
  *
  * Both model calls are made concurrently via Promise.all.
  * Returns CompareResult with responses, latencies, costs, and complexity.
  *
- * Usage (Builder 2 registers this in http-api.ts):
+ * Usage (registered in http-api.ts):
  *   registerCompareRoutes(server, { brain, complexityScorer });
  */
 
@@ -259,7 +257,7 @@ async function handleCompare(
 /**
  * Register GET /v1/admin/compare on the provided HTTP server.
  *
- * Builder 2 calls this in http-api.ts (same pattern as registerFederationRoutes).
+ * Called in http-api.ts (same pattern as registerFederationRoutes).
  * '/v1/admin' is already in the fallthrough list, so no extra entry needed.
  *
  * @param server  - Existing http.Server (shared with other routes).

@@ -11,7 +11,7 @@ const SECCOMP_DATA_NR_OFFSET   = 0; // offset of nr   field in seccomp_data
 const SECCOMP_DATA_ARCH_OFFSET = 4; // offset of arch field in seccomp_data
 const AUDIT_ARCH_X86_64        = 0xC000003E;
 
-// Allowlist — conservative, per Wave 2.2g spec §3.
+// Allowlist — conservative, per spec §3.
 // SIGSYS-denied (do NOT add): 83 88 112 101 165 166 155 161 125 126 321 298 317 322
 const ALLOWED_NRS: readonly number[] = [
   // Memory
@@ -29,7 +29,7 @@ const ALLOWED_NRS: readonly number[] = [
   // Signals
   13, 14, 15, 62, 127, 128, 200, 289,
   // Process / Identity (setuid family ALLOWED — returns EPERM; entry.cjs try/catch)
-  // execve ALLOWED in 2.2g: bwrap uses it; Wave 2.2h closes via C wrapper
+  // execve ALLOWED here: bwrap uses it; closed afterwards via C wrapper
   39, 59, 60, 61, 95, 97, 98, 99,
   102, 104, 105, 106, 107, 108, 110,
   113, 114, 117, 118, 119, 120,

@@ -2,7 +2,6 @@
  * @file recipes/recipe-types.ts
  * @description Re-exports Recipe and related types from wave10-types.
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
  * Import from this file for all recipe-related type usage.
  */
 

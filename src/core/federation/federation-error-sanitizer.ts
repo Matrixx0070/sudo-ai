@@ -9,7 +9,7 @@
  *   - Oversized payloads (64KB body limit, 8KB stack trace cap)
  *   - Dangerous meta keys (code/script/eval/exec/command injection)
  *
- * Wave 2 — Federation Error Protocol.
+ * Part of the Federation Error Protocol.
  */
 
 // ---------------------------------------------------------------------------

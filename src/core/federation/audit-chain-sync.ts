@@ -13,7 +13,6 @@
  *     UNIQUE(instance_id, seq))
  *
  * Uses native fetch() — no added dependencies.
- * Wave 7E — federation MVP.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -52,7 +51,7 @@ export interface FederatedEvent {
   payload: unknown;
   ts: number;
   seq: number;
-  // Wave 10H — optional signature fields (present when signer is configured):
+  // Optional signature fields (present when signer is configured):
   keyId?: string;
   keyVersion?: number;
   signature?: string;
@@ -183,7 +182,7 @@ export class AuditChainSync {
       seq,
     };
 
-    // Wave 10H: sign outbound envelope if signer is present and kill-switch is off
+    // Sign outbound envelope if signer is present and kill-switch is off
     if (this._signer && process.env['SUDO_FED_SIGN_DISABLE'] !== '1') {
       try {
         const artifact = this._signer.sign(envelope.payload, 'federation_event');
@@ -324,7 +323,6 @@ export class AuditChainSync {
   /**
    * Returns the names of all configured peers.
    * Used by SleepCycle to enumerate peers for the post-Phase-5 audit pull.
-   * Wave 8D.
    */
   listPeers(): string[] {
     return this.registry.getPeers().map(p => p.name);

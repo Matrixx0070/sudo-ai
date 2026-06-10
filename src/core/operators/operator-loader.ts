@@ -2,8 +2,6 @@
  * @file operators/operator-loader.ts
  * @description Loads OperatorManifest[] from workspace/operators/*.toml files.
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
- *
  * Usage:
  *   const loader = new OperatorLoader('/path/to/project-root');
  *   const manifests = await loader.loadAll();

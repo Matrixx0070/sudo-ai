@@ -6,7 +6,7 @@
  * optional JSON metadata. Supports filtered queries for reporting and compliance.
  * Uses WAL mode for concurrent read safety.
  *
- * Wave 6A upgrade: cryptographic SHA-256 hash chaining via audit-chain.ts.
+ * Cryptographic SHA-256 hash chaining via audit-chain.ts.
  * Each row stores prev_hash and hash, linking it to the previous row and
  * making any retrospective tampering detectable via verifyChain().
  */
@@ -114,7 +114,7 @@ export class AuditTrail {
       )
     `);
 
-    // Wave 6A: add hash-chain columns and back-fill existing rows.
+    // Add hash-chain columns and back-fill existing rows.
     this.addChainColumns();
     this.backfillHashes();
 

@@ -2,8 +2,6 @@
  * @file gateway/savings-routes.ts
  * @description GET /v1/savings — cost + energy savings summary endpoint.
  *
- * Wave 10 — Builder 3 (Config + Ops + UX)
- *
  * Auth: timing-safe Bearer token (same pattern as admin-routes.ts).
  * Endpoint: GET /v1/savings?period=session|day|week|month|all
  *

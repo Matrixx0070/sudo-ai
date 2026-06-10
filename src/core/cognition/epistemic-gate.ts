@@ -1,5 +1,5 @@
 /**
- * EpistemicGate — Primitive D (Wave 6F Builder C)
+ * EpistemicGate — Primitive D
  *
  * Classifies the epistemic confidence of an LLM rationale and gates
  * tool dispatch based on (tag × impact) matrix. Pure functions +

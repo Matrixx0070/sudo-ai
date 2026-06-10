@@ -2,7 +2,7 @@
  * @file cognition/commitment-auditor.ts
  * @description CommitmentAuditor — scans the audit_log for commitment rows that
  * are nearing or past their TTL, emitting structured log warnings/errors and
- * returning a report. Pure module; no REST wiring (deferred to Wave 6H).
+ * returning a report. Pure module; no REST wiring (deferred).
  *
  * Commitments are stored by AuditTrail.recordTriple() as rows with
  * action='commitment', metadata_json containing {mistake, learned, commitment, ttl_days}.

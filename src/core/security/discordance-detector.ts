@@ -61,7 +61,7 @@ export interface DiscordanceResult {
   detectedAt: string;
 }
 
-/** Exported for future AlignmentAggregator wiring (Wave 6D: export only). */
+/** Exported for future AlignmentAggregator wiring (export only). */
 export interface AlignmentAggregatorDiscordanceInput {
   discordanceScore: number;
 }
@@ -284,7 +284,7 @@ export function detectDiscordance(signals: DiscordanceSignals): DiscordanceResul
       'detectDiscordance: result computed',
     );
 
-    // Wave 7D: post-discordance re-anchor emission — fires only when score crosses
+    // Post-discordance re-anchor emission — fires only when score crosses
     // the 'discordant' threshold (>= 0.70). Does NOT fire on 'normal' or 'elevated'.
     if (level === 'discordant' && _reAnchorCallback !== undefined) {
       try {

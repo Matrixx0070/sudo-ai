@@ -1,6 +1,6 @@
 /**
  * @file sandbox/wasm-runner.ts
- * @description wasmtime-based WASM module runner for SUDO-AI Wave 10.
+ * @description wasmtime-based WASM module runner for SUDO-AI.
  *
  * Invokes the `wasmtime` CLI binary as a subprocess using spawnSync with
  * array arguments (no shell interpolation — per constraint L.9).
