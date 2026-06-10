@@ -431,6 +431,20 @@ SUDO_SIGNING_DISABLE=1
 # ... (see api-reference.md for the complete current list)
 ```
 
+**Opt-in intelligence / learning flags (all default OFF; full semantics in `docs/api-reference.md#opt-in-intelligence-flags`):**
+
+```bash
+SUDO_PREDICTOR_LOOP=1                      # First-turn anticipatory "# HEADS UP" injection from the Predictor
+SUDO_PREDICTOR_AUTO_RESOLVE=1              # Sweep expired pending predictions to 'incorrect' (feeds accuracy stats)
+SUDO_FAILURE_LEARNER_DB=1                  # FailureLearner durable SQLite store in data/mind.db (default: in-memory)
+SUDO_TOOL_OUTCOME_LEARNER=1                # Attach ToolOutcomeLearner to the agent loop (failure recording + prevention-rule hints)
+SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN=3   # Cap semantic planning calls per run (0 = template-only; unset = unbounded)
+SUDO_SKILL_FORGE_ASYNC=1                   # Cooperative SkillForge scan (yields to the event loop; identical output)
+SUDO_POLICY_AGG_WINDOW_DAYS=30             # Recency window for trace-policy aggregates (positive integer days; unset = all history)
+```
+
+Boolean flags use exact-`=1` matching (mirror of the kill-switches). Numeric flags ignore malformed values. Everything is fail-open: a failed feature init logs a warning and the agent keeps running without it. Which of these to enable is an operator decision; none change behavior unless set.
+
 **Cross-platform / desktop / GUI setup (for computer-use GUI control):**
 ```bash
 # Linux GUI (xdotool/scrot)

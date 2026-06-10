@@ -163,10 +163,16 @@ export class ToolOutcomeLearner {
     }
 
     // b. If failed: check for existing prevention rules
+    // (guarded like every other sink: the SQLite-backed FailureLearner can
+    // throw on runtime DB errors, and this runs on the loop's hot path)
     if (!success && error && this.failureLearner) {
-      const rule = this.failureLearner.getPreventionRule(toolName, error);
-      if (rule) {
-        log.info({ tool: toolName, rule: rule.slice(0, 100) }, 'Prevention rule found');
+      try {
+        const rule = this.failureLearner.getPreventionRule(toolName, error);
+        if (rule) {
+          log.info({ tool: toolName, rule: rule.slice(0, 100) }, 'Prevention rule found');
+        }
+      } catch (err) {
+        log.warn({ err, tool: toolName }, 'FailureLearner.getPreventionRule failed');
       }
     }
 
