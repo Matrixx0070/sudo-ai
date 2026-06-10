@@ -7,16 +7,9 @@
  *   2. Whether the HTTP health endpoint responds at localhost:HEALTH_PORT.
  */
 
-import path from 'node:path';
 import { readPid, isRunning } from '../pid.js';
 import { checkHealth } from '../health.js';
-import { HEALTH_PORT } from '../../core/shared/constants.js';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const PID_PATH_RELATIVE = path.join('data', 'sudo-ai.pid');
+import { HEALTH_PORT, PID_PATH } from '../../core/shared/constants.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -25,11 +18,10 @@ const PID_PATH_RELATIVE = path.join('data', 'sudo-ai.pid');
 /**
  * Print the current SUDO-AI status and return an appropriate exit code.
  *
- * @param projectRoot Absolute path to the project root.
  * @returns 0 if running, 1 if stopped or indeterminate.
  */
-export async function runStatus(projectRoot: string): Promise<number> {
-  const pidPath = path.join(projectRoot, PID_PATH_RELATIVE);
+export async function runStatus(): Promise<number> {
+  const pidPath = PID_PATH;
   const pid = readPid(pidPath);
 
   console.log('\n  SUDO-AI Status\n  ──────────────────────────────');

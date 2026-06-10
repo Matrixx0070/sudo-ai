@@ -6,14 +6,13 @@
  * waits up to 5 seconds for it to exit, then removes the PID file.
  */
 
-import path from 'node:path';
 import { readPid, removePid, isRunning } from '../pid.js';
+import { PID_PATH } from '../../core/shared/constants.js';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const PID_PATH_RELATIVE = path.join('data', 'sudo-ai.pid');
 const WAIT_MS = 5_000;
 const POLL_INTERVAL_MS = 200;
 
@@ -24,11 +23,10 @@ const POLL_INTERVAL_MS = 200;
 /**
  * Send SIGTERM to the running SUDO-AI process and wait for it to exit.
  *
- * @param projectRoot Absolute path to the project root.
  * @returns Exit code: 0 on success, 1 if the process could not be stopped.
  */
-export async function runStop(projectRoot: string): Promise<number> {
-  const pidPath = path.join(projectRoot, PID_PATH_RELATIVE);
+export async function runStop(): Promise<number> {
+  const pidPath = PID_PATH;
   const pid = readPid(pidPath);
 
   if (pid === null) {

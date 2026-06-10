@@ -13,6 +13,7 @@ import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { dataPath } from '../shared/paths.js';
 import { ConsciousnessError } from './errors.js';
 
 // ---------------------------------------------------------------------------
@@ -25,7 +26,7 @@ const log = createLogger('consciousness-db');
 // Default database path
 // ---------------------------------------------------------------------------
 
-const DEFAULT_DB_PATH = 'data/consciousness.db';
+const DEFAULT_DB_PATH = dataPath('consciousness.db');
 
 // ---------------------------------------------------------------------------
 // Schema — one complete SQL statement per array element
@@ -499,7 +500,7 @@ export class ConsciousnessDB {
    * Open (or create) the consciousness database and apply the full schema.
    *
    * @param dbPath - Absolute or relative path to the SQLite file.
-   *                 Defaults to `data/consciousness.db` relative to cwd.
+   *                 Defaults to `data/consciousness.db` under the project root.
    */
   constructor(dbPath: string = DEFAULT_DB_PATH) {
     this.dbPath = dbPath;
