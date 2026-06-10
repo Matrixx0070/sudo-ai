@@ -14,6 +14,11 @@
  * opt-in, default-OFF SUDO_PREDICTOR_LOOP flag (see AgentLoop.run). Do not wire it
  * into the general loop unconditionally — these forecasts are noise for owners who
  * are not content creators.
+ *
+ * Outcome learning loop: outcomes arrive via recordOutcome() (exposed as the
+ * meta.predictor 'record-outcome' action) and, opt-in via the default-OFF
+ * SUDO_PREDICTOR_AUTO_RESOLVE=1 flag, via an expiry sweep that resolves pending
+ * predictions past their expires_at as 'incorrect' (see resolveExpired).
  */
 
 import Database from 'better-sqlite3';
@@ -97,7 +102,8 @@ export class Predictor {
   // Outcome tracking
   // -------------------------------------------------------------------------
 
-  recordOutcome(predictionId: string, outcome: 'correct' | 'incorrect'): void {
+  /** @returns true if a prediction row was updated, false if the id was not found. */
+  recordOutcome(predictionId: string, outcome: 'correct' | 'incorrect'): boolean {
     if (!predictionId?.trim()) throw new TypeError('recordOutcome: predictionId is required');
     if (outcome !== 'correct' && outcome !== 'incorrect') {
       throw new TypeError(`recordOutcome: must be 'correct' or 'incorrect', got: ${outcome}`);
@@ -107,8 +113,52 @@ export class Predictor {
     ).run({ outcome, id: predictionId });
     if (info.changes === 0) {
       logger.warn({ predictionId }, 'recordOutcome: prediction not found');
-    } else {
-      logger.info({ predictionId, outcome }, 'Prediction outcome recorded');
+      return false;
+    }
+    logger.info({ predictionId, outcome }, 'Prediction outcome recorded');
+    return true;
+  }
+
+  /**
+   * Resolve predictions whose expiry window has passed while still 'pending'.
+   * Conservative semantics: an anticipatory forecast that expired without being
+   * confirmed counts as 'incorrect' — this keeps getAccuracy() honest instead of
+   * empty, at the cost of penalising unreviewed predictions. Predictions with no
+   * expires_at are never auto-resolved.
+   *
+   * @returns number of predictions resolved.
+   */
+  resolveExpired(): number {
+    // Both sides are ISO-8601 with 'T' and trailing 'Z' (buildPrediction uses
+    // toISOString; strftime format below matches), so lexicographic compare is
+    // chronological. Do NOT use datetime('now') here — it returns the space
+    // format and would mis-compare against ISO strings.
+    const info = this.db.prepare(`
+      UPDATE predictions SET outcome = 'incorrect'
+      WHERE outcome = 'pending'
+        AND expires_at IS NOT NULL
+        AND expires_at < strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    `).run();
+    if (info.changes > 0) {
+      logger.info({ resolved: info.changes }, 'Expired pending predictions resolved as incorrect');
+    }
+    return info.changes;
+  }
+
+  /**
+   * Opt-in (SUDO_PREDICTOR_AUTO_RESOLVE=1, default OFF) expiry sweep, run before
+   * anticipate() and detectAnomalies() so accuracy stats and the accuracy/stale
+   * anomaly checks operate on resolved data. Fail-open: a sweep error never
+   * blocks the caller. Synchronous (better-sqlite3) by design, consistent with
+   * all other Predictor DB access; the UPDATE is bounded by the small number of
+   * pending-with-expiry rows a single owner accumulates.
+   */
+  private _maybeResolveExpired(): void {
+    if (process.env['SUDO_PREDICTOR_AUTO_RESOLVE'] !== '1') return;
+    try {
+      this.resolveExpired();
+    } catch (err) {
+      logger.warn({ err: String(err) }, 'resolveExpired sweep failed — continuing');
     }
   }
 
@@ -128,6 +178,7 @@ export class Predictor {
   // -------------------------------------------------------------------------
 
   async anticipate(): Promise<Prediction[]> {
+    this._maybeResolveExpired();
     const predictions = await runAnticipate(this.db);
     for (const p of predictions) this.storePrediction(p);
     return predictions;
@@ -165,6 +216,7 @@ export class Predictor {
   // -------------------------------------------------------------------------
 
   async detectAnomalies(): Promise<Anomaly[]> {
+    this._maybeResolveExpired();
     return runDetectAnomalies(this.db, () => this.getAccuracy(), a => this._storeAnomaly(a));
   }
 

@@ -225,10 +225,13 @@ export async function runDetectAnomalies(
   }
 
   // Stale pending predictions
+  // created_at/expires_at are ISO-8601 with 'T'/'Z' (toISOString / strftime DDL
+  // default); datetime('now') returns the space format and mis-compares
+  // lexicographically (PR #18 class bug), so both sides must use strftime here.
   const stale = db.prepare(`
     SELECT COUNT(*) AS cnt FROM predictions
-    WHERE outcome = 'pending' AND created_at < datetime('now', '-3 days')
-      AND (expires_at IS NULL OR expires_at > datetime('now'))
+    WHERE outcome = 'pending' AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-3 days')
+      AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   `).get() as { cnt: number };
   if (stale.cnt > 10) {
     anomalies.push(storeAnomaly({
