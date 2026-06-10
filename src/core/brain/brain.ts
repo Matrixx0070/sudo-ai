@@ -12,6 +12,7 @@ import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/c
 import { ModelFailover } from './failover.js';
 import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
+import { sortToolEntries } from './prompt-cache-discipline.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
@@ -858,19 +859,19 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         };
 
         if (request.tools && request.tools.length > 0) {
-          streamParams.tools = Object.fromEntries(
-            request.tools.map((t) => {
-              const raw = t as Record<string, unknown>;
-              const fn = raw['function'] as Record<string, unknown> | undefined;
-              const name = (fn?.['name'] as string | undefined) ?? (raw['name'] as string | undefined) ?? '';
-              const desc = (fn?.['description'] as string | undefined) ?? (raw['description'] as string | undefined) ?? '';
-              const params = (fn?.['parameters'] as Record<string, unknown> | undefined) ?? (raw['parameters'] as Record<string, unknown> | undefined) ?? {};
-              return [name, aiTool({
-                description: desc,
-                inputSchema: jsonSchema(params),
-              })];
-            })
-          );
+          const toolEntries = request.tools.map((t): [string, unknown] => {
+            const raw = t as Record<string, unknown>;
+            const fn = raw['function'] as Record<string, unknown> | undefined;
+            const name = (fn?.['name'] as string | undefined) ?? (raw['name'] as string | undefined) ?? '';
+            const desc = (fn?.['description'] as string | undefined) ?? (raw['description'] as string | undefined) ?? '';
+            const params = (fn?.['parameters'] as Record<string, unknown> | undefined) ?? (raw['parameters'] as Record<string, unknown> | undefined) ?? {};
+            return [name, aiTool({
+              description: desc,
+              inputSchema: jsonSchema(params),
+            })];
+          });
+          // SUDO_PROMPT_CACHE=1: deterministic tool order → byte-stable prefix for provider caches.
+          streamParams.tools = Object.fromEntries(sortToolEntries(toolEntries));
         }
 
         const result = streamText(streamParams as Parameters<typeof streamText>[0]);
@@ -929,17 +930,17 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       maxOutputTokens: maxTokens,
     };
     if (request.tools && request.tools.length > 0) {
-      callParams.tools = Object.fromEntries(
-        request.tools.map((t: any) => {
-          const name = t.function?.name ?? t.name;
-          const desc = t.function?.description ?? t.description;
-          const params = t.function?.parameters ?? t.parameters;
-          return [name, aiTool({
-            description: desc,
-            inputSchema: jsonSchema(params),
-          })];
-        })
-      );
+      const toolEntries = request.tools.map((t: any): [string, unknown] => {
+        const name = t.function?.name ?? t.name;
+        const desc = t.function?.description ?? t.description;
+        const params = t.function?.parameters ?? t.parameters;
+        return [name, aiTool({
+          description: desc,
+          inputSchema: jsonSchema(params),
+        })];
+      });
+      // SUDO_PROMPT_CACHE=1: deterministic tool order → byte-stable prefix for provider caches.
+      callParams.tools = Object.fromEntries(sortToolEntries(toolEntries));
     }
     // A4: obtain the completion through the auth-profile rotation path — rotates
     // across multiple API keys for this provider on rate-limit/auth/billing errors

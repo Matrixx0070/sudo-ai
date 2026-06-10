@@ -480,6 +480,7 @@ The inverse of kill-switches: these enable learning/prediction features that are
 | `SUDO_SKILL_FORGE_ASYNC=1` | boolean | off | SkillForge scan runs cooperatively, yielding to the event loop between batches; output is identical to the synchronous scan |
 | `SUDO_POLICY_AGG_WINDOW_DAYS` | positive integer | all history | Bounds trace-policy aggregate refresh to the most recent N days (suggested starting value: `30`) |
 | `SUDO_STUCK_DETECTOR=1` | boolean | off | Result-aware stuck detection in the agent loop: consecutive identical tool *errors* from the same tool inject a change-strategy warning at `SUDO_STUCK_DETECTOR_WARN_THRESHOLD` (positive integer, default `3`) and terminate the run at `SUDO_STUCK_DETECTOR_ABORT_THRESHOLD` (positive integer, default `5`). Complements LoopGuard/DoomLoop (which key on tool+args before execution); wait/poll-style tools are exempt |
+| `SUDO_PROMPT_CACHE=1` | boolean | off | Stable-prefix discipline for provider prompt caches: the volatile Current Date & Time block moves below the system prompt's dynamic boundary, and tool definitions (both the system-prompt tools list and the serialized tool schemas) are sorted by name so the request prefix is byte-identical across calls. Layout-only — no content is added or removed |
 
 **Related (documented elsewhere):** the trace-learning flywheel flags `SUDO_TRACE_LEARNING=1`, `SUDO_TRACE_POLICY=1`, and `SUDO_POLICY_REFRESH_MS` follow the same opt-in pattern.
 

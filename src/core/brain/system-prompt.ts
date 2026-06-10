@@ -12,6 +12,7 @@ import { PATHS } from '../shared/constants.js';
 import { PROJECT_ROOT } from '../shared/paths.js';
 import { getPersonaSystemBlock } from './personas.js';
 import { getMoodSystemBlock } from './moods.js';
+import { isPromptCacheEnabled, sortByName } from './prompt-cache-discipline.js';
 import type { SystemPromptOptions } from './types.js';
 
 const log = createLogger('brain:system-prompt');
@@ -184,10 +185,12 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     `Current time (UTC): ${now.toISOString().slice(11, 19)}`,
   ].join('\n');
 
+  const promptCacheStable = isPromptCacheEnabled();
+
   // Build tools list block with usage instructions.
   let toolsListBlock = '';
   if (tools && tools.length > 0) {
-    const lines = tools.map((t) => `- **${t.name}**: ${t.description}`);
+    const lines = sortByName(tools, (t) => t.name).map((t) => `- **${t.name}**: ${t.description}`);
     toolsListBlock = [
       'You have access to the following tools. Use them ONLY when the user asks you to DO something concrete ' +
       '(check, search, navigate, read, write, screenshot, execute, etc.). ' +
@@ -266,8 +269,11 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // 3. USER.md
   parts.push(section(userContent));
 
-  // 4. Date / time
-  parts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
+  // 4. Date / time — volatile (changes every second). With SUDO_PROMPT_CACHE=1
+  //    it moves below the cache boundary so it cannot bust the stable prefix.
+  if (!promptCacheStable) {
+    parts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
+  }
 
   // 5. Available tools
   if (toolsListBlock) {
@@ -277,7 +283,12 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // --- PROMPT CACHE BOUNDARY ---
   // Everything above: stable (SOUL, IDENTITY, USER, tools) → reused across calls.
   // Everything below: dynamic (date, mood, memory, consciousness) → fresh each call.
+  // With SUDO_PROMPT_CACHE=1 the date/time block also sits below this line.
   parts.push('\n<!-- __SYSTEM_PROMPT_DYNAMIC_BOUNDARY__ -->');
+
+  if (promptCacheStable) {
+    parts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
+  }
 
   // 6. Persona
   if (persona) {
