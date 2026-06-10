@@ -4,7 +4,7 @@
  */
 
 import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest';
-import { ToolOutcomeLearner, toolOutcomeLearner } from '../../src/core/agent/tool-outcome-learner.js';
+import { ToolOutcomeLearner } from '../../src/core/agent/tool-outcome-learner.js';
 
 // ---------------------------------------------------------------------------
 // Mock implementations for duck-typed dependencies
@@ -128,7 +128,7 @@ describe('ToolOutcomeLearner', () => {
     expect(mockImprovementLoop.insights[1].description).toContain('fs.write');
   });
 
-  it('returns hint from checkPreventionRules when pattern exists', () => {
+  it('returns hint from checkPreventionRulesForError when pattern exists', () => {
     mockFailureLearner.rules.set('fs.read:ENOENT: no such file', 'Check if file exists before reading');
 
     const learner = new ToolOutcomeLearner({
@@ -142,7 +142,7 @@ describe('ToolOutcomeLearner', () => {
     expect(hint).toContain('Check if file exists');
   });
 
-  it('returns null from checkPreventionRules when no patterns exist', () => {
+  it('returns null from checkPreventionRulesForError when no patterns exist', () => {
     const learner = new ToolOutcomeLearner({
       failureLearner: mockFailureLearner,
     });
@@ -260,11 +260,6 @@ describe('ToolOutcomeLearner', () => {
     expect(mockConfidenceCalibrationTracker.entries[0].tag).toBe('CERTAIN');
   });
 
-  it('singleton export exists', () => {
-    expect(toolOutcomeLearner).toBeDefined();
-    expect(toolOutcomeLearner).toBeInstanceOf(ToolOutcomeLearner);
-  });
-
   it('handles missing dependencies gracefully (fail-open)', () => {
     const learner = new ToolOutcomeLearner({});
 
@@ -276,7 +271,7 @@ describe('ToolOutcomeLearner', () => {
     }).not.toThrow();
   });
 
-  it('checkPreventionRules returns null when learning disabled', () => {
+  it('checkPreventionRulesForError returns null when learning disabled', () => {
     process.env['SUDO_TOOL_LEARNING_DISABLE'] = '1';
 
     const learner = new ToolOutcomeLearner({

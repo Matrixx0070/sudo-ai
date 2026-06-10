@@ -296,40 +296,8 @@ export class ToolOutcomeLearner {
   }
 
   /**
-   * BEFORE a tool call, check if there are known failure patterns.
-   *
-   * @param toolName - Name of the tool about to be called
-   * @param args - Tool arguments
-   * @returns A hint string if a pattern exists, or null if no known patterns
-   */
-  checkPreventionRules(toolName: string, args?: Record<string, unknown>): string | null {
-    if (this.learningDisabled) {
-      return null;
-    }
-
-    if (!toolName || !this.failureLearner) {
-      return null;
-    }
-
-    // We can't check prevention rules without an error to match against.
-    // Instead, check if this tool has failed before with any error.
-    // Return a generic hint if we've seen failures for this tool.
-    const argsStr = args ? JSON.stringify(args) : '';
-
-    // Check if we have any prevention rules for this tool by scanning common error prefixes
-    // Since getPreventionRule requires an error, we check hasSeenBefore with a generic context
-    // The FailureLearner stores rules keyed by `${tool}:${error.slice(0, 50)}`
-    // We can't enumerate rules, so we return null if no specific error to check
-    // This is a limitation of the current FailureLearner interface
-
-    // Alternative: check if tool has failed before (heuristic)
-    // We'd need an error to check, so this is best-effort
-    return null;
-  }
-
-  /**
    * Check prevention rules for a specific tool and error combination.
-   * This is the more precise version that returns a hint when a pattern exists.
+   * Returns a hint when a pattern exists.
    *
    * @param toolName - Name of the tool
    * @param error - Error message to check against known patterns
@@ -365,9 +333,3 @@ export class ToolOutcomeLearner {
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Singleton export
-// ---------------------------------------------------------------------------
-
-export const toolOutcomeLearner = new ToolOutcomeLearner();

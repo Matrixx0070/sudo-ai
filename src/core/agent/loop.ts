@@ -2413,19 +2413,6 @@ export class AgentLoop {
             void this.hooks?.emit('before:tool-call', { event: 'before:tool-call', sessionId: state.sessionId, toolName: tc.name, params: tc.arguments ?? {} });
           }
 
-          // ToolOutcomeLearner: check prevention rules before tool execution.
-          if (this._toolOutcomeLearner) {
-            for (const tc of activeToolCalls) {
-              try {
-                const hint = this._toolOutcomeLearner.checkPreventionRules(tc.name, tc.arguments ?? {});
-                if (hint) {
-                  session.messages.push({ role: 'system', content: `[ToolOutcomeLearner] ${hint}` });
-                  log.warn({ tool: tc.name, sessionId: state.sessionId }, 'Prevention rule hint injected');
-                }
-              } catch { /* fail-open — never block tool execution due to learning error */ }
-            }
-          }
-
           // Alignment aggregator: owner-loyalty composite check (advisory, fail-open).
           // Discordance 7th signal — collect signals, run detector, pass score.
           try {
