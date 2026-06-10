@@ -19,7 +19,7 @@ jobs:
     steps:
       # 1. Check out the full source tree
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # 2. Create runtime dirs the tests expect (relative to the checkout).
       #    Tests are now cwd-relative, so no copy to /root is needed.
@@ -34,13 +34,13 @@ jobs:
 
       # 4. Set up pnpm (must come before setup-node so the cache key is correct)
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9.15.0
 
       # 5. Set up Node 22
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
