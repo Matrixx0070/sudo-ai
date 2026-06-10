@@ -47,6 +47,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
+    "verify": "pnpm lint && pnpm test && pnpm build",
     "prepublishOnly": "pnpm build && pnpm build:cli && pnpm test",
     "test:fuzz": "vitest run tests/fuzz/",
     "test:soak": "node scripts/soak.ts",

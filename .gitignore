@@ -130,3 +130,9 @@ output/
 internal/misc/json         # duplicate of the above
 *.tgz                      # vendored package tarballs — install from registry instead
 /ast_probe_tmp.js          # one-off AST probe script
+# Test-suite scratch dirs — fully regenerated (rmSync + mkdirSync) by their
+# test files on every run; nothing in them is a hand-crafted fixture
+/test-data-costs/
+/test-data-marketplace/
+/test-data-migrations/
+/test-data-rollbacks/
