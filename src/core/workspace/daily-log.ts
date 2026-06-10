@@ -44,7 +44,7 @@ export class DailyLogManager {
   private readonly logDir: string;
 
   /**
-   * @param workspaceDir - Root workspace directory (default: PATHS.WORKSPACE).
+   * @param workspaceDir - Root workspace directory (default: PATHS.WORKSPACE, absolute).
    */
   constructor(workspaceDir: string = PATHS.WORKSPACE) {
     this.logDir = path.resolve(workspaceDir, MEMORY_SUBDIR);

@@ -1,7 +1,10 @@
 /**
  * Application-wide constants for SUDO-AI v3.
- * All values are `as const` — no mutation at runtime.
+ * No mutation at runtime; path values are plain strings resolved at module
+ * load, everything else is `as const`.
  */
+
+import { projectPath, dataPath } from './paths.js';
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -99,22 +102,24 @@ export const BILLING_COOLDOWN: readonly number[] = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// File-system paths (relative to project root)
+// File-system paths (absolute, resolved against PROJECT_ROOT via paths.ts —
+// honors SUDO_AI_HOME, falls back to cwd; previously these were cwd-relative
+// strings, which silently shared state between instances with different roots)
 // ---------------------------------------------------------------------------
 
 export const PATHS = {
-  DATA: 'data',
-  MIND_DB: 'data/mind.db',
-  WISDOM_DB: 'data/wisdom.db',
-  SESSIONS: 'data/sessions',
-  CRON: 'data/cron',
-  CACHE: 'data/cache',
-  MEDIA: 'data/media',
-  LOGS: 'data/logs',
-  CONFIG: 'config/sudo-ai.json5',
-  ENV: 'config/.env',
-  WORKSPACE: 'workspace',
-  SKILLS: 'skills',
+  DATA: projectPath('data'),
+  MIND_DB: dataPath('mind.db'),
+  WISDOM_DB: dataPath('wisdom.db'),
+  SESSIONS: dataPath('sessions'),
+  CRON: dataPath('cron'),
+  CACHE: dataPath('cache'),
+  MEDIA: dataPath('media'),
+  LOGS: dataPath('logs'),
+  CONFIG: projectPath('config', 'sudo-ai.json5'),
+  ENV: projectPath('config', '.env'),
+  WORKSPACE: projectPath('workspace'),
+  SKILLS: projectPath('skills'),
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -125,7 +130,7 @@ export const PATHS = {
 export const HEALTH_PORT = 3001 as const;
 
 /** Path to the PID file written by `sudo-ai start`. */
-export const PID_PATH = `${PATHS.DATA}/sudo-ai.pid` as const;
+export const PID_PATH: string = dataPath('sudo-ai.pid');
 
 // ---------------------------------------------------------------------------
 // Upgrade 35: Truncation Policy Constants

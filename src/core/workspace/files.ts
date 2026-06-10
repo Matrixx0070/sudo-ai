@@ -62,7 +62,7 @@ export class WorkspaceManager extends EventEmitter {
 
   /**
    * @param workspaceDir - Absolute or relative path to the workspace directory.
-   *                       Defaults to PATHS.WORKSPACE ('workspace').
+   *                       Defaults to PATHS.WORKSPACE (<project-root>/workspace).
    */
   constructor(workspaceDir: string = PATHS.WORKSPACE) {
     super();

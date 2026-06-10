@@ -18,9 +18,10 @@
  *  13. Non-object values in sections → ignored gracefully
  *  14. Extra unknown keys → parsed without error (TOML lib tolerant)
  *  15. Custom tomlPath parameter → reads from that path
+ *  16. No-arg call → resolves config/sudo-ai.toml under PROJECT_ROOT (SUDO_AI_HOME)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -227,5 +228,27 @@ default_model = "google/gemini-2.0-flash"
 `);
     const result = await loadConfig5Pillar(customPath);
     expect(result.intelligence?.default_model).toBe('google/gemini-2.0-flash');
+  });
+
+  it('16. no-arg call resolves <project-root>/config/sudo-ai.toml via SUDO_AI_HOME', async () => {
+    const prevHome = process.env['SUDO_AI_HOME'];
+    process.env['SUDO_AI_HOME'] = tmpDir;
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'config'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'config', 'sudo-ai.toml'), `
+[intelligence]
+default_model = "ollama/deepseek-v4-pro:cloud"
+`, 'utf8');
+
+      // PROJECT_ROOT is captured at module load — force a fresh import.
+      vi.resetModules();
+      const { loadConfig5Pillar: freshLoad } = await import('../../src/core/config/loader.js');
+      const result = await freshLoad();
+      expect(result.intelligence?.default_model).toBe('ollama/deepseek-v4-pro:cloud');
+    } finally {
+      if (prevHome === undefined) delete process.env['SUDO_AI_HOME'];
+      else process.env['SUDO_AI_HOME'] = prevHome;
+      vi.resetModules();
+    }
   });
 });

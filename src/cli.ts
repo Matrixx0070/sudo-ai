@@ -164,7 +164,7 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   // 1. Config
   // -------------------------------------------------------------------------
-  const configLoader = new ConfigLoader(process.cwd());
+  const configLoader = new ConfigLoader();
   await configLoader.load();
   const config: SudoConfig = configLoader.get();
   registerShutdown(() => configLoader.close());

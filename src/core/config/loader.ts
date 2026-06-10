@@ -20,7 +20,8 @@ import { config as loadDotenv } from 'dotenv';
 import { Value } from '@sinclair/typebox/value';
 import { createLogger } from '../shared/logger.js';
 import { ConfigError } from '../shared/errors.js';
-import { PATHS, CONFIG_RELOAD_DEBOUNCE_MS } from '../shared/constants.js';
+import { CONFIG_RELOAD_DEBOUNCE_MS } from '../shared/constants.js';
+import { PROJECT_ROOT } from '../shared/paths.js';
 import { debounce } from '../shared/utils.js';
 import { SudoConfigSchema } from './schema.js';
 import type { SudoConfig } from './types.js';
@@ -28,8 +29,12 @@ import type { Config5Pillar } from '../shared/wave10-types.js';
 
 const log = createLogger('config');
 
-// Default TOML overlay path (relative to project root)
+// Root-relative config locations. The loader resolves these against a
+// caller-supplied root (PROJECT_ROOT by default), so they stay relative here
+// rather than using the absolute PATHS constants.
 const TOML_CONFIG_NAME = 'config/sudo-ai.toml';
+const CONFIG_FILE = 'config/sudo-ai.json5';
+const ENV_FILE = 'config/.env';
 
 // ---------------------------------------------------------------------------
 // loadConfig5Pillar — standalone function
@@ -47,11 +52,11 @@ const TOML_CONFIG_NAME = 'config/sudo-ai.toml';
  *   3. env vars — always win
  *
  * @param tomlPath - Absolute path to the TOML file.
- *                   Defaults to <cwd>/config/sudo-ai.toml.
+ *                   Defaults to <project-root>/config/sudo-ai.toml.
  * @returns Parsed Config5Pillar, or empty object if file absent.
  */
 export async function loadConfig5Pillar(tomlPath?: string): Promise<Config5Pillar> {
-  const resolvedPath = tomlPath ?? path.resolve(process.cwd(), TOML_CONFIG_NAME);
+  const resolvedPath = tomlPath ?? path.resolve(PROJECT_ROOT, TOML_CONFIG_NAME);
 
   if (!fs.existsSync(resolvedPath)) {
     log.debug({ tomlPath: resolvedPath }, 'No TOML overlay found — returning empty Config5Pillar');
@@ -116,12 +121,13 @@ export class ConfigLoader extends EventEmitter {
   private readonly envPath: string;
 
   /**
-   * @param root - Project root directory (defaults to cwd).
+   * @param root - Project root directory (defaults to PROJECT_ROOT, which
+   *               honors SUDO_AI_HOME and falls back to cwd).
    */
-  constructor(root: string = process.cwd()) {
+  constructor(root: string = PROJECT_ROOT) {
     super();
-    this.configPath = path.resolve(root, PATHS.CONFIG);
-    this.envPath = path.resolve(root, PATHS.ENV);
+    this.configPath = path.resolve(root, CONFIG_FILE);
+    this.envPath = path.resolve(root, ENV_FILE);
   }
 
   // -------------------------------------------------------------------------
