@@ -911,16 +911,50 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
         const result = streamText(streamParams as Parameters<typeof streamText>[0]);
 
-        for await (const chunk of result.textStream) {
-          yield chunk;
+        let streamCompleted = false;
+        let streamErrored = false;
+        try {
+          for await (const chunk of result.textStream) {
+            yield chunk;
+          }
+          streamCompleted = true;
+        } catch (err) {
+          streamErrored = true;
+          throw err;
+        } finally {
+          if (!streamCompleted && !streamErrored) {
+            // The consumer broke out of the stream (generator return() at the
+            // yield), so execution never reaches the post-loop bookkeeping
+            // below. The model itself streamed fine: credit it, and detach the
+            // abandoned usage promise — stream cancellation can reject it,
+            // which would otherwise surface as an unhandled rejection.
+            void Promise.resolve(result.usage).then(
+              (u) => {
+                const usage = buildTokenUsage(modelId, u);
+                if (usage.completionTokens > 0) {
+                  log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }, 'Streaming call ended early by consumer');
+                }
+              },
+              () => { /* stream cancelled — usage unavailable */ },
+            );
+            this.failover.recordSuccess(profile.id);
+          }
         }
 
         // result is StreamTextResult (not a Promise); usage is PromiseLike<LanguageModelUsage>.
-        const finalUsage = await result.usage;
-        const usage = buildTokenUsage(modelId, finalUsage);
+        // A usage rejection after a fully-delivered stream must not poison the
+        // failover record — or worse, propagate to the outer catch and retry-
+        // stream a duplicate response. The model already served the text.
+        let finalUsage: Awaited<typeof result.usage> | undefined;
+        try {
+          finalUsage = await result.usage;
+        } catch (usageErr) {
+          log.warn({ modelId, err: usageErr }, 'Usage unavailable after completed stream');
+        }
+        const usage = finalUsage ? buildTokenUsage(modelId, finalUsage) : undefined;
 
         this.failover.recordSuccess(profile.id);
-        log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }, 'Streaming call completed');
+        log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
         return;
 
       } catch (err) {
