@@ -34,23 +34,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readConfig, writeConfig } from './config-io.js';
 import { createLogger } from '../../shared/logger.js';
+import { PROJECT_ROOT } from '../../shared/paths.js';
 
 const log = createLogger('api:admin:tools-helpers');
 
-export const TOOLS_DIR = path.join(process.cwd(), 'src', 'core', 'tools', 'builtin');
+export const TOOLS_DIR = path.join(PROJECT_ROOT, 'src', 'core', 'tools', 'builtin');
 
 /**
  * Absolute path to the external superpowers module directory.
  * builtin/superpowers/index.ts re-exports ToolDefinition objects that live here,
  * so this directory must be included in the superpowers category scan.
  */
-const SUPERPOWERS_EXTERNAL_DIR = path.join(process.cwd(), 'src', 'core', 'superpowers');
+const SUPERPOWERS_EXTERNAL_DIR = path.join(PROJECT_ROOT, 'src', 'core', 'superpowers');
 
 /**
  * Source root used to build display-friendly relative file paths.
  * All reported `file` fields will start with "src/".
  */
-const SRC_ROOT = path.join(process.cwd(), 'src');
+const SRC_ROOT = path.join(PROJECT_ROOT, 'src');
 
 /**
  * Regex that matches a ToolDefinition `name` property literal in TypeScript source.

@@ -116,4 +116,6 @@ export interface SkillsHubConfig {
   fetchTimeoutMs?: number;
   /** Maximum retry attempts (default: 3). */
   maxRetries?: number;
+  /** Directory for installed skills (default: <DATA_DIR>/installed-skills). */
+  installDir?: string;
 }

@@ -17,13 +17,14 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { PROJECT_ROOT } from '../../../shared/paths.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 const logger = createLogger('meta.tool-creator');
 
-const CUSTOM_DIR = path.resolve('src/core/tools/builtin/custom');
+const CUSTOM_DIR = path.join(PROJECT_ROOT, 'src/core/tools/builtin/custom');
 
 // ---------------------------------------------------------------------------
 // Name helpers

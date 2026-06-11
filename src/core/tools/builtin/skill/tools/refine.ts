@@ -12,7 +12,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../../../../shared/logger.js';
-import { DATA_DIR } from '../../../../shared/paths.js';
+import { DATA_DIR, PROJECT_ROOT } from '../../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 
 const logger = createLogger('skill:refine');
@@ -63,7 +63,7 @@ export interface RefinementProposal {
 // ---------------------------------------------------------------------------
 
 const AUDIT_DB = path.join(DATA_DIR, 'audit.db');
-const SRC_BASE = path.resolve('src/core/tools/builtin');
+const SRC_BASE = path.join(PROJECT_ROOT, 'src/core/tools/builtin');
 
 interface AuditMistakeRow {
   resource: string;

@@ -14,8 +14,8 @@ import { request } from 'node:https';
 import { IncomingMessage } from 'node:http';
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
+import { MIND_DB } from '../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../tools/types.js';
 import type { ToolRegistry } from '../../../tools/registry.js';
 
@@ -25,8 +25,7 @@ const logger = createLogger('skill.intelligence.daily-brief');
 // Constants
 // ---------------------------------------------------------------------------
 
-const PROJECT_ROOT = resolve(process.cwd());
-const DB_PATH = join(PROJECT_ROOT, 'data', 'mind.db');
+const DB_PATH = MIND_DB;
 const REQUEST_TIMEOUT = 10_000;
 
 // ---------------------------------------------------------------------------
