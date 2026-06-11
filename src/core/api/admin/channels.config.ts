@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import JSON5 from 'json5';
 import { createLogger } from '../../shared/logger.js';
+import { PROJECT_ROOT, projectPath } from '../../shared/paths.js';
 
 const log = createLogger('api:admin:channels:config');
 
@@ -17,7 +18,7 @@ const log = createLogger('api:admin:channels:config');
 // Paths
 // ---------------------------------------------------------------------------
 
-export const CONFIG_PATH = path.resolve(process.cwd(), 'config', 'sudo-ai.json5');
+export const CONFIG_PATH = projectPath('config', 'sudo-ai.json5');
 export const CONFIG_BAK  = CONFIG_PATH + '.bak';
 
 // ---------------------------------------------------------------------------
@@ -108,7 +109,8 @@ export function isLikelyConnected(
     const sessionPath =
       (channelCfg['sessionPath'] as string | undefined) ?? 'data/whatsapp-session';
     try {
-      fs.accessSync(path.resolve(process.cwd(), sessionPath));
+      // path.resolve: returns sessionPath as-is when it is already absolute.
+      fs.accessSync(path.resolve(PROJECT_ROOT, sessionPath));
       return true;
     } catch {
       return false;

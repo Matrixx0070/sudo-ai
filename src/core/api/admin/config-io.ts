@@ -8,14 +8,14 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
 import JSON5 from 'json5';
 import { createLogger } from '../../shared/logger.js';
+import { projectPath } from '../../shared/paths.js';
 
 const log = createLogger('api:admin:config-io');
 
-export const CONFIG_PATH = path.join(process.cwd(), 'config', 'sudo-ai.json5');
-export const ENV_PATH    = path.join(process.cwd(), '.env');
+export const CONFIG_PATH = projectPath('config', 'sudo-ai.json5');
+export const ENV_PATH    = projectPath('.env');
 
 // ---------------------------------------------------------------------------
 // Config read / write

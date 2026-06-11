@@ -95,7 +95,7 @@ import { BestOfNExecutor } from './best-of-n.js';
 import { ConsciousnessDeepBridge, type DeepBridgeOrchestratorLike } from '../consciousness/deep-bridge.js';
 import { FeedbackTierManager } from './feedback-tier.js';
 import { getZDRManager, isZDRBlocked } from '../privacy/zdr-mode.js';
-import { WORKSPACE_DIR, DATA_DIR } from '../shared/paths.js';
+import { WORKSPACE_DIR, DATA_DIR, projectPath } from '../shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Content-hash helper — A1: deterministic 32-char hex per tool+args combo.
@@ -438,7 +438,7 @@ export class AgentLoop {
     // Initialise identity loader from the operator config directory.
     // Constructed internally — no new constructor argument required.
     try {
-      const configDir = path.resolve(process.cwd(), 'config');
+      const configDir = projectPath('config');
       this.identityLoader = createIdentityLoader(configDir);
       log.info('AgentLoop: IdentityLoader initialised');
     } catch (err) {

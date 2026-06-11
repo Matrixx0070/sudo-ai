@@ -14,8 +14,9 @@ import { createReadStream, existsSync, statSync, readFileSync } from 'node:fs';
 import { join, resolve, extname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { projectPath } from '../shared/paths.js';
 
-const DIST_DIR = resolve(process.cwd(), 'dist/renderer');
+const DIST_DIR = projectPath('dist', 'renderer');
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',

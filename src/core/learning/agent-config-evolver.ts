@@ -14,8 +14,9 @@
 
 import { EventEmitter } from 'node:events';
 import { mkdirSync, existsSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { projectPath } from '../shared/paths.js';
 import type { AgentConfigProposal, TracePattern } from '../shared/wave10-types.js';
 import type { ProposalStore } from './proposal-store.js';
 import { createLogger } from '../shared/logger.js';
@@ -28,7 +29,7 @@ const log = createLogger('learning:evolver');
 
 const MIN_TRACE_COUNT = 10;
 const MIN_QUALITY_THRESHOLD = 0.7;
-const PROPOSALS_DIR = resolve(process.cwd(), 'learning', 'proposals');
+const PROPOSALS_DIR = projectPath('learning', 'proposals');
 
 const MAX_TRACES = 5_000;
 const TRACES_EVICT_COUNT = 500;
