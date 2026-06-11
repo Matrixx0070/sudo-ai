@@ -21,7 +21,7 @@ It is built for power users who want a capable, owner-operated agent on their ow
 - **Continuous "consciousness" layer** of background cognitive modules (episodic/procedural/semantic memory, self-model, drives, emotional state, and more).
 - **200+ tools** across coder, browser, system, and comms categories, plus MCP server support.
 - **9 messaging channels** (Telegram built-in; Discord, Slack, Signal, Matrix, IRC, Email, SMS, Web, and an opt-in WhatsApp adapter).
-- **Multi-agent orchestration**: role-based sub-agents, a kanban task queue, and a swarm decomposer.
+- **Multi-agent orchestration**: role-based sub-agents and a swarm decomposer.
 - **Self-improvement loop**: records tool outcomes and learns model/tool policies from execution traces.
 - **Security stack**: prompt-injection scanning, a Linux `bwrap` sandbox, an encrypted credential vault, an approval matrix, and audit logs.
 

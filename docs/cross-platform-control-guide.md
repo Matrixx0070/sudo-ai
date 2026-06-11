@@ -121,7 +121,7 @@ await cu.browser({action: 'screenshot', format: 'png'});
 
 **Monitoring + self-repair (closed loop):**
 - The monitoring layer watches control health (e.g. `control_degraded`, large control logs, platform-specific issues) alongside existing signals (large files >750L, TypeScript errors, etc.).
-- On a detected control issue, it can trigger a repair task and create a kanban task for visibility.
+- On a detected control issue, it can trigger a repair task.
 - The self-repair tooling reads control code and logs, runs a baseline `tsc`, proposes edits, applies them, and verifies with `tsc`/tests, recording the repair outcome to the learner.
 - Practice: prefer small, targeted search/replace edits with `tsc` after each change to avoid large-refactor breakage.
 - Outcome: a self-healing control layer with reduced noise from large-file/critical signals.
@@ -130,7 +130,7 @@ await cu.browser({action: 'screenshot', format: 'png'});
 - The ApprovalMatrix tiers (auto / notify / confirm / never) apply to `IComputerUse` actions. Default rules can append, for example, `{pattern:'control.*', tier:'auto', reason:'Cross-platform system control (exec/browser/file/gui/desktop), owner-controlled'}`, with stricter tiers for risky operations (e.g. `rm` → never, writes → notify).
 - AutonomousExecutor wraps calls (`executeControl`); high-power actions may queue as pending and notify, depending on configured tier.
 - `SUDO_AUTO_APPROVE=1` favors automatic approval (operator opt-in).
-- Pending actions are surfaced in the kanban/dashboard; you can confirm them via configured channels.
+- Pending actions are surfaced in the dashboard; you can confirm them via configured channels.
 - Balance: keep the sandbox on and kill-switches available, and choose the autonomy tier that fits your trust level for the host.
 
 **Other wires:**
@@ -158,7 +158,6 @@ Control action (e.g. a GUI click on Windows) → outcome recorded → learner up
 - `SUDO_MCP_DISABLE=1`, `SUDO_MCP_OAUTH_DISABLE=1`, `SUDO_MCP_REMOTE_DISABLE=1`
 - `SUDO_SKILLS_HUB_DISABLE=1`, `SUDO_SKILLS_INSTALL_DISABLE=1`, `SUDO_SKILLS_SANDBOX_DISABLE=1`
 - `SUDO_PROFILES_DISABLE=1`
-- `SUDO_KANBAN_DISABLE=1`
 - `SUDO_CREDENTIAL_POOL_DISABLE=1`
 - `SUDO_MULTI_DELIVERY_DISABLE=1`
 - `SUDO_DASHBOARD_DISABLE=1`

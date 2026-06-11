@@ -407,7 +407,7 @@ SUDO_CROSS_PLATFORM_DISABLE=1        # Force Linux-only; disable Windows/macOS b
 SUDO_TOOL_LEARNING_DISABLE=1         # Disable the tool-outcome learner (incl. learning on control outcomes)
 SUDO_SANDBOX_DISABLE=1               # (DANGEROUS) Bypass the bwrap sandbox for control/exec
 
-# MCP, skills, profiles, kanban, etc.
+# MCP, skills, profiles, etc.
 SUDO_MCP_DISABLE=1
 SUDO_MCP_OAUTH_DISABLE=1
 SUDO_MCP_REMOTE_DISABLE=1
@@ -415,7 +415,6 @@ SUDO_SKILLS_HUB_DISABLE=1
 SUDO_SKILLS_INSTALL_DISABLE=1
 SUDO_SKILLS_SANDBOX_DISABLE=1
 SUDO_PROFILES_DISABLE=1
-SUDO_KANBAN_DISABLE=1
 SUDO_CREDENTIAL_POOL_DISABLE=1
 SUDO_MULTI_DELIVERY_DISABLE=1
 SUDO_DASHBOARD_DISABLE=1
