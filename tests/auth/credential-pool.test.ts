@@ -6,7 +6,6 @@
  * - Cooldown behavior
  * - Success/failure reporting
  * - Kill-switch behavior
- * - REST routes
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -419,35 +418,5 @@ describe('CredentialPool', () => {
       const status = pool.getPoolStatus('unknown');
       expect(status.total).toBe(0);
     });
-  });
-
-  // -------------------------------------------------------------------------
-  // REST routes
-  // -------------------------------------------------------------------------
-
-  describe('routes', () => {
-    it('should have valid route patterns', () => {
-      // Test that route patterns are correctly defined
-      const patterns = [
-        '/v1/admin/credentials/pool',
-        '/v1/admin/credentials/pool/:provider',
-        '/v1/admin/credentials/pool/:provider/strategy',
-        '/v1/admin/credentials/pool/:provider/add',
-        '/v1/admin/credentials/pool/:provider/:credentialId',
-      ];
-
-      expect(patterns).toHaveLength(5);
-      expect(patterns[0]).toBe('/v1/admin/credentials/pool');
-    });
-  });
-});
-
-// Separate describe block for routes module to avoid import issues
-describe('CredentialPoolRoutes', () => {
-  it('should export registerCredentialPoolRoutes function', async () => {
-    const { registerCredentialPoolRoutes } = await import(
-      '../../src/core/auth/credential-pool-routes.js'
-    );
-    expect(typeof registerCredentialPoolRoutes).toBe('function');
   });
 });

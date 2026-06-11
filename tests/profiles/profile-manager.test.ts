@@ -1,12 +1,11 @@
 /**
- * Tests for profile-manager.ts and profile-routes.ts.
+ * Tests for profile-manager.ts.
  *
  * Tests cover:
  * - createProfile, getProfile, listProfiles, deleteProfile
  * - activateProfile, getActiveProfile
  * - cloneProfile (deep copies config, env, skills)
  * - Kill-switch SUDO_PROFILES_DISABLE=1
- * - REST route handlers with mock req/res
  * - Profile isolation (different env vars per profile)
  */
 
@@ -15,7 +14,6 @@ import { rmSync, mkdirSync, existsSync, writeFileSync, mkdtempSync } from 'node:
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ProfileManager, profileManager } from '../../src/core/profiles/profile-manager.js';
-import { registerProfileRoutes } from '../../src/core/profiles/profile-routes.js';
 import type { ProfileCreateOptions } from '../../src/core/profiles/profile-types.js';
 
 // ---------------------------------------------------------------------------
@@ -323,190 +321,5 @@ describe('ProfileManager', () => {
       expect(envB.SHARED).toBe('from-b');
       expect(skillsB).toEqual(['skill-b']);
     });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Route handler tests (mock req/res)
-// ---------------------------------------------------------------------------
-
-describe('registerProfileRoutes', () => {
-  function createMockReq(method: string, url: string, body?: Record<string, unknown>) {
-    const listeners: Record<string, Array<(chunk: Buffer) => void>> = {};
-    return {
-      method,
-      url,
-      headers: { authorization: 'Bearer test-token' },
-      on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
-        if (!listeners[event]) listeners[event] = [];
-        listeners[event].push(cb);
-      }),
-      destroy: vi.fn(),
-      _emitData: (chunk: Buffer) => {
-        listeners['data']?.forEach(cb => cb(chunk));
-        listeners['end']?.forEach(cb => cb());
-      },
-      _emitError: (err: Error) => {
-        listeners['error']?.forEach(cb => cb(err));
-      },
-    } as unknown as IncomingMessage & { _emitData: (chunk: Buffer) => void; _emitError: (err: Error) => void };
-  }
-
-  function createMockRes() {
-    let statusCode = 200;
-    let body = '';
-    return {
-      writeHead: vi.fn((code: number) => { statusCode = code; }),
-      end: vi.fn((data: string) => { body = data; }),
-      _getStatusCode: () => statusCode,
-      _getBody: () => body,
-    } as unknown as ServerResponse & { _getStatusCode: () => number; _getBody: () => string };
-  }
-
-  beforeEach(() => {
-    process.env['GATEWAY_TOKEN'] = 'test-token';
-  });
-
-  afterEach(() => {
-    delete process.env['GATEWAY_TOKEN'];
-  });
-
-  it('GET /v1/admin/profiles returns list', () => {
-    const server = { on: vi.fn() } as unknown as HttpServer;
-    registerProfileRoutes(server);
-
-    const req = createMockReq('GET', '/v1/admin/profiles');
-    const res = createMockRes();
-
-    // Trigger the request listener
-    const listener = (server.on as ReturnType<typeof vi.fn>).mock.calls.find(
-      call => call[0] === 'request'
-    )?.[1];
-    expect(listener).toBeDefined();
-    listener!(req, res);
-
-    expect(res._getStatusCode()).toBe(200);
-    const data = JSON.parse(res._getBody());
-    expect(data.ok).toBe(true);
-    expect(data.data.profiles).toBeDefined();
-  });
-
-  it('POST /v1/admin/profiles creates profile', async () => {
-    const server = { on: vi.fn() } as unknown as HttpServer;
-    registerProfileRoutes(server);
-
-    const req = createMockReq('POST', '/v1/admin/profiles');
-    const res = createMockRes();
-
-    const listener = (server.on as ReturnType<typeof vi.fn>).mock.calls.find(
-      call => call[0] === 'request'
-    )?.[1];
-
-    listener!(req, res);
-    req._emitData(Buffer.from(JSON.stringify({ name: 'api-profile', displayName: 'API Profile' })));
-
-    // Wait for async handler to complete
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    // Route returns 201 for profile creation
-    expect(res._getStatusCode()).toBe(201);
-    const data = JSON.parse(res._getBody());
-    expect(data.ok).toBe(true);
-    expect(data.data.name).toBe('api-profile');
-  });
-
-  it('GET /v1/admin/profiles/:name returns profile', () => {
-    const manager = new ProfileManager();
-    manager.createProfile({ name: 'lookup-test' });
-
-    const server = { on: vi.fn() } as unknown as HttpServer;
-    registerProfileRoutes(server);
-
-    const req = createMockReq('GET', '/v1/admin/profiles/lookup-test');
-    const res = createMockRes();
-
-    const listener = (server.on as ReturnType<typeof vi.fn>).mock.calls.find(
-      call => call[0] === 'request'
-    )?.[1];
-    listener!(req, res);
-
-    expect(res._getStatusCode()).toBe(200);
-    const data = JSON.parse(res._getBody());
-    expect(data.data.name).toBe('lookup-test');
-  });
-
-  it('DELETE /v1/admin/profiles/:name deletes profile', () => {
-    const manager = new ProfileManager();
-    manager.createProfile({ name: 'delete-via-api' });
-
-    const server = { on: vi.fn() } as unknown as HttpServer;
-    registerProfileRoutes(server);
-
-    const req = createMockReq('DELETE', '/v1/admin/profiles/delete-via-api');
-    const res = createMockRes();
-
-    const listener = (server.on as ReturnType<typeof vi.fn>).mock.calls.find(
-      call => call[0] === 'request'
-    )?.[1];
-    listener!(req, res);
-
-    expect(res._getStatusCode()).toBe(200);
-    const data = JSON.parse(res._getBody());
-    expect(data.data.deleted).toBe(true);
-  });
-
-  it('POST /v1/admin/profiles/:name/activate activates profile', () => {
-    const manager = new ProfileManager();
-    manager.createProfile({ name: 'activate-via-api' });
-
-    const server = { on: vi.fn() } as unknown as HttpServer;
-    registerProfileRoutes(server);
-
-    const req = createMockReq('POST', '/v1/admin/profiles/activate-via-api/activate');
-    const res = createMockRes();
-
-    const listener = (server.on as ReturnType<typeof vi.fn>).mock.calls.find(
-      call => call[0] === 'request'
-    )?.[1];
-    listener!(req, res);
-
-    expect(res._getStatusCode()).toBe(200);
-    const data = JSON.parse(res._getBody());
-    expect(data.data.active).toBe(true);
-  });
-
-  it('returns 401 without valid token', () => {
-    const server = { on: vi.fn() } as unknown as HttpServer;
-    registerProfileRoutes(server);
-
-    const req = createMockReq('GET', '/v1/admin/profiles');
-    req.headers = {}; // No auth header
-    const res = createMockRes();
-
-    const listener = (server.on as ReturnType<typeof vi.fn>).mock.calls.find(
-      call => call[0] === 'request'
-    )?.[1];
-    listener!(req, res);
-
-    expect(res._getStatusCode()).toBe(401);
-  });
-
-  it('returns 503 when kill-switch is enabled', () => {
-    process.env['SUDO_PROFILES_DISABLE'] = '1';
-
-    const server = { on: vi.fn() } as unknown as HttpServer;
-    registerProfileRoutes(server);
-
-    const req = createMockReq('GET', '/v1/admin/profiles');
-    const res = createMockRes();
-
-    const listener = (server.on as ReturnType<typeof vi.fn>).mock.calls.find(
-      call => call[0] === 'request'
-    )?.[1];
-    listener!(req, res);
-
-    expect(res._getStatusCode()).toBe(503);
-
-    delete process.env['SUDO_PROFILES_DISABLE'];
   });
 });

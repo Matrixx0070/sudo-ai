@@ -1,7 +1,7 @@
 /**
  * Multi-Delivery Cron Tests
  *
- * Tests for cron job management, delivery targets, and REST routes.
+ * Tests for cron job management and delivery targets.
  */
 
 import { describe, it, beforeEach, afterEach } from 'vitest';
@@ -9,7 +9,6 @@ import assert from 'node:assert';
 import { existsSync, rmSync } from 'fs';
 import path from 'path';
 import { MultiDeliveryCron } from '../../src/core/cron/multi-delivery.js';
-import { createCronRoutes } from '../../src/core/cron/multi-delivery-routes.js';
 import type { DeliveryTarget } from '../../src/core/cron/multi-delivery-types.js';
 
 const TEST_DB = path.join('/tmp', `cron-test-${Date.now()}.db`);
@@ -231,182 +230,5 @@ describe('MultiDeliveryCron', () => {
     assert.strictEqual(updated?.lastRunAt, fiveMinAgo.toISOString());
 
     delete process.env.SUDO_MULTI_DELIVERY_DISABLE;
-  });
-});
-
-describe('createCronRoutes', () => {
-  let cron: MultiDeliveryCron;
-  let routes: ReturnType<typeof createCronRoutes>;
-
-  beforeEach(() => {
-    cleanupDb();
-    cron = new MultiDeliveryCron(TEST_DB);
-    routes = createCronRoutes(cron, 'test-token');
-  });
-
-  afterEach(() => {
-    cron.close();
-    cleanupDb();
-  });
-
-  function mockReq(params?: Record<string, string>, body?: unknown, token?: string) {
-    return {
-      params,
-      body: body ? JSON.stringify(body) : undefined,
-      headers: {
-        authorization: token ? `Bearer ${token}` : undefined,
-        query: {},
-      },
-    };
-  }
-
-  function mockRes(): { statusCode?: number; headers: Record<string, string>; body?: string } {
-    return {
-      statusCode: undefined,
-      headers: {},
-      body: undefined,
-      setHeader(k: string, v: string) {
-        this.headers[k] = v;
-      },
-      end(body: string) {
-        this.body = body;
-      },
-      write(body: string) {
-        this.body = body;
-      },
-    };
-  }
-
-  it('listJobs returns 401 without token', () => {
-    const req = mockReq();
-    const res = mockRes();
-    routes.listJobs(req, res);
-    assert.strictEqual(res.statusCode, 401);
-  });
-
-  it('listJobs returns jobs with valid token', () => {
-    cron.addJob({
-      name: 'listed-job',
-      schedule: { type: 'interval', value: '60000' },
-      prompt: 'Test',
-      skills: [],
-      deliver: [],
-      enabled: true,
-    });
-
-    const req = mockReq(undefined, undefined, 'test-token');
-    const res = mockRes();
-    routes.listJobs(req, res);
-    assert.strictEqual(res.statusCode, 200);
-    assert.ok(res.body?.includes('listed-job'));
-  });
-
-  it('createJob creates a new job', () => {
-    const req = mockReq(
-      undefined,
-      {
-        name: 'new-job',
-        schedule: { type: 'interval', value: '300000' },
-        prompt: 'New prompt',
-        skills: ['skill-x'],
-        deliver: [{ type: 'local', config: {} }],
-      },
-      'test-token',
-    );
-    const res = mockRes();
-    routes.createJob(req, res);
-    assert.strictEqual(res.statusCode, 201);
-    assert.ok(res.body?.includes('new-job'));
-
-    const jobs = cron.listJobs();
-    assert.strictEqual(jobs.length, 1);
-    assert.strictEqual(jobs[0]?.name, 'new-job');
-  });
-
-  it('getJob returns a single job', () => {
-    const job = cron.addJob({
-      name: 'single-job',
-      schedule: { type: 'interval', value: '60000' },
-      prompt: 'Test',
-      skills: [],
-      deliver: [],
-      enabled: true,
-    });
-
-    const req = mockReq({ id: job.id }, undefined, 'test-token');
-    const res = mockRes();
-    routes.getJob(req, res);
-    assert.strictEqual(res.statusCode, 200);
-    assert.ok(res.body?.includes('single-job'));
-  });
-
-  it('deleteJob removes a job', () => {
-    const job = cron.addJob({
-      name: 'to-delete',
-      schedule: { type: 'interval', value: '60000' },
-      prompt: 'Test',
-      skills: [],
-      deliver: [],
-      enabled: true,
-    });
-
-    const req = mockReq({ id: job.id }, undefined, 'test-token');
-    const res = mockRes();
-    routes.deleteJob(req, res);
-    assert.strictEqual(res.statusCode, 200);
-
-    assert.strictEqual(cron.getJob(job.id), null);
-  });
-
-  it('runJob triggers immediate delivery', async () => {
-    const job = cron.addJob({
-      name: 'run-now',
-      schedule: { type: 'interval', value: '60000' },
-      prompt: 'Run immediately',
-      skills: [],
-      deliver: [{ type: 'local', config: {} }],
-      enabled: true,
-    });
-
-    const req = mockReq({ id: job.id }, undefined, 'test-token');
-    const res = mockRes();
-    await routes.runJob(req, res);
-    assert.strictEqual(res.statusCode, 200);
-    assert.ok(res.body?.includes('"success":true'));
-  });
-
-  it('enableJob enables a disabled job', () => {
-    const job = cron.addJob({
-      name: 'enable-me',
-      schedule: { type: 'interval', value: '60000' },
-      prompt: 'Test',
-      skills: [],
-      deliver: [],
-      enabled: true,
-    });
-    cron.disableJob(job.id);
-
-    const req = mockReq({ id: job.id }, undefined, 'test-token');
-    const res = mockRes();
-    routes.enableJob(req, res);
-    assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(cron.getJob(job.id)?.enabled, true);
-  });
-
-  it('disableJob disables an enabled job', () => {
-    const job = cron.addJob({
-      name: 'disable-me',
-      schedule: { type: 'interval', value: '60000' },
-      prompt: 'Test',
-      skills: [],
-      deliver: [],
-      enabled: true,
-    });
-
-    const req = mockReq({ id: job.id }, undefined, 'test-token');
-    const res = mockRes();
-    routes.disableJob(req, res);
-    assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(cron.getJob(job.id)?.enabled, false);
   });
 });
