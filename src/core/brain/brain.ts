@@ -133,7 +133,14 @@ function toSDKMessages(messages: BrainMessage[]): unknown[] {
     .filter((msg) => {
       // System messages are handled via the 'system' param of generateText.
       // Including them in the messages array causes SDK schema validation errors.
-      return msg.role !== 'system';
+      if (msg.role === 'system') {
+        log.warn(
+          { contentPreview: String(msg.content ?? '').slice(0, 80) },
+          'Dropping system-role message from request.messages — system content must go through the system prompt, not the message array',
+        );
+        return false;
+      }
+      return true;
     })
     .map((msg) => {
       // Assistant message with tool calls: convert to content array format.
