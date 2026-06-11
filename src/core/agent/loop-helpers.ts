@@ -315,7 +315,7 @@ export interface SandboxManagerLike {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2 polish: duck-typed Likes for injected FeedbackMemory / PromptCacheManager
+// Phase 2 polish: duck-typed Likes for injected FeedbackMemory
 // (defined here to keep loop-helpers self-contained; mirrors other *Like patterns above)
 // ---------------------------------------------------------------------------
 
@@ -335,11 +335,6 @@ export interface FeedbackMemoryLike {
     error: string,
     sessionId?: string,
   ): unknown;
-}
-
-export interface PromptCacheManagerLike {
-  /** Real API (TODO placeholder used outdated .check); returns cached system prompt or null. */
-  getCachedPrompt(key: string): string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -761,28 +756,7 @@ export async function prepareMessages(
   state: AgentState,
   emit: Emitter,
   hooks?: HookEmitterLike,
-  promptCacheManager?: PromptCacheManagerLike,
 ): Promise<BrainMessage[]> {
-  // Phase 2 polish wire: PromptCacheManager (TODO removed; adapted to real getCachedPrompt API)
-  // Note: manager caches *system prompts* (see prompt-cache-optimizer.ts); here we wire the check
-  // per TODO location as advisory (no early return — history layers must still run).
-  if (process.env['SUDO_PROMPT_CACHE_DISABLE'] !== '1' && promptCacheManager) {
-    try {
-      const lastUser = (session.messages || [])
-        .slice()
-        .reverse()
-        .find((m: BrainMessage) => m.role === 'user');
-      const lastUserContent = typeof lastUser?.content === 'string' ? lastUser.content : '';
-      const cacheKey = `prompt:${state.sessionId}:${lastUserContent.slice(0, 128)}`;
-      const cached = promptCacheManager.getCachedPrompt(cacheKey);
-      if (cached) {
-        log.debug({ sessionId: state.sessionId, cacheKey: cacheKey.slice(0, 32) }, 'PromptCacheManager hit (wired from TODO)');
-      }
-    } catch (pcErr) {
-      log.warn({ err: String(pcErr), sessionId: state.sessionId }, 'PromptCacheManager check failed — continuing');
-    }
-  }
-
   // LAYER 0 — PRE-COMPACTION FLUSH REMINDER
   // At 40 % of MAX_CONTEXT_TOKENS (below the 50 % shouldCompact threshold), inject a
   // system reminder so the agent has one full turn to write important context to
