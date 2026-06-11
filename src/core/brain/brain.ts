@@ -13,6 +13,7 @@ import { ModelFailover } from './failover.js';
 import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
 import { sortToolEntries, isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages, markLastToolForCache } from './prompt-cache-discipline.js';
+import { warnOnDuplicateToolNames } from './tool-name-collision.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
@@ -879,6 +880,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
               inputSchema: jsonSchema(params),
             })];
           });
+          warnOnDuplicateToolNames(toolEntries);
           // SUDO_PROMPT_CACHE=1: deterministic tool order → byte-stable prefix for provider caches.
           let sortedEntries = sortToolEntries(toolEntries);
           if (cacheBreakpoints) {
@@ -960,6 +962,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           inputSchema: jsonSchema(params),
         })];
       });
+      warnOnDuplicateToolNames(toolEntries);
       // SUDO_PROMPT_CACHE=1: deterministic tool order → byte-stable prefix for provider caches.
       let sortedEntries = sortToolEntries(toolEntries);
       if (cacheBreakpoints) {
