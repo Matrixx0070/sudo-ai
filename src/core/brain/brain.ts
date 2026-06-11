@@ -752,14 +752,25 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           cloudProfiles.map(p => p.id),
           async (modelId) => {
             const profile = cloudProfiles.find(p => p.id === modelId)!;
-            const response = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
-            return {
-              model: response.model,
-              content: response.content ?? '',
-              toolCalls: response.toolCalls ?? [],
-              latencyMs: 0,
-              usage: response.usage,
-            };
+            try {
+              const response = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+              return {
+                model: response.model,
+                content: response.content ?? '',
+                toolCalls: response.toolCalls ?? [],
+                latencyMs: 0,
+                usage: response.usage,
+              };
+            } catch (err) {
+              // Attribute the failure to THIS model with its real category —
+              // consensus swallows per-model rejections, so without this the
+              // failover tracker never learns about a flaky participant.
+              const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
+              const category = this.failover.categorizeError(status, body);
+              log.warn({ modelId, status, category, retryAfterMs }, 'Consensus participant failed');
+              this.failover.recordError(modelId, category, { retryAfterMs });
+              throw err;
+            }
           },
           this._consensusOptions(request),
         );
@@ -783,11 +794,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           }),
         };
       } catch (consensusErr) {
+        // Per-model errors were already recorded with their real categories in
+        // the caller above; a blanket recordError here would double-penalize
+        // (and previously mis-filed everything as 'format'). If Phase 2 below
+        // retries a profile that just failed here (possible via the failover
+        // force-reset rescue) and it fails AGAIN, that second recordError is
+        // intentional: two real failed calls, two records.
         log.warn({ err: consensusErr }, 'Consensus call failed — falling back to sequential failover');
-        // Record errors for all cloud models that participated
-        for (const profile of cloudProfiles) {
-          this.failover.recordError(profile.id, 'format');
-        }
       }
     }
 
