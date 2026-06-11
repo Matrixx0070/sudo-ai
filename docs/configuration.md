@@ -503,6 +503,29 @@ TWILIO_FROM_NUMBER=+15551234567
 
 ---
 
+## Process Environment Variables
+
+These are read from the **process environment at startup** (set them in your shell,
+service unit, or pm2 `ecosystem.config.cjs` `env` block — **not** in `config/.env`).
+`config/.env` is loaded after module constants are captured, so path and model
+overrides placed there arrive too late to take effect.
+
+| Variable | Default | Description |
+|---|---|---|
+| `SUDO_AI_HOME` | `process.cwd()` | Project root for all derived paths (`config/`, `workspace/`, `skills/`, and the default data dir). Set it when running the CLI from outside the install directory. |
+| `DATA_DIR` | `<root>/data` | Data directory (SQLite databases, sessions, logs, cache). Absolute, or relative to the working directory. `ecosystem.config.cjs` uses it to isolate staging (`data-staging`) from prod. |
+| `SUDO_NO_WIZARD` | unset | Set to `1` to suppress the auto-launched first-run setup wizard when no config file exists (useful for scripted/headless installs). Explicit `sudo-ai setup` still runs. |
+| `SUDO_DEFAULT_MODEL` | `ollama/deepseek-v4-pro:cloud` | Overrides the built-in default model ID. |
+| `SUDO_FALLBACK_MODEL` | `ollama/qwen3.5:latest` | Overrides the built-in fallback model ID. |
+| `SUDO_PLUGIN_ROOT` | empty string | Substituted for `${SUDO_PLUGIN_ROOT}` (and the Claude-compat `${CLAUDE_PLUGIN_ROOT}`) placeholders in plugin/hook commands. |
+| `SUDO_AI_ROOT` | `process.cwd()` | Substituted for `${SUDO_AI_ROOT}` placeholders in plugin/hook commands. |
+
+Kill-switches (`SUDO_*_DISABLE=1`) and the opt-in intelligence flags listed above are
+also plain process env vars, but they are read at call time, so they work from
+`config/.env` as well.
+
+---
+
 ## Hot Reload
 
 `config/sudo-ai.json5` supports hot reload. Changes to the file are detected within 300ms and applied without restart. This applies to: models, channel configuration, tool disabling, and cron jobs.
