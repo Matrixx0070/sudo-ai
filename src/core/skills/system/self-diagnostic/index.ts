@@ -18,8 +18,9 @@
 
 import Database from 'better-sqlite3';
 import { existsSync, statSync, readdirSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { join } from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../tools/types.js';
 import type { ToolRegistry } from '../../../tools/registry.js';
 
@@ -29,10 +30,8 @@ const logger = createLogger('skill.system.self-diagnostic');
 // Constants
 // ---------------------------------------------------------------------------
 
-const PROJECT_ROOT = resolve(process.cwd());
-const DB_PATH = join(PROJECT_ROOT, 'data', 'mind.db');
-const LOG_DIR = join(PROJECT_ROOT, 'data', 'logs');
-const DATA_DIR = join(PROJECT_ROOT, 'data');
+const DB_PATH = join(DATA_DIR, 'mind.db');
+const LOG_DIR = join(DATA_DIR, 'logs');
 const DAILY_BUDGET_USD = 5.0;
 
 // ---------------------------------------------------------------------------
