@@ -472,7 +472,6 @@ async function executeSingleToolCall(
     resultContent = typeof result.output === 'string' ? result.output : String(result.output ?? '');
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
     log.info({ tool: tc.name, success: result.success }, 'Tool call completed');
-    // Phase 2 polish wire + Phase 3 dedup: FeedbackMemory.recordSuccess (TODO removed; now via intra helper)
     guardedRecordFeedback(feedbackMemory, true, tc.name, tc.arguments ?? {}, resultContent || 'success', ctx.sessionId);
   } catch (err) {
     if (err instanceof ToolError && err.code === 'tool_not_found') {
@@ -487,7 +486,6 @@ async function executeSingleToolCall(
     resultContent = `Error executing tool ${tc.name}: ${String(err)}`;
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
     log.error({ tool: tc.name, err }, 'Tool call failed');
-    // Phase 2 polish wire + Phase 3 dedup: FeedbackMemory.recordFailure (TODO removed; now via intra helper)
     guardedRecordFeedback(feedbackMemory, false, tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
   }
 

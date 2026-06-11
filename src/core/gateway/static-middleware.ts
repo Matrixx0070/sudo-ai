@@ -11,7 +11,7 @@
  */
 
 import { createReadStream, existsSync, statSync, readFileSync } from 'node:fs';
-import { join, resolve, extname } from 'node:path';
+import { join, resolve, extname, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { projectPath } from '../shared/paths.js';
@@ -109,9 +109,10 @@ export function serveStaticFile(req: IncomingMessage, res: ServerResponse, pathn
     return false;
   }
 
-  // Path traversal protection
+  // Path traversal protection. The separator suffix prevents prefix
+  // collisions (e.g. dist/renderer-evil passing a bare startsWith check).
   const resolved = resolve(filePath);
-  if (!resolved.startsWith(DIST_DIR)) {
+  if (!resolved.startsWith(DIST_DIR + sep)) {
     if (res.headersSent) return true;
     res.writeHead(403);
     res.end('Forbidden');

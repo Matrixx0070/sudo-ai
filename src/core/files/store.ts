@@ -156,17 +156,10 @@ export class FileStore {
   create(input: CreateFileInput): FileMetadata {
     const { scope_id } = input;
 
-    const countRow = this.stmtCountScope.get(scope_id) as { cnt: number };
-    if (countRow.cnt >= MAX_FILES_PER_SESSION) {
-      throw new FileStoreError(
-        `Session "${scope_id}" has reached the ${MAX_FILES_PER_SESSION}-file limit`,
-        'file_cap_exceeded',
-        { scope_id, count: countRow.cnt },
-      );
-    }
+    this.checkCap(scope_id);
 
     const id = `file_${nanoid()}`;
-    const uploaded_at = new Date().toISOString().replace('T', 'T').replace(/\.\d{3}Z$/, match => match);
+    const uploaded_at = new Date().toISOString();
     const row: FileRow = { ...input, id, uploaded_at, deleted_at: null };
 
     this.stmtInsert.run({
