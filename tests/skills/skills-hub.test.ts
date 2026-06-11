@@ -67,31 +67,24 @@ This skill summarizes text.
 let db: InstanceType<typeof Database>;
 let registry: SkillRegistry;
 let testDir: string;
-// Isolated fake working directory. SkillsHub resolves its install directory as
-// join(process.cwd(), INSTALLED_SKILLS_DIR), so we stub process.cwd() to point
-// at this temp dir and never touch the real repo-relative data/installed-skills.
-let cwdDir: string;
-const INSTALLED_SKILLS_DIR = 'data/installed-skills';
+// Isolated install directory injected via SkillsHubConfig.installDir, so the
+// hub never touches the real <DATA_DIR>/installed-skills tree during tests.
+let installDir: string;
 
 function cleanupInstalledDir(): void {
-  const installedDir = join(cwdDir, INSTALLED_SKILLS_DIR);
   try {
-    if (existsSync(installedDir)) {
-      rmSync(installedDir, { recursive: true, force: true });
+    if (existsSync(installDir)) {
+      rmSync(installDir, { recursive: true, force: true });
     }
   } catch {
     // Ignore
   }
-  mkdirSync(installedDir, { recursive: true });
+  mkdirSync(installDir, { recursive: true });
 }
 
 beforeEach(() => {
   testDir = join(tmpdir(), `skills-hub-test-${randomUUID()}`);
-  cwdDir = join(tmpdir(), `skills-hub-cwd-${randomUUID()}`);
-  mkdirSync(cwdDir, { recursive: true });
-  // Redirect process.cwd() so the hub (and this test's own join(process.cwd(), ...))
-  // both resolve the install directory under the isolated temp dir.
-  vi.spyOn(process, 'cwd').mockReturnValue(cwdDir);
+  installDir = join(tmpdir(), `skills-hub-install-${randomUUID()}`);
   db = new Database(':memory:');
   db.pragma('journal_mode = WAL');
   registry = new SkillRegistry(db, testDir);
@@ -105,8 +98,8 @@ afterEach(() => {
   if (testDir) {
     rmSync(testDir, { recursive: true, force: true });
   }
-  if (cwdDir) {
-    rmSync(cwdDir, { recursive: true, force: true });
+  if (installDir) {
+    rmSync(installDir, { recursive: true, force: true });
   }
   vi.restoreAllMocks();
 });
@@ -138,7 +131,7 @@ describe('SkillsHub', () => {
       const originalEnv = process.env['SUDO_SKILLS_HUB_DISABLE'];
       process.env['SUDO_SKILLS_HUB_DISABLE'] = '1';
 
-      const hub = new SkillsHub(registry);
+      const hub = new SkillsHub(registry, { installDir });
       await expect(hub.search('test')).rejects.toThrow('SkillsHub is disabled');
 
       if (originalEnv !== undefined) {
@@ -174,7 +167,7 @@ describe('SkillsHub', () => {
       });
       vi.stubGlobal('fetch', mockFetch);
 
-      const hub = new SkillsHub(registry);
+      const hub = new SkillsHub(registry, { installDir });
       const installed = await hub.install('summarize');
 
       expect(installed.name).toBe('summarize');
@@ -187,7 +180,7 @@ describe('SkillsHub', () => {
       const originalEnv = process.env['SUDO_SKILLS_INSTALL_DISABLE'];
       process.env['SUDO_SKILLS_INSTALL_DISABLE'] = '1';
 
-      const hub = new SkillsHub(registry);
+      const hub = new SkillsHub(registry, { installDir });
       await expect(hub.install('test')).rejects.toThrow('Skill installation is disabled');
 
       if (originalEnv !== undefined) {
@@ -232,13 +225,13 @@ describe('SkillsHub', () => {
       });
       vi.stubGlobal('fetch', mockFetch);
 
-      const hub = new SkillsHub(registry);
+      const hub = new SkillsHub(registry, { installDir });
 
       // First install a skill at version 1.0.0
       await hub.install('summarize');
 
       // Verify installation worked before testing update
-      const skillFile = join(process.cwd(), INSTALLED_SKILLS_DIR, 'summarize', 'SKILL.md');
+      const skillFile = join(installDir, 'summarize', 'SKILL.md');
       expect(existsSync(skillFile)).toBe(true);
 
       // Then check for updates - should detect 1.1.0 available (non-breaking)
@@ -252,7 +245,7 @@ describe('SkillsHub', () => {
   describe('list', () => {
     it('returns empty array when no skills installed', () => {
       // Directory is cleaned in beforeEach, so list should return empty
-      const hub = new SkillsHub(registry);
+      const hub = new SkillsHub(registry, { installDir });
       const skills = hub.list();
       expect(skills).toEqual([]);
     });
@@ -264,11 +257,11 @@ describe('SkillsHub', () => {
       });
       vi.stubGlobal('fetch', mockFetch);
 
-      const hub = new SkillsHub(registry);
+      const hub = new SkillsHub(registry, { installDir });
       await hub.install('summarize');
 
       // Verify file was written to disk before listing
-      const skillFile = join(process.cwd(), INSTALLED_SKILLS_DIR, 'summarize', 'SKILL.md');
+      const skillFile = join(installDir, 'summarize', 'SKILL.md');
       expect(existsSync(skillFile)).toBe(true);
 
       const skills = hub.list();
@@ -285,11 +278,11 @@ describe('SkillsHub', () => {
       });
       vi.stubGlobal('fetch', mockFetch);
 
-      const hub = new SkillsHub(registry);
+      const hub = new SkillsHub(registry, { installDir });
       await hub.install('summarize');
 
       // Verify file was written before testing removal
-      const skillFile = join(process.cwd(), INSTALLED_SKILLS_DIR, 'summarize', 'SKILL.md');
+      const skillFile = join(installDir, 'summarize', 'SKILL.md');
       expect(existsSync(skillFile)).toBe(true);
 
       // Remove
@@ -299,7 +292,7 @@ describe('SkillsHub', () => {
     });
 
     it('returns false when skill not found', () => {
-      const hub = new SkillsHub(registry);
+      const hub = new SkillsHub(registry, { installDir });
       const removed = hub.remove('nonexistent');
       expect(removed).toBe(false);
     });

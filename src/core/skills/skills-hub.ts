@@ -9,7 +9,9 @@
  * Registry URL from SUDO_SKILLS_REGISTRY_URL env (default: https://agentskills.io/api/v1)
  */
 
+import { join } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type {
   RegistrySkillEntry,
   RegistrySearchResult,
@@ -30,7 +32,7 @@ const log = createLogger('skills:hub');
 const DEFAULT_REGISTRY_URL = 'https://agentskills.io/api/v1';
 const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RETRIES = 3;
-const INSTALLED_SKILLS_DIR = 'data/installed-skills';
+const DEFAULT_INSTALLED_SKILLS_DIR = join(DATA_DIR, 'installed-skills');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -87,17 +89,6 @@ async function fetchWithRetry(
   throw lastError ?? new Error('fetch failed after max retries');
 }
 
-/** Ensure installed skills directory exists. */
-function ensureInstalledDir(): void {
-  try {
-    const { mkdirSync } = require('node:fs');
-    const { join } = require('node:path');
-    mkdirSync(join(process.cwd(), INSTALLED_SKILLS_DIR), { recursive: true });
-  } catch (err) {
-    log.warn({ err }, 'failed to create installed-skills directory');
-  }
-}
-
 /** Parse trust tier from registry response. */
 function parseTrustTier(raw: string | undefined): SkillTrustTier {
   const valid = new Set(['bundled', 'indexed', 'unreviewed', 'workspace']);
@@ -116,12 +107,14 @@ export class SkillsHub {
   private readonly fetchTimeoutMs: number;
   private readonly maxRetries: number;
   private readonly registry: SkillRegistry | null;
+  private readonly installDir: string;
 
   constructor(registry: SkillRegistry | null = null, config: SkillsHubConfig = {}) {
     this.registry = registry;
     this.registryUrl = config.registryUrl ?? process.env['SUDO_SKILLS_REGISTRY_URL'] ?? DEFAULT_REGISTRY_URL;
     this.fetchTimeoutMs = config.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
     this.maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.installDir = config.installDir ?? DEFAULT_INSTALLED_SKILLS_DIR;
     log.info({ registryUrl: this.registryUrl }, 'SkillsHub initialized');
   }
 
@@ -210,8 +203,7 @@ export class SkillsHub {
 
     // Save to installed-skills directory
     const { writeFileSync, mkdirSync } = require('node:fs');
-    const { join } = require('node:path');
-    const skillDir = join(process.cwd(), INSTALLED_SKILLS_DIR, skillName);
+    const skillDir = join(this.installDir, skillName);
     mkdirSync(skillDir, { recursive: true });
 
     const filePath = join(skillDir, 'SKILL.md');
@@ -273,8 +265,7 @@ export class SkillsHub {
     }
 
     const { readFileSync, readdirSync } = require('node:fs');
-    const { join } = require('node:path');
-    const installedDir = join(process.cwd(), INSTALLED_SKILLS_DIR);
+    const installedDir = this.installDir;
 
     // Get list of installed skills
     let skillNames: string[] = [];
@@ -349,8 +340,7 @@ export class SkillsHub {
    */
   list(source?: SkillInstallSource): InstalledSkill[] {
     const { readFileSync, readdirSync, existsSync } = require('node:fs');
-    const { join } = require('node:path');
-    const installedDir = join(process.cwd(), INSTALLED_SKILLS_DIR);
+    const installedDir = this.installDir;
 
     if (!existsSync(installedDir)) {
       return [];
@@ -420,8 +410,7 @@ export class SkillsHub {
     }
 
     const { rmSync, existsSync } = require('node:fs');
-    const { join } = require('node:path');
-    const skillPath = join(process.cwd(), INSTALLED_SKILLS_DIR, name);
+    const skillPath = join(this.installDir, name);
 
     if (!existsSync(skillPath)) {
       return false;

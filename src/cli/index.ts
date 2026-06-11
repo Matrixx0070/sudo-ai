@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { APP_VERSION } from '../core/shared/constants.js';
+import { PROJECT_ROOT } from '../core/shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -70,16 +71,16 @@ declare const require: NodeRequire;  // provided by esbuild banner
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the project root regardless of whether this file is being run
- * from src/ (tsx) or from dist/cli/ (compiled binary).
- *
- * Structure assumptions:
- *   src/cli/index.ts  → ../../  is the project root
- *   dist/cli/index.js → ../../  is the project root
+ * Install root: where this checkout lives (../../ from src/ or dist/cli/).
+ * Used only by commands operating on the installation itself (`start` spawns
+ * src/cli.ts with the local tsx; `update` runs git against the checkout and
+ * reads its package.json). All other commands (config, doctor, scan,
+ * quickstart, init) use the SUDO_AI_HOME-aware PROJECT_ROOT from
+ * core/shared/paths.ts, so a global install targets the user's project dir.
  */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+const INSTALL_ROOT = path.resolve(__dirname, '..', '..');
 
 // ---------------------------------------------------------------------------
 // Program definition
@@ -103,10 +104,10 @@ program
   .action(async (opts: { daemon: boolean }) => {
     if (opts.daemon) {
       const { runStartDaemon } = await import('./commands/start.js');
-      runStartDaemon(PROJECT_ROOT);
+      runStartDaemon(INSTALL_ROOT);
     } else {
       const { runStartForeground } = await import('./commands/start.js');
-      await runStartForeground(PROJECT_ROOT);
+      await runStartForeground(INSTALL_ROOT);
     }
   });
 
@@ -283,7 +284,7 @@ program
   .option('--status', 'Show current version and update history')
   .action(async (opts: { check?: boolean; channel?: string; rollback?: boolean; status?: boolean }) => {
     const { runUpdate } = await import('./commands/update.js');
-    const code = await runUpdate(PROJECT_ROOT, opts);
+    const code = await runUpdate(INSTALL_ROOT, opts);
     process.exit(code);
   });
 

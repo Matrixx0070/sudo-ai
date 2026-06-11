@@ -16,8 +16,9 @@
  */
 
 import Database from 'better-sqlite3';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { PROJECT_ROOT, MIND_DB } from '../shared/paths.js';
 import {
   validateName,
   validateVersion,
@@ -33,9 +34,8 @@ const logger = createLogger('skill-compiler');
 // Constants
 // ---------------------------------------------------------------------------
 
-const PROJECT_ROOT = resolve(process.cwd());
 const SKILLS_SRC_DIR = join(PROJECT_ROOT, 'src', 'core', 'skills');
-const DB_PATH = join(PROJECT_ROOT, 'data', 'mind.db');
+const DB_PATH = MIND_DB;
 
 // ---------------------------------------------------------------------------
 // Types

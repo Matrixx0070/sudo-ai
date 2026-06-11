@@ -77,4 +77,21 @@ describe('paths.ts DATA_DIR env resolution', () => {
     expect(c.PATHS.DATA).toBe('/tmp/staging-data');
     expect(c.PATHS.MIND_DB).toBe(path.join('/tmp/staging-data', 'mind.db'));
   });
+
+  it('PATHS-5: testing/checks.ts re-exports the shared DATA_DIR and anchors src paths on PROJECT_ROOT', async () => {
+    process.env['SUDO_AI_HOME'] = '/tmp/sudo-home';
+    process.env['DATA_DIR'] = '/tmp/staging-data';
+    vi.resetModules();
+    // Both imports share the same resetModules epoch, so they resolve the
+    // same freshly-loaded DATA_DIR singleton.
+    const [p, checks] = await Promise.all([
+      import('../../src/core/shared/paths.js'),
+      import('../../src/core/testing/checks.js'),
+    ]);
+
+    expect(checks.DATA_DIR).toBe(p.DATA_DIR);
+    expect(checks.DB_PATHS['mind']).toBe(path.join('/tmp/staging-data', 'mind.db'));
+    expect(checks.SKILLS_DIR).toBe(path.join('/tmp/sudo-home', 'src/core/tools/builtin/custom'));
+    expect(checks.TOOLS_DIR).toBe(path.join('/tmp/sudo-home', 'src/core/tools/builtin'));
+  });
 });

@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
+import { PROJECT_ROOT } from '../shared/paths.js';
 import {
   SkillRegistryError,
   parseFrontmatter,
@@ -41,7 +42,7 @@ export type { SkillMeta, SkillFull, AttachedSkill } from './registry-types.js';
 const log = createLogger('skills:registry');
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = path.join(__dir, 'sqlite-migrations', '001-skills.sql');
-const DEFAULT_SKILLS_DIR = path.resolve('skills');
+const DEFAULT_SKILLS_DIR = path.join(PROJECT_ROOT, 'skills');
 const SESSION_SKILL_CAP = 20;
 const MAX_SKILL_BYTES = 1_048_576; // 1 MB — oversized files are skipped with a warning
 

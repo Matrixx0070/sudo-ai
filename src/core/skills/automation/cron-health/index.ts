@@ -15,8 +15,9 @@
 
 import Database from 'better-sqlite3';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join } from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR, MIND_DB } from '../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../tools/types.js';
 import type { ToolRegistry } from '../../../tools/registry.js';
 
@@ -26,9 +27,8 @@ const logger = createLogger('skill.automation.cron-health');
 // Constants
 // ---------------------------------------------------------------------------
 
-const PROJECT_ROOT = resolve(process.cwd());
-const JOBS_FILE = resolve(PROJECT_ROOT, 'data', 'cron', 'jobs.json');
-const DB_PATH = resolve(PROJECT_ROOT, 'data', 'mind.db');
+const JOBS_FILE = join(DATA_DIR, 'cron', 'jobs.json');
+const DB_PATH = MIND_DB;
 
 /** A job is considered overdue if last run is older than 3× its interval. */
 const OVERDUE_MULTIPLIER = 3;
