@@ -15,7 +15,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from './core/shared/logger.js';
-import { PROJECT_ROOT } from './core/shared/paths.js';
+import { PROJECT_ROOT, DATA_DIR } from './core/shared/paths.js';
 import { ConfigLoader } from './core/config/loader.js';
 import { MindDB } from './core/memory/db.js';
 import { Brain } from './core/brain/brain.js';
@@ -1800,7 +1800,7 @@ async function boot(): Promise<void> {
   // Runs after all DBs are initialised, before cron starts any agent activity.
   // -------------------------------------------------------------------------
   try {
-    const dbDir = path.resolve('data');
+    const dbDir = DATA_DIR;
     const { readdirSync, chmodSync } = await import('node:fs');
     for (const file of readdirSync(dbDir)) {
       if (file.endsWith('.db') || file.endsWith('.db-wal') || file.endsWith('.db-shm')) {

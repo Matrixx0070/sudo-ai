@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { readConfig, writeConfig } from './config-io.js';
 import { createLogger } from '../../shared/logger.js';
+import { DATA_DIR } from '../../shared/paths.js';
 
 const log = createLogger('api:admin:security-helpers');
 
@@ -15,7 +16,7 @@ const log = createLogger('api:admin:security-helpers');
 // Constants
 // ---------------------------------------------------------------------------
 
-export const TOKENS_FILE = path.join(process.cwd(), 'data', 'api-tokens.json');
+export const TOKENS_FILE = path.join(DATA_DIR, 'api-tokens.json');
 
 export const SENSITIVE_KEYS = [
   'XAI_API_KEY',
@@ -48,7 +49,7 @@ export interface StoredToken {
 // ---------------------------------------------------------------------------
 
 function ensureDataDir(): void {
-  const dir = path.join(process.cwd(), 'data');
+  const dir = DATA_DIR;
   if (!fs.existsSync(dir)) {
     try {
       fs.mkdirSync(dir, { recursive: true });

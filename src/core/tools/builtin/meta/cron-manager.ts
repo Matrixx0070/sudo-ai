@@ -21,9 +21,9 @@ import { createLogger } from '../../../shared/logger.js';
 import { execSync } from 'node:child_process';
 import { writeFileSync, appendFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.cron-manager');
-const DATA_DIR = path.resolve('data');
 const CRON_LOG = path.join(DATA_DIR, 'cron-events.log');
 const SUDO_AI_PREFIX = '# SUDO-AI:';
 

@@ -15,8 +15,9 @@
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
+import { join } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import { DEFAULT_TIER_CAPS } from '../shared/wave10-types.js';
 import type { SkillTrustTier } from '../shared/wave10-types.js';
@@ -28,7 +29,7 @@ const logger = createLogger('skill-loader');
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_DB_PATH = resolve(process.cwd(), 'data', 'mind.db');
+const DEFAULT_DB_PATH = join(DATA_DIR, 'mind.db');
 
 // ---------------------------------------------------------------------------
 // Types

@@ -12,8 +12,9 @@
 
 import Database from 'better-sqlite3';
 import path from 'node:path';
+import { DATA_DIR } from '../shared/paths.js';
 
-const DB_PATH = path.resolve('data', 'mind.db');
+const DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 // ---------------------------------------------------------------------------
 // Result types

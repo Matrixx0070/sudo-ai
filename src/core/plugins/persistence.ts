@@ -8,11 +8,12 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('plugin:persistence');
 
 /** Absolute path to the plugin state file. */
-export const PLUGINS_JSON = path.resolve('data/plugins.json');
+export const PLUGINS_JSON = path.join(DATA_DIR, 'plugins.json');
 
 // ---------------------------------------------------------------------------
 // Schema

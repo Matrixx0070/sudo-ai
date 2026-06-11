@@ -13,9 +13,10 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { runSelfImprovement, detectPatterns } from '../../../self-improvement/index.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.self-improve');
-const DB_PATH = path.resolve('data', 'mind.db');
+const DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 export const selfImproveTool: ToolDefinition = {
   name: 'meta.self-improve',

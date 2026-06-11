@@ -10,9 +10,10 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('localizer');
-const DEFAULT_DB_PATH = path.resolve('data/localization.db');
+const DEFAULT_DB_PATH = path.join(DATA_DIR, 'localization.db');
 
 // ---------------------------------------------------------------------------
 // Public types

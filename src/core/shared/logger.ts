@@ -6,16 +6,24 @@
 import pino, { type Logger } from 'pino';
 import path from 'path';
 import { mkdirSync } from 'fs';
+import { DATA_DIR } from './paths.js';
 
-const LOG_DIR = path.resolve('data/logs');
+const LOG_DIR = path.join(DATA_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'sudo-ai.log');
 
+// Vitest points SUDO_AI_HOME/DATA_DIR at temp dirs removed in afterEach; a
+// file-transport worker racing that cleanup throws an unhandled ENOENT, so
+// skip the file target (and dir creation) under test.
+const isTest = process.env['VITEST'] !== undefined;
+
 // Ensure the log directory exists before pino tries to open the file.
-try {
-  mkdirSync(LOG_DIR, { recursive: true });
-} catch (err) {
-  // Non-fatal: if we cannot create the dir, file transport will simply fail.
-  process.stderr.write(`[logger] Cannot create log dir ${LOG_DIR}: ${String(err)}\n`);
+if (!isTest) {
+  try {
+    mkdirSync(LOG_DIR, { recursive: true });
+  } catch (err) {
+    // Non-fatal: if we cannot create the dir, file transport will simply fail.
+    process.stderr.write(`[logger] Cannot create log dir ${LOG_DIR}: ${String(err)}\n`);
+  }
 }
 
 const isDev = process.env['NODE_ENV'] !== 'production';
@@ -43,7 +51,7 @@ function buildTransport(): pino.TransportMultiOptions {
         messageFormat: '[{module}] {msg}',
       },
     };
-    return { targets: [prettyTarget, fileTarget] };
+    return { targets: isTest ? [prettyTarget] : [prettyTarget, fileTarget] };
   }
 
   const stdoutTarget: pino.TransportTargetOptions = {
@@ -52,7 +60,7 @@ function buildTransport(): pino.TransportMultiOptions {
     options: { destination: 1 }, // fd 1 = stdout
   };
 
-  return { targets: [stdoutTarget, fileTarget] };
+  return { targets: isTest ? [stdoutTarget] : [stdoutTarget, fileTarget] };
 }
 
 const baseOptions: pino.LoggerOptions = {

@@ -15,6 +15,7 @@ import { nanoid } from 'nanoid';
 import path from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { UpdateChannel, VersionRecord } from './update-manager-types.js';
 
 // ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ export class RollbackStore {
    * @param dbPath  Path to the SQLite database file.
    * @param rollbackVersions  How many inactive versions to retain (default 3).
    */
-  constructor(dbPath: string = path.resolve('data/update-versions.db'), rollbackVersions: number = 3) {
+  constructor(dbPath: string = path.join(DATA_DIR, 'update-versions.db'), rollbackVersions: number = 3) {
     mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');

@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { LockInfo } from './update-manager-types.js';
 
 // ---------------------------------------------------------------------------
@@ -29,7 +30,7 @@ export class UpdateLock {
   private readonly lockPath: string;
   private readonly defaultTimeoutMs: number;
 
-  constructor(lockDir: string = path.resolve('data'), defaultTimeoutMs: number = 300_000) {
+  constructor(lockDir: string = DATA_DIR, defaultTimeoutMs: number = 300_000) {
     this.lockPath = path.join(lockDir, 'update.lock');
     this.defaultTimeoutMs = defaultTimeoutMs;
   }

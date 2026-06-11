@@ -17,6 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/logger.js';
 import { ConfigError } from '../shared/errors.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('config:permissions');
 
@@ -105,7 +106,7 @@ const MODE_CONFIGS: Readonly<Record<PermissionModeType, PermissionModeConfig>> =
 // Persistence path
 // ---------------------------------------------------------------------------
 
-const DEFAULT_PERSIST_DIR = path.resolve('data/config');
+const DEFAULT_PERSIST_DIR = path.join(DATA_DIR, 'config');
 const PERSIST_FILENAME = 'permission-mode.json';
 
 interface PersistedMode {

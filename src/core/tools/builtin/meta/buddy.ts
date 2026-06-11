@@ -11,9 +11,9 @@ import { createLogger } from '../../../shared/logger.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
 import path from 'node:path';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.buddy');
-const DATA_DIR = path.resolve('data');
 const BUDDY_FILE = path.join(DATA_DIR, 'buddy.json');
 
 // ---------------------------------------------------------------------------

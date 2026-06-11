@@ -12,6 +12,7 @@
 import { createLogger } from '../shared/logger.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DATA_DIR } from '../shared/paths.js';
 import type { CommandRegistry } from './registry.js';
 import type { CommandContext } from './types.js';
 import type { ToolRegistry } from '../tools/registry.js';
@@ -47,7 +48,7 @@ function fmtBytes(bytes: number): string {
 
 /** Resolve the export directory, creating it if needed. */
 function ensureExportDir(): string {
-  const dir = join(process.cwd(), 'data', 'exports');
+  const dir = join(DATA_DIR, 'exports');
   try {
     mkdirSync(dir, { recursive: true });
   } catch {

@@ -4,6 +4,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { DATA_DIR } from '../../../shared/paths.js';
 import type { ToolResult } from '../../types.js';
 
 // ---------------------------------------------------------------------------
@@ -12,7 +13,7 @@ import type { ToolResult } from '../../types.js';
 
 export type { PostStatus, ScheduledPost } from '../../../social/schedule-dispatcher-types.js';
 
-export const SCHEDULE_FILE = path.resolve('data/scheduled-posts.json');
+export const SCHEDULE_FILE = path.join(DATA_DIR, 'scheduled-posts.json');
 
 export function missingKey(envVar: string, toolName: string): ToolResult {
   return { success: false, output: `${toolName}: API key not configured. Set ${envVar} in config/.env` };

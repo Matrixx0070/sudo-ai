@@ -8,10 +8,11 @@ import { PipelineError } from '../../shared/errors.js';
 import type { PipelineRun, SfxResult } from '../types.js';
 import { existsSync } from 'fs';
 import path from 'path';
+import { DATA_DIR } from '../../shared/paths.js';
 
 const log = createLogger('pipeline:sfx');
 
-const SFX_LIBRARY_PATH = path.resolve('data/media/sfx_library');
+const SFX_LIBRARY_PATH = path.join(DATA_DIR, 'media/sfx_library');
 
 // ---------------------------------------------------------------------------
 // Preset definitions

@@ -12,9 +12,10 @@ import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
 import { NICHE_PROSPECTS, FALLBACK_PROSPECTS } from './sponsor-prospects.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('sponsor-manager');
-const DEFAULT_DB_PATH = path.resolve('data/business.db');
+const DEFAULT_DB_PATH = path.join(DATA_DIR, 'business.db');
 
 // ---------------------------------------------------------------------------
 // Public types

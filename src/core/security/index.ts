@@ -22,7 +22,7 @@ import {
 } from './patterns.js';
 import { RateLimiter } from './rate-limiter.js';
 import type { CounterKey, RateLimitResult } from './rate-limiter.js';
-import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT } from '../shared/paths.js';
+import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT, DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('security');
 
@@ -30,7 +30,7 @@ const log = createLogger('security');
 // Audit log
 // ---------------------------------------------------------------------------
 
-const SECURITY_LOG_PATH = path.resolve('data/logs/security.log');
+const SECURITY_LOG_PATH = path.join(DATA_DIR, 'logs/security.log');
 
 try {
   fs.mkdirSync(path.dirname(SECURITY_LOG_PATH), { recursive: true });

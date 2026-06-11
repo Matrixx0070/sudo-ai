@@ -13,10 +13,10 @@ import path from 'node:path';
 import type { ToolRegistry } from '../../registry.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('finance-builtin');
 
-const DATA_DIR = path.resolve('data');
 const LEDGER_FILE = path.join(DATA_DIR, 'finance-ledger.json');
 
 // ---------------------------------------------------------------------------

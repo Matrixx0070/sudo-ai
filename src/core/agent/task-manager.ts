@@ -16,6 +16,7 @@ import { genId } from '../shared/utils.js';
 import type { HookManager, HookContext } from '../hooks/index.js';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('agent:task-manager');
 
@@ -104,7 +105,7 @@ export class TaskManager {
       throw new TypeError('TaskManager: sessionId must be a non-empty string');
     }
     this.sessionId = sessionId;
-    this.persistDir = opts?.persistDir ?? path.resolve('data/tasks');
+    this.persistDir = opts?.persistDir ?? path.join(DATA_DIR, 'tasks');
     this.persistPath = path.join(this.persistDir, `${sessionId}.json`);
     this.hookManager = opts?.hooks;
 

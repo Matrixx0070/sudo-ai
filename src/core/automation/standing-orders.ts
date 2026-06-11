@@ -9,11 +9,11 @@ import path from 'path';
 import { Cron } from 'croner';
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { StandingOrder, StandingOrdersFile, OrderTrigger } from './types.js';
 
 const log = createLogger('automation:standing-orders');
 
-const DATA_DIR = path.resolve('data');
 const ORDERS_FILE = path.join(DATA_DIR, 'standing-orders.json');
 const ORDERS_BAK = path.join(DATA_DIR, 'standing-orders.json.bak');
 const EVAL_INTERVAL_MS = 60_000 as const;

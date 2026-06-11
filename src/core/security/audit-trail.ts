@@ -15,6 +15,7 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import {
   computeHash,
   verifyChainRows,
@@ -99,7 +100,7 @@ function buildPayload(
 export class AuditTrail {
   private readonly db: Database.Database;
 
-  constructor(dbPath: string = path.resolve(process.cwd(), 'data/audit.db')) {
+  constructor(dbPath: string = path.join(DATA_DIR, 'audit.db')) {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(`

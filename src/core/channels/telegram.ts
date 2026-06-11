@@ -15,6 +15,7 @@ import { Bot, type Context, GrammyError, InputFile, InlineKeyboard } from 'gramm
 import { saveFeedback, addNoteToFeedback } from '../feedback/store.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { DATA_DIR } from '../shared/paths.js';
 import { createLogger } from '../shared/index.js';
 import { ChannelError } from '../shared/index.js';
 import { SpeechToText } from '../voice/stt.js';
@@ -78,7 +79,7 @@ function chunkText(text: string, limit: number): string[] {
 }
 
 /** Directory where incoming Telegram photos are saved. */
-const UPLOAD_DIR = join(process.cwd(), 'data', 'uploads');
+const UPLOAD_DIR = join(DATA_DIR, 'uploads');
 
 /**
  * Download a Telegram photo to disk and return the saved path.
@@ -326,7 +327,7 @@ export class TelegramAdapter implements ChannelAdapter {
    * Best-effort: failures are logged at warn level and never propagate.
    */
   private _writeHeartbeat(): void {
-    const heartbeatPath = join(process.cwd(), 'data', 'heartbeat-state.json');
+    const heartbeatPath = join(DATA_DIR, 'heartbeat-state.json');
     try {
       let existing: Record<string, unknown> = {};
       if (existsSync(heartbeatPath)) {

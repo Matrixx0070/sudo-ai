@@ -128,10 +128,10 @@ import { cronDeleteTool } from './cron-delete.js';
 import { registerSearchTools } from './tool-search.js';
 import { registerInstallTools } from './tool-install.js';
 import { registerSynthesizeTools } from './tool-synthesize.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta-builtin');
 
-const DATA_DIR = path.resolve('data');
 const SKILLS_DIR = path.resolve('src/core/tools/builtin/custom');
 const WORKFLOWS_FILE = path.join(DATA_DIR, 'meta-workflows.json');
 const ACTIVE_RECORDING_FILE = path.join(DATA_DIR, 'meta-recording.json');

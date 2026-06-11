@@ -15,9 +15,10 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { ThumbnailABTester } from '../../../youtube/thumbnail-ab.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.thumbnail-ab');
-const DB_PATH = path.resolve('data/mind.db');
+const DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 function getTester(): ThumbnailABTester {
   return new ThumbnailABTester(DB_PATH);

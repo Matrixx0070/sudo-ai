@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../../shared/logger.js';
+import { DATA_DIR } from '../../shared/paths.js';
 import type { CronJob, CronRunRecord } from '../../cron/types.js';
 
 const log = createLogger('api:admin:cron:utils');
@@ -17,7 +18,7 @@ const log = createLogger('api:admin:cron:utils');
 // Paths
 // ---------------------------------------------------------------------------
 
-export const CRON_DIR  = path.resolve(process.cwd(), 'data', 'cron');
+export const CRON_DIR  = path.join(DATA_DIR, 'cron');
 export const JOBS_FILE = path.join(CRON_DIR, 'jobs.json');
 export const JOBS_BAK  = path.join(CRON_DIR, 'jobs.json.bak');
 export const RUNS_FILE = path.join(CRON_DIR, 'runs.jsonl');

@@ -18,9 +18,10 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { EventDaemon } from '../../../daemon/event-daemon.js';
 import type { EventPriority } from '../../../daemon/event-daemon.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.event-daemon');
-const DB_PATH = path.resolve('data/mind.db');
+const DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 // ---------------------------------------------------------------------------
 // Singleton daemon — one instance per process

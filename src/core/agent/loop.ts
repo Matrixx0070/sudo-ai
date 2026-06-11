@@ -95,7 +95,7 @@ import { BestOfNExecutor } from './best-of-n.js';
 import { ConsciousnessDeepBridge, type DeepBridgeOrchestratorLike } from '../consciousness/deep-bridge.js';
 import { FeedbackTierManager } from './feedback-tier.js';
 import { getZDRManager, isZDRBlocked } from '../privacy/zdr-mode.js';
-import { WORKSPACE_DIR } from '../shared/paths.js';
+import { WORKSPACE_DIR, DATA_DIR } from '../shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Content-hash helper — A1: deterministic 32-char hex per tool+args combo.
@@ -503,7 +503,7 @@ export class AgentLoop {
     // Pattern: exact match to TrustTierTracker / VetoOverrideStore / AuditTrail in this ctor (DATA_DIR, mind.db for feedback).
     // FeedbackMemory lives for process lifetime (like trust db); records are fail-open side effects.
     try {
-      const dataDir = process.env['DATA_DIR'] || path.join(process.cwd(), 'data');
+      const dataDir = process.env['DATA_DIR'] || DATA_DIR;
       const mindPath = path.join(dataDir, 'mind.db');
       if (existsSync(mindPath)) {
         const fbDb = new Database(mindPath);

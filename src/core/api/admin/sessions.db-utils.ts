@@ -8,10 +8,11 @@
 
 import path from 'node:path';
 import { createLogger } from '../../shared/logger.js';
+import { DATA_DIR } from '../../shared/paths.js';
 
 const log = createLogger('api:admin:sessions:db');
 
-export const MIND_DB_PATH = path.resolve(process.cwd(), 'data', 'mind.db');
+export const MIND_DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 // ---------------------------------------------------------------------------
 // Types (mirrors SessionManager internals — no direct import)
