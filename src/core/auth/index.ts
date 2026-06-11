@@ -18,7 +18,7 @@
  *
  * // OAuth 2.0 (user authentication)
  * const oauth = new OAuthManager({
- *   providers: [OAuthProviders.github(process.env.GITHUB_CLIENT_ID!)],
+ *   providers: [OAuthProviders.github('<your-github-oauth-client-id>')],
  *   autoRefresh: true,
  * });
  * oauth.injectVault(vault);
