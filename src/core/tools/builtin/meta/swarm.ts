@@ -15,10 +15,11 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { SwarmManager } from '../../../swarm/index.js';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.swarm');
 
-const DB_PATH = path.resolve('data/swarm.db');
+const DB_PATH = path.join(DATA_DIR, 'swarm.db');
 
 /** Lazy singleton — one SwarmManager per process lifetime. */
 let _manager: SwarmManager | null = null;

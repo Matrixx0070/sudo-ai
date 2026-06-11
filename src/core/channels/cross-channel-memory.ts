@@ -11,6 +11,7 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import { guardMemoryWrite, type MessageRole } from '../memory/injection-scanner.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,7 +76,7 @@ const DDL = `
 export class CrossChannelMemory {
   private db: Database.Database;
 
-  constructor(dbPath: string = path.resolve(process.cwd(), 'data/mind.db')) {
+  constructor(dbPath: string = path.join(DATA_DIR, 'mind.db')) {
     this.db = new Database(dbPath);
     this.db.exec(DDL);
   }

@@ -11,8 +11,9 @@
  */
 
 import { mkdirSync, existsSync, writeFileSync, readFileSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { Profile, ProfileSummary, ProfileCreateOptions, ProfileCloneOptions } from './profile-types.js';
 import { PROFILES_KILL_SWITCH } from './profile-types.js';
 
@@ -22,7 +23,7 @@ const log = createLogger('profile-manager');
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_DATA_DIR = process.env['DATA_DIR'] ?? resolve('data');
+const DEFAULT_DATA_DIR = DATA_DIR;
 
 /** Resolves the profiles directory — checks env var at call time for testability. */
 function getProfilesDir(): string {

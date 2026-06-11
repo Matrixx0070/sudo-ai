@@ -15,6 +15,7 @@ import path from 'node:path';
 import { adminRouter, sendJson, readJsonBody } from '../admin-router.js';
 import { readConfig, writeConfig, updateEnvVar } from './config-io.js';
 import { createLogger } from '../../shared/logger.js';
+import { DATA_DIR } from '../../shared/paths.js';
 
 const log = createLogger('api:admin:models');
 
@@ -210,7 +211,7 @@ adminRouter.put('/api/admin/models/providers/:id/key', async (req, res, params) 
 
 // --- GET /api/admin/models/cost ---------------------------------------------
 
-const DB_PATH = path.join(process.cwd(), 'data', 'knowledge.db');
+const DB_PATH = path.join(DATA_DIR, 'knowledge.db');
 
 interface CostRecord {
   provider: string;

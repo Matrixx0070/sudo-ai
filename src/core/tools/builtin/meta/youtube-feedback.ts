@@ -15,10 +15,11 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { YouTubeAnalytics } from '../../../feedback/youtube-analytics.js';
 import { LearningEngine } from '../../../feedback/learning-engine.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.youtube-feedback');
 
-const DB_PATH = path.resolve('data/mind.db');
+const DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 // ---------------------------------------------------------------------------
 // Factory helpers — instantiated lazily per call so env vars are read fresh

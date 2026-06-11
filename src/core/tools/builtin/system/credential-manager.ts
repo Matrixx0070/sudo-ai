@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 
 const logger = createLogger('system.credentials');
@@ -33,7 +34,6 @@ const logger = createLogger('system.credentials');
 // Crypto constants — hardened settings
 // ---------------------------------------------------------------------------
 
-const DATA_DIR = path.resolve('data');
 const STORE_PATH = path.join(DATA_DIR, 'credentials.vault');
 const SALT_PATH = path.join(DATA_DIR, '.vault-salt');
 const HMAC_PATH = path.join(DATA_DIR, '.vault-hmac');

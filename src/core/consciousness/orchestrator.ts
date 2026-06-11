@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { genId, truncate } from '../shared/utils.js';
+import { DATA_DIR } from '../shared/paths.js';
 import { ConsciousnessDB } from './consciousness-db.js';
 import { ConsciousnessError } from './errors.js';
 import type { BodyState, EmotionalValence, AttentionSignal } from './types.js';
@@ -187,7 +188,7 @@ export class ConsciousnessOrchestrator {
     let skipStream = false;
     let skipEmbodied = false;
     try {
-      const controlFile = path.resolve('data/consciousness-control.json');
+      const controlFile = path.join(DATA_DIR, 'consciousness-control.json');
       if (existsSync(controlFile)) {
         const control = JSON.parse(readFileSync(controlFile, 'utf8'));
         if (control.cognitiveStream === false) skipStream = true;

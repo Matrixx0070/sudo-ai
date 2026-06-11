@@ -6,10 +6,11 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { Invoice, InvoiceItem } from './types.js';
 
 const log = createLogger('business');
-const DB_PATH = path.resolve('data/business.db');
+const DB_PATH = path.join(DATA_DIR, 'business.db');
 
 // Row shapes
 interface InvoiceRow {

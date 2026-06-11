@@ -11,9 +11,9 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.undercover');
-const DATA_DIR = path.resolve('data');
 const UNDERCOVER_FILE = path.join(DATA_DIR, 'undercover.json');
 
 // ---------------------------------------------------------------------------

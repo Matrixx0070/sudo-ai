@@ -16,6 +16,7 @@
 import path from 'node:path';
 import { adminRouter, sendJson, readJsonBody } from '../admin-router.js';
 import { createLogger } from '../../shared/logger.js';
+import { DATA_DIR } from '../../shared/paths.js';
 import {
   CHANNEL_TYPES,
   readConfig,
@@ -26,7 +27,7 @@ import {
 
 const log = createLogger('api:admin:channels');
 
-const MIND_DB_PATH = path.resolve(process.cwd(), 'data', 'mind.db');
+const MIND_DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 // ---------------------------------------------------------------------------
 // GET /api/admin/channels

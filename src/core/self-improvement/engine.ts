@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR, WORKSPACE_DIR } from '../shared/paths.js';
 import { detectPatterns } from './pattern-detector.js';
 import type { DetectedPatterns } from './pattern-detector.js';
 import { FeedbackMemory } from './feedback-memory.js';
@@ -28,9 +29,9 @@ import type { PolicyAction } from '../learning/trace-driven-policy.js';
 
 const log = createLogger('self-improvement:engine');
 
-const DB_PATH        = path.resolve('data', 'mind.db');
-const LEARNINGS_PATH = path.resolve('workspace', 'LEARNINGS.md');
-const DRAFTS_DIR     = path.resolve('data', 'improvement-drafts');
+const DB_PATH        = path.join(DATA_DIR, 'mind.db');
+const LEARNINGS_PATH = path.join(WORKSPACE_DIR, 'LEARNINGS.md');
+const DRAFTS_DIR     = path.join(DATA_DIR, 'improvement-drafts');
 
 // ---------------------------------------------------------------------------
 // DB helpers

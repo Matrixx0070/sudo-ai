@@ -12,11 +12,12 @@ import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 
 const logger = createLogger('system.tasks');
 
-const TASKS_FILE = path.resolve('data/tasks.json');
+const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
 const TASKS_DIR = path.dirname(TASKS_FILE);
 
 // ---------------------------------------------------------------------------

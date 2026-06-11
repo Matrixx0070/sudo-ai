@@ -15,6 +15,7 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { contentHash, genId } from '../shared/utils.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('learning:trace-store');
 
@@ -202,9 +203,9 @@ export class TraceStore {
   private stmtInsertTrace!: import('better-sqlite3').Statement;
   private stmtUpsertAggregate!: import('better-sqlite3').Statement;
 
-  /** @param dbPath - Defaults to `data/traces.db` relative to cwd. */
+  /** @param dbPath - Defaults to `traces.db` inside DATA_DIR. */
   constructor(dbPath?: string) {
-    this.dbPath = dbPath ?? path.resolve('data/traces.db');
+    this.dbPath = dbPath ?? path.join(DATA_DIR, 'traces.db');
   }
 
   // -- Lifecycle -------------------------------------------------------------

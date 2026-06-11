@@ -16,6 +16,7 @@ import { mkdirSync } from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
+import { DATA_DIR } from '../shared/paths.js';
 import {
   initGoalsV2Schema,
   rowToGoal,
@@ -38,7 +39,7 @@ export type {
 
 const log = createLogger('autonomy:goal-engine-v2');
 
-const DB_PATH = path.resolve('data/goals.db');
+const DB_PATH = path.join(DATA_DIR, 'goals.db');
 
 // ---------------------------------------------------------------------------
 // GoalEngineV2

@@ -24,6 +24,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.ultra-plan');
 
@@ -31,7 +32,6 @@ const logger = createLogger('meta.ultra-plan');
 // Paths
 // ---------------------------------------------------------------------------
 
-const DATA_DIR       = path.resolve('data');
 const PLANS_DIR      = path.join(DATA_DIR, 'plans');
 const PENDING_DIR    = path.join(PLANS_DIR, 'pending');
 const ULTRAPLAN_LOG  = path.join(DATA_DIR, 'ultraplan.log');

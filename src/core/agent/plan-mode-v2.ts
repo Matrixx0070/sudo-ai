@@ -14,6 +14,7 @@
 import { createLogger } from '../shared/logger.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('agent:plan-mode-v2');
 
@@ -82,7 +83,7 @@ export class PlanModeStateMachine {
   private readonly dataDir: string;
 
   constructor(dataDir?: string) {
-    this.dataDir = dataDir ?? path.join(process.cwd(), 'data');
+    this.dataDir = dataDir ?? DATA_DIR;
     mkdirSync(this.dataDir, { recursive: true });
 
     // Restore from persisted state if available

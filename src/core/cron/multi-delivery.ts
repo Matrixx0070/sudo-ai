@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { CronJob, DeliveryTarget, DeliveryResult, CronJobRow } from './multi-delivery-types.js';
 
 // Dynamic import for better-sqlite3 (CommonJS module)
@@ -18,7 +19,6 @@ const Database: any = (await import('better-sqlite3')).default;
 
 const log = createLogger('cron:multi-delivery');
 
-const DATA_DIR = path.resolve('data');
 const DB_PATH = path.join(DATA_DIR, 'cron-jobs.db');
 
 /** Generate a unique ID for new jobs */

@@ -8,6 +8,7 @@
 import { mkdirSync, readdirSync, copyFileSync, statSync, existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 
 const logger = createLogger('system.backup-brain');
@@ -31,9 +32,8 @@ function humanBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-/** Resolve the data/ directory relative to the project root (cwd). */
 function dataDir(): string {
-  return join(process.cwd(), 'data');
+  return DATA_DIR;
 }
 
 // ---------------------------------------------------------------------------

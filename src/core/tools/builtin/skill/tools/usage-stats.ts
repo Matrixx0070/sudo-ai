@@ -9,6 +9,7 @@
 
 import path from 'node:path';
 import { createLogger } from '../../../../shared/logger.js';
+import { DATA_DIR } from '../../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 
 const logger = createLogger('skill:usage-stats');
@@ -66,7 +67,6 @@ interface CalibRow {
   outcome: number;
 }
 
-const DATA_DIR = path.resolve('data');
 const AUDIT_DB = path.join(DATA_DIR, 'audit.db');
 const CALIBRATION_DB = path.join(DATA_DIR, 'calibration.db');
 

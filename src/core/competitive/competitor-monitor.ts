@@ -10,9 +10,10 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('competitor-monitor');
-const DEFAULT_DB_PATH = path.resolve('data/competitive.db');
+const DEFAULT_DB_PATH = path.join(DATA_DIR, 'competitive.db');
 
 // ---------------------------------------------------------------------------
 // Public types

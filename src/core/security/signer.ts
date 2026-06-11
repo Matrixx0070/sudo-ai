@@ -28,6 +28,7 @@ import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import type { SignedArtifact, ArtifactVerifyResult } from '../shared/wave10-types.js';
 import { KeyRotationStore, type KeyRotationRow } from './key-rotation-store.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('security:signer');
 
@@ -44,7 +45,7 @@ const MAX_KEYGEN_ATTEMPTS = 3;
 // ---------------------------------------------------------------------------
 
 function getKeyDir(): string {
-  return process.env['SUDO_SIGNER_KEY_DIR'] ?? path.resolve('data', 'keys');
+  return process.env['SUDO_SIGNER_KEY_DIR'] ?? path.join(DATA_DIR, 'keys');
 }
 
 /** Path for versioned private key file. */

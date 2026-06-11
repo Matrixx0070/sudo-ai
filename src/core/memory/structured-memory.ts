@@ -12,6 +12,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import { legacyTypeToTaxonomy } from './memory-taxonomy.js';
 import { guardMemoryWrite } from './injection-scanner.js';
 
@@ -62,7 +63,7 @@ export interface MemorySearchOptions {
 // ---------------------------------------------------------------------------
 
 /** Absolute path to the structured memory store. */
-const STORE_DIR = path.resolve(process.cwd(), 'data', 'structured-memory');
+const STORE_DIR = path.join(DATA_DIR, 'structured-memory');
 
 const VALID_TYPES = new Set<MemoryType>([
   'user',

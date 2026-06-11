@@ -14,6 +14,7 @@ import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import path from 'node:path';
 import { mkdirSync, existsSync } from 'node:fs';
+import { DATA_DIR } from '../shared/paths.js';
 import type { OSVAdvisory } from './osv-client.js';
 import type { ComponentInfo } from './component-scanner.js';
 
@@ -54,7 +55,7 @@ export interface ScanSummary {
 // ---------------------------------------------------------------------------
 
 function getDbPath(): string {
-  const dataDir = process.env['DATA_DIR'] ?? path.resolve('data');
+  const dataDir = process.env['DATA_DIR'] ?? DATA_DIR;
   if (!existsSync(dataDir)) {
     mkdirSync(dataDir, { recursive: true });
   }

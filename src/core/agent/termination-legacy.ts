@@ -9,6 +9,7 @@
 import { writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { GoalEngineV2, GoalV2, GoalStatusV2 } from '../autonomy/goal-engine-v2.js';
 
 const log = createLogger('agent:termination-legacy');
@@ -197,11 +198,14 @@ export async function runTerminationLegacy(
   deps: TerminationLegacyDeps,
 ): Promise<LegacySnapshot> {
   const sessionWindow = deps.sessionWindow ?? 5;
-  const dataDir = deps.dataDir ?? path.resolve('data');
+  // Resolve the safe root at call time so an in-process DATA_DIR override
+  // (e.g. the TUI adapter) is honored even though paths.ts captures at load.
+  const envDataDir = process.env['DATA_DIR'];
+  const safeRoot = envDataDir ? path.resolve(envDataDir) : DATA_DIR;
+  const dataDir = deps.dataDir ?? safeRoot;
 
   // Security: reject dataDir paths that escape the safe root.
   const resolvedDataDir = path.resolve(dataDir);
-  const safeRoot = path.resolve(process.cwd(), 'data');
   if (resolvedDataDir !== safeRoot && !resolvedDataDir.startsWith(safeRoot + path.sep)) {
     log.warn({ dataDir: '[redacted]' }, 'termination-legacy: dataDir outside safe root — refusing to write');
     return {

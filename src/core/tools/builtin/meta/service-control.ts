@@ -17,10 +17,10 @@ import { createLogger } from '../../../shared/logger.js';
 import { execSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.service-control');
 const SERVICE_NAME = 'sudo-ai';
-const DATA_DIR = path.resolve('data');
 const EVENTS_LOG = path.join(DATA_DIR, 'service-events.log');
 const RESTART_MARKER = path.join(DATA_DIR, 'restart-scheduled.marker');
 

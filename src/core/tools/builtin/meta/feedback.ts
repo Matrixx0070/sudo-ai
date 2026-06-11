@@ -11,9 +11,10 @@ import Database from 'better-sqlite3';
 import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.feedback');
-const DB_PATH = path.resolve('data', 'mind.db');
+const DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 function getDb(): Database.Database {
   return new Database(DB_PATH, { readonly: true, fileMustExist: true });

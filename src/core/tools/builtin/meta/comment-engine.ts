@@ -21,10 +21,11 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { CommentEngine } from '../../../youtube/comment-engine.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.comments');
 
-const DB_PATH = path.resolve('data/mind.db');
+const DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 // ---------------------------------------------------------------------------
 // Lazy singleton — instantiated once per process, reset if env vars change

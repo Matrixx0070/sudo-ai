@@ -12,10 +12,10 @@ import path from 'node:path';
 import type { ToolRegistry } from '../../registry.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('pm-builtin');
 
-const DATA_DIR = path.resolve('data');
 const PM_TASKS_FILE = path.join(DATA_DIR, 'pm-tasks.json');
 const TIME_LOG_FILE = path.join(DATA_DIR, 'pm-timelog.json');
 

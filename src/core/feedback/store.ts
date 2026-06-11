@@ -11,10 +11,11 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('feedback:store');
 
-const DB_PATH = path.resolve('data', 'mind.db');
+const DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 export type Rating = 'good' | 'bad' | 'skip';
 

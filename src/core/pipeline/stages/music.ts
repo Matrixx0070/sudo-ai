@@ -8,10 +8,11 @@ import { PipelineError } from '../../shared/errors.js';
 import type { PipelineRun, DirectorPlan, MusicResult } from '../types.js';
 import { readdirSync, existsSync } from 'fs';
 import path from 'path';
+import { DATA_DIR } from '../../shared/paths.js';
 
 const log = createLogger('pipeline:music');
 
-const MUSIC_LIBRARY_PATH = path.resolve('data/media/music_library');
+const MUSIC_LIBRARY_PATH = path.join(DATA_DIR, 'media/music_library');
 
 // Mood → preferred track name substrings (case-insensitive match).
 const MOOD_TRACK_MAP: Record<string, string[]> = {
