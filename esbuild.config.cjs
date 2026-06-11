@@ -70,6 +70,12 @@ Promise.all([
     keepNames: true,
   }),
 ]).then(() => {
+  // Runtime asset, not transpiled: tool-synthesize resolves this next to its
+  // own __dirname at runtime, so it must ship inside dist as well.
+  fs.copyFileSync(
+    path.join(builtinDir, 'meta/synth-bwrap-entry.cjs'),
+    path.join(projectRoot, 'dist/core/tools/builtin/meta/synth-bwrap-entry.cjs'),
+  );
   console.log('Build complete: server CLI + builtin tools');
 }).catch((err) => {
   console.error('Build failed:', err.message);
