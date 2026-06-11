@@ -1,22 +1,15 @@
 /**
  * @file auth/index.ts
- * @description Authentication module — credential pooling + OAuth 2.0 / SSO.
+ * @description Authentication module — OAuth 2.0 / SSO.
  *
  * Exports:
- * - CredentialPool: Multi-key credential rotation
  * - OAuthManager: OAuth 2.0 / OIDC / SSO authentication
  * - All auth types
  *
  * Usage:
  * ```ts
- * import { CredentialPool, OAuthManager, OAuthProviders } from '../core/auth/index.js';
+ * import { OAuthManager, OAuthProviders } from '../core/auth/index.js';
  *
- * // Credential pooling (API keys)
- * const pool = CredentialPool.getInstance();
- * pool.loadFromEnv('openai');
- * const cred = pool.selectCredential('openai');
- *
- * // OAuth 2.0 (user authentication)
  * const oauth = new OAuthManager({
  *   providers: [OAuthProviders.github('<your-github-oauth-client-id>')],
  *   autoRefresh: true,
@@ -26,18 +19,7 @@
  * ```
  */
 
-// Credential Pool (existing)
-export { CredentialPool, credentialPool } from './credential-pool.js';
-export type {
-  CredentialEntry,
-  CredentialPoolConfig,
-  SelectionStrategy,
-  PoolStatus,
-  AddCredentialRequest,
-  SetStrategyRequest,
-} from './credential-pool-types.js';
-
-// OAuth 2.0 / SSO (new)
+// OAuth 2.0 / SSO
 export { OAuthManager, OAuthProviders } from './oauth.js';
 export {
   generateCodeVerifier,
