@@ -66,7 +66,6 @@ export const DEFAULT_RULES: Omit<ApprovalRule, 'id' | 'createdAt' | 'updatedAt'>
   { pattern: 'meta.self-modify',   tier: 'notify', reason: 'Code changes — notify after' },
   { pattern: 'meta.self-update',   tier: 'notify', reason: 'Self-update — notify after' },
   { pattern: 'meta.service-control', tier: 'notify', reason: 'Service restart — notify after' },
-  { pattern: 'video.remotion-msa', tier: 'notify', reason: 'Content publish — notify after' },
   { pattern: 'system.exec',        tier: 'notify', reason: 'Shell commands — notify after' },
 
   // === CONFIRM ===
