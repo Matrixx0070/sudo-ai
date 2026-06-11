@@ -40,7 +40,6 @@ import type {
   Emitter,
   HookEmitterLike,
   FeedbackMemoryLike,
-  PromptCacheManagerLike,
 } from './loop-helpers.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
 import { LoopGuard } from './loop-guard.js';
@@ -75,7 +74,6 @@ import { createHash } from 'node:crypto';
 import type { DetectionResult } from '../cognition/injection-detector.js';
 import { ToolOutcomeLearner, type ToolOutcomeLearnerDeps } from './tool-outcome-learner.js';
 import { FeedbackMemory } from '../self-improvement/feedback-memory.js';
-import { promptCache } from '../brain/prompt-cache-optimizer.js';
 import { NegativeRouter } from '../brain/negative-router.js';
 import type { RoutingResult } from '../brain/negative-router.js';
 import { ContextCompressor } from '../brain/context-compressor.js';
@@ -319,8 +317,6 @@ export class AgentLoop {
 
   // Phase 2 polish: FeedbackMemory (live recordSuccess/recordFailure wired into tool exec paths)
   private _feedbackMemory?: FeedbackMemory;
-  // Phase 2 polish: PromptCacheManager (for prepareMessages check; singleton injected)
-  private _promptCacheManager?: PromptCacheManagerLike;
 
   // Negative Router — 3-tier DFA routing (block/redirect/model selection)
   private _negativeRouter?: NegativeRouter;
@@ -503,7 +499,7 @@ export class AgentLoop {
       log.warn({ err: String(err) }, 'AgentLoop: EpistemicGate init failed — disabled');
     }
 
-    // Phase 2 polish wire (FeedbackMemory + PromptCacheManager boot init).
+    // Phase 2 polish wire (FeedbackMemory boot init).
     // Pattern: exact match to TrustTierTracker / VetoOverrideStore / AuditTrail in this ctor (DATA_DIR, mind.db for feedback).
     // FeedbackMemory lives for process lifetime (like trust db); records are fail-open side effects.
     try {
@@ -520,10 +516,6 @@ export class AgentLoop {
     } catch (err) {
       log.warn({ err: String(err) }, 'AgentLoop: FeedbackMemory init failed — recording disabled');
     }
-    // Prompt cache singleton (no db, always safe; guard inside prepareMessages).
-    this._promptCacheManager = promptCache;
-    log.info('AgentLoop: PromptCacheManager attached (singleton for prepareMessages)');
-
     // Negative Router — 3-tier DFA routing engine (optional, fail-open).
     try {
       this._negativeRouter = new NegativeRouter();
@@ -1774,7 +1766,7 @@ export class AgentLoop {
         // Hook: before_prompt_build — fires before the message array is prepared for the API call.
         void this.hooks?.emit('before_prompt_build', { event: 'before_prompt_build', sessionId: state.sessionId, iteration: state.iteration });
 
-        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper, this._promptCacheManager);
+        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper);
 
         // Hook: before_model_resolve — fires after messages are prepared, just before brain.call().
         void this.hooks?.emit('before_model_resolve', { event: 'before_model_resolve', sessionId: state.sessionId, modelName: model ?? '' });

@@ -256,12 +256,12 @@ describe('executeToolCalls — tool_not_found routing', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 2 polish wiring tests (FeedbackMemory records + PromptCacheManager check)
-// These exercise the new optional params + guarded calls in executeSingleToolCall / prepareMessages.
+// Phase 2 polish wiring tests (FeedbackMemory records)
+// These exercise the new optional params + guarded calls in executeSingleToolCall.
 // Mocks confirm records fire on success/fail paths with correct (real) API args.
 // ---------------------------------------------------------------------------
 
-describe('Phase 2: FeedbackMemory + PromptCacheManager wiring (loop-helpers)', () => {
+describe('Phase 2: FeedbackMemory wiring (loop-helpers)', () => {
   it('P2-FB-1: recordSuccess called on successful tool execution (with real API shape)', async () => {
     const recordSuccess = vi.fn();
     const recordFailure = vi.fn();
@@ -328,28 +328,6 @@ describe('Phase 2: FeedbackMemory + PromptCacheManager wiring (loop-helpers)', (
     // resultContent in catch is the error string
     expect(recordFailure).toHaveBeenCalledWith('bad.tool', { x: 42 }, expect.stringContaining('Error executing tool bad.tool'), 'test-session');
     expect(recordSuccess).not.toHaveBeenCalled();
-  });
-
-  it('P2-PC-1: PromptCacheManager.getCachedPrompt is invoked (advisory wire, no behavior change)', async () => {
-    const getCachedPrompt = vi.fn(() => null);
-    const pcMock: any = { getCachedPrompt };
-
-    // We can't easily unit the prepare path without full brain, but we can import + call prepareMessages directly
-    // (it is exported). This covers the injected param + guard path.
-    const { prepareMessages } = await import('../../src/core/agent/loop-helpers.js');
-    const brain = { call: vi.fn() } as any;
-    const session: any = { messages: [{ role: 'user', content: 'hello test cache' }] };
-    const state: any = { sessionId: 'p2-cache-sess', iteration: 0, isCompacting: false, pendingToolCalls: 0 };
-    const emit = () => {};
-
-    // Should not throw; getCachedPrompt should be called (unless disabled, which we don't set)
-    const result = await prepareMessages(brain, session, state, emit, undefined, pcMock);
-    expect(Array.isArray(result)).toBe(true);
-    expect(getCachedPrompt).toHaveBeenCalled();
-    // key contains session + prefix of user content
-    const calledKey = getCachedPrompt.mock.calls[0]?.[0] as string;
-    expect(calledKey).toContain('p2-cache-sess');
-    expect(calledKey).toContain('hello test cache');
   });
 
   // Phase 3 strict minimal: dedup in loop-helpers (guards now via guardedRecordFeedback); P2 record paths cover it
