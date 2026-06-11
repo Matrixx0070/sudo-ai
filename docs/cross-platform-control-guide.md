@@ -156,10 +156,7 @@ Control action (e.g. a GUI click on Windows) → outcome recorded → learner up
 
 **Feature switches (still apply):**
 - `SUDO_MCP_DISABLE=1`, `SUDO_MCP_OAUTH_DISABLE=1`, `SUDO_MCP_REMOTE_DISABLE=1`
-- `SUDO_SKILLS_HUB_DISABLE=1`, `SUDO_SKILLS_INSTALL_DISABLE=1`, `SUDO_SKILLS_SANDBOX_DISABLE=1`
 - `SUDO_PROFILES_DISABLE=1`
-- `SUDO_CREDENTIAL_POOL_DISABLE=1`
-- `SUDO_MULTI_DELIVERY_DISABLE=1`
 - `SUDO_DASHBOARD_DISABLE=1`
 - `SUDO_BRAIN_RACE_DISABLE=1`, `SUDO_BRAIN_CONSENSUS_DISABLE=1`
 - `SUDO_AUTO_APPROVE=1` (enables automatic approval for autonomy; the opposite of gating)

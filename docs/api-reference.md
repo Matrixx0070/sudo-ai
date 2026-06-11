@@ -432,12 +432,7 @@ All kill-switches use exact-`"1"`-match semantics: the feature is disabled only 
 | `SUDO_MCP_DISABLE=1` | MCP server integration (SSE/WS/OAuth) |
 | `SUDO_MCP_OAUTH_DISABLE=1` | MCP OAuth PKCE |
 | `SUDO_MCP_REMOTE_DISABLE=1` | MCP remote tool access |
-| `SUDO_SKILLS_HUB_DISABLE=1` | Skills Hub (search/install/update) |
-| `SUDO_SKILLS_INSTALL_DISABLE=1` | Skills install from registry |
-| `SUDO_SKILLS_SANDBOX_DISABLE=1` | Skills sandboxing |
 | `SUDO_PROFILES_DISABLE=1` | Multi-profile isolation |
-| `SUDO_CREDENTIAL_POOL_DISABLE=1` | Credential pool (4 strategies) |
-| `SUDO_MULTI_DELIVERY_DISABLE=1` | Multi-delivery cron (6 targets) |
 | `SUDO_DASHBOARD_DISABLE=1` | Web dashboard (stats/health/alignment/metrics) |
 | `SUDO_BRAIN_RACE_DISABLE=1` | Brain parallel model race |
 | `SUDO_BRAIN_CONSENSUS_DISABLE=1` | 3-model Jaccard consensus |
