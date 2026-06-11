@@ -24,14 +24,6 @@ export type {
   GatewayConfig,
 } from './types.js';
 
-// Permission modes (reverse-engineered from Claude Code)
-export { PermissionModeManager } from './permission-modes.js';
-export type {
-  PermissionModeType,
-  PermissionModeConfig,
-  ActionCategory,
-} from './permission-modes.js';
-
 // Settings manager (project + local scopes)
 export { SettingsManager } from './settings-manager.js';
 export type {
