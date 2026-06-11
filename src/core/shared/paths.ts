@@ -22,8 +22,20 @@ export const PROJECT_ROOT: string = process.env['SUDO_AI_HOME']
   ? path.resolve(process.env['SUDO_AI_HOME'])
   : process.cwd();
 
-/** `<root>/data` — databases and runtime state. */
-export const DATA_DIR: string = path.join(PROJECT_ROOT, 'data');
+/**
+ * `<root>/data` — databases and runtime state.
+ *
+ * Honors the `DATA_DIR` env override — the same variable ecosystem.config.cjs
+ * sets for prod/staging isolation and that runtime modules (cli.ts trackers,
+ * agent/loop.ts, kanban, profiles) read at call time. Without this, modules
+ * importing the constant would write into `<root>/data` even when a staging
+ * instance points DATA_DIR elsewhere. Captured at module load: overrides set
+ * later in-process (e.g. the TUI adapter's private dir) intentionally do not
+ * move this constant.
+ */
+export const DATA_DIR: string = process.env['DATA_DIR']
+  ? path.resolve(process.env['DATA_DIR'])
+  : path.join(PROJECT_ROOT, 'data');
 
 /** `<root>/workspace` — agent working area. */
 export const WORKSPACE_DIR: string = path.join(PROJECT_ROOT, 'workspace');

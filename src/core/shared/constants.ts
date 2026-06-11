@@ -4,7 +4,7 @@
  * load, everything else is `as const`.
  */
 
-import { projectPath, dataPath } from './paths.js';
+import { projectPath, dataPath, DATA_DIR } from './paths.js';
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -108,7 +108,7 @@ export const BILLING_COOLDOWN: readonly number[] = [
 // ---------------------------------------------------------------------------
 
 export const PATHS = {
-  DATA: projectPath('data'),
+  DATA: DATA_DIR,
   MIND_DB: dataPath('mind.db'),
   WISDOM_DB: dataPath('wisdom.db'),
   SESSIONS: dataPath('sessions'),

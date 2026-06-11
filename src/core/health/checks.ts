@@ -18,14 +18,14 @@ import { execSync } from 'node:child_process';
 
 import Database from 'better-sqlite3';
 import type { HealthCheck } from './watchdog.js';
-import { PROJECT_ROOT } from '../shared/paths.js';
+import { PROJECT_ROOT, DATA_DIR as RESOLVED_DATA_DIR } from '../shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Shared path constants (exported for use in fixes.ts and watchdog.ts)
 // ---------------------------------------------------------------------------
 
 export const ROOT       = PROJECT_ROOT;
-export const DATA_DIR   = path.join(ROOT, 'data');
+export const DATA_DIR   = RESOLVED_DATA_DIR;
 export const LOG_FILE   = path.join(DATA_DIR, 'logs', 'sudo-ai.log');
 export const HEARTBEAT_FILE = path.join(DATA_DIR, 'heartbeat-state.json');
 
