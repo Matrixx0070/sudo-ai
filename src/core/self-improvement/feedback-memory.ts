@@ -2,8 +2,8 @@
  * @file feedback-memory.ts
  * @description FeedbackMemory — records both successes and failures per tool invocation.
  *
- * SUDO-AI v4 only tracked failures. v5 tracks both so ToolQualityScorer can compute
- * meaningful EMA scores and surface best-performing tools alongside problem areas.
+ * SUDO-AI v4 only tracked failures. v5 tracks both to compute meaningful EMA
+ * scores and surface best-performing tools alongside problem areas.
  *
  * Storage: SQLite table `feedback_memory` in the shared mind.db instance.
  */
