@@ -27,7 +27,7 @@ export const PROJECT_ROOT: string = process.env['SUDO_AI_HOME']
  *
  * Honors the `DATA_DIR` env override — the same variable ecosystem.config.cjs
  * sets for prod/staging isolation and that runtime modules (cli.ts trackers,
- * agent/loop.ts, kanban, profiles) read at call time. Without this, modules
+ * agent/loop.ts, profiles) read at call time. Without this, modules
  * importing the constant would write into `<root>/data` even when a staging
  * instance points DATA_DIR elsewhere. Captured at module load: overrides set
  * later in-process (e.g. the TUI adapter's private dir) intentionally do not

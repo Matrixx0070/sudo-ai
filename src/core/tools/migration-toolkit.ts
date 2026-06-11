@@ -138,7 +138,7 @@ const FEATURE_COMPARISON: ComparisonEntry[] = [
   { feature: 'Local-First',          openclaw: '❌ Cloud required',  hermes: '✅ Ollama support',  openjarvis: '✅ Offline default',  sudoai: '✅ Ollama + local fallback' },
   { feature: 'Desktop Control',      openclaw: '❌ CLI only',       hermes: '✅ Full desktop',   openjarvis: '⚠️ Immature UI',    sudoai: '✅ IComputerUse (exec/browser/GUI)' },
   { feature: 'Autonomous Reliability', openclaw: '⚠️ 5/10 complex', hermes: '⚠️ Memory bugs',     openjarvis: '⚠️ 6/10',          sudoai: '✅ KAIROS + arsenal self-repair' },
-  { feature: 'Multi-Agent',          openclaw: '✅ Basic',           hermes: '✅ Mission control', openjarvis: '❌ None',           sudoai: '✅ Swarm 6 roles + Kanban' },
+  { feature: 'Multi-Agent',          openclaw: '✅ Basic',           hermes: '✅ Mission control', openjarvis: '❌ None',           sudoai: '✅ Swarm 6 roles' },
   { feature: 'Full system control',  openclaw: '⚠️ Browser',        hermes: '⚠️ Limited',        openjarvis: '⚠️ Limited',        sudoai: '✅ Owner-controlled' },
 ];
 

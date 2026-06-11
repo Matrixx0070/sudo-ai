@@ -340,26 +340,6 @@ export class HeartbeatEngine {
       log.debug({ err }, 'No task data found');
     }
 
-    // Read from Kanban board if available
-    if (this.db) {
-      try {
-        const rows = this.db
-          .prepare(`SELECT id, title, priority, category FROM kanban_tasks WHERE status = 'ready' ORDER BY priority DESC LIMIT 10`)
-          .all() as Array<{ id: string; title: string; priority: string; category: string }>;
-
-        for (const row of rows) {
-          tasks.push({
-            id: row.id,
-            title: row.title,
-            priority: row.priority as BriefingTask['priority'],
-            category: row.category,
-          });
-        }
-      } catch {
-        // Table may not exist yet
-      }
-    }
-
     return tasks;
   }
 
