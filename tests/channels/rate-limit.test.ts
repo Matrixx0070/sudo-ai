@@ -267,12 +267,15 @@ describe('Rate Limiter — Token Bucket', () => {
   // -------------------------------------------------------------------------
   it('9. persistence: write valid JSON → _loadPersisted restores bucket state', async () => {
     const ORIGINAL_CWD = process.cwd();
-    // The rate limiter resolves WORKSPACE_DIR = process.cwd()/workspace at import
-    // time. chdir into a fresh temp dir BEFORE importing so this test reads,
-    // writes, and deletes an isolated rate-limits.json and never touches the
-    // real workspace/rate-limits.json.
+    const ORIGINAL_HOME = process.env['SUDO_AI_HOME'];
+    // The rate limiter resolves PERSIST_FILE from shared paths.ts WORKSPACE_DIR
+    // (= SUDO_AI_HOME ?? process.cwd(), captured at import time). chdir into a
+    // fresh temp dir AND clear SUDO_AI_HOME before importing so this test
+    // reads, writes, and deletes an isolated rate-limits.json and never
+    // touches the real workspace/rate-limits.json.
     const tempCwd = await mkdtemp(join(tmpdir(), 'rate-limit-test-'));
     process.chdir(tempCwd);
+    delete process.env['SUDO_AI_HOME'];
     try {
       vi.resetModules();
       process.env['SUDO_RATE_LIMIT_PER_MIN'] = '10';
@@ -306,6 +309,7 @@ describe('Rate Limiter — Token Bucket', () => {
       expect(restored!.burstWarned).toBe(false);
     } finally {
       process.chdir(ORIGINAL_CWD);
+      if (ORIGINAL_HOME !== undefined) process.env['SUDO_AI_HOME'] = ORIGINAL_HOME;
       await rm(tempCwd, { recursive: true, force: true });
       delete process.env['SUDO_RATE_LIMIT_PERSIST'];
     }

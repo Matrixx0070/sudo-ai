@@ -17,6 +17,7 @@ import { parseYaml } from './yaml-parser.js';
 import { validateWorkflow, evaluateCondition, execShell } from './executor.js';
 import type { AccessorMap } from './executor.js';
 import { createLogger } from '../shared/logger.js';
+import { WORKSPACE_DIR } from '../shared/paths.js';
 
 const log = createLogger('workflows');
 
@@ -24,7 +25,7 @@ const log = createLogger('workflows');
 // Path confinement — workflows must live under WORKFLOWS_BASE
 // ---------------------------------------------------------------------------
 
-const WORKFLOWS_BASE = path.resolve(process.cwd(), 'workspace/workflows');
+const WORKFLOWS_BASE = path.join(WORKSPACE_DIR, 'workflows');
 
 // ---------------------------------------------------------------------------
 // Re-export all public types so downstream consumers only import from here

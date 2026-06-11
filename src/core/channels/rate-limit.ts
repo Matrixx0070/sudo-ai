@@ -17,6 +17,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/index.js';
+import { WORKSPACE_DIR } from '../shared/paths.js';
 import type { HookContext, HookEvent } from '../hooks/index.js';
 
 const log = createLogger('channels:rate-limit');
@@ -31,7 +32,6 @@ const GC_INTERVAL_MS = 60_000;
 const BUCKET_TTL_MS = 3_600_000; // 1 hour
 const PERSIST_INTERVAL_MS = 60_000;
 const REFILL_WINDOW_MS = 60_000; // tokens refill over 1 minute
-const WORKSPACE_DIR = join(process.cwd(), 'workspace');
 const PERSIST_FILE = join(WORKSPACE_DIR, 'rate-limits.json');
 
 // ---------------------------------------------------------------------------

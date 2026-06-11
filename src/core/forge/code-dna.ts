@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
+import { WORKSPACE_DIR } from '../shared/paths.js';
 
 /**
  * Defines the structure of a reusable code pattern extracted from
@@ -31,7 +32,7 @@ export class CodeDNA {
   private db: Database.Database;
 
   constructor() {
-    const dir = join(process.cwd(), 'workspace', 'forge');
+    const dir = join(WORKSPACE_DIR, 'forge');
     mkdirSync(dir, { recursive: true });
     const dbPath = join(dir, 'dna.db');
     this.db = new Database(dbPath);

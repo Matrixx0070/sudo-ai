@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import type { Database, Statement } from 'better-sqlite3';
 import { nanoid } from 'nanoid';
 import { createLogger } from '../shared/logger.js';
+import { WORKSPACE_DIR } from '../shared/paths.js';
 import {
   FileStoreError,
   MAX_FILE_BYTES,
@@ -50,7 +51,7 @@ export class FileStore {
   constructor(db: Database, baseDir: string, workspaceRoot?: string) {
     this.db = db;
     this.baseDir = baseDir;
-    this.workspaceRoot = workspaceRoot ?? path.join(process.cwd(), 'workspace');
+    this.workspaceRoot = workspaceRoot ?? WORKSPACE_DIR;
 
     this.runMigration();
 

@@ -1,5 +1,6 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { projectPath } from '../../../shared/paths.js';
 
 const logger = createLogger('video.remotion-msa');
 
@@ -45,13 +46,13 @@ export const video_remotion_msaTool: ToolDefinition = {
       // Generate unique output filename
       const crypto = await import('crypto');
       const fs = await import('fs/promises');
-      const path = await import('path');
+      const path = await import('node:path');
       
       const hash = crypto.createHash('md5')
         .update(`${title}-${script.slice(0, 50)}`)
         .digest('hex');
       
-      const outputDir = path.join(process.cwd(), 'output');
+      const outputDir = projectPath('output');
       await fs.mkdir(outputDir, { recursive: true });
       
       const outputPath = path.join(outputDir, `msa-${hash}.mp4`);

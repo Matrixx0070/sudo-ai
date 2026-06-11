@@ -16,6 +16,7 @@
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../../shared/index.js';
+import { projectPath } from '../../shared/paths.js';
 import type { SlashCommand, CommandContext } from '../types.js';
 import { TraceStore } from '../../learning/trace-store.js';
 import { TraceAnalyzer } from '../../learning/trace-analyzer.js';
@@ -138,7 +139,7 @@ export const forgeCommand: SlashCommand = {
       return 'Skill forge needs DATA_DIR set (the directory holding traces.db).';
     }
     const proposalsDir = path.join(dataDir, 'skill-proposals');
-    const liveSkillsDir = path.resolve(process.cwd(), 'skills');
+    const liveSkillsDir = projectPath('skills');
 
     const trimmed = (args ?? '').trim();
     const [sub, ...rest] = trimmed.split(/\s+/);

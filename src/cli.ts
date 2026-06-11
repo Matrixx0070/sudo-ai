@@ -15,7 +15,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from './core/shared/logger.js';
-import { PROJECT_ROOT, DATA_DIR } from './core/shared/paths.js';
+import { PROJECT_ROOT, DATA_DIR, WORKSPACE_DIR, projectPath } from './core/shared/paths.js';
 import { ConfigLoader } from './core/config/loader.js';
 import { MindDB } from './core/memory/db.js';
 import { Brain } from './core/brain/brain.js';
@@ -451,7 +451,7 @@ async function boot(): Promise<void> {
   const sandboxProxyBus = new EventEmitter();
   const sandboxManager = new SandboxManager({
     stateMachine: sandboxProxyBus,
-    workspaceRoot: path.join(process.cwd(), 'workspace', 'sessions'),
+    workspaceRoot: path.join(WORKSPACE_DIR, 'sessions'),
     defaultPolicy: DEFAULT_SANDBOX_POLICY,
   });
   registerShutdown(async () => sandboxManager.teardownAll());
@@ -1987,7 +1987,7 @@ async function boot(): Promise<void> {
     void steeringChannel;
 
     // Markdown skill loader
-    const mdSkills = await loadMarkdownSkills(path.resolve(process.cwd(), 'skills'));
+    const mdSkills = await loadMarkdownSkills(projectPath('skills'));
     // Build skill→tool reverse index and wire into ToolRegistry (fail-open)
     registry.setSkillIndex(buildSkillToolIndex(mdSkills));
 
