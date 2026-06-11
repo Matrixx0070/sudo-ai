@@ -31,6 +31,8 @@ export function findDuplicateToolNames(
 
 // Warn once per distinct collision set per process — collisions are
 // per-request, so an unbounded warn would spam the log on every call.
+// Growth is bounded by the number of distinct tool configurations the
+// process ever sees (typically O(1)), so no eviction is needed.
 const warnedSignatures = new Set<string>();
 
 /** Test hook: clear the once-per-signature memory. */
@@ -39,8 +41,12 @@ export function resetDuplicateToolNameWarnings(): void {
 }
 
 /**
- * Log-only, fail-open: never throws, never alters the entries.
- * Callers still serialize via Object.fromEntries (last-write-wins).
+ * Log-only, fail-open: never throws, never alters the entries. (Fail-open
+ * covers this function body; module-load failures in logger.ts are outside
+ * the guard.)
+ * Callers sort (when SUDO_PROMPT_CACHE=1) then serialize via
+ * Object.fromEntries; the stable sort preserves relative order among
+ * same-named entries, so last-definition-wins holds in both modes.
  */
 export function warnOnDuplicateToolNames(
   entries: ReadonlyArray<readonly [string, unknown]>,
