@@ -4,8 +4,7 @@
  *
  * Manages the update lifecycle: periodic checking, health gating,
  * downloading, verifying, applying, and restarting. Integrates with
- * Watchdog for health checks, ConfigWatcher for hot-reload, and
- * pm2 for process restart.
+ * Watchdog for health checks and pm2 for process restart.
  *
  * Covers: start, stop, _checkCycle, _applyUpdate, _rollback,
  *         updateConfig, event emission.
