@@ -91,6 +91,7 @@ export class AgentSpawner {
       const result = await this.swarm.spawn(prompt, {
         model: config.model,
         timeout: config.timeout,
+        ...(config.forkHistory ? { forkHistory: config.forkHistory } : {}),
       });
 
       instance.status = 'completed';

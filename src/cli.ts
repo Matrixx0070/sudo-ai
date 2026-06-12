@@ -482,7 +482,8 @@ async function boot(): Promise<void> {
   try {
     const { MultiAgentOrchestrator, createMultiAgentTool } = await import('./core/agents/index.js');
     const multiAgent = new MultiAgentOrchestrator(brain, registry, dualSessionManager);
-    registry.register(createMultiAgentTool(multiAgent));
+    // Session manager enables opt-in fork-mode parent context (SUDO_FORK_CONTEXT=1).
+    registry.register(createMultiAgentTool(multiAgent, dualSessionManager));
     log.info('Multi-agent orchestrator registered (system.spawn-agent)');
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
