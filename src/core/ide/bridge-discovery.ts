@@ -129,8 +129,20 @@ export function isStalePid(portFilePath?: string): boolean {
 // mDNS Advertisement (best-effort)
 // ---------------------------------------------------------------------------
 
-let mdnsBrowser: unknown = null;
-let mdnsService: unknown = null;
+// Minimal contracts for the optional bonjour-service package (loaded via
+// require in startMdns); the assertion at that boundary names what this
+// module uses. Methods stay optional because the package is best-effort.
+interface MdnsService {
+  stop?: () => void;
+}
+
+interface MdnsInstance {
+  publish(opts: { name: string; type: string; port: number; txt?: Record<string, string> }): MdnsService;
+  destroy?: () => void;
+}
+
+let mdnsBrowser: MdnsInstance | null = null;
+let mdnsService: MdnsService | null = null;
 
 /**
  * Start mDNS advertisement for `_sudo-ai._tcp`.
@@ -145,10 +157,11 @@ export function startMdns(port: number, options?: { name?: string }): void {
   try {
     // Dynamic import — bonjour-service may not be installed
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const bonjour = require('bonjour-service');
-    mdnsBrowser = new bonjour.default();
+    const bonjour = require('bonjour-service') as { default: new () => MdnsInstance };
+    const browser = new bonjour.default();
+    mdnsBrowser = browser;
 
-    mdnsService = (mdnsBrowser as any).publish({
+    mdnsService = browser.publish({
       name: options?.name ?? 'sudo-ai',
       type: 'sudo-ai',
       port,
@@ -166,11 +179,11 @@ export function startMdns(port: number, options?: { name?: string }): void {
  */
 export function stopMdns(): void {
   try {
-    if (mdnsService && typeof (mdnsService as any).stop === 'function') {
-      (mdnsService as any).stop();
+    if (mdnsService && typeof mdnsService.stop === 'function') {
+      mdnsService.stop();
     }
-    if (mdnsBrowser && typeof (mdnsBrowser as any).destroy === 'function') {
-      (mdnsBrowser as any).destroy();
+    if (mdnsBrowser && typeof mdnsBrowser.destroy === 'function') {
+      mdnsBrowser.destroy();
     }
   } catch (err) {
     log.debug({ err: String(err) }, 'Error stopping mDNS');
