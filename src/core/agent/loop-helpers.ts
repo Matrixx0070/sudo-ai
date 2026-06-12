@@ -81,6 +81,10 @@ export interface ToolDescriptor {
   description: string;
   category: string;
   parameters: Record<string, unknown>;
+  /** Declared safety level — 'destructive' tools never run in parallel. */
+  safety?: 'readonly' | 'destructive';
+  /** Confirmation-gated tools never run in parallel. */
+  requiresConfirmation?: boolean;
 }
 
 export interface ToolRegistryLike {
@@ -367,27 +371,43 @@ function guardedRecordFeedback(
 // Parallel tool-call execution helpers (Upgrade 5)
 // ---------------------------------------------------------------------------
 
-/** Tool name prefixes that mutate shared state and must always run sequentially. */
+/**
+ * Tool name prefixes that mutate shared state and must always run sequentially.
+ * Namespace prefixes (trailing dot) block every tool in that namespace:
+ * `system.` and `code.` execute arbitrary commands, and `browser.`/`sandbox.`
+ * tools share one stateful session, so even nominally read-only members are
+ * order-dependent. Generic names (file./shell./db.) are kept for synthesized
+ * and MCP tools that follow those conventions.
+ */
 const SEQUENTIAL_TOOL_PREFIXES: readonly string[] = [
+  'system.', 'code.', 'browser.', 'sandbox.',
+  'coder.write-file', 'coder.edit-file', 'coder.multi-edit', 'coder.smart-edit',
+  'coder.apply-patch', 'coder.notebook-edit', 'coder.scaffold', 'coder.git',
+  'coder.npm', 'coder.test',
   'file.write', 'file.delete', 'file.move', 'file.rename',
-  'shell.run', 'shell.exec', 'code.run', 'code.exec',
-  'browser.navigate', 'browser.click', 'browser.type',
-  'db.write', 'db.insert', 'db.update', 'db.delete',
+  'shell.', 'db.write', 'db.insert', 'db.update', 'db.delete',
   'memory.save', 'memory.delete',
 ];
 
 /**
  * Return true when a tool call can run concurrently with others.
- * Sequential when it has a mutating prefix or shares a `path` arg with another call.
+ * Sequential when it has a mutating prefix, declares `safety: 'destructive'`
+ * or `requiresConfirmation` in the registry, or shares a `path` arg with
+ * another call in the same batch.
+ *
+ * Exported with underscore prefix to signal "internal, test-only".
  */
-function isParallelSafe(
+export function _isParallelSafe(
   tc: { name: string; arguments: Record<string, unknown> },
   allCalls: ReadonlyArray<{ name: string; arguments: Record<string, unknown> }>,
+  registry?: Pick<ToolRegistryLike, 'get'>,
 ): boolean {
   const nameL = tc.name.toLowerCase();
   for (const prefix of SEQUENTIAL_TOOL_PREFIXES) {
     if (nameL.startsWith(prefix)) return false;
   }
+  const def = registry?.get?.(tc.name);
+  if (def && (def.safety === 'destructive' || def.requiresConfirmation === true)) return false;
   const myPath = tc.arguments['path'] as string | undefined;
   if (myPath) {
     const conflicts = allCalls.filter(
@@ -405,13 +425,15 @@ interface PartitionResult {
   trailingSequential: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
 }
 
-function partitionToolCalls(
+/** Exported with underscore prefix to signal "internal, test-only". */
+export function _partitionToolCalls(
   calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
+  registry?: Pick<ToolRegistryLike, 'get'>,
 ): PartitionResult {
-  if (calls.length <= 1) {
+  if (calls.length <= 1 || process.env['SUDO_PARALLEL_TOOLS_DISABLE'] === '1') {
     return { leadingSequential: calls, parallel: [], trailingSequential: [] };
   }
-  const safeFlags = calls.map(tc => isParallelSafe(tc, calls));
+  const safeFlags = calls.map(tc => _isParallelSafe(tc, calls, registry));
   const firstSafe = safeFlags.indexOf(true);
   if (firstSafe === -1) {
     return { leadingSequential: calls, parallel: [], trailingSequential: [] };
@@ -423,6 +445,14 @@ function partitionToolCalls(
     parallel: calls.slice(firstSafe, lastSafe + 1),
     trailingSequential: calls.slice(lastSafe + 1),
   };
+}
+
+const DEFAULT_TOOL_CONCURRENCY = 10;
+
+/** Parallel-batch concurrency cap from SUDO_TOOL_CONCURRENCY (default 10, min 1). */
+function getToolConcurrency(): number {
+  const raw = Number(process.env['SUDO_TOOL_CONCURRENCY']);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_TOOL_CONCURRENCY;
 }
 
 interface SingleCallResult {
@@ -683,7 +713,7 @@ export async function executeToolCalls(
   };
 
   // Phase 1: partition into sequential / parallel groups.
-  const { leadingSequential, parallel, trailingSequential } = partitionToolCalls(approvedCalls);
+  const { leadingSequential, parallel, trailingSequential } = _partitionToolCalls(approvedCalls, toolRegistry);
 
   // Phase 2a: leading sequential block.
   for (const tc of leadingSequential) {
@@ -691,17 +721,21 @@ export async function executeToolCalls(
     commit(res);
   }
 
-  // Phase 2b: parallel batch (two or more safe tools).
+  // Phase 2b: parallel batch (two or more safe tools), capped per chunk.
   if (parallel.length > 1) {
+    const cap = getToolConcurrency();
     log.info(
-      { count: parallel.length, tools: parallel.map(t => t.name) },
+      { count: parallel.length, cap, tools: parallel.map(t => t.name) },
       'Running tool calls in parallel',
     );
-    const results = await Promise.all(
-      parallel.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory)),
-    );
-    // Append in original order so the LLM context stays coherent.
-    for (const res of results) commit(res);
+    for (let i = 0; i < parallel.length; i += cap) {
+      const chunk = parallel.slice(i, i + cap);
+      const results = await Promise.all(
+        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory)),
+      );
+      // Append in original order so the LLM context stays coherent.
+      for (const res of results) commit(res);
+    }
   } else if (parallel.length === 1) {
     const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory);
     commit(res);
@@ -714,6 +748,14 @@ export async function executeToolCalls(
   }
 
   state.pendingToolCalls = 0;
+
+  // Fire-and-forget: signals that every tool call in this turn has settled
+  // (CC PostToolBatch parity) — lets hooks act once per batch instead of per call.
+  void safeEmit(hooks, 'tool_batch_complete', {
+    sessionId: state.sessionId,
+    toolCount: toolCalls.length,
+    parallelCount: parallel.length,
+  });
 }
 
 // ---------------------------------------------------------------------------
