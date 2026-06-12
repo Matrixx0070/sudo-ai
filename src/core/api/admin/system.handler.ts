@@ -37,7 +37,7 @@ const DOCTOR_CHECKS: Array<{ label: string; rel: string; type: 'file' | 'dir' }>
   { label: 'data/knowledge.db',           rel: 'data/knowledge.db',              type: 'file' },
   { label: 'data/consciousness.db',       rel: 'data/consciousness.db',          type: 'file' },
   { label: 'node_modules/',               rel: 'node_modules',                   type: 'dir'  },
-  { label: 'dist/renderer/index.html',    rel: 'dist/renderer/index.html',       type: 'file' },
+  { label: 'dist/renderer/chat/index.html', rel: 'dist/renderer/chat/index.html', type: 'file' },
 ];
 
 /** Database files reported by /system/databases. */

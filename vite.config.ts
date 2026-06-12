@@ -4,7 +4,7 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
-  // renderer source is the Vite root; index.html must live here
+  // renderer source is the Vite root; entry html files live in admin/ and chat/
   root: 'src/renderer',
   base: './',
   build: {
@@ -13,7 +13,6 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        main: path.resolve(__dirname, 'src/renderer/index.html'),
         admin: path.resolve(__dirname, 'src/renderer/admin/index.html'),
         chat: path.resolve(__dirname, 'src/renderer/chat/index.html'),
       },
