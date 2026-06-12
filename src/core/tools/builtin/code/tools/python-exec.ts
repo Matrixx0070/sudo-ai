@@ -20,6 +20,7 @@ import { readFile } from 'node:fs/promises';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { getOrCreateEntry, sanitizeForDocker, isValidSessionId } from '../session-kernels.js';
 import { createLogger } from '../../../../shared/logger.js';
+import { clampToolOutput } from '../../../../shared/head-tail-buffer.js';
 
 const execFileAsync = promisify(execFile);
 const logger = createLogger('code.python-exec');
@@ -473,12 +474,12 @@ export const pythonExecTool: ToolDefinition = {
     if (!result.containerId) {
       outputParts.push('[Docker unavailable — Python execution skipped]');
     }
-    const output = outputParts.join('\n') || '(no output)';
+    const { text: output, truncated } = clampToolOutput(outputParts.join('\n') || '(no output)');
 
     return {
       success: !result.timedOut && !result.stderr && !!result.containerId,
       output,
-      data: result,
+      data: { ...result, truncated },
     };
   },
 };
