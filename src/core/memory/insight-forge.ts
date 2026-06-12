@@ -19,11 +19,12 @@ export interface SubQuestion {
   intent: 'factual' | 'contextual' | 'procedural' | 'temporal' | 'relational';
 }
 
-export interface ForgeResult {
+/** Result of forgeInsights. T is the hit type returned by hybridSearchFn; supply it explicitly when importing this type bare (defaults to unknown). */
+export interface ForgeResult<T = unknown> {
   originalQuery:  string;
   subQuestions:   SubQuestion[];
-  results:        Array<{ subQuestion: string; hits: any[] }>;
-  merged:         any[];
+  results:        Array<{ subQuestion: string; hits: T[] }>;
+  merged:         Array<T & { _rrfScore: number }>;
   forgeMs:        number;
 }
 
@@ -57,18 +58,19 @@ export interface ForgeOptions {
  * @param idKey      - Property name used to identify unique items (default: 'id')
  * @param k          - RRF k constant (default: 60)
  */
-export function reciprocalRankFusion(
-  resultSets: any[][],
+export function reciprocalRankFusion<T extends object>(
+  resultSets: T[][],
   idKey: string = 'id',
   k: number = 60,
-): any[] {
-  const scoreMap = new Map<string | number, number>();
-  const itemMap  = new Map<string | number, any>();
+): Array<T & { _rrfScore: number }> {
+  const scoreMap = new Map<unknown, number>();
+  const itemMap  = new Map<unknown, T>();
 
   for (const resultSet of resultSets) {
     for (let rank = 0; rank < resultSet.length; rank++) {
       const item = resultSet[rank]!;
-      const id   = item[idKey];
+      // idKey is a dynamic property name by design; T carries no index signature.
+      const id   = (item as Record<string, unknown>)[idKey];
       if (id === undefined || id === null) continue;
 
       const contribution = 1 / (k + rank);
@@ -84,7 +86,7 @@ export function reciprocalRankFusion(
   // Sort by RRF score descending and attach score to each item
   return Array.from(scoreMap.entries())
     .sort((a, b) => b[1] - a[1])
-    .map(([id, score]) => ({ ...itemMap.get(id), _rrfScore: score }));
+    .map(([id, score]) => ({ ...itemMap.get(id)!, _rrfScore: score }));
 }
 
 // ---------------------------------------------------------------------------
@@ -99,12 +101,12 @@ export function reciprocalRankFusion(
  * @param query            - The original user query
  * @param options          - Optional tuning parameters
  */
-export async function forgeInsights(
-  hybridSearchFn:   (query: string, limit?: number) => Promise<any[]>,
+export async function forgeInsights<T extends object>(
+  hybridSearchFn:   (query: string, limit?: number) => Promise<T[]>,
   decomposeQueryFn: (query: string, maxSubs: number) => Promise<SubQuestion[]>,
   query:            string,
   options:          ForgeOptions = {},
-): Promise<ForgeResult> {
+): Promise<ForgeResult<T>> {
   const {
     maxSubQuestions  = 5,
     maxResultsPerSub = 8,
@@ -136,10 +138,10 @@ export async function forgeInsights(
     hybridSearchFn(sq.question, maxResultsPerSub).catch(() => []),
   );
 
-  const perSubResults: any[][] = await Promise.all(searchPromises);
+  const perSubResults: T[][] = await Promise.all(searchPromises);
 
   // Build the per-sub-question results array for the ForgeResult
-  const results: ForgeResult['results'] = subQuestions.map((sq, i) => ({
+  const results: ForgeResult<T>['results'] = subQuestions.map((sq, i) => ({
     subQuestion: sq.question,
     hits:        perSubResults[i] ?? [],
   }));

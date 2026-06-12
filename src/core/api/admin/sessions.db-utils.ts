@@ -51,8 +51,7 @@ export interface BetterSqliteRow {
  */
 export async function openMindDb(
   opts: { readonly?: boolean } = { readonly: true },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): Promise<any | null> {
+): Promise<BetterSqlite3T.Database | null> {
   try {
     const mod = await import('better-sqlite3');
     // ESM dynamic import wraps CJS default export in { default: ... }
@@ -103,10 +102,9 @@ export function parseSessionMetas(rows: BetterSqliteRow[]): SessionMeta[] {
 /**
  * Check whether a SQLite table exists in the given db.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function tableExists(db: any, tableName: string): boolean {
+export function tableExists(db: BetterSqlite3T.Database, tableName: string): boolean {
   const row = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}'`)
-    .get({});
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name = ?`)
+    .get(tableName);
   return Boolean(row);
 }
