@@ -273,6 +273,7 @@ export const TYPED_HOOK_MAP: Record<HookEvent, { runnerType: HookRunnerType; res
 
   // -- Persistence --
   'tool_result_persist':  { runnerType: 'void',      resultType: 'GenericResult' },
+  'tool_batch_complete':  { runnerType: 'void',      resultType: 'GenericResult' },
 
   // -- Compaction aliases --
   'before_compaction':    { runnerType: 'modifying', resultType: 'CompactionResult' },

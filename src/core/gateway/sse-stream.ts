@@ -33,7 +33,7 @@ const ALL_HOOK_EVENTS: HookEvent[] = [
   'gateway:startup', 'gateway:shutdown',
   'message:received', 'message:transcribed', 'message:preprocessed', 'message:sent',
   'before_model_resolve', 'before_prompt_build',
-  'tool_result_persist',
+  'tool_result_persist', 'tool_batch_complete',
   'before_compaction', 'after_compaction',
   'before_install', 'after_install',
   'vault:set', 'vault:get', 'vault:rotate', 'vault:delete',

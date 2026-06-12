@@ -120,6 +120,8 @@ export type HookEvent =
   | 'before_prompt_build'
   // Persistence event
   | 'tool_result_persist'
+  // Fired once after every tool call in a turn has settled (batch-level hook)
+  | 'tool_batch_complete'
   // Compaction alias events (distinct from pre:compact / post:compact)
   | 'before_compaction'
   | 'after_compaction'
