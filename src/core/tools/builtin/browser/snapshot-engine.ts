@@ -14,8 +14,13 @@
  */
 import { CDPManager } from './cdp-manager.js';
 import { createLogger } from '../../../shared/logger.js';
+import type { Page } from 'playwright-core';
 
 const log = createLogger('snapshot-engine');
+
+// Element roles come from the runtime accessibility tree as plain strings;
+// this names Playwright's ARIA role union so getByRole calls can assert it.
+type AriaRole = Parameters<Page['getByRole']>[0];
 
 // -- Exported types ------------------------------------------------------------
 
@@ -179,7 +184,7 @@ export class SnapshotEngine {
   async clickElement(ref: number): Promise<void> {
     const el = this.requireElement(ref);
     const page = await this.resolveActivePage();
-    await page.getByRole(el.role as any, { name: el.name }).first().click();
+    await page.getByRole(el.role as AriaRole, { name: el.name }).first().click();
     log.info({ ref, role: el.role, name: el.name }, 'Clicked element');
   }
 
@@ -190,7 +195,7 @@ export class SnapshotEngine {
   async typeIntoElement(ref: number, text: string): Promise<void> {
     const el = this.requireElement(ref);
     const page = await this.resolveActivePage();
-    const locator = page.getByRole(el.role as any, { name: el.name }).first();
+    const locator = page.getByRole(el.role as AriaRole, { name: el.name }).first();
     await locator.fill(''); // clear existing value
     await locator.fill(text);
     log.info({ ref, role: el.role, name: el.name, textLength: text.length }, 'Typed into element');
@@ -226,7 +231,7 @@ export class SnapshotEngine {
 
   /**
    * Fetch the accessibility tree via CDP session.
-   * Tries Accessibility.getFullAXTree first; falls back to Accessibility.query.
+   * Tries Accessibility.getFullAXTree first; falls back to Accessibility.queryAXTree.
    */
   private async fetchAccessibilityTree(): Promise<RawAXNode[]> {
     const page = await this.resolveActivePage();
@@ -235,8 +240,12 @@ export class SnapshotEngine {
       const { nodes } = await cdpSession.send('Accessibility.getFullAXTree') as { nodes: RawCDPAXNode[] };
       return this.normalizeAXNodes(nodes);
     } catch (err) {
-      log.warn({ err }, 'Full AX tree failed — falling back to Accessibility.query');
-      const { nodes } = await cdpSession.send('Accessibility.query' as any, {}) as { nodes: RawCDPAXNode[] };
+      log.warn({ err }, 'Full AX tree failed — falling back to Accessibility.queryAXTree');
+      // The previous fallback sent 'Accessibility.query', which is not a CDP
+      // method, so it always threw and the fallback never worked. With empty
+      // params queryAXTree is an unscoped full-tree query, same breadth as
+      // getFullAXTree above.
+      const { nodes } = await cdpSession.send('Accessibility.queryAXTree', {}) as { nodes: RawCDPAXNode[] };
       return this.normalizeAXNodes(nodes);
     } finally {
       await cdpSession.detach().catch(() => {});

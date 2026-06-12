@@ -53,14 +53,17 @@ const refLoc = (pg: any, r: string) => pg.locator(`[aria-ref="${r}"], [data-ref=
 async function pageOf(cdp: CDPManager): Promise<any> {
   const s = cdp.getActiveSession();
   if (!s) throw new Error('No active CDP session');
-  const ctx = (cdp as any).context;
+  const ctx = cdp.getContext();
   if (!ctx) throw new Error('CDPManager context unavailable');
   for (const pg of ctx.pages()) {
     try {
       const c = await pg.context().newCDPSession(pg);
-      const { target } = await c.send('Target.getTargetInfo') as any;
+      // Protocol result is { targetInfo } — the previous { target } destructure
+      // was always undefined, so matching never succeeded and resolution always
+      // fell through to the last-page fallback below.
+      const { targetInfo } = await c.send('Target.getTargetInfo');
       await c.detach().catch(() => {});
-      if (target?.targetId === s.targetId) return pg;
+      if (targetInfo.targetId === s.targetId) return pg;
     } catch { continue; }
   }
   const pp = ctx.pages();
