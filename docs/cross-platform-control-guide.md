@@ -149,8 +149,7 @@ Control action (e.g. a GUI click on Windows) → outcome recorded → learner up
 **All use exact `= "1"` semantics** (see the API reference for details). Set them in `.env`, `ecosystem.config.cjs`, systemd, or a pm2 env. Never set them from user input.
 
 **Core control switches:**
-- `SUDO_COMPUTER_USE_DISABLE=1` — Disable the entire `IComputerUse` plus the legacy `computer.use` (and related GUI/desktop).
-- `SUDO_CROSS_PLATFORM_DISABLE=1` — Force Linux-only even if other backends are present; disable Windows/macOS paths.
+- `SUDO_CROSS_CONTROL_DISABLE=1` — Disable all `IComputerUse` cross-platform control backends (exec/browser/file/GUI/desktop on Linux/Windows/macOS). Note: the legacy `computer.use` tool is NOT gated by this (or any) kill-switch.
 - `SUDO_TOOL_LEARNING_DISABLE=1` — Disable ToolOutcomeLearner entirely (including on control outcomes; useful for debugging the learning layer).
 - `SUDO_SANDBOX_DISABLE=1` (or per-scope) — Run control/exec outside bwrap. Dangerous; for trusted owner use only.
 
@@ -164,7 +163,7 @@ Control action (e.g. a GUI click on Windows) → outcome recorded → learner up
 - `SUDO_TAINT_DISABLE=1`, `SUDO_SIGNING_DISABLE=1`, etc.
 - The full current table is maintained in `docs/api-reference.md#kill-switches` (update there when switches change).
 
-**Usage recommendation:** For full-power use on a trusted host: `SUDO_AUTO_APPROVE=1 SUDO_COMPUTER_USE_DISABLE=0 ...` plus desktop access. For safer/shared environments: leave defaults (confirm tier for destructive actions) and set disables as needed. Audit activity via the monitoring layer and dashboard.
+**Usage recommendation:** For full-power use on a trusted host: `SUDO_AUTO_APPROVE=1 ...` plus desktop access (leave `SUDO_CROSS_CONTROL_DISABLE` unset — only the exact value `1` disables; `0` is a no-op). For safer/shared environments: leave defaults (confirm tier for destructive actions) and set disables as needed. Audit activity via the monitoring layer and dashboard.
 
 **Sandbox + security for control:** Control actions pass through SecurityGuard (injection and dangerous-pattern checks) plus the sandbox where applicable. Adversarial review (security review plus `/codex:adversarial-review`) is recommended before merging high-power changes.
 

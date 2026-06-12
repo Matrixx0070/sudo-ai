@@ -365,7 +365,7 @@ User intent (via chat or an autonomy goal) → Brain (system prompt + context) �
 - **Alignment/Veto:** High-risk control actions can hit the veto gate (epistemic checks plus signals).
 
 **Kill-Switches (control specific):**
-`SUDO_COMPUTER_USE_DISABLE=1`, `SUDO_CROSS_PLATFORM_DISABLE=1` (see the API reference and config for full semantics). Also `SUDO_TOOL_LEARNING_DISABLE=1` to pause outcome learning on control, and `SUDO_SANDBOX_DISABLE=1` (use with extreme care).
+`SUDO_CROSS_CONTROL_DISABLE=1` disables the `IComputerUse` cross-platform control backends on all platforms (see the API reference and config for full semantics); the legacy `computer.use` tool is not covered by any kill-switch. Also `SUDO_TOOL_LEARNING_DISABLE=1` to pause outcome learning on control, and `SUDO_SANDBOX_DISABLE=1` (use with extreme care).
 
 **Safety Model:**
 The control layer is full-power and owner-controlled. Safety is enforced through external controls — kill-switches, approval tiers, the sandbox, audit logging, and learning from outcomes — rather than relying on the model to refuse. Operators should grant only the privileges they intend and keep the sandbox enabled.

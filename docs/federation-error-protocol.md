@@ -464,9 +464,9 @@ SUDO_FEDERATION_PEERS='[{"name":"admin","url":"https://admin.sudoai.local:18900"
 # Inbound tokens (what this peer accepts from others)
 SUDO_FEDERATION_INBOUND_TOKENS='["fed_sk_xyz789..."]'
 
-# Kill-switches (optional)
-SUDO_FED_ERROR_REPORT_DISABLE=0
-SUDO_FED_TOKEN_CONTRIBUTE_ENABLE=1
+# Kill-switches (optional; only the exact value 1 disables — unset = enabled)
+# SUDO_FED_ERROR_REPORT_DISABLE=1   # uncomment to disable error reports
+# SUDO_FED_TOKEN_POOL_DISABLE=1     # uncomment to disable token contribution/pool
 ```
 
 ### Admin Instance Setup

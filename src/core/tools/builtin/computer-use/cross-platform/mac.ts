@@ -46,17 +46,21 @@ export class MacComputerUse implements IComputerUse {
     if (this.config.learner) {
       try { this.config.learner.onToolResult(toolName, args, success, error, this.config.sessionId, undefined, 'control,cross-platform,mac'); } catch {}
     }
-    if (!success && error && this.triggerRepair && process.env['SUDO_KAIROS_ARSENAL_TRIGGER_DISABLE'] !== '1') {
+    if (!success && error && error !== 'kill-switch' && this.triggerRepair && process.env['SUDO_KAIROS_ARSENAL_TRIGGER_DISABLE'] !== '1') {
       try { await this.triggerRepair(`KAIROS control ${toolName} mac: ${error.slice(0,100)}`, 'fix'); } catch {}
     }
+  }
+
+  private killSwitchActive(): boolean {
+    return process.env[this.config.killSwitchEnv || 'SUDO_CROSS_CONTROL_DISABLE'] === '1';
   }
 
   async exec(cmd: string, opts: ExecOptions = {}): Promise<ExecResult> {
     const start = Date.now();
     const args = { cmd, opts };
-    if (process.env[this.config.killSwitchEnv || 'SUDO_CROSS_CONTROL_DISABLE'] === '1') {
-      await this.recordOutcome('control.exec', args, false, 'kill');
-      return { success: false, stdout: '', stderr: 'kill', exitCode: 1, durationMs: Date.now() - start, platform: 'mac' };
+    if (this.killSwitchActive()) {
+      await this.recordOutcome('control.exec', args, false, 'kill-switch');
+      return { success: false, stdout: '', stderr: 'kill-switch', exitCode: 1, durationMs: Date.now() - start, platform: 'mac' };
     }
     try {
       // Fix HIGH-1: scrub secrets
@@ -76,6 +80,10 @@ export class MacComputerUse implements IComputerUse {
   }
 
   async browser(params: BrowserActionParams): Promise<BrowserResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     // Refine (Codex post-remed): do not report mac browser stub (no-op) as success; accurate for cross-platform.
     const err = 'control.browser stub on mac (P1 refine: no-op not reported success per Codex; real via osascript in full)';
     await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, false, err);
@@ -83,6 +91,10 @@ export class MacComputerUse implements IComputerUse {
   }
 
   async file(params: FileOpParams): Promise<FileResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.file.${params.op}`, params as unknown as Record<string, unknown>, false, 'kill-switch');
+      return { success: false, error: 'kill-switch' };
+    }
     try {
       const abs = path.resolve(params.path);
       // Fix HIGH-3: denylist mac control.file
@@ -111,6 +123,10 @@ export class MacComputerUse implements IComputerUse {
   }
 
   async gui(params: GUIActionParams): Promise<GUIResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     // Refine (Codex post-remed): do not report mac gui stub (no-op) as success; accurate for cross-platform.
     const err = 'control.gui stub on mac (P1 refine: no-op not reported success per Codex; real via osascript in full)';
     await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, false, err);
@@ -118,6 +134,10 @@ export class MacComputerUse implements IComputerUse {
   }
 
   async desktop(params: DesktopActionParams): Promise<DesktopResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     // Refine (Codex post-remed): do not report mac desktop stub (no-op) as success; accurate for cross-platform.
     const err = 'control.desktop stub on mac (P1 refine: no-op not reported success per Codex)';
     await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, false, err);

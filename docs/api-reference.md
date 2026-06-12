@@ -370,7 +370,7 @@ If `Brain.runWithModel` is not available for a given model, `responseA` or `resp
 
 Return the instance's Ed25519 public key. Federation peers use this to verify `signedArtifact` bodies returned by the `/approve` endpoints.
 
-**Auth:** Bearer token (`SUDO_GATEWAY_TOKEN`). Returns `401` if missing or invalid.
+**Auth:** Bearer token (`GATEWAY_TOKEN`). Returns `401` if missing or invalid.
 
 **Request:**
 
@@ -425,8 +425,7 @@ All kill-switches use exact-`"1"`-match semantics: the feature is disabled only 
 
 | Variable | Feature disabled |
 |---|---|
-| `SUDO_COMPUTER_USE_DISABLE=1` | IComputerUse unified cross-platform control (exec/browser/file/gui/desktop) + legacy computer.use. Linux is fully supported; Windows/macOS backends are experimental |
-| `SUDO_CROSS_PLATFORM_DISABLE=1` | Windows/macOS backends; force Linux-only control paths |
+| `SUDO_CROSS_CONTROL_DISABLE=1` | IComputerUse unified cross-platform control backends (exec/browser/file/gui/desktop) on all platforms. Linux is fully supported; Windows/macOS backends are experimental. The legacy `computer.use` tool is NOT covered by this (or any) kill-switch |
 | `SUDO_TOOL_LEARNING_DISABLE=1` | ToolOutcomeLearner; disables learning on *all* tool outcomes incl. control actions |
 | `SUDO_SANDBOX_DISABLE=1` | bwrap/seccomp/LD_PRELOAD sandbox for exec/control (leave enabled unless you fully control and trust the host) |
 | `SUDO_MCP_DISABLE=1` | MCP server integration (SSE/WS/OAuth) |
@@ -514,7 +513,7 @@ curl -X POST http://localhost:18900/v1/chat/completions \
 The agent will call `browser.search`, retrieve the result, and return a text answer. The response contains only the final text — intermediate tool calls are not exposed in the API response.
 
 **Computer-use control example (cross-platform IComputerUse):**
-Use a prompt that triggers computer control (e.g. "Take a desktop screenshot via GUI, list files in the working directory using exec, write a short note, and navigate the browser to example.com"). The agent will use IComputerUse (or legacy computer.use on Linux), and outcomes feed ToolOutcomeLearner automatically. Linux is fully supported; Windows and macOS backends are experimental. Disable via `SUDO_COMPUTER_USE_DISABLE=1`. Full details: `docs/cross-platform-control-guide.md`. Self-repair and the autonomy/approval tiers apply to control actions as described in the cross-platform control guide.
+Use a prompt that triggers computer control (e.g. "Take a desktop screenshot via GUI, list files in the working directory using exec, write a short note, and navigate the browser to example.com"). The agent will use IComputerUse (or legacy computer.use on Linux), and outcomes feed ToolOutcomeLearner automatically. Linux is fully supported; Windows and macOS backends are experimental. Disable IComputerUse via `SUDO_CROSS_CONTROL_DISABLE=1` (legacy `computer.use` has no kill-switch). Full details: `docs/cross-platform-control-guide.md`. Self-repair and the autonomy/approval tiers apply to control actions as described in the cross-platform control guide.
 
 ### Multi-turn conversation
 
@@ -660,8 +659,9 @@ The Federation Error Protocol provides distributed error reporting and fix propa
 ### Example: Submit Error Report
 
 ```bash
+# FEDERATION_TOKEN = one of the entries in the server's SUDO_FEDERATION_INBOUND_TOKENS JSON array
 curl -X POST http://localhost:18900/v1/federation/error-report \
-  -H "Authorization: Bearer $SUDO_FEDERATION_INBOUND_TOKEN" \
+  -H "Authorization: Bearer $FEDERATION_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "errorSignature": "sha256:abc123...",

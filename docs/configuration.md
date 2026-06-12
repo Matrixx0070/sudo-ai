@@ -11,7 +11,7 @@ Configuration lives in two files:
 
 `config/.env` is never validated — missing keys cause the relevant feature to be skipped or fall back gracefully. The agent logs a warning for each missing optional key.
 
-**Setup wizard note:** The TUI wizard (launched by `sudo-ai setup` or on first run of `sudo-ai`) populates cross-platform fields (computer-use enable, tool-outcome learner, self-repair, kill-switches such as `SUDO_CROSS_PLATFORM_DISABLE`, and persona/system-prompt options) interactively. See the README "Setup Wizard" section for details. Manual edits to the config files are also supported, and many settings hot-reload.
+**Setup wizard note:** The TUI wizard (launched by `sudo-ai setup` or on first run of `sudo-ai`) populates cross-platform fields (computer-use enable, tool-outcome learner, self-repair, kill-switches such as `SUDO_CROSS_CONTROL_DISABLE`, and persona/system-prompt options) interactively. See the README "Setup Wizard" section for details. Manual edits to the config files are also supported, and many settings hot-reload.
 
 ---
 
@@ -35,7 +35,7 @@ An Ink-based interactive TUI covers:
 - Cross-platform computer-use enable + policy (exec/file/gui/desktop/browser; fully supported on Linux, experimental on Windows/macOS)
 - Tool-outcome learner / self-improvement on control actions (opt-in)
 - Self-repair routines
-- Profiles, kill-switches (e.g. `SUDO_CROSS_PLATFORM_DISABLE=1`), persona/system-prompt confirmation
+- Profiles, kill-switches (e.g. `SUDO_CROSS_CONTROL_DISABLE=1`), persona/system-prompt confirmation
 - Service/pm2 install option, Telegram/Discord channels
 - Writes `sudo-ai.json5` + `.env` as needed and validates them.
 
@@ -52,7 +52,7 @@ After the wizard, `sudo-ai chat` (or the default `sudo-ai`) launches the Ink TUI
 See `docs/cross-platform-control-guide.md` for prompt examples and the supported control surface.
 
 **Control kill-switches (in wizard + env):**
-See the kill-switches table below (including `SUDO_CROSS_PLATFORM_DISABLE=1`, `SUDO_COMPUTER_USE_DISABLE=1`, `SUDO_TOOL_LEARNING_DISABLE=1`). The wizard surfaces the key ones for you to choose.
+See the kill-switches table below (including `SUDO_CROSS_CONTROL_DISABLE=1`, `SUDO_TOOL_LEARNING_DISABLE=1`). The wizard surfaces the key ones for you to choose.
 
 ---
 
@@ -402,8 +402,7 @@ WebChat now attaches to the gateway server — no separate `WEB_CHAT_PORT` requi
 
 ```bash
 # Control / computer-use
-SUDO_COMPUTER_USE_DISABLE=1          # Disable computer-use + legacy computer.use / GUI/desktop control
-SUDO_CROSS_PLATFORM_DISABLE=1        # Force Linux-only; disable Windows/macOS backends
+SUDO_CROSS_CONTROL_DISABLE=1         # Disable IComputerUse cross-platform control backends (exec/browser/file/GUI/desktop, all platforms). Legacy computer.use is NOT covered by any kill-switch
 SUDO_TOOL_LEARNING_DISABLE=1         # Disable the tool-outcome learner (incl. learning on control outcomes)
 SUDO_SANDBOX_DISABLE=1               # (DANGEROUS) Bypass the bwrap sandbox for control/exec
 
@@ -465,7 +464,7 @@ SUDO_AUTO_APPROVE=1   # As above
 The full system prompt always includes `workspace/SOUL.md` (see the agents config `systemPrompt` note). It defines an owner-controlled, full-power operating posture for the agent. This is not a guarantee that the agent will perform any requested action — model providers apply their own policies, and the agent's behavior depends on the configured model. Safety is enforced through the kill-switches above, the autonomy/approval tiers, the bwrap sandbox, audit logging, and the outcome learner.
 
 **Other relevant settings:**
-- `SUDO_BRAIN_CONSENSUS=1` (or disable) toggles multi-model consensus for control tasks.
+- `SUDO_BRAIN_CONSENSUS_DISABLE=1` disables multi-model consensus for control tasks (consensus is on by default when cloud model profiles are configured).
 - Custom sandbox policy files live under `sandbox/`.
 
 See `docs/cross-platform-control-guide.md` for per-OS examples, full setup, and validation of control; the `README.md` install/wizard sections; and the architecture docs for the computer-use design.
