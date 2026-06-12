@@ -85,18 +85,6 @@ export function registerBrowserTools(registry: ToolRegistry): void {
 export { executeComputerAction } from './computer-use.js';
 export type { ScreenAction, ComputerUseResult } from './computer-use.js';
 
-// Upgrade 60: Browser Session Control
-export {
-  createSession,
-  getSession,
-  listSessions,
-  closeSession,
-  updateSessionUrl,
-  fillField,
-  clickElement,
-} from './session-control.js';
-export type { BrowserSession } from './session-control.js';
-
 // Phase 6: CDP Browser Integration
 export { CDPManager } from './cdp-manager.js';
 export { SnapshotEngine } from './snapshot-engine.js';
