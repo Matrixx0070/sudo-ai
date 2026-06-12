@@ -30,6 +30,7 @@ import type {
 } from './insights-dashboard-types.js';
 import { DEFAULT_INSIGHTS_CONFIG } from './insights-dashboard-types.js';
 import type { SessionSignals } from './session-signals.js';
+import { toSqliteTimestamp } from './trace-store.js';
 
 const log = createLogger('learning:insights');
 
@@ -52,16 +53,15 @@ interface ApiCallLogRow {
   called_at: string;
 }
 
-// Shape this module's traces query reads. NOTE: the only traces DDL in the
-// repo (trace-store.ts) has trace_type/tool_name/created_at/error_message,
-// not type/key/timestamp/error — against that schema this query throws
-// "no such column" and is swallowed by the catch below (empty analytics).
+// Pinned by the traces DDL in trace-store.ts (SCHEMA_TRACES). success is
+// NOT NULL there; created_at is stored in SQLite datetime('now') space
+// format, which is UTC.
 interface TraceRow {
-  key: string | null;
-  success: number | null;
-  error: string | null;
+  tool_name: string | null;
+  success: number;
+  error_message: string | null;
   latency_ms: number | null;
-  timestamp: string;
+  created_at: string;
 }
 
 interface CountRow {
@@ -485,15 +485,17 @@ export class InsightsDashboardGenerator {
 
           if (tableExists) {
             const rows = db.prepare(
-              "SELECT * FROM traces WHERE type = 'tool_call' AND timestamp >= ? AND timestamp <= ?",
-            ).all(start.toISOString(), end.toISOString()) as TraceRow[];
+              "SELECT tool_name, success, error_message, latency_ms, created_at FROM traces WHERE trace_type = 'tool_call' AND created_at >= ? AND created_at <= ?",
+            ).all(toSqliteTimestamp(start.toISOString()), toSqliteTimestamp(end.toISOString())) as TraceRow[];
 
             for (const row of rows) {
-              const toolName = row.key ?? 'unknown';
-              const success = row.success ?? 0;
+              const toolName = row.tool_name ?? 'unknown';
+              const success = row.success;
               const latency = row.latency_ms ?? 0;
-              const error = row.error ?? '';
-              const day = formatDate(new Date(row.timestamp));
+              const error = row.error_message ?? '';
+              // created_at is UTC in space format; parse explicitly as UTC so
+              // the day bucket matches formatDate's toISOString.
+              const day = formatDate(new Date(row.created_at.replace(' ', 'T') + 'Z'));
 
               callsByDay[day] = (callsByDay[day] ?? 0) + 1;
 
@@ -543,7 +545,9 @@ export class InsightsDashboardGenerator {
     const totalToolErrors = topTools.reduce((sum, t) => sum + t.errorCount, 0);
     const errorRates: Record<string, number> = {};
     for (const tool of topTools) {
-      errorRates[tool.toolName] = tool.successRate > 0 ? 1 - tool.successRate : 0;
+      // Every entry in topTools has callCount >= 1, so successRate is well-defined
+      // and errorRate is simply its complement (an all-failure tool must report 1, not 0).
+      errorRates[tool.toolName] = 1 - tool.successRate;
     }
 
     return {
