@@ -20,36 +20,7 @@ export const produceCommand: SlashCommand = {
       return 'Usage: /produce [topic]\nExample: /produce AI vs humans 2026';
     }
 
-    log.info({ peerId: ctx.peerId, topic }, '/produce triggered');
-
-    // Attempt to call pipeline orchestrator if present on the agentLoop context.
-    // The tool 'pipeline.start' is invoked when the registry exposes it.
-    const registry = ctx.toolRegistry as {
-      isEnabled?: (name: string) => boolean;
-      execute?: (
-        name: string,
-        params: Record<string, unknown>,
-        ctx: unknown,
-      ) => Promise<{ success: boolean; output: string }>;
-    } | null;
-
-    if (registry?.isEnabled?.('pipeline.start') && registry.execute) {
-      try {
-        const result = await registry.execute(
-          'pipeline.start',
-          { topic },
-          { sessionId: ctx.sessionId, workingDir: process.cwd(), config: ctx.config, logger: log },
-        );
-        log.info({ topic, success: result.success }, 'Pipeline tool called');
-        return result.output;
-      } catch (err) {
-        log.error({ topic, err }, 'Pipeline tool call failed');
-        return `Pipeline failed to start: ${String(err)}`;
-      }
-    }
-
-    // Graceful fallback when the pipeline tool is not loaded
-    log.warn({ topic }, 'pipeline.start tool not available — returning acknowledgement');
-    return `Pipeline queued for: ${topic}\n(pipeline.start tool not loaded — task logged)`;
+    log.warn({ peerId: ctx.peerId, topic }, '/produce triggered, but no video pipeline is wired');
+    return `Video pipeline is not available (no pipeline.start tool registered). Nothing was queued. Use the media tools instead, e.g. media.shorts-factory.`;
   },
 };
