@@ -221,6 +221,13 @@ describe('isAddressedToBot', () => {
     expect(isAddressedToBot(msg({ chatType: 'group', text: 'email me @ home' }), ['sudobot'])).toBe(false);
   });
 
+  it('handles the IRC-style address prefix (name: / name,)', () => {
+    expect(isAddressedToBot(msg({ chatType: 'group', text: 'sudobot: do the thing' }), ['sudobot'])).toBe(true);
+    expect(isAddressedToBot(msg({ chatType: 'group', text: '  SudoBot, status?' }), ['sudobot'])).toBe(true);
+    expect(isAddressedToBot(msg({ chatType: 'group', text: 'sudobot is great' }), ['sudobot'])).toBe(false);
+    expect(isAddressedToBot(msg({ chatType: 'group', text: 'ask sudobot: later' }), ['sudobot'])).toBe(false);
+  });
+
   it('fails open when no bot names are known', () => {
     expect(isAddressedToBot(msg({ chatType: 'group', text: 'anything' }), [])).toBe(true);
     expect(isAddressedToBot(msg({ chatType: 'group', text: 'anything' }), ['', '@'])).toBe(true);
