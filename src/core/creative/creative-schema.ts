@@ -51,7 +51,7 @@ export interface ContentFormat {
   description: string;
   template: string;            // structural template text
   bestFor: string[];           // topic categories
-  estimatedViralScore: number; // 0-100
+  estimatedViralScore: number; // 0-100; constant 50 baseline — nothing measures virality yet
   inspiration: string;
   status: 'concept' | 'tested' | 'proven' | 'retired';
   createdAt: string;           // ISO-8601

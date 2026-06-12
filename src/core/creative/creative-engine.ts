@@ -254,7 +254,9 @@ export class CreativeEngine {
       description: `A "${formatName}" format adapted for the "${safeNiche}" niche.`,
       template: tmpl.template,
       bestFor: [...tmpl.bestFor, safeNiche],
-      estimatedViralScore: 50 + Math.floor(Math.random() * 35),
+      // Neutral baseline: nothing measures virality yet, so a constant is the
+      // only honest value (was random noise persisted as a ranking metric).
+      estimatedViralScore: 50,
       inspiration: tmpl.inspiration,
       status: 'concept', createdAt: new Date().toISOString(),
     };
@@ -279,10 +281,10 @@ export class CreativeEngine {
     }
     const rows = status
       ? (this.db.prepare(
-          `SELECT * FROM content_formats WHERE status = ? ORDER BY estimated_viral_score DESC`
+          `SELECT * FROM content_formats WHERE status = ? ORDER BY created_at DESC`
         ).all(status) as FormatRow[])
       : (this.db.prepare(
-          `SELECT * FROM content_formats ORDER BY estimated_viral_score DESC`
+          `SELECT * FROM content_formats ORDER BY created_at DESC`
         ).all() as FormatRow[]);
     return rows.map(rowToFormat);
   }

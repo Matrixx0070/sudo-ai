@@ -134,7 +134,7 @@ export const creativeTool: ToolDefinition = {
           const niche = (params['niche'] as string | undefined)?.trim();
           if (!niche) return { success: false, output: 'niche is required for invent-format.' };
           const fmt = engine.inventFormat(niche);
-          logger.info({ id: fmt.id, niche, viralScore: fmt.estimatedViralScore }, 'invent-format complete');
+          logger.info({ id: fmt.id, niche }, 'invent-format complete');
           return { success: true, output: `Content format invented:\n${formatFormat(fmt)}`, data: fmt };
         }
 

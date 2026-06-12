@@ -33,7 +33,7 @@ export function formatFramework(f: StoryFramework): string {
 
 export function formatFormat(f: ContentFormat): string {
   return [
-    `[${f.id.slice(0, 8)}] "${f.name}" [${f.status.toUpperCase()}] viral: ${f.estimatedViralScore}/100`,
+    `[${f.id.slice(0, 8)}] "${f.name}" [${f.status.toUpperCase()}]`,
     `  Best for: ${f.bestFor.join(', ')}`,
     `  Template: ${f.template.slice(0, 90)}...`,
   ].join('\n');
