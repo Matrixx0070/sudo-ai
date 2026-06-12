@@ -245,7 +245,7 @@ export class UnifiedMemory {
     query: string,
     decomposeQueryFn: (query: string, maxSubs: number) => Promise<SubQuestion[]>,
     options?: ForgeOptions,
-  ): Promise<ForgeResult> {
+  ): Promise<ForgeResult<MemoryResult>> {
     const searchFn = async (q: string, limit = 8) => {
       return this.search({ query: q, limit });
     };
