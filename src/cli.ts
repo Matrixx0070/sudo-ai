@@ -24,6 +24,8 @@ import { loadBuiltinTools } from './core/tools/loader.js';
 import { SessionManager } from './core/sessions/manager.js';
 import { AgentLoop } from './core/agent/loop.js';
 import { TelegramAdapter } from './core/channels/telegram.js';
+import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
+import type { UnifiedMessage } from './core/channels/types.js';
 import { CronStore } from './core/cron/store.js';
 import { CronScheduler } from './core/cron/scheduler.js';
 import { HeartbeatRunner } from './core/cron/heartbeat.js';
@@ -1104,14 +1106,11 @@ async function boot(): Promise<void> {
     telegram.setHookEmitter(hooks);
     telegramNotifier = telegram;
 
-    telegram.onMessage(async (msg) => {
-      log.info(
-        { channel: msg.channel, peerId: msg.peerId, text: msg.text?.slice(0, 80) },
-        'Incoming message',
-      );
-
-      // Serialized per-peer: enqueue so concurrent messages from the same user
-      // never overlap on the same session (prevents race conditions).
+    // Serialized per-peer: enqueue so concurrent messages from the same user
+    // never overlap on the same session (prevents race conditions). Resolves
+    // when the turn fully completes (reply sent) — the coalescer's
+    // foreground-reply fence depends on that.
+    const handleTelegramTurn = (msg: UnifiedMessage): Promise<void> =>
       dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
         try {
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
@@ -1217,9 +1216,49 @@ async function boot(): Promise<void> {
             );
           } catch { try { await telegram.send(msg.peerId, `Error: ${errMsg.substring(0, 200)}`); } catch {} }
         }
-      }).catch((err: unknown) => {
-        log.error({ err: String(err), peerId: msg.peerId }, 'Queued agent turn failed');
       });
+
+    // Burst debounce/coalesce + foreground-reply fence (opt-in: SUDO_MSG_COALESCE=1;
+    // idle window via SUDO_MSG_COALESCE_MS, default 1000 ms, 0 = flush on next tick).
+    // handleTelegramTurn rejections propagate so the coalescer logs real failures.
+    const coalesceWindowMs = Number(process.env['SUDO_MSG_COALESCE_MS']);
+    const telegramCoalescer = process.env['SUDO_MSG_COALESCE'] === '1'
+      ? new MessageCoalescer({
+          deliver: handleTelegramTurn,
+          ...(process.env['SUDO_MSG_COALESCE_MS'] !== undefined && Number.isFinite(coalesceWindowMs) && coalesceWindowMs >= 0
+            ? { debounceMs: coalesceWindowMs }
+            : {}),
+        })
+      : null;
+    if (telegramCoalescer) log.info('Telegram message coalescer enabled');
+
+    // Group-chat mention gating (opt-in: SUDO_GROUP_MENTION_ONLY=1): in groups,
+    // only respond when the message mentions the bot by @username.
+    const groupMentionOnly = process.env['SUDO_GROUP_MENTION_ONLY'] === '1';
+
+    telegram.onMessage(async (msg) => {
+      log.info(
+        { channel: msg.channel, peerId: msg.peerId, chatType: msg.chatType, text: msg.text?.slice(0, 80) },
+        'Incoming message',
+      );
+
+      if (groupMentionOnly) {
+        const botNames = [telegram.botUsername ?? '', process.env['SUDO_BOT_NAME'] ?? ''].filter(Boolean);
+        if (!isAddressedToBot(msg, botNames)) {
+          log.debug({ peerId: msg.peerId, chatType: msg.chatType }, 'Group message not addressed to bot — ignored');
+          return;
+        }
+      }
+
+      if (telegramCoalescer) {
+        telegramCoalescer.push(msg);
+      } else {
+        // MessageHandler contract: must not throw — catch here, not inside
+        // handleTelegramTurn, so the coalescer path sees real rejections.
+        await handleTelegramTurn(msg).catch((err: unknown) => {
+          log.error({ err: String(err), peerId: msg.peerId }, 'Queued agent turn failed');
+        });
+      }
     });
 
     // Register built-in slash commands

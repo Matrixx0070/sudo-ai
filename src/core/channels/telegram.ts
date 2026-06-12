@@ -214,6 +214,16 @@ export class TelegramAdapter implements ChannelAdapter {
     return this._isConnected;
   }
 
+  /** The bot's @username once authenticated; null before start() completes. */
+  get botUsername(): string | null {
+    try {
+      // Grammy's botInfo getter throws when accessed before bot.init().
+      return this.bot?.botInfo.username ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   onMessage(handler: MessageHandler): void {
     this._handler = handler;
   }
