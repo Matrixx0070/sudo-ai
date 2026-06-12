@@ -419,6 +419,31 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 4.5 Plugin SDK — manifest-first plugins from DATA_DIR/plugins
+  //     (opt-in: SUDO_PLUGINS=1; plugins run host code, so off by default)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_PLUGINS'] === '1') {
+    try {
+      const { bootPlugins, shutdownPlugins } = await import('./core/plugins/boot.js');
+      const pluginBoot = await bootPlugins(hooks);
+      log.info(
+        { loaded: pluginBoot.loaded, enabled: pluginBoot.enabled, hooksRegistered: pluginBoot.hooksRegistered },
+        'Plugin SDK initialized',
+      );
+      registerShutdown(async () => {
+        try {
+          await shutdownPlugins(pluginBoot.loader, hooks);
+        } catch (err) {
+          log.warn({ err: String(err) }, 'Plugin shutdown failed — continuing');
+        }
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'Plugin SDK failed to initialize — continuing without plugins');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 5. SessionManager
   // -------------------------------------------------------------------------
   const sessionManager = new SessionManager(db);
