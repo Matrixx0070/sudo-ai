@@ -22,6 +22,7 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { getOrCreateEntry, touchEntry } from '../session-kernels.js';
 import { createLogger } from '../../../../shared/logger.js';
+import { clampToolOutput } from '../../../../shared/head-tail-buffer.js';
 
 const logger = createLogger('code.js-exec');
 
@@ -276,7 +277,7 @@ export const jsExecTool: ToolDefinition = {
         outputParts.push(`return value: [non-serializable]`);
       }
     }
-    const output = outputParts.join('\n') || '(no output)';
+    const { text: output, truncated } = clampToolOutput(outputParts.join('\n') || '(no output)');
 
     // success = ran without timeout and no exception-level stderr
     // Note: console.error() output in stderr does not indicate failure
@@ -285,7 +286,7 @@ export const jsExecTool: ToolDefinition = {
     return {
       success: !result.timedOut && !hasError,
       output,
-      data: result,
+      data: { ...result, truncated },
     };
   },
 };

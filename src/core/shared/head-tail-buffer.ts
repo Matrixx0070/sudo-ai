@@ -159,3 +159,26 @@ export function clampHeadTail(
   const { droppedChars } = buf.stats();
   return { text: buf.toString(), truncated: droppedChars > 0, droppedChars };
 }
+
+/** Default model-facing tool-output budget, matching system.exec's MAX_OUTPUT. */
+const DEFAULT_TOOL_OUTPUT_MAX = 8_000;
+
+/**
+ * Clamp a tool's model-facing output string to `maxChars` with a 50/50
+ * head/tail split and a marker reporting the original size. Identity for
+ * text within budget. `maxChars` is measured in UTF-16 code units
+ * (String.length), not bytes.
+ */
+export function clampToolOutput(
+  text: string,
+  maxChars: number = DEFAULT_TOOL_OUTPUT_MAX,
+): { text: string; truncated: boolean } {
+  if (text.length <= maxChars) return { text, truncated: false };
+  const half = Math.floor(maxChars / 2);
+  const { text: clamped, truncated } = clampHeadTail(text, {
+    headBudget: half,
+    tailBudget: maxChars - half,
+    elisionMarker: `...[truncated — ${text.length} total chars, {n} elided]...`,
+  });
+  return { text: clamped, truncated };
+}

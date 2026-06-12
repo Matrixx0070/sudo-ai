@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { HeadTailBuffer, clampHeadTail } from '../../../src/core/shared/head-tail-buffer.js';
+import { HeadTailBuffer, clampHeadTail, clampToolOutput } from '../../../src/core/shared/head-tail-buffer.js';
 
 describe('HeadTailBuffer', () => {
   it('returns content unchanged when it fits within head+tail budget', () => {
@@ -102,5 +102,34 @@ describe('clampHeadTail', () => {
     const { text, truncated } = clampHeadTail('tiny', { headBudget: 100, tailBudget: 100 });
     expect(text).toBe('tiny');
     expect(truncated).toBe(false);
+  });
+});
+
+describe('clampToolOutput', () => {
+  it('is identity for text within the default 8000-char budget', () => {
+    const text = 'x'.repeat(8_000);
+    const { text: out, truncated } = clampToolOutput(text);
+    expect(out).toBe(text);
+    expect(truncated).toBe(false);
+  });
+
+  it('clamps oversize text 50/50 and reports the original size in the marker', () => {
+    const text = 'HEAD' + 'm'.repeat(20_000) + 'TAIL';
+    const { text: out, truncated } = clampToolOutput(text);
+    expect(truncated).toBe(true);
+    expect(out.startsWith('HEAD')).toBe(true);
+    expect(out.endsWith('TAIL')).toBe(true);
+    expect(out).toContain(`${text.length} total chars`);
+    // head + marker line + tail stays near the budget
+    expect(out.length).toBeLessThan(8_200);
+  });
+
+  it('honours a custom maxChars budget', () => {
+    const text = 'a'.repeat(50) + 'b'.repeat(50);
+    const { text: out, truncated } = clampToolOutput(text, 20);
+    expect(truncated).toBe(true);
+    expect(out).toContain('total chars');
+    expect(out.startsWith('aaaaaaaaaa')).toBe(true);
+    expect(out.endsWith('bbbbbbbbbb')).toBe(true);
   });
 });
