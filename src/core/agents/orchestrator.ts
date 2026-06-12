@@ -131,8 +131,18 @@ export class MultiAgentOrchestrator {
 /**
  * Create the 'system.spawn-agent' ToolDefinition bound to an orchestrator.
  * Role-aware spawn tool, distinct from the basic 'agent.spawn'.
+ *
+ * When `sessionManager` is provided AND SUDO_FORK_CONTEXT=1, the spawning
+ * (parent) session's history is forked into the sub-agent fork-mode style:
+ * system/user messages and final-answer assistant messages are inherited;
+ * tool calls/results and intermediate assistant turns are dropped. Default
+ * (flag unset) preserves the previous behaviour: sub-agents start with an
+ * empty session.
  */
-export function createMultiAgentTool(orchestrator: MultiAgentOrchestrator): ToolDefinition {
+export function createMultiAgentTool(
+  orchestrator: MultiAgentOrchestrator,
+  sessionManager?: { get: (id: string) => Promise<{ messages?: unknown } | null | undefined> } | null,
+): ToolDefinition {
   return {
     name: 'system.spawn-agent',
     description:
@@ -146,7 +156,7 @@ export function createMultiAgentTool(orchestrator: MultiAgentOrchestrator): Tool
       fileBoundaries: { type: 'string', description: 'Comma-separated file/dir paths to focus on.', required: false },
     },
 
-    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+    async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
       const role = params['role'];
       if (!role || typeof role !== 'string' || !(ROLE_NAMES as readonly string[]).includes(role)) {
         return { success: false, output: `Invalid role "${String(role)}". Valid: ${ROLE_NAMES.join(', ')}` };
@@ -166,10 +176,34 @@ export function createMultiAgentTool(orchestrator: MultiAgentOrchestrator): Tool
         ? params['fileBoundaries'].split(',').map((s) => s.trim()).filter(Boolean)
         : undefined;
 
+      // Opt-in fork-mode context: inherit the parent session's history
+      // (filtered inside AgentSwarm before seeding). Fail-open: any lookup
+      // error means the sub-agent simply starts without parent context.
+      let forkHistory: SpawnConfig['forkHistory'];
+      if (process.env['SUDO_FORK_CONTEXT'] === '1' && sessionManager && ctx.sessionId) {
+        try {
+          const parent = await sessionManager.get(ctx.sessionId);
+          const msgs = parent?.messages;
+          if (Array.isArray(msgs) && msgs.length > 0) {
+            const valid = msgs.filter((m): m is { role: string; content: string } => {
+              const r = (m as { role?: unknown })?.role;
+              const c = (m as { content?: unknown })?.content;
+              return (r === 'user' || r === 'assistant' || r === 'system' || r === 'tool') && typeof c === 'string';
+            });
+            if (valid.length > 0) {
+              forkHistory = valid as SpawnConfig['forkHistory'];
+            }
+          }
+        } catch (err) {
+          log.warn({ sessionId: ctx.sessionId, err: String(err) }, 'spawn-agent: parent session lookup failed — spawning without fork context');
+        }
+      }
+
       try {
         const inst = await orchestrator.spawnAgent({
           // Membership in ROLE_NAMES was checked above.
           role: role as AgentRoleName, task: String(task).trim(), context, fileBoundaries: fb,
+          ...(forkHistory ? { forkHistory } : {}),
         });
 
         if (inst.status === 'completed') {

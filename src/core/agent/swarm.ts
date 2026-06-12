@@ -18,6 +18,9 @@ import type { IsolationMode } from './isolation.js';
 import type { AgentConfig } from './types.js';
 import type { HookManager } from '../hooks/index.js';
 import { pushCompletionBus } from './push-completion.js';
+import { seedForkedHistory } from './fork-history.js';
+import type { ForkableMessage } from './fork-history.js';
+import { SpawnSlotGuard } from './spawn-guard.js';
 
 const log = createLogger('agent:swarm');
 
@@ -54,6 +57,14 @@ export interface SpawnOptions {
    * - 'worktree'           — gets a dedicated git worktree branch
    */
   isolationMode?: IsolationMode;
+  /**
+   * Parent conversation history to fork into the sub-agent's session.
+   * Filtered before seeding (fork-mode): system/user messages and
+   * final-answer assistant messages are kept; tool results and
+   * intermediate assistant turns are dropped. Omitted (default) — the
+   * sub-agent starts with an empty session, exactly as before.
+   */
+  forkHistory?: ForkableMessage[];
 }
 
 /** Runtime record of an active sub-agent. */
@@ -160,85 +171,110 @@ export class AgentSwarm {
       };
       this.active.set(id, record);
 
-      // Emit swarm:spawn lifecycle event.
-      if (this.hookManager) {
-        await this.hookManager.emit('swarm:spawn', {
-          event: 'swarm:spawn',
-          meta: { agentId: id, task: taskDescription.slice(0, 100) },
-        });
-      }
-
-      log.info({ id, task: taskDescription.slice(0, 100), timeout }, 'Sub-agent spawning');
-
-      // Create an ephemeral session.
-      const sessionManager = this.sessionManager as {
-        getOrCreate: (channel: string, peerId: string) => Promise<{ id: string }>;
-      };
-
-      let sessionId: string;
-      try {
-        const session = await sessionManager.getOrCreate('swarm', `subagent:${id}`);
-        sessionId = session.id;
-      } catch (err) {
-        this.active.delete(id);
-        // Push-based failure notification for async subscribers.
+      // RAII slot guard: everything below runs inside a single try/finally so
+      // an early throw (hook emit, session creation, AgentLoop construction)
+      // can never leak the active record, an isolation environment, or leave
+      // pushCompletionBus subscribers waiting forever.
+      const guard = new SpawnSlotGuard(() => {
         pushCompletionBus.fail(id, {
           agentId: id,
           task: taskDescription,
-          error: `Failed to create session: ${String(err)}`,
+          error: 'Sub-agent spawn aborted before reporting a result',
         });
-        throw new PipelineError(
-          `AgentSwarm: failed to create session for sub-agent ${id}: ${String(err)}`,
-          'pipeline_session_not_found',
-          { id },
-        );
-      }
-
-      const config: Partial<AgentConfig> = {
-        timeout,
-        ...(options.model ? { model: options.model } : {}),
-      };
-
-      // Optional workspace isolation.
-      const isolationMode = options.isolationMode ?? 'shared';
-      let isolatedEnv: Awaited<ReturnType<typeof createIsolatedAgent>> | null = null;
-      if (isolationMode !== 'shared') {
-        try {
-          isolatedEnv = await createIsolatedAgent(isolationMode);
-          log.info({ id, isolationMode, workdir: isolatedEnv.workdir }, 'Sub-agent isolation environment created');
-        } catch (isoErr) {
-          log.warn({ id, isolationMode, err: String(isoErr) }, 'Failed to create isolated environment — falling back to shared');
-          isolatedEnv = null;
-        }
-      }
-
-      const sandboxManager = {
-        getWorkspaceDir: (sid: string) => `/tmp/sandbox-${sid}`,
-        getPolicyFor: () => ({ readonly: false, allowedPaths: ['/tmp'] }),
-      };
-      const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config, undefined, undefined, undefined, undefined, sandboxManager);
-
-      // Apply timeout via AbortController + a racing timeout promise.
-      // The AbortController alone does not stop loop.run() (the loop does not
-      // accept the signal), so we also race the run against a rejecting timer.
-      // This frees the queue slot and removes the active record on timeout
-      // instead of waiting for the loop's natural completion.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          controller.abort();
-          log.error({ id, timeout }, 'Sub-agent timed out — aborting');
-          reject(
-            new PipelineError(
-              `Sub-agent ${id} timed out after ${timeout}ms`,
-              'pipeline_max_iterations',
-              { id, timeout },
-            ),
-          );
-        }, timeout);
+      });
+      guard.defer(() => {
+        this.active.delete(id);
       });
 
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        // Emit swarm:spawn lifecycle event.
+        if (this.hookManager) {
+          await this.hookManager.emit('swarm:spawn', {
+            event: 'swarm:spawn',
+            meta: { agentId: id, task: taskDescription.slice(0, 100) },
+          });
+        }
+
+        log.info({ id, task: taskDescription.slice(0, 100), timeout }, 'Sub-agent spawning');
+
+        // Create an ephemeral session.
+        const sessionManager = this.sessionManager as {
+          getOrCreate: (channel: string, peerId: string) => Promise<{ id: string; messages?: unknown }>;
+          save?: (session: unknown) => Promise<void>;
+        };
+
+        let sessionId: string;
+        let session: { id: string; messages?: unknown };
+        try {
+          session = await sessionManager.getOrCreate('swarm', `subagent:${id}`);
+          sessionId = session.id;
+        } catch (err) {
+          throw new PipelineError(
+            `AgentSwarm: failed to create session for sub-agent ${id}: ${String(err)}`,
+            'pipeline_session_not_found',
+            { id },
+          );
+        }
+
+        // Fork-mode context: seed the filtered parent history (fail-open).
+        if (options.forkHistory && options.forkHistory.length > 0) {
+          try {
+            const kept = seedForkedHistory(session, options.forkHistory);
+            if (kept > 0 && typeof sessionManager.save === 'function') {
+              await sessionManager.save(session);
+            }
+            log.info(
+              { id, kept, dropped: options.forkHistory.length - kept },
+              'Fork-mode history seeded into sub-agent session',
+            );
+          } catch (forkErr) {
+            log.warn({ id, err: String(forkErr) }, 'Fork history seeding failed — sub-agent starts without parent context');
+          }
+        }
+
+        const config: Partial<AgentConfig> = {
+          timeout,
+          ...(options.model ? { model: options.model } : {}),
+        };
+
+        // Optional workspace isolation.
+        const isolationMode = options.isolationMode ?? 'shared';
+        if (isolationMode !== 'shared') {
+          try {
+            const isolatedEnv = await createIsolatedAgent(isolationMode);
+            guard.defer(() => isolatedEnv.cleanup());
+            log.info({ id, isolationMode, workdir: isolatedEnv.workdir }, 'Sub-agent isolation environment created');
+          } catch (isoErr) {
+            log.warn({ id, isolationMode, err: String(isoErr) }, 'Failed to create isolated environment — falling back to shared');
+          }
+        }
+
+        const sandboxManager = {
+          getWorkspaceDir: (sid: string) => `/tmp/sandbox-${sid}`,
+          getPolicyFor: () => ({ readonly: false, allowedPaths: ['/tmp'] }),
+        };
+        const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config, undefined, undefined, undefined, undefined, sandboxManager);
+
+        // Apply timeout via AbortController + a racing timeout promise.
+        // The AbortController alone does not stop loop.run() (the loop does not
+        // accept the signal), so we also race the run against a rejecting timer.
+        // This frees the queue slot and removes the active record on timeout
+        // instead of waiting for the loop's natural completion.
+        const timeoutPromise = new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            log.error({ id, timeout }, 'Sub-agent timed out — aborting');
+            reject(
+              new PipelineError(
+                `Sub-agent ${id} timed out after ${timeout}ms`,
+                'pipeline_max_iterations',
+                { id, timeout },
+              ),
+            );
+          }, timeout);
+        });
+
         const startTime = Date.now();
         const runPromise = loop.run(sessionId, taskDescription);
         // Swallow any late rejection if the timeout wins the race below, so the
@@ -264,6 +300,7 @@ export class AgentSwarm {
           result: resultText,
           duration,
         });
+        guard.commit();
 
         return resultText;
       } catch (err) {
@@ -281,6 +318,7 @@ export class AgentSwarm {
             task: taskDescription,
             error: timeoutError.message,
           });
+          guard.commit();
           throw timeoutError;
         }
 
@@ -290,20 +328,15 @@ export class AgentSwarm {
           task: taskDescription,
           error: errorMessage,
         });
+        guard.commit();
 
         log.error({ id, err }, 'Sub-agent failed');
         throw err;
       } finally {
         clearTimeout(timer);
-        this.active.delete(id);
-        // Always clean up isolated environment, even on error.
-        if (isolatedEnv) {
-          try {
-            await isolatedEnv.cleanup();
-          } catch (cleanErr) {
-            log.warn({ id, isolationMode, err: String(cleanErr) }, 'Isolation cleanup failed');
-          }
-        }
+        // Removes the active record and cleans up any isolation environment;
+        // notifies subscribers if the spawn aborted before reporting.
+        await guard.release();
       }
     }) as Promise<string>;
   }
@@ -341,80 +374,97 @@ export class AgentSwarm {
         };
         this.active.set(id, record);
 
-        // Emit swarm:spawn lifecycle event.
-        if (this.hookManager) {
-          await this.hookManager.emit('swarm:spawn', {
-            event: 'swarm:spawn',
-            meta: { agentId: id, task: taskDescription.slice(0, 100) },
-          });
-        }
-
-        log.info({ id, task: taskDescription.slice(0, 100), timeout }, 'Async sub-agent spawning');
-
-        // Create an ephemeral session.
-        const sessionManager = this.sessionManager as {
-          getOrCreate: (channel: string, peerId: string) => Promise<{ id: string }>;
-        };
-
-        let sessionId: string;
-        try {
-          const session = await sessionManager.getOrCreate('swarm', `subagent:${id}`);
-          sessionId = session.id;
-        } catch (err) {
-          this.active.delete(id);
+        // RAII slot guard — see spawn() for semantics.
+        const guard = new SpawnSlotGuard(() => {
           pushCompletionBus.fail(id, {
             agentId: id,
             task: taskDescription,
-            error: `Failed to create session: ${String(err)}`,
+            error: 'Sub-agent spawn aborted before reporting a result',
           });
-          return;
-        }
-
-        const config: Partial<AgentConfig> = {
-          timeout,
-          ...(options.model ? { model: options.model } : {}),
-        };
-
-        // Optional workspace isolation.
-        const isolationMode = options.isolationMode ?? 'shared';
-        let isolatedEnv: Awaited<ReturnType<typeof createIsolatedAgent>> | null = null;
-        if (isolationMode !== 'shared') {
-          try {
-            isolatedEnv = await createIsolatedAgent(isolationMode);
-            log.info({ id, isolationMode, workdir: isolatedEnv.workdir }, 'Async sub-agent isolation environment created');
-          } catch (isoErr) {
-            log.warn({ id, isolationMode, err: String(isoErr) }, 'Failed to create isolated environment — falling back to shared');
-            isolatedEnv = null;
-          }
-        }
-
-        const sandboxManager = {
-          getWorkspaceDir: (sid: string) => `/tmp/sandbox-${sid}`,
-          getPolicyFor: () => ({ readonly: false, allowedPaths: ['/tmp'] }),
-        };
-        const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config, undefined, undefined, undefined, undefined, sandboxManager);
-
-        // Apply timeout via AbortController + a racing timeout promise.
-        // The AbortController alone does not stop loop.run() (the loop does not
-        // accept the signal), so we also race the run against a rejecting timer.
-        // This frees the queue slot and removes the active record on timeout
-        // instead of waiting for the loop's natural completion.
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeoutPromise = new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            controller.abort();
-            log.error({ id, timeout }, 'Async sub-agent timed out — aborting');
-            reject(
-              new PipelineError(
-                `Sub-agent ${id} timed out after ${timeout}ms`,
-                'pipeline_max_iterations',
-                { id, timeout },
-              ),
-            );
-          }, timeout);
+        });
+        guard.defer(() => {
+          this.active.delete(id);
         });
 
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
+          // Emit swarm:spawn lifecycle event.
+          if (this.hookManager) {
+            await this.hookManager.emit('swarm:spawn', {
+              event: 'swarm:spawn',
+              meta: { agentId: id, task: taskDescription.slice(0, 100) },
+            });
+          }
+
+          log.info({ id, task: taskDescription.slice(0, 100), timeout }, 'Async sub-agent spawning');
+
+          // Create an ephemeral session.
+          const sessionManager = this.sessionManager as {
+            getOrCreate: (channel: string, peerId: string) => Promise<{ id: string; messages?: unknown }>;
+            save?: (session: unknown) => Promise<void>;
+          };
+
+          const session = await sessionManager.getOrCreate('swarm', `subagent:${id}`);
+          const sessionId = session.id;
+
+          // Fork-mode context: seed the filtered parent history (fail-open).
+          if (options.forkHistory && options.forkHistory.length > 0) {
+            try {
+              const kept = seedForkedHistory(session, options.forkHistory);
+              if (kept > 0 && typeof sessionManager.save === 'function') {
+                await sessionManager.save(session);
+              }
+              log.info(
+                { id, kept, dropped: options.forkHistory.length - kept },
+                'Fork-mode history seeded into async sub-agent session',
+              );
+            } catch (forkErr) {
+              log.warn({ id, err: String(forkErr) }, 'Fork history seeding failed — sub-agent starts without parent context');
+            }
+          }
+
+          const config: Partial<AgentConfig> = {
+            timeout,
+            ...(options.model ? { model: options.model } : {}),
+          };
+
+          // Optional workspace isolation.
+          const isolationMode = options.isolationMode ?? 'shared';
+          if (isolationMode !== 'shared') {
+            try {
+              const isolatedEnv = await createIsolatedAgent(isolationMode);
+              guard.defer(() => isolatedEnv.cleanup());
+              log.info({ id, isolationMode, workdir: isolatedEnv.workdir }, 'Async sub-agent isolation environment created');
+            } catch (isoErr) {
+              log.warn({ id, isolationMode, err: String(isoErr) }, 'Failed to create isolated environment — falling back to shared');
+            }
+          }
+
+          const sandboxManager = {
+            getWorkspaceDir: (sid: string) => `/tmp/sandbox-${sid}`,
+            getPolicyFor: () => ({ readonly: false, allowedPaths: ['/tmp'] }),
+          };
+          const loop = new AgentLoop(this.brain, this.toolRegistry, this.sessionManager, config, undefined, undefined, undefined, undefined, sandboxManager);
+
+          // Apply timeout via AbortController + a racing timeout promise.
+          // The AbortController alone does not stop loop.run() (the loop does not
+          // accept the signal), so we also race the run against a rejecting timer.
+          // This frees the queue slot and removes the active record on timeout
+          // instead of waiting for the loop's natural completion.
+          const timeoutPromise = new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => {
+              controller.abort();
+              log.error({ id, timeout }, 'Async sub-agent timed out — aborting');
+              reject(
+                new PipelineError(
+                  `Sub-agent ${id} timed out after ${timeout}ms`,
+                  'pipeline_max_iterations',
+                  { id, timeout },
+                ),
+              );
+            }, timeout);
+          });
+
           const startTime = Date.now();
           const runPromise = loop.run(sessionId, taskDescription);
           // Swallow any late rejection if the timeout wins the race below, so the
@@ -440,6 +490,7 @@ export class AgentSwarm {
             result: resultText,
             duration,
           });
+          guard.commit();
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
 
@@ -456,17 +507,13 @@ export class AgentSwarm {
               error: errorMessage,
             });
           }
+          guard.commit();
           log.error({ id, err }, 'Async sub-agent failed');
         } finally {
           clearTimeout(timer);
-          this.active.delete(id);
-          if (isolatedEnv) {
-            try {
-              await isolatedEnv.cleanup();
-            } catch (cleanErr) {
-              log.warn({ id, isolationMode, err: String(cleanErr) }, 'Isolation cleanup failed');
-            }
-          }
+          // Removes the active record and cleans up any isolation environment;
+          // notifies subscribers if the spawn aborted before reporting.
+          await guard.release();
         }
       })
       .catch((queueErr) => {

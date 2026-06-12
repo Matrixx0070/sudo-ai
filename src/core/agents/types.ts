@@ -60,6 +60,18 @@ export interface SpawnConfig {
   timeout?: number;
   /** Override LLM model for this agent. */
   model?: string;
+  /**
+   * Parent conversation history to fork into the sub-agent's session.
+   * Filtered fork-mode style before seeding: system/user messages and
+   * final-answer assistant messages are kept; tool results and intermediate
+   * assistant turns are dropped. Shape mirrors sessions' BrainMessage
+   * structurally (kept inline so this file stays import-free).
+   */
+  forkHistory?: Array<{
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    toolCalls?: unknown[];
+  }>;
 }
 
 // ---------------------------------------------------------------------------
