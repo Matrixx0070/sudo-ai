@@ -50,6 +50,18 @@ describe('forgeInsights', () => {
     expect(typeof result.merged[0]!._rrfScore).toBe('number');
   });
 
+  it('IF-6: idKey option merges hits without an id field (MemoryResult shape)', async () => {
+    interface MemHit { content: string; relevance: number; }
+    const search = async (query: string): Promise<MemHit[]> =>
+      query === 'q1'
+        ? [{ content: 'shared fact', relevance: 0.9 }]
+        : [{ content: 'shared fact', relevance: 0.8 }, { content: 'other fact', relevance: 0.5 }];
+    const result = await forgeInsights(search, decompose, 'original', { idKey: 'content' });
+    expect(result.merged.map((m) => m.content)).toEqual(['shared fact', 'other fact']);
+    expect(result.merged[0]!._rrfScore).toBeCloseTo(1 / 60 + 1 / 60);
+    expect(result.merged[1]!._rrfScore).toBeCloseTo(1 / 61);
+  });
+
   it('IF-5: decompose failure falls back to the original query; search failure yields empty hits', async () => {
     const failingDecompose = async (): Promise<SubQuestion[]> => { throw new Error('boom'); };
     const failingSearch = async (): Promise<Hit[]> => { throw new Error('boom'); };

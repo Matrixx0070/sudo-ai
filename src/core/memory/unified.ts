@@ -249,7 +249,8 @@ export class UnifiedMemory {
     const searchFn = async (q: string, limit = 8) => {
       return this.search({ query: q, limit });
     };
-    return forgeInsights(searchFn, decomposeQueryFn, query, options);
+    // MemoryResult has no id field; content is its identity for RRF dedupe.
+    return forgeInsights(searchFn, decomposeQueryFn, query, { idKey: 'content', ...options });
   }
 
   // -------------------------------------------------------------------------

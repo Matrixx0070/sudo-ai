@@ -37,6 +37,8 @@ export interface ForgeOptions {
   finalMaxResults?: number;
   /** RRF k parameter — higher = less steep rank penalty (default: 60) */
   rrfK?: number;
+  /** Property name identifying unique hits for RRF merging (default: 'id'). Hits without this property are dropped from `merged`. */
+  idKey?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +114,7 @@ export async function forgeInsights<T extends object>(
     maxResultsPerSub = 8,
     finalMaxResults  = 10,
     rrfK             = 60,
+    idKey            = 'id',
   } = options;
 
   const startMs = Date.now();
@@ -149,7 +152,7 @@ export async function forgeInsights<T extends object>(
   // -------------------------------------------------------------------------
   // Step 3: Merge with RRF
   // -------------------------------------------------------------------------
-  const merged = reciprocalRankFusion(perSubResults, 'id', rrfK)
+  const merged = reciprocalRankFusion(perSubResults, idKey, rrfK)
     .slice(0, finalMaxResults);
 
   return {
