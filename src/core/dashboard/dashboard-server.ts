@@ -22,18 +22,31 @@ const DASHBOARD_DISABLED = process.env['SUDO_DASHBOARD_DISABLE'] === '1';
 
 const activityBuffer: ActivityEvent[] = [];
 
-// Optional runtime registration points: subsystems may attach themselves to
-// globalThis so the dashboard can detect them. Nothing in src registers these
-// today, so the health checks honestly report "not detected" and getAlignment
-// returns its zero default until something does.
+// Optional runtime registration points: subsystems attach themselves via
+// registerDashboardGlobals() (called from cli.ts at boot) so the dashboard
+// can detect them. Unregistered subsystems honestly report "not detected"
+// and getAlignment returns its zero default.
+/** Provider of alignment digest data (score + signal breakdown). */
+export interface AlignmentDigestSource {
+  getDigest?: () => { overallScore?: number; signals?: Record<string, number> } | undefined;
+}
 interface SudoRuntimeGlobals {
   __sudoBrain?: unknown;
   __sudoGateway?: unknown;
-  __sudoAlignment?: {
-    getDigest?: () => { overallScore?: number; signals?: Record<string, number> } | undefined;
-  };
+  __sudoAlignment?: AlignmentDigestSource;
 }
 const runtimeGlobals = globalThis as SudoRuntimeGlobals;
+
+/** Register live subsystem references for health checks and alignment data. */
+export function registerDashboardGlobals(parts: {
+  brain?: unknown;
+  gateway?: unknown;
+  alignment?: AlignmentDigestSource;
+}): void {
+  if (parts.brain !== undefined) runtimeGlobals.__sudoBrain = parts.brain;
+  if (parts.gateway !== undefined) runtimeGlobals.__sudoGateway = parts.gateway;
+  if (parts.alignment !== undefined) runtimeGlobals.__sudoAlignment = parts.alignment;
+}
 let lastCpuUsage = process.cpuUsage();
 let lastCpuTime = Date.now();
 

@@ -1941,6 +1941,44 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 8.6 Observability dashboard (kill switch: SUDO_DASHBOARD_DISABLE=1)
+  // -------------------------------------------------------------------------
+  try {
+    const { initDashboard, shutdownDashboard, registerDashboardGlobals } =
+      await import('./core/dashboard/dashboard-server.js');
+
+    const dashboardPort = parseInt(process.env['SUDO_DASHBOARD_PORT'] ?? '18910', 10) || 18910;
+    const pinnedToken = process.env['SUDO_DASHBOARD_TOKEN'] ?? process.env['GATEWAY_TOKEN'];
+    const dashboardToken = pinnedToken ?? randomUUID();
+    if (!pinnedToken) {
+      log.info({ token: dashboardToken }, 'Dashboard API token generated for this boot (set SUDO_DASHBOARD_TOKEN to pin)');
+    }
+
+    registerDashboardGlobals({
+      brain,
+      // gatewayServer stays null when the gateway failed to start; omit so the
+      // health check honestly reports "not detected".
+      gateway: gatewayServer ?? undefined,
+      alignment: {
+        getDigest: () => {
+          const report = finalAgentLoop.getAlignmentAggregator()?.getLastReport();
+          if (!report) return undefined;
+          return {
+            overallScore: report.score,
+            signals: Object.fromEntries(Object.entries(report.signals)),
+          };
+        },
+      },
+    });
+
+    initDashboard({ port: dashboardPort, authToken: dashboardToken, refreshIntervalMs: 5000 });
+    registerShutdown(() => shutdownDashboard());
+    log.info({ port: dashboardPort }, 'Observability dashboard wired (SUDO_DASHBOARD_DISABLE=1 to disable)');
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Dashboard wiring failed (non-fatal)');
+  }
+
+  // -------------------------------------------------------------------------
   // 9. SUDO-AI v5 modules
   // -------------------------------------------------------------------------
   let goalEngine: GoalEngineV2 | null = null;
