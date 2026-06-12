@@ -31,7 +31,7 @@ import {
 } from './plugin-manifest.js';
 import { SudoError } from '../shared/errors.js';
 import { readdir, readFile, rm, mkdir } from 'node:fs/promises';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join, resolve } from 'node:path';
 
 const log = createLogger('plugin:loader');
@@ -650,7 +650,11 @@ export class PluginLoader {
 
     try {
       mkdirSync(this.config.pluginsDir, { recursive: true });
-      writeFileSync(statePath, JSON.stringify(data, null, 2), 'utf-8');
+      // Write-then-rename so a crash mid-write never leaves a truncated
+      // (unparseable) state file behind.
+      const tmpPath = `${statePath}.tmp`;
+      writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      renameSync(tmpPath, statePath);
       log.debug({ path: statePath, count: data.length }, 'Plugin state saved');
     } catch (err) {
       log.warn({ err }, 'Failed to save plugin state');
@@ -708,7 +712,7 @@ export class PluginLoader {
       log.info({ restored }, 'Plugin state restored');
       return restored;
     } catch (err) {
-      log.warn({ err }, 'Failed to load plugin state');
+      log.warn({ path: statePath, err }, 'Plugin state file unreadable or corrupt — starting fresh');
       return 0;
     }
   }

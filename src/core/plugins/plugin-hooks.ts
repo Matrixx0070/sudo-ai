@@ -82,6 +82,11 @@ function normaliseEvent(event: string): HookEvent {
 /**
  * Track which hook IDs a plugin has registered so we can unregister
  * them later.
+ *
+ * Module-level singleton: registering the same plugin ID twice without an
+ * intervening unregisterPluginHooks() accumulates duplicate registrations.
+ * Callers (e.g. plugins/boot.ts) must pair register and unregister per
+ * plugin lifecycle.
  */
 const pluginHookIds = new Map<string, Set<string>>();
 
