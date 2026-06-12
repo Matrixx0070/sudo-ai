@@ -40,8 +40,9 @@ export const modelCommand: SlashCommand = {
 
     try {
       brain.setModel(target);
-      log.info({ target }, 'Model switched via /model command');
-      return `Model switched to: ${target}`;
+      const canonical = brain.getModel?.() ?? target;
+      log.info({ target, model: canonical }, 'Model switched via /model command');
+      return `Model switched to: ${canonical}`;
     } catch (err) {
       log.error({ target, err }, 'Failed to switch model');
       return `Failed to switch model to "${target}": ${String(err)}`;

@@ -53,4 +53,6 @@ export interface CommandContext {
   config: unknown;
   /** Open MindDB / database handle. */
   db: unknown;
+  /** Per-peer turn queue (KeyedAsyncQueue) for /queue inspection. Optional. */
+  peerQueue?: unknown;
 }

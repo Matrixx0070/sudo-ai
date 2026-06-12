@@ -187,6 +187,23 @@ function toSDKMessages(messages: BrainMessage[]): unknown[] {
 // Brain class
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve a /model switch target against the configured failover chain.
+ * Accepts the full "provider/model-id" ref or the bare model id, both
+ * case-insensitive. Returns the canonical configured ref, or null when the
+ * target is not configured (switching to arbitrary unconfigured models would
+ * bypass the failover chain and provider key setup).
+ */
+export function resolveModelSwitch(configured: string[], target: string): string | null {
+  const t = target.trim().toLowerCase();
+  if (!t) return null;
+  return (
+    configured.find((m) => m.toLowerCase() === t) ??
+    configured.find((m) => m.toLowerCase().split('/').pop() === t) ??
+    null
+  );
+}
+
 /** Minimal interface required from a RAG engine — avoids importing RAGEngine directly. */
 interface RAGEngineInterface {
   retrieveContext(query: string, maxChunks?: number): Promise<string>;
@@ -202,8 +219,10 @@ export class Brain {
   private ragEngine: RAGEngineInterface | null = null;
   /** Negative router — injected post-construction via setNegativeRouter(). Undefined = no routing. */
   private negativeRouter: NegativeRouter | undefined;
-  /** Highest-priority model id, captured at construction — the primary for smart-routing. */
-  private readonly primaryModel: string;
+  /** Highest-priority model id — the primary for smart-routing. Mutable via setModel(). */
+  private primaryModel: string;
+  /** Full configured failover chain, captured at construction (setModel allowlist). */
+  private readonly configuredModels: string[];
   /** Cheap-path dispatch router (novelty scoring + LRU cache + anti-self-promotion guard). */
   private readonly dispatchRouter = new DispatchRouter();
   /** Multi-key rotation manager — rotates API keys per provider on rate-limit/auth errors. */
@@ -220,6 +239,7 @@ export class Brain {
     this.config = config as SudoConfig | null;
     const modelIds = this.buildModelList();
     this.failover = new ModelFailover(modelIds);
+    this.configuredModels = modelIds.length > 0 ? modelIds : [DEFAULT_MODEL];
     this.primaryModel = modelIds[0] ?? DEFAULT_MODEL;
     // Auto-init providers on construction (async, awaited on first call)
     this.providersReady = initProviders();
@@ -256,6 +276,38 @@ export class Brain {
     }
 
     return models;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Runtime model switching (/model directive)
+  // ---------------------------------------------------------------------------
+
+  /** The current primary model id ("provider/model-id"). */
+  getModel(): string {
+    return this.primaryModel;
+  }
+
+  /**
+   * Switch the primary model at runtime. The target must be in the configured
+   * failover chain — matched by full "provider/model-id" or by the bare model
+   * id (case-insensitive). The matched model is promoted to the top of the
+   * failover order so both smart routing and the sequential failover path
+   * start from the new primary; the other models keep their relative order.
+   *
+   * @throws {LLMError} when the target is not a configured model.
+   */
+  setModel(target: string): void {
+    const match = resolveModelSwitch(this.configuredModels, target);
+    if (!match) {
+      throw new LLMError(
+        `Model "${target}" is not configured. Available: ${this.configuredModels.join(', ')}`,
+        'llm_invalid_model',
+        { target, configured: this.configuredModels },
+      );
+    }
+    this.primaryModel = match;
+    this.failover.setPrimary(match);
+    log.info({ model: match }, 'Primary model switched at runtime');
   }
 
   // ---------------------------------------------------------------------------

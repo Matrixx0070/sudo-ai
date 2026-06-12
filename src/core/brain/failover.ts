@@ -305,6 +305,26 @@ export class ModelFailover {
   }
 
   /**
+   * Promote a registered model to the top of the failover order (priority 0);
+   * the remaining profiles keep their relative order behind it. Without this,
+   * runtime /model switching would only steer smart routing while the
+   * sequential failover path kept starting from the boot-time primary.
+   */
+  setPrimary(modelString: string): void {
+    const target = this.profiles.get(modelString);
+    if (!target) {
+      log.warn({ modelString }, 'setPrimary: model not registered — failover order unchanged');
+      return;
+    }
+    const ordered = Array.from(this.profiles.values()).sort((a, b) => a.priority - b.priority);
+    let next = 1;
+    for (const profile of ordered) {
+      profile.priority = profile === target ? 0 : next++;
+    }
+    log.info({ modelString }, 'Failover order rebased — model promoted to primary');
+  }
+
+  /**
    * Force-reset cooldowns on ALL non-disabled profiles.
    * Used when the system needs an emergency recovery (e.g. after a restart
    * or when a provider outage has resolved).
