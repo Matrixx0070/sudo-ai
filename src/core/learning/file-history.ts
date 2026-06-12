@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import type { Database } from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import type {
   FileChangeRecord,
@@ -33,6 +34,67 @@ import type {
 import { DEFAULT_FILE_HISTORY_CONFIG } from './file-history-types.js';
 
 const log = createLogger('learning:file-history');
+
+// ---------------------------------------------------------------------------
+// SQL row shapes — assertions at the better-sqlite3 boundary name these
+// contracts; the column types are pinned by createTables() below.
+// ---------------------------------------------------------------------------
+
+interface FileChangeRow {
+  id: string;
+  session_id: string;
+  channel: string;
+  file_path: string;
+  change_type: string;
+  timestamp: string;
+  hash_before: string;
+  hash_after: string;
+  lines_added: number;
+  lines_deleted: number;
+  diff: string;
+  tool_name: string;
+  description: string;
+  auto_approved: number;
+  total_lines: number;
+}
+
+interface SessionAttributionRow {
+  session_id: string;
+  channel: string;
+  peer_id: string;
+  model: string;
+  change_count: number;
+  files_changed: string;
+  total_lines_added: number;
+  total_lines_deleted: number;
+  start_time: string;
+  end_time: string;
+  goal_type: string;
+  completion_verdict: string;
+}
+
+interface ContextSnapshotRow {
+  id: string;
+  session_id: string;
+  timestamp: string;
+  reason: string;
+  total_size_bytes: number;
+  signals: string | null;
+}
+
+interface SnapshotFileRow {
+  file_path: string;
+  hash: string;
+  size_bytes: number;
+  line_count: number;
+  content: string;
+  truncated: number;
+  last_modified: string;
+}
+
+interface CountRow {
+  total: number;
+}
 
 // ---------------------------------------------------------------------------
 // Diff Computation
@@ -149,6 +211,29 @@ function genId(): string {
   return crypto.randomBytes(16).toString('hex').substring(0, 21);
 }
 
+/**
+ * Map a file_changes row to its public record shape.
+ */
+function rowToChangeRecord(row: FileChangeRow): FileChangeRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    channel: row.channel,
+    filePath: row.file_path,
+    changeType: row.change_type as FileChangeType,
+    timestamp: row.timestamp,
+    hashBefore: row.hash_before,
+    hashAfter: row.hash_after,
+    linesAdded: row.lines_added,
+    linesDeleted: row.lines_deleted,
+    diff: row.diff,
+    toolName: row.tool_name,
+    description: row.description,
+    autoApproved: row.auto_approved === 1,
+    totalLines: row.total_lines,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // File History Store (SQLite-backed)
 // ---------------------------------------------------------------------------
@@ -162,7 +247,7 @@ function genId(): string {
  */
 export class FileHistoryStore {
   private config: FileHistoryConfig;
-  private db: any = null; // better-sqlite3 Database, dynamically imported
+  private db: Database | null = null; // dynamically imported in init()
   private initialized = false;
   private changeCounters = new Map<string, number>(); // sessionId -> change count since last snapshot
   private eventHandlers = new Map<string, Set<(event: FileHistoryEvent) => void>>();
@@ -182,18 +267,19 @@ export class FileHistoryStore {
     if (this.initialized) return;
 
     try {
-      const Database = await import('better-sqlite3');
+      const BetterSqlite3 = await import('better-sqlite3');
       const dbPath = path.resolve(this.config.dbPath);
 
       // Ensure directory exists
       fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-      this.db = new Database.default(dbPath);
-      this.db.pragma('journal_mode = WAL');
-      this.db.pragma('synchronous = NORMAL');
-      this.db.pragma('foreign_keys = ON');
+      const db = new BetterSqlite3.default(dbPath);
+      db.pragma('journal_mode = WAL');
+      db.pragma('synchronous = NORMAL');
+      db.pragma('foreign_keys = ON');
 
-      this.createTables();
+      this.createTables(db);
+      this.db = db;
       this.initialized = true;
 
       log.info({ dbPath }, 'File history store initialized');
@@ -206,8 +292,8 @@ export class FileHistoryStore {
   /**
    * Create database tables if they don't exist.
    */
-  private createTables(): void {
-    this.db.exec(`
+  private createTables(db: Database): void {
+    db.exec(`
       CREATE TABLE IF NOT EXISTS file_changes (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -298,7 +384,7 @@ export class FileHistoryStore {
     description?: string;
     autoApproved?: boolean;
   }): FileChangeRecord {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
     const {
       sessionId,
@@ -360,7 +446,7 @@ export class FileHistoryStore {
     };
 
     // Insert into database
-    const insert = this.db.prepare(`
+    const insert = db.prepare(`
       INSERT INTO file_changes (
         id, session_id, channel, file_path, change_type, timestamp,
         hash_before, hash_after, lines_added, lines_deleted, diff,
@@ -420,18 +506,20 @@ export class FileHistoryStore {
    * Update session attribution after a file change.
    */
   private updateAttribution(record: FileChangeRecord): void {
-    const existing = this.db.prepare(
+    const db = this.requireDb();
+
+    const existing = db.prepare(
       'SELECT * FROM session_attributions WHERE session_id = ?',
-    ).get(record.sessionId) as any;
+    ).get(record.sessionId) as SessionAttributionRow | undefined;
 
     if (existing) {
       // Update existing attribution
-      const filesChanged: string[] = JSON.parse(existing.files_changed || '[]');
+      const filesChanged = JSON.parse(existing.files_changed || '[]') as string[];
       if (!filesChanged.includes(record.filePath)) {
         filesChanged.push(record.filePath);
       }
 
-      this.db.prepare(`
+      db.prepare(`
         UPDATE session_attributions SET
           change_count = change_count + 1,
           files_changed = ?,
@@ -448,7 +536,7 @@ export class FileHistoryStore {
       );
     } else {
       // Create new attribution
-      this.db.prepare(`
+      db.prepare(`
         INSERT INTO session_attributions (
           session_id, channel, peer_id, model, change_count, files_changed,
           total_lines_added, total_lines_deleted, start_time, end_time,
@@ -475,11 +563,11 @@ export class FileHistoryStore {
    * Get attribution for a specific session.
    */
   getAttribution(sessionId: string): SessionAttribution | null {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
-    const row = this.db.prepare(
+    const row = db.prepare(
       'SELECT * FROM session_attributions WHERE session_id = ?',
-    ).get(sessionId) as any;
+    ).get(sessionId) as SessionAttributionRow | undefined;
 
     if (!row) return null;
 
@@ -489,7 +577,7 @@ export class FileHistoryStore {
       peerId: row.peer_id,
       model: row.model,
       changeCount: row.change_count,
-      filesChanged: JSON.parse(row.files_changed || '[]'),
+      filesChanged: JSON.parse(row.files_changed || '[]') as string[],
       totalLinesAdded: row.total_lines_added,
       totalLinesDeleted: row.total_lines_deleted,
       startTime: row.start_time,
@@ -503,14 +591,14 @@ export class FileHistoryStore {
    * Get attribution summary for a specific file.
    */
   getFileAttribution(filePath: string): FileAttributionSummary {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
-    const rows = this.db.prepare(`
+    const rows = db.prepare(`
       SELECT session_id, channel, timestamp
       FROM file_changes
       WHERE file_path = ?
       ORDER BY timestamp DESC
-    `).all(filePath) as any[];
+    `).all(filePath) as Array<Pick<FileChangeRow, 'session_id' | 'channel' | 'timestamp'>>;
 
     const sessionMap = new Map<string, { sessionId: string; channel: string; changeCount: number; lastChangeTime: string }>();
 
@@ -551,10 +639,10 @@ export class FileHistoryStore {
    * Query file change history with filtering.
    */
   queryHistory(query: FileHistoryQuery): FileHistoryResult {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
     const conditions: string[] = [];
-    const params: any[] = [];
+    const params: Array<string | number> = [];
 
     if (query.filePathPattern) {
       // Convert glob pattern to SQL LIKE
@@ -595,34 +683,18 @@ export class FileHistoryStore {
     const offset = query.offset ?? 0;
 
     // Get total count
-    const countRow = this.db.prepare(
+    const countRow = db.prepare(
       `SELECT COUNT(*) as total FROM file_changes ${whereClause}`,
-    ).get(...params) as any;
+    ).get(...params) as CountRow | undefined;
 
     const totalCount = countRow?.total ?? 0;
 
     // Get records
-    const rows = this.db.prepare(
+    const rows = db.prepare(
       `SELECT * FROM file_changes ${whereClause} ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
-    ).all(...params, limit, offset) as any[];
+    ).all(...params, limit, offset) as FileChangeRow[];
 
-    const records: FileChangeRecord[] = rows.map((row: any) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      channel: row.channel,
-      filePath: row.file_path,
-      changeType: row.change_type as FileChangeType,
-      timestamp: row.timestamp,
-      hashBefore: row.hash_before,
-      hashAfter: row.hash_after,
-      linesAdded: row.lines_added,
-      linesDeleted: row.lines_deleted,
-      diff: row.diff,
-      toolName: row.tool_name,
-      description: row.description,
-      autoApproved: row.auto_approved === 1,
-      totalLines: row.total_lines,
-    }));
+    const records: FileChangeRecord[] = rows.map(rowToChangeRecord);
 
     return {
       records,
@@ -646,89 +718,72 @@ export class FileHistoryStore {
    * Get the most recent change for a file.
    */
   getLatestChange(filePath: string): FileChangeRecord | null {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
-    const row = this.db.prepare(
+    const row = db.prepare(
       'SELECT * FROM file_changes WHERE file_path = ? ORDER BY timestamp DESC LIMIT 1',
-    ).get(filePath) as any;
+    ).get(filePath) as FileChangeRow | undefined;
 
     if (!row) return null;
-
-    return {
-      id: row.id,
-      sessionId: row.session_id,
-      channel: row.channel,
-      filePath: row.file_path,
-      changeType: row.change_type as FileChangeType,
-      timestamp: row.timestamp,
-      hashBefore: row.hash_before,
-      hashAfter: row.hash_after,
-      linesAdded: row.lines_added,
-      linesDeleted: row.lines_deleted,
-      diff: row.diff,
-      toolName: row.tool_name,
-      description: row.description,
-      autoApproved: row.auto_approved === 1,
-      totalLines: row.total_lines,
-    };
+    return rowToChangeRecord(row);
   }
 
   /**
    * Get statistics about file changes.
    */
   getStats(): FileHistoryStats {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
-    const totalRow = this.db.prepare('SELECT COUNT(*) as total FROM file_changes').get() as any;
+    const totalRow = db.prepare('SELECT COUNT(*) as total FROM file_changes').get() as CountRow | undefined;
     const totalChanges = totalRow?.total ?? 0;
 
-    const uniqueFilesRow = this.db.prepare('SELECT COUNT(DISTINCT file_path) as total FROM file_changes').get() as any;
+    const uniqueFilesRow = db.prepare('SELECT COUNT(DISTINCT file_path) as total FROM file_changes').get() as CountRow | undefined;
     const uniqueFiles = uniqueFilesRow?.total ?? 0;
 
-    const uniqueSessionsRow = this.db.prepare('SELECT COUNT(DISTINCT session_id) as total FROM file_changes').get() as any;
+    const uniqueSessionsRow = db.prepare('SELECT COUNT(DISTINCT session_id) as total FROM file_changes').get() as CountRow | undefined;
     const uniqueSessions = uniqueSessionsRow?.total ?? 0;
 
     // Changes by type
-    const typeRows = this.db.prepare(
+    const typeRows = db.prepare(
       'SELECT change_type, COUNT(*) as count FROM file_changes GROUP BY change_type',
-    ).all() as any[];
+    ).all() as Array<{ change_type: string; count: number }>;
     const changesByType: Record<string, number> = {};
     for (const row of typeRows) {
       changesByType[row.change_type] = row.count;
     }
 
     // Changes by tool
-    const toolRows = this.db.prepare(
+    const toolRows = db.prepare(
       'SELECT tool_name, COUNT(*) as count FROM file_changes GROUP BY tool_name ORDER BY count DESC LIMIT 10',
-    ).all() as any[];
+    ).all() as Array<{ tool_name: string; count: number }>;
     const changesByTool: Record<string, number> = {};
     for (const row of toolRows) {
       if (row.tool_name) changesByTool[row.tool_name] = row.count;
     }
 
     // Changes by day
-    const dayRows = this.db.prepare(
+    const dayRows = db.prepare(
       "SELECT substr(timestamp, 1, 10) as day, COUNT(*) as count FROM file_changes GROUP BY day ORDER BY day DESC LIMIT 30",
-    ).all() as any[];
+    ).all() as Array<{ day: string; count: number }>;
     const changesByDay: Record<string, number> = {};
     for (const row of dayRows) {
       changesByDay[row.day] = row.count;
     }
 
     // Most changed files
-    const fileRows = this.db.prepare(
+    const fileRows = db.prepare(
       'SELECT file_path, COUNT(*) as count FROM file_changes GROUP BY file_path ORDER BY count DESC LIMIT 10',
-    ).all() as any[];
-    const mostChangedFiles = fileRows.map((row: any) => ({
+    ).all() as Array<{ file_path: string; count: number }>;
+    const mostChangedFiles = fileRows.map((row) => ({
       filePath: row.file_path,
       changeCount: row.count,
     }));
 
     // Most active sessions
-    const sessionRows = this.db.prepare(
+    const sessionRows = db.prepare(
       'SELECT session_id, COUNT(*) as count FROM file_changes GROUP BY session_id ORDER BY count DESC LIMIT 10',
-    ).all() as any[];
-    const mostActiveSessions = sessionRows.map((row: any) => ({
+    ).all() as Array<{ session_id: string; count: number }>;
+    const mostActiveSessions = sessionRows.map((row) => ({
       sessionId: row.session_id,
       changeCount: row.count,
     }));
@@ -757,7 +812,7 @@ export class FileHistoryStore {
     reason: SnapshotReason,
     files?: Array<{ filePath: string; content: string }>,
   ): Promise<ContextSnapshot> {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
     const id = genId();
     const timestamp = new Date().toISOString();
@@ -798,7 +853,7 @@ export class FileHistoryStore {
     };
 
     // Insert snapshot
-    this.db.prepare(`
+    db.prepare(`
       INSERT INTO context_snapshots (id, session_id, timestamp, reason, total_size_bytes, signals)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(
@@ -811,7 +866,7 @@ export class FileHistoryStore {
     );
 
     // Insert snapshot files
-    const insertFile = this.db.prepare(`
+    const insertFile = db.prepare(`
       INSERT INTO snapshot_files (snapshot_id, file_path, hash, size_bytes, line_count, content, truncated, last_modified)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
@@ -855,7 +910,7 @@ export class FileHistoryStore {
 
     if (signals) {
       // Update snapshot with signals
-      this.db.prepare(
+      this.requireDb().prepare(
         'UPDATE context_snapshots SET signals = ? WHERE id = ?',
       ).run(JSON.stringify(signals), snapshot.id);
     }
@@ -874,7 +929,7 @@ export class FileHistoryStore {
     const snapshot = await this.createSnapshot(sessionId, 'session_end', workspaceFiles);
 
     if (signals) {
-      this.db.prepare(
+      this.requireDb().prepare(
         'UPDATE context_snapshots SET signals = ? WHERE id = ?',
       ).run(JSON.stringify(signals), snapshot.id);
     }
@@ -886,24 +941,24 @@ export class FileHistoryStore {
    * Get a snapshot by ID.
    */
   getSnapshot(snapshotId: string): ContextSnapshot | null {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
-    const row = this.db.prepare(
+    const row = db.prepare(
       'SELECT * FROM context_snapshots WHERE id = ?',
-    ).get(snapshotId) as any;
+    ).get(snapshotId) as ContextSnapshotRow | undefined;
 
     if (!row) return null;
 
-    const files = this.db.prepare(
+    const files = db.prepare(
       'SELECT * FROM snapshot_files WHERE snapshot_id = ?',
-    ).all(snapshotId) as any[];
+    ).all(snapshotId) as SnapshotFileRow[];
 
     return {
       id: row.id,
       sessionId: row.session_id,
       timestamp: row.timestamp,
-      reason: row.reason,
-      files: files.map((f: any) => ({
+      reason: row.reason as SnapshotReason,
+      files: files.map((f) => ({
         filePath: f.file_path,
         hash: f.hash,
         sizeBytes: f.size_bytes,
@@ -912,7 +967,7 @@ export class FileHistoryStore {
         truncated: f.truncated === 1,
         lastModified: f.last_modified,
       })),
-      signals: row.signals ? JSON.parse(row.signals) : undefined,
+      signals: row.signals ? (JSON.parse(row.signals) as SnapshotSignals) : undefined,
       totalSizeBytes: row.total_size_bytes,
     };
   }
@@ -921,20 +976,20 @@ export class FileHistoryStore {
    * Get snapshots for a session.
    */
   getSessionSnapshots(sessionId: string): ContextSnapshot[] {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
-    const rows = this.db.prepare(
+    const rows = db.prepare(
       'SELECT * FROM context_snapshots WHERE session_id = ? ORDER BY timestamp DESC',
-    ).all(sessionId) as any[];
+    ).all(sessionId) as ContextSnapshotRow[];
 
-    return rows.map((row: any) => ({
+    return rows.map((row) => ({
       id: row.id,
       sessionId: row.session_id,
       timestamp: row.timestamp,
-      reason: row.reason,
+      reason: row.reason as SnapshotReason,
       files: [], // Don't load all files for listing
       totalSizeBytes: row.total_size_bytes,
-      signals: row.signals ? JSON.parse(row.signals) : undefined,
+      signals: row.signals ? (JSON.parse(row.signals) as SnapshotSignals) : undefined,
     }));
   }
 
@@ -942,11 +997,11 @@ export class FileHistoryStore {
    * Get the most recent snapshot before a given time.
    */
   getLatestSnapshotBefore(timestamp: string): ContextSnapshot | null {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
-    const row = this.db.prepare(
+    const row = db.prepare(
       'SELECT * FROM context_snapshots WHERE timestamp <= ? ORDER BY timestamp DESC LIMIT 1',
-    ).get(timestamp) as any;
+    ).get(timestamp) as ContextSnapshotRow | undefined;
 
     if (!row) return null;
     return this.getSnapshot(row.id);
@@ -960,24 +1015,27 @@ export class FileHistoryStore {
    * Prune old snapshots for a session, keeping only the most recent N.
    */
   private pruneSessionSnapshots(sessionId: string): void {
+    const db = this.requireDb();
+
     const maxSnapshots = this.config.maxSnapshotsPerSession;
 
-    const count = this.db.prepare(
+    const count = db.prepare(
       'SELECT COUNT(*) as total FROM context_snapshots WHERE session_id = ?',
-    ).get(sessionId) as any;
+    ).get(sessionId) as CountRow | undefined;
+    const total = count?.total ?? 0;
 
-    if ((count?.total ?? 0) > maxSnapshots) {
+    if (total > maxSnapshots) {
       // Delete the oldest snapshots, keeping only the most recent
-      const toDelete = this.db.prepare(`
+      const toDelete = db.prepare(`
         SELECT id FROM context_snapshots
         WHERE session_id = ?
         ORDER BY timestamp ASC
         LIMIT ?
-      `).all(sessionId, (count.total - maxSnapshots)) as any[];
+      `).all(sessionId, total - maxSnapshots) as Array<{ id: string }>;
 
       for (const row of toDelete) {
-        this.db.prepare('DELETE FROM snapshot_files WHERE snapshot_id = ?').run(row.id);
-        this.db.prepare('DELETE FROM context_snapshots WHERE id = ?').run(row.id);
+        db.prepare('DELETE FROM snapshot_files WHERE snapshot_id = ?').run(row.id);
+        db.prepare('DELETE FROM context_snapshots WHERE id = ?').run(row.id);
       }
 
       log.debug(
@@ -993,23 +1051,23 @@ export class FileHistoryStore {
    * @returns Number of records removed.
    */
   pruneOldHistory(): number {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - this.config.retentionDays);
     const cutoff = cutoffDate.toISOString();
 
-    const result = this.db.prepare(
+    const result = db.prepare(
       'DELETE FROM file_changes WHERE timestamp < ?',
     ).run(cutoff);
 
     // Also prune old snapshots
-    this.db.prepare(
+    db.prepare(
       'DELETE FROM context_snapshots WHERE timestamp < ?',
     ).run(cutoff);
 
     // Also prune old attributions
-    this.db.prepare(
+    db.prepare(
       'DELETE FROM session_attributions WHERE end_time < ?',
     ).run(cutoff);
 
@@ -1027,15 +1085,15 @@ export class FileHistoryStore {
    * Enforce the maximum records limit by deleting oldest records.
    */
   enforceMaxRecords(): number {
-    this.ensureInitialized();
+    const db = this.requireDb();
 
-    const totalRow = this.db.prepare('SELECT COUNT(*) as total FROM file_changes').get() as any;
+    const totalRow = db.prepare('SELECT COUNT(*) as total FROM file_changes').get() as CountRow | undefined;
     const total = totalRow?.total ?? 0;
 
     if (total <= this.config.maxRecords) return 0;
 
     const toRemove = total - this.config.maxRecords;
-    this.db.prepare(`
+    db.prepare(`
       DELETE FROM file_changes WHERE id IN (
         SELECT id FROM file_changes ORDER BY timestamp ASC LIMIT ?
       )
@@ -1107,10 +1165,11 @@ export class FileHistoryStore {
     }
   }
 
-  private ensureInitialized(): void {
+  private requireDb(): Database {
     if (!this.initialized || !this.db) {
       throw new Error('FileHistoryStore not initialized. Call init() first.');
     }
+    return this.db;
   }
 }
 
