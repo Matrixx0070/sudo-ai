@@ -385,3 +385,48 @@ describe('Edge Cases', () => {
     expect(insightsDashboard).toBeInstanceOf(InsightsDashboardGenerator);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tool Usage Analytics (traces.db)
+// ---------------------------------------------------------------------------
+
+describe('Tool Usage Analytics', () => {
+  it('reads tool_call traces written by TraceStore through the real schema', async () => {
+    const testDir = path.join(os.tmpdir(), `sudo-ai-insights-traces-${Date.now()}`);
+    fs.mkdirSync(testDir, { recursive: true });
+
+    try {
+      const { TraceStore } = await import('../../src/core/learning/trace-store.js');
+      const store = new TraceStore(path.join(testDir, 'traces.db'));
+      await store.init();
+      store.recordToolCall('s1', 'read_file', true, 12);
+      store.recordToolCall('s1', 'read_file', true, 20);
+      store.recordToolCall('s1', 'bash', false, 300, { type: 'tool_error', message: 'exit 1' });
+      // A non-tool trace must not be counted
+      store.recordBrainCall('s1', 'claude-sonnet-4-6', true, 800);
+      store.close();
+
+      const generator = new InsightsDashboardGenerator(
+        { includeCosts: false, includeFileChanges: false, includeAnomalies: false },
+        testDir,
+      );
+      const dashboard = await generator.generateDashboard('24h');
+      const tools = dashboard.tools;
+
+      expect(tools.totalCalls).toBe(3);
+      expect(tools.totalSuccesses).toBe(2);
+      expect(tools.totalErrors).toBe(1);
+      const readFile = tools.topTools.find((t) => t.toolName === 'read_file');
+      expect(readFile?.callCount).toBe(2);
+      expect(readFile?.successRate).toBe(1);
+      const bash = tools.topTools.find((t) => t.toolName === 'bash');
+      expect(bash?.errorCount).toBe(1);
+      expect(bash?.topError).toBe('exit 1');
+      // An all-failure tool must report errorRate 1, not 0
+      expect(tools.errorRates['bash']).toBe(1);
+      expect(Object.values(tools.callsByDay).reduce((a, b) => a + b, 0)).toBe(3);
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+});
