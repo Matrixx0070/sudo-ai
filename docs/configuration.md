@@ -407,11 +407,10 @@ SUDO_CROSS_PLATFORM_DISABLE=1        # Force Linux-only; disable Windows/macOS b
 SUDO_TOOL_LEARNING_DISABLE=1         # Disable the tool-outcome learner (incl. learning on control outcomes)
 SUDO_SANDBOX_DISABLE=1               # (DANGEROUS) Bypass the bwrap sandbox for control/exec
 
-# MCP, profiles, etc.
+# MCP, etc.
 SUDO_MCP_DISABLE=1
 SUDO_MCP_OAUTH_DISABLE=1
 SUDO_MCP_REMOTE_DISABLE=1
-SUDO_PROFILES_DISABLE=1
 SUDO_DASHBOARD_DISABLE=1
 
 # Brain / consensus / autonomy
