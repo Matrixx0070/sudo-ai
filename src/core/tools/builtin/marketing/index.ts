@@ -5,8 +5,8 @@
  * marketing artefacts (reports, ad copy, calendars, competitor analyses).
  *
  * Tools registered:
- *   marketing.seo-audit         — Full site SEO audit with fix recommendations
- *   marketing.keyword-research  — Find keywords by volume, difficulty, intent
+ *   marketing.seo-audit         — Knowledge-based SEO recommendations (does not fetch the URL)
+ *   marketing.keyword-research  — Keyword ideas with heuristic volume/difficulty estimates
  *   marketing.ad-campaign-builder — Create ad campaigns with copy + targeting
  *   marketing.ad-copy-generator  — Generate A/B ad copy variants
  *   marketing.competitor-analysis — Deep competitor analysis
@@ -50,7 +50,7 @@ async function askBrain(ctx: ToolContext, system: string, user: string): Promise
 const seoAuditTool: ToolDefinition = {
   name: 'marketing.seo-audit',
   description:
-    'Perform a full SEO audit for a website URL or page description. Returns on-page issues, technical recommendations, content gaps, and a prioritised fix list.',
+    'Generate knowledge-based SEO recommendations for a website URL or page description. The URL is NOT fetched or crawled — output is an expert checklist of items to verify and likely improvements, not measured site data. For measured data, crawl the site with browser/fetch tools first and pass findings via the context parameter.',
   category: 'marketing',
   timeout: 60_000,
   parameters: {
@@ -66,22 +66,26 @@ const seoAuditTool: ToolDefinition = {
     if (!url?.trim()) return { success: false, output: 'url is required.' };
 
     try {
-      const system = 'You are an expert SEO consultant with 10+ years of experience. Provide detailed, actionable audits.';
-      const user = `Perform a comprehensive SEO audit for: ${url}
+      const system = 'You are an expert SEO consultant with 10+ years of experience. You CANNOT access the website — base your recommendations on general SEO expertise plus any context provided, and frame site-specific claims as items to verify, never as observed facts.';
+      const user = `Provide SEO recommendations for: ${url}
 ${context ? `Context: ${context}` : ''}
 
 Structure your response with these sections:
-1. TECHNICAL SEO (page speed, mobile, schema, crawlability issues)
-2. ON-PAGE SEO (title tags, meta descriptions, headings, content quality)
-3. CONTENT GAPS (missing topics, thin content, duplicate content)
-4. BACKLINK PROFILE (authority estimation, link building opportunities)
-5. PRIORITY FIX LIST (top 10 actions ranked by impact, format: Impact|Effort|Action)
+1. TECHNICAL SEO CHECKLIST (page speed, mobile, schema, crawlability — items to verify and how)
+2. ON-PAGE SEO GUIDANCE (title tags, meta descriptions, headings, content quality best practices)
+3. LIKELY CONTENT GAPS (common gaps for this kind of site/topic, framed as hypotheses)
+4. LINK BUILDING OPPORTUNITIES (strategies appropriate for this niche)
+5. PRIORITY ACTION LIST (top 10 actions ranked by typical impact, format: Impact|Effort|Action)
 
-Be specific with actionable recommendations.`;
+Be specific and actionable. Do not invent measurements for a site you have not seen.`;
 
       const output = await askBrain(ctx, system, user);
-      logger.info({ url }, 'SEO audit complete');
-      return { success: true, output, data: { url, auditLength: output.length } };
+      logger.info({ url }, 'SEO recommendations generated');
+      return {
+        success: true,
+        output: `Note: knowledge-based recommendations — ${url} was not fetched or crawled.\n\n${output}`,
+        data: { url, fetched: false, auditLength: output.length },
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error({ url, err: msg }, 'marketing.seo-audit error');
@@ -97,7 +101,7 @@ Be specific with actionable recommendations.`;
 const keywordResearchTool: ToolDefinition = {
   name: 'marketing.keyword-research',
   description:
-    'Research keywords for a topic or niche. Returns estimated search volume tiers, keyword difficulty, search intent, and long-tail variations.',
+    'Generate keyword ideas for a topic or niche with heuristic volume/difficulty/intent estimates from LLM knowledge — NOT live search-engine data. Useful for brainstorming and prioritisation; validate volumes with a real keyword tool before committing budget.',
   category: 'marketing',
   timeout: 60_000,
   parameters: {
@@ -115,8 +119,8 @@ const keywordResearchTool: ToolDefinition = {
     if (!topic?.trim()) return { success: false, output: 'topic is required.' };
 
     try {
-      const system = 'You are an expert SEO keyword researcher. Provide data-driven keyword analysis with realistic estimations.';
-      const user = `Research ${count} keywords for the topic: "${topic}"
+      const system = 'You are an expert SEO keyword researcher. You have NO live search data — provide keyword ideas with clearly heuristic tier estimates based on general knowledge of the niche.';
+      const user = `Suggest ${count} keywords for the topic: "${topic}"
 ${industry ? `Industry: ${industry}` : ''}
 
 For each keyword provide:
@@ -132,7 +136,11 @@ QUICK WINS: 3 low-difficulty, decent-volume keywords to target first`;
 
       const output = await askBrain(ctx, system, user);
       logger.info({ topic, count }, 'Keyword research complete');
-      return { success: true, output, data: { topic, industry, requestedCount: count } };
+      return {
+        success: true,
+        output: `Note: volume/difficulty tiers are LLM heuristics, not live search data.\n\n${output}`,
+        data: { topic, industry, requestedCount: count, liveData: false },
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error({ topic, err: msg }, 'marketing.keyword-research error');
@@ -253,7 +261,7 @@ End with TESTING NOTES: which variant to test first and why.`;
 const competitorAnalysisTool: ToolDefinition = {
   name: 'marketing.competitor-analysis',
   description:
-    'Deep competitor analysis covering pricing, features, traffic estimates, messaging, and weaknesses. Identifies gaps and opportunities.',
+    'Competitor analysis covering pricing, features, messaging, and weaknesses, inferred from the model\'s market knowledge (no live data is fetched). Identifies gaps and opportunities; verify specifics before acting.',
   category: 'marketing',
   timeout: 60_000,
   parameters: {
@@ -274,14 +282,14 @@ const competitorAnalysisTool: ToolDefinition = {
     const competitorList = competitors.split(',').map(s => s.trim()).filter(Boolean).slice(0, 5);
 
     try {
-      const system = 'You are a competitive intelligence analyst. Provide structured, data-informed competitor analyses.';
+      const system = 'You are a competitive intelligence analyst with no live data access. Provide structured competitor analyses based on your training knowledge, framing specific figures or claims as unverified.';
       const user = `Conduct a ${focus} competitor analysis for "${company}" vs: ${competitorList.join(', ')}
 
 Structure your analysis:
 1. FEATURE COMPARISON TABLE (key features, mark ✓/✗/partial for each competitor)
 2. PRICING ANALYSIS (pricing models, tiers, positioning — infer from market knowledge)
 3. MESSAGING & POSITIONING (value props, target segments, tone)
-4. TRAFFIC & SEO ESTIMATES (domain authority tier, estimated organic traffic tier)
+4. TRAFFIC & SEO (qualitative judgment from market knowledge only — label clearly as unverified)
 5. STRENGTHS & WEAKNESSES (per competitor)
 6. OPPORTUNITIES (gaps in competitor offerings your company can exploit)
 7. THREATS (competitor advantages you need to counter)
