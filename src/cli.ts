@@ -1770,6 +1770,99 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 7.7 Extra channels via MessageRouter — IRC / Matrix / Signal (conditional)
+  //     Each adapter activates when its env credentials are present (same
+  //     opt-in model as Discord/Slack). One shared turn handler serves all
+  //     three; the router serializes per chat and contains handler errors.
+  // -------------------------------------------------------------------------
+  const extraChannelEnv = {
+    irc: Boolean(process.env['IRC_SERVER'] && process.env['IRC_NICK']),
+    matrix: Boolean(process.env['MATRIX_HOMESERVER'] && process.env['MATRIX_ACCESS_TOKEN']),
+    signal: Boolean(process.env['SIGNAL_PHONE_NUMBER']),
+  };
+  if (extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal) {
+    try {
+      const { MessageRouter } = await import('./core/channels/router.js');
+      const router = new MessageRouter();
+
+      if (extraChannelEnv.irc) {
+        const { IRCAdapter } = await import('./core/channels/irc.js');
+        router.registerAdapter(new IRCAdapter());
+      }
+      if (extraChannelEnv.matrix) {
+        const { MatrixAdapter } = await import('./core/channels/matrix.js');
+        router.registerAdapter(new MatrixAdapter());
+      }
+      if (extraChannelEnv.signal) {
+        const { SignalAdapter } = await import('./core/channels/signal.js');
+        router.registerAdapter(new SignalAdapter());
+      }
+
+      const routedMentionOnly = process.env['SUDO_GROUP_MENTION_ONLY'] === '1';
+      const routedBotNames = [process.env['IRC_NICK'] ?? '', process.env['SUDO_BOT_NAME'] ?? ''].filter(Boolean);
+      if (routedMentionOnly && routedBotNames.length === 0) {
+        log.warn('SUDO_GROUP_MENTION_ONLY=1 but no bot names known (set SUDO_BOT_NAME) — group gating fails open on routed channels');
+      }
+
+      router.setHandler(async (msg) => {
+        log.info(
+          { channel: msg.channel, peerId: msg.peerId, chatType: msg.chatType, text: msg.text?.slice(0, 80) },
+          'Routed channel incoming message',
+        );
+
+        if (routedMentionOnly && !isAddressedToBot(msg, routedBotNames)) {
+          log.debug({ channel: msg.channel, peerId: msg.peerId }, 'Group message not addressed to bot — ignored');
+          return;
+        }
+
+        try {
+          const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
+          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+          const replyText = result?.text ?? 'No response generated.';
+
+          try {
+            const turnSummary = `**User (${msg.channel}):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
+            await dailyLog.append(turnSummary);
+          } catch { /* daily log write is non-fatal */ }
+
+          try {
+            const nowTs = new Date().toISOString();
+            await dualSessionManager.appendEvent(String(session.id), {
+              ts: nowTs,
+              sessionId: String(session.id),
+              type: 'message',
+              role: 'user',
+              content: msg.text ?? '',
+            });
+            await dualSessionManager.appendEvent(String(session.id), {
+              ts: nowTs,
+              sessionId: String(session.id),
+              type: 'message',
+              role: 'assistant',
+              content: replyText,
+            });
+          } catch { /* journal append is non-fatal */ }
+
+          await router.sendToChannel(msg.channel, msg.peerId, replyText);
+          log.info({ channel: msg.channel, peerId: msg.peerId }, 'Reply sent via router');
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          log.error({ err: errMsg, channel: msg.channel, peerId: msg.peerId }, 'Routed channel agent turn failed');
+          try { await router.sendToChannel(msg.channel, msg.peerId, 'Something went wrong. Please try again.'); } catch { /* best effort */ }
+        }
+      });
+
+      await router.startAll();
+      registerShutdown(() => router.stopAll());
+      log.info({ channels: router.registeredChannels }, 'Extra channels active via MessageRouter');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'Extra channel wiring failed (non-fatal)');
+    }
+  } else {
+    log.info('Extra channels disabled (set IRC_SERVER+IRC_NICK, MATRIX_HOMESERVER+MATRIX_ACCESS_TOKEN, or SIGNAL_PHONE_NUMBER to enable IRC/Matrix/Signal)');
+  }
+
+  // -------------------------------------------------------------------------
   // 8.5 OpenAI-compatible API — merged into port 3001 (no separate server)
   // Register brain + models into shared singleton so WebAdapter's /v1/ handler
   // can serve OpenAI-compatible requests on the same port.

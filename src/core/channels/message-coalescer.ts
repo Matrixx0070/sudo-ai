@@ -73,10 +73,11 @@ export function combineMessages(msgs: UnifiedMessage[]): UnifiedMessage {
  * Group-chat mention gating: should this inbound message be handled at all?
  *
  * - DMs are always handled.
- * - Group messages are handled only when the text mentions one of the bot's
- *   names (`@name`, case-insensitive). Reply-to-bot detection is not possible
- *   here (adapters do not track which platform message IDs are the bot's), so
- *   replies without a mention are gated like any other group message.
+ * - Group messages are handled when the text mentions one of the bot's names
+ *   (`@name`, case-insensitive) or starts with the IRC-style address prefix
+ *   `name:` / `name,`. Reply-to-bot detection is not possible here (adapters
+ *   do not track which platform message IDs are the bot's), so replies
+ *   without a mention are gated like any other group message.
  * - With no known bot names, gating is skipped (fail-open) — better to answer
  *   than to go silent in every group.
  */
@@ -84,8 +85,10 @@ export function isAddressedToBot(msg: UnifiedMessage, botNames: string[]): boole
   if (msg.chatType !== 'group') return true;
   const names = botNames.map((n) => n.replace(/^@/, '').trim().toLowerCase()).filter(Boolean);
   if (names.length === 0) return true;
-  const text = (msg.text ?? '').toLowerCase();
-  return names.some((name) => text.includes(`@${name}`));
+  const text = (msg.text ?? '').toLowerCase().trimStart();
+  return names.some(
+    (name) => text.includes(`@${name}`) || text.startsWith(`${name}:`) || text.startsWith(`${name},`),
+  );
 }
 
 /**
