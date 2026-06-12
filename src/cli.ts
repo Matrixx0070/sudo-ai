@@ -22,7 +22,9 @@ import { Brain } from './core/brain/brain.js';
 import { ToolRegistry } from './core/tools/registry.js';
 import { loadBuiltinTools } from './core/tools/loader.js';
 import { SessionManager } from './core/sessions/manager.js';
+import { runGenerations } from './core/sessions/run-generation.js';
 import { AgentLoop } from './core/agent/loop.js';
+import { approvalManager } from './core/agent/approval.js';
 import { TelegramAdapter } from './core/channels/telegram.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
 import type { UnifiedMessage } from './core/channels/types.js';
@@ -1105,6 +1107,15 @@ async function boot(): Promise<void> {
   // 7. Telegram channel adapter
   // -------------------------------------------------------------------------
 
+  // Chat-based tool approvals (opt-in: SUDO_CHAT_APPROVALS=1). When enabled,
+  // tools with requiresConfirmation send a YES/NO prompt to the originating
+  // chat instead of auto-approving headless. Approval replies are consumed
+  // by the admission guard ABOVE the per-peer turn queue (see
+  // tryConsumeApprovalReply call sites) — queued behind the blocked turn
+  // they would deadlock until the 60 s timeout denies.
+  const chatApprovals = process.env['SUDO_CHAT_APPROVALS'] === '1';
+  if (chatApprovals) log.info('Chat-based tool approvals enabled (SUDO_CHAT_APPROVALS=1)');
+
   // Hoisted so web handler can send Telegram notifications when long tasks finish.
   let telegramNotifier: TelegramAdapter | null = null;
 
@@ -1124,6 +1135,7 @@ async function boot(): Promise<void> {
     );
     telegram.setHookEmitter(hooks);
     telegramNotifier = telegram;
+    if (chatApprovals) approvalManager.registerSender('telegram', telegram);
 
     // Serialized per-peer: enqueue so concurrent messages from the same user
     // never overlap on the same session (prevents race conditions). Resolves
@@ -1132,6 +1144,8 @@ async function boot(): Promise<void> {
     const handleTelegramTurn = (msg: UnifiedMessage): Promise<void> =>
       dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
         try {
+          const convKey = `${msg.channel}:${msg.peerId}`;
+          const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
           log.info({ sessionId: String(session.id) }, 'Session resolved');
 
@@ -1146,6 +1160,10 @@ async function boot(): Promise<void> {
           }
 
           const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+          if (runGenerations.isStale(convKey, runGen)) {
+            log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
+            return;
+          }
           const replyText = result?.text ?? 'No response generated.';
           const attachments = result?.attachments ?? [];
 
@@ -1261,6 +1279,14 @@ async function boot(): Promise<void> {
         'Incoming message',
       );
 
+      // Admission guard: approval replies are consumed BEFORE the coalescer
+      // and the turn queue (a reply queued behind the turn awaiting it would
+      // deadlock; a coalesced reply would be swallowed into a batch).
+      if (approvalManager.tryConsumeApprovalReply(msg.text)) {
+        log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
+        return;
+      }
+
       if (groupMentionOnly) {
         const botNames = [telegram.botUsername ?? '', process.env['SUDO_BOT_NAME'] ?? ''].filter(Boolean);
         if (!isAddressedToBot(msg, botNames)) {
@@ -1335,6 +1361,7 @@ async function boot(): Promise<void> {
       const discord = new DiscordAdapter('DISCORD_TOKEN', discordAllowedChannels);
       discord.setHookEmitter(hooks);
       discordAdapter = discord;
+      if (chatApprovals) approvalManager.registerSender('discord', discord);
 
       discord.onMessage(async (msg) => {
         log.info(
@@ -1342,12 +1369,23 @@ async function boot(): Promise<void> {
           'Discord incoming message',
         );
 
+        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
+          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
+          return;
+        }
+
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
+            const convKey = `${msg.channel}:${msg.peerId}`;
+            const runGen = runGenerations.current(convKey);
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Discord session resolved');
 
             const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+            if (runGenerations.isStale(convKey, runGen)) {
+              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
+              return;
+            }
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1405,6 +1443,7 @@ async function boot(): Promise<void> {
       // SlackAdapter reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from env internally.
       const slack = new SlackAdapter();
       slackAdapter = slack;
+      if (chatApprovals) approvalManager.registerSender('slack', slack);
 
       slack.onMessage(async (msg) => {
         log.info(
@@ -1412,12 +1451,23 @@ async function boot(): Promise<void> {
           'Slack incoming message',
         );
 
+        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
+          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
+          return;
+        }
+
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
+            const convKey = `${msg.channel}:${msg.peerId}`;
+            const runGen = runGenerations.current(convKey);
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Slack session resolved');
 
             const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+            if (runGenerations.isStale(convKey, runGen)) {
+              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
+              return;
+            }
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1490,6 +1540,7 @@ async function boot(): Promise<void> {
       const whatsapp = new WhatsAppAdapter(undefined, whatsAppAllowedJids);
       whatsapp.setHookEmitter(hooks);
       whatsAppAdapter = whatsapp;
+      if (chatApprovals) approvalManager.registerSender('whatsapp', whatsapp);
 
       whatsapp.onMessage(async (msg) => {
         log.info(
@@ -1497,12 +1548,23 @@ async function boot(): Promise<void> {
           'WhatsApp incoming message',
         );
 
+        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
+          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
+          return;
+        }
+
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
+            const convKey = `${msg.channel}:${msg.peerId}`;
+            const runGen = runGenerations.current(convKey);
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'WhatsApp session resolved');
 
             const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+            if (runGenerations.isStale(convKey, runGen)) {
+              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
+              return;
+            }
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1562,6 +1624,7 @@ async function boot(): Promise<void> {
   if (process.env['WEB_CHAT_ENABLED'] === 'true') try {
     const { WebAdapter } = await import('./core/channels/web.js');
     const web = new WebAdapter();
+    if (chatApprovals) approvalManager.registerSender('web', web);
 
     web.onMessage(async (msg) => {
       log.info(
@@ -1569,14 +1632,25 @@ async function boot(): Promise<void> {
         'Web incoming message',
       );
 
+      if (approvalManager.tryConsumeApprovalReply(msg.text)) {
+        log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
+        return;
+      }
+
       // Serialized per-peer: enqueue so concurrent messages from the same user
       // never overlap on the same session (prevents race conditions).
       dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
         // taskStartMs measured at execution time (excludes queue wait).
         const taskStartMs = Date.now();
         try {
+          const convKey = `${msg.channel}:${msg.peerId}`;
+          const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
           const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+          if (runGenerations.isStale(convKey, runGen)) {
+            log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
+            return;
+          }
           const webReplyText = webResult?.text ?? 'No response generated.';
           log.info({ replyLen: webReplyText.length }, 'Web agent reply ready');
 
@@ -1641,6 +1715,7 @@ async function boot(): Promise<void> {
       const email = new EmailAdapter();
       email.setHookEmitter(hooks);
       emailAdapter = email;
+      if (chatApprovals) approvalManager.registerSender('email', email);
 
       email.onMessage(async (msg) => {
         log.info(
@@ -1648,12 +1723,23 @@ async function boot(): Promise<void> {
           'Email incoming message',
         );
 
+        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
+          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
+          return;
+        }
+
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
+            const convKey = `${msg.channel}:${msg.peerId}`;
+            const runGen = runGenerations.current(convKey);
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'Email session resolved');
 
             const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+            if (runGenerations.isStale(convKey, runGen)) {
+              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
+              return;
+            }
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1710,6 +1796,7 @@ async function boot(): Promise<void> {
       const sms = new SmsAdapter();
       sms.setHookEmitter(hooks);
       smsAdapter = sms;
+      if (chatApprovals) approvalManager.registerSender('sms', sms);
 
       sms.onMessage(async (msg) => {
         log.info(
@@ -1717,12 +1804,23 @@ async function boot(): Promise<void> {
           'SMS incoming message',
         );
 
+        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
+          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
+          return;
+        }
+
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
+            const convKey = `${msg.channel}:${msg.peerId}`;
+            const runGen = runGenerations.current(convKey);
             const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
             log.info({ sessionId: String(session.id) }, 'SMS session resolved');
 
             const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+            if (runGenerations.isStale(convKey, runGen)) {
+              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
+              return;
+            }
             const replyText = result?.text ?? 'No response generated.';
 
             try {
@@ -1785,6 +1883,11 @@ async function boot(): Promise<void> {
       const { MessageRouter } = await import('./core/channels/router.js');
       const router = new MessageRouter();
 
+      // Admission guard: approval replies bypass the router's per-peer queue
+      // (queued behind the blocked turn they would deadlock until timeout).
+      // Set BEFORE adapters register so no early message can slip past it.
+      router.setPreDispatchInterceptor((msg) => approvalManager.tryConsumeApprovalReply(msg.text));
+
       if (extraChannelEnv.irc) {
         const { IRCAdapter } = await import('./core/channels/irc.js');
         router.registerAdapter(new IRCAdapter());
@@ -1796,6 +1899,14 @@ async function boot(): Promise<void> {
       if (extraChannelEnv.signal) {
         const { SignalAdapter } = await import('./core/channels/signal.js');
         router.registerAdapter(new SignalAdapter());
+      }
+
+      if (chatApprovals) {
+        for (const ch of router.registeredChannels) {
+          approvalManager.registerSender(ch, {
+            send: (peerId, text) => router.sendToChannel(ch, peerId, text),
+          });
+        }
       }
 
       const routedMentionOnly = process.env['SUDO_GROUP_MENTION_ONLY'] === '1';
@@ -1816,8 +1927,14 @@ async function boot(): Promise<void> {
         }
 
         try {
+          const convKey = `${msg.channel}:${msg.peerId}`;
+          const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
           const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+          if (runGenerations.isStale(convKey, runGen)) {
+            log.info({ channel: msg.channel, peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
+            return;
+          }
           const replyText = result?.text ?? 'No response generated.';
 
           try {

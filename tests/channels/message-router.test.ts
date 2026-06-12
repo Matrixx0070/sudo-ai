@@ -231,4 +231,66 @@ describe('MessageRouter', () => {
     await second.emit(msg('irc', 'p', 'from-second'));
     expect(received).toEqual(['from-second']);
   });
+
+  describe('pre-dispatch interceptor (admission guard)', () => {
+    it('rejects non-function interceptors', () => {
+      const router = new MessageRouter();
+      expect(() => router.setPreDispatchInterceptor('nope' as unknown as (m: UnifiedMessage) => boolean)).toThrow(TypeError);
+    });
+
+    it('consumed messages never reach the queue or handler', async () => {
+      const router = new MessageRouter();
+      const irc = new FakeAdapter('irc');
+      router.registerAdapter(irc);
+
+      const handled: string[] = [];
+      router.setHandler(async (m) => { handled.push(m.text); });
+      router.setPreDispatchInterceptor((m) => m.text.startsWith('YES (approval-id:'));
+
+      await irc.emit(msg('irc', 'nick1', 'YES (approval-id: abc123)'));
+      await irc.emit(msg('irc', 'nick1', 'normal turn'));
+      expect(handled).toEqual(['normal turn']);
+    });
+
+    it('interceptor runs even while the peer queue is blocked (bypass, not enqueue)', async () => {
+      const router = new MessageRouter();
+      const irc = new FakeAdapter('irc');
+      router.registerAdapter(irc);
+
+      const consumed: string[] = [];
+      router.setPreDispatchInterceptor((m) => {
+        if (m.text === 'control') { consumed.push(m.text); return true; }
+        return false;
+      });
+
+      let releaseTurn!: () => void;
+      const gate = new Promise<void>((r) => { releaseTurn = r; });
+      const handled: string[] = [];
+      router.setHandler(async (m) => { handled.push(m.text); await gate; });
+
+      const turn = irc.emit(msg('irc', 'nick1', 'long turn'));
+      await sleep(10);
+      // The turn is mid-flight and holds the per-peer queue. The control
+      // message is consumed immediately — it does not wait behind the turn.
+      await irc.emit(msg('irc', 'nick1', 'control'));
+      expect(consumed).toEqual(['control']);
+      expect(handled).toEqual(['long turn']);
+
+      releaseTurn();
+      await turn;
+    });
+
+    it('fails open when the interceptor throws', async () => {
+      const router = new MessageRouter();
+      const irc = new FakeAdapter('irc');
+      router.registerAdapter(irc);
+
+      const handled: string[] = [];
+      router.setHandler(async (m) => { handled.push(m.text); });
+      router.setPreDispatchInterceptor(() => { throw new Error('interceptor bug'); });
+
+      await irc.emit(msg('irc', 'nick1', 'still delivered'));
+      expect(handled).toEqual(['still delivered']);
+    });
+  });
 });

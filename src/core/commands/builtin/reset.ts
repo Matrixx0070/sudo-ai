@@ -4,6 +4,7 @@
  */
 
 import { createLogger } from '../../shared/index.js';
+import { runGenerations } from '../../sessions/run-generation.js';
 import type { SlashCommand, CommandContext } from '../types.js';
 
 const log = createLogger('commands:reset');
@@ -38,6 +39,10 @@ export const resetCommand: SlashCommand = {
     try {
       await sessionManager.archive(oldId);
       log.info({ oldId }, 'Session archived');
+      // Invalidate any in-flight turn for this conversation so its stale
+      // reply is discarded instead of being delivered after the reset.
+      const generation = runGenerations.bump(`${ctx.channel}:${ctx.peerId}`);
+      log.info({ channel: ctx.channel, peerId: ctx.peerId, generation }, 'Run generation bumped — in-flight turns invalidated');
     } catch (err) {
       log.error({ oldId, err }, '/reset: failed to archive session');
       return `Failed to archive session: ${String(err)}`;

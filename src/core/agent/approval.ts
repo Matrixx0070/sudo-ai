@@ -223,6 +223,26 @@ export class ApprovalManager {
     return { approvalId, approved };
   }
 
+  /**
+   * Inbound admission guard: consume a chat message when it is a decision on
+   * a pending approval. Returns true if the message was consumed — callers
+   * must NOT enqueue it as an agent turn, because the per-peer queue is
+   * blocked by the very turn that is awaiting this approval (queueing the
+   * reply behind it would deadlock until the 60 s timeout denies).
+   *
+   * Non-matching messages, ambiguous replies, and replies to unknown/expired
+   * approval IDs all return false so the message proceeds as a normal turn.
+   */
+  tryConsumeApprovalReply(text: string | undefined | null): boolean {
+    if (!text || this.pending.size === 0) return false;
+    const parsed = this.parseApprovalReply(text);
+    if (!parsed) return false;
+    // Unknown/expired ID → not consumed (and no handleResponse warn noise:
+    // a user quoting an old prompt is normal traffic, not an error).
+    if (!this.pending.has(parsed.approvalId)) return false;
+    return this.handleResponse(parsed.approvalId, parsed.approved);
+  }
+
   /** Return the count of currently pending approvals. */
   get pendingCount(): number {
     return this.pending.size;
