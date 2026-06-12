@@ -179,11 +179,15 @@ adminRouter.post('/api/admin/channels/:type/test', async (_req, res, params) => 
     return;
   }
 
-  log.info({ type }, 'Channel test requested (stub)');
-  sendJson(res, 200, {
-    ok: true,
+  // Channel adapters are not wired into the admin API; answering 200 ok here
+  // would claim a send that never happens (see PR #76 stub-honesty precedent).
+  log.info({ type }, 'Channel test requested — not implemented');
+  sendJson(res, 501, {
+    error: {
+      message: 'Not implemented — channel adapters are not wired into the admin API; no test message was sent',
+      code: 501,
+    },
     type,
-    message: 'Test message queued (stub — adapter not yet wired into admin handler)',
   });
 });
 

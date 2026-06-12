@@ -79,17 +79,18 @@ export function buildStreamPlan(config: StreamConfig, avatarName: string): Strea
     topicList || '  (none specified)',
   ].join('\n');
 
+  // To-do phrasing only: this is a plan, none of these actions are performed.
   const checklist = [
-    `Avatar "${avatarName}" loaded and expression set to "excited"`,
-    `Stream title configured: "${config.title}"`,
-    `Platform account connected: ${config.platform}`,
-    'Audio output device verified',
-    'Intro sound/animation queued',
-    'Content outline reviewed',
-    'CTA links prepared',
-    'Thumbnail uploaded',
-    'Stream health check passed (bitrate / keyframe interval)',
-    'Backup recording software running',
+    `Load avatar "${avatarName}" and set expression to "excited"`,
+    `Configure stream title: "${config.title}"`,
+    `Connect platform account: ${config.platform}`,
+    'Verify audio output device',
+    'Queue intro sound/animation',
+    'Review content outline',
+    'Prepare CTA links',
+    'Upload thumbnail',
+    'Run stream health check (bitrate / keyframe interval)',
+    'Start backup recording software',
   ];
 
   return { plan, checklist };
