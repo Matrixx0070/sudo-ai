@@ -60,7 +60,7 @@ export class MacComputerUse implements IComputerUse {
     }
     try {
       // Fix HIGH-1: scrub secrets
-      const policy = (this.config as any).sandboxPolicy || DEFAULT_SANDBOX_POLICY;
+      const policy = this.config.sandboxPolicy || DEFAULT_SANDBOX_POLICY;
       const baseEnv = buildSandboxEnv(policy);
       const childEnv = opts.env ? { ...baseEnv, ...opts.env } : baseEnv;
       const { stdout, stderr } = await execFileAsync('/bin/sh', ['-c', cmd], {
