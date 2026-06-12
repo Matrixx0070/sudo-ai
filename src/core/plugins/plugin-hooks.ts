@@ -203,8 +203,15 @@ export function registerPluginHooks(
 
   const pluginId = manifest.id;
   let registered = 0;
+  let skippedDisabled = 0;
 
   for (const decl of manifest.hooks) {
+    if (decl.enabled === false) {
+      skippedDisabled++;
+      log.debug({ pluginId, event: decl.event }, 'Hook declared disabled — skipping');
+      continue;
+    }
+
     const event = normaliseEvent(decl.event);
 
     let handler: (ctx: HookContext) => Promise<void>;
@@ -237,7 +244,7 @@ export function registerPluginHooks(
     log.debug({ pluginId, event, type: decl.type, hookId }, 'Plugin hook registered');
   }
 
-  log.info({ pluginId, hookCount: registered }, 'Plugin hooks registered');
+  log.info({ pluginId, hookCount: registered, skippedDisabled }, 'Plugin hooks registered');
   return registered;
 }
 
