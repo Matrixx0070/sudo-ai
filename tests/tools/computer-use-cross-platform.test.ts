@@ -162,6 +162,32 @@ describe('P1 cross-platform computer-use (IComputerUse 3OS harness + 100x)', () 
     expect(learnRate).toBeGreaterThan(0);
   }, 10000);
 
+  it('kill switch gates ALL control ops (exec/browser/file/gui/desktop) on all 3 platforms', async () => {
+    process.env.SUDO_CROSS_CONTROL_DISABLE = '1';
+    const repairTrigger = vi.fn().mockResolvedValue({ success: true, output: '' });
+    try {
+      for (const p of ['linux', 'win32', 'darwin'] as const) {
+        setPlatform(p);
+        const cu = createComputerUse({ learner: mockLearner, triggerRepair: repairTrigger });
+        const exec = await cu.exec('echo nope');
+        const browser = await cu.browser({ action: 'screenshot' });
+        const file = await cu.file({ op: 'read', path: '/tmp/x' });
+        const gui = await cu.gui({ action: 'screenshot' });
+        const desktop = await cu.desktop({ action: 'list' });
+        expect(exec.success).toBe(false);
+        expect(exec.stderr).toBe('kill-switch');
+        for (const r of [browser, file, gui, desktop]) {
+          expect(r.success).toBe(false);
+          expect(r.error).toBe('kill-switch');
+        }
+      }
+      // kill-switch hits are operator-intentional: KAIROS repair must NOT fire
+      expect(repairTrigger).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.SUDO_CROSS_CONTROL_DISABLE;
+    }
+  });
+
   it('sandbox cross compat + kill switch', async () => {
     process.env.SUDO_CROSS_CONTROL_DISABLE = '1';
     setPlatform('win32');

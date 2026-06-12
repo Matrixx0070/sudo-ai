@@ -50,19 +50,23 @@ export class WinComputerUse implements IComputerUse {
         this.config.learner.onToolResult(toolName, args, success, error, this.config.sessionId, undefined, 'control,cross-platform,win');
       } catch {}
     }
-    if (!success && error && this.triggerRepair && process.env['SUDO_KAIROS_ARSENAL_TRIGGER_DISABLE'] !== '1') {
+    if (!success && error && error !== 'kill-switch' && this.triggerRepair && process.env['SUDO_KAIROS_ARSENAL_TRIGGER_DISABLE'] !== '1') {
       try {
         await this.triggerRepair(`KAIROS: control ${toolName} win degraded: ${error.slice(0,100)}`, 'fix');
       } catch {}
     }
   }
 
+  private killSwitchActive(): boolean {
+    return process.env[this.config.killSwitchEnv || 'SUDO_CROSS_CONTROL_DISABLE'] === '1';
+  }
+
   async exec(cmd: string, opts: ExecOptions = {}): Promise<ExecResult> {
     const start = Date.now();
     const args = { cmd, opts };
-    if (process.env[this.config.killSwitchEnv || 'SUDO_CROSS_CONTROL_DISABLE'] === '1') {
-      await this.recordOutcome('control.exec', args, false, 'kill');
-      return { success: false, stdout: '', stderr: 'kill', exitCode: 1, durationMs: Date.now() - start, platform: 'win' };
+    if (this.killSwitchActive()) {
+      await this.recordOutcome('control.exec', args, false, 'kill-switch');
+      return { success: false, stdout: '', stderr: 'kill-switch', exitCode: 1, durationMs: Date.now() - start, platform: 'win' };
     }
     try {
       // Fix HIGH-1: scrub secrets via buildSandboxEnv (never full process.env for control.exec on win)
@@ -86,6 +90,10 @@ export class WinComputerUse implements IComputerUse {
   }
 
   async browser(params: BrowserActionParams): Promise<BrowserResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     // Do not report win browser stub (no-op) as success; accurate reporting for cross-platform.
     const err = 'control.browser stub on win (P1 refine: no-op not reported success per Codex; real via powershell in full cross)';
     await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, false, err);
@@ -93,6 +101,10 @@ export class WinComputerUse implements IComputerUse {
   }
 
   async file(params: FileOpParams): Promise<FileResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.file.${params.op}`, params as unknown as Record<string, unknown>, false, 'kill-switch');
+      return { success: false, error: 'kill-switch' };
+    }
     try {
       const abs = path.resolve(params.path);
       // Fix HIGH-3: denylist for win control.file (SOUL exfil protection)
@@ -121,6 +133,10 @@ export class WinComputerUse implements IComputerUse {
   }
 
   async gui(params: GUIActionParams): Promise<GUIResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     // Do not report win gui stub (no-op) as success; accurate reporting for cross-platform.
     const err = 'control.gui stub on win (P1 refine: no-op not reported success per Codex; real via powershell SendKeys in full)';
     await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, false, err);
@@ -128,6 +144,10 @@ export class WinComputerUse implements IComputerUse {
   }
 
   async desktop(params: DesktopActionParams): Promise<DesktopResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     // Do not report win desktop stub (no-op) as success; accurate reporting for cross-platform.
     const err = 'control.desktop stub on win (P1 refine: no-op not reported success per Codex)';
     await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, false, err);

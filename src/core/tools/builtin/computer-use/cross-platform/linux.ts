@@ -85,8 +85,9 @@ export class LinuxComputerUse implements IComputerUse {
         log.warn({ err: e, tool: toolName }, 'learner.onToolResult failed (fail-open for 100x)');
       }
     }
-    // KAIROS/arsenal hook on degraded control (per plan)
-    if (!success && error && this.triggerRepair && process.env['SUDO_KAIROS_ARSENAL_TRIGGER_DISABLE'] !== '1') {
+    // KAIROS/arsenal hook on degraded control (per plan). Kill-switch hits are
+    // operator-intentional, not degradation — never trigger repair for them.
+    if (!success && error && error !== 'kill-switch' && this.triggerRepair && process.env['SUDO_KAIROS_ARSENAL_TRIGGER_DISABLE'] !== '1') {
       try {
         const task = `KAIROS: control ${toolName} degraded on linux: ${error.slice(0, 100)}. Use coder.arsenal to fix.`;
         await this.triggerRepair(task, 'fix');
@@ -102,13 +103,17 @@ export class LinuxComputerUse implements IComputerUse {
     return this.config.sandboxPolicy;
   }
 
+  private killSwitchActive(): boolean {
+    return process.env[this.config.killSwitchEnv || 'SUDO_CROSS_CONTROL_DISABLE'] === '1';
+  }
+
   async exec(cmd: string, opts: ExecOptions = {}): Promise<ExecResult> {
     const start = Date.now();
     const args = { cmd, opts };
     const policy = this.getSandboxPolicy();
 
     // Per SOUL: no refusal, full power (only kill/approval external)
-    if (process.env[this.config.killSwitchEnv || 'SUDO_CROSS_CONTROL_DISABLE'] === '1') {
+    if (this.killSwitchActive()) {
       await this.recordOutcome('control.exec', args, false, 'kill-switch');
       return { success: false, stdout: '', stderr: 'kill-switch', exitCode: 1, durationMs: Date.now() - start, platform: 'linux' };
     }
@@ -161,6 +166,10 @@ export class LinuxComputerUse implements IComputerUse {
   }
 
   async browser(params: BrowserActionParams): Promise<BrowserResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.browser.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     const start = Date.now();
     // Reuse Linux gui/screen logic (generalized from computer-use)
     const screenAction: ScreenAction = {
@@ -209,6 +218,10 @@ export class LinuxComputerUse implements IComputerUse {
   }
 
   async file(params: FileOpParams): Promise<FileResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.file.${params.op}`, params as unknown as Record<string, unknown>, false, 'kill-switch');
+      return { success: false, error: 'kill-switch' };
+    }
     const start = Date.now();
     const policy = this.getSandboxPolicy();
     try {
@@ -258,6 +271,10 @@ export class LinuxComputerUse implements IComputerUse {
   }
 
   async gui(params: GUIActionParams): Promise<GUIResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.gui.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     const screenAction: ScreenAction = {
       type: params.action as ScreenAction['type'],
       x: params.x,
@@ -292,6 +309,10 @@ export class LinuxComputerUse implements IComputerUse {
   }
 
   async desktop(params: DesktopActionParams): Promise<DesktopResult> {
+    if (this.killSwitchActive()) {
+      await this.recordOutcome(`control.desktop.${params.action}`, params as Record<string, unknown>, false, 'kill-switch');
+      return { action: params.action, success: false, error: 'kill-switch' };
+    }
     const start = Date.now();
     try {
       let success = true;
