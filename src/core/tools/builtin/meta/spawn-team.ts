@@ -71,17 +71,11 @@ export const spawnTeamTool: ToolDefinition = {
     // team instance was created in this function and no other code
     // references the agents array yet. Without truncating the array,
     // run() would spawn unnecessary workers, wasting resources.
-    if ((team as any).agents && (team as any).agents.length > maxAgents) {
-      (team as any).agents = (team as any).agents.slice(0, maxAgents);
+    const teamInternals = team as unknown as { agents?: unknown[] };
+    if (teamInternals.agents && teamInternals.agents.length > maxAgents) {
+      teamInternals.agents = teamInternals.agents.slice(0, maxAgents);
     }
-    // If the planned team exceeds maxAgents, slice the composition. We
-    // cannot mutate the team directly so instead we limit the agents
-    // passed into the run() call by recreating a new team instance if
-    // necessary. However run() operates on the internal agents array, so
-    // we rely on the team being created with the desired length from
-    // spawn(). When spawn() returns more than maxAgents we throw away
-    // the excess agents by spawning again with truncated roles. Here we
-    // simply slice the composition for reporting.
+    // Slice the reported composition to match the truncated agents array.
     let composition = team.composition;
     if (composition.length > maxAgents) {
       composition = composition.slice(0, maxAgents);

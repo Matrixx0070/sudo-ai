@@ -816,8 +816,10 @@ export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor'
   // Matches "as before" verified patterns (sim + guards); uses internal execute for full pipeline (recon/baseline/AI/verify).
   logger.info({ task, mode }, 'KAIROS requested arsenal self-repair (dry-run wired)');
   try {
-    // Minimal ctx (session/logger only; full ToolContext not required for read-only dry)
-    const ctx = { sessionId: 'kairos-self-repair', logger } as any;
+    // Minimal ctx (session/logger only; full ToolContext not required for read-only dry).
+    // Partial stub asserted through unknown: execute() does not touch the missing fields
+    // on the applyEdits:false path.
+    const ctx = { sessionId: 'kairos-self-repair', logger } as unknown as ToolContext;
     const result = await arsenalTool.execute({ task, mode, applyEdits: false }, ctx);
     return { success: !!result.success, output: String(result.output || '').slice(0, 300) };
   } catch (e) {

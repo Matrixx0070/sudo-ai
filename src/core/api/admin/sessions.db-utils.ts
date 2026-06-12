@@ -7,6 +7,7 @@
  */
 
 import path from 'node:path';
+import type BetterSqlite3T from 'better-sqlite3';
 import { createLogger } from '../../shared/logger.js';
 import { DATA_DIR } from '../../shared/paths.js';
 
@@ -53,9 +54,9 @@ export async function openMindDb(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<any | null> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = (await import('better-sqlite3')) as any;
-    const Database = mod.default ?? mod;
+    const mod = await import('better-sqlite3');
+    // ESM dynamic import wraps CJS default export in { default: ... }
+    const Database = (mod.default ?? mod) as typeof BetterSqlite3T;
     return new Database(MIND_DB_PATH, opts);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;

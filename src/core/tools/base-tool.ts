@@ -142,15 +142,14 @@ export function Tool(
     // Attempt immediate registration if the global registry is available.
     const globalRegistry = ToolRegistry.getGlobal();
     if (globalRegistry) {
-      // We need an instance to call toDefinition(); construct via type assertion.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const instance = new (ctor as any)() as BaseTool;
+      // We need an instance to call toDefinition(); the decorator target is a
+      // zero-arg BaseTool subclass constructor, so assert that contract.
+      const instance = new (ctor as unknown as new () => BaseTool)();
       globalRegistry.register(instance.toDefinition());
       logger.info({ tool: name }, 'Auto-registered tool at import time');
     } else {
       // No global registry yet — queue for lazy registration.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      pendingRegistrations.push(new (ctor as any)() as BaseTool);
+      pendingRegistrations.push(new (ctor as unknown as new () => BaseTool)());
       logger.debug({ tool: name }, 'Queued tool for lazy registration');
     }
   };

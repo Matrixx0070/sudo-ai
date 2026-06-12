@@ -15,7 +15,7 @@ import { URL } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createLogger } from '../shared/logger.js';
 import type { ChannelType, MessageHandler, SendOptions } from '../channels/types.js';
-import type { BridgeRouterDeps, BridgeConfig, BridgeConnection } from './bridge-types.js';
+import type { BridgeRouterDeps, BridgeConfig, BridgeConnection, BridgeMethodHandler } from './bridge-types.js';
 import { DEFAULT_BRIDGE_CONFIG } from './bridge-types.js';
 import { verifyGatewayToken, getServerEpoch } from './bridge-auth.js';
 import { createConnection, cleanupConnection, startHeartbeatMonitor, recordHeartbeat, rejectAllPendingApprovals } from './bridge-session.js';
@@ -23,6 +23,7 @@ import { BridgeDiscovery } from './bridge-discovery.js';
 import { buildBridgeRouter, dispatchMessage } from './bridge-protocol.js';
 import type {
   BridgeClientMessage,
+  BridgeMethod,
   BridgeServerEvent,
   BridgeServerResponse,
   BridgeErrorCodeType,
@@ -53,7 +54,7 @@ export class IdeBridgeAdapter {
   private wss: WebSocketServer | null = null;
   private httpServer: HttpServer | null = null;
   private discovery: BridgeDiscovery;
-  private router: Map<string, (ctx: any) => Promise<any>> | null = null;
+  private router: Map<BridgeMethod, BridgeMethodHandler> | null = null;
   private heartbeatCleanups = new Map<string, () => void>();
 
   constructor(deps: BridgeRouterDeps, config?: BridgeConfig) {
@@ -315,8 +316,10 @@ export class IdeBridgeAdapter {
       return;
     }
 
-    // Handle heartbeat inline (not a dispatched method)
-    if ((message as any).method === 'heartbeat') {
+    // Handle heartbeat inline. 'heartbeat' is an off-protocol wire message:
+    // it is not part of the BridgeMethod union, so widen to string at the
+    // JSON boundary to compare.
+    if ((message.method as string) === 'heartbeat') {
       recordHeartbeat(connection);
       this.sendResponse(connection, { id: message.id, result: { serverTime: Date.now(), epoch: getServerEpoch() } });
       return;
@@ -326,7 +329,7 @@ export class IdeBridgeAdapter {
 
     // Dispatch to method handler
     if (this.router) {
-      const response = await dispatchMessage(message, connection, this.router as any, this.deps);
+      const response = await dispatchMessage(message, connection, this.router, this.deps);
       this.sendResponse(connection, response);
     } else {
       this.sendError(connection, message.id, BridgeErrorCode.INTERNAL_ERROR, 'Router not initialized');

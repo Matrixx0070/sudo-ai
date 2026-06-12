@@ -115,14 +115,16 @@ export const fsListByMtimeTool: ToolDefinition = {
       let names: string[];
       if (globParam !== null) {
         try {
-          // Dynamic import to handle @types/node gap (R4 gotcha)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const fsPromises = (await import('node:fs/promises')) as any;
+          // Dynamic import to handle @types/node gap (R4 gotcha): fs.glob exists
+          // at runtime on Node >= 22 but may be absent from the installed types.
+          const fsPromises = (await import('node:fs/promises')) as typeof import('node:fs/promises') & {
+            glob?: (pattern: string, opts: { cwd: string }) => AsyncIterable<string>;
+          };
           if (typeof fsPromises.glob === 'function') {
             // Collect async iterable manually (Array.fromAsync not in all TS lib targets)
             const collected: string[] = [];
             for await (const entry of fsPromises.glob(globParam, { cwd: resolved })) {
-              collected.push(entry as string);
+              collected.push(entry);
             }
             names = collected;
           } else {

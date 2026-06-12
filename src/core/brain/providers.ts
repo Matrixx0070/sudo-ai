@@ -297,7 +297,7 @@ export function getModel(modelString: string): ReturnType<AnyProvider> {
 
   if (openAiCompatibleProviders.includes(providerName)) {
     // OpenAI-compatible providers need .chat() to get the LanguageModel
-    return (provider as any).chat(modelId);
+    return (provider as { chat: (id: string) => ReturnType<AnyProvider> }).chat(modelId);
   }
 
   // Native providers can be called directly
@@ -338,7 +338,7 @@ export async function getModelWithKey(modelString: string, apiKey: string): Prom
   // native providers are callable directly. Mirrors getModel().
   const openAiCompatibleProviders: ProviderName[] = ['ollama', 'mistral', 'deepseek', 'together', 'groq'];
   if (openAiCompatibleProviders.includes(providerName)) {
-    return (provider as any).chat(modelId);
+    return (provider as { chat: (id: string) => ReturnType<AnyProvider> }).chat(modelId);
   }
   return (provider as (id: string) => ReturnType<AnyProvider>)(modelId);
 }
