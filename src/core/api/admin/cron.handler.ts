@@ -235,8 +235,17 @@ adminRouter.post('/api/admin/cron/jobs/:id/run', async (_req, res, params) => {
     return;
   }
 
-  log.info({ jobId: id, jobName: job.name }, 'Manual run requested (stub)');
-  sendJson(res, 200, { ok: true, id, name: job.name, message: 'Run queued (stub — scheduler not yet wired)' });
+  // No scheduler is wired into the admin API; answering 200 ok here would
+  // claim a run that never happens (see PR #76 stub-honesty precedent).
+  log.info({ jobId: id, jobName: job.name }, 'Manual run requested — not implemented');
+  sendJson(res, 501, {
+    error: {
+      message: 'Not implemented — no scheduler is wired into the admin API; the job was not run',
+      code: 501,
+    },
+    id,
+    name: job.name,
+  });
 });
 
 // ---------------------------------------------------------------------------

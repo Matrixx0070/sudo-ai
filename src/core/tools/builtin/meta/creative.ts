@@ -97,7 +97,11 @@ export const creativeTool: ToolDefinition = {
           const duration = typeof params['duration'] === 'number' ? params['duration'] : 60;
           const c = engine.composeMusic(mood, duration);
           logger.info({ id: c.id, mood, duration }, 'compose-music complete');
-          return { success: true, output: `Music composition created:\n${formatMusic(c)}`, data: c };
+          return {
+            success: true,
+            output: `Music composition spec created (text description only — no audio is rendered):\n${formatMusic(c)}`,
+            data: c,
+          };
         }
 
         case 'create-style': {

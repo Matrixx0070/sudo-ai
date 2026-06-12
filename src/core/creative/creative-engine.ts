@@ -62,9 +62,9 @@ export class CreativeEngine {
       id: randomUUID(),
       title: `SUDO-${safeMood.charAt(0).toUpperCase() + safeMood.slice(1)}-${Date.now()}`,
       mood: safeMood, tempo, key, structure,
-      description: `A ${safeDuration}s ${safeMood} composition in ${key.replace('_', ' ')} `
+      description: `Spec for a ${safeDuration}s ${safeMood} composition in ${key.replace('_', ' ')} `
         + `at ${tempo} BPM. Structure: ${structure.join(' → ')}. `
-        + `Instrumentation: layered synthesizers, cinematic percussion, `
+        + `Suggested instrumentation: layered synthesizers, cinematic percussion, `
         + `atmospheric pads with dynamic tension-release arc.`,
       duration: safeDuration,
       createdAt: new Date().toISOString(),
