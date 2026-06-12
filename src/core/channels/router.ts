@@ -43,6 +43,15 @@ export class MessageRouter {
   private handler: MessageHandler | null = null;
 
   /**
+   * Optional admission interceptor checked synchronously in `_dispatch`
+   * BEFORE the message is enqueued. Returning true consumes the message: it
+   * never reaches the per-peer queue or the handler. Used for control
+   * traffic — e.g. tool-approval replies — that must bypass the turn queue,
+   * because a reply queued behind the very turn awaiting it would deadlock.
+   */
+  private preDispatchInterceptor: ((msg: UnifiedMessage) => boolean) | null = null;
+
+  /**
    * Optional cross-channel memory store.
    * When provided, every inbound and outbound message is persisted, and the
    * peer's full cross-channel history is attached to the UnifiedMessage as
@@ -92,6 +101,18 @@ export class MessageRouter {
     }
     this.handler = handler;
     log.debug('global message handler registered');
+  }
+
+  /**
+   * Register a synchronous pre-dispatch admission interceptor.
+   * See {@link preDispatchInterceptor} for semantics.
+   */
+  setPreDispatchInterceptor(interceptor: (msg: UnifiedMessage) => boolean): void {
+    if (typeof interceptor !== 'function') {
+      throw new TypeError('setPreDispatchInterceptor: interceptor must be a function');
+    }
+    this.preDispatchInterceptor = interceptor;
+    log.debug('pre-dispatch interceptor registered');
   }
 
   // ---------------------------------------------------------------------------
@@ -250,6 +271,18 @@ export class MessageRouter {
    *     UnifiedMessage as `crossChannelContext` before the handler is called.
    */
   private _dispatch(msg: UnifiedMessage): Promise<void> {
+    if (this.preDispatchInterceptor) {
+      try {
+        if (this.preDispatchInterceptor(msg)) {
+          log.info({ channel: msg.channel, peerId: msg.peerId }, 'message consumed by pre-dispatch interceptor — not queued');
+          return Promise.resolve();
+        }
+      } catch (err) {
+        // Fail open: interceptor bugs must never drop user messages.
+        log.warn({ channel: msg.channel, peerId: msg.peerId, err }, 'pre-dispatch interceptor threw — dispatching normally');
+      }
+    }
+
     const key = `${msg.channel}:${msg.peerId}`;
 
     return this.queue.enqueue(key, async () => {
