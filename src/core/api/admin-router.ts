@@ -249,15 +249,15 @@ export function readJsonBody(
 export const adminRouter = new AdminRouter();
 
 // ---------------------------------------------------------------------------
-// Stub factory — returns a handler that signals "not yet implemented"
+// Stub factory — returns a handler that answers 501 until a real handler
+// (registered by admin/index.ts registerAdminHandlers) overrides the route.
 // ---------------------------------------------------------------------------
 
 function stub(section: string): AdminHandler {
   return async (_req, res) => {
-    sendJson(res, 200, {
-      status: 'ok',
+    sendJson(res, 501, {
+      error: { message: 'Not implemented', code: 501 },
       section,
-      message: 'Handler not yet implemented',
     });
   };
 }

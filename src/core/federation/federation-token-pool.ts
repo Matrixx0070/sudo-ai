@@ -330,14 +330,15 @@ export class FederationTokenPool {
       // Optionally delete from vault
       if (opts.deleteFromVault) {
         try {
-          // Vault delete requires requester param
-          // We use a special internal requester for token pool operations
-          const vaultDeleteSql = `DELETE FROM vault_entries WHERE namespace = ? AND key = ?`;
-          // Note: vault.delete() is not in our interface, so we skip direct vault deletion
-          // The token will be inaccessible due to active=0 flag
-          log.debug({ tokenId }, 'Vault deletion skipped — use deactivate with deleteFromVault=false');
+          await this.deps.vault.delete(VAULT_NAMESPACE, row.vault_key, 'FederationTokenPool');
         } catch (err) {
-          log.warn({ err: String(err), tokenId }, 'Failed to delete from vault');
+          // key_not_found means the entry is already gone — desired end-state reached
+          if ((err as { code?: string } | null)?.code === 'key_not_found') {
+            log.debug({ tokenId }, 'Vault entry already absent');
+          } else {
+            log.warn({ err: String(err), tokenId }, 'Token deactivated in DB but vault deletion failed');
+            return { success: false, error: `deactivated, but vault deletion failed: ${String(err)}` };
+          }
         }
       }
 

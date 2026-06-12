@@ -21,6 +21,9 @@
  *   FED-TOK-16 List with activeOnly=false includes inactive
  *   FED-TOK-17 Vault get returns null for expired token
  *   FED-TOK-18 Contribute token returns error on vault failure
+ *   FED-TOK-19 Deactivate with deleteFromVault deletes the vault entry
+ *   FED-TOK-20 deleteFromVault failure reports failure (no fake success)
+ *   FED-TOK-21 deleteFromVault key_not_found treated as success
  *   FED-TOK-SEC-1  Token format validation: reject too-long tokens
  *   FED-TOK-SEC-2  Token format validation: reject non-printable ASCII
  *   FED-TOK-SEC-3  Token format validation: reject null bytes
@@ -49,6 +52,8 @@ function createMockVault(opts?: {
   getReturnsNull?: boolean;
   getThrows?: boolean;
   setThrows?: boolean;
+  deleteThrows?: boolean;
+  deleteThrowsKeyNotFound?: boolean;
 }) {
   const vaultData = new Map<string, string>();
 
@@ -69,6 +74,17 @@ function createMockVault(opts?: {
       const value = vaultData.get(`${namespace}:${key}`);
       return value ? { value } : null;
     }),
+    delete: vi.fn<(...args: unknown[]) => Promise<void>>().mockImplementation(async (namespace, key) => {
+      if (opts?.deleteThrowsKeyNotFound) {
+        const err = new Error(`Key not found: ${String(key)}`) as Error & { code: string };
+        err.code = 'key_not_found';
+        throw err;
+      }
+      if (opts?.deleteThrows) {
+        throw new Error('Vault delete failed');
+      }
+      vaultData.delete(`${namespace}:${key}`);
+    }),
   };
 
   return { mockVault, vaultData };
@@ -88,6 +104,8 @@ function createPool(opts?: {
   vaultGetReturnsNull?: boolean;
   vaultGetThrows?: boolean;
   vaultSetThrows?: boolean;
+  vaultDeleteThrows?: boolean;
+  vaultDeleteThrowsKeyNotFound?: boolean;
 }) {
   const db = makeInMemoryDb();
   const { mockVault } = createMockVault({
@@ -95,6 +113,8 @@ function createPool(opts?: {
     getReturnsNull: opts?.vaultGetReturnsNull,
     getThrows: opts?.vaultGetThrows,
     setThrows: opts?.vaultSetThrows,
+    deleteThrows: opts?.vaultDeleteThrows,
+    deleteThrowsKeyNotFound: opts?.vaultDeleteThrowsKeyNotFound,
   });
 
   return {
@@ -353,6 +373,51 @@ describe('FederationTokenPool — deactivateToken', () => {
     const result = await pool.deactivateToken('nonexistent-token-id');
     expect(result.success).toBe(false);
     expect(result.error).toBe('Token not found');
+
+    pool.destroy();
+  });
+
+  it('FED-TOK-19: deactivate with deleteFromVault actually deletes the vault entry', async () => {
+    const { pool, db, mockVault } = createPool();
+
+    const result = await pool.contributeToken(makeContribution());
+    const tokenId = result.id;
+    const row = db.prepare('SELECT vault_key FROM federation_token_pool WHERE id = ?').get(tokenId) as { vault_key: string };
+
+    const deactivateResult = await pool.deactivateToken(tokenId, { deleteFromVault: true });
+    expect(deactivateResult.success).toBe(true);
+    expect(mockVault.delete).toHaveBeenCalledWith('federation-tokens', row.vault_key, 'FederationTokenPool');
+
+    pool.destroy();
+  });
+
+  it('FED-TOK-20: deleteFromVault failure reports failure, does not fake success', async () => {
+    const { pool, db, mockVault } = createPool({ vaultDeleteThrows: true });
+
+    const result = await pool.contributeToken(makeContribution());
+    const tokenId = result.id;
+
+    const deactivateResult = await pool.deactivateToken(tokenId, { deleteFromVault: true });
+    expect(mockVault.delete).toHaveBeenCalledTimes(1);
+    expect(deactivateResult.success).toBe(false);
+    expect(deactivateResult.error).toContain('vault deletion failed');
+
+    // DB deactivation itself still happened
+    const row = db.prepare('SELECT active FROM federation_token_pool WHERE id = ?').get(tokenId) as { active: number };
+    expect(row.active).toBe(0);
+
+    pool.destroy();
+  });
+
+  it('FED-TOK-21: deleteFromVault treats key_not_found as success (entry already gone)', async () => {
+    const { pool, mockVault } = createPool({ vaultDeleteThrowsKeyNotFound: true });
+
+    const result = await pool.contributeToken(makeContribution());
+    const tokenId = result.id;
+
+    const deactivateResult = await pool.deactivateToken(tokenId, { deleteFromVault: true });
+    expect(mockVault.delete).toHaveBeenCalledTimes(1);
+    expect(deactivateResult.success).toBe(true);
 
     pool.destroy();
   });

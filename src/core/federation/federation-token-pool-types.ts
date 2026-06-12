@@ -24,6 +24,7 @@ export interface FederationTokenPoolDeps {
   vault: {
     set(namespace: string, key: string, value: string, opts?: { expiresAt?: string }): Promise<void>;
     get(namespace: string, key: string, requester: string): Promise<{ value: string } | null>;
+    delete(namespace: string, key: string, requester: string): Promise<void>;
   };
   db: {
     prepare(sql: string): { run(...args: unknown[]): unknown; get(...args: unknown[]): unknown | undefined; all(...args: unknown[]): unknown[] };
