@@ -446,6 +446,25 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 4.6 User hooks file — script lifecycle events without writing a plugin
+  //     (opt-in: SUDO_USER_HOOKS=1; command hooks run shell, so off by default;
+  //      file: SUDO_HOOKS_FILE or DATA_DIR/hooks.json)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_USER_HOOKS'] === '1') {
+    try {
+      const { loadUserHooks } = await import('./core/hooks/user-hooks.js');
+      const userHooks = loadUserHooks(hooks, process.env['SUDO_HOOKS_FILE']);
+      log.info(
+        { registered: userHooks.registered, skipped: userHooks.skipped, invalid: userHooks.errors.length },
+        'User hooks initialized',
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'User hooks failed to initialize — continuing without them');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 5. SessionManager
   // -------------------------------------------------------------------------
   const sessionManager = new SessionManager(db);
