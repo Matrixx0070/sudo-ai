@@ -21,6 +21,19 @@ const log = createLogger('dashboard');
 const DASHBOARD_DISABLED = process.env['SUDO_DASHBOARD_DISABLE'] === '1';
 
 const activityBuffer: ActivityEvent[] = [];
+
+// Optional runtime registration points: subsystems may attach themselves to
+// globalThis so the dashboard can detect them. Nothing in src registers these
+// today, so the health checks honestly report "not detected" and getAlignment
+// returns its zero default until something does.
+interface SudoRuntimeGlobals {
+  __sudoBrain?: unknown;
+  __sudoGateway?: unknown;
+  __sudoAlignment?: {
+    getDigest?: () => { overallScore?: number; signals?: Record<string, number> } | undefined;
+  };
+}
+const runtimeGlobals = globalThis as SudoRuntimeGlobals;
 let lastCpuUsage = process.cpuUsage();
 let lastCpuTime = Date.now();
 
@@ -99,10 +112,10 @@ export class DashboardServer {
       if (ok) metrics.healthChecksOk++; else metrics.healthChecksFail++;
     };
 
-    try { pushCheck('brain', typeof (globalThis as any).__sudoBrain !== 'undefined', 'Brain module loaded', 'Brain module not detected'); }
+    try { pushCheck('brain', typeof runtimeGlobals.__sudoBrain !== 'undefined', 'Brain module loaded', 'Brain module not detected'); }
     catch { checks.push({ name: 'brain', status: 'error', message: 'Health check failed' }); metrics.healthChecksFail++; }
 
-    try { pushCheck('gateway', typeof (globalThis as any).__sudoGateway !== 'undefined', 'Gateway module loaded', 'Gateway module not detected'); }
+    try { pushCheck('gateway', typeof runtimeGlobals.__sudoGateway !== 'undefined', 'Gateway module loaded', 'Gateway module not detected'); }
     catch { checks.push({ name: 'gateway', status: 'error', message: 'Health check failed' }); metrics.healthChecksFail++; }
 
     try {
@@ -114,7 +127,7 @@ export class DashboardServer {
     }
     catch { checks.push({ name: 'memory', status: 'error', message: 'Health check failed' }); metrics.healthChecksFail++; }
 
-    try { pushCheck('alignment', typeof (globalThis as any).__sudoAlignment !== 'undefined', 'Alignment system active', 'Alignment system not detected'); }
+    try { pushCheck('alignment', typeof runtimeGlobals.__sudoAlignment !== 'undefined', 'Alignment system active', 'Alignment system not detected'); }
     catch { checks.push({ name: 'alignment', status: 'error', message: 'Health check failed' }); metrics.healthChecksFail++; }
 
     const hasError = checks.some(c => c.status === 'error');
@@ -142,7 +155,7 @@ export class DashboardServer {
 
   /** Get alignment score and signal breakdown. */
   getAlignment(): AlignmentData {
-    const alignment = (globalThis as any).__sudoAlignment;
+    const alignment = runtimeGlobals.__sudoAlignment;
     if (alignment && typeof alignment.getDigest === 'function') {
       try {
         const digest = alignment.getDigest();

@@ -541,15 +541,19 @@ export class BashASTParser {
   /**
    * Parse a simple command into a CommandNode.
    */
-  private parseSimpleCommand(command: string): CommandNode {
+  // Returns the base node type because an all-whitespace input yields an
+  // 'empty' node, which is not a CommandNode (the sole caller, parseToAST,
+  // returns BashASTNode anyway).
+  private parseSimpleCommand(command: string): BashASTNode {
     const tokens = this.tokenize(command);
     if (tokens.length === 0) {
-      return {
+      const empty: BashASTNode = {
         type: 'empty',
         raw: command,
         start: 0,
         end: command.length,
-      } as any;
+      };
+      return empty;
     }
 
     // Extract prefix assignments (VAR=value before command)
@@ -581,7 +585,7 @@ export class BashASTParser {
     // Check for background
     const isBackground = args.length > 0 && args[args.length - 1] === '&';
 
-    return {
+    const node: CommandNode = {
       type: 'command',
       raw: command,
       start: 0,
@@ -593,6 +597,7 @@ export class BashASTParser {
       isPrivileged,
       isBackground,
     };
+    return node;
   }
 
   // ---------------------------------------------------------------------------
@@ -761,12 +766,12 @@ export class BashASTParser {
         break;
       }
       case 'subshell': {
-        const sub = node as any;
+        const sub = node as SubshellNode;
         if (sub.body) results.push(...this.walkAST(sub.body));
         break;
       }
       case 'background': {
-        const bg = node as any;
+        const bg = node as BackgroundNode;
         if (bg.command) results.push(...this.walkAST(bg.command));
         break;
       }
@@ -894,7 +899,7 @@ export class BashASTParser {
           return seq.commands.every(walkReadOnly);
         }
         case 'background': {
-          const bg = node as any;
+          const bg = node as BackgroundNode;
           return bg.command ? walkReadOnly(bg.command) : false;
         }
         default:

@@ -9,7 +9,7 @@
  * Secondary mode: Connect to an existing Chrome via CDP endpoint
  */
 
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import { chromium, type Browser, type BrowserContext, type Page, type Request } from 'playwright-core';
 import { createLogger } from '../../../shared/logger.js';
 import { genId } from '../../../shared/utils.js';
 
@@ -61,7 +61,7 @@ export class CDPManager {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private cdpEndpoint: string | undefined;
-  private interceptHandlers = new Map<string, (request: any) => void>();
+  private interceptHandlers = new Map<string, (request: Request) => void>();
 
   constructor(config?: Partial<CDPConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -210,6 +210,11 @@ export class CDPManager {
     return this.browser;
   }
 
+  /** Expose the active browser context (e.g. for page enumeration by consumers). */
+  getContext(): BrowserContext | null {
+    return this.context;
+  }
+
   // -- Network interception --------------------------------------------------
 
   /**
@@ -217,7 +222,7 @@ export class CDPManager {
    * Handler receives the Playwright Request object — can abort, respond, or observe.
    * Applied to all existing and future pages.
    */
-  interceptRequests(pattern: string, handler: (request: any) => void): void {
+  interceptRequests(pattern: string, handler: (request: Request) => void): void {
     this.interceptHandlers.set(pattern, handler);
     log.info({ pattern }, 'Network interception handler registered');
     if (this.context) {
@@ -286,9 +291,11 @@ export class CDPManager {
   private async resolveTargetId(page: Page): Promise<string> {
     try {
       const cdp = await page.context().newCDPSession(page);
-      const { target } = await cdp.send('Target.getTargetInfo') as any;
+      // The protocol result is { targetInfo } — the previous { target }
+      // destructure was always undefined, so every session got a random ID.
+      const { targetInfo } = await cdp.send('Target.getTargetInfo');
       await cdp.detach().catch(() => {});
-      return target?.targetId ?? genId();
+      return targetInfo.targetId;
     } catch { return genId(); }
   }
 
@@ -298,9 +305,9 @@ export class CDPManager {
     for (const page of this.context.pages()) {
       try {
         const cdp = await page.context().newCDPSession(page);
-        const { target } = await cdp.send('Target.getTargetInfo') as any;
+        const { targetInfo } = await cdp.send('Target.getTargetInfo');
         await cdp.detach().catch(() => {});
-        if (target?.targetId === targetId) return page;
+        if (targetInfo.targetId === targetId) return page;
       } catch { continue; }
     }
     return null;
@@ -329,10 +336,10 @@ export class CDPManager {
   }
 
   /** Apply a single interception handler to a page via route filtering. */
-  private applyInterceptionToPage(page: Page, pattern: string, handler: (request: any) => void): void {
+  private applyInterceptionToPage(page: Page, pattern: string, handler: (request: Request) => void): void {
     try {
       page.route(`**/${pattern}**`, async (route) => {
-        try { handler(route.request() as any); }
+        try { handler(route.request()); }
         catch (e) {
           log.warn({ pattern, err: e }, 'Interception handler error — continuing request');
           await route.continue().catch(() => {});
