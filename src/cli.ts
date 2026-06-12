@@ -2222,6 +2222,72 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 9.2 Autonomy v1 — background goal work + persistent think cycle
+  //     (opt-in: SUDO_AUTONOMY_V1=1; runs agent turns unattended, so off by
+  //      default. SUDO_AUTONOMY_V1_INTERVAL_MS tunes the tick/think cadence,
+  //      SUDO_AUTONOMY_V1_REWAKE_MS how long a worked goal sleeps before the
+  //      next turn.)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_AUTONOMY_V1'] === '1') {
+    try {
+      if (!goalEngine) throw new Error('GoalEngineV2 unavailable (v5 module init failed)');
+      const engine = goalEngine;
+      const { AutonomousEventLoop } = await import('./core/autonomy/event-loop.js');
+      const { WakeSleepCycle } = await import('./core/autonomy/wake-sleep-cycle.js');
+
+      const tickRaw = Number(process.env['SUDO_AUTONOMY_V1_INTERVAL_MS']);
+      const tickMs = Number.isFinite(tickRaw) && tickRaw >= 1_000 ? tickRaw : 300_000;
+      const rewakeRaw = Number(process.env['SUDO_AUTONOMY_V1_REWAKE_MS']);
+      const rewakeMs = Number.isFinite(rewakeRaw) && rewakeRaw >= 60_000 ? rewakeRaw : 3_600_000;
+
+      const wakeSleep = new WakeSleepCycle(
+        engine,
+        hooks,
+        async (goal) => {
+          // Claim the goal by re-sleeping it BEFORE the agent turn: ticks are
+          // not serialized, so a turn outlasting the tick interval would
+          // otherwise get the same goal dispatched twice. Completion (via the
+          // agent or the user) overrides the wake schedule.
+          engine.scheduleWake(goal.id, new Date(Date.now() + rewakeMs).toISOString());
+          // Same per-peer serialization as the channel handlers, so nothing
+          // else can run a turn on this session while the goal turn is live.
+          await dualSessionManager.peerQueue.enqueue(`goal:${goal.id}`, async () => {
+            const session = await dualSessionManager.getOrCreate('autonomy', `goal:${goal.id}`);
+            const prompt = [
+              '[autonomous goal turn] Work on this goal now and make concrete progress.',
+              `Goal: ${goal.title}`,
+              goal.description ? `Description: ${goal.description}` : '',
+              `Current progress: ${goal.progress}%`,
+            ].filter(Boolean).join('\n');
+            await finalAgentLoop.run(String(session.id), prompt, undefined, { race: true });
+          });
+        },
+        { tickIntervalMs: tickMs },
+      );
+      wakeSleep.start();
+      registerShutdown(() => wakeSleep.stop());
+
+      // The event loop persists plans/self-initiated actions in mind.db. It
+      // opens its own connection to the same file — safe alongside MindDB's
+      // WAL connection, and they write disjoint tables. The WakeSleepCycle is
+      // deliberately NOT passed in: it already runs its own scheduler above,
+      // and a second tick driver could double-dispatch goals.
+      const eventLoop = new AutonomousEventLoop(db.db.name, engine);
+      eventLoop.start(tickMs);
+      // Shutdown runs LIFO: eventLoop stops before wakeSleep above. If the
+      // cycle is ever passed into the event loop, swap the registration order.
+      registerShutdown(() => eventLoop.stop());
+
+      log.info({ tickMs, rewakeMs }, 'Autonomy v1 wired (wake/sleep cycle + event loop)');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'Autonomy v1 failed to initialize — continuing without it');
+    }
+  } else {
+    log.info('Autonomy v1 disabled (set SUDO_AUTONOMY_V1=1 to enable)');
+  }
+
+  // -------------------------------------------------------------------------
   // 9.5 WebSocket RPC Gateway
   // -------------------------------------------------------------------------
   try {
