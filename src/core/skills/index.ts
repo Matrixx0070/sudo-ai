@@ -28,13 +28,3 @@ export type {
   MarketplaceSearch,
   MarketplaceConfig,
 } from './marketplace.js';
-
-// Public Skill Registry (agentskills.io publish-registry)
-export { SkillRegistry as PublicSkillRegistry } from './skill-registry.js';
-export type {
-  SkillYamlFrontmatter,
-  PublishedSkill,
-  SkillSearchParams,
-  SkillListResult,
-  ResolvedSkill,
-} from './skill-registry.js';

@@ -60,14 +60,3 @@ export function registerMediaTools(registry: ToolRegistry): void {
   }
   logger.info({ count: MEDIA_TOOLS.length }, 'Media tools registered');
 }
-
-// Upgrade 62: Video Generation Skeleton
-export {
-  requestVideo,
-  startVideoGeneration,
-  completeVideo,
-  failVideo,
-  getVideoStatus,
-  listVideos,
-} from './video-generation.js';
-export type { VideoRequest, VideoResult, VideoStatus } from './video-generation.js';

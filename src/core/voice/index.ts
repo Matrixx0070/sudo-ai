@@ -15,18 +15,3 @@ export type {
   TTSOptions,
   SUPPORTED_STT_MIMES,
 } from './types.js';
-
-// Upgrade 40: Quicksilver Voice Skeleton
-export {
-  createVoiceSession,
-  endVoiceSession,
-  transcribe,
-  synthesize,
-} from './quicksilver.js';
-export type {
-  QuicksilverModel,
-  QuicksilverConfig,
-  QuicksilverSession,
-  VadMode,
-  AudioEncoding,
-} from './quicksilver.js';
