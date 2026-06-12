@@ -11,13 +11,101 @@
  * corresponding stubs in admin-router.ts only when this module is imported
  * before the stubs (i.e. admin-router stubs must be removed or deferred).
  * The stubs for these paths will be removed during integration.
+ *
+ * Honesty contract: every stats field is a real measurement; when a source
+ * is unavailable the field is null, never a fabricated zero.
  */
 
 import os from 'node:os';
+import path from 'node:path';
+import { statfs } from 'node:fs/promises';
+import type BetterSqlite3T from 'better-sqlite3';
 import { adminRouter, sendJson } from '../admin-router.js';
 import { createLogger } from '../../shared/logger.js';
+import { DATA_DIR } from '../../shared/paths.js';
+import {
+  openMindDb,
+  parseSessionMetas,
+  tableExists,
+  type BetterSqliteRow,
+} from './sessions.db-utils.js';
 
 const log = createLogger('api:admin:dashboard');
+
+const KNOWLEDGE_DB_PATH = path.join(DATA_DIR, 'knowledge.db');
+
+/** Percent of the DATA_DIR volume in use, or null when statfs fails. */
+async function diskUsagePercent(): Promise<number | null> {
+  try {
+    const s = await statfs(DATA_DIR);
+    const total = s.blocks * s.bsize;
+    if (total <= 0) return null;
+    const used = total - s.bavail * s.bsize;
+    return Math.round((used / total) * 100);
+  } catch (err) {
+    log.debug({ err }, 'statfs failed — disk usage unavailable');
+    return null;
+  }
+}
+
+/** Count of sessions in state "active" in mind.db, or null when unavailable. */
+async function countActiveSessions(): Promise<number | null> {
+  const db = await openMindDb({ readonly: true });
+  if (!db) return null;
+  try {
+    if (!tableExists(db, 'chunks')) return 0;
+    const rows = db
+      .prepare(
+        `SELECT text FROM chunks
+         WHERE path LIKE 'session:%:meta'
+           AND source = 'conversation'
+         ORDER BY rowid DESC`,
+      )
+      .all() as BetterSqliteRow[];
+    return parseSessionMetas(rows).filter((s) => s.state === 'active').length;
+  } catch (err) {
+    log.warn({ err }, 'active-session count failed');
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+interface UsageTodayRow {
+  tokens: number | null;
+  cost: number | null;
+}
+
+/**
+ * Tokens and USD recorded in knowledge.db api_costs since local midnight,
+ * or null when the DB or table is unavailable (tracking not set up — unknown,
+ * not zero).
+ */
+async function usageToday(): Promise<{ tokensToday: number; costToday: number } | null> {
+  let db: BetterSqlite3T.Database | undefined;
+  try {
+    const mod = await import('better-sqlite3');
+    const Database = (mod.default ?? mod) as typeof BetterSqlite3T;
+    db = new Database(KNOWLEDGE_DB_PATH, { readonly: true });
+    if (!tableExists(db, 'api_costs')) return null;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const row = db
+      .prepare(
+        `SELECT SUM(input_tokens + output_tokens) AS tokens,
+                SUM(cost_usd)                     AS cost
+         FROM api_costs
+         WHERE created_at >= ?`,
+      )
+      .get(todayStart) as UsageTodayRow;
+    return { tokensToday: Number(row.tokens ?? 0), costToday: Number(row.cost ?? 0) };
+  } catch (err) {
+    log.debug({ err }, 'api_costs query failed — token/cost usage unavailable');
+    return null;
+  } finally {
+    db?.close();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/admin/dashboard/stats
@@ -51,19 +139,24 @@ adminRouter.get('/api/admin/dashboard/stats', async (_req, res) => {
   const freeMem = os.freemem();
   const usedMem = totalMem - freeMem;
 
+  const [disk, activeSessions, usage] = await Promise.all([
+    diskUsagePercent(),
+    countActiveSessions(),
+    usageToday(),
+  ]);
+
   sendJson(res, 200, {
     cpu: Math.round(cpuUsage),
     memory: Math.round((usedMem / totalMem) * 100),
     memoryUsedMB: Math.round(usedMem / 1024 / 1024),
     memoryTotalMB: Math.round(totalMem / 1024 / 1024),
-    disk: 0, // Placeholder — requires fs.statfs (Node 19+) or statvfs binding
+    disk,
     uptime: Math.round(os.uptime()),
     platform: os.platform(),
     nodeVersion: process.version,
-    activeSessions: 0,
-    tokensToday: 0,
-    costToday: 0,
-    agentActivity: { total: 8, active: 0 },
+    activeSessions,
+    tokensToday: usage ? usage.tokensToday : null,
+    costToday: usage ? usage.costToday : null,
   });
 
   log.debug({ cpuUsage: Math.round(cpuUsage), usedMem }, 'dashboard/stats served');
