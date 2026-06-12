@@ -133,7 +133,7 @@ export async function forgeInsights(
   // Step 2: Search all sub-questions in parallel
   // -------------------------------------------------------------------------
   const searchPromises = subQuestions.map((sq) =>
-    hybridSearchFn(sq.question, maxResultsPerSub).catch(() => [] as any[]),
+    hybridSearchFn(sq.question, maxResultsPerSub).catch(() => []),
   );
 
   const perSubResults: any[][] = await Promise.all(searchPromises);

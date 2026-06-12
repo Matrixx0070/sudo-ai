@@ -12,7 +12,7 @@ import { PipelineError } from '../shared/index.js';
 import { AgentSpawner } from './spawner.js';
 import { AgentMessenger } from './messenger.js';
 import { ROLE_NAMES } from './roles.js';
-import type { AgentInstance, PipelineResult, SpawnConfig, Wave, WaveResult } from './types.js';
+import type { AgentInstance, AgentRoleName, PipelineResult, SpawnConfig, Wave, WaveResult } from './types.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../tools/types.js';
 
 const log = createLogger('agents:orchestrator');
@@ -148,7 +148,7 @@ export function createMultiAgentTool(orchestrator: MultiAgentOrchestrator): Tool
 
     async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
       const role = params['role'];
-      if (!role || typeof role !== 'string' || !ROLE_NAMES.includes(role as any)) {
+      if (!role || typeof role !== 'string' || !(ROLE_NAMES as readonly string[]).includes(role)) {
         return { success: false, output: `Invalid role "${String(role)}". Valid: ${ROLE_NAMES.join(', ')}` };
       }
 
@@ -168,7 +168,8 @@ export function createMultiAgentTool(orchestrator: MultiAgentOrchestrator): Tool
 
       try {
         const inst = await orchestrator.spawnAgent({
-          role: role as any, task: String(task).trim(), context, fileBoundaries: fb,
+          // Membership in ROLE_NAMES was checked above.
+          role: role as AgentRoleName, task: String(task).trim(), context, fileBoundaries: fb,
         });
 
         if (inst.status === 'completed') {

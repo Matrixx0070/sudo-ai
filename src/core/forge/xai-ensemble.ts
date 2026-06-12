@@ -114,7 +114,11 @@ export class XaiEnsemble {
             `xAI API request failed (status ${response.status}): ${lastError || response.statusText}`
           );
         }
-        const data = (await response.json()) as any;
+        // Shape of the xAI chat-completions response fields we consume.
+        const data = (await response.json()) as {
+          choices?: Array<{ message?: { content?: unknown } }>;
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
+        };
         const choice = data?.choices?.[0]?.message?.content ?? '';
         const usage = data?.usage;
         if (usage) {

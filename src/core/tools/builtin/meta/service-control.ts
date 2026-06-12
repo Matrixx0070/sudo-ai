@@ -214,7 +214,7 @@ async function handleReloadConfig(): Promise<ToolResult> {
     logEvent('reload-config');
 
     // Emit a process-level event that config watchers can listen to
-    process.emit('message' as any, { type: 'reload-config', timestamp: timestamp() } as any, undefined as any);
+    process.emit('message', { type: 'reload-config', timestamp: timestamp() }, undefined);
 
     return {
       success: true,

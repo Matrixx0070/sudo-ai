@@ -14,6 +14,7 @@
  */
 
 import path from 'node:path';
+import type BetterSqlite3T from 'better-sqlite3';
 import { adminRouter, sendJson, readJsonBody } from '../admin-router.js';
 import { createLogger } from '../../shared/logger.js';
 import { DATA_DIR } from '../../shared/paths.js';
@@ -208,9 +209,9 @@ adminRouter.get('/api/admin/channels/:type/messages', async (req, res, params) =
   let messages: unknown[] = [];
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = (await import('better-sqlite3')) as any;
-    const Database = mod.default ?? mod;
+    const mod = await import('better-sqlite3');
+    // ESM dynamic import wraps CJS default export in { default: ... }
+    const Database = (mod.default ?? mod) as typeof BetterSqlite3T;
     const db = new Database(MIND_DB_PATH, { readonly: true });
 
     try {

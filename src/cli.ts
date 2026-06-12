@@ -1957,11 +1957,11 @@ async function boot(): Promise<void> {
     const agentIdentity = new AgentIdentity('sudo-ai-v5');
     const steeringChannel = new InMemorySteeringChannel();
 
-    // AutoDream: pass a stub brain caller and a raw better-sqlite3 Database
-    const dreamDb = (db as any)?.db ?? db; // unwrap MindDB wrapper if needed
+    // AutoDream: pass a stub brain caller and the raw better-sqlite3 Database
+    // (MindDB exposes it as the public readonly `db` field).
     autoDream = new AutoDream(
       async (prompt: string) => brain.chat([{ role: 'user', content: prompt }]),
-      dreamDb as any,
+      db.db,
     );
 
     // Background agent executor (needs an agentRunner function)

@@ -95,7 +95,7 @@ function deriveKey(salt: Buffer): Buffer {
 function encrypt(plaintext: string, key: Buffer): EncryptedPayload {
   // Unique random IV per encryption — NEVER reused
   const iv = crypto.randomBytes(IV_LEN);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LEN } as any);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LEN });
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return {
@@ -108,7 +108,7 @@ function encrypt(plaintext: string, key: Buffer): EncryptedPayload {
 function decrypt(payload: EncryptedPayload, key: Buffer): string {
   const iv = Buffer.from(payload.iv, 'hex');
   const authTag = Buffer.from(payload.authTag, 'hex');
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LEN } as any);
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LEN });
   decipher.setAuthTag(authTag);
   const decrypted = Buffer.concat([
     decipher.update(Buffer.from(payload.data, 'hex')),

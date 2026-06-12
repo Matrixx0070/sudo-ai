@@ -75,7 +75,7 @@ export interface ToolRegistry {}
 // RFC‑4122 compliant UUID. Fall back to a simple timestamp string if
 // crypto.randomUUID is unavailable.
 function generateId(): string {
-  const cryptoObj: any = (globalThis as any).crypto;
+  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
   if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
     return cryptoObj.randomUUID();
   }
