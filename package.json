@@ -41,6 +41,7 @@
     "build:server": "node esbuild.config.cjs",
     "build:cli": "node esbuild.config.cjs",
     "start": "node dist/server/cli.js start",
+    "mcp": "node dist/core/gateway/mcp-cli.js",
     "preview": "pnpm build && pnpm start",
     "doctor": "tsx src/cli/index.ts doctor",
     "cli": "tsx src/cli.ts",

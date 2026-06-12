@@ -20,6 +20,17 @@ function findAllTsFiles(dir, baseDir) {
   return results;
 }
 
+// Native/runtime modules that must load from node_modules, not the bundle.
+const sharedExternals = [
+  'better-sqlite3',
+  'sqlite-vec',
+  'canvas',
+  'sharp',
+  'playwright',
+  'puppeteer',
+  'chromium-bidi',
+];
+
 // Build all entry points for builtin tools
 const builtinDir = path.join(projectRoot, 'src/core/tools/builtin');
 const allTsFiles = findAllTsFiles(builtinDir, builtinDir);
@@ -36,14 +47,31 @@ Promise.all([
     target: 'node22',
     format: 'esm',
     outfile: 'dist/server/cli.js',
+    external: [...sharedExternals],
+    define: {
+      'process.env.NODE_ENV': production ? '"production"' : '"development"',
+    },
+    banner: {
+      js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
+    },
+    sourcemap: !production,
+    minify: production,
+    keepNames: true,
+  }),
+  // MCP loopback server CLI bundle (usage: node dist/core/gateway/mcp-cli.js)
+  esbuild.build({
+    entryPoints: ['src/core/gateway/mcp-cli.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'esm',
+    outfile: 'dist/core/gateway/mcp-cli.js',
     external: [
-      'better-sqlite3',
-      'sqlite-vec',
-      'canvas',
-      'sharp',
-      'playwright',
-      'puppeteer',
-      'chromium-bidi',
+      ...sharedExternals,
+      // pino resolves its transport worker via __dirname at runtime, which
+      // breaks when bundled into an ESM file — load it from node_modules.
+      'pino',
+      'pino-pretty',
     ],
     define: {
       'process.env.NODE_ENV': production ? '"production"' : '"development"',
@@ -76,7 +104,7 @@ Promise.all([
     path.join(builtinDir, 'meta/synth-bwrap-entry.cjs'),
     path.join(projectRoot, 'dist/core/tools/builtin/meta/synth-bwrap-entry.cjs'),
   );
-  console.log('Build complete: server CLI + builtin tools');
+  console.log('Build complete: server CLI + MCP CLI + builtin tools');
 }).catch((err) => {
   console.error('Build failed:', err.message);
   process.exit(1);
