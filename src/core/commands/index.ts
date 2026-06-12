@@ -27,6 +27,10 @@ export { resetCommand } from './builtin/reset.js';
 export { backupCommand } from './builtin/backup.js';
 export { cronCommand } from './builtin/cron.js';
 export { benchCommand } from './builtin/bench.js';
+export { stopCommand } from './builtin/stop.js';
+export { queueCommand } from './builtin/queue.js';
+export { tryDispatchDirective } from './dispatch.js';
+export type { DirectiveMessage, DirectiveDispatchOptions } from './dispatch.js';
 
 import { CommandRegistry } from './registry.js';
 import { createHelpCommand } from './builtin/help.js';
@@ -45,6 +49,8 @@ import { backupCommand } from './builtin/backup.js';
 import { cronCommand } from './builtin/cron.js';
 import { benchCommand } from './builtin/bench.js';
 import { forgeCommand } from './builtin/forge.js';
+import { stopCommand } from './builtin/stop.js';
+import { queueCommand } from './builtin/queue.js';
 
 /**
  * Register all built-in slash commands on the given registry.
@@ -70,6 +76,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register(cronCommand);
   registry.register(benchCommand);
   registry.register(forgeCommand);
+  registry.register(stopCommand);
+  registry.register(queueCommand);
 
   // Help must be registered last so it sees all other commands.
   registry.register(createHelpCommand(registry));

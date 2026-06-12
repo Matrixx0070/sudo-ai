@@ -32,6 +32,8 @@ import { CronStore } from './core/cron/store.js';
 import { CronScheduler } from './core/cron/scheduler.js';
 import { HeartbeatRunner } from './core/cron/heartbeat.js';
 import { CommandRegistry } from './core/commands/registry.js';
+import { tryDispatchDirective } from './core/commands/dispatch.js';
+import type { CommandContext } from './core/commands/types.js';
 import { HookManager } from './core/hooks/index.js';
 import { CostTracker } from './core/brain/cost-tracker.js';
 import { createFeedbackKeyboard, saveFeedback } from './core/feedback/index.js';
@@ -1127,6 +1129,58 @@ async function boot(): Promise<void> {
   let emailAdapter: import('./core/channels/email.js').EmailAdapter | null = null;
   let smsAdapter: import('./core/channels/sms.js').SmsAdapter | null = null;
 
+  // Slash command registration — shared by ALL channel adapters (previously
+  // inside the Telegram block, so a Telegram-disabled boot had no commands).
+  // The core set (/model /reset /persona /stop /queue ...) registers first;
+  // the deps-injected builtin set then overrides status/tools/help with the
+  // richer implementations.
+  try {
+    const { registerBuiltinCommands: registerCoreCommands } = await import('./core/commands/index.js');
+    registerCoreCommands(commandRegistry);
+    const { registerBuiltinCommands } = await import('./core/commands/builtin.js');
+    registerBuiltinCommands(commandRegistry, {
+      toolRegistry: registry,
+      sessionManager: dualSessionManager as unknown as SessionManager,
+      costTracker,
+      consciousness: consciousness ?? undefined,
+    });
+    log.info('Slash commands registered');
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn({ err: msg }, 'Command registration failed — continuing without slash commands');
+  }
+
+  // Shared CommandContext factory for every channel's directive dispatch.
+  const makeCommandContext = async (msg: { channel: string; peerId: string }): Promise<CommandContext | null> => {
+    try {
+      const session = await dualSessionManager.getOrCreate(
+        msg.channel as import('./core/channels/types.js').ChannelType,
+        msg.peerId,
+      );
+      return {
+        channel: msg.channel,
+        peerId: msg.peerId,
+        sessionId: String(session.id),
+        agentLoop: finalAgentLoop,
+        toolRegistry: registry,
+        config,
+        db,
+        peerQueue: dualSessionManager.peerQueue,
+      };
+    } catch (err) {
+      log.error({ peerId: msg.peerId, err: String(err) }, 'CommandContext factory failed');
+      return null;
+    }
+  };
+
+  // Directive short-circuits on every channel (opt-in: SUDO_CHANNEL_COMMANDS=1).
+  // When enabled, slash commands on Discord/Slack/WhatsApp/Web/Email/SMS and
+  // the routed channels are intercepted BEFORE the per-peer turn queue, so
+  // /stop and /reset work even while a turn is in flight. Telegram's adapter
+  // intercept is always on (pre-existing behaviour).
+  const channelDirectives = process.env['SUDO_CHANNEL_COMMANDS'] === '1';
+  if (channelDirectives) log.info('Cross-channel slash directives enabled (SUDO_CHANNEL_COMMANDS=1)');
+
   if (config.channels.telegram.enabled && process.env['SUDO_TELEGRAM_DISABLE'] !== '1') {
     const tgAllowed = (process.env['TELEGRAM_CHAT_ID'] ?? '')
       .split(',').map(s => s.trim()).filter(Boolean);
@@ -1307,39 +1361,9 @@ async function boot(): Promise<void> {
       }
     });
 
-    // Register built-in slash commands
-    try {
-      const { registerBuiltinCommands } = await import('./core/commands/builtin.js');
-      registerBuiltinCommands(commandRegistry, {
-        toolRegistry: registry,
-        sessionManager: dualSessionManager as unknown as SessionManager,
-        costTracker,
-        consciousness: consciousness ?? undefined,
-      });
-      log.info('Built-in slash commands registered');
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn({ err: msg }, 'Built-in command registration failed — continuing without slash commands');
-    }
-
-    // Wire CommandRegistry to the Telegram adapter
-    telegram.setCommandRegistry(commandRegistry, async (msg) => {
-      try {
-        const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-        return {
-          channel: msg.channel,
-          peerId: msg.peerId,
-          sessionId: session.id,
-          agentLoop: finalAgentLoop,
-          toolRegistry: registry,
-          config,
-          db,
-        };
-      } catch (err) {
-        log.error({ peerId: msg.peerId, err: String(err) }, 'CommandContext factory failed');
-        return null;
-      }
-    });
+    // Wire CommandRegistry to the Telegram adapter (registration happens in
+    // the shared block above, before the channel sections).
+    telegram.setCommandRegistry(commandRegistry, makeCommandContext);
     log.info('CommandRegistry wired to Telegram adapter');
 
     await telegram.start();
@@ -1374,6 +1398,12 @@ async function boot(): Promise<void> {
           log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
           return;
         }
+
+        // Directive short-circuit: slash commands bypass the turn queue.
+        if (channelDirectives && await tryDispatchDirective({
+          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          reply: (text) => discord.send(msg.peerId, text),
+        })) return;
 
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
@@ -1456,6 +1486,12 @@ async function boot(): Promise<void> {
           log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
           return;
         }
+
+        // Directive short-circuit: slash commands bypass the turn queue.
+        if (channelDirectives && await tryDispatchDirective({
+          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          reply: (text) => slack.send(msg.peerId, text),
+        })) return;
 
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
@@ -1554,6 +1590,12 @@ async function boot(): Promise<void> {
           return;
         }
 
+        // Directive short-circuit: slash commands bypass the turn queue.
+        if (channelDirectives && await tryDispatchDirective({
+          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          reply: (text) => whatsapp.send(msg.peerId, text),
+        })) return;
+
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
             const convKey = `${msg.channel}:${msg.peerId}`;
@@ -1637,6 +1679,12 @@ async function boot(): Promise<void> {
         log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
         return;
       }
+
+      // Directive short-circuit: slash commands bypass the turn queue.
+      if (channelDirectives && await tryDispatchDirective({
+        registry: commandRegistry, msg, makeContext: makeCommandContext,
+        reply: (text) => web.send(msg.peerId, text),
+      })) return;
 
       // Serialized per-peer: enqueue so concurrent messages from the same user
       // never overlap on the same session (prevents race conditions).
@@ -1729,6 +1777,12 @@ async function boot(): Promise<void> {
           return;
         }
 
+        // Directive short-circuit: slash commands bypass the turn queue.
+        if (channelDirectives && await tryDispatchDirective({
+          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          reply: (text) => email.send(msg.peerId, text),
+        })) return;
+
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
             const convKey = `${msg.channel}:${msg.peerId}`;
@@ -1810,6 +1864,12 @@ async function boot(): Promise<void> {
           return;
         }
 
+        // Directive short-circuit: slash commands bypass the turn queue.
+        if (channelDirectives && await tryDispatchDirective({
+          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          reply: (text) => sms.send(msg.peerId, text),
+        })) return;
+
         dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
           try {
             const convKey = `${msg.channel}:${msg.peerId}`;
@@ -1884,10 +1944,29 @@ async function boot(): Promise<void> {
       const { MessageRouter } = await import('./core/channels/router.js');
       const router = new MessageRouter();
 
-      // Admission guard: approval replies bypass the router's per-peer queue
-      // (queued behind the blocked turn they would deadlock until timeout).
-      // Set BEFORE adapters register so no early message can slip past it.
-      router.setPreDispatchInterceptor((msg) => approvalManager.tryConsumeApprovalReply(msg.text));
+      // Admission guard: approval replies and slash directives bypass the
+      // router's per-peer queue (queued behind the blocked turn, an approval
+      // reply would deadlock and a /stop could never cancel the turn it
+      // targets). Set BEFORE adapters register so no early message can slip
+      // past it. Directives are consumed synchronously and executed
+      // fire-and-forget; tryDispatchDirective contains its own errors.
+      router.setPreDispatchInterceptor((msg) => {
+        if (approvalManager.tryConsumeApprovalReply(msg.text)) return true;
+        if (channelDirectives && commandRegistry.isCommand(msg.text ?? '')) {
+          void tryDispatchDirective({
+            registry: commandRegistry, msg, makeContext: makeCommandContext,
+            reply: (text) => router.sendToChannel(msg.channel, msg.peerId, text),
+          }).then((handled) => {
+            // Unlike the cli handlers, the message was already consumed here,
+            // so a failed context build cannot fall through to the agent.
+            if (!handled) log.warn({ channel: msg.channel, peerId: msg.peerId }, 'Routed directive context unavailable — command dropped');
+          }).catch((err: unknown) => {
+            log.error({ channel: msg.channel, peerId: msg.peerId, err: String(err) }, 'Routed directive dispatch failed');
+          });
+          return true;
+        }
+        return false;
+      });
 
       if (extraChannelEnv.irc) {
         const { IRCAdapter } = await import('./core/channels/irc.js');
