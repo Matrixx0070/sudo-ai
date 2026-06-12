@@ -20,6 +20,7 @@ import {
   rejectAllPendingApprovals,
 } from './bridge-session.js';
 import type {
+  AgentEventLike,
   BridgeConnection,
   BridgeMethodHandler,
   BridgeMethodResult,
@@ -455,63 +456,76 @@ function convertAgentEvent(
   sessionId: string,
   turnId: string,
 ): BridgeServerEvent | null {
+  // The agent loop's onEvent callback is untyped (AgentLoopLike), so each
+  // case asserts the matching AgentEventLike variant — the assertion names
+  // the contract the real AgentLoop emits for that event type.
   switch (event.type) {
-    case 'stream-chunk':
+    case 'stream-chunk': {
+      const e = event as Extract<AgentEventLike, { type: 'stream-chunk' }>;
       return {
         event: 'stream.token',
         data: {
           sessionId,
           turnId,
-          delta: (event as any).chunk ?? '',
+          delta: e.chunk ?? '',
           index: 0,
         } satisfies StreamTokenEvent,
       };
+    }
 
-    case 'tool-call':
+    case 'tool-call': {
+      const e = event as Extract<AgentEventLike, { type: 'tool-call' }>;
       return {
         event: 'stream.tool_call',
         data: {
           sessionId,
           turnId,
-          toolName: (event as any).name ?? '',
-          toolId: (event as any).toolId ?? '',
-          args: (event as any).args ?? {},
+          toolName: e.name ?? '',
+          toolId: e.toolId ?? '',
+          args: e.args ?? {},
         } satisfies StreamToolCallEvent,
       };
+    }
 
-    case 'tool-result':
+    case 'tool-result': {
+      const e = event as Extract<AgentEventLike, { type: 'tool-result' }>;
       return {
         event: 'stream.tool_result',
         data: {
           sessionId,
           turnId,
-          toolName: (event as any).name ?? '',
-          toolId: (event as any).toolId ?? '',
-          result: (event as any).result,
+          toolName: e.name ?? '',
+          toolId: e.toolId ?? '',
+          result: e.result,
         } satisfies StreamToolResultEvent,
       };
+    }
 
-    case 'error':
+    case 'error': {
+      const e = event as Extract<AgentEventLike, { type: 'error' }>;
       return {
         event: 'stream.error',
         data: {
           sessionId,
           turnId,
-          error: (event as any).error ?? 'Unknown error',
+          error: e.error ?? 'Unknown error',
         } satisfies StreamErrorEvent,
       };
+    }
 
-    case 'message':
+    case 'message': {
       // Full message — convert to stream.token delta
+      const e = event as Extract<AgentEventLike, { type: 'message' }>;
       return {
         event: 'stream.token',
         data: {
           sessionId,
           turnId,
-          delta: (event as any).content ?? '',
+          delta: e.content ?? '',
           index: 0,
         } satisfies StreamTokenEvent,
       };
+    }
 
     case 'done':
       // Handled by the caller (chat.send), not emitted as an event here
