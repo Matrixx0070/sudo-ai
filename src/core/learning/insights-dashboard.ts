@@ -29,8 +29,49 @@ import type {
   InsightsFormat,
 } from './insights-dashboard-types.js';
 import { DEFAULT_INSIGHTS_CONFIG } from './insights-dashboard-types.js';
+import type { SessionSignals } from './session-signals.js';
 
 const log = createLogger('learning:insights');
+
+// SQL row shapes — assertions at the better-sqlite3 boundary name these
+// contracts. ApiCallLogRow is pinned by cost-tracker.ts DDL; the file_changes
+// aggregates by file-history.ts createTables(). SUM() returns NULL on an
+// empty set, hence the nullable sum columns.
+interface ApiCallLogRow {
+  id: string;
+  provider: string;
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  latency_ms: number;
+  success: number;
+  error: string | null;
+  source: string;
+  called_at: string;
+}
+
+// Shape this module's traces query reads. NOTE: the only traces DDL in the
+// repo (trace-store.ts) has trace_type/tool_name/created_at/error_message,
+// not type/key/timestamp/error — against that schema this query throws
+// "no such column" and is swallowed by the catch below (empty analytics).
+interface TraceRow {
+  key: string | null;
+  success: number | null;
+  error: string | null;
+  latency_ms: number | null;
+  timestamp: string;
+}
+
+interface CountRow {
+  count: number;
+}
+
+interface LinesSumRow {
+  added: number | null;
+  deleted: number | null;
+}
 
 // ---------------------------------------------------------------------------
 // Time Range Parsing
@@ -183,7 +224,7 @@ export class InsightsDashboardGenerator {
    */
   private async getSessionAnalytics(start: Date, end: Date): Promise<SessionAnalytics> {
     const signalsDir = path.join(this.dataRoot, 'signals');
-    const sessions: Array<Record<string, unknown>> = [];
+    const sessions: Array<Partial<SessionSignals>> = [];
 
     try {
       if (fs.existsSync(signalsDir)) {
@@ -191,7 +232,8 @@ export class InsightsDashboardGenerator {
         for (const file of files) {
           try {
             const content = fs.readFileSync(path.join(signalsDir, file), 'utf8');
-            const signal = JSON.parse(content);
+            // Signal files on disk may predate fields added to SessionSignals.
+            const signal = JSON.parse(content) as Partial<SessionSignals>;
             const signalTime = new Date(signal.startTime ?? signal.endTime ?? 0);
             if (signalTime >= start && signalTime <= end) {
               sessions.push(signal);
@@ -226,41 +268,39 @@ export class InsightsDashboardGenerator {
     const itlValues: number[] = [];
 
     for (const session of sessions) {
-      totalTurns += (session.turnCount as number) ?? 0;
-      totalToolCalls += (session.toolCallCount as number) ?? 0;
-      totalDuration += (session.totalDurationMs as number) ?? 0;
-      totalInputTokens += (session.tokensUsed as any)?.input ?? 0;
-      totalOutputTokens += (session.tokensUsed as any)?.output ?? 0;
-      totalErrors += (session.errorCount as number) ?? 0;
-      totalCancellations += (session.cancellationCount as number) ?? 0;
-      doomLoops += (session.doomLoopDetections as number) ?? 0;
+      totalTurns += session.turnCount ?? 0;
+      totalToolCalls += session.toolCallCount ?? 0;
+      totalDuration += session.totalDurationMs ?? 0;
+      totalInputTokens += session.tokensUsed?.input ?? 0;
+      totalOutputTokens += session.tokensUsed?.output ?? 0;
+      totalErrors += session.errorCount ?? 0;
+      totalCancellations += session.cancellationCount ?? 0;
+      doomLoops += session.doomLoopDetections ?? 0;
 
-      const ttft = (session.avgTimeToFirstTokenMs as number) ?? 0;
+      const ttft = session.avgTimeToFirstTokenMs ?? 0;
       if (ttft > 0) {
         totalTTFT += ttft;
         ttftCount++;
       }
 
-      if ((session.goalCompletionVerdict as string) === 'completed') completedCount++;
-      const goalType = (session.goalClassificationType as string) ?? 'unknown';
+      if (session.goalCompletionVerdict === 'completed') completedCount++;
+      const goalType = session.goalClassificationType ?? 'unknown';
       goalTypes[goalType] = (goalTypes[goalType] ?? 0) + 1;
 
-      const model = (session.modelUsed as string) ?? 'unknown';
+      const model = session.modelUsed ?? 'unknown';
       modelUsage[model] = (modelUsage[model] ?? 0) + 1;
 
-      const tier = (session.feedbackTier as string) ?? 'unknown';
+      const tier = session.feedbackTier ?? 'unknown';
       feedbackTiers[tier] = (feedbackTiers[tier] ?? 0) + 1;
 
-      const day = formatDate(new Date(session.startTime as string ?? Date.now()));
+      const day = formatDate(new Date(session.startTime ?? Date.now()));
       sessionsByDay[day] = (sessionsByDay[day] ?? 0) + 1;
 
-      const duration = (session.totalDurationMs as number) ?? 0;
+      const duration = session.totalDurationMs ?? 0;
       if (duration > 0) durations.push(duration);
 
       // Collect ITL values
-      const p50 = (session.itlP50Ms as number) ?? 0;
-      const p95 = (session.itlP95Ms as number) ?? 0;
-      const p99 = (session.itlP99Ms as number) ?? 0;
+      const p50 = session.itlP50Ms ?? 0;
       if (p50 > 0) itlValues.push(p50);
     }
 
@@ -328,7 +368,7 @@ export class InsightsDashboardGenerator {
           if (tableExists) {
             const rows = db.prepare(
               'SELECT * FROM api_call_log WHERE called_at >= ? AND called_at <= ?',
-            ).all(start.toISOString(), end.toISOString()) as any[];
+            ).all(start.toISOString(), end.toISOString()) as ApiCallLogRow[];
 
             const today = formatDate(new Date());
             const weekAgo = new Date();
@@ -337,21 +377,21 @@ export class InsightsDashboardGenerator {
             monthAgo.setDate(monthAgo.getDate() - 30);
 
             for (const row of rows) {
-              const cost = (row.estimated_cost_usd as number) ?? 0;
+              const cost = row.estimated_cost_usd ?? 0;
               totalCost += cost;
 
-              const rowDate = formatDate(new Date(row.called_at as string));
+              const rowDate = formatDate(new Date(row.called_at));
               costByDay[rowDate] = (costByDay[rowDate] ?? 0) + cost;
 
               if (rowDate === today) todayCost += cost;
-              if (new Date(row.called_at as string) >= weekAgo) weekCost += cost;
-              if (new Date(row.called_at as string) >= monthAgo) monthCost += cost;
+              if (new Date(row.called_at) >= weekAgo) weekCost += cost;
+              if (new Date(row.called_at) >= monthAgo) monthCost += cost;
 
-              totalInputTokens += (row.prompt_tokens as number) ?? 0;
-              totalOutputTokens += (row.completion_tokens as number) ?? 0;
+              totalInputTokens += row.prompt_tokens ?? 0;
+              totalOutputTokens += row.completion_tokens ?? 0;
 
               // Group by model
-              const model = (row.model as string) ?? 'unknown';
+              const model = row.model ?? 'unknown';
               const entry = byModelMap.get(model) ?? {
                 model,
                 callCount: 0,
@@ -364,19 +404,12 @@ export class InsightsDashboardGenerator {
                 _successCount: 0,
               };
               entry.callCount++;
-              entry.inputTokens += (row.prompt_tokens as number) ?? 0;
-              entry.outputTokens += (row.completion_tokens as number) ?? 0;
+              entry.inputTokens += row.prompt_tokens ?? 0;
+              entry.outputTokens += row.completion_tokens ?? 0;
               entry.estimatedCostUsd += cost;
-              entry._totalLatency += (row.latency_ms as number) ?? 0;
-              if ((row.success as number) ?? 0) entry._successCount++;
+              entry._totalLatency += row.latency_ms ?? 0;
+              if (row.success ?? 0) entry._successCount++;
               byModelMap.set(model, entry);
-            }
-
-            // Also get costs outside the time range for today/week/month
-            const allRows = db.prepare('SELECT * FROM api_call_log').all() as any[];
-            let allCost = 0;
-            for (const row of allRows) {
-              allCost += (row.estimated_cost_usd as number) ?? 0;
             }
           }
         } finally {
@@ -453,14 +486,14 @@ export class InsightsDashboardGenerator {
           if (tableExists) {
             const rows = db.prepare(
               "SELECT * FROM traces WHERE type = 'tool_call' AND timestamp >= ? AND timestamp <= ?",
-            ).all(start.toISOString(), end.toISOString()) as any[];
+            ).all(start.toISOString(), end.toISOString()) as TraceRow[];
 
             for (const row of rows) {
-              const toolName = (row.key as string) ?? 'unknown';
-              const success = (row.success as number) ?? 0;
-              const latency = (row.latency_ms as number) ?? 0;
-              const error = (row.error as string) ?? '';
-              const day = formatDate(new Date(row.timestamp as string));
+              const toolName = row.key ?? 'unknown';
+              const success = row.success ?? 0;
+              const latency = row.latency_ms ?? 0;
+              const error = row.error ?? '';
+              const day = formatDate(new Date(row.timestamp));
 
               callsByDay[day] = (callsByDay[day] ?? 0) + 1;
 
@@ -557,29 +590,29 @@ export class InsightsDashboardGenerator {
           // Total changes
           totalChanges = (db.prepare(
             'SELECT COUNT(*) as count FROM file_changes WHERE timestamp >= ? AND timestamp <= ?',
-          ).get(startTime, endTime) as any)?.count ?? 0;
+          ).get(startTime, endTime) as CountRow | undefined)?.count ?? 0;
 
           // Unique files
           uniqueFiles = (db.prepare(
             'SELECT COUNT(DISTINCT file_path) as count FROM file_changes WHERE timestamp >= ? AND timestamp <= ?',
-          ).get(startTime, endTime) as any)?.count ?? 0;
+          ).get(startTime, endTime) as CountRow | undefined)?.count ?? 0;
 
           // Unique sessions
           uniqueSessions = (db.prepare(
             'SELECT COUNT(DISTINCT session_id) as count FROM file_changes WHERE timestamp >= ? AND timestamp <= ?',
-          ).get(startTime, endTime) as any)?.count ?? 0;
+          ).get(startTime, endTime) as CountRow | undefined)?.count ?? 0;
 
           // Lines added/deleted
           const linesRow = db.prepare(
             'SELECT SUM(lines_added) as added, SUM(lines_deleted) as deleted FROM file_changes WHERE timestamp >= ? AND timestamp <= ?',
-          ).get(startTime, endTime) as any;
+          ).get(startTime, endTime) as LinesSumRow | undefined;
           totalLinesAdded = linesRow?.added ?? 0;
           totalLinesDeleted = linesRow?.deleted ?? 0;
 
           // Changes by type
           const typeRows = db.prepare(
             'SELECT change_type, COUNT(*) as count FROM file_changes WHERE timestamp >= ? AND timestamp <= ? GROUP BY change_type',
-          ).all(startTime, endTime) as any[];
+          ).all(startTime, endTime) as Array<{ change_type: string; count: number }>;
           for (const row of typeRows) {
             changesByType[row.change_type] = row.count;
           }
@@ -587,7 +620,7 @@ export class InsightsDashboardGenerator {
           // Changes by tool
           const toolRows = db.prepare(
             'SELECT tool_name, COUNT(*) as count FROM file_changes WHERE timestamp >= ? AND timestamp <= ? GROUP BY tool_name ORDER BY count DESC',
-          ).all(startTime, endTime) as any[];
+          ).all(startTime, endTime) as Array<{ tool_name: string; count: number }>;
           for (const row of toolRows) {
             if (row.tool_name) changesByTool[row.tool_name] = row.count;
           }
@@ -595,7 +628,7 @@ export class InsightsDashboardGenerator {
           // Top files
           const fileRows = db.prepare(
             'SELECT file_path, COUNT(*) as count FROM file_changes WHERE timestamp >= ? AND timestamp <= ? GROUP BY file_path ORDER BY count DESC LIMIT 10',
-          ).all(startTime, endTime) as any[];
+          ).all(startTime, endTime) as Array<{ file_path: string; count: number }>;
           for (const row of fileRows) {
             topFiles.push({ filePath: row.file_path, changeCount: row.count });
           }
@@ -603,7 +636,7 @@ export class InsightsDashboardGenerator {
           // Changes by day
           const dayRows = db.prepare(
             "SELECT substr(timestamp, 1, 10) as day, COUNT(*) as count FROM file_changes WHERE timestamp >= ? AND timestamp <= ? GROUP BY day ORDER BY day",
-          ).all(startTime, endTime) as any[];
+          ).all(startTime, endTime) as Array<{ day: string; count: number }>;
           for (const row of dayRows) {
             changesByDay[row.day] = row.count;
           }
