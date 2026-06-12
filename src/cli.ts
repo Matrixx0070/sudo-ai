@@ -49,7 +49,7 @@ import { AutoDream } from './core/memory/auto-dream.js';
 import { TeammateIdleDetector } from './core/agent/teammate-idle.js';
 import { BackgroundAgentExecutor } from './core/agent/background-agent.js';
 import { InMemorySteeringChannel } from './core/agent/steering.js';
-import { loadMarkdownSkills } from './core/skills/markdown-loader.js';
+import { loadMarkdownSkills, parseSkillRoots } from './core/skills/markdown-loader.js';
 import { startGateway, gatewayServer } from './core/gateway/server.js';
 import { attachWsRpc } from './core/gateway/ws-server.js';
 import { attachHttpApi } from './core/gateway/http-api.js';
@@ -2397,8 +2397,20 @@ async function boot(): Promise<void> {
     void agentIdentity;
     void steeringChannel;
 
-    // Markdown skill loader
+    // Markdown skill loader — project skills/ (flat .md files plus
+    // agentskills.io <skill>/SKILL.md directories) and optional extra roots
+    // (SUDO_SKILLS_DIRS, colon-separated; e.g. ~/.claude/skills to ingest
+    // Claude Code / agentskills.io skill trees). First-seen name wins.
     const mdSkills = await loadMarkdownSkills(projectPath('skills'));
+    const extraSkillRoots = parseSkillRoots(process.env['SUDO_SKILLS_DIRS']);
+    const seenSkillNames = new Set(mdSkills.map((s) => s.name));
+    for (const root of extraSkillRoots) {
+      for (const skill of await loadMarkdownSkills(root)) {
+        if (seenSkillNames.has(skill.name)) continue;
+        mdSkills.push(skill);
+        seenSkillNames.add(skill.name);
+      }
+    }
     // Build skill→tool reverse index and wire into ToolRegistry (fail-open)
     registry.setSkillIndex(buildSkillToolIndex(mdSkills));
 
@@ -2707,6 +2719,12 @@ async function boot(): Promise<void> {
         // Scan bundled SKILL.md files from src/core/skills subdirectories
         const bundledSkillsDir = new URL('./core/skills', import.meta.url).pathname;
         skillRegistry.scanBundledSkills(bundledSkillsDir);
+        // agentskills.io directory-layout skills in the user skills/ tree and
+        // optional extra roots (SUDO_SKILLS_DIRS, colon-separated)
+        skillRegistry.scanBundledSkills(projectPath('skills'));
+        for (const root of parseSkillRoots(process.env['SUDO_SKILLS_DIRS'])) {
+          skillRegistry.scanBundledSkills(root);
+        }
         registerSkillRoutes(gatewayServer, skillRegistry, sessionDeps.store);
         log.info('Skills API attached (/v1/skills)');
         const { registerRegistryRoutes } = await import('./core/skills/registry-routes.js');

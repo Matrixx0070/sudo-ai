@@ -63,6 +63,10 @@ export function parseFrontmatter(raw: string): {
 
   const meta: Record<string, unknown> = {};
   for (const line of lines.slice(1, endIdx)) {
+    // Skip indented continuation lines: agentskills.io allows nested maps
+    // (e.g. a `metadata:` block) whose inner `key: value` lines would
+    // otherwise leak into the top-level meta and clobber real keys.
+    if (/^\s/.test(line)) continue;
     const colonAt = line.indexOf(':');
     if (colonAt < 1) continue;
     const key = line.slice(0, colonAt).trim();

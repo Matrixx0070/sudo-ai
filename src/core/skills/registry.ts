@@ -173,7 +173,9 @@ export class SkillRegistry {
         return; // unreadable directory — skip silently
       }
       for (const entry of entries) {
-        if (entry.isFile() && entry.name === 'SKILL.md') {
+        // Case-insensitive: agentskills.io canonical SKILL.md and this
+        // repo's lowercase skill.md directories both match.
+        if (entry.isFile() && entry.name.toLowerCase() === 'skill.md') {
           skillFiles.push(path.join(dir, entry.name));
         } else if (entry.isDirectory()) {
           walk(path.join(dir, entry.name), depth + 1);
