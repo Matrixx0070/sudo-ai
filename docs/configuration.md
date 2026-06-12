@@ -396,6 +396,16 @@ WEB_CHAT_ENABLED=false              # Set true to enable web chat adapter
 
 WebChat now attaches to the gateway server — no separate `WEB_CHAT_PORT` required. Default URL: http://127.0.0.1:18900/chat
 
+### MCP Loopback Server (stdio)
+
+Expose registered tools to an external MCP client (e.g. Claude Code) over stdio with `pnpm mcp` (runs `node dist/core/gateway/mcp-cli.js` — run `pnpm build` first, the bundle is not committed):
+
+```bash
+SUDO_MCP_TOKEN=choose-a-secret      # Required — the CLI exits immediately if unset
+SUDO_MCP_EXPOSE_TOOLS=a,b           # Optional comma-separated tool allowlist
+SUDO_MCP_ALLOW_SHELL=1              # Optional; system.shell-exec needs BOTH this AND SUDO_MCP_EXPOSE_TOOLS to include it
+```
+
 ### Cross-Platform Control, Kill-Switches, Autonomy, Learning
 
 **Kill-switches (set to exactly `=1` to disable; see the full table + semantics in `docs/api-reference.md#kill-switches`):**
