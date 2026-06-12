@@ -469,6 +469,7 @@ export class AutoFixTrigger {
           severity TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'open',
           created_at TEXT NOT NULL,
+          branch_name TEXT,
           fixed_at TEXT,
           commit_sha TEXT,
           pr_number INTEGER,
@@ -487,6 +488,18 @@ export class AutoFixTrigger {
         );
         CREATE INDEX IF NOT EXISTS idx_rate_log_time ON auto_fix_rate_log(executed_at);
       `);
+
+      // Migrate pre-existing databases created before branch_name was added to
+      // the DDL: CREATE TABLE IF NOT EXISTS never alters an existing table, and
+      // without the column every _logAttempt INSERT fails, which also silently
+      // disabled the hourly rate limit.
+      const cols = this.mindDb
+        .prepare<{ name: string }>(`SELECT name FROM pragma_table_info('auto_fix_log')`)
+        .all({});
+      if (!cols.some((c) => c.name === 'branch_name')) {
+        this.mindDb.exec(`ALTER TABLE auto_fix_log ADD COLUMN branch_name TEXT`);
+        log.info('_ensureTables: migrated auto_fix_log — added branch_name column');
+      }
 
       log.info('_ensureTables: tables created/verified');
     } catch (err) {
@@ -515,7 +528,16 @@ export class AutoFixTrigger {
         prNumber: attempt.prNumber ?? null,
       });
 
-      // Also log to rate log
+      log.debug({ issueNumber: attempt.issueNumber }, '_logAttempt: logged');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, '_logAttempt: attempt insert failed');
+    }
+
+    // Rate-log insert is kept independent of the attempt insert: the hourly
+    // rate limit is a safety control and must record the attempt even when
+    // the audit insert above fails.
+    try {
       this.mindDb.prepare(`
         INSERT INTO auto_fix_rate_log (executed_at, issue_number)
         VALUES (:executedAt, :issueNumber)
@@ -523,11 +545,9 @@ export class AutoFixTrigger {
         executedAt: new Date().toISOString(),
         issueNumber: attempt.issueNumber,
       });
-
-      log.debug({ issueNumber: attempt.issueNumber }, '_logAttempt: logged');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn({ err: msg }, '_logAttempt: failed');
+      log.warn({ err: msg }, '_logAttempt: rate-log insert failed');
     }
   }
 

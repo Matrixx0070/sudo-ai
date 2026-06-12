@@ -22,7 +22,9 @@ export type ChannelType =
   | 'web'
   | 'email'
   | 'sms'
-  | 'ide';
+  | 'ide'
+  /** Internal channel for autonomous background goal-work sessions (no adapter). */
+  | 'autonomy';
 
 /** Whether the conversation is a direct message or a group/guild channel. */
 export type ChatType = 'dm' | 'group';
