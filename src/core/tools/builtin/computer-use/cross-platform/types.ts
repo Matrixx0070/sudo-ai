@@ -78,6 +78,7 @@ export interface FileOpParams {
   path: string;
   content?: string;
   encoding?: string;
+  [key: string]: unknown;
 }
 
 export interface FileResult {
@@ -135,7 +136,7 @@ export interface ComputerUseConfig {
   platform?: Platform;
   learner?: ToolOutcomeLearnerLike; // call onToolResult on EVERY control outcome
   approval?: ApprovalMatrixLike; // wiring to tiers + executor (control.* auto per SOUL)
-  sandboxPolicy?: Record<string, unknown>; // cross-platform expand
+  sandboxPolicy?: import('../../../../sandbox/sandbox-types.js').SandboxPolicy; // cross-platform expand
   sessionId?: string;
   killSwitchEnv?: string; // e.g. SUDO_CROSS_CONTROL_DISABLE
   // Arsenal/KAIROS hook support

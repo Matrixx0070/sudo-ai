@@ -66,7 +66,7 @@ export class WinComputerUse implements IComputerUse {
     }
     try {
       // Fix HIGH-1: scrub secrets via buildSandboxEnv (never full process.env for control.exec on win)
-      const policy = (this.config as any).sandboxPolicy || DEFAULT_SANDBOX_POLICY;
+      const policy = this.config.sandboxPolicy || DEFAULT_SANDBOX_POLICY;
       const baseEnv = buildSandboxEnv(policy);
       const childEnv = opts.env ? { ...baseEnv, ...opts.env } : baseEnv;
       const { stdout, stderr } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], {

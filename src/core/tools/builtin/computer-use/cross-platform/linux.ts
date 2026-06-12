@@ -99,7 +99,7 @@ export class LinuxComputerUse implements IComputerUse {
 
   private getSandboxPolicy(): SandboxPolicy | undefined {
     // From expanded sandbox config (compat)
-    return this.config.sandboxPolicy as SandboxPolicy | undefined;
+    return this.config.sandboxPolicy;
   }
 
   async exec(cmd: string, opts: ExecOptions = {}): Promise<ExecResult> {

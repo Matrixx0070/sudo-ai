@@ -87,7 +87,7 @@ describe('P1 cross-platform computer-use (IComputerUse 3OS harness + 100x)', () 
 
   it('exec on linux (sandbox path + learner called on outcome)', async () => {
     setPlatform('linux');
-    const cu = createComputerUse({ learner: mockLearner, sandboxPolicy: { enabled: true } as any });
+    const cu = createComputerUse({ learner: mockLearner, sandboxPolicy: { enabled: true, network: 'none' } });
     const res = await cu.exec('echo hello', { cwd: '/tmp' });
     expect(res.success).toBe(true);
     expect(learnerCalls.some(c => c.name === 'control.exec' && c.tag?.includes('linux'))).toBe(true);

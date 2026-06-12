@@ -15,7 +15,15 @@ import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import { ApprovalMatrix, type ApprovalDecision, type ApprovalTier } from './approval-matrix.js';
 // Cross-platform IComputerUse wiring for control actions (exec/browser/file/gui/desktop) + learner/arsenal
-import type { IComputerUse, ComputerUseConfig } from '../tools/builtin/computer-use/cross-platform/index.js';
+import type {
+  IComputerUse,
+  ComputerUseConfig,
+  ExecOptions,
+  BrowserActionParams,
+  FileOpParams,
+  GUIActionParams,
+  DesktopActionParams,
+} from '../tools/builtin/computer-use/cross-platform/index.js';
 import type { ToolOutcomeLearner } from '../agent/tool-outcome-learner.js'; // use class (has onToolResult); duck ok at runtime
 
 const log = createLogger('autonomy:executor');
@@ -177,13 +185,15 @@ export class AutonomousExecutor {
 
     // auto or notify: execute via unified IComputerUse (full-power, owner-controlled)
     try {
-      let res: any;
+      // params arrive as an untyped record (LLM/JSON boundary); backends validate at
+      // runtime, so the assertions below only name the contract each op expects.
+      let res: { success: boolean; error?: string };
       switch (ca.op) {
-        case 'exec': res = await cu.exec(String(ca.params.cmd || ''), ca.params as any); break;
-        case 'browser': res = await cu.browser(ca.params as any); break;
-        case 'file': res = await cu.file(ca.params as any); break;
-        case 'gui': res = await cu.gui(ca.params as any); break;
-        case 'desktop': res = await cu.desktop(ca.params as any); break;
+        case 'exec': res = await cu.exec(String(ca.params.cmd || ''), ca.params as ExecOptions); break;
+        case 'browser': res = await cu.browser(ca.params as BrowserActionParams); break;
+        case 'file': res = await cu.file(ca.params as FileOpParams); break;
+        case 'gui': res = await cu.gui(ca.params as GUIActionParams); break;
+        case 'desktop': res = await cu.desktop(ca.params as DesktopActionParams); break;
         default: res = { success: false, error: 'unknown op' };
       }
       const success = !!res?.success;
@@ -199,7 +209,11 @@ export class AutonomousExecutor {
           }
         } catch (e) { /* non fatal, as in P3 wiring */ }
         // also if cu has it (from createComputerUse config)
-        const cuTrig = (cu as any).triggerRepair || (cu as any).config?.triggerRepair;
+        const cuWithRepair = cu as IComputerUse & {
+          triggerRepair?: ComputerUseConfig['triggerRepair'];
+          config?: ComputerUseConfig;
+        };
+        const cuTrig = cuWithRepair.triggerRepair || cuWithRepair.config?.triggerRepair;
         if (cuTrig) { try { await cuTrig(`control ${ca.op}`, 'fix'); } catch {} }
       }
       if (decision.tier === 'notify') {
