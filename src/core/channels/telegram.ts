@@ -546,6 +546,48 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /**
+   * Streaming-mode placeholder (gap #19). Sends `placeholder` as a regular
+   * message and returns its Telegram `message_id` as a string so the
+   * channel-agnostic stream sink can later edit it in place. The returned
+   * id is base-10 so it can round-trip through the `StreamSink.edit`
+   * signature (string | number) without surprises.
+   */
+  async sendForStream(peerId: string, placeholder: string): Promise<string> {
+    if (!this.bot || !this._isConnected) {
+      throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
+    }
+    if (!peerId) {
+      throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
+    }
+    const safePlaceholder = placeholder?.trim().length ? placeholder : '…';
+    const sent = await this.bot.api.sendMessage(peerId, safePlaceholder);
+    return String(sent.message_id);
+  }
+
+  /**
+   * Streaming-mode edit (gap #19). Wraps `bot.api.editMessageText` so the
+   * stream sink can update the placeholder in place. The `messageId`
+   * param is the value returned by `sendForStream`. Empty / unchanged
+   * text is the caller's responsibility — Telegram returns HTTP 400 on a
+   * noop edit, which the BufferedEditSink already prevents.
+   */
+  async editText(peerId: string, messageId: string | number, text: string): Promise<void> {
+    if (!this.bot || !this._isConnected) {
+      throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
+    }
+    if (!peerId) {
+      throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
+    }
+    const msgIdNum = typeof messageId === 'number' ? messageId : parseInt(String(messageId), 10);
+    if (!Number.isFinite(msgIdNum)) {
+      throw new ChannelError('messageId must parse to a finite integer', 'channel_invalid_peer', { messageId });
+    }
+    // Telegram hard-caps message bodies at 4096 chars; longer edits 400.
+    const clamped = text.length > 4096 ? text.slice(0, 4080) + '\n…[truncated]' : text;
+    await this.bot.api.editMessageText(peerId, msgIdNum, clamped);
+  }
+
+  /**
    * Send a message with a Telegram InlineKeyboard attached.
    * Falls back to plain send if keyboard fails.
    */
