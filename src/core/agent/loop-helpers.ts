@@ -8,6 +8,7 @@
 import { createLogger } from '../shared/logger.js';
 import { PipelineError, ToolError } from '../shared/errors.js';
 import { compact, microCompact } from './compaction.js';
+import { microCompactMessages, type MicroCompactMessage } from './microcompact.js';
 import { shouldCompact, estimateContextSize, MAX_CONTEXT_TOKENS } from './context.js';
 import { PRE_COMPACTION_FLUSH, PRE_COMPACTION_FLUSH_THRESHOLD } from '../shared/constants.js';
 import { approvalManager } from './approval.js';
@@ -809,6 +810,41 @@ export async function prepareMessages(
       log.info(
         { sessionId: state.sessionId, estimatedTokens, flushThreshold },
         'LAYER 0: Pre-compaction memory flush reminder injected',
+      );
+    }
+  }
+
+  // TIER 1 — Two-tier compaction (gap #14, opt-in SUDO_TWO_TIER_COMPACT=1):
+  // zero-cost, role-aware microcompact runs BEFORE the LLM-based LAYER 1 so
+  // we skip the paid round-trip when shrinking middle tool outputs is enough
+  // to fall back below shouldCompact's threshold. Default OFF, fail-open.
+  // LAYER 1's existing shouldCompact() check re-runs against the trimmed
+  // history, so a sufficient TIER 1 pass naturally suppresses LAYER 1.
+  if (
+    process.env['SUDO_TWO_TIER_COMPACT'] === '1' &&
+    shouldCompact(session.messages as Array<{ content: string }>)
+  ) {
+    try {
+      const result = microCompactMessages(
+        session.messages as MicroCompactMessage[],
+      );
+      if (result.charsAfter < result.charsBefore) {
+        session.messages = result.messages as typeof session.messages;
+        log.info(
+          {
+            sessionId: state.sessionId,
+            charsBefore: result.charsBefore,
+            charsAfter: result.charsAfter,
+            recoveredChars: result.charsBefore - result.charsAfter,
+            clamped: result.clamped,
+          },
+          'TIER 1: zero-cost microcompact applied (gap #14)',
+        );
+      }
+    } catch (err) {
+      log.warn(
+        { sessionId: state.sessionId, err: String(err) },
+        'TIER 1 microcompact threw — falling through to LAYER 1',
       );
     }
   }
