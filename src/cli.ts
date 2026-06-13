@@ -2879,6 +2879,25 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 9.6b Programmatic Tool Calling — meta.ptc (gap #15)
+  //      (opt-in: SUDO_PTC=1; script-driven multi-tool dispatch in one model
+  //      turn. The script runs in a sealed VM and reaches the registry only
+  //      through `await tool(name, args)` — every call hits the normal
+  //      permission/approval gates.)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_PTC'] === '1') {
+    try {
+      const { ptcTool, setPtcRegistry } = await import('./core/tools/builtin/meta/ptc.js');
+      setPtcRegistry(registry);
+      registry.register(ptcTool);
+      log.info('meta.ptc registered (SUDO_PTC=1)');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'meta.ptc registration failed — continuing without it');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 9.7 Health Watchdog
   // -------------------------------------------------------------------------
   try {
