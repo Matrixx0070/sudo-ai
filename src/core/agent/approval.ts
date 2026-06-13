@@ -13,6 +13,11 @@
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
 import type { HookManager } from '../hooks/index.js';
+import {
+  type ExecPolicyStore,
+  isDangerousCommand,
+  extractSmartPrefix,
+} from './exec-policy.js';
 
 const log = createLogger('agent:approval');
 
@@ -52,6 +57,20 @@ export class ApprovalManager {
   private senders: Map<string, ApprovalSender> = new Map();
   /** Optional HookManager for emitting 'tool:approved' / 'tool:denied' events. */
   private hookManager: HookManager | null = null;
+  /** Optional persistent exec-policy store (gap #16). */
+  private policyStore: ExecPolicyStore | null = null;
+
+  /**
+   * Attach a persistent ExecPolicyStore. When set, requestApproval()
+   * consults it BEFORE prompting the user — a matching allow rule
+   * auto-approves, a matching deny rule auto-denies, all without
+   * sending a chat message. Dangerous commands (DANGEROUS_PREFIXES)
+   * are always denied regardless of any allow rule.
+   */
+  setPolicyStore(store: ExecPolicyStore | null): void {
+    this.policyStore = store;
+    log.info({ enabled: store !== null }, 'ApprovalManager: policy store updated');
+  }
 
   /**
    * Register a channel sender so approval prompts can be delivered.
@@ -105,6 +124,38 @@ export class ApprovalManager {
     // Clamp riskScore to [0, 10].
     const clampedRisk = Math.max(0, Math.min(10, riskScore));
 
+    // -----------------------------------------------------------------------
+    // Persistent exec-policy pre-check (gap #16).
+    //   1. Dangerous-prefix ban — force deny, never overridable.
+    //   2. User rules — allow rule → auto-approve; deny rule → auto-deny.
+    // Both paths emit the same hook events the normal flow does so observers
+    // see the decision regardless of how it was reached.
+    // -----------------------------------------------------------------------
+    if (isDangerousCommand(toolName, params)) {
+      log.warn(
+        { toolName, params, riskScore: clampedRisk },
+        'Dangerous-prefix command denied by policy (cannot be overridden)',
+      );
+      void this._emitHook('tool:denied', toolName, params, clampedRisk);
+      return false;
+    }
+    if (this.policyStore) {
+      try {
+        const rule = this.policyStore.findMatchingRule(toolName, params);
+        if (rule) {
+          const decided = rule.decision === 'allow';
+          log.info(
+            { toolName, ruleId: rule.id, decision: rule.decision, commandPrefix: rule.commandPrefix },
+            'Approval auto-decided by persistent exec-policy rule',
+          );
+          void this._emitHook(decided ? 'tool:approved' : 'tool:denied', toolName, params, clampedRisk);
+          return decided;
+        }
+      } catch (err) {
+        log.warn({ err: String(err) }, 'Policy store lookup failed — falling through to user prompt');
+      }
+    }
+
     const approvalId = genId();
     const sender = this.senders.get(channel);
 
@@ -119,12 +170,15 @@ export class ApprovalManager {
     }
 
     const paramsStr = JSON.stringify(params, null, 2);
+    const policyHint = this.policyStore
+      ? `\nReply ALWAYS to approve and persist a rule (or NEVER to deny + persist).`
+      : '';
     const prompt =
       `SUDO-AI wants to execute a sensitive tool:\n\n` +
       `Tool: ${toolName}\n` +
       `Risk score: ${clampedRisk}/10\n` +
       `Params:\n${paramsStr}\n\n` +
-      `Reply YES to approve or NO to deny.\n` +
+      `Reply YES to approve or NO to deny.${policyHint}\n` +
       `(approval-id: ${approvalId} — expires in 60s)`;
 
     log.info({ approvalId, toolName, channel, peerId, riskScore: clampedRisk }, 'Sending approval request to user');
@@ -179,7 +233,7 @@ export class ApprovalManager {
    * @param approved   - true = user said YES, false = user said NO.
    * @returns true if an active pending approval was found and resolved.
    */
-  handleResponse(approvalId: string, approved: boolean): boolean {
+  handleResponse(approvalId: string, approved: boolean, persist = false): boolean {
     const pending = this.pending.get(approvalId);
     if (!pending) {
       log.warn({ approvalId }, 'handleResponse: no pending approval found for this ID');
@@ -190,9 +244,30 @@ export class ApprovalManager {
     this.pending.delete(approvalId);
 
     log.info(
-      { approvalId, toolName: pending.toolName, approved },
+      { approvalId, toolName: pending.toolName, approved, persist },
       'Approval response received',
     );
+
+    if (persist && this.policyStore) {
+      try {
+        const commandPrefix = extractSmartPrefix(pending.params);
+        const ruleId = this.policyStore.addRule({
+          toolName: pending.toolName,
+          commandPrefix,
+          decision: approved ? 'allow' : 'deny',
+          source: 'user_reply',
+        });
+        log.info(
+          { ruleId, toolName: pending.toolName, commandPrefix, decision: approved ? 'allow' : 'deny' },
+          'Persistent exec-policy rule recorded',
+        );
+      } catch (err) {
+        // Persistence failure must not block the one-time decision: the user
+        // already replied, and the right thing is to honour their immediate
+        // intent even if we can't remember it next time.
+        log.warn({ err: String(err) }, 'Failed to persist exec-policy rule — proceeding with one-time decision');
+      }
+    }
 
     pending.resolve(approved);
     return true;
@@ -201,10 +276,19 @@ export class ApprovalManager {
   /**
    * Parse a user message for an inline approval reply.
    *
-   * Looks for pattern: (approval-id: <id>) with YES or NO in the message.
-   * Returns null if no match found.
+   * Recognised tokens (case-insensitive, whole-word):
+   *   YES / NO        — one-time approve / deny (existing behaviour)
+   *   ALWAYS          — approve AND persist a "smart prefix" rule (gap #16)
+   *   NEVER           — deny AND persist a "smart prefix" rule (gap #16)
+   *
+   * Returns null if no match found or the message is ambiguous (e.g.
+   * contains both YES and NO, or both ALWAYS and NEVER).
    */
-  parseApprovalReply(text: string): { approvalId: string; approved: boolean } | null {
+  parseApprovalReply(text: string): {
+    approvalId: string;
+    approved: boolean;
+    persist: boolean;
+  } | null {
     if (!text) return null;
 
     const idMatch = text.match(/approval-id:\s*([A-Za-z0-9_-]+)/i);
@@ -212,15 +296,21 @@ export class ApprovalManager {
 
     const approvalId = idMatch[1];
     const upper = text.toUpperCase();
-    // Match whole-word YES/NO tokens so substrings like "YESTERDAY" or
-    // "KNOW"/"NORTH" do not get misread as a decision.
-    const approved = /\bYES\b/.test(upper);
-    const denied = /\bNO\b/.test(upper);
+    // Match whole-word tokens so substrings like "YESTERDAY", "KNOW",
+    // "NORTH", or "RUNAWAY" do not get misread as a decision.
+    const always = /\bALWAYS\b/.test(upper);
+    const never = /\bNEVER\b/.test(upper);
+    const yes = /\bYES\b/.test(upper);
+    const no = /\bNO\b/.test(upper);
 
-    // Ambiguous (both or neither present) → no decision.
-    if (approved === denied) return null;
+    // Persistent tokens take precedence and are mutually exclusive.
+    if (always && never) return null;
+    if (always) return { approvalId, approved: true, persist: true };
+    if (never) return { approvalId, approved: false, persist: true };
 
-    return { approvalId, approved };
+    // One-time tokens, mutually exclusive.
+    if (yes === no) return null;
+    return { approvalId, approved: yes, persist: false };
   }
 
   /**
@@ -240,7 +330,7 @@ export class ApprovalManager {
     // Unknown/expired ID → not consumed (and no handleResponse warn noise:
     // a user quoting an old prompt is normal traffic, not an error).
     if (!this.pending.has(parsed.approvalId)) return false;
-    return this.handleResponse(parsed.approvalId, parsed.approved);
+    return this.handleResponse(parsed.approvalId, parsed.approved, parsed.persist);
   }
 
   /** Return the count of currently pending approvals. */

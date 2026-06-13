@@ -213,6 +213,24 @@ async function boot(): Promise<void> {
   log.info('Inspection queue wired (injection-detector + rationalization-guard)');
 
   // -------------------------------------------------------------------------
+  // 2.2 Persistent exec-policy rules (gap #16)
+  //     (opt-in: SUDO_EXEC_POLICY=1; persists "always allow / always deny"
+  //      decisions across sessions in mind.db, force-denies the hardcoded
+  //      DANGEROUS_PREFIXES list. ApprovalManager consults the store BEFORE
+  //      prompting; a matching rule short-circuits the chat round-trip.)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_EXEC_POLICY'] === '1') {
+    try {
+      const { ExecPolicyStore } = await import('./core/agent/exec-policy.js');
+      approvalManager.setPolicyStore(new ExecPolicyStore(db.db));
+      log.info('Persistent exec-policy store wired (SUDO_EXEC_POLICY=1)');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'exec-policy store wiring failed — continuing without persistence');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 3.0 Claude OAuth Token Manager — use Claude Max as primary brain
   // -------------------------------------------------------------------------
   //
