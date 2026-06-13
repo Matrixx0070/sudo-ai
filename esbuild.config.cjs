@@ -104,6 +104,22 @@ Promise.all([
     path.join(builtinDir, 'meta/synth-bwrap-entry.cjs'),
     path.join(projectRoot, 'dist/core/tools/builtin/meta/synth-bwrap-entry.cjs'),
   );
+  // Same pattern for the code-execution sandbox workers (gap #15 +
+  // pre-existing js-exec). Both are loaded at __dirname/<name>.cjs by their
+  // tool file's Worker() constructor and must ship next to the transpiled JS.
+  // mkdirSync(recursive) is defensive — the esbuild step creates code/ when
+  // it transpiles code/index.ts, but if entry-points filtering ever changes
+  // we still want the copy to succeed.
+  const codeDistDir = path.join(projectRoot, 'dist/core/tools/builtin/code');
+  fs.mkdirSync(codeDistDir, { recursive: true });
+  fs.copyFileSync(
+    path.join(builtinDir, 'code/js-worker.cjs'),
+    path.join(codeDistDir, 'js-worker.cjs'),
+  );
+  fs.copyFileSync(
+    path.join(builtinDir, 'code/ptc-worker.cjs'),
+    path.join(codeDistDir, 'ptc-worker.cjs'),
+  );
   console.log('Build complete: server CLI + MCP CLI + builtin tools');
 }).catch((err) => {
   console.error('Build failed:', err.message);
