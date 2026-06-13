@@ -20,6 +20,7 @@ import {
 import { createLogger } from '../shared/logger.js';
 import { ToolError } from '../shared/errors.js';
 import type { MCPAdapter, MCPAdapterLike, MCPToolDef } from './mcp-adapter.js';
+import { isReadOnlyTool } from '../agent/plan-mode-gate.js';
 
 const logger = createLogger('tool-registry');
 
@@ -71,6 +72,9 @@ export class ToolRegistry {
   private readonly mcpTools = new Map<string, MCPToolDef>();
   /** Reverse index — tool name → skill name. Null until setSkillIndex() called. */
   private _skillIndex: Map<string, string> | null = null;
+
+  /** Plan-mode gate (gap #18). Null until setPlanModeGate() called. */
+  private _planModeGate: import('../agent/plan-mode-gate.js').PlanModeGate | null = null;
 
   // -------------------------------------------------------------------------
   // Global singleton — allows tools to self-register at runtime
@@ -234,6 +238,17 @@ export class ToolRegistry {
   }
 
   /**
+   * Attach the plan-mode gate (gap #18). When the gate is set AND
+   * `gate.isActive()` returns true at execute() time, destructive tool
+   * calls are rejected with a `plan_mode_blocked` ToolError; read-only
+   * tools (per `isReadOnlyTool`) pass through. Passing null detaches.
+   */
+  setPlanModeGate(gate: import('../agent/plan-mode-gate.js').PlanModeGate | null): void {
+    this._planModeGate = gate;
+    logger.info({ attached: gate !== null }, 'plan-mode gate updated');
+  }
+
+  /**
    * Return every registered tool, enabled or disabled.
    *
    * @returns Snapshot array of all {@link ToolDefinition} instances.
@@ -391,6 +406,22 @@ export class ToolRegistry {
     if (this.disabled.has(name)) {
       logger.warn({ tool: name }, 'Attempt to execute disabled tool');
       throw new ToolError(`Tool is disabled: ${name}`, 'tool_disabled', { name });
+    }
+
+    // Plan-mode gate (gap #18). When a plan is being drafted or awaiting
+    // approval, only read-only tools may run. The plan-mode enter / exit
+    // primitives are in ALWAYS_ALLOWED so the agent can still surface its
+    // plan and exit the gate.
+    if (this._planModeGate?.isActive()) {
+      if (!isReadOnlyTool(name, tool)) {
+        const stateLabel = this._planModeGate.getStateLabel();
+        logger.warn({ tool: name, state: stateLabel }, 'plan-mode gate blocked destructive tool');
+        throw new ToolError(
+          `Plan mode active (${stateLabel}) — destructive tool '${name}' is blocked until the plan is approved`,
+          'tool_plan_mode_blocked',
+          { name, state: stateLabel },
+        );
+      }
     }
 
     const timeout = tool.timeout ?? 30_000;
