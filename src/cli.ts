@@ -1125,6 +1125,35 @@ async function boot(): Promise<void> {
     }
   }
 
+  // gap #18 — plan mode write-gate. Opt-in via SUDO_PLAN_MODE=1. Wires the
+  // latent PlanModeStateMachine (loop.ts already constructs one but its
+  // tools were schema-only — no executors, no gate). When the flag is set:
+  //   1. The meta.enter-plan-mode / meta.exit-plan-mode executors are
+  //      injected with the existing state machine instance.
+  //   2. ToolRegistry.setPlanModeGate hooks the state machine so every
+  //      destructive tool call is rejected with `plan_mode_blocked` while
+  //      the state is `plan_mode` or `plan_approval`.
+  //   3. The executors are registered on the registry.
+  if (process.env['SUDO_PLAN_MODE'] === '1') {
+    try {
+      const pms = finalAgentLoop.getPlanModeStateMachine();
+      if (!pms) {
+        log.warn('SUDO_PLAN_MODE=1 but AgentLoop has no PlanModeStateMachine — skipping');
+      } else {
+        const { gateFromStateMachine } = await import('./core/agent/plan-mode-gate.js');
+        const planModeTools = await import('./core/tools/builtin/meta/plan-mode-tools.js');
+        planModeTools.setPlanModeStateMachine(pms);
+        registry.register(planModeTools.enterPlanModeTool);
+        registry.register(planModeTools.exitPlanModeTool);
+        registry.register(planModeTools.planModeStatusTool);
+        registry.setPlanModeGate(gateFromStateMachine(pms));
+        log.info('plan mode write-gate active (SUDO_PLAN_MODE=1)');
+      }
+    } catch (err: unknown) {
+      log.warn({ err: String(err) }, 'plan-mode wiring failed — gate not installed');
+    }
+  }
+
   // Theme 1 (learning flywheel, slice 1): wire TraceStore so the agent loop
   // records execution traces (routing / brain / tool outcomes) into a local
   // SQLite DB — the foundation the policy learner + skill-forge build on later.
