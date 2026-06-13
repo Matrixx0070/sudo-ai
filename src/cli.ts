@@ -55,6 +55,7 @@ import { attachWsRpc } from './core/gateway/ws-server.js';
 import { attachHttpApi } from './core/gateway/http-api.js';
 import { DualSessionManager } from './core/sessions/dual-manager.js';
 import { JournalSessionStore } from './core/sessions/journal-store.js';
+import { scanInterruptedSessions } from './core/sessions/crash-safe.js';
 import { buildSessionRouteDeps, registerSessionRoutes } from './core/sessions/routes.js';
 import { AgentConfigStore, registerAgentRoutes } from './core/agents/index.js';
 import { registerSseRoutes } from './core/gateway/sse-stream.js';
@@ -523,8 +524,29 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   const sessionManager = new SessionManager(db);
   const journalStore = new JournalSessionStore();
-  const dualSessionManager = new DualSessionManager(sessionManager, journalStore);
-  log.info('SessionManager initialized');
+  // gap #17 — opt-in journal-first save ordering + boot-time interrupted-turn scan.
+  // Default OFF: behaviour byte-identical to the pre-gap-#17 SQLite-first path.
+  const crashSafe = process.env['SUDO_CRASH_SAFE'] === '1';
+  const dualSessionManager = new DualSessionManager(sessionManager, journalStore, { crashSafe });
+  log.info({ crashSafe }, 'SessionManager initialized');
+  if (crashSafe) {
+    try {
+      const interrupted = await scanInterruptedSessions(journalStore, sessionManager, {
+        journalDir: journalStore.journalDir,
+      });
+      if (interrupted.length > 0) {
+        log.warn(
+          { count: interrupted.length, sample: interrupted.slice(0, 3) },
+          'crash-safe boot scan: JSONL leads SQLite for some sessions — operator should review',
+        );
+      } else {
+        log.info('crash-safe boot scan: no interrupted sessions detected');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'crash-safe boot scan failed — continuing without report');
+    }
+  }
 
   const dailyLog = new DailyLogManager();
 
