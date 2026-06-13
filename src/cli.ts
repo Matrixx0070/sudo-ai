@@ -1299,6 +1299,10 @@ async function boot(): Promise<void> {
     // foreground-reply fence depends on that.
     const handleTelegramTurn = (msg: UnifiedMessage): Promise<void> =>
       dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
+        // Hoisted out of the try-block so the outer catch can cancel it
+        // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=1 is unset this
+        // stays null and the byte-identical pre-PR send path runs.
+        let streamSink: { chunk(t: string): void; finalize(t: string): Promise<void>; cancel(): Promise<void> } | null = null;
         try {
           const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
@@ -1315,8 +1319,41 @@ async function boot(): Promise<void> {
             }
           }
 
-          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+          // gap #19 — streamed agent loop on Telegram. Opt-in
+          // SUDO_STREAM_CHANNELS=1. Creates a placeholder message that gets
+          // edited in place as `stream-chunk` events fire, then a final
+          // edit with the canonical replyText. Fail-open: sink construction
+          // errors fall through to the normal send path.
+          // Use the real AgentEventHandler signature — `ev.chunk` is non-
+          // optional on the 'stream-chunk' variant of the discriminated
+          // union and the narrow is what we filter on (verifier HIGH #1).
+          let onEvent: import('./core/agent/types.js').AgentEventHandler | undefined;
+          if (process.env['SUDO_STREAM_CHANNELS'] === '1') {
+            try {
+              const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
+              streamSink = await createBufferedEditSink(
+                (placeholder: string) => telegram.sendForStream(msg.peerId, placeholder),
+                (id: string | number, text: string) => telegram.editText(msg.peerId, id, text),
+                // maxChars clamps BEFORE same-text suppression so the sink
+                // and Telegram's 4096-char editMessageText cap agree on the
+                // wire body — preventing duplicate edits whose only delta
+                // is past Telegram's truncation point (verifier HIGH #3).
+                { intervalMs: 800, maxChars: 4080, placeholder: '…', label: `telegram:${msg.peerId}` },
+              );
+              onEvent = (ev) => {
+                if (ev.type === 'stream-chunk') {
+                  streamSink!.chunk(ev.chunk);
+                }
+              };
+            } catch (sinkErr) {
+              log.warn({ err: String(sinkErr) }, 'gap #19: stream sink construction failed — falling back to batched send');
+              streamSink = null;
+              onEvent = undefined;
+            }
+          }
+          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', onEvent, { race: true });
           if (runGenerations.isStale(convKey, runGen)) {
+            if (streamSink) await streamSink.cancel();
             log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
             return;
           }
@@ -1379,9 +1416,28 @@ async function boot(): Promise<void> {
             }
           }
 
-          // Send reply + feedback keyboard (skip for greetings/very short replies)
+          // Send reply + feedback keyboard (skip for greetings/very short replies).
+          // gap #19: when a stream sink is active, finalize it with the canonical
+          // text and send the feedback keyboard as a separate follow-up message
+          // (Telegram cannot attach a reply_markup via editMessageText without
+          // also editing inline-keyboard state — simpler to keep the keyboard
+          // on its own message).
           const isSubstantialReply = (replyText.length > 80);
-          if (isSubstantialReply) {
+          if (streamSink) {
+            await streamSink.finalize(replyText);
+            if (isSubstantialReply) {
+              const { keyboard } = createFeedbackKeyboard(
+                String(session.id),
+                (msg.text ?? replyText).slice(0, 120),
+                'telegram',
+              );
+              try {
+                await telegram.sendWithKeyboard(msg.peerId, '​', keyboard);
+              } catch (kbErr) {
+                log.warn({ err: String(kbErr) }, 'gap #19: feedback keyboard follow-up failed');
+              }
+            }
+          } else if (isSubstantialReply) {
             const { keyboard } = createFeedbackKeyboard(
               String(session.id),
               (msg.text ?? replyText).slice(0, 120),
@@ -1391,10 +1447,16 @@ async function boot(): Promise<void> {
           } else {
             await telegram.send(msg.peerId, replyText);
           }
-          log.info({ peerId: msg.peerId }, 'Reply sent to Telegram');
+          log.info({ peerId: msg.peerId, streamed: streamSink !== null }, 'Reply sent to Telegram');
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
           log.error({ err: errMsg, peerId: msg.peerId }, 'Agent turn failed');
+          // gap #19 — cancel the stream sink before sending the error so
+          // a zombie partial-message stays frozen rather than being
+          // edited again after the error has surfaced (verifier HIGH #2).
+          if (streamSink) {
+            try { await streamSink.cancel(); } catch { /* already-warned */ }
+          }
           // Send decline feedback option
           try {
             const { keyboard } = createFeedbackKeyboard(
