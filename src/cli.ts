@@ -469,6 +469,38 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 4.7 Claude/Cursor ecosystem compat (gap #13)
+  //     (opt-in: SUDO_CLAUDE_COMPAT=1; ingests .mcp.json + Cursor mcp.json,
+  //      Claude settings.json hooks, ~/.claude/skills + <root>/.claude/skills,
+  //      and .claude-plugin/marketplace.json catalog entries. Must run BEFORE
+  //      §9.1 (markdown skill loader) and §8.6+ (skill registry scan), both
+  //      of which read SUDO_SKILLS_DIRS — this section mutates it.)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_CLAUDE_COMPAT'] === '1') {
+    try {
+      const { ingestClaudeCompat } = await import('./core/plugins/claude-compat.js');
+      const compat = await ingestClaudeCompat(hooks, { projectRoot: PROJECT_ROOT });
+      log.info(
+        {
+          mcpRegistered: compat.mcp.registered,
+          mcpSkipped: compat.mcp.skipped,
+          mcpErrors: compat.mcp.errors.length,
+          hooksRegistered: compat.hooks.registered,
+          hooksSkipped: compat.hooks.skipped,
+          hooksErrors: compat.hooks.errors.length,
+          skillRootsAdded: compat.skillRootsAdded.length,
+          marketplacePlugins: compat.marketplacePlugins.length,
+          marketplaceErrors: compat.marketplaceErrors.length,
+        },
+        'Claude/Cursor compat initialized',
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'Claude/Cursor compat failed to initialize — continuing without it');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 5. SessionManager
   // -------------------------------------------------------------------------
   const sessionManager = new SessionManager(db);

@@ -65,6 +65,15 @@ export interface McpServer {
 
 const servers: Map<string, McpServer> = new Map();
 
+/**
+ * Monotonic counter appended to Date.now()-based IDs so back-to-back
+ * registerMcpServer() calls within the same millisecond don't collide on
+ * the Map key (which would silently drop earlier registrations). Without
+ * this, a bulk-ingest flow like Claude/Cursor's .mcp.json (gap #13) loses
+ * all but the last server registered.
+ */
+let registerSeq = 0;
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -89,7 +98,7 @@ export function registerMcpServer(
   if (!name || typeof name !== 'string') throw new Error('McpRegistry: name is required');
   if (!url || typeof url !== 'string') throw new Error('McpRegistry: url is required');
 
-  const id = `mcp-${Date.now()}`;
+  const id = `mcp-${Date.now()}-${++registerSeq}`;
   const server: McpServer = {
     id,
     name,
