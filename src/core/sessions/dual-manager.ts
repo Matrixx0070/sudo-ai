@@ -3,11 +3,20 @@
  * @description DualSessionManager — wraps SessionManager (SQLite primary) and
  * JournalSessionStore (JSONL secondary) behind a single duck-typed interface.
  *
- * Read policy  : primary only — the SQLite store is the authoritative source of truth.
- * Write policy : both stores; primary failure throws; journal failure logs warning only.
+ * Read policy: primary only — the SQLite store is the authoritative source.
  *
- * This lets callers transparently persist sessions to both backends without knowing the
- * underlying stores exist.
+ * Write policy depends on the `crashSafe` constructor flag:
+ *
+ *   - crashSafe:false (default) — primary first (failure throws), then
+ *     journal best-effort (failure logs warning, does not throw). Byte-
+ *     identical to the pre-gap-#17 behaviour.
+ *   - crashSafe:true (gap #17) — journal first WITH fsync (failure throws),
+ *     then primary (failure throws). The slow-but-safe path. Guarantees
+ *     "SQLite never leads JSONL" so a crash between the two writes leaves
+ *     the journal as the more-complete store, recoverable on next boot via
+ *     `scanInterruptedSessions`.
+ *
+ * Lifecycle methods (`archive`) follow the same per-mode contract.
  */
 
 import { createLogger } from '../shared/logger.js';
@@ -18,6 +27,7 @@ import type { JournalSessionStore } from './journal-store.js';
 import type { KeyedAsyncQueue } from './queue.js';
 import type { DmScopeMode } from './manager.js';
 import type { JournalEvent } from './journal-types.js';
+import { fsyncFile } from './crash-safe.js';
 
 const log = createLogger('sessions:dual-manager');
 
@@ -39,16 +49,34 @@ const log = createLogger('sessions:dual-manager');
  * await dual.save(session);
  * ```
  */
+export interface DualSessionManagerOptions {
+  /**
+   * When true (gap #17 crash-safe ordering), `save()` writes the JSONL
+   * journal FIRST with a follow-up fsync, then the SQLite primary. A
+   * crash between the two leaves the journal as the more-complete store,
+   * which the boot-time scanner detects. Default false preserves the
+   * existing SQLite-first ordering byte-identically for callers that have
+   * not asked for the invariant.
+   */
+  crashSafe?: boolean;
+}
+
 export class DualSessionManager {
   private readonly primary: SessionManager;
   private readonly journal: JournalSessionStore;
+  private readonly crashSafe: boolean;
 
-  constructor(primary: SessionManager, journal: JournalSessionStore) {
+  constructor(
+    primary: SessionManager,
+    journal: JournalSessionStore,
+    options: DualSessionManagerOptions = {},
+  ) {
     if (!primary) throw new TypeError('DualSessionManager: primary must not be null');
     if (!journal) throw new TypeError('DualSessionManager: journal must not be null');
     this.primary = primary;
     this.journal = journal;
-    log.info('DualSessionManager initialized');
+    this.crashSafe = options.crashSafe ?? false;
+    log.info({ crashSafe: this.crashSafe }, 'DualSessionManager initialized');
   }
 
   // ---------------------------------------------------------------------------
@@ -69,14 +97,35 @@ export class DualSessionManager {
   // ---------------------------------------------------------------------------
 
   /**
-   * Persist a session.  Writes to primary first (throws on failure), then to
-   * journal (logs warning on failure — never throws).
+   * Persist a session.
+   *
+   * Default ordering (crashSafe:false): primary first (throws on failure),
+   * then journal (logs warning on failure — never throws). Byte-identical
+   * to the pre-gap-#17 behaviour.
+   *
+   * Crash-safe ordering (crashSafe:true): journal first WITH fsync (throws
+   * on failure), then primary (also throws on failure). A crash between
+   * the journal write and the primary write leaves the JSONL as the
+   * more-complete store; the boot-time scanInterruptedSessions detector
+   * surfaces the divergence. Journal failure throws here because in the
+   * crash-safe mode the journal is the authoritative log and we must not
+   * mirror to SQLite something we couldn't durably log.
    */
   async save(session: Session): Promise<void> {
-    // Primary write — failure is fatal
-    await this.primary.save(session);
+    if (this.crashSafe) {
+      // Journal first — fatal on failure (we will NOT mirror to SQLite
+      // anything that did not durably hit the log).
+      await this.journal.save(session);
+      const filePath = this.journal.getFilePath(session.id);
+      if (filePath) fsyncFile(filePath);
 
-    // Journal write — failure is non-fatal
+      // Primary second.
+      await this.primary.save(session);
+      return;
+    }
+
+    // Legacy ordering: primary first, journal best-effort.
+    await this.primary.save(session);
     try {
       await this.journal.save(session);
     } catch (err) {
@@ -85,16 +134,22 @@ export class DualSessionManager {
   }
 
   /**
-   * Archive a session.  Archives on primary first (throws on failure), then on
-   * journal (logs warning on failure — never throws).
+   * Archive a session. Same per-mode contract as save(): crashSafe:true →
+   * journal first (fatal), primary second (fatal); crashSafe:false →
+   * primary first (fatal), journal best-effort (warn-only).
    */
   async archive(sessionId: string): Promise<void> {
     if (!sessionId) throw new TypeError('sessionId must not be empty');
 
-    // Primary archive — failure is fatal
-    await this.primary.archive(sessionId);
+    if (this.crashSafe) {
+      await this.journal.archive(sessionId);
+      const filePath = this.journal.getFilePath(sessionId);
+      if (filePath) fsyncFile(filePath);
+      await this.primary.archive(sessionId);
+      return;
+    }
 
-    // Journal archive — failure is non-fatal
+    await this.primary.archive(sessionId);
     try {
       await this.journal.archive(sessionId);
     } catch (err) {

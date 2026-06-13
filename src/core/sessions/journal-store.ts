@@ -183,23 +183,45 @@ export class JournalSessionStore {
     return index.entries.filter((e) => e.agentId === agentId);
   }
 
+  /**
+   * Absolute path on disk where this session's JSONL lives. Returns
+   * undefined when the session is not in the index. Exposed for crash-safe
+   * callers that need to fsync the file after a write.
+   */
+  getFilePath(sessionId: string): string | undefined {
+    if (!sessionId) return undefined;
+    const entry = findEntry(readIndex(this.indexPath), sessionId);
+    if (!entry) return undefined;
+    const absFile = path.resolve(this.baseDir, entry.file);
+    if (!absFile.startsWith(path.resolve(this.baseDir) + path.sep)) return undefined;
+    return absFile;
+  }
+
+  /** Base directory holding all session JSONL files. */
+  get journalDir(): string {
+    return this.baseDir;
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  /** Synchronously append one JSONL line; updates entry.updatedAt in-place. */
+  /**
+   * Synchronously append one JSONL line; updates entry.updatedAt in-place.
+   * THROWS on write failure (gap #17 — was previously silent, but the
+   * crash-safe path in DualSessionManager relies on save() propagating
+   * disk-full / EACCES so it can refuse to mirror the message to SQLite).
+   * Legacy callers (DualSessionManager.save/appendEvent default path)
+   * already wrap journal calls in try/catch and downgrade to a warn log,
+   * so this stays non-fatal for them.
+   */
   private _writeEvent(entry: SessionIndexEntry, event: JournalEvent): void {
     const absFile = path.resolve(this.baseDir, entry.file);
     if (!absFile.startsWith(path.resolve(this.baseDir) + path.sep)) {
-      log.error({ entry: { file: entry.file } }, 'entry.file escapes baseDir — rejecting');
-      return;
+      throw new Error(`journal: entry.file ${entry.file} escapes baseDir`);
     }
-    try {
-      appendFileSync(absFile, toJsonlLine(event) + '\n', 'utf8');
-      entry.updatedAt = nowIso();
-    } catch (err) {
-      log.error({ sessionId: entry.id, eventType: event.type, err }, '_writeEvent: write failed');
-    }
+    appendFileSync(absFile, toJsonlLine(event) + '\n', 'utf8');
+    entry.updatedAt = nowIso();
   }
 
   /** Reconstruct a Session by replaying the JSONL file. Returns undefined on error. */
