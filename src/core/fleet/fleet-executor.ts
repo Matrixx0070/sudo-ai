@@ -48,6 +48,23 @@ export interface ExecutorAutonomyHandle {
   status(): { state: string; paused: boolean; activeCount: number };
 }
 
+/**
+ * Alignment digest handle the executor needs — gap #28d slice 2.
+ *
+ * Duck-typed against `AlignmentDigestSource.getDigest()` (the same shape
+ * the dashboard's `__sudoAlignment` global uses). The slim wrapper in
+ * cli.ts forwards both consumers to one closure — fleet rollup and the
+ * local dashboard's `/api/alignment` see the exact same snapshot.
+ *
+ * digest() returns `undefined` when the AlignmentAggregator has no report
+ * yet — the executor surfaces that as `failed/alignment_unavailable` so
+ * the admin rollup can distinguish "no digest produced yet" from "device
+ * never ran alignment.digest".
+ */
+export interface ExecutorAlignmentHandle {
+  digest(): { overallScore?: number; signals?: Record<string, number> } | undefined;
+}
+
 /** Options for `startFleetExecutor`. */
 export interface FleetExecutorOptions {
   registrarUrl: string;
@@ -67,6 +84,14 @@ export interface FleetExecutorOptions {
    * cycle is constructed later in boot than the executor).
    */
   autonomy?: ExecutorAutonomyHandle;
+  /**
+   * Alignment digest handle (gap #28d slice 2). The alignment aggregator
+   * is wired into `__sudoAlignment` BEFORE the executor starts, so this
+   * is passed at construct time (no late-bind setter needed — unlike the
+   * autonomy cycle in slice 1). When absent, `alignment.digest` commands
+   * return `failed/alignment_not_enabled`.
+   */
+  alignment?: ExecutorAlignmentHandle;
   /** Long-poll wait seconds. Clamped server-side to [0, 60]. */
   waitSeconds?: number;
   /** Backoff jitter base, ms. Default 5000. */
@@ -94,6 +119,12 @@ export interface FleetExecutorHandle {
    * detach (e.g. on autonomy shutdown). Idempotent.
    */
   setAutonomy(handle: ExecutorAutonomyHandle | undefined): void;
+  /**
+   * Hot-swap the alignment handle (gap #28d slice 2). cli.ts wires this at
+   * construct time today, but the setter keeps the API symmetric with
+   * setAutonomy() and lets future callers detach on subsystem shutdown.
+   */
+  setAlignment(handle: ExecutorAlignmentHandle | undefined): void;
 }
 
 /** Start the long-poll loop. Returns immediately with a handle. */
@@ -108,6 +139,10 @@ export function startFleetExecutor(opts: FleetExecutorOptions): FleetExecutorHan
   let consecutiveErrors = 0;
   // Mutable so setAutonomy() can late-bind / detach after start.
   let autonomy: ExecutorAutonomyHandle | undefined = opts.autonomy;
+  // Same hot-swap pattern as autonomy: cli.ts wires alignment at construct
+  // time today (slice 2), but a setter keeps the API symmetric and lets
+  // future callers detach on alignment subsystem shutdown.
+  let alignment: ExecutorAlignmentHandle | undefined = opts.alignment;
 
   async function loopBody(): Promise<void> {
     while (!stopping) {
@@ -120,10 +155,10 @@ export function startFleetExecutor(opts: FleetExecutorOptions): FleetExecutorHan
           continue;
         }
         consecutiveErrors = 0;
-        // Got a command. Run + report. Both handles are read fresh on each
-        // dispatch so late-bound autonomy via setAutonomy() takes effect on
-        // the very next admin command.
-        const result = await runCommand(cmd, opts.brain, autonomy);
+        // Got a command. Run + report. All handles are read fresh on each
+        // dispatch so late-bound autonomy via setAutonomy() (or alignment
+        // via setAlignment()) takes effect on the very next admin command.
+        const result = await runCommand(cmd, opts.brain, autonomy, alignment);
         await postResult(cmd.commandId, result);
       } catch (err) {
         if (stopping) break;
@@ -201,14 +236,18 @@ export function startFleetExecutor(opts: FleetExecutorOptions): FleetExecutorHan
     setAutonomy(handle: ExecutorAutonomyHandle | undefined): void {
       autonomy = handle;
     },
+    setAlignment(handle: ExecutorAlignmentHandle | undefined): void {
+      alignment = handle;
+    },
   };
 }
 
 /**
- * Run a single command against the local brain/autonomy handles.
+ * Run a single command against the local brain/autonomy/alignment handles.
  *
  * - `model.{get,set}` — gap #28c slice 2 (brain-backed)
  * - `autonomy.{pause,resume,status}` — gap #28d slice 1 (autonomy-backed)
+ * - `alignment.digest` — gap #28d slice 2 (alignment-aggregator-backed)
  *
  * Unknown kinds return `failed/unsupported_kind:<k>` rather than throwing
  * so the admin sees the error rather than the executor's outer backoff loop
@@ -218,6 +257,7 @@ export async function runCommand(
   cmd: { commandId: string; kind: string; args?: Record<string, unknown> },
   brain: ExecutorBrainHandle | undefined,
   autonomy?: ExecutorAutonomyHandle,
+  alignment?: ExecutorAlignmentHandle,
 ): Promise<CommandResult> {
   try {
     if (cmd.kind === 'model.get') {
@@ -244,6 +284,22 @@ export async function runCommand(
     if (cmd.kind === 'autonomy.status') {
       if (!autonomy) return { status: 'failed', error: 'autonomy_not_enabled' };
       return { status: 'completed', result: autonomy.status() };
+    }
+    if (cmd.kind === 'alignment.digest') {
+      if (!alignment) return { status: 'failed', error: 'alignment_not_enabled' };
+      const d = alignment.digest();
+      // No report produced yet — distinct from "no handle" so admin rollup
+      // can show "device awaiting first alignment turn" vs. "device opted
+      // out of alignment".
+      if (d === undefined) return { status: 'failed', error: 'alignment_unavailable' };
+      return {
+        status: 'completed',
+        result: {
+          overallScore: d.overallScore ?? 0,
+          signals: d.signals ?? {},
+          at: new Date().toISOString(),
+        },
+      };
     }
     return { status: 'failed', error: `unsupported_kind:${cmd.kind}` };
   } catch (err) {
