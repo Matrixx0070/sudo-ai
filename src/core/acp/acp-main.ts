@@ -34,8 +34,11 @@ import { ConfigLoader } from '../config/loader.js';
 import { Brain } from '../brain/brain.js';
 import { JsonRpcConnection } from './jsonrpc.js';
 import { AcpServer } from './acp-server.js';
+import path from 'node:path';
 import { BrainAcpBackend, type AcpBackendOptions } from './brain-backend.js';
 import { makeJsonRpcClientFacade } from './client-facade.js';
+import { SessionStore } from './session-store.js';
+import { DATA_DIR } from '../shared/paths.js';
 import { buildAcpToolHost } from './tools/index.js';
 import type { RequestPermissionParams, RequestPermissionResult } from './types.js';
 
@@ -53,8 +56,17 @@ export async function runAcpServer(): Promise<void> {
   const version = process.env['npm_package_version'] ?? '0.0.0';
   const model = process.env['SUDO_ACP_MODEL'] || undefined;
   const toolsEnabled = process.env['SUDO_ACP_TOOLS'] !== '0';
+  const sessionStoreEnabled = process.env['SUDO_ACP_PERSIST'] !== '0';
 
   const conn = new JsonRpcConnection(process.stdin, process.stdout);
+
+  // Slice 4: per-session JSON store under <DATA_DIR>/acp-sessions/. Enabling
+  // this lights up `session/load` and survives process restarts. Disabled via
+  // SUDO_ACP_PERSIST=0 for editors that don't want disk persistence (the
+  // store is also harmless: it falls back to in-memory if writes fail).
+  const sessionStore = sessionStoreEnabled
+    ? new SessionStore({ baseDir: path.join(DATA_DIR, 'acp-sessions') })
+    : undefined;
 
   // Build the curated fs/terminal tool host over the ACP client facade.
   // Permission round-trips reach the client via server.requestPermission(...)
@@ -65,6 +77,7 @@ export async function runAcpServer(): Promise<void> {
   let server: AcpServer | undefined;
   const backendOptions: AcpBackendOptions = {
     ...(model ? { model } : {}),
+    ...(sessionStore ? { sessionStore } : {}),
   };
   if (toolsEnabled) {
     // Build the facade + host lazily so SUDO_ACP_TOOLS=0 reverts to the

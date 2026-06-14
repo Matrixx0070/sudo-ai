@@ -102,6 +102,12 @@ export interface AgentMessageChunkUpdate {
   content: TextContentBlock;
 }
 
+/** A user message chunk — used during `session/load` replay (slice 4). */
+export interface UserMessageChunkUpdate {
+  sessionUpdate: 'user_message_chunk';
+  content: TextContentBlock;
+}
+
 /** Free-form internal reasoning the agent wants the client to render distinctly. */
 export interface ThoughtUpdate {
   sessionUpdate: 'thought';
@@ -156,6 +162,7 @@ export interface ToolCallUpdateUpdate {
 
 export type SessionUpdate =
   | AgentMessageChunkUpdate
+  | UserMessageChunkUpdate
   | ThoughtUpdate
   | ToolCallUpdate
   | ToolCallUpdateUpdate;
@@ -307,3 +314,21 @@ export interface TerminalReleaseParams {
 }
 
 export type TerminalReleaseResult = EmptyAcpResult;
+
+// ---------------------------------------------------------------------------
+// session/load (request: client → agent, slice 4)
+//
+// The client asks the agent to load a previously-persisted session. The agent
+// replays the session history as `session/update` notifications so the client
+// can rebuild its UI, then returns success.
+// ---------------------------------------------------------------------------
+
+export interface LoadSessionParams {
+  sessionId: string;
+  /** Optional cwd hint from the client. */
+  cwd?: string;
+  /** Optional MCP server array, mirroring session/new. */
+  mcpServers?: unknown[];
+}
+
+export type LoadSessionResult = EmptyAcpResult;

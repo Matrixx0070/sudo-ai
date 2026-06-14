@@ -39,7 +39,9 @@ import type {
   PermissionOption,
   RequestPermissionParams,
   RequestPermissionResult,
+  SessionUpdate,
 } from './types.js';
+import type { SessionStore, StoredMessage, StoredSession } from './session-store.js';
 
 /** Minimal slice of Brain.stream() this backend depends on. */
 export interface AcpBrain {
@@ -124,6 +126,12 @@ export interface AcpBackendOptions {
   model?: string;
   /** When set, tool dispatch + permission round-trip is enabled (slice 2). */
   tools?: AcpBackendToolsOptions;
+  /**
+   * When set, the backend persists per-session histories after each prompt
+   * turn and `loadSession()` becomes meaningful (slice 4). The server uses
+   * the presence of this option to advertise `agentCapabilities.loadSession`.
+   */
+  sessionStore?: SessionStore;
 }
 
 /** Bound per-session history (FIFO trim on overflow). */
@@ -167,6 +175,9 @@ export class BrainAcpBackend implements AcpBackend {
   private readonly brain: AcpBrain;
   private readonly model: string | undefined;
   private readonly tools: AcpBackendToolsOptions | undefined;
+  private readonly sessionStore: SessionStore | undefined;
+  /** ISO timestamp of first persist per session — used to fill `createdAt`. */
+  private readonly sessionCreatedAt = new Map<string, string>();
 
   // Permission cache keyed by (sessionId, toolName) — populated when the client
   // returns `allow_always`. `reject_always` is also remembered so the agent
@@ -178,12 +189,86 @@ export class BrainAcpBackend implements AcpBackend {
     this.brain = brain;
     this.model = options.model;
     this.tools = options.tools;
+    this.sessionStore = options.sessionStore;
   }
 
   createSession(_params: NewSessionParams): string {
     const id = `acp_${randomUUID()}`;
     this.histories.set(id, []);
+    this.sessionCreatedAt.set(id, new Date().toISOString());
     return id;
+  }
+
+  /** True when a SessionStore is wired — drives the server's loadSession capability advert. */
+  supportsLoadSession(): boolean {
+    return this.sessionStore !== undefined;
+  }
+
+  /**
+   * Load a previously-persisted session from disk and replay its history as
+   * `session/update` notifications so the client can rebuild its UI
+   * (gap #26 slice 4).
+   *
+   * Returns `true` on success, `false` when the session is unknown to the
+   * store. Throws only on a malformed sessionId (caller maps that to
+   * `InvalidParams`).
+   *
+   * Replay scope: text-only — `user_message_chunk` + `agent_message_chunk`.
+   * Tool calls embedded in the assistant text remain as raw text per the
+   * slice 2 wire format; clients can re-parse them client-side. Replaying
+   * structured `tool_call` + `tool_call_update` notifications keyed by
+   * stable ids is a future slice (requires storing the call envelope, not
+   * just the resulting text).
+   */
+  async loadSession(args: {
+    sessionId: string;
+    emit?: (update: SessionUpdate) => void;
+  }): Promise<boolean> {
+    const store = this.sessionStore;
+    if (!store) return false;
+    const record = await store.load(args.sessionId);
+    if (!record) return false;
+
+    this.histories.set(args.sessionId, record.messages.map((m) => ({ role: m.role, content: m.content })));
+    this.sessionCreatedAt.set(args.sessionId, record.createdAt);
+
+    if (args.emit) {
+      for (const m of record.messages) {
+        if (m.role === 'user') {
+          args.emit({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: m.content } });
+        } else if (m.role === 'assistant') {
+          args.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: m.content } });
+        }
+        // Tool messages are not replayed as structured updates this slice —
+        // the model still sees them in the next stream pass via history.
+      }
+    }
+
+    return true;
+  }
+
+  /** Persist the in-memory history for one session. No-op without a store. */
+  private async persist(sessionId: string): Promise<void> {
+    const store = this.sessionStore;
+    if (!store) return;
+    const history = this.histories.get(sessionId);
+    if (!history) return;
+    const now = new Date().toISOString();
+    const createdAt = this.sessionCreatedAt.get(sessionId) ?? now;
+    const record: StoredSession = {
+      version: 1,
+      sessionId,
+      createdAt,
+      updatedAt: now,
+      messages: history.map((m): StoredMessage => ({ role: m.role, content: m.content })),
+    };
+    try {
+      await store.save(record);
+    } catch {
+      // Persistence failures should never break the conversation — the
+      // in-memory history is still authoritative. A future slice can
+      // surface this via a hook event.
+    }
   }
 
   async prompt(args: {
@@ -256,6 +341,8 @@ export class BrainAcpBackend implements AcpBackend {
       history.splice(0, history.length - MAX_HISTORY_MESSAGES);
     }
     this.histories.set(args.sessionId, history);
+    // Best-effort persist after the turn. See persist() for failure posture.
+    await this.persist(args.sessionId);
     return stopReason;
   }
 
