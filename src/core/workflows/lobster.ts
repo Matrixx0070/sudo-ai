@@ -27,6 +27,18 @@ const log = createLogger('workflows');
 
 const WORKFLOWS_BASE = path.join(WORKSPACE_DIR, 'workflows');
 
+/**
+ * Resolve a step's stdin, expanding the `{{prev}}` placeholder to the previous
+ * completed step's stdout. Shared by shell and tool step execution.
+ */
+function resolveStdin(step: WorkflowStep, completedSteps: StepResult[]): string | undefined {
+  if (step.stdin === '{{prev}}') {
+    const prev = completedSteps[completedSteps.length - 1];
+    return prev?.stdout ?? '';
+  }
+  return step.stdin;
+}
+
 // ---------------------------------------------------------------------------
 // Re-export all public types so downstream consumers only import from here
 // ---------------------------------------------------------------------------
@@ -37,6 +49,8 @@ export type {
   StepResult,
   WorkflowRunState,
   RunOptions,
+  ToolStepResult,
+  ToolStepExecutor,
 } from './types.js';
 
 import type {
@@ -45,6 +59,7 @@ import type {
   StepResult,
   WorkflowRunState,
   RunOptions,
+  ToolStepResult,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -150,7 +165,7 @@ export async function runWorkflow(
   workflow: Workflow,
   options: RunOptions = {},
 ): Promise<WorkflowRunState> {
-  const { resumeState, approvalCallback } = options;
+  const { resumeState, approvalCallback, toolExecutor } = options;
 
   const runState: WorkflowRunState = resumeState
     ? {
@@ -161,6 +176,7 @@ export async function runWorkflow(
         // duplicate StepResult is appended for the resumed step.
         completedSteps: resumeState.completedSteps.filter((s) => s.status !== 'awaiting_approval'),
         pendingStepIndex: undefined,
+        pendingStepId: undefined,
         resumeToken: undefined,
       }
     : {
@@ -214,6 +230,7 @@ export async function runWorkflow(
       if (!approved) {
         const token = randomUUID();
         runState.pendingStepIndex = i;
+        runState.pendingStepId = step.id;
         runState.resumeToken = token;
         runState.completedSteps.push({ id: step.id, status: 'awaiting_approval', durationMs: 0 });
         log.info({ stepId: step.id, resumeToken: token }, 'Workflow paused — awaiting approval');
@@ -229,26 +246,50 @@ export async function runWorkflow(
     const t0 = Date.now();
 
     if (step.type === 'tool') {
-      log.info({ stepId: step.id, command: step.command }, 'Tool execution not wired yet');
-      runState.completedSteps.push({
+      // Tool steps dispatch through the host registry via the injected
+      // toolExecutor. Without one the step fails HONESTLY — never a silent
+      // fake success (the engine has no tool access on its own).
+      if (!toolExecutor) {
+        runState.completedSteps.push({
+          id: step.id,
+          status: 'failure',
+          stdout: '',
+          stderr: 'tool-type step requires a tool executor; run this workflow via meta.run-workflow',
+          exitCode: 1,
+          durationMs: Date.now() - t0,
+        });
+        log.warn({ stepId: step.id }, 'Tool step with no executor — failing honestly');
+        break;
+      }
+
+      const toolStdin = resolveStdin(step, runState.completedSteps);
+      let outcome: ToolStepResult;
+      try {
+        outcome = await toolExecutor(step, toolStdin);
+      } catch (err) {
+        outcome = { success: false, stderr: err instanceof Error ? err.message : String(err) };
+      }
+
+      const toolResult: StepResult = {
         id: step.id,
-        status: 'success',
-        stdout: '',
-        stderr: '',
-        exitCode: 0,
+        status: outcome.success ? 'success' : 'failure',
+        stdout: outcome.stdout ?? '',
+        stderr: outcome.stderr ?? '',
+        exitCode: outcome.success ? 0 : 1,
         durationMs: Date.now() - t0,
-      });
+      };
+      log.info({ stepId: step.id, status: toolResult.status }, 'Tool step completed');
+      runState.completedSteps.push(toolResult);
+
+      if (toolResult.status === 'failure') {
+        log.warn({ stepId: step.id }, 'Tool step failed — halting workflow');
+        break;
+      }
       continue;
     }
 
     // Resolve stdin piping
-    let stdinData: string | undefined;
-    if (step.stdin === '{{prev}}') {
-      const prev = runState.completedSteps[runState.completedSteps.length - 1];
-      stdinData = prev?.stdout ?? '';
-    } else if (step.stdin !== undefined) {
-      stdinData = step.stdin;
-    }
+    const stdinData = resolveStdin(step, runState.completedSteps);
 
     log.info({ stepId: step.id, command: step.command }, 'Executing step');
 
