@@ -228,7 +228,7 @@ export function registerRoutes(
     return;
   }
   handleAdminPost(req, res, server, config, pathname).catch((err: unknown) => {
-    log.warn({ pathname, err: err instanceof Error ? err.message : String(err) }, 'Admin POST rejected');
+    log.warn({ pathname, err: err instanceof Error ? err.message : String(err), msg: 'Admin POST rejected' });
     if (!res.headersSent) sendJson(res, 500, { error: 'internal_error' });
   });
 }
