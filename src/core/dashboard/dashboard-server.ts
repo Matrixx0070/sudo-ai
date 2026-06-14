@@ -32,6 +32,7 @@ import {
   DashboardBindMode,
   FleetRegistrarSource,
   FleetCommandQueueSource,
+  FederationStateSource,
 } from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
 import { listCredentialsMetadata, type CredentialsSnapshot } from './credentials-meta.js';
@@ -120,6 +121,15 @@ interface SudoRuntimeGlobals {
     issue(deviceId: string): { nonce: string; expiresAtMs: number };
     consume(deviceId: string, nonce: string): boolean;
   };
+  /**
+   * Gap #28d slice 3 — federation state aggregator. cli.ts wires this in
+   * §6.4h (after PeerRegistry + AuditChainSync) and again after
+   * FederationTokenPool boots in §9.5; the `/api/admin/federation/state`
+   * route reads the latest snapshot. Absent ↔ federation subsystem
+   * didn't boot (no DATA_DIR, no peers configured) — the route returns
+   * a 503 with `federation_not_enabled` in that case.
+   */
+  __sudoFederation?: FederationStateSource;
 }
 const runtimeGlobals = globalThis as SudoRuntimeGlobals;
 
@@ -135,6 +145,8 @@ export function registerDashboardGlobals(parts: {
   fleetRegistrar?: FleetRegistrarSource;
   fleetCommandQueue?: FleetCommandQueueSource;
   fleetNonceStore?: { issue(deviceId: string): { nonce: string; expiresAtMs: number }; consume(deviceId: string, nonce: string): boolean };
+  /** Gap #28d slice 3 — federation state aggregator. */
+  federation?: FederationStateSource;
 }): void {
   if (parts.brain !== undefined) runtimeGlobals.__sudoBrain = parts.brain;
   if (parts.gateway !== undefined) runtimeGlobals.__sudoGateway = parts.gateway;
@@ -146,6 +158,7 @@ export function registerDashboardGlobals(parts: {
   if (parts.fleetRegistrar !== undefined) runtimeGlobals.__sudoFleetRegistrar = parts.fleetRegistrar;
   if (parts.fleetCommandQueue !== undefined) runtimeGlobals.__sudoFleetCommandQueue = parts.fleetCommandQueue;
   if (parts.fleetNonceStore !== undefined) runtimeGlobals.__sudoFleetNonceStore = parts.fleetNonceStore;
+  if (parts.federation !== undefined) runtimeGlobals.__sudoFederation = parts.federation;
 }
 
 /** Slice 4 — look up the registered nonce store. */
@@ -160,6 +173,15 @@ export function getRegisteredFleetNonceStore(): typeof runtimeGlobals.__sudoFlee
  */
 export function getRegisteredFleetRegistrar(): FleetRegistrarSource | undefined {
   return runtimeGlobals.__sudoFleetRegistrar;
+}
+
+/**
+ * Gap #28d slice 3 — look up the registered federation-state aggregator.
+ * Used by `/api/admin/federation/state`; returns `undefined` when the
+ * federation subsystem (PeerRegistry + AuditChainSync) didn't boot.
+ */
+export function getRegisteredFederation(): FederationStateSource | undefined {
+  return runtimeGlobals.__sudoFederation;
 }
 
 /** Returns the registered AuthBackend, or `undefined` to fall back to built-in Bearer logic. */

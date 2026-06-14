@@ -248,6 +248,62 @@ export interface FleetCommandQueueSource {
   latestCompletedByKindPerDevice?(kind: string): FleetCommandRow[];
 }
 
+// ---------------------------------------------------------------------------
+// Federation state (gap #28d slice 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The federation-state snapshot the admin URL exposes at
+ * `/api/admin/federation/state`. Aggregates PeerRegistry +
+ * AuditChainSync + FederationTokenPool reads into a single read-only
+ * response — operators see the whole federation in one shot rather than
+ * grepping logs.
+ *
+ * **Secret discipline.** Two fields in the underlying types carry
+ * secrets — `PeerConfig.token` (peer-side auth bearer) and the encrypted
+ * `FederationTokenWithDecrypted.token`. Neither appears here. The
+ * projected `peers[]` entries are `{name, url}` only; tokens are
+ * surfaced as counts, never as values. Any future field added to this
+ * shape that REQUIRES sensitive data must justify the leak — the safe
+ * default is to keep it out.
+ */
+export interface FederationState {
+  /**
+   * True iff the federation subsystem booted cleanly (PeerRegistry +
+   * AuditChainSync wired in §6.4h). When false the other fields are
+   * still safe to read but every count is zero / list is empty.
+   */
+  enabled: boolean;
+  /** SUDO_INSTANCE_ID or `${hostname}-${pid}` fallback (matches §6.4h). */
+  instanceId: string;
+  /** Peers from PeerRegistry.getPeers() with `token` stripped. */
+  peers: Array<{ name: string; url: string }>;
+  /** AuditChainSync inbound-event observation window. */
+  audit: {
+    inboundEventCount: number;
+    lastInboundTs: number | null;
+    /** ISO-8601 derived from lastInboundTs for human-readable rendering. */
+    lastInboundIso: string | null;
+  };
+  /**
+   * FederationTokenPool aggregate counts. Individual token IDs are
+   * intentionally omitted — operators who need them have `listTokens()`
+   * via the gateway's federation-token-pool endpoint. The admin URL's
+   * job is a fleet-wide health picture, not credential management.
+   */
+  tokens: {
+    totalCount: number;
+    activeCount: number;
+    /** Provider → count of active tokens (e.g. `{openai: 3, anthropic: 1}`). */
+    byProvider: Record<string, number>;
+  };
+}
+
+/** Provider of federation state for the admin URL. */
+export interface FederationStateSource {
+  getState(): FederationState;
+}
+
 /** Row shape returned by FleetCommandQueueSource — wire-format-adjacent. */
 export interface FleetCommandRow {
   commandId: string;

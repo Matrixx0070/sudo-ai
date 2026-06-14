@@ -29,6 +29,7 @@ import {
   checkHostHeader,
   getRegisteredFleetRegistrar,
   getRegisteredFleetNonceStore,
+  getRegisteredFederation,
   type DashboardServer,
 } from './dashboard-server.js';
 import type { DashboardConfig } from './dashboard-types.js';
@@ -90,6 +91,10 @@ const ADMIN_GET_ROUTES: ReadonlySet<string> = new Set([
   // latest completed `alignment.digest` row per device from the command
   // queue + joins against RegistryStore for a missing/reported split.
   '/api/admin/fleet/alignment',
+  // Gap #28d slice 3 — federation state aggregator. Reads PeerRegistry +
+  // AuditChainSync + FederationTokenPool through the `__sudoFederation`
+  // global, redacts peer tokens, exposes only counts for FederationTokenPool.
+  '/api/admin/federation/state',
 ]);
 /** POST-only admin mutation routes (#28b slice 1) — Bearer-gated AND opt-in. */
 const POST_ROUTES: ReadonlySet<string> = new Set([
@@ -601,6 +606,40 @@ export async function registerRoutes(
         reported,
         missing,
       });
+      return;
+    }
+    if (pathname === '/api/admin/federation/state') {
+      // Gap #28d slice 3 — federation state aggregator.
+      //
+      // The handler is intentionally thin: cli.ts wires the
+      // FederationStateSource with the live PeerRegistry +
+      // AuditChainSync + FederationTokenPool reads, and pre-redacts
+      // PeerConfig.token before it ever reaches this surface. We
+      // re-validate the shape here defensively — a future federation
+      // refactor that accidentally leaks a token field would be caught
+      // by the FederationState type shape, but a runtime check costs
+      // nothing and protects the admin URL specifically.
+      const federation = getRegisteredFederation();
+      if (!federation) {
+        sendJson(res, 503, {
+          error: 'federation_not_enabled',
+          hint: 'Federation requires DATA_DIR + peer config (see §6.4h)',
+        });
+        return;
+      }
+      let state: ReturnType<typeof federation.getState>;
+      try {
+        state = federation.getState();
+      } catch (err) {
+        // The source closure aggregates three subsystems; any of them
+        // could throw under boot races. Surface as 500 with a stable
+        // error code rather than letting the outer catch produce a
+        // generic 'internal_error'.
+        log.warn({ err: err instanceof Error ? err.message : String(err), msg: 'federation state aggregation threw' });
+        sendJson(res, 500, { error: 'federation_state_aggregation_failed' });
+        return;
+      }
+      sendJson(res, 200, state);
       return;
     }
     // Unreachable — pathname was vetted by `isKnownGet || isKnownAdminGet`
