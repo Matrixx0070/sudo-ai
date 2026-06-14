@@ -88,12 +88,15 @@ const POST_ROUTES: ReadonlySet<string> = new Set([
  * a real Authorization header so the token never ends up in server access
  * logs, browser history, referrer headers, or shell history.
  */
-function authenticateRequest(
+async function authenticateRequest(
   req: IncomingMessage,
   server: DashboardServer,
   opts: { allowQueryToken: boolean },
-): { ok: true; principal: string } | { ok: false; reason: string } {
-  return server.getAuthBackend().authenticate(req, opts);
+): Promise<{ ok: true; principal: string } | { ok: false; reason: string }> {
+  // The interface allows sync `AuthResult` OR `Promise<AuthResult>` (slice 4
+  // widening for OAuth). `await` collapses both cases — sync backends pay no
+  // measurable overhead because the microtask hop is a single V8 frame.
+  return await server.getAuthBackend().authenticate(req, opts);
 }
 
 /** Send JSON response. */
@@ -156,13 +159,22 @@ function actorFor(req: IncomingMessage, principal: string): string {
   return `dashboard:${principal}:${remote}`;
 }
 
-/** Route handler registration. */
-export function registerRoutes(
+/**
+ * Route handler registration. Async since slice 4 — OAuth/JWT backends can
+ * verify RS256 signatures via `crypto.verify`, which is callback-/promise-
+ * based when used with PEM-encoded keys. Sync Bearer auth keeps working
+ * because `await Promise.resolve(syncResult)` collapses in one microtask.
+ *
+ * Callers (DashboardServer.start, tests) must handle the returned Promise —
+ * they may either `.catch(...)` rejections or simply ignore the Promise (the
+ * function itself returns 500 on any internal throw before resolving).
+ */
+export async function registerRoutes(
   req: IncomingMessage,
   res: ServerResponse,
   server: DashboardServer,
   config: DashboardConfig
-): void {
+): Promise<void> {
   // Step 0a: Host-header allowlist (DNS-rebinding defense, slice 2). Applies
   // to ALL paths including the unauthenticated HTML root — if an attacker
   // tricks a victim browser into resolving `evil.com → 127.0.0.1`, the Host
@@ -234,10 +246,12 @@ export function registerRoutes(
     // try/catch defends against a misbehaving custom AuthBackend throwing
     // out of `authenticate`. A throwing backend must not fall through to
     // the top-level 500 handler — treat throw as a denial.
-    let authResult: ReturnType<typeof authenticateRequest>;
+    let authResult: Awaited<ReturnType<typeof authenticateRequest>>;
     try {
-      authResult = authenticateRequest(req, server, { allowQueryToken: isAnyGet && !isKnownPost });
+      authResult = await authenticateRequest(req, server, { allowQueryToken: isAnyGet && !isKnownPost });
     } catch (err: unknown) {
+      // Sync throw OR rejected Promise from a misbehaving backend — both
+      // bubble through the same `await` and collapse to a denial.
       log.warn({ err: err instanceof Error ? err.message : String(err), msg: 'AuthBackend threw — treating as denial' });
       sendJson(res, 401, { error: 'Unauthorized' });
       return;

@@ -2595,6 +2595,68 @@ async function boot(): Promise<void> {
     // network callers can't skip).
     const loopbackTrust = bindMode === 'loopback' && !insecureOptIn;
 
+    // Slice 4 — pluggable OAuth/JWT backend selection via SUDO_DASHBOARD_AUTH.
+    // `basic` (default) preserves slice-2 Bearer + ?token semantics. `nous` and
+    // `self-hosted` wire JWT verification against a configured IdP (Hermes
+    // parity: plugins/dashboard_auth/{nous,self_hosted}/). Missing/invalid
+    // config does NOT crash boot — we log and fall back to basic so a
+    // misconfigured op env can never lock the operator out of the panel.
+    let oauthBackend: import('./core/dashboard/dashboard-server.js').AuthBackend | undefined;
+    const authMode = (process.env['SUDO_DASHBOARD_AUTH'] ?? 'basic').toLowerCase();
+    if (authMode !== 'basic') {
+      try {
+        const { createNousAuthBackend, createSelfHostedAuthBackend } =
+          await import('./core/dashboard/dashboard-server.js');
+        const algorithmRaw = (process.env['SUDO_DASHBOARD_OAUTH_ALG'] ?? 'RS256').toUpperCase();
+        if (algorithmRaw !== 'HS256' && algorithmRaw !== 'RS256') {
+          throw new Error(`unsupported SUDO_DASHBOARD_OAUTH_ALG=${algorithmRaw} (must be HS256 or RS256)`);
+        }
+        const algorithm = algorithmRaw as 'HS256' | 'RS256';
+        const hmacSecret = process.env['SUDO_DASHBOARD_OAUTH_HMAC_SECRET'];
+        const publicKeyPem = process.env['SUDO_DASHBOARD_OAUTH_PUBLIC_KEY_PEM'];
+        // PEM via env supports both inline PEM and a `\n`-escaped one-line
+        // form (common in docker-compose env files). Replace literal `\n`
+        // with newlines when no real newline exists in the value.
+        const publicKeyPemNormalized = publicKeyPem !== undefined && !publicKeyPem.includes('\n')
+          ? publicKeyPem.replace(/\\n/g, '\n')
+          : publicKeyPem;
+        const expectedIssuer = process.env['SUDO_DASHBOARD_OAUTH_ISSUER'];
+        const expectedAudience = process.env['SUDO_DASHBOARD_OAUTH_AUDIENCE'];
+        const requiredScope = process.env['SUDO_DASHBOARD_OAUTH_REQUIRED_SCOPE'];
+        const sharedOpts = {
+          algorithm,
+          ...(hmacSecret ? { hmacSecret } : {}),
+          ...(publicKeyPemNormalized ? { publicKeyPem: publicKeyPemNormalized } : {}),
+          ...(expectedIssuer ? { expectedIssuer } : {}),
+          ...(expectedAudience ? { expectedAudience } : {}),
+          ...(requiredScope ? { requiredScope } : {}),
+        } as const;
+        if (authMode === 'nous') {
+          oauthBackend = createNousAuthBackend(sharedOpts);
+        } else if (authMode === 'self-hosted' || authMode === 'self_hosted') {
+          if (!expectedIssuer) {
+            throw new Error('SUDO_DASHBOARD_AUTH=self-hosted requires SUDO_DASHBOARD_OAUTH_ISSUER');
+          }
+          oauthBackend = createSelfHostedAuthBackend({ ...sharedOpts, expectedIssuer });
+        } else {
+          throw new Error(`unknown SUDO_DASHBOARD_AUTH=${authMode} (expected basic | nous | self-hosted)`);
+        }
+        log.info({
+          mode: authMode,
+          algorithm,
+          issuer: expectedIssuer ?? '(none)',
+          audience: expectedAudience ?? '(none)',
+          requiredScope: requiredScope ?? '(none)',
+        }, 'Dashboard OAuth backend wired (slice 4 — Hermes parity)');
+      } catch (err) {
+        log.warn({
+          err: err instanceof Error ? err.message : String(err),
+          mode: authMode,
+        }, 'OAuth backend wiring failed — falling back to basic Bearer auth');
+        oauthBackend = undefined;
+      }
+    }
+
     registerDashboardGlobals({
       brain,
       // gatewayServer stays null when the gateway failed to start; omit so the
@@ -2619,6 +2681,10 @@ async function boot(): Promise<void> {
       // serve a structured "not_registered" response when the global is missing.
       ...(autoUpdater ? { updater: autoUpdater } : {}),
       ...(auditTrail ? { audit: auditTrail } : {}),
+      // OAuth backend (#28b slice 4). Only registered when an external IdP
+      // is configured AND wiring succeeded; otherwise the dashboard's
+      // default BasicAuthBackend handles auth.
+      ...(oauthBackend ? { authBackend: oauthBackend } : {}),
     });
 
     initDashboard({
@@ -2637,7 +2703,8 @@ async function boot(): Promise<void> {
       loopbackTrust,
       hostAllowlistSize: hostAllowlist.length,
       adminPowers: process.env['SUDO_ADMIN_POWERS'] === '1',
-    }, 'Observability dashboard wired (SUDO_DASHBOARD_DISABLE=1 to disable; SUDO_ADMIN_POWERS=1 enables mutation endpoints; loopback-trust skips GET auth unless SUDO_DASHBOARD_INSECURE=1)');
+      authMode: oauthBackend ? authMode : 'basic',
+    }, 'Observability dashboard wired (SUDO_DASHBOARD_DISABLE=1 to disable; SUDO_ADMIN_POWERS=1 enables mutation endpoints; loopback-trust skips GET auth unless SUDO_DASHBOARD_INSECURE=1; SUDO_DASHBOARD_AUTH=nous|self-hosted swaps in OAuth/JWT backends)');
   } catch (err) {
     log.warn({ err: String(err) }, 'Dashboard wiring failed (non-fatal)');
   }
