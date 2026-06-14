@@ -257,50 +257,127 @@ export class PlanModeStateMachine {
   // -------------------------------------------------------------------------
   // Tool definitions (for registration with ToolRegistry)
   // -------------------------------------------------------------------------
+  //
+  // These are INSTANCE methods (previously static schema-only stubs) so
+  // each definition can close over `this` and delegate to the live state
+  // machine. `plan_mode.enter` / `plan_mode.exit` are the legacy ALWAYS_
+  // ALLOWED names; gap #18 added `meta.enter-plan-mode` / `meta.exit-
+  // plan-mode` as the equivalent always-on tools wired through the meta
+  // injection pattern. Both surfaces dispatch to the same SM — keeping
+  // the legacy names callable preserves backward compatibility for any
+  // agent/skill that still emits the `plan_mode.*` names.
+  //
+  // Definitions use the flat `parameters: { name: { type, … } }` shape
+  // (matching the rest of the codebase + ToolRegistry), not the JSON-
+  // Schema `properties` shape the old static stubs returned. The
+  // previous schema-only shape would have failed registry validation
+  // even if `getToolDefinitions()` had been called correctly from
+  // loop.ts; this rewrite makes both the call AND the body work.
 
-  /** Tool definition for `enter_plan_mode`. */
-  static getEnterPlanModeTool() {
+  /** Executable tool definition for the legacy `plan_mode.enter` name. */
+  getEnterPlanModeTool(): import('../tools/types.js').ToolDefinition {
+    const sm = this;
     return {
       name: 'plan_mode.enter',
-      description: 'Enter plan mode to draft a structured plan before taking action. Use for complex or irreversible tasks.',
+      description:
+        'Enter plan mode to draft a structured plan before taking action. Use for complex or irreversible tasks. ' +
+        'Equivalent to meta.enter-plan-mode; legacy name kept callable.',
+      category: 'meta' as const,
+      safety: 'readonly',
+      requiresConfirmation: false,
+      timeout: 5_000,
       parameters: {
-        type: 'object' as const,
-        properties: {
-          title: {
-            type: 'string' as const,
-            description: 'Short title for the plan (e.g., "Refactor authentication system")',
-          },
-          steps: {
-            type: 'array' as const,
-            items: {
-              type: 'object' as const,
-              properties: {
-                description: { type: 'string' as const, description: 'What this step does' },
-                files: { type: 'array' as const, items: { type: 'string' as const }, description: 'Files this step will modify' },
-              },
-              required: ['description'] as const,
-            },
-            description: 'Planned steps for the plan',
-          },
+        title: {
+          type: 'string',
+          description: 'Short title for the plan (e.g. "Refactor authentication system").',
         },
-        required: ['title'] as const,
+      },
+      async execute(params, _ctx) {
+        try {
+          if (sm.isActive()) {
+            return {
+              success: false,
+              output: `plan_mode.enter: already in plan mode (state=${sm.getState()}). Use plan_mode.exit first.`,
+            };
+          }
+          const title = typeof params['title'] === 'string' ? (params['title'] as string) : 'Untitled Plan';
+          const plan = sm.enterPlanMode(title);
+          return {
+            success: true,
+            output:
+              `Plan mode entered. Plan id: ${plan.id} ("${plan.title}").\n\n` +
+              'While plan mode is active, ONLY read-only tools will run; destructive tools return plan_mode_blocked. ' +
+              'Investigate, draft, then call plan_mode.exit with `approved: true` to start execution.',
+            data: { planId: plan.id, title: plan.title, state: sm.getState() },
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { success: false, output: `plan_mode.enter: ${msg}` };
+        }
       },
     };
   }
 
-  /** Tool definition for `exit_plan_mode`. */
-  static getExitPlanModeTool() {
+  /** Executable tool definition for the legacy `plan_mode.exit` name. */
+  getExitPlanModeTool(): import('../tools/types.js').ToolDefinition {
+    const sm = this;
     return {
       name: 'plan_mode.exit',
-      description: 'Exit plan mode. If a plan was being drafted, it is finalized. If awaiting approval, the plan is cancelled.',
+      description:
+        'Exit plan mode. Pass `approved: true` to submit + approve (unblocks destructive tools); ' +
+        '`approved: false` or omit to cancel back to normal. Equivalent to meta.exit-plan-mode.',
+      category: 'meta' as const,
+      safety: 'readonly',
+      requiresConfirmation: false,
+      timeout: 5_000,
       parameters: {
-        type: 'object' as const,
-        properties: {
-          approved: {
-            type: 'boolean' as const,
-            description: 'Whether to approve the plan (if in approval state). Default: false (cancel).',
-          },
+        approved: {
+          type: 'boolean',
+          description: 'True to approve immediately and unblock writes; false to cancel back to normal state.',
+          default: false,
         },
+      },
+      async execute(params, _ctx) {
+        try {
+          const initialState = sm.getState();
+          const approved = params['approved'] === true;
+          if (approved) {
+            if (initialState === 'plan_mode') {
+              const sub = sm.submitForApproval();
+              if (sub === null || sm.getState() !== 'plan_approval') {
+                return {
+                  success: false,
+                  output: `plan_mode.exit: submitForApproval refused — state stuck at ${sm.getState()}`,
+                  data: { state: sm.getState(), approved: false },
+                };
+              }
+            }
+            if (sm.getState() === 'plan_approval') {
+              const app = sm.approvePlan();
+              if (app === null || sm.getState() !== 'executing') {
+                return {
+                  success: false,
+                  output: `plan_mode.exit: approvePlan refused — state stuck at ${sm.getState()}`,
+                  data: { state: sm.getState(), approved: false },
+                };
+              }
+            }
+            return {
+              success: true,
+              output: `Plan approved (state ${initialState} → ${sm.getState()}). Destructive tools are now unblocked.`,
+              data: { state: sm.getState(), approved: true },
+            };
+          }
+          sm.exitPlanMode();
+          return {
+            success: true,
+            output: `Plan mode exited (state ${initialState} → ${sm.getState()}). The plan was NOT approved.`,
+            data: { state: sm.getState(), approved: false },
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { success: false, output: `plan_mode.exit: ${msg}` };
+        }
       },
     };
   }

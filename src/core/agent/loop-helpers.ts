@@ -93,6 +93,12 @@ export interface ToolRegistryLike {
   getSchemaForLLM(): object[];
   /** Return whether a tool requires user confirmation before execution. */
   requiresConfirmation?(name: string): boolean;
+  /**
+   * Register a tool. Optional because some test/mock registries that
+   * implement only the read-side surface don't need to accept new tools.
+   * Real ToolRegistry instances always supply this.
+   */
+  register?(toolDef: unknown): void;
   // ---- Optional methods consumed by ToolRouter (smart routing) ----
   /** Return all enabled tools whose category matches the given string. */
   getByCategory?(category: string): ToolDescriptor[];

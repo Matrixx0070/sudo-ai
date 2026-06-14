@@ -115,13 +115,19 @@ describe('PlanModeStateMachine', () => {
     expect(plan?.steps[1].status).toBe('completed');
   });
 
-  it('should provide tool definitions', () => {
-    const enterTool = PlanModeStateMachine.getEnterPlanModeTool();
+  it('should provide executable tool definitions from instance methods', () => {
+    // Converted from static schema-only stubs to instance methods that
+    // return executable ToolDefinitions delegating to the SM (audit
+    // pass — "prefer wiring over deleting").
+    const enterTool = machine.getEnterPlanModeTool();
     expect(enterTool.name).toBe('plan_mode.enter');
-    expect(enterTool.parameters.required).toContain('title');
+    expect(typeof enterTool.execute).toBe('function');
+    // Flat ToolRegistry parameter shape (not JSON Schema).
+    expect((enterTool.parameters as Record<string, { type?: string }>)['title']?.type).toBe('string');
 
-    const exitTool = PlanModeStateMachine.getExitPlanModeTool();
+    const exitTool = machine.getExitPlanModeTool();
     expect(exitTool.name).toBe('plan_mode.exit');
+    expect(typeof exitTool.execute).toBe('function');
   });
 
   it('should return state document', () => {

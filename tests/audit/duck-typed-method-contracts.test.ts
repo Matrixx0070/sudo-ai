@@ -58,27 +58,55 @@ describe('ToolRegistry duck-typed methods called via ?.()', () => {
   });
 });
 
-describe('PlanModeStateMachine surface (audit removed dead getToolDefinitions path)', () => {
-  it('enterPlanMode + exitPlanMode + getState exist on the class', () => {
+describe('PlanModeStateMachine surface — legacy plan_mode.* tools properly wired', () => {
+  it('enterPlanMode + exitPlanMode + getState exist on the instance', () => {
     const sm = new PlanModeStateMachine('/tmp');
     expect(typeof sm.enterPlanMode).toBe('function');
     expect(typeof sm.exitPlanMode).toBe('function');
     expect(typeof sm.getState).toBe('function');
   });
 
-  it('does NOT expose getToolDefinitions — the loop.ts dead path was removed', () => {
+  it('getEnterPlanModeTool / getExitPlanModeTool are INSTANCE methods returning executable ToolDefinition', () => {
+    // Per the autonomy mandate "prefer wiring over deleting", the
+    // previous audit deletion of the legacy registration path was
+    // reverted and the static schema-only stubs were converted to
+    // instance methods returning real executable ToolDefinitions.
+    // loop.ts then registers them at boot.
     const sm = new PlanModeStateMachine('/tmp');
-    // The audit removed the `getToolDefinitions?.()` call at loop.ts:586.
-    // The state machine never had this method; executors live in
-    // tools/builtin/meta/plan-mode-tools.ts (gap #18) instead. Pin so
-    // a future addition that introduces `getToolDefinitions` (and
-    // hence assumes someone will call it) gets flagged here too.
-    expect((sm as unknown as Record<string, unknown>).getToolDefinitions).toBeUndefined();
+    expect(typeof sm.getEnterPlanModeTool).toBe('function');
+    expect(typeof sm.getExitPlanModeTool).toBe('function');
+    const enter = sm.getEnterPlanModeTool();
+    const exit = sm.getExitPlanModeTool();
+    expect(enter.name).toBe('plan_mode.enter');
+    expect(exit.name).toBe('plan_mode.exit');
+    expect(typeof enter.execute).toBe('function');
+    expect(typeof exit.execute).toBe('function');
   });
 
-  it('exposes the static schema-only getters (legacy ALWAYS_ALLOWED names)', () => {
-    expect(typeof PlanModeStateMachine.getEnterPlanModeTool).toBe('function');
-    expect(typeof PlanModeStateMachine.getExitPlanModeTool).toBe('function');
+  it('legacy plan_mode.enter executor delegates to the SM (enter → plan_mode state)', async () => {
+    const sm = new PlanModeStateMachine('/tmp');
+    const enter = sm.getEnterPlanModeTool();
+    const r = await enter.execute(
+      { title: 'Audit-driven wire' },
+      { sessionId: 'test', workingDir: '/tmp', config: {}, logger: {} },
+    );
+    expect(r.success).toBe(true);
+    expect(sm.getState()).toBe('plan_mode');
+    // Cleanup so this test doesn't bleed state into the next.
+    sm.exitPlanMode();
+  });
+
+  it('legacy plan_mode.exit (approved:true) walks plan_mode → executing', async () => {
+    const sm = new PlanModeStateMachine('/tmp');
+    sm.enterPlanMode('e2e');
+    const exit = sm.getExitPlanModeTool();
+    const r = await exit.execute(
+      { approved: true },
+      { sessionId: 'test', workingDir: '/tmp', config: {}, logger: {} },
+    );
+    expect(r.success).toBe(true);
+    expect(sm.getState()).toBe('executing');
+    sm.exitPlanMode();
   });
 });
 
