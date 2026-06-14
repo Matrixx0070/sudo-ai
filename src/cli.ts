@@ -2652,6 +2652,35 @@ async function boot(): Promise<void> {
       };
     },
   };
+
+  // Gap #28d slice 3 — federation state aggregator for the admin URL.
+  //
+  // The closure captures the *bindings* of peerRegistryForAuth /
+  // federationDeps / federationTokenPool (all `let` declared in outer
+  // scope), so calls made AFTER §9.5 finishes initialising
+  // federationTokenPool still see the live value. Each request to
+  // `/api/admin/federation/state` re-aggregates — no caching; the
+  // numbers should change as inbound events land.
+  //
+  // Projection logic lives in `federation-state-projector.ts` so the
+  // secret-redaction contract can be unit-tested without booting the
+  // CLI. See its file header for the secret-discipline notes.
+  const { projectFederationState } = await import('./core/federation/federation-state-projector.js');
+  const federationStateSource = {
+    getState: (): import('./core/dashboard/dashboard-types.js').FederationState => {
+      const instanceId = process.env['SUDO_INSTANCE_ID'] || (() => {
+        try { return `${require('node:os').hostname()}-${process.pid}`; }
+        catch { return `unknown-${process.pid}`; }
+      })();
+      return projectFederationState({
+        instanceId,
+        peerRegistry: peerRegistryForAuth ?? undefined,
+        auditChainSync: federationDeps?.auditChainSync,
+        federationTokenPool: federationTokenPool ?? undefined,
+        onError: (err, context) => log.warn({ err: String(err), context }, 'federation projector subsystem threw — surfacing zero counts'),
+      });
+    },
+  };
   try {
     const { initDashboard, shutdownDashboard, registerDashboardGlobals, classifyBind, parseHostAllowlist } =
       await import('./core/dashboard/dashboard-server.js');
@@ -2718,6 +2747,9 @@ async function boot(): Promise<void> {
       // health check honestly reports "not detected".
       gateway: gatewayServer ?? undefined,
       alignment: alignmentDigestSource,
+      // Gap #28d slice 3 — federation state aggregator. Always wired so
+      // the route returns honest `enabled: false` when §6.4h didn't boot.
+      federation: federationStateSource,
       // FleetView source (gap #25 slice 1). multiAgent.getSnapshot() chains
       // through to AgentSwarm.snapshot(). When orchestrator wiring failed in
       // section 5.5, multiAgent is null and the dashboard's getLiveAgents()
