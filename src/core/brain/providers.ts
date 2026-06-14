@@ -144,18 +144,28 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
         log.warn('claude-oauth: no credentials — run `sudo-ai claude-oauth login`');
         return null;
       }
-      log.info('claude-oauth: provider registered (PKCE authToken getter)');
+      log.info('claude-oauth: provider registered (fetch interceptor Bearer)');
       return createAnthropic({
-        authToken: async () => {
-          const live = mgr.getAccessToken();
-          if (live) return live;
-          // Within the refresh buffer — refresh now and read again.
-          await mgr.refreshToken();
-          return mgr.getAccessToken() ?? '';
+        // @ai-sdk/anthropic@3.x stringifies `authToken` via template literal
+        // and spreads `headers` synchronously (so a function-form headers
+        // option collapses to `{}`). Neither path supports live token rotation
+        // at provider-create time. Instead we hand the SDK a sentinel auth
+        // value (so it doesn't throw "no auth") and intercept every outgoing
+        // request via `fetch`, rewriting Authorization with the live token
+        // the manager holds at that moment. Refreshes propagate instantly.
+        authToken: 'OAUTH_PLACEHOLDER_REPLACED_BY_FETCH_INTERCEPTOR',
+        fetch: async (input, init) => {
+          let token = mgr.getAccessToken();
+          if (!token) {
+            await mgr.refreshToken();
+            token = mgr.getAccessToken();
+          }
+          const headers = new Headers(init?.headers);
+          if (token) headers.set('Authorization', `Bearer ${token}`);
+          // Sent to match Claude Code's outbound requests verbatim.
+          headers.set('anthropic-beta', 'oauth-2025-04-20');
+          return globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, headers });
         },
-        // OAuth tokens are rejected by /v1/messages without this beta opt-in
-        // — same header Claude Code sends on every inference call.
-        headers: { 'anthropic-beta': 'oauth-2025-04-20' },
       } as unknown as Parameters<typeof createAnthropic>[0]);
     },
   },
