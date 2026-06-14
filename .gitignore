@@ -136,3 +136,17 @@ internal/misc/json         # duplicate of the above
 /test-data-marketplace/
 /test-data-migrations/
 /test-data-rollbacks/
+# Internal working/strategy docs (2026-06-14) — kept LOCAL on purpose; this is a
+# PUBLIC repo, so the iterative-loop planning/decision/roadmap notes are not
+# published. Root-anchored so any same-named docs under src/ stay trackable.
+/ARCHITECTURE.md
+/ASSUMPTIONS.md
+/CLAUDE.md
+/DECISIONS.md
+/FEATURES.md
+/PROGRESS.md
+/RESUME.md
+/TOOLS.md
+# graphify knowledge-graph output — ~145MB of generated, regenerable artifacts
+/graphify-out/
+/.graphifyignore
