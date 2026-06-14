@@ -54,8 +54,17 @@ export function clearExecBackends(): void {
   registry.clear();
 }
 
-/** The selected backend name (default 'local' = the built-in bwrap path). */
-export function selectExecBackendName(): string {
+/**
+ * The selected backend name (default 'local' = the built-in bwrap path).
+ *
+ * Precedence (gap #27): a per-policy `execBackend` wins over the global
+ * SUDO_EXEC_BACKEND env, which wins over the 'local' default. (The
+ * SUDO_SANDBOX_DISABLE kill-switch is checked earlier, in runInSandbox, and
+ * still takes precedence over all backend selection.)
+ */
+export function selectExecBackendName(policy?: { execBackend?: string }): string {
+  const fromPolicy = policy?.execBackend?.trim().toLowerCase();
+  if (fromPolicy) return fromPolicy;
   return (process.env['SUDO_EXEC_BACKEND'] ?? 'local').trim().toLowerCase() || 'local';
 }
 

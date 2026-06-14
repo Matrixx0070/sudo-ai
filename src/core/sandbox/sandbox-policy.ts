@@ -155,6 +155,15 @@ export function mergePolicy(
         : base.allowedEnvVars
         ? [...base.allowedEnvVars].slice(0, 32)
         : undefined,
+    // Carry execBackend through (override-wins-else-base) — gap #27 per-policy
+    // selection. Must be explicit or a merge silently drops it. execBackend
+    // cannot reduce isolation (unknown/malformed fail-safes to bwrap at dispatch).
+    // NOTE: platform / enableCrossPlatform are intentionally NOT preserved here —
+    // policy.platform drives the non-linux host-exec shim in runInSandbox, so
+    // carrying it through merge would let a policy *data* field drop the local
+    // sandbox. Preserving them safely needs consumer hardening; out of scope for
+    // this slice, so merge continues to drop them as before.
+    execBackend: override.execBackend !== undefined ? override.execBackend : base.execBackend,
   };
 }
 
@@ -213,6 +222,14 @@ export function parsePolicy(raw: unknown): SandboxPolicy {
   const extraWritableBinds = parseBindArray(r['extraWritableBinds'], 'extraWritableBinds');
   const allowedEnvVars = parseStringArray(r['allowedEnvVars']);
 
+  // Per-policy exec backend (gap #27). Untrusted input: accept only a safe TOKEN
+  // SHAPE (lowercase alnum + -/_); anything malformed is dropped so it falls back
+  // to the SUDO_EXEC_BACKEND env / 'local'. The token is NOT checked against the
+  // backend registry here — an unknown-but-valid token fail-safes to bwrap at
+  // dispatch (resolveExecBackend returns null). Cannot disable the sandbox.
+  const ebRaw = typeof r['execBackend'] === 'string' ? r['execBackend'].trim().toLowerCase() : '';
+  const execBackend = ebRaw && /^[a-z0-9][a-z0-9_-]*$/.test(ebRaw) ? ebRaw : undefined;
+
   return {
     enabled,
     network,
@@ -222,6 +239,7 @@ export function parsePolicy(raw: unknown): SandboxPolicy {
     ...(extraReadOnlyBinds !== undefined && { extraReadOnlyBinds }),
     ...(extraWritableBinds !== undefined && { extraWritableBinds }),
     ...(allowedEnvVars !== undefined && { allowedEnvVars }),
+    ...(execBackend !== undefined && { execBackend }),
     // Cross-platform fields
     platform: (r['platform'] as SandboxPolicy['platform']) || DEFAULT_SANDBOX_POLICY.platform,
     enableCrossPlatform: typeof r['enableCrossPlatform'] === 'boolean' ? r['enableCrossPlatform'] : DEFAULT_SANDBOX_POLICY.enableCrossPlatform,
