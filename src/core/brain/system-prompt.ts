@@ -13,6 +13,7 @@ import { PROJECT_ROOT } from '../shared/paths.js';
 import { getPersonaSystemBlock } from './personas.js';
 import { getMoodSystemBlock } from './moods.js';
 import { isPromptCacheEnabled, sortByName, DYNAMIC_BOUNDARY_MARKER } from './prompt-cache-discipline.js';
+import { getCapabilityManifestBody, isCapabilityManifestEnabled } from './capability-manifest.js';
 import type { SystemPromptOptions } from './types.js';
 
 const log = createLogger('brain:system-prompt');
@@ -329,6 +330,14 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
 
   // 9. TOOLS.md
   parts.push(section(toolsContent));
+
+  // 9.25 Tool Capability Manifest — single static block that maps the most
+  // common access mismatches (sandbox vs host repo vs project workspace) to
+  // the right tool. The bot's audit identified the sandbox/host split as the
+  // #4 wall agents repeatedly run into. Opt out with SUDO_CAPABILITY_MANIFEST=0.
+  if (isCapabilityManifestEnabled()) {
+    parts.push(sectionWithHeader('Tool Capability Manifest', getCapabilityManifestBody()));
+  }
 
   // 9.5 REMOTION.md — professional video rendering knowledge
   if (remotionContent) {
