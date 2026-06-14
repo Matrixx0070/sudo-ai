@@ -363,6 +363,13 @@ async function runUnsandboxed(
     const errRaw = error.stderr;
     const stdout = typeof outRaw === 'string' ? outRaw : outRaw ? String(outRaw) : '';
     const stderr = typeof errRaw === 'string' ? errRaw : errRaw ? String(errRaw) : '';
+
+    // Abort → 130, parity with the bwrap + docker paths (an aborted run otherwise
+    // surfaces as a generic exit 1).
+    if (error.code === 'ABORT_ERR' || error.code === 'ERR_ABORT' || signal?.aborted) {
+      return { stdout, stderr: stderr || 'Process aborted', exitCode: 130 };
+    }
+
     const exitCode = exitCodeFromError(error);
     return { stdout, stderr, exitCode };
   }
