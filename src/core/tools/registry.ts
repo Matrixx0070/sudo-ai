@@ -238,6 +238,22 @@ export class ToolRegistry {
   }
 
   /**
+   * Surface a registered tool's `requiresConfirmation` field for the loop
+   * gate at `agent/loop-helpers.ts:675` (gap #20 verifier BLOCKER —
+   * previously this method did not exist, so EVERY `requiresConfirmation:
+   * true` tool was silently executed without prompting; the duck-typed
+   * `toolRegistry.requiresConfirmation?.(name)` invocation short-circuited
+   * to undefined). Returns false for unknown / disabled tools.
+   */
+  requiresConfirmation(name: string): boolean {
+    if (!name) return false;
+    const tool = this.tools.get(name);
+    if (!tool) return false;
+    if (this.disabled.has(name)) return false;
+    return tool.requiresConfirmation === true;
+  }
+
+  /**
    * Attach the plan-mode gate (gap #18). When the gate is set AND
    * `gate.isActive()` returns true at execute() time, destructive tool
    * calls are rejected with a `plan_mode_blocked` ToolError; read-only
