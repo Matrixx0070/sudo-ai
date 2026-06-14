@@ -170,6 +170,24 @@ describe('Brain providers — getModel / getEnvKeyForProvider', () => {
     expect(getEnvKeyForProvider('anthropic')).toBe('ANTHROPIC_API_KEY');
   });
 
+  it('getEnvKeyForProvider is correct for every built-in (registry table is complete + typo-free)', async () => {
+    const { getEnvKeyForProvider } = await import('../../../src/core/brain/providers.js');
+    const expected = {
+      ollama: 'OLLAMA_URL',
+      xai: 'XAI_API_KEY',
+      openai: 'OPENAI_API_KEY',
+      anthropic: 'ANTHROPIC_API_KEY',
+      google: 'GEMINI_API_KEY',
+      groq: 'GROQ_API_KEY',
+      mistral: 'MISTRAL_API_KEY',
+      deepseek: 'DEEPSEEK_API_KEY',
+      together: 'TOGETHER_API_KEY',
+    } as const;
+    for (const [provider, key] of Object.entries(expected)) {
+      expect(getEnvKeyForProvider(provider as keyof typeof expected)).toBe(key);
+    }
+  });
+
   it('getModel throws LLMError for model string without slash', async () => {
     process.env['XAI_API_KEY'] = 'test-key';
     const { initProviders, getModel } = await import('../../../src/core/brain/providers.js');
@@ -190,6 +208,28 @@ describe('Brain providers — getModel / getEnvKeyForProvider', () => {
   it('getModel throws LLMError for unknown provider', async () => {
     const { getModel } = await import('../../../src/core/brain/providers.js');
     expect(() => getModel('unknownprovider/some-model')).toThrow(LLMError);
+  });
+
+  it('getModelWithKey throws "Unknown provider" for a name not in the registry (the !spec branch)', async () => {
+    const { getModelWithKey } = await import('../../../src/core/brain/providers.js');
+    await expect(getModelWithKey('notaprovider/some-model', 'sk-key')).rejects.toThrow('Unknown provider');
+  });
+
+  it('anthropic resolves via the ANTHROPIC_AUTH_TOKEN fallback env (no ANTHROPIC_API_KEY)', async () => {
+    // Relies on anthropic not being pre-cached by an earlier test (no earlier
+    // test in this file sets an anthropic key). vi.resetModules() is deliberately
+    // NOT used: it would give a fresh LLMError class and break the static-import
+    // `toThrow(LLMError)` assertions elsewhere in this file.
+    delete process.env['ANTHROPIC_API_KEY'];
+    process.env['ANTHROPIC_AUTH_TOKEN'] = 'sk-ant-oat-fallback';
+    try {
+      const { initProviders, listAvailableProviders } = await import('../../../src/core/brain/providers.js');
+      await initProviders();
+      // The fallbackEnvKey path must build anthropic from the auth token alone.
+      expect(listAvailableProviders()).toContain('anthropic');
+    } finally {
+      delete process.env['ANTHROPIC_AUTH_TOKEN'];
+    }
   });
 
   it('getModel throws for unknown provider — checks message', async () => {

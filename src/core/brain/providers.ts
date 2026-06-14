@@ -3,6 +3,12 @@
  *
  * Wraps createXai / createOpenAI / createAnthropic / createGoogleGenerativeAI
  * into a single lookup interface. Only providers with env keys set are active.
+ *
+ * Built-in providers are declared in ONE data-driven registry (BUILTIN_PROVIDERS)
+ * instead of a hardcoded switch: adding an OpenAI-compatible built-in is a
+ * one-line spec entry, and ALL_PROVIDERS, the env-key lookup, and the
+ * native-vs-`.chat()` handle resolution all derive from it. Custom providers
+ * (SUDO_CUSTOM_PROVIDERS, gap #27) remain a parallel registry consulted on miss.
  */
 
 import { createXai } from '@ai-sdk/xai';
@@ -35,10 +41,6 @@ export type ProviderName =
   | 'deepseek'
   | 'together';
 
-// ---------------------------------------------------------------------------
-// Lazy provider instance cache
-// ---------------------------------------------------------------------------
-
 type AnyProvider = ReturnType<
   | typeof createXai
   | typeof createOpenAI
@@ -46,130 +48,217 @@ type AnyProvider = ReturnType<
   | typeof createGoogleGenerativeAI
 >;
 
-const providerCache = new Map<ProviderName, AnyProvider>();
+// ---------------------------------------------------------------------------
+// Built-in provider registry (replaces the former switch)
+// ---------------------------------------------------------------------------
 
-/** Env variable names for each provider. */
-const ENV_KEYS: Record<ProviderName, string> = {
-  xai: 'XAI_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  anthropic: 'ANTHROPIC_API_KEY', // Also checks ANTHROPIC_AUTH_TOKEN for OAuth
-  google: 'GEMINI_API_KEY',
-  groq: 'GROQ_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  ollama: 'OLLAMA_URL', // Ollama Cloud URL
-  together: 'TOGETHER_API_KEY',
+/**
+ * Declarative spec for one built-in provider. `create` builds the SDK instance
+ * from a resolved key/value; `modelKind` decides how a model handle is obtained
+ * (native providers are callable directly; OpenAI-compatible ones need
+ * `.chat(id)`). This is the single source of truth that ALL_PROVIDERS, the
+ * env-key lookup, and getModel/getModelWithKey handle resolution derive from.
+ */
+interface BuiltinProviderSpec {
+  /** Env var holding the API key (or the base URL, for ollama). */
+  envKey: string;
+  /** Secondary env var checked when envKey is unset (anthropic OAuth token). */
+  fallbackEnvKey?: string;
+  /** True when the provider needs no API key (ollama is local/cloud-keyless). */
+  keyOptional?: boolean;
+  /** How to turn the provider instance into a LanguageModel handle. */
+  modelKind: 'native' | 'chat';
+  /**
+   * Build the SDK provider from the resolved env value (api key, or base URL for
+   * ollama). Returns null when an optional SDK isn't installed (groq). May be async.
+   */
+  create(value: string | undefined): AnyProvider | null | Promise<AnyProvider | null>;
+}
+
+/**
+ * The built-in providers, in priority order. Each entry's `create` is byte-for-
+ * byte the body of the former switch case.
+ */
+const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
+  ollama: {
+    envKey: 'OLLAMA_URL', // Ollama Cloud URL
+    keyOptional: true, // Ollama is local — no API key required
+    modelKind: 'chat',
+    create(value) {
+      // Ollama Cloud (primary) — deepseek-v4-pro:cloud via https://ollama.com/v1.
+      // OLLAMA_URL env may override; OLLAMA_API_KEY for cloud auth.
+      const baseURL = value ?? 'https://ollama.com/v1';
+      const ollamaApiKey = process.env['OLLAMA_API_KEY'] ?? 'ollama';
+      const instance = createOpenAI({
+        apiKey: ollamaApiKey,
+        baseURL,
+        name: 'ollama',
+        compatibility: 'compatible', // Force Chat Completions API format
+      } as Parameters<typeof createOpenAI>[0]);
+      log.info({ url: baseURL }, 'Ollama provider registered (Cloud-first)');
+      return instance;
+    },
+  },
+  xai: {
+    envKey: 'XAI_API_KEY',
+    modelKind: 'native',
+    create(value) {
+      return createXai({ apiKey: value! });
+    },
+  },
+  openai: {
+    envKey: 'OPENAI_API_KEY',
+    modelKind: 'native',
+    create(value) {
+      return createOpenAI({ apiKey: value! });
+    },
+  },
+  anthropic: {
+    envKey: 'ANTHROPIC_API_KEY', // Also checks ANTHROPIC_AUTH_TOKEN for OAuth
+    fallbackEnvKey: 'ANTHROPIC_AUTH_TOKEN',
+    modelKind: 'native',
+    create(value) {
+      if (value!.startsWith('sk-ant-oat')) {
+        log.info('Anthropic: using OAuth authToken');
+        return createAnthropic({ authToken: value! } as Parameters<typeof createAnthropic>[0]);
+      }
+      return createAnthropic({ apiKey: value! });
+    },
+  },
+  google: {
+    envKey: 'GEMINI_API_KEY',
+    modelKind: 'native',
+    create(value) {
+      return createGoogleGenerativeAI({ apiKey: value! });
+    },
+  },
+  groq: {
+    envKey: 'GROQ_API_KEY',
+    modelKind: 'chat',
+    async create(value) {
+      // Dynamic import — gracefully skip if @ai-sdk/groq not installed.
+      const mod = await import('@ai-sdk/groq').catch((err) => {
+        log.warn({ err: String(err) }, 'groq: @ai-sdk/groq not installed — provider unavailable');
+        return null;
+      });
+      if (!mod) return null;
+      return mod.createGroq({ apiKey: value! }) as unknown as AnyProvider;
+    },
+  },
+  mistral: {
+    envKey: 'MISTRAL_API_KEY',
+    modelKind: 'chat',
+    create(value) {
+      // Mistral via OpenAI-compatible endpoint.
+      return createOpenAI({
+        apiKey: value!,
+        baseURL: 'https://api.mistral.ai/v1',
+        name: 'mistral',
+      } as Parameters<typeof createOpenAI>[0]);
+    },
+  },
+  deepseek: {
+    envKey: 'DEEPSEEK_API_KEY',
+    modelKind: 'chat',
+    create(value) {
+      // DeepSeek uses an OpenAI-compatible API.
+      return createOpenAI({
+        apiKey: value!,
+        baseURL: 'https://api.deepseek.com/v1',
+        name: 'deepseek',
+      } as Parameters<typeof createOpenAI>[0]);
+    },
+  },
+  together: {
+    envKey: 'TOGETHER_API_KEY',
+    modelKind: 'chat',
+    create(value) {
+      // Together AI uses an OpenAI-compatible API.
+      return createOpenAI({
+        apiKey: value!,
+        baseURL: 'https://api.together.xyz/v1',
+        name: 'together',
+      } as Parameters<typeof createOpenAI>[0]);
+    },
+  },
 };
+
+/**
+ * All known provider names in priority order, derived from the registry. The
+ * BUILTIN_PROVIDERS declaration order IS the priority order — Object.keys
+ * preserves string-key insertion order (ES2015+), so this matches the former
+ * explicit array exactly.
+ */
+const ALL_PROVIDERS: ProviderName[] = Object.keys(BUILTIN_PROVIDERS) as ProviderName[];
+
+/**
+ * Resolve the env value (api key, or base URL for ollama) for a built-in.
+ *
+ * The primary value is returned RAW (not collapsed) so an empty-string env
+ * behaves exactly as the old `process.env[envKey]` did — e.g. ollama's create()
+ * decides what undefined-vs-'' means via its own `??`. The `||` fallback applies
+ * ONLY where a fallbackEnvKey exists (anthropic: ANTHROPIC_API_KEY ||
+ * ANTHROPIC_AUTH_TOKEN), matching the original's `||` there.
+ */
+function resolveEnvValue(spec: BuiltinProviderSpec): string | undefined {
+  const primary = process.env[spec.envKey];
+  if (spec.fallbackEnvKey) {
+    return primary || process.env[spec.fallbackEnvKey];
+  }
+  return primary;
+}
+
+/**
+ * Turn a built-in provider instance into a LanguageModel handle: OpenAI-compatible
+ * providers (ollama, mistral, deepseek, together, groq) use `.chat(id)`; native
+ * providers (xai, openai, anthropic, google) are callable directly.
+ */
+function resolveHandle(spec: BuiltinProviderSpec, provider: AnyProvider, modelId: string): ReturnType<AnyProvider> {
+  if (spec.modelKind === 'chat') {
+    return (provider as { chat: (id: string) => ReturnType<AnyProvider> }).chat(modelId);
+  }
+  return (provider as (id: string) => ReturnType<AnyProvider>)(modelId);
+}
+
+// ---------------------------------------------------------------------------
+// Lazy provider instance cache
+// ---------------------------------------------------------------------------
+
+const providerCache = new Map<ProviderName, AnyProvider>();
 
 /**
  * Build and cache a provider instance. Returns null when the API key is absent
  * or the required SDK is not installed.
  */
 async function instantiateProvider(name: ProviderName, explicitKey?: string): Promise<AnyProvider | null> {
-  const envKey = ENV_KEYS[name];
-  // For Anthropic: check both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN (OAuth)
-  const envValue = explicitKey ?? (name === 'anthropic'
-    ? (process.env[envKey] || process.env['ANTHROPIC_AUTH_TOKEN'])
-    : process.env[envKey]);
+  const spec = BUILTIN_PROVIDERS[name];
+  const envValue = explicitKey ?? (spec ? resolveEnvValue(spec) : undefined);
 
-  // Ollama is local — no API key required, but OLLAMA_URL env may override base.
-  if (name !== 'ollama' && !envValue) {
-    log.debug({ provider: name, envKey }, 'API key not set — provider unavailable');
+  // The key-presence gate runs BEFORE the unknown-provider throw — intentionally,
+  // to stay byte-identical to the original switch, whose
+  // `if (name !== 'ollama' && !envValue) return null` short-circuited before the
+  // `default` throw. Net result, preserved exactly: an unknown provider with NO
+  // key returns null (caller surfaces "could not be built"), an unknown provider
+  // WITH a key throws below. (ollama is keyless, so its gate is skipped.)
+  if (!spec?.keyOptional && !envValue) {
+    log.debug({ provider: name, envKey: spec?.envKey }, 'API key not set — provider unavailable');
     return null;
   }
 
-  let instance: AnyProvider;
+  if (!spec) {
+    // Unknown provider name (reachable only via getModelWithKey with a key).
+    throw new LLMError(`Unknown provider: ${String(name)}`, 'llm_unknown_provider');
+  }
 
+  let instance: AnyProvider | null;
   try {
-    switch (name) {
-      case 'xai':
-        instance = createXai({ apiKey: envValue! });
-        break;
-
-      case 'openai':
-        instance = createOpenAI({ apiKey: envValue! });
-        break;
-
-      case 'anthropic': {
-        if (envValue!.startsWith('sk-ant-oat')) {
-          instance = createAnthropic({ authToken: envValue! } as Parameters<typeof createAnthropic>[0]);
-          log.info('Anthropic: using OAuth authToken');
-        } else {
-          instance = createAnthropic({ apiKey: envValue! });
-        }
-        break;
-      }
-
-      case 'google':
-        instance = createGoogleGenerativeAI({ apiKey: envValue! });
-        break;
-
-      case 'groq': {
-        // Dynamic import — gracefully skip if @ai-sdk/groq not installed.
-        const mod = await import('@ai-sdk/groq').catch((err) => {
-          log.warn({ err: String(err) }, 'groq: @ai-sdk/groq not installed — provider unavailable');
-          return null;
-        });
-        if (!mod) return null;
-        instance = mod.createGroq({ apiKey: envValue! }) as unknown as AnyProvider;
-        break;
-      }
-
-      case 'mistral': {
-        // Mistral via OpenAI-compatible endpoint.
-        instance = createOpenAI({
-          apiKey: envValue!,
-          baseURL: 'https://api.mistral.ai/v1',
-          name: 'mistral',
-        } as Parameters<typeof createOpenAI>[0]);
-        break;
-      }
-
-      case 'deepseek': {
-        // DeepSeek uses an OpenAI-compatible API.
-        instance = createOpenAI({
-          apiKey: envValue!,
-          baseURL: 'https://api.deepseek.com/v1',
-          name: 'deepseek',
-        } as Parameters<typeof createOpenAI>[0]);
-        break;
-      }
-
-      case 'ollama': {
-        // Ollama Cloud (primary) — deepseek-v4-pro:cloud via https://ollama.com/v1
-        // OLLAMA_URL env may override; OLLAMA_API_KEY for cloud auth.
-        const baseURL = envValue ?? 'https://ollama.com/v1';
-        const ollamaApiKey = process.env['OLLAMA_API_KEY'] ?? 'ollama';
-        instance = createOpenAI({
-          apiKey: ollamaApiKey,
-          baseURL,
-          name: 'ollama',
-          compatibility: 'compatible',  // Force Chat Completions API format
-        } as Parameters<typeof createOpenAI>[0]);
-        log.info({ url: baseURL }, 'Ollama provider registered (Cloud-first)');
-        break;
-      }
-
-      case 'together': {
-        // Together AI uses an OpenAI-compatible API.
-        instance = createOpenAI({
-          apiKey: envValue!,
-          baseURL: 'https://api.together.xyz/v1',
-          name: 'together',
-        } as Parameters<typeof createOpenAI>[0]);
-        break;
-      }
-
-      default: {
-        const _exhaustive: never = name;
-        throw new LLMError(`Unknown provider: ${String(_exhaustive)}`, 'llm_unknown_provider');
-      }
-    }
+    instance = await spec.create(envValue);
   } catch (err) {
     if (err instanceof LLMError) throw err;
     log.error({ provider: name, err: String(err) }, 'Failed to instantiate provider');
     return null;
   }
+  if (!instance) return null; // optional SDK (e.g. groq) not installed
 
   log.debug({ provider: name, keyed: explicitKey !== undefined }, 'Provider instance created');
   return instance;
@@ -217,12 +306,6 @@ function buildProvider(name: ProviderName): AnyProvider | null {
 // Public API
 // ---------------------------------------------------------------------------
 
-/** All known provider names in priority order. */
-const ALL_PROVIDERS: ProviderName[] = [
-  'ollama', 'xai', 'openai', 'anthropic', 'google',
-  'groq', 'mistral', 'deepseek', 'together',
-];
-
 /**
  * Initialise all providers whose env keys are set.
  * Call once at startup so getProvider/getModel can work synchronously.
@@ -254,7 +337,7 @@ export function getProvider(name: ProviderName): AnyProvider {
   const provider = buildProvider(name);
   if (!provider) {
     throw new LLMError(
-      `Provider "${name}" is not configured — set ${ENV_KEYS[name]}`,
+      `Provider "${name}" is not configured — set ${BUILTIN_PROVIDERS[name]?.envKey ?? name}`,
       'llm_provider_unconfigured',
       { provider: name },
     );
@@ -291,7 +374,7 @@ export function getModel(modelString: string): ReturnType<AnyProvider> {
 
   if (!ALL_PROVIDERS.includes(providerName)) {
     // Pluggable custom providers (gap #27) — OpenAI-compatible, registered from
-    // SUDO_CUSTOM_PROVIDERS. Resolved here only after the built-in switch misses.
+    // SUDO_CUSTOM_PROVIDERS. Resolved here only after the built-in registry misses.
     if (isCustomProvider(providerName)) {
       const custom = getCustomProvider(providerName)!;
       log.debug({ modelString, providerName, modelId, custom: true }, 'Resolved custom model handle');
@@ -308,18 +391,7 @@ export function getModel(modelString: string): ReturnType<AnyProvider> {
 
   log.debug({ modelString, providerName, modelId }, 'Resolved model handle');
 
-  // Vercel AI SDK providers:
-  // - OpenAI-compatible providers (ollama, mistral, deepseek, together, groq) use provider.chat(modelId)
-  // - Native providers (xai, openai, anthropic, google) use provider(modelId) directly
-  const openAiCompatibleProviders: ProviderName[] = ['ollama', 'mistral', 'deepseek', 'together', 'groq'];
-
-  if (openAiCompatibleProviders.includes(providerName)) {
-    // OpenAI-compatible providers need .chat() to get the LanguageModel
-    return (provider as { chat: (id: string) => ReturnType<AnyProvider> }).chat(modelId);
-  }
-
-  // Native providers can be called directly
-  return (provider as (id: string) => ReturnType<AnyProvider>)(modelId);
+  return resolveHandle(BUILTIN_PROVIDERS[providerName], provider, modelId);
 }
 
 /**
@@ -358,13 +430,8 @@ export async function getModelWithKey(modelString: string, apiKey: string): Prom
     );
   }
 
-  // OpenAI-compatible providers need .chat() to get the LanguageModel;
-  // native providers are callable directly. Mirrors getModel().
-  const openAiCompatibleProviders: ProviderName[] = ['ollama', 'mistral', 'deepseek', 'together', 'groq'];
-  if (openAiCompatibleProviders.includes(providerName)) {
-    return (provider as { chat: (id: string) => ReturnType<AnyProvider> }).chat(modelId);
-  }
-  return (provider as (id: string) => ReturnType<AnyProvider>)(modelId);
+  // Native vs OpenAI-compatible handle resolution mirrors getModel().
+  return resolveHandle(BUILTIN_PROVIDERS[providerName], provider, modelId);
 }
 
 /**
@@ -381,5 +448,5 @@ export function listAvailableProviders(): ProviderName[] {
  * Useful for diagnostic messages.
  */
 export function getEnvKeyForProvider(name: ProviderName): string {
-  return ENV_KEYS[name];
+  return BUILTIN_PROVIDERS[name].envKey;
 }
