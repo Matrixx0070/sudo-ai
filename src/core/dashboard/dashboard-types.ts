@@ -205,6 +205,41 @@ export interface FleetRegistrarSource {
   count(): number;
 }
 
+/**
+ * Slice-2 command queue surface — what the dashboard dispatcher needs from
+ * the queue, minus better-sqlite3 typings. Implemented by `CommandQueue`
+ * in `src/core/fleet/command-queue.ts`.
+ *
+ * Kept narrow on purpose: any change here is a coordinated change with
+ * both `CommandQueue` and the route dispatcher.
+ */
+export interface FleetCommandQueueSource {
+  enqueue(input: {
+    deviceId: string;
+    command: { kind: string; args?: Record<string, unknown> };
+    dispatcher: string;
+  }): string;
+  pickup(deviceId: string): FleetCommandRow | undefined;
+  pickupLongPoll(deviceId: string, timeoutMs: number): Promise<FleetCommandRow | undefined>;
+  complete(input: { commandId: string; result: { status: 'completed' | 'failed'; result?: unknown; error?: string } }): FleetCommandRow | undefined;
+  get(commandId: string): FleetCommandRow | undefined;
+}
+
+/** Row shape returned by FleetCommandQueueSource — wire-format-adjacent. */
+export interface FleetCommandRow {
+  commandId: string;
+  deviceId: string;
+  kind: string;
+  argsJson: string | null;
+  status: 'queued' | 'in_flight' | 'completed' | 'failed' | 'timeout';
+  dispatcher: string;
+  dispatchedAt: string;
+  pickedUpAt: string | null;
+  completedAt: string | null;
+  resultJson: string | null;
+  errorMessage: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Pluggable auth backend (#28b slice 2 — Hermes parity)
 // ---------------------------------------------------------------------------
