@@ -15,6 +15,13 @@
 
 import { createLogger } from '../shared/index.js';
 import { contentHash } from '../shared/index.js';
+import {
+  DEFAULT_SUPPRESS_HITS,
+  getGlobalLoopSignatureStore,
+  pingPongSignature,
+  repeatSignature,
+  type LoopSignatureStore,
+} from './loop-signature-store.js';
 
 const log = createLogger('agent:loop-guard');
 
@@ -68,6 +75,12 @@ interface CallRecord {
 /**
  * Stateful loop detector scoped to a single agent turn.
  * Call reset() at the start of each new outer-loop turn.
+ *
+ * Optional cross-session learning: pass a LoopSignatureStore and any
+ * signature that has fired in `suppressHits` prior sessions will abort on
+ * its very first identical call instead of waiting for the in-turn
+ * threshold. Same store gets the signature persisted whenever an abort
+ * actually fires here, so the learning is cumulative.
  */
 export class LoopGuard {
   /** All tool calls made in this turn (in order). */
@@ -78,6 +91,11 @@ export class LoopGuard {
 
   /** Total calls in this turn. */
   private totalCalls = 0;
+
+  constructor(
+    private readonly signatureStore?: LoopSignatureStore,
+    private readonly suppressHits: number = DEFAULT_SUPPRESS_HITS,
+  ) {}
 
   // -------------------------------------------------------------------------
   // Public API
@@ -102,6 +120,17 @@ export class LoopGuard {
     this.history.push(record);
     this.totalCalls++;
 
+    // Fast-suppress check: a known-bad signature short-circuits the
+    // in-turn thresholds. Saves the agent from re-discovering loops it has
+    // already aborted on in prior sessions. Skipped when no store wired
+    // (legacy callers / unit tests) — behaviour is byte-identical there.
+    const fast = this._checkFastSuppress(toolName, argsHash);
+    if (fast.action === 'abort') {
+      log.error({ toolName, totalCalls: this.totalCalls, reason: fast.reason }, 'LoopGuard ABORT (fast-suppress)');
+      this._persistAbortSignature(toolName, argsHash);
+      return fast;
+    }
+
     // Run all three detectors, escalate to highest severity result
     const results: LoopGuardResult[] = [
       this._checkRepeat(toolName, argsHash),
@@ -113,6 +142,7 @@ export class LoopGuard {
     const abort = results.find((r) => r.action === 'abort');
     if (abort) {
       log.error({ toolName, totalCalls: this.totalCalls, reason: abort.reason }, 'LoopGuard ABORT');
+      this._persistAbortSignature(toolName, argsHash);
       return abort;
     }
 
@@ -227,6 +257,68 @@ export class LoopGuard {
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Consult the persistent store. Returns 'abort' if the about-to-be-recorded
+   * call matches a known-bad signature (this turn's repeat signature OR a
+   * ping-pong signature paired with the immediately previous call). Returns
+   * 'allow' when no store is wired or no match crosses the suppress threshold.
+   */
+  private _checkFastSuppress(toolName: string, argsHash: string): LoopGuardResult {
+    const store = this.signatureStore ?? getGlobalLoopSignatureStore();
+    if (!store) return { action: 'allow' };
+
+    if (REPEAT_EXEMPT_TOOLS.has(toolName)) return { action: 'allow' };
+
+    const repeatSig = repeatSignature(toolName, argsHash);
+    if (store.shouldSuppress(repeatSig, this.suppressHits)) {
+      return {
+        action: 'abort',
+        reason: `Loop signature ${repeatSig} known across sessions — aborting before in-turn thresholds.`,
+      };
+    }
+
+    // Ping-pong: check pair with the most recent prior call (the one BEFORE
+    // we appended this call). If we already aborted on this A/B pair in a
+    // prior session, short-circuit now.
+    if (this.history.length >= 2) {
+      const prev = this.history[this.history.length - 2]!;
+      if (prev.toolName !== toolName || prev.argsHash !== argsHash) {
+        const ppSig = pingPongSignature(prev.toolName, prev.argsHash, toolName, argsHash);
+        if (store.shouldSuppress(ppSig, this.suppressHits)) {
+          return {
+            action: 'abort',
+            reason: `Ping-pong signature ${ppSig} known across sessions — aborting before in-turn thresholds.`,
+          };
+        }
+      }
+    }
+
+    return { action: 'allow' };
+  }
+
+  /**
+   * Write the current call's signature to the persistent store on abort.
+   * Records both the repeat-style signature (always applicable) and, when
+   * the abort looks like ping-pong (last two distinct calls form a stable
+   * pair), the ping-pong signature too — so either detector triggering it
+   * again next time also benefits from fast-suppress.
+   */
+  private _persistAbortSignature(toolName: string, argsHash: string): void {
+    const store = this.signatureStore ?? getGlobalLoopSignatureStore();
+    if (!store) return;
+    try {
+      store.record(repeatSignature(toolName, argsHash));
+      if (this.history.length >= 2) {
+        const prev = this.history[this.history.length - 2]!;
+        if (prev.toolName !== toolName || prev.argsHash !== argsHash) {
+          store.record(pingPongSignature(prev.toolName, prev.argsHash, toolName, argsHash));
+        }
+      }
+    } catch (err) {
+      log.warn({ err: String(err) }, 'LoopGuard: signature persist failed (non-fatal)');
+    }
+  }
 
   private _hashArgs(args: Record<string, unknown>): string {
     try {
