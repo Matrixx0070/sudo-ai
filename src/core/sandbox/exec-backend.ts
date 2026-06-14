@@ -102,5 +102,16 @@ export async function resolveExecBackend(name: string): Promise<ExecBackend | nu
     }
   }
 
+  if (name === 'modal') {
+    try {
+      const { modalBackend } = await import('./backends/modal-backend.js');
+      registry.set('modal', modalBackend);
+      return modalBackend;
+    } catch (err) {
+      log.warn({ err: String(err) }, 'failed to load the modal exec backend');
+      return null;
+    }
+  }
+
   return null;
 }

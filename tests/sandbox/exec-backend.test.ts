@@ -91,6 +91,13 @@ describe('resolveExecBackend', () => {
     expect(getRegisteredExecBackend('ssh')).toBe(b);
   });
 
+  it('lazy-loads the built-in modal backend on first use', async () => {
+    const b = await resolveExecBackend('modal');
+    expect(b).not.toBeNull();
+    expect(b!.name).toBe('modal');
+    expect(getRegisteredExecBackend('modal')).toBe(b);
+  });
+
   it('returns null for an unknown backend (caller falls back to bwrap)', async () => {
     expect(await resolveExecBackend('nope')).toBeNull();
   });
