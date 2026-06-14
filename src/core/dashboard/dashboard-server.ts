@@ -32,6 +32,9 @@ import {
   DashboardBindMode,
 } from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
+import { listCredentialsMetadata, type CredentialsSnapshot } from './credentials-meta.js';
+import { buildDebugShareSnapshot, type DebugShareSnapshot } from './debug-share.js';
+import { getRegisteredLogRing, type LogLine } from './log-ring.js';
 
 const log = createLogger('dashboard');
 const DASHBOARD_DISABLED = process.env['SUDO_DASHBOARD_DISABLE'] === '1';
@@ -551,6 +554,84 @@ export class DashboardServer {
         this.audit(actor, 'admin.update.apply.result', channel ?? 'default', 'error', { reason: message });
       });
     return { accepted: true, ...(channel !== undefined && { channel }), acceptedAt };
+  }
+
+  // -------------------------------------------------------------------------
+  // Admin-power READ surfaces (#28b slice 3 — Hermes parity: credentials,
+  // log-tail, debug-share). Each read fires an audit-chain entry so the
+  // operator-side review trail records WHO scraped sensitive state.
+  // -------------------------------------------------------------------------
+
+  /**
+   * List vault namespaces + per-entry **metadata only** (no decryption, no
+   * last-N-char hint). Returns the file-on-disk view; if vault was never
+   * initialized, returns `vaultDirPresent: false` and an empty array.
+   */
+  getCredentialsMetadata(actor: string): CredentialsSnapshot {
+    const snap = listCredentialsMetadata();
+    const totalEntries = snap.namespaces.reduce(
+      (n, ns) => n + (ns.format === 'v2' ? ns.entries.length : 0),
+      0,
+    );
+    this.audit(actor, 'admin.credentials.read', 'vault', 'success', {
+      namespaceCount: snap.namespaces.length,
+      totalEntries,
+      vaultDirPresent: snap.vaultDirPresent,
+      vaultConfigured: snap.vaultConfigured,
+    });
+    return snap;
+  }
+
+  /**
+   * Tail the process-local log ring. Returns `{available: false}` when
+   * `attachLogRing()` was not called at boot (e.g. SUDO_DASHBOARD_LOG_RING_
+   * DISABLE=1). The caller's `lines` request is clamped inside the ring's
+   * own `tail()` method.
+   */
+  getLogTail(actor: string, lines: number): {
+    available: true;
+    lines: LogLine[];
+    bufferSize: number;
+    capacity: number;
+  } | { available: false; reason: 'log_ring_not_registered' } {
+    const ring = getRegisteredLogRing();
+    if (!ring) {
+      this.audit(actor, 'admin.logs.read', 'log-ring', 'error', { reason: 'log_ring_not_registered' });
+      return { available: false, reason: 'log_ring_not_registered' };
+    }
+    const tail = ring.tail(lines);
+    this.audit(actor, 'admin.logs.read', 'log-ring', 'success', {
+      linesRequested: lines,
+      linesReturned: tail.length,
+      bufferSize: ring.size(),
+    });
+    return { available: true, lines: tail, bufferSize: ring.size(), capacity: ring.capacity() };
+  }
+
+  /**
+   * Build the debug-share JSON bundle for `GET /api/admin/debug-share`.
+   * Wires every per-subsystem accessor through `buildDebugShareSnapshot`
+   * which catches throws + redacts known-sensitive keys.
+   */
+  getDebugShareSnapshot(actor: string): DebugShareSnapshot {
+    const snap = buildDebugShareSnapshot({
+      stats: () => this.getStats(),
+      health: () => this.getHealth(),
+      alignment: () => this.getAlignment(),
+      recentActivity: (limit) => this.getRecentActivity(limit),
+      currentModel: () => this.getCurrentModel(),
+      liveAgents: () => this.getLiveAgents(),
+      bind: () => this.getBindAddress(),
+      loopbackTrust: () => this.isLoopbackTrust(),
+      hostAllowlist: () => this.getHostAllowlist(),
+      adminPowers: () => this.adminPowersEnabled(),
+    });
+    this.audit(actor, 'admin.debug-share.read', 'snapshot', 'success', {
+      pkgVersion: snap.process.pkgVersion,
+      uptimeSeconds: snap.process.uptimeSeconds,
+      envKeysReturned: Object.keys(snap.env).length,
+    });
+    return snap;
   }
 
   /**

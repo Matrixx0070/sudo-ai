@@ -13,6 +13,11 @@
  *   GET /api/agents/live — FleetView live agent snapshot (gap #25 slice 1)
  *   GET /api/admin/model — Current active LLM model (#28b slice 1)
  *
+ * Admin-power READ routes (#28b slice 3 — Bearer-gated AND opt-in via SUDO_ADMIN_POWERS=1):
+ *   GET /api/admin/credentials — vault namespace + entry metadata (no decryption)
+ *   GET /api/admin/logs?lines=N — last N lines from the in-process ring buffer
+ *   GET /api/admin/debug-share — single JSON support bundle (redacted)
+ *
  * Admin-power routes (POST, Bearer-gated AND opt-in via SUDO_ADMIN_POWERS=1):
  *   POST /api/admin/restart    — process.exit(0); supervisor respawns
  *   POST /api/admin/update     — preview-by-default; dry_run=false applies
@@ -48,6 +53,24 @@ const GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/activity',
   '/api/agents/live',
   '/api/admin/model',
+]);
+/**
+ * Admin-power READ routes (#28b slice 3) — GET, Bearer-gated AND opt-in via
+ * SUDO_ADMIN_POWERS=1. Separate from GET_ROUTES so they share the
+ * `adminPowersEnabled()` 503 gate with the POST mutation routes — the
+ * common safety property is "no operator-level state leaves the box
+ * unless the opt-in is set", regardless of HTTP method.
+ *
+ * Loopback-trust still applies to these GETs (same as `/api/admin/model`)
+ * — see study doc 19:162-169 on the Hermes loopback-trust posture. The
+ * three new endpoints surface no plaintext secrets (credentials returns
+ * metadata only; debug-share applies key-name redaction; logs are
+ * process stdout already visible via `/proc/N/fd/1` to anyone on the box).
+ */
+const ADMIN_GET_ROUTES: ReadonlySet<string> = new Set([
+  '/api/admin/credentials',
+  '/api/admin/logs',
+  '/api/admin/debug-share',
 ]);
 /** POST-only admin mutation routes (#28b slice 1) — Bearer-gated AND opt-in. */
 const POST_ROUTES: ReadonlySet<string> = new Set([
@@ -181,6 +204,8 @@ export function registerRoutes(
   }
 
   const isKnownGet = GET_ROUTES.has(pathname);
+  const isKnownAdminGet = ADMIN_GET_ROUTES.has(pathname);
+  const isAnyGet = isKnownGet || isKnownAdminGet;
   const isKnownPost = POST_ROUTES.has(pathname);
 
   // Auth runs BEFORE the unknown-path 404 guard on purpose: unauthenticated
@@ -189,26 +214,29 @@ export function registerRoutes(
   // hitting an unknown path still get 404 (the guard below).
   //
   // Loopback-trust (slice 2): when the dashboard is bound to 127.0.0.1 AND
-  // the operator hasn't set `SUDO_DASHBOARD_INSECURE=1`, GET-only read routes
-  // skip auth — matching Hermes's loopback-trust-by-default pattern (study
-  // doc 19). POST mutations ALWAYS require auth regardless of loopback-trust
-  // (mirrors how Hermes's /api/pty and /api/gateway/restart still require
-  // auth even on loopback).
+  // the operator hasn't set `SUDO_DASHBOARD_INSECURE=1`, GET read routes skip
+  // auth — matching Hermes's loopback-trust-by-default pattern (study doc 19).
+  // Admin-power GETs (slice 3 — credentials/logs/debug-share) are eligible too
+  // because they surface no plaintext secrets and anyone on the loopback face
+  // can already read /proc/self/{environ,fd/1}. POST mutations ALWAYS require
+  // auth regardless (mirrors how Hermes's /api/pty and /api/gateway/restart
+  // still require auth even on loopback).
   let principal: string;
-  const skipAuthForLoopbackGet = server.isLoopbackTrust() && method === 'GET' && isKnownGet;
+  const skipAuthForLoopbackGet = server.isLoopbackTrust() && method === 'GET' && isAnyGet;
   if (skipAuthForLoopbackGet) {
     principal = 'loopback-no-auth';
   } else {
-    // allowQueryToken is true ONLY for known GET routes. Unknown paths and
-    // POST mutations both require an Authorization header — the ?token=
-    // fallback is read-route ergonomics, not a universal auth method.
+    // allowQueryToken is true ONLY for known GET routes (both regular and
+    // admin reads). Unknown paths and POST mutations both require an
+    // Authorization header — the ?token= fallback is read-route ergonomics,
+    // not a universal auth method.
     //
     // try/catch defends against a misbehaving custom AuthBackend throwing
     // out of `authenticate`. A throwing backend must not fall through to
     // the top-level 500 handler — treat throw as a denial.
     let authResult: ReturnType<typeof authenticateRequest>;
     try {
-      authResult = authenticateRequest(req, server, { allowQueryToken: isKnownGet && !isKnownPost });
+      authResult = authenticateRequest(req, server, { allowQueryToken: isAnyGet && !isKnownPost });
     } catch (err: unknown) {
       log.warn({ err: err instanceof Error ? err.message : String(err), msg: 'AuthBackend threw — treating as denial' });
       sendJson(res, 401, { error: 'Unauthorized' });
@@ -222,13 +250,28 @@ export function registerRoutes(
   }
 
   // Unknown path on any method → 404.
-  if (!isKnownGet && !isKnownPost) {
+  if (!isAnyGet && !isKnownPost) {
     sendJson(res, 404, { error: 'Not found' });
     return;
   }
 
+  // Opt-in gate runs BEFORE method-mismatch so an attacker who guesses an
+  // admin path can't enumerate which HTTP verb is correct by reading the
+  // 405-vs-503 split. Admin POST mutations and admin GET reads BOTH share
+  // SUDO_ADMIN_POWERS=1, so a single check covers both classes. The shape
+  // matches the slice-1 POST-mutation 503 so callers don't branch.
+  //
+  // `isKnownPost` is currently the same set as the admin POST mutation set
+  // (POST_ROUTES contains only admin mutations); if a non-admin POST route
+  // ever lands, split this gate into an explicit admin-POST subset.
+  const isAnyAdminRoute = isKnownAdminGet || isKnownPost;
+  if (isAnyAdminRoute && !server.adminPowersEnabled()) {
+    sendJson(res, 503, { error: 'admin_powers_disabled', hint: 'Set SUDO_ADMIN_POWERS=1 to enable admin endpoints' });
+    return;
+  }
+
   // Method/path mismatch → 405. (e.g. POST /api/stats, GET /api/admin/restart)
-  if (method === 'GET' && !isKnownGet) {
+  if (method === 'GET' && !isAnyGet) {
     sendJson(res, 405, { error: 'Method not allowed' });
     return;
   }
@@ -267,16 +310,41 @@ export function registerRoutes(
       sendJson(res, 200, { model });
       return;
     }
-    // unreachable — pathname was vetted by isKnownGet check above
-    sendJson(res, 404, { error: 'Not found' });
-    return;
+    // ---- Admin-power READ dispatch (#28b slice 3) -----------------------
+    // adminPowersEnabled() was already gated above for ADMIN_GET_ROUTES.
+    const actor = actorFor(req, principal);
+    if (pathname === '/api/admin/credentials') {
+      sendJson(res, 200, server.getCredentialsMetadata(actor));
+      return;
+    }
+    if (pathname === '/api/admin/logs') {
+      const linesRaw = url.searchParams.get('lines');
+      // Default 200 mirrors LogRing's own DEFAULT_USER_LINES_REQUEST. parseInt
+      // returns NaN for non-numeric input; LogRing.tail() handles NaN by
+      // re-defaulting + clamping internally, so we don't need a separate guard.
+      const lines = linesRaw === null ? 200 : parseInt(linesRaw, 10);
+      const result = server.getLogTail(actor, lines);
+      if (!result.available) {
+        sendJson(res, 503, result);
+        return;
+      }
+      sendJson(res, 200, result);
+      return;
+    }
+    if (pathname === '/api/admin/debug-share') {
+      sendJson(res, 200, server.getDebugShareSnapshot(actor));
+      return;
+    }
+    // Unreachable — pathname was vetted by `isKnownGet || isKnownAdminGet`
+    // above. If a future path is added to either set without a matching
+    // dispatch branch, throwing here surfaces the gap in the test suite
+    // immediately instead of silently 404'ing in production.
+    throw new Error(`unhandled GET dispatch: ${pathname}`);
   }
 
   // ---- POST dispatch (admin powers) ---------------------------------------
-  if (!server.adminPowersEnabled()) {
-    sendJson(res, 503, { error: 'admin_powers_disabled', hint: 'Set SUDO_ADMIN_POWERS=1 to enable mutation endpoints' });
-    return;
-  }
+  // The SUDO_ADMIN_POWERS=1 opt-in gate runs above (before method-mismatch
+  // and POST dispatch) so it cannot be bypassed by a method-mismatch probe.
   handleAdminPost(req, res, server, pathname, principal).catch((err: unknown) => {
     log.warn({ pathname, err: err instanceof Error ? err.message : String(err), msg: 'Admin POST rejected' });
     if (!res.headersSent) sendJson(res, 500, { error: 'internal_error' });
