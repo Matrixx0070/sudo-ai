@@ -1154,6 +1154,21 @@ async function boot(): Promise<void> {
     }
   }
 
+  // gap #20 — LLM-written memory consolidation. Opt-in SUDO_MEMORY_CONSOLIDATE=1
+  // registers `meta.memory-consolidate`, an agent/operator-callable tool that
+  // distills MEMORY.md into an organized human-readable form via the brain.
+  // Default OFF (a brain round-trip per call is the cost; we don't trigger it
+  // on a timer in this slice — the agent decides when to call it).
+  if (process.env['SUDO_MEMORY_CONSOLIDATE'] === '1') {
+    try {
+      const { memoryConsolidateTool } = await import('./core/tools/builtin/meta/memory-consolidate.js');
+      registry.register(memoryConsolidateTool);
+      log.info('meta.memory-consolidate registered (SUDO_MEMORY_CONSOLIDATE=1)');
+    } catch (err: unknown) {
+      log.warn({ err: String(err) }, 'memory-consolidate wiring failed — tool not registered');
+    }
+  }
+
   // Theme 1 (learning flywheel, slice 1): wire TraceStore so the agent loop
   // records execution traces (routing / brain / tool outcomes) into a local
   // SQLite DB — the foundation the policy learner + skill-forge build on later.
