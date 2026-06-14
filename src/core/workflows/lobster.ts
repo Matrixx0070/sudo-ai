@@ -177,6 +177,7 @@ export async function loadWorkflow(
         timeout: rs['timeout'] !== undefined ? Number(rs['timeout']) : undefined,
         parallel_group:
           rs['parallel_group'] !== undefined ? String(rs['parallel_group']) : undefined,
+        phase: rs['phase'] !== undefined ? String(rs['phase']) : undefined,
       };
       workflow.steps.push(step);
     }
@@ -349,89 +350,40 @@ export async function runWorkflow(
   }
 
   // ---------------------------------------------------------------------
-  // Group-aware scheduler. Walks the step list, grouping consecutive steps
-  // that share a `parallel_group` label, dispatching each group concurrently
-  // with a semaphore (maxParallel). One failing member of a parallel group
-  // halts the workflow AFTER the rest of the group settles — partial-result
-  // visibility for the operator beats noisy aborts.
+  // Fan-out block executor (shared by parallel_group AND phase). Members all
+  // settle before this returns, with a hard barrier at the boundary. One
+  // failing member halts the workflow AFTER the rest of the block settles —
+  // partial-result visibility beats noisy aborts.
+  //
+  // Returns true if the workflow should halt (a member failed); the caller
+  // returns runState immediately on true.
   // ---------------------------------------------------------------------
-  let i = startIndex;
-  while (i < workflow.steps.length) {
-    const first = workflow.steps[i] as WorkflowStep;
-    const groupLabel = first.parallel_group;
-
-    if (!groupLabel) {
-      // Solo step — sequential semantics (condition + approval + execute).
-      if (first.condition) {
-        const pass = evaluateCondition(first.condition, buildStepsMap());
-        if (!pass) {
-          log.info({ stepId: first.id, condition: first.condition }, 'Step skipped (condition false)');
-          runState.completedSteps.push({ id: first.id, status: 'skipped', durationMs: 0 });
-          await persist();
-          i++;
-          continue;
-        }
-      }
-
-      if (first.approval) {
-        log.info({ stepId: first.id }, 'Step requires approval');
-        let approved = false;
-        if (approvalCallback) {
-          approved = await approvalCallback(first, runState);
-        }
-        if (!approved) {
-          const token = randomUUID();
-          runState.pendingStepIndex = i;
-          runState.pendingStepId = first.id;
-          runState.resumeToken = token;
-          runState.completedSteps.push({ id: first.id, status: 'awaiting_approval', durationMs: 0 });
-          await persist();
-          log.info({ stepId: first.id, resumeToken: token }, 'Workflow paused — awaiting approval');
-          return runState;
-        }
-        log.info({ stepId: first.id }, 'Approval granted — continuing');
-      }
-
-      const result = await executeStep(first);
-      log.info(
-        { stepId: result.id, status: result.status, exitCode: result.exitCode, durationMs: result.durationMs },
-        'Step completed',
-      );
-      runState.completedSteps.push(result);
-      await persist();
-
-      if (result.status === 'failure') {
-        log.warn({ stepId: result.id, exitCode: result.exitCode }, 'Step failed — halting workflow');
-        return runState;
-      }
-      i++;
-      continue;
-    }
-
-    // Parallel group — collect consecutive members with the same label.
-    const groupSteps: WorkflowStep[] = [];
-    let j = i;
-    while (j < workflow.steps.length) {
-      const s = workflow.steps[j] as WorkflowStep;
-      if (s.parallel_group !== groupLabel) break;
-      groupSteps.push(s);
-      j++;
-    }
-
+  const runFanOutBlock = async (
+    members: WorkflowStep[],
+    label: { kind: 'parallel_group' | 'phase'; value: string },
+  ): Promise<boolean> => {
     log.info(
-      { workflowName: workflow.name, group: groupLabel, members: groupSteps.length, maxParallel },
-      'Running parallel group',
+      {
+        workflowName: workflow.name,
+        [label.kind]: label.value,
+        members: members.length,
+        maxParallel,
+      },
+      `Running ${label.kind}`,
     );
 
-    // Pre-skip members whose `condition` is false (gates read pre-group state,
-    // exactly like sequential). Survivors go into the dispatch pool.
+    // Pre-skip members whose `condition` is false (gates read pre-block state,
+    // exactly like sequential). Survivors go into the dispatch pool. Skipped
+    // members land in a Map keyed by id so the source-order append loop below
+    // stays O(n) regardless of skip count — future-proofing the engine for
+    // large phase blocks where every member could fail the condition gate.
     const dispatchable: WorkflowStep[] = [];
-    const skipResults: StepResult[] = [];
-    for (const s of groupSteps) {
+    const skipResults = new Map<string, StepResult>();
+    for (const s of members) {
       if (s.condition) {
         const pass = evaluateCondition(s.condition, buildStepsMap());
         if (!pass) {
-          skipResults.push({ id: s.id, status: 'skipped', durationMs: 0 });
+          skipResults.set(s.id, { id: s.id, status: 'skipped', durationMs: 0 });
           continue;
         }
       }
@@ -439,14 +391,11 @@ export async function runWorkflow(
     }
 
     // Semaphore-bounded fan-out. We don't use Promise.all on a fixed pool
-    // because the cap may be smaller than the group size. The simple
+    // because the cap may be smaller than the block size. The simple
     // worker-pool pattern below preserves member submission order under cap
     // while keeping the implementation tight.
     const results = new Map<string, StepResult>();
     let cursor = 0;
-    // Arrow form rather than `async function worker()` inside a loop body:
-    // avoids the no-loop-func lint hazard and keeps the closure capture of
-    // `cursor`, `dispatchable`, `results`, `groupLabel` explicit and lexical.
     const worker = async (): Promise<void> => {
       while (cursor < dispatchable.length) {
         const idx = cursor++;
@@ -454,35 +403,132 @@ export async function runWorkflow(
         const r = await executeStep(member);
         results.set(member.id, r);
         log.info(
-          { stepId: r.id, status: r.status, exitCode: r.exitCode, durationMs: r.durationMs, group: groupLabel },
-          'Group member completed',
+          {
+            stepId: r.id,
+            status: r.status,
+            exitCode: r.exitCode,
+            durationMs: r.durationMs,
+            [label.kind]: label.value,
+          },
+          `${label.kind} member completed`,
         );
       }
     };
     const poolSize = Math.min(maxParallel, dispatchable.length);
     await Promise.all(Array.from({ length: poolSize }, () => worker()));
 
-    // Append results in the original group order so {{prev}} (after the
-    // group) and the journal observe a deterministic sequence.
-    for (const s of groupSteps) {
-      const r = skipResults.find((sk) => sk.id === s.id) ?? results.get(s.id);
+    // Append results in the original member order so {{prev}} (after the
+    // block) and the journal observe a deterministic sequence.
+    for (const s of members) {
+      const r = skipResults.get(s.id) ?? results.get(s.id);
       if (r) runState.completedSteps.push(r);
     }
     await persist();
 
-    const groupFailed = groupSteps.some((s) => {
+    const blockFailed = members.some((s) => {
       const r = results.get(s.id);
       return r && r.status === 'failure';
     });
-    if (groupFailed) {
+    if (blockFailed) {
       log.warn(
-        { workflowName: workflow.name, group: groupLabel },
-        'Parallel group had a failing member — halting workflow',
+        { workflowName: workflow.name, [label.kind]: label.value },
+        `${label.kind} had a failing member — halting workflow`,
       );
-      return runState;
+      return true;
+    }
+    return false;
+  };
+
+  // ---------------------------------------------------------------------
+  // Block-aware scheduler. Walks the step list, classifying each position
+  // as one of three block types and dispatching accordingly:
+  //   - solo:           sequential semantics (condition + approval + execute)
+  //   - parallel_group: slice 2 fan-out across consecutive same-group peers
+  //   - phase:          slice 3 named fan-out across consecutive same-phase
+  //                     members, with a hard barrier at the phase boundary
+  // ---------------------------------------------------------------------
+  let i = startIndex;
+  while (i < workflow.steps.length) {
+    const first = workflow.steps[i] as WorkflowStep;
+
+    // Phase block takes precedence — validateStep guarantees a step cannot
+    // have BOTH phase and parallel_group, so the check order is safe.
+    if (first.phase !== undefined) {
+      const phaseLabel = first.phase;
+      const phaseSteps: WorkflowStep[] = [];
+      let j = i;
+      while (j < workflow.steps.length) {
+        const s = workflow.steps[j] as WorkflowStep;
+        if (s.phase !== phaseLabel) break;
+        phaseSteps.push(s);
+        j++;
+      }
+      const halt = await runFanOutBlock(phaseSteps, { kind: 'phase', value: phaseLabel });
+      if (halt) return runState;
+      i = j;
+      continue;
     }
 
-    i = j;
+    if (first.parallel_group !== undefined) {
+      const groupLabel = first.parallel_group;
+      const groupSteps: WorkflowStep[] = [];
+      let j = i;
+      while (j < workflow.steps.length) {
+        const s = workflow.steps[j] as WorkflowStep;
+        if (s.parallel_group !== groupLabel) break;
+        groupSteps.push(s);
+        j++;
+      }
+      const halt = await runFanOutBlock(groupSteps, { kind: 'parallel_group', value: groupLabel });
+      if (halt) return runState;
+      i = j;
+      continue;
+    }
+
+    // Solo step — sequential semantics (condition + approval + execute).
+    if (first.condition) {
+      const pass = evaluateCondition(first.condition, buildStepsMap());
+      if (!pass) {
+        log.info({ stepId: first.id, condition: first.condition }, 'Step skipped (condition false)');
+        runState.completedSteps.push({ id: first.id, status: 'skipped', durationMs: 0 });
+        await persist();
+        i++;
+        continue;
+      }
+    }
+
+    if (first.approval) {
+      log.info({ stepId: first.id }, 'Step requires approval');
+      let approved = false;
+      if (approvalCallback) {
+        approved = await approvalCallback(first, runState);
+      }
+      if (!approved) {
+        const token = randomUUID();
+        runState.pendingStepIndex = i;
+        runState.pendingStepId = first.id;
+        runState.resumeToken = token;
+        runState.completedSteps.push({ id: first.id, status: 'awaiting_approval', durationMs: 0 });
+        await persist();
+        log.info({ stepId: first.id, resumeToken: token }, 'Workflow paused — awaiting approval');
+        return runState;
+      }
+      log.info({ stepId: first.id }, 'Approval granted — continuing');
+    }
+
+    const result = await executeStep(first);
+    log.info(
+      { stepId: result.id, status: result.status, exitCode: result.exitCode, durationMs: result.durationMs },
+      'Step completed',
+    );
+    runState.completedSteps.push(result);
+    await persist();
+
+    if (result.status === 'failure') {
+      log.warn({ stepId: result.id, exitCode: result.exitCode }, 'Step failed — halting workflow');
+      return runState;
+    }
+    i++;
   }
 
   await persist();

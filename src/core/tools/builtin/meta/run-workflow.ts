@@ -6,7 +6,7 @@
  * steps, `{{prev}}` stdout threading, `condition`, `approval`, opt-in via
  * SUDO_WORKFLOWS=1.
  *
- * Slice 2 (this file) adds:
+ * Slice 2 (PR #134) added:
  *   - `parallel_group` — consecutive steps sharing the label fan out, bounded
  *     by `SUDO_WORKFLOWS_MAX_PARALLEL` (default 4). One failing group member
  *     halts the workflow after the rest of the group settles.
@@ -19,6 +19,15 @@
  *     A resume call passes `resume_run_id`; the engine refuses if the workflow
  *     source SHA-256 has changed since the journal was written.
  *
+ * Slice 3 (this file) adds:
+ *   - `phase` — named synchronization barriers. Consecutive steps sharing a
+ *     `phase` value form a phase block; ALL members fan out concurrently into
+ *     the same worker pool used by `parallel_group`, with a hard barrier at
+ *     the phase boundary. Phase and parallel_group are mutually exclusive on
+ *     the same step (each step picks one fan-out scope). `{{prev}}` and
+ *     `approval: true` are forbidden inside a phase for the same reason as
+ *     inside a parallel_group.
+ *
  * Trust posture mirrors meta.ptc: `requiresConfirmation: true` on the OUTER call
  * so the operator approves running the whole workflow (whose step commands / tool
  * args they may not have authored) before any step executes.
@@ -26,9 +35,10 @@
  * Opt-in: cli.ts registers this only when SUDO_WORKFLOWS=1. When the flag is OFF
  * the tool is not in the registry at all.
  *
- * Deferred (follow-up slices): `phase:` named synchronization barriers; wiring
- * the orchestration/ TaskQueue + TaskExecutor as a cross-workflow scheduler
- * (this slice's parallel fan-out is intra-process for one workflow run).
+ * Deferred (slice 4): wiring the orchestration/ TaskQueue + TaskExecutor as a
+ * cross-workflow scheduler — slices 2 + 3 fan-out is intra-process for one
+ * workflow run, and inter-workflow scheduling is a semantic shift (persistent
+ * SQLite queue, separate handler model) that warrants its own slice.
  */
 
 import path from 'node:path';
@@ -55,10 +65,11 @@ const WORKFLOWS_BASE = path.join(WORKSPACE_DIR, 'workflows');
 const DEFAULT_JOURNAL_DIR = path.join(DATA_DIR, 'workflow-runs');
 
 /**
- * Per-engine fan-out cap for parallel groups (slice 2). Read at execute time so
- * env changes take effect without process restart. Falls back to 4 on invalid
- * input — a kill-switch via `SUDO_WORKFLOWS_MAX_PARALLEL=1` reverts to
- * effectively-sequential behavior without touching workflow files.
+ * Per-engine fan-out cap for `parallel_group` and `phase` blocks (slices 2 + 3
+ * share the same worker pool). Read at execute time so env changes take effect
+ * without process restart. Falls back to 4 on invalid input — a kill-switch via
+ * `SUDO_WORKFLOWS_MAX_PARALLEL=1` reverts to effectively-sequential behavior
+ * without touching workflow files.
  */
 function readMaxParallel(): number {
   const raw = process.env['SUDO_WORKFLOWS_MAX_PARALLEL'];
@@ -160,7 +171,10 @@ export const runWorkflowTool: ToolDefinition = {
   description:
     "Run a deterministic multi-step workflow defined in a .yaml file under the workspace " +
     "'workflows/' directory. Steps run sequentially by default; consecutive steps sharing a " +
-    "`parallel_group` label fan out (capped by SUDO_WORKFLOWS_MAX_PARALLEL, default 4). " +
+    "`parallel_group` label fan out (capped by SUDO_WORKFLOWS_MAX_PARALLEL, default 4), and " +
+    "consecutive steps sharing a `phase` label form a named barrier block where all members " +
+    'fan out concurrently and the next phase cannot start until every member settles ' +
+    "(parallel_group and phase are mutually exclusive on the same step). " +
     "`stdin: '{{prev}}'` pipes the previous step's stdout; `{{steps.<id>.<field>}}` templates " +
     'in command/stdin reference any prior step (fields: stdout, stderr, exitCode, status, ' +
     'durationMs); `condition` skips; `approval: true` pauses and returns a resume token. ' +
