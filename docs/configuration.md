@@ -529,6 +529,11 @@ SUDO_WORKFLOWS=1                           # Register meta.run-workflow: determi
                                            #   parallel_group fan-out, phase synchronization barriers, on-disk SHA-256 resume journal;
                                            #   tool steps go through normal gates)
 SUDO_WORKFLOWS_MAX_PARALLEL=4              # Per-engine fan-out cap for parallel_group OR phase members (1 = sequential kill switch). Default 4.
+SUDO_WORKFLOWS_QUEUE=1                     # Register meta.enqueue-workflow + start cross-workflow scheduler (persistent TaskQueue on mind.db,
+                                           #   workflow.run handler, pending runs survive process restarts; queued runs auto-approve internal
+                                           #   approval gates)
+SUDO_WORKFLOWS_QUEUE_CONCURRENT=2          # Max concurrent queued workflow runs. Default 2 (each run also uses SUDO_WORKFLOWS_MAX_PARALLEL).
+SUDO_WORKFLOWS_QUEUE_POLL_MS=5000          # TaskExecutor poll interval in ms. Minimum 100. Default 5000.
 SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1    # Keep the stable prefix but skip the explicit Anthropic breakpoints
 ```
 

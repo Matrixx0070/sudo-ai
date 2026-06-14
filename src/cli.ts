@@ -3061,12 +3061,14 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // 9.6c Workflow system — meta.run-workflow (gap #24)
+  // 9.6c Workflow system — meta.run-workflow (gap #24, slices 1-3)
   //      (opt-in: SUDO_WORKFLOWS=1; runs deterministic multi-step .yaml
   //      workflows. Shell steps run one argv command each; tool steps dispatch
   //      through registry.execute() — the same permission/approval gates a
-  //      normal tool call hits. Sequential engine; parallel()/phase() fan-out
-  //      and the SHA-256 resume journal are follow-up slices.)
+  //      normal tool call hits. Slice 1 sequential engine + tool steps;
+  //      slice 2 parallel_group fan-out + {{steps.<id>.<field>}} templating +
+  //      on-disk SHA-256 resume journal; slice 3 phase synchronization
+  //      barriers. Cross-workflow scheduling lives in 9.6d.)
   // -------------------------------------------------------------------------
   if (process.env['SUDO_WORKFLOWS'] === '1') {
     try {
@@ -3079,6 +3081,62 @@ async function boot(): Promise<void> {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn({ err: msg }, 'meta.run-workflow registration failed — continuing without it');
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 9.6d Cross-workflow scheduler — meta.enqueue-workflow (gap #24, slice 4)
+  //      (opt-in: SUDO_WORKFLOWS_QUEUE=1; initializes the WorkflowQueue
+  //      singleton on mind.db, registers a workflow.run TaskExecutor handler,
+  //      and exposes meta.enqueue-workflow for persistent / async / multi-run
+  //      scheduling. Capped by SUDO_WORKFLOWS_QUEUE_CONCURRENT (default 2);
+  //      poll interval SUDO_WORKFLOWS_QUEUE_POLL_MS (default 5000). Pending
+  //      runs survive process restarts. Queued runs auto-approve internal
+  //      approval gates; the enqueue tool refuses workflows with approval
+  //      steps unless auto_approve:true is set. Registered independently of
+  //      SUDO_WORKFLOWS=1 — operators can opt into queue-only or sync-only.)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_WORKFLOWS_QUEUE'] === '1') {
+    try {
+      const { initWorkflowQueue } = await import('./core/workflows/queue.js');
+      const { enqueueWorkflowTool } = await import(
+        './core/tools/builtin/meta/enqueue-workflow.js'
+      );
+
+      const concurrentRaw = process.env['SUDO_WORKFLOWS_QUEUE_CONCURRENT'];
+      const concurrent = concurrentRaw ? parseInt(concurrentRaw, 10) : 2;
+      const pollRaw = process.env['SUDO_WORKFLOWS_QUEUE_POLL_MS'];
+      const pollMs = pollRaw ? parseInt(pollRaw, 10) : 5_000;
+
+      // Synthetic ctx for queued tool-step dispatch. The queue has no original
+      // operator session — sessionId is a stable identifier for log
+      // correlation; workingDir matches the workspace so tool steps using
+      // ctx.workingDir as a base path land where the workflow author expects.
+      const queueCtx = {
+        sessionId: 'workflow-queue',
+        workingDir: process.cwd(),
+        config: {},
+        logger: console,
+      };
+
+      const wq = initWorkflowQueue({
+        registry,
+        ctx: queueCtx,
+        maxConcurrent: Number.isFinite(concurrent) && concurrent >= 1 ? concurrent : 2,
+        pollIntervalMs: Number.isFinite(pollMs) && pollMs >= 100 ? pollMs : 5_000,
+      });
+      registry.register(enqueueWorkflowTool);
+      registerShutdown(() => wq.shutdown());
+      log.info(
+        { concurrent: wq.taskQueue.maxConcurrent },
+        'WorkflowQueue + meta.enqueue-workflow registered (SUDO_WORKFLOWS_QUEUE=1)',
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(
+        { err: msg },
+        'WorkflowQueue registration failed — continuing without cross-workflow scheduler',
+      );
     }
   }
 
