@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { writeFileSync } from 'fs';
+import { writeFileSync, readFileSync, existsSync, mkdtempSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { EventEmitter } from 'events';
@@ -58,8 +58,8 @@ vi.mock('child_process', async (importOriginal) => {
 
 // Now import the module under test (after mocking)
 import { loadWorkflow, runWorkflow } from '../../src/core/workflows/lobster.js';
-import type { Workflow, WorkflowRunState, ToolStepExecutor } from '../../src/core/workflows/lobster.js';
-import { validateStep, execShell } from '../../src/core/workflows/executor.js';
+import type { Workflow, WorkflowRunState, ToolStepExecutor, WorkflowJournal } from '../../src/core/workflows/lobster.js';
+import { validateStep, execShell, renderTemplate } from '../../src/core/workflows/executor.js';
 import { spawn } from 'child_process';
 
 const spawnMock = vi.mocked(spawn);
@@ -578,6 +578,358 @@ steps:
       expect(() =>
         validateStep({ id: 'sh', command: 'cat', stdin: '{"content":"a > b & c"}' }),
       ).toThrow('stdin contains forbidden characters');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 9. Templating: {{steps.<id>.<field>}} + safety re-check (slice 2)
+  // -------------------------------------------------------------------------
+  describe('templating', () => {
+    it('renderTemplate expands {{prev}} and {{steps.<id>.<field>}}', () => {
+      const completed = [
+        { id: 'a', status: 'success' as const, stdout: 'AAA', exitCode: 0, durationMs: 1 },
+        { id: 'b', status: 'success' as const, stdout: 'BBB', exitCode: 0, durationMs: 2 },
+      ];
+      const r1 = renderTemplate('got {{prev}}', completed);
+      expect(r1).toEqual({ rendered: 'got BBB', expanded: true });
+
+      const r2 = renderTemplate(
+        'a={{steps.a.stdout}} b-exit={{steps.b.exitCode}}',
+        completed,
+      );
+      expect(r2.rendered).toBe('a=AAA b-exit=0');
+      expect(r2.expanded).toBe(true);
+
+      // Unknown id is preserved literally (caller re-validates if expansion happened).
+      const r3 = renderTemplate('hi {{steps.nope.stdout}}', completed);
+      expect(r3.rendered).toBe('hi {{steps.nope.stdout}}');
+      expect(r3.expanded).toBe(false);
+
+      // Disallowed field is preserved literally too.
+      const r4 = renderTemplate('hi {{steps.a.id}}', completed);
+      expect(r4.rendered).toBe('hi {{steps.a.id}}');
+      expect(r4.expanded).toBe(false);
+    });
+
+    it('runs a shell step whose command templates a prior step output', async () => {
+      // step-a → echo VALUE; step-b → echo {{steps.step-a.stdout}}
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('VALUE\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('rendered-arg\n', '', 0) as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'tmpl-cmd',
+        steps: [
+          { id: 'step-a', command: 'echo VALUE' },
+          { id: 'step-b', command: 'echo {{steps.step-a.stdout}}' },
+        ],
+      };
+
+      await runWorkflow(workflow);
+
+      // spawn for step-b was called with the rendered argv: ['echo', 'VALUE'] (newline trimmed by argv split)
+      const secondCall = spawnMock.mock.calls[1]!;
+      expect(secondCall[0]).toBe('echo');
+      // stdout was 'VALUE\n'; whitespace split yields ['VALUE']
+      expect(secondCall[1]).toEqual(['VALUE']);
+    });
+
+    it('halts when an expanded template injects a PIPE into the command', async () => {
+      spawnMock.mockImplementationOnce(
+        () => makeSpawnMock('a | b', '', 0) as ReturnType<typeof spawn>,
+      );
+
+      const workflow: Workflow = {
+        name: 'tmpl-pipe',
+        steps: [
+          { id: 'producer', command: 'echo bad' },
+          { id: 'consumer', command: 'echo {{steps.producer.stdout}}' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow);
+
+      expect(state.completedSteps).toHaveLength(2);
+      expect(state.completedSteps[1]?.status).toBe('failure');
+      expect(state.completedSteps[1]?.stderr).toContain('forbidden characters');
+      // The producer ran (one spawn), the consumer was REJECTED before spawn.
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('templates {{prev}} from the previously completed step (sequential)', async () => {
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('first\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('second\n', '', 0) as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'prev-cmd',
+        steps: [
+          { id: 's1', command: 'echo first' },
+          { id: 's2', command: 'echo {{prev}}' },
+        ],
+      };
+
+      await runWorkflow(workflow);
+      const second = spawnMock.mock.calls[1]!;
+      // argv-split of 'echo first' yields ['echo','first']
+      expect(second[0]).toBe('echo');
+      expect(second[1]).toEqual(['first']);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 10. Parallel groups (slice 2)
+  // -------------------------------------------------------------------------
+  describe('parallel groups', () => {
+    it('fans out consecutive parallel_group members concurrently', async () => {
+      let inFlight = 0;
+      let peakInFlight = 0;
+
+      function makeSlowSpawn(stdout: string) {
+        const stdoutEmitter = new EventEmitter();
+        const stderrEmitter = new EventEmitter();
+        const stdinMock = { write: vi.fn(), end: vi.fn() };
+
+        const child = new EventEmitter() as NodeJS.EventEmitter & {
+          stdout: typeof stdoutEmitter;
+          stderr: typeof stderrEmitter;
+          stdin: typeof stdinMock;
+          kill: ReturnType<typeof vi.fn>;
+        };
+        child.stdout = stdoutEmitter;
+        child.stderr = stderrEmitter;
+        child.stdin = stdinMock;
+        child.kill = vi.fn();
+
+        inFlight++;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+
+        setTimeout(() => {
+          stdoutEmitter.emit('data', Buffer.from(stdout));
+          inFlight--;
+          child.emit('close', 0);
+        }, 30);
+
+        return child;
+      }
+
+      spawnMock
+        .mockImplementationOnce(() => makeSlowSpawn('A\n') as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSlowSpawn('B\n') as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSlowSpawn('C\n') as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'fanout',
+        steps: [
+          { id: 'a', command: 'echo a', parallel_group: 'g' },
+          { id: 'b', command: 'echo b', parallel_group: 'g' },
+          { id: 'c', command: 'echo c', parallel_group: 'g' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow, { maxParallel: 3 });
+
+      expect(state.completedSteps).toHaveLength(3);
+      expect(state.completedSteps.every((s) => s.status === 'success')).toBe(true);
+      // All three must have been in flight at the same time.
+      expect(peakInFlight).toBe(3);
+    });
+
+    it('caps in-flight at maxParallel within a group', async () => {
+      let inFlight = 0;
+      let peakInFlight = 0;
+
+      function makeSlowSpawn() {
+        const stdoutEmitter = new EventEmitter();
+        const stderrEmitter = new EventEmitter();
+        const stdinMock = { write: vi.fn(), end: vi.fn() };
+        const child = new EventEmitter() as NodeJS.EventEmitter & {
+          stdout: typeof stdoutEmitter;
+          stderr: typeof stderrEmitter;
+          stdin: typeof stdinMock;
+          kill: ReturnType<typeof vi.fn>;
+        };
+        child.stdout = stdoutEmitter;
+        child.stderr = stderrEmitter;
+        child.stdin = stdinMock;
+        child.kill = vi.fn();
+
+        inFlight++;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+
+        setTimeout(() => {
+          inFlight--;
+          child.emit('close', 0);
+        }, 20);
+        return child;
+      }
+
+      for (let i = 0; i < 4; i++) {
+        spawnMock.mockImplementationOnce(() => makeSlowSpawn() as ReturnType<typeof spawn>);
+      }
+
+      const workflow: Workflow = {
+        name: 'capped',
+        steps: [
+          { id: 'a', command: 'echo a', parallel_group: 'g' },
+          { id: 'b', command: 'echo b', parallel_group: 'g' },
+          { id: 'c', command: 'echo c', parallel_group: 'g' },
+          { id: 'd', command: 'echo d', parallel_group: 'g' },
+        ],
+      };
+
+      await runWorkflow(workflow, { maxParallel: 2 });
+      expect(peakInFlight).toBe(2);
+    });
+
+    it('one failing group member halts the workflow after the group settles', async () => {
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('ok-a\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('', 'boom', 7) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('ok-c\n', '', 0) as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'group-fail',
+        steps: [
+          { id: 'a', command: 'echo a', parallel_group: 'g' },
+          { id: 'b', command: 'false', parallel_group: 'g' },
+          { id: 'c', command: 'echo c', parallel_group: 'g' },
+          { id: 'after', command: 'echo never' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow, { maxParallel: 3 });
+
+      // All three group members ran (parallel doesn't short-circuit), then halt.
+      expect(state.completedSteps).toHaveLength(3);
+      const ids = state.completedSteps.map((s) => s.id);
+      expect(ids).toEqual(['a', 'b', 'c']);
+      const byId = Object.fromEntries(state.completedSteps.map((s) => [s.id, s]));
+      expect(byId['a']?.status).toBe('success');
+      expect(byId['b']?.status).toBe('failure');
+      expect(byId['c']?.status).toBe('success');
+      // 'after' must NOT have spawned.
+      expect(spawnMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('validateStep rejects {{prev}} inside a parallel_group', () => {
+      expect(() =>
+        validateStep({ id: 'x', command: 'echo {{prev}}', parallel_group: 'g' }),
+      ).toThrow('{{prev}} is forbidden inside parallel_group');
+
+      expect(() =>
+        validateStep({ id: 'x', command: 'echo y', parallel_group: 'g', stdin: '{{prev}}' }),
+      ).toThrow('{{prev}} is forbidden inside parallel_group');
+    });
+
+    it('validateStep rejects approval inside a parallel_group', () => {
+      expect(() =>
+        validateStep({ id: 'x', command: 'echo y', parallel_group: 'g', approval: true }),
+      ).toThrow('approval gates are not supported inside parallel_group');
+    });
+
+    it('runs sequential→group→sequential in deterministic completed order', async () => {
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('s1\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('g-a\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('g-b\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('s2\n', '', 0) as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'mixed',
+        steps: [
+          { id: 'pre', command: 'echo pre' },
+          { id: 'ga', command: 'echo a', parallel_group: 'g' },
+          { id: 'gb', command: 'echo b', parallel_group: 'g' },
+          { id: 'post', command: 'echo post' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow);
+
+      expect(state.completedSteps.map((s) => s.id)).toEqual(['pre', 'ga', 'gb', 'post']);
+      expect(state.completedSteps.every((s) => s.status === 'success')).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 11. Resume journal (slice 2)
+  // -------------------------------------------------------------------------
+  describe('resume journal', () => {
+    let journalDir: string;
+
+    beforeEach(() => {
+      journalDir = mkdtempSync(path.join(TMP, 'wf-journal-'));
+    });
+    afterEach(() => {
+      rmSync(journalDir, { recursive: true, force: true });
+    });
+
+    it('writes a SHA-fingerprinted journal file after every settled step', async () => {
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('one\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('two\n', '', 0) as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'journaled',
+        steps: [
+          { id: 'a', command: 'echo a' },
+          { id: 'b', command: 'echo b' },
+        ],
+      };
+
+      const journalPath = path.join(journalDir, 'fixed-run.json');
+      await runWorkflow(workflow, {
+        runId: 'fixed-run',
+        journalPath,
+        sourceSha256: 'deadbeef'.repeat(8),
+      });
+
+      expect(existsSync(journalPath)).toBe(true);
+      const j: WorkflowJournal = JSON.parse(readFileSync(journalPath, 'utf8'));
+      expect(j.runId).toBe('fixed-run');
+      expect(j.sourceSha256).toBe('deadbeef'.repeat(8));
+      expect(j.version).toBe(1);
+      expect(j.state.workflowName).toBe('journaled');
+      expect(j.state.completedSteps).toHaveLength(2);
+      expect(j.state.runId).toBe('fixed-run');
+    });
+
+    it('reuses the resumeState.runId so the same journal file is rewritten', async () => {
+      spawnMock.mockImplementationOnce(
+        () => makeSpawnMock('y\n', '', 0) as ReturnType<typeof spawn>,
+      );
+
+      const workflow: Workflow = {
+        name: 'resume-rewrite',
+        steps: [{ id: 'only', command: 'echo y' }],
+      };
+
+      const previous: WorkflowRunState = {
+        workflowName: 'resume-rewrite',
+        startedAt: new Date().toISOString(),
+        completedSteps: [],
+        runId: 'sticky-id',
+      };
+
+      const journalPath = path.join(journalDir, 'sticky-id.json');
+      await runWorkflow(workflow, {
+        resumeState: previous,
+        journalPath,
+        sourceSha256: 'aa'.repeat(32),
+      });
+
+      const j: WorkflowJournal = JSON.parse(readFileSync(journalPath, 'utf8'));
+      expect(j.runId).toBe('sticky-id');
+    });
+
+    it('throws when journalPath is set without sourceSha256', async () => {
+      await expect(
+        runWorkflow(
+          { name: 'x', steps: [{ id: 'a', command: 'echo a' }] },
+          { journalPath: path.join(journalDir, 'x.json') },
+        ),
+      ).rejects.toThrow('journalPath requires sourceSha256');
     });
   });
 });

@@ -525,7 +525,9 @@ SUDO_STUCK_DETECTOR_ABORT_THRESHOLD=5      # Consecutive identical errors before
 SUDO_PROMPT_CACHE=1                        # Stable-prefix discipline for provider prompt caches (timestamp below boundary, sorted tools;
                                            #   Anthropic models also get explicit cache_control breakpoints on last tool + stable system prefix)
 SUDO_WORKFLOWS=1                           # Register meta.run-workflow: deterministic multi-step .yaml workflows under workspace/workflows/
-                                           #   (shell + tool steps, {{prev}} piping, condition/approval gates; tool steps go through normal gates)
+                                           #   (shell + tool steps, {{prev}} + {{steps.<id>.<field>}} templating, condition/approval gates,
+                                           #   parallel_group fan-out, on-disk SHA-256 resume journal; tool steps go through normal gates)
+SUDO_WORKFLOWS_MAX_PARALLEL=4              # Per-engine fan-out cap for parallel_group members (1 = sequential kill switch). Default 4.
 SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1    # Keep the stable prefix but skip the explicit Anthropic breakpoints
 ```
 

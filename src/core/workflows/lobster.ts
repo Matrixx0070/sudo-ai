@@ -10,11 +10,17 @@
  * from this single entry point.
  */
 
-import { readFile } from 'fs/promises';
+import { readFile, writeFile, mkdir, rename } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import path from 'node:path';
 import { parseYaml } from './yaml-parser.js';
-import { validateWorkflow, evaluateCondition, execShell } from './executor.js';
+import {
+  validateWorkflow,
+  evaluateCondition,
+  execShell,
+  renderTemplate,
+  assertRenderedCommandSafe,
+} from './executor.js';
 import type { AccessorMap } from './executor.js';
 import { createLogger } from '../shared/logger.js';
 import { WORKSPACE_DIR } from '../shared/paths.js';
@@ -28,15 +34,48 @@ const log = createLogger('workflows');
 const WORKFLOWS_BASE = path.join(WORKSPACE_DIR, 'workflows');
 
 /**
- * Resolve a step's stdin, expanding the `{{prev}}` placeholder to the previous
- * completed step's stdout. Shared by shell and tool step execution.
+ * Resolve a step's stdin by running the template engine (`{{prev}}` and
+ * `{{steps.<id>.<field>}}`). Shared by shell and tool step execution.
+ *
+ * When the result expanded ANY token AND the step is shell-typed, the caller
+ * re-validates against the shell-metachar guard; tool stdin is JSON and never
+ * reaches a shell.
  */
-function resolveStdin(step: WorkflowStep, completedSteps: StepResult[]): string | undefined {
-  if (step.stdin === '{{prev}}') {
-    const prev = completedSteps[completedSteps.length - 1];
-    return prev?.stdout ?? '';
+function resolveStdin(
+  step: WorkflowStep,
+  completedSteps: StepResult[],
+): { value: string | undefined; expanded: boolean } {
+  if (step.stdin === undefined) return { value: undefined, expanded: false };
+  const { rendered, expanded } = renderTemplate(step.stdin, completedSteps);
+  return { value: rendered, expanded };
+}
+
+// ---------------------------------------------------------------------------
+// Resume journal — on-disk SHA-256-fingerprinted run state (slice 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Atomically rewrite the journal file. Uses fs.rename which is atomic on the
+ * same filesystem — readers either see the previous snapshot or the new one,
+ * never a torn write. Failures are non-fatal: log + continue so a full disk
+ * doesn't kill an in-progress workflow run; the in-memory state is the source
+ * of truth, the journal is for crash recovery only.
+ */
+async function writeJournal(
+  journalPath: string,
+  payload: WorkflowJournal,
+): Promise<void> {
+  try {
+    await mkdir(path.dirname(journalPath), { recursive: true });
+    const tmp = `${journalPath}.tmp-${randomUUID()}`;
+    await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8');
+    await rename(tmp, journalPath);
+  } catch (err) {
+    log.warn(
+      { journalPath, err: err instanceof Error ? err.message : String(err) },
+      'writeJournal failed — in-memory state retained',
+    );
   }
-  return step.stdin;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +90,7 @@ export type {
   RunOptions,
   ToolStepResult,
   ToolStepExecutor,
+  WorkflowJournal,
 } from './types.js';
 
 import type {
@@ -60,6 +100,7 @@ import type {
   WorkflowRunState,
   RunOptions,
   ToolStepResult,
+  WorkflowJournal,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -134,6 +175,8 @@ export async function loadWorkflow(
         approval: rs['approval'] === true || rs['approval'] === 'true',
         condition: rs['condition'] !== undefined ? String(rs['condition']) : undefined,
         timeout: rs['timeout'] !== undefined ? Number(rs['timeout']) : undefined,
+        parallel_group:
+          rs['parallel_group'] !== undefined ? String(rs['parallel_group']) : undefined,
       };
       workflow.steps.push(step);
     }
@@ -165,7 +208,12 @@ export async function runWorkflow(
   workflow: Workflow,
   options: RunOptions = {},
 ): Promise<WorkflowRunState> {
-  const { resumeState, approvalCallback, toolExecutor } = options;
+  const { resumeState, approvalCallback, toolExecutor, journalPath, sourceSha256 } = options;
+  const maxParallel = Math.max(1, options.maxParallel ?? 4);
+
+  if (journalPath !== undefined && !sourceSha256) {
+    throw new Error('runWorkflow: journalPath requires sourceSha256');
+  }
 
   const runState: WorkflowRunState = resumeState
     ? {
@@ -185,6 +233,20 @@ export async function runWorkflow(
         completedSteps: [],
       };
 
+  /** Per-run journal id — stable across writes for a single run. */
+  const runId = resumeState?.runId ?? options.runId ?? randomUUID();
+  runState.runId = runId;
+
+  const persist = async (): Promise<void> => {
+    if (!journalPath || !sourceSha256) return;
+    await writeJournal(journalPath, {
+      runId,
+      sourceSha256,
+      version: 1,
+      state: runState,
+    });
+  };
+
   const startIndex = resumeState?.pendingStepIndex ?? 0;
 
   /** Build the accessor map used by the condition evaluator. */
@@ -197,80 +259,47 @@ export async function runWorkflow(
   }
 
   log.info(
-    { workflowName: workflow.name, startIndex, stepCount: workflow.steps.length },
+    {
+      workflowName: workflow.name,
+      startIndex,
+      stepCount: workflow.steps.length,
+      maxParallel,
+      journal: journalPath !== undefined,
+    },
     'Running workflow',
   );
 
-  for (let i = startIndex; i < workflow.steps.length; i++) {
-    const step = workflow.steps[i] as WorkflowStep;
-
-    // ------------------------------------------------------------------
-    // Condition gate — skip step if expression is false
-    // ------------------------------------------------------------------
-    if (step.condition) {
-      const pass = evaluateCondition(step.condition, buildStepsMap());
-      if (!pass) {
-        log.info({ stepId: step.id, condition: step.condition }, 'Step skipped (condition false)');
-        runState.completedSteps.push({ id: step.id, status: 'skipped', durationMs: 0 });
-        continue;
-      }
-    }
-
-    // ------------------------------------------------------------------
-    // Approval gate
-    // ------------------------------------------------------------------
-    if (step.approval) {
-      log.info({ stepId: step.id }, 'Step requires approval');
-
-      let approved = false;
-      if (approvalCallback) {
-        approved = await approvalCallback(step, runState);
-      }
-
-      if (!approved) {
-        const token = randomUUID();
-        runState.pendingStepIndex = i;
-        runState.pendingStepId = step.id;
-        runState.resumeToken = token;
-        runState.completedSteps.push({ id: step.id, status: 'awaiting_approval', durationMs: 0 });
-        log.info({ stepId: step.id, resumeToken: token }, 'Workflow paused — awaiting approval');
-        return runState;
-      }
-
-      log.info({ stepId: step.id }, 'Approval granted — continuing');
-    }
-
-    // ------------------------------------------------------------------
-    // Execute step
-    // ------------------------------------------------------------------
+  // ---------------------------------------------------------------------
+  // Step-execution kernel — runs ONE step. Returns the StepResult; the
+  // caller appends it to runState in serialized order. No condition / no
+  // approval checks here — those are handled by the outer scheduler before
+  // a step is even submitted, because they read runState and would race
+  // against parallel siblings.
+  // ---------------------------------------------------------------------
+  async function executeStep(step: WorkflowStep): Promise<StepResult> {
     const t0 = Date.now();
 
     if (step.type === 'tool') {
-      // Tool steps dispatch through the host registry via the injected
-      // toolExecutor. Without one the step fails HONESTLY — never a silent
-      // fake success (the engine has no tool access on its own).
       if (!toolExecutor) {
-        runState.completedSteps.push({
+        log.warn({ stepId: step.id }, 'Tool step with no executor — failing honestly');
+        return {
           id: step.id,
           status: 'failure',
           stdout: '',
           stderr: 'tool-type step requires a tool executor; run this workflow via meta.run-workflow',
           exitCode: 1,
           durationMs: Date.now() - t0,
-        });
-        log.warn({ stepId: step.id }, 'Tool step with no executor — failing honestly');
-        break;
+        };
       }
 
-      const toolStdin = resolveStdin(step, runState.completedSteps);
+      const { value: toolStdin } = resolveStdin(step, runState.completedSteps);
       let outcome: ToolStepResult;
       try {
         outcome = await toolExecutor(step, toolStdin);
       } catch (err) {
         outcome = { success: false, stderr: err instanceof Error ? err.message : String(err) };
       }
-
-      const toolResult: StepResult = {
+      return {
         id: step.id,
         status: outcome.success ? 'success' : 'failure',
         stdout: outcome.stdout ?? '',
@@ -278,41 +307,184 @@ export async function runWorkflow(
         exitCode: outcome.success ? 0 : 1,
         durationMs: Date.now() - t0,
       };
-      log.info({ stepId: step.id, status: toolResult.status }, 'Tool step completed');
-      runState.completedSteps.push(toolResult);
-
-      if (toolResult.status === 'failure') {
-        log.warn({ stepId: step.id }, 'Tool step failed — halting workflow');
-        break;
-      }
-      continue;
     }
 
-    // Resolve stdin piping
-    const stdinData = resolveStdin(step, runState.completedSteps);
+    // Shell step: render command + stdin against completed-step results, then
+    // re-validate against the shell-metachar guards. Untrusted step output
+    // that injects `$()` / backtick / pipe halts the run honestly.
+    let renderedCommand = step.command;
+    try {
+      const cmdRender = renderTemplate(step.command, runState.completedSteps);
+      renderedCommand = cmdRender.rendered;
+      if (cmdRender.expanded) assertRenderedCommandSafe(step.id, renderedCommand);
+    } catch (err) {
+      return {
+        id: step.id,
+        status: 'failure',
+        stdout: '',
+        stderr: err instanceof Error ? err.message : String(err),
+        exitCode: 1,
+        durationMs: Date.now() - t0,
+      };
+    }
 
-    log.info({ stepId: step.id, command: step.command }, 'Executing step');
+    // Note: stdin is a pipe to the child, not a shell — the load-time
+    // STDIN_DANGEROUS_RE check explicitly exempts `{{prev}}` for the same
+    // reason. We do NOT re-validate rendered stdin; arbitrary bytes from a
+    // prior step's stdout (including newlines) are intended to flow through.
+    const stdinRender = resolveStdin(step, runState.completedSteps);
+    const stdinData = stdinRender.value;
 
-    const { stdout, stderr, exitCode } = await execShell(step.command, stdinData, step.timeout);
-    const durationMs = Date.now() - t0;
+    log.info({ stepId: step.id, command: renderedCommand }, 'Executing step');
 
-    const result: StepResult = {
+    const { stdout, stderr, exitCode } = await execShell(renderedCommand, stdinData, step.timeout);
+    return {
       id: step.id,
       status: exitCode === 0 ? 'success' : 'failure',
       stdout,
       stderr,
       exitCode,
-      durationMs,
+      durationMs: Date.now() - t0,
     };
-
-    log.info({ stepId: step.id, status: result.status, exitCode, durationMs }, 'Step completed');
-    runState.completedSteps.push(result);
-
-    if (result.status === 'failure') {
-      log.warn({ stepId: step.id, exitCode }, 'Step failed — halting workflow');
-      break;
-    }
   }
 
+  // ---------------------------------------------------------------------
+  // Group-aware scheduler. Walks the step list, grouping consecutive steps
+  // that share a `parallel_group` label, dispatching each group concurrently
+  // with a semaphore (maxParallel). One failing member of a parallel group
+  // halts the workflow AFTER the rest of the group settles — partial-result
+  // visibility for the operator beats noisy aborts.
+  // ---------------------------------------------------------------------
+  let i = startIndex;
+  while (i < workflow.steps.length) {
+    const first = workflow.steps[i] as WorkflowStep;
+    const groupLabel = first.parallel_group;
+
+    if (!groupLabel) {
+      // Solo step — sequential semantics (condition + approval + execute).
+      if (first.condition) {
+        const pass = evaluateCondition(first.condition, buildStepsMap());
+        if (!pass) {
+          log.info({ stepId: first.id, condition: first.condition }, 'Step skipped (condition false)');
+          runState.completedSteps.push({ id: first.id, status: 'skipped', durationMs: 0 });
+          await persist();
+          i++;
+          continue;
+        }
+      }
+
+      if (first.approval) {
+        log.info({ stepId: first.id }, 'Step requires approval');
+        let approved = false;
+        if (approvalCallback) {
+          approved = await approvalCallback(first, runState);
+        }
+        if (!approved) {
+          const token = randomUUID();
+          runState.pendingStepIndex = i;
+          runState.pendingStepId = first.id;
+          runState.resumeToken = token;
+          runState.completedSteps.push({ id: first.id, status: 'awaiting_approval', durationMs: 0 });
+          await persist();
+          log.info({ stepId: first.id, resumeToken: token }, 'Workflow paused — awaiting approval');
+          return runState;
+        }
+        log.info({ stepId: first.id }, 'Approval granted — continuing');
+      }
+
+      const result = await executeStep(first);
+      log.info(
+        { stepId: result.id, status: result.status, exitCode: result.exitCode, durationMs: result.durationMs },
+        'Step completed',
+      );
+      runState.completedSteps.push(result);
+      await persist();
+
+      if (result.status === 'failure') {
+        log.warn({ stepId: result.id, exitCode: result.exitCode }, 'Step failed — halting workflow');
+        return runState;
+      }
+      i++;
+      continue;
+    }
+
+    // Parallel group — collect consecutive members with the same label.
+    const groupSteps: WorkflowStep[] = [];
+    let j = i;
+    while (j < workflow.steps.length) {
+      const s = workflow.steps[j] as WorkflowStep;
+      if (s.parallel_group !== groupLabel) break;
+      groupSteps.push(s);
+      j++;
+    }
+
+    log.info(
+      { workflowName: workflow.name, group: groupLabel, members: groupSteps.length, maxParallel },
+      'Running parallel group',
+    );
+
+    // Pre-skip members whose `condition` is false (gates read pre-group state,
+    // exactly like sequential). Survivors go into the dispatch pool.
+    const dispatchable: WorkflowStep[] = [];
+    const skipResults: StepResult[] = [];
+    for (const s of groupSteps) {
+      if (s.condition) {
+        const pass = evaluateCondition(s.condition, buildStepsMap());
+        if (!pass) {
+          skipResults.push({ id: s.id, status: 'skipped', durationMs: 0 });
+          continue;
+        }
+      }
+      dispatchable.push(s);
+    }
+
+    // Semaphore-bounded fan-out. We don't use Promise.all on a fixed pool
+    // because the cap may be smaller than the group size. The simple
+    // worker-pool pattern below preserves member submission order under cap
+    // while keeping the implementation tight.
+    const results = new Map<string, StepResult>();
+    let cursor = 0;
+    // Arrow form rather than `async function worker()` inside a loop body:
+    // avoids the no-loop-func lint hazard and keeps the closure capture of
+    // `cursor`, `dispatchable`, `results`, `groupLabel` explicit and lexical.
+    const worker = async (): Promise<void> => {
+      while (cursor < dispatchable.length) {
+        const idx = cursor++;
+        const member = dispatchable[idx]!;
+        const r = await executeStep(member);
+        results.set(member.id, r);
+        log.info(
+          { stepId: r.id, status: r.status, exitCode: r.exitCode, durationMs: r.durationMs, group: groupLabel },
+          'Group member completed',
+        );
+      }
+    };
+    const poolSize = Math.min(maxParallel, dispatchable.length);
+    await Promise.all(Array.from({ length: poolSize }, () => worker()));
+
+    // Append results in the original group order so {{prev}} (after the
+    // group) and the journal observe a deterministic sequence.
+    for (const s of groupSteps) {
+      const r = skipResults.find((sk) => sk.id === s.id) ?? results.get(s.id);
+      if (r) runState.completedSteps.push(r);
+    }
+    await persist();
+
+    const groupFailed = groupSteps.some((s) => {
+      const r = results.get(s.id);
+      return r && r.status === 'failure';
+    });
+    if (groupFailed) {
+      log.warn(
+        { workflowName: workflow.name, group: groupLabel },
+        'Parallel group had a failing member — halting workflow',
+      );
+      return runState;
+    }
+
+    i = j;
+  }
+
+  await persist();
   return runState;
 }

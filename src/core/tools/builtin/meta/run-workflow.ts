@@ -1,19 +1,23 @@
 /**
  * @file run-workflow.ts
- * @description meta.run-workflow — deterministic multi-step workflow runner (gap #24, slice 1).
+ * @description meta.run-workflow — deterministic multi-step workflow runner (gap #24).
  *
- * Wires the latent Lobster workflow engine (src/core/workflows/) into the tool
- * registry. A workflow is a `.yaml` file of sequential steps; the engine threads
- * stdout between steps via `stdin: '{{prev}}'`, gates steps on `condition`
- * expressions, and pauses on `approval: true` steps returning a resume token.
+ * Slice 1 (PR #122) wired the latent Lobster engine: sequential shell + tool
+ * steps, `{{prev}}` stdout threading, `condition`, `approval`, opt-in via
+ * SUDO_WORKFLOWS=1.
  *
- * Two step types:
- *   - type: shell  → runs ONE argv command (no shell, no pipes) with a per-step
- *                    timeout + 10 MB output clamp.
- *   - type: tool   → dispatches `step.command` as a host tool name with JSON args
- *                    taken from `stdin`, routed through `registry.execute()` — the
- *                    SAME permission / approval / sandbox / plan-mode gates a
- *                    normal tool call hits, NOT a privileged bypass.
+ * Slice 2 (this file) adds:
+ *   - `parallel_group` — consecutive steps sharing the label fan out, bounded
+ *     by `SUDO_WORKFLOWS_MAX_PARALLEL` (default 4). One failing group member
+ *     halts the workflow after the rest of the group settles.
+ *   - `{{steps.<id>.<field>}}` templating in `command` and `stdin` (fields:
+ *     stdout, stderr, exitCode, status, durationMs). The rendered shell
+ *     command + stdin are re-validated against the shell-metachar guard so an
+ *     untrusted step output can't inject `$()` / backtick / pipe.
+ *   - On-disk SHA-256-fingerprinted resume journal at
+ *     `<DATA_DIR>/workflow-runs/<runId>.json` (override with `journal_dir`).
+ *     A resume call passes `resume_run_id`; the engine refuses if the workflow
+ *     source SHA-256 has changed since the journal was written.
  *
  * Trust posture mirrors meta.ptc: `requiresConfirmation: true` on the OUTER call
  * so the operator approves running the whole workflow (whose step commands / tool
@@ -22,23 +26,25 @@
  * Opt-in: cli.ts registers this only when SUDO_WORKFLOWS=1. When the flag is OFF
  * the tool is not in the registry at all.
  *
- * Deferred (follow-up slices): parallel()/phase() fan-out via the orchestration/
- * TaskExecutor; a SHA-256 resume journal persisted to disk (today the run state
- * round-trips through the model via the `resume_state` param); argument
- * templating from prior step outputs.
+ * Deferred (follow-up slices): `phase:` named synchronization barriers; wiring
+ * the orchestration/ TaskQueue + TaskExecutor as a cross-workflow scheduler
+ * (this slice's parallel fan-out is intra-process for one workflow run).
  */
 
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import type { ToolRegistry } from '../../registry.js';
 import { createLogger } from '../../../shared/logger.js';
 import { clampToolOutput } from '../../../shared/head-tail-buffer.js';
-import { WORKSPACE_DIR } from '../../../shared/paths.js';
+import { WORKSPACE_DIR, DATA_DIR } from '../../../shared/paths.js';
 import { loadWorkflow, runWorkflow } from '../../../workflows/lobster.js';
 import type {
   Workflow,
   WorkflowRunState,
   WorkflowStep,
+  WorkflowJournal,
   ToolStepResult,
   ToolStepExecutor,
 } from '../../../workflows/lobster.js';
@@ -46,6 +52,20 @@ import type {
 const logger = createLogger('meta.run-workflow');
 
 const WORKFLOWS_BASE = path.join(WORKSPACE_DIR, 'workflows');
+const DEFAULT_JOURNAL_DIR = path.join(DATA_DIR, 'workflow-runs');
+
+/**
+ * Per-engine fan-out cap for parallel groups (slice 2). Read at execute time so
+ * env changes take effect without process restart. Falls back to 4 on invalid
+ * input — a kill-switch via `SUDO_WORKFLOWS_MAX_PARALLEL=1` reverts to
+ * effectively-sequential behavior without touching workflow files.
+ */
+function readMaxParallel(): number {
+  const raw = process.env['SUDO_WORKFLOWS_MAX_PARALLEL'];
+  if (!raw) return 4;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1 ? n : 4;
+}
 
 // ---------------------------------------------------------------------------
 // Dependency injection — the ToolRegistry that `type: 'tool'` steps dispatch
@@ -78,6 +98,49 @@ function isRunState(v: unknown): v is WorkflowRunState {
   return typeof s['workflowName'] === 'string' && Array.isArray(s['completedSteps']);
 }
 
+/** Minimal structural check that a value is a resume journal we wrote. */
+function isJournal(v: unknown): v is WorkflowJournal {
+  if (!v || typeof v !== 'object') return false;
+  const j = v as Record<string, unknown>;
+  return (
+    typeof j['runId'] === 'string' &&
+    typeof j['sourceSha256'] === 'string' &&
+    j['version'] === 1 &&
+    isRunState(j['state'])
+  );
+}
+
+/** Read + parse a journal file. Returns null when missing, throws on malformed. */
+async function loadJournal(journalPath: string): Promise<WorkflowJournal | null> {
+  let raw: string;
+  try {
+    raw = await readFile(journalPath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`journal "${journalPath}" is not valid JSON: ${String(err)}`);
+  }
+  if (!isJournal(parsed)) {
+    throw new Error(`journal "${journalPath}" is missing required fields`);
+  }
+  return parsed;
+}
+
+/** Hex SHA-256 of the workflow source bytes. */
+function sha256(buf: string): string {
+  return createHash('sha256').update(buf, 'utf8').digest('hex');
+}
+
+/** Compose a stable journal filename from runId. */
+function journalFile(dir: string, runId: string): string {
+  return path.join(dir, `${runId}.json`);
+}
+
 /** One line per completed step: `  - <id>: <status> exit=<n>`. */
 function formatState(state: WorkflowRunState): string {
   return state.completedSteps
@@ -96,12 +159,16 @@ export const runWorkflowTool: ToolDefinition = {
   name: 'meta.run-workflow',
   description:
     "Run a deterministic multi-step workflow defined in a .yaml file under the workspace " +
-    "'workflows/' directory. Steps run sequentially; `stdin: '{{prev}}'` pipes the previous " +
-    "step's stdout; `condition` skips a step; `approval: true` pauses and returns a resume " +
-    'token. Step types: `shell` (ONE argv command, no pipes) and `tool` (step.command = a host ' +
-    'tool name, args = a JSON object in `stdin`) — every tool step is routed through the normal ' +
-    'permission/approval gates. Set auto_approve:true to clear internal approval gates, or pass ' +
-    'resume_state (from a paused run, with the same file) to continue it.',
+    "'workflows/' directory. Steps run sequentially by default; consecutive steps sharing a " +
+    "`parallel_group` label fan out (capped by SUDO_WORKFLOWS_MAX_PARALLEL, default 4). " +
+    "`stdin: '{{prev}}'` pipes the previous step's stdout; `{{steps.<id>.<field>}}` templates " +
+    'in command/stdin reference any prior step (fields: stdout, stderr, exitCode, status, ' +
+    'durationMs); `condition` skips; `approval: true` pauses and returns a resume token. ' +
+    'Step types: `shell` (ONE argv command, no pipes) and `tool` (step.command = a host tool ' +
+    'name, args = a JSON object in `stdin`) — every tool step is routed through the normal ' +
+    'permission/approval gates. Set auto_approve:true to clear internal approval gates, or ' +
+    'pass resume_state (from a paused run) or resume_run_id (resumes from the on-disk journal, ' +
+    'verifying the source SHA-256) to continue.',
   category: 'meta' as const,
   safety: 'destructive',
   // The workflow's step commands / tool args may not have been authored by the
@@ -129,7 +196,23 @@ export const runWorkflowTool: ToolDefinition = {
       type: 'object',
       description:
         'The run-state object returned in data.runState by a prior PAUSED call. Supply it — ' +
-        'with the same file — to resume execution from where the workflow paused.',
+        'with the same file — to resume execution from where the workflow paused. Prefer ' +
+        'resume_run_id when a journal_dir was used: it round-trips through a small id, not the ' +
+        'whole state, and the engine verifies the source hash on disk.',
+    },
+    journal_dir: {
+      type: 'string',
+      description:
+        'Directory the engine rewrites a per-run resume journal into after every settled step. ' +
+        'A relative path is rejected; an absolute path is used as-is. Defaults to ' +
+        '<DATA_DIR>/workflow-runs/. Pass an empty string to disable.',
+    },
+    resume_run_id: {
+      type: 'string',
+      description:
+        'Resume the run with this id from disk (<journal_dir>/<run_id>.json). The engine ' +
+        'refuses to resume when the SHA-256 of the workflow source has changed since the ' +
+        'journal was written.',
     },
   },
 
@@ -177,6 +260,17 @@ export const runWorkflowTool: ToolDefinition = {
     const resolved = path.isAbsolute(file) ? file : path.join(WORKFLOWS_BASE, file);
 
     let workflow: Workflow;
+    let sourceText: string;
+    try {
+      sourceText = await readFile(resolved, 'utf8');
+    } catch (err) {
+      return {
+        success: false,
+        output: `meta.run-workflow: cannot read "${resolved}": ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    const sourceHash = sha256(sourceText);
+
     try {
       workflow = await loadWorkflow(resolved);
     } catch (err) {
@@ -184,6 +278,94 @@ export const runWorkflowTool: ToolDefinition = {
         success: false,
         output: `meta.run-workflow: ${err instanceof Error ? err.message : String(err)}`,
       };
+    }
+
+    // Resolve journal directory. Default is on; empty string disables. Any
+    // user-supplied absolute path is confined to DATA_DIR or WORKSPACE_DIR so
+    // a caller can't trick the engine into rewriting a journal file into
+    // /etc/, /root/, ~/.ssh/, etc. The runId is also regex-confined below so
+    // path traversal via `runId="../../foo"` is blocked even before this point.
+    const rawJournalDir = params['journal_dir'];
+    let journalDir: string | undefined;
+    if (rawJournalDir === undefined || rawJournalDir === null) {
+      journalDir = DEFAULT_JOURNAL_DIR;
+    } else if (typeof rawJournalDir === 'string') {
+      const trimmed = rawJournalDir.trim();
+      if (trimmed === '') {
+        journalDir = undefined;
+      } else if (!path.isAbsolute(trimmed)) {
+        return {
+          success: false,
+          output: 'meta.run-workflow: journal_dir must be an absolute path or empty',
+        };
+      } else {
+        const normalized = path.resolve(trimmed);
+        const dataRoot = path.resolve(DATA_DIR);
+        const workspaceRoot = path.resolve(WORKSPACE_DIR);
+        const insideData =
+          normalized === dataRoot || normalized.startsWith(dataRoot + path.sep);
+        const insideWorkspace =
+          normalized === workspaceRoot || normalized.startsWith(workspaceRoot + path.sep);
+        if (!insideData && !insideWorkspace) {
+          return {
+            success: false,
+            output:
+              `meta.run-workflow: journal_dir "${trimmed}" must be inside DATA_DIR ` +
+              `(${dataRoot}) or WORKSPACE_DIR (${workspaceRoot})`,
+          };
+        }
+        journalDir = normalized;
+      }
+    } else {
+      return { success: false, output: 'meta.run-workflow: journal_dir must be a string' };
+    }
+
+    // If a resume_run_id was passed, load the journal off disk. The journal's
+    // run state overrides any resume_state passed by the model (disk is the
+    // source of truth across crashes). SHA mismatch is fatal — the workflow
+    // file was edited since pause, so step semantics are no longer guaranteed.
+    const resumeRunId = typeof params['resume_run_id'] === 'string' ? (params['resume_run_id'] as string).trim() : '';
+    if (resumeRunId !== '') {
+      if (!journalDir) {
+        return {
+          success: false,
+          output: 'meta.run-workflow: resume_run_id requires a journal_dir (got empty)',
+        };
+      }
+      // Refuse path traversal in run id — must be a plain uuid-ish token.
+      if (!/^[A-Za-z0-9_-]+$/.test(resumeRunId)) {
+        return { success: false, output: 'meta.run-workflow: resume_run_id is malformed' };
+      }
+      let journal: WorkflowJournal | null;
+      try {
+        journal = await loadJournal(journalFile(journalDir, resumeRunId));
+      } catch (err) {
+        return {
+          success: false,
+          output: `meta.run-workflow: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      if (!journal) {
+        return {
+          success: false,
+          output: `meta.run-workflow: no journal at ${journalFile(journalDir, resumeRunId)}`,
+        };
+      }
+      if (journal.sourceSha256 !== sourceHash) {
+        return {
+          success: false,
+          output:
+            'meta.run-workflow: refusing to resume — workflow source SHA-256 changed since the ' +
+            `journal was written (journal=${journal.sourceSha256.slice(0, 12)}…, current=${sourceHash.slice(0, 12)}…)`,
+        };
+      }
+      if (journal.state.workflowName !== workflow.name) {
+        return {
+          success: false,
+          output: `meta.run-workflow: journal workflow name "${journal.state.workflowName}" does not match "${workflow.name}"`,
+        };
+      }
+      resumeState = journal.state;
     }
 
     // Tool-step executor: dispatch step.command through the host registry with
@@ -257,12 +439,22 @@ export const runWorkflowTool: ToolDefinition = {
       'Running workflow',
     );
 
+    // Filename anchor: resumed runId on resume; else mint one here so the
+    // first journal write lands at <dir>/<runId>.json (not <dir>/pending.json).
+    const { randomUUID: cryptoRandomUUID } = await import('node:crypto');
+    const effectiveRunId = resumeState?.runId ?? (resumeRunId !== '' ? resumeRunId : cryptoRandomUUID());
+    const finalJournalPath = journalDir ? journalFile(journalDir, effectiveRunId) : undefined;
+
     let finalState: WorkflowRunState;
     try {
       finalState = await runWorkflow(workflow, {
         toolExecutor,
         approvalCallback,
+        maxParallel: readMaxParallel(),
+        runId: effectiveRunId,
         ...(resumeState ? { resumeState } : {}),
+        ...(finalJournalPath ? { journalPath: finalJournalPath } : {}),
+        sourceSha256: sourceHash,
       });
     } catch (err) {
       return {
@@ -279,10 +471,13 @@ export const runWorkflowTool: ToolDefinition = {
       formatState(finalState),
     ];
     if (paused) {
+      const resumeHint = finalJournalPath
+        ? `resume_run_id: "${effectiveRunId}" (journal at ${finalJournalPath})`
+        : 'resume_state set to the object in data.runState';
       parts.push(
         `\nPAUSED at approval gate (step index ${finalState.pendingStepIndex}). To continue, call ` +
-          'meta.run-workflow again with the same file plus resume_state set to the object in ' +
-          'data.runState (or pass auto_approve:true to clear approval gates).',
+          `meta.run-workflow again with the same file plus ${resumeHint} ` +
+          '(or pass auto_approve:true to clear approval gates).',
       );
     } else if (failed) {
       parts.push('\nWorkflow halted on a failing step.');
@@ -303,6 +498,14 @@ export const runWorkflowTool: ToolDefinition = {
         failed,
         resumeToken: finalState.resumeToken,
         pendingStepIndex: finalState.pendingStepIndex,
+        runId: effectiveRunId,
+        ...(finalJournalPath ? { journalPath: finalJournalPath } : {}),
+        // Surface only a short prefix of the source SHA-256 in the tool
+        // response (the full hash is persisted in the journal). The prefix is
+        // enough for an operator to spot-check correlation between a pause and
+        // a resume; the full hash would act as a hash oracle for partial-file
+        // edits without filesystem access.
+        sourceSha256Prefix: sourceHash.slice(0, 12),
         runState: finalState,
         truncated,
       },
