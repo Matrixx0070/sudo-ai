@@ -2546,7 +2546,7 @@ async function boot(): Promise<void> {
   // 8.6 Observability dashboard (kill switch: SUDO_DASHBOARD_DISABLE=1)
   // -------------------------------------------------------------------------
   try {
-    const { initDashboard, shutdownDashboard, registerDashboardGlobals } =
+    const { initDashboard, shutdownDashboard, registerDashboardGlobals, classifyBind, parseHostAllowlist } =
       await import('./core/dashboard/dashboard-server.js');
 
     const dashboardPort = parseInt(process.env['SUDO_DASHBOARD_PORT'] ?? '18910', 10) || 18910;
@@ -2555,6 +2555,27 @@ async function boot(): Promise<void> {
     if (!pinnedToken) {
       log.info({ token: dashboardToken }, 'Dashboard API token generated for this boot (set SUDO_DASHBOARD_TOKEN to pin)');
     }
+
+    // Slice 2 — bind + Host + loopback-trust wiring (Hermes parity).
+    const dashboardBind = process.env['SUDO_DASHBOARD_BIND'] ?? '127.0.0.1';
+    const bindMode = classifyBind(dashboardBind);
+    const insecureOptIn = process.env['SUDO_DASHBOARD_INSECURE'] === '1';
+    if (bindMode !== 'loopback' && !insecureOptIn) {
+      // Refuse non-loopback bind without explicit opt-in. The dashboard would
+      // be reachable from the network with full admin powers (if SUDO_ADMIN_
+      // POWERS=1) — operator must acknowledge by setting SUDO_DASHBOARD_INSECURE=1.
+      throw new Error(`SUDO_DASHBOARD_BIND=${dashboardBind} is non-loopback (${bindMode}); set SUDO_DASHBOARD_INSECURE=1 to confirm operator intent`);
+    }
+    if (dashboardBind === '0.0.0.0') {
+      // classifyBind labels 0.0.0.0 as 'lan' for opt-in symmetry, but it binds
+      // EVERY interface including public NICs. Operator should know.
+      log.warn({ bind: dashboardBind }, 'SUDO_DASHBOARD_BIND=0.0.0.0 binds every interface including public NICs; treat as if public');
+    }
+    const hostAllowlist = parseHostAllowlist(process.env['SUDO_DASHBOARD_HOSTS']);
+    // Loopback-trust GET-skip-auth is ON for loopback binds UNLESS the operator
+    // explicitly opted into insecure mode (which forces full auth back on so
+    // network callers can't skip).
+    const loopbackTrust = bindMode === 'loopback' && !insecureOptIn;
 
     registerDashboardGlobals({
       brain,
@@ -2582,12 +2603,23 @@ async function boot(): Promise<void> {
       ...(auditTrail ? { audit: auditTrail } : {}),
     });
 
-    initDashboard({ port: dashboardPort, authToken: dashboardToken, refreshIntervalMs: 5000 });
+    initDashboard({
+      port: dashboardPort,
+      authToken: dashboardToken,
+      refreshIntervalMs: 5000,
+      bindAddress: dashboardBind,
+      hostAllowlist,
+      loopbackTrust,
+    });
     registerShutdown(() => shutdownDashboard());
     log.info({
       port: dashboardPort,
+      bind: dashboardBind,
+      mode: bindMode,
+      loopbackTrust,
+      hostAllowlistSize: hostAllowlist.length,
       adminPowers: process.env['SUDO_ADMIN_POWERS'] === '1',
-    }, 'Observability dashboard wired (SUDO_DASHBOARD_DISABLE=1 to disable; SUDO_ADMIN_POWERS=1 enables mutation endpoints)');
+    }, 'Observability dashboard wired (SUDO_DASHBOARD_DISABLE=1 to disable; SUDO_ADMIN_POWERS=1 enables mutation endpoints; loopback-trust skips GET auth unless SUDO_DASHBOARD_INSECURE=1)');
   } catch (err) {
     log.warn({ err: String(err) }, 'Dashboard wiring failed (non-fatal)');
   }
