@@ -155,6 +155,24 @@ describe('runInSandbox dispatch', () => {
       delete process.env['SUDO_SANDBOX_DISABLE'];
     }
   });
+
+  it('host-exec (unsandboxed) maps an aborted run to 130, parity with bwrap/docker', async () => {
+    process.env['SUDO_SANDBOX_DISABLE'] = '1';
+    const ac = new AbortController();
+    ac.abort();
+    try {
+      const res = await runInSandbox({
+        command: 'echo should-not-run',
+        workspaceDir: '/tmp',
+        policy: { ...DEFAULT_SANDBOX_POLICY },
+        timeoutMs: 5000,
+        signal: ac.signal,
+      });
+      expect(res.exitCode).toBe(130);
+    } finally {
+      delete process.env['SUDO_SANDBOX_DISABLE'];
+    }
+  });
 });
 
 describe('exitCodeFromError', () => {
