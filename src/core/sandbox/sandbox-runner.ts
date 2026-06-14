@@ -26,6 +26,7 @@ import {
   SandboxPolicyError,
 } from './sandbox-types.js';
 import { validateBindPath } from './sandbox-policy.js';
+import { selectExecBackendName, resolveExecBackend } from './exec-backend.js';
 
 const log = createLogger('sandbox:runner');
 const execFileAsync = promisify(execFile);
@@ -95,6 +96,27 @@ export function buildSandboxEnv(policy: SandboxPolicy): NodeJS.ProcessEnv {
   env['USER'] = 'sandbox';
 
   return env;
+}
+
+/**
+ * Wrap a command with hard+soft ulimits (-SH so the child cannot raise them):
+ * -t cpu seconds, -f file blocks (maxFileMB * 2048), -u processes, -v virtual
+ * memory (MB * 1024). Shared by the bwrap runner and alternate exec backends so
+ * the resource caps stay identical across execution environments.
+ */
+export function buildUlimitWrappedCommand(command: string, policy: SandboxPolicy): string {
+  const cpuSeconds = policy.cpuSeconds ?? 30;
+  const maxFileMB = policy.maxFileMB ?? 100;
+  const memoryMB = policy.memoryMB ?? 512;
+  const fileBlocks = maxFileMB * 2048;
+  const kb = memoryMB * 1024;
+  return (
+    `ulimit -SHt ${cpuSeconds}; ` +
+    `ulimit -SHf ${fileBlocks}; ` +
+    `ulimit -SHu 64; ` +
+    `ulimit -SHv ${kb}; ` +
+    command
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -195,20 +217,7 @@ export function buildBwrapArgs(
   args.push('/bin/bash', '-c');
 
   // Ulimit wrapper: set both soft AND hard limits (-SH) so the child cannot raise them.
-  // -t cpu seconds, -f file blocks (maxFileMB * 2048), -u processes, -v virtual memory (MB * 1024)
-  const cpuSeconds = policy.cpuSeconds ?? 30;
-  const maxFileMB = policy.maxFileMB ?? 100;
-  const memoryMB = policy.memoryMB ?? 512;
-  const fileBlocks = maxFileMB * 2048;
-  const kb = memoryMB * 1024;
-  const shellCmd =
-    `ulimit -SHt ${cpuSeconds}; ` +
-    `ulimit -SHf ${fileBlocks}; ` +
-    `ulimit -SHu 64; ` +
-    `ulimit -SHv ${kb}; ` +
-    command;
-
-  args.push(shellCmd);
+  args.push(buildUlimitWrappedCommand(command, policy));
 
   return args;
 }
@@ -226,18 +235,39 @@ export async function runInSandbox(
 ): Promise<SandboxRunResult> {
   const { command, workspaceDir, policy, timeoutMs, signal, platform } = opts;
 
-  const effectivePlatform = platform || policy.platform || 'linux';
-  if (effectivePlatform !== 'linux' || process.env['SUDO_SANDBOX_DISABLE'] === '1') {
-    // Hardened cross-platform shim: always scrub via buildSandboxEnv; non-linux = host exec (full power per SOUL but logged); route control.file/gui via denylist in backends
-    log.warn({ platform: effectivePlatform }, 'cross-platform sandbox shim (non-linux or disabled) - native with FULL env/policy scrub; file/gui/desktop control have separate denylists');
+  // Kill-switch precedence: an explicit SUDO_SANDBOX_DISABLE=1 means "no sandbox,
+  // host exec" and MUST win over backend selection — otherwise a lingering
+  // SUDO_EXEC_BACKEND would silently override the operator's decision to disable
+  // sandboxing. Checked before backend dispatch and before platform gating so the
+  // kill-switch is authoritative.
+  if (process.env['SUDO_SANDBOX_DISABLE'] === '1') {
+    log.warn(
+      'SUDO_SANDBOX_DISABLE=1 — sandbox disabled, running unsandboxed on host. ' +
+        'This is a security risk. Do not use in production.',
+    );
     return runUnsandboxed(command, workspaceDir, policy, timeoutMs, signal);
   }
 
-  if (process.env['SUDO_SANDBOX_DISABLE'] === '1') {
+  // Pluggable exec backend (gap #27): when SUDO_EXEC_BACKEND selects a non-default
+  // backend (e.g. docker), route through it. The default 'local'/'bwrap' path
+  // below is unchanged. An unknown/unloadable backend warns and falls back to
+  // bwrap — fail-safe, never silently to less isolation.
+  const backendName = selectExecBackendName();
+  if (backendName !== 'local' && backendName !== 'bwrap') {
+    const backend = await resolveExecBackend(backendName);
+    if (backend) {
+      return backend.run(opts);
+    }
     log.warn(
-      'SUDO_SANDBOX_DISABLE=1 — bwrap disabled, running unsandboxed. ' +
-        'This is a security risk. Do not use in production.',
+      { backend: backendName },
+      `SUDO_EXEC_BACKEND='${backendName}' could not be loaded or resolved — falling back to bwrap`,
     );
+  }
+
+  const effectivePlatform = platform || policy.platform || 'linux';
+  if (effectivePlatform !== 'linux') {
+    // Hardened cross-platform shim: always scrub via buildSandboxEnv; non-linux = host exec (full power per SOUL but logged); route control.file/gui via denylist in backends
+    log.warn({ platform: effectivePlatform }, 'cross-platform sandbox shim (non-linux) - native with FULL env/policy scrub; file/gui/desktop control have separate denylists');
     return runUnsandboxed(command, workspaceDir, policy, timeoutMs, signal);
   }
 

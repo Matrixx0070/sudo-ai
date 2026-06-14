@@ -24,8 +24,23 @@ export {
   type SandboxRunResult,
   buildBwrapArgs,
   buildSandboxEnv,
+  buildUlimitWrappedCommand,
   runInSandbox,
 } from './sandbox-runner.js';
+
+// ---------------------------------------------------------------------------
+// Pluggable exec backends (gap #27). Default is the bwrap path above; select an
+// alternate (e.g. Docker) via SUDO_EXEC_BACKEND. Backends are registry-driven.
+// ---------------------------------------------------------------------------
+
+export {
+  type ExecBackend,
+  registerExecBackend,
+  getRegisteredExecBackend,
+  listExecBackends,
+  selectExecBackendName,
+  resolveExecBackend,
+} from './exec-backend.js';
 
 export {
   type SandboxManagerOptions,
