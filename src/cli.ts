@@ -43,6 +43,8 @@ import { CrossChannelMemory } from './core/channels/cross-channel-memory.js';
 import { GoalEngineV2 } from './core/autonomy/goal-engine-v2.js';
 import { OutcomesLedger } from './core/autonomy/outcomes.js';
 import { AuditTrail } from './core/security/audit-trail.js';
+import { AutoUpdateManager } from './core/update/update-manager.js';
+import { DEFAULT_UPDATE_CONFIG } from './core/update/update-manager-types.js';
 import { AgentWallet } from './core/economy/wallet.js';
 import { AgentIdentity } from './core/economy/did.js';
 import { AutoDream } from './core/memory/auto-dream.js';
@@ -2513,6 +2515,34 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 8.5b Admin-power dependencies (#28b slice 1)
+  // Hoisted ahead of the §8.6 dashboard wiring so the dashboard can register
+  // the audit chain + updater for /api/admin/* mutation endpoints. §9 below
+  // reuses the same auditTrail instance (one SQLite file, one chain writer).
+  // -------------------------------------------------------------------------
+  let auditTrail: AuditTrail | null = null;
+  try {
+    auditTrail = new AuditTrail();
+  } catch (err) {
+    log.warn({ err: String(err) }, 'AuditTrail construction failed (non-fatal) — admin actions will not be audited');
+  }
+  // Verified fail-open: attachHttpApi (cli.ts:2870, http-api.ts:70) declares
+  // `auditTrail?:` and gates all uses (http-api.ts:446, :465) on truthy, so
+  // passing `auditTrail ?? undefined` here when construction failed leaves
+  // the gateway healthy — just with no inspection-route audit binding.
+  let autoUpdater: AutoUpdateManager | null = null;
+  try {
+    autoUpdater = new AutoUpdateManager({
+      config: { ...DEFAULT_UPDATE_CONFIG, projectRoot: PROJECT_ROOT },
+    });
+    // Note: we don't call .start() here — that would enable the periodic
+    // auto-update timer. Slice 1 ships manual-trigger only via the dashboard
+    // endpoint; the periodic loop is a follow-up slice.
+  } catch (err) {
+    log.warn({ err: String(err) }, 'AutoUpdateManager construction failed (non-fatal) — /api/admin/update will report updater_not_registered');
+  }
+
+  // -------------------------------------------------------------------------
   // 8.6 Observability dashboard (kill switch: SUDO_DASHBOARD_DISABLE=1)
   // -------------------------------------------------------------------------
   try {
@@ -2546,11 +2576,18 @@ async function boot(): Promise<void> {
       // section 5.5, multiAgent is null and the dashboard's getLiveAgents()
       // serves a zero default rather than 500ing.
       ...(multiAgent ? { agentSwarm: { getSnapshot: () => multiAgent!.getSnapshot() } } : {}),
+      // Admin-power sources (#28b slice 1). Each is optional — endpoints
+      // serve a structured "not_registered" response when the global is missing.
+      ...(autoUpdater ? { updater: autoUpdater } : {}),
+      ...(auditTrail ? { audit: auditTrail } : {}),
     });
 
     initDashboard({ port: dashboardPort, authToken: dashboardToken, refreshIntervalMs: 5000 });
     registerShutdown(() => shutdownDashboard());
-    log.info({ port: dashboardPort }, 'Observability dashboard wired (SUDO_DASHBOARD_DISABLE=1 to disable)');
+    log.info({
+      port: dashboardPort,
+      adminPowers: process.env['SUDO_ADMIN_POWERS'] === '1',
+    }, 'Observability dashboard wired (SUDO_DASHBOARD_DISABLE=1 to disable; SUDO_ADMIN_POWERS=1 enables mutation endpoints)');
   } catch (err) {
     log.warn({ err: String(err) }, 'Dashboard wiring failed (non-fatal)');
   }
@@ -2558,16 +2595,16 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   // 9. SUDO-AI v5 modules
   // -------------------------------------------------------------------------
+  // Note: auditTrail is hoisted ahead of §8.6 above so the dashboard can share
+  // the same chain writer; we reuse the same instance here.
   let goalEngine: GoalEngineV2 | null = null;
   let outcomesLedger: OutcomesLedger | null = null;
-  let auditTrail: AuditTrail | null = null;
 
   try {
     console.log('[boot] Initializing SUDO-AI v5 modules...');
     const crossChannelMemory = new CrossChannelMemory();
     goalEngine = new GoalEngineV2();
     outcomesLedger = new OutcomesLedger();
-    auditTrail = new AuditTrail();
     const agentWallet = new AgentWallet();
     const agentIdentity = new AgentIdentity('sudo-ai-v5');
     const steeringChannel = new InMemorySteeringChannel();

@@ -22,11 +22,19 @@ import {
   ActivityEvent,
   LiveAgentsData,
   AgentSwarmSource,
+  BrainSource,
+  UpdaterSource,
+  AuditSource,
+  UpdateCheckResult,
+  UpdateApplyResult,
 } from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
 
 const log = createLogger('dashboard');
 const DASHBOARD_DISABLED = process.env['SUDO_DASHBOARD_DISABLE'] === '1';
+
+/** Delay between sending the 202 response and `process.exit(0)` so the HTTP reply flushes. */
+const RESTART_FLUSH_DELAY_MS = 250;
 
 const activityBuffer: ActivityEvent[] = [];
 
@@ -39,24 +47,43 @@ export interface AlignmentDigestSource {
   getDigest?: () => { overallScore?: number; signals?: Record<string, number> } | undefined;
 }
 interface SudoRuntimeGlobals {
-  __sudoBrain?: unknown;
+  __sudoBrain?: BrainSource | unknown;
   __sudoGateway?: unknown;
   __sudoAlignment?: AlignmentDigestSource;
   __sudoAgentSwarm?: AgentSwarmSource;
+  __sudoUpdater?: UpdaterSource;
+  __sudoAudit?: AuditSource;
 }
 const runtimeGlobals = globalThis as SudoRuntimeGlobals;
 
-/** Register live subsystem references for health checks and alignment data. */
+/** Register live subsystem references for health checks, alignment data, and admin-power surfaces. */
 export function registerDashboardGlobals(parts: {
-  brain?: unknown;
+  brain?: BrainSource | unknown;
   gateway?: unknown;
   alignment?: AlignmentDigestSource;
   agentSwarm?: AgentSwarmSource;
+  updater?: UpdaterSource;
+  audit?: AuditSource;
 }): void {
   if (parts.brain !== undefined) runtimeGlobals.__sudoBrain = parts.brain;
   if (parts.gateway !== undefined) runtimeGlobals.__sudoGateway = parts.gateway;
   if (parts.alignment !== undefined) runtimeGlobals.__sudoAlignment = parts.alignment;
   if (parts.agentSwarm !== undefined) runtimeGlobals.__sudoAgentSwarm = parts.agentSwarm;
+  if (parts.updater !== undefined) runtimeGlobals.__sudoUpdater = parts.updater;
+  if (parts.audit !== undefined) runtimeGlobals.__sudoAudit = parts.audit;
+}
+
+/**
+ * Structural Brain narrowing for `getCurrentModel()` / `switchModel()` —
+ * `__sudoBrain` is `unknown` at the registry boundary; the callers below verify
+ * the two methods exist before invoking. Returns `undefined` when the brain is
+ * not registered or doesn't expose the model API.
+ */
+function brainAsSource(): BrainSource | undefined {
+  const b = runtimeGlobals.__sudoBrain as BrainSource | undefined;
+  if (!b) return undefined;
+  if (typeof b.getModel !== 'function' || typeof b.setModel !== 'function') return undefined;
+  return b;
 }
 let lastCpuUsage = process.cpuUsage();
 let lastCpuTime = Date.now();
@@ -235,6 +262,153 @@ export class DashboardServer {
   setCounters(totalRequests: number, activeSessions: number): void {
     this.totalRequests = totalRequests;
     this.activeSessions = activeSessions;
+  }
+
+  // -------------------------------------------------------------------------
+  // Admin-power surfaces (#28b slice 1 — Hermes parity)
+  // -------------------------------------------------------------------------
+  //
+  // Three mutation endpoints, each Bearer-gated AND opt-in behind
+  // SUDO_ADMIN_POWERS=1 (so a stock dashboard exposes nothing destructive).
+  // Each call audit-logs through __sudoAudit when registered; absence of the
+  // audit chain is non-fatal so the dashboard never blocks operator control
+  // on observability.
+  // -------------------------------------------------------------------------
+
+  /** True iff opt-in flag SUDO_ADMIN_POWERS=1 is set. Re-read per call so tests can toggle. */
+  adminPowersEnabled(): boolean {
+    return process.env['SUDO_ADMIN_POWERS'] === '1';
+  }
+
+  /**
+   * The active LLM model id ("provider/model-id"). Returns `undefined` when
+   * the Brain is not registered or lacks `getModel()`.
+   */
+  getCurrentModel(): string | undefined {
+    const b = brainAsSource();
+    try { return b?.getModel(); } catch { return undefined; }
+  }
+
+  /**
+   * Switch the primary model at runtime.
+   * @returns the new active model on success.
+   * @throws when target is not in the configured failover chain (Brain throws
+   *         LLMError; we re-throw so the route handler can map to 400).
+   */
+  switchModel(target: string, actor: string): string {
+    const b = brainAsSource();
+    if (!b) {
+      this.audit(actor, 'admin.model.set', target, 'error', { reason: 'brain_not_registered' });
+      throw new Error('brain_not_registered');
+    }
+    try {
+      b.setModel(target);
+      const now = b.getModel();
+      this.audit(actor, 'admin.model.set', target, 'success', { newModel: now });
+      return now;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.audit(actor, 'admin.model.set', target, 'denied', { reason: message });
+      throw err;
+    }
+  }
+
+  /**
+   * Schedule a self-exit so PM2 (or whatever supervises this process) respawns.
+   * Returns the planned exit delay so the caller can hold the response window
+   * open just long enough for the HTTP reply to flush.
+   */
+  requestRestart(actor: string, reason: string): { acceptedAt: string; exitInMs: number } {
+    const acceptedAt = new Date().toISOString();
+    this.audit(actor, 'admin.restart', 'process', 'success', { reason, exitInMs: RESTART_FLUSH_DELAY_MS });
+    log.warn({ actor, reason, exitInMs: RESTART_FLUSH_DELAY_MS }, 'Restart requested via dashboard — process.exit(0) scheduled');
+    // Test-only short-circuit: SUDO_DASHBOARD_RESTART_NOEXIT=1 keeps the audit
+    // + log + return shape live but skips the actual process exit so suites
+    // that exercise this endpoint don't kill the vitest runner. Safe in prod:
+    // env vars cannot be changed mid-process, so a remote attacker reaching
+    // POST /api/admin/restart cannot also flip this flag — it had to be set
+    // before the supervisor spawned the process. The endpoint still requires
+    // Bearer + SUDO_ADMIN_POWERS=1 gates regardless.
+    if (process.env['SUDO_DASHBOARD_RESTART_NOEXIT'] !== '1') {
+      setTimeout(() => {
+        log.warn('Exiting now for supervisor restart');
+        // eslint-disable-next-line n/no-process-exit
+        process.exit(0);
+      }, RESTART_FLUSH_DELAY_MS).unref();
+    }
+    return { acceptedAt, exitInMs: RESTART_FLUSH_DELAY_MS };
+  }
+
+  /**
+   * Preview an available update via `updater.checkNow()` without mutating
+   * anything. Returns `{available: false, reason: 'updater_not_registered'}`
+   * when no updater is wired so the endpoint stays honest.
+   */
+  async previewUpdate(channel: string | undefined, actor: string): Promise<UpdateCheckResult & { previewed: true }> {
+    const u = runtimeGlobals.__sudoUpdater;
+    if (!u) {
+      this.audit(actor, 'admin.update.preview', channel ?? 'default', 'error', { reason: 'updater_not_registered' });
+      return { previewed: true, available: false, reason: 'updater_not_registered' };
+    }
+    try {
+      const result = await u.checkNow(channel);
+      this.audit(actor, 'admin.update.preview', channel ?? 'default', 'success', { available: result.available, newVersion: result.newVersion });
+      return { previewed: true, ...result };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.audit(actor, 'admin.update.preview', channel ?? 'default', 'error', { reason: message });
+      return { previewed: true, available: false, reason: message };
+    }
+  }
+
+  /**
+   * Trigger a real update (`git pull` + `pnpm install` + `pnpm build` + `pm2
+   * reload`). Fire-and-forget — returns immediately because `pm2 reload` may
+   * kill the response mid-flush.
+   *
+   * The promise from `applyUpdate()` is intentionally orphaned; errors are
+   * logged + audited inside the .then/.catch chain rather than propagated.
+   */
+  triggerUpdate(channel: string | undefined, actor: string): { accepted: true; channel?: string; acceptedAt: string } | { accepted: false; reason: string } {
+    const u = runtimeGlobals.__sudoUpdater;
+    if (!u) {
+      this.audit(actor, 'admin.update.apply.queued', channel ?? 'default', 'error', { reason: 'updater_not_registered' });
+      return { accepted: false, reason: 'updater_not_registered' };
+    }
+    const acceptedAt = new Date().toISOString();
+    // First chain entry: ONLY the acceptance, not the apply. The action name
+    // ".queued" + the outcome 'success' refer to the queue-onto-background-job
+    // succeeding — NOT to the update having been applied. The real apply
+    // result lands in the second chain entry below (action .result) so any
+    // future audit-chain reader scanning for failed updates must look at
+    // .result, not .queued.
+    this.audit(actor, 'admin.update.apply.queued', channel ?? 'default', 'success', { acceptedAt, note: 'queued; real result in admin.update.apply.result' });
+    log.warn({ actor, channel }, 'Update triggered via dashboard — applyUpdate started in background');
+    u.applyUpdate(channel)
+      .then((result: UpdateApplyResult) => {
+        log.warn({ result }, 'applyUpdate() settled');
+        this.audit(actor, 'admin.update.apply.result', channel ?? 'default', result.success ? 'success' : 'failure', { ...result });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error({ err: message }, 'applyUpdate() rejected');
+        this.audit(actor, 'admin.update.apply.result', channel ?? 'default', 'error', { reason: message });
+      });
+    return { accepted: true, ...(channel !== undefined && { channel }), acceptedAt };
+  }
+
+  /**
+   * Best-effort audit log shim. The dashboard never blocks operator control
+   * on the audit chain being available; failures are logged + swallowed.
+   */
+  private audit(actor: string, action: string, resource: string, outcome: 'success' | 'failure' | 'denied' | 'error', metadata?: Record<string, unknown>): void {
+    const a = runtimeGlobals.__sudoAudit;
+    if (!a) return;
+    try {
+      a.record({ actor, action, resource, outcome, ...(metadata !== undefined && { metadata }) });
+    } catch (err: unknown) {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Audit append failed (non-fatal)');
+    }
   }
 }
 
