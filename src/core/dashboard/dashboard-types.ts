@@ -82,3 +82,62 @@ export interface AgentSnapshotPublic {
 export interface AgentSwarmSource {
   getSnapshot?: () => LiveAgentsData | undefined;
 }
+
+// ---------------------------------------------------------------------------
+// Admin-power surfaces (#28b slice 1 — Hermes parity)
+// ---------------------------------------------------------------------------
+
+/**
+ * Subset of the Brain class the dashboard needs for runtime model switching.
+ * Lets `dashboard-server` stay decoupled from `core/brain/brain.ts`.
+ */
+export interface BrainSource {
+  getModel(): string;
+  setModel(target: string): void;
+}
+
+/**
+ * Subset of `AutoUpdateManager` the dashboard needs for the update endpoints.
+ * `checkNow` previews; `applyUpdate` actually mutates (git pull + build + pm2
+ * reload), so only the latter is fire-and-forget from the route handler.
+ *
+ * Slice 1 only needs preview + apply. `getStatus()` is intentionally not
+ * mirrored here — slice 2 will add a `GET /api/admin/update/status` endpoint
+ * and the matching contract at that time.
+ */
+export interface UpdaterSource {
+  checkNow(channel?: string): Promise<UpdateCheckResult>;
+  applyUpdate(channel?: string): Promise<UpdateApplyResult>;
+}
+
+/** Mirror of `VersionCheckResult` from update-manager-types so the dashboard owns its own contract. */
+export interface UpdateCheckResult {
+  available: boolean;
+  currentVersion?: string;
+  newVersion?: string;
+  channel?: string;
+  reason?: string;
+}
+
+/** Mirror of `UpdateResult` from update-manager-types. */
+export interface UpdateApplyResult {
+  success: boolean;
+  fromVersion: string;
+  toVersion?: string;
+  stage: string;
+  error?: string;
+}
+
+/**
+ * Subset of `AuditTrail` the dashboard needs to log admin-power invocations.
+ * Matches `AuditTrail.record(entry)` from `core/security/audit-trail.ts:231`.
+ */
+export interface AuditSource {
+  record(entry: {
+    actor: string;
+    action: string;
+    resource: string;
+    outcome: 'success' | 'failure' | 'denied' | 'error';
+    metadata?: Record<string, unknown>;
+  }): string;
+}
