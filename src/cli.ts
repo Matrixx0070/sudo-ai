@@ -2582,6 +2582,7 @@ async function boot(): Promise<void> {
   let fleetIdentity: import('./core/fleet/device-identity.js').DeviceIdentity | null = null;
   let fleetRegistrar: import('./core/fleet/registry-store.js').RegistryStore | null = null;
   let fleetCommandQueue: import('./core/fleet/command-queue.js').CommandQueue | null = null;
+  let fleetNonceStore: import('./core/fleet/nonce-store.js').NonceStore | null = null;
   try {
     const { loadOrCreateDeviceIdentity, defaultIdentityPath } =
       await import('./core/fleet/device-identity.js');
@@ -2607,6 +2608,13 @@ async function boot(): Promise<void> {
         existingCommands: fleetCommandQueue.count(),
       }, 'Fleet command queue enabled (#28c slice 2) — POST /api/admin/fleet/dispatch + GET /api/fleet/device/:id/inbox + POST /api/fleet/device/:id/result + GET /api/admin/fleet/commands/:id live');
       registerShutdown(() => fleetCommandQueue?.close());
+
+      // Slice 4 — nonce store for the registration challenge round-trip.
+      // In-memory; loss on restart is fine (devices fetch a new nonce on
+      // their next register attempt).
+      const { NonceStore } = await import('./core/fleet/nonce-store.js');
+      fleetNonceStore = new NonceStore();
+      log.info({}, 'Fleet nonce store enabled (#28c slice 4) — GET /api/fleet/challenge live; POST /api/fleet/register now requires nonce + admin admit/revoke routes live');
     }
   } catch (err) {
     log.warn({ err: String(err) }, 'Fleet identity/registrar wiring failed (non-fatal) — /api/fleet/* routes will report fleet_registrar_not_enabled');
@@ -2709,6 +2717,8 @@ async function boot(): Promise<void> {
       ...(fleetRegistrar ? { fleetRegistrar } : {}),
       // Fleet command queue (#28c slice 2). Same opt-in as the registrar.
       ...(fleetCommandQueue ? { fleetCommandQueue } : {}),
+      // Fleet nonce store (#28c slice 4). Same opt-in as the registrar.
+      ...(fleetNonceStore ? { fleetNonceStore } : {}),
     });
 
     initDashboard({

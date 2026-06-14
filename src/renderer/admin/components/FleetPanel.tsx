@@ -62,8 +62,20 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ token }) => {
     }
   };
 
+  const onAdmissionToggle = async (): Promise<void> => {
+    if (!selected || busy) return;
+    setBusy(true);
+    try {
+      if (selected.admissionStatus === 'revoked') await fleet.admit(selected.deviceId);
+      else await fleet.revoke(selected.deviceId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const dispatchDisabled = !selected || busy
-    || (kind === 'model.set' && modelArg.trim().length === 0);
+    || (kind === 'model.set' && modelArg.trim().length === 0)
+    || (selected?.admissionStatus === 'revoked'); // can't dispatch to revoked devices
 
   return (
     <Panel title={`Fleet (${fleet.devices.length} device${fleet.devices.length === 1 ? '' : 's'})`} wide>
@@ -86,6 +98,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ token }) => {
             onDispatch={onDispatch}
             disabled={dispatchDisabled}
             busy={busy}
+            onAdmissionToggle={onAdmissionToggle}
           />
           <CommandHistory commands={fleet.commands} loading={fleet.loading} />
         </div>
@@ -117,7 +130,11 @@ const DeviceList: React.FC<DeviceListProps> = ({ devices, selectedDeviceId, onSe
     <ul className="list-none p-0 m-0 flex flex-col gap-[4px] max-h-[280px] overflow-y-auto">
       {devices.map((d) => {
         const selected = d.deviceId === selectedDeviceId;
-        const lastSeen = formatRelative(d.lastRegisteredAt);
+        // Slice 4 — prefer the heartbeat (last_seen_at) over the
+        // register timestamp for the "last seen" line. Devices that
+        // haven't polled yet still surface "registered N ago".
+        const heartbeatIso = d.lastSeenAt ?? d.lastRegisteredAt;
+        const online = d.lastSeenAt !== null && (Date.now() - Date.parse(d.lastSeenAt)) < 60_000;
         return (
           <li key={d.deviceId}>
             <button
@@ -130,9 +147,24 @@ const DeviceList: React.FC<DeviceListProps> = ({ devices, selectedDeviceId, onSe
               } cursor-pointer text-[12px]`}
               aria-pressed={selected}
             >
-              <div className="font-bold break-all">{d.hostname}</div>
+              <div className="flex items-center gap-[6px]">
+                <span
+                  aria-label={online ? 'online' : 'offline'}
+                  className={`inline-block w-[8px] h-[8px] rounded-full ${
+                    online ? 'bg-[#3fb950]' : 'bg-[#6e7681]'
+                  }`}
+                />
+                <span className="font-bold break-all">{d.hostname}</span>
+                {d.admissionStatus === 'revoked' && (
+                  <span className="inline-block px-[6px] py-[1px] rounded-[10px] text-[10px] font-bold bg-[#3d0000] text-[#f85149] border border-[#b62324]">
+                    revoked
+                  </span>
+                )}
+              </div>
               <div className="text-[10px] text-[#8b949e] break-all">{d.deviceId}</div>
-              <div className="text-[10px] text-[#6e7681]">v{d.versionStr} · last seen {lastSeen}</div>
+              <div className="text-[10px] text-[#6e7681]">
+                v{d.versionStr} · {d.lastSeenAt ? 'last seen' : 'registered'} {formatRelative(heartbeatIso)}
+              </div>
             </button>
           </li>
         );
@@ -150,8 +182,10 @@ interface DispatchFormProps {
   onDispatch(): void;
   disabled: boolean;
   busy: boolean;
+  /** Slice 4 — flip admission state on the selected device. */
+  onAdmissionToggle(): void;
 }
-const DispatchForm: React.FC<DispatchFormProps> = ({ selected, kind, setKind, modelArg, setModelArg, onDispatch, disabled, busy }) => {
+const DispatchForm: React.FC<DispatchFormProps> = ({ selected, kind, setKind, modelArg, setModelArg, onDispatch, disabled, busy, onAdmissionToggle }) => {
   return (
     <div className="bg-[#0d1117] border border-[#30363d] rounded-md p-[10px]">
       <div className="text-[#8b949e] text-[11px] uppercase tracking-wider mb-[8px]">Dispatch</div>
@@ -193,7 +227,25 @@ const DispatchForm: React.FC<DispatchFormProps> = ({ selected, kind, setKind, mo
           >
             {busy ? 'Sending…' : 'Send'}
           </button>
-          <div className="text-[10px] text-[#6e7681] basis-full">→ {selected.hostname} ({selected.deviceId.slice(0, 12)}…)</div>
+          <button
+            type="button"
+            onClick={onAdmissionToggle}
+            disabled={busy}
+            className={`px-[12px] py-[4px] text-[12px] rounded border ${
+              busy
+                ? 'bg-[#21262d] text-[#6e7681] border-[#30363d] cursor-not-allowed'
+                : selected.admissionStatus === 'revoked'
+                ? 'bg-[#0d4429] text-[#3fb950] border-[#1a7f37] cursor-pointer hover:opacity-80'
+                : 'bg-[#3d0000] text-[#f85149] border-[#b62324] cursor-pointer hover:opacity-80'
+            }`}
+            aria-label={selected.admissionStatus === 'revoked' ? 'Admit device' : 'Revoke device'}
+          >
+            {selected.admissionStatus === 'revoked' ? 'Admit' : 'Revoke'}
+          </button>
+          <div className="text-[10px] text-[#6e7681] basis-full">
+            → {selected.hostname} ({selected.deviceId.slice(0, 12)}…)
+            {selected.admissionStatus === 'revoked' && ' · revoked — dispatch disabled'}
+          </div>
         </div>
       )}
     </div>

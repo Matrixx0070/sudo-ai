@@ -16,22 +16,27 @@ import {
 import { registerRoutes } from '../../src/core/dashboard/dashboard-routes.js';
 import { createDeviceIdentity, defaultIdentityPath } from '../../src/core/fleet/device-identity.js';
 import { RegistryStore } from '../../src/core/fleet/registry-store.js';
+import { NonceStore } from '../../src/core/fleet/nonce-store.js';
 import { registerWithRegistrar } from '../../src/core/fleet/registrar-client.js';
 import type { DashboardConfig } from '../../src/core/dashboard/dashboard-types.js';
 
 let tmp: string;
 let store: RegistryStore;
+let nonceStore: NonceStore;
 
 beforeEach(() => {
   tmp = mkdtempSync(path.join(tmpdir(), 'sudo-fleet-client-'));
   store = new RegistryStore({ dbPath: path.join(tmp, 'fleet.db') });
-  registerDashboardGlobals({ fleetRegistrar: store });
+  nonceStore = new NonceStore();
+  registerDashboardGlobals({ fleetRegistrar: store, fleetNonceStore: nonceStore });
 });
 afterEach(() => {
   store.close();
   rmSync(tmp, { recursive: true, force: true });
   const g = globalThis as Record<string, unknown>;
   delete g['__sudoFleetRegistrar'];
+  delete g['__sudoFleetCommandQueue'];
+  delete g['__sudoFleetNonceStore'];
 });
 
 function startTestServer(): Promise<{ baseUrl: string; close(): Promise<void> }> {
@@ -101,11 +106,12 @@ describe('registerWithRegistrar', () => {
     }
   });
 
-  it('RC-04: registrar returns 503 (mode off) → registrar_rejected with status', async () => {
+  it('RC-04: registrar returns 503 on challenge (mode off) → challenge_rejected with status', async () => {
     const id = createDeviceIdentity(defaultIdentityPath(tmp));
-    // Unregister the global to simulate registrar mode OFF.
+    // Unregister both fleet globals to simulate registrar mode OFF.
     const g = globalThis as Record<string, unknown>;
     delete g['__sudoFleetRegistrar'];
+    delete g['__sudoFleetNonceStore'];
     const srv = await startTestServer();
     try {
       const r = await registerWithRegistrar({
@@ -115,7 +121,10 @@ describe('registerWithRegistrar', () => {
       });
       expect(r.ok).toBe(false);
       if (!r.ok) {
-        expect(r.reason).toBe('registrar_rejected');
+        // Slice 4 — registerWithRegistrar GETs the challenge first; that
+        // fails before we ever POST to /register, so the structural reason
+        // is `challenge_rejected` not `registrar_rejected`.
+        expect(r.reason).toBe('challenge_rejected');
         expect(r.status).toBe(503);
       }
     } finally { await srv.close(); }

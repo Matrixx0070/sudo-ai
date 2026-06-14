@@ -125,13 +125,16 @@ describe('GET /api/admin/fleet/devices/:id/commands (#28c slice 3)', () => {
     registerDashboardGlobals({ fleetRegistrar: registry, fleetCommandQueue: queue });
     const id = createDeviceIdentity(defaultIdentityPath(tmp));
     registry.upsert({ deviceId: id.deviceId, publicKeyPem: id.publicKeyPem, hostname: 'd', versionStr: '4.1.0' });
-    queue.enqueue({ deviceId: id.deviceId, command: { kind: 'model.get' }, dispatcher: 'admin' });
-    queue.enqueue({ deviceId: id.deviceId, command: { kind: 'model.set', args: { model: 'gpt-4' } }, dispatcher: 'admin' });
-    queue.enqueue({ deviceId: id.deviceId, command: { kind: 'model.get' }, dispatcher: 'admin' });
+    // Explicit timestamps so the most-recent-first ordering is
+    // deterministic. Without these, three same-ms enqueues tie in
+    // SQLite and CI flakes (real cause of the slice-3 retest fail).
+    queue.enqueue({ deviceId: id.deviceId, command: { kind: 'model.get' }, dispatcher: 'admin', now: new Date('2026-01-01T00:00:00Z') });
+    queue.enqueue({ deviceId: id.deviceId, command: { kind: 'model.set', args: { model: 'gpt-4' } }, dispatcher: 'admin', now: new Date('2026-01-01T00:00:01Z') });
+    queue.enqueue({ deviceId: id.deviceId, command: { kind: 'model.get' }, dispatcher: 'admin', now: new Date('2026-01-01T00:00:02Z') });
     // Enqueue a command for a DIFFERENT device — must not leak into our list.
     const other = createDeviceIdentity(path.join(tmp, 'other.json'));
     registry.upsert({ deviceId: other.deviceId, publicKeyPem: other.publicKeyPem, hostname: 'o', versionStr: '4.1.0' });
-    queue.enqueue({ deviceId: other.deviceId, command: { kind: 'model.get' }, dispatcher: 'admin' });
+    queue.enqueue({ deviceId: other.deviceId, command: { kind: 'model.get' }, dispatcher: 'admin', now: new Date('2026-01-01T00:00:03Z') });
 
     const srv = await startTestServer();
     try {

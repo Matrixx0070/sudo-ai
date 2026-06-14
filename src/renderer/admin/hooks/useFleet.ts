@@ -23,6 +23,10 @@ export interface FleetDevice {
   versionStr: string;
   firstRegisteredAt: string;
   lastRegisteredAt: string;
+  /** Slice 4 — null for devices that haven't yet polled the inbox. */
+  lastSeenAt: string | null;
+  /** Slice 4 — admin can revoke a device's access. */
+  admissionStatus: 'approved' | 'revoked';
   publicKeyFingerprint: string;
   metadata: Record<string, string> | null;
 }
@@ -53,6 +57,10 @@ export interface UseFleetReturn {
   refresh(): Promise<void>;
   /** Send a dispatch POST + refresh commands history. */
   dispatch(input: { deviceId: string; kind: 'model.get' | 'model.set'; args?: Record<string, unknown> }): Promise<string | null>;
+  /** Slice 4 — admit a device (flip admission_status → approved). */
+  admit(deviceId: string): Promise<boolean>;
+  /** Slice 4 — revoke a device (flip admission_status → revoked). */
+  revoke(deviceId: string): Promise<boolean>;
 }
 
 const POLL_INTERVAL_MS = 5000;
@@ -153,6 +161,29 @@ export function useFleet(token: string): UseFleetReturn {
     setSelectedDeviceId(deviceId);
   }, []);
 
+  const flipAdmission = useCallback(async (deviceId: string, action: 'admit' | 'revoke'): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`/api/admin/fleet/devices/${encodeURIComponent(deviceId)}/${action}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        setError(`${action} failed: HTTP ${res.status} ${body.slice(0, 120)}`);
+        return false;
+      }
+      await refresh();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }, [token, refresh]);
+
+  const admit = useCallback((id: string) => flipAdmission(id, 'admit'), [flipAdmission]);
+  const revoke = useCallback((id: string) => flipAdmission(id, 'revoke'), [flipAdmission]);
+
   // Initial load + poll.
   useEffect(() => {
     if (!token) return;
@@ -171,5 +202,5 @@ export function useFleet(token: string): UseFleetReturn {
     return () => { cancelled = true; };
   }, [token, selectedDeviceId, fetchCommands]);
 
-  return { devices, selectedDeviceId, selectDevice, commands, loading, error, registrarOff, refresh, dispatch };
+  return { devices, selectedDeviceId, selectDevice, commands, loading, error, registrarOff, refresh, dispatch, admit, revoke };
 }

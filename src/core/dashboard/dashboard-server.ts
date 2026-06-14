@@ -111,6 +111,15 @@ interface SudoRuntimeGlobals {
    * back via the structural `FleetCommandQueueSource` interface.
    */
   __sudoFleetCommandQueue?: FleetCommandQueueSource;
+  /**
+   * Slice-4 nonce store for the registration challenge round-trip.
+   * Loaded by cli.ts alongside the registrar; route handler consumes the
+   * nonce inside verifyRegistrationRequest.
+   */
+  __sudoFleetNonceStore?: {
+    issue(deviceId: string): { nonce: string; expiresAtMs: number };
+    consume(deviceId: string, nonce: string): boolean;
+  };
 }
 const runtimeGlobals = globalThis as SudoRuntimeGlobals;
 
@@ -125,6 +134,7 @@ export function registerDashboardGlobals(parts: {
   authBackend?: AuthBackend;
   fleetRegistrar?: FleetRegistrarSource;
   fleetCommandQueue?: FleetCommandQueueSource;
+  fleetNonceStore?: { issue(deviceId: string): { nonce: string; expiresAtMs: number }; consume(deviceId: string, nonce: string): boolean };
 }): void {
   if (parts.brain !== undefined) runtimeGlobals.__sudoBrain = parts.brain;
   if (parts.gateway !== undefined) runtimeGlobals.__sudoGateway = parts.gateway;
@@ -135,6 +145,12 @@ export function registerDashboardGlobals(parts: {
   if (parts.authBackend !== undefined) runtimeGlobals.__sudoAuthBackend = parts.authBackend;
   if (parts.fleetRegistrar !== undefined) runtimeGlobals.__sudoFleetRegistrar = parts.fleetRegistrar;
   if (parts.fleetCommandQueue !== undefined) runtimeGlobals.__sudoFleetCommandQueue = parts.fleetCommandQueue;
+  if (parts.fleetNonceStore !== undefined) runtimeGlobals.__sudoFleetNonceStore = parts.fleetNonceStore;
+}
+
+/** Slice 4 — look up the registered nonce store. */
+export function getRegisteredFleetNonceStore(): typeof runtimeGlobals.__sudoFleetNonceStore | undefined {
+  return runtimeGlobals.__sudoFleetNonceStore;
 }
 
 /**
@@ -686,6 +702,17 @@ export class DashboardServer {
     this.audit(actor, 'admin.fleet.dispatch', `device:${deviceId}`, 'success', {
       commandId,
       kind,
+    });
+  }
+
+  /**
+   * Audit an admission state transition (#28c slice 4). Admin admit/revoke
+   * is a high-impact action — the chain entry records actor + target + the
+   * new state.
+   */
+  appendFleetAdmissionAudit(actor: string, deviceId: string, newStatus: 'approved' | 'revoked'): void {
+    this.audit(actor, `admin.fleet.${newStatus === 'approved' ? 'admit' : 'revoke'}`, `device:${deviceId}`, 'success', {
+      admissionStatus: newStatus,
     });
   }
 
