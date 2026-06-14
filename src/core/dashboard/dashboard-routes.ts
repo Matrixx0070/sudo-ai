@@ -20,7 +20,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { DashboardServer } from './dashboard-server.js';
+import { checkHostHeader, type DashboardServer } from './dashboard-server.js';
 import type { DashboardConfig } from './dashboard-types.js';
 import { DASHBOARD_HTML } from './dashboard-html.js';
 
@@ -57,26 +57,20 @@ const POST_ROUTES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Validate Bearer token for /api/* routes.
+ * Authenticate via the dashboard's resolved AuthBackend (pluggable; built-in
+ * is `BasicAuthBackend` constructed from config.authToken). Slice 2 — Hermes
+ * parity with `plugins/dashboard_auth/{basic,nous,self_hosted}/`.
  *
- * The `?token=` query-string fallback is GET-only — mutation endpoints
- * (`/api/admin/restart`, `/api/admin/update`, `/api/admin/model/set`) require
- * a real `Authorization: Bearer <tok>` header so the token never ends up in
- * server access logs, browser history, referrer headers, or shell history.
+ * The `?token=` query-string fallback is GET-only — mutation POSTs require
+ * a real Authorization header so the token never ends up in server access
+ * logs, browser history, referrer headers, or shell history.
  */
-function validateAuth(req: IncomingMessage, config: DashboardConfig, opts: { allowQueryToken: boolean }): boolean {
-  const authHeader = req.headers.authorization ?? '';
-  if (authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7);
-    if (token === config.authToken) return true;
-  }
-
-  if (opts.allowQueryToken) {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-    const queryToken = url.searchParams.get('token');
-    if (queryToken === config.authToken) return true;
-  }
-  return false;
+function authenticateRequest(
+  req: IncomingMessage,
+  server: DashboardServer,
+  opts: { allowQueryToken: boolean },
+): { ok: true; principal: string } | { ok: false; reason: string } {
+  return server.getAuthBackend().authenticate(req, opts);
 }
 
 /** Send JSON response. */
@@ -122,17 +116,21 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 }
 
 /**
- * Identifier for the audit actor on dashboard-driven mutations. We don't have
- * a per-user identity (the dashboard is loopback-bound + single shared Bearer),
- * so we tag the actor with the bound remote IP only. Earlier revisions
- * embedded the last 6 chars of the auth token; that leaked a usable token
- * fragment into the chain-hashed audit log (forensics shareability problem),
- * so the token suffix is now omitted. The bound IP is non-spoofable because
- * `req.socket.remoteAddress` ignores `X-Forwarded-For`.
+ * Identifier for the audit actor on dashboard-driven mutations.
+ *
+ * Format: `dashboard:<principal>:<remote-ip>`. The principal comes from the
+ * authenticated AuthBackend result (slice 2 — Hermes parity) — `basic` for
+ * Bearer-only, `basic-query` for ?token= fallback, and future OAuth backends
+ * will return per-user subject claims here. Remote IP is non-spoofable
+ * because `req.socket.remoteAddress` ignores `X-Forwarded-For`.
+ *
+ * Earlier revisions embedded the last 6 chars of the auth token; that leaked
+ * a usable token fragment into the chain-hashed audit log (forensics
+ * shareability problem), so the token suffix is now omitted.
  */
-function actorFor(req: IncomingMessage): string {
+function actorFor(req: IncomingMessage, principal: string): string {
   const remote = req.socket.remoteAddress ?? 'unknown';
-  return `dashboard:${remote}`;
+  return `dashboard:${principal}:${remote}`;
 }
 
 /** Route handler registration. */
@@ -142,7 +140,31 @@ export function registerRoutes(
   server: DashboardServer,
   config: DashboardConfig
 ): void {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  // Step 0a: Host-header allowlist (DNS-rebinding defense, slice 2). Applies
+  // to ALL paths including the unauthenticated HTML root — if an attacker
+  // tricks a victim browser into resolving `evil.com → 127.0.0.1`, the Host
+  // header on those cross-origin fetches carries `evil.com`, not `localhost`,
+  // and 403 fires before any route logic runs.
+  //
+  // Done FIRST — before `new URL(...)` — because a malformed/exotic Host can
+  // make URL construction throw a TypeError, and we want the 403 to fire
+  // without surfacing parse details to the attacker.
+  if (!checkHostHeader(req.headers.host, server.getHostAllowlist())) {
+    sendJson(res, 403, { error: 'Forbidden host' });
+    return;
+  }
+
+  // Step 0b: parse URL only after the Host header has been validated.
+  // Wrapped in try/catch defensively: even with the guard above, an attacker
+  // who controls the allowlist via env (an operator misconfiguration) could
+  // feed a hostname that still crashes the URL parser. Return 400 instead.
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  } catch {
+    sendJson(res, 400, { error: 'Malformed request URL or Host' });
+    return;
+  }
   const pathname = url.pathname;
   const method = req.method ?? 'GET';
 
@@ -152,7 +174,7 @@ export function registerRoutes(
     return;
   }
 
-  // All /api/* routes require authentication
+  // All /api/* routes require authentication (subject to loopback-trust)
   if (!pathname.startsWith('/api/')) {
     sendJson(res, 404, { error: 'Not found' });
     return;
@@ -165,10 +187,38 @@ export function registerRoutes(
   // probes to non-existent routes return 401, not 404, so route names cannot
   // be enumerated without first passing the Bearer gate. Authenticated callers
   // hitting an unknown path still get 404 (the guard below).
-  // Auth: POST mutations require Authorization header — no ?token= fallback.
-  if (!validateAuth(req, config, { allowQueryToken: !isKnownPost })) {
-    sendJson(res, 401, { error: 'Unauthorized' });
-    return;
+  //
+  // Loopback-trust (slice 2): when the dashboard is bound to 127.0.0.1 AND
+  // the operator hasn't set `SUDO_DASHBOARD_INSECURE=1`, GET-only read routes
+  // skip auth — matching Hermes's loopback-trust-by-default pattern (study
+  // doc 19). POST mutations ALWAYS require auth regardless of loopback-trust
+  // (mirrors how Hermes's /api/pty and /api/gateway/restart still require
+  // auth even on loopback).
+  let principal: string;
+  const skipAuthForLoopbackGet = server.isLoopbackTrust() && method === 'GET' && isKnownGet;
+  if (skipAuthForLoopbackGet) {
+    principal = 'loopback-no-auth';
+  } else {
+    // allowQueryToken is true ONLY for known GET routes. Unknown paths and
+    // POST mutations both require an Authorization header — the ?token=
+    // fallback is read-route ergonomics, not a universal auth method.
+    //
+    // try/catch defends against a misbehaving custom AuthBackend throwing
+    // out of `authenticate`. A throwing backend must not fall through to
+    // the top-level 500 handler — treat throw as a denial.
+    let authResult: ReturnType<typeof authenticateRequest>;
+    try {
+      authResult = authenticateRequest(req, server, { allowQueryToken: isKnownGet && !isKnownPost });
+    } catch (err: unknown) {
+      log.warn({ err: err instanceof Error ? err.message : String(err), msg: 'AuthBackend threw — treating as denial' });
+      sendJson(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+    if (!authResult.ok) {
+      sendJson(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+    principal = authResult.principal;
   }
 
   // Unknown path on any method → 404.
@@ -227,7 +277,7 @@ export function registerRoutes(
     sendJson(res, 503, { error: 'admin_powers_disabled', hint: 'Set SUDO_ADMIN_POWERS=1 to enable mutation endpoints' });
     return;
   }
-  handleAdminPost(req, res, server, config, pathname).catch((err: unknown) => {
+  handleAdminPost(req, res, server, pathname, principal).catch((err: unknown) => {
     log.warn({ pathname, err: err instanceof Error ? err.message : String(err), msg: 'Admin POST rejected' });
     if (!res.headersSent) sendJson(res, 500, { error: 'internal_error' });
   });
@@ -238,8 +288,8 @@ async function handleAdminPost(
   req: IncomingMessage,
   res: ServerResponse,
   server: DashboardServer,
-  config: DashboardConfig,
   pathname: string,
+  principal: string,
 ): Promise<void> {
   let body: Record<string, unknown>;
   try {
@@ -250,7 +300,7 @@ async function handleAdminPost(
     return;
   }
 
-  const actor = actorFor(req);
+  const actor = actorFor(req, principal);
 
   if (pathname === '/api/admin/restart') {
     const reason = typeof body['reason'] === 'string' ? (body['reason'] as string) : 'dashboard restart';

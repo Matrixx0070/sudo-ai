@@ -27,6 +27,9 @@ import {
   AuditSource,
   UpdateCheckResult,
   UpdateApplyResult,
+  AuthBackend,
+  AuthResult,
+  DashboardBindMode,
 } from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
 
@@ -35,6 +38,48 @@ const DASHBOARD_DISABLED = process.env['SUDO_DASHBOARD_DISABLE'] === '1';
 
 /** Delay between sending the 202 response and `process.exit(0)` so the HTTP reply flushes. */
 const RESTART_FLUSH_DELAY_MS = 250;
+
+/** Loopback addresses that activate loopback-trust GET-skip-auth behavior. */
+const LOOPBACK_ADDRESSES: ReadonlySet<string> = new Set([
+  '127.0.0.1',
+  '::1',
+  'localhost',
+]);
+
+/**
+ * Default `Host:` header allowlist when `SUDO_DASHBOARD_HOSTS` is unset.
+ * Matches the same loopback names + bracketed IPv6 form a browser sends. The
+ * port suffix is stripped before comparison, so `localhost:18910` matches
+ * `localhost` here.
+ */
+const DEFAULT_HOST_ALLOWLIST: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '::1'];
+
+/**
+ * Determine bind mode from a host string.
+ *
+ * NOTE on `0.0.0.0`: classified as `'lan'` because the RFC-1918 ranges + the
+ * all-interfaces sentinel share the same operator-intent ("non-loopback,
+ * within my network"). But `0.0.0.0` actually binds **every** interface
+ * including any public NIC, so when the boot log reads `mode: 'lan'` and the
+ * bind is `0.0.0.0`, the host should also be treated as if it were
+ * `'public'` for risk assessment — the SUDO_DASHBOARD_INSECURE opt-in
+ * already gates both. cli.ts §8.6 emits an extra warn line when the bind
+ * is literally `0.0.0.0` to make this visible to operators.
+ */
+export function classifyBind(host: string): DashboardBindMode {
+  if (LOOPBACK_ADDRESSES.has(host)) return 'loopback';
+  // RFC 1918 private ranges + link-local are LAN; everything else is public.
+  // We only need a rough classification — the operator must already have
+  // opted into non-loopback bind via SUDO_DASHBOARD_INSECURE=1.
+  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host) || host === '0.0.0.0') return 'lan';
+  return 'public';
+}
+
+/** Parse SUDO_DASHBOARD_HOSTS env (comma-separated) into a normalized allowlist. */
+export function parseHostAllowlist(raw: string | undefined): readonly string[] {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_HOST_ALLOWLIST;
+  return raw.split(',').map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0);
+}
 
 const activityBuffer: ActivityEvent[] = [];
 
@@ -53,6 +98,7 @@ interface SudoRuntimeGlobals {
   __sudoAgentSwarm?: AgentSwarmSource;
   __sudoUpdater?: UpdaterSource;
   __sudoAudit?: AuditSource;
+  __sudoAuthBackend?: AuthBackend;
 }
 const runtimeGlobals = globalThis as SudoRuntimeGlobals;
 
@@ -64,6 +110,7 @@ export function registerDashboardGlobals(parts: {
   agentSwarm?: AgentSwarmSource;
   updater?: UpdaterSource;
   audit?: AuditSource;
+  authBackend?: AuthBackend;
 }): void {
   if (parts.brain !== undefined) runtimeGlobals.__sudoBrain = parts.brain;
   if (parts.gateway !== undefined) runtimeGlobals.__sudoGateway = parts.gateway;
@@ -71,6 +118,71 @@ export function registerDashboardGlobals(parts: {
   if (parts.agentSwarm !== undefined) runtimeGlobals.__sudoAgentSwarm = parts.agentSwarm;
   if (parts.updater !== undefined) runtimeGlobals.__sudoUpdater = parts.updater;
   if (parts.audit !== undefined) runtimeGlobals.__sudoAudit = parts.audit;
+  if (parts.authBackend !== undefined) runtimeGlobals.__sudoAuthBackend = parts.authBackend;
+}
+
+/** Returns the registered AuthBackend, or `undefined` to fall back to built-in Bearer logic. */
+export function getRegisteredAuthBackend(): AuthBackend | undefined {
+  return runtimeGlobals.__sudoAuthBackend;
+}
+
+/**
+ * Default `basic` auth backend — checks `Authorization: Bearer <tok>` and
+ * optionally `?token=<tok>` query fallback. The token is captured in the
+ * closure so the backend matches Hermes's per-instance plugin contract
+ * (`plugins/dashboard_auth/basic/`).
+ *
+ * Used when no other backend is registered via `registerDashboardGlobals`.
+ */
+export function createBasicAuthBackend(authToken: string): AuthBackend {
+  return {
+    name: 'basic',
+    authenticate(req, opts) {
+      const authHeader = req.headers.authorization ?? '';
+      if (authHeader.startsWith('Bearer ')) {
+        const token = authHeader.slice(7);
+        if (token === authToken) return { ok: true, principal: 'dashboard:basic' };
+      }
+      if (opts.allowQueryToken) {
+        const host = req.headers.host ?? 'localhost';
+        const url = new URL(req.url ?? '/', `http://${host}`);
+        const queryToken = url.searchParams.get('token');
+        if (queryToken === authToken) return { ok: true, principal: 'dashboard:basic-query' };
+      }
+      return { ok: false, reason: 'invalid_or_missing_token' };
+    },
+  };
+}
+
+/** Re-export AuthBackend / AuthResult / DashboardBindMode for downstream consumers. */
+export type { AuthBackend, AuthResult, DashboardBindMode };
+
+/**
+ * Compare a request's `Host:` header against the allowlist (port stripped,
+ * case-normalized). Returns `true` if the request should proceed to auth,
+ * `false` if the dashboard should answer 403.
+ *
+ * DNS-rebinding defense (GHSA-ppp5-vxwm-4cf7 precedent): an attacker tricks
+ * a victim's browser, currently on the local dashboard, into fetching from
+ * `evil.com` which DNS-resolves to `127.0.0.1`. The Host header on those
+ * cross-origin requests carries the attacker's domain, not `localhost`, so
+ * mismatching it 403s before the routes ever see the request.
+ */
+export function checkHostHeader(hostHeader: string | undefined, allowlist: readonly string[]): boolean {
+  if (allowlist.length === 0) return true; // empty allowlist = open (operator opted out)
+  if (hostHeader === undefined || hostHeader.trim() === '') return false;
+  // Strip port: `localhost:18910` → `localhost`. IPv6 keeps brackets: `[::1]:18910` → `[::1]`.
+  const raw = hostHeader.trim().toLowerCase();
+  let withoutPort: string;
+  if (raw.startsWith('[')) {
+    // IPv6: take through the closing `]`
+    const closingBracket = raw.indexOf(']');
+    withoutPort = closingBracket >= 0 ? raw.slice(0, closingBracket + 1) : raw;
+  } else {
+    const colonIdx = raw.lastIndexOf(':');
+    withoutPort = colonIdx >= 0 ? raw.slice(0, colonIdx) : raw;
+  }
+  return allowlist.includes(withoutPort);
 }
 
 /**
@@ -102,10 +214,18 @@ export class DashboardServer {
   private startTime: number = Date.now();
   private totalRequests = 0;
   private activeSessions = 0;
+  /** Default Bearer-backed AuthBackend, memoized from config.authToken at construction. */
+  private readonly defaultAuthBackend: AuthBackend;
 
   constructor(config: DashboardConfig) {
     this.config = config;
+    this.defaultAuthBackend = createBasicAuthBackend(config.authToken);
     if (DASHBOARD_DISABLED) log.warn('Dashboard server disabled via SUDO_DASHBOARD_DISABLE=1');
+  }
+
+  /** Resolved AuthBackend — registered global wins; falls back to built-in Bearer. */
+  getAuthBackend(): AuthBackend {
+    return getRegisteredAuthBackend() ?? this.defaultAuthBackend;
   }
 
   /** Start the HTTP server. */
@@ -117,7 +237,21 @@ export class DashboardServer {
 
     this.server = createServer((req, res) => {
       metrics.dashboardRequests++;
-      registerRoutes(req, res, this, this.config);
+      // Defensive try/catch: synchronous throws from `registerRoutes` (e.g.
+      // unexpected URL-parse paths, future code regressions) would otherwise
+      // surface as uncaught exceptions and can crash the supervised process.
+      // `server.on('error', ...)` is for bind/socket errors only; it does
+      // NOT intercept request-handler throws.
+      try {
+        registerRoutes(req, res, this, this.config);
+      } catch (err: unknown) {
+        metrics.dashboardErrors++;
+        log.error({ err: err instanceof Error ? err.message : String(err), url: req.url ?? '/' }, 'Dashboard request handler threw');
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+      }
     });
 
     this.server.on('error', (err) => {
@@ -125,9 +259,31 @@ export class DashboardServer {
       log.error({ err: err.message, port: this.config.port }, 'Dashboard server error');
     });
 
-    this.server.listen(this.config.port, '127.0.0.1', () => {
-      log.info({ port: this.config.port }, 'Dashboard server started');
+    const bindHost = this.config.bindAddress ?? '127.0.0.1';
+    this.server.listen(this.config.port, bindHost, () => {
+      log.info({
+        port: this.config.port,
+        bind: bindHost,
+        mode: classifyBind(bindHost),
+        loopbackTrust: this.config.loopbackTrust === true,
+        hostAllowlistSize: (this.config.hostAllowlist ?? []).length,
+      }, 'Dashboard server started');
     });
+  }
+
+  /** Bind address the dashboard is configured to use. */
+  getBindAddress(): string {
+    return this.config.bindAddress ?? '127.0.0.1';
+  }
+
+  /** True iff loopback-trust GET-skip-auth is active (set by boot wiring based on bindAddress). */
+  isLoopbackTrust(): boolean {
+    return this.config.loopbackTrust === true;
+  }
+
+  /** Allowed Host: header values (port stripped, case-normalized). */
+  getHostAllowlist(): readonly string[] {
+    return this.config.hostAllowlist ?? DEFAULT_HOST_ALLOWLIST;
   }
 
   /** Stop the HTTP server gracefully. */

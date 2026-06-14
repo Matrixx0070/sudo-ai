@@ -29,6 +29,25 @@ export interface DashboardConfig {
   port: number;                // HTTP listen port
   authToken: string;           // Bearer token for /api/* routes
   refreshIntervalMs: number;   // client-side refresh interval
+  /**
+   * Bind address (default `127.0.0.1`). When set to a non-loopback address,
+   * the operator MUST also set `SUDO_DASHBOARD_INSECURE=1` as explicit opt-in
+   * — the dashboard refuses to start otherwise. Slice 2 — Hermes parity.
+   */
+  bindAddress?: string;
+  /**
+   * Whitespace-trimmed list of allowed `Host:` header values (DNS-rebinding
+   * defense). When the dashboard receives a request whose Host header (port
+   * stripped, case-normalized) is not in this list, it returns 403 without
+   * touching the auth backend. Slice 2.
+   */
+  hostAllowlist?: readonly string[];
+  /**
+   * When true, GET endpoints skip Bearer auth (loopback-trust pattern).
+   * Set by the boot wiring based on bindAddress: loopback → true, non-loopback
+   * → false. POST mutation endpoints ALWAYS require auth regardless.
+   */
+  loopbackTrust?: boolean;
 }
 
 /** Alignment signal breakdown. */
@@ -141,3 +160,65 @@ export interface AuditSource {
     metadata?: Record<string, unknown>;
   }): string;
 }
+
+// ---------------------------------------------------------------------------
+// Pluggable auth backend (#28b slice 2 — Hermes parity)
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of one authentication attempt by an `AuthBackend`.
+ *
+ * `principal` identifies who authenticated — currently a generic
+ * "dashboard:basic" for the built-in Bearer backend; future OAuth backends
+ * will return per-user subject claims. The principal is what the audit chain
+ * actor field records when a mutation endpoint fires.
+ */
+export type AuthResult =
+  | { ok: true; principal: string }
+  | { ok: false; reason: string };
+
+/**
+ * Pluggable authentication backend (Hermes precedent: `plugins/dashboard_auth/
+ * {basic,nous,self_hosted}/`). Each backend inspects the request and returns
+ * a structural `AuthResult`. The dashboard ships ONE built-in backend in
+ * slice 2 — `BasicAuthBackend` wrapping the existing Bearer/?token logic —
+ * plus the contract. OAuth backends are slice 4+.
+ *
+ * **Invariant:** `authenticate` is called AFTER the Host-header allowlist
+ * guard, so the request's Host header has already been validated against
+ * `DashboardConfig.hostAllowlist`. Backends that build a URL from
+ * `req.headers.host` can rely on it being one of the allowlisted values.
+ *
+ * **Sync vs async:** the return type is currently `AuthResult` (sync only)
+ * and the route dispatcher does NOT await. Any custom backend registered
+ * today must complete synchronously. When OAuth backends land in slice 4+,
+ * the interface will widen to `AuthResult | Promise<AuthResult>` and the
+ * dispatcher will become async — that is the known breaking-change point.
+ */
+export interface AuthBackend {
+  /** Stable name (e.g. "basic", "oauth-nous") — surfaces in audit + logs. */
+  readonly name: string;
+  /**
+   * Inspect the request and return whether it should be authorized for this
+   * endpoint. `allowQueryToken` is honored by backends that support
+   * query-string token fallback (Bearer does for known GETs; OAuth ignores).
+   *
+   * **Slice-4 breaking-change note:** when OAuth backends land they will need
+   * async JWT verification, at which point this returns `AuthResult |
+   * Promise<AuthResult>` and `authenticateRequest` becomes async. Slice 2
+   * keeps it sync to avoid a non-load-bearing dispatch refactor.
+   */
+  authenticate(
+    req: import('node:http').IncomingMessage,
+    opts: { allowQueryToken: boolean },
+  ): AuthResult;
+}
+
+/**
+ * Allowed bind modes for the dashboard's HTTP listener. `loopback` (the
+ * default) skips Bearer on GETs (loopback-trust pattern from Hermes); any
+ * non-loopback bind FORCES authentication on every endpoint AND requires
+ * `SUDO_DASHBOARD_INSECURE=1` as explicit operator opt-in to bind that
+ * way at all.
+ */
+export type DashboardBindMode = 'loopback' | 'lan' | 'public';
