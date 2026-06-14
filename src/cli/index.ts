@@ -311,6 +311,23 @@ claudeOauthCmd
     process.exit(await runClaudeOAuthDisconnect());
   });
 
+claudeOauthCmd
+  .command('models')
+  .description('List Claude models available to the connected account')
+  .option('--refresh', 'Force a live fetch instead of using the cached list', false)
+  .action(async (opts: { refresh?: boolean }) => {
+    const { runClaudeOAuthModels } = await import('./commands/claude-oauth.js');
+    process.exit(await runClaudeOAuthModels(opts.refresh ?? false));
+  });
+
+claudeOauthCmd
+  .command('set-model <id>')
+  .description('Set the default Claude model used by the brain router')
+  .action(async (id: string) => {
+    const { runClaudeOAuthSetModel } = await import('./commands/claude-oauth.js');
+    process.exit(await runClaudeOAuthSetModel(id));
+  });
+
 // ---------------------------------------------------------------------------
 // update — check for and apply SUDO-AI updates
 // ---------------------------------------------------------------------------

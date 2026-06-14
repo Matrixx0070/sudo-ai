@@ -48,6 +48,21 @@ const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const LOOPBACK_HOST = 'http://localhost';
 const OAUTH_SCOPE = 'user:inference';
 
+/** Anthropic `/v1/models` endpoint — same host the AI SDK uses for inference. */
+const MODELS_URL = 'https://api.anthropic.com/v1/models';
+/** Anthropic API version header — same value Claude Code sends. */
+const ANTHROPIC_VERSION = '2023-06-01';
+/**
+ * OAuth-specific Anthropic beta header. The token endpoint returns OAuth
+ * tokens that the inference API only accepts when this header is present.
+ */
+const ANTHROPIC_OAUTH_BETA = 'oauth-2025-04-20';
+/**
+ * Auto-refresh the cached models list when older than this (24h). The picker
+ * UI also exposes a manual refresh.
+ */
+const MODELS_TTL_MS = 24 * 60 * 60 * 1000;
+
 /**
  * The refresh grant accepts a separate, legacy client_id string. Kept identical
  * to claude-token-manager.ts so this manager refreshes the same way the proven
@@ -78,6 +93,28 @@ export interface ClaudeOAuthCredentials {
   scopes: string[];
   /** Optional — populated when the token endpoint returns it. */
   subscriptionType?: string;
+  /**
+   * User-picked default model id (e.g. "claude-opus-4-8"). When unset, the
+   * provider falls back to the latest model from `models` (by created_at).
+   */
+  defaultModel?: string;
+  /** Cached `/v1/models` response — refreshed on demand by `refreshModels`. */
+  models?: ClaudeModelEntry[];
+  /** ms epoch when `models` was fetched, used to decide if it's stale. */
+  modelsFetchedAt?: number;
+}
+
+/**
+ * A single model entry as returned by Anthropic's `/v1/models`. We persist a
+ * trimmed view (id, display_name, created_at) and ignore the verbose
+ * capability matrix — none of the picker UI needs it today, and keeping the
+ * store small keeps boot fast.
+ */
+export interface ClaudeModelEntry {
+  id: string;
+  displayName: string;
+  /** ISO 8601 string from the API; preserved as-is so sort comparisons work. */
+  createdAt: string;
 }
 
 interface TokenResponse {
@@ -105,6 +142,10 @@ export interface ClaudeOAuthStatus {
   scopes: string[];
   subscriptionType: string | null;
   storePath: string;
+  /** Resolved default model id (user-picked, or latest from `models`). */
+  defaultModel: string | null;
+  /** Cached model list count — 0 when the list has never been fetched. */
+  modelsCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +226,9 @@ export class ClaudeOAuthManager {
         expiresAt: raw.expiresAt,
         scopes: Array.isArray(raw.scopes) ? raw.scopes : [],
         subscriptionType: raw.subscriptionType,
+        defaultModel: raw.defaultModel,
+        models: Array.isArray(raw.models) ? raw.models : undefined,
+        modelsFetchedAt: raw.modelsFetchedAt,
       };
       log.info(
         {
@@ -456,6 +500,8 @@ export class ClaudeOAuthManager {
         scopes: [],
         subscriptionType: null,
         storePath: this.storePath,
+        defaultModel: null,
+        modelsCount: 0,
       };
     }
     return {
@@ -465,7 +511,140 @@ export class ClaudeOAuthManager {
       scopes: this.credentials.scopes,
       subscriptionType: this.credentials.subscriptionType ?? null,
       storePath: this.storePath,
+      defaultModel: this.getDefaultModel(),
+      modelsCount: this.credentials.models?.length ?? 0,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Models — listing + default selection
+  // -------------------------------------------------------------------------
+
+  /**
+   * Return the cached model list (may be empty if `refreshModels` has never
+   * been called or after a `disconnect`). Sorted newest first by `createdAt`.
+   */
+  listModels(): ClaudeModelEntry[] {
+    const models = this.credentials?.models ?? [];
+    // Defensive copy so callers can't mutate the stored array. The sort key is
+    // an ISO 8601 string, which compares correctly with string comparison.
+    return [...models].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+  }
+
+  /**
+   * Resolve which model the brain should use:
+   *   1. The user-picked default (`defaultModel`) if it still exists in the
+   *      cached list (or no list yet).
+   *   2. Otherwise the newest cached model by `createdAt`.
+   *   3. Otherwise null.
+   */
+  getDefaultModel(): string | null {
+    if (!this.credentials) return null;
+    const picked = this.credentials.defaultModel;
+    const cached = this.credentials.models ?? [];
+    if (picked) {
+      // If we have a cached list and the picked id is gone (deprecated by
+      // Anthropic), fall through to the latest — never return a stale id.
+      if (cached.length === 0 || cached.some((m) => m.id === picked)) {
+        return picked;
+      }
+    }
+    if (cached.length === 0) return null;
+    const sorted = this.listModels();
+    return sorted[0]?.id ?? null;
+  }
+
+  /**
+   * Persist the user-picked default model id. Returns false when the id is
+   * not present in the cached list (caller should refresh first or surface
+   * the error to the user).
+   */
+  setDefaultModel(id: string): boolean {
+    if (!this.credentials) return false;
+    const cached = this.credentials.models ?? [];
+    if (cached.length > 0 && !cached.some((m) => m.id === id)) {
+      log.warn({ id, cached: cached.map((m) => m.id) }, 'setDefaultModel: id not in cached model list');
+      return false;
+    }
+    this.credentials.defaultModel = id;
+    this.saveCredentials();
+    log.info({ id }, 'Claude OAuth default model set');
+    return true;
+  }
+
+  /**
+   * Fetch the live `/v1/models` list with the current OAuth token, cache it
+   * on disk, and return the trimmed view. Throws on any non-2xx so callers
+   * can surface the API error verbatim.
+   */
+  async refreshModels(): Promise<ClaudeModelEntry[]> {
+    if (!this.credentials) {
+      throw new Error('Cannot refresh models — not connected');
+    }
+    // The token must be valid for the inference API to accept the request.
+    // getAccessToken returns null inside the 10-min refresh buffer, so trigger
+    // a refresh first when needed.
+    let token = this.getAccessToken();
+    if (!token) {
+      const ok = await this.refreshToken();
+      if (!ok) throw new Error('Token refresh failed before models fetch');
+      token = this.getAccessToken();
+      if (!token) throw new Error('Token still unavailable after refresh');
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(MODELS_URL, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'anthropic-version': ANTHROPIC_VERSION,
+          'anthropic-beta': ANTHROPIC_OAUTH_BETA,
+        },
+      });
+    } catch (err) {
+      throw new Error(`Models fetch network error: ${String(err)}`);
+    }
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '(unreadable)');
+      throw new Error(`Models fetch HTTP ${res.status}: ${errText.substring(0, 300)}`);
+    }
+
+    const raw = (await res.json()) as { data?: Array<{ id?: string; display_name?: string; created_at?: string }> };
+    const data = Array.isArray(raw.data) ? raw.data : [];
+    const trimmed: ClaudeModelEntry[] = data
+      .filter((m): m is { id: string; display_name?: string; created_at?: string } => typeof m.id === 'string')
+      .map((m) => ({
+        id: m.id,
+        displayName: typeof m.display_name === 'string' ? m.display_name : m.id,
+        createdAt: typeof m.created_at === 'string' ? m.created_at : new Date(0).toISOString(),
+      }));
+
+    this.credentials.models = trimmed;
+    this.credentials.modelsFetchedAt = Date.now();
+    this.saveCredentials();
+    log.info({ count: trimmed.length }, 'Claude OAuth models refreshed');
+    return this.listModels();
+  }
+
+  /**
+   * Lazy variant: returns the cached list if still fresh (< MODELS_TTL_MS),
+   * otherwise refreshes. Used by the dashboard so the user sees something
+   * immediately even if a manual refresh hasn't been hit recently.
+   */
+  async getModelsLazy(): Promise<ClaudeModelEntry[]> {
+    if (!this.credentials) return [];
+    const age = Date.now() - (this.credentials.modelsFetchedAt ?? 0);
+    if (this.credentials.models && this.credentials.models.length > 0 && age < MODELS_TTL_MS) {
+      return this.listModels();
+    }
+    try {
+      return await this.refreshModels();
+    } catch (err) {
+      log.warn({ err: String(err) }, 'getModelsLazy: refresh failed — returning cached list (possibly empty)');
+      return this.listModels();
+    }
   }
 
   /**

@@ -106,3 +106,71 @@ export async function runClaudeOAuthDisconnect(): Promise<number> {
   console.log('Disconnected — local credentials wiped.');
   return 0;
 }
+
+export async function runClaudeOAuthModels(refresh: boolean): Promise<number> {
+  const { getClaudeOAuthManager } = await import('../../core/brain/claude-oauth-manager.js');
+  const mgr = getClaudeOAuthManager();
+  if (!mgr.isAvailable()) {
+    console.error('Not connected — run `sudo-ai claude-oauth login` first.');
+    return 1;
+  }
+
+  let models;
+  try {
+    models = refresh ? await mgr.refreshModels() : await mgr.getModelsLazy();
+  } catch (err) {
+    console.error(`Failed to fetch models: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+
+  if (models.length === 0) {
+    console.log('No models returned. Try `sudo-ai claude-oauth models --refresh`.');
+    return 1;
+  }
+
+  const def = mgr.getDefaultModel();
+  console.log('');
+  console.log(`  Brain model string format: claude-oauth/<id>`);
+  console.log(`  Default model: ${def ?? '(none)'}`);
+  console.log('');
+  // Pad columns for readable plain-text output.
+  const idWidth = Math.max(...models.map((m) => m.id.length), 'MODEL ID'.length);
+  const nameWidth = Math.max(...models.map((m) => m.displayName.length), 'DISPLAY NAME'.length);
+  console.log(
+    `  ${''.padEnd(2)} ${'MODEL ID'.padEnd(idWidth)}  ${'DISPLAY NAME'.padEnd(nameWidth)}  CREATED`,
+  );
+  console.log(`  ${''.padEnd(2)} ${'-'.repeat(idWidth)}  ${'-'.repeat(nameWidth)}  ----------`);
+  for (const m of models) {
+    const marker = m.id === def ? '* ' : '  ';
+    const date = m.createdAt.slice(0, 10);
+    console.log(`  ${marker}${m.id.padEnd(idWidth)}  ${m.displayName.padEnd(nameWidth)}  ${date}`);
+  }
+  console.log('');
+  console.log('  Set a different default with: sudo-ai claude-oauth set-model <id>');
+  console.log('');
+  return 0;
+}
+
+export async function runClaudeOAuthSetModel(id: string): Promise<number> {
+  const { getClaudeOAuthManager } = await import('../../core/brain/claude-oauth-manager.js');
+  const mgr = getClaudeOAuthManager();
+  if (!mgr.isAvailable()) {
+    console.error('Not connected — run `sudo-ai claude-oauth login` first.');
+    return 1;
+  }
+  // Refresh the cache so we validate against the live list — avoids the user
+  // being stuck on an outdated cache after Anthropic publishes a new model.
+  try {
+    await mgr.getModelsLazy();
+  } catch {
+    /* non-fatal — setDefaultModel still works if the id is in the existing cache */
+  }
+  const ok = mgr.setDefaultModel(id);
+  if (!ok) {
+    console.error(`"${id}" is not in the cached model list. Run \`sudo-ai claude-oauth models\` to see what's available.`);
+    return 1;
+  }
+  console.log(`Default model set: ${id}`);
+  console.log(`Use this brain model string: claude-oauth/${id}`);
+  return 0;
+}

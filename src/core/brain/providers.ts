@@ -153,6 +153,9 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
           await mgr.refreshToken();
           return mgr.getAccessToken() ?? '';
         },
+        // OAuth tokens are rejected by /v1/messages without this beta opt-in
+        // — same header Claude Code sends on every inference call.
+        headers: { 'anthropic-beta': 'oauth-2025-04-20' },
       } as unknown as Parameters<typeof createAnthropic>[0]);
     },
   },

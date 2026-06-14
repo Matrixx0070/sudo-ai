@@ -89,6 +89,20 @@ export const DASHBOARD_HTML = `
         </div>
         <div id="coauth-login-error" class="error" style="margin-top: 8px; display: none;"></div>
       </div>
+      <div id="coauth-models-panel" style="margin-top: 18px; display: none; border-top: 1px solid #2a2a4a; padding-top: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
+          <h3 style="color: #00d9ff; font-size: 13px; text-transform: uppercase; margin: 0;">Default Model</h3>
+          <button id="coauth-models-refresh-btn" style="background: #2a2a4a; color: #e0e0e0; border: 0; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">Refresh list</button>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <select id="coauth-models-select" style="flex:1; padding: 8px; background:#0f0f1a; color:#e0e0e0; border:1px solid #2a2a4a; border-radius: 4px;"></select>
+          <button id="coauth-models-save-btn" style="background: #00d9ff; color: #0f0f1a; border: 0; padding: 8px 14px; border-radius: 4px; font-weight: bold; cursor: pointer;">Save</button>
+        </div>
+        <div id="coauth-models-hint" style="margin-top: 8px; color: #888; font-size: 12px;">
+          Use this model in sudo-ai's brain config as <code id="coauth-model-string" style="color:#00ff88;">claude-oauth/&lt;id&gt;</code>
+        </div>
+        <div id="coauth-models-error" class="error" style="margin-top: 8px; display: none;"></div>
+      </div>
     </div>
     <div class="card" style="grid-column: 1 / -1;">
       <h2>FleetView — Live Agents</h2>
@@ -267,24 +281,95 @@ export const DASHBOARD_HTML = `
       const refreshBtn = document.getElementById('coauth-refresh-btn');
       const disconnectBtn = document.getElementById('coauth-disconnect-btn');
       const loginBtn = document.getElementById('coauth-login-btn');
+      const modelsPanel = document.getElementById('coauth-models-panel');
       if (s && s.connected) {
         const expMin = s.expiresInSec != null ? Math.round(s.expiresInSec / 60) : null;
         const expTxt = expMin == null ? 'n/a' : (expMin > 60 ? Math.floor(expMin / 60) + 'h ' + (expMin % 60) + 'm' : expMin + 'm');
         statusEl.innerHTML =
           '<span class="status-ok">CONNECTED</span> &middot; ' +
           'expires in <span class="stat-value">' + escapeHtml(expTxt) + '</span>' +
-          (s.subscriptionType ? ' &middot; sub <span class="stat-value">' + escapeHtml(s.subscriptionType) + '</span>' : '');
+          (s.subscriptionType ? ' &middot; sub <span class="stat-value">' + escapeHtml(s.subscriptionType) + '</span>' : '') +
+          (s.defaultModel ? ' &middot; default <span class="stat-value">' + escapeHtml(s.defaultModel) + '</span>' : '');
         refreshBtn.style.display = 'inline-block';
         disconnectBtn.style.display = 'inline-block';
         loginBtn.textContent = 'Re-connect';
+        modelsPanel.style.display = 'block';
       } else {
         statusEl.innerHTML = '<span class="status-warn">NOT CONNECTED</span> &middot; ' +
           '<span class="stat-label">login to enable claude-oauth/* brain models</span>';
         refreshBtn.style.display = 'none';
         disconnectBtn.style.display = 'none';
         loginBtn.textContent = 'Connect Claude (OAuth)';
+        modelsPanel.style.display = 'none';
       }
     }
+
+    function renderCoauthModels(models, defaultModel) {
+      const sel = document.getElementById('coauth-models-select');
+      const code = document.getElementById('coauth-model-string');
+      sel.innerHTML = '';
+      if (!models || models.length === 0) {
+        const opt = document.createElement('option');
+        opt.textContent = 'No models — click Refresh list';
+        opt.disabled = true;
+        sel.appendChild(opt);
+        return;
+      }
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.displayName + ' (' + m.id + ')';
+        if (m.id === defaultModel) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      code.textContent = 'claude-oauth/' + (defaultModel || sel.value);
+      sel.addEventListener('change', () => {
+        code.textContent = 'claude-oauth/' + sel.value;
+      }, { once: true });
+    }
+
+    async function refreshCoauthModels(forceLive) {
+      const errEl = document.getElementById('coauth-models-error');
+      errEl.style.display = 'none';
+      try {
+        const url = '/v1/admin/claude-oauth/models' + (forceLive ? '?refresh=1' : '');
+        const data = await fetchJson(url);
+        const payload = data.data || data;
+        renderCoauthModels(payload.models, payload.defaultModel);
+      } catch (e) {
+        errEl.textContent = 'Models fetch failed: ' + e.message;
+        errEl.style.display = 'block';
+      }
+    }
+
+    document.getElementById('coauth-models-refresh-btn').addEventListener('click', () => refreshCoauthModels(true));
+
+    document.getElementById('coauth-models-save-btn').addEventListener('click', async () => {
+      const sel = document.getElementById('coauth-models-select');
+      const errEl = document.getElementById('coauth-models-error');
+      const id = sel.value;
+      if (!id) {
+        errEl.textContent = 'Pick a model first.';
+        errEl.style.display = 'block';
+        return;
+      }
+      try {
+        const token = getToken();
+        const res = await fetch('/v1/admin/claude-oauth/default-model', {
+          method: 'PUT',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelId: id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        errEl.style.display = 'none';
+        await refreshCoauthStatus();
+        await refreshCoauthModels(false);
+      } catch (e) {
+        errEl.textContent = 'Save failed: ' + e.message;
+        errEl.style.display = 'block';
+      }
+    });
 
     async function refreshCoauthStatus() {
       try {
@@ -348,6 +433,12 @@ export const DASHBOARD_HTML = `
 
     async function refreshAll() {
       await Promise.allSettled([updateStats(), updateHealth(), updateAlignment(), updateActivity(), updateFleet(), refreshCoauthStatus()]);
+      // Refresh models only when connected — avoids hitting the API on every
+      // dashboard tick when the user has nothing wired up.
+      const modelsPanel = document.getElementById('coauth-models-panel');
+      if (modelsPanel && modelsPanel.style.display !== 'none') {
+        refreshCoauthModels(false);
+      }
       updateTimestamp();
     }
 

@@ -233,6 +233,120 @@ describe('ClaudeOAuthManager — refresh + disconnect', () => {
   });
 });
 
+describe('ClaudeOAuthManager — models + default selection', () => {
+  function seedConnected(): void {
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        accessToken: 'sk-ant-oat-active',
+        refreshToken: 'rt',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        scopes: ['user:inference'],
+      }),
+    );
+  }
+
+  it('refreshModels caches a trimmed view sorted newest-first', async () => {
+    seedConnected();
+    const mgr = new ClaudeOAuthManager(storePath);
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      expect(u).toBe('https://api.anthropic.com/v1/models');
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      expect(headers['Authorization']).toBe('Bearer sk-ant-oat-active');
+      expect(headers['anthropic-version']).toBe('2023-06-01');
+      expect(headers['anthropic-beta']).toBe('oauth-2025-04-20');
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: 'claude-opus-4-7', display_name: 'Claude Opus 4.7', created_at: '2026-04-14T00:00:00Z' },
+            { id: 'claude-opus-4-8', display_name: 'Claude Opus 4.8', created_at: '2026-05-28T00:00:00Z' },
+            { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6', created_at: '2026-02-17T00:00:00Z' },
+          ],
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const models = await mgr.refreshModels();
+    expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6']);
+    // Persisted to disk so a fresh manager picks them up.
+    const mgr2 = new ClaudeOAuthManager(storePath);
+    expect(mgr2.listModels().map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6']);
+  });
+
+  it('getDefaultModel returns the newest cached model when none picked', async () => {
+    seedConnected();
+    const mgr = new ClaudeOAuthManager(storePath);
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: 'claude-opus-4-7', display_name: 'Opus 4.7', created_at: '2026-04-14T00:00:00Z' },
+              { id: 'claude-opus-4-8', display_name: 'Opus 4.8', created_at: '2026-05-28T00:00:00Z' },
+            ],
+          }),
+          { status: 200 },
+        ),
+    ) as unknown as typeof fetch;
+    await mgr.refreshModels();
+    expect(mgr.getDefaultModel()).toBe('claude-opus-4-8');
+  });
+
+  it('setDefaultModel rejects ids not in the cache', async () => {
+    seedConnected();
+    const mgr = new ClaudeOAuthManager(storePath);
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ data: [{ id: 'claude-opus-4-8', display_name: 'Opus 4.8', created_at: '2026-05-28T00:00:00Z' }] }),
+          { status: 200 },
+        ),
+    ) as unknown as typeof fetch;
+    await mgr.refreshModels();
+    expect(mgr.setDefaultModel('claude-bogus-1')).toBe(false);
+    expect(mgr.setDefaultModel('claude-opus-4-8')).toBe(true);
+    expect(mgr.getDefaultModel()).toBe('claude-opus-4-8');
+  });
+
+  it('getDefaultModel falls back to newest when the picked id was removed', () => {
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        accessToken: 'a',
+        refreshToken: 'b',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        scopes: ['user:inference'],
+        defaultModel: 'claude-deprecated',
+        models: [
+          { id: 'claude-opus-4-7', displayName: 'Opus 4.7', createdAt: '2026-04-14T00:00:00Z' },
+          { id: 'claude-opus-4-8', displayName: 'Opus 4.8', createdAt: '2026-05-28T00:00:00Z' },
+        ],
+        modelsFetchedAt: Date.now(),
+      }),
+    );
+    const mgr = new ClaudeOAuthManager(storePath);
+    expect(mgr.getDefaultModel()).toBe('claude-opus-4-8');
+  });
+
+  it('refreshModels surfaces HTTP errors verbatim', async () => {
+    seedConnected();
+    const mgr = new ClaudeOAuthManager(storePath);
+    globalThis.fetch = vi.fn(
+      async () => new Response('forbidden', { status: 403 }),
+    ) as unknown as typeof fetch;
+    await expect(mgr.refreshModels()).rejects.toThrow(/HTTP 403/);
+  });
+
+  it('listModels returns empty when nothing has been refreshed yet', () => {
+    seedConnected();
+    const mgr = new ClaudeOAuthManager(storePath);
+    expect(mgr.listModels()).toEqual([]);
+    expect(mgr.getDefaultModel()).toBeNull();
+  });
+});
+
 describe('ClaudeOAuthManager — status shape', () => {
   it('reports connected=false with sensible defaults when empty', () => {
     const mgr = new ClaudeOAuthManager(storePath);
@@ -243,6 +357,8 @@ describe('ClaudeOAuthManager — status shape', () => {
     expect(s.scopes).toEqual([]);
     expect(s.subscriptionType).toBeNull();
     expect(s.storePath).toBe(storePath);
+    expect(s.defaultModel).toBeNull();
+    expect(s.modelsCount).toBe(0);
   });
 
   it('reports connected=true with expiry fields populated when seeded', () => {

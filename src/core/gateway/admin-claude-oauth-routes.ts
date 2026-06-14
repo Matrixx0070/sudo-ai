@@ -145,6 +145,50 @@ function handleDisconnect(res: ServerResponse): void {
   sendJson(res, 200, { ok: true, data: { connected: false } });
 }
 
+async function handleModelsGet(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const mgr = getClaudeOAuthManager();
+  if (!mgr.isAvailable()) {
+    sendError(res, 400, 'Not connected — run login first');
+    return;
+  }
+  // `?refresh=1` forces a live fetch; otherwise return the cached list when fresh.
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const wantRefresh = url.searchParams.get('refresh') === '1';
+  try {
+    const models = wantRefresh ? await mgr.refreshModels() : await mgr.getModelsLazy();
+    sendJson(res, 200, { ok: true, data: { models, defaultModel: mgr.getDefaultModel() } });
+  } catch (err) {
+    sendError(res, 502, err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handleDefaultModelPut(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: unknown;
+  try {
+    const raw = await readBody(req);
+    body = raw.length > 0 ? (JSON.parse(raw) as unknown) : {};
+  } catch {
+    sendError(res, 400, 'Invalid or oversized request body');
+    return;
+  }
+  const id = (body as Record<string, unknown>)['modelId'];
+  if (typeof id !== 'string' || id.trim().length === 0) {
+    sendError(res, 400, 'modelId (string) is required');
+    return;
+  }
+  const mgr = getClaudeOAuthManager();
+  if (!mgr.isAvailable()) {
+    sendError(res, 400, 'Not connected — run login first');
+    return;
+  }
+  const ok = mgr.setDefaultModel(id.trim());
+  if (!ok) {
+    sendError(res, 400, `Model id "${id.trim()}" is not in the cached list — refresh models and retry`);
+    return;
+  }
+  sendJson(res, 200, { ok: true, data: { defaultModel: mgr.getDefaultModel() } });
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -187,9 +231,25 @@ export function registerAdminClaudeOAuthRoutes(server: HttpServer, tokenBuf: Buf
       handleDisconnect(res);
       return;
     }
+    if (method === 'GET' && pathname === '/v1/admin/claude-oauth/models') {
+      handleModelsGet(req, res).catch((err: unknown) => {
+        log.error({ err: String(err) }, 'Unhandled error in models');
+        if (!res.headersSent) sendError(res, 500, 'Internal server error');
+      });
+      return;
+    }
+    if (method === 'PUT' && pathname === '/v1/admin/claude-oauth/default-model') {
+      handleDefaultModelPut(req, res).catch((err: unknown) => {
+        log.error({ err: String(err) }, 'Unhandled error in default-model');
+        if (!res.headersSent) sendError(res, 500, 'Internal server error');
+      });
+      return;
+    }
 
     sendError(res, 404, 'Unknown claude-oauth admin route');
   });
 
-  log.info('Admin Claude OAuth routes registered (/v1/admin/claude-oauth/*)');
+  log.info(
+    'Admin Claude OAuth routes registered: status, login/start, login/complete, refresh, disconnect, models, default-model',
+  );
 }
