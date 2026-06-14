@@ -2636,6 +2636,22 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   // 8.6 Observability dashboard (kill switch: SUDO_DASHBOARD_DISABLE=1)
   // -------------------------------------------------------------------------
+  // Hoisted out of the §8.6 try-block so §8.6b's fleet executor can pass
+  // the SAME closure as its alignment.digest handler (gap #28d slice 2).
+  // Both consumers see the identical snapshot from
+  // finalAgentLoop.getAlignmentAggregator() — fleet rollup never drifts
+  // from the local /api/alignment value. Declared here (rather than at
+  // first use) so dashboard init failure doesn't strand the fleet handler.
+  const alignmentDigestSource = {
+    getDigest: (): { overallScore?: number; signals?: Record<string, number> } | undefined => {
+      const report = finalAgentLoop.getAlignmentAggregator()?.getLastReport();
+      if (!report) return undefined;
+      return {
+        overallScore: report.score,
+        signals: Object.fromEntries(Object.entries(report.signals)),
+      };
+    },
+  };
   try {
     const { initDashboard, shutdownDashboard, registerDashboardGlobals, classifyBind, parseHostAllowlist } =
       await import('./core/dashboard/dashboard-server.js');
@@ -2701,16 +2717,7 @@ async function boot(): Promise<void> {
       // gatewayServer stays null when the gateway failed to start; omit so the
       // health check honestly reports "not detected".
       gateway: gatewayServer ?? undefined,
-      alignment: {
-        getDigest: () => {
-          const report = finalAgentLoop.getAlignmentAggregator()?.getLastReport();
-          if (!report) return undefined;
-          return {
-            overallScore: report.score,
-            signals: Object.fromEntries(Object.entries(report.signals)),
-          };
-        },
-      },
+      alignment: alignmentDigestSource,
       // FleetView source (gap #25 slice 1). multiAgent.getSnapshot() chains
       // through to AgentSwarm.snapshot(). When orchestrator wiring failed in
       // section 5.5, multiAgent is null and the dashboard's getLiveAgents()
@@ -2825,6 +2832,11 @@ async function boot(): Promise<void> {
           registrarUrl: process.env['SUDO_FLEET_REGISTRAR_URL']!,
           identity: fleetIdentity,
           ...(brainHandle ? { brain: brainHandle } : {}),
+          // Gap #28d slice 2 — same closure as registerDashboardGlobals so
+          // fleet rollup and local /api/alignment never diverge. Method
+          // name differs (`digest` vs `getDigest`) so the adapter is
+          // ultra-thin and just forwards the call.
+          alignment: { digest: () => alignmentDigestSource.getDigest() },
         });
         // Gap #28d slice 1 — hoist into outer scope so §9.2 autonomy block
         // can late-bind the WakeSleepCycle adapter via handle.setAutonomy().

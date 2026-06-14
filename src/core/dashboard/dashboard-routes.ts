@@ -86,6 +86,10 @@ const ADMIN_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/admin/logs',
   '/api/admin/debug-share',
   '/api/admin/fleet/devices',
+  // Gap #28d slice 2 — fleet-wide alignment-digest rollup. Reads the
+  // latest completed `alignment.digest` row per device from the command
+  // queue + joins against RegistryStore for a missing/reported split.
+  '/api/admin/fleet/alignment',
 ]);
 /** POST-only admin mutation routes (#28b slice 1) — Bearer-gated AND opt-in. */
 const POST_ROUTES: ReadonlySet<string> = new Set([
@@ -535,6 +539,70 @@ export async function registerRoutes(
       sendJson(res, 200, { count: projected.length, devices: projected });
       return;
     }
+    if (pathname === '/api/admin/fleet/alignment') {
+      // Gap #28d slice 2 — fleet-wide alignment-digest rollup.
+      //
+      // Reads the latest completed `alignment.digest` row per device from
+      // the queue (no separate cache column on RegistryStore — the queue
+      // already persists results) and joins against the registrar's
+      // device list to derive a `reported / missing` split. The split is
+      // what makes this an aggregate vs. an N+1 of /commands lookups —
+      // operators see fleet-wide coverage at a glance.
+      const registrar = getRegisteredFleetRegistrar();
+      const queue = getCommandQueueOrUndefined();
+      if (!registrar || !queue) {
+        sendJson(res, 503, {
+          error: 'fleet_registrar_not_enabled',
+          hint: 'Set SUDO_FLEET_REGISTRAR_MODE=1 to enable the fleet registrar',
+        });
+        return;
+      }
+      if (typeof queue.latestCompletedByKindPerDevice !== 'function') {
+        // Structural impls that predate slice 2 won't have the helper —
+        // honest 501 lets operators distinguish "not enabled" from
+        // "out-of-date queue impl".
+        sendJson(res, 501, { error: 'rollup_not_supported', hint: 'FleetCommandQueueSource impl predates gap #28d slice 2' });
+        return;
+      }
+      const rows = queue.latestCompletedByKindPerDevice('alignment.digest');
+      // Map device→latest row. `latestCompletedByKindPerDevice` guarantees
+      // at most one row per device, but a defensive Map handles a future
+      // impl that broadens the contract.
+      const latestByDevice = new Map<string, typeof rows[number]>();
+      for (const r of rows) latestByDevice.set(r.deviceId, r);
+      // Walk the registrar's device list so devices with no digest yet
+      // show up in `missing` rather than being silently dropped.
+      const registered = registrar.list(1000);
+      const reported: Array<Record<string, unknown>> = [];
+      const missing: Array<{ deviceId: string; hostname: string; lastSeenAt: string | null }> = [];
+      for (const d of registered) {
+        const row = latestByDevice.get(d.deviceId);
+        if (!row) {
+          missing.push({ deviceId: d.deviceId, hostname: d.hostname, lastSeenAt: d.lastSeenAt });
+          continue;
+        }
+        // Defensive JSON parse — a row with a malformed result_json must
+        // not 500 the whole rollup.
+        let digest: unknown = null;
+        try { digest = row.resultJson ? JSON.parse(row.resultJson) : null; } catch { digest = null; }
+        reported.push({
+          deviceId: d.deviceId,
+          hostname: d.hostname,
+          lastSeenAt: d.lastSeenAt,
+          digest,
+          at: row.completedAt,
+          commandId: row.commandId,
+        });
+      }
+      sendJson(res, 200, {
+        reportedCount: reported.length,
+        missingCount: missing.length,
+        totalCount: registered.length,
+        reported,
+        missing,
+      });
+      return;
+    }
     // Unreachable — pathname was vetted by `isKnownGet || isKnownAdminGet`
     // above. If a future path is added to either set without a matching
     // dispatch branch, throwing here surfaces the gap in the test suite
@@ -823,6 +891,9 @@ const SUPPORTED_KINDS: readonly CommandKind[] = [
   'autonomy.pause',
   'autonomy.resume',
   'autonomy.status',
+  // Gap #28d slice 2 — alignment digest snapshot. The result is what the
+  // /api/admin/fleet/alignment rollup endpoint reads back per device.
+  'alignment.digest',
 ];
 function isSupportedCommandKind(s: string): boolean {
   return (SUPPORTED_KINDS as readonly string[]).includes(s);

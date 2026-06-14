@@ -114,4 +114,50 @@ describe('CommandQueue', () => {
     expect(aList.length).toBe(2);
     expect(aList.every((c) => c.deviceId === 'd-a')).toBe(true);
   });
+
+  // --- Gap #28d slice 2: latestCompletedByKindPerDevice rollup -------------
+
+  it('CQ-13: latestCompletedByKindPerDevice returns one row per device, latest completed', () => {
+    // Two devices, multiple alignment.digest dispatches each; the helper
+    // should return the LATEST completed row per device, ignoring queued
+    // and failed rows.
+    const completeRow = (deviceId: string, completedAt: string, result: unknown) => {
+      const id = q.enqueue({ deviceId, command: { kind: 'alignment.digest' }, dispatcher: 'admin' });
+      q.pickup(deviceId); // mark in_flight so complete() will work
+      q.complete({ commandId: id, result: { status: 'completed', result }, now: new Date(completedAt) });
+      return id;
+    };
+
+    completeRow('d-a', '2026-06-14T10:00:00Z', { overallScore: 0.5 });
+    const aLatest = completeRow('d-a', '2026-06-14T11:00:00Z', { overallScore: 0.8 });
+    completeRow('d-b', '2026-06-14T10:30:00Z', { overallScore: 0.6 });
+    const bLatest = completeRow('d-b', '2026-06-14T12:00:00Z', { overallScore: 0.7 });
+    // Also queue an alignment.digest for d-c that NEVER completes — should be excluded.
+    q.enqueue({ deviceId: 'd-c', command: { kind: 'alignment.digest' }, dispatcher: 'admin' });
+    // And a model.get on d-a that DOES complete — should be excluded by kind.
+    const modelId = q.enqueue({ deviceId: 'd-a', command: { kind: 'model.get' }, dispatcher: 'admin' });
+    q.pickup('d-a');
+    q.complete({ commandId: modelId, result: { status: 'completed', result: { model: 'sonnet' } } });
+
+    const rollup = q.latestCompletedByKindPerDevice('alignment.digest');
+    const byDevice = new Map(rollup.map((r) => [r.deviceId, r]));
+    expect(byDevice.size).toBe(2);
+    expect(byDevice.get('d-a')?.commandId).toBe(aLatest);
+    expect(byDevice.get('d-b')?.commandId).toBe(bLatest);
+    expect(byDevice.has('d-c')).toBe(false);
+    // Result JSON preserved.
+    expect(JSON.parse(byDevice.get('d-a')!.resultJson!)).toEqual({ overallScore: 0.8 });
+  });
+
+  it('CQ-14: latestCompletedByKindPerDevice returns empty when no completed rows', () => {
+    q.enqueue({ deviceId: 'd', command: { kind: 'alignment.digest' }, dispatcher: 'admin' });
+    expect(q.latestCompletedByKindPerDevice('alignment.digest')).toEqual([]);
+  });
+
+  it('CQ-15: latestCompletedByKindPerDevice ignores failed rows', () => {
+    const id = q.enqueue({ deviceId: 'd', command: { kind: 'alignment.digest' }, dispatcher: 'admin' });
+    q.pickup('d');
+    q.complete({ commandId: id, result: { status: 'failed', error: 'alignment_unavailable' } });
+    expect(q.latestCompletedByKindPerDevice('alignment.digest')).toEqual([]);
+  });
 });
