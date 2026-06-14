@@ -31,6 +31,23 @@ export interface ExecutorBrainHandle {
   setModel(model: string): void;
 }
 
+/**
+ * Autonomy handle the executor needs — gap #28d slice 1.
+ *
+ * Duck-typed against WakeSleepCycle so the executor stays decoupled from
+ * the autonomy module's full surface. cli.ts hands a slim adapter that
+ * forwards to the live cycle once SUDO_AUTONOMY_V1 has wired one up.
+ *
+ * status() returns the canonical fleet-visible snapshot — fields are the
+ * union of WakeSleepCycle.pause()/resume() return shapes, normalized so
+ * the admin UI can render any of the three commands' results uniformly.
+ */
+export interface ExecutorAutonomyHandle {
+  pause(): { state: string; paused: true; activeCount: number };
+  resume(): { state: string; paused: false; activeCount: number };
+  status(): { state: string; paused: boolean; activeCount: number };
+}
+
 /** Options for `startFleetExecutor`. */
 export interface FleetExecutorOptions {
   registrarUrl: string;
@@ -42,6 +59,14 @@ export interface FleetExecutorOptions {
    * /api/admin/model endpoint behavior in slice-1.
    */
   brain?: ExecutorBrainHandle;
+  /**
+   * Autonomy handle (gap #28d slice 1). When absent the executor still
+   * polls — but autonomy.* commands return `failed` with reason
+   * "autonomy_not_enabled". cli.ts may wire this in after the executor
+   * starts via the returned handle's `setAutonomy()` setter (the autonomy
+   * cycle is constructed later in boot than the executor).
+   */
+  autonomy?: ExecutorAutonomyHandle;
   /** Long-poll wait seconds. Clamped server-side to [0, 60]. */
   waitSeconds?: number;
   /** Backoff jitter base, ms. Default 5000. */
@@ -62,6 +87,13 @@ export interface FleetExecutorHandle {
   stop(): Promise<void>;
   /** Promise that resolves when the loop exits cleanly (after `stop`). */
   done: Promise<void>;
+  /**
+   * Late-bind an autonomy handle (gap #28d slice 1). cli.ts constructs the
+   * WakeSleepCycle AFTER the fleet executor starts, so passing the handle
+   * at startFleetExecutor() time isn't always possible. Pass `undefined` to
+   * detach (e.g. on autonomy shutdown). Idempotent.
+   */
+  setAutonomy(handle: ExecutorAutonomyHandle | undefined): void;
 }
 
 /** Start the long-poll loop. Returns immediately with a handle. */
@@ -74,6 +106,8 @@ export function startFleetExecutor(opts: FleetExecutorOptions): FleetExecutorHan
   let stopping = false;
   let currentController: AbortController | null = null;
   let consecutiveErrors = 0;
+  // Mutable so setAutonomy() can late-bind / detach after start.
+  let autonomy: ExecutorAutonomyHandle | undefined = opts.autonomy;
 
   async function loopBody(): Promise<void> {
     while (!stopping) {
@@ -86,8 +120,10 @@ export function startFleetExecutor(opts: FleetExecutorOptions): FleetExecutorHan
           continue;
         }
         consecutiveErrors = 0;
-        // Got a command. Run + report.
-        const result = await runCommand(cmd, opts.brain);
+        // Got a command. Run + report. Both handles are read fresh on each
+        // dispatch so late-bound autonomy via setAutonomy() takes effect on
+        // the very next admin command.
+        const result = await runCommand(cmd, opts.brain, autonomy);
         await postResult(cmd.commandId, result);
       } catch (err) {
         if (stopping) break;
@@ -162,13 +198,26 @@ export function startFleetExecutor(opts: FleetExecutorOptions): FleetExecutorHan
       await done;
     },
     done,
+    setAutonomy(handle: ExecutorAutonomyHandle | undefined): void {
+      autonomy = handle;
+    },
   };
 }
 
-/** Run a single command against the local brain. Slice-2 command set only. */
+/**
+ * Run a single command against the local brain/autonomy handles.
+ *
+ * - `model.{get,set}` — gap #28c slice 2 (brain-backed)
+ * - `autonomy.{pause,resume,status}` — gap #28d slice 1 (autonomy-backed)
+ *
+ * Unknown kinds return `failed/unsupported_kind:<k>` rather than throwing
+ * so the admin sees the error rather than the executor's outer backoff loop
+ * silently retrying.
+ */
 export async function runCommand(
   cmd: { commandId: string; kind: string; args?: Record<string, unknown> },
   brain: ExecutorBrainHandle | undefined,
+  autonomy?: ExecutorAutonomyHandle,
 ): Promise<CommandResult> {
   try {
     if (cmd.kind === 'model.get') {
@@ -183,6 +232,18 @@ export async function runCommand(
       }
       brain.setModel(target);
       return { status: 'completed', result: { model: brain.getModel() } };
+    }
+    if (cmd.kind === 'autonomy.pause') {
+      if (!autonomy) return { status: 'failed', error: 'autonomy_not_enabled' };
+      return { status: 'completed', result: autonomy.pause() };
+    }
+    if (cmd.kind === 'autonomy.resume') {
+      if (!autonomy) return { status: 'failed', error: 'autonomy_not_enabled' };
+      return { status: 'completed', result: autonomy.resume() };
+    }
+    if (cmd.kind === 'autonomy.status') {
+      if (!autonomy) return { status: 'failed', error: 'autonomy_not_enabled' };
+      return { status: 'completed', result: autonomy.status() };
     }
     return { status: 'failed', error: `unsupported_kind:${cmd.kind}` };
   } catch (err) {

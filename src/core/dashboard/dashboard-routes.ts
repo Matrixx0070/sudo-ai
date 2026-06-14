@@ -810,8 +810,20 @@ function publicKeyFingerprint(publicKeyPem: string): string {
   }
 }
 
-/** Slice-2 command kinds the admin dispatch endpoint accepts. */
-const SUPPORTED_KINDS: readonly CommandKind[] = ['model.get', 'model.set'];
+/**
+ * Command kinds the admin dispatch endpoint accepts.
+ *
+ * - `model.{get,set}` — gap #28c slice 2 (brain-backed)
+ * - `autonomy.{pause,resume,status}` — gap #28d slice 1 (WakeSleepCycle-backed;
+ *   device returns autonomy_not_enabled if SUDO_AUTONOMY_V1 isn't on)
+ */
+const SUPPORTED_KINDS: readonly CommandKind[] = [
+  'model.get',
+  'model.set',
+  'autonomy.pause',
+  'autonomy.resume',
+  'autonomy.status',
+];
 function isSupportedCommandKind(s: string): boolean {
   return (SUPPORTED_KINDS as readonly string[]).includes(s);
 }

@@ -170,4 +170,77 @@ describe('startFleetExecutor end-to-end', () => {
     queue.close();
     registry.close();
   });
+
+  // --- Gap #28d slice 1: autonomy.{pause,resume,status} dispatch ----------
+
+  describe('runCommand autonomy.* (gap #28d slice 1)', () => {
+    function makeAutonomyHandle() {
+      let paused = false;
+      let state: string = 'awake';
+      return {
+        calls: { pause: 0, resume: 0, status: 0 },
+        get paused() { return paused; },
+        get state() { return state; },
+        pause() {
+          this.calls.pause++;
+          paused = true;
+          state = 'paused';
+          return { state, paused: true as const, activeCount: 0 };
+        },
+        resume() {
+          this.calls.resume++;
+          paused = false;
+          state = 'awake';
+          return { state, paused: false as const, activeCount: 0 };
+        },
+        status() {
+          this.calls.status++;
+          return { state, paused, activeCount: 0 };
+        },
+      };
+    }
+
+    it('autonomy.pause without an autonomy handle returns autonomy_not_enabled', async () => {
+      const r = await runCommand({ commandId: 'c1', kind: 'autonomy.pause' }, undefined, undefined);
+      expect(r).toEqual({ status: 'failed', error: 'autonomy_not_enabled' });
+    });
+
+    it('autonomy.pause invokes pause() on the handle and returns its snapshot', async () => {
+      const a = makeAutonomyHandle();
+      const r = await runCommand({ commandId: 'c1', kind: 'autonomy.pause' }, undefined, a);
+      expect(r.status).toBe('completed');
+      expect(r.result).toEqual({ state: 'paused', paused: true, activeCount: 0 });
+      expect(a.calls.pause).toBe(1);
+    });
+
+    it('autonomy.resume invokes resume() on the handle and returns its snapshot', async () => {
+      const a = makeAutonomyHandle();
+      a.pause(); // start in paused state
+      const r = await runCommand({ commandId: 'c2', kind: 'autonomy.resume' }, undefined, a);
+      expect(r.status).toBe('completed');
+      expect(r.result).toEqual({ state: 'awake', paused: false, activeCount: 0 });
+      expect(a.calls.resume).toBe(1);
+    });
+
+    it('autonomy.status invokes status() without mutating state', async () => {
+      const a = makeAutonomyHandle();
+      const r = await runCommand({ commandId: 'c3', kind: 'autonomy.status' }, undefined, a);
+      expect(r.status).toBe('completed');
+      expect(r.result).toEqual({ state: 'awake', paused: false, activeCount: 0 });
+      expect(a.calls.status).toBe(1);
+      expect(a.calls.pause).toBe(0);
+      expect(a.calls.resume).toBe(0);
+    });
+
+    it('autonomy handle exceptions are caught and surfaced as failed', async () => {
+      const throwy = {
+        pause(): never { throw new Error('boom'); },
+        resume(): never { throw new Error('boom'); },
+        status(): never { throw new Error('boom'); },
+      };
+      const r = await runCommand({ commandId: 'c4', kind: 'autonomy.pause' }, undefined, throwy);
+      expect(r.status).toBe('failed');
+      expect(r.error).toBe('boom');
+    });
+  });
 });

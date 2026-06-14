@@ -164,6 +164,24 @@ describe('POST /api/admin/fleet/dispatch', () => {
       expect(queue.get(commandId)?.status).toBe('queued');
     } finally { await srv.close(); }
   });
+
+  it('BC-04b (#28d slice 1): autonomy.{pause,resume,status} pass kind validation', async () => {
+    registerDashboardGlobals({ fleetRegistrar: registry, fleetCommandQueue: queue });
+    const id = createDeviceIdentity(defaultIdentityPath(tmp));
+    registerOneDevice(id, 'd');
+    const srv = await startTestServer();
+    try {
+      for (const kind of ['autonomy.pause', 'autonomy.resume', 'autonomy.status'] as const) {
+        const r = await rawRequest(`${srv.baseUrl}/api/admin/fleet/dispatch`, {
+          method: 'POST', headers: { Authorization: 'Bearer admin-bearer' },
+          body: { deviceId: id.deviceId, command: { kind } },
+        });
+        expect(r.status).toBe(202);
+        const { commandId } = JSON.parse(r.body) as { commandId: string };
+        expect(queue.get(commandId)?.kind).toBe(kind);
+      }
+    } finally { await srv.close(); }
+  });
 });
 
 describe('GET /api/fleet/device/:id/inbox', () => {
