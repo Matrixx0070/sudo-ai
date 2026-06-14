@@ -629,6 +629,16 @@ async function handleAdminPost(
       sendJson(res, 403, { error: 'device_revoked' });
       return;
     }
+    // Slice-4 follow-up — pending devices haven't been admitted yet.
+    // Same posture as revoked: refuse here so the queue doesn't fill
+    // with orphan rows the device can't pick up (inbox poll is 403 too).
+    if (targetDevice.admissionStatus === 'pending') {
+      sendJson(res, 403, {
+        error: 'device_pending',
+        hint: 'POST /api/admin/fleet/devices/<id>/admit to allow this device to receive commands',
+      });
+      return;
+    }
     const argsRaw = (cmd as Record<string, unknown>)['args'];
     const args = argsRaw && typeof argsRaw === 'object' && !Array.isArray(argsRaw)
       ? (argsRaw as Record<string, unknown>)
@@ -740,6 +750,11 @@ async function handleFleetRegister(req: IncomingMessage, res: ServerResponse): P
       ok: true,
       deviceId: row.deviceId,
       registeredAt: row.lastRegisteredAt,
+      // Slice-4 follow-up. The device logs this so the operator can see
+      // "you're pending admin approval" without polling the inbox first.
+      // For approved devices it's just an extra confirmation; for pending
+      // it explains why the next inbox poll will 403.
+      admissionStatus: row.admissionStatus,
     });
   } catch (err: unknown) {
     log.warn({ err: err instanceof Error ? err.message : String(err), deviceId: payload.deviceId, msg: 'Fleet upsert failed' });
@@ -861,6 +876,15 @@ async function handleFleetDeviceBackChannel(
   // device sees it's been deliberately blocked, not just misconfigured.
   if (device.admissionStatus === 'revoked') {
     sendJson(res, 403, { error: 'device_revoked' });
+    return;
+  }
+  // Slice-4 follow-up — pending devices: admin hasn't admitted them yet.
+  // The device's long-poll loop should see this and back off; once the
+  // admin admits, the next poll succeeds and a queued command flows
+  // through. We deliberately mirror /api/admin/fleet/dispatch so the
+  // pending → approved transition unblocks both directions atomically.
+  if (device.admissionStatus === 'pending') {
+    sendJson(res, 403, { error: 'device_pending' });
     return;
   }
 

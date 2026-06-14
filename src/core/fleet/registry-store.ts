@@ -13,6 +13,17 @@
  * that rotates its keypair gets a NEW device_id and a new row — same way
  * SSH keys are tracked per-key, not per-host. The admin UI can correlate
  * via hostname.
+ *
+ * **Slice-4 follow-up — pending admission state.** Admission has three
+ * states: `approved` (can dispatch + poll inbox), `revoked` (admin
+ * blocked it), and `pending` (admin must explicitly admit before first
+ * command). The constructor takes an `admissionDefault` so operators
+ * can opt newly-registered devices into the `pending` state via
+ * `SUDO_FLEET_ADMISSION_DEFAULT=pending` (cli.ts §8.5c). On
+ * RE-registration the admission_status column is PRESERVED (the upsert
+ * UPDATE clause does not touch it) — once an admin has admitted or
+ * revoked a device, that decision sticks across boots and key
+ * re-registrations.
  */
 
 import Database from 'better-sqlite3';
@@ -33,18 +44,49 @@ export interface DeviceRow {
   admissionStatus: AdmissionStatus;
 }
 
-/** Slice-4 admission state. Newly-registered devices default to `approved`. */
-export type AdmissionStatus = 'approved' | 'revoked';
+/**
+ * Slice-4 admission state.
+ *
+ * - `approved`: device can dispatch + poll the back-channel.
+ * - `revoked`: admin cut off this device's access.
+ * - `pending` (slice-4 follow-up): device registered but is waiting for
+ *   an admin to explicitly admit it before the first command can flow.
+ *   Opt-in via `SUDO_FLEET_ADMISSION_DEFAULT=pending` on the registrar.
+ */
+export type AdmissionStatus = 'approved' | 'revoked' | 'pending';
 
 /** Constructor input for `RegistryStore`. */
 export interface RegistryStoreOptions {
   /** Absolute path to the SQLite file. */
   dbPath: string;
+  /**
+   * Slice-4 follow-up. Admission state stamped on NEW device rows.
+   * Default `approved` keeps slice-1+slice-3 behavior intact. Set to
+   * `pending` so newly-registered devices need an admin to admit them
+   * before dispatch or inbox unblock. Re-registrations PRESERVE the
+   * existing row's admission_status — the default only applies to
+   * the INSERT path.
+   */
+  admissionDefault?: AdmissionStatus;
 }
 
 /** Default path under DATA_DIR. */
 export function defaultRegistryDbPath(dataDir: string): string {
   return path.join(dataDir, 'fleet.db');
+}
+
+/**
+ * Resolve the registrar's `admissionDefault` from process env. Only
+ * `pending` opts into the explicit-admit-before-first-command workflow;
+ * any other value (unset, empty, `approved`, garbage) maps to the
+ * backward-compatible `approved`. We don't surface an "invalid" error
+ * because misreading the env at boot would crash the dashboard wiring;
+ * silently defaulting to `approved` is the safer posture (operators
+ * notice the missing pending behavior in the UI instead of a refusing
+ * server).
+ */
+export function resolveAdmissionDefault(env: NodeJS.ProcessEnv): AdmissionStatus {
+  return env['SUDO_FLEET_ADMISSION_DEFAULT'] === 'pending' ? 'pending' : 'approved';
 }
 
 /**
@@ -55,6 +97,7 @@ export function defaultRegistryDbPath(dataDir: string): string {
  */
 export class RegistryStore {
   private readonly db: Database.Database;
+  private readonly admissionDefault: AdmissionStatus;
   private readonly upsertStmt: Database.Statement;
   private readonly listStmt: Database.Statement;
   private readonly getStmt: Database.Statement;
@@ -66,6 +109,7 @@ export class RegistryStore {
   constructor(opts: RegistryStoreOptions) {
     this.db = new Database(opts.dbPath);
     this.db.pragma('journal_mode = WAL');
+    this.admissionDefault = opts.admissionDefault ?? 'approved';
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS fleet_devices (
         device_id           TEXT PRIMARY KEY,
@@ -87,9 +131,23 @@ export class RegistryStore {
     // Prepared statements — cheaper than re-parsing the SQL per request.
     // UPSERT keeps `first_registered_at` from the original row (uses COALESCE
     // via the SELECT in the ON CONFLICT clause) and bumps last_registered_at.
+    //
+    // Slice-4-follow-up: INSERT now stamps `admission_status` from the
+    // constructor default. The ON CONFLICT UPDATE clause deliberately
+    // OMITS admission_status so re-registration of an existing device
+    // preserves whatever state the admin already set — pending stays
+    // pending until admit, revoked stays revoked.
     this.upsertStmt = this.db.prepare(`
-      INSERT INTO fleet_devices (device_id, public_key_pem, hostname, version_str, first_registered_at, last_registered_at, metadata_json)
-      VALUES (@deviceId, @publicKeyPem, @hostname, @versionStr, @nowIso, @nowIso, @metadataJson)
+      INSERT INTO fleet_devices (
+        device_id, public_key_pem, hostname, version_str,
+        first_registered_at, last_registered_at, metadata_json,
+        admission_status
+      )
+      VALUES (
+        @deviceId, @publicKeyPem, @hostname, @versionStr,
+        @nowIso, @nowIso, @metadataJson,
+        @admissionStatus
+      )
       ON CONFLICT(device_id) DO UPDATE SET
         public_key_pem     = excluded.public_key_pem,
         hostname           = excluded.hostname,
@@ -159,6 +217,7 @@ export class RegistryStore {
       versionStr: input.versionStr,
       nowIso,
       metadataJson,
+      admissionStatus: this.admissionDefault,
     });
     const row = this.getStmt.get(input.deviceId) as DeviceRow | undefined;
     if (!row) throw new Error('RegistryStore.upsert: row not visible after write — bug');
@@ -192,6 +251,13 @@ export class RegistryStore {
    * Slice 4 — flip admission state. Returns the updated row, or undefined
    * if the device is not registered. Admin-driven; auditing is the caller's
    * responsibility (admin routes append admission audit entries).
+   *
+   * Note: the type accepts `'pending'` so the slice-4-follow-up test
+   * suite can exercise the column directly, BUT no admin HTTP route
+   * transitions a device INTO pending. Operators block an admitted
+   * device with `revoke`, never `pending`. If you wire a new caller
+   * that sets `pending`, add an audit entry — the existing
+   * `appendFleetAdmissionAudit` only fires from `/admit` + `/revoke`.
    */
   setAdmissionStatus(deviceId: string, status: AdmissionStatus): DeviceRow | undefined {
     const r = this.setAdmissionStmt.run(status, deviceId);
@@ -214,6 +280,12 @@ export class RegistryStore {
    * and `admission_status` (default 'approved' so existing rows match slice
    * 1+2 implicit-approval semantics). Each ALTER is its own try/catch
    * silencing only the known-race messages — every other error re-throws.
+   *
+   * Note: the table-level DEFAULT 'approved' here applies only to rows
+   * present BEFORE the slice-4 columns were added (and to inserts that
+   * omit the column). The slice-4-follow-up upsert always supplies
+   * `admission_status` explicitly from `this.admissionDefault`, so the
+   * table default only matters for legacy pre-slice-4 rows on first boot.
    */
   private addSlice4Columns(): void {
     const alters = [

@@ -120,4 +120,42 @@ describe('RegistryStore', () => {
     b.close();
     store = new RegistryStore({ dbPath: path.join(tmp, 'fleet.db') }); // restore for afterEach
   });
+
+  // Slice-4-follow-up — pending admission state via admissionDefault.
+  it('RS-13: admissionDefault=pending stamps new device rows as pending', () => {
+    store.close();
+    store = new RegistryStore({ dbPath: path.join(tmp, 'fleet.db'), admissionDefault: 'pending' });
+    const row = store.upsert({ ...baseInput });
+    expect(row.admissionStatus).toBe('pending');
+  });
+
+  it('RS-14: re-upsert PRESERVES admission_status (pending stays pending even with approved default)', () => {
+    // First boot: pending default. New device row should be pending.
+    store.close();
+    store = new RegistryStore({ dbPath: path.join(tmp, 'fleet.db'), admissionDefault: 'pending' });
+    const first = store.upsert({ ...baseInput });
+    expect(first.admissionStatus).toBe('pending');
+
+    // Second boot in `approved` default mode — re-upsert must NOT silently
+    // promote the existing pending row. The admin's intent persists.
+    store.close();
+    store = new RegistryStore({ dbPath: path.join(tmp, 'fleet.db'), admissionDefault: 'approved' });
+    const second = store.upsert({ ...baseInput, hostname: 'renamed' });
+    expect(second.admissionStatus).toBe('pending');
+    expect(second.hostname).toBe('renamed');
+  });
+
+  it('RS-15: re-upsert also preserves a revoked state (admin revoke survives re-register)', () => {
+    const first = store.upsert({ ...baseInput });
+    expect(first.admissionStatus).toBe('approved');
+    store.setAdmissionStatus(baseInput.deviceId, 'revoked');
+    const second = store.upsert({ ...baseInput, hostname: 'still-revoked' });
+    expect(second.admissionStatus).toBe('revoked');
+  });
+
+  it('RS-16: setAdmissionStatus accepts the pending state', () => {
+    store.upsert({ ...baseInput });
+    const updated = store.setAdmissionStatus(baseInput.deviceId, 'pending');
+    expect(updated?.admissionStatus).toBe('pending');
+  });
 });

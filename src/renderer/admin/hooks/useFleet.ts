@@ -25,8 +25,12 @@ export interface FleetDevice {
   lastRegisteredAt: string;
   /** Slice 4 — null for devices that haven't yet polled the inbox. */
   lastSeenAt: string | null;
-  /** Slice 4 — admin can revoke a device's access. */
-  admissionStatus: 'approved' | 'revoked';
+  /**
+   * Slice 4 — admin can revoke a device's access. Slice-4 follow-up
+   * adds `pending` for devices that registered but are waiting for
+   * the admin to explicitly admit them before first dispatch.
+   */
+  admissionStatus: 'approved' | 'revoked' | 'pending';
   publicKeyFingerprint: string;
   metadata: Record<string, string> | null;
 }

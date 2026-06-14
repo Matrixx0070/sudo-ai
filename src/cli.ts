@@ -2591,12 +2591,21 @@ async function boot(): Promise<void> {
     log.info({ deviceId: fleetIdentity.deviceId }, 'Fleet device identity loaded (#28c slice 1)');
 
     if (process.env['SUDO_FLEET_REGISTRAR_MODE'] === '1') {
-      const { RegistryStore, defaultRegistryDbPath } =
+      const { RegistryStore, defaultRegistryDbPath, resolveAdmissionDefault } =
         await import('./core/fleet/registry-store.js');
-      fleetRegistrar = new RegistryStore({ dbPath: defaultRegistryDbPath(dataDir) });
+      // Slice-4 follow-up: SUDO_FLEET_ADMISSION_DEFAULT=pending stamps
+      // newly-registered devices as `pending`, requiring an admin admit
+      // before they can dispatch or poll the back-channel. Default
+      // (anything else) is `approved`, preserving slice-1+2+3 behavior.
+      const admissionDefault = resolveAdmissionDefault(process.env);
+      fleetRegistrar = new RegistryStore({
+        dbPath: defaultRegistryDbPath(dataDir),
+        admissionDefault,
+      });
       log.info({
         dbPath: defaultRegistryDbPath(dataDir),
         existingDevices: fleetRegistrar.count(),
+        admissionDefault,
       }, 'Fleet registrar enabled (SUDO_FLEET_REGISTRAR_MODE=1) — POST /api/fleet/register + GET /api/admin/fleet/devices live');
       registerShutdown(() => fleetRegistrar?.close());
 
@@ -2610,11 +2619,15 @@ async function boot(): Promise<void> {
       registerShutdown(() => fleetCommandQueue?.close());
 
       // Slice 4 — nonce store for the registration challenge round-trip.
-      // In-memory; loss on restart is fine (devices fetch a new nonce on
-      // their next register attempt).
+      // Slice-4-follow-up: SQLite-backed (same fleet.db) so a multi-process
+      // registrar behind a load balancer can consume a nonce issued by a
+      // peer process. The SQLite WAL writer-lock serializes concurrent
+      // DELETE … RETURNING, so a captured-nonce race across processes
+      // produces exactly one winner.
       const { NonceStore } = await import('./core/fleet/nonce-store.js');
-      fleetNonceStore = new NonceStore();
+      fleetNonceStore = new NonceStore({ dbPath: defaultRegistryDbPath(dataDir) });
       log.info({}, 'Fleet nonce store enabled (#28c slice 4) — GET /api/fleet/challenge live; POST /api/fleet/register now requires nonce + admin admit/revoke routes live');
+      registerShutdown(() => fleetNonceStore?.close());
     }
   } catch (err) {
     log.warn({ err: String(err) }, 'Fleet identity/registrar wiring failed (non-fatal) — /api/fleet/* routes will report fleet_registrar_not_enabled');
