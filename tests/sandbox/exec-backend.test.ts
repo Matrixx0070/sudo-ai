@@ -67,6 +67,13 @@ describe('resolveExecBackend', () => {
     expect(getRegisteredExecBackend('docker')).toBe(b);
   });
 
+  it('lazy-loads the built-in ssh backend on first use', async () => {
+    const b = await resolveExecBackend('ssh');
+    expect(b).not.toBeNull();
+    expect(b!.name).toBe('ssh');
+    expect(getRegisteredExecBackend('ssh')).toBe(b);
+  });
+
   it('returns null for an unknown backend (caller falls back to bwrap)', async () => {
     expect(await resolveExecBackend('nope')).toBeNull();
   });
