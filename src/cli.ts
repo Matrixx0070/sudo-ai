@@ -216,6 +216,34 @@ async function boot(): Promise<void> {
   log.info('Inspection queue wired (injection-detector + rationalization-guard)');
 
   // -------------------------------------------------------------------------
+  // 2.15 LoopSignatureStore (architectural fix #5)
+  //     Cross-session loop memory: when LoopGuard aborts a turn, the
+  //     signature gets persisted; subsequent sessions short-circuit the
+  //     in-turn thresholds (10/20) the moment a known-bad signature shows
+  //     up again. Set via a module-level singleton so the per-loop
+  //     LoopGuard instances don't need a constructor change.
+  //     Disable with SUDO_LOOP_SIGNATURE_PERSIST=0; tunable via
+  //     SUDO_LOOP_SIGNATURE_SUPPRESS_HITS (default 2).
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_LOOP_SIGNATURE_PERSIST'] !== '0') {
+    try {
+      const { LoopSignatureStore, setGlobalLoopSignatureStore } = await import('./core/agent/loop-signature-store.js');
+      const store = new LoopSignatureStore(db.db);
+      setGlobalLoopSignatureStore(store);
+      // Prune entries last seen >30 days ago at boot, then on a daily schedule.
+      const pruned = store.prune();
+      log.info({ pruned, total: store.count() }, 'LoopSignatureStore wired');
+      const pruneTimer = setInterval(() => {
+        try { store.prune(); } catch (err) { log.warn({ err: String(err) }, 'LoopSignatureStore prune failed'); }
+      }, 24 * 60 * 60 * 1000);
+      if (pruneTimer.unref) pruneTimer.unref();
+      registerShutdown(() => clearInterval(pruneTimer));
+    } catch (err) {
+      log.warn({ err: String(err) }, 'LoopSignatureStore wiring failed — LoopGuard runs without persistence');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 2.2 Persistent exec-policy rules (gap #16)
   //     (opt-in: SUDO_EXEC_POLICY=1; persists "always allow / always deny"
   //      decisions across sessions in mind.db, force-denies the hardcoded
