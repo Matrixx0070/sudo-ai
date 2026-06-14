@@ -32,7 +32,15 @@ describe('SelfVerify', () => {
     expect(result.checks.length).toBeGreaterThan(0);
   });
 
-  it('should have a failed check when no files were modified', async () => {
+  it('should have a failed check when filesChanged is empty but a real diff exists', async () => {
+    // Force a non-empty diff probe so the whole-verifier abstain path
+    // (filesChanged=[] + empty diff) does not fire. Then Check 1 ("Files
+    // were modified to address the goal") must still fail because the
+    // caller reported no files changed despite the working tree showing one.
+    const { execSync } = await import('node:child_process');
+    (execSync as unknown as { mockReturnValueOnce: (v: string) => void }).mockReturnValueOnce(
+      ' src/x.ts | 5 +++--',
+    );
     const brain = {
       call: vi.fn().mockResolvedValue({
         content: '{"aligned": false, "reasoning": "No changes made"}',
@@ -107,5 +115,48 @@ describe('SelfVerify', () => {
     );
     expect(result.confidence).toBeGreaterThanOrEqual(0);
     expect(result.confidence).toBeLessThanOrEqual(1);
+  });
+
+  it('should skip the goal-alignment LLM call when there is no change history', async () => {
+    const brain = {
+      call: vi.fn().mockResolvedValue({ content: '{"aligned": true}' }),
+    };
+    const verifier = new SelfVerify(brain);
+    // Force a non-empty diff so we exercise the goal-alignment-skip path
+    // rather than the whole-verifier-abstain path added below.
+    const { execSync } = await import('node:child_process');
+    (execSync as unknown as { mockReturnValueOnce: (v: string) => void }).mockReturnValueOnce(
+      ' src/x.ts | 1 +',
+    );
+    const result = await verifier.verify(
+      'What is 7 times 8?',
+      [], // pure Q&A: no files changed
+      process.cwd(),
+    );
+    // Brain must not be queried — there is nothing to align against.
+    expect(brain.call).not.toHaveBeenCalled();
+    const alignmentCheck = result.checks.find(c => c.description.startsWith('Goal alignment'));
+    expect(alignmentCheck).toBeDefined();
+    expect(alignmentCheck?.passed).toBe(true);
+    expect(alignmentCheck?.evidence).toMatch(/no.*changes|nothing to verify/i);
+  });
+
+  it('should abstain (verdict=pass, confidence=1) when filesChanged=[] AND diff is empty', async () => {
+    const brain = {
+      call: vi.fn().mockResolvedValue({ content: '{"aligned": true}' }),
+    };
+    const verifier = new SelfVerify(brain);
+    // child_process.execSync is mocked to return '' globally — diff probe will be empty.
+    const result = await verifier.verify(
+      'What is 9 times 6?',
+      [],
+      process.cwd(),
+    );
+    expect(result.verdict).toBe('pass');
+    expect(result.confidence).toBe(1);
+    expect(result.checks).toHaveLength(1);
+    expect(result.checks[0].passed).toBe(true);
+    expect(result.checks[0].description).toMatch(/skipped|no change history/i);
+    expect(brain.call).not.toHaveBeenCalled();
   });
 });

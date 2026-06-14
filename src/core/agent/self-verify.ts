@@ -98,6 +98,33 @@ export class SelfVerify {
   ): Promise<VerifyResult> {
     log.info({ goal: goal.slice(0, 80), filesChanged: filesChanged.length }, 'Starting self-verification');
 
+    // Abstain when there is nothing to verify. The verifier's checks
+    // (files modified, diff syntax, test run, goal alignment) are all
+    // structured around code changes; running them on a pure Q&A turn
+    // (e.g. /v1/chat/completions with no edits) produces a misleading
+    // "partial" verdict on Check 1 alone. Treat an empty change set +
+    // empty diff as "no work expected, nothing to verify" and pass cleanly.
+    if (filesChanged.length === 0) {
+      const probeDiff = this._getDiffSummary(cwd);
+      if (probeDiff.trim() === '') {
+        const abstainChecks: VerifyCheck[] = [{
+          description: 'Self-verification skipped (no change history to verify)',
+          passed: true,
+          evidence: 'No files reported as changed and the working tree has no pending diff — verification not applicable',
+        }];
+        const summary = this._buildSummary('pass', abstainChecks, goal);
+        log.info({ verdict: 'pass', reason: 'no-change-history' }, 'Self-verification skipped');
+        return {
+          verdict: 'pass',
+          confidence: 1,
+          checks: abstainChecks,
+          summary,
+          testOutput: undefined,
+          diffSummary: '',
+        };
+      }
+    }
+
     const checks: VerifyCheck[] = [];
 
     // Check 1: Were any files actually modified?
@@ -252,6 +279,17 @@ export class SelfVerify {
     filesChanged: string[],
     diffSummary: string,
   ): Promise<VerifyCheck> {
+    // No change history to align against (e.g. pure Q&A via /v1/chat/completions).
+    // Skip the LLM call rather than issue a request that the brain rejects with
+    // "BrainRequest.messages must be non-empty" after its system-role filter.
+    if (filesChanged.length === 0 && diffSummary.trim() === '') {
+      return {
+        description: 'Goal alignment check (no changes to align)',
+        passed: true,
+        evidence: 'No files changed and empty diff — nothing to verify against; skipping LLM call',
+      };
+    }
+
     const brainLike = this.brain as { call?: (messages: Array<{ role: string; content: string }>) => Promise<{ content: string }> };
 
     if (!brainLike?.call || typeof brainLike.call !== 'function') {
