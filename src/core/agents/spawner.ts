@@ -11,6 +11,7 @@ import { createLogger } from '../shared/index.js';
 import { genId } from '../shared/index.js';
 import { PipelineError } from '../shared/index.js';
 import { AgentSwarm } from '../agent/swarm.js';
+import type { SwarmSnapshot } from '../agent/swarm.js';
 import { getRole } from './roles.js';
 import type { AgentInstance, SpawnConfig, AgentRole } from './types.js';
 
@@ -177,6 +178,15 @@ export class AgentSpawner {
       if (inst.status === 'running') count++;
     }
     return count;
+  }
+
+  /**
+   * Read-only swarm snapshot — what the FleetView dashboard endpoint serves
+   * (gap #25 slice 1). Pass-through to the underlying AgentSwarm; exposed here
+   * because callers don't have direct access to the private swarm field.
+   */
+  getSwarmSnapshot(): SwarmSnapshot {
+    return this.swarm.snapshot();
   }
 
   // -------------------------------------------------------------------------

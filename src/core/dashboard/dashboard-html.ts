@@ -28,6 +28,13 @@ export const DASHBOARD_HTML = `
     .status-error { color: #ff4444; }
     .health-item { padding: 8px 0; border-bottom: 1px solid #2a2a4a; }
     .health-item:last-child { border-bottom: none; }
+    .agent-row { padding: 8px 0; border-bottom: 1px solid #2a2a4a; font-size: 13px; }
+    .agent-row:last-child { border-bottom: none; }
+    .agent-id { color: #00d9ff; font-family: monospace; font-size: 11px; }
+    .agent-task { color: #e0e0e0; margin: 4px 0; word-break: break-word; }
+    .agent-meta { color: #888; font-size: 11px; display: flex; gap: 12px; }
+    .agent-idle-flag { color: #ffaa00; font-weight: bold; }
+    .fleet-summary { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #2a2a4a; margin-bottom: 8px; }
     .alignment-bar { height: 8px; background: #2a2a4a; border-radius: 4px; overflow: hidden; margin-top: 10px; }
     .alignment-fill { height: 100%; background: linear-gradient(90deg, #00d9ff, #00ff88); transition: width 0.3s; }
     #last-update { color: #666; font-size: 12px; margin-top: 20px; }
@@ -60,6 +67,15 @@ export const DASHBOARD_HTML = `
     <div class="card">
       <h2>Recent Activity</h2>
       <div id="activity-list"></div>
+    </div>
+    <div class="card" style="grid-column: 1 / -1;">
+      <h2>FleetView — Live Agents</h2>
+      <div id="fleet-summary" class="fleet-summary">
+        <span class="stat-label">Slots</span><span class="stat-value" id="fleet-slots">- / -</span>
+        <span class="stat-label">Queued</span><span class="stat-value" id="fleet-queued">-</span>
+        <span class="stat-label">Idle</span><span class="stat-value" id="fleet-idle">-</span>
+      </div>
+      <div id="fleet-agents"></div>
     </div>
   </div>
   <div id="last-update">Last update: -</div>
@@ -119,8 +135,12 @@ export const DASHBOARD_HTML = `
         statusEl.textContent = health.status.toUpperCase();
         statusEl.className = health.status === 'healthy' ? 'status-ok' : health.status === 'degraded' ? 'status-warn' : 'status-error';
         const checksEl = document.getElementById('health-checks');
+        // c.message is a free-text string from the dashboard server; escape it
+        // for consistency with updateFleet() — getHealth() does not currently
+        // surface user-supplied strings, but a future signal that incorporates
+        // upstream data shouldn't bypass HTML escaping by accident.
         checksEl.innerHTML = health.checks.map(c =>
-          '<div class="health-item"><span class="' + (c.status === 'ok' ? 'status-ok' : c.status === 'warn' ? 'status-warn' : 'status-error') + '">' + c.name + ': ' + c.status.toUpperCase() + '</span>' + (c.message ? ' - ' + c.message : '') + '</div>'
+          '<div class="health-item"><span class="' + (c.status === 'ok' ? 'status-ok' : c.status === 'warn' ? 'status-warn' : 'status-error') + '">' + escapeHtml(c.name) + ': ' + c.status.toUpperCase() + '</span>' + (c.message ? ' - ' + escapeHtml(c.message) : '') + '</div>'
         ).join('');
       } catch (e) {
         document.getElementById('health-checks').innerHTML = '<div class="error">Health check failed</div>';
@@ -157,12 +177,53 @@ export const DASHBOARD_HTML = `
       }
     }
 
+    function formatElapsed(ms) {
+      if (ms < 1000) return ms + 'ms';
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return s + 's';
+      const m = Math.floor(s / 60);
+      const rs = s % 60;
+      return m + 'm' + rs.toString().padStart(2, '0') + 's';
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    async function updateFleet() {
+      try {
+        const fleet = await fetchJson('/api/agents/live');
+        const idleCount = (fleet.spawned || []).filter(a => a.idle).length;
+        document.getElementById('fleet-slots').textContent = fleet.slotsUsed + ' / ' + fleet.slotsMax;
+        document.getElementById('fleet-queued').textContent = fleet.queueWaiting;
+        document.getElementById('fleet-idle').textContent = idleCount;
+        const agentsEl = document.getElementById('fleet-agents');
+        if (!fleet.spawned || fleet.spawned.length === 0) {
+          agentsEl.innerHTML = '<div style="color: #666; padding: 8px 0;">No agents spawned</div>';
+        } else {
+          agentsEl.innerHTML = fleet.spawned.map(a =>
+            '<div class="agent-row">' +
+              '<span class="agent-id">' + escapeHtml(a.id) + '</span>' +
+              (a.idle ? ' <span class="agent-idle-flag">[IDLE]</span>' : '') +
+              '<div class="agent-task">' + escapeHtml(a.task) + '</div>' +
+              '<div class="agent-meta">' +
+                '<span>elapsed ' + formatElapsed(a.elapsedMs) + '</span>' +
+                '<span>heartbeat ' + formatElapsed(a.sinceHeartbeatMs) + ' ago</span>' +
+              '</div>' +
+            '</div>'
+          ).join('');
+        }
+      } catch (e) {
+        document.getElementById('fleet-agents').innerHTML = '<div class="error">Fleet data unavailable</div>';
+      }
+    }
+
     function updateTimestamp() {
       document.getElementById('last-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
     }
 
     async function refreshAll() {
-      await Promise.allSettled([updateStats(), updateHealth(), updateAlignment(), updateActivity()]);
+      await Promise.allSettled([updateStats(), updateHealth(), updateAlignment(), updateActivity(), updateFleet()]);
       updateTimestamp();
     }
 

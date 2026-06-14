@@ -553,9 +553,13 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   // 5.5 Multi-agent orchestration
   // -------------------------------------------------------------------------
+  // Hoisted out of the try block so section 8.6 can register the orchestrator
+  // as the dashboard's `agentSwarm` source — getSnapshot() drives the
+  // FleetView endpoint (gap #25 slice 1).
+  let multiAgent: import('./core/agents/index.js').MultiAgentOrchestrator | null = null;
   try {
     const { MultiAgentOrchestrator, createMultiAgentTool } = await import('./core/agents/index.js');
-    const multiAgent = new MultiAgentOrchestrator(brain, registry, dualSessionManager);
+    multiAgent = new MultiAgentOrchestrator(brain, registry, dualSessionManager);
     // Session manager enables opt-in fork-mode parent context (SUDO_FORK_CONTEXT=1).
     registry.register(createMultiAgentTool(multiAgent, dualSessionManager));
     log.info('Multi-agent orchestrator registered (system.spawn-agent)');
@@ -2537,6 +2541,11 @@ async function boot(): Promise<void> {
           };
         },
       },
+      // FleetView source (gap #25 slice 1). multiAgent.getSnapshot() chains
+      // through to AgentSwarm.snapshot(). When orchestrator wiring failed in
+      // section 5.5, multiAgent is null and the dashboard's getLiveAgents()
+      // serves a zero default rather than 500ing.
+      ...(multiAgent ? { agentSwarm: { getSnapshot: () => multiAgent!.getSnapshot() } } : {}),
     });
 
     initDashboard({ port: dashboardPort, authToken: dashboardToken, refreshIntervalMs: 5000 });

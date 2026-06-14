@@ -100,6 +100,40 @@ export interface ActiveAgent {
   lastHeartbeat: number;
 }
 
+/**
+ * Public read-only snapshot of one active sub-agent. Used by the FleetView
+ * dashboard endpoint (gap #25 slice 1). Cannot leak the AbortController.
+ */
+export interface AgentSnapshot {
+  /** Stable sub-agent id. */
+  id: string;
+  /** Task description, truncated to a UI-safe length. */
+  task: string;
+  /** ISO-8601 timestamp of spawn. */
+  startedAt: string;
+  /** Wall-clock elapsed since spawn, computed at snapshot time. */
+  elapsedMs: number;
+  /** Wall-clock since last `refreshHeartbeat()`, computed at snapshot time. */
+  sinceHeartbeatMs: number;
+  /** True when `sinceHeartbeatMs >= IDLE_THRESHOLD_MS`. */
+  idle: boolean;
+}
+
+/** Aggregate view of the swarm — what the dashboard renders. */
+export interface SwarmSnapshot {
+  /** Live sub-agents, ordered oldest-spawned first. */
+  spawned: AgentSnapshot[];
+  /** Currently running concurrent agents (p-queue active count). */
+  slotsUsed: number;
+  /** Max concurrent agents (MAX_SWARM_AGENTS). */
+  slotsMax: number;
+  /** Tasks waiting in the p-queue (admitted but not running). */
+  queueWaiting: number;
+}
+
+/** Maximum task chars in a snapshot — keeps the dashboard JSON tight. */
+const SNAPSHOT_TASK_MAX_CHARS = 140;
+
 // ---------------------------------------------------------------------------
 // AgentSwarm
 // ---------------------------------------------------------------------------
@@ -673,6 +707,54 @@ export class AgentSwarm {
     return [...this.active.values()]
       .filter((agent) => now - agent.lastHeartbeat > IDLE_THRESHOLD_MS)
       .map(({ id, lastHeartbeat }) => ({ id, lastActiveAt: lastHeartbeat }));
+  }
+
+  /**
+   * Return a richer read-only snapshot of the swarm — what the FleetView
+   * dashboard endpoint serves (gap #25 slice 1).
+   *
+   * Includes per-agent elapsed + heartbeat staleness + idle flag, plus
+   * aggregate concurrency stats: how many slots are currently busy, the
+   * configured max, and how many spawn-queue entries are waiting for a slot.
+   * The AbortController is deliberately omitted — snapshots are public,
+   * cancellation goes through `kill()` (operator-authenticated).
+   *
+   * Returns a fresh object each call; the active map is read once at the top
+   * so consistency holds even if a sub-agent settles mid-iteration.
+   */
+  snapshot(): SwarmSnapshot {
+    const now = Date.now();
+    const active = [...this.active.values()].sort(
+      (a, b) => a.startedAt.getTime() - b.startedAt.getTime(),
+    );
+
+    const spawned: AgentSnapshot[] = active.map((a) => {
+      const sinceHeartbeatMs = now - a.lastHeartbeat;
+      return {
+        id: a.id,
+        task:
+          a.task.length > SNAPSHOT_TASK_MAX_CHARS
+            ? `${a.task.slice(0, SNAPSHOT_TASK_MAX_CHARS - 1)}…`
+            : a.task,
+        startedAt: a.startedAt.toISOString(),
+        elapsedMs: now - a.startedAt.getTime(),
+        sinceHeartbeatMs,
+        idle: sinceHeartbeatMs >= IDLE_THRESHOLD_MS,
+      };
+    });
+
+    // p-queue exposes `size` (pending = waiting to start) and `pending`
+    // (currently executing — counts the active task it has handed out).
+    // `slotsUsed` = currently-running tasks; `queueWaiting` = awaiting a slot.
+    const slotsUsed = this.queue.pending;
+    const queueWaiting = this.queue.size;
+
+    return {
+      spawned,
+      slotsUsed,
+      slotsMax: MAX_SWARM_AGENTS,
+      queueWaiting,
+    };
   }
 
   /**

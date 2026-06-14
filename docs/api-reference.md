@@ -431,7 +431,7 @@ All kill-switches use exact-`"1"`-match semantics: the feature is disabled only 
 | `SUDO_MCP_DISABLE=1` | MCP server integration (SSE/WS/OAuth) |
 | `SUDO_MCP_OAUTH_DISABLE=1` | MCP OAuth PKCE |
 | `SUDO_MCP_REMOTE_DISABLE=1` | MCP remote tool access |
-| `SUDO_DASHBOARD_DISABLE=1` | Web dashboard (stats/health/alignment/metrics) |
+| `SUDO_DASHBOARD_DISABLE=1` | Web dashboard (stats/health/alignment/metrics/recent-activity/agents-live). The FleetView endpoint `GET /api/agents/live` (gap #25 slice 1) returns a snapshot of live sub-agents from the multi-agent orchestrator: `{ spawned: AgentSnapshot[], slotsUsed, slotsMax, queueWaiting }`. Each `AgentSnapshot` carries `id`, truncated `task`, `startedAt`, `elapsedMs`, `sinceHeartbeatMs`, and an `idle` flag (true when heartbeat is older than 30s). Prometheus metrics include `sudo_agents_spawned`, `sudo_agents_idle`, `sudo_agents_slots_used`, `sudo_agents_slots_max`, `sudo_agents_queue_waiting`. When the multi-agent orchestrator failed to initialize at boot, the endpoint serves a zero default rather than 500 |
 | `SUDO_BRAIN_RACE_DISABLE=1` | Brain parallel model race |
 | `SUDO_BRAIN_CONSENSUS_DISABLE=1` | 3-model Jaccard consensus |
 | `SUDO_AUTO_APPROVE=1` | (enabler) Skips manual approval prompts in autonomy tiers. Off by default; enable only when you intend the agent to act without per-action confirmation |
