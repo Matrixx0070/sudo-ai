@@ -54,6 +54,25 @@ export interface AcpBackend {
     signal: AbortSignal;
     emit?: (update: import('./types.js').SessionUpdate) => void;
   }): Promise<StopReason>;
+  /**
+   * Load a previously-persisted session and replay its history as
+   * `session/update` notifications (gap #26 slice 4). Returns `true` on
+   * success, `false` when the session is unknown to the backend. Implementing
+   * this is optional — the server advertises `loadSession` capability based
+   * on {@link supportsLoadSession}.
+   */
+  loadSession?(args: {
+    sessionId: string;
+    emit?: (update: import('./types.js').SessionUpdate) => void;
+  }): Promise<boolean>;
+  /**
+   * Whether {@link loadSession} is wired and meaningful — drives the
+   * capability advert. MUST return a stable value across the lifetime of the
+   * backend: the server queries this once at `initialize` time, and a value
+   * that later diverges would produce a stale capability advert with no
+   * mechanism to update the client (verifier LOW 3).
+   */
+  supportsLoadSession?(): boolean;
 }
 
 export interface AcpServerOptions {
@@ -100,6 +119,8 @@ export class AcpServer {
         return this.onNewSession(params);
       case 'session/prompt':
         return this.onPrompt(params);
+      case 'session/load':
+        return this.onLoadSession(params);
       default:
         throw new AcpRpcError(JsonRpcErrorCode.MethodNotFound, `Method not found: ${method}`);
     }
@@ -134,7 +155,10 @@ export class AcpServer {
     return {
       protocolVersion,
       agentCapabilities: {
-        loadSession: false,
+        // Slice 4: advert reflects whether the backend has a session store
+        // wired. The server method handler also guards against calls when
+        // false so a non-compliant client can't probe past the capability.
+        loadSession: this.backend.supportsLoadSession?.() === true,
         promptCapabilities: { image: false, audio: false, embeddedContext: false },
       },
       agentInfo: { name: this.agentName, version: this.agentVersion },
@@ -209,6 +233,59 @@ export class AcpServer {
       'session/request_permission',
       params,
     );
+  }
+
+  /**
+   * `session/load` handler. Refuses honestly when the backend does not
+   * support load, when params are malformed, or when the backend reports the
+   * session is unknown.
+   */
+  private async onLoadSession(params: unknown): Promise<import('./types.js').LoadSessionResult> {
+    this.requireInitialized();
+    const p = params as import('./types.js').LoadSessionParams | undefined;
+    if (!p || typeof p.sessionId !== 'string' || p.sessionId === '') {
+      throw new AcpRpcError(
+        JsonRpcErrorCode.InvalidParams,
+        'session/load requires { sessionId: string }',
+      );
+    }
+    if (this.backend.supportsLoadSession?.() !== true || !this.backend.loadSession) {
+      throw new AcpRpcError(
+        JsonRpcErrorCode.MethodNotFound,
+        'session/load is not supported by this agent (no session store wired)',
+      );
+    }
+    const sessionId = p.sessionId;
+    // Refuse to overwrite an in-flight prompt's history (verifier MED 2).
+    // The symmetric guard in onPrompt blocks concurrent prompts; this one
+    // blocks load-during-prompt which would otherwise produce a torn history
+    // when the load replaced the array the prompt is appending to.
+    if (this.active.has(sessionId)) {
+      throw new AcpRpcError(
+        JsonRpcErrorCode.InvalidParams,
+        `a prompt turn is in flight for sessionId: ${sessionId} — cannot load`,
+      );
+    }
+    let loaded: boolean;
+    try {
+      loaded = await this.backend.loadSession({
+        sessionId,
+        emit: (update) => {
+          const notification: SessionUpdateNotification = { sessionId, update };
+          this.conn.notify('session/update', notification);
+        },
+      });
+    } catch (err) {
+      throw new AcpRpcError(
+        JsonRpcErrorCode.InvalidParams,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    if (!loaded) {
+      throw new AcpRpcError(JsonRpcErrorCode.InvalidParams, `unknown sessionId: ${sessionId}`);
+    }
+    this.sessions.add(sessionId);
+    return {} as import('./types.js').LoadSessionResult;
   }
 
   private requireInitialized(): void {
