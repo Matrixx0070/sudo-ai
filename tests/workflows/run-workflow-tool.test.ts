@@ -298,4 +298,252 @@ steps:
     expect(res.success).toBe(false);
     expect(res.output).toContain('not a valid workflow run state');
   });
+
+  // -------------------------------------------------------------------------
+  // Slice 2: journal + parallel + SHA-256 mismatch on resume
+  // -------------------------------------------------------------------------
+  describe('on-disk resume journal', () => {
+    it('writes <DATA_DIR>/workflow-runs/<runId>.json with sourceSha256 by default', async () => {
+      const { registry } = stubRegistry(async () => ({ success: true, output: 'OK' }));
+      setWorkflowRegistry(registry);
+
+      const file = writeWorkflow(
+        'with-journal.yaml',
+        'name: with-journal\nsteps:\n  - id: a\n    command: ok-tool\n    type: tool\n',
+      );
+
+      const res = await runWorkflowTool.execute({ file }, ctx);
+
+      expect(res.success).toBe(true);
+      expect(res.data?.['runId']).toMatch(/^[0-9a-f-]+$/);
+      const journalPath = res.data?.['journalPath'] as string;
+      expect(journalPath).toMatch(/workflow-runs[/\\][0-9a-f-]+\.json$/);
+
+      const { readFileSync, existsSync } = await import('fs');
+      expect(existsSync(journalPath)).toBe(true);
+      const j = JSON.parse(readFileSync(journalPath, 'utf8')) as Record<string, unknown>;
+      expect(j['version']).toBe(1);
+      expect(j['runId']).toBe(res.data?.['runId']);
+      // Full SHA-256 is persisted to disk, but only a 12-char prefix is echoed
+      // back in the tool response (the response would otherwise act as a hash
+      // oracle for partial-file edits without filesystem access).
+      const prefix = res.data?.['sourceSha256Prefix'];
+      expect(typeof prefix).toBe('string');
+      expect(prefix).toMatch(/^[0-9a-f]{12}$/);
+      expect((j['sourceSha256'] as string).startsWith(prefix as string)).toBe(true);
+      expect(res.data?.['sourceSha256']).toBeUndefined();
+    });
+
+    it('rejects an absolute journal_dir outside DATA_DIR / WORKSPACE_DIR', async () => {
+      const { registry } = stubRegistry(async () => ({ success: true, output: 'OK' }));
+      setWorkflowRegistry(registry);
+
+      const file = writeWorkflow(
+        'oob-jrnl.yaml',
+        'name: oob-jrnl\nsteps:\n  - id: a\n    command: ok-tool\n    type: tool\n',
+      );
+
+      // /etc is the canonical "obviously not yours" root. The guard refuses
+      // before any journal file would be written.
+      const res = await runWorkflowTool.execute(
+        { file, journal_dir: '/etc' },
+        ctx,
+      );
+
+      expect(res.success).toBe(false);
+      expect(res.output).toContain('must be inside DATA_DIR');
+    });
+
+    it('disables the journal when journal_dir is an empty string', async () => {
+      const { registry } = stubRegistry(async () => ({ success: true, output: 'OK' }));
+      setWorkflowRegistry(registry);
+
+      const file = writeWorkflow(
+        'no-journal.yaml',
+        'name: no-journal\nsteps:\n  - id: a\n    command: ok-tool\n    type: tool\n',
+      );
+
+      const res = await runWorkflowTool.execute({ file, journal_dir: '' }, ctx);
+      expect(res.success).toBe(true);
+      expect(res.data?.['journalPath']).toBeUndefined();
+    });
+
+    it('rejects a relative journal_dir', async () => {
+      const { registry } = stubRegistry(async () => ({ success: true, output: 'OK' }));
+      setWorkflowRegistry(registry);
+
+      const file = writeWorkflow('rel-jrnl.yaml', 'name: rel-jrnl\nsteps:\n  - id: a\n    command: ok-tool\n    type: tool\n');
+
+      const res = await runWorkflowTool.execute({ file, journal_dir: 'rel/path' }, ctx);
+      expect(res.success).toBe(false);
+      expect(res.output).toContain('journal_dir must be an absolute path');
+    });
+
+    it('refuses resume_run_id when the workflow source SHA changed since pause', async () => {
+      const calls: string[] = [];
+      const { registry } = stubRegistry(async (name) => {
+        calls.push(name);
+        return { success: true, output: 'ok' };
+      });
+      setWorkflowRegistry(registry);
+
+      const sourceA =
+        'name: sha-check\nsteps:\n  - id: g1\n    command: ok-tool\n    type: tool\n    approval: true\n  - id: g2\n    command: ok-tool\n    type: tool\n';
+      const file = writeWorkflow('sha-check.yaml', sourceA);
+
+      // First call: pauses on the approval gate, writes the journal.
+      const first = await runWorkflowTool.execute({ file }, ctx);
+      expect(first.data?.['paused']).toBe(true);
+      const runId = first.data?.['runId'] as string;
+      expect(runId).toBeDefined();
+      const journalPath = first.data?.['journalPath'] as string;
+      expect(journalPath).toBeDefined();
+
+      // Edit the workflow file — even a benign whitespace change flips the SHA.
+      writeFileSync(path.join(workflowsBase, 'sha-check.yaml'), sourceA + '# edited\n', 'utf8');
+
+      // Resume by run id — must refuse.
+      const second = await runWorkflowTool.execute(
+        { file, resume_run_id: runId, auto_approve: true },
+        ctx,
+      );
+      expect(second.success).toBe(false);
+      expect(second.output).toContain('source SHA-256 changed');
+
+      // The edit didn't trigger any new tool dispatches.
+      expect(calls.length).toBe(0);
+    });
+
+    it('resumes from disk via resume_run_id when the file is unchanged', async () => {
+      let calls = 0;
+      const { registry } = stubRegistry(async () => {
+        calls++;
+        return { success: true, output: 'tool-out' };
+      });
+      setWorkflowRegistry(registry);
+
+      const src =
+        'name: resume-ok\nsteps:\n  - id: g\n    command: ok-tool\n    type: tool\n    approval: true\n  - id: after\n    command: ok-tool\n    type: tool\n';
+      const file = writeWorkflow('resume-ok.yaml', src);
+
+      const first = await runWorkflowTool.execute({ file }, ctx);
+      expect(first.data?.['paused']).toBe(true);
+      expect(calls).toBe(0);
+      const runId = first.data?.['runId'] as string;
+
+      const second = await runWorkflowTool.execute(
+        { file, resume_run_id: runId, auto_approve: true },
+        ctx,
+      );
+      expect(second.success).toBe(true);
+      expect(second.data?.['completed']).toBe(true);
+      expect(calls).toBe(2);
+    });
+
+    it('rejects a malformed resume_run_id', async () => {
+      const { registry } = stubRegistry(async () => ({ success: true, output: 'ok' }));
+      setWorkflowRegistry(registry);
+
+      const file = writeWorkflow('id-mal.yaml', 'name: id-mal\nsteps:\n  - id: a\n    command: ok-tool\n    type: tool\n');
+
+      const res = await runWorkflowTool.execute(
+        { file, resume_run_id: '../escape' },
+        ctx,
+      );
+      expect(res.success).toBe(false);
+      expect(res.output).toContain('resume_run_id is malformed');
+    });
+
+    it('returns an honest error when resume_run_id has no journal on disk', async () => {
+      const { registry } = stubRegistry(async () => ({ success: true, output: 'ok' }));
+      setWorkflowRegistry(registry);
+
+      const file = writeWorkflow('miss.yaml', 'name: miss\nsteps:\n  - id: a\n    command: ok-tool\n    type: tool\n');
+
+      const res = await runWorkflowTool.execute(
+        { file, resume_run_id: 'never-existed-id' },
+        ctx,
+      );
+      expect(res.success).toBe(false);
+      expect(res.output).toContain('no journal at');
+    });
+  });
+
+  describe('parallel groups (tool-level)', () => {
+    it('runs consecutive parallel_group tool steps concurrently', async () => {
+      let inFlight = 0;
+      let peakInFlight = 0;
+      const { registry } = stubRegistry(async (name) => {
+        inFlight++;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 25));
+        inFlight--;
+        return { success: true, output: `out:${name}` };
+      });
+      setWorkflowRegistry(registry);
+
+      const file = writeWorkflow(
+        'parallel-tools.yaml',
+        `name: parallel-tools
+steps:
+  - id: a
+    command: alpha
+    type: tool
+    parallel_group: g
+  - id: b
+    command: beta
+    type: tool
+    parallel_group: g
+  - id: c
+    command: gamma
+    type: tool
+    parallel_group: g
+`,
+      );
+
+      const res = await runWorkflowTool.execute({ file }, ctx);
+
+      expect(res.success).toBe(true);
+      expect(peakInFlight).toBe(3);
+    });
+
+    it('SUDO_WORKFLOWS_MAX_PARALLEL=1 collapses fan-out to sequential', async () => {
+      const prev = process.env['SUDO_WORKFLOWS_MAX_PARALLEL'];
+      process.env['SUDO_WORKFLOWS_MAX_PARALLEL'] = '1';
+      try {
+        let inFlight = 0;
+        let peakInFlight = 0;
+        const { registry } = stubRegistry(async () => {
+          inFlight++;
+          peakInFlight = Math.max(peakInFlight, inFlight);
+          await new Promise((r) => setTimeout(r, 10));
+          inFlight--;
+          return { success: true, output: 'x' };
+        });
+        setWorkflowRegistry(registry);
+
+        const file = writeWorkflow(
+          'cap-1.yaml',
+          `name: cap-1
+steps:
+  - id: a
+    command: t
+    type: tool
+    parallel_group: g
+  - id: b
+    command: t
+    type: tool
+    parallel_group: g
+`,
+        );
+
+        const res = await runWorkflowTool.execute({ file }, ctx);
+        expect(res.success).toBe(true);
+        expect(peakInFlight).toBe(1);
+      } finally {
+        if (prev === undefined) delete process.env['SUDO_WORKFLOWS_MAX_PARALLEL'];
+        else process.env['SUDO_WORKFLOWS_MAX_PARALLEL'] = prev;
+      }
+    });
+  });
 });

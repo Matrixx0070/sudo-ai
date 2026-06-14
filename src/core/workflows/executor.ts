@@ -26,6 +26,27 @@ const DANGEROUS_RE = /\$\(|`|\|/;
 // Extended check: also blocks shell metacharacters when validating stdin
 const STDIN_DANGEROUS_RE = /\$\(|`|\||;|&|>|<|\n/;
 
+/** Field of a StepResult that the template engine is allowed to expand to text. */
+const TEMPLATE_FIELDS: ReadonlySet<keyof StepResult> = new Set<keyof StepResult>([
+  'stdout',
+  'stderr',
+  'exitCode',
+  'status',
+  'durationMs',
+]);
+
+/**
+ * Regex for `{{steps.<id>.<field>}}` (no surrounding whitespace).
+ *
+ * The id capture is intentionally lowercase-only to match `STEP_ID_RE`. If that
+ * schema is ever widened to accept uppercase ids, this regex must widen with it
+ * — otherwise references like `{{steps.MyStep.stdout}}` would silently fail to
+ * expand instead of failing loudly.
+ */
+const TEMPLATE_RE = /\{\{steps\.([a-z0-9_-]+)\.([a-zA-Z]+)\}\}/g;
+/** Regex for the legacy `{{prev}}` token. */
+const PREV_RE = /\{\{prev\}\}/g;
+
 const MAX_OUTPUT = 10 * 1024 * 1024; // 10 MB per stream
 
 /** Shell interpreters that must not appear as the command binary. */
@@ -83,6 +104,23 @@ export function validateStep(step: WorkflowStep): void {
 
   if (step.timeout !== undefined && (typeof step.timeout !== 'number' || step.timeout <= 0)) {
     throw new Error(`Step "${step.id}": timeout must be a positive number`);
+  }
+
+  // parallel_group steps may not use {{prev}} — fan-out has no defined
+  // intra-group ordering, so "the previous step" is ambiguous. Authors must
+  // reference a specific upstream id via {{steps.<id>.<field>}} instead.
+  if (step.parallel_group !== undefined) {
+    if (step.command.includes('{{prev}}') || (step.stdin ?? '').includes('{{prev}}')) {
+      throw new Error(
+        `Step "${step.id}": {{prev}} is forbidden inside parallel_group "${step.parallel_group}" — ` +
+          'use explicit {{steps.<id>.<field>}} against a step outside the group',
+      );
+    }
+    if (step.approval === true) {
+      throw new Error(
+        `Step "${step.id}": approval gates are not supported inside parallel_group "${step.parallel_group}"`,
+      );
+    }
   }
 }
 
@@ -195,6 +233,79 @@ export function evaluateCondition(expr: string, stepsMap: AccessorMap): boolean 
 
   return acc;
 }
+
+// ---------------------------------------------------------------------------
+// Template rendering — `{{prev}}` and `{{steps.<id>.<field>}}`
+// ---------------------------------------------------------------------------
+
+/**
+ * Expand template tokens in `text` against the run's completed-step results.
+ *
+ * Tokens:
+ *   - `{{prev}}` — last sequentially completed step's `stdout` (legacy).
+ *     Caller is responsible for forbidding this token inside parallel groups
+ *     (validateStep does so at workflow load time).
+ *   - `{{steps.<id>.<field>}}` — value of `<field>` on the StepResult keyed by
+ *     `<id>`. Allowed fields: stdout, stderr, exitCode, status, durationMs.
+ *
+ * Returns the rendered text plus a flag set when ANY token expanded — the
+ * caller uses this to decide whether to re-validate the rendered string under
+ * the shell-metachar guards (untrusted step output may carry `$()` / `|` / `;`).
+ */
+export function renderTemplate(
+  text: string,
+  completedSteps: StepResult[],
+): { rendered: string; expanded: boolean } {
+  if (!text) return { rendered: text, expanded: false };
+
+  const byId: Record<string, StepResult> = {};
+  for (const r of completedSteps) byId[r.id] = r;
+  const prev = completedSteps[completedSteps.length - 1];
+
+  let expanded = false;
+  let out = text;
+
+  out = out.replace(PREV_RE, () => {
+    expanded = true;
+    return prev?.stdout ?? '';
+  });
+
+  out = out.replace(TEMPLATE_RE, (match, id: string, field: string) => {
+    const step = byId[id];
+    if (!step) return match; // honestly unsubstituted — caller re-validates
+    if (!TEMPLATE_FIELDS.has(field as keyof StepResult)) return match;
+    const v = step[field as keyof StepResult];
+    expanded = true;
+    if (v === undefined || v === null) return '';
+    return String(v);
+  });
+
+  return { rendered: out, expanded };
+}
+
+/**
+ * Throw if the rendered shell command carries forbidden metacharacters. Used
+ * AFTER template substitution: a step output is untrusted, so `$()` / backtick
+ * / pipe in the rendered command must halt the run honestly rather than feed
+ * an attacker-controlled value into spawn() — even though spawn has shell:false,
+ * pipes would still split argv and `$()` would land as a literal arg by luck
+ * rather than design.
+ */
+export function assertRenderedCommandSafe(stepId: string, command: string): void {
+  if (DANGEROUS_RE.test(command)) {
+    throw new Error(
+      `Step "${stepId}": rendered command contains forbidden characters ` +
+        '(template expansion injected `$(`, backtick, or `|`)',
+    );
+  }
+}
+
+// Rendered shell stdin is intentionally NOT re-validated: stdin is a pipe to
+// the child process (spawn with shell:false), not a shell expression, so bytes
+// from a prior step's stdout (newlines, `;`, `$()`, etc.) can flow through
+// without injection risk. The load-time STDIN_DANGEROUS_RE check still rejects
+// shell metacharacters in *literal* stdin authored in the YAML, where they
+// likely signal a user error rather than legitimate piped data.
 
 // ---------------------------------------------------------------------------
 // Shell execution
