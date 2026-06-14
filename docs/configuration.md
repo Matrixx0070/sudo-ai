@@ -469,6 +469,19 @@ The **ssh** backend runs each command on a remote host via a single non-interact
 
 **Per-policy selection.** A `SandboxPolicy` may carry an `execBackend` field that takes **precedence over** the global `SUDO_EXEC_BACKEND` env, so different sessions / profiles / tools can route to different backends (precedence: `policy.execBackend` → `SUDO_EXEC_BACKEND` → `local`). It is validated as a safe token (untrusted policies parsed from storage fall back to the env/`local` on a malformed value), and an unknown-but-valid value still fail-safes to bwrap at dispatch. It **cannot** disable sandboxing — only the env-only `SUDO_SANDBOX_DISABLE=1` kill-switch does that, and the kill-switch still wins over any `policy.execBackend`.
 
+```bash
+SUDO_EXEC_BACKEND=modal         # run system.exec in an ephemeral Modal serverless sandbox
+SUDO_MODAL_IMAGE=debian:12      # optional registry image ref (default: modal's debian_slim)
+SUDO_MODAL_APP=sudo-exec        # optional modal app name (default sudo-exec)
+SUDO_MODAL_BIN=python3          # python binary that has the `modal` package (default python3)
+MODAL_TOKEN_ID=...              # Modal auth (standard modal env), inherited by the client
+MODAL_TOKEN_SECRET=...
+```
+
+The **modal** backend runs each command in an ephemeral [Modal](https://modal.com) sandbox. Modal's SDK is Python-only, so the backend shells out to `python3 -c <driver>` where the driver creates a `modal.Sandbox` and runs `bash -c <command>` in it. **Injection-safe:** the command travels via the `SUDO_MODAL_COMMAND` env var (never on argv) and reaches the sandbox as argv to `sb.exec` (not a host shell). Requires the `modal` Python package + Modal auth (`MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET`, inherited by the local client). Honest failure: python or the `modal` package missing → exit 127.
+
+**Semantics — not full docker/bwrap parity.** The command runs in a **fresh** Modal sandbox: the workspace is **not** mounted (no project files), and `policy.extraReadOnlyBinds`/`extraWritableBinds` do not apply. The **hard** resource cap is the shared ulimit wrapper (run inside the sandbox); the sandbox `memory` is a scheduling request and `timeout` a wall-clock backstop. `policy.network: 'none'` (the default) maps to Modal's `block_network` (best-effort — the driver retries without it and warns if your modal version lacks it). On local timeout/abort a SIGTERM handler terminates the remote sandbox so it doesn't keep billing. **Verification:** unlike docker/ssh, the live Modal round-trip is not exercised by this repo's tests (no Modal account in CI) — the driver's syntax + import-guard are tested against a real `python3`; validate against your Modal workspace before relying on remote execution.
+
 ### Cross-Platform Control, Kill-Switches, Autonomy, Learning
 
 **Kill-switches (set to exactly `=1` to disable; see the full table + semantics in `docs/api-reference.md#kill-switches`):**
