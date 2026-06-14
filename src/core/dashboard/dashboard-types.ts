@@ -237,6 +237,15 @@ export interface FleetCommandQueueSource {
   get(commandId: string): FleetCommandRow | undefined;
   /** Slice 3 — per-device history for the admin UI panel. */
   listForDevice(deviceId: string, limit?: number): FleetCommandRow[];
+  /**
+   * Gap #28d slice 2 — per-device latest-completed-by-kind window query.
+   * The fleet-alignment rollup at `/api/admin/fleet/alignment` calls this
+   * with `'alignment.digest'` and joins the result against the registrar's
+   * device list to derive a `reported / missing` split. Optional so the
+   * field stays backward-compatible with any future structural impl that
+   * predates the rollup endpoint.
+   */
+  latestCompletedByKindPerDevice?(kind: string): FleetCommandRow[];
 }
 
 /** Row shape returned by FleetCommandQueueSource — wire-format-adjacent. */

@@ -32,9 +32,10 @@ export type CommandStatus = 'queued' | 'in_flight' | 'completed' | 'failed' | 't
  * Fleet command kinds dispatched over the back-channel.
  *
  * - Slice 2 (#28c): `model.get`, `model.set` (brain-backed)
- * - Slice 1 of gap #28d: `autonomy.pause`, `autonomy.resume`, `autonomy.status`
- *   (WakeSleepCycle-backed; the queue is opaque so no schema migration was
- *   needed — new kinds are device-side dispatch only).
+ * - Gap #28d slice 1: `autonomy.{pause,resume,status}` (WakeSleepCycle-backed)
+ * - Gap #28d slice 2: `alignment.digest` (AlignmentAggregator-backed —
+ *   admin's `/api/admin/fleet/alignment` rollup reads the latest completed
+ *   row per device from this table for the fleet-wide view)
  *
  * Adding new kinds is intentionally a device-side change with NO queue
  * schema migration — see the file header for the contract.
@@ -44,7 +45,8 @@ export type CommandKind =
   | 'model.set'
   | 'autonomy.pause'
   | 'autonomy.resume'
-  | 'autonomy.status';
+  | 'autonomy.status'
+  | 'alignment.digest';
 
 /** Command body. */
 export interface CommandBody {
@@ -293,6 +295,38 @@ export class CommandQueue {
   listForDevice(deviceId: string, limit: number = 50): CommandRow[] {
     const clamped = Math.max(1, Math.min(1000, Math.floor(limit)));
     return this.listForDeviceStmt.all(deviceId, clamped) as CommandRow[];
+  }
+
+  /**
+   * Return the most recent `completed` row of the given kind for each
+   * device that has one. Used by the gap #28d slice 2 admin endpoint
+   * `/api/admin/fleet/alignment` to build the fleet-wide rollup without
+   * needing a per-device cache column.
+   *
+   * Devices with no completed row of this kind are simply absent from
+   * the result — the route handler joins against RegistryStore to derive
+   * a "missing" list.
+   */
+  latestCompletedByKindPerDevice(kind: CommandKind): CommandRow[] {
+    return this.db.prepare(`
+      SELECT
+        command_id    AS commandId,
+        device_id     AS deviceId,
+        kind          AS kind,
+        args_json     AS argsJson,
+        status        AS status,
+        dispatcher    AS dispatcher,
+        dispatched_at AS dispatchedAt,
+        picked_up_at  AS pickedUpAt,
+        completed_at  AS completedAt,
+        result_json   AS resultJson,
+        error_message AS errorMessage
+      FROM fleet_commands fc
+      WHERE kind = ? AND status = 'completed' AND completed_at = (
+        SELECT MAX(completed_at) FROM fleet_commands
+        WHERE kind = ? AND status = 'completed' AND device_id = fc.device_id
+      )
+    `).all(kind, kind) as CommandRow[];
   }
 
   /** Total row count — debug + tests. */

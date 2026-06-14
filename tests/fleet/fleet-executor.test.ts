@@ -243,4 +243,50 @@ describe('startFleetExecutor end-to-end', () => {
       expect(r.error).toBe('boom');
     });
   });
+
+  // --- Gap #28d slice 2: alignment.digest dispatch ------------------------
+
+  describe('runCommand alignment.digest (gap #28d slice 2)', () => {
+    it('alignment.digest without an alignment handle returns alignment_not_enabled', async () => {
+      const r = await runCommand({ commandId: 'c1', kind: 'alignment.digest' }, undefined, undefined, undefined);
+      expect(r).toEqual({ status: 'failed', error: 'alignment_not_enabled' });
+    });
+
+    it('alignment.digest returns alignment_unavailable when no report has been produced', async () => {
+      const r = await runCommand({ commandId: 'c2', kind: 'alignment.digest' }, undefined, undefined, {
+        digest: () => undefined,
+      });
+      expect(r).toEqual({ status: 'failed', error: 'alignment_unavailable' });
+    });
+
+    it('alignment.digest returns the snapshot with overallScore + signals + at', async () => {
+      const r = await runCommand({ commandId: 'c3', kind: 'alignment.digest' }, undefined, undefined, {
+        digest: () => ({ overallScore: 0.82, signals: { truthfulness: 0.9, safety: 0.95 } }),
+      });
+      expect(r.status).toBe('completed');
+      const result = r.result as { overallScore: number; signals: Record<string, number>; at: string };
+      expect(result.overallScore).toBe(0.82);
+      expect(result.signals).toEqual({ truthfulness: 0.9, safety: 0.95 });
+      expect(typeof result.at).toBe('string');
+      // ISO-8601 sanity check.
+      expect(Number.isNaN(Date.parse(result.at))).toBe(false);
+    });
+
+    it('alignment.digest fills missing fields with safe defaults (no signals/no score)', async () => {
+      const r = await runCommand({ commandId: 'c4', kind: 'alignment.digest' }, undefined, undefined, {
+        digest: () => ({}),
+      });
+      expect(r.status).toBe('completed');
+      const result = r.result as { overallScore: number; signals: Record<string, number> };
+      expect(result.overallScore).toBe(0);
+      expect(result.signals).toEqual({});
+    });
+
+    it('alignment handle exceptions are caught and surfaced as failed', async () => {
+      const throwy = { digest(): never { throw new Error('aggregator-down'); } };
+      const r = await runCommand({ commandId: 'c5', kind: 'alignment.digest' }, undefined, undefined, throwy);
+      expect(r.status).toBe('failed');
+      expect(r.error).toBe('aggregator-down');
+    });
+  });
 });

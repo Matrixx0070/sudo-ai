@@ -182,6 +182,119 @@ describe('POST /api/admin/fleet/dispatch', () => {
       }
     } finally { await srv.close(); }
   });
+
+  it('BC-04c (#28d slice 2): alignment.digest passes kind validation', async () => {
+    registerDashboardGlobals({ fleetRegistrar: registry, fleetCommandQueue: queue });
+    const id = createDeviceIdentity(defaultIdentityPath(tmp));
+    registerOneDevice(id, 'd');
+    const srv = await startTestServer();
+    try {
+      const r = await rawRequest(`${srv.baseUrl}/api/admin/fleet/dispatch`, {
+        method: 'POST', headers: { Authorization: 'Bearer admin-bearer' },
+        body: { deviceId: id.deviceId, command: { kind: 'alignment.digest' } },
+      });
+      expect(r.status).toBe(202);
+      const { commandId } = JSON.parse(r.body) as { commandId: string };
+      expect(queue.get(commandId)?.kind).toBe('alignment.digest');
+    } finally { await srv.close(); }
+  });
+});
+
+describe('GET /api/admin/fleet/alignment (#28d slice 2)', () => {
+  it('FA-01: registrar mode OFF → 503', async () => {
+    const srv = await startTestServer();
+    try {
+      const r = await rawRequest(`${srv.baseUrl}/api/admin/fleet/alignment`, {
+        headers: { Authorization: 'Bearer admin-bearer' },
+      });
+      expect(r.status).toBe(503);
+      expect(JSON.parse(r.body).error).toBe('fleet_registrar_not_enabled');
+    } finally { await srv.close(); }
+  });
+
+  it('FA-02: empty fleet → 200 with all-zero rollup', async () => {
+    registerDashboardGlobals({ fleetRegistrar: registry, fleetCommandQueue: queue });
+    const srv = await startTestServer();
+    try {
+      const r = await rawRequest(`${srv.baseUrl}/api/admin/fleet/alignment`, {
+        headers: { Authorization: 'Bearer admin-bearer' },
+      });
+      expect(r.status).toBe(200);
+      expect(JSON.parse(r.body)).toEqual({
+        reportedCount: 0, missingCount: 0, totalCount: 0, reported: [], missing: [],
+      });
+    } finally { await srv.close(); }
+  });
+
+  it('FA-03: device with no digest yet → in `missing`; device with digest → in `reported`', async () => {
+    registerDashboardGlobals({ fleetRegistrar: registry, fleetCommandQueue: queue });
+    const reported = createDeviceIdentity(defaultIdentityPath(tmp));
+    registerOneDevice(reported, 'reported-host');
+    // Second identity needs its own dir so the keypair file doesn't collide.
+    const missingDir = mkdtempSync(path.join(tmpdir(), 'sudo-bc-m-'));
+    const missingId = createDeviceIdentity(defaultIdentityPath(missingDir));
+    registerOneDevice(missingId, 'missing-host');
+
+    // Reported device: complete one alignment.digest.
+    const cmdId = queue.enqueue({ deviceId: reported.deviceId, command: { kind: 'alignment.digest' }, dispatcher: 'admin' });
+    queue.pickup(reported.deviceId);
+    queue.complete({
+      commandId: cmdId,
+      result: { status: 'completed', result: { overallScore: 0.91, signals: { truthfulness: 0.9 }, at: '2026-06-14T19:30:00Z' } },
+    });
+
+    const srv = await startTestServer();
+    try {
+      const r = await rawRequest(`${srv.baseUrl}/api/admin/fleet/alignment`, {
+        headers: { Authorization: 'Bearer admin-bearer' },
+      });
+      expect(r.status).toBe(200);
+      const json = JSON.parse(r.body) as {
+        reportedCount: number; missingCount: number; totalCount: number;
+        reported: Array<{ deviceId: string; hostname: string; digest: { overallScore: number }; commandId: string }>;
+        missing: Array<{ deviceId: string; hostname: string }>;
+      };
+      expect(json.totalCount).toBe(2);
+      expect(json.reportedCount).toBe(1);
+      expect(json.missingCount).toBe(1);
+      expect(json.reported[0]?.deviceId).toBe(reported.deviceId);
+      expect(json.reported[0]?.digest.overallScore).toBe(0.91);
+      expect(json.reported[0]?.commandId).toBe(cmdId);
+      expect(json.missing[0]?.deviceId).toBe(missingId.deviceId);
+    } finally { await srv.close(); }
+  });
+
+  it('FA-04: only the LATEST completed digest per device is surfaced', async () => {
+    registerDashboardGlobals({ fleetRegistrar: registry, fleetCommandQueue: queue });
+    const id = createDeviceIdentity(defaultIdentityPath(tmp));
+    registerOneDevice(id, 'host');
+
+    const stale = queue.enqueue({ deviceId: id.deviceId, command: { kind: 'alignment.digest' }, dispatcher: 'admin' });
+    queue.pickup(id.deviceId);
+    queue.complete({
+      commandId: stale,
+      result: { status: 'completed', result: { overallScore: 0.50 } },
+      now: new Date('2026-06-14T10:00:00Z'),
+    });
+    const fresh = queue.enqueue({ deviceId: id.deviceId, command: { kind: 'alignment.digest' }, dispatcher: 'admin' });
+    queue.pickup(id.deviceId);
+    queue.complete({
+      commandId: fresh,
+      result: { status: 'completed', result: { overallScore: 0.90 } },
+      now: new Date('2026-06-14T11:00:00Z'),
+    });
+
+    const srv = await startTestServer();
+    try {
+      const r = await rawRequest(`${srv.baseUrl}/api/admin/fleet/alignment`, {
+        headers: { Authorization: 'Bearer admin-bearer' },
+      });
+      const json = JSON.parse(r.body) as { reported: Array<{ commandId: string; digest: { overallScore: number } }> };
+      expect(json.reported).toHaveLength(1);
+      expect(json.reported[0]?.commandId).toBe(fresh);
+      expect(json.reported[0]?.digest.overallScore).toBe(0.90);
+    } finally { await srv.close(); }
+  });
 });
 
 describe('GET /api/fleet/device/:id/inbox', () => {
