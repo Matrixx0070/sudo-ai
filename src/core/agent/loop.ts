@@ -578,16 +578,48 @@ export class AgentLoop {
       log.warn({ err: String(err) }, 'AgentLoop: GoalStopDetector init failed — disabled');
     }
 
-    // P0: PlanModeStateMachine — state-tracking only. Tool EXECUTORS are
-    // wired in cli.ts §SUDO_PLAN_MODE (gap #18) via meta.enter-plan-mode /
-    // meta.exit-plan-mode / meta.plan-mode-status. The class has no
-    // `getToolDefinitions()` method — the previous code here duck-typed
-    // a call to one and silently short-circuited, hiding a dead path
-    // behind a never-fired "AgentLoop: PlanModeStateMachine tools
-    // registered" log. Removed in the audit pass since the executors
-    // live elsewhere; the SM itself just tracks state.
+    // P0: PlanModeStateMachine — state-tracking + legacy `plan_mode.enter`
+    // / `plan_mode.exit` tool registration. Two surfaces exist:
+    //
+    //   - LEGACY (registered here, always-on): plan_mode.enter, plan_mode.exit
+    //     — return-by-the-SM-instance via getEnter/ExitPlanModeTool(); both
+    //     listed in ALWAYS_ALLOWED so they bypass the plan-mode write gate.
+    //   - NEW (cli.ts §SUDO_PLAN_MODE=1, gap #18): meta.enter-plan-mode,
+    //     meta.exit-plan-mode, meta.plan-mode-status — same delegation
+    //     target.
+    //
+    // Both dispatch to the same state machine. The legacy surface used to
+    // be wired via a duck-typed `getToolDefinitions?.()` call that
+    // silently short-circuited because no such method existed — the
+    // success log "tools registered" never fired in any session. The
+    // audit pass first removed the dead path (PR #120); per the autonomy
+    // mandate ("prefer wiring over deleting"), this slice REVERTS that
+    // deletion and wires the legacy tools properly by calling the
+    // (now executable) instance methods directly. Real registration
+    // errors are logged at warn — no `?.()` hides them anymore.
     try {
       this._planModeStateMachine = new PlanModeStateMachine();
+      try {
+        const enterTool = this._planModeStateMachine.getEnterPlanModeTool();
+        const exitTool = this._planModeStateMachine.getExitPlanModeTool();
+        // `register` is optional on ToolRegistryLike (for read-only test
+        // stubs). The real registry always has it; failing loud here is
+        // the right thing if it ever doesn't — same posture as gap #20's
+        // requiresConfirmation contract.
+        const registerFn = (this.toolRegistry as ToolRegistryLike).register;
+        if (typeof registerFn !== 'function') {
+          log.warn('AgentLoop: toolRegistry has no register() — plan_mode.* tools not wired');
+        } else {
+          registerFn.call(this.toolRegistry, enterTool);
+          registerFn.call(this.toolRegistry, exitTool);
+          log.info(
+            { toolNames: [enterTool.name, exitTool.name] },
+            'AgentLoop: legacy plan_mode.* tools registered',
+          );
+        }
+      } catch (regErr) {
+        log.warn({ err: String(regErr) }, 'AgentLoop: plan_mode.* tool registration failed');
+      }
       log.info('AgentLoop: PlanModeStateMachine initialised');
     } catch (err) {
       log.warn({ err: String(err) }, 'AgentLoop: PlanModeStateMachine init failed — disabled');
