@@ -2542,6 +2542,24 @@ async function boot(): Promise<void> {
     log.warn({ err: String(err) }, 'AutoUpdateManager construction failed (non-fatal) — /api/admin/update will report updater_not_registered');
   }
 
+  // Log-ring capture for GET /api/admin/logs (#28b slice 3). Attaches stdout/
+  // stderr capture so the dashboard can serve the last N lines without
+  // grepping a file. Kill switch: SUDO_DASHBOARD_LOG_RING_DISABLE=1.
+  //
+  // The ring is process-local — pm2 logs / journald still receive everything,
+  // and a process restart starts a fresh ring (slice 3 docs make this honest).
+  try {
+    const { attachLogRing } = await import('./core/dashboard/log-ring.js');
+    const ring = attachLogRing();
+    if (ring) {
+      log.info({ capacity: ring.capacity() }, 'Dashboard log-ring attached (SUDO_DASHBOARD_LOG_RING_DISABLE=1 to disable)');
+    } else {
+      log.info('Dashboard log-ring disabled (SUDO_DASHBOARD_LOG_RING_DISABLE=1)');
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'attachLogRing failed (non-fatal) — /api/admin/logs will report log_ring_not_registered');
+  }
+
   // -------------------------------------------------------------------------
   // 8.6 Observability dashboard (kill switch: SUDO_DASHBOARD_DISABLE=1)
   // -------------------------------------------------------------------------
