@@ -43,6 +43,7 @@
     "start": "node dist/server/cli.js start",
     "mcp": "node dist/core/gateway/mcp-cli.js",
     "acp": "node dist/core/acp/acp-cli.js",
+    "tui:fleetview": "tsx src/tui/fleetview/index.ts",
     "preview": "pnpm build && pnpm start",
     "doctor": "tsx src/cli/index.ts doctor",
     "cli": "tsx src/cli.ts",
