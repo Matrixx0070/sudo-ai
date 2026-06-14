@@ -34,6 +34,12 @@ const isDev = process.env['NODE_ENV'] !== 'production';
  * In production:  raw JSON to both stdout and file.
  */
 function buildTransport(): pino.TransportMultiOptions {
+  // fd 1 = stdout (default). Stdio-protocol entrypoints (ACP / MCP) own stdout
+  // for their JSON-RPC channel, so they set SUDO_LOG_STDERR=1 to push human logs
+  // to fd 2 (stderr) and keep the protocol stream clean. Applies to BOTH the dev
+  // pretty target and the prod JSON target. Default (unset) is unchanged.
+  const logFd = process.env['SUDO_LOG_STDERR'] === '1' ? 2 : 1;
+
   const fileTarget: pino.TransportTargetOptions = {
     target: 'pino/file',
     level: 'trace',
@@ -45,6 +51,7 @@ function buildTransport(): pino.TransportMultiOptions {
       target: 'pino-pretty',
       level: 'trace',
       options: {
+        destination: logFd,
         colorize: true,
         translateTime: 'SYS:standard',
         ignore: 'pid,hostname',
@@ -57,7 +64,7 @@ function buildTransport(): pino.TransportMultiOptions {
   const stdoutTarget: pino.TransportTargetOptions = {
     target: 'pino/file',
     level: 'info',
-    options: { destination: 1 }, // fd 1 = stdout
+    options: { destination: logFd },
   };
 
   return { targets: isTest ? [stdoutTarget] : [stdoutTarget, fileTarget] };

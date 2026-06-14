@@ -83,6 +83,37 @@ Promise.all([
     minify: production,
     keepNames: true,
   }),
+  // ACP (Agent Client Protocol) stdio agent CLI bundle
+  // (usage: node dist/core/acp/acp-cli.js — launched by an ACP editor)
+  esbuild.build({
+    entryPoints: ['src/core/acp/acp-cli.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'esm',
+    outfile: 'dist/core/acp/acp-cli.js',
+    external: [
+      ...sharedExternals,
+      // pino resolves its transport worker via __dirname at runtime, which
+      // breaks when bundled into an ESM file — load it from node_modules.
+      'pino',
+      'pino-pretty',
+    ],
+    define: {
+      'process.env.NODE_ENV': production ? '"production"' : '"development"',
+    },
+    banner: {
+      // The env assignments run at the very TOP of the bundle, before any
+      // bundled module (logger / dotenv) initializes — so stdout stays a clean
+      // JSON-RPC channel: human logs go to stderr, dotenv's banner is silenced.
+      js:
+        "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" +
+        " process.env.SUDO_LOG_STDERR ??= '1'; process.env.DOTENV_CONFIG_QUIET ??= 'true';",
+    },
+    sourcemap: !production,
+    minify: production,
+    keepNames: true,
+  }),
   // Builtin tools - transpile all files preserving structure
   esbuild.build({
     entryPoints: allTsFiles,
@@ -120,7 +151,7 @@ Promise.all([
     path.join(builtinDir, 'code/ptc-worker.cjs'),
     path.join(codeDistDir, 'ptc-worker.cjs'),
   );
-  console.log('Build complete: server CLI + MCP CLI + builtin tools');
+  console.log('Build complete: server CLI + MCP CLI + ACP CLI + builtin tools');
 }).catch((err) => {
   console.error('Build failed:', err.message);
   process.exit(1);

@@ -207,7 +207,13 @@ export class ConfigLoader extends EventEmitter {
       return;
     }
 
-    const result = loadDotenv({ path: this.envPath, override: false });
+    // quiet suppresses dotenv's stdout banner — required when a stdio-protocol
+    // entrypoint (ACP / MCP) owns stdout. Default (env unset) keeps prior output.
+    const result = loadDotenv({
+      path: this.envPath,
+      override: false,
+      quiet: process.env['DOTENV_CONFIG_QUIET'] === 'true',
+    });
 
     if (result.error) {
       // Non-fatal: some deployments inject env vars directly.
