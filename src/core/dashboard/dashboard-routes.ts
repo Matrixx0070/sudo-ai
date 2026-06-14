@@ -33,6 +33,13 @@ import {
 import type { DashboardConfig } from './dashboard-types.js';
 import { DASHBOARD_HTML } from './dashboard-html.js';
 import { verifyRegistrationRequest } from '../fleet/registration.js';
+import { verifyFleetRequest } from '../fleet/fleet-signature.js';
+import {
+  type CommandBody,
+  type CommandKind,
+  type CommandResult,
+} from '../fleet/command-queue.js';
+import type { FleetCommandRow } from './dashboard-types.js';
 import { createHash, createPublicKey } from 'node:crypto';
 
 const log = {
@@ -84,7 +91,22 @@ const POST_ROUTES: ReadonlySet<string> = new Set([
   '/api/admin/restart',
   '/api/admin/update',
   '/api/admin/model/set',
+  '/api/admin/fleet/dispatch',
 ]);
+
+/**
+ * Dynamic admin GET paths (#28c slice 2). Each is a `startsWith` test —
+ * the path is parsed to extract a route param. Tested AFTER ADMIN_GET_ROUTES
+ * + before the unknown-path 404. Shares the SUDO_ADMIN_POWERS=1 opt-in.
+ */
+const ADMIN_GET_PREFIXES: readonly string[] = ['/api/admin/fleet/commands/'];
+
+/**
+ * Dynamic public POST/GET paths (#28c slice 2) — device back-channel.
+ * Signature-gated (per-request Ed25519 verified against the device's stored
+ * publicKey). Match by prefix, handle internally.
+ */
+const PUBLIC_FLEET_DEVICE_PREFIX = '/api/fleet/device/';
 
 /**
  * Public POST routes (#28c slice 1) — bypass Bearer/OAuth auth. Currently
@@ -254,8 +276,20 @@ export async function registerRoutes(
     }
   }
 
+  // Public device back-channel (#28c slice 2). Two routes, both dynamic on
+  // :deviceId, both signature-gated. Like /register above, public means
+  // "no Bearer/OAuth" — the per-request Ed25519 signature is the auth.
+  if (pathname.startsWith(PUBLIC_FLEET_DEVICE_PREFIX)) {
+    handleFleetDeviceBackChannel(req, res, pathname, method).catch((err: unknown) => {
+      log.warn({ err: err instanceof Error ? err.message : String(err), msg: 'Fleet back-channel handler threw' });
+      if (!res.headersSent) sendJson(res, 500, { error: 'internal_error' });
+    });
+    return;
+  }
+
   const isKnownGet = GET_ROUTES.has(pathname);
-  const isKnownAdminGet = ADMIN_GET_ROUTES.has(pathname);
+  const isAdminGetPrefix = ADMIN_GET_PREFIXES.some((p) => pathname.startsWith(p));
+  const isKnownAdminGet = ADMIN_GET_ROUTES.has(pathname) || isAdminGetPrefix;
   const isAnyGet = isKnownGet || isKnownAdminGet;
   const isKnownPost = POST_ROUTES.has(pathname);
 
@@ -388,6 +422,25 @@ export async function registerRoutes(
       sendJson(res, 200, server.getDebugShareSnapshot(actor));
       return;
     }
+    if (pathname.startsWith('/api/admin/fleet/commands/')) {
+      const queue = getCommandQueueOrUndefined();
+      if (!queue) {
+        sendJson(res, 503, { error: 'fleet_registrar_not_enabled' });
+        return;
+      }
+      const commandId = pathname.slice('/api/admin/fleet/commands/'.length);
+      if (commandId.length === 0 || commandId.includes('/')) {
+        sendJson(res, 400, { error: 'invalid_command_id' });
+        return;
+      }
+      const row = queue.get(commandId);
+      if (!row) {
+        sendJson(res, 404, { error: 'command_not_found' });
+        return;
+      }
+      sendJson(res, 200, projectCommand(row));
+      return;
+    }
     if (pathname === '/api/admin/fleet/devices') {
       const registrar = getRegisteredFleetRegistrar();
       if (!registrar) {
@@ -477,6 +530,43 @@ async function handleAdminPost(
     return;
   }
 
+  if (pathname === '/api/admin/fleet/dispatch') {
+    const registrar = getRegisteredFleetRegistrar();
+    const queue = getCommandQueueOrUndefined();
+    if (!registrar || !queue) {
+      sendJson(res, 503, { error: 'fleet_registrar_not_enabled' });
+      return;
+    }
+    const deviceId = body['deviceId'];
+    const cmd = body['command'];
+    if (typeof deviceId !== 'string' || deviceId.length === 0) {
+      sendJson(res, 400, { error: 'deviceId required' });
+      return;
+    }
+    if (!cmd || typeof cmd !== 'object' || Array.isArray(cmd)) {
+      sendJson(res, 400, { error: 'command must be an object with `kind`' });
+      return;
+    }
+    const kind = (cmd as Record<string, unknown>)['kind'];
+    if (typeof kind !== 'string' || !isSupportedCommandKind(kind)) {
+      sendJson(res, 400, { error: 'unsupported_command_kind', supported: SUPPORTED_KINDS });
+      return;
+    }
+    if (!registrar.list().some((d) => d.deviceId === deviceId)) {
+      sendJson(res, 404, { error: 'device_not_registered' });
+      return;
+    }
+    const argsRaw = (cmd as Record<string, unknown>)['args'];
+    const args = argsRaw && typeof argsRaw === 'object' && !Array.isArray(argsRaw)
+      ? (argsRaw as Record<string, unknown>)
+      : undefined;
+    const command: CommandBody = { kind: kind as CommandKind, ...(args ? { args } : {}) };
+    const commandId = queue.enqueue({ deviceId, command, dispatcher: actor });
+    server.appendFleetDispatchAudit(actor, deviceId, commandId, kind);
+    sendJson(res, 202, { ok: true, commandId });
+    return;
+  }
+
   if (pathname === '/api/admin/model/set') {
     const target = body['model'];
     if (typeof target !== 'string' || target.length === 0) {
@@ -560,6 +650,165 @@ function publicKeyFingerprint(publicKeyPem: string): string {
   } catch {
     return '(invalid-pem)';
   }
+}
+
+/** Slice-2 command kinds the admin dispatch endpoint accepts. */
+const SUPPORTED_KINDS: readonly CommandKind[] = ['model.get', 'model.set'];
+function isSupportedCommandKind(s: string): boolean {
+  return (SUPPORTED_KINDS as readonly string[]).includes(s);
+}
+
+/**
+ * Public device back-channel handler — covers both:
+ *   - GET  /api/fleet/device/:id/inbox?wait=<seconds>
+ *   - POST /api/fleet/device/:id/result
+ *
+ * Both signature-gated. Returns 503 when the queue isn't enabled, 404 for
+ * unknown deviceId, 400 for malformed paths, 401 for bad signatures.
+ */
+async function handleFleetDeviceBackChannel(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  method: string,
+): Promise<void> {
+  const registrar = getRegisteredFleetRegistrar();
+  const queue = getCommandQueueOrUndefined();
+  if (!registrar || !queue) {
+    sendJson(res, 503, { error: 'fleet_registrar_not_enabled' });
+    return;
+  }
+
+  // Path: /api/fleet/device/{id}/{inbox|result}
+  // Slice 1's PUBLIC_FLEET_DEVICE_PREFIX matched only the prefix; parse out
+  // the segments here.
+  const rest = pathname.slice('/api/fleet/device/'.length);
+  const slash = rest.indexOf('/');
+  if (slash <= 0 || slash === rest.length - 1) {
+    sendJson(res, 400, { error: 'invalid_path' });
+    return;
+  }
+  const deviceId = rest.slice(0, slash);
+  const action = rest.slice(slash + 1);
+  if (action !== 'inbox' && action !== 'result') {
+    sendJson(res, 404, { error: 'Not found' });
+    return;
+  }
+
+  const device = registrar.list().find((d) => d.deviceId === deviceId);
+  if (!device) {
+    sendJson(res, 404, { error: 'device_not_registered' });
+    return;
+  }
+
+  const verify = verifyFleetRequest({
+    method,
+    path: pathname,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+    expectedDeviceId: deviceId,
+    storedPublicKeyPem: device.publicKeyPem,
+  });
+  if (!verify.ok) {
+    sendJson(res, 401, { error: 'unauthorized', reason: verify.reason });
+    return;
+  }
+
+  if (action === 'inbox') {
+    if (method !== 'GET') {
+      sendJson(res, 405, { error: 'Method not allowed' });
+      return;
+    }
+    const url = new URL(pathname + (req.url?.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''), 'http://localhost');
+    const waitSecRaw = url.searchParams.get('wait');
+    const waitSec = waitSecRaw === null ? 25 : parseInt(waitSecRaw, 10);
+    // Clamp wait to [0, 60]. 0 = no long-poll (immediate return). 60 = HTTP
+    // client safety margin under most idle timeouts.
+    const waitMs = Math.max(0, Math.min(60, Number.isFinite(waitSec) ? waitSec : 25)) * 1000;
+    const row = waitMs === 0 ? queue.pickup(deviceId) : await queue.pickupLongPoll(deviceId, waitMs);
+    if (!row) {
+      // 204 — no command for this poll cycle. Device should re-poll.
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    sendJson(res, 200, projectCommand(row));
+    return;
+  }
+
+  // action === 'result'
+  if (method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (err: unknown) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : 'Invalid body' });
+    return;
+  }
+  const commandId = body['commandId'];
+  const statusRaw = body['status'];
+  if (typeof commandId !== 'string' || commandId.length === 0) {
+    sendJson(res, 400, { error: 'commandId required' });
+    return;
+  }
+  if (statusRaw !== 'completed' && statusRaw !== 'failed') {
+    sendJson(res, 400, { error: 'status must be completed|failed' });
+    return;
+  }
+  const existing = queue.get(commandId);
+  if (!existing) {
+    sendJson(res, 404, { error: 'command_not_found' });
+    return;
+  }
+  if (existing.deviceId !== deviceId) {
+    // A different device is trying to claim a result. Signature would have
+    // failed too (we verified above for `deviceId`), but defense in depth.
+    sendJson(res, 403, { error: 'device_id_mismatch' });
+    return;
+  }
+  const result: CommandResult = {
+    status: statusRaw,
+    ...(body['result'] !== undefined ? { result: body['result'] } : {}),
+    ...(typeof body['error'] === 'string' ? { error: body['error'] as string } : {}),
+  };
+  const updated = queue.complete({ commandId, result });
+  if (!updated) {
+    // Either already completed (idempotent retry) or not in_flight.
+    sendJson(res, 409, { error: 'command_not_in_flight', status: existing.status });
+    return;
+  }
+  sendJson(res, 200, { ok: true, status: updated.status });
+}
+
+/** Strip server-internal columns from a command row for over-the-wire JSON. */
+function projectCommand(row: FleetCommandRow): Record<string, unknown> {
+  return {
+    commandId: row.commandId,
+    deviceId: row.deviceId,
+    kind: row.kind,
+    args: row.argsJson ? safeJsonParse(row.argsJson) : undefined,
+    status: row.status,
+    dispatchedAt: row.dispatchedAt,
+    pickedUpAt: row.pickedUpAt,
+    completedAt: row.completedAt,
+    result: row.resultJson ? safeJsonParse(row.resultJson) : undefined,
+    error: row.errorMessage ?? undefined,
+  };
+}
+function safeJsonParse(s: string): unknown {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+/**
+ * Look up the registered CommandQueue, if any. The queue is registered
+ * alongside the registry in `registerDashboardGlobals` — both come up
+ * together when SUDO_FLEET_REGISTRAR_MODE=1.
+ */
+function getCommandQueueOrUndefined(): import('./dashboard-types.js').FleetCommandQueueSource | undefined {
+  const g = globalThis as { __sudoFleetCommandQueue?: import('./dashboard-types.js').FleetCommandQueueSource };
+  return g.__sudoFleetCommandQueue;
 }
 
 /** Parse a stored metadata_json blob safely; bad rows return null. */

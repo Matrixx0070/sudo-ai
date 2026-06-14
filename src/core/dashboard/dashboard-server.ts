@@ -31,6 +31,7 @@ import {
   AuthResult,
   DashboardBindMode,
   FleetRegistrarSource,
+  FleetCommandQueueSource,
 } from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
 import { listCredentialsMetadata, type CredentialsSnapshot } from './credentials-meta.js';
@@ -104,6 +105,12 @@ interface SudoRuntimeGlobals {
   __sudoAudit?: AuditSource;
   __sudoAuthBackend?: AuthBackend;
   __sudoFleetRegistrar?: FleetRegistrarSource;
+  /**
+   * Slice-2 command queue. Stored as `unknown` here to avoid pulling
+   * better-sqlite3 typings into the dashboard module — the dispatcher casts
+   * back via the structural `FleetCommandQueueSource` interface.
+   */
+  __sudoFleetCommandQueue?: FleetCommandQueueSource;
 }
 const runtimeGlobals = globalThis as SudoRuntimeGlobals;
 
@@ -117,6 +124,7 @@ export function registerDashboardGlobals(parts: {
   audit?: AuditSource;
   authBackend?: AuthBackend;
   fleetRegistrar?: FleetRegistrarSource;
+  fleetCommandQueue?: FleetCommandQueueSource;
 }): void {
   if (parts.brain !== undefined) runtimeGlobals.__sudoBrain = parts.brain;
   if (parts.gateway !== undefined) runtimeGlobals.__sudoGateway = parts.gateway;
@@ -126,6 +134,7 @@ export function registerDashboardGlobals(parts: {
   if (parts.audit !== undefined) runtimeGlobals.__sudoAudit = parts.audit;
   if (parts.authBackend !== undefined) runtimeGlobals.__sudoAuthBackend = parts.authBackend;
   if (parts.fleetRegistrar !== undefined) runtimeGlobals.__sudoFleetRegistrar = parts.fleetRegistrar;
+  if (parts.fleetCommandQueue !== undefined) runtimeGlobals.__sudoFleetCommandQueue = parts.fleetCommandQueue;
 }
 
 /**
@@ -665,6 +674,18 @@ export class DashboardServer {
     this.audit(actor, 'admin.fleet.devices.read', 'fleet-registrar', 'success', {
       deviceCount,
       requestedLimit,
+    });
+  }
+
+  /**
+   * Audit an admin → device command dispatch (#28c slice 2). Command args
+   * are NOT logged (could carry secrets like a model id with embedded creds);
+   * only kind + identifiers go on the chain.
+   */
+  appendFleetDispatchAudit(actor: string, deviceId: string, commandId: string, kind: string): void {
+    this.audit(actor, 'admin.fleet.dispatch', `device:${deviceId}`, 'success', {
+      commandId,
+      kind,
     });
   }
 

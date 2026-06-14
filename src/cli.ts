@@ -2581,6 +2581,7 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   let fleetIdentity: import('./core/fleet/device-identity.js').DeviceIdentity | null = null;
   let fleetRegistrar: import('./core/fleet/registry-store.js').RegistryStore | null = null;
+  let fleetCommandQueue: import('./core/fleet/command-queue.js').CommandQueue | null = null;
   try {
     const { loadOrCreateDeviceIdentity, defaultIdentityPath } =
       await import('./core/fleet/device-identity.js');
@@ -2597,6 +2598,15 @@ async function boot(): Promise<void> {
         existingDevices: fleetRegistrar.count(),
       }, 'Fleet registrar enabled (SUDO_FLEET_REGISTRAR_MODE=1) — POST /api/fleet/register + GET /api/admin/fleet/devices live');
       registerShutdown(() => fleetRegistrar?.close());
+
+      // Slice 2 — back-channel command queue. Same fleet.db so registry
+      // and queue share durable state; SQLite WAL handles concurrency.
+      const { CommandQueue } = await import('./core/fleet/command-queue.js');
+      fleetCommandQueue = new CommandQueue({ dbPath: defaultRegistryDbPath(dataDir) });
+      log.info({
+        existingCommands: fleetCommandQueue.count(),
+      }, 'Fleet command queue enabled (#28c slice 2) — POST /api/admin/fleet/dispatch + GET /api/fleet/device/:id/inbox + POST /api/fleet/device/:id/result + GET /api/admin/fleet/commands/:id live');
+      registerShutdown(() => fleetCommandQueue?.close());
     }
   } catch (err) {
     log.warn({ err: String(err) }, 'Fleet identity/registrar wiring failed (non-fatal) — /api/fleet/* routes will report fleet_registrar_not_enabled');
@@ -2697,6 +2707,8 @@ async function boot(): Promise<void> {
       // SUDO_FLEET_REGISTRAR_MODE=1 AND the store constructed cleanly. When
       // absent, fleet routes serve a structured 503.
       ...(fleetRegistrar ? { fleetRegistrar } : {}),
+      // Fleet command queue (#28c slice 2). Same opt-in as the registrar.
+      ...(fleetCommandQueue ? { fleetCommandQueue } : {}),
     });
 
     initDashboard({
@@ -2766,8 +2778,31 @@ async function boot(): Promise<void> {
           detail: result.detail,
         }, 'Fleet registration failed (non-fatal)');
       }
+
+      // Slice 2 — start the device-side back-channel executor only if
+      // registration succeeded (otherwise the inbox poll would 404 with
+      // device_not_registered until the next boot retry).
+      if (result.ok) {
+        const { startFleetExecutor } = await import('./core/fleet/registrar-client.js')
+          .then(() => import('./core/fleet/fleet-executor.js'));
+        // Brain handle for model.get/set — same getModel/setModel surface
+        // §28b slice 1 wired into /api/admin/model[/set]. If brain doesn't
+        // expose those, the executor still polls + returns brain_not_registered
+        // on model.* commands.
+        const brainCandidate = brain as unknown as { getModel?: () => string; setModel?: (m: string) => void };
+        const brainHandle = brainCandidate && typeof brainCandidate.getModel === 'function' && typeof brainCandidate.setModel === 'function'
+          ? { getModel: brainCandidate.getModel.bind(brainCandidate), setModel: brainCandidate.setModel.bind(brainCandidate) }
+          : undefined;
+        const handle = startFleetExecutor({
+          registrarUrl: process.env['SUDO_FLEET_REGISTRAR_URL']!,
+          identity: fleetIdentity,
+          ...(brainHandle ? { brain: brainHandle } : {}),
+        });
+        log.info({ deviceId: fleetIdentity.deviceId, hasBrain: brainHandle !== undefined }, 'Fleet executor started (#28c slice 2)');
+        registerShutdown(async () => { await handle.stop(); });
+      }
     } catch (err) {
-      log.warn({ err: String(err) }, 'Fleet registration wiring failed (non-fatal)');
+      log.warn({ err: String(err) }, 'Fleet registration/executor wiring failed (non-fatal)');
     }
   }
 
