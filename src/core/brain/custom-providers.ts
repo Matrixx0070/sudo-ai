@@ -1,18 +1,21 @@
 /**
  * @file brain/custom-providers.ts
- * @description Pluggable OpenAI-compatible model providers (gap #27).
+ * @description Pluggable model providers (gap #27).
  *
  * Opens the otherwise-closed ProviderName switch: register ADDITIONAL providers
  * at boot from the `SUDO_CUSTOM_PROVIDERS` env (a JSON array) so sudo can talk to
- * ANY OpenAI-compatible endpoint (vLLM, LM Studio, OpenRouter, a local server, a
- * new vendor) WITHOUT a core code change. providers.ts consults this registry
- * when a model string's provider isn't one of the built-ins.
+ * ANY supported endpoint WITHOUT a core code change. providers.ts consults this
+ * registry when a model string's provider isn't one of the built-ins.
  *
- * Slice 1 covers OpenAI-compatible endpoints only (`createOpenAI` + baseURL) —
- * the exact mechanism the built-in mistral/deepseek/together/ollama cases
- * already use. Non-OpenAI-shaped providers (a fresh AI-SDK adapter) are a
- * follow-up. Opt-in: when `SUDO_CUSTOM_PROVIDERS` is unset the registry is empty
- * and resolution is byte-identical to before.
+ * Each entry picks an `adapter` — the AI-SDK provider shape to build it with:
+ *   - 'openai' (default): createOpenAI + baseURL — OpenAI-compatible endpoints
+ *     (vLLM, LM Studio, OpenRouter, a local server). Model handle via `.chat(id)`.
+ *   - 'anthropic': createAnthropic + baseURL — an Anthropic-API-shaped endpoint
+ *     (e.g. a gateway/proxy). Native handle via `provider(id)`.
+ *   - 'google': createGoogleGenerativeAI + baseURL — a Gemini-API-shaped endpoint.
+ *     Native handle.
+ * Opt-in: when `SUDO_CUSTOM_PROVIDERS` is unset the registry is empty and
+ * resolution is byte-identical to before.
  *
  * Trust note: a baseURL is an endpoint sudo sends prompts + the API key to. It
  * is OPERATOR-configured (not model-controlled), so it is treated as trusted;
@@ -20,25 +23,76 @@
  */
 
 import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createLogger } from '../shared/logger.js';
 
 const log = createLogger('brain:custom-providers');
+
+/** Which AI-SDK provider shape a custom endpoint speaks. */
+export type CustomAdapter = 'openai' | 'anthropic' | 'google';
 
 /** A single custom provider declaration (one element of SUDO_CUSTOM_PROVIDERS). */
 export interface CustomProviderConfig {
   /** Provider prefix used in model strings: "<name>/<model-id>". */
   name: string;
-  /** OpenAI-compatible base URL, e.g. "https://openrouter.ai/api/v1". */
+  /** Base URL of the endpoint, e.g. "https://openrouter.ai/api/v1". */
   baseURL: string;
   /** Inline API key. Prefer apiKeyEnv to keep secrets out of config. */
   apiKey?: string;
   /** Name of an env var holding the API key. */
   apiKeyEnv?: string;
-  /** AI SDK OpenAI compatibility mode (default 'compatible'). */
+  /** Which AI-SDK adapter to build with (default 'openai'). */
+  adapter?: CustomAdapter;
+  /** AI SDK OpenAI compatibility mode (default 'compatible'). openai adapter only. */
   compatibility?: 'compatible' | 'strict';
 }
 
-type OpenAICompatProvider = ReturnType<typeof createOpenAI>;
+type AnyCustomProvider =
+  | ReturnType<typeof createOpenAI>
+  | ReturnType<typeof createAnthropic>
+  | ReturnType<typeof createGoogleGenerativeAI>;
+
+/** How a model handle is obtained: OpenAI-compatible via `.chat(id)`; native call directly. */
+type ModelKind = 'native' | 'chat';
+
+interface CustomProviderEntry {
+  provider: AnyCustomProvider;
+  modelKind: ModelKind;
+}
+
+/**
+ * One adapter: the model-handle shape it produces + a factory that builds the SDK
+ * provider from the resolved key + baseURL. Mirrors the built-in BUILTIN_PROVIDERS
+ * registry in providers.ts — adding a new adapter is a one-line entry.
+ */
+interface AdapterSpec {
+  modelKind: ModelKind;
+  build(apiKey: string, baseURL: string, config: CustomProviderConfig): AnyCustomProvider;
+}
+
+const ADAPTERS: Record<CustomAdapter, AdapterSpec> = {
+  openai: {
+    modelKind: 'chat',
+    build: (apiKey, baseURL, config) =>
+      createOpenAI({
+        apiKey,
+        baseURL,
+        name: config.name,
+        compatibility: config.compatibility ?? 'compatible',
+      } as Parameters<typeof createOpenAI>[0]),
+  },
+  anthropic: {
+    modelKind: 'native',
+    build: (apiKey, baseURL) =>
+      createAnthropic({ apiKey, baseURL } as Parameters<typeof createAnthropic>[0]),
+  },
+  google: {
+    modelKind: 'native',
+    build: (apiKey, baseURL) =>
+      createGoogleGenerativeAI({ apiKey, baseURL } as Parameters<typeof createGoogleGenerativeAI>[0]),
+  },
+};
 
 /**
  * Provider names must be a lowercase model-string-safe token. Lowercase-only
@@ -47,7 +101,7 @@ type OpenAICompatProvider = ReturnType<typeof createOpenAI>;
  */
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
-const registry = new Map<string, OpenAICompatProvider>();
+const registry = new Map<string, CustomProviderEntry>();
 
 /** Reset the registry (tests only). */
 export function clearCustomProviders(): void {
@@ -58,12 +112,27 @@ export function isCustomProvider(name: string): boolean {
   return registry.has(name);
 }
 
-export function getCustomProvider(name: string): OpenAICompatProvider | null {
-  return registry.get(name) ?? null;
+/** The built SDK provider instance for a custom name (null if unregistered). */
+export function getCustomProvider(name: string): AnyCustomProvider | null {
+  return registry.get(name)?.provider ?? null;
 }
 
 export function listCustomProviders(): string[] {
   return [...registry.keys()];
+}
+
+/**
+ * Resolve a LanguageModel handle for a registered custom provider, honoring its
+ * adapter's model kind: OpenAI-compatible → `.chat(id)`; anthropic/google native
+ * → `provider(id)`. Returns null when the name isn't registered.
+ */
+export function resolveCustomModel(name: string, modelId: string): unknown {
+  const entry = registry.get(name);
+  if (!entry) return null;
+  if (entry.modelKind === 'chat') {
+    return (entry.provider as { chat: (id: string) => unknown }).chat(modelId);
+  }
+  return (entry.provider as unknown as (id: string) => unknown)(modelId);
 }
 
 /**
@@ -123,15 +192,22 @@ export function registerCustomProvider(
     return false;
   }
 
+  // adapter comes from untrusted JSON — treat as a string and validate against
+  // the known set; an unknown value is skipped (fail-safe), default is 'openai'.
+  const rawAdapter = (config as { adapter?: string }).adapter ?? 'openai';
+  const adapter = (ADAPTERS as Record<string, AdapterSpec | undefined>)[rawAdapter];
+  if (!adapter) {
+    log.warn({ name, adapter: rawAdapter }, 'custom provider: unknown adapter (use openai|anthropic|google) — skipped');
+    return false;
+  }
+  if (config.compatibility && rawAdapter !== 'openai') {
+    log.warn({ name, adapter: rawAdapter }, 'custom provider: `compatibility` is ignored for non-openai adapters');
+  }
+
   try {
-    const instance = createOpenAI({
-      apiKey,
-      baseURL,
-      name,
-      compatibility: config.compatibility ?? 'compatible',
-    } as Parameters<typeof createOpenAI>[0]);
-    registry.set(name, instance);
-    log.info({ name, baseURL }, 'custom provider registered');
+    const instance = adapter.build(apiKey, baseURL, config);
+    registry.set(name, { provider: instance, modelKind: adapter.modelKind });
+    log.info({ name, baseURL, adapter: rawAdapter }, 'custom provider registered');
     return true;
   } catch (err) {
     log.error({ name, err: String(err) }, 'custom provider: failed to instantiate — skipped');

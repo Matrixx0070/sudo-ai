@@ -20,7 +20,7 @@ import { createLogger } from '../shared/logger.js';
 import {
   registerCustomProvidersFromEnv,
   isCustomProvider,
-  getCustomProvider,
+  resolveCustomModel,
   listCustomProviders,
 } from './custom-providers.js';
 
@@ -373,12 +373,17 @@ export function getModel(modelString: string): ReturnType<AnyProvider> {
   }
 
   if (!ALL_PROVIDERS.includes(providerName)) {
-    // Pluggable custom providers (gap #27) — OpenAI-compatible, registered from
-    // SUDO_CUSTOM_PROVIDERS. Resolved here only after the built-in registry misses.
+    // Pluggable custom providers (gap #27) — registered from SUDO_CUSTOM_PROVIDERS.
+    // Resolved here only after the built-in registry misses; the adapter (openai/
+    // anthropic/google) decides native-vs-.chat() handle resolution.
     if (isCustomProvider(providerName)) {
-      const custom = getCustomProvider(providerName)!;
-      log.debug({ modelString, providerName, modelId, custom: true }, 'Resolved custom model handle');
-      return custom.chat(modelId) as ReturnType<AnyProvider>;
+      const handle = resolveCustomModel(providerName, modelId);
+      if (handle) {
+        log.debug({ modelString, providerName, modelId, custom: true }, 'Resolved custom model handle');
+        return handle as ReturnType<AnyProvider>;
+      }
+      // null only if the registry changed between the check and resolve — fall
+      // through to the unknown-provider throw rather than return a null handle.
     }
     throw new LLMError(
       `Unknown provider "${providerName}" in model string "${modelString}"`,
@@ -416,9 +421,12 @@ export async function getModelWithKey(modelString: string, apiKey: string): Prom
   const modelId = modelString.slice(slashIndex + 1);
 
   // Custom providers (gap #27) carry their own configured key — key rotation
-  // does not apply, so resolve them directly from the registry.
+  // does not apply, so resolve them directly from the registry (adapter-aware).
   if (isCustomProvider(providerName)) {
-    return getCustomProvider(providerName)!.chat(modelId) as ReturnType<AnyProvider>;
+    const handle = resolveCustomModel(providerName, modelId);
+    if (handle) return handle as ReturnType<AnyProvider>;
+    // null only if the registry changed mid-flight — fall through to the build
+    // path, which throws a clean "Unknown provider" LLMError for a missing name.
   }
 
   const provider = await buildProviderWithKey(providerName, apiKey);
