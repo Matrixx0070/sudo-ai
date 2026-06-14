@@ -578,21 +578,16 @@ export class AgentLoop {
       log.warn({ err: String(err) }, 'AgentLoop: GoalStopDetector init failed — disabled');
     }
 
-    // P0: PlanModeStateMachine — plan mode tool definitions (fail-open).
+    // P0: PlanModeStateMachine — state-tracking only. Tool EXECUTORS are
+    // wired in cli.ts §SUDO_PLAN_MODE (gap #18) via meta.enter-plan-mode /
+    // meta.exit-plan-mode / meta.plan-mode-status. The class has no
+    // `getToolDefinitions()` method — the previous code here duck-typed
+    // a call to one and silently short-circuited, hiding a dead path
+    // behind a never-fired "AgentLoop: PlanModeStateMachine tools
+    // registered" log. Removed in the audit pass since the executors
+    // live elsewhere; the SM itself just tracks state.
     try {
       this._planModeStateMachine = new PlanModeStateMachine();
-      // Register plan_mode.enter and plan_mode.exit tool definitions with the tool registry.
-      try {
-        const pmsTools = (this._planModeStateMachine as unknown as { getToolDefinitions?: () => Array<unknown> }).getToolDefinitions?.();
-        if (pmsTools && typeof (this.toolRegistry as unknown as { register?: (def: unknown) => void }).register === 'function') {
-          for (const toolDef of pmsTools) {
-            (this.toolRegistry as unknown as { register: (def: unknown) => void }).register(toolDef);
-          }
-          log.info({ toolCount: pmsTools.length }, 'AgentLoop: PlanModeStateMachine tools registered');
-        }
-      } catch (regErr) {
-        log.warn({ err: String(regErr) }, 'AgentLoop: PlanModeStateMachine tool registration failed');
-      }
       log.info('AgentLoop: PlanModeStateMachine initialised');
     } catch (err) {
       log.warn({ err: String(err) }, 'AgentLoop: PlanModeStateMachine init failed — disabled');
