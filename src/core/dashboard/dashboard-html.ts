@@ -69,6 +69,42 @@ export const DASHBOARD_HTML = `
       <div id="activity-list"></div>
     </div>
     <div class="card" style="grid-column: 1 / -1;">
+      <h2>Claude OAuth (PKCE)</h2>
+      <div id="coauth-status" style="margin-bottom: 12px;"><span class="stat-label">Loading...</span></div>
+      <div id="coauth-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button id="coauth-login-btn" style="background: #00d9ff; color: #0f0f1a; border: 0; padding: 8px 14px; border-radius: 4px; font-weight: bold; cursor: pointer;">Connect Claude (OAuth)</button>
+        <button id="coauth-refresh-btn" style="background: #2a2a4a; color: #e0e0e0; border: 0; padding: 8px 14px; border-radius: 4px; cursor: pointer; display: none;">Refresh now</button>
+        <button id="coauth-disconnect-btn" style="background: #5a1a2a; color: #ffaaaa; border: 0; padding: 8px 14px; border-radius: 4px; cursor: pointer; display: none;">Disconnect</button>
+      </div>
+      <div id="coauth-login-panel" style="margin-top: 14px; display: none;">
+        <div style="margin-bottom: 8px; color: #888; font-size: 13px;">
+          1. Open this URL in a new tab, approve, then copy the code shown on the callback page:
+        </div>
+        <div style="margin-bottom: 10px;">
+          <a id="coauth-authorize-link" target="_blank" rel="noopener noreferrer" style="color: #00d9ff; word-break: break-all;"></a>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <input id="coauth-code-input" type="text" placeholder="Paste authorization code" style="flex:1; padding: 8px; background:#0f0f1a; color:#e0e0e0; border:1px solid #2a2a4a; border-radius: 4px;" />
+          <button id="coauth-complete-btn" style="background: #00ff88; color: #0f0f1a; border: 0; padding: 8px 14px; border-radius: 4px; font-weight: bold; cursor: pointer;">Complete</button>
+        </div>
+        <div id="coauth-login-error" class="error" style="margin-top: 8px; display: none;"></div>
+      </div>
+      <div id="coauth-models-panel" style="margin-top: 18px; display: none; border-top: 1px solid #2a2a4a; padding-top: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
+          <h3 style="color: #00d9ff; font-size: 13px; text-transform: uppercase; margin: 0;">Default Model</h3>
+          <button id="coauth-models-refresh-btn" style="background: #2a2a4a; color: #e0e0e0; border: 0; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">Refresh list</button>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <select id="coauth-models-select" style="flex:1; padding: 8px; background:#0f0f1a; color:#e0e0e0; border:1px solid #2a2a4a; border-radius: 4px;"></select>
+          <button id="coauth-models-save-btn" style="background: #00d9ff; color: #0f0f1a; border: 0; padding: 8px 14px; border-radius: 4px; font-weight: bold; cursor: pointer;">Save</button>
+        </div>
+        <div id="coauth-models-hint" style="margin-top: 8px; color: #888; font-size: 12px;">
+          Use this model in sudo-ai's brain config as <code id="coauth-model-string" style="color:#00ff88;">claude-oauth/&lt;id&gt;</code>
+        </div>
+        <div id="coauth-models-error" class="error" style="margin-top: 8px; display: none;"></div>
+      </div>
+    </div>
+    <div class="card" style="grid-column: 1 / -1;">
       <h2>FleetView — Live Agents</h2>
       <div id="fleet-summary" class="fleet-summary">
         <span class="stat-label">Slots</span><span class="stat-value" id="fleet-slots">- / -</span>
@@ -222,8 +258,187 @@ export const DASHBOARD_HTML = `
       document.getElementById('last-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
     }
 
+    // -----------------------------------------------------------------------
+    // Claude OAuth (PKCE) panel
+    // -----------------------------------------------------------------------
+
+    async function postJson(url, body) {
+      const token = getToken();
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      return data.data;
+    }
+
+    function renderCoauthStatus(s) {
+      const statusEl = document.getElementById('coauth-status');
+      const refreshBtn = document.getElementById('coauth-refresh-btn');
+      const disconnectBtn = document.getElementById('coauth-disconnect-btn');
+      const loginBtn = document.getElementById('coauth-login-btn');
+      const modelsPanel = document.getElementById('coauth-models-panel');
+      if (s && s.connected) {
+        const expMin = s.expiresInSec != null ? Math.round(s.expiresInSec / 60) : null;
+        const expTxt = expMin == null ? 'n/a' : (expMin > 60 ? Math.floor(expMin / 60) + 'h ' + (expMin % 60) + 'm' : expMin + 'm');
+        statusEl.innerHTML =
+          '<span class="status-ok">CONNECTED</span> &middot; ' +
+          'expires in <span class="stat-value">' + escapeHtml(expTxt) + '</span>' +
+          (s.subscriptionType ? ' &middot; sub <span class="stat-value">' + escapeHtml(s.subscriptionType) + '</span>' : '') +
+          (s.defaultModel ? ' &middot; default <span class="stat-value">' + escapeHtml(s.defaultModel) + '</span>' : '');
+        refreshBtn.style.display = 'inline-block';
+        disconnectBtn.style.display = 'inline-block';
+        loginBtn.textContent = 'Re-connect';
+        modelsPanel.style.display = 'block';
+      } else {
+        statusEl.innerHTML = '<span class="status-warn">NOT CONNECTED</span> &middot; ' +
+          '<span class="stat-label">login to enable claude-oauth/* brain models</span>';
+        refreshBtn.style.display = 'none';
+        disconnectBtn.style.display = 'none';
+        loginBtn.textContent = 'Connect Claude (OAuth)';
+        modelsPanel.style.display = 'none';
+      }
+    }
+
+    function renderCoauthModels(models, defaultModel) {
+      const sel = document.getElementById('coauth-models-select');
+      const code = document.getElementById('coauth-model-string');
+      sel.innerHTML = '';
+      if (!models || models.length === 0) {
+        const opt = document.createElement('option');
+        opt.textContent = 'No models — click Refresh list';
+        opt.disabled = true;
+        sel.appendChild(opt);
+        return;
+      }
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.displayName + ' (' + m.id + ')';
+        if (m.id === defaultModel) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      code.textContent = 'claude-oauth/' + (defaultModel || sel.value);
+      sel.addEventListener('change', () => {
+        code.textContent = 'claude-oauth/' + sel.value;
+      }, { once: true });
+    }
+
+    async function refreshCoauthModels(forceLive) {
+      const errEl = document.getElementById('coauth-models-error');
+      errEl.style.display = 'none';
+      try {
+        const url = '/v1/admin/claude-oauth/models' + (forceLive ? '?refresh=1' : '');
+        const data = await fetchJson(url);
+        const payload = data.data || data;
+        renderCoauthModels(payload.models, payload.defaultModel);
+      } catch (e) {
+        errEl.textContent = 'Models fetch failed: ' + e.message;
+        errEl.style.display = 'block';
+      }
+    }
+
+    document.getElementById('coauth-models-refresh-btn').addEventListener('click', () => refreshCoauthModels(true));
+
+    document.getElementById('coauth-models-save-btn').addEventListener('click', async () => {
+      const sel = document.getElementById('coauth-models-select');
+      const errEl = document.getElementById('coauth-models-error');
+      const id = sel.value;
+      if (!id) {
+        errEl.textContent = 'Pick a model first.';
+        errEl.style.display = 'block';
+        return;
+      }
+      try {
+        const token = getToken();
+        const res = await fetch('/v1/admin/claude-oauth/default-model', {
+          method: 'PUT',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelId: id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        errEl.style.display = 'none';
+        await refreshCoauthStatus();
+        await refreshCoauthModels(false);
+      } catch (e) {
+        errEl.textContent = 'Save failed: ' + e.message;
+        errEl.style.display = 'block';
+      }
+    });
+
+    async function refreshCoauthStatus() {
+      try {
+        const data = await fetchJson('/v1/admin/claude-oauth/status');
+        renderCoauthStatus(data.data || data);
+      } catch (e) {
+        document.getElementById('coauth-status').innerHTML = '<span class="error">Status fetch failed: ' + escapeHtml(e.message) + '</span>';
+      }
+    }
+
+    document.getElementById('coauth-login-btn').addEventListener('click', async () => {
+      try {
+        const data = await postJson('/v1/admin/claude-oauth/login/start');
+        document.getElementById('coauth-login-panel').style.display = 'block';
+        const link = document.getElementById('coauth-authorize-link');
+        link.href = data.authorizeUrl;
+        link.textContent = data.authorizeUrl;
+        document.getElementById('coauth-code-input').value = '';
+        document.getElementById('coauth-login-error').style.display = 'none';
+      } catch (e) {
+        alert('Login start failed: ' + e.message);
+      }
+    });
+
+    document.getElementById('coauth-complete-btn').addEventListener('click', async () => {
+      const code = document.getElementById('coauth-code-input').value.trim();
+      const errEl = document.getElementById('coauth-login-error');
+      if (!code) {
+        errEl.textContent = 'Paste the authorization code first.';
+        errEl.style.display = 'block';
+        return;
+      }
+      try {
+        await postJson('/v1/admin/claude-oauth/login/complete', { code });
+        document.getElementById('coauth-login-panel').style.display = 'none';
+        await refreshCoauthStatus();
+      } catch (e) {
+        errEl.textContent = 'Login failed: ' + e.message;
+        errEl.style.display = 'block';
+      }
+    });
+
+    document.getElementById('coauth-refresh-btn').addEventListener('click', async () => {
+      try {
+        await postJson('/v1/admin/claude-oauth/refresh');
+        await refreshCoauthStatus();
+      } catch (e) {
+        alert('Refresh failed: ' + e.message);
+      }
+    });
+
+    document.getElementById('coauth-disconnect-btn').addEventListener('click', async () => {
+      if (!confirm('Wipe Claude OAuth credentials from sudo-ai? You will need to log in again.')) return;
+      try {
+        await postJson('/v1/admin/claude-oauth/disconnect');
+        await refreshCoauthStatus();
+      } catch (e) {
+        alert('Disconnect failed: ' + e.message);
+      }
+    });
+
     async function refreshAll() {
-      await Promise.allSettled([updateStats(), updateHealth(), updateAlignment(), updateActivity(), updateFleet()]);
+      await Promise.allSettled([updateStats(), updateHealth(), updateAlignment(), updateActivity(), updateFleet(), refreshCoauthStatus()]);
+      // Refresh models only when connected — avoids hitting the API on every
+      // dashboard tick when the user has nothing wired up.
+      const modelsPanel = document.getElementById('coauth-models-panel');
+      if (modelsPanel && modelsPanel.style.display !== 'none') {
+        refreshCoauthModels(false);
+      }
       updateTimestamp();
     }
 

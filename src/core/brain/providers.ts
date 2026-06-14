@@ -35,6 +35,7 @@ export type ProviderName =
   | 'xai'
   | 'openai'
   | 'anthropic'
+  | 'claude-oauth'
   | 'google'
   | 'groq'
   | 'mistral'
@@ -123,6 +124,39 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
         return createAnthropic({ authToken: value! } as Parameters<typeof createAnthropic>[0]);
       }
       return createAnthropic({ apiKey: value! });
+    },
+  },
+  // Anthropic via Claude.ai subscription OAuth (PKCE). The manager owns the
+  // token and refreshes it in the background; passing the SDK an authToken
+  // getter (instead of a frozen string) means each request reads the live
+  // token, so a rotation takes effect on the very next call without rebuilding
+  // the provider. `create()` only fails when the manager is not connected at
+  // boot — login can happen later and the provider will start working as soon
+  // as initProviders() is re-run or the cache is invalidated.
+  'claude-oauth': {
+    envKey: 'SUDO_CLAUDE_OAUTH_CONNECTED', // synthetic — set by the manager
+    keyOptional: true, // gating happens via the manager, not env
+    modelKind: 'native',
+    async create() {
+      const { getClaudeOAuthManager } = await import('./claude-oauth-manager.js');
+      const mgr = getClaudeOAuthManager();
+      if (!mgr.isAvailable()) {
+        log.warn('claude-oauth: no credentials — run `sudo-ai claude-oauth login`');
+        return null;
+      }
+      log.info('claude-oauth: provider registered (PKCE authToken getter)');
+      return createAnthropic({
+        authToken: async () => {
+          const live = mgr.getAccessToken();
+          if (live) return live;
+          // Within the refresh buffer — refresh now and read again.
+          await mgr.refreshToken();
+          return mgr.getAccessToken() ?? '';
+        },
+        // OAuth tokens are rejected by /v1/messages without this beta opt-in
+        // — same header Claude Code sends on every inference call.
+        headers: { 'anthropic-beta': 'oauth-2025-04-20' },
+      } as unknown as Parameters<typeof createAnthropic>[0]);
     },
   },
   google: {
@@ -457,4 +491,18 @@ export function listAvailableProviders(): ProviderName[] {
  */
 export function getEnvKeyForProvider(name: ProviderName): string {
   return BUILTIN_PROVIDERS[name].envKey;
+}
+
+/**
+ * Drop the cached instance for a built-in provider and rebuild it now. Used
+ * after a runtime state change (e.g. claude-oauth login completed) so the next
+ * getProvider() call sees the new auth without waiting for a restart.
+ *
+ * Returns true when the provider was rebuilt successfully, false when no
+ * credentials are available.
+ */
+export async function reinitProvider(name: ProviderName): Promise<boolean> {
+  providerCache.delete(name);
+  const instance = await buildProviderAsync(name);
+  return instance !== null;
 }
