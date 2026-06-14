@@ -446,13 +446,26 @@ Implements ACP `initialize` / `session/new` / `session/prompt` (with streamed `a
 By default `system.exec` runs commands in a **bubblewrap** sandbox (Linux). Select an alternate, pluggable execution backend at runtime:
 
 ```bash
-SUDO_EXEC_BACKEND=docker        # default: local (bwrap). Also accepts custom registered backends.
+SUDO_EXEC_BACKEND=docker        # default: local (bwrap). Also: ssh, or a custom registered backend.
 SUDO_DOCKER_IMAGE=ubuntu:24.04  # image with /bin/bash (default ubuntu:24.04)
 SUDO_DOCKER_BIN=docker          # docker/podman binary (default docker)
 SUDO_DOCKER_USER=1000:1000      # optional --user to drop root inside the container
 ```
 
-The **docker** backend runs each command in a throwaway container (`docker run --rm --init`) with the workspace bind-mounted at `/workspace`, the same env scrub + ulimit caps the bwrap runner uses, the same policy bind mounts (`extraReadOnlyBinds`/`extraWritableBinds`, symlink-resolved and denylist-validated), container memory/pid limits, and `--network none` (unless `policy.network` is `host`). Requires Docker on the host — when the binary is absent the command returns an honest exit 127. An unknown `SUDO_EXEC_BACKEND` value warns and falls back to bwrap (fail-safe). The `SUDO_SANDBOX_DISABLE=1` kill-switch takes precedence over backend selection — it always means unsandboxed host exec, never a backend. New backends can be added via `registerExecBackend()`. (SSH/Modal backends and per-policy backend selection are follow-ups.)
+The **docker** backend runs each command in a throwaway container (`docker run --rm --init`) with the workspace bind-mounted at `/workspace`, the same env scrub + ulimit caps the bwrap runner uses, the same policy bind mounts (`extraReadOnlyBinds`/`extraWritableBinds`, symlink-resolved and denylist-validated), container memory/pid limits, and `--network none` (unless `policy.network` is `host`). Requires Docker on the host — when the binary is absent the command returns an honest exit 127. An unknown `SUDO_EXEC_BACKEND` value warns and falls back to bwrap (fail-safe). The `SUDO_SANDBOX_DISABLE=1` kill-switch takes precedence over backend selection — it always means unsandboxed host exec, never a backend. New backends can be added via `registerExecBackend()`. (Modal backend and per-policy backend selection are follow-ups.)
+
+```bash
+SUDO_EXEC_BACKEND=ssh           # run system.exec on a REMOTE host over SSH
+SUDO_SSH_HOST=build.example.com # required — remote host
+SUDO_SSH_USER=deploy            # optional — becomes user@host
+SUDO_SSH_PORT=22                # optional (default 22; -p emitted only when != 22)
+SUDO_SSH_KEY=~/.ssh/id_ed25519  # optional identity file (-i)
+SUDO_SSH_WORKDIR=/srv/app       # optional remote working dir to cd into
+SUDO_SSH_BIN=ssh                # ssh binary (default ssh)
+SUDO_SSH_STRICT_HOST_KEY=accept-new  # StrictHostKeyChecking value (default accept-new)
+```
+
+The **ssh** backend runs each command on a remote host via a single non-interactive SSH invocation (`BatchMode=yes` + `ConnectTimeout`), applying the same ulimit resource caps on the remote. The remote command is passed as one fully single-quote-escaped `bash -c` argument, so command content cannot break out of the quoting (injection-safe). **Security:** execution happens on the remote with the SSH user's privileges — there is **no local sandbox**, the local env scrub does **not** apply, and `policy.network` / bind mounts do not apply (no namespaces over SSH); treat the remote as trusted. The local env is inherited by the ssh *client* (so the agent / `~/.ssh` work) but is not forwarded to the remote. Honest failures: ssh binary absent → exit 127; `SUDO_SSH_HOST` unset → exit 78 (`EX_CONFIG`); connection failure → ssh's own exit 255. Requires key-based (or agent) auth — `BatchMode` never prompts for a password.
 
 ### Cross-Platform Control, Kill-Switches, Autonomy, Learning
 

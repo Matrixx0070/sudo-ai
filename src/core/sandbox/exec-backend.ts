@@ -82,5 +82,16 @@ export async function resolveExecBackend(name: string): Promise<ExecBackend | nu
     }
   }
 
+  if (name === 'ssh') {
+    try {
+      const { sshBackend } = await import('./backends/ssh-backend.js');
+      registry.set('ssh', sshBackend);
+      return sshBackend;
+    } catch (err) {
+      log.warn({ err: String(err) }, 'failed to load the ssh exec backend');
+      return null;
+    }
+  }
+
   return null;
 }
