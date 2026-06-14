@@ -33,6 +33,27 @@ export interface WorkflowStep {
    * group instead.
    */
   parallel_group?: string;
+  /**
+   * Named synchronization barrier (slice 3). Consecutive steps sharing a
+   * `phase` value form a phase block: ALL members fan out concurrently into
+   * the same per-engine worker pool used by `parallel_group` (bounded by
+   * `SUDO_WORKFLOWS_MAX_PARALLEL`, default 4). A hard barrier sits at the end
+   * of every phase — the next phase (or any sequential step after) cannot
+   * start until every phase member settles. Failure of any member halts the
+   * workflow after the rest of the phase settles, matching `parallel_group`
+   * semantics.
+   *
+   * Difference vs `parallel_group`: phase blocks are named stages that often
+   * span heterogeneous work (fetch + transform + validate together under one
+   * stage label), where `parallel_group` is a peer fan-out. The two are
+   * mutually exclusive on the same step — pick one fan-out scope per step.
+   *
+   * `{{prev}}` and `approval: true` are forbidden inside a phase for the same
+   * reason as inside a parallel_group: phase members have no defined ordering,
+   * so "the previous step" is ambiguous and an approval gate has no resume
+   * semantics across a fan-out.
+   */
+  phase?: string;
 }
 
 export interface Workflow {
@@ -110,9 +131,10 @@ export interface RunOptions {
    */
   toolExecutor?: ToolStepExecutor;
   /**
-   * Max in-flight steps within one `parallel_group`. Outside a group, steps
-   * still run sequentially. Default 4 when omitted. The caller layer reads
-   * `SUDO_WORKFLOWS_MAX_PARALLEL` and passes it down.
+   * Max in-flight steps within one `parallel_group` or `phase` block.
+   * Outside a fan-out block, steps still run sequentially. Default 4 when
+   * omitted. The caller layer reads `SUDO_WORKFLOWS_MAX_PARALLEL` and passes
+   * it down.
    */
   maxParallel?: number;
   /**

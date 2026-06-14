@@ -932,4 +932,260 @@ steps:
       ).rejects.toThrow('journalPath requires sourceSha256');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // 12. Phase synchronization barriers (slice 3)
+  // -------------------------------------------------------------------------
+  describe('phase synchronization barriers', () => {
+    it('fans out consecutive same-phase members concurrently', async () => {
+      let inFlight = 0;
+      let peakInFlight = 0;
+
+      function makeSlowSpawn(stdout: string) {
+        const stdoutEmitter = new EventEmitter();
+        const stderrEmitter = new EventEmitter();
+        const stdinMock = { write: vi.fn(), end: vi.fn() };
+        const child = new EventEmitter() as NodeJS.EventEmitter & {
+          stdout: typeof stdoutEmitter;
+          stderr: typeof stderrEmitter;
+          stdin: typeof stdinMock;
+          kill: ReturnType<typeof vi.fn>;
+        };
+        child.stdout = stdoutEmitter;
+        child.stderr = stderrEmitter;
+        child.stdin = stdinMock;
+        child.kill = vi.fn();
+
+        inFlight++;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+
+        setTimeout(() => {
+          stdoutEmitter.emit('data', Buffer.from(stdout));
+          inFlight--;
+          child.emit('close', 0);
+        }, 25);
+
+        return child;
+      }
+
+      spawnMock
+        .mockImplementationOnce(() => makeSlowSpawn('A\n') as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSlowSpawn('B\n') as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSlowSpawn('C\n') as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'phase-fanout',
+        steps: [
+          { id: 'a', command: 'echo a', phase: 'gather' },
+          { id: 'b', command: 'echo b', phase: 'gather' },
+          { id: 'c', command: 'echo c', phase: 'gather' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow, { maxParallel: 3 });
+
+      expect(state.completedSteps).toHaveLength(3);
+      expect(state.completedSteps.every((s) => s.status === 'success')).toBe(true);
+      expect(peakInFlight).toBe(3);
+    });
+
+    it('enforces a hard barrier between phases (next phase waits)', async () => {
+      const startTimes: Record<string, number> = {};
+      const endTimes: Record<string, number> = {};
+
+      function makeTimedSpawn(stepId: string) {
+        const stdoutEmitter = new EventEmitter();
+        const stderrEmitter = new EventEmitter();
+        const stdinMock = { write: vi.fn(), end: vi.fn() };
+        const child = new EventEmitter() as NodeJS.EventEmitter & {
+          stdout: typeof stdoutEmitter;
+          stderr: typeof stderrEmitter;
+          stdin: typeof stdinMock;
+          kill: ReturnType<typeof vi.fn>;
+        };
+        child.stdout = stdoutEmitter;
+        child.stderr = stderrEmitter;
+        child.stdin = stdinMock;
+        child.kill = vi.fn();
+
+        startTimes[stepId] = Date.now();
+        // Phase-1 members take 40ms; phase-2 starts after.
+        const ms = stepId.startsWith('p1') ? 40 : 5;
+        setTimeout(() => {
+          endTimes[stepId] = Date.now();
+          stdoutEmitter.emit('data', Buffer.from(`${stepId}\n`));
+          child.emit('close', 0);
+        }, ms);
+        return child;
+      }
+
+      spawnMock
+        .mockImplementationOnce(() => makeTimedSpawn('p1-a') as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeTimedSpawn('p1-b') as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeTimedSpawn('p2-c') as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'phase-barrier',
+        steps: [
+          { id: 'p1-a', command: 'echo p1a', phase: 'one' },
+          { id: 'p1-b', command: 'echo p1b', phase: 'one' },
+          { id: 'p2-c', command: 'echo p2c', phase: 'two' },
+        ],
+      };
+
+      await runWorkflow(workflow, { maxParallel: 2 });
+
+      // Phase 2 must not start until BOTH phase 1 members have ended.
+      const phase1Latest = Math.max(endTimes['p1-a']!, endTimes['p1-b']!);
+      expect(startTimes['p2-c']).toBeGreaterThanOrEqual(phase1Latest);
+    });
+
+    it('caps in-flight at maxParallel within a phase', async () => {
+      let inFlight = 0;
+      let peakInFlight = 0;
+
+      function makeSlowSpawn() {
+        const stdoutEmitter = new EventEmitter();
+        const stderrEmitter = new EventEmitter();
+        const stdinMock = { write: vi.fn(), end: vi.fn() };
+        const child = new EventEmitter() as NodeJS.EventEmitter & {
+          stdout: typeof stdoutEmitter;
+          stderr: typeof stderrEmitter;
+          stdin: typeof stdinMock;
+          kill: ReturnType<typeof vi.fn>;
+        };
+        child.stdout = stdoutEmitter;
+        child.stderr = stderrEmitter;
+        child.stdin = stdinMock;
+        child.kill = vi.fn();
+
+        inFlight++;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        setTimeout(() => {
+          inFlight--;
+          child.emit('close', 0);
+        }, 15);
+        return child;
+      }
+
+      for (let i = 0; i < 4; i++) {
+        spawnMock.mockImplementationOnce(() => makeSlowSpawn() as ReturnType<typeof spawn>);
+      }
+
+      const workflow: Workflow = {
+        name: 'phase-cap',
+        steps: [
+          { id: 'a', command: 'echo a', phase: 'p' },
+          { id: 'b', command: 'echo b', phase: 'p' },
+          { id: 'c', command: 'echo c', phase: 'p' },
+          { id: 'd', command: 'echo d', phase: 'p' },
+        ],
+      };
+
+      await runWorkflow(workflow, { maxParallel: 2 });
+      expect(peakInFlight).toBe(2);
+    });
+
+    it('one failing phase member halts the workflow after the phase settles', async () => {
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('ok-a\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('', 'boom', 9) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('ok-c\n', '', 0) as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'phase-fail',
+        steps: [
+          { id: 'a', command: 'echo a', phase: 'one' },
+          { id: 'b', command: 'false', phase: 'one' },
+          { id: 'c', command: 'echo c', phase: 'one' },
+          { id: 'after', command: 'echo never' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow, { maxParallel: 3 });
+
+      // All three phase members ran (phase doesn't short-circuit), then halt.
+      expect(state.completedSteps).toHaveLength(3);
+      expect(state.completedSteps.map((s) => s.id)).toEqual(['a', 'b', 'c']);
+      const byId = Object.fromEntries(state.completedSteps.map((s) => [s.id, s]));
+      expect(byId['a']?.status).toBe('success');
+      expect(byId['b']?.status).toBe('failure');
+      expect(byId['c']?.status).toBe('success');
+      // 'after' must NOT have spawned.
+      expect(spawnMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('validateStep rejects phase + parallel_group on the same step', () => {
+      expect(() =>
+        validateStep({
+          id: 'x',
+          command: 'echo y',
+          parallel_group: 'g',
+          phase: 'p',
+        }),
+      ).toThrow('cannot both be set on the same step');
+    });
+
+    it('validateStep rejects {{prev}} inside a phase', () => {
+      expect(() =>
+        validateStep({ id: 'x', command: 'echo {{prev}}', phase: 'p' }),
+      ).toThrow('{{prev}} is forbidden inside phase');
+
+      expect(() =>
+        validateStep({ id: 'x', command: 'echo y', phase: 'p', stdin: '{{prev}}' }),
+      ).toThrow('{{prev}} is forbidden inside phase');
+    });
+
+    it('validateStep rejects approval inside a phase', () => {
+      expect(() =>
+        validateStep({ id: 'x', command: 'echo y', phase: 'p', approval: true }),
+      ).toThrow('approval gates are not supported inside phase');
+    });
+
+    it('runs sequential → phase → sequential in deterministic completed order', async () => {
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('pre\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('ph-a\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('ph-b\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('post\n', '', 0) as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'phase-mixed',
+        steps: [
+          { id: 'pre', command: 'echo pre' },
+          { id: 'a', command: 'echo a', phase: 'gather' },
+          { id: 'b', command: 'echo b', phase: 'gather' },
+          { id: 'post', command: 'echo post' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow);
+
+      expect(state.completedSteps.map((s) => s.id)).toEqual(['pre', 'a', 'b', 'post']);
+      expect(state.completedSteps.every((s) => s.status === 'success')).toBe(true);
+    });
+
+    it('splits non-consecutive same-phase labels into separate phases (current semantics)', async () => {
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('a\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('mid\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('b\n', '', 0) as ReturnType<typeof spawn>);
+
+      const workflow: Workflow = {
+        name: 'phase-split',
+        steps: [
+          { id: 'a', command: 'echo a', phase: 'p1' },
+          { id: 'mid', command: 'echo mid' },
+          { id: 'b', command: 'echo b', phase: 'p1' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow);
+      // 'mid' breaks the phase block; the trailing 'b' is its own one-member
+      // phase. Locked here so any future merge of non-consecutive labels is a
+      // deliberate spec change.
+      expect(state.completedSteps.map((s) => s.id)).toEqual(['a', 'mid', 'b']);
+      expect(state.completedSteps.every((s) => s.status === 'success')).toBe(true);
+    });
+  });
 });

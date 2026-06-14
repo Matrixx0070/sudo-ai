@@ -546,4 +546,100 @@ steps:
       }
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Slice 3: phase synchronization barriers (tool layer)
+  // -------------------------------------------------------------------------
+  describe('phase synchronization barriers (tool-level)', () => {
+    it('runs consecutive same-phase tool steps concurrently and barriers the next phase', async () => {
+      let inFlight = 0;
+      let peakInFlight = 0;
+      const startTimes: Record<string, number> = {};
+      const endTimes: Record<string, number> = {};
+
+      const { registry } = stubRegistry(async (name) => {
+        inFlight++;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        startTimes[name] = Date.now();
+        // Phase 1 members take 30ms; phase-2 takes 5.
+        const ms = name.startsWith('p1') ? 30 : 5;
+        await new Promise((r) => setTimeout(r, ms));
+        endTimes[name] = Date.now();
+        inFlight--;
+        return { success: true, output: `out:${name}` };
+      });
+      setWorkflowRegistry(registry);
+
+      const file = writeWorkflow(
+        'phase-tools.yaml',
+        `name: phase-tools
+steps:
+  - id: a
+    command: p1-alpha
+    type: tool
+    phase: one
+  - id: b
+    command: p1-beta
+    type: tool
+    phase: one
+  - id: c
+    command: p1-gamma
+    type: tool
+    phase: one
+  - id: d
+    command: p2-delta
+    type: tool
+    phase: two
+`,
+      );
+
+      const res = await runWorkflowTool.execute({ file }, ctx);
+
+      expect(res.success).toBe(true);
+      // All three phase-one members must have been in flight at once.
+      expect(peakInFlight).toBe(3);
+      // Phase 2 cannot start until ALL phase-1 members have ended.
+      const phase1Latest = Math.max(endTimes['p1-alpha']!, endTimes['p1-beta']!, endTimes['p1-gamma']!);
+      expect(startTimes['p2-delta']).toBeGreaterThanOrEqual(phase1Latest);
+    });
+
+    it('SUDO_WORKFLOWS_MAX_PARALLEL=1 collapses phase fan-out to sequential', async () => {
+      const prev = process.env['SUDO_WORKFLOWS_MAX_PARALLEL'];
+      process.env['SUDO_WORKFLOWS_MAX_PARALLEL'] = '1';
+      try {
+        let inFlight = 0;
+        let peakInFlight = 0;
+        const { registry } = stubRegistry(async () => {
+          inFlight++;
+          peakInFlight = Math.max(peakInFlight, inFlight);
+          await new Promise((r) => setTimeout(r, 10));
+          inFlight--;
+          return { success: true, output: 'x' };
+        });
+        setWorkflowRegistry(registry);
+
+        const file = writeWorkflow(
+          'phase-cap-1.yaml',
+          `name: phase-cap-1
+steps:
+  - id: a
+    command: t
+    type: tool
+    phase: stage
+  - id: b
+    command: t
+    type: tool
+    phase: stage
+`,
+        );
+
+        const res = await runWorkflowTool.execute({ file }, ctx);
+        expect(res.success).toBe(true);
+        expect(peakInFlight).toBe(1);
+      } finally {
+        if (prev === undefined) delete process.env['SUDO_WORKFLOWS_MAX_PARALLEL'];
+        else process.env['SUDO_WORKFLOWS_MAX_PARALLEL'] = prev;
+      }
+    });
+  });
 });

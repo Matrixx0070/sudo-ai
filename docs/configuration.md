@@ -526,8 +526,9 @@ SUDO_PROMPT_CACHE=1                        # Stable-prefix discipline for provid
                                            #   Anthropic models also get explicit cache_control breakpoints on last tool + stable system prefix)
 SUDO_WORKFLOWS=1                           # Register meta.run-workflow: deterministic multi-step .yaml workflows under workspace/workflows/
                                            #   (shell + tool steps, {{prev}} + {{steps.<id>.<field>}} templating, condition/approval gates,
-                                           #   parallel_group fan-out, on-disk SHA-256 resume journal; tool steps go through normal gates)
-SUDO_WORKFLOWS_MAX_PARALLEL=4              # Per-engine fan-out cap for parallel_group members (1 = sequential kill switch). Default 4.
+                                           #   parallel_group fan-out, phase synchronization barriers, on-disk SHA-256 resume journal;
+                                           #   tool steps go through normal gates)
+SUDO_WORKFLOWS_MAX_PARALLEL=4              # Per-engine fan-out cap for parallel_group OR phase members (1 = sequential kill switch). Default 4.
 SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1    # Keep the stable prefix but skip the explicit Anthropic breakpoints
 ```
 

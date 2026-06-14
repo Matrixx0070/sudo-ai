@@ -106,19 +106,39 @@ export function validateStep(step: WorkflowStep): void {
     throw new Error(`Step "${step.id}": timeout must be a positive number`);
   }
 
-  // parallel_group steps may not use {{prev}} — fan-out has no defined
-  // intra-group ordering, so "the previous step" is ambiguous. Authors must
-  // reference a specific upstream id via {{steps.<id>.<field>}} instead.
-  if (step.parallel_group !== undefined) {
+  // parallel_group and phase are mutually exclusive: each step picks ONE
+  // fan-out scope. Mixing the two would conflate peer-group semantics with
+  // barrier-stage semantics and break the unambiguous "what does this step
+  // belong to" mental model the scheduler relies on.
+  if (step.parallel_group !== undefined && step.phase !== undefined) {
+    throw new Error(
+      `Step "${step.id}": parallel_group "${step.parallel_group}" and phase "${step.phase}" ` +
+        'cannot both be set on the same step — pick one fan-out scope',
+    );
+  }
+
+  // Members of a fan-out (parallel_group OR phase) may not use {{prev}} —
+  // fan-out has no defined intra-member ordering, so "the previous step" is
+  // ambiguous. Authors must reference a specific upstream id via
+  // {{steps.<id>.<field>}} against a step outside the fan-out. Approval gates
+  // are also forbidden for the same reason: their resume token semantics
+  // assume a single ordered step, not a settled fan-out.
+  const fanOutLabel =
+    step.parallel_group !== undefined
+      ? { kind: 'parallel_group', value: step.parallel_group }
+      : step.phase !== undefined
+        ? { kind: 'phase', value: step.phase }
+        : null;
+  if (fanOutLabel) {
     if (step.command.includes('{{prev}}') || (step.stdin ?? '').includes('{{prev}}')) {
       throw new Error(
-        `Step "${step.id}": {{prev}} is forbidden inside parallel_group "${step.parallel_group}" — ` +
-          'use explicit {{steps.<id>.<field>}} against a step outside the group',
+        `Step "${step.id}": {{prev}} is forbidden inside ${fanOutLabel.kind} "${fanOutLabel.value}" — ` +
+          'use explicit {{steps.<id>.<field>}} against a step outside the fan-out',
       );
     }
     if (step.approval === true) {
       throw new Error(
-        `Step "${step.id}": approval gates are not supported inside parallel_group "${step.parallel_group}"`,
+        `Step "${step.id}": approval gates are not supported inside ${fanOutLabel.kind} "${fanOutLabel.value}"`,
       );
     }
   }
