@@ -92,6 +92,7 @@ export class AgentSpawner {
         model: config.model,
         timeout: config.timeout,
         ...(config.forkHistory ? { forkHistory: config.forkHistory } : {}),
+        ...(config.resumeFromAgentId ? { resumeFromAgentId: config.resumeFromAgentId } : {}),
       });
 
       instance.status = 'completed';

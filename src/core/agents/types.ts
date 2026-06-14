@@ -72,6 +72,17 @@ export interface SpawnConfig {
     content: string;
     toolCalls?: unknown[];
   }>;
+  /**
+   * Resume from a previously-completed sub-agent (gap #21). When set,
+   * the swarm loads the named agent's session transcript verbatim and
+   * splices it onto the new sub-agent's session BEFORE the loop runs,
+   * so the new prompt lands on top of a finished conversation. Distinct
+   * from `forkHistory`, which is the filtered parent-conversation
+   * seeding path; resume keeps the full transcript including tool I/O.
+   * Unknown agent ids fail open — the new sub-agent starts cold with a
+   * warn log.
+   */
+  resumeFromAgentId?: string;
 }
 
 // ---------------------------------------------------------------------------

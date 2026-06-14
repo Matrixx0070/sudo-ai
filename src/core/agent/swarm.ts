@@ -19,6 +19,7 @@ import type { AgentConfig } from './types.js';
 import type { HookManager } from '../hooks/index.js';
 import { pushCompletionBus } from './push-completion.js';
 import { seedForkedHistory } from './fork-history.js';
+import { loadResumeMessages, seedResumeHistory } from './subagent-resume.js';
 import type { ForkableMessage } from './fork-history.js';
 import { SpawnSlotGuard } from './spawn-guard.js';
 
@@ -65,6 +66,21 @@ export interface SpawnOptions {
    * sub-agent starts with an empty session, exactly as before.
    */
   forkHistory?: ForkableMessage[];
+  /**
+   * Resume from a previously-completed sub-agent (gap #21). When set,
+   * the swarm loads the named agent's session transcript verbatim
+   * (system + user + assistant + tool messages — full arc) and splices
+   * it onto the new sub-agent's session BEFORE the loop runs, so the
+   * new prompt lands on top of a finished conversation. Distinct from
+   * `forkHistory` which is the FILTERED parent-conversation seeding
+   * path; resume keeps the full transcript including tool I/O.
+   *
+   * If both `resumeFromAgentId` and `forkHistory` are set, the resumed
+   * messages go in FIRST (oldest position), then the parent fork
+   * messages, then the new task. Unknown agent ids fail open — the new
+   * sub-agent starts cold with a warn log.
+   */
+  resumeFromAgentId?: string;
 }
 
 /** Runtime record of an active sub-agent. */
@@ -217,19 +233,62 @@ export class AgentSwarm {
           );
         }
 
+        // gap #21 — resume_from a finished sub-agent. Loads the prior
+        // transcript (user + assistant + tool — system messages excluded;
+        // see subagent-resume.ts JSDoc for the brain.ts:131 reason) and
+        // splices it ahead of any fork-mode seeding so the new prompt
+        // lands on top of the resumed conversation. Fail-open: unknown
+        // agent id or any load error → warn log and start cold.
+        //
+        // Resume + fork both mutate session.messages in place; a single
+        // save at the END of seeding avoids the partial-write window the
+        // verifier flagged (HIGH #2) — if the resume save succeeded but
+        // the fork save crashed, the on-disk session was inconsistent.
+        let anySeeded = false;
+        if (options.resumeFromAgentId) {
+          try {
+            const resumed = await loadResumeMessages(sessionManager, options.resumeFromAgentId);
+            if (resumed.length > 0) {
+              const kept = seedResumeHistory(session, resumed);
+              if (kept > 0) anySeeded = true;
+              log.info(
+                { id, resumeFromAgentId: options.resumeFromAgentId, kept },
+                'Resume seeded prior sub-agent transcript into new session',
+              );
+            } else {
+              log.warn(
+                { id, resumeFromAgentId: options.resumeFromAgentId },
+                'Resume requested but prior sub-agent has no messages — starting cold',
+              );
+            }
+          } catch (resumeErr) {
+            log.warn(
+              { id, resumeFromAgentId: options.resumeFromAgentId, err: String(resumeErr) },
+              'Resume seeding failed — sub-agent starts without prior transcript',
+            );
+          }
+        }
+
         // Fork-mode context: seed the filtered parent history (fail-open).
         if (options.forkHistory && options.forkHistory.length > 0) {
           try {
             const kept = seedForkedHistory(session, options.forkHistory);
-            if (kept > 0 && typeof sessionManager.save === 'function') {
-              await sessionManager.save(session);
-            }
+            if (kept > 0) anySeeded = true;
             log.info(
               { id, kept, dropped: options.forkHistory.length - kept },
               'Fork-mode history seeded into sub-agent session',
             );
           } catch (forkErr) {
             log.warn({ id, err: String(forkErr) }, 'Fork history seeding failed — sub-agent starts without parent context');
+          }
+        }
+
+        // Single atomic save covering both seedings — verifier HIGH #2.
+        if (anySeeded && typeof sessionManager.save === 'function') {
+          try {
+            await sessionManager.save(session);
+          } catch (saveErr) {
+            log.warn({ id, err: String(saveErr) }, 'Seed save failed — sub-agent will run with in-memory session only');
           }
         }
 
@@ -407,19 +466,55 @@ export class AgentSwarm {
           const session = await sessionManager.getOrCreate('swarm', `subagent:${id}`);
           const sessionId = session.id;
 
+          // gap #21 — resume_from a finished sub-agent (async variant).
+          // Same semantics as spawn(): full transcript, splice before
+          // fork seeding, single atomic save at the end (verifier HIGH
+          // #2), fail-open on unknown agent id.
+          let anySeeded = false;
+          if (options.resumeFromAgentId) {
+            try {
+              const resumed = await loadResumeMessages(sessionManager, options.resumeFromAgentId);
+              if (resumed.length > 0) {
+                const kept = seedResumeHistory(session, resumed);
+                if (kept > 0) anySeeded = true;
+                log.info(
+                  { id, resumeFromAgentId: options.resumeFromAgentId, kept },
+                  'Resume seeded prior sub-agent transcript into async sub-agent session',
+                );
+              } else {
+                log.warn(
+                  { id, resumeFromAgentId: options.resumeFromAgentId },
+                  'Resume requested but prior sub-agent has no messages — starting cold',
+                );
+              }
+            } catch (resumeErr) {
+              log.warn(
+                { id, resumeFromAgentId: options.resumeFromAgentId, err: String(resumeErr) },
+                'Resume seeding failed — async sub-agent starts without prior transcript',
+              );
+            }
+          }
+
           // Fork-mode context: seed the filtered parent history (fail-open).
           if (options.forkHistory && options.forkHistory.length > 0) {
             try {
               const kept = seedForkedHistory(session, options.forkHistory);
-              if (kept > 0 && typeof sessionManager.save === 'function') {
-                await sessionManager.save(session);
-              }
+              if (kept > 0) anySeeded = true;
               log.info(
                 { id, kept, dropped: options.forkHistory.length - kept },
                 'Fork-mode history seeded into async sub-agent session',
               );
             } catch (forkErr) {
               log.warn({ id, err: String(forkErr) }, 'Fork history seeding failed — sub-agent starts without parent context');
+            }
+          }
+
+          // Single atomic save covering both seedings — verifier HIGH #2.
+          if (anySeeded && typeof sessionManager.save === 'function') {
+            try {
+              await sessionManager.save(session);
+            } catch (saveErr) {
+              log.warn({ id, err: String(saveErr) }, 'Seed save failed — async sub-agent will run with in-memory session only');
             }
           }
 
