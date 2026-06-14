@@ -46,6 +46,23 @@ describe('selectExecBackendName', () => {
     process.env['SUDO_EXEC_BACKEND'] = '  Docker ';
     expect(selectExecBackendName()).toBe('docker');
   });
+
+  it('a per-policy execBackend wins over the env default', () => {
+    process.env['SUDO_EXEC_BACKEND'] = 'local';
+    expect(selectExecBackendName({ execBackend: 'docker' })).toBe('docker');
+  });
+
+  it('falls back to the env when policy.execBackend is empty/unset', () => {
+    process.env['SUDO_EXEC_BACKEND'] = 'docker';
+    expect(selectExecBackendName({})).toBe('docker');
+    expect(selectExecBackendName({ execBackend: '   ' })).toBe('docker');
+    expect(selectExecBackendName()).toBe('docker');
+  });
+
+  it('normalizes the policy value (trim + lowercase)', () => {
+    delete process.env['SUDO_EXEC_BACKEND'];
+    expect(selectExecBackendName({ execBackend: '  Docker ' })).toBe('docker');
+  });
 });
 
 describe('resolveExecBackend', () => {
@@ -95,6 +112,77 @@ describe('runInSandbox dispatch', () => {
       expect(res.stderr).toContain('not found');
     } finally {
       delete process.env['SUDO_EXEC_BACKEND'];
+      delete process.env['SUDO_DOCKER_BIN'];
+    }
+  });
+
+  it('routes via policy.execBackend even when SUDO_EXEC_BACKEND is unset (per-policy selection)', async () => {
+    delete process.env['SUDO_EXEC_BACKEND'];
+    process.env['SUDO_DOCKER_BIN'] = '/nonexistent/docker-xyz';
+    try {
+      const res = await runInSandbox({
+        command: 'echo hi',
+        workspaceDir: '/tmp',
+        policy: { ...DEFAULT_SANDBOX_POLICY, execBackend: 'docker' },
+        timeoutMs: 5000,
+      });
+      // Reached the docker backend (missing-binary path) purely via the policy.
+      expect(res.exitCode).toBe(127);
+      expect(res.stderr).toContain('not found');
+    } finally {
+      delete process.env['SUDO_DOCKER_BIN'];
+    }
+  });
+
+  it('policy.execBackend wins over SUDO_EXEC_BACKEND', async () => {
+    process.env['SUDO_EXEC_BACKEND'] = 'local'; // env says local…
+    process.env['SUDO_DOCKER_BIN'] = '/nonexistent/docker-xyz';
+    try {
+      const res = await runInSandbox({
+        command: 'echo hi',
+        workspaceDir: '/tmp',
+        policy: { ...DEFAULT_SANDBOX_POLICY, execBackend: 'docker' }, // …policy says docker
+        timeoutMs: 5000,
+      });
+      expect(res.exitCode).toBe(127); // docker won
+    } finally {
+      delete process.env['SUDO_EXEC_BACKEND'];
+      delete process.env['SUDO_DOCKER_BIN'];
+    }
+  });
+
+  it('an unknown policy.execBackend fails safe to the default path (never mis-routes to docker)', async () => {
+    process.env['SUDO_DOCKER_BIN'] = '/nonexistent/docker-xyz'; // would yield 127 if mis-routed to docker
+    try {
+      const res = await runInSandbox({
+        command: 'echo hi',
+        workspaceDir: '/tmp',
+        policy: { ...DEFAULT_SANDBOX_POLICY, execBackend: 'totally-unknown-xyz' },
+        timeoutMs: 5000,
+      });
+      // Fell through to the default (bwrap) path — NOT the docker backend.
+      expect(res.exitCode).not.toBe(127);
+      expect(res.stderr).not.toContain('Docker');
+    } finally {
+      delete process.env['SUDO_DOCKER_BIN'];
+    }
+  });
+
+  it('SUDO_SANDBOX_DISABLE=1 still wins over policy.execBackend (kill-switch precedence holds)', async () => {
+    process.env['SUDO_SANDBOX_DISABLE'] = '1';
+    process.env['SUDO_DOCKER_BIN'] = '/nonexistent/docker-xyz';
+    try {
+      const res = await runInSandbox({
+        command: 'echo killswitch-wins',
+        workspaceDir: '/tmp',
+        policy: { ...DEFAULT_SANDBOX_POLICY, execBackend: 'docker' },
+        timeoutMs: 5000,
+      });
+      // Host exec, NOT the docker backend — kill-switch is checked before dispatch.
+      expect(res.exitCode).toBe(0);
+      expect(res.stdout).toContain('killswitch-wins');
+    } finally {
+      delete process.env['SUDO_SANDBOX_DISABLE'];
       delete process.env['SUDO_DOCKER_BIN'];
     }
   });

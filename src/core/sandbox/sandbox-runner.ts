@@ -268,7 +268,7 @@ export async function runInSandbox(
   // backend (e.g. docker), route through it. The default 'local'/'bwrap' path
   // below is unchanged. An unknown/unloadable backend warns and falls back to
   // bwrap — fail-safe, never silently to less isolation.
-  const backendName = selectExecBackendName();
+  const backendName = selectExecBackendName(policy);
   if (backendName !== 'local' && backendName !== 'bwrap') {
     const backend = await resolveExecBackend(backendName);
     if (backend) {

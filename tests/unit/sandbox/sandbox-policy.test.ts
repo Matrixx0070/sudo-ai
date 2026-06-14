@@ -223,3 +223,27 @@ describe('Regression: existing validateBindPath behavior preserved', () => {
   it('// normalizes to / — denied', () => expect(validateBindPath('//')).toBe(false));
   it('//etc/passwd normalizes to /etc/passwd — denied', () => expect(validateBindPath('//etc/passwd')).toBe(false));
 });
+
+describe('gap #27: per-policy execBackend', () => {
+  it('parsePolicy accepts a valid backend token (normalized to lowercase)', () => {
+    expect(parsePolicy({ execBackend: 'docker' }).execBackend).toBe('docker');
+    expect(parsePolicy({ execBackend: '  Docker ' }).execBackend).toBe('docker');
+    expect(parsePolicy({ execBackend: 'my-backend_2' }).execBackend).toBe('my-backend_2');
+  });
+
+  it('parsePolicy drops a malformed / non-string execBackend (falls back to env/local)', () => {
+    expect(parsePolicy({ execBackend: 'bad name!' }).execBackend).toBeUndefined();
+    expect(parsePolicy({ execBackend: 'a;b' }).execBackend).toBeUndefined();
+    expect(parsePolicy({ execBackend: 123 }).execBackend).toBeUndefined();
+    expect(parsePolicy({ execBackend: '' }).execBackend).toBeUndefined();
+    expect(parsePolicy({}).execBackend).toBeUndefined();
+  });
+
+  it('mergePolicy carries execBackend through (override wins, else base) — no silent drop', () => {
+    const base: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, execBackend: 'docker' };
+    // base value survives when the override does not set it
+    expect(mergePolicy(base, {}).execBackend).toBe('docker');
+    // override wins
+    expect(mergePolicy(base, { execBackend: 'ssh' }).execBackend).toBe('ssh');
+  });
+});

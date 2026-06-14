@@ -26,6 +26,15 @@ export interface SandboxPolicy {
   /** Additional env var names allowed beyond ENV_ALLOWLIST_BASE. */
   allowedEnvVars?: string[];
 
+  /**
+   * Per-policy exec backend selector (gap #27). When set, takes precedence over
+   * the global SUDO_EXEC_BACKEND env so different policies/profiles can route to
+   * different backends (e.g. 'docker', 'ssh', 'local'/'bwrap'). Unset → the env
+   * default. Cannot disable sandboxing — that is the env-only SUDO_SANDBOX_DISABLE
+   * kill-switch, which still wins over any backend selection.
+   */
+  execBackend?: string;
+
   // Cross-platform expansion (compat for Win/Mac shims + policy)
   platform?: 'linux' | 'win' | 'mac' | 'auto';
   enableCrossPlatform?: boolean;
