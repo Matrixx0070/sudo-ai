@@ -44,6 +44,7 @@ import type {
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
 import { LoopGuard } from './loop-guard.js';
 import { DoomLoopDetector } from './doom-loop.js';
+import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
 import { StuckDetector } from './stuck-detector.js';
 import { generateIntelligenceBrief } from './intelligence-brief.js';
 import { shouldFork, forkSession } from '../sessions/session-fork.js';
@@ -259,6 +260,11 @@ export class AgentLoop {
   private readonly config: AgentConfig;
   private readonly loopGuard = new LoopGuard();
   private readonly doomLoopDetector = new DoomLoopDetector();
+  /** gap #23 — opt-in via SUDO_DOOM_LOOP_EXTRAS=1; both null when flag off. */
+  private readonly writeCycleDetector: WriteCycleDetector | null =
+    process.env['SUDO_DOOM_LOOP_EXTRAS'] === '1' ? new WriteCycleDetector() : null;
+  private readonly pollingStagnationDetector: PollingStagnationDetector | null =
+    process.env['SUDO_DOOM_LOOP_EXTRAS'] === '1' ? new PollingStagnationDetector() : null;
   private readonly stuckDetector = new StuckDetector();
   private readonly consciousness: ConsciousnessLike | null;
   private readonly security: SecurityGuardLike | null;
@@ -1755,6 +1761,11 @@ export class AgentLoop {
     this.loopGuard.reset();
     this.doomLoopDetector.onNewTurn();
     this.stuckDetector.reset();
+    // gap #23 — keep the contract symmetric with the existing
+    // detectors so future per-turn reset logic added inside the
+    // pattern-extras detectors actually fires (verifier HIGH #3).
+    this.writeCycleDetector?.onNewTurn();
+    this.pollingStagnationDetector?.onNewTurn();
 
     try {
       while (state.iteration < maxIterations) {
@@ -2233,6 +2244,51 @@ export class AgentLoop {
               finalText = `I stopped because a doom loop was detected: ${doomResult.reason ?? 'cross-turn repetition exceeded threshold'}`;
               session.messages.push({ role: 'assistant', content: finalText });
               try { this._feedbackTierManager?.recordDoomLoop(); } catch { /* fail-open */ }
+              guardAborted = true;
+              break;
+            }
+
+            // gap #23 — write-cycle + polling-stagnation extras (opt-in,
+            // both null when SUDO_DOOM_LOOP_EXTRAS is unset). Same
+            // warn / abort contract as the loop-guard / doom-loop above
+            // so the failure modes are handled identically.
+            const args = tc.arguments ?? {};
+            const wcResult = this.writeCycleDetector?.recordCall(tc.name, args);
+            if (wcResult?.action === 'warn') {
+              const msg = `[WriteCycle] ${wcResult.reason ?? 'Write cycle detected'}`;
+              session.messages.push({ role: 'system', content: msg });
+              emit({ type: 'error', error: msg });
+              log.warn({ tool: tc.name, sessionId: state.sessionId }, 'WriteCycle warning injected');
+              // gap #23 — skip the polling stagnation check for the
+              // same tc; otherwise a write that warns on cycle would
+              // ALSO clear the polling counter for that path
+              // (verifier HIGH #2). Move on to the next tool call.
+              continue;
+            } else if (wcResult?.action === 'abort') {
+              const msg = `[WriteCycle] Loop detected — breaking: ${wcResult.reason ?? ''}`;
+              emit({ type: 'error', error: msg });
+              log.error({ tool: tc.name, sessionId: state.sessionId }, 'WriteCycle abort triggered');
+              session.messages.push({ role: 'system', content: msg });
+              finalText = `I stopped because a write-cycle was detected: ${wcResult.reason ?? 'rewriting the same file repeatedly'}`;
+              session.messages.push({ role: 'assistant', content: finalText });
+              guardAborted = true;
+              break;
+            }
+
+            const psResult = this.pollingStagnationDetector?.recordCall(tc.name, args);
+            if (psResult?.action === 'warn') {
+              const msg = `[PollingStagnation] ${psResult.reason ?? 'Polling stagnation detected'}`;
+              session.messages.push({ role: 'system', content: msg });
+              emit({ type: 'error', error: msg });
+              log.warn({ tool: tc.name, sessionId: state.sessionId }, 'PollingStagnation warning injected');
+              continue;
+            } else if (psResult?.action === 'abort') {
+              const msg = `[PollingStagnation] Loop detected — breaking: ${psResult.reason ?? ''}`;
+              emit({ type: 'error', error: msg });
+              log.error({ tool: tc.name, sessionId: state.sessionId }, 'PollingStagnation abort triggered');
+              session.messages.push({ role: 'system', content: msg });
+              finalText = `I stopped because polling stagnation was detected: ${psResult.reason ?? 'reading the same path repeatedly with no intervening write'}`;
+              session.messages.push({ role: 'assistant', content: finalText });
               guardAborted = true;
               break;
             }
