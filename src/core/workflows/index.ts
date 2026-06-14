@@ -12,6 +12,8 @@ export type {
   StepResult,
   WorkflowRunState,
   RunOptions,
+  ToolStepResult,
+  ToolStepExecutor,
 } from './lobster.js';
 
 export { loadWorkflow, runWorkflow } from './lobster.js';

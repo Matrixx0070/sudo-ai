@@ -56,7 +56,11 @@ export function validateStep(step: WorkflowStep): void {
     );
   }
 
-  // Reject shell interpreters as the command binary
+  // Reject shell interpreters as the command binary. This also runs for
+  // `type: 'tool'` steps (where command is a tool name, not a shell command);
+  // that is harmless — real tool names are `category.action` and never match an
+  // interpreter — and keeps the guard uniform. A non-existent tool name would
+  // fail honestly at registry.execute() time, not here.
   const firstToken = step.command.split(/\s+/)[0] ?? '';
   const bin = path.basename(firstToken);
   if (BLOCKED_INTERPRETERS.has(bin)) {
@@ -65,8 +69,11 @@ export function validateStep(step: WorkflowStep): void {
     );
   }
 
-  // Validate stdin: allow the literal '{{prev}}' placeholder; reject shell metacharacters otherwise
-  if (step.stdin !== undefined && step.stdin !== '{{prev}}') {
+  // Validate stdin: allow the literal '{{prev}}' placeholder; reject shell
+  // metacharacters otherwise. Tool steps are exempt — their stdin carries JSON
+  // args parsed and handed to a host tool (registry.execute), so it never
+  // reaches a shell and the injection guard does not apply.
+  if (step.type !== 'tool' && step.stdin !== undefined && step.stdin !== '{{prev}}') {
     if (STDIN_DANGEROUS_RE.test(step.stdin)) {
       throw new Error(
         `Step "${step.id}": stdin contains forbidden characters (shell metacharacters are not allowed)`,

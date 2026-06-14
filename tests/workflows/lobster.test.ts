@@ -58,7 +58,7 @@ vi.mock('child_process', async (importOriginal) => {
 
 // Now import the module under test (after mocking)
 import { loadWorkflow, runWorkflow } from '../../src/core/workflows/lobster.js';
-import type { Workflow, WorkflowRunState } from '../../src/core/workflows/lobster.js';
+import type { Workflow, WorkflowRunState, ToolStepExecutor } from '../../src/core/workflows/lobster.js';
 import { validateStep, execShell } from '../../src/core/workflows/executor.js';
 import { spawn } from 'child_process';
 
@@ -310,6 +310,8 @@ steps:
       expect(state.resumeToken).toBeDefined();
       expect(typeof state.resumeToken).toBe('string');
       expect(state.pendingStepIndex).toBe(1);
+      // pendingStepId is the stable resume anchor (id, not index).
+      expect(state.pendingStepId).toBe('gated');
 
       // spawn was called only for 'before'
       expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -459,6 +461,123 @@ steps:
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
       expect(result.stderr).toContain('[stream truncated at 10MB]');
       expect(result.exitCode).toBe(124);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 8. Tool-type steps (gap #24 — dispatched via an injected toolExecutor)
+  // -------------------------------------------------------------------------
+  describe('tool steps', () => {
+    it('runs a tool step via the injected toolExecutor and records the real outcome', async () => {
+      const toolExecutor: ToolStepExecutor = vi.fn(async () => ({ success: true, stdout: 'TOOL_OUT' }));
+
+      const workflow: Workflow = {
+        name: 'tool-wf',
+        steps: [{ id: 'call', command: 'coder.read-file', type: 'tool', stdin: '{"path":"/x"}' }],
+      };
+
+      const state = await runWorkflow(workflow, { toolExecutor });
+
+      expect(toolExecutor).toHaveBeenCalledTimes(1);
+      expect(state.completedSteps).toHaveLength(1);
+      expect(state.completedSteps[0]?.status).toBe('success');
+      expect(state.completedSteps[0]?.stdout).toBe('TOOL_OUT');
+      expect(state.completedSteps[0]?.exitCode).toBe(0);
+      // A tool step must never touch the shell.
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('fails HONESTLY when a tool step has no toolExecutor (no fake success)', async () => {
+      // Regression: the pre-wiring engine returned status:'success' with empty
+      // output for tool steps. It must now fail honestly and halt.
+      const workflow: Workflow = {
+        name: 'tool-nowire',
+        steps: [
+          { id: 'call', command: 'coder.read-file', type: 'tool' },
+          { id: 'after', command: 'echo never' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow); // no toolExecutor
+
+      expect(state.completedSteps).toHaveLength(1);
+      expect(state.completedSteps[0]?.status).toBe('failure');
+      expect(state.completedSteps[0]?.exitCode).toBe(1);
+      expect(state.completedSteps[0]?.stderr).toContain('tool executor');
+      // The honest failure halts the workflow — 'after' never runs.
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('halts the workflow when a tool step reports failure', async () => {
+      const toolExecutor: ToolStepExecutor = vi.fn(async () => ({ success: false, stderr: 'boom' }));
+
+      const workflow: Workflow = {
+        name: 'tool-fail',
+        steps: [
+          { id: 'call', command: 'coder.write-file', type: 'tool' },
+          { id: 'after', command: 'echo never', type: 'tool' },
+        ],
+      };
+
+      const state = await runWorkflow(workflow, { toolExecutor });
+
+      expect(state.completedSteps).toHaveLength(1);
+      expect(state.completedSteps[0]?.status).toBe('failure');
+      expect(state.completedSteps[0]?.stderr).toBe('boom');
+      expect(toolExecutor).toHaveBeenCalledTimes(1); // 'after' never dispatched
+    });
+
+    it('pipes {{prev}} stdout into a tool step as resolvedStdin', async () => {
+      const seen: Array<string | undefined> = [];
+      const toolExecutor: ToolStepExecutor = vi.fn(async (_step, resolvedStdin) => {
+        seen.push(resolvedStdin);
+        return { success: true, stdout: 'producer-out' };
+      });
+
+      const workflow: Workflow = {
+        name: 'tool-pipe',
+        steps: [
+          { id: 'producer', command: 'data.make', type: 'tool' },
+          { id: 'consumer', command: 'data.take', type: 'tool', stdin: '{{prev}}' },
+        ],
+      };
+
+      await runWorkflow(workflow, { toolExecutor });
+
+      expect(seen[0]).toBeUndefined();      // producer had no stdin
+      expect(seen[1]).toBe('producer-out'); // consumer received the previous stdout
+    });
+
+    it('records a failure when the toolExecutor throws', async () => {
+      const toolExecutor: ToolStepExecutor = vi.fn(async () => {
+        throw new Error('kaboom');
+      });
+
+      const workflow: Workflow = {
+        name: 'tool-throw',
+        steps: [{ id: 'call', command: 'x.y', type: 'tool' }],
+      };
+
+      const state = await runWorkflow(workflow, { toolExecutor });
+
+      expect(state.completedSteps[0]?.status).toBe('failure');
+      expect(state.completedSteps[0]?.stderr).toContain('kaboom');
+    });
+
+    it('validateStep exempts tool-step stdin from the shell-metachar guard but not shell steps', () => {
+      // Tool stdin is JSON args handed to a host tool — it never reaches a shell.
+      expect(() =>
+        validateStep({
+          id: 'tool',
+          command: 'coder.write-file',
+          type: 'tool',
+          stdin: '{"content":"a > b & c"}',
+        }),
+      ).not.toThrow();
+      // The same stdin on a shell step is still rejected.
+      expect(() =>
+        validateStep({ id: 'sh', command: 'cat', stdin: '{"content":"a > b & c"}' }),
+      ).toThrow('stdin contains forbidden characters');
     });
   });
 });

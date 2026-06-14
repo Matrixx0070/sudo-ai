@@ -3061,6 +3061,28 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 9.6c Workflow system — meta.run-workflow (gap #24)
+  //      (opt-in: SUDO_WORKFLOWS=1; runs deterministic multi-step .yaml
+  //      workflows. Shell steps run one argv command each; tool steps dispatch
+  //      through registry.execute() — the same permission/approval gates a
+  //      normal tool call hits. Sequential engine; parallel()/phase() fan-out
+  //      and the SHA-256 resume journal are follow-up slices.)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_WORKFLOWS'] === '1') {
+    try {
+      const { runWorkflowTool, setWorkflowRegistry } = await import(
+        './core/tools/builtin/meta/run-workflow.js'
+      );
+      setWorkflowRegistry(registry);
+      registry.register(runWorkflowTool);
+      log.info('meta.run-workflow registered (SUDO_WORKFLOWS=1)');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'meta.run-workflow registration failed — continuing without it');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 9.7 Health Watchdog
   // -------------------------------------------------------------------------
   try {
