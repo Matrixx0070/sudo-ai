@@ -98,8 +98,16 @@ const POST_ROUTES: ReadonlySet<string> = new Set([
  * Dynamic admin GET paths (#28c slice 2). Each is a `startsWith` test —
  * the path is parsed to extract a route param. Tested AFTER ADMIN_GET_ROUTES
  * + before the unknown-path 404. Shares the SUDO_ADMIN_POWERS=1 opt-in.
+ *
+ * Slice 3 adds `/api/admin/fleet/devices/<id>/commands` for the per-device
+ * command-history panel. The prefix order matters — both start with
+ * `/api/admin/fleet/`; the per-device path includes `/commands` AT THE END
+ * so we match it with an explicit endsWith check below.
  */
-const ADMIN_GET_PREFIXES: readonly string[] = ['/api/admin/fleet/commands/'];
+const ADMIN_GET_PREFIXES: readonly string[] = [
+  '/api/admin/fleet/commands/',
+  '/api/admin/fleet/devices/',
+];
 
 /**
  * Dynamic public POST/GET paths (#28c slice 2) — device back-channel.
@@ -420,6 +428,31 @@ export async function registerRoutes(
     }
     if (pathname === '/api/admin/debug-share') {
       sendJson(res, 200, server.getDebugShareSnapshot(actor));
+      return;
+    }
+    if (pathname.startsWith('/api/admin/fleet/devices/') && pathname.endsWith('/commands')) {
+      // Slice 3 — per-device command history for the admin UI panel.
+      const queue = getCommandQueueOrUndefined();
+      const registrar = getRegisteredFleetRegistrar();
+      if (!queue || !registrar) {
+        sendJson(res, 503, { error: 'fleet_registrar_not_enabled' });
+        return;
+      }
+      // Extract :deviceId from `/api/admin/fleet/devices/<id>/commands`.
+      const prefix = '/api/admin/fleet/devices/';
+      const deviceId = pathname.slice(prefix.length, pathname.length - '/commands'.length);
+      if (deviceId.length === 0 || deviceId.includes('/')) {
+        sendJson(res, 400, { error: 'invalid_device_id' });
+        return;
+      }
+      if (!registrar.list().some((d) => d.deviceId === deviceId)) {
+        sendJson(res, 404, { error: 'device_not_registered' });
+        return;
+      }
+      const limitRaw = url.searchParams.get('limit');
+      const limit = limitRaw === null ? 50 : parseInt(limitRaw, 10);
+      const rows = queue.listForDevice(deviceId, Number.isFinite(limit) ? limit : 50);
+      sendJson(res, 200, { deviceId, count: rows.length, commands: rows.map(projectCommand) });
       return;
     }
     if (pathname.startsWith('/api/admin/fleet/commands/')) {

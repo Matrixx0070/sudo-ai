@@ -223,6 +223,8 @@ export interface FleetCommandQueueSource {
   pickupLongPoll(deviceId: string, timeoutMs: number): Promise<FleetCommandRow | undefined>;
   complete(input: { commandId: string; result: { status: 'completed' | 'failed'; result?: unknown; error?: string } }): FleetCommandRow | undefined;
   get(commandId: string): FleetCommandRow | undefined;
+  /** Slice 3 — per-device history for the admin UI panel. */
+  listForDevice(deviceId: string, limit?: number): FleetCommandRow[];
 }
 
 /** Row shape returned by FleetCommandQueueSource — wire-format-adjacent. */

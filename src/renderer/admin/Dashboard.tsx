@@ -14,6 +14,7 @@ import { VetoPanel } from './components/VetoPanel';
 import { InjectionPanel } from './components/InjectionPanel';
 import { ReanchorPanel } from './components/ReanchorPanel';
 import { ResolutionsPanel } from './components/ResolutionsPanel';
+import { FleetPanel } from './components/FleetPanel';
 
 type StatusType = 'ok' | 'loading' | 'error' | 'degraded';
 
@@ -208,6 +209,13 @@ export const Dashboard: React.FC = () => {
 
       {/* Resolutions */}
       {digestData?.resolutions && <ResolutionsPanel resolutions={digestData.resolutions} />}
+
+      {/* Section header — Fleet (gap #28c slice 3) */}
+      <div className="text-[#8b949e] text-[11px] uppercase tracking-wider my-[20px] border-b border-[#21262d] pb-[4px]">
+        Fleet
+      </div>
+
+      <FleetPanel token={token} />
     </div>
   );
 };
