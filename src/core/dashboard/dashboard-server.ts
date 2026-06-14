@@ -30,6 +30,7 @@ import {
   AuthBackend,
   AuthResult,
   DashboardBindMode,
+  FleetRegistrarSource,
 } from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
 import { listCredentialsMetadata, type CredentialsSnapshot } from './credentials-meta.js';
@@ -102,6 +103,7 @@ interface SudoRuntimeGlobals {
   __sudoUpdater?: UpdaterSource;
   __sudoAudit?: AuditSource;
   __sudoAuthBackend?: AuthBackend;
+  __sudoFleetRegistrar?: FleetRegistrarSource;
 }
 const runtimeGlobals = globalThis as SudoRuntimeGlobals;
 
@@ -114,6 +116,7 @@ export function registerDashboardGlobals(parts: {
   updater?: UpdaterSource;
   audit?: AuditSource;
   authBackend?: AuthBackend;
+  fleetRegistrar?: FleetRegistrarSource;
 }): void {
   if (parts.brain !== undefined) runtimeGlobals.__sudoBrain = parts.brain;
   if (parts.gateway !== undefined) runtimeGlobals.__sudoGateway = parts.gateway;
@@ -122,6 +125,16 @@ export function registerDashboardGlobals(parts: {
   if (parts.updater !== undefined) runtimeGlobals.__sudoUpdater = parts.updater;
   if (parts.audit !== undefined) runtimeGlobals.__sudoAudit = parts.audit;
   if (parts.authBackend !== undefined) runtimeGlobals.__sudoAuthBackend = parts.authBackend;
+  if (parts.fleetRegistrar !== undefined) runtimeGlobals.__sudoFleetRegistrar = parts.fleetRegistrar;
+}
+
+/**
+ * Get the registered fleet registry (or `undefined` if registrar mode is
+ * not enabled at boot). Slice 1 — used by `dashboard-routes.ts` to decide
+ * whether to dispatch `/api/fleet/*` and `/api/admin/fleet/*`.
+ */
+export function getRegisteredFleetRegistrar(): FleetRegistrarSource | undefined {
+  return runtimeGlobals.__sudoFleetRegistrar;
 }
 
 /** Returns the registered AuthBackend, or `undefined` to fall back to built-in Bearer logic. */
@@ -642,6 +655,17 @@ export class DashboardServer {
       envKeysReturned: Object.keys(snap.env).length,
     });
     return snap;
+  }
+
+  /**
+   * Audit a fleet device enumeration read (#28c slice 1). The list payload
+   * itself is not logged — only metadata (caller, count, requested limit).
+   */
+  appendFleetReadAudit(actor: string, deviceCount: number, requestedLimit: number): void {
+    this.audit(actor, 'admin.fleet.devices.read', 'fleet-registrar', 'success', {
+      deviceCount,
+      requestedLimit,
+    });
   }
 
   /**

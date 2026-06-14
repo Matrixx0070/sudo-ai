@@ -162,6 +162,50 @@ export interface AuditSource {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Fleet registrar surfaces (#28c slice 1 — OpenClaw "one admin → N devices"
+// model). The registrar mode is opt-in via SUDO_FLEET_REGISTRAR_MODE=1; when
+// set, cli.ts constructs a RegistryStore + registers it under
+// __sudoFleetRegistrar so the dashboard can serve `POST /api/fleet/register`
+// (public, signature-verified) and `GET /api/admin/fleet/devices` (Bearer +
+// admin opt-in).
+// ---------------------------------------------------------------------------
+
+/**
+ * Structural shape the dashboard needs from a fleet registry. Implemented
+ * by `RegistryStore` in `src/core/fleet/registry-store.ts`. The interface
+ * stays minimal so the dashboard does not depend on better-sqlite3
+ * transitively — registrar-disabled boots don't pay any extra cost.
+ */
+export interface FleetRegistrarSource {
+  upsert(input: {
+    deviceId: string;
+    publicKeyPem: string;
+    hostname: string;
+    versionStr: string;
+    metadata?: Record<string, string>;
+  }): {
+    deviceId: string;
+    publicKeyPem: string;
+    hostname: string;
+    versionStr: string;
+    firstRegisteredAt: string;
+    lastRegisteredAt: string;
+    metadataJson: string | null;
+  };
+  list(limit?: number): Array<{
+    deviceId: string;
+    publicKeyPem: string;
+    hostname: string;
+    versionStr: string;
+    firstRegisteredAt: string;
+    lastRegisteredAt: string;
+    metadataJson: string | null;
+  }>;
+  count(): number;
+}
+
+// ---------------------------------------------------------------------------
 // Pluggable auth backend (#28b slice 2 — Hermes parity)
 // ---------------------------------------------------------------------------
 
