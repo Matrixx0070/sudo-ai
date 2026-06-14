@@ -12,7 +12,7 @@ import {
   resolveExecBackend,
   type ExecBackend,
 } from '../../src/core/sandbox/exec-backend.js';
-import { runInSandbox } from '../../src/core/sandbox/sandbox-runner.js';
+import { runInSandbox, exitCodeFromError } from '../../src/core/sandbox/sandbox-runner.js';
 import { DEFAULT_SANDBOX_POLICY } from '../../src/core/sandbox/sandbox-types.js';
 
 const fakeBackend: ExecBackend = {
@@ -135,5 +135,37 @@ describe('runInSandbox dispatch', () => {
     } finally {
       delete process.env['SUDO_EXEC_BACKEND'];
     }
+  });
+
+  it('propagates the REAL nonzero exit code, not a collapsed 1 (regression: execFile puts it on .code)', async () => {
+    // Exercises the host-exec path (runUnsandboxed); the bwrap + docker paths
+    // share exitCodeFromError. Before the fix, .status-only reads forced every
+    // nonzero exit to 1.
+    process.env['SUDO_SANDBOX_DISABLE'] = '1';
+    try {
+      const res = await runInSandbox({
+        command: 'echo out; exit 7',
+        workspaceDir: '/tmp',
+        policy: { ...DEFAULT_SANDBOX_POLICY },
+        timeoutMs: 5000,
+      });
+      expect(res.exitCode).toBe(7);
+      expect(res.stdout).toContain('out');
+    } finally {
+      delete process.env['SUDO_SANDBOX_DISABLE'];
+    }
+  });
+});
+
+describe('exitCodeFromError', () => {
+  it('reads the numeric exit code from an execFile rejection (.code is the exit code)', () => {
+    expect(exitCodeFromError({ code: 7 })).toBe(7);
+    expect(exitCodeFromError({ code: 2 })).toBe(2);
+  });
+
+  it('falls back to .status (spawnSync shape) then to 1', () => {
+    expect(exitCodeFromError({ status: 5 })).toBe(5);
+    expect(exitCodeFromError({ code: 'ENOENT' })).toBe(1); // string code → not an exit code
+    expect(exitCodeFromError({})).toBe(1);
   });
 });

@@ -26,7 +26,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { realpathSync } from 'node:fs';
 import { createLogger } from '../../shared/logger.js';
-import { buildSandboxEnv, buildUlimitWrappedCommand } from '../sandbox-runner.js';
+import { buildSandboxEnv, buildUlimitWrappedCommand, exitCodeFromError } from '../sandbox-runner.js';
 import type { RunInSandboxOptions, SandboxRunResult } from '../sandbox-runner.js';
 import type { ExecBackend } from '../exec-backend.js';
 import { validateBindPath } from '../sandbox-policy.js';
@@ -169,6 +169,7 @@ export const dockerBackend: ExecBackend = {
       const error = err as NodeJS.ErrnoException & {
         stdout?: string | Buffer;
         stderr?: string | Buffer;
+        code?: string | number;
         status?: number;
       };
 
@@ -189,7 +190,8 @@ export const dockerBackend: ExecBackend = {
         return { stdout, stderr: stderr || 'Process aborted', exitCode: 130 };
       }
 
-      const exitCode = typeof error.status === 'number' ? error.status : 1;
+      // docker run exits with the container's exit code; execFile puts it on .code
+      const exitCode = exitCodeFromError(error);
       return { stdout, stderr, exitCode };
     }
   },
