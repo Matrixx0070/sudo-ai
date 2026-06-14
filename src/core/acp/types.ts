@@ -205,3 +205,105 @@ export type RequestPermissionOutcome =
 export interface RequestPermissionResult {
   outcome: RequestPermissionOutcome;
 }
+
+// ---------------------------------------------------------------------------
+// fs/* (requests: agent → client)
+//
+// Slice 3 (gap #26): the agent delegates filesystem ops to the editor so the
+// client can enforce trust + show the user what's being touched. Paths are
+// workspace-relative; behavior on absolute paths is implementation-defined
+// (most clients reject them).
+// ---------------------------------------------------------------------------
+
+export interface FsReadTextFileParams {
+  sessionId: string;
+  path: string;
+  /** Optional offset/length window — implementations may ignore. */
+  line?: number;
+  limit?: number;
+}
+
+export interface FsReadTextFileResult {
+  /** Full file contents (or window when line/limit applied). */
+  content: string;
+}
+
+export interface FsWriteTextFileParams {
+  sessionId: string;
+  path: string;
+  content: string;
+}
+
+/**
+ * Empty-object result shape — ACP success envelopes that carry no payload.
+ * Reusable so the three empty-result types (`FsWriteTextFileResult`,
+ * `TerminalKillResult`, `TerminalReleaseResult`) share one definition rather
+ * than re-declaring the `[key: string]: never` index pattern (verifier LOW 2).
+ */
+export type EmptyAcpResult = Record<string, never>;
+
+/** Write returns an empty object on success per ACP. */
+export type FsWriteTextFileResult = EmptyAcpResult;
+
+// ---------------------------------------------------------------------------
+// terminal/* (requests: agent → client)
+//
+// The agent asks the client to spawn and manage a terminal. terminalId is
+// opaque from the agent's side; output/wait/kill/release all reference it.
+// ---------------------------------------------------------------------------
+
+export interface TerminalCreateParams {
+  sessionId: string;
+  /** Argv-style command — first element is the program. */
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  /** Cap on bytes the client buffers; oldest bytes drop. */
+  outputByteLimit?: number;
+}
+
+export interface TerminalCreateResult {
+  terminalId: string;
+}
+
+export interface TerminalOutputParams {
+  sessionId: string;
+  terminalId: string;
+}
+
+export interface TerminalOutputResult {
+  /** Concatenated stdout + stderr captured so far. */
+  output: string;
+  /** True when the client truncated the buffer to fit outputByteLimit. */
+  truncated: boolean;
+  /**
+   * Exit status if the process has exited; absent while running. Clients may
+   * also surface a signal in addition to or instead of exitCode.
+   */
+  exitStatus?: { exitCode?: number; signal?: string };
+}
+
+export interface TerminalWaitForExitParams {
+  sessionId: string;
+  terminalId: string;
+}
+
+export interface TerminalWaitForExitResult {
+  exitCode?: number;
+  signal?: string;
+}
+
+export interface TerminalKillParams {
+  sessionId: string;
+  terminalId: string;
+}
+
+export type TerminalKillResult = EmptyAcpResult;
+
+export interface TerminalReleaseParams {
+  sessionId: string;
+  terminalId: string;
+}
+
+export type TerminalReleaseResult = EmptyAcpResult;
