@@ -89,15 +89,119 @@ export interface CancelParams {
 
 // ---------------------------------------------------------------------------
 // session/update (notification: agent → client)
+//
+// Slice 1 emitted only `agent_message_chunk`. Slice 2 (gap #26) adds the
+// reasoning-and-action variants that let an editor render what the agent is
+// doing in real time: a `thought` rendered as italic prose, a `tool_call`
+// announcing intent (with title, kind, raw input), a `tool_call_update`
+// reporting status transitions and final output.
 // ---------------------------------------------------------------------------
 
-/** The only session/update variant slice 1 emits. */
 export interface AgentMessageChunkUpdate {
   sessionUpdate: 'agent_message_chunk';
   content: TextContentBlock;
 }
 
+/** Free-form internal reasoning the agent wants the client to render distinctly. */
+export interface ThoughtUpdate {
+  sessionUpdate: 'thought';
+  content: TextContentBlock;
+}
+
+/** Status of a tool call as the agent transitions it through its lifecycle. */
+export type ToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
+
+/** Tool-call kind hint — clients use this to choose an icon / treatment. */
+export type ToolCallKind =
+  | 'read'
+  | 'edit'
+  | 'delete'
+  | 'move'
+  | 'search'
+  | 'execute'
+  | 'think'
+  | 'fetch'
+  | 'switch_mode'
+  | 'other';
+
+/**
+ * One announced tool invocation. `toolCallId` is the agent-chosen stable id;
+ * subsequent updates reference the same id. `rawInput` carries the agent's
+ * pre-validation arguments; clients may render them but should not assume the
+ * agent will execute exactly those.
+ */
+export interface ToolCallUpdate {
+  sessionUpdate: 'tool_call';
+  toolCallId: string;
+  title: string;
+  kind: ToolCallKind;
+  status: ToolCallStatus;
+  rawInput?: unknown;
+}
+
+/**
+ * Status / output update for an already-announced tool call. Most fields are
+ * optional — clients merge against the prior `tool_call` they saw with the
+ * matching `toolCallId`.
+ */
+export interface ToolCallUpdateUpdate {
+  sessionUpdate: 'tool_call_update';
+  toolCallId: string;
+  status?: ToolCallStatus;
+  /** Free-form output rendered by the client; usually short. */
+  content?: TextContentBlock[];
+  /** Set on failure — typically a one-line cause. */
+  rawError?: string;
+}
+
+export type SessionUpdate =
+  | AgentMessageChunkUpdate
+  | ThoughtUpdate
+  | ToolCallUpdate
+  | ToolCallUpdateUpdate;
+
 export interface SessionUpdateNotification {
   sessionId: string;
-  update: AgentMessageChunkUpdate;
+  update: SessionUpdate;
+}
+
+// ---------------------------------------------------------------------------
+// session/request_permission (request: agent → client)
+//
+// Slice 2: when the agent wants to execute a `requiresConfirmation` tool, it
+// SENDS this request to the client and awaits the user's choice. The client
+// returns one of the option ids that was offered, or rejects with `cancelled`
+// if the request was withdrawn.
+// ---------------------------------------------------------------------------
+
+/** Behavior the client should associate with an option (UI hint only). */
+export type PermissionOptionKind = 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+
+export interface PermissionOption {
+  optionId: string;
+  name: string;
+  kind: PermissionOptionKind;
+}
+
+export interface RequestPermissionParams {
+  sessionId: string;
+  /**
+   * The tool_call the agent wants approval for. The client should display
+   * `title`/`rawInput` so the user understands what they are approving.
+   */
+  toolCall: {
+    toolCallId: string;
+    title: string;
+    kind: ToolCallKind;
+    rawInput?: unknown;
+  };
+  options: PermissionOption[];
+}
+
+export type RequestPermissionOutcome =
+  | { outcome: 'selected'; optionId: string }
+  | { outcome: 'cancelled' };
+
+export interface RequestPermissionResult {
+  outcome: RequestPermissionOutcome;
 }

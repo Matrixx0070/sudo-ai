@@ -57,7 +57,7 @@ describe('BrainAcpBackend', () => {
 
   it('passes a pinned model through to the Brain request', async () => {
     const brain = stubBrain(['x']);
-    const backend = new BrainAcpBackend(brain, 'openai/gpt-4o');
+    const backend = new BrainAcpBackend(brain, { model: 'openai/gpt-4o' });
     const sessionId = backend.createSession({});
     await backend.prompt({ sessionId, text: 'hi', onChunk: () => {}, signal: new AbortController().signal });
     expect(brain.lastRequest!.model).toBe('openai/gpt-4o');
