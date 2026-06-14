@@ -24,7 +24,18 @@ const logger = createLogger('meta-task-manager');
 const DB_PATH = MIND_DB;
 
 // ---------------------------------------------------------------------------
-// Lazy singleton queue — opens once per process lifetime
+// Lazy singleton queue — opens once per process lifetime.
+//
+// IMPORTANT: this is a READ-ONLY management view of the TaskQueue. It does NOT
+// register any handler with a TaskExecutor (it does not start one). The actual
+// executor lives in src/core/workflows/queue.ts behind SUDO_WORKFLOWS_QUEUE=1
+// and dispatches the `workflow.run` task type. The two connections share the
+// same mind.db (better-sqlite3 supports concurrent connections under WAL).
+//
+// Do not start a TaskExecutor here without coordinating with WorkflowQueue —
+// the two would race on dequeue() because each enforces its own maxConcurrent
+// cap (this one 8; queue.ts 2 by default) against the same `running` rows.
+// Cross-process / cross-executor scheduling is a future-slice concern.
 // ---------------------------------------------------------------------------
 
 let _queue: TaskQueue | null = null;
