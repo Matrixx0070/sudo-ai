@@ -154,6 +154,15 @@ export function createMultiAgentTool(
       task: { type: 'string', description: 'Self-contained task description.', required: true },
       context: { type: 'string', description: 'Optional context from prior results.', required: false },
       fileBoundaries: { type: 'string', description: 'Comma-separated file/dir paths to focus on.', required: false },
+      resume_from: {
+        type: 'string',
+        description:
+          'Optional sub-agent id to resume from (gap #21). Loads the named agent\'s full transcript ' +
+          '(system + user + assistant + tool messages) and splices it onto the new sub-agent\'s ' +
+          'session BEFORE the loop runs, so the new task lands on top of the prior arc instead of ' +
+          'cold. Unknown ids fail open — the new sub-agent starts cold with a warn log.',
+        required: false,
+      },
     },
 
     async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -199,11 +208,16 @@ export function createMultiAgentTool(
         }
       }
 
+      const resumeFromAgentId = typeof params['resume_from'] === 'string' && (params['resume_from'] as string).trim().length > 0
+        ? (params['resume_from'] as string).trim()
+        : undefined;
+
       try {
         const inst = await orchestrator.spawnAgent({
           // Membership in ROLE_NAMES was checked above.
           role: role as AgentRoleName, task: String(task).trim(), context, fileBoundaries: fb,
           ...(forkHistory ? { forkHistory } : {}),
+          ...(resumeFromAgentId ? { resumeFromAgentId } : {}),
         });
 
         if (inst.status === 'completed') {
