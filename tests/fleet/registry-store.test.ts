@@ -83,4 +83,41 @@ describe('RegistryStore', () => {
     expect(reopened.get(baseInput.deviceId)?.hostname).toBe('device-1');
     reopened.close();
   });
+
+  // Slice 4 — additive columns + setters.
+  it('RS-08: upsert sets admissionStatus=approved by default + lastSeenAt=null', () => {
+    const row = store.upsert({ ...baseInput });
+    expect(row.admissionStatus).toBe('approved');
+    expect(row.lastSeenAt).toBeNull();
+  });
+
+  it('RS-09: setLastSeen bumps the heartbeat column', () => {
+    store.upsert({ ...baseInput });
+    store.setLastSeen(baseInput.deviceId, new Date('2026-06-14T12:00:00Z'));
+    expect(store.get(baseInput.deviceId)?.lastSeenAt).toBe('2026-06-14T12:00:00.000Z');
+  });
+
+  it('RS-10: setAdmissionStatus flips state + returns updated row', () => {
+    store.upsert({ ...baseInput });
+    const updated = store.setAdmissionStatus(baseInput.deviceId, 'revoked');
+    expect(updated?.admissionStatus).toBe('revoked');
+    const back = store.setAdmissionStatus(baseInput.deviceId, 'approved');
+    expect(back?.admissionStatus).toBe('approved');
+  });
+
+  it('RS-11: setAdmissionStatus on unknown device → undefined', () => {
+    expect(store.setAdmissionStatus('nope', 'revoked')).toBeUndefined();
+  });
+
+  it('RS-12: slice-4 additive migration is idempotent (re-open does not re-add columns)', () => {
+    store.close();
+    // Open + close twice. The migration loop should silently skip
+    // "duplicate column name" both times.
+    const a = new RegistryStore({ dbPath: path.join(tmp, 'fleet.db') });
+    a.close();
+    const b = new RegistryStore({ dbPath: path.join(tmp, 'fleet.db') });
+    expect(b.count()).toBe(0);
+    b.close();
+    store = new RegistryStore({ dbPath: path.join(tmp, 'fleet.db') }); // restore for afterEach
+  });
 });

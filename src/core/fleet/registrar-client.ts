@@ -53,24 +53,18 @@ export async function registerWithRegistrar(opts: RegistrarClientOptions): Promi
   const hostname = opts.hostname ?? os.hostname();
   const timeoutMs = opts.timeoutMs ?? 10_000;
 
-  const payload: RegistrationPayload = {
-    version: 1,
-    deviceId: opts.identity.deviceId,
-    publicKeyPem: opts.identity.publicKeyPem,
-    hostname,
-    version_str: opts.versionStr,
-    ts: now(),
-    ...(opts.metadata ? { metadata: opts.metadata } : {}),
-  };
-  const canonical = canonicalizePayload(payload);
-  const signature = opts.identity.sign(canonical);
-  const body: RegistrationRequestBody = { payload, signature };
-
-  // Build URL; reject malformed registrar URL early with a structural err.
-  let url: string;
+  // Slice 4: fetch a single-use nonce first. The registrar's
+  // verifyRegistrationRequest rejects payloads without a current nonce, so
+  // we MUST do this round-trip even though it costs an extra RTT. The
+  // operator-facing API stays unchanged — callers don't see the challenge.
+  let challengeUrl: string;
+  let registerUrl: string;
   try {
-    const u = new URL('/api/fleet/register', opts.registrarUrl);
-    url = u.toString();
+    challengeUrl = new URL(
+      `/api/fleet/challenge?deviceId=${encodeURIComponent(opts.identity.deviceId)}`,
+      opts.registrarUrl,
+    ).toString();
+    registerUrl = new URL('/api/fleet/register', opts.registrarUrl).toString();
   } catch (err) {
     return {
       ok: false,
@@ -78,6 +72,53 @@ export async function registerWithRegistrar(opts: RegistrarClientOptions): Promi
       detail: err instanceof Error ? err.message : String(err),
     };
   }
+
+  const challengeController = new AbortController();
+  const challengeTimer = setTimeout(() => challengeController.abort(), timeoutMs);
+  let nonce: string;
+  try {
+    const challengeRes = await fetchImpl(challengeUrl, {
+      method: 'GET',
+      signal: challengeController.signal,
+    });
+    if (!challengeRes.ok) {
+      const detail = await challengeRes.text().catch(() => '');
+      return {
+        ok: false,
+        reason: 'challenge_rejected',
+        status: challengeRes.status,
+        detail: detail.slice(0, 200) || `HTTP ${challengeRes.status}`,
+      };
+    }
+    const challengeJson = (await challengeRes.json()) as { nonce?: string };
+    if (typeof challengeJson.nonce !== 'string' || challengeJson.nonce.length === 0) {
+      return { ok: false, reason: 'challenge_invalid_response' };
+    }
+    nonce = challengeJson.nonce;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (challengeController.signal.aborted) {
+      return { ok: false, reason: 'timeout', detail: `challenge aborted after ${timeoutMs}ms` };
+    }
+    return { ok: false, reason: 'network_error', detail: msg };
+  } finally {
+    clearTimeout(challengeTimer);
+  }
+
+  const payload: RegistrationPayload = {
+    version: 2,
+    deviceId: opts.identity.deviceId,
+    publicKeyPem: opts.identity.publicKeyPem,
+    hostname,
+    version_str: opts.versionStr,
+    ts: now(),
+    nonce,
+    ...(opts.metadata ? { metadata: opts.metadata } : {}),
+  };
+  const canonical = canonicalizePayload(payload);
+  const signature = opts.identity.sign(canonical);
+  const body: RegistrationRequestBody = { payload, signature };
+  const url = registerUrl;
 
   // AbortController for timeout. `AbortSignal.timeout` is Node 16.14+ but
   // older Node deployments still see this code, so use AbortController

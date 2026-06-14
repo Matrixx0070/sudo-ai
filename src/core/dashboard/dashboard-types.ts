@@ -177,6 +177,21 @@ export interface AuditSource {
  * stays minimal so the dashboard does not depend on better-sqlite3
  * transitively — registrar-disabled boots don't pay any extra cost.
  */
+/** Row shape both list() and the source's per-row methods return. */
+export interface FleetDeviceRow {
+  deviceId: string;
+  publicKeyPem: string;
+  hostname: string;
+  versionStr: string;
+  firstRegisteredAt: string;
+  lastRegisteredAt: string;
+  metadataJson: string | null;
+  /** Slice 4 — heartbeat (bumped on inbox poll). */
+  lastSeenAt: string | null;
+  /** Slice 4 — admission state. */
+  admissionStatus: 'approved' | 'revoked';
+}
+
 export interface FleetRegistrarSource {
   upsert(input: {
     deviceId: string;
@@ -184,25 +199,13 @@ export interface FleetRegistrarSource {
     hostname: string;
     versionStr: string;
     metadata?: Record<string, string>;
-  }): {
-    deviceId: string;
-    publicKeyPem: string;
-    hostname: string;
-    versionStr: string;
-    firstRegisteredAt: string;
-    lastRegisteredAt: string;
-    metadataJson: string | null;
-  };
-  list(limit?: number): Array<{
-    deviceId: string;
-    publicKeyPem: string;
-    hostname: string;
-    versionStr: string;
-    firstRegisteredAt: string;
-    lastRegisteredAt: string;
-    metadataJson: string | null;
-  }>;
+  }): FleetDeviceRow;
+  list(limit?: number): FleetDeviceRow[];
   count(): number;
+  /** Slice 4 — bump heartbeat. */
+  setLastSeen(deviceId: string, now?: Date): void;
+  /** Slice 4 — flip admission. */
+  setAdmissionStatus(deviceId: string, status: 'approved' | 'revoked'): FleetDeviceRow | undefined;
 }
 
 /**

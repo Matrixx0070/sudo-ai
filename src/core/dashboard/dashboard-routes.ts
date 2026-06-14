@@ -28,6 +28,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   checkHostHeader,
   getRegisteredFleetRegistrar,
+  getRegisteredFleetNonceStore,
   type DashboardServer,
 } from './dashboard-server.js';
 import type { DashboardConfig } from './dashboard-types.js';
@@ -93,6 +94,21 @@ const POST_ROUTES: ReadonlySet<string> = new Set([
   '/api/admin/model/set',
   '/api/admin/fleet/dispatch',
 ]);
+
+/**
+ * Dynamic admin POST prefixes (#28c slice 4). Each matched by both startsWith
+ * AND a specific suffix; pathname `/api/admin/fleet/devices/<id>/admit` →
+ * one match, `/admit` action. The set is small + each entry shares the
+ * SUDO_ADMIN_POWERS=1 gate.
+ */
+const ADMIN_POST_PREFIXES: readonly { prefix: string; suffix: string }[] = [
+  { prefix: '/api/admin/fleet/devices/', suffix: '/admit' },
+  { prefix: '/api/admin/fleet/devices/', suffix: '/revoke' },
+];
+
+function isAdminPostPrefix(pathname: string): boolean {
+  return ADMIN_POST_PREFIXES.some((p) => pathname.startsWith(p.prefix) && pathname.endsWith(p.suffix));
+}
 
 /**
  * Dynamic admin GET paths (#28c slice 2). Each is a `startsWith` test —
@@ -284,6 +300,18 @@ export async function registerRoutes(
     }
   }
 
+  // Slice 4 — public GET /api/fleet/challenge — emits a single-use nonce
+  // the device must echo in the registration payload (replay-window hardening).
+  // No auth — anyone can request a nonce; consumption is tied to deviceId +
+  // requires a valid Ed25519 signature on the subsequent /register POST.
+  if (method === 'GET' && pathname === '/api/fleet/challenge') {
+    handleFleetChallenge(req, res, url).catch((err: unknown) => {
+      log.warn({ err: err instanceof Error ? err.message : String(err), msg: 'Fleet challenge handler threw' });
+      if (!res.headersSent) sendJson(res, 500, { error: 'internal_error' });
+    });
+    return;
+  }
+
   // Public device back-channel (#28c slice 2). Two routes, both dynamic on
   // :deviceId, both signature-gated. Like /register above, public means
   // "no Bearer/OAuth" — the per-request Ed25519 signature is the auth.
@@ -299,7 +327,7 @@ export async function registerRoutes(
   const isAdminGetPrefix = ADMIN_GET_PREFIXES.some((p) => pathname.startsWith(p));
   const isKnownAdminGet = ADMIN_GET_ROUTES.has(pathname) || isAdminGetPrefix;
   const isAnyGet = isKnownGet || isKnownAdminGet;
-  const isKnownPost = POST_ROUTES.has(pathname);
+  const isKnownPost = POST_ROUTES.has(pathname) || isAdminPostPrefix(pathname);
 
   // Auth runs BEFORE the unknown-path 404 guard on purpose: unauthenticated
   // probes to non-existent routes return 401, not 404, so route names cannot
@@ -497,6 +525,10 @@ export async function registerRoutes(
         versionStr: d.versionStr,
         firstRegisteredAt: d.firstRegisteredAt,
         lastRegisteredAt: d.lastRegisteredAt,
+        // Slice 4 — heartbeat + admission state. lastSeenAt is null for
+        // devices that haven't yet polled (post-register, pre-first-inbox).
+        lastSeenAt: d.lastSeenAt,
+        admissionStatus: d.admissionStatus,
         publicKeyFingerprint: publicKeyFingerprint(d.publicKeyPem),
         metadata: parseMetadataJsonSafe(d.metadataJson),
       }));
@@ -585,8 +617,16 @@ async function handleAdminPost(
       sendJson(res, 400, { error: 'unsupported_command_kind', supported: SUPPORTED_KINDS });
       return;
     }
-    if (!registrar.list().some((d) => d.deviceId === deviceId)) {
+    const targetDevice = registrar.list().find((d) => d.deviceId === deviceId);
+    if (!targetDevice) {
       sendJson(res, 404, { error: 'device_not_registered' });
+      return;
+    }
+    // Slice 4 — refuse dispatch to a revoked device. The admin who revoked
+    // it intentionally cut its access; queueing a command for it would just
+    // sit forever (the device's inbox poll already returns 403).
+    if (targetDevice.admissionStatus === 'revoked') {
+      sendJson(res, 403, { error: 'device_revoked' });
       return;
     }
     const argsRaw = (cmd as Record<string, unknown>)['args'];
@@ -614,6 +654,33 @@ async function handleAdminPost(
       const status = message === 'brain_not_registered' ? 503 : 400;
       sendJson(res, status, { error: message });
     }
+    return;
+  }
+
+  // Slice 4 — admission state transitions.
+  // POST /api/admin/fleet/devices/<id>/{admit,revoke}
+  if (pathname.startsWith('/api/admin/fleet/devices/') &&
+      (pathname.endsWith('/admit') || pathname.endsWith('/revoke'))) {
+    const registrar = getRegisteredFleetRegistrar();
+    if (!registrar) {
+      sendJson(res, 503, { error: 'fleet_registrar_not_enabled' });
+      return;
+    }
+    const action = pathname.endsWith('/admit') ? 'admit' : 'revoke';
+    const target: 'approved' | 'revoked' = action === 'admit' ? 'approved' : 'revoked';
+    const suffix = action === 'admit' ? '/admit' : '/revoke';
+    const deviceId = pathname.slice('/api/admin/fleet/devices/'.length, pathname.length - suffix.length);
+    if (deviceId.length === 0 || deviceId.includes('/')) {
+      sendJson(res, 400, { error: 'invalid_device_id' });
+      return;
+    }
+    const updated = registrar.setAdmissionStatus(deviceId, target);
+    if (!updated) {
+      sendJson(res, 404, { error: 'device_not_registered' });
+      return;
+    }
+    server.appendFleetAdmissionAudit(actor, deviceId, target);
+    sendJson(res, 200, { ok: true, deviceId, admissionStatus: updated.admissionStatus });
     return;
   }
 
@@ -646,7 +713,12 @@ async function handleFleetRegister(req: IncomingMessage, res: ServerResponse): P
     return;
   }
 
-  const verifyResult = verifyRegistrationRequest(body);
+  const nonceStore = getRegisteredFleetNonceStore();
+  if (!nonceStore) {
+    sendJson(res, 503, { error: 'fleet_registrar_not_enabled', reason: 'nonce_store_missing' });
+    return;
+  }
+  const verifyResult = verifyRegistrationRequest(body, { nonceStore });
   if (!verifyResult.ok) {
     // Specific reason lands in the response so a legitimate device that
     // misconfigured can debug. An attacker spamming random POSTs already
@@ -673,6 +745,44 @@ async function handleFleetRegister(req: IncomingMessage, res: ServerResponse): P
     log.warn({ err: err instanceof Error ? err.message : String(err), deviceId: payload.deviceId, msg: 'Fleet upsert failed' });
     sendJson(res, 500, { error: 'persist_failed' });
   }
+}
+
+/**
+ * Slice 4 — public GET /api/fleet/challenge?deviceId=<id>. Issues a
+ * single-use nonce + expiry, scoped to the deviceId. The device must echo
+ * this nonce in its subsequent `POST /register` payload.
+ *
+ * 400 when `deviceId` is missing/invalid. 503 when nonce store / registrar
+ * not enabled. 200 on success.
+ */
+async function handleFleetChallenge(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  // Mirror /register's gate: if the operator doesn't have registrar mode on,
+  // there's nothing to challenge for. 503 keeps gate-enumeration symmetric
+  // with the rest of the slice 1 + 2 fleet routes.
+  const registrar = getRegisteredFleetRegistrar();
+  const nonceStore = getRegisteredFleetNonceStore();
+  if (!registrar || !nonceStore) {
+    sendJson(res, 503, { error: 'fleet_registrar_not_enabled' });
+    return;
+  }
+
+  const deviceId = url.searchParams.get('deviceId');
+  if (!deviceId || deviceId.length === 0) {
+    sendJson(res, 400, { error: 'deviceId required' });
+    return;
+  }
+  // Cheap structural sanity — deviceId is 16 hex chars from
+  // `computeDeviceId`. Reject anything with whitespace or path separators
+  // before stamping a row.
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(deviceId)) {
+    sendJson(res, 400, { error: 'invalid_device_id' });
+    return;
+  }
+  const issued = nonceStore.issue(deviceId);
+  sendJson(res, 200, {
+    nonce: issued.nonce,
+    expiresAtMs: issued.expiresAtMs,
+  });
 }
 
 /** Short SHA-256 fingerprint of a public-key PEM, for the admin list view. */
@@ -746,11 +856,26 @@ async function handleFleetDeviceBackChannel(
     return;
   }
 
+  // Slice 4 — refuse revoked devices. Sig + identity all check out, but the
+  // admin has explicitly revoked this device's access. Returns 403 so the
+  // device sees it's been deliberately blocked, not just misconfigured.
+  if (device.admissionStatus === 'revoked') {
+    sendJson(res, 403, { error: 'device_revoked' });
+    return;
+  }
+
   if (action === 'inbox') {
     if (method !== 'GET') {
       sendJson(res, 405, { error: 'Method not allowed' });
       return;
     }
+    // Slice 4 — bump heartbeat. This is the highest-frequency device→
+    // registrar interaction (every ~25s under normal long-poll), so it's
+    // the canonical "device is alive" signal. Best-effort; a registry
+    // throw on update is non-fatal (the rest of the inbox flow continues).
+    try {
+      registrar.setLastSeen(deviceId);
+    } catch { /* heartbeat is best-effort */ }
     const url = new URL(pathname + (req.url?.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''), 'http://localhost');
     const waitSecRaw = url.searchParams.get('wait');
     const waitSec = waitSecRaw === null ? 25 : parseInt(waitSecRaw, 10);

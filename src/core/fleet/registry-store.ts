@@ -27,7 +27,14 @@ export interface DeviceRow {
   firstRegisteredAt: string;
   lastRegisteredAt: string;
   metadataJson: string | null;
+  /** Slice 4 — bumped on every inbox poll. ISO-8601 string or null. */
+  lastSeenAt: string | null;
+  /** Slice 4 — admission state machine. Default `approved` on first register. */
+  admissionStatus: AdmissionStatus;
 }
+
+/** Slice-4 admission state. Newly-registered devices default to `approved`. */
+export type AdmissionStatus = 'approved' | 'revoked';
 
 /** Constructor input for `RegistryStore`. */
 export interface RegistryStoreOptions {
@@ -53,6 +60,9 @@ export class RegistryStore {
   private readonly getStmt: Database.Statement;
   private readonly countStmt: Database.Statement;
 
+  private readonly setLastSeenStmt: Database.Statement;
+  private readonly setAdmissionStmt: Database.Statement;
+
   constructor(opts: RegistryStoreOptions) {
     this.db = new Database(opts.dbPath);
     this.db.pragma('journal_mode = WAL');
@@ -67,6 +77,12 @@ export class RegistryStore {
         metadata_json       TEXT
       )
     `);
+
+    // Slice-4 additive migrations. Same pattern as audit-trail.ts:135 —
+    // each ALTER is its own try/catch silencing only "already exists" /
+    // "duplicate column name" so re-boots don't re-add columns. All other
+    // SQLite errors re-throw.
+    this.addSlice4Columns();
 
     // Prepared statements — cheaper than re-parsing the SQL per request.
     // UPSERT keeps `first_registered_at` from the original row (uses COALESCE
@@ -90,7 +106,9 @@ export class RegistryStore {
         version_str         AS versionStr,
         first_registered_at AS firstRegisteredAt,
         last_registered_at  AS lastRegisteredAt,
-        metadata_json       AS metadataJson
+        metadata_json       AS metadataJson,
+        last_seen_at        AS lastSeenAt,
+        admission_status    AS admissionStatus
       FROM fleet_devices
       ORDER BY last_registered_at DESC
       LIMIT ?
@@ -104,9 +122,18 @@ export class RegistryStore {
         version_str         AS versionStr,
         first_registered_at AS firstRegisteredAt,
         last_registered_at  AS lastRegisteredAt,
-        metadata_json       AS metadataJson
+        metadata_json       AS metadataJson,
+        last_seen_at        AS lastSeenAt,
+        admission_status    AS admissionStatus
       FROM fleet_devices
       WHERE device_id = ?
+    `);
+
+    this.setLastSeenStmt = this.db.prepare(`
+      UPDATE fleet_devices SET last_seen_at = ? WHERE device_id = ?
+    `);
+    this.setAdmissionStmt = this.db.prepare(`
+      UPDATE fleet_devices SET admission_status = ? WHERE device_id = ?
     `);
 
     this.countStmt = this.db.prepare(`SELECT COUNT(*) AS n FROM fleet_devices`);
@@ -152,6 +179,26 @@ export class RegistryStore {
     return this.getStmt.get(deviceId) as DeviceRow | undefined;
   }
 
+  /**
+   * Slice 4 — bump the device's `last_seen_at` heartbeat column. Called by
+   * the inbox handler on every long-poll. Silently no-ops for unknown
+   * deviceIds — the inbox handler 404s those before this is reached.
+   */
+  setLastSeen(deviceId: string, now: Date = new Date()): void {
+    this.setLastSeenStmt.run(now.toISOString(), deviceId);
+  }
+
+  /**
+   * Slice 4 — flip admission state. Returns the updated row, or undefined
+   * if the device is not registered. Admin-driven; auditing is the caller's
+   * responsibility (admin routes append admission audit entries).
+   */
+  setAdmissionStatus(deviceId: string, status: AdmissionStatus): DeviceRow | undefined {
+    const r = this.setAdmissionStmt.run(status, deviceId);
+    if (r.changes === 0) return undefined;
+    return this.get(deviceId);
+  }
+
   /** Total row count — cheap. */
   count(): number {
     return (this.countStmt.get() as { n: number }).n;
@@ -160,5 +207,27 @@ export class RegistryStore {
   /** Close the underlying SQLite handle. */
   close(): void {
     this.db.close();
+  }
+
+  /**
+   * Slice-4 additive migrations — add `last_seen_at` (nullable, no default)
+   * and `admission_status` (default 'approved' so existing rows match slice
+   * 1+2 implicit-approval semantics). Each ALTER is its own try/catch
+   * silencing only the known-race messages — every other error re-throws.
+   */
+  private addSlice4Columns(): void {
+    const alters = [
+      "ALTER TABLE fleet_devices ADD COLUMN last_seen_at TEXT",
+      "ALTER TABLE fleet_devices ADD COLUMN admission_status TEXT NOT NULL DEFAULT 'approved'",
+    ];
+    for (const sql of alters) {
+      try {
+        this.db.exec(sql);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('duplicate column name') || msg.includes('already has a column named')) continue;
+        throw err;
+      }
+    }
   }
 }

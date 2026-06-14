@@ -30,10 +30,26 @@
 
 import { computeDeviceId, verifySignatureFromPem } from './device-identity.js';
 
+/**
+ * Structural shape of the nonce store the verifier needs. Implemented by
+ * `NonceStore` in `nonce-store.ts`; declared structurally here so the
+ * dashboard route handler (which only sees a runtime global) can pass it
+ * through without the concrete class type.
+ */
+export interface NonceStoreLike {
+  consume(deviceId: string, nonce: string): boolean;
+}
+
 /** The signed body the device sends to the registrar. */
 export interface RegistrationPayload {
-  /** Schema version. Slice 1 = 1. */
-  version: 1;
+  /**
+   * Schema version. Slice 4 bumps to 2 — payload now REQUIRES a `nonce`
+   * obtained from `GET /api/fleet/challenge`. Version-1 payloads are
+   * rejected by `verifyRegistrationRequest` with reason
+   * `unsupported_payload_version` so the registrar refuses old clients
+   * that don't do the challenge round-trip (replay-window hardening).
+   */
+  version: 2;
   /** SHA-256-derived id (matches the publicKey). */
   deviceId: string;
   /** Ed25519 SPKI PEM. The registrar uses this to verify the signature. */
@@ -44,6 +60,12 @@ export interface RegistrationPayload {
   version_str: string;
   /** Unix ms timestamp at register time. Replay-window-checked by registrar. */
   ts: number;
+  /**
+   * Single-use nonce from `GET /api/fleet/challenge`. Registrar's
+   * `NonceStore.consume()` removes it on first valid registration —
+   * a captured payload cannot be replayed (slice 4 hardening).
+   */
+  nonce: string;
   /**
    * Free-form metadata bag — slice 1 stores it verbatim, slice 3's admin
    * UI surfaces it. Required to be a flat string→string map (registrar
@@ -92,24 +114,36 @@ export type RegistrationVerifyResult =
  *
  * Replay window: 5 minutes either side of `now`. Larger window = more
  * attacker time; smaller = legitimate NTP drift breaks registration.
+ *
+ * **Slice-4 hardening — nonce check.** The payload now carries a `nonce`
+ * obtained from `GET /api/fleet/challenge`. We consume it atomically from
+ * the `NonceStore` AFTER the signature + deviceId checks pass. Replay of
+ * a captured valid registration finds no nonce on the second attempt and
+ * is rejected with `nonce_consumed_or_unknown`.
  */
 export function verifyRegistrationRequest(
   body: unknown,
-  now: number = Date.now(),
-  replayWindowMs: number = 5 * 60 * 1000,
+  opts: {
+    nonceStore: NonceStoreLike;
+    now?: number;
+    replayWindowMs?: number;
+  },
 ): RegistrationVerifyResult {
+  const now = opts.now ?? Date.now();
+  const replayWindowMs = opts.replayWindowMs ?? 5 * 60 * 1000;
   // Shape check first; rejects malformed bodies in one place.
   if (!body || typeof body !== 'object') return { ok: false, reason: 'body_not_object' };
   const env = body as Partial<RegistrationRequestBody>;
   if (!env.payload || typeof env.payload !== 'object') return { ok: false, reason: 'payload_missing' };
   if (typeof env.signature !== 'string' || env.signature.length === 0) return { ok: false, reason: 'signature_missing' };
   const p = env.payload as Partial<RegistrationPayload>;
-  if (p.version !== 1) return { ok: false, reason: 'unsupported_payload_version' };
+  if (p.version !== 2) return { ok: false, reason: 'unsupported_payload_version' };
   if (typeof p.deviceId !== 'string' || p.deviceId.length === 0) return { ok: false, reason: 'deviceId_missing' };
   if (typeof p.publicKeyPem !== 'string' || p.publicKeyPem.length === 0) return { ok: false, reason: 'publicKey_missing' };
   if (typeof p.hostname !== 'string') return { ok: false, reason: 'hostname_missing' };
   if (typeof p.version_str !== 'string') return { ok: false, reason: 'version_str_missing' };
   if (typeof p.ts !== 'number' || !Number.isFinite(p.ts)) return { ok: false, reason: 'ts_invalid' };
+  if (typeof p.nonce !== 'string' || p.nonce.length === 0) return { ok: false, reason: 'nonce_missing' };
 
   // Signature first (cheapest way to reject completely random/forged POSTs).
   const canonical = canonicalizePayload(p as RegistrationPayload);
@@ -122,11 +156,16 @@ export function verifyRegistrationRequest(
   const expectedId = computeDeviceId(p.publicKeyPem);
   if (expectedId !== p.deviceId) return { ok: false, reason: 'deviceId_mismatch' };
 
-  // Replay window check last (cheapest of the structural rejects but
-  // ordered after signature so an attacker spamming random POSTs can't
-  // narrow down the registrar's clock via timing).
+  // Replay window check.
   if (Math.abs(now - p.ts) > replayWindowMs) {
     return { ok: false, reason: 'ts_outside_window' };
+  }
+
+  // Nonce consume — slice 4. Ordered LAST so we don't burn a nonce on a
+  // request that would have been rejected for any other reason. Atomic:
+  // consume() removes the entry on first match so a replay finds nothing.
+  if (!opts.nonceStore.consume(p.deviceId, p.nonce)) {
+    return { ok: false, reason: 'nonce_consumed_or_unknown' };
   }
 
   return { ok: true, payload: p as RegistrationPayload };
