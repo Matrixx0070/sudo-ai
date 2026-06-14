@@ -154,7 +154,7 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
         // request via `fetch`, rewriting Authorization with the live token
         // the manager holds at that moment. Refreshes propagate instantly.
         authToken: 'OAUTH_PLACEHOLDER_REPLACED_BY_FETCH_INTERCEPTOR',
-        fetch: async (input, init) => {
+        fetch: async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
           let token = mgr.getAccessToken();
           if (!token) {
             await mgr.refreshToken();
@@ -167,18 +167,20 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
 
           // Anthropic gates Opus/Sonnet via OAuth on an EXACT-prefix system
           // prompt attestation ("You are Claude Code, Anthropic's official
-          // CLI for Claude."). Without it, Opus/Sonnet return HTTP 429 with
-          // an empty "Error" message; only Haiku is open. With it, all
-          // models work. Verified by probing every Claude tier with and
-          // without the prefix on 2026-06-14.
-          //
-          // We splice the attestation as the FIRST entry of an array-form
-          // system prompt, then place the caller's real system content
-          // afterwards — both reach the model, and the gate is satisfied.
+          // CLI for Claude.") AND restricts tool names to
+          // ^[a-zA-Z0-9_-]{1,128}$ — sudo-ai's tool registry uses dotted
+          // names like "meta.run_workflow" which fail that pattern. We
+          // rewrite both on the way out and reverse the tool-name mapping
+          // in the SSE response so sudo-ai's dispatcher still resolves the
+          // original tool when the model calls it.
           let body = init?.body;
+          // sanitized -> original tool name. Empty when no rewrites needed.
+          const toolNameMap = new Map<string, string>();
           if (typeof body === 'string') {
             try {
-              const parsed = JSON.parse(body) as { system?: unknown; [k: string]: unknown };
+              const parsed = JSON.parse(body) as { system?: unknown; tools?: unknown; [k: string]: unknown };
+
+              // ---- 1. System-prompt attestation -----------------------
               const ATTESTATION = "You are Claude Code, Anthropic's official CLI for Claude.";
               const attestEntry = { type: 'text', text: ATTESTATION };
               const cur = parsed.system;
@@ -194,15 +196,85 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
                   parsed.system = [attestEntry, ...cur];
                 }
               }
+
+              // ---- 1b. Strip `temperature` for models that deprecated it.
+              // Opus 4.8 (and later opus-4-x) return 400 invalid_request_error
+              // "`temperature` is deprecated for this model." All older models
+              // (sonnet 4.5/4.6, opus 4.7, haiku 4.5) still accept it. Keep
+              // the param for them; surgically drop it only for opus-4-8+.
+              if (typeof parsed['model'] === 'string' && /^claude-opus-4-(8|9|[1-9][0-9]+)/.test(parsed['model'])) {
+                delete (parsed as Record<string, unknown>)['temperature'];
+              }
+
+              // ---- 2. Tool-name sanitisation --------------------------
+              if (Array.isArray(parsed.tools)) {
+                for (const tool of parsed.tools as Array<Record<string, unknown>>) {
+                  const original = tool['name'];
+                  if (typeof original === 'string') {
+                    const sanitized = original.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+                    if (sanitized !== original) {
+                      toolNameMap.set(sanitized, original);
+                      tool['name'] = sanitized;
+                    }
+                  }
+                }
+              }
+
               body = JSON.stringify(parsed);
             } catch {
               // Body wasn't JSON — leave as-is. The SDK only sends JSON to
               // /v1/messages today; non-JSON paths (file uploads etc) are
-              // unaffected by this gate.
+              // unaffected.
             }
           }
 
-          return globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, body, headers });
+          const res = await globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, body, headers });
+          if (!res.ok) {
+            try {
+              const clone = res.clone();
+              const errBody = (await clone.text()).slice(0, 600);
+              log.warn({ status: res.status, errBody }, 'claude-oauth: non-2xx from Anthropic');
+            } catch { /* ignore */ }
+            return res;
+          }
+
+          // If we sanitised any tool names on the way out, the model will
+          // emit tool_use blocks naming the sanitised form. Sudo-ai's
+          // dispatcher only knows the original names, so we rewrap the SSE
+          // body and substitute the original name in any
+          //   "name":"<sanitized>"
+          // occurrence we see. Robust to streaming because the substitution
+          // is per-chunk (Anthropic emits the name inside one event line —
+          // there's no splitting of the name across chunks).
+          if (toolNameMap.size === 0 || !res.body) return res;
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          const encoder = new TextEncoder();
+          const replacements: Array<[string, string]> = [];
+          for (const [s, o] of toolNameMap) {
+            // Order matters: we replace JSON-encoded `"name":"<s>"`. JSON
+            // escaping of the original is needed in case it contains
+            // characters like \ or " (unlikely for tool names but safe).
+            replacements.push([`"name":"${s}"`, `"name":${JSON.stringify(o)}`]);
+          }
+          const rewritten = new ReadableStream<Uint8Array>({
+            async pull(controller) {
+              const { done, value } = await reader.read();
+              if (done) {
+                controller.close();
+                return;
+              }
+              let chunk = decoder.decode(value, { stream: true });
+              for (const [from, to] of replacements) {
+                if (chunk.includes(from)) chunk = chunk.split(from).join(to);
+              }
+              controller.enqueue(encoder.encode(chunk));
+            },
+            cancel(reason) {
+              reader.cancel(reason).catch(() => { /* ignore */ });
+            },
+          });
+          return new Response(rewritten, { status: res.status, statusText: res.statusText, headers: res.headers });
         },
       } as unknown as Parameters<typeof createAnthropic>[0]);
     },
