@@ -94,10 +94,16 @@ export interface ToolMetadata {
  */
 export interface AcpToolHost {
   describe(toolName: string): ToolMetadata | undefined;
+  /**
+   * Execute the tool. `sessionId` is threaded through so hosts that bridge to
+   * ACP `fs/*` or `terminal/*` client methods can include it in their params
+   * (gap #26 slice 3 — the spec requires sessionId on every client request).
+   */
   execute(
     toolName: string,
     args: Record<string, unknown>,
     signal: AbortSignal,
+    sessionId: string,
   ): Promise<{ success: boolean; output: string }>;
 }
 
@@ -340,7 +346,7 @@ export class BrainAcpBackend implements AcpBackend {
 
     let dispatchResult: { success: boolean; output: string };
     try {
-      dispatchResult = await tools.host.execute(call.name, call.args, signal);
+      dispatchResult = await tools.host.execute(call.name, call.args, signal, sessionId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       emit?.({
