@@ -119,6 +119,22 @@ export function buildUlimitWrappedCommand(command: string, policy: SandboxPolicy
   );
 }
 
+/**
+ * Resolve a child-process exit code from a rejected execFile/exec error.
+ *
+ * `promisify(execFile)` puts the numeric exit code on `error.code` (a number),
+ * NOT on `error.status` — `.status` is a `spawnSync`-only field and is
+ * `undefined` for async execFile. Reading `.status` alone silently collapses
+ * EVERY nonzero exit to 1 (e.g. a command that exits 7 is reported as 1).
+ * Order: numeric `.code` → numeric `.status` → 1. Callers must handle string
+ * `error.code` cases (ENOENT/ABORT_ERR) BEFORE calling this.
+ */
+export function exitCodeFromError(error: { code?: string | number; status?: number }): number {
+  if (typeof error.code === 'number') return error.code;
+  if (typeof error.status === 'number') return error.status;
+  return 1;
+}
+
 // ---------------------------------------------------------------------------
 // buildBwrapArgs
 // ---------------------------------------------------------------------------
@@ -308,8 +324,8 @@ export async function runInSandbox(
       return { stdout, stderr: stderr || 'Process aborted', exitCode: 130 };
     }
 
-    // Numeric exit code from the child process
-    const exitCode = typeof error.status === 'number' ? error.status : 1;
+    // Numeric exit code from the child process (execFile puts it on .code)
+    const exitCode = exitCodeFromError(error);
 
     return { stdout, stderr, exitCode };
   }
@@ -340,13 +356,14 @@ async function runUnsandboxed(
     const error = err as NodeJS.ErrnoException & {
       stdout?: string | Buffer;
       stderr?: string | Buffer;
+      code?: string | number;
       status?: number;
     };
     const outRaw = error.stdout;
     const errRaw = error.stderr;
     const stdout = typeof outRaw === 'string' ? outRaw : outRaw ? String(outRaw) : '';
     const stderr = typeof errRaw === 'string' ? errRaw : errRaw ? String(errRaw) : '';
-    const exitCode = typeof error.status === 'number' ? error.status : 1;
+    const exitCode = exitCodeFromError(error);
     return { stdout, stderr, exitCode };
   }
 }
