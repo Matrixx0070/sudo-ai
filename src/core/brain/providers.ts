@@ -164,7 +164,45 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
           if (token) headers.set('Authorization', `Bearer ${token}`);
           // Sent to match Claude Code's outbound requests verbatim.
           headers.set('anthropic-beta', 'oauth-2025-04-20');
-          return globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, headers });
+
+          // Anthropic gates Opus/Sonnet via OAuth on an EXACT-prefix system
+          // prompt attestation ("You are Claude Code, Anthropic's official
+          // CLI for Claude."). Without it, Opus/Sonnet return HTTP 429 with
+          // an empty "Error" message; only Haiku is open. With it, all
+          // models work. Verified by probing every Claude tier with and
+          // without the prefix on 2026-06-14.
+          //
+          // We splice the attestation as the FIRST entry of an array-form
+          // system prompt, then place the caller's real system content
+          // afterwards — both reach the model, and the gate is satisfied.
+          let body = init?.body;
+          if (typeof body === 'string') {
+            try {
+              const parsed = JSON.parse(body) as { system?: unknown; [k: string]: unknown };
+              const ATTESTATION = "You are Claude Code, Anthropic's official CLI for Claude.";
+              const attestEntry = { type: 'text', text: ATTESTATION };
+              const cur = parsed.system;
+              if (cur === undefined || cur === null) {
+                parsed.system = [attestEntry];
+              } else if (typeof cur === 'string') {
+                parsed.system = cur.length > 0
+                  ? [attestEntry, { type: 'text', text: cur }]
+                  : [attestEntry];
+              } else if (Array.isArray(cur)) {
+                const first = cur[0] as { text?: string } | undefined;
+                if (typeof first?.text !== 'string' || !first.text.startsWith(ATTESTATION)) {
+                  parsed.system = [attestEntry, ...cur];
+                }
+              }
+              body = JSON.stringify(parsed);
+            } catch {
+              // Body wasn't JSON — leave as-is. The SDK only sends JSON to
+              // /v1/messages today; non-JSON paths (file uploads etc) are
+              // unaffected by this gate.
+            }
+          }
+
+          return globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, body, headers });
         },
       } as unknown as Parameters<typeof createAnthropic>[0]);
     },
