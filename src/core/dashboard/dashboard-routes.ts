@@ -25,9 +25,15 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { checkHostHeader, type DashboardServer } from './dashboard-server.js';
+import {
+  checkHostHeader,
+  getRegisteredFleetRegistrar,
+  type DashboardServer,
+} from './dashboard-server.js';
 import type { DashboardConfig } from './dashboard-types.js';
 import { DASHBOARD_HTML } from './dashboard-html.js';
+import { verifyRegistrationRequest } from '../fleet/registration.js';
+import { createHash, createPublicKey } from 'node:crypto';
 
 const log = {
   info: (msg: object) => {
@@ -71,12 +77,28 @@ const ADMIN_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/admin/credentials',
   '/api/admin/logs',
   '/api/admin/debug-share',
+  '/api/admin/fleet/devices',
 ]);
 /** POST-only admin mutation routes (#28b slice 1) — Bearer-gated AND opt-in. */
 const POST_ROUTES: ReadonlySet<string> = new Set([
   '/api/admin/restart',
   '/api/admin/update',
   '/api/admin/model/set',
+]);
+
+/**
+ * Public POST routes (#28c slice 1) — bypass Bearer/OAuth auth. Currently
+ * only `/api/fleet/register`, where the request's Ed25519 signature IS the
+ * auth (verified against the embedded public key + payload).
+ *
+ * Host-header allowlist still applies (runs at step 0a, before this set is
+ * consulted). When registrar mode is OFF (no FleetRegistrarSource registered),
+ * the route returns 503 from inside the handler — there is no separate
+ * routing-table-level gate, so an attacker can't enumerate "registrar
+ * enabled?" via the 404-vs-405-vs-503 split.
+ */
+const PUBLIC_POST_ROUTES: ReadonlySet<string> = new Set([
+  '/api/fleet/register',
 ]);
 
 /**
@@ -215,6 +237,23 @@ export async function registerRoutes(
     return;
   }
 
+  // -------------------------------------------------------------------------
+  // PUBLIC POST routes (#28c slice 1) — bypass Bearer/OAuth auth because the
+  // request's Ed25519 signature IS the auth. Handled BEFORE the auth gate so
+  // devices that don't share the dashboard's Bearer token can still register.
+  // The Host-header allowlist still ran above (step 0a). When registrar mode
+  // is off, the handler returns 503 — no separate enumeration of the gate.
+  // -------------------------------------------------------------------------
+  if (method === 'POST' && PUBLIC_POST_ROUTES.has(pathname)) {
+    if (pathname === '/api/fleet/register') {
+      handleFleetRegister(req, res).catch((err: unknown) => {
+        log.warn({ err: err instanceof Error ? err.message : String(err), msg: 'Fleet register handler threw' });
+        if (!res.headersSent) sendJson(res, 500, { error: 'internal_error' });
+      });
+      return;
+    }
+  }
+
   const isKnownGet = GET_ROUTES.has(pathname);
   const isKnownAdminGet = ADMIN_GET_ROUTES.has(pathname);
   const isAnyGet = isKnownGet || isKnownAdminGet;
@@ -349,6 +388,35 @@ export async function registerRoutes(
       sendJson(res, 200, server.getDebugShareSnapshot(actor));
       return;
     }
+    if (pathname === '/api/admin/fleet/devices') {
+      const registrar = getRegisteredFleetRegistrar();
+      if (!registrar) {
+        sendJson(res, 503, {
+          error: 'fleet_registrar_not_enabled',
+          hint: 'Set SUDO_FLEET_REGISTRAR_MODE=1 to enable the fleet registrar',
+        });
+        return;
+      }
+      const limitRaw = url.searchParams.get('limit');
+      const limit = limitRaw === null ? 100 : parseInt(limitRaw, 10);
+      // Audit the read with non-secret metadata only (count, limit, actor).
+      const devices = registrar.list(Number.isFinite(limit) ? limit : 100);
+      server.appendFleetReadAudit(actor, devices.length, Number.isFinite(limit) ? limit : 100);
+      // metadata_json is an opaque JSON blob; parse defensively (a row from
+      // an older slice could have a malformed value and we don't want a
+      // single bad row to 500 the whole list endpoint).
+      const projected = devices.map((d) => ({
+        deviceId: d.deviceId,
+        hostname: d.hostname,
+        versionStr: d.versionStr,
+        firstRegisteredAt: d.firstRegisteredAt,
+        lastRegisteredAt: d.lastRegisteredAt,
+        publicKeyFingerprint: publicKeyFingerprint(d.publicKeyPem),
+        metadata: parseMetadataJsonSafe(d.metadataJson),
+      }));
+      sendJson(res, 200, { count: projected.length, devices: projected });
+      return;
+    }
     // Unreachable — pathname was vetted by `isKnownGet || isKnownAdminGet`
     // above. If a future path is added to either set without a matching
     // dispatch branch, throwing here surfaces the gap in the test suite
@@ -428,4 +496,84 @@ async function handleAdminPost(
 
   // Should never reach here — pathname was vetted by caller.
   sendJson(res, 404, { error: 'Not found' });
+}
+
+/**
+ * Handle `POST /api/fleet/register` (#28c slice 1). Public — no Bearer/OAuth.
+ * The Ed25519 signature over the canonical payload IS the auth. Verified
+ * against the embedded publicKey + deviceId = hash(publicKey) check +
+ * 5-minute replay window. When registrar mode is off, returns 503 so
+ * an attacker can't enumerate the gate via a 404-vs-503 split.
+ */
+async function handleFleetRegister(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const registrar = getRegisteredFleetRegistrar();
+  if (!registrar) {
+    sendJson(res, 503, {
+      error: 'fleet_registrar_not_enabled',
+      hint: 'Set SUDO_FLEET_REGISTRAR_MODE=1 on the registrar to accept device registrations',
+    });
+    return;
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (err: unknown) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : 'Invalid body' });
+    return;
+  }
+
+  const verifyResult = verifyRegistrationRequest(body);
+  if (!verifyResult.ok) {
+    // Specific reason lands in the response so a legitimate device that
+    // misconfigured can debug. An attacker spamming random POSTs already
+    // failed the signature check, so the leak surface is minimal.
+    sendJson(res, 400, { error: 'invalid_registration', reason: verifyResult.reason });
+    return;
+  }
+
+  const payload = verifyResult.payload;
+  try {
+    const row = registrar.upsert({
+      deviceId: payload.deviceId,
+      publicKeyPem: payload.publicKeyPem,
+      hostname: payload.hostname,
+      versionStr: payload.version_str,
+      ...(payload.metadata ? { metadata: payload.metadata } : {}),
+    });
+    sendJson(res, 200, {
+      ok: true,
+      deviceId: row.deviceId,
+      registeredAt: row.lastRegisteredAt,
+    });
+  } catch (err: unknown) {
+    log.warn({ err: err instanceof Error ? err.message : String(err), deviceId: payload.deviceId, msg: 'Fleet upsert failed' });
+    sendJson(res, 500, { error: 'persist_failed' });
+  }
+}
+
+/** Short SHA-256 fingerprint of a public-key PEM, for the admin list view. */
+function publicKeyFingerprint(publicKeyPem: string): string {
+  try {
+    const der = createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' });
+    return createHash('sha256').update(der).digest('hex').slice(0, 16);
+  } catch {
+    return '(invalid-pem)';
+  }
+}
+
+/** Parse a stored metadata_json blob safely; bad rows return null. */
+function parseMetadataJsonSafe(json: string | null): Record<string, string> | null {
+  if (json === null) return null;
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+    return out;
+  } catch {
+    return null;
+  }
 }

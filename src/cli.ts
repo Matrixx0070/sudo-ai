@@ -2561,6 +2561,48 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 8.5c Fleet device identity + registrar wiring (#28c slice 1).
+  //
+  // ALWAYS: load or create this device's Ed25519 identity at
+  //   DATA_DIR/device-identity.json. Cheap (one file read or one keypair gen
+  //   on first boot) and idempotent. Slice 2's back-channel will use the
+  //   same key to sign heartbeat/result messages, so we want it loaded
+  //   regardless of registrar mode.
+  //
+  // OPT-IN: when SUDO_FLEET_REGISTRAR_MODE=1, construct a RegistryStore over
+  //   DATA_DIR/fleet.db and register it under __sudoFleetRegistrar so the
+  //   dashboard's POST /api/fleet/register + GET /api/admin/fleet/devices
+  //   routes go live. Otherwise both routes 503.
+  //
+  // OPT-IN: when SUDO_FLEET_REGISTRAR_URL is set, POST a signed registration
+  //   to that URL after the dashboard finishes wiring (so devices behind
+  //   the same daemon can register with a remote registrar). Best-effort —
+  //   network errors log warn and boot continues.
+  // -------------------------------------------------------------------------
+  let fleetIdentity: import('./core/fleet/device-identity.js').DeviceIdentity | null = null;
+  let fleetRegistrar: import('./core/fleet/registry-store.js').RegistryStore | null = null;
+  try {
+    const { loadOrCreateDeviceIdentity, defaultIdentityPath } =
+      await import('./core/fleet/device-identity.js');
+    const dataDir = process.env['DATA_DIR'] ?? '/tmp';
+    fleetIdentity = loadOrCreateDeviceIdentity(defaultIdentityPath(dataDir));
+    log.info({ deviceId: fleetIdentity.deviceId }, 'Fleet device identity loaded (#28c slice 1)');
+
+    if (process.env['SUDO_FLEET_REGISTRAR_MODE'] === '1') {
+      const { RegistryStore, defaultRegistryDbPath } =
+        await import('./core/fleet/registry-store.js');
+      fleetRegistrar = new RegistryStore({ dbPath: defaultRegistryDbPath(dataDir) });
+      log.info({
+        dbPath: defaultRegistryDbPath(dataDir),
+        existingDevices: fleetRegistrar.count(),
+      }, 'Fleet registrar enabled (SUDO_FLEET_REGISTRAR_MODE=1) — POST /api/fleet/register + GET /api/admin/fleet/devices live');
+      registerShutdown(() => fleetRegistrar?.close());
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Fleet identity/registrar wiring failed (non-fatal) — /api/fleet/* routes will report fleet_registrar_not_enabled');
+  }
+
+  // -------------------------------------------------------------------------
   // 8.6 Observability dashboard (kill switch: SUDO_DASHBOARD_DISABLE=1)
   // -------------------------------------------------------------------------
   try {
@@ -2651,6 +2693,10 @@ async function boot(): Promise<void> {
       // is configured AND wiring succeeded; otherwise the dashboard's
       // default BasicAuthBackend handles auth.
       ...(oauthBackend ? { authBackend: oauthBackend } : {}),
+      // Fleet registrar (#28c slice 1). Only registered when
+      // SUDO_FLEET_REGISTRAR_MODE=1 AND the store constructed cleanly. When
+      // absent, fleet routes serve a structured 503.
+      ...(fleetRegistrar ? { fleetRegistrar } : {}),
     });
 
     initDashboard({
@@ -2673,6 +2719,56 @@ async function boot(): Promise<void> {
     }, 'Observability dashboard wired (SUDO_DASHBOARD_DISABLE=1 to disable; SUDO_ADMIN_POWERS=1 enables mutation endpoints; loopback-trust skips GET auth unless SUDO_DASHBOARD_INSECURE=1; SUDO_DASHBOARD_AUTH=nous|self-hosted swaps in OAuth/JWT backends)');
   } catch (err) {
     log.warn({ err: String(err) }, 'Dashboard wiring failed (non-fatal)');
+  }
+
+  // -------------------------------------------------------------------------
+  // 8.6b Fleet registrar client (#28c slice 1, device-side).
+  //
+  // Opt-in via SUDO_FLEET_REGISTRAR_URL. When set, this device sends a
+  // signed registration POST to that URL after the dashboard finishes
+  // wiring. Best-effort — failures log warn and boot continues, the next
+  // boot retries. Slice 2 will add a periodic heartbeat-re-register so the
+  // registrar's last_registered_at tracks liveness, not just last-boot.
+  // -------------------------------------------------------------------------
+  if (fleetIdentity && process.env['SUDO_FLEET_REGISTRAR_URL']) {
+    try {
+      const { registerWithRegistrar } = await import('./core/fleet/registrar-client.js');
+      // package.json version — best-effort, fall back to 'unknown' rather
+      // than failing registration if the read throws (very rare; package.json
+      // is bundled into dist/ but might be missing in some edge-case layouts).
+      let versionStr = 'unknown';
+      try {
+        const pkg = JSON.parse(
+          (await import('node:fs')).readFileSync(
+            (await import('node:path')).resolve(PROJECT_ROOT, 'package.json'),
+            'utf8',
+          ),
+        ) as { version?: string };
+        if (typeof pkg.version === 'string') versionStr = pkg.version;
+      } catch { /* keep 'unknown' */ }
+
+      const result = await registerWithRegistrar({
+        registrarUrl: process.env['SUDO_FLEET_REGISTRAR_URL'],
+        identity: fleetIdentity,
+        versionStr,
+      });
+      if (result.ok) {
+        log.info({
+          registrarUrl: process.env['SUDO_FLEET_REGISTRAR_URL'],
+          deviceId: result.deviceId,
+          registeredAt: result.registeredAt,
+        }, 'Registered with fleet registrar (#28c slice 1)');
+      } else {
+        log.warn({
+          registrarUrl: process.env['SUDO_FLEET_REGISTRAR_URL'],
+          reason: result.reason,
+          status: result.status,
+          detail: result.detail,
+        }, 'Fleet registration failed (non-fatal)');
+      }
+    } catch (err) {
+      log.warn({ err: String(err) }, 'Fleet registration wiring failed (non-fatal)');
+    }
   }
 
   // -------------------------------------------------------------------------
