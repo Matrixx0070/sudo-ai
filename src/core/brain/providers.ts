@@ -11,6 +11,12 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { LLMError } from '../shared/errors.js';
 import { createLogger } from '../shared/logger.js';
+import {
+  registerCustomProvidersFromEnv,
+  isCustomProvider,
+  getCustomProvider,
+  listCustomProviders,
+} from './custom-providers.js';
 
 const log = createLogger('brain:providers');
 
@@ -230,7 +236,12 @@ export async function initProviders(): Promise<void> {
       log.error({ provider: ALL_PROVIDERS[i], err: String(r.reason) }, 'Provider init failed');
     }
   });
-  log.info({ initialized: [...providerCache.keys()] }, 'Providers initialized');
+  // Pluggable providers (gap #27): opt-in via SUDO_CUSTOM_PROVIDERS. No-op when unset.
+  registerCustomProvidersFromEnv(new Set<string>(ALL_PROVIDERS));
+  log.info(
+    { initialized: [...providerCache.keys()], custom: listCustomProviders() },
+    'Providers initialized',
+  );
 }
 
 /**
@@ -279,6 +290,13 @@ export function getModel(modelString: string): ReturnType<AnyProvider> {
   }
 
   if (!ALL_PROVIDERS.includes(providerName)) {
+    // Pluggable custom providers (gap #27) — OpenAI-compatible, registered from
+    // SUDO_CUSTOM_PROVIDERS. Resolved here only after the built-in switch misses.
+    if (isCustomProvider(providerName)) {
+      const custom = getCustomProvider(providerName)!;
+      log.debug({ modelString, providerName, modelId, custom: true }, 'Resolved custom model handle');
+      return custom.chat(modelId) as ReturnType<AnyProvider>;
+    }
     throw new LLMError(
       `Unknown provider "${providerName}" in model string "${modelString}"`,
       'llm_unknown_provider',
@@ -324,6 +342,12 @@ export async function getModelWithKey(modelString: string, apiKey: string): Prom
   }
   const providerName = modelString.slice(0, slashIndex) as ProviderName;
   const modelId = modelString.slice(slashIndex + 1);
+
+  // Custom providers (gap #27) carry their own configured key — key rotation
+  // does not apply, so resolve them directly from the registry.
+  if (isCustomProvider(providerName)) {
+    return getCustomProvider(providerName)!.chat(modelId) as ReturnType<AnyProvider>;
+  }
 
   const provider = await buildProviderWithKey(providerName, apiKey);
   if (!provider) {

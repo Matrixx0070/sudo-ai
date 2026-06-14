@@ -380,6 +380,22 @@ GROQ_API_KEY=gsk_...
 OLLAMA_BASE_URL=http://localhost:11434
 ```
 
+#### Custom / pluggable providers (`SUDO_CUSTOM_PROVIDERS`)
+
+Beyond the nine built-in providers, register any number of **OpenAI-compatible** endpoints (vLLM, LM Studio, OpenRouter, a local server, a new vendor) without a code change — opt-in via a JSON array in `SUDO_CUSTOM_PROVIDERS`. Each entry adds a provider prefix usable in any model string (`<name>/<model-id>`), e.g. in `models.primary` / `SUDO_DEFAULT_MODEL`.
+
+```bash
+# apiKeyEnv references another env var (keeps the secret out of config); apiKey inline also works.
+SUDO_CUSTOM_PROVIDERS='[
+  {"name":"openrouter","baseURL":"https://openrouter.ai/api/v1","apiKeyEnv":"OPENROUTER_API_KEY"},
+  {"name":"localvllm","baseURL":"http://localhost:8000/v1","apiKey":"sk-local"}
+]'
+OPENROUTER_API_KEY=sk-or-...
+# Then use it: SUDO_DEFAULT_MODEL=openrouter/meta-llama/llama-3.3-70b-instruct
+```
+
+Per-entry fields: `name` (lowercase model-string-safe token, must not collide with a built-in), `baseURL` (http(s); plaintext http is warned about unless localhost), `apiKey` or `apiKeyEnv`, optional `compatibility` (`compatible` default / `strict`). The key (incl. via `apiKeyEnv`) is read **once at startup** — restart the process to pick up a rotated secret. Invalid entries are skipped with a warning — never fatal. Unset = no custom providers (byte-identical to before). Trust note: a `baseURL` receives prompts + the key, so it is treated as an operator-trusted endpoint.
+
 ### API Server
 
 ```bash
