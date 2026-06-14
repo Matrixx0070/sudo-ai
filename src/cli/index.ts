@@ -272,6 +272,46 @@ program
   });
 
 // ---------------------------------------------------------------------------
+// claude-oauth — Claude.ai subscription OAuth (PKCE) connector
+// ---------------------------------------------------------------------------
+
+const claudeOauthCmd = program
+  .command('claude-oauth')
+  .description('Manage Claude.ai subscription OAuth (PKCE) — login, status, refresh, disconnect');
+
+claudeOauthCmd
+  .command('login')
+  .description('Run the PKCE OAuth flow — prints URL, accepts pasted code')
+  .action(async () => {
+    const { runClaudeOAuthLogin } = await import('./commands/claude-oauth.js');
+    process.exit(await runClaudeOAuthLogin());
+  });
+
+claudeOauthCmd
+  .command('status')
+  .description('Show whether sudo-ai has a usable Claude OAuth token')
+  .action(async () => {
+    const { runClaudeOAuthStatus } = await import('./commands/claude-oauth.js');
+    process.exit(await runClaudeOAuthStatus());
+  });
+
+claudeOauthCmd
+  .command('refresh')
+  .description('Force a Claude OAuth token refresh now')
+  .action(async () => {
+    const { runClaudeOAuthRefresh } = await import('./commands/claude-oauth.js');
+    process.exit(await runClaudeOAuthRefresh());
+  });
+
+claudeOauthCmd
+  .command('disconnect')
+  .description('Wipe stored Claude OAuth credentials')
+  .action(async () => {
+    const { runClaudeOAuthDisconnect } = await import('./commands/claude-oauth.js');
+    process.exit(await runClaudeOAuthDisconnect());
+  });
+
+// ---------------------------------------------------------------------------
 // update — check for and apply SUDO-AI updates
 // ---------------------------------------------------------------------------
 

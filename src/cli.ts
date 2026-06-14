@@ -288,6 +288,31 @@ async function boot(): Promise<void> {
   } catch (err) {
     log.warn({ err: String(err) }, 'Claude token manager failed to initialize — using existing providers');
   }
+
+  // -------------------------------------------------------------------------
+  // 3.0b Claude OAuth (PKCE) Manager — independent of the `claude` CLI
+  //
+  // Boots the sudo-ai-owned PKCE OAuth connector. If the user has previously
+  // run `sudo-ai claude-oauth login` (or used the admin UI button), the store
+  // at <DATA_DIR>/claude-oauth.json contains a usable token: load it, start the
+  // background refresh loop, and the `claude-oauth` provider in providers.ts
+  // will be registered by initProviders() further down. If not, this is a
+  // no-op — login can happen later and reinitProvider() picks it up.
+  // -------------------------------------------------------------------------
+  try {
+    const { getClaudeOAuthManager } = await import('./core/brain/claude-oauth-manager.js');
+    const oauthMgr = getClaudeOAuthManager();
+    if (oauthMgr.isAvailable()) {
+      oauthMgr.startAutoRefresh();
+      registerShutdown(() => oauthMgr.stopAutoRefresh());
+      log.info('Claude OAuth (PKCE) manager active — claude-oauth/* models available');
+    } else {
+      log.info('Claude OAuth (PKCE) not connected — run `sudo-ai claude-oauth login` to enable');
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Claude OAuth manager failed to initialize — continuing without it');
+  }
+
   // -------------------------------------------------------------------------
   // 2.95 Local Gateway — start before Brain so the API is available
   // -------------------------------------------------------------------------
