@@ -4,12 +4,13 @@
  * HTTP route handlers for the SUDO-AI dashboard.
  *
  * Routes:
- *   GET /           — Dashboard HTML UI
- *   GET /api/stats  — DashboardStats JSON (Bearer-gated)
- *   GET /api/health — DashboardHealth JSON (Bearer-gated)
- *   GET /api/metrics — Prometheus text metrics (Bearer-gated)
+ *   GET /              — Dashboard HTML UI
+ *   GET /api/stats     — DashboardStats JSON (Bearer-gated)
+ *   GET /api/health    — DashboardHealth JSON (Bearer-gated)
+ *   GET /api/metrics   — Prometheus text metrics (Bearer-gated)
  *   GET /api/alignment — Alignment data (Bearer-gated)
  *   GET /api/activity?limit=50 — Recent activity (Bearer-gated)
+ *   GET /api/agents/live — FleetView live agent snapshot (Bearer-gated, gap #25 slice 1)
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -119,6 +120,12 @@ export function registerRoutes(
   if (pathname === '/api/activity') {
     const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
     sendJson(res, 200, server.getRecentActivity(limit));
+    return;
+  }
+
+  // Route: /api/agents/live — FleetView (gap #25 slice 1)
+  if (pathname === '/api/agents/live') {
+    sendJson(res, 200, server.getLiveAgents());
     return;
   }
 

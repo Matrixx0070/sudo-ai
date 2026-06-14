@@ -14,7 +14,15 @@
 
 import { createServer, type Server } from 'node:http';
 import { createLogger } from '../shared/logger.js';
-import { DashboardConfig, DashboardStats, DashboardHealth, AlignmentData, ActivityEvent } from './dashboard-types.js';
+import {
+  DashboardConfig,
+  DashboardStats,
+  DashboardHealth,
+  AlignmentData,
+  ActivityEvent,
+  LiveAgentsData,
+  AgentSwarmSource,
+} from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
 
 const log = createLogger('dashboard');
@@ -34,6 +42,7 @@ interface SudoRuntimeGlobals {
   __sudoBrain?: unknown;
   __sudoGateway?: unknown;
   __sudoAlignment?: AlignmentDigestSource;
+  __sudoAgentSwarm?: AgentSwarmSource;
 }
 const runtimeGlobals = globalThis as SudoRuntimeGlobals;
 
@@ -42,10 +51,12 @@ export function registerDashboardGlobals(parts: {
   brain?: unknown;
   gateway?: unknown;
   alignment?: AlignmentDigestSource;
+  agentSwarm?: AgentSwarmSource;
 }): void {
   if (parts.brain !== undefined) runtimeGlobals.__sudoBrain = parts.brain;
   if (parts.gateway !== undefined) runtimeGlobals.__sudoGateway = parts.gateway;
   if (parts.alignment !== undefined) runtimeGlobals.__sudoAlignment = parts.alignment;
+  if (parts.agentSwarm !== undefined) runtimeGlobals.__sudoAgentSwarm = parts.agentSwarm;
 }
 let lastCpuUsage = process.cpuUsage();
 let lastCpuTime = Date.now();
@@ -151,6 +162,8 @@ export class DashboardServer {
   /** Expose Prometheus-style metrics. */
   getMetrics(): Record<string, number> {
     const stats = this.getStats();
+    const fleet = this.getLiveAgents();
+    const fleetIdle = fleet.spawned.reduce((n, a) => n + (a.idle ? 1 : 0), 0);
     return {
       sudo_dashboard_uptime_seconds: stats.uptime,
       sudo_dashboard_requests_total: metrics.dashboardRequests,
@@ -163,6 +176,14 @@ export class DashboardServer {
       sudo_system_total_requests: stats.totalRequests,
       sudo_health_checks_ok: metrics.healthChecksOk,
       sudo_health_checks_fail: metrics.healthChecksFail,
+      // FleetView agent metrics (gap #25 slice 1). When no swarm is
+      // registered these are all zero — `getLiveAgents()` returns an
+      // empty default for the same reason `getAlignment()` does.
+      sudo_agents_spawned: fleet.spawned.length,
+      sudo_agents_idle: fleetIdle,
+      sudo_agents_slots_used: fleet.slotsUsed,
+      sudo_agents_slots_max: fleet.slotsMax,
+      sudo_agents_queue_waiting: fleet.queueWaiting,
     };
   }
 
@@ -176,6 +197,26 @@ export class DashboardServer {
       } catch { /* Fall through to default */ }
     }
     return { score: 0, signals: { veto: 0, discordance: 0, sleep: 0, epistemic: 0, commitment: 0, trust: 0, calibration: 0, brier: 0 } };
+  }
+
+  /**
+   * Get the live FleetView snapshot — what `/api/agents/live` serves
+   * (gap #25 slice 1). Reads from `__sudoAgentSwarm` registered via
+   * `registerDashboardGlobals`. When no source is registered or the source
+   * throws, returns a zero default so the endpoint never 500s.
+   */
+  getLiveAgents(): LiveAgentsData {
+    const empty: LiveAgentsData = { spawned: [], slotsUsed: 0, slotsMax: 0, queueWaiting: 0 };
+    const src = runtimeGlobals.__sudoAgentSwarm;
+    if (src && typeof src.getSnapshot === 'function') {
+      try {
+        const snap = src.getSnapshot();
+        if (snap) return snap;
+      } catch {
+        // Fall through to the empty default — never 500 the endpoint.
+      }
+    }
+    return empty;
   }
 
   /** Get recent activity events. */

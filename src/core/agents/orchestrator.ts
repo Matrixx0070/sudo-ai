@@ -14,6 +14,7 @@ import { AgentMessenger } from './messenger.js';
 import { ROLE_NAMES } from './roles.js';
 import type { AgentInstance, AgentRoleName, PipelineResult, SpawnConfig, Wave, WaveResult } from './types.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../tools/types.js';
+import type { SwarmSnapshot } from '../agent/swarm.js';
 
 const log = createLogger('agents:orchestrator');
 
@@ -121,6 +122,16 @@ export class MultiAgentOrchestrator {
     this.spawner.cancelAll();
     this.running = false;
     log.info('All agents and pipeline cancelled');
+  }
+
+  /**
+   * Read-only live-swarm snapshot for the FleetView dashboard endpoint
+   * (gap #25 slice 1). Pass-through to the AgentSpawner → AgentSwarm.
+   * Stable contract because this is what `__sudoAgentSwarm.getSnapshot()`
+   * resolves to when cli.ts registers the orchestrator with the dashboard.
+   */
+  getSnapshot(): SwarmSnapshot {
+    return this.spawner.getSwarmSnapshot();
   }
 }
 
