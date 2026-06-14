@@ -10,6 +10,7 @@ import {
   getCustomProvider,
   listCustomProviders,
   clearCustomProviders,
+  resolveCustomModel,
 } from '../../src/core/brain/custom-providers.js';
 import { getModel } from '../../src/core/brain/providers.js';
 
@@ -134,5 +135,60 @@ describe('getModel resolves custom providers', () => {
 
   it('still throws for an unknown, unregistered provider', () => {
     expect(() => getModel('nonexistent/model')).toThrow('Unknown provider');
+  });
+});
+
+describe('custom provider adapters (non-OpenAI shapes)', () => {
+  it('defaults to the openai adapter and resolves a handle', () => {
+    registerCustomProvider({ name: 'defadapter', baseURL: 'https://x/v1', apiKey: 'k' }, RESERVED);
+    const handle = resolveCustomModel('defadapter', 'm');
+    expect(handle).toBeTypeOf('object');
+    expect(handle).not.toBeNull();
+  });
+
+  it('registers an anthropic-shaped endpoint and resolves a native handle', () => {
+    const ok = registerCustomProvider(
+      { name: 'myanthropic', baseURL: 'https://anthropic-proxy.example/v1', apiKey: 'sk-test', adapter: 'anthropic' },
+      RESERVED,
+    );
+    expect(ok).toBe(true);
+    expect(isCustomProvider('myanthropic')).toBe(true);
+    expect(getCustomProvider('myanthropic')).not.toBeNull();
+    // Native handle resolution (provider(id)), not .chat(id).
+    const handle = resolveCustomModel('myanthropic', 'claude-x');
+    expect(handle).toBeTypeOf('object');
+    expect(handle).not.toBeNull();
+  });
+
+  it('registers a google-shaped endpoint and resolves a native handle', () => {
+    expect(
+      registerCustomProvider(
+        { name: 'mygemini', baseURL: 'https://gemini-proxy.example/v1', apiKey: 'sk-test', adapter: 'google' },
+        RESERVED,
+      ),
+    ).toBe(true);
+    expect(resolveCustomModel('mygemini', 'gemini-x')).not.toBeNull();
+  });
+
+  it('rejects an unknown adapter (from env JSON)', () => {
+    process.env['SUDO_CUSTOM_PROVIDERS'] = JSON.stringify([
+      { name: 'badadapter', baseURL: 'https://x/v1', apiKey: 'k', adapter: 'cohere' },
+    ]);
+    expect(registerCustomProvidersFromEnv(RESERVED)).toBe(0);
+    expect(isCustomProvider('badadapter')).toBe(false);
+  });
+
+  it('resolveCustomModel returns null for an unregistered provider', () => {
+    expect(resolveCustomModel('not-registered', 'm')).toBeNull();
+  });
+
+  it('getModel resolves an anthropic-adapter custom provider end-to-end', () => {
+    registerCustomProvider(
+      { name: 'anthro2', baseURL: 'https://anthropic-proxy.example/v1', apiKey: 'sk-test', adapter: 'anthropic' },
+      RESERVED,
+    );
+    const handle = getModel('anthro2/claude-x');
+    expect(handle).toBeTypeOf('object');
+    expect(handle).not.toBeNull();
   });
 });
