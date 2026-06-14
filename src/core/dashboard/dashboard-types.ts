@@ -188,8 +188,12 @@ export interface FleetDeviceRow {
   metadataJson: string | null;
   /** Slice 4 — heartbeat (bumped on inbox poll). */
   lastSeenAt: string | null;
-  /** Slice 4 — admission state. */
-  admissionStatus: 'approved' | 'revoked';
+  /**
+   * Slice 4 — admission state. Slice-4 follow-up adds `pending` for
+   * the explicit-admin-approval workflow opt-in via
+   * `SUDO_FLEET_ADMISSION_DEFAULT=pending`.
+   */
+  admissionStatus: 'approved' | 'revoked' | 'pending';
 }
 
 export interface FleetRegistrarSource {
@@ -204,8 +208,13 @@ export interface FleetRegistrarSource {
   count(): number;
   /** Slice 4 — bump heartbeat. */
   setLastSeen(deviceId: string, now?: Date): void;
-  /** Slice 4 — flip admission. */
-  setAdmissionStatus(deviceId: string, status: 'approved' | 'revoked'): FleetDeviceRow | undefined;
+  /**
+   * Slice 4 — flip admission. The admin admit/revoke endpoints only
+   * pass approved|revoked; the slice-4-follow-up upsert path stamps
+   * `pending` on new rows, but admins do not transition INTO pending
+   * (revoke is the way to block an already-admitted device).
+   */
+  setAdmissionStatus(deviceId: string, status: 'approved' | 'revoked' | 'pending'): FleetDeviceRow | undefined;
 }
 
 /**

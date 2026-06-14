@@ -66,8 +66,10 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ token }) => {
     if (!selected || busy) return;
     setBusy(true);
     try {
-      if (selected.admissionStatus === 'revoked') await fleet.admit(selected.deviceId);
-      else await fleet.revoke(selected.deviceId);
+      // Both `revoked` and `pending` need an admit to unblock dispatch.
+      // Only `approved` is the "currently allowed" state that revoke flips.
+      if (selected.admissionStatus === 'approved') await fleet.revoke(selected.deviceId);
+      else await fleet.admit(selected.deviceId);
     } finally {
       setBusy(false);
     }
@@ -75,7 +77,8 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ token }) => {
 
   const dispatchDisabled = !selected || busy
     || (kind === 'model.set' && modelArg.trim().length === 0)
-    || (selected?.admissionStatus === 'revoked'); // can't dispatch to revoked devices
+    // Slice 4 + follow-up: both revoked and pending block dispatch.
+    || (selected !== null && selected.admissionStatus !== 'approved');
 
   return (
     <Panel title={`Fleet (${fleet.devices.length} device${fleet.devices.length === 1 ? '' : 's'})`} wide>
@@ -160,6 +163,11 @@ const DeviceList: React.FC<DeviceListProps> = ({ devices, selectedDeviceId, onSe
                     revoked
                   </span>
                 )}
+                {d.admissionStatus === 'pending' && (
+                  <span className="inline-block px-[6px] py-[1px] rounded-[10px] text-[10px] font-bold bg-[#3d2900] text-[#d29922] border border-[#9e6a03]">
+                    pending
+                  </span>
+                )}
               </div>
               <div className="text-[10px] text-[#8b949e] break-all">{d.deviceId}</div>
               <div className="text-[10px] text-[#6e7681]">
@@ -234,17 +242,18 @@ const DispatchForm: React.FC<DispatchFormProps> = ({ selected, kind, setKind, mo
             className={`px-[12px] py-[4px] text-[12px] rounded border ${
               busy
                 ? 'bg-[#21262d] text-[#6e7681] border-[#30363d] cursor-not-allowed'
-                : selected.admissionStatus === 'revoked'
-                ? 'bg-[#0d4429] text-[#3fb950] border-[#1a7f37] cursor-pointer hover:opacity-80'
-                : 'bg-[#3d0000] text-[#f85149] border-[#b62324] cursor-pointer hover:opacity-80'
+                : selected.admissionStatus === 'approved'
+                ? 'bg-[#3d0000] text-[#f85149] border-[#b62324] cursor-pointer hover:opacity-80'
+                : 'bg-[#0d4429] text-[#3fb950] border-[#1a7f37] cursor-pointer hover:opacity-80'
             }`}
-            aria-label={selected.admissionStatus === 'revoked' ? 'Admit device' : 'Revoke device'}
+            aria-label={selected.admissionStatus === 'approved' ? 'Revoke device' : 'Admit device'}
           >
-            {selected.admissionStatus === 'revoked' ? 'Admit' : 'Revoke'}
+            {selected.admissionStatus === 'approved' ? 'Revoke' : 'Admit'}
           </button>
           <div className="text-[10px] text-[#6e7681] basis-full">
             → {selected.hostname} ({selected.deviceId.slice(0, 12)}…)
             {selected.admissionStatus === 'revoked' && ' · revoked — dispatch disabled'}
+            {selected.admissionStatus === 'pending' && ' · pending admit — dispatch disabled'}
           </div>
         </div>
       )}
