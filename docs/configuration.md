@@ -440,6 +440,19 @@ SUDO_ACP_MODEL=openai/gpt-4o   # Optional — pin a model; default is Brain smar
 
 Implements ACP `initialize` / `session/new` / `session/prompt` (with streamed `agent_message_chunk` updates) / `session/cancel`, protocol version 1. Slice 1 is **chat-only** over sudo's multi-provider Brain; tools/agent-loop, `fs`/`terminal` delegation, `session/load`, and permission round-trips are follow-up slices. stdout is the JSON-RPC channel — all logs go to stderr.
 
+### Exec backends (`SUDO_EXEC_BACKEND`)
+
+By default `system.exec` runs commands in a **bubblewrap** sandbox (Linux). Select an alternate, pluggable execution backend at runtime:
+
+```bash
+SUDO_EXEC_BACKEND=docker        # default: local (bwrap). Also accepts custom registered backends.
+SUDO_DOCKER_IMAGE=ubuntu:24.04  # image with /bin/bash (default ubuntu:24.04)
+SUDO_DOCKER_BIN=docker          # docker/podman binary (default docker)
+SUDO_DOCKER_USER=1000:1000      # optional --user to drop root inside the container
+```
+
+The **docker** backend runs each command in a throwaway container (`docker run --rm --init`) with the workspace bind-mounted at `/workspace`, the same env scrub + ulimit caps the bwrap runner uses, the same policy bind mounts (`extraReadOnlyBinds`/`extraWritableBinds`, symlink-resolved and denylist-validated), container memory/pid limits, and `--network none` (unless `policy.network` is `host`). Requires Docker on the host — when the binary is absent the command returns an honest exit 127. An unknown `SUDO_EXEC_BACKEND` value warns and falls back to bwrap (fail-safe). The `SUDO_SANDBOX_DISABLE=1` kill-switch takes precedence over backend selection — it always means unsandboxed host exec, never a backend. New backends can be added via `registerExecBackend()`. (SSH/Modal backends and per-policy backend selection are follow-ups.)
+
 ### Cross-Platform Control, Kill-Switches, Autonomy, Learning
 
 **Kill-switches (set to exactly `=1` to disable; see the full table + semantics in `docs/api-reference.md#kill-switches`):**
