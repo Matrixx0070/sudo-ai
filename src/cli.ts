@@ -1169,6 +1169,23 @@ async function boot(): Promise<void> {
     }
   }
 
+  // gap #22 — always-on read-only meta tools:
+  //   meta.classify-bash : static bash safety classifier (no subprocess)
+  //   meta.search-tools  : keyword search over the local ToolRegistry so
+  //                        the agent can find tools by capability without
+  //                        all schemas being injected at boot.
+  // Both are safe:'readonly' and require no approval, hence no flag.
+  try {
+    const { classifyBashTool } = await import('./core/tools/builtin/meta/classify-bash.js');
+    const { searchToolsTool, setSearchToolsRegistry } = await import('./core/tools/builtin/meta/search-tools.js');
+    registry.register(classifyBashTool);
+    setSearchToolsRegistry(registry);
+    registry.register(searchToolsTool);
+    log.info('gap #22 meta tools registered: meta.classify-bash + meta.search-tools');
+  } catch (err: unknown) {
+    log.warn({ err: String(err) }, 'gap #22 meta-tool wiring failed — tools not registered');
+  }
+
   // Theme 1 (learning flywheel, slice 1): wire TraceStore so the agent loop
   // records execution traces (routing / brain / tool outcomes) into a local
   // SQLite DB — the foundation the policy learner + skill-forge build on later.
