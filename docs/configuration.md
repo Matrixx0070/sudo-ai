@@ -406,6 +406,24 @@ SUDO_MCP_EXPOSE_TOOLS=a,b           # Optional comma-separated tool allowlist
 SUDO_MCP_ALLOW_SHELL=1              # Optional; system.shell-exec needs BOTH this AND SUDO_MCP_EXPOSE_TOOLS to include it
 ```
 
+### ACP Agent (stdio) — Agent Client Protocol
+
+Run sudo-ai as an [Agent Client Protocol](https://agentclientprotocol.com) agent so any ACP-compatible editor (e.g. Zed) can drive it. The editor launches the agent as a subprocess and speaks JSON-RPC 2.0 over newline-delimited stdio. Build first (`pnpm build`), then point the editor at `node dist/core/acp/acp-cli.js` (or `pnpm acp`). Example Zed `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "sudo-ai": { "command": "node", "args": ["dist/core/acp/acp-cli.js"] }
+  }
+}
+```
+
+```bash
+SUDO_ACP_MODEL=openai/gpt-4o   # Optional — pin a model; default is Brain smart-routing
+```
+
+Implements ACP `initialize` / `session/new` / `session/prompt` (with streamed `agent_message_chunk` updates) / `session/cancel`, protocol version 1. Slice 1 is **chat-only** over sudo's multi-provider Brain; tools/agent-loop, `fs`/`terminal` delegation, `session/load`, and permission round-trips are follow-up slices. stdout is the JSON-RPC channel — all logs go to stderr.
+
 ### Cross-Platform Control, Kill-Switches, Autonomy, Learning
 
 **Kill-switches (set to exactly `=1` to disable; see the full table + semantics in `docs/api-reference.md#kill-switches`):**
