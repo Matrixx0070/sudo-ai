@@ -32,19 +32,27 @@ import {
 /**
  * Executes ACP turns. Injected so the protocol layer stays decoupled from the
  * Brain / agent loop and is testable with a stub.
+ *
+ * Slice 2 (gap #26) adds the optional `emit` callback so the backend can drive
+ * the full set of `session/update` variants (tool_call, tool_call_update,
+ * thought) — slice 1 backends only used `onChunk` for agent_message_chunk.
+ * `emit` is wired by AcpServer to `conn.notify('session/update', ...)` with the
+ * sessionId attached.
  */
 export interface AcpBackend {
   /** Create a new conversation session; returns its id. */
   createSession(params: NewSessionParams): Promise<string> | string;
   /**
    * Run ONE prompt turn. Stream assistant text via `onChunk`; honor `signal`
-   * for session/cancel. Resolve with the StopReason.
+   * for session/cancel. Resolve with the StopReason. Emit structured updates
+   * (tool_call / tool_call_update / thought) via `emit` when configured.
    */
   prompt(args: {
     sessionId: string;
     text: string;
     onChunk: (text: string) => void;
     signal: AbortSignal;
+    emit?: (update: import('./types.js').SessionUpdate) => void;
   }): Promise<StopReason>;
 }
 
@@ -178,11 +186,29 @@ export class AcpServer {
             };
             this.conn.notify('session/update', notification);
           },
+          emit: (update) => {
+            const notification: SessionUpdateNotification = { sessionId, update };
+            this.conn.notify('session/update', notification);
+          },
         }),
       };
     } finally {
       this.active.delete(sessionId);
     }
+  }
+
+  /**
+   * Issue a `session/request_permission` request to the connected client and
+   * await its response (gap #26 slice 2). Wired into the backend's tools.
+   * requestPermission injection at construction time by acp-main.ts.
+   */
+  async requestPermission(
+    params: import('./types.js').RequestPermissionParams,
+  ): Promise<import('./types.js').RequestPermissionResult> {
+    return this.conn.sendRequest<import('./types.js').RequestPermissionResult>(
+      'session/request_permission',
+      params,
+    );
   }
 
   private requireInitialized(): void {

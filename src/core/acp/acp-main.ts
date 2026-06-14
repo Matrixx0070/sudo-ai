@@ -6,11 +6,18 @@
  * (SUDO_LOG_STDERR / DOTENV_CONFIG_QUIET) is set, so the logger and dotenv here
  * keep stdout clean for the JSON-RPC channel.
  *
- * Slice 1 is chat-only: drives sudo-ai's multi-provider Brain and streams
- * `agent_message_chunk` updates. Tools / agent-loop, fs + terminal delegation,
- * session/load, and permission round-trips are follow-up slices.
+ * Slice 1 was chat-only. Slice 2 (gap #26) lands the protocol pieces for
+ * tool dispatch + ACP `session/request_permission` round-trip + the new
+ * `session/update` variants (tool_call, tool_call_update, thought). The
+ * tool-dispatch path is live in BrainAcpBackend whenever a tool host is
+ * injected; this entry intentionally does NOT inject one yet because a
+ * standalone ACP subprocess does not boot the cli.ts dependencies (provider
+ * keys, session manager, hook manager, plugin loader) that the real
+ * ToolRegistry needs. Wiring a host (or a curated read-only subset) is
+ * slice 3 work, alongside fs/terminal client methods.
  *
- * Optional env: SUDO_ACP_MODEL — pin a model string (default: Brain smart-routing).
+ * Optional env:
+ *   SUDO_ACP_MODEL — pin a model string (default: Brain smart-routing).
  */
 
 import { ConfigLoader } from '../config/loader.js';
@@ -33,7 +40,9 @@ export async function runAcpServer(): Promise<void> {
   const version = process.env['npm_package_version'] ?? '0.0.0';
   const model = process.env['SUDO_ACP_MODEL'] || undefined;
 
-  const backend = new BrainAcpBackend(brain, model);
+  // Slice 2: no real tool host wired here yet (see file header). The backend
+  // collapses to slice 1 chat-only behavior when `tools` is omitted.
+  const backend = new BrainAcpBackend(brain, model ? { model } : {});
   const conn = new JsonRpcConnection(process.stdin, process.stdout);
   const server = new AcpServer(conn, backend, { agentName: 'sudo-ai', agentVersion: version });
   server.start();

@@ -48,6 +48,20 @@ export class AcpRpcError extends Error {
 export type RequestHandler = (method: string, params: unknown) => Promise<unknown> | unknown;
 export type NotificationHandler = (method: string, params: unknown) => void | Promise<void>;
 
+/**
+ * Outbound-request resolver — the agent originates a JSON-RPC request to the
+ * client (e.g. `session/request_permission`) and awaits the matched response.
+ * The pending map keys on the agent-chosen id; an inbound message carrying
+ * `id` + (`result` | `error`) resolves or rejects the entry.
+ *
+ * Used by ACP slice 2 (gap #26) to round-trip the permission gate.
+ */
+interface PendingOutbound {
+  resolve: (value: unknown) => void;
+  reject: (err: AcpRpcError) => void;
+  method: string;
+}
+
 export class JsonRpcConnection {
   private buffer = '';
   private started = false;
@@ -55,6 +69,9 @@ export class JsonRpcConnection {
     throw new AcpRpcError(JsonRpcErrorCode.MethodNotFound, 'no request handler installed');
   };
   private notificationHandler: NotificationHandler = () => { /* ignore */ };
+  /** In-flight outbound requests waiting on a client response, keyed by id. */
+  private readonly pendingOutbound = new Map<string, PendingOutbound>();
+  private outboundCounter = 0;
 
   constructor(
     private readonly input: Readable,
@@ -80,6 +97,29 @@ export class JsonRpcConnection {
   /** Send a JSON-RPC notification (no id, no response expected). */
   notify(method: string, params: unknown): void {
     this.send({ jsonrpc: '2.0', method, params });
+  }
+
+  /**
+   * Originate a JSON-RPC request to the peer and await its response. Returns
+   * the `result` field, throws an {@link AcpRpcError} on `error`. Used by ACP
+   * slice 2 for `session/request_permission` (agent → client).
+   *
+   * The id is generated internally with a monotonic counter scoped to this
+   * connection; never collides with inbound ids because outbound ids use the
+   * `out-<n>` prefix and the inbound dispatcher only acts on incoming
+   * `method`-carrying messages (response messages are identified by the
+   * presence of `result`/`error` and routed to {@link pendingOutbound}).
+   */
+  async sendRequest<T = unknown>(method: string, params: unknown): Promise<T> {
+    const id = `out-${++this.outboundCounter}`;
+    return new Promise<T>((resolve, reject) => {
+      this.pendingOutbound.set(id, {
+        method,
+        resolve: (v) => resolve(v as T),
+        reject,
+      });
+      this.send({ jsonrpc: '2.0', id, method, params });
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -112,6 +152,48 @@ export class JsonRpcConnection {
       msg = JSON.parse(line) as Record<string, unknown>;
     } catch {
       this.send({ jsonrpc: '2.0', id: null, error: { code: JsonRpcErrorCode.ParseError, message: 'Parse error' } });
+      return;
+    }
+
+    // Response to an outbound request we originated. Per JSON-RPC 2.0 a
+    // response MUST carry either `result` or `error` — without those it is a
+    // malformed REQUEST (no `method`), which falls through to the
+    // InvalidRequest branch below. Verifier HIGH 3: a null-id "response" is
+    // an error echo from the peer itself and is dropped silently to avoid
+    // spec-violating loops.
+    const looksLikeResponse =
+      msg &&
+      typeof msg === 'object' &&
+      msg['jsonrpc'] === '2.0' &&
+      typeof msg['method'] !== 'string' &&
+      ('result' in msg || 'error' in msg);
+    if (looksLikeResponse) {
+      const idVal = msg['id'];
+      if (idVal === null) return; // spec error echo, drop
+      if (typeof idVal === 'string' || typeof idVal === 'number') {
+        const idStr = String(idVal);
+        const pending = this.pendingOutbound.get(idStr);
+        if (pending) {
+          this.pendingOutbound.delete(idStr);
+          if ('error' in msg && msg['error']) {
+            const errObj = msg['error'] as { code?: number; message?: string; data?: unknown };
+            pending.reject(
+              new AcpRpcError(
+                typeof errObj.code === 'number' ? errObj.code : JsonRpcErrorCode.InternalError,
+                typeof errObj.message === 'string' ? errObj.message : 'peer error',
+                errObj.data,
+              ),
+            );
+          } else {
+            pending.resolve(msg['result']);
+          }
+          return;
+        }
+        // Response to an id we never issued — stale or unknown, drop silently.
+        return;
+      }
+      // Response with no id at all — malformed, drop silently rather than
+      // echoing an error back (peer can't correlate it anyway).
       return;
     }
 
