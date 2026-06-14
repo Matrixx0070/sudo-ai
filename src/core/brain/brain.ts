@@ -11,6 +11,7 @@ import { LLMError } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
 import { getModel, getModelWithKey, initProviders } from './providers.js';
+import { isCustomProvider } from './custom-providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
 import { sortToolEntries, isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages, markLastToolForCache } from './prompt-cache-discipline.js';
 import { warnOnDuplicateToolNames } from './tool-name-collision.js';
@@ -1282,6 +1283,15 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     callParams: Record<string, unknown>,
   ): Promise<Awaited<ReturnType<typeof generateText>>> {
     const provider = profile.provider;
+
+    // Custom providers (gap #27) carry a single configured key and have no
+    // rotation profiles — skip rotation entirely so numbered _API_KEY_N vars
+    // for a custom name don't spin the loop with keys that never get used.
+    if (isCustomProvider(provider)) {
+      callParams.model = getModel(profile.id);
+      return generateText(callParams as Parameters<typeof generateText>[0]);
+    }
+
     const keyCount = this._ensureRotationKeys(provider);
 
     // Single-key / env path — unchanged behavior.
