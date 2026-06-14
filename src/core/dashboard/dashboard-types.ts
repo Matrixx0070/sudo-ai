@@ -180,20 +180,26 @@ export type AuthResult =
 /**
  * Pluggable authentication backend (Hermes precedent: `plugins/dashboard_auth/
  * {basic,nous,self_hosted}/`). Each backend inspects the request and returns
- * a structural `AuthResult`. The dashboard ships ONE built-in backend in
- * slice 2 — `BasicAuthBackend` wrapping the existing Bearer/?token logic —
- * plus the contract. OAuth backends are slice 4+.
+ * a structural `AuthResult`.
+ *
+ * **Built-ins (slice 2 + slice 4):**
+ *  - `BasicAuthBackend` — Bearer/?token (slice 2, `createBasicAuthBackend`).
+ *  - OAuth JWT — Hermes `nous` / `self_hosted` parity (slice 4,
+ *    `createOAuthJwtBackend`, `createNousAuthBackend`,
+ *    `createSelfHostedAuthBackend`). Verifies HS256/RS256 JWTs using
+ *    `node:crypto` (no new deps); see `oauth-jwt-backend.ts`.
  *
  * **Invariant:** `authenticate` is called AFTER the Host-header allowlist
  * guard, so the request's Host header has already been validated against
  * `DashboardConfig.hostAllowlist`. Backends that build a URL from
  * `req.headers.host` can rely on it being one of the allowlisted values.
  *
- * **Sync vs async:** the return type is currently `AuthResult` (sync only)
- * and the route dispatcher does NOT await. Any custom backend registered
- * today must complete synchronously. When OAuth backends land in slice 4+,
- * the interface will widen to `AuthResult | Promise<AuthResult>` and the
- * dispatcher will become async — that is the known breaking-change point.
+ * **Sync vs async (widened in slice 4):** the return type is now
+ * `AuthResult | Promise<AuthResult>` so OAuth backends can run async JWT
+ * verification (RS256 via `crypto.verify`). The route dispatcher awaits
+ * the result. Sync backends (Bearer) keep returning a plain `AuthResult`
+ * and incur no overhead — `Promise.resolve(syncResult)` collapses in the
+ * dispatcher's `await`.
  */
 export interface AuthBackend {
   /** Stable name (e.g. "basic", "oauth-nous") — surfaces in audit + logs. */
@@ -201,17 +207,16 @@ export interface AuthBackend {
   /**
    * Inspect the request and return whether it should be authorized for this
    * endpoint. `allowQueryToken` is honored by backends that support
-   * query-string token fallback (Bearer does for known GETs; OAuth ignores).
+   * query-string token fallback (Bearer does for known GETs; OAuth backends
+   * MUST ignore it because a JWT in the URL would leak into access logs,
+   * referrers, and browser history).
    *
-   * **Slice-4 breaking-change note:** when OAuth backends land they will need
-   * async JWT verification, at which point this returns `AuthResult |
-   * Promise<AuthResult>` and `authenticateRequest` becomes async. Slice 2
-   * keeps it sync to avoid a non-load-bearing dispatch refactor.
+   * May return a `Promise<AuthResult>`; the dispatcher awaits.
    */
   authenticate(
     req: import('node:http').IncomingMessage,
     opts: { allowQueryToken: boolean },
-  ): AuthResult;
+  ): AuthResult | Promise<AuthResult>;
 }
 
 /**

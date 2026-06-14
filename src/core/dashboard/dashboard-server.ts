@@ -160,6 +160,14 @@ export function createBasicAuthBackend(authToken: string): AuthBackend {
 /** Re-export AuthBackend / AuthResult / DashboardBindMode for downstream consumers. */
 export type { AuthBackend, AuthResult, DashboardBindMode };
 
+/** Re-export OAuth JWT backend factories (slice 4 — Hermes nous/self-hosted parity). */
+export {
+  createOAuthJwtBackend,
+  createNousAuthBackend,
+  createSelfHostedAuthBackend,
+} from './oauth-jwt-backend.js';
+export type { JwtAlg, OAuthJwtBackendOptions } from './oauth-jwt-backend.js';
+
 /**
  * Compare a request's `Host:` header against the allowlist (port stripped,
  * case-normalized). Returns `true` if the request should proceed to auth,
@@ -240,20 +248,22 @@ export class DashboardServer {
 
     this.server = createServer((req, res) => {
       metrics.dashboardRequests++;
-      // Defensive try/catch: synchronous throws from `registerRoutes` (e.g.
-      // unexpected URL-parse paths, future code regressions) would otherwise
-      // surface as uncaught exceptions and can crash the supervised process.
-      // `server.on('error', ...)` is for bind/socket errors only; it does
-      // NOT intercept request-handler throws.
-      try {
-        registerRoutes(req, res, this, this.config);
-      } catch (err: unknown) {
+      // Defensive try/catch + .catch: synchronous throws OR rejected promises
+      // from `registerRoutes` (slice 4 made it async for OAuth JWT) would
+      // otherwise surface as uncaught exceptions and can crash the supervised
+      // process. `server.on('error', ...)` is for bind/socket errors only.
+      const handleErr = (err: unknown): void => {
         metrics.dashboardErrors++;
         log.error({ err: err instanceof Error ? err.message : String(err), url: req.url ?? '/' }, 'Dashboard request handler threw');
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'internal_error' }));
         }
+      };
+      try {
+        Promise.resolve(registerRoutes(req, res, this, this.config)).catch(handleErr);
+      } catch (err: unknown) {
+        handleErr(err);
       }
     });
 
