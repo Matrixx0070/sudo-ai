@@ -28,8 +28,23 @@ import { randomUUID } from 'node:crypto';
 /** Persisted command states. */
 export type CommandStatus = 'queued' | 'in_flight' | 'completed' | 'failed' | 'timeout';
 
-/** Slice-2 command kinds. New kinds extend this union. */
-export type CommandKind = 'model.get' | 'model.set';
+/**
+ * Fleet command kinds dispatched over the back-channel.
+ *
+ * - Slice 2 (#28c): `model.get`, `model.set` (brain-backed)
+ * - Slice 1 of gap #28d: `autonomy.pause`, `autonomy.resume`, `autonomy.status`
+ *   (WakeSleepCycle-backed; the queue is opaque so no schema migration was
+ *   needed — new kinds are device-side dispatch only).
+ *
+ * Adding new kinds is intentionally a device-side change with NO queue
+ * schema migration — see the file header for the contract.
+ */
+export type CommandKind =
+  | 'model.get'
+  | 'model.set'
+  | 'autonomy.pause'
+  | 'autonomy.resume'
+  | 'autonomy.status';
 
 /** Command body. */
 export interface CommandBody {

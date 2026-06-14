@@ -22,7 +22,7 @@ const log = createLogger('autonomy:wake-sleep-cycle');
 // ---------------------------------------------------------------------------
 
 /** Overall state of the wake/sleep cycle. */
-export type CycleState = 'idle' | 'awake' | 'working' | 'sleeping';
+export type CycleState = 'idle' | 'awake' | 'working' | 'sleeping' | 'paused';
 
 /** Handler that does the actual work for a goal. */
 export type WorkHandler = (goal: GoalV2) => Promise<void>;
@@ -73,6 +73,14 @@ export class WakeSleepCycle {
   private readonly maxConcurrentGoals: number;
   private readonly terminationLegacyFn: (() => Promise<void>) | null;
   private activeWorkCount = 0;
+  /**
+   * When true, `tick()` short-circuits without dispatching goals. Distinct
+   * from `stop()`: the interval keeps firing so resume() is a single state
+   * flip — no need to re-create the timer or re-enter the constructor. This
+   * is how gap #28d turns a remote `autonomy.pause` admin command into a
+   * fleet-wide pause without losing in-flight work.
+   */
+  private paused = false;
 
   /**
    * @param goalEngine    - GoalEngineV2 instance that persists goals.
@@ -151,6 +159,12 @@ export class WakeSleepCycle {
    */
   async tick(): Promise<void> {
     if (this.state === 'idle') return;
+    if (this.paused) {
+      // Keep the interval armed but skip dispatch. resume() flips paused
+      // back to false; the next tick then proceeds normally.
+      this.state = 'paused';
+      return;
+    }
 
     let readyGoals: GoalV2[];
     try {
@@ -202,6 +216,48 @@ export class WakeSleepCycle {
    */
   getStatus(): CycleState {
     return this.state;
+  }
+
+  // -------------------------------------------------------------------------
+  // Pause / resume (gap #28d slice 1)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Pause the autonomous loop without tearing down the interval. tick() will
+   * short-circuit until resume() is called. Idempotent. Distinct from stop():
+   * no termination-legacy hook fires, no in-flight goal is cancelled.
+   *
+   * Returns the snapshot the admin caller (or fleet command handler) should
+   * echo back so the fleet UI can show the device's pause state.
+   */
+  pause(): { state: CycleState; paused: true; activeCount: number } {
+    if (!this.paused) {
+      this.paused = true;
+      // Only flip the visible state if we're not currently in the middle of
+      // dispatchGoal() — that path manages state itself and a forced 'paused'
+      // here would race with its `this.state = 'awake'` reset.
+      if (this.state !== 'working') this.state = 'paused';
+      log.info({}, 'WakeSleepCycle paused');
+    }
+    return { state: this.state, paused: true, activeCount: this.activeWorkCount };
+  }
+
+  /**
+   * Resume from a paused state. Idempotent. If the interval was torn down
+   * (stop() was called), resume is a no-op — callers must start() instead.
+   */
+  resume(): { state: CycleState; paused: false; activeCount: number } {
+    if (this.paused) {
+      this.paused = false;
+      if (this.intervalId !== null && this.state === 'paused') this.state = 'awake';
+      log.info({}, 'WakeSleepCycle resumed');
+    }
+    return { state: this.state, paused: false, activeCount: this.activeWorkCount };
+  }
+
+  /** True iff pause() was called and resume() has not yet flipped it back. */
+  isPaused(): boolean {
+    return this.paused;
   }
 
   // -------------------------------------------------------------------------

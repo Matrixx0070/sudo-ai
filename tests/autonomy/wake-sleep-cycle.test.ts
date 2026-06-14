@@ -162,4 +162,75 @@ describe('WakeSleepCycle', () => {
     expect(cycle.getStatus()).toBe('idle');
     await expect(cycle.tick()).resolves.toBeUndefined(); // idle tick is a no-op
   });
+
+  // --- Gap #28d slice 1 ----------------------------------------------------
+
+  it('pause() short-circuits tick() without dispatching ready goals', async () => {
+    const engine = makeEngine();
+    const worked: string[] = [];
+    const cycle = track(new WakeSleepCycle(engine, null, async (goal: GoalV2) => {
+      worked.push(goal.id);
+      engine.completeGoal(goal.id);
+    }, { tickIntervalMs: 60_000 }));
+
+    engine.setGoal({ title: 'do work' });
+    cycle.start();
+    await sleep(50); // immediate tick from start() runs first
+    expect(worked).toHaveLength(1);
+
+    // Pause then drop in a new goal — manual tick must NOT dispatch.
+    const snap = cycle.pause();
+    expect(snap.paused).toBe(true);
+    expect(cycle.isPaused()).toBe(true);
+    engine.setGoal({ title: 'second goal — should be skipped while paused' });
+    await cycle.tick();
+    expect(worked).toHaveLength(1); // still one
+    expect(cycle.getStatus()).toBe('paused');
+  });
+
+  it('resume() lets the next tick dispatch the previously-skipped goal', async () => {
+    const engine = makeEngine();
+    const worked: string[] = [];
+    const cycle = track(new WakeSleepCycle(engine, null, async (goal: GoalV2) => {
+      worked.push(goal.id);
+      engine.completeGoal(goal.id);
+    }, { tickIntervalMs: 60_000 }));
+
+    cycle.start();
+    cycle.pause();
+    const skipped = engine.setGoal({ title: 'queued during pause' });
+    await cycle.tick();
+    expect(worked).toHaveLength(0);
+
+    const snap = cycle.resume();
+    expect(snap.paused).toBe(false);
+    expect(cycle.isPaused()).toBe(false);
+    await cycle.tick();
+    expect(worked).toEqual([skipped.id]);
+  });
+
+  it('pause()/resume() are idempotent and stable across repeated calls', () => {
+    const engine = makeEngine();
+    const cycle = track(new WakeSleepCycle(engine, null, async () => {}, { tickIntervalMs: 60_000 }));
+    cycle.start();
+    cycle.pause();
+    cycle.pause(); // no state thrash
+    expect(cycle.isPaused()).toBe(true);
+    cycle.resume();
+    cycle.resume();
+    expect(cycle.isPaused()).toBe(false);
+  });
+
+  it('resume() on a stopped cycle does not re-arm — start() is the only way back', () => {
+    const engine = makeEngine();
+    const cycle = track(new WakeSleepCycle(engine, null, async () => {}, { tickIntervalMs: 60_000 }));
+    cycle.start();
+    cycle.pause();
+    cycle.stop();
+    expect(cycle.getStatus()).toBe('idle');
+    cycle.resume();
+    // resume() flipped paused=false but the interval is gone, so state stays 'idle'.
+    expect(cycle.getStatus()).toBe('idle');
+    expect(cycle.isPaused()).toBe(false);
+  });
 });

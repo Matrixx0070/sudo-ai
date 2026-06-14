@@ -2765,6 +2765,11 @@ async function boot(): Promise<void> {
   // boot retries. Slice 2 will add a periodic heartbeat-re-register so the
   // registrar's last_registered_at tracks liveness, not just last-boot.
   // -------------------------------------------------------------------------
+  // Gap #28d slice 1 — hoisted so §9.2 autonomy wiring can late-bind the
+  // WakeSleepCycle adapter via fleetExecutorHandle.setAutonomy(...). The
+  // executor is built here in §8.6b; the cycle in §9.2 — by then this var
+  // is whatever the inner if() assigned (handle, or still null on opt-out).
+  let fleetExecutorHandle: import('./core/fleet/fleet-executor.js').FleetExecutorHandle | null = null;
   if (fleetIdentity && process.env['SUDO_FLEET_REGISTRAR_URL']) {
     try {
       const { registerWithRegistrar } = await import('./core/fleet/registrar-client.js');
@@ -2821,6 +2826,12 @@ async function boot(): Promise<void> {
           identity: fleetIdentity,
           ...(brainHandle ? { brain: brainHandle } : {}),
         });
+        // Gap #28d slice 1 — hoist into outer scope so §9.2 autonomy block
+        // can late-bind the WakeSleepCycle adapter via handle.setAutonomy().
+        // The autonomy cycle is built strictly AFTER the fleet executor: v5
+        // module init (which creates goalEngine) runs in §9, and the cycle
+        // itself is constructed in §9.2.
+        fleetExecutorHandle = handle;
         log.info({ deviceId: fleetIdentity.deviceId, hasBrain: brainHandle !== undefined }, 'Fleet executor started (#28c slice 2)');
         registerShutdown(async () => { await handle.stop(); });
       }
@@ -2953,6 +2964,28 @@ async function boot(): Promise<void> {
       );
       wakeSleep.start();
       registerShutdown(() => wakeSleep.stop());
+
+      // Gap #28d slice 1 — late-bind the autonomy adapter onto the fleet
+      // executor (if §8.6b opted into fleet mode). The executor was started
+      // earlier in boot when the cycle did not yet exist; this setter is the
+      // contract that lets admin `autonomy.{pause,resume,status}` commands
+      // reach the live WakeSleepCycle without re-ordering boot. Detach on
+      // shutdown so a torn-down cycle can't be invoked by a late-arriving
+      // inbox poll.
+      if (fleetExecutorHandle) {
+        const cycle = wakeSleep;
+        fleetExecutorHandle.setAutonomy({
+          pause: () => cycle.pause(),
+          resume: () => cycle.resume(),
+          status: () => ({
+            state: cycle.getStatus(),
+            paused: cycle.isPaused(),
+            activeCount: cycle.activeCount,
+          }),
+        });
+        registerShutdown(() => { fleetExecutorHandle?.setAutonomy(undefined); });
+        log.info({ deviceId: process.env['SUDO_INSTANCE_ID'] }, 'Autonomy adapter wired into fleet executor (#28d slice 1)');
+      }
 
       // The event loop persists plans/self-initiated actions in mind.db. It
       // opens its own connection to the same file — safe alongside MindDB's
