@@ -110,6 +110,21 @@ async function drainMicrotasks(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
 }
 
+// File-level env baseline (defense against future describe-block splits
+// into separate files run in parallel workers). Captures the slice-4 and
+// slice-5 opt-in flags BEFORE any describe block can mutate them, and
+// restores at file-end no matter what individual describe-level cleanup
+// did. Vitest's top-level beforeAll/afterAll fire once per file, outside
+// any describe scope, so they're the safe outer guard. (Verifier MED-2.)
+const FILE_PREV_FEEDBACK = process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
+const FILE_PREV_BLOCK = process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'];
+afterAll(() => {
+  if (FILE_PREV_FEEDBACK === undefined) delete process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
+  else process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = FILE_PREV_FEEDBACK;
+  if (FILE_PREV_BLOCK === undefined) delete process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'];
+  else process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = FILE_PREV_BLOCK;
+});
+
 describe('executeToolCalls — verify-gate slice 1 + slice 2 integration', () => {
   // Guard against permission-override pollution from any other test in the
   // suite — PermissionManager is a process-wide singleton. Without this,
@@ -746,5 +761,197 @@ describe('executeToolCalls — verify-gate slice 4 (agent-facing feedback)', () 
     const stored = String(session.messages[0]?.content ?? '');
     expect(stored).toBe('ok:coder.write-file');
     expect(stored).not.toMatch(/VERIFY-GATE CRITIC/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 5 — critic-reject hard block (SUDO_VERIFY_GATE_CRITIC_BLOCK=1)
+//
+// Closes the campaign's last "soft → hard" gradient. Slice 3 ships the
+// critic observable-only; slice 5 lets an operator opt in to refusing
+// any `'reject'` invoke before `toolRegistry.execute` runs.
+//
+// Branches covered:
+//   VGI-18  reject + block on            → tool BLOCKED (registry.execute
+//                                          never called), `[VerifyGate] Tool
+//                                          call blocked: ... — critic reject`
+//                                          message stored, critic event still
+//                                          fired (slice 3 contract preserved)
+//   VGI-19  reject + block off           → tool runs (slice-3 observable
+//                                          contract intact when flag absent)
+//   VGI-20  approve + block on           → tool runs (only `'reject'` triggers
+//                                          the block; soft-skips + approvals
+//                                          stay observable per slice-3 cadence)
+//   VGI-21  reject + block on + feedback → BLOCK wins; the block message
+//          on (precedence)                 itself names the critic rejection,
+//                                          so the slice-4 prefix is NOT
+//                                          prepended on top
+// ---------------------------------------------------------------------------
+
+describe('executeToolCalls — verify-gate slice 5 (critic-reject hard block)', () => {
+  function recordingCritic(
+    review: CriticPassLike['review'],
+  ): { critic: CriticPassLike; reviews: Array<Parameters<CriticPassLike['review']>[0]> } {
+    const reviews: Array<Parameters<CriticPassLike['review']>[0]> = [];
+    const critic: CriticPassLike = {
+      review: async (input) => {
+        reviews.push(input);
+        return review(input);
+      },
+    };
+    return { critic, reviews };
+  }
+
+  // PREV_BLOCK + PREV_FEEDBACK captured inside beforeAll so an earlier
+  // test file that mutated env and didn't clean up can't silently
+  // contaminate our restore baseline (verifier MED-2 on slice 4).
+  let PREV_BLOCK: string | undefined;
+  let PREV_FEEDBACK: string | undefined;
+  beforeAll(() => {
+    PREV_BLOCK = process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'];
+    PREV_FEEDBACK = process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
+  });
+  beforeEach(() => {
+    PermissionManager.getInstance().resetAll();
+    delete process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'];
+    delete process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
+  });
+  afterAll(() => {
+    if (PREV_BLOCK === undefined) delete process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'];
+    else process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = PREV_BLOCK;
+    if (PREV_FEEDBACK === undefined) delete process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
+    else process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = PREV_FEEDBACK;
+  });
+
+  it('VGI-18 reject + block on → tool BLOCKED, structured message stored, critic event still fired', async () => {
+    process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = '1';
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const session = makeSession();
+    const { critic, reviews } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'old_string not present in file',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false, // grounding observable (so we reach the critic path, not the grounding-block path)
+      critic,
+    );
+
+    // (a) Tool was not executed.
+    expect(executed()).toEqual([]);
+
+    // (b) Block message landed in session history in the slice-2 shape so
+    //     downstream observers can catch both block paths with one regex.
+    expect(session.messages).toHaveLength(1);
+    const stored = String(session.messages[0]?.content ?? '');
+    expect(stored).toBe('[VerifyGate] Tool call blocked: coder.write-file — critic reject (old_string not present in file)');
+    expect(stored).toMatch(/^\[VerifyGate\] Tool call blocked: \S+ — critic reject \(/);
+
+    // (c) Critic was reached (slice-3 contract preserved: events fire BEFORE the block decision).
+    expect(reviews).toHaveLength(1);
+    await drainMicrotasks();
+    const invoked = events.find((e) => e.event === 'verify_gate_critic_invoked');
+    expect(invoked?.ctx).toMatchObject({
+      toolName: 'coder.write-file',
+      verdict: 'reject',
+      rationale: 'old_string not present in file',
+    });
+  });
+
+  it('VGI-19 reject + block OFF → tool runs (slice-3 observable contract intact when flag absent)', async () => {
+    // Flag explicitly NOT set — beforeEach already deleted it.
+    const { registry, executed } = makeRegistry();
+    const { hooks } = makeHooks();
+    const session = makeSession();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'old_string not present in file',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    const stored = String(session.messages[0]?.content ?? '');
+    expect(stored).toBe('ok:coder.write-file');
+    expect(stored).not.toMatch(/Tool call blocked/);
+  });
+
+  it('VGI-20 approve + block on → tool runs (only invoked reject triggers the block)', async () => {
+    process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = '1';
+    const { registry, executed } = makeRegistry();
+    const { hooks } = makeHooks();
+    const session = makeSession();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'approve',
+      reason: 'invoked',
+      rationale: 'edit looks reversible',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'foo' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    const stored = String(session.messages[0]?.content ?? '');
+    expect(stored).toBe('ok:coder.write-file');
+    expect(stored).not.toMatch(/Tool call blocked/);
+  });
+
+  it('VGI-21 reject + block on + feedback on → BLOCK wins, no slice-4 prefix on top', async () => {
+    // Both flags on: precedence is BLOCK > FEEDBACK because the block
+    // message itself already names the critic rejection. Prepending
+    // [VERIFY-GATE CRITIC REJECT] on top would be doubly redundant.
+    process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = '1';
+    process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = '1';
+    const { registry, executed } = makeRegistry();
+    const { hooks } = makeHooks();
+    const session = makeSession();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'old_string not present in file',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual([]);
+    const stored = String(session.messages[0]?.content ?? '');
+    // Block message present, but no slice-4 prefix anywhere.
+    expect(stored.startsWith('[VerifyGate] Tool call blocked: coder.write-file — critic reject (')).toBe(true);
+    expect(stored).not.toMatch(/VERIFY-GATE CRITIC REJECT/);
   });
 });

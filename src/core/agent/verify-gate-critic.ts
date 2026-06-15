@@ -97,8 +97,12 @@ const DEFAULT_BUDGET = 3;
 const SESSION_TRACKER_CAP = 1_000;
 /** Cap on serialized-arg payload sent to the critic so the prompt stays small. */
 const ARGS_PREVIEW_MAX = 1_000;
-/** Cap on the critic's rationale length passed downstream (defensive against runaway output). */
-const RATIONALE_MAX = 280;
+/**
+ * Cap on the critic's rationale length passed downstream (defensive against
+ * runaway output). Exported so tests can pin clamp behaviour against the
+ * source of truth instead of duplicating the magic literal.
+ */
+export const RATIONALE_MAX = 280;
 
 /** Parses `SUDO_VERIFY_GATE_CRITIC_BUDGET`; floors to >=0 (0 disables LLM critic invocations). */
 export function readCriticBudget(env: NodeJS.ProcessEnv = process.env): number {
@@ -108,6 +112,48 @@ export function readCriticBudget(env: NodeJS.ProcessEnv = process.env): number {
   if (!/^\d+$/.test(trimmed)) return DEFAULT_BUDGET;
   const n = Number.parseInt(trimmed, 10);
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_BUDGET;
+}
+
+/**
+ * Slice 5 opt-in: when set to `1`, a `'reject'` verdict (invoked critic
+ * only — soft-skips and errors are still observable-only) becomes a HARD
+ * BLOCK: the tool is refused before `toolRegistry.execute` runs, and the
+ * agent sees a structured `[VerifyGate] Tool call blocked` message in the
+ * exact shape slice 2 already uses for grounding mismatches.
+ *
+ * Default OFF. Master `SUDO_VERIFY_GATE=1` is still required for the
+ * gate to escalate at all. When this flag is OFF, slice-3 / slice-4
+ * behaviour is unchanged (verdict only ships via hook + optional
+ * feedback prefix). When BOTH this flag AND `..._CRITIC_FEEDBACK=1`
+ * are set, the BLOCK wins — the block message itself names the critic
+ * rejection, so prepending the feedback line on top would be doubly
+ * redundant. Block takes precedence.
+ *
+ * Observable note: when slice 5 hard-blocks a call, the `tool_result_persist`
+ * hook event is NOT emitted (the early return in `executeSingleToolCall`
+ * bypasses the `commit` closure in `executeToolCalls`). Downstream alert
+ * routers that correlate `verify_gate_critic_invoked` with
+ * `tool_result_persist` will see the critic event (slice-3 contract
+ * preserved) but no persist event for the blocked call. Listen for the
+ * `[VerifyGate] Tool call blocked` message shape instead.
+ */
+export function readCriticBlockEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] === '1';
+}
+
+/**
+ * Render the structured "tool blocked because critic rejected" message
+ * that lands in session history when slice 5 hard-blocks a call.
+ *
+ * Mirrors slice 2's `[VerifyGate] Tool call blocked: <tool> — grounding
+ * mismatch (<reason>)` shape so a single regex in downstream observers
+ * (alignment digest, alert routers) catches both block paths.
+ */
+export function renderCriticBlockMessage(toolName: string, rationale: string | null | undefined): string {
+  const trimmed = typeof rationale === 'string' ? rationale.trim() : '';
+  const clamped = trimmed.slice(0, RATIONALE_MAX);
+  const reason = clamped.length === 0 ? '(no rationale)' : clamped;
+  return `[VerifyGate] Tool call blocked: ${toolName} — critic reject (${reason})`;
 }
 
 /**
