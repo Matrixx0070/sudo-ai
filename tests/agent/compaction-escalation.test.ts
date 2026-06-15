@@ -148,6 +148,49 @@ describe('escalateCompaction (gap #14 TIER 2/3)', () => {
     expect(session.messages.at(-1)?.role).toBe('user');
   });
 
+  it('per-session circuit breaker: session A tripped → session B unaffected', async () => {
+    // 3 throw-everything escalateCompaction calls on session A pushes its
+    // autoCompact counter to the maxFailures=3 limit; the 4th call must
+    // short-circuit autoCompact (no brain call for TIER 2). Session B,
+    // starting fresh, must still hit autoCompact and succeed.
+    const throwBrain = new RecordingBrain();
+    for (let i = 0; i < 6; i++) throwBrain.queueResponse(new Error('down'));
+
+    const sessionA: MutableSession = { id: 'A', messages: makeFatHistory() };
+    const stateA = makeState();
+
+    // Trip the breaker on session A (3 turns, each: autoCompact throws then
+    // fullCompact throws → 2 brain calls per turn → 6 total).
+    for (let i = 0; i < 3; i++) {
+      sessionA.messages = makeFatHistory(); // restore fat each turn
+      await escalateCompaction(throwBrain, sessionA as never, stateA);
+    }
+    expect(throwBrain.calls).toHaveLength(6);
+
+    // Now use a healthy brain on session A — autoCompact is circuit-broken,
+    // so only fullCompact runs (one brain call).
+    const healthyA = new RecordingBrain();
+    healthyA.queueResponse(okResponse('A nuclear summary'));
+    sessionA.messages = makeFatHistory();
+    await escalateCompaction(healthyA, sessionA as never, stateA);
+    expect(healthyA.calls).toHaveLength(1);
+    expect(sessionA.messages[0]?.content).toContain('[FullCompact');
+
+    // Session B is fresh — autoCompact runs (one brain call), succeeds,
+    // TIER 3 is skipped.
+    const healthyB = new RecordingBrain();
+    healthyB.queueResponse(okResponse('B short summary'));
+    const sessionB: MutableSession = { id: 'B', messages: makeFatHistory() };
+    await escalateCompaction(healthyB, sessionB as never, makeState());
+    expect(healthyB.calls).toHaveLength(1);
+    expect(
+      sessionB.messages.some((m) => m.content.includes('[AutoCompact summary]')),
+    ).toBe(true);
+    expect(
+      sessionB.messages.some((m) => m.content.includes('[FullCompact')),
+    ).toBe(false);
+  });
+
   it('fail-open: both autoCompact and fullCompact throw → history untouched', async () => {
     const brain = new RecordingBrain();
     brain.queueResponse(new Error('autoCompact down'));
