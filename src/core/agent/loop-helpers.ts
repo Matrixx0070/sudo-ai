@@ -141,6 +141,21 @@ export interface HookEmitterLike {
 }
 
 /**
+ * Minimal contract the AgentLoop consumes from a verify-gate implementation.
+ * Mirrors `ConfidenceGate.evaluate()` from verify-gate.ts so the helper does
+ * not need to import the concrete class (keeps loop-helpers free of DB deps).
+ */
+export interface VerifyGateLike {
+  evaluate(toolName: string): {
+    decision: 'allow' | 'escalate' | 'unknown';
+    confidence: number | null;
+    threshold: number;
+    samples: number;
+    reason: string;
+  };
+}
+
+/**
  * Fire a hook event without letting hook errors propagate.
  * Any exception is swallowed so a bad hook never crashes the agent loop.
  */
@@ -478,6 +493,8 @@ async function executeSingleToolCall(
   toolRegistry: ToolRegistryLike,
   security?: SecurityGuardLike,
   feedbackMemory?: FeedbackMemoryLike,
+  verifyGate?: VerifyGateLike,
+  hooks?: HookEmitterLike,
 ): Promise<SingleCallResult> {
   emit({ type: 'tool-call', name: tc.name, args: tc.arguments, toolId: tc.id });
   log.info({ tool: tc.name, toolCallId: tc.id, sessionId: ctx.sessionId }, 'Executing tool call');
@@ -498,6 +515,32 @@ async function executeSingleToolCall(
     log.warn({ tool: tc.name, sessionId: ctx.sessionId }, deniedMsg);
     emit({ type: 'tool-result', name: tc.name, result: deniedMsg, toolId: tc.id });
     return { tc, resultContent: deniedMsg };
+  }
+
+  // Verify-gate (slice 1: confidence dispatcher).
+  // Observable-only: 'escalate' decisions log + emit a hook event but still
+  // execute, because slices 2 (grounding) and 3 (auto-critic) aren't wired
+  // yet — blocking here without a fallback would brick the loop.
+  if (verifyGate) {
+    try {
+      const gate = verifyGate.evaluate(tc.name);
+      if (gate.decision === 'escalate') {
+        log.warn(
+          { tool: tc.name, confidence: gate.confidence, threshold: gate.threshold, samples: gate.samples, sessionId: ctx.sessionId },
+          'verify-gate: escalation signaled (slice 1: observable-only, executing anyway)',
+        );
+        void safeEmit(hooks, 'verify_gate_escalated', {
+          sessionId: ctx.sessionId,
+          toolName: tc.name,
+          confidence: gate.confidence,
+          threshold: gate.threshold,
+          samples: gate.samples,
+          reason: gate.reason,
+        });
+      }
+    } catch (err) {
+      log.warn({ tool: tc.name, err: String(err) }, 'verify-gate: evaluate threw — failing open');
+    }
   }
 
   let resultContent: string;
@@ -628,6 +671,7 @@ export async function executeToolCalls(
   hooks?: HookEmitterLike,
   sandboxManager?: SandboxManagerLike,
   feedbackMemory?: FeedbackMemoryLike,
+  verifyGate?: VerifyGateLike,
 ): Promise<void> {
   const policyFromSandbox = sandboxManager?.getPolicyFor(state.sessionId);
   // Provision workspace if sandboxManager is available — ensures directory exists before bwrap tries to mount it.
@@ -724,7 +768,7 @@ export async function executeToolCalls(
 
   // Phase 2a: leading sequential block.
   for (const tc of leadingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks);
     commit(res);
   }
 
@@ -738,19 +782,19 @@ export async function executeToolCalls(
     for (let i = 0; i < parallel.length; i += cap) {
       const chunk = parallel.slice(i, i + cap);
       const results = await Promise.all(
-        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory)),
+        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks)),
       );
       // Append in original order so the LLM context stays coherent.
       for (const res of results) commit(res);
     }
   } else if (parallel.length === 1) {
-    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory);
+    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks);
     commit(res);
   }
 
   // Phase 2c: trailing sequential block.
   for (const tc of trailingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks);
     commit(res);
   }
 
