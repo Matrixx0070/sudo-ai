@@ -2315,6 +2315,18 @@ async function boot(): Promise<void> {
   // Assigned after section 8.5 once finalAgentLoop is available.
   let selfBuildDepsRef: import('./core/self-build/orchestrator.js').SelfBuildDeps | null = null;
 
+  // Single dedup window for heartbeat content. See heartbeat-dedup.ts —
+  // suppresses replays of the same heartbeat payload inside the window so
+  // the agent doesn't burn turns acknowledging duplicates.
+  const { HeartbeatDedup, DEFAULT_HEARTBEAT_DEDUP_WINDOW_MS } = await import('./core/cron/heartbeat-dedup.js');
+  const heartbeatDedupWindowMs = Number(process.env['HEARTBEAT_DEDUP_WINDOW_MS'])
+    || DEFAULT_HEARTBEAT_DEDUP_WINDOW_MS;
+  const heartbeatDedup = new HeartbeatDedup(heartbeatDedupWindowMs);
+  log.info(
+    { windowMin: Math.round(heartbeatDedupWindowMs / 60_000), disabled: process.env['HEARTBEAT_DEDUP'] === '0' },
+    'Heartbeat dedup window initialised',
+  );
+
   /**
    * Payload runner: executes a cron job payload as an isolated agent turn.
    * Creates or reuses a dedicated session for the cron job.
@@ -2377,6 +2389,25 @@ async function boot(): Promise<void> {
       if (!isWithinActiveHours(new Date(), tz, start, end)) {
         log.debug({ jobId: job.id }, 'Heartbeat skipped — outside active hours');
         return;
+      }
+
+      // Dedup guard: drop ticks whose normalised content matches one we
+      // already processed inside the window. The bot's audit identified
+      // this replay as the #1 recurring failure — MEMORY.md was dominated
+      // by 100+ identical heartbeat acknowledgments per session. Disabled
+      // by setting HEARTBEAT_DEDUP=0.
+      if (process.env['HEARTBEAT_DEDUP'] !== '0') {
+        const verdict = heartbeatDedup.check(payload.message);
+        if (!verdict.shouldProcess) {
+          const ageMin = verdict.firstSeenAt
+            ? Math.round((Date.now() - verdict.firstSeenAt) / 60_000)
+            : 0;
+          log.info(
+            { jobId: job.id, hash: verdict.hash, firstSeenMinAgo: ageMin },
+            'Heartbeat skipped — duplicate content already processed in window',
+          );
+          return;
+        }
       }
     }
 
