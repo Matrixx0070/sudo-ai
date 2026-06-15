@@ -22,7 +22,7 @@
  *                                                    no `verify_gate_grounding_failed`
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
 import {
   executeToolCalls,
   type ToolRegistryLike,
@@ -513,5 +513,238 @@ describe('executeToolCalls — verify-gate slice 1 + slice 2 integration', () =>
       toolName: 'coder.write-file',
       err: expect.stringContaining('disk on fire'),
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 4 — agent-facing feedback via tool-result prefix
+//
+// `Brain.toSDKMessages` drops mid-conversation `role: 'system'` messages from
+// the request, so a naïve system-message inject would be silently swallowed.
+// Slice 4 prepends the critic's rationale to the rejected tool's own
+// `role: 'tool'` result content — that channel passes straight through to the
+// model, so the agent sees the criticism on its next turn.
+//
+// Branches covered:
+//   VGI-13 reject + feedback flag on    → tool message stored with prefix,
+//                                         tool-result event un-prefixed,
+//                                         tool_result_persist sees prefix
+//   VGI-14 reject + feedback flag off   → tool message stored WITHOUT prefix
+//                                         (default-OFF opt-in)
+//   VGI-15 approve + flag on            → no prefix (only `'reject'` triggers)
+//   VGI-16 low-confidence soft-skip     → no prefix (critic never returned a verdict)
+// ---------------------------------------------------------------------------
+
+describe('executeToolCalls — verify-gate slice 4 (agent-facing feedback)', () => {
+  function recordingCritic(
+    review: CriticPassLike['review'],
+  ): { critic: CriticPassLike; reviews: Array<Parameters<CriticPassLike['review']>[0]> } {
+    const reviews: Array<Parameters<CriticPassLike['review']>[0]> = [];
+    const critic: CriticPassLike = {
+      review: async (input) => {
+        reviews.push(input);
+        return review(input);
+      },
+    };
+    return { critic, reviews };
+  }
+
+  // PermissionManager + process.env are process-wide singletons.
+  // Reset both around each test so a stray override / leftover flag
+  // can't false-pass another assertion. PREV_ENV is captured inside
+  // beforeAll (NOT at describe-evaluation time) so an earlier test file
+  // that mutated the env and didn't clean up can't silently contaminate
+  // our restore baseline. (Verifier MED-2 on slice 4.)
+  let PREV_ENV: string | undefined;
+  beforeAll(() => {
+    PREV_ENV = process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
+  });
+  beforeEach(() => {
+    PermissionManager.getInstance().resetAll();
+    delete process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
+  });
+  afterAll(() => {
+    if (PREV_ENV === undefined) delete process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
+    else process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = PREV_ENV;
+  });
+
+  it('VGI-13 reject + flag on → tool message prefixed, tool-result event un-prefixed', async () => {
+    process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = '1';
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const session = makeSession();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'old_string not present in file',
+    }));
+    const emitted: Array<{ type: string; result?: string }> = [];
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, session, makeState(),
+      (ev) => { emitted.push(ev as { type: string; result?: string }); },
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false, // observable-only — critic must reach reject path
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']); // slice 4 stays observable too
+
+    // (a) session history carries the prefix → model sees it on next turn.
+    expect(session.messages).toHaveLength(1);
+    const stored = String(session.messages[0]?.content ?? '');
+    expect(stored.startsWith('[VERIFY-GATE CRITIC REJECT] old_string not present in file')).toBe(true);
+    expect(stored.endsWith('ok:coder.write-file')).toBe(true);
+    // Order: prefix line, blank line, raw output. Pin it.
+    expect(stored).toBe('[VERIFY-GATE CRITIC REJECT] old_string not present in file\n\nok:coder.write-file');
+
+    // (b) live tool-result event still carries the un-prefixed payload —
+    // telemetry and stream observers see exactly what the tool returned.
+    const toolResultEvent = emitted.find((e) => e.type === 'tool-result');
+    expect(toolResultEvent?.result).toBe('ok:coder.write-file');
+
+    // (c) tool_result_persist hook fires with the persisted (prefixed) content
+    // so a downstream subscriber can correlate with verify_gate_critic_invoked.
+    await drainMicrotasks();
+    const persist = events.find((e) => e.event === 'tool_result_persist');
+    expect(persist?.ctx?.['result']).toBe(stored);
+  });
+
+  it('VGI-14 reject + flag OFF → tool message stored WITHOUT prefix (default-OFF opt-in)', async () => {
+    // Flag explicitly NOT set — beforeEach already deleted it.
+    const { registry, executed } = makeRegistry();
+    const { hooks } = makeHooks();
+    const session = makeSession();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'old_string not present in file',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    const stored = String(session.messages[0]?.content ?? '');
+    expect(stored).toBe('ok:coder.write-file');
+    expect(stored).not.toMatch(/VERIFY-GATE CRITIC/);
+  });
+
+  it('VGI-15 approve + flag on → no prefix (only reject triggers feedback)', async () => {
+    process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = '1';
+    const { registry, executed } = makeRegistry();
+    const { hooks } = makeHooks();
+    const session = makeSession();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'approve',
+      reason: 'invoked',
+      rationale: 'file is reversible, edit looks safe',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    const stored = String(session.messages[0]?.content ?? '');
+    expect(stored).toBe('ok:coder.write-file');
+    expect(stored).not.toMatch(/VERIFY-GATE CRITIC/);
+  });
+
+  it('VGI-17 reject + flag on + tool_not_found fallback → prefix attached on fallback result', async () => {
+    // The code comment claims criticFeedback is still informative on the
+    // tool_not_found path because the critic ran on the call the agent
+    // *planned*. Pin that contract: prefix lands on the fallback message.
+    process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = '1';
+    const session = makeSession();
+    const { hooks } = makeHooks();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'tool name looks made-up',
+    }));
+    // Registry that throws tool_not_found on every execute (matches the
+    // ToolError code branch in executeSingleToolCall's catch).
+    const { ToolError } = await import('../../src/core/shared/errors.js');
+    const calls: string[] = [];
+    const notFoundRegistry: ToolRegistryLike = {
+      execute: vi.fn(async (name: string) => {
+        calls.push(name);
+        // ToolError constructor is (message, code) — getting this backwards
+        // makes err.code !== 'tool_not_found' and the tool_not_found branch
+        // is missed silently. Pin it.
+        throw new ToolError(`Tool not registered: ${name}`, 'tool_not_found');
+      }),
+      getSchemaForLLM: vi.fn(() => []),
+    };
+
+    await executeToolCalls(
+      [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })],
+      session, makeState(), () => undefined,
+      notFoundRegistry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false, // observable-only — critic must reach reject path
+      critic,
+    );
+
+    // tool_not_found triggers the 3-step fallback chain on the registry,
+    // which in turn calls registry.execute again for tool.search-mcp-catalog
+    // / search-npm / synthesize — all of which our throwing stub also rejects
+    // with tool_not_found, so the chain exhausts and returns the "could not
+    // be auto-resolved" message. That's the content the prefix should land on.
+    expect(session.messages).toHaveLength(1);
+    const stored = String(session.messages[0]?.content ?? '');
+    expect(stored.startsWith('[VERIFY-GATE CRITIC REJECT] tool name looks made-up')).toBe(true);
+    // The fallback message format is pinned by _toolNotFoundFallback.
+    expect(stored).toMatch(/Tool not found and could not be auto-resolved: coder\.write-file/);
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it('VGI-16 low-confidence soft-skip + flag on → no prefix (critic never returned a verdict)', async () => {
+    process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = '1';
+    const { registry, executed } = makeRegistry();
+    const { hooks } = makeHooks();
+    const session = makeSession();
+    const { critic } = recordingCritic(async () => ({
+      invoked: false,
+      verdict: 'skip',
+      reason: 'soft-skip',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'foo' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(true), // grounding OK → soft-skip path
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    const stored = String(session.messages[0]?.content ?? '');
+    expect(stored).toBe('ok:coder.write-file');
+    expect(stored).not.toMatch(/VERIFY-GATE CRITIC/);
   });
 });

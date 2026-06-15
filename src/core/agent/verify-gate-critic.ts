@@ -110,6 +110,48 @@ export function readCriticBudget(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_BUDGET;
 }
 
+/**
+ * Slice 4 opt-in: when set to `1`, a `'reject'` verdict prepends a
+ * `[VERIFY-GATE CRITIC REJECT] <rationale>` line to the rejected tool's
+ * `role: 'tool'` result content. The agent then sees the criticism on its
+ * next turn — closes the loop the slice-3 hook event left open.
+ *
+ * Carrier rationale: `Brain.toSDKMessages` drops mid-conversation
+ * `role: 'system'` messages with a warning (SDK schema rejects them), so
+ * the tool-result channel is the only one already plumbed end-to-end to
+ * the model that we can piggy-back on without changing the SDK contract.
+ *
+ * Default OFF. Master `SUDO_VERIFY_GATE=1` is still required for the
+ * slice-1 gate to escalate at all; this flag only changes the carrier
+ * for verdicts that slice 3 already produced.
+ */
+export function readCriticFeedbackEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] === '1';
+}
+
+/** Prefix prepended to a rejected tool's result content. */
+export const CRITIC_FEEDBACK_PREFIX = '[VERIFY-GATE CRITIC REJECT]';
+
+/**
+ * Render the feedback line that gets prepended to the rejected tool's result.
+ * Kept as a tiny pure function so tests can pin the exact wire format and a
+ * future slice (e.g. structured agent-facing feedback) can swap renderers
+ * without touching the executeToolCalls hot path.
+ *
+ * Defense-in-depth length clamp: `parseVerdict` already caps the rationale
+ * at `RATIONALE_MAX` (280) before storing it on `CriticReviewResult`, but
+ * `renderCriticFeedback` is an exported helper — a caller that bypasses
+ * `parseVerdict` (test stub, future inline use) could feed an arbitrarily
+ * long string. Re-clamp here so the renderer is self-contained.
+ * (Verifier LOW-1 on slice 4.)
+ */
+export function renderCriticFeedback(rationale: string | null | undefined): string {
+  const trimmed = typeof rationale === 'string' ? rationale.trim() : '';
+  const clamped = trimmed.slice(0, RATIONALE_MAX);
+  const body = clamped.length === 0 ? '(no rationale)' : clamped;
+  return `${CRITIC_FEEDBACK_PREFIX} ${body}`;
+}
+
 // ---------------------------------------------------------------------------
 // CriticPass
 // ---------------------------------------------------------------------------
