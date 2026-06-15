@@ -7,7 +7,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { PipelineError, ToolError } from '../shared/errors.js';
-import { compact, microCompact } from './compaction.js';
+import { compact, microCompact, autoCompact, fullCompact } from './compaction.js';
 import { microCompactMessages, type MicroCompactMessage } from './microcompact.js';
 import { shouldCompact, estimateContextSize, MAX_CONTEXT_TOKENS } from './context.js';
 import { PRE_COMPACTION_FLUSH, PRE_COMPACTION_FLUSH_THRESHOLD } from '../shared/constants.js';
@@ -1038,6 +1038,84 @@ function hasFlushReminder(messages: BrainMessage[]): boolean {
   return messages.some((m) => typeof m.content === 'string' && m.content.startsWith('MEMORY FLUSH:'));
 }
 
+/**
+ * TIER 2 / TIER 3 compaction escalation (gap #14 deferred follow-up).
+ *
+ * Runs AFTER LAYER 1's brain-driven `compact()` summary. If the resulting
+ * history is still over the `shouldCompact` threshold, escalates:
+ *   TIER 2 → `autoCompact` (circuit-breaker-aware brain summary of the middle)
+ *   TIER 3 → `fullCompact` (nuclear collapse: 1 system summary + last user)
+ *
+ * Mutates `session.messages` in place on success; fail-open on any throw so a
+ * misbehaving brain never breaks the agent loop. Caller is expected to gate on
+ * the `SUDO_COMPACT_ESCALATE=1` opt-in env flag before invoking.
+ *
+ * @internal exported for unit testing.
+ */
+export async function escalateCompaction(
+  brain: BrainLike,
+  session: SessionLike,
+  state: AgentState,
+): Promise<void> {
+  if (!shouldCompact(session.messages as Array<{ content: string }>)) {
+    return;
+  }
+  const beforeTokens = estimateContextSize(session.messages as Array<{ content: string }>);
+
+  // TIER 2 — autoCompact. brain.call shape is structurally compatible; cast
+  // through unknown to satisfy TS's bivariant function-parameter check.
+  try {
+    const autoResult = await autoCompact(
+      session.messages as Array<{ role: string; content: string }>,
+      brain as unknown as Parameters<typeof autoCompact>[1],
+      beforeTokens,
+      MAX_CONTEXT_TOKENS,
+    );
+    if (autoResult.compacted) {
+      session.messages = autoResult.history as typeof session.messages;
+      log.info(
+        {
+          sessionId: state.sessionId,
+          beforeTokens,
+          afterTokens: autoResult.tokensAfter,
+        },
+        'TIER 2: autoCompact applied (gap #14 deferred)',
+      );
+    }
+  } catch (err) {
+    log.warn(
+      { sessionId: state.sessionId, err: String(err) },
+      'TIER 2 autoCompact threw — falling through to TIER 3',
+    );
+  }
+
+  // TIER 3 — fullCompact nuclear reset. Only if shouldCompact still true
+  // after TIER 2 (autoCompact's circuit breaker can leave history untouched).
+  if (!shouldCompact(session.messages as Array<{ content: string }>)) {
+    return;
+  }
+  try {
+    const fullResult = await fullCompact(
+      session.messages as Array<{ role: string; content: string }>,
+      brain as unknown as Parameters<typeof fullCompact>[1],
+    );
+    session.messages = fullResult as typeof session.messages;
+    log.warn(
+      {
+        sessionId: state.sessionId,
+        beforeTokens,
+        afterMessages: fullResult.length,
+      },
+      'TIER 3: fullCompact nuclear reset applied (gap #14 deferred)',
+    );
+  } catch (err) {
+    log.warn(
+      { sessionId: state.sessionId, err: String(err) },
+      'TIER 3 fullCompact threw — leaving history for LAYER 2/3 to handle',
+    );
+  }
+}
+
 export async function prepareMessages(
   brain: BrainLike,
   session: SessionLike,
@@ -1101,6 +1179,15 @@ export async function prepareMessages(
   if (shouldCompact(session.messages as Array<{ content: string }>)) {
     log.info({ sessionId: state.sessionId }, 'LAYER 1: Proactive compaction triggered');
     await runCompaction(brain, session, state, emit, hooks);
+  }
+
+  // TIER 2 / TIER 3 — compaction escalation (gap #14 deferred). Opt-in
+  // SUDO_COMPACT_ESCALATE=1. Default OFF, fail-open. Only fires when LAYER 1's
+  // summary (or LAYER 1 itself being off) leaves the history above
+  // shouldCompact's threshold — wiring the latent autoCompact/fullCompact paths
+  // so heavy sessions escalate instead of relying on LAYER 2/3 to clip alone.
+  if (process.env['SUDO_COMPACT_ESCALATE'] === '1') {
+    await escalateCompaction(brain, session, state);
   }
 
   // LAYER 2 — SNIP: micro-compact the in-memory history (zero API cost, pure JS)

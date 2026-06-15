@@ -236,6 +236,15 @@ export interface AutoCompactOptions {
 
 let _autoCompactFailures = 0;
 
+/**
+ * Reset the module-level autoCompact circuit-breaker counter.
+ * Intended for tests that intentionally drive autoCompact to failure and need
+ * a clean slate between cases. Not part of the runtime contract.
+ */
+export function resetAutoCompactFailures(): void {
+  _autoCompactFailures = 0;
+}
+
 export async function autoCompact(
   history: Array<{ role: string; content: string }>,
   brain: { call(opts: { messages: Array<{ role: string; content: string }>; maxTokens?: number }): Promise<{ content: string }> },
