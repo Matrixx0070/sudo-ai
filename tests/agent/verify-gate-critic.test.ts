@@ -13,8 +13,11 @@ import {
   parseVerdict,
   readCriticBudget,
   readCriticFeedbackEnabled,
+  readCriticBlockEnabled,
   renderCriticFeedback,
+  renderCriticBlockMessage,
   CRITIC_FEEDBACK_PREFIX,
+  RATIONALE_MAX,
   type CriticBrainLike,
   type CriticReviewInput,
 } from '../../src/core/agent/verify-gate-critic.js';
@@ -293,8 +296,60 @@ describe('renderCriticFeedback (slice 4)', () => {
   it('clamps an oversized rationale to RATIONALE_MAX (defense-in-depth on bypass-parseVerdict callers)', () => {
     const long = 'x'.repeat(1000);
     const out = renderCriticFeedback(long);
-    // PREFIX + space + at most 280 chars of body
-    expect(out.length).toBe(CRITIC_FEEDBACK_PREFIX.length + 1 + 280);
+    // PREFIX + space + at most RATIONALE_MAX chars of body
+    expect(out.length).toBe(CRITIC_FEEDBACK_PREFIX.length + 1 + RATIONALE_MAX);
     expect(out.startsWith(`${CRITIC_FEEDBACK_PREFIX} `)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 5 — readCriticBlockEnabled + renderCriticBlockMessage
+// ---------------------------------------------------------------------------
+
+describe('readCriticBlockEnabled (slice 5)', () => {
+  it('defaults to false when env is absent', () => {
+    expect(readCriticBlockEnabled({} as NodeJS.ProcessEnv)).toBe(false);
+  });
+
+  it('returns true only on the literal string "1"', () => {
+    expect(readCriticBlockEnabled({ SUDO_VERIFY_GATE_CRITIC_BLOCK: '1' } as unknown as NodeJS.ProcessEnv)).toBe(true);
+  });
+
+  it('rejects anything else — opt-in must be explicit (matches the rest of the campaign)', () => {
+    for (const v of ['', '0', 'true', 'TRUE', 'yes', 'on', '01', '1 ', ' 1']) {
+      expect(readCriticBlockEnabled({ SUDO_VERIFY_GATE_CRITIC_BLOCK: v } as unknown as NodeJS.ProcessEnv)).toBe(false);
+    }
+  });
+});
+
+describe('renderCriticBlockMessage (slice 5)', () => {
+  it('produces the [VerifyGate] Tool call blocked shape with rationale', () => {
+    const out = renderCriticBlockMessage('coder.write-file', 'old_string not present in file');
+    expect(out).toBe('[VerifyGate] Tool call blocked: coder.write-file — critic reject (old_string not present in file)');
+  });
+
+  it('mirrors the slice-2 grounding-block prefix so one regex catches both block paths', () => {
+    // Same prefix slice 2 uses for grounding mismatches — assertable
+    // by downstream alignment digests and alert routers.
+    const out = renderCriticBlockMessage('shell.exec', 'rm -rf /tmp/x looks too broad');
+    expect(out.startsWith('[VerifyGate] Tool call blocked: ')).toBe(true);
+    expect(out).toMatch(/^\[VerifyGate\] Tool call blocked: \S+ — critic reject \(/);
+  });
+
+  it('trims whitespace and falls back to "(no rationale)" on empty / null / undefined', () => {
+    const want = '[VerifyGate] Tool call blocked: t — critic reject ((no rationale))';
+    expect(renderCriticBlockMessage('t', '')).toBe(want);
+    expect(renderCriticBlockMessage('t', '   ')).toBe(want);
+    expect(renderCriticBlockMessage('t', null)).toBe(want);
+    expect(renderCriticBlockMessage('t', undefined)).toBe(want);
+  });
+
+  it('clamps an oversized rationale to RATIONALE_MAX (defense-in-depth)', () => {
+    const long = 'x'.repeat(1000);
+    const out = renderCriticBlockMessage('t', long);
+    // body chars + frame = "[VerifyGate] Tool call blocked: t — critic reject (" + RATIONALE_MAX + ")"
+    const frame = '[VerifyGate] Tool call blocked: t — critic reject ('.length + 1;
+    expect(out.length).toBe(frame + RATIONALE_MAX);
+    expect(out.endsWith(')')).toBe(true);
   });
 });

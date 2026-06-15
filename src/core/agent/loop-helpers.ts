@@ -16,7 +16,12 @@ import { PermissionManager } from './permissions.js';
 import type { AgentState, AgentEvent } from './types.js';
 import { resolveEffort, type EffortLevel } from './effort.js';
 import { shouldUseInterleavedThinking, buildThinkingBlock } from './interleaved-thinking.js';
-import { readCriticFeedbackEnabled, renderCriticFeedback } from './verify-gate-critic.js';
+import {
+  readCriticFeedbackEnabled,
+  renderCriticFeedback,
+  readCriticBlockEnabled,
+  renderCriticBlockMessage,
+} from './verify-gate-critic.js';
 
 const log = createLogger('agent:loop');
 
@@ -759,11 +764,42 @@ async function executeSingleToolCall(
             },
             hooks,
           );
+          // Slice 5 — critic-reject hard block (opt-in
+          // SUDO_VERIFY_GATE_CRITIC_BLOCK=1). Closes the campaign's last
+          // "soft → hard" gradient: when the critic actually invoked AND
+          // returned 'reject' AND the operator opted in, refuse the call
+          // before `toolRegistry.execute` runs. Same block shape slice 2
+          // uses for grounding mismatches so downstream observers
+          // (alignment digest, alert routers) catch both block paths with
+          // one regex. Soft-skips / errors / approvals never block —
+          // matches slice 3's deliberately observable contract for the
+          // weaker signals.
+          //
+          // Block precedence over slice-4 feedback: when block fires,
+          // the block MESSAGE itself names the critic rejection, so
+          // prepending the `[VERIFY-GATE CRITIC REJECT]` line on top
+          // would be doubly redundant. Drop slice-4 feedback when slice
+          // 5 wins so the agent sees one clean signal.
           if (
             criticResult
             && criticResult.invoked
             && criticResult.verdict === 'reject'
-            && readCriticFeedbackEnabled()
+            && readCriticBlockEnabled(process.env)
+          ) {
+            const blockedMsg = renderCriticBlockMessage(tc.name, criticResult.rationale);
+            log.warn(
+              { tool: tc.name, sessionId: ctx.sessionId, rationale: criticResult.rationale },
+              'verify-gate slice 5: critic reject — hard block',
+            );
+            emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id });
+            return { tc, resultContent: blockedMsg };
+          }
+
+          if (
+            criticResult
+            && criticResult.invoked
+            && criticResult.verdict === 'reject'
+            && readCriticFeedbackEnabled(process.env)
           ) {
             criticFeedback = renderCriticFeedback(criticResult.rationale);
             log.info(
