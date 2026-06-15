@@ -15,7 +15,13 @@ const log = createLogger('brain:claude-token');
 // ---------------------------------------------------------------------------
 
 const CREDENTIALS_PATH = '/root/.claude/.credentials.json';
-const REFRESH_URL = 'https://console.anthropic.com/v1/oauth/token';
+// Endpoint host moved from console.anthropic.com → platform.claude.com.
+// The old URL now 404s; the new host is the one claude-code itself uses
+// (verified by intercepting `claude setup-token` on 2026-06-14).
+const REFRESH_URL = 'https://platform.claude.com/v1/oauth/token';
+// Refresh now requires the UUID client_id; the legacy 'claude-code' slug
+// started returning 400 "Invalid request format" on 2026-06-15.
+const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 
 /** Refresh the token this many ms before it expires (10 minutes). */
 const REFRESH_BUFFER_MS = 10 * 60 * 1000;
@@ -176,7 +182,7 @@ export class ClaudeTokenManager {
         body: JSON.stringify({
           grant_type: 'refresh_token',
           refresh_token: this.credentials.refreshToken,
-          client_id: 'claude-code',
+          client_id: CLAUDE_CODE_CLIENT_ID,
         }),
       });
     } catch (err) {

@@ -64,11 +64,14 @@ const ANTHROPIC_OAUTH_BETA = 'oauth-2025-04-20';
 const MODELS_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The refresh grant accepts a separate, legacy client_id string. Kept identical
- * to claude-token-manager.ts so this manager refreshes the same way the proven
- * path does — only the authorize+exchange step uses the UUID client_id.
+ * Refresh uses the same UUID client_id as the authorize+exchange. The legacy
+ * 'claude-code' slug was accepted at integration time (2026-06-14) but stopped
+ * working a day later — Anthropic now returns 400 "Invalid request format"
+ * for that value. The UUID returns valid token responses (or 429 when
+ * rate-limited, which is normal). Keeping the two client_ids identical is
+ * also the simpler invariant: one constant to track.
  */
-const REFRESH_CLIENT_ID = 'claude-code';
+const REFRESH_CLIENT_ID = CLAUDE_CODE_CLIENT_ID;
 
 const DEFAULT_STORE_PATH = dataPath('claude-oauth.json');
 
