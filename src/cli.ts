@@ -1523,7 +1523,7 @@ async function boot(): Promise<void> {
                 'telegram',
               );
               try {
-                await telegram.sendWithKeyboard(msg.peerId, '​', keyboard);
+                await telegram.sendWithKeyboard(msg.peerId, '⋯', keyboard);
               } catch (kbErr) {
                 log.warn({ err: String(kbErr) }, 'gap #19: feedback keyboard follow-up failed');
               }

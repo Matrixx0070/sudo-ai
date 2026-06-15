@@ -491,8 +491,10 @@ export class TelegramAdapter implements ChannelAdapter {
         }
       }
 
-      // Send text (chunked if necessary).
-      if (text.trim().length > 0) {
+      // Send text (chunked if necessary). Zero-width chars (U+200B-D, U+2060, U+FEFF)
+      // are stripped before the empty check — `String.prototype.trim()` does not
+      // remove them and Telegram 400s on `text must be non-empty`.
+      if (text.replace(/[​-‍⁠﻿]/g, '').trim().length > 0) {
         const chunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
 
         for (let i = 0; i < chunks.length; i++) {
@@ -533,7 +535,7 @@ export class TelegramAdapter implements ChannelAdapter {
       log.error({ peerId, err }, 'Telegram send failed');
       // Last resort: try sending plain text without any formatting
       try {
-        if (this.bot && text.trim()) {
+        if (this.bot && text.replace(/[​-‍⁠﻿]/g, '').trim()) {
           await this.bot.api.sendMessage(peerId, text.substring(0, TELEGRAM_CHUNK_LIMIT));
           log.info({ peerId }, 'Sent plain text fallback after error');
         }
@@ -559,7 +561,8 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!peerId) {
       throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
     }
-    const safePlaceholder = placeholder?.trim().length ? placeholder : '…';
+    const visible = placeholder?.replace(/[​-‍⁠﻿]/g, '').trim();
+    const safePlaceholder = visible?.length ? placeholder : '⋯';
     const sent = await this.bot.api.sendMessage(peerId, safePlaceholder);
     return String(sent.message_id);
   }
