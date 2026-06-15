@@ -193,7 +193,9 @@ describe('ClaudeOAuthManager — refresh + disconnect', () => {
       expect(u).toBe('https://platform.claude.com/v1/oauth/token');
       const body = JSON.parse(init!.body as string) as Record<string, unknown>;
       expect(body['grant_type']).toBe('refresh_token');
-      expect(body['client_id']).toBe('claude-code'); // refresh client_id is the legacy slug
+      // Refresh uses the same UUID client_id as authorize/exchange. The legacy
+      // 'claude-code' slug stopped working 2026-06-15.
+      expect(body['client_id']).toBe('9d1c250a-e61b-44d9-88ed-5944d1962f5e');
       expect(body['refresh_token']).toBe('rt-old');
       return new Response(
         JSON.stringify({ access_token: 'sk-ant-oat-new', refresh_token: 'rt-new', expires_in: 3600 }),
