@@ -228,21 +228,38 @@ export function microCompact(history: string[], maxChars: number): string[] {
 // ---------------------------------------------------------------------------
 // AutoCompact — triggered near token limit
 // ---------------------------------------------------------------------------
+/** Mutable failure counter wrapper — caller owns lifetime + scoping. */
+export interface AutoCompactFailureCounter {
+  count: number;
+}
+
 export interface AutoCompactOptions {
   reserveTokens?: number;
   maxSummaryTokens?: number;
   maxFailures?: number;
+  /**
+   * Optional per-caller circuit-breaker counter. When provided, autoCompact
+   * reads and mutates THIS counter instead of the module-level default. Lets
+   * callers scope the breaker (e.g., per session) so one misbehaving session
+   * doesn't disable autoCompact for unrelated sessions in the same process.
+   */
+  failureCounter?: AutoCompactFailureCounter;
 }
 
-let _autoCompactFailures = 0;
+/**
+ * Module-level fallback counter for standalone callers that don't pass
+ * `failureCounter`. Shared across calls — known footgun in multi-session
+ * processes; pass a `failureCounter` to scope per call site.
+ */
+const _defaultFailureCounter: AutoCompactFailureCounter = { count: 0 };
 
 /**
  * Reset the module-level autoCompact circuit-breaker counter.
- * Intended for tests that intentionally drive autoCompact to failure and need
- * a clean slate between cases. Not part of the runtime contract.
+ * ONLY affects callers that did NOT pass their own `failureCounter`. Intended
+ * for tests that drive the default counter to failure and need a clean slate.
  */
 export function resetAutoCompactFailures(): void {
-  _autoCompactFailures = 0;
+  _defaultFailureCounter.count = 0;
 }
 
 export async function autoCompact(
@@ -253,11 +270,12 @@ export async function autoCompact(
   options: AutoCompactOptions = {},
 ): Promise<{ history: Array<{ role: string; content: string }>; compacted: boolean; tokensAfter: number }> {
   const { reserveTokens = 13000, maxSummaryTokens = 20000, maxFailures = 3 } = options;
+  const counter = options.failureCounter ?? _defaultFailureCounter;
 
   if (currentTokens <= tokenLimit - reserveTokens) {
     return { history, compacted: false, tokensAfter: currentTokens };
   }
-  if (_autoCompactFailures >= maxFailures) {
+  if (counter.count >= maxFailures) {
     return { history, compacted: false, tokensAfter: currentTokens };
   }
 
@@ -274,7 +292,7 @@ export async function autoCompact(
       maxTokens: maxSummaryTokens,
     });
 
-    _autoCompactFailures = 0;
+    counter.count = 0;
     const compacted = [
       ...head,
       { role: 'system' as const, content: `[AutoCompact summary]\n${summary.content}` },
@@ -283,7 +301,7 @@ export async function autoCompact(
     const charsAfter = compacted.reduce((s, m) => s + m.content.length, 0);
     return { history: compacted, compacted: true, tokensAfter: Math.round(charsAfter / 4) };
   } catch {
-    _autoCompactFailures++;
+    counter.count++;
     return { history, compacted: false, tokensAfter: currentTokens };
   }
 }

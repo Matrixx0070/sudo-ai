@@ -7,7 +7,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { PipelineError, ToolError } from '../shared/errors.js';
-import { compact, microCompact, autoCompact, fullCompact } from './compaction.js';
+import { compact, microCompact, autoCompact, fullCompact, type AutoCompactFailureCounter } from './compaction.js';
 import { microCompactMessages, type MicroCompactMessage } from './microcompact.js';
 import { shouldCompact, estimateContextSize, MAX_CONTEXT_TOKENS } from './context.js';
 import { PRE_COMPACTION_FLUSH, PRE_COMPACTION_FLUSH_THRESHOLD } from '../shared/constants.js';
@@ -1039,6 +1039,24 @@ function hasFlushReminder(messages: BrainMessage[]): boolean {
 }
 
 /**
+ * Per-session autoCompact circuit-breaker counter. Keyed by the SessionLike
+ * object reference so entries are GC'd automatically when the session goes
+ * away — no manual cleanup, no leak in long-running PM2 processes.
+ * Replaces the original module-level counter inside compaction.ts so a
+ * misbehaving brain on session A can't disable autoCompact on session B.
+ */
+const autoCompactFailuresBySession: WeakMap<SessionLike, AutoCompactFailureCounter> = new WeakMap();
+
+function getSessionFailureCounter(session: SessionLike): AutoCompactFailureCounter {
+  let counter = autoCompactFailuresBySession.get(session);
+  if (!counter) {
+    counter = { count: 0 };
+    autoCompactFailuresBySession.set(session, counter);
+  }
+  return counter;
+}
+
+/**
  * TIER 2 / TIER 3 compaction escalation (gap #14 deferred follow-up).
  *
  * Runs AFTER LAYER 1's brain-driven `compact()` summary. If the resulting
@@ -1049,6 +1067,9 @@ function hasFlushReminder(messages: BrainMessage[]): boolean {
  * Mutates `session.messages` in place on success; fail-open on any throw so a
  * misbehaving brain never breaks the agent loop. Caller is expected to gate on
  * the `SUDO_COMPACT_ESCALATE=1` opt-in env flag before invoking.
+ *
+ * The autoCompact circuit-breaker counter is held PER-SESSION (WeakMap-backed)
+ * so failure on one session never disables autoCompact for others.
  *
  * @internal exported for unit testing.
  */
@@ -1061,6 +1082,7 @@ export async function escalateCompaction(
     return;
   }
   const beforeTokens = estimateContextSize(session.messages as Array<{ content: string }>);
+  const failureCounter = getSessionFailureCounter(session);
 
   // TIER 2 — autoCompact. brain.call shape is structurally compatible; cast
   // through unknown to satisfy TS's bivariant function-parameter check.
@@ -1070,6 +1092,7 @@ export async function escalateCompaction(
       brain as unknown as Parameters<typeof autoCompact>[1],
       beforeTokens,
       MAX_CONTEXT_TOKENS,
+      { failureCounter },
     );
     if (autoResult.compacted) {
       session.messages = autoResult.history as typeof session.messages;
