@@ -156,6 +156,21 @@ export interface VerifyGateLike {
 }
 
 /**
+ * Minimal contract the AgentLoop consumes from a grounding-checker implementation
+ * (slice 2 of the verify-gate campaign). Mirrors `GroundingChecker.check()` from
+ * verify-gate-grounding.ts so this helper stays free of fs/Promise deps in its
+ * type surface — concrete class is constructed in loop.ts.
+ */
+export interface GroundingCheckerLike {
+  check(toolName: string, args: Record<string, unknown>): Promise<{
+    ok: boolean;
+    reason: string;
+    checked?: 'edit-grounding' | 'file-reference-grounding';
+    evidence?: Record<string, unknown>;
+  }>;
+}
+
+/**
  * Fire a hook event without letting hook errors propagate.
  * Any exception is swallowed so a bad hook never crashes the agent loop.
  */
@@ -495,6 +510,8 @@ async function executeSingleToolCall(
   feedbackMemory?: FeedbackMemoryLike,
   verifyGate?: VerifyGateLike,
   hooks?: HookEmitterLike,
+  groundingChecker?: GroundingCheckerLike,
+  groundingBlockEnabled: boolean = false,
 ): Promise<SingleCallResult> {
   emit({ type: 'tool-call', name: tc.name, args: tc.arguments, toolId: tc.id });
   log.info({ tool: tc.name, toolCallId: tc.id, sessionId: ctx.sessionId }, 'Executing tool call');
@@ -517,17 +534,23 @@ async function executeSingleToolCall(
     return { tc, resultContent: deniedMsg };
   }
 
-  // Verify-gate (slice 1: confidence dispatcher).
-  // Observable-only: 'escalate' decisions log + emit a hook event but still
-  // execute, because slices 2 (grounding) and 3 (auto-critic) aren't wired
-  // yet — blocking here without a fallback would brick the loop.
+  // Verify-gate (slice 1: confidence dispatcher + slice 2: grounding check).
+  //
+  // Slice 1 still emits 'verify_gate_escalated' on every low-confidence
+  // destructive call. Slice 2 layers a grounding pass on top: when escalation
+  // fires AND a grounding checker is wired, re-read the target file (or stat
+  // a referenced path) BEFORE the tool runs. By default the result is
+  // observable-only (logged + emitted as 'verify_gate_grounding_failed'),
+  // matching slice 1's caution; opt-in `SUDO_VERIFY_GATE_BLOCK=1` upgrades
+  // a mismatch to a hard block with the same structured shape as the
+  // security/permission blocks above.
   if (verifyGate) {
     try {
       const gate = verifyGate.evaluate(tc.name);
       if (gate.decision === 'escalate') {
         log.warn(
           { tool: tc.name, confidence: gate.confidence, threshold: gate.threshold, samples: gate.samples, sessionId: ctx.sessionId },
-          'verify-gate: escalation signaled (slice 1: observable-only, executing anyway)',
+          'verify-gate: escalation signaled',
         );
         void safeEmit(hooks, 'verify_gate_escalated', {
           sessionId: ctx.sessionId,
@@ -537,6 +560,49 @@ async function executeSingleToolCall(
           samples: gate.samples,
           reason: gate.reason,
         });
+
+        if (groundingChecker) {
+          let grounding: Awaited<ReturnType<GroundingCheckerLike['check']>> | null = null;
+          let groundingThrew = false;
+          try {
+            grounding = await groundingChecker.check(tc.name, tc.arguments ?? {});
+          } catch (err) {
+            groundingThrew = true;
+            log.warn({ tool: tc.name, err: String(err) }, 'verify-gate: grounding check threw — failing open');
+            // Distinguish "checker threw" from "no checker wired" for slice-3
+            // consumers and ops dashboards — both produce a silent pass-through
+            // without this event.
+            void safeEmit(hooks, 'verify_gate_grounding_error', {
+              sessionId: ctx.sessionId,
+              toolName: tc.name,
+              err: String(err),
+            });
+          }
+          if (!groundingThrew && grounding && !grounding.ok) {
+            log.warn(
+              { tool: tc.name, reason: grounding.reason, checked: grounding.checked, evidence: grounding.evidence, sessionId: ctx.sessionId, block: groundingBlockEnabled },
+              'verify-gate: grounding mismatch',
+            );
+            // `confidence` + `threshold` are carried here so a slice-3 critic
+            // consumer can act on grounding failures without correlating
+            // back to `verify_gate_escalated` by session+tool+timestamp.
+            void safeEmit(hooks, 'verify_gate_grounding_failed', {
+              sessionId: ctx.sessionId,
+              toolName: tc.name,
+              reason: grounding.reason,
+              checked: grounding.checked ?? null,
+              evidence: grounding.evidence ?? null,
+              blocked: groundingBlockEnabled,
+              confidence: gate.confidence,
+              threshold: gate.threshold,
+            });
+            if (groundingBlockEnabled) {
+              const blockedMsg = `[VerifyGate] Tool call blocked: ${tc.name} — grounding mismatch (${grounding.reason})`;
+              emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id });
+              return { tc, resultContent: blockedMsg };
+            }
+          }
+        }
       }
     } catch (err) {
       log.warn({ tool: tc.name, err: String(err) }, 'verify-gate: evaluate threw — failing open');
@@ -672,6 +738,8 @@ export async function executeToolCalls(
   sandboxManager?: SandboxManagerLike,
   feedbackMemory?: FeedbackMemoryLike,
   verifyGate?: VerifyGateLike,
+  groundingChecker?: GroundingCheckerLike,
+  groundingBlockEnabled: boolean = false,
 ): Promise<void> {
   const policyFromSandbox = sandboxManager?.getPolicyFor(state.sessionId);
   // Provision workspace if sandboxManager is available — ensures directory exists before bwrap tries to mount it.
@@ -768,7 +836,7 @@ export async function executeToolCalls(
 
   // Phase 2a: leading sequential block.
   for (const tc of leadingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled);
     commit(res);
   }
 
@@ -782,19 +850,19 @@ export async function executeToolCalls(
     for (let i = 0; i < parallel.length; i += cap) {
       const chunk = parallel.slice(i, i + cap);
       const results = await Promise.all(
-        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks)),
+        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled)),
       );
       // Append in original order so the LLM context stays coherent.
       for (const res of results) commit(res);
     }
   } else if (parallel.length === 1) {
-    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks);
+    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled);
     commit(res);
   }
 
   // Phase 2c: trailing sequential block.
   for (const tc of trailingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled);
     commit(res);
   }
 

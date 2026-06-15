@@ -326,9 +326,15 @@ export class AgentLoop {
 
   // Verify-gate (slice 1: confidence dispatcher). Opt-in via SUDO_VERIFY_GATE=1.
   // When attached, executeToolCalls consults it before executing each destructive
-  // tool call; 'escalate' decisions log + emit a hook event (observable-only in
-  // slice 1 — execution still proceeds, since slices 2/3 aren't wired yet).
+  // tool call; 'escalate' decisions log + emit a hook event.
   private _verifyGate?: import('./loop-helpers.js').VerifyGateLike;
+
+  // Verify-gate (slice 2: grounding check). Wired alongside _verifyGate when
+  // SUDO_VERIFY_GATE=1. Runs only when slice-1 escalates a call; re-reads the
+  // target file / stats a referenced path before execution. Observable-only by
+  // default; SUDO_VERIFY_GATE_BLOCK=1 upgrades a mismatch to a hard block.
+  private _groundingChecker?: import('./loop-helpers.js').GroundingCheckerLike;
+  private _groundingBlockEnabled = false;
 
   // Negative Router — 3-tier DFA routing (block/redirect/model selection)
   private _negativeRouter?: NegativeRouter;
@@ -789,6 +795,26 @@ export class AgentLoop {
       log.info('AgentLoop: VerifyGate attached');
     } else {
       log.warn('AgentLoop: setVerifyGate: invalid duck-type — ignoring');
+    }
+  }
+
+  /**
+   * Wire a grounding checker (slice 2 of the verify-gate campaign). Consulted
+   * only when slice 1's confidence gate emits an `escalate` decision for the
+   * current tool call. `blockOnFail=true` upgrades a grounding mismatch to a
+   * hard block; default is observable-only. Duck-typed against
+   * `GroundingCheckerLike` — invalid handles are ignored with a warning.
+   */
+  setGroundingChecker(
+    checker: import('./loop-helpers.js').GroundingCheckerLike,
+    blockOnFail = false,
+  ): void {
+    if (checker && typeof checker.check === 'function') {
+      this._groundingChecker = checker;
+      this._groundingBlockEnabled = blockOnFail;
+      log.info({ blockOnFail }, 'AgentLoop: GroundingChecker attached');
+    } else {
+      log.warn('AgentLoop: setGroundingChecker: invalid duck-type — ignoring');
     }
   }
 
@@ -2574,7 +2600,7 @@ export class AgentLoop {
             }
 
             _stuckPreCount = session.messages.length;
-            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager, this._feedbackMemory, this._verifyGate);
+            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled);
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
 
