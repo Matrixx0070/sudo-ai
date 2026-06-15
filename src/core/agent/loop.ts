@@ -336,6 +336,12 @@ export class AgentLoop {
   private _groundingChecker?: import('./loop-helpers.js').GroundingCheckerLike;
   private _groundingBlockEnabled = false;
 
+  // Verify-gate (slice 3: auto-critic). Wired alongside _verifyGate when
+  // SUDO_VERIFY_GATE=1. Runs only after slice 1 escalates AND slice 2 has
+  // settled; observable-only — verdict ships as a hook event and does NOT
+  // block execution. Per-session budget enforced internally.
+  private _criticPass?: import('./loop-helpers.js').CriticPassLike;
+
   // Negative Router — 3-tier DFA routing (block/redirect/model selection)
   private _negativeRouter?: NegativeRouter;
 
@@ -815,6 +821,23 @@ export class AgentLoop {
       log.info({ blockOnFail }, 'AgentLoop: GroundingChecker attached');
     } else {
       log.warn('AgentLoop: setGroundingChecker: invalid duck-type — ignoring');
+    }
+  }
+
+  /**
+   * Wire a critic pass (slice 3 of the verify-gate campaign). Auto-invokes the
+   * `reviewer` agent role on the strongest verify-gate signal — observable
+   * grounding failure with execution still proceeding. Strictly observable:
+   * the verdict ships out as a hook event but never blocks tool execution in
+   * slice 3. Per-session invocation budget is enforced inside the critic.
+   * Duck-typed against `CriticPassLike` — invalid handles ignored with a warning.
+   */
+  setCriticPass(critic: import('./loop-helpers.js').CriticPassLike): void {
+    if (critic && typeof critic.review === 'function') {
+      this._criticPass = critic;
+      log.info('AgentLoop: CriticPass attached');
+    } else {
+      log.warn('AgentLoop: setCriticPass: invalid duck-type — ignoring');
     }
   }
 
@@ -2600,7 +2623,7 @@ export class AgentLoop {
             }
 
             _stuckPreCount = session.messages.length;
-            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled);
+            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass);
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
 
