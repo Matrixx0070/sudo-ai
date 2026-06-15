@@ -34,7 +34,7 @@
     google: { envKey: 'GOOGLE_API_KEY' },
   },
   channels: {
-    telegram: { enabled: false, tokenEnvKey: 'TELEGRAM_BOT_TOKEN', allowedUsers: [] },
+    telegram: { enabled: true, tokenEnvKey: 'TELEGRAM_BOT_TOKEN', allowedUsers: ['8087386717'] },
     whatsapp: { enabled: false, sessionPath: 'data/whatsapp', allowedJids: [] },
     discord: { enabled: false, tokenEnvKey: 'DISCORD_BOT_TOKEN', allowedChannelIds: [] },
   },
