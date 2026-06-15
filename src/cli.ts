@@ -1143,6 +1143,23 @@ async function boot(): Promise<void> {
     }
   }
 
+  // Verify-gate (slice 1: confidence dispatcher). Opt-in via SUDO_VERIFY_GATE=1.
+  // Reads per-tool live confidence from calibration.db before every destructive
+  // tool call. Slice 1 is observable-only: 'escalate' decisions log + emit a
+  // hook event but still execute (slices 2 grounding + 3 critic plug into the
+  // same dispatch later). Fail-open: any wiring or DB error simply leaves the
+  // loop unchanged.
+  if (process.env['SUDO_VERIFY_GATE'] === '1') {
+    try {
+      const { ConfidenceGate } = await import('./core/agent/verify-gate.js');
+      const gate = new ConfidenceGate(registry as unknown as import('./core/agent/verify-gate.js').ToolRegistryForGate);
+      finalAgentLoop.setVerifyGate(gate);
+      log.info('VerifyGate: slice-1 confidence dispatcher wired (SUDO_VERIFY_GATE=1)');
+    } catch (err: unknown) {
+      log.warn({ err: String(err) }, 'VerifyGate wiring failed — verify-gate disabled');
+    }
+  }
+
   // Wire InjectionDetector into the resolved agent loop.
   try {
     finalAgentLoop.setInjectionDetector(injectionDetector);
