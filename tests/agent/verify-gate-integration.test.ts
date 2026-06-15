@@ -864,12 +864,35 @@ describe('executeToolCalls — verify-gate slice 5 (critic-reject hard block)', 
       verdict: 'reject',
       rationale: 'old_string not present in file',
     });
+
+    // (d) Slice 6 — dedicated `verify_gate_critic_blocked` correlator
+    //     event carries the full block context so alert routers don't
+    //     have to regex-match the `[VerifyGate]` message shape.
+    const blockedEvent = events.find((e) => e.event === 'verify_gate_critic_blocked');
+    expect(blockedEvent).toBeDefined();
+    expect(blockedEvent?.ctx).toMatchObject({
+      // sessionId spot-check guards a future regression that accidentally
+      // omits it from the correlator payload (verifier LOW-2 on slice 6).
+      sessionId: expect.any(String),
+      toolName: 'coder.write-file',
+      trigger: 'grounding-failed',
+      confidence: 0.2,
+      threshold: 0.55,
+      rationale: 'old_string not present in file',
+      message: stored,
+    });
+
+    // (e) Order: invoked fires BEFORE blocked (verdict → enforcement).
+    const invokedIdx = events.findIndex((e) => e.event === 'verify_gate_critic_invoked');
+    const blockedIdx = events.findIndex((e) => e.event === 'verify_gate_critic_blocked');
+    expect(invokedIdx).toBeGreaterThanOrEqual(0);
+    expect(blockedIdx).toBeGreaterThan(invokedIdx);
   });
 
-  it('VGI-19 reject + block OFF → tool runs (slice-3 observable contract intact when flag absent)', async () => {
+  it('VGI-19 reject + block OFF → tool runs (slice-3 observable contract intact when flag absent), no verify_gate_critic_blocked event', async () => {
     // Flag explicitly NOT set — beforeEach already deleted it.
     const { registry, executed } = makeRegistry();
-    const { hooks } = makeHooks();
+    const { hooks, events } = makeHooks();
     const session = makeSession();
     const { critic } = recordingCritic(async () => ({
       invoked: true,
@@ -892,12 +915,18 @@ describe('executeToolCalls — verify-gate slice 5 (critic-reject hard block)', 
     const stored = String(session.messages[0]?.content ?? '');
     expect(stored).toBe('ok:coder.write-file');
     expect(stored).not.toMatch(/Tool call blocked/);
+
+    // Slice 6 — the dedicated blocked event must NOT fire on the
+    // observable-only path. Slice-3's invoked event still does.
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_critic_invoked')).toBeDefined();
+    expect(events.find((e) => e.event === 'verify_gate_critic_blocked')).toBeUndefined();
   });
 
-  it('VGI-20 approve + block on → tool runs (only invoked reject triggers the block)', async () => {
+  it('VGI-20 approve + block on → tool runs (only invoked reject triggers the block), no verify_gate_critic_blocked event', async () => {
     process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = '1';
     const { registry, executed } = makeRegistry();
-    const { hooks } = makeHooks();
+    const { hooks, events } = makeHooks();
     const session = makeSession();
     const { critic } = recordingCritic(async () => ({
       invoked: true,
@@ -920,16 +949,22 @@ describe('executeToolCalls — verify-gate slice 5 (critic-reject hard block)', 
     const stored = String(session.messages[0]?.content ?? '');
     expect(stored).toBe('ok:coder.write-file');
     expect(stored).not.toMatch(/Tool call blocked/);
+
+    // Slice 6 — the blocked event must NOT fire on an approve verdict
+    // even when the block flag is on. Guards against a regression that
+    // keys the event on the flag alone instead of (flag && reject).
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_critic_blocked')).toBeUndefined();
   });
 
-  it('VGI-21 reject + block on + feedback on → BLOCK wins, no slice-4 prefix on top', async () => {
+  it('VGI-21 reject + block on + feedback on → BLOCK wins, no slice-4 prefix on top, slice-6 event still fires', async () => {
     // Both flags on: precedence is BLOCK > FEEDBACK because the block
     // message itself already names the critic rejection. Prepending
     // [VERIFY-GATE CRITIC REJECT] on top would be doubly redundant.
     process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = '1';
     process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = '1';
     const { registry, executed } = makeRegistry();
-    const { hooks } = makeHooks();
+    const { hooks, events } = makeHooks();
     const session = makeSession();
     const { critic } = recordingCritic(async () => ({
       invoked: true,
@@ -953,5 +988,18 @@ describe('executeToolCalls — verify-gate slice 5 (critic-reject hard block)', 
     // Block message present, but no slice-4 prefix anywhere.
     expect(stored.startsWith('[VerifyGate] Tool call blocked: coder.write-file — critic reject (')).toBe(true);
     expect(stored).not.toMatch(/VERIFY-GATE CRITIC REJECT/);
+
+    // Slice 6 — the blocked event fires exactly once on the precedence
+    // path. Guards against a regression that ties the event emission to
+    // the feedback-flag branch rather than the block branch (verifier
+    // MED-1 on slice 6).
+    await drainMicrotasks();
+    const blockedEvents = events.filter((e) => e.event === 'verify_gate_critic_blocked');
+    expect(blockedEvents).toHaveLength(1);
+    expect(blockedEvents[0]?.ctx).toMatchObject({
+      toolName: 'coder.write-file',
+      rationale: 'old_string not present in file',
+      message: stored,
+    });
   });
 });
