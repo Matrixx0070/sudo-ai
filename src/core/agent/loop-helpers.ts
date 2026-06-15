@@ -16,6 +16,7 @@ import { PermissionManager } from './permissions.js';
 import type { AgentState, AgentEvent } from './types.js';
 import { resolveEffort, type EffortLevel } from './effort.js';
 import { shouldUseInterleavedThinking, buildThinkingBlock } from './interleaved-thinking.js';
+import { readCriticFeedbackEnabled, renderCriticFeedback } from './verify-gate-critic.js';
 
 const log = createLogger('agent:loop');
 
@@ -198,6 +199,10 @@ export interface CriticPassLike {
  * Run the slice-3 critic and emit a structured hook event. Never throws —
  * critic-internal failures are reported as `verify_gate_critic_error` so a
  * flaky critic can never brick the loop.
+ *
+ * Slice 4: returns the critic's result (or `null` on the throw-path) so the
+ * caller can inspect a `'reject'` verdict and prepend agent-facing feedback
+ * to the tool result it persists. The hook contract is unchanged.
  */
 async function runCriticPass(
   critic: CriticPassLike,
@@ -211,7 +216,7 @@ async function runCriticPass(
     evidence?: Record<string, unknown>;
   },
   hooks: HookEmitterLike | undefined,
-): Promise<void> {
+): Promise<Awaited<ReturnType<CriticPassLike['review']>> | null> {
   let result: Awaited<ReturnType<CriticPassLike['review']>>;
   try {
     result = await critic.review(input);
@@ -226,7 +231,7 @@ async function runCriticPass(
       trigger: input.trigger,
       err: String(err),
     });
-    return;
+    return null;
   }
 
   const baseCtx = {
@@ -251,7 +256,7 @@ async function runCriticPass(
       reason: result.reason,
       rationale: result.rationale ?? null,
     });
-    return;
+    return result;
   }
 
   log.info(
@@ -263,6 +268,7 @@ async function runCriticPass(
     verdict: result.verdict,
     rationale: result.rationale ?? null,
   });
+  return result;
 }
 
 /**
@@ -590,6 +596,14 @@ function getToolConcurrency(): number {
 interface SingleCallResult {
   tc: { id: string; name: string; arguments: Record<string, unknown> };
   resultContent: string;
+  /**
+   * Slice-4 carrier: when the critic returned a `'reject'` verdict for this
+   * call AND `SUDO_VERIFY_GATE_CRITIC_FEEDBACK=1` is set, the `commit` closure
+   * prepends this string to the tool message that lands in session history so
+   * the model sees the criticism on its next turn. Undefined on every other
+   * path (no critic wired / skipped / approved / env flag off).
+   */
+  criticFeedback?: string;
 }
 
 /**
@@ -611,6 +625,12 @@ async function executeSingleToolCall(
 ): Promise<SingleCallResult> {
   emit({ type: 'tool-call', name: tc.name, args: tc.arguments, toolId: tc.id });
   log.info({ tool: tc.name, toolCallId: tc.id, sessionId: ctx.sessionId }, 'Executing tool call');
+
+  // Slice-4 carrier. Populated by the criticPass branch below on a
+  // `'reject'` verdict when SUDO_VERIFY_GATE_CRITIC_FEEDBACK=1. The
+  // `commit` closure in executeToolCalls reads it back to prepend
+  // agent-facing feedback to the tool message stored in session history.
+  let criticFeedback: string | undefined;
 
   if (security) {
     const secResult = security.validateToolCall(tc.name, tc.arguments ?? {});
@@ -714,10 +734,19 @@ async function executeSingleToolCall(
         // escalated call, awaited so the verdict event lands in the same
         // turn the agent can see on the next iteration. Strictly observable:
         // verdict never blocks execution.
+        //
+        // Slice 4 — agent-facing feedback. When the critic returns a
+        // `'reject'` verdict AND `SUDO_VERIFY_GATE_CRITIC_FEEDBACK=1` is set,
+        // capture the rationale here; the `commit` closure in
+        // executeToolCalls prepends it to the tool message that lands in
+        // session history so the model sees the criticism on its next turn.
+        // Brain.toSDKMessages drops mid-conversation system messages, so the
+        // tool-result channel is the only carrier already plumbed end-to-end
+        // to the model that we can piggy-back on.
         if (criticPass) {
           const trigger: 'grounding-failed' | 'low-confidence' =
             groundingFailedObservable ? 'grounding-failed' : 'low-confidence';
-          await runCriticPass(
+          const criticResult = await runCriticPass(
             criticPass,
             {
               sessionId: ctx.sessionId,
@@ -730,6 +759,18 @@ async function executeSingleToolCall(
             },
             hooks,
           );
+          if (
+            criticResult
+            && criticResult.invoked
+            && criticResult.verdict === 'reject'
+            && readCriticFeedbackEnabled()
+          ) {
+            criticFeedback = renderCriticFeedback(criticResult.rationale);
+            log.info(
+              { tool: tc.name, sessionId: ctx.sessionId },
+              'verify-gate slice 4: critic reject — feedback queued for next turn',
+            );
+          }
         }
       }
     } catch (err) {
@@ -755,7 +796,10 @@ async function executeSingleToolCall(
         : {};
       const fallbackResult = await _toolNotFoundFallback(tc.name, safeArgs, toolRegistry, ctx);
       emit({ type: 'tool-result', name: tc.name, result: fallbackResult, toolId: tc.id });
-      return { tc, resultContent: fallbackResult };
+      // Slice-4: even on tool_not_found the critic verdict (if any) was
+      // about the *call the agent planned*, so it's still informative for
+      // the next-turn replanning. Surface it.
+      return { tc, resultContent: fallbackResult, ...(criticFeedback ? { criticFeedback } : {}) };
     }
     resultContent = `Error executing tool ${tc.name}: ${String(err)}`;
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
@@ -763,7 +807,7 @@ async function executeSingleToolCall(
     guardedRecordFeedback(feedbackMemory, false, tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
   }
 
-  return { tc, resultContent };
+  return { tc, resultContent, ...(criticFeedback ? { criticFeedback } : {}) };
 }
 
 /**
@@ -853,6 +897,12 @@ export async function _toolNotFoundFallback(
  * @param hooks          - Optional hook emitter for lifecycle events.
  * @param sandboxManager - Optional SandboxManager for sandbox-aware workspace resolution.
  * @param feedbackMemory - Optional (Phase 2) for live recordSuccess/recordFailure at exec time.
+ * @param verifyGate     - Optional slice-1 confidence dispatcher (verify-gate campaign).
+ * @param groundingChecker - Optional slice-2 grounding checker. Co-dependency: only runs when `verifyGate` escalates.
+ * @param groundingBlockEnabled - When true (SUDO_VERIFY_GATE_BLOCK=1), slice-2 grounding mismatch is a hard block.
+ * @param criticPass     - Optional slice-3 auto-critic. Co-dependency: only runs when `verifyGate` escalates AND the call is not already grounding-blocked.
+ *                         Slice 4 (SUDO_VERIFY_GATE_CRITIC_FEEDBACK=1) prepends a `'reject'` verdict's rationale
+ *                         to the tool message in session history so the agent sees it next turn.
  */
 export async function executeToolCalls(
   toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
@@ -943,11 +993,23 @@ export async function executeToolCalls(
 
   // Append a result message and decrement the pending counter.
   const commit = (res: SingleCallResult): void => {
+    // Slice-4: when the critic returned `'reject'` AND
+    // SUDO_VERIFY_GATE_CRITIC_FEEDBACK=1 was set, prepend the rationale
+    // to the tool message stored in session history so the model sees
+    // the criticism on its next turn. The `tool-result` event already
+    // fired with the raw output (see executeSingleToolCall) so telemetry
+    // and stream observers still see the un-prefixed content — only the
+    // model-facing history is annotated. `tool_result_persist` carries
+    // the annotated content so a hook subscriber can correlate it with
+    // the `verify_gate_critic_invoked` event.
+    const stored = res.criticFeedback
+      ? `${res.criticFeedback}\n\n${res.resultContent}`
+      : res.resultContent;
     // toolCallId and toolName MUST be present for the Vercel AI SDK to
     // correctly match tool results back to tool calls on the next LLM turn.
     session.messages.push({
       role: 'tool',
-      content: res.resultContent,
+      content: stored,
       toolCallId: res.tc.id,
       toolName: res.tc.name,
     });
@@ -956,7 +1018,7 @@ export async function executeToolCalls(
     void safeEmit(hooks, 'tool_result_persist', {
       sessionId: state.sessionId,
       toolName: res.tc.name,
-      result: res.resultContent,
+      result: stored,
     });
   };
 

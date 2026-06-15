@@ -12,6 +12,9 @@ import {
   CriticPass,
   parseVerdict,
   readCriticBudget,
+  readCriticFeedbackEnabled,
+  renderCriticFeedback,
+  CRITIC_FEEDBACK_PREFIX,
   type CriticBrainLike,
   type CriticReviewInput,
 } from '../../src/core/agent/verify-gate-critic.js';
@@ -245,5 +248,53 @@ describe('CriticPass.review', () => {
     expect(user?.content).toMatch(/<\/args>/);
     expect(user?.content).toMatch(/<evidence>/);
     expect(user?.content).toMatch(/<\/evidence>/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice 4 — readCriticFeedbackEnabled + renderCriticFeedback
+// ---------------------------------------------------------------------------
+
+describe('readCriticFeedbackEnabled (slice 4)', () => {
+  it('defaults to false when env is absent', () => {
+    expect(readCriticFeedbackEnabled({} as NodeJS.ProcessEnv)).toBe(false);
+  });
+
+  it('returns true only on the literal string "1"', () => {
+    expect(readCriticFeedbackEnabled({ SUDO_VERIFY_GATE_CRITIC_FEEDBACK: '1' } as unknown as NodeJS.ProcessEnv)).toBe(true);
+  });
+
+  it('rejects anything else (truthy strings included) — opt-in must be explicit', () => {
+    for (const v of ['', '0', 'true', 'TRUE', 'yes', 'on', '01', '1 ', ' 1']) {
+      expect(readCriticFeedbackEnabled({ SUDO_VERIFY_GATE_CRITIC_FEEDBACK: v } as unknown as NodeJS.ProcessEnv)).toBe(false);
+    }
+  });
+});
+
+describe('renderCriticFeedback (slice 4)', () => {
+  it('produces a single line "<PREFIX> <rationale>" for a normal rationale', () => {
+    const out = renderCriticFeedback('old_string not present in file');
+    expect(out).toBe(`${CRITIC_FEEDBACK_PREFIX} old_string not present in file`);
+  });
+
+  it('trims surrounding whitespace from the rationale', () => {
+    const out = renderCriticFeedback('   spaces around   ');
+    expect(out).toBe(`${CRITIC_FEEDBACK_PREFIX} spaces around`);
+  });
+
+  it('falls back to "(no rationale)" on empty / whitespace / null / undefined', () => {
+    const want = `${CRITIC_FEEDBACK_PREFIX} (no rationale)`;
+    expect(renderCriticFeedback('')).toBe(want);
+    expect(renderCriticFeedback('   ')).toBe(want);
+    expect(renderCriticFeedback(null)).toBe(want);
+    expect(renderCriticFeedback(undefined)).toBe(want);
+  });
+
+  it('clamps an oversized rationale to RATIONALE_MAX (defense-in-depth on bypass-parseVerdict callers)', () => {
+    const long = 'x'.repeat(1000);
+    const out = renderCriticFeedback(long);
+    // PREFIX + space + at most 280 chars of body
+    expect(out.length).toBe(CRITIC_FEEDBACK_PREFIX.length + 1 + 280);
+    expect(out.startsWith(`${CRITIC_FEEDBACK_PREFIX} `)).toBe(true);
   });
 });
