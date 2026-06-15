@@ -791,6 +791,30 @@ async function executeSingleToolCall(
               { tool: tc.name, sessionId: ctx.sessionId, rationale: criticResult.rationale },
               'verify-gate slice 5: critic reject — hard block',
             );
+            // Slice 6 — dedicated `verify_gate_critic_blocked` correlator event.
+            // Slice 5 only stored the structured `[VerifyGate] Tool call
+            // blocked` message in session history; alert routers had to
+            // regex-match the message shape to detect block enforcement.
+            // This event closes that gap: it carries the same correlator
+            // fields as `verify_gate_critic_invoked` (already fired by
+            // runCriticPass above) plus the literal block message so
+            // subscribers don't reconstruct it.
+            // Queued AFTER `verify_gate_critic_invoked`; sequential ordering
+            // is guaranteed for SYNCHRONOUS subscribers but not for async
+            // ones that yield internally. Async subscribers should correlate
+            // by sessionId + toolName rather than rely on event order.
+            // No new env flag — event presence is already env-gated by
+            // SUDO_VERIFY_GATE_CRITIC_BLOCK=1 (this branch only runs when
+            // the operator opted into the hard block).
+            void safeEmit(hooks, 'verify_gate_critic_blocked', {
+              sessionId: ctx.sessionId,
+              toolName: tc.name,
+              trigger,
+              confidence: gate.confidence,
+              threshold: gate.threshold,
+              rationale: criticResult.rationale ?? null,
+              message: blockedMsg,
+            });
             emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id });
             return { tc, resultContent: blockedMsg };
           }
