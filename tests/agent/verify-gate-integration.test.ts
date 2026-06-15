@@ -29,6 +29,7 @@ import {
   type SessionLike,
   type VerifyGateLike,
   type GroundingCheckerLike,
+  type CriticPassLike,
   type HookEmitterLike,
 } from '../../src/core/agent/loop-helpers.js';
 import { PermissionManager } from '../../src/core/agent/permissions.js';
@@ -231,6 +232,256 @@ describe('executeToolCalls — verify-gate slice 1 + slice 2 integration', () =>
       reason: 'edit-grounding-fail',
       blocked: true,
     });
+  });
+
+  // Slice 3 — auto-critic. The critic verdict ships out as a hook event but
+  // never blocks tool execution in slice 3 (observable-only).
+
+  function recordingCritic(
+    review: CriticPassLike['review'],
+  ): { critic: CriticPassLike; reviews: Array<Parameters<CriticPassLike['review']>[0]> } {
+    const reviews: Array<Parameters<CriticPassLike['review']>[0]> = [];
+    const critic: CriticPassLike = {
+      review: async (input) => {
+        reviews.push(input);
+        return review(input);
+      },
+    };
+    return { critic, reviews };
+  }
+
+  it('VGI-06 escalate + grounding fail observable → critic invoked with grounding-failed trigger', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const { critic, reviews } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'old_string not present in file',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false, // observable-only
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']); // critic is observable-only
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toMatchObject({
+      toolName: 'coder.write-file',
+      trigger: 'grounding-failed',
+      confidence: 0.2,
+      threshold: 0.55,
+    });
+    expect(reviews[0]?.evidence).toMatchObject({ reason: 'edit-grounding-fail' });
+
+    await drainMicrotasks();
+    const invoked = events.find((e) => e.event === 'verify_gate_critic_invoked');
+    expect(invoked).toBeDefined();
+    expect(invoked?.ctx).toMatchObject({
+      toolName: 'coder.write-file',
+      trigger: 'grounding-failed',
+      verdict: 'reject',
+      rationale: 'old_string not present in file',
+    });
+  });
+
+  it('VGI-07 escalate + grounding ok → critic gets low-confidence trigger, skipped hook event', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const { critic, reviews } = recordingCritic(async () => ({
+      invoked: false,
+      verdict: 'skip',
+      reason: 'soft-skip',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'foo' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(true),
+      true, // block enabled — doesn't matter, grounding ok
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]?.trigger).toBe('low-confidence');
+    // No grounding evidence on the soft path.
+    expect(reviews[0]?.evidence).toBeUndefined();
+
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_critic_invoked')).toBeUndefined();
+    const skipped = events.find((e) => e.event === 'verify_gate_critic_skipped');
+    expect(skipped).toBeDefined();
+    expect(skipped?.ctx).toMatchObject({
+      toolName: 'coder.write-file',
+      trigger: 'low-confidence',
+      reason: 'soft-skip',
+    });
+  });
+
+  it('VGI-08 escalate + grounding fail, block enabled → critic never invoked (already blocked)', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const { critic, reviews } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'approve',
+      reason: 'invoked',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      true, // BLOCK — short-circuits before the critic
+      critic,
+    );
+
+    expect(executed()).toEqual([]);
+    expect(reviews).toHaveLength(0);
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_critic_invoked')).toBeUndefined();
+    expect(events.find((e) => e.event === 'verify_gate_critic_skipped')).toBeUndefined();
+  });
+
+  it('VGI-09 critic returns budget-exhausted → dedicated hook event, no invoked event', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const { critic } = recordingCritic(async () => ({
+      invoked: false,
+      verdict: 'skip',
+      reason: 'budget-exhausted',
+      rationale: 'errors=2/3',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_critic_invoked')).toBeUndefined();
+    const budget = events.find((e) => e.event === 'verify_gate_critic_budget_exhausted');
+    expect(budget).toBeDefined();
+    expect(budget?.ctx).toMatchObject({
+      toolName: 'coder.write-file',
+      trigger: 'grounding-failed',
+      reason: 'budget-exhausted',
+      // MED-2: rationale carries errors=K/N so ops can distinguish
+      // "flaky provider burned the budget" from "real reviews burned it".
+      rationale: 'errors=2/3',
+    });
+  });
+
+  it('VGI-12 grounding checker throws + critic wired → soft low-confidence trigger', async () => {
+    // LOW-1 coverage: VGI-05 covered the throw path before slice 3 existed and
+    // did not assert critic behavior. Here we pin: when grounding threw and
+    // groundingFailedObservable stays false, the critic gets the SOFT trigger
+    // ('low-confidence') and immediately short-circuits — no LLM call.
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const { critic, reviews } = recordingCritic(async () => ({
+      invoked: false,
+      verdict: 'skip',
+      reason: 'soft-skip',
+    }));
+    const throwing: GroundingCheckerLike = {
+      check: async () => { throw new Error('disk on fire'); },
+    };
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'foo' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      throwing,
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]?.trigger).toBe('low-confidence');
+    expect(reviews[0]?.evidence).toBeUndefined();
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_grounding_error')).toBeDefined();
+    const skipped = events.find((e) => e.event === 'verify_gate_critic_skipped');
+    expect(skipped).toBeDefined();
+    expect(skipped?.ctx).toMatchObject({
+      toolName: 'coder.write-file',
+      trigger: 'low-confidence',
+      reason: 'soft-skip',
+    });
+  });
+
+  it('VGI-10 critic.review throws → fail-open, dedicated error event, tool still runs', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const critic: CriticPassLike = {
+      review: async () => { throw new Error('critic on fire'); },
+    };
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_critic_invoked')).toBeUndefined();
+    const erred = events.find((e) => e.event === 'verify_gate_critic_error');
+    expect(erred).toBeDefined();
+    expect(erred?.ctx).toMatchObject({
+      toolName: 'coder.write-file',
+      trigger: 'grounding-failed',
+      err: expect.stringContaining('critic on fire'),
+    });
+  });
+
+  it('VGI-11 gate allow → critic never consulted (no escalation, nothing to critique)', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const { critic, reviews } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', content: 'hello' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      allowingGate(),
+      fixedGrounding(false),
+      true,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    expect(reviews).toHaveLength(0);
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_critic_invoked')).toBeUndefined();
+    expect(events.find((e) => e.event === 'verify_gate_critic_skipped')).toBeUndefined();
   });
 
   it('VGI-05 grounding checker throws → fail-open, tool runs, no grounding_failed event', async () => {

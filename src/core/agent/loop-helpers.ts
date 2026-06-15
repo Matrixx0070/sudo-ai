@@ -171,6 +171,101 @@ export interface GroundingCheckerLike {
 }
 
 /**
+ * Minimal contract the AgentLoop consumes from a critic-pass implementation
+ * (slice 3 of the verify-gate campaign). Mirrors `CriticPass.review()` from
+ * verify-gate-critic.ts. Slice 3 is observable-only: the verdict ships out as
+ * a hook event but does NOT block execution. Trigger 'grounding-failed' fires
+ * an LLM critic call; 'low-confidence' short-circuits to a soft-skip.
+ */
+export interface CriticPassLike {
+  review(input: {
+    sessionId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    trigger: 'grounding-failed' | 'low-confidence';
+    confidence: number | null;
+    threshold: number;
+    evidence?: Record<string, unknown>;
+  }): Promise<{
+    invoked: boolean;
+    verdict: 'approve' | 'reject' | 'skip';
+    reason: string;
+    rationale?: string;
+  }>;
+}
+
+/**
+ * Run the slice-3 critic and emit a structured hook event. Never throws —
+ * critic-internal failures are reported as `verify_gate_critic_error` so a
+ * flaky critic can never brick the loop.
+ */
+async function runCriticPass(
+  critic: CriticPassLike,
+  input: {
+    sessionId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    trigger: 'grounding-failed' | 'low-confidence';
+    confidence: number | null;
+    threshold: number;
+    evidence?: Record<string, unknown>;
+  },
+  hooks: HookEmitterLike | undefined,
+): Promise<void> {
+  let result: Awaited<ReturnType<CriticPassLike['review']>>;
+  try {
+    result = await critic.review(input);
+  } catch (err) {
+    log.warn(
+      { tool: input.toolName, sessionId: input.sessionId, err: String(err) },
+      'verify-gate: critic.review threw — failing open',
+    );
+    void safeEmit(hooks, 'verify_gate_critic_error', {
+      sessionId: input.sessionId,
+      toolName: input.toolName,
+      trigger: input.trigger,
+      err: String(err),
+    });
+    return;
+  }
+
+  const baseCtx = {
+    sessionId: input.sessionId,
+    toolName: input.toolName,
+    trigger: input.trigger,
+    confidence: input.confidence,
+    threshold: input.threshold,
+  };
+
+  if (!result.invoked) {
+    const event = result.reason === 'budget-exhausted'
+      ? 'verify_gate_critic_budget_exhausted'
+      : result.reason === 'error' || result.reason === 'malformed'
+        ? 'verify_gate_critic_error'
+        : 'verify_gate_critic_skipped';
+    // `rationale` on the budget-exhausted path carries an `errors=K/N` breakdown
+    // from CriticPass so ops can distinguish "budget burned by real reviews"
+    // from "budget burned by a flaky provider". Other skip reasons leave it null.
+    void safeEmit(hooks, event, {
+      ...baseCtx,
+      reason: result.reason,
+      rationale: result.rationale ?? null,
+    });
+    return;
+  }
+
+  log.info(
+    { tool: input.toolName, sessionId: input.sessionId, verdict: result.verdict, trigger: input.trigger },
+    'verify-gate: critic verdict',
+  );
+  void safeEmit(hooks, 'verify_gate_critic_invoked', {
+    ...baseCtx,
+    verdict: result.verdict,
+    rationale: result.rationale ?? null,
+  });
+}
+
+/**
  * Fire a hook event without letting hook errors propagate.
  * Any exception is swallowed so a bad hook never crashes the agent loop.
  */
@@ -512,6 +607,7 @@ async function executeSingleToolCall(
   hooks?: HookEmitterLike,
   groundingChecker?: GroundingCheckerLike,
   groundingBlockEnabled: boolean = false,
+  criticPass?: CriticPassLike,
 ): Promise<SingleCallResult> {
   emit({ type: 'tool-call', name: tc.name, args: tc.arguments, toolId: tc.id });
   log.info({ tool: tc.name, toolCallId: tc.id, sessionId: ctx.sessionId }, 'Executing tool call');
@@ -561,6 +657,8 @@ async function executeSingleToolCall(
           reason: gate.reason,
         });
 
+        let groundingFailedObservable = false;
+        let lastGroundingEvidence: Record<string, unknown> | undefined;
         if (groundingChecker) {
           let grounding: Awaited<ReturnType<GroundingCheckerLike['check']>> | null = null;
           let groundingThrew = false;
@@ -601,7 +699,37 @@ async function executeSingleToolCall(
               emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id });
               return { tc, resultContent: blockedMsg };
             }
+            // Observable-only mismatch — slice-3 critic gets the strong trigger.
+            groundingFailedObservable = true;
+            lastGroundingEvidence = {
+              reason: grounding.reason,
+              checked: grounding.checked ?? null,
+              ...(grounding.evidence ?? {}),
+            };
           }
+        }
+
+        // Slice 3 — auto-critic. Reached only when the grounding block above
+        // did NOT short-circuit return. The critic runs at most once per
+        // escalated call, awaited so the verdict event lands in the same
+        // turn the agent can see on the next iteration. Strictly observable:
+        // verdict never blocks execution.
+        if (criticPass) {
+          const trigger: 'grounding-failed' | 'low-confidence' =
+            groundingFailedObservable ? 'grounding-failed' : 'low-confidence';
+          await runCriticPass(
+            criticPass,
+            {
+              sessionId: ctx.sessionId,
+              toolName: tc.name,
+              args: tc.arguments ?? {},
+              trigger,
+              confidence: gate.confidence,
+              threshold: gate.threshold,
+              ...(lastGroundingEvidence ? { evidence: lastGroundingEvidence } : {}),
+            },
+            hooks,
+          );
         }
       }
     } catch (err) {
@@ -740,6 +868,7 @@ export async function executeToolCalls(
   verifyGate?: VerifyGateLike,
   groundingChecker?: GroundingCheckerLike,
   groundingBlockEnabled: boolean = false,
+  criticPass?: CriticPassLike,
 ): Promise<void> {
   const policyFromSandbox = sandboxManager?.getPolicyFor(state.sessionId);
   // Provision workspace if sandboxManager is available — ensures directory exists before bwrap tries to mount it.
@@ -836,7 +965,7 @@ export async function executeToolCalls(
 
   // Phase 2a: leading sequential block.
   for (const tc of leadingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass);
     commit(res);
   }
 
@@ -850,19 +979,19 @@ export async function executeToolCalls(
     for (let i = 0; i < parallel.length; i += cap) {
       const chunk = parallel.slice(i, i + cap);
       const results = await Promise.all(
-        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled)),
+        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass)),
       );
       // Append in original order so the LLM context stays coherent.
       for (const res of results) commit(res);
     }
   } else if (parallel.length === 1) {
-    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled);
+    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass);
     commit(res);
   }
 
   // Phase 2c: trailing sequential block.
   for (const tc of trailingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass);
     commit(res);
   }
 

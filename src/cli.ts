@@ -1143,13 +1143,16 @@ async function boot(): Promise<void> {
     }
   }
 
-  // Verify-gate (slice 1: confidence dispatcher + slice 2: grounding check).
-  // Opt-in via SUDO_VERIFY_GATE=1. Slice 1 reads per-tool live confidence from
-  // audit.db before every destructive tool call; 'escalate' decisions emit a
-  // hook event. Slice 2 layers a grounding pass (re-read target file / stat
-  // referenced path) on top: observable-only by default, hard block when
-  // SUDO_VERIFY_GATE_BLOCK=1. Fail-open: any wiring or fs error leaves the
-  // loop unchanged. Slice 3 (auto-critic) consumes the same hook signals.
+  // Verify-gate (slice 1: confidence dispatcher + slice 2: grounding check +
+  // slice 3: auto-critic). Opt-in via SUDO_VERIFY_GATE=1. Slice 1 reads
+  // per-tool live confidence from audit.db before every destructive tool
+  // call; 'escalate' decisions emit a hook event. Slice 2 layers a grounding
+  // pass (re-read target file / stat referenced path) on top: observable-only
+  // by default, hard block when SUDO_VERIFY_GATE_BLOCK=1. Slice 3 auto-invokes
+  // the reviewer agent role on observable grounding failures and emits its
+  // verdict as a hook event (never blocks). Per-session critic-call budget
+  // capped by SUDO_VERIFY_GATE_CRITIC_BUDGET (default 3). Fail-open: any
+  // wiring or fs error leaves the loop unchanged.
   if (process.env['SUDO_VERIFY_GATE'] === '1') {
     try {
       const { ConfidenceGate } = await import('./core/agent/verify-gate.js');
@@ -1161,7 +1164,14 @@ async function boot(): Promise<void> {
       const blockOnFail = isGroundingBlockEnabled();
       finalAgentLoop.setGroundingChecker(grounding, blockOnFail);
 
-      log.info({ blockOnFail }, 'VerifyGate: slice-1 confidence dispatcher + slice-2 grounding check wired (SUDO_VERIFY_GATE=1)');
+      const { CriticPass, readCriticBudget } = await import('./core/agent/verify-gate-critic.js');
+      const critic = new CriticPass(brain as unknown as import('./core/agent/verify-gate-critic.js').CriticBrainLike);
+      finalAgentLoop.setCriticPass(critic);
+
+      log.info(
+        { blockOnFail, criticBudget: readCriticBudget() },
+        'VerifyGate: slice-1 confidence dispatcher + slice-2 grounding check + slice-3 auto-critic wired (SUDO_VERIFY_GATE=1)',
+      );
     } catch (err: unknown) {
       log.warn({ err: String(err) }, 'VerifyGate wiring failed — verify-gate disabled');
     }
