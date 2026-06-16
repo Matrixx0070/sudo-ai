@@ -814,6 +814,13 @@ export class AgentLoop {
    * current tool call. `blockOnFail=true` upgrades a grounding mismatch to a
    * hard block; default is observable-only. Duck-typed against
    * `GroundingCheckerLike` — invalid handles are ignored with a warning.
+   *
+   * `blockOnFail=true` is a permanent code-level override: once set, the block
+   * stays on regardless of `SUDO_VERIFY_GATE_BLOCK`. The per-call check ORs
+   * the cached param with the live env value, so `blockOnFail=false` (the
+   * default) lets `SUDO_VERIFY_GATE_BLOCK=1` toggle the block on/off at
+   * runtime without re-attaching. To release a code-level forced block,
+   * re-call this with `blockOnFail=false`.
    */
   setGroundingChecker(
     checker: import('./loop-helpers.js').GroundingCheckerLike,
