@@ -11,6 +11,8 @@ compatibility: [node-22]
 caps: []
 tags: [content, youtube, no-llm, no-network]
 source: bundled:sudo-ai
+isReadOnly: true
+isConcurrencySafe: true
 metadata:
   trust_tier: bundled
 ---
