@@ -42,6 +42,7 @@ import { applyPatches } from './patch-applier.js';
 import { parsePatchBlock } from './patch-parser.js';
 import type { ApplyResult } from './patch-types.js';
 import { recon } from './recon.js';
+import { readAutoRevertEnabled, revertAttempts, type RevertResult } from './revert.js';
 import {
   buildRetryAppendix,
   clampMaxAttempts,
@@ -88,6 +89,12 @@ interface AttemptRecord {
   diffSummary: string;
   /** Wall-clock ms for this attempt (LLM call + apply + tsc + tests + critic). */
   durationMs: number;
+  /**
+   * Per-attempt success bool — same shape as the final tool success. Lifted
+   * onto the record so the post-loop auto-revert decision (all-attempts-fail
+   * trigger) doesn't have to re-derive it from the constituent fields.
+   */
+  attemptSuccess: boolean;
 }
 
 function runTsc(): TscResult {
@@ -417,6 +424,15 @@ export const arsenalV2Tool: ToolDefinition = {
         : null;
 
       const durationMs = Date.now() - attemptStartedAt;
+
+      // Per-attempt success same shape as the final success bool — used to
+      // make the telemetry row's "success" interpretable in aggregate later
+      // AND to drive the post-loop all-attempts-fail revert trigger.
+      const attemptTscOk = after.clean || (baseline ? after.errorCount < baseline.errorCount : true);
+      const attemptTestsOk = !testResult || testResult.skipped || testResult.passed;
+      const attemptCriticOk = !criticResult || criticResult.skipped || criticResult.verdict === 'approve';
+      const attemptSuccess = failed === 0 && attemptTscOk && attemptTestsOk && attemptCriticOk;
+
       attempts.push({
         index: attemptIdx,
         model: currentModel,
@@ -429,14 +445,8 @@ export const arsenalV2Tool: ToolDefinition = {
         criticResult,
         diffSummary,
         durationMs,
+        attemptSuccess,
       });
-
-      // Per-attempt success same shape as the final success bool — used to
-      // make the telemetry row's "success" interpretable in aggregate later.
-      const attemptTscOk = after.clean || (baseline ? after.errorCount < baseline.errorCount : true);
-      const attemptTestsOk = !testResult || testResult.skipped || testResult.passed;
-      const attemptCriticOk = !criticResult || criticResult.skipped || criticResult.verdict === 'approve';
-      const attemptSuccess = failed === 0 && attemptTscOk && attemptTestsOk && attemptCriticOk;
 
       if (telemetryEnabled) {
         recordAttempt(
@@ -576,6 +586,7 @@ export const arsenalV2Tool: ToolDefinition = {
 
     lines.push(`## Backups`);
     lines.push(`  ${applyResult.backupDir}`);
+    lines.push('');
 
     const tscOk = after.clean || (baseline ? after.errorCount < baseline.errorCount : true);
     const testsOk = !testResult || testResult.skipped || testResult.passed;
@@ -584,6 +595,44 @@ export const arsenalV2Tool: ToolDefinition = {
     // graceful degrade, matching how tsc / tests treat their own skip paths.
     const criticOk = !criticResult || criticResult.skipped || criticResult.verdict === 'approve';
     const success = failed === 0 && tscOk && testsOk && criticOk;
+
+    // Auto-revert on all-attempts-fail (opt-in via SUDO_ARSENAL_V2_AUTO_REVERT=1).
+    // Trigger: the run as a whole failed AND every individual attempt also
+    // failed by its own success criteria. A partial improvement (e.g. tsc
+    // errors dropped attempt 1 but everything broke attempt 2) is left on
+    // disk — the operator can still use per-attempt backup dirs manually.
+    // Disabled by default: a tool that mutates user code should not also
+    // auto-delete those mutations without an explicit operator decision.
+    const autoRevertEnabled = readAutoRevertEnabled(process.env);
+    const allAttemptsFailed =
+      !success && attempts.length > 0 && attempts.every((a) => !a.attemptSuccess);
+    let revertResult: RevertResult | null = null;
+    if (allAttemptsFailed && autoRevertEnabled) {
+      revertResult = revertAttempts(attempts, { projectRoot: PROJECT_ROOT });
+      logger.warn(
+        {
+          restored: revertResult.restored,
+          deleted: revertResult.deleted,
+          failed: revertResult.failed,
+          attempts: attempts.length,
+        },
+        'arsenal-v2: all attempts failed — auto-revert ran',
+      );
+      lines.push('## Revert');
+      lines.push(
+        `  All ${attempts.length} attempt(s) failed; SUDO_ARSENAL_V2_AUTO_REVERT=1 active.`,
+      );
+      lines.push(
+        `  Restored: ${revertResult.restored} file(s), Deleted: ${revertResult.deleted} file(s), Failed: ${revertResult.failed} file(s).`,
+      );
+      if (revertResult.errors.length > 0) {
+        for (const e of revertResult.errors.slice(0, 5)) lines.push(`    ✗ ${e}`);
+        if (revertResult.errors.length > 5) {
+          lines.push(`    … +${revertResult.errors.length - 5} more (see logs)`);
+        }
+      }
+      lines.push('');
+    }
     return {
       success,
       output: lines.join('\n'),
@@ -617,6 +666,14 @@ export const arsenalV2Tool: ToolDefinition = {
         attemptVerdicts: attempts.map((a) => a.criticResult?.verdict ?? null),
         loopAbortReason,
         telemetryEnabled,
+        autoRevertEnabled,
+        reverted: revertResult !== null,
+        // Split restored vs deleted so the data shape matches the existing
+        // paired-counter convention (opsApplied / opsSkipped / opsFailed).
+        // Verifier LOW-1.
+        revertedRestored: revertResult?.restored ?? 0,
+        revertedDeleted: revertResult?.deleted ?? 0,
+        revertedFailed: revertResult?.failed ?? 0,
       },
     };
   },
