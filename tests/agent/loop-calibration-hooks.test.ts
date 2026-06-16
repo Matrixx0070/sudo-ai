@@ -57,10 +57,10 @@ const createMockSandboxManager = () => ({
 
 /** Build a spy calibration tracker. */
 function makeSpyTracker() {
-  const calls: Array<{ predicted: number; outcome: number; tag?: string }> = [];
+  const calls: Array<{ predicted: number; outcome: number; tag?: string; toolName?: string }> = [];
   return {
-    record: vi.fn((predicted: number, outcome: 0 | 1, tag?: string) => {
-      calls.push({ predicted, outcome, tag });
+    record: vi.fn((predicted: number, outcome: 0 | 1, tag?: string, toolName?: string) => {
+      calls.push({ predicted, outcome, tag, toolName });
     }),
     getReport: vi.fn(() => ({
       totalSamples: calls.length,
@@ -122,10 +122,12 @@ describe('CAL-2: record(predicted, 1, tag) on tool-call success', () => {
     await loop.run('test-session-id', 'do something');
 
     expect(tracker.record).toHaveBeenCalledTimes(1);
-    const [predicted, outcome] = tracker.record.mock.calls[0] as [number, number, string?];
+    const [predicted, outcome, , toolName] = tracker.record.mock.calls[0] as [number, number, string?, string?];
     expect(outcome).toBe(1);
     expect(typeof predicted).toBe('number');
     expect(predicted).toBeGreaterThan(0);
+    // Calibration-pivot follow-up: the 4th arg carries the dispatched tool's name.
+    expect(toolName).toBe('system.hello');
   });
 });
 
@@ -164,8 +166,11 @@ describe('CAL-3: record() still called with outcome=1 when tool fails internally
     // record should have been called (the executeToolCalls function completed)
     expect(tracker.record).toHaveBeenCalled();
     // Since executeToolCalls did not throw, outcome should be 1
-    const call = tracker.record.mock.calls[0] as [number, number, string?];
+    const call = tracker.record.mock.calls[0] as [number, number, string?, string?];
     expect(call[1]).toBe(1);
+    // Calibration-pivot follow-up: tool name still threaded through on the
+    // absorbed-error path.
+    expect(call[3]).toBe('system.hello');
   });
 });
 
@@ -197,10 +202,13 @@ describe('CAL-4: record(predicted, 0, tag) on epistemic REPLAN/block', () => {
     const blockedCall = tracker.record.mock.calls.find((c: unknown[]) => (c as [number, number])[1] === 0);
     expect(blockedCall).toBeDefined();
     if (blockedCall) {
-      const [predicted, outcome] = blockedCall as [number, number, string?];
+      const [predicted, outcome, , toolName] = blockedCall as [number, number, string?, string?];
       // CONJECTURE → 0.4
       expect(outcome).toBe(0);
       expect(predicted).toBeCloseTo(0.4, 5);
+      // Calibration-pivot follow-up: tool name threads through the REPLAN
+      // block record() call too (loop.ts:2268).
+      expect(toolName).toBe('update_file');
     }
   });
 });

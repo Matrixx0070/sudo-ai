@@ -282,8 +282,8 @@ export class AgentLoop {
   private epistemicGate?: EpistemicGate;
   // Confidence calibration tracker — optional, set via setter after construction.
   private _confidenceCalibrationTracker?: {
-    record(predicted: number, outcome: 0|1, tag?: string): void;
-    getReport(opts?: { windowDays?: number; tag?: string }): {
+    record(predicted: number, outcome: 0|1, tag?: string, toolName?: string): void;
+    getReport(opts?: { windowDays?: number; tag?: string; toolName?: string }): {
       totalSamples: number; brierScore: number; overallAvgPredicted: number; overallSuccessRate: number;
       buckets: Array<{ bucket: string; rangeLow: number; rangeHigh: number; count: number; avgPredicted: number; actualSuccessRate: number; calibrationError: number }>;
       windowDays: number; computedAt: string;
@@ -2232,7 +2232,7 @@ export class AgentLoop {
 
           // Per-tool-call pending calibration entries keyed by tc.id.
           // Populated at decision time; consumed at outcome (success/failure/veto/block).
-          const calibrationPending = new Map<string, { predicted: number; tag: string }>();
+          const calibrationPending = new Map<string, { predicted: number; tag: string; toolName: string }>();
 
           if (this.epistemicGate !== undefined) {
             for (const tc of validToolCalls) {
@@ -2265,7 +2265,7 @@ export class AgentLoop {
                   // Record epistemic-block or conjecture-commit outcome (fail-open).
                   try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: eg.error ? 'conjecture-commit' : 'epistemic-block' }); } catch {}
                   // Record calibration outcome=0 for blocked call (fail-open).
-                  try { this._confidenceCalibrationTracker?.record(egPredicted, 0, eg.tag); } catch {}
+                  try { this._confidenceCalibrationTracker?.record(egPredicted, 0, eg.tag, tc.name); } catch {}
                   // Synthesize tool-result stubs for ALL pending validToolCalls.
                   // The assistant message pushed at line ~876 already contains toolCalls for the
                   // full batch. Without matching tool_result entries the AI SDK's
@@ -2284,7 +2284,7 @@ export class AgentLoop {
                   break;
                 } else {
                   // PROCEED or UNCERTAIN_RESPONSE — store pending entry for outcome recording later.
-                  calibrationPending.set(tc.id, { predicted: egPredicted, tag: eg.tag });
+                  calibrationPending.set(tc.id, { predicted: egPredicted, tag: eg.tag, toolName: tc.name });
                   if (eg.result.decision === 'UNCERTAIN_RESPONSE' && eg.response) {
                     session.messages.push({ role: 'system', content: eg.response.message });
                     log.info({ tool: tc.name, tag: eg.tag, sessionId: state.sessionId }, 'EpistemicGate UNCERTAIN_RESPONSE injected');
@@ -2300,7 +2300,7 @@ export class AgentLoop {
           } else {
             // Epistemic gate absent (or bypassed via override) — use OVERRIDE/0.5 neutral.
             for (const tc of validToolCalls) {
-              calibrationPending.set(tc.id, { predicted: 0.5, tag: 'OVERRIDE' });
+              calibrationPending.set(tc.id, { predicted: 0.5, tag: 'OVERRIDE', toolName: tc.name });
             }
           }
 
@@ -2454,7 +2454,7 @@ export class AgentLoop {
                 vetoedIds.add(tc.id);
                 try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'veto' }); } catch {}
                 // Record calibration outcome=0 for veto-deny (fail-open).
-                try { const _cp = calibrationPending.get(tc.id); if (_cp) { this._confidenceCalibrationTracker?.record(_cp.predicted, 0, _cp.tag); calibrationPending.delete(tc.id); } } catch {}
+                try { const _cp = calibrationPending.get(tc.id); if (_cp) { this._confidenceCalibrationTracker?.record(_cp.predicted, 0, _cp.tag, _cp.toolName); calibrationPending.delete(tc.id); } } catch {}
                 if (this.auditTrail?.recordTriple) {
                   try {
                     this.auditTrail.recordTriple({
@@ -2506,7 +2506,7 @@ export class AgentLoop {
                 vetoedIds.add(tc.id);
                 try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'veto' }); } catch {}
                 // Record calibration outcome=0 for veto-gate deny (fail-open).
-                try { const _vcp = calibrationPending.get(tc.id); if (_vcp) { this._confidenceCalibrationTracker?.record(_vcp.predicted, 0, _vcp.tag); calibrationPending.delete(tc.id); } } catch {}
+                try { const _vcp = calibrationPending.get(tc.id); if (_vcp) { this._confidenceCalibrationTracker?.record(_vcp.predicted, 0, _vcp.tag, _vcp.toolName); calibrationPending.delete(tc.id); } } catch {}
                 // H3: Audit trail entry on every VETO (non-fatal).
                 if (this.auditTrail) {
                   try { this.auditTrail.recordTriple({ mistake: 'tool call vetoed', learned: `risk=${vetoResult.risk} reason=${vetoResult.reason}`, commitment: `do not retry vetoed call: ${tc.name}`, ttl_days: 7 }); } catch { /* non-fatal */ }
@@ -2724,7 +2724,7 @@ export class AgentLoop {
             try {
               for (const _atc of activeToolCalls) {
                 const _scp = calibrationPending.get(_atc.id);
-                if (_scp) { this._confidenceCalibrationTracker?.record(_scp.predicted, 1, _scp.tag); calibrationPending.delete(_atc.id); }
+                if (_scp) { this._confidenceCalibrationTracker?.record(_scp.predicted, 1, _scp.tag, _scp.toolName); calibrationPending.delete(_atc.id); }
               }
             } catch {}
             // Injection scan on tool outputs (before feeding back to model).
@@ -2774,7 +2774,7 @@ export class AgentLoop {
             try {
               for (const _ftc of activeToolCalls) {
                 const _fcp = calibrationPending.get(_ftc.id);
-                if (_fcp) { this._confidenceCalibrationTracker?.record(_fcp.predicted, 0, _fcp.tag); calibrationPending.delete(_ftc.id); }
+                if (_fcp) { this._confidenceCalibrationTracker?.record(_fcp.predicted, 0, _fcp.tag, _fcp.toolName); calibrationPending.delete(_ftc.id); }
               }
             } catch {}
             // Phase 2: TraceDrivenPolicy — record tool failure outcomes for feedback loop (fail-open).
