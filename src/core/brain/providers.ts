@@ -228,12 +228,39 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
             }
           }
 
-          const res = await globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, body, headers });
+          // Diagnostic helper: pull the model id out of the outgoing body so
+          // the error log says WHICH model failed (the SDK's RetryError
+          // collapses cause to "Error" with no message — this is the only
+          // place the model name is still visible).
+          const outgoingModel: string | undefined = typeof body === 'string'
+            ? (() => { try { return (JSON.parse(body) as { model?: string }).model; } catch { return undefined; } })()
+            : undefined;
+
+          let res: Response;
+          try {
+            res = await globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, body, headers });
+          } catch (err) {
+            // Network-layer failure: DNS, TLS, abort, timeout, EAI_AGAIN, etc.
+            // Never produced a Response, so the non-2xx branch below never
+            // runs and the SDK only sees a thrown Error with whatever the
+            // platform put in .message (often empty on undici). Log enough
+            // here to actually diagnose.
+            const e = err instanceof Error ? err : new Error(String(err));
+            const cause = (e as { cause?: unknown }).cause;
+            log.warn({
+              model: outgoingModel,
+              errName: e.name,
+              errMessage: e.message || '(empty)',
+              errCode: (e as { code?: string }).code,
+              cause: cause ? (cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)) : undefined,
+            }, 'claude-oauth: fetch threw before response');
+            throw err;
+          }
           if (!res.ok) {
             try {
               const clone = res.clone();
               const errBody = (await clone.text()).slice(0, 600);
-              log.warn({ status: res.status, errBody }, 'claude-oauth: non-2xx from Anthropic');
+              log.warn({ status: res.status, model: outgoingModel, errBody }, 'claude-oauth: non-2xx from Anthropic');
             } catch { /* ignore */ }
             return res;
           }
