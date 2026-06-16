@@ -11,6 +11,24 @@
 import type { Database as BetterSqlite3DB, Statement } from 'better-sqlite3';
 
 // ---------------------------------------------------------------------------
+// Row shapes (owned here — the SQL author defines what columns come back)
+// ---------------------------------------------------------------------------
+
+export interface ActivationNodeRow {
+  id: string;
+  activation: number;
+  last_activated: string;
+  total_activations: number;
+}
+
+export interface ActivationEdgeRow {
+  from_id: string;
+  to_id: string;
+  weight: number;
+  cooccurrences: number;
+}
+
+// ---------------------------------------------------------------------------
 // Statement bundle type
 // ---------------------------------------------------------------------------
 
@@ -18,56 +36,48 @@ import type { Database as BetterSqlite3DB, Statement } from 'better-sqlite3';
  * All prepared statements used by SpreadingActivationNetwork.
  * Fields are named after their purpose to keep call-sites self-documenting.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface NetworkStatements {
   /**
    * INSERT or UPDATE a concept node, incrementing total_activations on conflict.
    * Params: id, activation, last_activated
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  upsertNode: Statement<any[], any>;
+  upsertNode: Statement<[string, number, string]>;
 
   /**
    * SELECT a single node by id.
    * Params: id
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getNode: Statement<any[], any>;
+  getNode: Statement<[string], ActivationNodeRow>;
 
   /**
    * SELECT all outgoing edges for a node.
    * Params: from_id
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  edgesFrom: Statement<any[], any>;
+  edgesFrom: Statement<[string], ActivationEdgeRow>;
 
   /**
    * INSERT an edge if it does not already exist (no-op on duplicate).
    * Params: from_id, to_id, weight
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  upsertEdge: Statement<any[], any>;
+  upsertEdge: Statement<[string, string, number]>;
 
   /**
    * Increase an edge's weight by delta (capped at 1.0) and increment cooccurrences.
    * Params: delta, from_id, to_id
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  strengthenEdge: Statement<any[], any>;
+  strengthenEdge: Statement<[number, string, string]>;
 
   /**
    * SELECT top-N outgoing edges sorted by weight DESC.
    * Params: from_id, limit
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  edgesRelated: Statement<any[], any>;
+  edgesRelated: Statement<[string, number], ActivationEdgeRow>;
 
   /**
    * UPDATE activation and last_activated for a node without touching total_activations.
    * Params: activation, last_activated, id
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  updateActivation: Statement<any[], any>;
+  updateActivation: Statement<[number, string, string]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +91,7 @@ export interface NetworkStatements {
  * @param db - Open better-sqlite3 Database instance.
  */
 export function buildStatements(db: BetterSqlite3DB): NetworkStatements {
-  const upsertNode = db.prepare(`
+  const upsertNode = db.prepare<[string, number, string]>(`
     INSERT INTO concept_nodes (id, activation, last_activated, total_activations)
     VALUES (?, ?, ?, 1)
     ON CONFLICT(id) DO UPDATE SET
@@ -90,30 +100,30 @@ export function buildStatements(db: BetterSqlite3DB): NetworkStatements {
       total_activations = total_activations + 1
   `);
 
-  const getNode = db.prepare(`
+  const getNode = db.prepare<[string], ActivationNodeRow>(`
     SELECT id, activation, last_activated, total_activations
     FROM concept_nodes WHERE id = ?
   `);
 
-  const edgesFrom = db.prepare(`
+  const edgesFrom = db.prepare<[string], ActivationEdgeRow>(`
     SELECT from_id, to_id, weight, cooccurrences
     FROM concept_edges WHERE from_id = ?
   `);
 
-  const upsertEdge = db.prepare(`
+  const upsertEdge = db.prepare<[string, string, number]>(`
     INSERT INTO concept_edges (from_id, to_id, weight)
     VALUES (?, ?, ?)
     ON CONFLICT(from_id, to_id) DO NOTHING
   `);
 
-  const strengthenEdge = db.prepare(`
+  const strengthenEdge = db.prepare<[number, string, string]>(`
     UPDATE concept_edges
     SET weight        = MIN(weight + ?, 1.0),
         cooccurrences = cooccurrences + 1
     WHERE from_id = ? AND to_id = ?
   `);
 
-  const edgesRelated = db.prepare(`
+  const edgesRelated = db.prepare<[string, number], ActivationEdgeRow>(`
     SELECT from_id, to_id, weight, cooccurrences
     FROM concept_edges
     WHERE from_id = ?
@@ -121,7 +131,7 @@ export function buildStatements(db: BetterSqlite3DB): NetworkStatements {
     LIMIT ?
   `);
 
-  const updateActivation = db.prepare(`
+  const updateActivation = db.prepare<[number, string, string]>(`
     UPDATE concept_nodes
     SET activation = ?, last_activated = ?
     WHERE id = ?

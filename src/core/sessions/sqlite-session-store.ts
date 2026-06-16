@@ -16,7 +16,7 @@
  *  - MemoryInjectionError bubbles from appendMessage unchanged.
  */
 
-import type { Database } from 'better-sqlite3';
+import type { Database, Statement } from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import { SudoError } from '../shared/errors.js';
 import { guardMemoryWrite, type MessageRole } from '../memory/injection-scanner.js';
@@ -105,6 +105,35 @@ interface CountRow {
 }
 
 // ---------------------------------------------------------------------------
+// Prepared-statement bind shapes (named params → object literals)
+// ---------------------------------------------------------------------------
+
+interface InsertSessionBind {
+  id: string;
+  source_platform: string;
+  user_id: string;
+  model: string;
+  system_prompt: string | null;
+  parent_session_id: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  title: string | null;
+  status: string;
+}
+
+interface InsertMessageBind {
+  session_id: string;
+  role: MessageRow['role'];
+  content: string;
+}
+
+interface LinkParentBind {
+  id: string;
+  parent_session_id: string;
+}
+
+// ---------------------------------------------------------------------------
 // Column definitions for migration runner
 // ---------------------------------------------------------------------------
 
@@ -127,25 +156,19 @@ const NEW_COLUMNS: ReadonlyArray<readonly [string, string, string]> = [
 export class SqliteSessionStore {
   private readonly db: Database;
 
-  // Prepared statements — compiled once in constructor, reused on every call
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtInsertSession: ReturnType<Database['prepare']>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtGetSession: ReturnType<Database['prepare']>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtInsertMessage: ReturnType<Database['prepare']>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtGetMessages: ReturnType<Database['prepare']>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtCountMessages: ReturnType<Database['prepare']>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtLinkParent: ReturnType<Database['prepare']>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtDeleteSession: ReturnType<Database['prepare']>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtGetCursorAt: ReturnType<Database['prepare']>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly stmtSearchSessions: ReturnType<Database['prepare']>;
+  // Prepared statements — compiled once in constructor, reused on every call.
+  // Typed via better-sqlite3's `Statement<BindParameters, Result>` so the
+  // bind shapes and row shapes flow through, eliminating the explicit-any
+  // suppressions the file used to need on each declaration.
+  private readonly stmtInsertSession: Statement<[InsertSessionBind]>;
+  private readonly stmtGetSession: Statement<[string], AliasedSessionRow>;
+  private readonly stmtInsertMessage: Statement<[InsertMessageBind]>;
+  private readonly stmtGetMessages: Statement<[string, number], MessageRow>;
+  private readonly stmtCountMessages: Statement<[string], CountRow>;
+  private readonly stmtLinkParent: Statement<[LinkParentBind]>;
+  private readonly stmtDeleteSession: Statement<[string]>;
+  private readonly stmtGetCursorAt: Statement<[string], RawCursorRow>;
+  private readonly stmtSearchSessions: Statement<[string], AliasedSessionRow>;
 
   constructor(db: Database) {
     this.db = db;
@@ -252,7 +275,7 @@ export class SqliteSessionStore {
    */
   getSession(sessionId: string): SessionRow | undefined {
     if (!sessionId) return undefined;
-    const row = this.stmtGetSession.get(sessionId) as AliasedSessionRow | undefined;
+    const row = this.stmtGetSession.get(sessionId);
     return row ? this._mapSession(row) : undefined;
   }
 
@@ -276,7 +299,7 @@ export class SqliteSessionStore {
    */
   getMessages(sessionId: string, limit = 100): MessageRow[] {
     if (!sessionId) return [];
-    return (this.stmtGetMessages as { all: (...args: unknown[]) => unknown[] }).all(sessionId, limit) as MessageRow[];
+    return this.stmtGetMessages.all(sessionId, limit);
   }
 
   /**
@@ -299,7 +322,7 @@ export class SqliteSessionStore {
 
     // Cursor pagination via afterId — look up the cursor row's created_at
     if (opts.afterId) {
-      const cursor = this.stmtGetCursorAt.get(opts.afterId) as RawCursorRow | undefined;
+      const cursor = this.stmtGetCursorAt.get(opts.afterId);
       if (cursor) {
         clauses.push(
           '(created_at < :cursor_at OR (created_at = :cursor_at AND id < :cursor_id))',
@@ -311,7 +334,7 @@ export class SqliteSessionStore {
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
 
-    const rows = this.db.prepare(`
+    const rows = this.db.prepare<Record<string, unknown>, AliasedSessionRow>(`
       SELECT
         id              AS session_id,
         source_platform, user_id, model, system_prompt,
@@ -321,7 +344,7 @@ export class SqliteSessionStore {
       ${where}
       ORDER BY created_at DESC, id DESC
       LIMIT :limit
-    `).all(params) as AliasedSessionRow[];
+    `).all(params);
 
     return rows.map((r) => this._mapSession(r));
   }
@@ -334,7 +357,7 @@ export class SqliteSessionStore {
   searchSessions(query: string): SessionRow[] {
     if (!query?.trim()) return [];
     try {
-      const rows = this.stmtSearchSessions.all(query) as AliasedSessionRow[];
+      const rows = this.stmtSearchSessions.all(query);
       return rows.map((r) => this._mapSession(r));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -385,7 +408,7 @@ export class SqliteSessionStore {
    * Return message count for a session (utility; used in tests).
    */
   getMessageCount(sessionId: string): number {
-    const row = this.stmtCountMessages.get(sessionId) as CountRow | undefined;
+    const row = this.stmtCountMessages.get(sessionId);
     return row?.cnt ?? 0;
   }
 
