@@ -74,6 +74,21 @@ describe('isAllowlistEligible — negative cases (writes / network / chained)', 
   });
 });
 
+describe('isAllowlistEligible — quoted commands are rejected (conservative)', () => {
+  it.each([
+    'cat "README.md"',
+    "cat 'README.md'",
+    'echo "hello world"',
+    "echo 'hello world'",
+    'grep "foo bar" file.txt',
+    "grep 'foo' file.txt",
+    'git log --grep="bugfix"', // single-arg with embedded quote
+    'ls "folder with space"',
+  ])('quoted (not eligible): %s', (cmd) => {
+    expect(isAllowlistEligible(cmd)).toBe(false);
+  });
+});
+
 describe('isAllowlistEligible — defensive inputs', () => {
   it('returns false for undefined / null / non-string', () => {
     expect(isAllowlistEligible(undefined)).toBe(false);

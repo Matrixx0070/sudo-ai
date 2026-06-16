@@ -72,9 +72,17 @@ const GIT_READONLY_SUBCMDS: ReadonlySet<string> = new Set([
 /**
  * Any of these in the command body forces the fall-through path. Includes
  * shell separators, pipes, redirections, command/process substitution,
- * subshells, and variable expansion. A single occurrence anywhere disqualifies.
+ * subshells, variable expansion, AND quote characters. A single occurrence
+ * anywhere disqualifies.
+ *
+ * Why quotes are vetoed: token-splitting by `/\s+/` is not quote-aware, so a
+ * command like `cat "file with space"` tokenizes to `['cat', '"file', 'with',
+ * 'space"']` — the head check still passes, but the args are wrong. Rather
+ * than ship quote-aware tokenization for a v1 fast-path, we reject any
+ * quoted command and let it fall through to the prompt. False negative,
+ * not a false positive — the right side of the safety tradeoff.
  */
-const FORBIDDEN_METACHARS = /[;&|<>`$()]/;
+const FORBIDDEN_METACHARS = /[;&|<>`$()"']/;
 
 /**
  * Pure, static eligibility check — no side effects, no I/O, no parser state.
