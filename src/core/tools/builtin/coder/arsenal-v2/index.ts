@@ -35,6 +35,7 @@ import {
   buildSystemPrompt,
   isMutatingMode,
 } from './system-prompt.js';
+import { runRelatedTests } from './verify.js';
 
 const logger = createLogger('coder.arsenal-v2');
 
@@ -226,6 +227,14 @@ export const arsenalV2Tool: ToolDefinition = {
     // ---- 7. Re-run tsc to verify ----
     const after = runTsc();
 
+    // ---- 7b. Run vitest --related on patch-touched files ----
+    // Test failures are surfaced in the report but do NOT abort — matches how
+    // tsc errors are handled. Tool success still requires opsFailed === 0 and
+    // a non-regressed tsc, plus (when tests ran) a clean test result.
+    const testResult = applied > 0
+      ? runRelatedTests(applyResult.filesWritten, { projectRoot: PROJECT_ROOT })
+      : null;
+
     // ---- 8. Build structured report ----
     const lines: string[] = [`**[coder.arsenal-v2 — ${modelId} — ${mode}]**`, ''];
     lines.push('## Patches');
@@ -244,10 +253,22 @@ export const arsenalV2Tool: ToolDefinition = {
       lines.push('');
     }
 
+    if (testResult) {
+      lines.push('## Tests');
+      lines.push(`  ${testResult.summary.split('\n')[0]}`);
+      if (testResult.ran && !testResult.passed) {
+        const rest = testResult.summary.split('\n').slice(1);
+        for (const l of rest) lines.push(`  ${l}`);
+      }
+      lines.push('');
+    }
+
     lines.push(`## Backups`);
     lines.push(`  ${applyResult.backupDir}`);
 
-    const success = failed === 0 && (after.clean || (baseline ? after.errorCount < baseline.errorCount : true));
+    const tscOk = after.clean || (baseline ? after.errorCount < baseline.errorCount : true);
+    const testsOk = !testResult || testResult.skipped || testResult.passed;
+    const success = failed === 0 && tscOk && testsOk;
     return {
       success,
       output: lines.join('\n'),
@@ -263,6 +284,11 @@ export const arsenalV2Tool: ToolDefinition = {
         typeErrorsBefore: baseline?.errorCount ?? null,
         typeErrorsAfter: after.errorCount,
         typesClean: after.clean,
+        testsRan: testResult?.ran ?? false,
+        testsPassed: testResult?.passed ?? null,
+        testsRun: testResult?.testsRun ?? null,
+        testFailures: testResult?.failures ?? null,
+        testSkipReason: testResult?.skipReason ?? null,
       },
     };
   },
