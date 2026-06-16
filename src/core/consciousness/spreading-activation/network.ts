@@ -27,8 +27,6 @@ const clamp = (v: number, lo = 0, hi = 1): number => Math.max(lo, Math.min(hi, v
 const nowISO = (): string => new Date().toISOString();
 const norm = (s: string): string => s.trim().toLowerCase();
 
-interface NodeRow { id: string; activation: number; last_activated: string; total_activations: number; }
-interface EdgeRow { from_id: string; to_id: string; weight: number; cooccurrences: number; }
 
 /** Associative concept network with spreading activation, Hebbian learning,
  * and exponential decay. In-memory cache is source of truth; call flush() to persist. */
@@ -52,7 +50,7 @@ export class SpreadingActivationNetwork {
   private _getOrCreate(id: string): ConceptNode {
     let node = this._nodes.get(id);
     if (node) return node;
-    const row = this._s.getNode.get(id) as NodeRow | undefined;
+    const row = this._s.getNode.get(id);
     if (row) {
       node = { id: row.id, activation: row.activation, lastActivated: row.last_activated, totalActivations: row.total_activations };
     } else {
@@ -94,7 +92,7 @@ export class SpreadingActivationNetwork {
           this._persist(node);
           directlyActivated.push(id);
 
-          for (const edge of this._s.edgesFrom.all(id) as EdgeRow[]) {
+          for (const edge of this._s.edgesFrom.all(id)) {
             const nb = this._getOrCreate(edge.to_id);
             nb.activation = clamp(nb.activation + k * edge.weight * SPREAD_SCALE);
             nb.lastActivated = nowISO();
@@ -228,7 +226,7 @@ export class SpreadingActivationNetwork {
       throw new ConsciousnessError(`getRelated: count must be a positive integer, got ${count}`,
         'consciousness_spreading_invalid_input', { count });
     }
-    return (this._s.edgesRelated.all(id, count) as EdgeRow[])
+    return this._s.edgesRelated.all(id, count)
       .map((e) => this._getOrCreate(e.to_id));
   }
 
@@ -270,7 +268,7 @@ export class SpreadingActivationNetwork {
 
   /** Return outgoing edges for a concept (for introspection and testing). */
   getEdgesFrom(concept: string): ConceptEdge[] {
-    return (this._s.edgesFrom.all(norm(concept)) as EdgeRow[]).map((r) => ({
+    return this._s.edgesFrom.all(norm(concept)).map((r) => ({
       fromId: r.from_id, toId: r.to_id, weight: r.weight, cooccurrences: r.cooccurrences,
     }));
   }
