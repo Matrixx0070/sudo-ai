@@ -1002,4 +1002,56 @@ describe('executeToolCalls — verify-gate slice 5 (critic-reject hard block)', 
       message: stored,
     });
   });
+
+  it('VGI-22 async-yielding subscriber sees invoked-then-blocked order (regression: void safeEmit reordered events)', async () => {
+    // VGI-18's order check uses makeHooks(), whose emit handler pushes
+    // synchronously and so passes even when production code does
+    // `void safeEmit(...)` — the push order matches source order purely
+    // because nothing yields. This test forces the invoked handler to
+    // yield internally before recording, which would let the blocked
+    // handler's push complete first under fire-and-forget emission.
+    // The production fix awaits both safeEmit calls so HookEmitter.emit's
+    // sequential handler iteration extends end-to-end.
+    process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = '1';
+
+    const events: Array<{ event: string; ctx: Record<string, unknown> }> = [];
+    const yieldingHooks: HookEmitterLike = {
+      emit: async (event: string, ctx: Record<string, unknown>) => {
+        // Three microtask yields before recording the invoked event;
+        // blocked records immediately. Without await on the production
+        // safeEmit, blocked would push to `events` first.
+        if (event === 'verify_gate_critic_invoked') {
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        }
+        events.push({ event, ctx });
+      },
+    };
+
+    const { registry } = makeRegistry();
+    const session = makeSession();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'old_string not present in file',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, yieldingHooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    await drainMicrotasks();
+    const invokedIdx = events.findIndex((e) => e.event === 'verify_gate_critic_invoked');
+    const blockedIdx = events.findIndex((e) => e.event === 'verify_gate_critic_blocked');
+    expect(invokedIdx).toBeGreaterThanOrEqual(0);
+    expect(blockedIdx).toBeGreaterThan(invokedIdx);
+  });
 });

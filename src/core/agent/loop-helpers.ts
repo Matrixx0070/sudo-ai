@@ -277,7 +277,12 @@ async function runCriticPass(
     { tool: input.toolName, sessionId: input.sessionId, verdict: result.verdict, trigger: input.trigger },
     'verify-gate: critic verdict',
   );
-  void safeEmit(hooks, 'verify_gate_critic_invoked', {
+  // Awaited so subscribers registered on both `verify_gate_critic_invoked`
+  // and `verify_gate_critic_blocked` see them in invoked → blocked order
+  // even when their handlers yield internally. HookEmitter.emit awaits each
+  // handler sequentially, so awaiting here means every invoked handler has
+  // run to completion before the caller fires the follow-up blocked event.
+  await safeEmit(hooks, 'verify_gate_critic_invoked', {
     ...baseCtx,
     verdict: result.verdict,
     rationale: result.rationale ?? null,
@@ -731,6 +736,17 @@ async function executeSingleToolCall(
               threshold: gate.threshold,
             });
             if (groundingBlockEnabled) {
+              // Precedence — block-over-critic-over-feedback. The
+              // grounding-block path short-circuits BEFORE the slice-3
+              // critic runs, so neither the slice-4 agent-facing feedback
+              // nor the slice-5 critic-reject block ever fires when
+              // grounding has already blocked the call. Mirrors the
+              // explicit precedence comment at slice 5's block-vs-feedback
+              // branch below: when a stronger signal wins, drop the
+              // weaker signals so the agent sees one clean reason.
+              // `verify_gate_grounding_failed` (already emitted above with
+              // `blocked: true`) is the sole correlator event subscribers
+              // get for this path.
               const blockedMsg = `[VerifyGate] Tool call blocked: ${tc.name} — grounding mismatch (${grounding.reason})`;
               emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id });
               return { tc, resultContent: blockedMsg };
@@ -810,14 +826,16 @@ async function executeSingleToolCall(
             // fields as `verify_gate_critic_invoked` (already fired by
             // runCriticPass above) plus the literal block message so
             // subscribers don't reconstruct it.
-            // Queued AFTER `verify_gate_critic_invoked`; sequential ordering
-            // is guaranteed for SYNCHRONOUS subscribers but not for async
-            // ones that yield internally. Async subscribers should correlate
-            // by sessionId + toolName rather than rely on event order.
+            // Awaited so the ordering guarantee from runCriticPass extends
+            // through here: `verify_gate_critic_invoked` handlers have all
+            // run to completion before `verify_gate_critic_blocked` fires,
+            // even for async subscribers that yield internally. Order is
+            // observable on hook listeners, not just on the in-process
+            // events array.
             // No new env flag — event presence is already env-gated by
             // SUDO_VERIFY_GATE_CRITIC_BLOCK=1 (this branch only runs when
             // the operator opted into the hard block).
-            void safeEmit(hooks, 'verify_gate_critic_blocked', {
+            await safeEmit(hooks, 'verify_gate_critic_blocked', {
               sessionId: ctx.sessionId,
               toolName: tc.name,
               trigger,
