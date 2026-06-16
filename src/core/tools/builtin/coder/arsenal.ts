@@ -96,8 +96,9 @@ function rotateBackups(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): void {
     for (const file of files) {
       const filePath = path.join(BACKUP_DIR, file);
       try {
-        const stat = statSync(filePath);
-        if (now - stat.mtimeMs > maxAgeMs) {
+        const stat = lstatSync(filePath);
+        // Only delete regular files, not symlinks or directories
+        if (stat.isFile() && now - stat.mtimeMs > maxAgeMs) {
           unlinkSync(filePath);
         }
       } catch { /* skip if stat/delete fails */ }
@@ -329,7 +330,9 @@ function createBackup(abs: string): void {
       logger.warn({ abs }, 'arsenal: backup skipped (path outside root)');
       return;
     }
-    const dest = path.join(BACKUP_DIR, `${Date.now()}_${rel}`);
+    // Add random suffix to prevent collision when multiple concurrent calls happen within same millisecond
+    const rand = Math.random().toString(36).slice(2, 10);
+    const dest = path.join(BACKUP_DIR, `${Date.now()}_${rand}_${rel}`);
     if (existsSync(abs)) copyFileSync(abs, dest);
   } catch { /* non-fatal */ }
 }
@@ -373,6 +376,11 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
     const rgResults = await Promise.allSettled(
       keywords.map(keyword => new Promise<string[]>((resolve) => {
         try {
+          // Reject keywords starting with `-` to prevent rg flag injection (e.g., `--exec`)
+          if (keyword.startsWith('-')) {
+            resolve([]);
+            return;
+          }
           const out = execFileSync(
             'rg',
             ['-l', '--max-count=1', '--fixed-strings', '-g', '*.ts', '-g', '*.js', keyword, baseDir],
@@ -529,6 +537,9 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
   let analysis = '';
   let explanation = '';
 
+  // Track FILE block regions to avoid extracting markers inside file content
+  const fileBlockRanges: Array<{ start: number; end: number }> = [];
+
   // Parse FILE blocks using indexOf (no ReDoS risk from lazy quantifiers)
   let pos = 0;
   while (true) {
@@ -541,12 +552,17 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
     // Validate filePath: reject empty, dot paths, absolute paths, or paths with null bytes
     if (!filePath || filePath === '.' || filePath === '..' || /^\s*$/.test(filePath) || /^[/\\]/.test(filePath) || filePath.includes('\0')) {
       pos = text.indexOf('<<<END>>>', startIdx) + 9;
+      if (pos - 9 === -1) break;
       continue;
     }
 
-    const contentStart = text.indexOf('\n', endFileIdx) + 1;
+    const nlIdx = text.indexOf('\n', endFileIdx);
+    if (nlIdx === -1) break; // malformed: no newline after >>>
+    const contentStart = nlIdx + 1;
     const contentEnd = text.indexOf('<<<END>>>', contentStart);
     if (contentEnd === -1) break;
+
+    fileBlockRanges.push({ start: startIdx, end: contentEnd + 9 });
 
     let content = text.substring(contentStart, contentEnd).trim();
     if (filePath && content) {
@@ -555,37 +571,53 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
     pos = contentEnd + 9;
   }
 
-  // Extract SUMMARY block using indexOf
-  const summaryStart = text.indexOf('<<<SUMMARY>>>');
+  // Helper: check if position is inside a FILE block
+  const isInFileBlock = (idx: number): boolean => {
+    return fileBlockRanges.some(range => idx >= range.start && idx < range.end);
+  };
+
+  // Helper: find marker outside FILE blocks
+  const findMarkerOutsideBlocks = (marker: string, startPos: number = 0): number => {
+    let pos = startPos;
+    while (true) {
+      const idx = text.indexOf(marker, pos);
+      if (idx === -1) return -1;
+      if (!isInFileBlock(idx)) return idx;
+      pos = idx + marker.length;
+    }
+  };
+
+  // Extract SUMMARY block
+  const summaryStart = findMarkerOutsideBlocks('<<<SUMMARY>>>');
   if (summaryStart !== -1) {
-    const summaryEnd = text.indexOf('<<<END>>>', summaryStart);
+    const summaryEnd = findMarkerOutsideBlocks('<<<END>>>', summaryStart);
     if (summaryEnd !== -1) {
       summary = text.substring(summaryStart + 13, summaryEnd).trim();
     }
   }
 
-  // Extract REVIEW block using indexOf
-  const reviewStart = text.indexOf('<<<REVIEW>>>');
+  // Extract REVIEW block
+  const reviewStart = findMarkerOutsideBlocks('<<<REVIEW>>>');
   if (reviewStart !== -1) {
-    const reviewEnd = text.indexOf('<<<END>>>', reviewStart);
+    const reviewEnd = findMarkerOutsideBlocks('<<<END>>>', reviewStart);
     if (reviewEnd !== -1) {
       review = text.substring(reviewStart + 12, reviewEnd).trim();
     }
   }
 
-  // Extract ANALYSIS block using indexOf
-  const analysisStart = text.indexOf('<<<ANALYSIS>>>');
+  // Extract ANALYSIS block
+  const analysisStart = findMarkerOutsideBlocks('<<<ANALYSIS>>>');
   if (analysisStart !== -1) {
-    const analysisEnd = text.indexOf('<<<END>>>', analysisStart);
+    const analysisEnd = findMarkerOutsideBlocks('<<<END>>>', analysisStart);
     if (analysisEnd !== -1) {
       analysis = text.substring(analysisStart + 14, analysisEnd).trim();
     }
   }
 
-  // Extract EXPLANATION block using indexOf
-  const explanationStart = text.indexOf('<<<EXPLANATION>>>');
+  // Extract EXPLANATION block
+  const explanationStart = findMarkerOutsideBlocks('<<<EXPLANATION>>>');
   if (explanationStart !== -1) {
-    const explanationEnd = text.indexOf('<<<END>>>', explanationStart);
+    const explanationEnd = findMarkerOutsideBlocks('<<<END>>>', explanationStart);
     if (explanationEnd !== -1) {
       explanation = text.substring(explanationStart + 17, explanationEnd).trim();
     }
@@ -782,6 +814,11 @@ export const arsenalTool: ToolDefinition = {
       const parts: string[] = [];
       for (const fp of filesParam) {
         const abs = resolveProjectPath(fp);
+        // Security: reject paths outside project root (prevents exfiltration)
+        if (!assertPathWithinRoot(abs)) {
+          parts.push(`[Access denied: ${fp} (outside project root)]\n`);
+          continue;
+        }
         if (!existsSync(abs)) { parts.push(`[Not found: ${fp}]\n`); continue; }
         const s = statSync(abs);
         if (s.isDirectory()) {

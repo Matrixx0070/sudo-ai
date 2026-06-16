@@ -151,6 +151,10 @@ function rgRank(keywords: string[], searchRoot: string): string[] {
   // keywords rank higher.
   const fileScores = new Map<string, number>();
   for (const kw of keywords) {
+    // Reject keywords starting with `-` to prevent rg flag injection (e.g., `--exec`)
+    if (kw.startsWith('-')) {
+      continue;
+    }
     let out = '';
     try {
       out = execFileSync(
