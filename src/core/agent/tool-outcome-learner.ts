@@ -60,7 +60,7 @@ export interface TrustTierTrackerLike {
 }
 
 export interface ConfidenceCalibrationTrackerLike {
-  record(predicted: number, outcome: 0 | 1, tag?: string): void;
+  record(predicted: number, outcome: 0 | 1, tag?: string, toolName?: string): void;
 }
 
 export interface ToolOutcome {
@@ -236,6 +236,7 @@ export class ToolOutcomeLearner {
           predictedConfidence ?? 0.5,
           outcome,
           epistemicTag ?? 'tool-outcome',
+          toolName,
         );
       } catch (err) {
         log.warn({ err, tool: toolName }, 'ConfidenceCalibrationTracker.record failed');
@@ -285,6 +286,7 @@ export class ToolOutcomeLearner {
             outcome.predictedConfidence ?? 0.5,
             result,
             outcome.epistemicTag ?? 'session-end',
+            outcome.toolName,
           );
         } catch (err) {
           log.warn({ err, sessionId }, 'ConfidenceCalibrationTracker session-end recording failed');

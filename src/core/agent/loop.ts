@@ -711,8 +711,8 @@ export class AgentLoop {
 
   /** Wire a ConfidenceCalibrationTracker after construction. Fail-open if duck-type mismatch. */
   setConfidenceCalibrationTracker(tracker: {
-    record(predicted: number, outcome: 0|1, tag?: string): void;
-    getReport(opts?: { windowDays?: number; tag?: string }): {
+    record(predicted: number, outcome: 0|1, tag?: string, toolName?: string): void;
+    getReport(opts?: { windowDays?: number; tag?: string; toolName?: string }): {
       totalSamples: number; brierScore: number; overallAvgPredicted: number; overallSuccessRate: number;
       buckets: Array<{ bucket: string; rangeLow: number; rangeHigh: number; count: number; avgPredicted: number; actualSuccessRate: number; calibrationError: number }>;
       windowDays: number; computedAt: string;

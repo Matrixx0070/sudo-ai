@@ -290,4 +290,94 @@ describe('ConfidenceCalibrationTracker', () => {
     expect(report.totalSamples).toBe(2);
     expect(report.brierScore).toBeCloseTo(0.20, 5);
   });
+
+  // 21 — per-tool dimension: getReport({toolName}) filters rows by tool_name
+  it('getReport({toolName}) returns only rows for that tool', () => {
+    tracker.record(0.9, 1, 'tool-outcome', 'system.exec');
+    tracker.record(0.9, 1, 'tool-outcome', 'system.exec');
+    tracker.record(0.4, 0, 'tool-outcome', 'system.exec');
+    tracker.record(0.9, 0, 'tool-outcome', 'fs.write');
+    tracker.record(0.1, 1, 'tool-outcome'); // legacy, no toolName
+
+    const exec = tracker.getReport({ toolName: 'system.exec' });
+    expect(exec.totalSamples).toBe(3);
+    // brier = ((0.9-1)^2 + (0.9-1)^2 + (0.4-0)^2) / 3 = (0.01 + 0.01 + 0.16) / 3 = 0.06
+    expect(exec.brierScore).toBeCloseTo(0.06, 5);
+
+    const fsWrite = tracker.getReport({ toolName: 'fs.write' });
+    expect(fsWrite.totalSamples).toBe(1);
+    expect(fsWrite.brierScore).toBeCloseTo(0.81, 5);
+
+    // The unfiltered report sees all 5.
+    expect(tracker.getReport().totalSamples).toBe(5);
+  });
+
+  // 22 — combined filter: getReport({tag, toolName}) ANDs both clauses
+  it('getReport({tag, toolName}) ANDs both filters', () => {
+    tracker.record(0.9, 1, 'tool-outcome', 'system.exec');
+    tracker.record(0.9, 1, 'session-end', 'system.exec');
+    tracker.record(0.9, 1, 'tool-outcome', 'fs.write');
+
+    const both = tracker.getReport({ tag: 'tool-outcome', toolName: 'system.exec' });
+    expect(both.totalSamples).toBe(1);
+    expect(both.overallSuccessRate).toBe(1);
+  });
+
+  // 23 — legacy 3-arg call stores tool_name = NULL, unfiltered report sees it
+  it('legacy record(predicted, outcome, tag) stores NULL tool_name', () => {
+    tracker.record(0.7, 1, 'PROBABLE');
+    const noFilter = tracker.getReport();
+    expect(noFilter.totalSamples).toBe(1);
+    const byTool = tracker.getReport({ toolName: 'system.exec' });
+    expect(byTool.totalSamples).toBe(0); // NULL tool_name does not equal any value
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Additive migration: pre-existing DB with old schema (no tool_name) must
+// gain the column when the tracker is constructed against it.
+// ---------------------------------------------------------------------------
+
+describe('ConfidenceCalibrationTracker — tool_name migration', () => {
+  it('adds tool_name column to a pre-existing legacy table', () => {
+    const db = makeDb();
+    // Pre-create the table in its slice-1 shape (no tool_name column).
+    db.exec(`
+      CREATE TABLE confidence_calibration (
+        id        TEXT PRIMARY KEY,
+        predicted REAL NOT NULL,
+        outcome   INTEGER NOT NULL CHECK(outcome IN (0,1)),
+        tag       TEXT,
+        ts        INTEGER NOT NULL
+      )
+    `);
+    db.prepare(
+      `INSERT INTO confidence_calibration (id, predicted, outcome, tag, ts)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('legacy-row', 0.5, 1, 'PROBABLE', Date.now() - 1000);
+
+    // Constructor runs the ALTER migration.
+    const tracker = new ConfidenceCalibrationTracker(db);
+
+    // PRAGMA confirms the column landed.
+    const cols = db
+      .prepare(`PRAGMA table_info(confidence_calibration)`)
+      .all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain('tool_name');
+
+    // Legacy row still has NULL tool_name; new rows with toolName persist correctly.
+    tracker.record(0.9, 1, 'tool-outcome', 'system.exec');
+    const byTool = tracker.getReport({ toolName: 'system.exec' });
+    expect(byTool.totalSamples).toBe(1);
+    const unfiltered = tracker.getReport();
+    expect(unfiltered.totalSamples).toBe(2); // 1 legacy + 1 new
+  });
+
+  it('is idempotent: constructing twice on the same DB does not throw', () => {
+    const db = makeDb();
+    const tracker1 = new ConfidenceCalibrationTracker(db);
+    tracker1.record(0.9, 1, 'tool-outcome', 'system.exec');
+    // Second construction must not throw on the now-duplicate ALTER.
+    expect(() => new ConfidenceCalibrationTracker(db)).not.toThrow();
+  });
 });

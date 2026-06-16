@@ -12,21 +12,24 @@
  * here would brick the loop. Gate is opt-in via `SUDO_VERIFY_GATE=1`,
  * default OFF, fail-open on every error path.
  *
- * Live-confidence signal — slice 1 design note:
- *   The natural source would be `<DATA_DIR>/calibration.db`'s
- *   `confidence_calibration` table, but its `tag` column carries an epistemic
- *   label (`'PROBABLE'`, `'tool-outcome'`, `'OVERRIDE'`, ...), never a tool
- *   name — so a per-tool Brier lookup keyed on tool name returns zero rows.
- *   (`skill/tools/usage-stats.ts:brierForTool` has the same defect and is
- *   why its `brierForTool` field is almost always `null` in practice.)
+ * Live-confidence signal:
+ *   Composite default — try Brier-by-tool against `<DATA_DIR>/calibration.db`
+ *   first; if it returns no rows (or below `minSamples`), fall back to a
+ *   rolling per-tool success rate against `<DATA_DIR>/audit.db`. Either
+ *   path returns the same `{ confidence, samples }` shape, so the gate's
+ *   public contract is unchanged regardless of which one wins.
  *
- *   Slice 1 therefore pivots to `<DATA_DIR>/audit.db`'s `audit_log` table,
- *   which records `resource = <tool name>` for every `action = 'tool_call'`
- *   row. Live confidence = rolling per-tool success rate over the last N
- *   rows. This is not Brier, but it IS a real, ground-truth per-tool signal
- *   computed from outcomes the loop already writes. A future slice can add
- *   a tool-name dimension to `confidence_calibration` and pivot back without
- *   changing the gate's public contract.
+ *   The Brier path became viable once `confidence_calibration` grew a
+ *   `tool_name` column (calibration-pivot slice; slice-1 pre-pivot, the
+ *   column held only epistemic labels and per-tool lookups returned zero
+ *   rows, which is why slice 1 went straight to audit.db). Audit.db
+ *   remains the fallback so cold calibration DBs do not regress.
+ *
+ *   Brier-derived confidence = `1 - mean((predicted - outcome)^2)`, which
+ *   captures predictor calibration on a tool (overconfident predictors
+ *   drop below threshold even when the success rate alone would pass).
+ *   Audit fallback is still `successes / usable` — same semantic the gate
+ *   shipped with under slice 1.
  */
 
 import path from 'node:path';
@@ -71,6 +74,12 @@ interface OutcomeRow {
   outcome: string | null;
 }
 
+/** DB row shape returned by the calibration-Brier query. */
+interface CalibrationRow {
+  predicted: number;
+  outcome: number;
+}
+
 /** Duck-typed better-sqlite3 surface — same pattern as skill/usage-stats.ts. */
 interface DbLike {
   prepare(sql: string): { all(...args: unknown[]): unknown[] };
@@ -88,6 +97,8 @@ const DEFAULT_THRESHOLD = 0.55;
 const DEFAULT_MIN_SAMPLES = 5;
 /** Cap on audit rows we sample per tool (matches usage-stats.ts read budget). */
 const AUDIT_ROW_LIMIT = 100;
+/** Cap on calibration rows sampled per tool for the Brier window. */
+const CALIBRATION_ROW_LIMIT = 100;
 
 /** Returns true when `SUDO_VERIFY_GATE=1`. Default OFF. */
 export function isGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -165,6 +176,83 @@ export function computeLiveConfidence(
   }
 }
 
+/**
+ * Compute Brier-derived confidence from `calibration.db` for one tool, using
+ * the last `CALIBRATION_ROW_LIMIT` rows that carry `tool_name = ?`. Returns
+ * `{ confidence, samples }` or `null` when the DB / table / matching rows
+ * are unavailable.
+ *
+ * `confidence = 1 - mean((predicted - outcome)^2)` — overconfident predictors
+ * (high predicted, low realized) push the Brier score up and confidence down,
+ * so the gate fires on miscalibration rather than just raw failure rate.
+ *
+ * Rows with non-finite `predicted` or non-binary `outcome` are skipped rather
+ * than poisoning the mean; if every row is unusable we return `null` (same as
+ * no-history).
+ */
+export function computeBrierConfidence(
+  toolName: string,
+  dbPath: string = path.join(DATA_DIR, 'calibration.db'),
+): { confidence: number; samples: number } | null {
+  const db = openReadonly(dbPath);
+  if (!db) return null;
+  try {
+    const rows = db.prepare(
+      `SELECT predicted, outcome FROM confidence_calibration
+       WHERE tool_name = ?
+       ORDER BY ts DESC LIMIT ?`,
+    ).all(toolName, CALIBRATION_ROW_LIMIT) as CalibrationRow[];
+    let usable = 0;
+    let sumSquaredError = 0;
+    for (const r of rows) {
+      if (typeof r.predicted !== 'number' || !Number.isFinite(r.predicted)) continue;
+      if (r.outcome !== 0 && r.outcome !== 1) continue;
+      const p = Math.max(0, Math.min(1, r.predicted));
+      sumSquaredError += (p - r.outcome) ** 2;
+      usable++;
+    }
+    if (usable === 0) return null;
+    const brier = sumSquaredError / usable;
+    const raw = 1 - brier;
+    const confidence = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0;
+    return { confidence, samples: usable };
+  } catch {
+    return null;
+  } finally {
+    try { db.close(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Composite lookup used by the default `ConfidenceGate`:
+ *
+ *   1. Try Brier-by-tool against calibration.db. If it returns at least
+ *      `minSamples` rows, that's the answer.
+ *   2. Otherwise fall back to the audit.db rolling-rate path (slice 1
+ *      behavior). Cold calibration DB → no regression.
+ *
+ * Returning Brier only when sample count meets `minSamples` keeps a
+ * one-row calibration entry from displacing a 100-row audit signal. The
+ * gate's own low-samples check is still authoritative on the final result.
+ */
+export function computeCompositeConfidence(
+  toolName: string,
+  opts: { minSamples?: number; brierDbPath?: string; auditDbPath?: string } = {},
+): { confidence: number; samples: number } | null {
+  const minSamples = opts.minSamples ?? DEFAULT_MIN_SAMPLES;
+  const brier = computeBrierConfidence(
+    toolName,
+    opts.brierDbPath ?? path.join(DATA_DIR, 'calibration.db'),
+  );
+  if (brier !== null && brier.samples >= minSamples) {
+    return brier;
+  }
+  return computeLiveConfidence(
+    toolName,
+    opts.auditDbPath ?? path.join(DATA_DIR, 'audit.db'),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ConfidenceGate
 // ---------------------------------------------------------------------------
@@ -201,7 +289,11 @@ export class ConfidenceGate {
     this.enabled = opts.enabled ?? isGateEnabled();
     this.threshold = opts.threshold ?? readThreshold();
     this.minSamples = opts.minSamples ?? readMinSamples();
-    this.lookup = opts.confidenceLookup ?? ((name) => computeLiveConfidence(name));
+    // Composite default — Brier-by-tool first, audit rolling-rate fallback.
+    // The composite uses the gate's own minSamples so a sparse calibration
+    // row never displaces a richer audit signal.
+    this.lookup =
+      opts.confidenceLookup ?? ((name) => computeCompositeConfidence(name, { minSamples: this.minSamples }));
   }
 
   /**

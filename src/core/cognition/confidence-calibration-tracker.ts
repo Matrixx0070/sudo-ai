@@ -76,6 +76,12 @@ export interface CalibrationReport {
 export interface GetReportOptions {
   windowDays?: number;
   tag?: string;
+  /**
+   * Filter rows by exact tool_name match. Independent of `tag` — the verify
+   * gate's per-tool Brier path keys on this, the legacy epistemic-tag path
+   * keys on `tag`. When both are set the filters AND.
+   */
+  toolName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +93,7 @@ interface RawCalibrationRow {
   predicted: number;
   outcome: number;
   tag: string | null;
+  tool_name: string | null;
   ts: number;
 }
 
@@ -241,6 +248,8 @@ export class ConfidenceCalibrationTracker {
   private readonly _stmtInsert: StatementLike<unknown[], unknown>;
   private readonly _stmtListWindow: StatementLike<unknown[], RawCalibrationRow>;
   private readonly _stmtListWindowByTag: StatementLike<unknown[], RawCalibrationRow>;
+  private readonly _stmtListWindowByToolName: StatementLike<unknown[], RawCalibrationRow>;
+  private readonly _stmtListWindowByTagAndToolName: StatementLike<unknown[], RawCalibrationRow>;
   private readonly _stmtDeleteAll: StatementLike<unknown[], unknown>;
 
   constructor(db: DatabaseLike) {
@@ -251,9 +260,22 @@ export class ConfidenceCalibrationTracker {
           predicted REAL NOT NULL,
           outcome   INTEGER NOT NULL CHECK(outcome IN (0,1)),
           tag       TEXT,
+          tool_name TEXT,
           ts        INTEGER NOT NULL
         )
       `);
+      // Additive migration for DBs created before tool_name existed.
+      // - New DB: CREATE TABLE above already includes tool_name, so the
+      //   ALTER below throws "duplicate column name" — caught.
+      // - Legacy DB: CREATE TABLE IF NOT EXISTS no-ops on the old shape,
+      //   then ALTER successfully adds the column.
+      // - Already-migrated DB: ALTER throws duplicate-column — caught.
+      // All three paths converge on a table that has the column.
+      try {
+        db.exec(`ALTER TABLE confidence_calibration ADD COLUMN tool_name TEXT`);
+      } catch {
+        // Column already present — nothing to do.
+      }
     } catch (err: unknown) {
       log.error(
         { err, event: 'calibration.init.error' },
@@ -263,21 +285,35 @@ export class ConfidenceCalibrationTracker {
     }
 
     this._stmtInsert = db.prepare(
-      `INSERT INTO confidence_calibration (id, predicted, outcome, tag, ts)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO confidence_calibration (id, predicted, outcome, tag, tool_name, ts)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     );
 
     this._stmtListWindow = db.prepare<RawCalibrationRow>(
-      `SELECT id, predicted, outcome, tag, ts
+      `SELECT id, predicted, outcome, tag, tool_name, ts
        FROM confidence_calibration
        WHERE ts >= ?
        ORDER BY ts ASC`,
     );
 
     this._stmtListWindowByTag = db.prepare<RawCalibrationRow>(
-      `SELECT id, predicted, outcome, tag, ts
+      `SELECT id, predicted, outcome, tag, tool_name, ts
        FROM confidence_calibration
        WHERE ts >= ? AND tag = ?
+       ORDER BY ts ASC`,
+    );
+
+    this._stmtListWindowByToolName = db.prepare<RawCalibrationRow>(
+      `SELECT id, predicted, outcome, tag, tool_name, ts
+       FROM confidence_calibration
+       WHERE ts >= ? AND tool_name = ?
+       ORDER BY ts ASC`,
+    );
+
+    this._stmtListWindowByTagAndToolName = db.prepare<RawCalibrationRow>(
+      `SELECT id, predicted, outcome, tag, tool_name, ts
+       FROM confidence_calibration
+       WHERE ts >= ? AND tag = ? AND tool_name = ?
        ORDER BY ts ASC`,
     );
 
@@ -295,8 +331,12 @@ export class ConfidenceCalibrationTracker {
    * - Clamps predicted to [0,1].
    * - Silent no-op on NaN or Infinity (fail-open).
    * - DB errors are caught and logged (fail-open).
+   *
+   * `toolName` enables the verify-gate's per-tool Brier-by-tool lookup. The
+   * column is nullable; legacy callers and unrelated calibration sources
+   * (epistemic-tag records keyed by `tag` only) pass through as before.
    */
-  record(predicted: number, outcome: 0 | 1, tag?: string): void {
+  record(predicted: number, outcome: 0 | 1, tag?: string, toolName?: string): void {
     // Guard against NaN / Infinity — silent no-op
     if (!Number.isFinite(predicted)) {
       log.debug(
@@ -311,14 +351,14 @@ export class ConfidenceCalibrationTracker {
     const ts = Date.now();
 
     try {
-      this._stmtInsert.run(id, clamped, outcome, tag ?? null, ts);
+      this._stmtInsert.run(id, clamped, outcome, tag ?? null, toolName ?? null, ts);
       log.debug(
-        { id, predicted: clamped, outcome, tag, ts, event: 'calibration.recorded' },
+        { id, predicted: clamped, outcome, tag, toolName, ts, event: 'calibration.recorded' },
         'confidence-calibration-tracker: entry recorded',
       );
     } catch (err: unknown) {
       log.error(
-        { err, predicted: clamped, outcome, tag, event: 'calibration.record.error' },
+        { err, predicted: clamped, outcome, tag, toolName, event: 'calibration.record.error' },
         'confidence-calibration-tracker: DB insert failed (fail-open)',
       );
     }
@@ -331,19 +371,26 @@ export class ConfidenceCalibrationTracker {
   getReport(opts?: GetReportOptions): CalibrationReport {
     const windowDays = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
     const tag = opts?.tag;
+    const toolName = opts?.toolName;
     const cutoffTs = Date.now() - windowDays * MS_PER_DAY;
+    const hasTag = tag !== undefined && tag !== null;
+    const hasTool = toolName !== undefined && toolName !== null;
 
     try {
       let rows: RawCalibrationRow[];
-      if (tag !== undefined && tag !== null) {
+      if (hasTag && hasTool) {
+        rows = this._stmtListWindowByTagAndToolName.all(cutoffTs, tag, toolName);
+      } else if (hasTag) {
         rows = this._stmtListWindowByTag.all(cutoffTs, tag);
+      } else if (hasTool) {
+        rows = this._stmtListWindowByToolName.all(cutoffTs, toolName);
       } else {
         rows = this._stmtListWindow.all(cutoffTs);
       }
       return computeReport(rows, windowDays);
     } catch (err: unknown) {
       log.error(
-        { err, windowDays, tag, event: 'calibration.report.error' },
+        { err, windowDays, tag, toolName, event: 'calibration.report.error' },
         'confidence-calibration-tracker: DB query failed; returning empty report (fail-open)',
       );
       return emptyReport(windowDays);
