@@ -28,7 +28,7 @@ import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../../shared/paths.js';
 import { getModel } from '../../../../brain/providers.js';
 import { modelForAttempt, parseCascade } from './cascade.js';
-import { loadRecentStatsByMode, rankCascade } from './stats.js';
+import { collapseByMode, loadRecentStatsByMode, rankCascade } from './stats.js';
 import { runCritic, type CriticResult } from './critic.js';
 import { buildDiffSummary } from './diff-summary.js';
 import { applyPatches } from './patch-applier.js';
@@ -209,21 +209,24 @@ export const arsenalV2Tool: ToolDefinition = {
           : true;
     const statsWindowMs = Number(process.env['SUDO_ARSENAL_V2_STATS_WINDOW_MS']);
     const halfLifeMs = Number(process.env['SUDO_ARSENAL_V2_STATS_HALF_LIFE_MS']);
-    const cascade =
-      reorderEnabled && cascadeOriginal.length > 1
-        ? rankCascade(
-            cascadeOriginal,
-            // Per-mode stats: a model's refactor performance shouldn't drag
-            // its fix ranking. Empty Map fallback when this mode has no
-            // history — rankCascade then treats all entries as "unknown"
-            // and preserves the declared order.
-            loadRecentStatsByMode({
-              path: TELEMETRY_PATH,
-              windowMs: Number.isFinite(statsWindowMs) && statsWindowMs > 0 ? statsWindowMs : undefined,
-              halfLifeMs: Number.isFinite(halfLifeMs) && halfLifeMs > 0 ? halfLifeMs : undefined,
-            }).get(mode) ?? new Map(),
-          )
-        : cascadeOriginal;
+    const shrinkageK = Number(process.env['SUDO_ARSENAL_V2_STATS_SHRINKAGE_K']);
+    const cascade = (() => {
+      if (!reorderEnabled || cascadeOriginal.length <= 1) return cascadeOriginal;
+      // One file walk produces per-mode buckets; collapse derives the
+      // slice-11 global view without a second read. Empty global =
+      // empty mode bucket = "all unknown" → declared order preserved.
+      const byMode = loadRecentStatsByMode({
+        path: TELEMETRY_PATH,
+        windowMs: Number.isFinite(statsWindowMs) && statsWindowMs > 0 ? statsWindowMs : undefined,
+        halfLifeMs: Number.isFinite(halfLifeMs) && halfLifeMs > 0 ? halfLifeMs : undefined,
+      });
+      const modeStats = byMode.get(mode) ?? new Map();
+      const globalStats = collapseByMode(byMode);
+      return rankCascade(cascadeOriginal, modeStats, {
+        globalStats,
+        modeShrinkageK: Number.isFinite(shrinkageK) && shrinkageK > 0 ? shrinkageK : undefined,
+      });
+    })();
     const cascadeReordered =
       cascade.length === cascadeOriginal.length &&
       cascade.some((m, i) => m !== cascadeOriginal[i]);
