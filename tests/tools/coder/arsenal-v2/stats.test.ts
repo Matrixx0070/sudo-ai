@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   loadRecentStats,
+  loadRecentStatsByMode,
   rankCascade,
   type ModelStats,
 } from '../../../../src/core/tools/builtin/coder/arsenal-v2/stats.js';
@@ -205,5 +206,81 @@ describe('rankCascade', () => {
     stats.set('B', mkStats('B', 1, 0));
     // With minSamples=1, A's 100% should win.
     expect(rankCascade(['B', 'A'], stats, { minSamples: 1 })).toEqual(['A', 'B']);
+  });
+});
+
+describe('loadRecentStatsByMode', () => {
+  it('returns an empty map when the file is missing', () => {
+    const out = loadRecentStatsByMode({ path: logPath, now: NOW });
+    expect(out.size).toBe(0);
+  });
+
+  it('buckets rows by mode and keeps model stats independent per mode', async () => {
+    await seed([
+      row({ mode: 'fix', model: 'A', criticVerdict: 'approve' }),
+      row({ mode: 'fix', model: 'A', criticVerdict: 'approve' }),
+      row({ mode: 'refactor', model: 'A', criticVerdict: 'needs_revision' }),
+      row({ mode: 'refactor', model: 'A', criticVerdict: 'needs_revision' }),
+    ]);
+    const out = loadRecentStatsByMode({ path: logPath, now: NOW });
+    expect(out.size).toBe(2);
+    const fixA = out.get('fix')!.get('A')!;
+    const refA = out.get('refactor')!.get('A')!;
+    expect(fixA.attempts).toBe(2);
+    expect(fixA.approvals).toBe(2);
+    expect(refA.attempts).toBe(2);
+    expect(refA.approvals).toBe(0);
+    expect(refA.rejections).toBe(2);
+  });
+
+  it('skips rows missing the mode field', async () => {
+    const good = JSON.stringify(row({ mode: 'fix', model: 'A' }));
+    const noMode = JSON.stringify({ ...row({ model: 'A' }), mode: undefined });
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await writeFile(logPath, `${good}\n${noMode}\n`, 'utf-8');
+    const out = loadRecentStatsByMode({ path: logPath, now: NOW });
+    expect(out.size).toBe(1);
+    expect(out.get('fix')!.get('A')!.attempts).toBe(1);
+  });
+
+  it('respects the same windowing as loadRecentStats', async () => {
+    await seed([
+      row({ mode: 'fix', model: 'A', ts: NOW - 1 * dayMs }), // inside
+      row({ mode: 'fix', model: 'A', ts: NOW - 30 * dayMs }), // outside
+    ]);
+    const out = loadRecentStatsByMode({ path: logPath, now: NOW });
+    expect(out.get('fix')!.get('A')!.attempts).toBe(1);
+  });
+
+  it('computes avgDurationMs per (mode, model) bucket independently', async () => {
+    await seed([
+      row({ mode: 'fix', model: 'A', durationMs: 1000 }),
+      row({ mode: 'fix', model: 'A', durationMs: 2000 }),
+      row({ mode: 'refactor', model: 'A', durationMs: 10_000 }),
+    ]);
+    const out = loadRecentStatsByMode({ path: logPath, now: NOW });
+    expect(out.get('fix')!.get('A')!.avgDurationMs).toBe(1500);
+    expect(out.get('refactor')!.get('A')!.avgDurationMs).toBe(10_000);
+  });
+});
+
+describe('rankCascade with per-mode stats (integration)', () => {
+  it('mode-A stats do not leak into mode-B ranking', async () => {
+    // A is great at fix, terrible at refactor. B is the opposite.
+    await seed([
+      // fix: A approved 10×, B rejected 10×
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'A', criticVerdict: 'approve' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'B', criticVerdict: 'needs_revision' })),
+      // refactor: B approved 10×, A rejected 10×
+      ...Array.from({ length: 10 }, () => row({ mode: 'refactor', model: 'B', criticVerdict: 'approve' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'refactor', model: 'A', criticVerdict: 'needs_revision' })),
+    ]);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW });
+
+    const fixCascade = rankCascade(['B', 'A'], byMode.get('fix')!);
+    const refCascade = rankCascade(['A', 'B'], byMode.get('refactor')!);
+
+    expect(fixCascade).toEqual(['A', 'B']); // A wins for fix
+    expect(refCascade).toEqual(['B', 'A']); // B wins for refactor
   });
 });

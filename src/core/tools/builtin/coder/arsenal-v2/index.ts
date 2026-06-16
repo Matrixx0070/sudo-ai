@@ -28,7 +28,7 @@ import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../../shared/paths.js';
 import { getModel } from '../../../../brain/providers.js';
 import { modelForAttempt, parseCascade } from './cascade.js';
-import { loadRecentStats, rankCascade } from './stats.js';
+import { loadRecentStatsByMode, rankCascade } from './stats.js';
 import { runCritic, type CriticResult } from './critic.js';
 import { buildDiffSummary } from './diff-summary.js';
 import { applyPatches } from './patch-applier.js';
@@ -212,10 +212,14 @@ export const arsenalV2Tool: ToolDefinition = {
       reorderEnabled && cascadeOriginal.length > 1
         ? rankCascade(
             cascadeOriginal,
-            loadRecentStats({
+            // Per-mode stats: a model's refactor performance shouldn't drag
+            // its fix ranking. Empty Map fallback when this mode has no
+            // history — rankCascade then treats all entries as "unknown"
+            // and preserves the declared order.
+            loadRecentStatsByMode({
               path: TELEMETRY_PATH,
               windowMs: Number.isFinite(statsWindowMs) && statsWindowMs > 0 ? statsWindowMs : undefined,
-            }),
+            }).get(mode) ?? new Map(),
           )
         : cascadeOriginal;
     const cascadeReordered =
@@ -526,7 +530,7 @@ export const arsenalV2Tool: ToolDefinition = {
       lines.push('## Cascade');
       lines.push(`  Declared: [${cascadeOriginal.join(', ')}]`);
       lines.push(`  Active:   [${cascade.join(', ')}]`);
-      lines.push(`  (reordered by recent approval rate from telemetry)`);
+      lines.push(`  (reordered by recent ${mode}-mode approval rate from telemetry)`);
       lines.push('');
     }
 
