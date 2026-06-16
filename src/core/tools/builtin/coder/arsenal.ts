@@ -98,11 +98,11 @@ function assertPathWithinRoot(abs: string): boolean {
 }
 
 // Escape AI-protocol markers in file content to prevent prompt injection
-// Uses HTML entity encoding: <<< becomes &lt;&lt;&lt; which is safe from both
-// LLM interpretation (sees entity) and the parser (which only matches raw <<<)
+// Only escapes triple-angle-bracket markers (<<<FILE:, <<<SUMMARY>, etc.), not all <
+// Uses HTML entity encoding on the opening markers to prevent parser from matching them
 function escapeProtocolMarkers(content: string): string {
   return content
-    .replace(/</g, '&lt;');
+    .replace(/<<<(FILE:|SUMMARY|REVIEW|ANALYSIS|EXPLANATION|END)/g, '&lt;&lt;&lt;$1');
 }
 
 // Rotate old backups (7+ days) to prevent unbounded directory growth
@@ -755,6 +755,7 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
       // Write to temp file in TARGET DIRECTORY (not os.tmpdir) to ensure same filesystem
       // This makes rename atomic and prevents EXDEV
       const tmpPath = `${abs}.arsenal-${randomBytes(4).toString('hex')}.tmp`;
+      let renameSucceeded = false;
 
       try {
         writeFileSync(tmpPath, edit.content, 'utf-8');
@@ -762,6 +763,7 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
         // Atomic rename - kernel prevents symlink traversal
         try {
           renameSync(tmpPath, abs);
+          renameSucceeded = true;
         } catch (renameErr: unknown) {
           // If rename fails with EXDEV (different filesystem), use copy path
           const e = renameErr as { code?: string; message?: string };
@@ -779,6 +781,7 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
             }
             // Copy and clean up tmp
             copyFileSync(tmpPath, abs);
+            renameSucceeded = true;
           } else {
             throw renameErr;
           }
@@ -792,17 +795,20 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
             const rel = path.relative(PROJECT_ROOT, realAbs);
             if (rel.startsWith('..')) {
               // File ended up outside root - this is a security failure
-              // Try to remove it and error
-              try { unlinkSync(abs); } catch { }
-              throw new Error('SECURITY: File written outside project root');
+              // DO NOT delete abs here — the production file is now at abs.
+              // Instead, we log and throw; the caller should handle cleanup if needed.
+              throw new Error('SECURITY: File written outside project root (validation failed post-write)');
             }
           } catch (validateErr) {
             throw validateErr;
           }
         }
       } finally {
-        // Always try to clean up temp file if it exists
-        try { unlinkSync(tmpPath); } catch { }
+        // Clean up temp file only if rename/copy did not succeed
+        // If rename/copy succeeded, tmpPath no longer exists and abs is the production file
+        if (!renameSucceeded) {
+          try { unlinkSync(tmpPath); } catch { }
+        }
       }
 
       const rel = path.relative(PROJECT_ROOT, abs);
