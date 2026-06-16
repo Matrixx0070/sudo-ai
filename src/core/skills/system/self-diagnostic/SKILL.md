@@ -11,6 +11,8 @@ compatibility: [node-22]
 caps: [fs.read, db.read]
 tags: [system, health, local]
 source: bundled:sudo-ai
+isReadOnly: true
+isConcurrencySafe: true
 metadata:
   trust_tier: bundled
 ---

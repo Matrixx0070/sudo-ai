@@ -11,6 +11,8 @@ compatibility: [node-22]
 caps: [net.fetch, db.read]
 tags: [intelligence, briefing, daily]
 source: bundled:sudo-ai
+isReadOnly: true
+isConcurrencySafe: true
 metadata:
   trust_tier: bundled
 ---

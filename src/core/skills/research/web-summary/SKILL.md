@@ -11,6 +11,8 @@ compatibility: [node-22]
 caps: [net.fetch]
 tags: [research, web, no-llm]
 source: bundled:sudo-ai
+isReadOnly: true
+isConcurrencySafe: true
 metadata:
   trust_tier: bundled
 ---

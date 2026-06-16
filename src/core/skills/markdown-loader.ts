@@ -43,6 +43,20 @@ export interface MarkdownSkill {
   tools?: ToolTranslatorEntry[];
   /** Provenance metadata (author, registry, etc.). */
   provenance?: string;
+  // --- Q4: scheduler hints (all optional; undefined = unknown, fall back to serial) ---
+  /**
+   * True when the skill only reads filesystem / queries / network without
+   * mutating state. The workflow scheduler can dispatch read-only skills more
+   * aggressively (cache, parallelize, retry without side-effects).
+   */
+  isReadOnly?: boolean;
+  /**
+   * True when N concurrent invocations of this skill against the same inputs
+   * are safe (no shared mutable state, no rate-limited external API, no
+   * order-of-operations requirement). Required by the Phase 1 P3 workflow
+   * engine's parallel-pipeline mode.
+   */
+  isConcurrencySafe?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +83,19 @@ function parseFrontmatter(raw: string): { meta: Record<string, string | string[]
     }
   }
   return { meta, body: match[2] };
+}
+
+/**
+ * Convert a YAML scalar value into a strict boolean. Accepts "true" / "false"
+ * (case-insensitive). Anything else returns undefined, including missing keys —
+ * preserves the "unknown" tri-state so the scheduler can fall back to serial.
+ */
+function parseBool(raw: string | string[] | undefined): boolean | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const v = raw.trim().toLowerCase();
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  return undefined;
 }
 
 function parseSkillFile(raw: string, filePath: string, fallbackName: string): MarkdownSkill {
@@ -115,6 +142,9 @@ function parseSkillFile(raw: string, filePath: string, fallbackName: string): Ma
     caps,
     tools,
     provenance: (meta['provenance'] as string | undefined) || undefined,
+    // Q4: scheduler hints (camelCase YAML keys)
+    isReadOnly: parseBool(meta['isReadOnly']),
+    isConcurrencySafe: parseBool(meta['isConcurrencySafe']),
   };
 }
 
