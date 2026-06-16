@@ -4,7 +4,7 @@
  * Wrap at 76 chars with 2-space left margin.
  */
 
-import { marked, type Token } from 'marked';
+import { marked, type Token, type Tokens } from 'marked';
 import { highlight } from 'cli-highlight';
 
 // ---------------------------------------------------------------------------
@@ -121,8 +121,7 @@ function renderTokens(tokens: Token[]): string {
   return tokens.map(renderToken).join('');
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function renderToken(token: any): string {
+function renderToken(token: Token): string {
   switch (token.type) {
     case 'heading': {
       const text = renderInline(token.tokens ?? []);
@@ -137,8 +136,7 @@ function renderToken(token: any): string {
     case 'list': {
       const ordered: boolean = token.ordered === true;
       const startNum: number = typeof token.start === 'number' ? token.start : 1;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const items: string[] = (token.items ?? []).map((item: any, idx: number) => {
+      const items: string[] = (token.items ?? []).map((item: Tokens.ListItem, idx: number) => {
         const body = renderTokens(item.tokens ?? []).trimEnd();
         const prefix = ordered
           ? `  ${startNum + idx}  `
@@ -170,17 +168,18 @@ function renderToken(token: any): string {
     }
 
     default: {
-      if (token.tokens) return renderInline(token.tokens);
-      if (typeof token.text === 'string') return token.text;
+      // Tokens.Generic + the leftover non-block variants land here. Both
+      // `tokens` and `text` are optional on Generic, so probe defensively.
+      const generic = token as { tokens?: Token[]; text?: string };
+      if (generic.tokens) return renderInline(generic.tokens);
+      if (typeof generic.text === 'string') return generic.text;
       return '';
     }
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function renderInline(tokens: any[]): string {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return tokens.map((t: any) => {
+function renderInline(tokens: Token[]): string {
+  return tokens.map((t: Token) => {
     switch (t.type) {
       case 'text':   return t.text ?? '';
       case 'strong': return bold(renderInline(t.tokens ?? []));
@@ -201,9 +200,12 @@ function renderInline(tokens: any[]): string {
       case 'html':   return t.text ?? '';
       case 'escape': return t.text ?? '';
       default: {
-        if (t.tokens) return renderInline(t.tokens);
-        if (typeof t.text === 'string') return t.text;
-        if (typeof t.raw === 'string') return t.raw;
+        // Tokens.Generic + variants without tokens/text (Br, etc.) land here;
+        // probe defensively, then fall back to .raw which all base Tokens carry.
+        const generic = t as { tokens?: Token[]; text?: string; raw?: string };
+        if (generic.tokens) return renderInline(generic.tokens);
+        if (typeof generic.text === 'string') return generic.text;
+        if (typeof generic.raw === 'string') return generic.raw;
         return '';
       }
     }
