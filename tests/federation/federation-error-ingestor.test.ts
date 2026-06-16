@@ -27,7 +27,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import { FederationErrorIngestor } from '../../src/core/federation/federation-error-ingestor.js';
+import { FederationErrorIngestor, coerceSeverity } from '../../src/core/federation/federation-error-ingestor.js';
 import type { FederationErrorReport } from '../../src/core/federation/federation-error-ingestor-types.js';
 
 // ---------------------------------------------------------------------------
@@ -654,6 +654,101 @@ describe('FederationErrorIngestor — queryReports timestamp contract', () => {
     // millisecond-exact.
     expect(row.timestamp).toBeGreaterThanOrEqual(beforeMs);
     expect(row.timestamp).toBeLessThanOrEqual(afterMs);
+
+    ingestor.destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FED-ERR-43..45: Audit-LOW sweep — coerceSeverity + no-tautology WHERE
+// ---------------------------------------------------------------------------
+
+describe('coerceSeverity — whitelist coercion', () => {
+  it('FED-ERR-43: passes through the 4 valid severities unchanged', () => {
+    expect(coerceSeverity('CRITICAL')).toBe('CRITICAL');
+    expect(coerceSeverity('HIGH')).toBe('HIGH');
+    expect(coerceSeverity('MEDIUM')).toBe('MEDIUM');
+    expect(coerceSeverity('LOW')).toBe('LOW');
+  });
+
+  it('FED-ERR-44: coerces unknown / malformed inputs to MEDIUM (fail-safe)', () => {
+    // String outside the whitelist (e.g. legacy peer that sent "critical").
+    expect(coerceSeverity('critical')).toBe('MEDIUM');
+    expect(coerceSeverity('PANIC')).toBe('MEDIUM');
+    expect(coerceSeverity('')).toBe('MEDIUM');
+    // Non-string inputs (corrupted DB row, accidental number/null).
+    expect(coerceSeverity(null)).toBe('MEDIUM');
+    expect(coerceSeverity(undefined)).toBe('MEDIUM');
+    expect(coerceSeverity(0)).toBe('MEDIUM');
+    expect(coerceSeverity({ severity: 'HIGH' })).toBe('MEDIUM');
+  });
+});
+
+describe('FederationErrorIngestor — queryReports SQL hygiene', () => {
+  it('FED-ERR-45: no-filter query emits SQL with no WHERE clause and no 1=1 tautology', async () => {
+    const { db, mockErrorReporter, mockGithubIssues } = createMockDeps({
+      searchResult: { success: true, issues: [] },
+      createResult: { success: true, number: 1 },
+    });
+
+    // Wrap the real prepare to capture every SQL string the ingestor compiles.
+    const seenSql: string[] = [];
+    const originalPrepare = db.prepare.bind(db);
+    db.prepare = ((sql: string) => {
+      seenSql.push(sql);
+      return originalPrepare(sql);
+    }) as typeof db.prepare;
+
+    const ingestor = new FederationErrorIngestor({
+      errorReporter: mockErrorReporter,
+      githubIssues: mockGithubIssues,
+      db,
+    });
+
+    await ingestor.ingestReport(makeReport());
+    // better-sqlite3's .prepare() is fully synchronous, so all ingest-time
+    // prepares have completed by the time this await resolves — the flush
+    // window is deterministic, not racy. (Verifier MED-2.)
+    seenSql.length = 0;
+    const rows = ingestor.queryReports();
+    expect(rows).toHaveLength(1);
+
+    const querySql = seenSql.find((s) => /SELECT \* FROM federation_error_reports/.test(s));
+    expect(querySql).toBeDefined();
+    expect(querySql!).not.toMatch(/1\s*=\s*1/);
+    expect(querySql!).not.toMatch(/\bWHERE\b/);
+
+    ingestor.destroy();
+  });
+
+  it('FED-ERR-46: filtered query still builds a real WHERE clause', async () => {
+    const { db, mockErrorReporter, mockGithubIssues } = createMockDeps({
+      searchResult: { success: true, issues: [] },
+      createResult: { success: true, number: 1 },
+    });
+
+    const seenSql: string[] = [];
+    const originalPrepare = db.prepare.bind(db);
+    db.prepare = ((sql: string) => {
+      seenSql.push(sql);
+      return originalPrepare(sql);
+    }) as typeof db.prepare;
+
+    const ingestor = new FederationErrorIngestor({
+      errorReporter: mockErrorReporter,
+      githubIssues: mockGithubIssues,
+      db,
+    });
+
+    await ingestor.ingestReport(makeReport({ peerId: 'peer-X' }));
+    seenSql.length = 0;
+    const rows = ingestor.queryReports({ peerId: 'peer-X' });
+    expect(rows).toHaveLength(1);
+
+    const querySql = seenSql.find((s) => /SELECT \* FROM federation_error_reports/.test(s));
+    expect(querySql).toBeDefined();
+    expect(querySql!).toMatch(/WHERE peer_id = \?/);
+    expect(querySql!).not.toMatch(/1\s*=\s*1/);
 
     ingestor.destroy();
   });

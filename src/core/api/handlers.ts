@@ -75,6 +75,41 @@ export function validateChatRequest(body: unknown): string | null {
   return null;
 }
 
+/**
+ * Whitelist-coerce an untrusted `tools` array from a chat-completion request
+ * into typed `ToolSchema[]`. Each element must shape-match the registry's
+ * emitted contract (`type: 'function'` + `function.name` + `function.parameters`);
+ * elements that don't are dropped with a debug log instead of poisoning the
+ * Brain call. Returns undefined when the input is undefined OR when zero
+ * elements survived the filter — both indicate "no tools to forward".
+ *
+ * Replaces the `as ToolSchema[] | undefined` boundary cast that PR #204
+ * carved out as a LOW: `body.tools` is typed `unknown[]` at the HTTP edge,
+ * so the cast was unchecked and a malformed tools entry would surface as a
+ * Brain.call() crash rather than a clean drop.
+ */
+export function coerceToolSchemas(input: unknown): ToolSchema[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const out: ToolSchema[] = [];
+  for (const item of input) {
+    if (typeof item !== 'object' || item === null) continue;
+    const t = item as Record<string, unknown>;
+    if (t['type'] !== 'function') continue;
+    const fn = t['function'];
+    if (typeof fn !== 'object' || fn === null) continue;
+    const f = fn as Record<string, unknown>;
+    if (typeof f['name'] !== 'string' || f['name'].length === 0) continue;
+    if (typeof f['description'] !== 'string') continue;
+    if (typeof f['parameters'] !== 'object' || f['parameters'] === null) continue;
+    out.push(item as ToolSchema);
+  }
+  if (out.length === 0) return undefined;
+  if (out.length !== input.length) {
+    log.debug({ kept: out.length, dropped: input.length - out.length }, 'coerceToolSchemas: dropped malformed entries');
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Non-streaming handler
 // ---------------------------------------------------------------------------
@@ -99,7 +134,7 @@ export async function handleNonStreaming(
       model: body.model,
       temperature: body.temperature,
       maxTokens: body.max_tokens,
-      tools: body.tools as ToolSchema[] | undefined,
+      tools: coerceToolSchemas(body.tools),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -178,7 +213,7 @@ export async function handleStreaming(
       model: body.model,
       temperature: body.temperature,
       maxTokens: body.max_tokens,
-      tools: body.tools as ToolSchema[] | undefined,
+      tools: coerceToolSchemas(body.tools),
     })) {
       sendChunk({ content: chunk }, null);
     }

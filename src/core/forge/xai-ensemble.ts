@@ -97,7 +97,12 @@ export class XaiEnsemble {
     };
     const url = 'https://api.x.ai/v1/chat/completions';
     let attempt = 0;
-    let lastError: unknown;
+    // Always an Error after at least one failed attempt — never a raw HTTP
+    // body string (the prior code overloaded this slot, immediately
+    // overwriting any string in the catch block) and never undefined after
+    // a 3x-429 exhaust (the 429 branch now sets a synthetic Error too).
+    // Mirrors the audit HIGH-2 fix from PR #204's body.
+    let lastError: Error | undefined;
     while (attempt < 3) {
       try {
         const response = await fetch(url, {
@@ -109,14 +114,19 @@ export class XaiEnsemble {
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
           const delayMs = retryAfter ? parseFloat(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+          // Populate lastError so a 3x-429 exhaust produces a meaningful
+          // message instead of "Failed to call xAI model after retries:
+          // undefined". Reset on the next iteration's catch when a real
+          // error supplants it.
+          lastError = new Error(`xAI API rate-limited (status 429); backed off up to ${delayMs}ms per attempt`);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
           attempt++;
           continue;
         }
         if (!response.ok) {
-          lastError = await response.text();
+          const errorBody = await response.text();
           throw new Error(
-            `xAI API request failed (status ${response.status}): ${lastError || response.statusText}`
+            `xAI API request failed (status ${response.status}): ${errorBody || response.statusText}`
           );
         }
         // Shape of the xAI chat-completions response fields we consume.
@@ -135,14 +145,14 @@ export class XaiEnsemble {
         }
         return typeof choice === 'string' ? choice : JSON.stringify(choice);
       } catch (err: unknown) {
-        lastError = err;
+        lastError = err instanceof Error ? err : new Error(String(err));
         // For transient network or server errors, apply exponential backoff.
         const delayMs = Math.pow(2, attempt) * 1000;
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         attempt++;
       }
     }
-    const lastErrorMessage = lastError instanceof Error ? lastError.message : String(lastError);
+    const lastErrorMessage = lastError?.message ?? 'all attempts exhausted with no error captured';
     throw new Error(`Failed to call xAI model after retries: ${lastErrorMessage}`);
   }
 }

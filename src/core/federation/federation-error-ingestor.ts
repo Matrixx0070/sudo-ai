@@ -16,6 +16,31 @@ import {
 
 const log = createLogger('federation:error-ingestor');
 
+type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+const SEVERITY_WHITELIST: readonly Severity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
+const SEVERITY_FALLBACK: Severity = 'MEDIUM';
+
+/**
+ * Whitelist-coerce an unknown DB value into a typed Severity.
+ *
+ * The DB column is `TEXT NOT NULL` with no CHECK constraint, so legacy rows,
+ * peer-supplied severities, and corrupted reads can all produce arbitrary
+ * strings. Casting `row.severity as Severity` silently smuggles those through
+ * to consumers that switch on the four valid values. Named coercion logs the
+ * unexpected input and falls back to MEDIUM rather than poisoning downstream
+ * dashboards with phantom severity values.
+ */
+export function coerceSeverity(raw: unknown): Severity {
+  if (typeof raw === 'string' && (SEVERITY_WHITELIST as readonly string[]).includes(raw)) {
+    return raw as Severity;
+  }
+  // log.debug, not log.warn: a single legacy peer flooding the DB with bad
+  // severities would otherwise be amplified per-row, per-queryReports call.
+  // Verifier LOW-1 on the audit-LOW sweep.
+  log.debug({ raw: String(raw) }, 'federation-error-ingestor: severity outside whitelist — coerced to MEDIUM');
+  return SEVERITY_FALLBACK;
+}
+
 const DB_INIT_SQL = `
   CREATE TABLE IF NOT EXISTS federation_error_reports (
     id TEXT PRIMARY KEY,
@@ -172,12 +197,13 @@ export class FederationErrorIngestor {
     }
 
     const limit = opts.limit ?? 100;
-    conditions.push('1=1');
 
-    const whereClause = conditions.join(' AND ');
+    // No tautological `1=1` padding — drop the WHERE clause entirely when no
+    // conditions apply. Matches the audit LOW from PR #208's body.
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const sql = `
       SELECT * FROM federation_error_reports
-      WHERE ${whereClause}
+      ${whereClause}
       ORDER BY created_at DESC
       LIMIT ?
     `;
@@ -208,7 +234,7 @@ export class FederationErrorIngestor {
         errorSignature: row.error_signature,
         stackTrace: row.stack_trace ?? undefined,
         botVersion: row.bot_version,
-        severity: row.severity as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW',
+        severity: coerceSeverity(row.severity),
         toolName: row.tool_name ?? undefined,
         sessionId: row.session_id ?? undefined,
         phase: row.phase ?? undefined,
