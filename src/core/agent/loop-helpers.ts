@@ -80,6 +80,14 @@ export interface ToolContext {
 
 export interface BrainLike {
   call(req: BrainRequest): Promise<BrainResponse>;
+  /**
+   * Optional chat-style entry point. Real Brain class has it (returns the
+   * raw assistant text); duck-typed mocks may not. Callers must guard.
+   */
+  chat?(
+    messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>,
+    model?: string,
+  ): Promise<string>;
 }
 
 /** Minimal tool descriptor shape used by the smart tool router. */
@@ -441,6 +449,8 @@ export interface SecurityGuardLike {
     severity: string;
     timestamp: string;
   }): void;
+  /** Optional prompt-injection check. Not all guard implementations carry it. */
+  detectInjection?(message: string): { safe: boolean; threat: string | null; score: number };
 }
 
 // ---------------------------------------------------------------------------

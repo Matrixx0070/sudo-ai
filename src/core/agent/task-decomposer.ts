@@ -30,7 +30,9 @@ export interface DecomposedTask {
  */
 export interface DecomposerBrainLike {
   call(opts: {
-    messages: Array<{ role: string; content: string }>;
+    // Same union as BrainMessage.role so BrainLike satisfies this contract
+    // structurally without needing a cast at the call site.
+    messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>;
     maxTokens?: number;
     temperature?: number;
   }): Promise<{ content: string }>;
