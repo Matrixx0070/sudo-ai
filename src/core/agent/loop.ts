@@ -1260,7 +1260,7 @@ export class AgentLoop {
     // so the brain remains aware and resistant without losing the owner's intent.
     if (this.security) {
       try {
-        const check = (this.security as unknown as { detectInjection?: (m: string) => { safe: boolean; threat: string | null; score: number } }).detectInjection?.(message);
+        const check = this.security.detectInjection?.(message);
         if (check && !check.safe) {
           log.warn({ sessionId, threat: check.threat, score: check.score }, 'Prompt injection detected — injecting brain warning');
           session.messages.push({
@@ -1418,15 +1418,31 @@ export class AgentLoop {
 
       // Session fork: if context is full, archive old session and continue in a new one.
       // Transparent to the user — the new session carries a compact handoff summary.
-      if (shouldFork(session as unknown as import('../sessions/types.js').Session)) {
+      //
+      // SessionLike (loop-helpers) is intentionally a structural subset of the
+      // concrete Session (sessions/types.ts) so the loop stays decoupled from
+      // session-storage internals. At runtime the loop only ever runs against
+      // the real SessionManager which yields real Session instances, so the
+      // narrowing below is a one-shot bridge at the helper boundary and not a
+      // dynamic guess. SessionManagerLike → ForkSessionManager is the same
+      // SessionLike↔Session impedance plus covariant return shifts, so both
+      // bridges live in the same single statement and nowhere else in the
+      // loop.
+      const fullSession = session as unknown as import('../sessions/types.js').Session;
+      const forkSessionManager = this.sessionManager as unknown as ForkSessionManager;
+      if (shouldFork(fullSession)) {
         log.info({ sessionId: state.sessionId }, 'Session fork threshold reached — forking');
         try {
           const fork = await forkSession(
-            session as unknown as import('../sessions/types.js').Session,
+            fullSession,
             this.brain as Parameters<typeof forkSession>[1],
-            this.sessionManager as unknown as ForkSessionManager,
+            forkSessionManager,
           );
           if (fork) {
+            // Session → SessionLike: SessionLike has an open index
+            // signature for ad-hoc session metadata (loop-helpers.ts)
+            // which the concrete Session does not declare, so this is
+            // the second unavoidable bridge cast at the boundary.
             session = fork.newSession as unknown as SessionLike;
             state.sessionId = fork.newSession.id;
             log.info({ newSessionId: fork.newSession.id, oldSessionId: fork.archivedSessionId }, 'Session forked — continuing in new session');
@@ -1454,7 +1470,7 @@ export class AgentLoop {
       const isFirstUserTurn = session.messages.filter(m => m.role === 'user').length === 0;
       if (isFirstUserTurn) {
         try {
-          await (this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike)?.emit(
+          await this.hooks?.emit(
             'agent:bootstrap',
             { event: 'agent:bootstrap', sessionId },
           );
@@ -1543,7 +1559,7 @@ export class AgentLoop {
       // 150-token micro-call, so simple turns never incur an extra LLM call.
       if (process.env['SUDO_AUTO_PLAN'] === '1') {
         try {
-          const decomposed = await decomposeIfComplex(this.brain as unknown as DecomposerBrainLike, current);
+          const decomposed = await decomposeIfComplex(this.brain, current);
           // Sanitize before injecting as a SYSTEM message (higher trust): collapse
           // whitespace so a subtask can't smuggle extra lines, cap length to bound
           // tokens + adversarial content, drop empties, then cap step count.
@@ -1594,7 +1610,15 @@ export class AgentLoop {
                 'GoalPlanner: semantic per-run cap reached — using template planning for this message',
               );
             }
-            const planner = new GoalPlanner(useSemantic ? (this.brain as unknown as BrainForPlanning) : null);
+            // Adapter: BrainLike's chat method is optional (duck-typed mocks
+            // may omit it), BrainForPlanning's is required. Capture in a local
+            // so the closure's narrowed type sticks; fall back to template
+            // planning when chat is unavailable.
+            const brainChat = this.brain.chat?.bind(this.brain);
+            const plannerBrain: BrainForPlanning | null = useSemantic && brainChat
+              ? { chat: (msgs) => brainChat(msgs) }
+              : null;
+            const planner = new GoalPlanner(plannerBrain);
             // Count the attempt before planning: plan() issues exactly one brain.chat
             // when constructed with a brain, and bills tokens even if it then times out
             // or the JSON fails to parse and it falls back to template internally.
@@ -1819,9 +1843,14 @@ export class AgentLoop {
         log.warn('AgentLoop: runBestOfN called but BestOfNExecutor not attached');
         return null;
       }
-      const result = await (this._bestOfNExecutor as unknown as {
-        execute(task: string, n: number): Promise<{ bestText: string; scores: number[] }>;
-      }).execute(prompt, n);
+      const raw = await this._bestOfNExecutor.execute(prompt, n);
+      // BestOfNResult's `winnerOutput` + `scores: JudgeScore[]` is richer than
+      // this method's contract; project it down to the promised shape so the
+      // log line + return value stay aligned with the function's signature.
+      const result = {
+        bestText: raw.winnerOutput,
+        scores: raw.scores.map((s) => s.totalScore),
+      };
       log.info({ sessionId, n, bestScore: result.scores[0] ?? 'N/A' }, 'BestOfNExecutor: execution complete');
       return result;
     } catch (err) {
@@ -1843,7 +1872,7 @@ export class AgentLoop {
     const { maxIterations, model } = this.config;
     let finalText = '';
     state.isProcessing = true;
-    const hooksHelper = this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike | undefined;
+    const hooksHelper = this.hooks;
 
     // P0: track total tool calls across inner loop iterations for LazinessNudge.
     let _innerLoopToolCallCount = 0;
@@ -2134,14 +2163,14 @@ export class AgentLoop {
                     compressedMessages = inputMessages;
                 }
 
-                const newTokens = estimateContextSize(compressedMessages as unknown as typeof session.messages);
+                const newTokens = estimateContextSize(compressedMessages);
                 log.info(
                   { sessionId: state.sessionId, stage, tokensBefore: currentTokens, tokensAfter: newTokens },
                   'ContextCompressor: graduated compression applied',
                 );
 
                 if (newTokens < currentTokens) {
-                  session.messages = compressedMessages as unknown as typeof session.messages;
+                  session.messages = compressedMessages;
                   emit({ type: 'compaction', summary: summary ?? `[Context compressed: stage=${stage}]` });
                   await hooksHelper?.emit('after_compaction', { sessionId: state.sessionId });
                   continue;
@@ -2623,7 +2652,7 @@ export class AgentLoop {
             }
 
             _stuckPreCount = session.messages.length;
-            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks as unknown as import('./loop-helpers.js').HookEmitterLike, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass);
+            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass);
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
 
@@ -2873,9 +2902,9 @@ export class AgentLoop {
         // If the agent produced text without making any tool calls, check if it's being lazy.
         try {
           if (this._lazinessNudge) {
-            const nudgeResult = (this._lazinessNudge as unknown as { classify(count: number, text: string): { nudgeInjected: boolean; level: string } }).classify(_innerLoopToolCallCount, finalText);
+            const nudgeResult = this._lazinessNudge.classify(_innerLoopToolCallCount, finalText);
             if (nudgeResult.nudgeInjected) {
-              const nudgeMsg = (this._lazinessNudge as unknown as { getNudgeMessage(level: string): string }).getNudgeMessage(nudgeResult.level);
+              const nudgeMsg = this._lazinessNudge.getNudgeMessage(nudgeResult.level);
               session.messages.push({ role: 'system', content: nudgeMsg });
               log.info({ sessionId: state.sessionId, level: nudgeResult.level }, 'LazinessNudge: nudge injected');
             }
@@ -2925,9 +2954,12 @@ export class AgentLoop {
         // P0: TodoGate — block premature loop exit if TODOs remain (fail-open).
         try {
           if (this._todoGate) {
-            const gateResult = (this._todoGate as unknown as { check(): { action: string; reason: string } }).check();
+            const gateResult = this._todoGate.check();
             if (gateResult.action === 'block') {
-              session.messages.push({ role: 'system', content: gateResult.reason });
+              session.messages.push({
+                role: 'system',
+                content: gateResult.reason ?? 'TodoGate: incomplete todos remain — continue working.',
+              });
               log.info({ sessionId: state.sessionId }, 'TodoGate: blocked premature exit — continuing loop');
               continue; // re-enter the while loop instead of breaking
             }

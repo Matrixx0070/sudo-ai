@@ -420,7 +420,9 @@ const COMPLEXITY_EXTRA_STEPS: Record<GoalComplexity, StepTemplate | null> = {
 
 /** Minimal interface the planner needs from Brain for semantic planning. */
 export interface BrainForPlanning {
-  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
+  // Same role union as BrainMessage so BrainLike-shaped inputs satisfy this
+  // contract structurally without `as unknown as` at the caller.
+  chat(messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------
