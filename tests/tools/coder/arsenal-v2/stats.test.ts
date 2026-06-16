@@ -10,10 +10,14 @@ import path from 'node:path';
 import {
   DEFAULT_MODE_SIMILARITY,
   blendScores,
+  blendSimilarity,
   collapseByMode,
+  computeEmpiricalSimilarity,
+  effectiveSimilarity,
   loadRecentStats,
   loadRecentStatsByMode,
   parseModeSimilarityEnv,
+  pearson,
   rankCascade,
   weightedCollapseByMode,
   wilsonLowerBound,
@@ -712,5 +716,216 @@ describe('slice-12 mode-similarity integration', () => {
     expect(fixGlobal.size).toBe(0);
     const fixCascade = rankCascade(['B', 'A'], byMode.get('fix')!, { globalStats: fixGlobal });
     expect(fixCascade).toEqual(['A', 'B']);
+  });
+});
+
+describe('pearson', () => {
+  it('returns 0 for n < 2', () => {
+    expect(pearson([], [])).toBe(0);
+    expect(pearson([1], [1])).toBe(0);
+  });
+  it('returns 0 for mismatched lengths', () => {
+    expect(pearson([1, 2], [1])).toBe(0);
+  });
+  it('returns 1 for perfectly correlated vectors', () => {
+    expect(pearson([0, 0.25, 0.5, 0.75, 1], [0, 0.25, 0.5, 0.75, 1])).toBeCloseTo(1, 5);
+  });
+  it('returns -1 for perfectly anti-correlated vectors', () => {
+    expect(pearson([1, 0.75, 0.5, 0.25, 0], [0, 0.25, 0.5, 0.75, 1])).toBeCloseTo(-1, 5);
+  });
+  it('returns 0 when either vector has zero variance', () => {
+    expect(pearson([0.5, 0.5, 0.5], [0.1, 0.2, 0.9])).toBe(0);
+    expect(pearson([0.1, 0.2, 0.9], [0.5, 0.5, 0.5])).toBe(0);
+  });
+  it('handles a moderate correlation within tolerance', () => {
+    // Two vectors that should land somewhere between 0 and 1.
+    const r = pearson([0.9, 0.8, 0.5, 0.3], [0.85, 0.7, 0.6, 0.4]);
+    expect(r).toBeGreaterThan(0.8);
+    expect(r).toBeLessThan(1);
+  });
+});
+
+describe('computeEmpiricalSimilarity', () => {
+  const mkS = (m: string, attempts: number, approvals: number): ModelStats => ({
+    model: m,
+    attempts,
+    approvals,
+    rejections: 0,
+    errors: 0,
+    successes: approvals,
+    avgDurationMs: 1000,
+    lastSeen: 100,
+    weightedAttempts: attempts,
+    weightedApprovals: approvals,
+  });
+
+  it('returns an empty matrix when there are fewer than 2 shared models', () => {
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    byMode.set('fix', new Map([['A', mkS('A', 5, 5)]]));
+    byMode.set('build', new Map([['A', mkS('A', 5, 5)]])); // only 1 shared
+    const { matrix, sharedCounts } = computeEmpiricalSimilarity(byMode);
+    expect(matrix.fix?.build).toBeUndefined();
+    expect(sharedCounts.get('fix')!.get('build')).toBe(1);
+  });
+
+  it('produces a high correlation when fix-rates and build-rates agree across models', () => {
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    // A: high in both. B: middling in both. C: low in both.
+    byMode.set('fix', new Map([
+      ['A', mkS('A', 10, 9)],
+      ['B', mkS('B', 10, 5)],
+      ['C', mkS('C', 10, 1)],
+    ]));
+    byMode.set('build', new Map([
+      ['A', mkS('A', 10, 8)],
+      ['B', mkS('B', 10, 6)],
+      ['C', mkS('C', 10, 2)],
+    ]));
+    const { matrix } = computeEmpiricalSimilarity(byMode);
+    expect(matrix.fix?.build).toBeGreaterThan(0.9);
+  });
+
+  it('clamps negative correlations to 0 (omits from the result row)', () => {
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    // Anti-correlated: A great at fix bad at build; B opposite; C middle.
+    byMode.set('fix', new Map([
+      ['A', mkS('A', 10, 9)],
+      ['B', mkS('B', 10, 1)],
+      ['C', mkS('C', 10, 5)],
+    ]));
+    byMode.set('build', new Map([
+      ['A', mkS('A', 10, 1)],
+      ['B', mkS('B', 10, 9)],
+      ['C', mkS('C', 10, 5)],
+    ]));
+    const { matrix } = computeEmpiricalSimilarity(byMode);
+    expect(matrix.fix?.build).toBeUndefined();
+  });
+
+  it('excludes models with too few samples (per-mode minPerModelSamples)', () => {
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    byMode.set('fix', new Map([
+      ['A', mkS('A', 2, 2)], // below default minPerModelSamples=3
+      ['B', mkS('B', 10, 5)],
+    ]));
+    byMode.set('build', new Map([
+      ['A', mkS('A', 10, 5)],
+      ['B', mkS('B', 10, 5)],
+    ]));
+    const { sharedCounts } = computeEmpiricalSimilarity(byMode);
+    expect(sharedCounts.get('fix')!.get('build')).toBe(1); // only B qualifies
+  });
+
+  it('respects a custom minPerModelSamples', () => {
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    byMode.set('fix', new Map([
+      ['A', mkS('A', 1, 1)],
+      ['B', mkS('B', 1, 0)],
+    ]));
+    byMode.set('build', new Map([
+      ['A', mkS('A', 1, 1)],
+      ['B', mkS('B', 1, 0)],
+    ]));
+    const { sharedCounts } = computeEmpiricalSimilarity(byMode, { minPerModelSamples: 1 });
+    expect(sharedCounts.get('fix')!.get('build')).toBe(2);
+  });
+});
+
+describe('blendSimilarity', () => {
+  it('returns the default unchanged when sharedCounts are all 0', () => {
+    const defaults: ModeSimilarityMatrix = { fix: { build: 0.6 } };
+    const empirical: ModeSimilarityMatrix = { fix: { build: 0.95 } };
+    const shared = new Map<string, Map<string, number>>();
+    shared.set('fix', new Map([['build', 0]]));
+    const out = blendSimilarity(empirical, defaults, shared);
+    expect(out.fix!.build).toBeCloseTo(0.6, 5);
+  });
+
+  it('weights 50/50 when shared count equals the shrinkage constant', () => {
+    const defaults: ModeSimilarityMatrix = { fix: { build: 0.6 } };
+    const empirical: ModeSimilarityMatrix = { fix: { build: 1.0 } };
+    const shared = new Map<string, Map<string, number>>();
+    shared.set('fix', new Map([['build', 5]])); // = default k=5 → 50/50
+    const out = blendSimilarity(empirical, defaults, shared);
+    expect(out.fix!.build).toBeCloseTo(0.8, 5); // 0.5*1.0 + 0.5*0.6 = 0.8
+  });
+
+  it('shifts toward empirical as shared count grows', () => {
+    const defaults: ModeSimilarityMatrix = { fix: { build: 0.6 } };
+    const empirical: ModeSimilarityMatrix = { fix: { build: 1.0 } };
+    const mk = (shared: number) => {
+      const s = new Map<string, Map<string, number>>();
+      s.set('fix', new Map([['build', shared]]));
+      return blendSimilarity(empirical, defaults, s).fix!.build;
+    };
+    expect(mk(1)).toBeLessThan(mk(5));
+    expect(mk(5)).toBeLessThan(mk(50));
+    expect(mk(500)).toBeGreaterThan(0.99); // far past k=5 → ~empirical
+  });
+
+  it('includes pairs present only in defaults at full default weight', () => {
+    const defaults: ModeSimilarityMatrix = { fix: { build: 0.6, refactor: 0.7 } };
+    const empirical: ModeSimilarityMatrix = { fix: { build: 0.95 } }; // no refactor
+    const shared = new Map<string, Map<string, number>>();
+    shared.set('fix', new Map([['build', 10]]));
+    const out = blendSimilarity(empirical, defaults, shared);
+    expect(out.fix!.refactor).toBeCloseTo(0.7, 5); // unchanged
+  });
+
+  it('respects a custom shrinkageK', () => {
+    const defaults: ModeSimilarityMatrix = { fix: { build: 0.6 } };
+    const empirical: ModeSimilarityMatrix = { fix: { build: 1.0 } };
+    const shared = new Map<string, Map<string, number>>();
+    shared.set('fix', new Map([['build', 5]]));
+    const out = blendSimilarity(empirical, defaults, shared, { shrinkageK: 50 });
+    // w_data = 5 / (5 + 50) = 0.091 → ~0.91*0.6 + 0.09*1.0 = 0.636
+    expect(out.fix!.build).toBeCloseTo(0.636, 2);
+  });
+});
+
+describe('effectiveSimilarity', () => {
+  it('falls through to defaults when byMode is empty', () => {
+    const out = effectiveSimilarity(new Map(), DEFAULT_MODE_SIMILARITY);
+    expect(out.fix!.build).toBeCloseTo(DEFAULT_MODE_SIMILARITY.fix!.build!, 5);
+  });
+
+  it('promotes the empirical signal when enough shared models accumulate', async () => {
+    const dayMsLocal = 24 * 60 * 60 * 1000;
+    // Seed 6 shared models in fix and build, all with strongly-correlated
+    // rates → empirical Pearson ≈ 1.0, blend ≈ 0.5 * 1 + 0.5 * 0.6 = 0.8.
+    const rates = [0.9, 0.85, 0.7, 0.5, 0.3, 0.1];
+    const rows: object[] = [];
+    rates.forEach((p, i) => {
+      const model = `M${i}`;
+      for (let j = 0; j < 10; j++) {
+        rows.push(row({ mode: 'fix', model, ts: NOW - dayMsLocal, criticVerdict: j / 10 < p ? 'approve' : 'needs_revision' }));
+        rows.push(row({ mode: 'build', model, ts: NOW - dayMsLocal, criticVerdict: j / 10 < p ? 'approve' : 'needs_revision' }));
+      }
+    });
+    await seed(rows);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 0 });
+    const sim = effectiveSimilarity(byMode, DEFAULT_MODE_SIMILARITY);
+    // Empirical correlation should be high; blend lifts it above the default 0.6.
+    expect(sim.fix!.build).toBeGreaterThan(DEFAULT_MODE_SIMILARITY.fix!.build!);
+  });
+
+  it('drops below the default when the empirical signal disagrees', async () => {
+    const dayMsLocal = 24 * 60 * 60 * 1000;
+    // Anti-correlated: high rate in fix → low rate in build for each model.
+    // Empirical → 0 (clamped); blend pulls fix-build below the default 0.6.
+    const fixRates = [0.9, 0.85, 0.7, 0.5, 0.3, 0.1];
+    const buildRates = [0.1, 0.15, 0.3, 0.5, 0.7, 0.9];
+    const rows: object[] = [];
+    fixRates.forEach((p, i) => {
+      const model = `M${i}`;
+      for (let j = 0; j < 10; j++) {
+        rows.push(row({ mode: 'fix', model, ts: NOW - dayMsLocal, criticVerdict: j / 10 < p ? 'approve' : 'needs_revision' }));
+        rows.push(row({ mode: 'build', model, ts: NOW - dayMsLocal, criticVerdict: j / 10 < buildRates[i]! ? 'approve' : 'needs_revision' }));
+      }
+    });
+    await seed(rows);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 0 });
+    const sim = effectiveSimilarity(byMode, DEFAULT_MODE_SIMILARITY);
+    expect(sim.fix!.build).toBeLessThan(DEFAULT_MODE_SIMILARITY.fix!.build!);
   });
 });

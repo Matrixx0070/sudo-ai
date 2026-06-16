@@ -30,6 +30,7 @@ import { getModel } from '../../../../brain/providers.js';
 import { modelForAttempt, parseCascade } from './cascade.js';
 import {
   DEFAULT_MODE_SIMILARITY,
+  effectiveSimilarity,
   loadRecentStatsByMode,
   parseModeSimilarityEnv,
   rankCascade,
@@ -229,7 +230,17 @@ export const arsenalV2Tool: ToolDefinition = {
       });
       const modeStats = byMode.get(mode) ?? new Map();
       const envMatrix = parseModeSimilarityEnv(process.env['SUDO_ARSENAL_V2_MODE_SIMILARITY']);
-      const globalStats = weightedCollapseByMode(byMode, mode, envMatrix ?? DEFAULT_MODE_SIMILARITY);
+      const baseMatrix = envMatrix ?? DEFAULT_MODE_SIMILARITY;
+      // Slice 13: blend the hand-crafted prior with empirical Pearson
+      // similarity. Opt-out drops back to the slice-12 static matrix.
+      const dataDrivenEnabled = process.env['SUDO_ARSENAL_V2_NO_DATA_SIMILARITY'] !== '1';
+      const simShrinkageK = Number(process.env['SUDO_ARSENAL_V2_SIM_SHRINKAGE_K']);
+      const simMatrix = dataDrivenEnabled
+        ? effectiveSimilarity(byMode, baseMatrix, {
+            shrinkageK: Number.isFinite(simShrinkageK) && simShrinkageK > 0 ? simShrinkageK : undefined,
+          })
+        : baseMatrix;
+      const globalStats = weightedCollapseByMode(byMode, mode, simMatrix);
       return rankCascade(cascadeOriginal, modeStats, {
         globalStats,
         modeShrinkageK: Number.isFinite(shrinkageK) && shrinkageK > 0 ? shrinkageK : undefined,
