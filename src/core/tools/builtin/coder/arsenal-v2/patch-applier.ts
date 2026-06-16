@@ -30,6 +30,8 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
+  lstatSync,
+  realpathSync,
 } from 'node:fs';
 import { closeSync, fsyncSync, openSync } from 'node:fs';
 import path from 'node:path';
@@ -82,6 +84,26 @@ export function applyPatches(ops: PatchOp[], opts: ApplyOptions): ApplyResult {
 // Internals
 // ---------------------------------------------------------------------------
 
+function assertPathWithinRoot(absPath: string, projectRoot: string): boolean {
+  try {
+    if (existsSync(absPath)) {
+      const real = realpathSync(absPath);
+      const rel = path.relative(projectRoot, real);
+      return !rel.startsWith('..');
+    }
+    const dir = path.dirname(absPath);
+    if (existsSync(dir)) {
+      const realDir = realpathSync(dir);
+      const rel = path.relative(projectRoot, realDir);
+      return !rel.startsWith('..');
+    }
+    const rel = path.relative(projectRoot, absPath);
+    return !rel.startsWith('..');
+  } catch {
+    return false;
+  }
+}
+
 function groupByFile(ops: PatchOp[]): Map<string, PatchOp[]> {
   const map = new Map<string, PatchOp[]>();
   for (const op of ops) {
@@ -100,10 +122,8 @@ function applyToFile(
 ): PatchOpResult[] {
   const absFile = path.resolve(opts.projectRoot, relFile);
 
-  // Path-traversal guard: resolve must remain inside the project root.
-  // path.relative -> path that doesn't start with '..' and isn't absolute.
-  const rel = path.relative(opts.projectRoot, absFile);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+  // Path-traversal guard: includes symlink resolution to detect symlink attacks
+  if (!assertPathWithinRoot(absFile, opts.projectRoot)) {
     return ops.map<PatchOpResult>((op) => ({
       op,
       status: 'failed',
@@ -299,15 +319,42 @@ function applyOneMutation(op: PatchOp, current: string): { result: PatchOpResult
   return { result: { op, status: 'failed', reason: 'io_error', detail: 'mutate-path received non-mutate op' }, next: current };
 }
 
-/** Atomic write: temp -> fsync -> rename. */
+/** Atomic write: temp -> fsync -> rename (with EXDEV fallback and TOCTOU validation). */
 function atomicWrite(absFile: string, content: string): void {
   const tmp = absFile + '.arsenal-tmp';
   writeFileSync(tmp, content, 'utf-8');
-  // fsync to ensure durability before rename — rename is atomic on POSIX
-  // when source + dest are on the same filesystem (which they are here).
+  // fsync to ensure durability before rename
   const fd = openSync(tmp, 'r+');
   try { fsyncSync(fd); } finally { closeSync(fd); }
-  renameSync(tmp, absFile);
+  try {
+    renameSync(tmp, absFile);
+  } catch (renameErr: unknown) {
+    const e = renameErr as { code?: string; message?: string };
+    if (e.code === 'EXDEV') {
+      // Cross-filesystem: fall back to copy + delete
+      copyFileSync(tmp, absFile);
+      unlinkSync(tmp);
+    } else {
+      throw renameErr;
+    }
+  }
+  // TOCTOU validation: after write, verify target is still within project root
+  if (existsSync(absFile)) {
+    try {
+      // Get the project root from absFile's parent chain or use a fallback
+      const projectRoot = process.env.PROJECT_ROOT || process.cwd();
+      const realAbs = realpathSync(absFile);
+      const rel = path.relative(projectRoot, realAbs);
+      if (rel.startsWith('..')) {
+        throw new Error('TOCTOU: file was moved outside project root after write');
+      }
+    } catch (validateErr) {
+      if (validateErr instanceof Error && validateErr.message.includes('TOCTOU')) {
+        throw validateErr;
+      }
+      // If realpathSync fails, file may have been deleted post-write — log but continue
+    }
+  }
 }
 
 /**

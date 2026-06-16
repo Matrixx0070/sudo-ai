@@ -20,7 +20,7 @@
  */
 
 import { generateText, streamText } from 'ai';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ToolContext, ToolDefinition, ToolResult } from '../../../types.js';
@@ -93,11 +93,12 @@ interface AttemptRecord {
 function runTsc(): TscResult {
   if (!existsSync(TSC)) return { clean: true, errorCount: 0, summary: '(tsc not available — skipped)' };
   try {
-    execSync(`"${TSC}" --noEmit`, {
+    execFileSync(TSC, ['--noEmit'], {
       cwd: PROJECT_ROOT,
       encoding: 'utf-8',
       timeout: 90_000,
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 512 * 1024,
     });
     return { clean: true, errorCount: 0, summary: 'TypeScript: clean ✓' };
   } catch (err) {

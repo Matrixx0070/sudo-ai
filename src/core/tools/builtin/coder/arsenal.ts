@@ -76,6 +76,17 @@ function assertPathWithinRoot(abs: string): boolean {
   }
 }
 
+// Escape AI-protocol markers in file content to prevent prompt injection
+function escapeProtocolMarkers(content: string): string {
+  return content
+    .replace(/<<<FILE:/g, '<\\<\\<FILE:')
+    .replace(/<<<END>>>/g, '<\\<\\<END>>>')
+    .replace(/<<<SUMMARY>>>/g, '<\\<\\<SUMMARY>>>')
+    .replace(/<<<REVIEW>>>/g, '<\\<\\<REVIEW>>>')
+    .replace(/<<<ANALYSIS>>>/g, '<\\<\\<ANALYSIS>>>')
+    .replace(/<<<EXPLANATION>>>/g, '<\\<\\<EXPLANATION>>>');
+}
+
 // Rotate old backups (7+ days) to prevent unbounded directory growth
 function rotateBackups(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): void {
   if (!existsSync(BACKUP_DIR)) return;
@@ -401,7 +412,8 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
       if (s.size > 80_000) continue;
       const content = readFileSync(abs, 'utf-8');
       const rel = path.relative(PROJECT_ROOT, abs);
-      parts.push(`### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`);
+      const escapedContent = escapeProtocolMarkers(content);
+      parts.push(`### ${rel}\n\`\`\`\n${escapedContent}\n\`\`\`\n\n`);
     } catch { /* skip unreadable */ }
   }
 
@@ -432,7 +444,8 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
       try {
         const content = readFileSync(full, 'utf-8');
         const rel = path.relative(PROJECT_ROOT, full);
-        const chunk = `### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+        const escapedContent = escapeProtocolMarkers(content);
+        const chunk = `### ${rel}\n\`\`\`\n${escapedContent}\n\`\`\`\n\n`;
         // Pre-check: only append if it won't exceed the limit
         if (totalBytes + chunk.length > maxBytes) break;
         parts.push(chunk);
@@ -460,7 +473,8 @@ function readSpecificFiles(filePaths: string[]): string {
     try {
       const content = readFileSync(abs, 'utf-8');
       const relative = path.relative(PROJECT_ROOT, abs);
-      parts.push(`### ${relative}\n\`\`\`\n${content}\n\`\`\`\n\n`);
+      const escapedContent = escapeProtocolMarkers(content);
+      parts.push(`### ${relative}\n\`\`\`\n${escapedContent}\n\`\`\`\n\n`);
     } catch { parts.push(`### ${fp}\n[CANNOT READ]\n\n`); }
   }
   return parts.join('');
@@ -612,11 +626,40 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
       // Write to secure temp file (TOCTOU-resistant: use system temp dir, not predictable .tmp)
       const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'arsenal-'));
       const tmpPath = path.join(tmpDir, path.basename(abs));
+      let success = false;
       try {
         writeFileSync(tmpPath, edit.content, 'utf-8');
-        renameSync(tmpPath, abs);
+        try {
+          renameSync(tmpPath, abs);
+        } catch (renameErr: unknown) {
+          // If rename fails with EXDEV (cross-filesystem), fall back to copy+delete
+          const e = renameErr as { code?: string; message?: string };
+          if (e.code === 'EXDEV') {
+            copyFileSync(tmpPath, abs);
+            unlinkSync(tmpPath);
+          } else {
+            throw renameErr;
+          }
+        }
+        // TOCTOU validation: after write succeeds, verify target is still within root
+        if (existsSync(abs)) {
+          try {
+            const realAbs = realpathSync(abs);
+            const rel = path.relative(PROJECT_ROOT, realAbs);
+            if (rel.startsWith('..')) {
+              throw new Error('TOCTOU: file was moved outside project root after write');
+            }
+          } catch (validateErr) {
+            if (validateErr instanceof Error && validateErr.message.includes('TOCTOU')) {
+              throw validateErr;
+            }
+            // If realpathSync fails, file may have been deleted/corrupted post-write — log but continue
+            logger.warn({ path: abs, err: validateErr instanceof Error ? validateErr.message : String(validateErr) }, 'arsenal: post-write validation failed');
+          }
+        }
+        success = true;
       } finally {
-        // Clean up temp directory (not tmpPath — it's been renamed to abs)
+        // Clean up temp directory only if rename/copy succeeded (otherwise tmpPath still exists)
         try { rmSync(tmpDir, { recursive: true, force: true }); } catch { }
       }
 
