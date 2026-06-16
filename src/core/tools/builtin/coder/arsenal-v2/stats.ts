@@ -155,6 +155,8 @@ function walkRows(
       continue;
     }
     if (!row || typeof row.model !== 'string' || typeof row.ts !== 'number') continue;
+    // Guard against NaN timestamps which corrupt the entire weight calculation
+    if (!Number.isFinite(row.ts)) continue;
     if (row.ts < cutoff) continue;
     const age = Math.max(0, now - row.ts);
     const weight = halfLifeMs > 0 ? Math.exp(-(age * Math.LN2) / halfLifeMs) : 1;
@@ -197,7 +199,8 @@ function accumulate(
     s.errors += 1; // 'error' or null
   }
   if (row.success === true) s.successes += 1;
-  if (typeof row.durationMs === 'number' && Number.isFinite(row.durationMs)) {
+  // Guard against NaN durationMs which corrupts avgDurationMs calculation
+  if (typeof row.durationMs === 'number' && Number.isFinite(row.durationMs) && row.durationMs >= 0) {
     durationSums.set(model, (durationSums.get(model) ?? 0) + row.durationMs);
   }
   if (row.ts > s.lastSeen) s.lastSeen = row.ts;
@@ -580,6 +583,12 @@ function rankArray(arr: number[]): number[] {
 export function pearson(xs: number[], ys: number[]): number {
   const n = xs.length;
   if (n < 2 || ys.length !== n) return 0;
+
+  // Guard against NaN inputs which propagate through the calculation
+  if (xs.some(x => !Number.isFinite(x)) || ys.some(y => !Number.isFinite(y))) {
+    return 0;
+  }
+
   let sumX = 0;
   let sumY = 0;
   for (let i = 0; i < n; i++) {
@@ -598,7 +607,8 @@ export function pearson(xs: number[], ys: number[]): number {
     varX += dx * dx;
     varY += dy * dy;
   }
-  if (varX === 0 || varY === 0) return 0;
+  // Guard for zero-variance or NaN results
+  if (!Number.isFinite(varX) || !Number.isFinite(varY) || varX === 0 || varY === 0) return 0;
   return cov / Math.sqrt(varX * varY);
 }
 

@@ -103,7 +103,9 @@ function runTsc(): TscResult {
     return { clean: true, errorCount: 0, summary: 'TypeScript: clean ✓' };
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string };
-    const raw = `${e.stdout ?? ''}\n${e.stderr ?? ''}`.trim();
+    let raw = `${e.stdout ?? ''}\n${e.stderr ?? ''}`.trim();
+    // Sanitize CRLF and ANSI escape codes to prevent injection into LLM prompt
+    raw = raw.replace(/\r\n/g, '\n').replace(/\x1B\[[0-9;]*m/g, '');
     const matches = raw.match(/error TS\d+/g);
     const count = matches?.length ?? 0;
     const firstTen = raw.split('\n').filter((l) => l.includes('error TS')).slice(0, 10);
@@ -457,6 +459,13 @@ export const arsenalV2Tool: ToolDefinition = {
           },
           { path: telemetryPath },
         );
+      }
+
+      // Check for unrecoverable drift: all operations were skipped due to file changes
+      // In this case, retrying won't help — the files don't match the LLM's plan anymore
+      if (applied === 0 && skipped > 0 && failed === 0 && parsed.ops.length > 0) {
+        loopAbortReason = `all_ops_skipped_drift_detected_on_attempt_${attemptIdx}`;
+        break;
       }
 
       const retry = shouldRetry({

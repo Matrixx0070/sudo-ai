@@ -455,13 +455,14 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
   async function walk(d: string): Promise<void> {
     if (totalBytes >= maxBytes) return;
     // Prevent traversal into symlink directories (TOCTOU safety)
-    if (existsSync(d)) {
-      try {
-        const stat = lstatSync(d);
-        if (stat.isSymbolicLink()) return;
-      } catch {
-        return; // On error, skip directory
-      }
+    // Use lstatSync directly without existsSync pre-check to avoid race window
+    try {
+      const stat = lstatSync(d);
+      if (stat.isSymbolicLink()) return; // Skip symlink directories
+      if (!stat.isDirectory()) return; // Skip non-directories
+    } catch {
+      // lstatSync throws on missing directory or permission error — skip
+      return;
     }
     let entries: string[];
     try { entries = await readdir(d); } catch { return; }
@@ -580,16 +581,26 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
 
     // Validate filePath: reject empty, dot paths, absolute paths, or paths with null bytes
     if (!filePath || filePath === '.' || filePath === '..' || /^\s*$/.test(filePath) || /^[/\\]/.test(filePath) || filePath.includes('\0')) {
-      pos = text.indexOf('<<<END>>>', startIdx) + 9;
-      if (pos - 9 === -1) break;
+      // Find and skip to the end of this block
+      const blockEnd = text.indexOf('<<<END>>>', startIdx);
+      if (blockEnd === -1) {
+        // No closing marker - break to avoid infinite loop
+        break;
+      }
+      pos = blockEnd + 9;
       continue;
     }
 
     // Reject relative path traversal (../), normalized form must have no .. segments
     const normalized = path.normalize(filePath);
     if (normalized.includes('..') || normalized.startsWith('/') || normalized.startsWith('\\')) {
-      pos = text.indexOf('<<<END>>>', startIdx) + 9;
-      if (pos - 9 === -1) break;
+      // Find and skip to the end of this block
+      const blockEnd = text.indexOf('<<<END>>>', startIdx);
+      if (blockEnd === -1) {
+        // No closing marker - break to avoid infinite loop
+        break;
+      }
+      pos = blockEnd + 9;
       continue;
     }
 
@@ -597,7 +608,11 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
     if (nlIdx === -1) break; // malformed: no newline after >>>
     const contentStart = nlIdx + 1;
     const contentEnd = text.indexOf('<<<END>>>', contentStart);
-    if (contentEnd === -1) break;
+    if (contentEnd === -1) {
+      // Malformed: no closing <<<END>>> found
+      // Break unconditionally to prevent infinite loop of re-parsing same malformed block
+      break;
+    }
 
     fileBlockRanges.push({ start: startIdx, end: contentEnd + 9 });
 
@@ -693,57 +708,92 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
   for (const edit of edits) {
     const abs = resolveProjectPath(edit.filePath);
 
-    // Security: must be within project root (includes symlink resolution)
-    if (!assertPathWithinRoot(abs)) {
-      failed.push(`${edit.filePath} (path traversal blocked)`);
+    // Security: basic path validation only - deeper checks happen post-write
+    // Reject obvious traversals before attempting any write
+    const normalizedPath = path.normalize(edit.filePath);
+    if (normalizedPath.includes('..') || normalizedPath.startsWith('/') || normalizedPath.startsWith('\\')) {
+      failed.push(`${edit.filePath} (invalid path)`);
       continue;
     }
 
     try {
       // Create backup of existing file
       createBackup(abs);
-      // Ensure directory exists
-      const dir = path.dirname(abs);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-      // Write to secure temp file (TOCTOU-resistant: use system temp dir, not predictable .tmp)
-      const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'arsenal-'));
-      const tmpPath = path.join(tmpDir, path.basename(abs));
-      let success = false;
+      // Ensure directory exists AND verify no symlinks in directory chain
+      const dir = path.dirname(abs);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      } else {
+        // Verify no symlink components in the directory path
+        const components = dir.split(path.sep);
+        let current = '';
+        for (let i = 0; i < components.length; i++) {
+          current = path.join(current || path.sep, components[i]);
+          if (current && existsSync(current)) {
+            try {
+              const stat = lstatSync(current);
+              if (stat.isSymbolicLink()) {
+                throw new Error(`Path component is symlink: ${current}`);
+              }
+            } catch (err) {
+              throw err;
+            }
+          }
+        }
+      }
+
+      // Write to temp file in TARGET DIRECTORY (not os.tmpdir) to ensure same filesystem
+      // This makes rename atomic and prevents EXDEV
+      const tmpPath = `${abs}.arsenal-${randomBytes(4).toString('hex')}.tmp`;
+
       try {
         writeFileSync(tmpPath, edit.content, 'utf-8');
+
+        // Atomic rename - kernel prevents symlink traversal
         try {
           renameSync(tmpPath, abs);
         } catch (renameErr: unknown) {
-          // If rename fails with EXDEV (cross-filesystem), fall back to copy+delete
+          // If rename fails with EXDEV (different filesystem), use copy path
           const e = renameErr as { code?: string; message?: string };
           if (e.code === 'EXDEV') {
+            // For cross-filesystem: verify target isn't a symlink BEFORE copy
+            if (existsSync(abs)) {
+              try {
+                const stat = lstatSync(abs);
+                if (stat.isSymbolicLink()) {
+                  throw new Error('Target is symlink - refusing copy');
+                }
+              } catch (err) {
+                throw err;
+              }
+            }
+            // Copy and clean up tmp
             copyFileSync(tmpPath, abs);
-            unlinkSync(tmpPath);
           } else {
             throw renameErr;
           }
         }
-        // TOCTOU validation: after write succeeds, verify target is still within root
+
+        // POST-WRITE VALIDATION: verify file is actually within root
+        // This happens AFTER the atomic operation completes
         if (existsSync(abs)) {
           try {
             const realAbs = realpathSync(abs);
             const rel = path.relative(PROJECT_ROOT, realAbs);
             if (rel.startsWith('..')) {
-              throw new Error('TOCTOU: file was moved outside project root after write');
+              // File ended up outside root - this is a security failure
+              // Try to remove it and error
+              try { unlinkSync(abs); } catch { }
+              throw new Error('SECURITY: File written outside project root');
             }
           } catch (validateErr) {
-            if (validateErr instanceof Error && validateErr.message.includes('TOCTOU')) {
-              throw validateErr;
-            }
-            // If realpathSync fails, file may have been deleted/corrupted post-write — log but continue
-            logger.warn({ path: abs, err: validateErr instanceof Error ? validateErr.message : String(validateErr) }, 'arsenal: post-write validation failed');
+            throw validateErr;
           }
         }
-        success = true;
       } finally {
-        // Clean up temp directory only if rename/copy succeeded (otherwise tmpPath still exists)
-        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { }
+        // Always try to clean up temp file if it exists
+        try { unlinkSync(tmpPath); } catch { }
       }
 
       const rel = path.relative(PROJECT_ROOT, abs);
