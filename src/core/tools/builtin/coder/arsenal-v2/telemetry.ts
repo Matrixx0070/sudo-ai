@@ -126,8 +126,8 @@ export function recordAttempt(record: TelemetryRecord, opts: RecordOptions): voi
         try {
           truncateToTail(opts.path, retainBytes);
         } finally {
-          // Always release lock, even if truncate fails
-          try { statSync(lockPath) && writeFileSync(lockPath, ''); } catch { }
+          // Always release lock, even if truncate fails - use unlinkSync to delete it
+          try { unlinkSync(lockPath); } catch { }
         }
       } catch (lockErr) {
         // Another process holds the lock - skip truncation, try next time
