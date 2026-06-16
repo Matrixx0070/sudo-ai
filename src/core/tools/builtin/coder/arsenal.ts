@@ -51,6 +51,24 @@ async function getCodeReviewTool() {
   return _codeReviewToolCache;
 }
 
+// Rotate old backups (7+ days) to prevent unbounded directory growth
+function rotateBackups(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): void {
+  if (!existsSync(BACKUP_DIR)) return;
+  try {
+    const now = Date.now();
+    const files = require('node:fs').readdirSync(BACKUP_DIR);
+    for (const file of files) {
+      const filePath = path.join(BACKUP_DIR, file);
+      try {
+        const stat = statSync(filePath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          require('node:fs').unlinkSync(filePath);
+        }
+      } catch { /* skip if stat/delete fails */ }
+    }
+  } catch { /* non-fatal */ }
+}
+
 // ---------------------------------------------------------------------------
 // Model cascade
 // ---------------------------------------------------------------------------
@@ -288,7 +306,8 @@ function resolveProjectPath(p: string): string {
 
 async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): Promise<string> {
   // 1. Extract keywords: split on non-word chars, filter short words, take top 10
-  const stopWords = new Set(['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'boy', 'did', 'its', 'let', 'put', 'say', 'she', 'too', 'use', 'fix', 'add', 'run', 'use', 'via', 'per', 'set']);
+  // Deduplicated stop words (removed duplicate 'its', 'use')
+  const stopWords = new Set(['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'boy', 'did', 'let', 'put', 'say', 'she', 'too', 'use', 'via', 'per', 'set', 'fix', 'add', 'run']);
   const keywords = task
     .split(/\W+/)
     .filter(w => w.length >= 4 && !stopWords.has(w.toLowerCase()))
@@ -317,7 +336,7 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
           const out = execFileSync(
             'rg',
             ['-l', '--max-count=1', '-g', '*.ts', '-g', '*.js', keyword, baseDir],
-            { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] }
+            { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024 }
           );
           resolve(out.trim().split('\n').filter(Boolean));
         } catch (err) {
@@ -560,7 +579,7 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
       renameSync(tmpPath, abs);
       const rel = path.relative(PROJECT_ROOT, abs);
       applied.push(rel);
-      logger.info({ path: rel }, 'arsenal: file written');
+      logger.debug({ path: rel }, 'arsenal: file written');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       failed.push(`${edit.filePath}: ${msg}`);
@@ -648,6 +667,9 @@ export const arsenalTool: ToolDefinition = {
       return { success: false, output: 'coder.arsenal: "task" is required.' };
     }
 
+    // Rotate old backups once per session
+    rotateBackups();
+
     logger.info({ session: ctx.sessionId, mode, files: filesParam.length, forcedModel }, 'coder.arsenal invoked');
 
     // ---- STEP 1: Gather code context ----
@@ -711,6 +733,10 @@ export const arsenalTool: ToolDefinition = {
     for (const option of cascade) {
       try {
         const model = getModel(option.model);
+        if (!model) {
+          errors.push(`${option.label}: model not configured`);
+          continue;
+        }
         logger.info({ model: option.model, mode }, 'arsenal: trying model');
 
         const result = await generateText({
@@ -894,10 +920,13 @@ export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor'
   // Matches "as before" verified patterns (sim + guards); uses internal execute for full pipeline (recon/baseline/AI/verify).
   logger.info({ task, mode }, 'KAIROS requested arsenal self-repair (dry-run wired)');
   try {
-    // Minimal ctx (session/logger only; full ToolContext not required for read-only dry).
-    // Partial stub asserted through unknown: execute() does not touch the missing fields
-    // on the applyEdits:false path.
-    const ctx = { sessionId: 'kairos-self-repair', logger } as unknown as ToolContext;
+    // Full ToolContext with all required fields
+    const ctx: ToolContext = {
+      sessionId: 'kairos-self-repair',
+      workingDir: PROJECT_ROOT,
+      config: {} as unknown,
+      logger,
+    };
     const result = await arsenalTool.execute({ task, mode, applyEdits: false }, ctx);
     return { success: !!result.success, output: String(result.output || '').slice(0, 300) };
   } catch (e) {
