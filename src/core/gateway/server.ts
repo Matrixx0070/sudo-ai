@@ -20,6 +20,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 import { isHostGateEnabled, isHostAllowed } from './host-gate.js';
+import { getPromptCacheStats } from '../shared/prompt-cache-telemetry.js';
 import { progress } from './progress.js';
 import { getCacheKey, cacheGet, cacheSet } from './cache.js';
 import { scoreComplexity } from '../agent/complexity-scorer.js';
@@ -118,7 +119,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     res.end(JSON.stringify({
       status: 'ok',
       uptime: Math.floor((Date.now() - startTime) / 1000),
-      stats: { ...stats, avgLatencyMs: avgLatency(), queueDepths: queueDepths() },
+      stats: { ...stats, ...getPromptCacheStats(), avgLatencyMs: avgLatency(), queueDepths: queueDepths() },
     }));
     return;
   }

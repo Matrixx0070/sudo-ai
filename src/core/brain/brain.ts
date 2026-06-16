@@ -7,6 +7,7 @@
 
 import { generateText, streamText, tool as aiTool, jsonSchema } from 'ai';
 import { createLogger } from '../shared/logger.js';
+import { recordPromptCacheUsageFromProviderMetadata } from '../shared/prompt-cache-telemetry.js';
 import { LLMError } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
@@ -1006,6 +1007,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         }
         const usage = finalUsage ? buildTokenUsage(modelId, finalUsage) : undefined;
 
+        // Anthropic prompt-cache telemetry. providerMetadata is a PromiseLike on streamText;
+        // await defensively so a cancelled-after-completion stream can't poison the success path.
+        try {
+          const meta = await (result as { providerMetadata?: PromiseLike<unknown> }).providerMetadata;
+          recordPromptCacheUsageFromProviderMetadata(meta);
+        } catch { /* providerMetadata may reject on cancelled streams — non-fatal */ }
+
         this.failover.recordSuccess(profile.id);
         log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
         return;
@@ -1181,6 +1189,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     }
 
     this.failover.recordSuccess(profile.id);
+    recordPromptCacheUsageFromProviderMetadata((result as { providerMetadata?: unknown }).providerMetadata);
     log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
 
     return { content: finalContent, toolCalls: finalToolCalls, usage, model: modelId, finishReason: finalFinishReason };
