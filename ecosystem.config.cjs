@@ -115,6 +115,12 @@ module.exports = {
         // Kill-switch: SUDO_BASH_ALLOWLIST_FASTPATH=0 disables.
         SUDO_BASH_ALLOWLIST_FASTPATH: process.env['SUDO_BASH_ALLOWLIST_FASTPATH'] || '1',
 
+        // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
+        // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
+        // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the
+        // stable prefix but skips explicit breakpoints; SUDO_PROMPT_CACHE=0 disables fully.
+        SUDO_PROMPT_CACHE: process.env['SUDO_PROMPT_CACHE'] || '1',
+
         // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
         SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
         SUDO_UPDATE_CHANNEL: process.env['SUDO_UPDATE_CHANNEL'] || 'latest',
@@ -201,6 +207,10 @@ module.exports = {
         // Bash allowlist fast-path (see prod block for full rationale).
         // Enabled on staging so any UX regression surfaces here before prod.
         SUDO_BASH_ALLOWLIST_FASTPATH: process.env['SUDO_BASH_ALLOWLIST_FASTPATH'] || '1',
+
+        // Prompt-cache discipline (see prod block for full rationale). Default ON on staging
+        // so any cache-related regression surfaces here before reaching prod.
+        SUDO_PROMPT_CACHE: process.env['SUDO_PROMPT_CACHE'] || '1',
 
         // Kill-switch: enables tool.synthesize pipeline (bwrap sandbox + AST analysis).
         // MUST remain staging-only — never copy to apps[0] production env block.
