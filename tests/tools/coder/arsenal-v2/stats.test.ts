@@ -8,13 +8,17 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  DEFAULT_MODE_SIMILARITY,
   blendScores,
   collapseByMode,
   loadRecentStats,
   loadRecentStatsByMode,
+  parseModeSimilarityEnv,
   rankCascade,
+  weightedCollapseByMode,
   wilsonLowerBound,
   type ModelStats,
+  type ModeSimilarityMatrix,
 } from '../../../../src/core/tools/builtin/coder/arsenal-v2/stats.js';
 
 let root: string;
@@ -527,5 +531,186 @@ describe('slice-11 cross-mode fallback in rankCascade', () => {
     // No telemetry at all — no file, no rows. Cascade should be unchanged.
     const out = rankCascade(['A', 'B', 'C'], new Map(), { globalStats: new Map() });
     expect(out).toEqual(['A', 'B', 'C']);
+  });
+});
+
+describe('parseModeSimilarityEnv', () => {
+  it('returns null for missing / empty input', () => {
+    expect(parseModeSimilarityEnv(undefined)).toBeNull();
+    expect(parseModeSimilarityEnv('')).toBeNull();
+    expect(parseModeSimilarityEnv('   ')).toBeNull();
+  });
+  it('returns null for malformed JSON', () => {
+    expect(parseModeSimilarityEnv('{not json')).toBeNull();
+    expect(parseModeSimilarityEnv('"a string"')).toBeNull();
+    expect(parseModeSimilarityEnv('[]')).toBeNull();
+  });
+  it('parses a valid matrix', () => {
+    const out = parseModeSimilarityEnv(JSON.stringify({ fix: { build: 0.8, test: 0.3 } }));
+    expect(out).toEqual({ fix: { build: 0.8, test: 0.3 } });
+  });
+  it('caps weights above 1 to 1', () => {
+    const out = parseModeSimilarityEnv(JSON.stringify({ fix: { build: 2.5 } }));
+    expect(out).toEqual({ fix: { build: 1 } });
+  });
+  it('drops non-numeric / non-finite / non-positive weights', () => {
+    const out = parseModeSimilarityEnv(
+      JSON.stringify({ fix: { build: 0.5, bad: 'x', neg: -1, zero: 0, inf: Infinity } }),
+    );
+    expect(out).toEqual({ fix: { build: 0.5 } });
+  });
+  it('drops rows that have no valid weights after filtering', () => {
+    const out = parseModeSimilarityEnv(JSON.stringify({ fix: { bad: 'x' }, build: { test: 0.3 } }));
+    expect(out).toEqual({ build: { test: 0.3 } });
+  });
+  it('returns null when nothing valid remains', () => {
+    expect(parseModeSimilarityEnv(JSON.stringify({ fix: { bad: 'x' } }))).toBeNull();
+  });
+});
+
+describe('DEFAULT_MODE_SIMILARITY', () => {
+  it('clusters code-writing modes with mutual weight ≥ 0.4', () => {
+    for (const a of ['fix', 'build', 'refactor', 'test']) {
+      for (const b of ['fix', 'build', 'refactor', 'test']) {
+        if (a === b) continue;
+        const w = DEFAULT_MODE_SIMILARITY[a]?.[b];
+        expect(w, `${a}->${b}`).toBeGreaterThanOrEqual(0.4);
+      }
+    }
+  });
+  it('clusters read-only modes with mutual weight ≥ 0.5', () => {
+    for (const a of ['review', 'analyze', 'explain']) {
+      for (const b of ['review', 'analyze', 'explain']) {
+        if (a === b) continue;
+        const w = DEFAULT_MODE_SIMILARITY[a]?.[b];
+        expect(w, `${a}->${b}`).toBeGreaterThanOrEqual(0.5);
+      }
+    }
+  });
+  it('cross-cluster weights are ≤ 0.3', () => {
+    const writing = ['fix', 'build', 'refactor', 'test'];
+    const reading = ['review', 'analyze', 'explain'];
+    for (const a of writing) {
+      for (const b of reading) {
+        const w = DEFAULT_MODE_SIMILARITY[a]?.[b];
+        expect(w, `${a}->${b}`).toBeLessThanOrEqual(0.3);
+      }
+    }
+  });
+});
+
+describe('weightedCollapseByMode', () => {
+  const mk = (m: string, attempts: number, approvals: number, lastSeen = 100): ModelStats => ({
+    model: m,
+    attempts,
+    approvals,
+    rejections: 0,
+    errors: 0,
+    successes: approvals,
+    avgDurationMs: 1000,
+    lastSeen,
+    weightedAttempts: attempts,
+    weightedApprovals: approvals,
+  });
+
+  it('returns empty when input is empty', () => {
+    expect(weightedCollapseByMode(new Map(), 'fix').size).toBe(0);
+  });
+
+  it('falls back to flat collapseByMode when currentMode is missing from the matrix', () => {
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    const fix = new Map([['A', mk('A', 5, 5)]]);
+    byMode.set('fix', fix);
+    // 'unknown-mode' isn't in the default matrix → should equal collapseByMode.
+    const out = weightedCollapseByMode(byMode, 'unknown-mode');
+    const flat = collapseByMode(byMode);
+    expect(out.get('A')!.attempts).toBe(flat.get('A')!.attempts);
+    expect(out.get('A')!.approvals).toBe(flat.get('A')!.approvals);
+  });
+
+  it('excludes the current mode from the weighted sum', () => {
+    // A has 10 rows in 'fix' AND 10 rows in 'refactor'. For currentMode='fix',
+    // only the refactor rows should contribute (weighted by sim(fix, refactor) = 0.7).
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    byMode.set('fix', new Map([['A', mk('A', 10, 10)]]));
+    byMode.set('refactor', new Map([['A', mk('A', 10, 8)]]));
+    const out = weightedCollapseByMode(byMode, 'fix');
+    expect(out.get('A')!.attempts).toBeCloseTo(7, 5); // 10 * 0.7
+    expect(out.get('A')!.approvals).toBeCloseTo(5.6, 5); // 8 * 0.7
+  });
+
+  it('weights other modes by similarity, dropping unweighted modes', () => {
+    const matrix: ModeSimilarityMatrix = { fix: { build: 0.6, refactor: 0.8 } };
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    byMode.set('build', new Map([['A', mk('A', 10, 10)]]));
+    byMode.set('refactor', new Map([['A', mk('A', 5, 5)]]));
+    byMode.set('explain', new Map([['A', mk('A', 100, 100)]])); // dropped (no entry)
+    const out = weightedCollapseByMode(byMode, 'fix', matrix);
+    // 10*0.6 + 5*0.8 = 6 + 4 = 10
+    expect(out.get('A')!.attempts).toBeCloseTo(10, 5);
+    // 10*0.6 + 5*0.8 = 10
+    expect(out.get('A')!.approvals).toBeCloseTo(10, 5);
+  });
+
+  it('produces fractional counts (Wilson handles them downstream)', () => {
+    const matrix: ModeSimilarityMatrix = { fix: { build: 0.3 } };
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    byMode.set('build', new Map([['A', mk('A', 7, 5)]]));
+    const out = weightedCollapseByMode(byMode, 'fix', matrix);
+    expect(out.get('A')!.attempts).toBeCloseTo(2.1, 5);
+    expect(out.get('A')!.approvals).toBeCloseTo(1.5, 5);
+  });
+
+  it('keeps lastSeen as the max across contributing modes', () => {
+    const matrix: ModeSimilarityMatrix = { fix: { build: 0.5, refactor: 0.5 } };
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    byMode.set('build', new Map([['A', mk('A', 5, 5, 100)]]));
+    byMode.set('refactor', new Map([['A', mk('A', 5, 5, 200)]]));
+    const out = weightedCollapseByMode(byMode, 'fix', matrix);
+    expect(out.get('A')!.lastSeen).toBe(200);
+  });
+});
+
+describe('slice-12 mode-similarity integration', () => {
+  it('a model with strong fix-mode history lifts more in build (sim 0.6) than in explain (sim 0.1)', async () => {
+    // Two models, both with NO build/explain data, both with fix-mode signal.
+    // A: 10/10 in fix. B: 10/0 in fix. Cascade ranking should depend on the
+    // current mode's similarity to fix.
+    await seed([
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'A', criticVerdict: 'approve' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'B', criticVerdict: 'needs_revision' })),
+    ]);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 0 });
+
+    // For build: sim(build, fix) = 0.6 — A's 10/10 contributes 6/6, B's 10/0 → 6/0.
+    // wilson(6, 6) > wilson(0, 6) → A should rank first.
+    const buildGlobal = weightedCollapseByMode(byMode, 'build');
+    const buildCascade = rankCascade(['B', 'A'], new Map(), { globalStats: buildGlobal });
+    expect(buildCascade).toEqual(['A', 'B']);
+
+    // For explain: sim(explain, fix) = 0.1 — A's 10/10 contributes 1/1.
+    // Total attempts = 1 → below minSamples=3 → both treated as unknown →
+    // declared order ['B','A'] preserved.
+    const explainGlobal = weightedCollapseByMode(byMode, 'explain');
+    const explainCascade = rankCascade(['B', 'A'], new Map(), { globalStats: explainGlobal });
+    expect(explainCascade).toEqual(['B', 'A']);
+  });
+
+  it('current mode is NOT double-counted via the weighted collapse', async () => {
+    // A has 10/10 only in fix mode. Ranking for fix should use the mode
+    // signal directly; the weighted global excludes fix (the current mode).
+    // With no other modes contributing, weighted global is empty → A's
+    // total attempts = 10 (from modeStats only), Wilson lower bound on
+    // 10/10 wins handily.
+    await seed([
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'A', criticVerdict: 'approve' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'B', criticVerdict: 'needs_revision' })),
+    ]);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 0 });
+    const fixGlobal = weightedCollapseByMode(byMode, 'fix');
+    // fixGlobal should be empty — no other modes contributing.
+    expect(fixGlobal.size).toBe(0);
+    const fixCascade = rankCascade(['B', 'A'], byMode.get('fix')!, { globalStats: fixGlobal });
+    expect(fixCascade).toEqual(['A', 'B']);
   });
 });

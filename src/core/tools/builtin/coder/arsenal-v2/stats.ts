@@ -214,6 +214,75 @@ function finalizeAverages(
 }
 
 /**
+ * Slice 12 — a mode similarity matrix.
+ *
+ *   simMatrix[currentMode][otherMode] = weight in [0, 1]
+ *
+ * Used by {@link weightedCollapseByMode} to blend the current mode's
+ * cross-mode evidence with a recency that reflects relatedness rather
+ * than the flat global average from slice 11. Missing entries are
+ * treated as 0 (no contribution). Self-similarity is irrelevant — the
+ * current mode's own data already feeds the mode-specific score, so
+ * the weighted collapse explicitly skips it.
+ */
+export type ModeSimilarityMatrix = Record<string, Record<string, number>>;
+
+/**
+ * Hand-crafted similarity prior. Two clusters:
+ *   - Code-writing modes (fix / build / refactor / test) — mutually
+ *     similar at ≥ 0.4. A model that writes good code under one of
+ *     these will probably write good code under another.
+ *   - Read-only modes (review / analyze / explain) — mutually similar
+ *     at ≥ 0.5.
+ *   - Cross-cluster pairs cap at 0.3 — different jobs, different
+ *     model strengths.
+ *
+ * Override at runtime via {@link parseModeSimilarityEnv} fed from
+ * `SUDO_ARSENAL_V2_MODE_SIMILARITY` (JSON).
+ */
+export const DEFAULT_MODE_SIMILARITY: ModeSimilarityMatrix = {
+  fix:      { build: 0.6, refactor: 0.7, test: 0.4, review: 0.2, analyze: 0.2, explain: 0.1 },
+  build:    { fix: 0.6, refactor: 0.5, test: 0.5, review: 0.2, analyze: 0.2, explain: 0.1 },
+  refactor: { fix: 0.7, build: 0.5, test: 0.4, review: 0.3, analyze: 0.3, explain: 0.1 },
+  test:     { fix: 0.4, build: 0.5, refactor: 0.4, review: 0.2, analyze: 0.2, explain: 0.1 },
+  review:   { fix: 0.2, build: 0.2, refactor: 0.3, test: 0.2, analyze: 0.7, explain: 0.5 },
+  analyze:  { fix: 0.2, build: 0.2, refactor: 0.3, test: 0.2, review: 0.7, explain: 0.6 },
+  explain:  { fix: 0.1, build: 0.1, refactor: 0.1, test: 0.1, review: 0.5, analyze: 0.6 },
+};
+
+/**
+ * Parse a `SUDO_ARSENAL_V2_MODE_SIMILARITY` JSON string into a matrix.
+ * Returns `null` on missing / empty / malformed input — callers fall
+ * back to {@link DEFAULT_MODE_SIMILARITY} when this returns `null`.
+ *
+ * Validation is permissive: any non-string-keyed entry or non-numeric
+ * weight is dropped from that row. An entry with no valid weights
+ * after filtering is also dropped.
+ */
+export function parseModeSimilarityEnv(raw: string | undefined): ModeSimilarityMatrix | null {
+  if (!raw || !raw.trim()) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'mode similarity env parse failed');
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const out: ModeSimilarityMatrix = {};
+  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+    const row: Record<string, number> = {};
+    for (const [otherMode, weight] of Object.entries(v as Record<string, unknown>)) {
+      if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) continue;
+      row[otherMode] = Math.min(1, weight); // cap at 1 — weights >1 are noise
+    }
+    if (Object.keys(row).length > 0) out[k] = row;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
  * Collapse the slice-9 per-mode stats into a single all-modes-summed
  * map. Slice 11 uses this as the "global" signal that `rankCascade`
  * blends with the mode-specific signal when a model is sparse in the
@@ -246,6 +315,68 @@ export function collapseByMode(
       agg.weightedAttempts += s.weightedAttempts;
       agg.weightedApprovals += s.weightedApprovals;
       agg.avgDurationMs = agg.attempts > 0 ? Math.round(sumDuration / agg.attempts) : 0;
+      if (s.lastSeen > agg.lastSeen) agg.lastSeen = s.lastSeen;
+    }
+  }
+  return out;
+}
+
+/**
+ * Slice 12 — similarity-weighted collapse. Replaces slice-11's flat
+ * `collapseByMode` average. For each non-current mode `M`, we add its
+ * counts and weighted sums scaled by `simMatrix[currentMode][M]`.
+ * Modes with weight 0 or missing from the matrix contribute nothing.
+ *
+ * The current mode is explicitly skipped — that data already feeds the
+ * mode-specific score path in {@link rankCascade}. Mixing it back into
+ * the "global" signal would double-weight the current mode.
+ *
+ * Fallbacks:
+ *   - `currentMode` not in the matrix at all  → fall back to
+ *     {@link collapseByMode} (flat slice-11 behavior).
+ *   - Otherwise, fractional `attempts` are produced when 0 < weight <
+ *     1. The gate in `rankCascade` runs on these fractional totals;
+ *     Wilson's formula already tolerates real-valued inputs.
+ */
+export function weightedCollapseByMode(
+  byMode: Map<string, Map<string, ModelStats>>,
+  currentMode: string,
+  simMatrix: ModeSimilarityMatrix = DEFAULT_MODE_SIMILARITY,
+): Map<string, ModelStats> {
+  const row = simMatrix[currentMode];
+  if (!row) return collapseByMode(byMode);
+
+  const out = new Map<string, ModelStats>();
+  for (const [mode, modelMap] of byMode) {
+    if (mode === currentMode) continue;
+    const w = row[mode];
+    if (typeof w !== 'number' || !Number.isFinite(w) || w <= 0) continue;
+    for (const [model, s] of modelMap) {
+      const agg = out.get(model);
+      if (!agg) {
+        out.set(model, {
+          model,
+          attempts: s.attempts * w,
+          approvals: s.approvals * w,
+          rejections: s.rejections * w,
+          errors: s.errors * w,
+          successes: s.successes * w,
+          weightedAttempts: s.weightedAttempts * w,
+          weightedApprovals: s.weightedApprovals * w,
+          avgDurationMs: s.avgDurationMs,
+          lastSeen: s.lastSeen,
+        });
+        continue;
+      }
+      const sumDur = agg.avgDurationMs * agg.attempts + s.avgDurationMs * s.attempts * w;
+      agg.attempts += s.attempts * w;
+      agg.approvals += s.approvals * w;
+      agg.rejections += s.rejections * w;
+      agg.errors += s.errors * w;
+      agg.successes += s.successes * w;
+      agg.weightedAttempts += s.weightedAttempts * w;
+      agg.weightedApprovals += s.weightedApprovals * w;
+      agg.avgDurationMs = agg.attempts > 0 ? Math.round(sumDur / agg.attempts) : 0;
       if (s.lastSeen > agg.lastSeen) agg.lastSeen = s.lastSeen;
     }
   }
