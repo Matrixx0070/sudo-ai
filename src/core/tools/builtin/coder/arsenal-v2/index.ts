@@ -28,6 +28,7 @@ import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../../shared/paths.js';
 import { getModel } from '../../../../brain/providers.js';
 import { modelForAttempt, parseCascade } from './cascade.js';
+import { loadRecentStats, rankCascade } from './stats.js';
 import { runCritic, type CriticResult } from './critic.js';
 import { buildDiffSummary } from './diff-summary.js';
 import { applyPatches } from './patch-applier.js';
@@ -164,6 +165,10 @@ export const arsenalV2Tool: ToolDefinition = {
       type: 'boolean',
       description: 'Write one JSONL row per attempt to data/arsenal-v2-telemetry.jsonl. Default: true unless SUDO_ARSENAL_V2_TELEMETRY=0.',
     },
+    reorder: {
+      type: 'boolean',
+      description: 'Reorder the cascade by recent approval rate (read from data/arsenal-v2-telemetry.jsonl, 7-day window). Default: true unless SUDO_ARSENAL_V2_NO_REORDER=1.',
+    },
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -185,13 +190,37 @@ export const arsenalV2Tool: ToolDefinition = {
     // Model cascade — one entry per retry attempt; last entry repeats. The
     // cascade collapses to a single-element list when only `model` / env are
     // set, which preserves slice-5 behavior (same model every attempt).
-    const cascade = parseCascade({
+    const cascadeOriginal = parseCascade({
       models: params['models'],
       model: forcedModel,
       envCascade: process.env['SUDO_ARSENAL_V2_CASCADE'],
       envModel: process.env['SUDO_ARSENAL_V2_MODEL'],
       defaultModel: DEFAULT_MODEL,
     });
+
+    // Reorder by recent approval rate when the cascade has more than one
+    // model and reordering isn't disabled. Reads the slice-6 telemetry
+    // JSONL — empty / missing → no-op, original order preserved.
+    const reorderEnabled =
+      params['reorder'] === false
+        ? false
+        : process.env['SUDO_ARSENAL_V2_NO_REORDER'] === '1'
+          ? false
+          : true;
+    const statsWindowMs = Number(process.env['SUDO_ARSENAL_V2_STATS_WINDOW_MS']);
+    const cascade =
+      reorderEnabled && cascadeOriginal.length > 1
+        ? rankCascade(
+            cascadeOriginal,
+            loadRecentStats({
+              path: TELEMETRY_PATH,
+              windowMs: Number.isFinite(statsWindowMs) && statsWindowMs > 0 ? statsWindowMs : undefined,
+            }),
+          )
+        : cascadeOriginal;
+    const cascadeReordered =
+      cascade.length === cascadeOriginal.length &&
+      cascade.some((m, i) => m !== cascadeOriginal[i]);
 
     // Retry-loop budget. Tool param wins; otherwise env; otherwise the
     // clampMaxAttempts default (3). Always clamped to [1, 5].
@@ -204,7 +233,19 @@ export const arsenalV2Tool: ToolDefinition = {
     const telemetryEnabled = params['telemetry'] === false ? false : true;
 
     logger.info(
-      { session: ctx.sessionId, mode, mutating, shouldApply, cascade, maxAttempts, telemetry: telemetryEnabled, explicitFiles: filesParam.length },
+      {
+        session: ctx.sessionId,
+        mode,
+        mutating,
+        shouldApply,
+        cascade,
+        cascadeOriginal,
+        cascadeReordered,
+        reorderEnabled,
+        maxAttempts,
+        telemetry: telemetryEnabled,
+        explicitFiles: filesParam.length,
+      },
       'coder.arsenal-v2 invoked',
     );
 
@@ -481,6 +522,14 @@ export const arsenalV2Tool: ToolDefinition = {
       lines.push('');
     }
 
+    if (cascadeReordered) {
+      lines.push('## Cascade');
+      lines.push(`  Declared: [${cascadeOriginal.join(', ')}]`);
+      lines.push(`  Active:   [${cascade.join(', ')}]`);
+      lines.push(`  (reordered by recent approval rate from telemetry)`);
+      lines.push('');
+    }
+
     lines.push(`## Backups`);
     lines.push(`  ${applyResult.backupDir}`);
 
@@ -497,6 +546,8 @@ export const arsenalV2Tool: ToolDefinition = {
       data: {
         model: finalModel,
         cascade,
+        cascadeOriginal,
+        cascadeReordered,
         modelsUsed: attempts.map((a) => a.model),
         mode,
         filesWritten: applyResult.filesWritten,
