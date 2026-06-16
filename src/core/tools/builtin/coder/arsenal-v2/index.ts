@@ -28,7 +28,13 @@ import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../../shared/paths.js';
 import { getModel } from '../../../../brain/providers.js';
 import { modelForAttempt, parseCascade } from './cascade.js';
-import { collapseByMode, loadRecentStatsByMode, rankCascade } from './stats.js';
+import {
+  DEFAULT_MODE_SIMILARITY,
+  loadRecentStatsByMode,
+  parseModeSimilarityEnv,
+  rankCascade,
+  weightedCollapseByMode,
+} from './stats.js';
 import { runCritic, type CriticResult } from './critic.js';
 import { buildDiffSummary } from './diff-summary.js';
 import { applyPatches } from './patch-applier.js';
@@ -212,16 +218,18 @@ export const arsenalV2Tool: ToolDefinition = {
     const shrinkageK = Number(process.env['SUDO_ARSENAL_V2_STATS_SHRINKAGE_K']);
     const cascade = (() => {
       if (!reorderEnabled || cascadeOriginal.length <= 1) return cascadeOriginal;
-      // One file walk produces per-mode buckets; collapse derives the
-      // slice-11 global view without a second read. Empty global =
-      // empty mode bucket = "all unknown" → declared order preserved.
+      // One file walk produces per-mode buckets; weightedCollapseByMode
+      // derives the slice-12 similarity-weighted global view without a
+      // second read. Empty mode bucket + empty global = "all unknown"
+      // → declared order preserved (slice-7 contract).
       const byMode = loadRecentStatsByMode({
         path: TELEMETRY_PATH,
         windowMs: Number.isFinite(statsWindowMs) && statsWindowMs > 0 ? statsWindowMs : undefined,
         halfLifeMs: Number.isFinite(halfLifeMs) && halfLifeMs > 0 ? halfLifeMs : undefined,
       });
       const modeStats = byMode.get(mode) ?? new Map();
-      const globalStats = collapseByMode(byMode);
+      const envMatrix = parseModeSimilarityEnv(process.env['SUDO_ARSENAL_V2_MODE_SIMILARITY']);
+      const globalStats = weightedCollapseByMode(byMode, mode, envMatrix ?? DEFAULT_MODE_SIMILARITY);
       return rankCascade(cascadeOriginal, modeStats, {
         globalStats,
         modeShrinkageK: Number.isFinite(shrinkageK) && shrinkageK > 0 ? shrinkageK : undefined,
