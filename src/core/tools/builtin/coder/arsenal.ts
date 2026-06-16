@@ -454,6 +454,15 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
 
   async function walk(d: string): Promise<void> {
     if (totalBytes >= maxBytes) return;
+    // Prevent traversal into symlink directories (TOCTOU safety)
+    if (existsSync(d)) {
+      try {
+        const stat = lstatSync(d);
+        if (stat.isSymbolicLink()) return;
+      } catch {
+        return; // On error, skip directory
+      }
+    }
     let entries: string[];
     try { entries = await readdir(d); } catch { return; }
     for (const entry of entries.sort()) {
@@ -528,7 +537,9 @@ function runTsc(workingDir: string = PROJECT_ROOT): TscResult {
     return { clean: true, errorCount: 0, summary: 'TypeScript: clean ✓' };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string };
-    const raw = ((e.stdout ?? '') + '\n' + (e.stderr ?? '')).trim();
+    let raw = ((e.stdout ?? '') + '\n' + (e.stderr ?? '')).trim();
+    // Sanitize CRLF and ANSI escape codes to prevent injection
+    raw = raw.replace(/\r\n/g, '\n').replace(/\x1B\[[0-9;]*m/g, '');
     // Cap output length to prevent unbounded memory use
     const rawCapped = raw.length > 100_000 ? raw.slice(0, 100_000) + '\n[... truncated]' : raw;
     const matches = rawCapped.match(/error TS\d+/g);
