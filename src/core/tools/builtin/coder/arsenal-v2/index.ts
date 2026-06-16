@@ -484,7 +484,7 @@ export const arsenalV2Tool: ToolDefinition = {
       try {
         reconResult = await recon(reconTask, { projectRoot: PROJECT_ROOT, searchRoot: PROJECT_ROOT });
       } catch (err) {
-        loopAbortReason = `recon_failed_on_attempt_${attemptIdx + 1}: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`;
+        loopAbortReason = `recon_failed_after_attempt_${attemptIdx}: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`;
         break;
       }
       const nextPrompt = buildUserPrompt(reconResult.payload, buildRetryAppendix(previousForPrompt));
@@ -547,6 +547,9 @@ export const arsenalV2Tool: ToolDefinition = {
         criticResult.verdict === 'approve' ? '✓' : criticResult.verdict === 'needs_revision' ? '⚠' : '✗';
       lines.push('## Critic');
       lines.push(`  Verdict: ${verdictGlyph} ${criticResult.verdict.toUpperCase()} (${criticResult.modelId})`);
+      if (criticResult.verdict === 'error') {
+        logger.warn({ model: criticResult.modelId }, 'critic verdict returned error — safety net bypassed, changes approved anyway');
+      }
       if (criticResult.critique) {
         for (const l of criticResult.critique.split('\n')) lines.push(`  ${l}`);
       }

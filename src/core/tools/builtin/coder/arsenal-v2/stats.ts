@@ -412,8 +412,12 @@ export function computeEmpiricalSimilarity(
         if (s1.attempts < minPerModel || s1.weightedAttempts <= 0) continue;
         const s2 = stats2.get(model);
         if (!s2 || s2.attempts < minPerModel || s2.weightedAttempts <= 0) continue;
-        rates1.push(s1.weightedApprovals / s1.weightedAttempts);
-        rates2.push(s2.weightedApprovals / s2.weightedAttempts);
+        const r1 = s1.weightedApprovals / s1.weightedAttempts;
+        const r2 = s2.weightedApprovals / s2.weightedAttempts;
+        // Skip if rates are NaN or non-finite (protect against corrupt telemetry)
+        if (!Number.isFinite(r1) || !Number.isFinite(r2)) continue;
+        rates1.push(r1);
+        rates2.push(r2);
       }
       sharedRow.set(m2, rates1.length);
       // Slice 14: lower bound enforces n >= 4; below that it returns
@@ -512,9 +516,11 @@ function fisherCILowerBound(r: number, n: number, z: number): number {
   if (!Number.isFinite(r) || r <= 0) return 0;
   if (r >= 1) return 1;
   const zr = 0.5 * Math.log((1 + r) / (1 - r));
+  if (!Number.isFinite(zr)) return 0; // Protect against log of negative (shouldn't happen with above guards)
   const se = 1 / Math.sqrt(n - 3);
   const zLower = zr - z * se;
-  return Math.max(0, Math.min(1, Math.tanh(zLower)));
+  const result = Math.max(0, Math.min(1, Math.tanh(zLower)));
+  return Number.isFinite(result) ? result : 0;
 }
 
 /**
@@ -734,8 +740,14 @@ export function rankCascade(
     // sum across all modes; otherwise fall back to the mode-only count
     // (slice-10 semantics).
     const totalAttempts = sGlobal?.attempts ?? sMode?.attempts ?? 0;
+    // Use continuous scoring: if below minSamples, use Laplace smoothing
+    // ((approvals + 0.5) / (attempts + 1)) instead of hard defaultScore gate.
+    // This eliminates the discontinuity at the minSamples boundary.
     if (totalAttempts < minSamples) {
-      return { model, index, score: defaultScore };
+      const approvals = (sGlobal?.approvals ?? sMode?.approvals ?? 0);
+      const attempts = totalAttempts;
+      const laplaceScore = (approvals + 0.5) / (attempts + 1);
+      return { model, index, score: laplaceScore };
     }
     const modeScore = sMode && sMode.weightedAttempts > 0
       ? wilsonLowerBound(sMode.weightedApprovals, sMode.weightedAttempts, z)

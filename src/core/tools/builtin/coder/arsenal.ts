@@ -115,9 +115,12 @@ function rotateBackups(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): void {
       const filePath = path.join(BACKUP_DIR, file);
       try {
         const stat = lstatSync(filePath);
-        // Only delete regular files, not symlinks or directories
-        if (stat.isFile() && now - stat.mtimeMs > maxAgeMs) {
-          unlinkSync(filePath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          if (stat.isFile()) {
+            unlinkSync(filePath);
+          } else if (stat.isDirectory()) {
+            rmSync(filePath, { recursive: true, force: true });
+          }
         }
       } catch { /* skip if stat/delete fails */ }
     }
@@ -348,8 +351,8 @@ function createBackup(abs: string): void {
       logger.warn({ abs }, 'arsenal: backup skipped (path outside root)');
       return;
     }
-    // Use cryptographic random suffix to prevent collision and poisoning attacks
-    const rand = randomBytes(4).toString('hex');
+    // Use cryptographic random suffix (8 bytes = 64-bit collision resistance) to prevent collision and poisoning attacks
+    const rand = randomBytes(8).toString('hex');
     const dest = path.join(BACKUP_DIR, `${Date.now()}_${rand}_${rel}`);
     if (existsSync(abs)) copyFileSync(abs, dest);
   } catch { /* non-fatal */ }
@@ -496,6 +499,7 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
 
 function readSpecificFiles(filePaths: string[]): string {
   const parts: string[] = [];
+  const maxFileSize = 80_000; // 80KB hard cap, same as collectSourceFiles
   for (const fp of filePaths) {
     const abs = resolveProjectPath(fp);
 
@@ -507,6 +511,11 @@ function readSpecificFiles(filePaths: string[]): string {
 
     if (!existsSync(abs)) { parts.push(`### ${fp}\n[FILE NOT FOUND]\n\n`); continue; }
     try {
+      const stat = statSync(abs);
+      if (stat.size > maxFileSize) {
+        parts.push(`### ${fp}\n[FILE TOO LARGE: ${stat.size} bytes — skipped]\n\n`);
+        continue;
+      }
       const content = readFileSync(abs, 'utf-8');
       const relative = path.relative(PROJECT_ROOT, abs);
       const escapedContent = escapeProtocolMarkers(content);
