@@ -18,6 +18,11 @@ import {
   isDangerousCommand,
   extractSmartPrefix,
 } from './exec-policy.js';
+import {
+  isBashAllowlistFastPathEnabled,
+  isAllowlistEligible,
+  extractCommand,
+} from './bash-allowlist.js';
 
 const log = createLogger('agent:approval');
 
@@ -138,6 +143,21 @@ export class ApprovalManager {
       );
       void this._emitHook('tool:denied', toolName, params, clampedRisk);
       return false;
+    }
+    // Allowlist fast-path (Q2): when SUDO_BASH_ALLOWLIST_FASTPATH=1, statically
+    // classify command-shaped tool calls via BashASTParser. If risk='safe' AND
+    // read-only, skip both the policy store and the user prompt. The dangerous-
+    // prefix check above has already run, so this never bypasses a force-deny.
+    if (isBashAllowlistFastPathEnabled()) {
+      const command = extractCommand(params);
+      if (command && isAllowlistEligible(command)) {
+        log.info(
+          { toolName, commandPrefix: command.slice(0, 80), riskScore: clampedRisk },
+          'Approval auto-decided by bash-allowlist fast-path (safe + read-only)',
+        );
+        void this._emitHook('tool:approved', toolName, params, clampedRisk);
+        return true;
+      }
     }
     if (this.policyStore) {
       try {
