@@ -321,6 +321,178 @@ export function collapseByMode(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Slice 13 — data-driven mode similarity
+// ---------------------------------------------------------------------------
+
+/** Default minimum per-model samples in a mode for it to contribute to Pearson. */
+const DEFAULT_EMPIRICAL_MIN_SAMPLES = 3;
+/** Default shrinkage constant for the empirical vs hand-crafted blend. */
+const DEFAULT_SIM_BLEND_K = 5;
+
+export interface EmpiricalSimilarityOptions {
+  /**
+   * Minimum (raw integer) attempts a model needs in BOTH modes of a pair
+   * before its (rate, rate) point contributes to Pearson. Default 3.
+   */
+  minPerModelSamples?: number;
+}
+
+export interface EmpiricalSimilarityResult {
+  /** Pearson correlation per mode pair, clamped to [0, 1]. */
+  matrix: ModeSimilarityMatrix;
+  /** Per mode-pair, the number of models that contributed to the correlation. */
+  sharedCounts: Map<string, Map<string, number>>;
+}
+
+/**
+ * Compute Pearson correlation of per-model approval rates across every
+ * pair of modes seen in `byMode`. Rates are the decay-weighted
+ * `weightedApprovals / weightedAttempts` so slice-10's recency bias
+ * flows through.
+ *
+ * For each (m1, m2) pair (m1 ≠ m2):
+ *   - Walk models with `attempts >= minPerModelSamples` in both modes.
+ *   - Build rate vectors v1 and v2 indexed by model.
+ *   - similarity = max(0, Pearson(v1, v2)). Negative correlations
+ *     are clamped to 0 because the matrix is defined on [0, 1].
+ *   - When fewer than 2 models qualify, or when either mode's variance
+ *     is zero, similarity is 0 (no signal).
+ *
+ * The result also includes `sharedCounts` — the per-pair number of
+ * contributing models — which {@link blendSimilarity} uses as the
+ * confidence weight when mixing empirical with the hand-crafted prior.
+ */
+export function computeEmpiricalSimilarity(
+  byMode: Map<string, Map<string, ModelStats>>,
+  opts: EmpiricalSimilarityOptions = {},
+): EmpiricalSimilarityResult {
+  const minPerModel = opts.minPerModelSamples ?? DEFAULT_EMPIRICAL_MIN_SAMPLES;
+  const matrix: ModeSimilarityMatrix = {};
+  const sharedCounts = new Map<string, Map<string, number>>();
+  const modes = Array.from(byMode.keys());
+
+  for (const m1 of modes) {
+    const row: Record<string, number> = {};
+    const sharedRow = new Map<string, number>();
+    matrix[m1] = row;
+    sharedCounts.set(m1, sharedRow);
+
+    for (const m2 of modes) {
+      if (m1 === m2) continue;
+      const stats1 = byMode.get(m1)!;
+      const stats2 = byMode.get(m2)!;
+
+      const rates1: number[] = [];
+      const rates2: number[] = [];
+      for (const [model, s1] of stats1) {
+        if (s1.attempts < minPerModel || s1.weightedAttempts <= 0) continue;
+        const s2 = stats2.get(model);
+        if (!s2 || s2.attempts < minPerModel || s2.weightedAttempts <= 0) continue;
+        rates1.push(s1.weightedApprovals / s1.weightedAttempts);
+        rates2.push(s2.weightedApprovals / s2.weightedAttempts);
+      }
+      sharedRow.set(m2, rates1.length);
+      if (rates1.length < 2) continue;
+      const r = pearson(rates1, rates2);
+      if (r > 0) row[m2] = Math.min(1, r);
+    }
+  }
+  return { matrix, sharedCounts };
+}
+
+export interface BlendSimilarityOptions {
+  /**
+   * Shrinkage constant for the empirical vs default blend. With `k`
+   * shared models, w_empirical = k / (k + shrinkageK). Default 5: at
+   * 5 shared models the empirical and default each weigh 50%. Higher
+   * shrinkageK = trust empirical more slowly.
+   */
+  shrinkageK?: number;
+}
+
+/**
+ * Per-pair blend of the empirical matrix with the hand-crafted prior.
+ * Confidence weight grows with `sharedCounts[m1][m2]` (the number of
+ * models that produced the empirical correlation for that pair).
+ *
+ * Result coverage is the UNION of pairs in either input — missing values
+ * default to 0, so a pair present only in `defaults` keeps its prior
+ * weight, and a pair present only in `empirical` (rare) starts from a
+ * 0 prior and shrinks toward 0 with low shared-model counts.
+ */
+export function blendSimilarity(
+  empirical: ModeSimilarityMatrix,
+  defaults: ModeSimilarityMatrix,
+  sharedCounts: Map<string, Map<string, number>>,
+  opts: BlendSimilarityOptions = {},
+): ModeSimilarityMatrix {
+  const k = opts.shrinkageK ?? DEFAULT_SIM_BLEND_K;
+  const out: ModeSimilarityMatrix = {};
+  const modes = new Set([...Object.keys(empirical), ...Object.keys(defaults)]);
+  for (const m1 of modes) {
+    const row: Record<string, number> = {};
+    const empRow = empirical[m1] ?? {};
+    const defRow = defaults[m1] ?? {};
+    const sharedRow = sharedCounts.get(m1) ?? new Map<string, number>();
+    const otherModes = new Set([...Object.keys(empRow), ...Object.keys(defRow)]);
+    for (const m2 of otherModes) {
+      const empVal = empRow[m2] ?? 0;
+      const defVal = defRow[m2] ?? 0;
+      const shared = sharedRow.get(m2) ?? 0;
+      const denom = shared + k;
+      const wData = denom > 0 ? shared / denom : 0;
+      row[m2] = wData * empVal + (1 - wData) * defVal;
+    }
+    if (Object.keys(row).length > 0) out[m1] = row;
+  }
+  return out;
+}
+
+/**
+ * Convenience: compute the empirical matrix and blend it with the
+ * provided defaults in one call. The typical production path —
+ * `index.ts` calls this once per invocation.
+ */
+export function effectiveSimilarity(
+  byMode: Map<string, Map<string, ModelStats>>,
+  defaults: ModeSimilarityMatrix = DEFAULT_MODE_SIMILARITY,
+  opts: EmpiricalSimilarityOptions & BlendSimilarityOptions = {},
+): ModeSimilarityMatrix {
+  const { matrix: empirical, sharedCounts } = computeEmpiricalSimilarity(byMode, opts);
+  return blendSimilarity(empirical, defaults, sharedCounts, opts);
+}
+
+/**
+ * Pearson correlation of two equal-length numeric vectors. Returns 0
+ * when n < 2 or when either vector has zero variance. Used internally
+ * by {@link computeEmpiricalSimilarity}; exported for direct testing.
+ */
+export function pearson(xs: number[], ys: number[]): number {
+  const n = xs.length;
+  if (n < 2 || ys.length !== n) return 0;
+  let sumX = 0;
+  let sumY = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += xs[i]!;
+    sumY += ys[i]!;
+  }
+  const meanX = sumX / n;
+  const meanY = sumY / n;
+  let cov = 0;
+  let varX = 0;
+  let varY = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i]! - meanX;
+    const dy = ys[i]! - meanY;
+    cov += dx * dy;
+    varX += dx * dx;
+    varY += dy * dy;
+  }
+  if (varX === 0 || varY === 0) return 0;
+  return cov / Math.sqrt(varX * varY);
+}
+
 /**
  * Slice 12 — similarity-weighted collapse. Replaces slice-11's flat
  * `collapseByMode` average. For each non-current mode `M`, we add its
