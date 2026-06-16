@@ -55,23 +55,72 @@ export interface LoadStatsOptions {
  * Walk the JSONL file, parse line-by-line, aggregate per-model stats for
  * the trailing window. Tolerant of malformed lines (skipped, no throw)
  * and missing files (returns empty Map).
+ *
+ * Collapsed view — all modes are summed together. For per-mode ranking
+ * (slice 9), use {@link loadRecentStatsByMode}.
  */
 export function loadRecentStats(opts: LoadStatsOptions): Map<string, ModelStats> {
   const out = new Map<string, ModelStats>();
+  const durationSums = new Map<string, number>();
+  walkRows(opts, (row) => {
+    accumulate(out, durationSums, row.model, row);
+  });
+  finalizeAverages(out, durationSums);
+  return out;
+}
+
+/**
+ * Same walk + aggregation as {@link loadRecentStats}, but bucketed by
+ * `mode` first, then `model`. The slice-9 reorder uses this to keep a
+ * model's `refactor` performance from dragging its `fix` ranking.
+ *
+ * Rows without a `mode` field are skipped (defensive — slice-6 writers
+ * always include it).
+ */
+export function loadRecentStatsByMode(
+  opts: LoadStatsOptions,
+): Map<string, Map<string, ModelStats>> {
+  const out = new Map<string, Map<string, ModelStats>>();
+  const durationSums = new Map<string, Map<string, number>>(); // mode -> model -> sum
+  walkRows(opts, (row) => {
+    if (typeof row.mode !== 'string' || !row.mode) return;
+    let modelMap = out.get(row.mode);
+    let durMap = durationSums.get(row.mode);
+    if (!modelMap) {
+      modelMap = new Map();
+      out.set(row.mode, modelMap);
+    }
+    if (!durMap) {
+      durMap = new Map();
+      durationSums.set(row.mode, durMap);
+    }
+    accumulate(modelMap, durMap, row.model, row);
+  });
+  for (const [mode, modelMap] of out) {
+    finalizeAverages(modelMap, durationSums.get(mode) ?? new Map());
+  }
+  return out;
+}
+
+/**
+ * Shared row iterator — reads the JSONL, filters by window + required
+ * fields, hands each surviving row to the caller. Centralizes the
+ * read/parse/skip logic so {@link loadRecentStats} and
+ * {@link loadRecentStatsByMode} stay in lockstep.
+ */
+function walkRows(opts: LoadStatsOptions, onRow: (row: TelemetryRow) => void): void {
   const now = opts.now ?? Date.now();
   const cutoff = now - (opts.windowMs ?? SEVEN_DAYS_MS);
 
-  if (!existsSync(opts.path)) return out;
+  if (!existsSync(opts.path)) return;
 
   let raw: string;
   try {
     raw = readFileSync(opts.path, 'utf-8');
   } catch (err) {
     logger.warn({ path: opts.path, err: err instanceof Error ? err.message : String(err) }, 'telemetry read failed');
-    return out;
+    return;
   }
-
-  const durationSums = new Map<string, number>(); // For avgDurationMs computation.
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -80,46 +129,55 @@ export function loadRecentStats(opts: LoadStatsOptions): Map<string, ModelStats>
     try {
       row = JSON.parse(trimmed) as Partial<TelemetryRow>;
     } catch {
-      // Skip malformed lines — see "tolerant of malformed lines" above.
+      // Skip malformed lines.
       continue;
     }
     if (!row || typeof row.model !== 'string' || typeof row.ts !== 'number') continue;
     if (row.ts < cutoff) continue;
-
-    let s = out.get(row.model);
-    if (!s) {
-      s = {
-        model: row.model,
-        attempts: 0,
-        approvals: 0,
-        rejections: 0,
-        errors: 0,
-        successes: 0,
-        avgDurationMs: 0,
-        lastSeen: 0,
-      };
-      out.set(row.model, s);
-      durationSums.set(row.model, 0);
-    }
-
-    s.attempts += 1;
-    if (row.criticVerdict === 'approve') s.approvals += 1;
-    else if (row.criticVerdict === 'needs_revision') s.rejections += 1;
-    else s.errors += 1; // 'error' or null
-    if (row.success === true) s.successes += 1;
-    if (typeof row.durationMs === 'number' && Number.isFinite(row.durationMs)) {
-      durationSums.set(row.model, (durationSums.get(row.model) ?? 0) + row.durationMs);
-    }
-    if (row.ts > s.lastSeen) s.lastSeen = row.ts;
+    onRow(row as TelemetryRow);
   }
+}
 
-  // Finalize avgDurationMs now that all rows are counted.
-  for (const [model, s] of out) {
+function accumulate(
+  modelMap: Map<string, ModelStats>,
+  durationSums: Map<string, number>,
+  model: string,
+  row: TelemetryRow,
+): void {
+  let s = modelMap.get(model);
+  if (!s) {
+    s = {
+      model,
+      attempts: 0,
+      approvals: 0,
+      rejections: 0,
+      errors: 0,
+      successes: 0,
+      avgDurationMs: 0,
+      lastSeen: 0,
+    };
+    modelMap.set(model, s);
+    durationSums.set(model, 0);
+  }
+  s.attempts += 1;
+  if (row.criticVerdict === 'approve') s.approvals += 1;
+  else if (row.criticVerdict === 'needs_revision') s.rejections += 1;
+  else s.errors += 1; // 'error' or null
+  if (row.success === true) s.successes += 1;
+  if (typeof row.durationMs === 'number' && Number.isFinite(row.durationMs)) {
+    durationSums.set(model, (durationSums.get(model) ?? 0) + row.durationMs);
+  }
+  if (row.ts > s.lastSeen) s.lastSeen = row.ts;
+}
+
+function finalizeAverages(
+  modelMap: Map<string, ModelStats>,
+  durationSums: Map<string, number>,
+): void {
+  for (const [model, s] of modelMap) {
     const sum = durationSums.get(model) ?? 0;
     s.avgDurationMs = s.attempts > 0 ? Math.round(sum / s.attempts) : 0;
   }
-
-  return out;
 }
 
 export interface RankOptions {
@@ -166,6 +224,8 @@ export function rankCascade(
 /** Subset of slice-6 TelemetryRecord we actually inspect. */
 interface TelemetryRow {
   ts: number;
+  /** arsenal-v2 mode — added to the walker in slice 9 for per-mode bucketing. */
+  mode: string;
   model: string;
   criticVerdict: 'approve' | 'needs_revision' | 'error' | null;
   success: boolean;
