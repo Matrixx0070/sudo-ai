@@ -73,10 +73,12 @@ function assertPathWithinRoot(abs: string): boolean {
 
     // TOCTOU defense: verify no symlink components exist in the path
     // This prevents an attacker from swapping in a symlink between check and write
-    const components = abs.split(path.sep);
-    let current = '';
+    const parsed = path.parse(abs);
+    const components = abs.split(path.sep).filter(c => c); // Remove empty segments from leading/trailing slashes
+    let current = parsed.root; // Start from filesystem root (handles Windows drive correctly)
+
     for (let i = 0; i < components.length - 1; i++) { // skip final component (target)
-      current = path.join(current || path.sep, components[i]);
+      current = path.join(current, components[i]);
       if (current && existsSync(current)) {
         try {
           const stat = lstatSync(current);
@@ -717,7 +719,7 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
   for (const edit of edits) {
     const abs = resolveProjectPath(edit.filePath);
 
-    // Security: basic path validation only - deeper checks happen post-write
+    // Security: basic path validation before any filesystem operation
     // Reject obvious traversals before attempting any write
     const normalizedPath = path.normalize(edit.filePath);
     if (normalizedPath.includes('..') || normalizedPath.startsWith('/') || normalizedPath.startsWith('\\')) {
@@ -726,6 +728,12 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
     }
 
     try {
+      // CRITICAL PRE-WRITE GUARD: verify target path is within project root
+      // This runs BEFORE any write, backup, or mkdir — the authoritative check
+      if (!assertPathWithinRoot(abs)) {
+        throw new Error('Path validation failed: outside project root');
+      }
+
       // Create backup of existing file
       createBackup(abs);
 
@@ -733,6 +741,10 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
       const dir = path.dirname(abs);
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
+        // Re-verify after mkdir in case a TOCTOU symlink was inserted
+        if (!assertPathWithinRoot(abs)) {
+          throw new Error('Path validation failed after mkdir: possible symlink injection');
+        }
       } else {
         // Verify no symlink components in the directory path
         const components = dir.split(path.sep);
