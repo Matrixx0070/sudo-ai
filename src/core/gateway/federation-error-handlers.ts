@@ -248,13 +248,35 @@ function redactMeta(meta: Record<string, unknown> | undefined): Record<string, u
 
 /**
  * Sanitize report for public response (redact sessionId and sensitive meta).
+ *
+ * Builds the response row by explicit field whitelist, NOT by spreading
+ * `report`. The previous `{ ...report, ... }` form coupled the public wire
+ * contract to whatever shape `FederationErrorReportRow` happened to grow:
+ * any new field on the stored type — internal audit hashes, raw db
+ * columns, computed flags — would leak silently. The whitelist below
+ * pins the wire surface to the fields the route is documented to emit
+ * (see federation-error-types.ts: FederationErrorReport + the two
+ * server-set additions `id` and `deduplicated`, plus the optional
+ * `githubIssueNumber`). Adding a new field requires touching this
+ * function deliberately.
  */
 function sanitizeReport(report: FederationErrorReportRow): FederationErrorReportRow {
-  return {
-    ...report,
-    sessionId: report.sessionId !== undefined ? '***' : undefined,
-    meta: redactMeta(report.meta),
+  const out: FederationErrorReportRow = {
+    id: report.id,
+    errorSignature: report.errorSignature,
+    botVersion: report.botVersion,
+    peerId: report.peerId,
+    timestamp: report.timestamp,
+    severity: report.severity,
+    deduplicated: report.deduplicated,
   };
+  if (report.stackTrace !== undefined) out.stackTrace = report.stackTrace;
+  if (report.toolName !== undefined) out.toolName = report.toolName;
+  if (report.phase !== undefined) out.phase = report.phase;
+  if (report.githubIssueNumber !== undefined) out.githubIssueNumber = report.githubIssueNumber;
+  if (report.sessionId !== undefined) out.sessionId = '***';
+  if (report.meta !== undefined) out.meta = redactMeta(report.meta);
+  return out;
 }
 
 export function handleErrorReports(

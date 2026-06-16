@@ -47,9 +47,11 @@
 
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import http from 'node:http';
+import Database from 'better-sqlite3';
 import { registerFederationErrorRoutes, type FederationErrorRoutesDeps } from '../../src/core/gateway/federation-error-routes.js';
 import { clearRateLimitMap } from '../../src/core/gateway/federation-error-helpers.js';
 import type { FederationErrorReport, FederationErrorReportRow, FederationTokenContribution } from '../../src/core/gateway/federation-error-types.js';
+import { FederationErrorIngestor } from '../../src/core/federation/federation-error-ingestor.js';
 import type { AddressInfo } from 'node:net';
 
 // ---------------------------------------------------------------------------
@@ -714,6 +716,54 @@ describe('Security: Data leakage prevention', () => {
       limit: 50,
     });
   });
+
+  it('FED-ERR-41: response row keyset is whitelisted (extra fields on the stored shape are stripped)', async () => {
+    // Stuff fields onto the stored row that the FederationErrorReportRow type
+    // does NOT declare. Under the previous `{ ...report, ... }` spread these
+    // would leak straight to the wire. The explicit whitelist in
+    // sanitizeReport pins the public shape, so they must NOT appear in the
+    // response. Documents the regression vector behind PRs #205 / #206.
+    const rowWithLeak = {
+      id: 'rpt_leak',
+      errorSignature: 'leakage-test',
+      botVersion: '1.0.0',
+      peerId: 'peer-leak',
+      timestamp: 1_700_000_000_000,
+      severity: 'HIGH',
+      deduplicated: false,
+      // Fields that are NOT on FederationErrorReportRow — must be stripped.
+      _internalAuditTrail: 'private-trace-id-xyz',
+      _dbRowVersion: 7,
+      __raw_db_columns: { created_at: 'now', resolved_at: null },
+    } as unknown as FederationErrorReportRow;
+    const leakDeps = makeMockDeps({ reports: [rowWithLeak] });
+    ts = await startServer(leakDeps, makeAdminTokenBuf());
+
+    const { status, json } = await doGet(`${ts.baseUrl}/v1/federation/error-reports`, ADMIN_TOKEN);
+    expect(status).toBe(200);
+    const body = json as { ok: boolean; data: { reports: Record<string, unknown>[]; count: number } };
+    expect(body.data.reports).toHaveLength(1);
+    const row = body.data.reports[0]!;
+
+    // Declared fields present.
+    expect(row['id']).toBe('rpt_leak');
+    expect(row['errorSignature']).toBe('leakage-test');
+    expect(row['timestamp']).toBe(1_700_000_000_000);
+    expect(row['deduplicated']).toBe(false);
+
+    // Undeclared fields STRIPPED.
+    expect(row).not.toHaveProperty('_internalAuditTrail');
+    expect(row).not.toHaveProperty('_dbRowVersion');
+    expect(row).not.toHaveProperty('__raw_db_columns');
+
+    // Keyset is exactly the FederationErrorReportRow whitelist for this fixture
+    // (sessionId/meta/stackTrace/toolName/phase/githubIssueNumber omitted
+    // because they were undefined on the input — the whitelist drops them
+    // rather than emitting `"foo": undefined`).
+    expect(new Set(Object.keys(row))).toEqual(
+      new Set(['id', 'errorSignature', 'botVersion', 'peerId', 'timestamp', 'severity', 'deduplicated']),
+    );
+  });
 });
 
 describe('Security: Token contribution validation', () => {
@@ -779,6 +829,106 @@ describe('Security: Rate limiter cleanup', () => {
     await ts?.close();
     vi.clearAllMocks();
     clearRateLimitMap();
+  });
+
+  it('FED-ERR-42: real FederationErrorIngestor through real route — keyset + timestamp contract end-to-end', async () => {
+    // Closes the audit gap behind PRs #205 and #206: every prior /error-reports
+    // test mocked queryReports with vi.fn().mockReturnValue(...), so any drift
+    // between the ingestor's emitted shape and the gateway's wire contract
+    // went undetected until production-side fixes. This test wires the REAL
+    // FederationErrorIngestor (in-memory sqlite + mocked github) into the
+    // REAL route, ingests, then asserts the JSON shape matches the
+    // FederationErrorReportRow whitelist — including the timestamp field
+    // that #205 fixed and the keyset contract #206 + FED-ERR-41 lock in.
+    const db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    const ingestor = new FederationErrorIngestor({
+      db,
+      errorReporter: {
+        capture: vi.fn().mockResolvedValue(undefined),
+        normalizeSignature: vi.fn().mockImplementation((err: Error) => err.message),
+      },
+      githubIssues: {
+        isConfigured: vi.fn().mockReturnValue(false),
+        searchIssues: vi.fn().mockResolvedValue({ success: true, issues: [] }),
+        createIssue: vi.fn().mockResolvedValue({ success: true, number: 0 }),
+        addComment: vi.fn().mockResolvedValue({ success: true }),
+      },
+    });
+
+    // Ingest two distinct reports — different peer + signature so neither
+    // is deduplicated. The ingestor stamps id (uuid) and now() at insert
+    // time; we will spot-check those on the wire output.
+    await ingestor.ingestReport({
+      peerId: 'real-peer-1',
+      errorSignature: 'RealError-One',
+      botVersion: '4.0.0',
+      severity: 'CRITICAL',
+      timestamp: 1_700_000_000_000,
+      toolName: 'real-tool',
+      sessionId: 'sess-real-1',
+      meta: { customField: 'value', apiToken: 'sk-secret' },
+    });
+    await ingestor.ingestReport({
+      peerId: 'real-peer-2',
+      errorSignature: 'RealError-Two',
+      botVersion: '4.0.0',
+      severity: 'LOW',
+      timestamp: 1_700_000_001_000,
+    });
+
+    // FederationErrorIngestor returns FederationErrorReportStored which is
+    // structurally equivalent to FederationErrorReportRow; route only needs
+    // ingestReport + queryReports so we wrap directly.
+    const realDeps: FederationErrorRoutesDeps = {
+      errorIngestor: {
+        ingestReport: ingestor.ingestReport.bind(ingestor),
+        queryReports: ingestor.queryReports.bind(ingestor),
+      } as FederationErrorRoutesDeps['errorIngestor'],
+      tokenPool: {
+        contributeToken: vi.fn().mockResolvedValue({ id: 't', success: true }),
+        listTokens: vi.fn().mockReturnValue([]),
+      },
+      fedAuth: makeFederationAuth(FEDERATION_TOKEN),
+    };
+
+    ts = await startServer(realDeps, makeAdminTokenBuf());
+    const { status, json } = await doGet(`${ts.baseUrl}/v1/federation/error-reports`, ADMIN_TOKEN);
+    expect(status).toBe(200);
+    const body = json as { ok: boolean; data: { reports: Record<string, unknown>[]; count: number } };
+    expect(body.data.reports).toHaveLength(2);
+
+    // (a) Every row carries the four server-set / required fields end-to-end.
+    //     timestamp is the #205 regression marker — was missing on the live
+    //     row when the spread sanitizeReport carried the storage-side shape.
+    for (const row of body.data.reports) {
+      expect(typeof row['id']).toBe('string');
+      expect((row['id'] as string).length).toBeGreaterThan(0);
+      expect(typeof row['timestamp']).toBe('number');
+      expect(row['deduplicated']).toBe(false);
+      expect(typeof row['errorSignature']).toBe('string');
+      // (b) Whitelist contract: keyset must be a subset of the documented
+      //     FederationErrorReportRow shape. Catches future drift where the
+      //     ingestor adds a storage-only field (raw_db_row, audit_hash, etc).
+      const allowed = new Set([
+        'id', 'errorSignature', 'stackTrace', 'botVersion', 'peerId',
+        'timestamp', 'severity', 'toolName', 'sessionId', 'phase', 'meta',
+        'deduplicated', 'githubIssueNumber',
+      ]);
+      for (const k of Object.keys(row)) {
+        expect(allowed).toContain(k);
+      }
+    }
+
+    // (c) sessionId redaction survives the real ingestor path.
+    const withSession = body.data.reports.find((r) => r['peerId'] === 'real-peer-1');
+    expect(withSession?.['sessionId']).toBe('***');
+    // (d) Sensitive meta keys redacted; non-sensitive preserved.
+    const meta = withSession?.['meta'] as Record<string, unknown> | undefined;
+    expect(meta?.['apiToken']).toBe('[REDACTED]');
+    expect(meta?.['customField']).toBe('value');
+
+    db.close();
   });
 
   it('FED-ERR-38: old entries evicted after 100 calls', async () => {
