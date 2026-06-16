@@ -1,6 +1,8 @@
 /** @file provider.ts — Multi-provider streaming abstraction for SUDO-AI chat TUI. */
 
 import fs from 'node:fs';
+import type Anthropic from '@anthropic-ai/sdk';
+import type OpenAI from 'openai';
 import { PATHS } from '../../../core/shared/constants.js';
 
 // ---------------------------------------------------------------------------
@@ -99,15 +101,13 @@ export interface ProviderInfo {
 
 interface AnthropicClient {
   kind: 'anthropic';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  sdk: any;
+  sdk: Anthropic;
   info: ProviderInfo;
 }
 
 interface OpenAICompatClient {
   kind: 'openai-compat';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  sdk: any;
+  sdk: OpenAI;
   info: ProviderInfo;
 }
 
@@ -201,8 +201,7 @@ export async function* chatStream(opts: {
 }
 
 async function* _streamAnthropic(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  sdk: any,
+  sdk: Anthropic,
   model: string,
   system: string,
   messages: ChatMessage[],
@@ -226,14 +225,13 @@ async function* _streamAnthropic(
   let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for await (const event of stream as AsyncIterable<any>) {
+    for await (const event of stream as AsyncIterable<Anthropic.Messages.RawMessageStreamEvent>) {
       if (signal.aborted) break;
-      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
         yield { type: 'text', value: event.delta.text };
       } else if (event.type === 'message_delta' && event.usage) {
         lastUsage = {
-          inputTokens: event.usage.input_tokens,
+          inputTokens: event.usage.input_tokens ?? undefined,
           outputTokens: event.usage.output_tokens,
         };
       }
@@ -266,8 +264,7 @@ async function* _streamAnthropic(
 }
 
 async function* _streamOpenAICompat(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  sdk: any,
+  sdk: OpenAI,
   model: string,
   system: string,
   messages: ChatMessage[],
@@ -286,10 +283,9 @@ async function* _streamOpenAICompat(
       max_tokens: 4096,
     }, { signal });
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for await (const chunk of stream as AsyncIterable<any>) {
+    for await (const chunk of stream as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>) {
       if (signal.aborted) break;
-      const delta = chunk.choices?.[0]?.delta?.content;
+      const delta = chunk.choices[0]?.delta?.content;
       if (typeof delta === 'string' && delta.length > 0) {
         yield { type: 'text', value: delta };
       }
