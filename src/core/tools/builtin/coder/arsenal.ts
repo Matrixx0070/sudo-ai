@@ -27,11 +27,12 @@
 import { generateText } from 'ai';
 import {
   readFileSync, writeFileSync, existsSync,
-  mkdirSync, copyFileSync, statSync, lstatSync, renameSync,
+  mkdirSync, copyFileSync, statSync, lstatSync, renameSync, readdirSync, unlinkSync, mkdtempSync, realpathSync,
 } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getModel } from '../../../brain/providers.js';
@@ -51,22 +52,48 @@ async function getCodeReviewTool() {
   return _codeReviewToolCache;
 }
 
+// Validate path is within project root (check symlinks and parent for new files)
+function assertPathWithinRoot(abs: string): boolean {
+  try {
+    // For existing files/symlinks, resolve the real path
+    if (existsSync(abs)) {
+      const real = realpathSync(abs);
+      const rel = path.relative(PROJECT_ROOT, real);
+      return !rel.startsWith('..');
+    }
+    // For non-existent files, check the parent directory's real path
+    const dir = path.dirname(abs);
+    if (existsSync(dir)) {
+      const realDir = realpathSync(dir);
+      const rel = path.relative(PROJECT_ROOT, realDir);
+      return !rel.startsWith('..');
+    }
+    // Fallback: check the path itself against PROJECT_ROOT
+    const rel = path.relative(PROJECT_ROOT, abs);
+    return !rel.startsWith('..');
+  } catch {
+    return false; // Any error = reject
+  }
+}
+
 // Rotate old backups (7+ days) to prevent unbounded directory growth
 function rotateBackups(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): void {
   if (!existsSync(BACKUP_DIR)) return;
   try {
     const now = Date.now();
-    const files = require('node:fs').readdirSync(BACKUP_DIR);
+    const files = readdirSync(BACKUP_DIR);
     for (const file of files) {
       const filePath = path.join(BACKUP_DIR, file);
       try {
         const stat = statSync(filePath);
         if (now - stat.mtimeMs > maxAgeMs) {
-          require('node:fs').unlinkSync(filePath);
+          unlinkSync(filePath);
         }
       } catch { /* skip if stat/delete fails */ }
     }
-  } catch { /* non-fatal */ }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'arsenal: backup rotation failed');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +338,8 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
   const keywords = task
     .split(/\W+/)
     .filter(w => w.length >= 4 && !stopWords.has(w.toLowerCase()))
+    .map(w => w.replace(/[^a-zA-Z0-9_-]/g, '')) // Sanitize: remove special chars to prevent DoS
+    .filter(w => w.length >= 4) // Re-filter after sanitization
     .slice(0, 10);
 
   // 2. Extract explicit file references from task
@@ -335,7 +364,7 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
         try {
           const out = execFileSync(
             'rg',
-            ['-l', '--max-count=1', '-g', '*.ts', '-g', '*.js', keyword, baseDir],
+            ['-l', '--max-count=1', '--fixed-strings', '-g', '*.ts', '-g', '*.js', keyword, baseDir],
             { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024 }
           );
           resolve(out.trim().split('\n').filter(Boolean));
@@ -421,16 +450,16 @@ function readSpecificFiles(filePaths: string[]): string {
   for (const fp of filePaths) {
     const abs = resolveProjectPath(fp);
 
-    // Security: must be within project root
-    const relative = path.relative(PROJECT_ROOT, abs);
-    if (relative.startsWith('..')) {
-      parts.push(`### ${fp}\n[ACCESS DENIED — outside project root]\n\n`);
+    // Security: must be within project root (includes symlink resolution)
+    if (!assertPathWithinRoot(abs)) {
+      parts.push(`### ${path.basename(fp)}\n[ACCESS DENIED — outside project root]\n\n`);
       continue;
     }
 
     if (!existsSync(abs)) { parts.push(`### ${fp}\n[FILE NOT FOUND]\n\n`); continue; }
     try {
       const content = readFileSync(abs, 'utf-8');
+      const relative = path.relative(PROJECT_ROOT, abs);
       parts.push(`### ${relative}\n\`\`\`\n${content}\n\`\`\`\n\n`);
     } catch { parts.push(`### ${fp}\n[CANNOT READ]\n\n`); }
   }
@@ -450,10 +479,11 @@ interface TscResult {
 function runTsc(workingDir: string = PROJECT_ROOT): TscResult {
   if (!existsSync(TSC)) return { clean: true, errorCount: 0, summary: '(tsc not available)' };
   try {
-    execSync(`"${TSC}" --noEmit`, {
+    // Use execFileSync to avoid shell interpolation of TSC path
+    execFileSync(TSC, ['--noEmit'], {
       cwd: workingDir, encoding: 'utf-8', timeout: 90_000,
       stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer: 5 * 1024 * 1024, // 5MB cap on output
+      maxBuffer: 512 * 1024, // 512KB cap (output capped at 100KB anyway)
     });
     return { clean: true, errorCount: 0, summary: 'TypeScript: clean ✓' };
   } catch (err: unknown) {
@@ -493,6 +523,12 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
     const endFileIdx = text.indexOf('>>>', startIdx + 8);
     if (endFileIdx === -1) break;
     const filePath = text.substring(startIdx + 8, endFileIdx).trim();
+
+    // Validate filePath: reject empty, dot paths, absolute paths, or paths with null bytes
+    if (!filePath || filePath === '.' || filePath === '..' || /^\s*$/.test(filePath) || /^[/\\]/.test(filePath) || filePath.includes('\0')) {
+      pos = text.indexOf('<<<END>>>', startIdx) + 9;
+      continue;
+    }
 
     const contentStart = text.indexOf('\n', endFileIdx) + 1;
     const contentEnd = text.indexOf('<<<END>>>', contentStart);
@@ -560,9 +596,8 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
   for (const edit of edits) {
     const abs = resolveProjectPath(edit.filePath);
 
-    // Security: must be within project root (check with path.sep boundary)
-    const relative = path.relative(PROJECT_ROOT, abs);
-    if (relative.startsWith('..')) {
+    // Security: must be within project root (includes symlink resolution)
+    if (!assertPathWithinRoot(abs)) {
       failed.push(`${edit.filePath} (path traversal blocked)`);
       continue;
     }
@@ -573,10 +608,18 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
       // Ensure directory exists
       const dir = path.dirname(abs);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      // Write to temp file first, then atomic rename (prevents partial writes)
-      const tmpPath = `${abs}.tmp`;
-      writeFileSync(tmpPath, edit.content, 'utf-8');
-      renameSync(tmpPath, abs);
+
+      // Write to secure temp file (TOCTOU-resistant: use system temp dir, not predictable .tmp)
+      const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'arsenal-'));
+      const tmpPath = path.join(tmpDir, path.basename(abs));
+      try {
+        writeFileSync(tmpPath, edit.content, 'utf-8');
+        renameSync(tmpPath, abs);
+      } finally {
+        // Clean up temp directory
+        try { unlinkSync(tmpPath); } catch { }
+      }
+
       const rel = path.relative(PROJECT_ROOT, abs);
       applied.push(rel);
       logger.debug({ path: rel }, 'arsenal: file written');
@@ -651,21 +694,33 @@ export const arsenalTool: ToolDefinition = {
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-    const task       = typeof params['task']    === 'string' ? params['task'].trim()    : '';
+    // Cap task length and reject if it contains file markers (prompt injection defense)
+    const taskRaw = typeof params['task'] === 'string' ? params['task'].trim() : '';
+    const task = taskRaw.slice(0, 50_000);
+    if (!task) {
+      return { success: false, output: 'coder.arsenal: "task" is required.' };
+    }
+    if (task.includes('<<<FILE') || task.includes('<<<END>>>')) {
+      logger.warn({ taskLength: taskRaw.length }, 'arsenal: task rejected (contains file markers)');
+      return { success: false, output: 'coder.arsenal: task contains reserved markers.' };
+    }
+
     const mode       = typeof params['mode']    === 'string' ? params['mode'].trim()    : 'fix';
     const rawCode    = typeof params['code']    === 'string' ? params['code'].trim()    : '';
     const context    = typeof params['context'] === 'string' ? params['context'].trim() : '';
     const forcedModel= typeof params['model']   === 'string' ? params['model'].trim()   : '';
     const filesParam = Array.isArray(params['files']) ? (params['files'] as string[]) : [];
 
+    // Validate forcedModel: alphanumeric, dashes, underscores, slashes, dots only; max 200 chars
+    const ALLOWED_MODEL_PATTERN = /^[a-zA-Z0-9\-_.\/]+$/;
+    if (forcedModel && (!ALLOWED_MODEL_PATTERN.test(forcedModel) || forcedModel.length > 200)) {
+      return { success: false, output: 'coder.arsenal: invalid model identifier.' };
+    }
+
     // Default: apply edits for mutating modes, not for read-only modes
     const readOnlyModes = new Set(['review', 'analyze', 'explain']);
     const defaultApply = !readOnlyModes.has(mode);
     const shouldApply = typeof params['applyEdits'] === 'boolean' ? params['applyEdits'] : defaultApply;
-
-    if (!task) {
-      return { success: false, output: 'coder.arsenal: "task" is required.' };
-    }
 
     // Rotate old backups once per session
     rotateBackups();
