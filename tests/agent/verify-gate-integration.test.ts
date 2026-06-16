@@ -118,11 +118,17 @@ async function drainMicrotasks(): Promise<void> {
 // any describe scope, so they're the safe outer guard. (Verifier MED-2.)
 const FILE_PREV_FEEDBACK = process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
 const FILE_PREV_BLOCK = process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'];
+// VGI-26/27/28 toggle SUDO_VERIFY_GATE_BLOCK (live-read flag for grounding
+// block). Snapshot it at file-load and restore in afterAll so a leaky test
+// can't poison the rest of the suite.
+const FILE_PREV_GROUNDING_BLOCK = process.env['SUDO_VERIFY_GATE_BLOCK'];
 afterAll(() => {
   if (FILE_PREV_FEEDBACK === undefined) delete process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'];
   else process.env['SUDO_VERIFY_GATE_CRITIC_FEEDBACK'] = FILE_PREV_FEEDBACK;
   if (FILE_PREV_BLOCK === undefined) delete process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'];
   else process.env['SUDO_VERIFY_GATE_CRITIC_BLOCK'] = FILE_PREV_BLOCK;
+  if (FILE_PREV_GROUNDING_BLOCK === undefined) delete process.env['SUDO_VERIFY_GATE_BLOCK'];
+  else process.env['SUDO_VERIFY_GATE_BLOCK'] = FILE_PREV_GROUNDING_BLOCK;
 });
 
 describe('executeToolCalls — verify-gate slice 1 + slice 2 integration', () => {
@@ -1053,5 +1059,168 @@ describe('executeToolCalls — verify-gate slice 5 (critic-reject hard block)', 
     const blockedIdx = events.findIndex((e) => e.event === 'verify_gate_critic_blocked');
     expect(invokedIdx).toBeGreaterThanOrEqual(0);
     expect(blockedIdx).toBeGreaterThan(invokedIdx);
+  });
+
+  // LOW-1 — success-path event. `verify_gate_escalated` only fires on
+  // escalate; before this slice, a subscriber that only saw silence could
+  // not tell apart "gate ran and was happy" from "no gate wired". The new
+  // `verify_gate_evaluated_ok` event closes that gap.
+
+  it('VGI-23 gate allow → verify_gate_evaluated_ok fires with symmetric payload, no escalated event', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', content: 'hello' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      allowingGate(),
+      undefined,
+      false,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    await drainMicrotasks();
+    const ok = events.find((e) => e.event === 'verify_gate_evaluated_ok');
+    expect(ok).toBeDefined();
+    expect(ok?.ctx).toMatchObject({
+      sessionId: 'test-session',
+      toolName: 'coder.write-file',
+      decision: 'allow',
+      confidence: null,
+      threshold: 0.55,
+      samples: 0,
+      reason: 'readonly',
+    });
+    expect(events.find((e) => e.event === 'verify_gate_escalated')).toBeUndefined();
+  });
+
+  it('VGI-24 no verifyGate wired → verify_gate_evaluated_ok NOT emitted (subscribers can rely on absence == disabled)', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', content: 'hello' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      undefined, // no verifyGate
+      undefined,
+      false,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_evaluated_ok')).toBeUndefined();
+    expect(events.find((e) => e.event === 'verify_gate_escalated')).toBeUndefined();
+  });
+
+  it('VGI-25 escalate → verify_gate_escalated fires, verify_gate_evaluated_ok does NOT (mutual exclusion)', async () => {
+    const { registry } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'foo' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(true),
+      false,
+    );
+
+    await drainMicrotasks();
+    expect(events.find((e) => e.event === 'verify_gate_escalated')).toBeDefined();
+    expect(events.find((e) => e.event === 'verify_gate_evaluated_ok')).toBeUndefined();
+  });
+
+  // LOW-2 — env-flag freeze asymmetry. SUDO_VERIFY_GATE_BLOCK is the
+  // grounding-block flag, snapshotted on AgentLoop._groundingBlockEnabled
+  // at setGroundingChecker time. The slice-5 critic-block flag is read
+  // live each call. These tests prove the grounding block now resolves
+  // (param || env), bringing the two flags into symmetry.
+
+  it('VGI-26 blockOnFail=false param BUT SUDO_VERIFY_GATE_BLOCK=1 env → tool BLOCKED (live env wins over frozen param)', async () => {
+    process.env['SUDO_VERIFY_GATE_BLOCK'] = '1';
+    try {
+      const { registry, executed } = makeRegistry();
+      const { hooks, events } = makeHooks();
+      const session = makeSession();
+      const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+      await executeToolCalls(
+        calls, session, makeState(), () => undefined,
+        registry, undefined, undefined, hooks, undefined, undefined,
+        escalatingGate('coder.write-file'),
+        fixedGrounding(false),
+        false, // param frozen OFF — env should win
+      );
+
+      expect(executed()).toEqual([]); // env-driven block kicked in
+      expect(String(session.messages[0]?.content)).toMatch(/^\[VerifyGate\] Tool call blocked: coder\.write-file/);
+      await drainMicrotasks();
+      const groundingFailed = events.find((e) => e.event === 'verify_gate_grounding_failed');
+      expect(groundingFailed?.ctx).toMatchObject({ blocked: true });
+    } finally {
+      delete process.env['SUDO_VERIFY_GATE_BLOCK'];
+    }
+  });
+
+  it('VGI-27 blockOnFail=true param + env unset → tool BLOCKED (code-level forced enable still wins)', async () => {
+    delete process.env['SUDO_VERIFY_GATE_BLOCK'];
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const session = makeSession();
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, session, makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      true, // code-level forced enable
+    );
+
+    expect(executed()).toEqual([]);
+    expect(String(session.messages[0]?.content)).toMatch(/^\[VerifyGate\] Tool call blocked: coder\.write-file/);
+    await drainMicrotasks();
+    const groundingFailed = events.find((e) => e.event === 'verify_gate_grounding_failed');
+    expect(groundingFailed?.ctx).toMatchObject({ blocked: true });
+  });
+
+  it('VGI-28 env toggled mid-process → second call observable when env unset between calls (live read, not cached)', async () => {
+    // try/finally guards against a mid-test throw between the two calls
+    // leaving SUDO_VERIFY_GATE_BLOCK=1 set for the rest of the suite — the
+    // file-level afterAll restores eventually, but a per-test cleanup
+    // narrows the bleed window. Mirrors VGI-26's try/finally pattern.
+    try {
+      const { registry, executed } = makeRegistry();
+      const { hooks } = makeHooks();
+      const session = makeSession();
+
+      // Call 1 — env ON, expect block.
+      process.env['SUDO_VERIFY_GATE_BLOCK'] = '1';
+      await executeToolCalls(
+        [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })],
+        session, makeState(), () => undefined,
+        registry, undefined, undefined, hooks, undefined, undefined,
+        escalatingGate('coder.write-file'),
+        fixedGrounding(false),
+        false,
+      );
+      expect(executed()).toEqual([]);
+
+      // Call 2 — env OFF, expect observable-only (tool runs through).
+      delete process.env['SUDO_VERIFY_GATE_BLOCK'];
+      await executeToolCalls(
+        [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })],
+        session, makeState(), () => undefined,
+        registry, undefined, undefined, hooks, undefined, undefined,
+        escalatingGate('coder.write-file'),
+        fixedGrounding(false),
+        false,
+      );
+      expect(executed()).toEqual(['coder.write-file']);
+    } finally {
+      delete process.env['SUDO_VERIFY_GATE_BLOCK'];
+    }
   });
 });

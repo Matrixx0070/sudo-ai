@@ -23,6 +23,7 @@ import {
   readCriticBlockEnabled,
   renderCriticBlockMessage,
 } from './verify-gate-critic.js';
+import { isGroundingBlockEnabled } from './verify-gate-grounding.js';
 
 const log = createLogger('agent:loop');
 
@@ -718,8 +719,20 @@ async function executeSingleToolCall(
             });
           }
           if (!groundingThrew && grounding && !grounding.ok) {
+            // Resolve effective block flag live: the param wired in by
+            // setGroundingChecker(checker, blockOnFail) was a one-shot
+            // snapshot at attach time, leaving SUDO_VERIFY_GATE_BLOCK
+            // asymmetric with the live-read critic flags
+            // (SUDO_VERIFY_GATE_CRITIC_BLOCK, ..._CRITIC_FEEDBACK). OR
+            // against the live env so an operator who flips the flag
+            // mid-process sees the new behaviour on the next call without
+            // re-attaching the checker. The explicit param remains a
+            // code-level forced enable (true wins) — a test or hardened
+            // deployment that wants the block on regardless of env still
+            // gets it.
+            const effectiveBlock = groundingBlockEnabled || isGroundingBlockEnabled(process.env);
             log.warn(
-              { tool: tc.name, reason: grounding.reason, checked: grounding.checked, evidence: grounding.evidence, sessionId: ctx.sessionId, block: groundingBlockEnabled },
+              { tool: tc.name, reason: grounding.reason, checked: grounding.checked, evidence: grounding.evidence, sessionId: ctx.sessionId, block: effectiveBlock },
               'verify-gate: grounding mismatch',
             );
             // `confidence` + `threshold` are carried here so a slice-3 critic
@@ -731,11 +744,11 @@ async function executeSingleToolCall(
               reason: grounding.reason,
               checked: grounding.checked ?? null,
               evidence: grounding.evidence ?? null,
-              blocked: groundingBlockEnabled,
+              blocked: effectiveBlock,
               confidence: gate.confidence,
               threshold: gate.threshold,
             });
-            if (groundingBlockEnabled) {
+            if (effectiveBlock) {
               // Precedence — block-over-critic-over-feedback. The
               // grounding-block path short-circuits BEFORE the slice-3
               // critic runs, so neither the slice-4 agent-facing feedback
@@ -861,6 +874,24 @@ async function executeSingleToolCall(
             );
           }
         }
+      } else {
+        // Success-path event — closes the audit LOW where subscribers could
+        // not tell apart "gate ran and was happy" from "no verify-gate wired
+        // / SUDO_VERIFY_GATE off". Symmetric correlator fields with
+        // `verify_gate_escalated` so a single observer can union both events
+        // on (sessionId, toolName) without conditional payload handling.
+        // Volume note: subscribers writing one row per event to a
+        // high-cardinality backend will see roughly one extra event per
+        // non-escalated destructive tool call when SUDO_VERIFY_GATE=1.
+        void safeEmit(hooks, 'verify_gate_evaluated_ok', {
+          sessionId: ctx.sessionId,
+          toolName: tc.name,
+          decision: gate.decision,
+          confidence: gate.confidence,
+          threshold: gate.threshold,
+          samples: gate.samples,
+          reason: gate.reason,
+        });
       }
     } catch (err) {
       log.warn({ tool: tc.name, err: String(err) }, 'verify-gate: evaluate threw — failing open');
