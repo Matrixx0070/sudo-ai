@@ -16,12 +16,19 @@
  * fail-open. No DB I/O; calibration lookup is injected.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import DatabaseConstructor from 'better-sqlite3';
 import {
   ConfidenceGate,
   isGateEnabled,
   readThreshold,
   readMinSamples,
+  computeBrierConfidence,
+  computeCompositeConfidence,
+  computeLiveConfidence,
   type ToolDefForGate,
   type ToolRegistryForGate,
 } from '../../src/core/agent/verify-gate.js';
@@ -220,5 +227,200 @@ describe('env helpers', () => {
     expect(readMinSamples({ SUDO_VERIFY_GATE_MIN_SAMPLES: '0' })).toBe(5);
     expect(readMinSamples({ SUDO_VERIFY_GATE_MIN_SAMPLES: '10' })).toBe(10);
     expect(readMinSamples({ SUDO_VERIFY_GATE_MIN_SAMPLES: '3.9' })).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeBrierConfidence + computeCompositeConfidence (calibration-pivot)
+//
+// Real on-disk better-sqlite3 files because the readers open by path. Each
+// test seeds a minimal calibration.db / audit.db schema with known rows then
+// asserts the math + composite fallback policy.
+// ---------------------------------------------------------------------------
+
+describe('computeBrierConfidence + composite (calibration pivot)', () => {
+  let tmpDir: string;
+  let calibrationDbPath: string;
+  let auditDbPath: string;
+
+  function seedCalibration(
+    rows: Array<{ predicted: number; outcome: 0 | 1; toolName: string | null; tsOffsetMs?: number }>,
+  ): void {
+    const db = new DatabaseConstructor(calibrationDbPath);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS confidence_calibration (
+        id        TEXT PRIMARY KEY,
+        predicted REAL NOT NULL,
+        outcome   INTEGER NOT NULL CHECK(outcome IN (0,1)),
+        tag       TEXT,
+        tool_name TEXT,
+        ts        INTEGER NOT NULL
+      )
+    `);
+    const ins = db.prepare(
+      `INSERT INTO confidence_calibration (id, predicted, outcome, tag, tool_name, ts)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const baseTs = Date.now();
+    rows.forEach((r, i) => {
+      ins.run(`row-${i}`, r.predicted, r.outcome, null, r.toolName, baseTs - (r.tsOffsetMs ?? i));
+    });
+    db.close();
+  }
+
+  function seedAudit(rows: Array<{ resource: string; outcome: string }>): void {
+    const db = new DatabaseConstructor(auditDbPath);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id        TEXT PRIMARY KEY,
+        action    TEXT,
+        resource  TEXT,
+        outcome   TEXT,
+        timestamp INTEGER NOT NULL
+      )
+    `);
+    const ins = db.prepare(
+      `INSERT INTO audit_log (id, action, resource, outcome, timestamp) VALUES (?, ?, ?, ?, ?)`,
+    );
+    rows.forEach((r, i) => ins.run(`a-${i}`, 'tool_call', r.resource, r.outcome, Date.now() - i));
+    db.close();
+  }
+
+  beforeAll(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-gate-calib-'));
+    calibrationDbPath = path.join(tmpDir, 'calibration.db');
+    auditDbPath = path.join(tmpDir, 'audit.db');
+  });
+
+  beforeEach(() => {
+    // Pure hermetic test: wipe both DB files so a previously-seeded row
+    // from another test cannot bleed in. Verifier MED-1 on this slice.
+    try { fs.rmSync(calibrationDbPath, { force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(auditDbPath, { force: true }); } catch { /* ignore */ }
+  });
+
+  afterAll(() => {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('returns null when calibration.db does not exist', () => {
+    const missing = path.join(tmpDir, 'nonexistent.db');
+    expect(computeBrierConfidence('system.exec', missing)).toBeNull();
+  });
+
+  it('returns null when no rows match the tool', () => {
+    seedCalibration([
+      { predicted: 0.9, outcome: 1, toolName: 'fs.write' },
+    ]);
+    expect(computeBrierConfidence('system.exec', calibrationDbPath)).toBeNull();
+  });
+
+  it('computes 1 - Brier for perfect predictor (predicted=1, outcome=1)', () => {
+    seedCalibration([
+      { predicted: 1, outcome: 1, toolName: 'system.exec' },
+      { predicted: 1, outcome: 1, toolName: 'system.exec' },
+      { predicted: 1, outcome: 1, toolName: 'system.exec' },
+    ]);
+    const r = computeBrierConfidence('system.exec', calibrationDbPath);
+    expect(r).not.toBeNull();
+    expect(r!.samples).toBe(3);
+    expect(r!.confidence).toBeCloseTo(1.0, 9);
+  });
+
+  it('penalizes overconfidence (predicted=1, outcome=0) → confidence=0', () => {
+    seedCalibration([
+      { predicted: 1, outcome: 0, toolName: 'system.exec' },
+      { predicted: 1, outcome: 0, toolName: 'system.exec' },
+    ]);
+    const r = computeBrierConfidence('system.exec', calibrationDbPath);
+    expect(r).not.toBeNull();
+    expect(r!.confidence).toBeCloseTo(0, 9);
+  });
+
+  it('mixed: predicted=0.8 vs outcome=1 + predicted=0.6 vs outcome=0 → 1 - 0.20 = 0.80', () => {
+    seedCalibration([
+      { predicted: 0.8, outcome: 1, toolName: 'system.exec' },
+      { predicted: 0.6, outcome: 0, toolName: 'system.exec' },
+    ]);
+    const r = computeBrierConfidence('system.exec', calibrationDbPath);
+    expect(r!.confidence).toBeCloseTo(0.80, 5);
+    expect(r!.samples).toBe(2);
+  });
+
+  it('skips non-numeric predicted rows', () => {
+    seedCalibration([
+      { predicted: 1, outcome: 1, toolName: 'system.exec' },
+    ]);
+    // Sneak a text-typed predicted into the REAL column directly. SQLite's
+    // loose typing accepts it; the reader's typeof-guard must then skip it.
+    const db = new DatabaseConstructor(calibrationDbPath);
+    db.prepare(
+      `INSERT INTO confidence_calibration (id, predicted, outcome, tag, tool_name, ts)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('row-bad', 'not-a-number', 0, null, 'system.exec', Date.now() - 1);
+    db.close();
+
+    const r = computeBrierConfidence('system.exec', calibrationDbPath);
+    expect(r!.samples).toBe(1);
+    expect(r!.confidence).toBeCloseTo(1.0, 9);
+  });
+
+  it('composite: Brier wins when samples ≥ minSamples', () => {
+    seedCalibration(Array.from({ length: 5 }, () => ({
+      predicted: 0.9, outcome: 1 as 0 | 1, toolName: 'system.exec',
+    })));
+    // Audit would say 0% success — composite must NOT see it.
+    seedAudit(Array.from({ length: 50 }, () => ({ resource: 'system.exec', outcome: 'failure' })));
+
+    const r = computeCompositeConfidence('system.exec', {
+      minSamples: 5,
+      brierDbPath: calibrationDbPath,
+      auditDbPath,
+    });
+    expect(r!.samples).toBe(5);
+    expect(r!.confidence).toBeCloseTo(0.99, 2); // Brier ≈ 0.01
+  });
+
+  it('composite: falls back to audit when Brier has < minSamples rows', () => {
+    seedCalibration([
+      { predicted: 0.9, outcome: 1, toolName: 'system.exec' }, // only 1 row
+    ]);
+    seedAudit(Array.from({ length: 10 }, (_, i) => ({
+      resource: 'system.exec',
+      outcome: i < 8 ? 'success' : 'failure', // 80% success
+    })));
+
+    const r = computeCompositeConfidence('system.exec', {
+      minSamples: 5,
+      brierDbPath: calibrationDbPath,
+      auditDbPath,
+    });
+    expect(r!.samples).toBe(10);
+    expect(r!.confidence).toBeCloseTo(0.8, 5);
+  });
+
+  it('composite: falls back to audit when calibration.db is missing', () => {
+    seedAudit([{ resource: 'system.exec', outcome: 'success' }]);
+
+    const r = computeCompositeConfidence('system.exec', {
+      minSamples: 5,
+      brierDbPath: path.join(tmpDir, 'definitely-missing.db'),
+      auditDbPath,
+    });
+    // computeLiveConfidence returns the audit result.
+    const audit = computeLiveConfidence('system.exec', auditDbPath);
+    expect(r).toEqual(audit);
+  });
+
+  it('composite: returns null when both sources have no rows for the tool', () => {
+    seedCalibration([{ predicted: 0.9, outcome: 1, toolName: 'fs.write' }]);
+    seedAudit([{ resource: 'fs.write', outcome: 'success' }]);
+
+    const r = computeCompositeConfidence('system.exec', {
+      minSamples: 5,
+      brierDbPath: calibrationDbPath,
+      auditDbPath,
+    });
+    expect(r).toBeNull();
   });
 });
