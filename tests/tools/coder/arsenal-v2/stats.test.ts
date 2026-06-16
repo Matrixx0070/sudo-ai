@@ -18,6 +18,7 @@ import {
   loadRecentStatsByMode,
   parseModeSimilarityEnv,
   pearson,
+  pearsonLowerBound,
   rankCascade,
   weightedCollapseByMode,
   wilsonLowerBound,
@@ -768,9 +769,36 @@ describe('computeEmpiricalSimilarity', () => {
     expect(sharedCounts.get('fix')!.get('build')).toBe(1);
   });
 
-  it('produces a high correlation when fix-rates and build-rates agree across models', () => {
+  it('produces a high lower-bound correlation when fix-rates and build-rates agree across enough models', () => {
+    // Slice 14: Fisher CI requires n >= 4 shared models. Use 5 for a
+    // comfortable margin; the lower bound is in (0.5, 1] at n = 5 with
+    // strongly-correlated rates.
     const byMode = new Map<string, Map<string, ModelStats>>();
-    // A: high in both. B: middling in both. C: low in both.
+    byMode.set('fix', new Map([
+      ['A', mkS('A', 10, 9)],
+      ['B', mkS('B', 10, 7)],
+      ['C', mkS('C', 10, 5)],
+      ['D', mkS('D', 10, 3)],
+      ['E', mkS('E', 10, 1)],
+    ]));
+    byMode.set('build', new Map([
+      ['A', mkS('A', 10, 8)],
+      ['B', mkS('B', 10, 7)],
+      ['C', mkS('C', 10, 5)],
+      ['D', mkS('D', 10, 4)],
+      ['E', mkS('E', 10, 2)],
+    ]));
+    const { matrix } = computeEmpiricalSimilarity(byMode);
+    // Raw Pearson here is ~0.99; Fisher lower bound at n=5, z=1 lands ~0.85.
+    expect(matrix.fix?.build).toBeGreaterThan(0.5);
+    expect(matrix.fix?.build).toBeLessThanOrEqual(1);
+  });
+
+  it('returns no entry when shared models < 4 (Fisher CI undefined)', () => {
+    // Slice 14: 3 shared models — Fisher SE requires n > 3, so the
+    // entry is omitted. This is the corrected behavior; slice 13 would
+    // have produced a high empirical correlation here.
+    const byMode = new Map<string, Map<string, ModelStats>>();
     byMode.set('fix', new Map([
       ['A', mkS('A', 10, 9)],
       ['B', mkS('B', 10, 5)],
@@ -781,22 +809,28 @@ describe('computeEmpiricalSimilarity', () => {
       ['B', mkS('B', 10, 6)],
       ['C', mkS('C', 10, 2)],
     ]));
-    const { matrix } = computeEmpiricalSimilarity(byMode);
-    expect(matrix.fix?.build).toBeGreaterThan(0.9);
+    const { matrix, sharedCounts } = computeEmpiricalSimilarity(byMode);
+    expect(matrix.fix?.build).toBeUndefined();
+    // sharedCounts still records the count — the blend uses it for confidence.
+    expect(sharedCounts.get('fix')!.get('build')).toBe(3);
   });
 
   it('clamps negative correlations to 0 (omits from the result row)', () => {
     const byMode = new Map<string, Map<string, ModelStats>>();
-    // Anti-correlated: A great at fix bad at build; B opposite; C middle.
+    // Anti-correlated: A great at fix bad at build; B opposite; C middle; D, E to clear the n >= 4 gate.
     byMode.set('fix', new Map([
       ['A', mkS('A', 10, 9)],
       ['B', mkS('B', 10, 1)],
       ['C', mkS('C', 10, 5)],
+      ['D', mkS('D', 10, 8)],
+      ['E', mkS('E', 10, 2)],
     ]));
     byMode.set('build', new Map([
       ['A', mkS('A', 10, 1)],
       ['B', mkS('B', 10, 9)],
       ['C', mkS('C', 10, 5)],
+      ['D', mkS('D', 10, 2)],
+      ['E', mkS('E', 10, 8)],
     ]));
     const { matrix } = computeEmpiricalSimilarity(byMode);
     expect(matrix.fix?.build).toBeUndefined();
@@ -909,7 +943,7 @@ describe('effectiveSimilarity', () => {
     expect(sim.fix!.build).toBeGreaterThan(DEFAULT_MODE_SIMILARITY.fix!.build!);
   });
 
-  it('drops below the default when the empirical signal disagrees', async () => {
+  it('drops below the default when the empirical signal disagrees with enough shared models', async () => {
     const dayMsLocal = 24 * 60 * 60 * 1000;
     // Anti-correlated: high rate in fix → low rate in build for each model.
     // Empirical → 0 (clamped); blend pulls fix-build below the default 0.6.
@@ -927,5 +961,76 @@ describe('effectiveSimilarity', () => {
     const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 0 });
     const sim = effectiveSimilarity(byMode, DEFAULT_MODE_SIMILARITY);
     expect(sim.fix!.build).toBeLessThan(DEFAULT_MODE_SIMILARITY.fix!.build!);
+  });
+});
+
+describe('pearsonLowerBound (slice 14)', () => {
+  it('returns 0 when either vector has fewer than 4 points', () => {
+    expect(pearsonLowerBound([], [])).toBe(0);
+    expect(pearsonLowerBound([1, 2, 3], [1, 2, 3])).toBe(0);
+  });
+
+  it('returns 0 when the point estimate is non-positive', () => {
+    // Perfect anti-correlation → raw Pearson = -1 → clamped to 0.
+    const xs = [1, 2, 3, 4, 5];
+    const ys = [5, 4, 3, 2, 1];
+    expect(pearsonLowerBound(xs, ys)).toBe(0);
+  });
+
+  it('returns 1 when the point estimate is exactly 1', () => {
+    const xs = [0.1, 0.3, 0.5, 0.7, 0.9];
+    expect(pearsonLowerBound(xs, xs)).toBe(1);
+  });
+
+  it('applies a large haircut at small n', () => {
+    // r = 0.9 at n=5 → lower bound ~0.64 (z=1.0).
+    // Build vectors so Pearson lands close to 0.9.
+    const xs = [0.9, 0.7, 0.5, 0.3, 0.1];
+    const ys = [0.85, 0.75, 0.5, 0.25, 0.15];
+    const raw = pearson(xs, ys);
+    const lower = pearsonLowerBound(xs, ys);
+    expect(raw).toBeGreaterThan(0.9);
+    expect(lower).toBeLessThan(raw);
+    expect(lower).toBeGreaterThan(0.5);
+  });
+
+  it('applies a small haircut at large n', () => {
+    // 100 highly-correlated samples → lower bound very close to raw r.
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const v = i / 99;
+      xs.push(v);
+      ys.push(v * 0.9 + (i % 2 === 0 ? 0.05 : -0.05));
+    }
+    const raw = pearson(xs, ys);
+    const lower = pearsonLowerBound(xs, ys);
+    expect(raw - lower).toBeLessThan(0.05);
+  });
+
+  it('is monotone non-decreasing in n at fixed r', () => {
+    // Same correlation, growing n → tighter CI → higher lower bound.
+    const makePair = (n: number): { xs: number[]; ys: number[] } => {
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (let i = 0; i < n; i++) {
+        xs.push(i % 2 === 0 ? 0.9 : 0.1);
+        ys.push(i % 2 === 0 ? 0.85 : 0.15);
+      }
+      return { xs, ys };
+    };
+    const lo4 = pearsonLowerBound(makePair(4).xs, makePair(4).ys);
+    const lo20 = pearsonLowerBound(makePair(20).xs, makePair(20).ys);
+    const lo100 = pearsonLowerBound(makePair(100).xs, makePair(100).ys);
+    expect(lo4).toBeLessThan(lo20);
+    expect(lo20).toBeLessThan(lo100);
+  });
+
+  it('respects the z parameter (larger z = wider CI = lower bound)', () => {
+    const xs = [0.9, 0.7, 0.5, 0.3, 0.1];
+    const ys = [0.85, 0.75, 0.5, 0.25, 0.15];
+    const lo1 = pearsonLowerBound(xs, ys, 1.0); // ~84% CI
+    const lo196 = pearsonLowerBound(xs, ys, 1.96); // 95% CI
+    expect(lo196).toBeLessThan(lo1);
   });
 });
