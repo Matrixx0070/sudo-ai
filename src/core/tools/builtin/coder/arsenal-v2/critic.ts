@@ -156,23 +156,41 @@ export async function runCritic(opts: CriticOptions): Promise<CriticResult> {
 
 /**
  * Extract the verdict + critique from the critic's raw response.
- * Tolerant of leading whitespace, markdown bold, and trailing whitespace.
+ *
+ * The regex matches the first line whose start-of-line decoration is purely
+ * markdown chrome (heading hashes, blockquote `>`, list markers `-` / `*` /
+ * `1.`, bold `**`, whitespace) followed by `VERDICT:` and then APPROVE or
+ * NEEDS_REVISION. Anything after the verdict word on the same line becomes
+ * the leading critique. Subsequent lines append.
+ *
+ * What we deliberately reject:
+ *   - `I'd render my VERDICT: maybe later`  — "my " is not allowed chrome,
+ *     so the line-start anchor refuses to match.
+ *   - `VERDICT: APPROVED` / `NEEDS_REVISIONS` — `\b` word boundary stops
+ *     the partial-keyword match.
+ *
  * Unparseable output is treated as 'error' so the wrapping tool can decide
  * how to handle it — same shape as a critic LLM call failure.
  */
 export function parseCriticOutput(raw: string): { verdict: CriticVerdict; critique: string } {
   const text = raw.trim();
-  // Strip markdown bold/italic wrappers around the verdict line.
-  const m = text.match(/^\**\s*VERDICT\s*:\s*(APPROVE|NEEDS_REVISION)\**\s*$/im);
+  // Decoration that's allowed before VERDICT: list/heading/quote markers, bold,
+  // whitespace, numbered-list prefix.
+  const VERDICT_LINE_RE =
+    /^[\s>*#\-]*(?:\d+\.\s*)?\**\s*VERDICT\s*:\s*\**\s*(APPROVE|NEEDS_REVISION)\b\**[ \t]*(.*)$/im;
+  const m = text.match(VERDICT_LINE_RE);
   if (!m) {
     return {
       verdict: 'error',
       critique: `Critic output did not include a VERDICT line. Raw (first 400 chars):\n${text.slice(0, 400)}`,
     };
   }
-  const verdict: CriticVerdict = m[1] === 'APPROVE' ? 'approve' : 'needs_revision';
-  // Everything after the verdict line is the critique. The verdict's match
-  // index gives us a deterministic split point.
-  const after = text.slice(m.index! + m[0].length).trim();
-  return { verdict, critique: after };
+  const verdict: CriticVerdict = m[1].toUpperCase() === 'APPROVE' ? 'approve' : 'needs_revision';
+  // Same-line trailing text + everything after the matched line, joined.
+  // Leading separators (`—`, `:`, `-`, `.`, `,`) on the same-line tail are
+  // cosmetic — strip them so the critique starts on a word.
+  const sameLineTail = m[2].replace(/^[\s—:.\-,;]+/, '').trim();
+  const afterBlock = text.slice(m.index! + m[0].length).trim();
+  const critique = [sameLineTail, afterBlock].filter(Boolean).join('\n').trim();
+  return { verdict, critique };
 }
