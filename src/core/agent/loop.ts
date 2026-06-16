@@ -43,6 +43,7 @@ import type {
 } from './loop-helpers.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
 import { LoopGuard } from './loop-guard.js';
+import { buildLoopFallbackReply } from './loop-fallback.js';
 import { DoomLoopDetector } from './doom-loop.js';
 import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
 import { StuckDetector } from './stuck-detector.js';
@@ -2250,7 +2251,11 @@ export class AgentLoop {
             log.warn({ sessionId: state.sessionId, consecutiveToolIterations: state.consecutiveToolIterations }, 'Cross-iteration tool loop detected — breaking');
             session.messages.push({ role: 'system', content: loopMsg });
             emit({ type: 'error', error: loopMsg });
-            finalText = response.content || 'I kept trying to use tools but got stuck in a loop. Here is what I know so far. Let me know if you need me to try a different approach.';
+            // Prefer the model's own text if it produced any. Otherwise fall
+            // back to the canned LoopGuard reply — but de-dupe against the
+            // previous assistant turn so consecutive cross-iteration loops
+            // show a streak count instead of the same byte-identical reply.
+            finalText = response.content || buildLoopFallbackReply(session.messages);
             session.messages.push({ role: 'assistant', content: finalText });
             emit({ type: 'message', content: finalText });
             break;
