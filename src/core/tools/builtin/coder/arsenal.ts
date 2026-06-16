@@ -27,7 +27,7 @@
 import { generateText } from 'ai';
 import {
   readFileSync, writeFileSync, existsSync,
-  mkdirSync, copyFileSync, statSync,
+  mkdirSync, copyFileSync, statSync, lstatSync, renameSync,
 } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
@@ -363,7 +363,8 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
       if (['node_modules', '.git', 'dist', 'build', '__pycache__', 'coverage'].includes(entry)) continue;
       const full = path.join(d, entry);
       let s;
-      try { s = statSync(full); } catch { continue; }
+      try { s = lstatSync(full); } catch { continue; }
+      if (s.isSymbolicLink()) continue; // Skip symlinks — block exfiltration
       if (s.isDirectory()) { await walk(full); continue; }
       const ext = path.extname(entry).toLowerCase();
       if (!['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json', '.yaml', '.yml', '.md'].includes(ext)) continue;
@@ -386,11 +387,18 @@ function readSpecificFiles(filePaths: string[]): string {
   const parts: string[] = [];
   for (const fp of filePaths) {
     const abs = resolveProjectPath(fp);
+
+    // Security: must be within project root
+    const relative = path.relative(PROJECT_ROOT, abs);
+    if (relative.startsWith('..')) {
+      parts.push(`### ${fp}\n[ACCESS DENIED — outside project root]\n\n`);
+      continue;
+    }
+
     if (!existsSync(abs)) { parts.push(`### ${fp}\n[FILE NOT FOUND]\n\n`); continue; }
     try {
       const content = readFileSync(abs, 'utf-8');
-      const rel = path.relative(PROJECT_ROOT, abs);
-      parts.push(`### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`);
+      parts.push(`### ${relative}\n\`\`\`\n${content}\n\`\`\`\n\n`);
     } catch { parts.push(`### ${fp}\n[CANNOT READ]\n\n`); }
   }
   return parts.join('');
@@ -441,34 +449,61 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
   let analysis = '';
   let explanation = '';
 
-  // Extract FILE blocks
-  const fileRegex = /<<<FILE:\s*([^\n>]+)>>>\n([\s\S]*?)<<<END>>>/g;
-  let m: RegExpExecArray | null;
-  while ((m = fileRegex.exec(text)) !== null) {
-    const filePath = (m[1] ?? '').trim();
-    let content = (m[2] ?? '').trim();
-    // Strip markdown code fences if AI wrapped in ```
-    content = content.replace(/^```[^\n]*\n/, '').replace(/\n```$/, '');
+  // Parse FILE blocks using indexOf (no ReDoS risk from lazy quantifiers)
+  let pos = 0;
+  while (true) {
+    const startIdx = text.indexOf('<<<FILE:', pos);
+    if (startIdx === -1) break;
+    const endFileIdx = text.indexOf('>>>', startIdx + 8);
+    if (endFileIdx === -1) break;
+    const filePath = text.substring(startIdx + 8, endFileIdx).trim();
+
+    const contentStart = text.indexOf('\n', endFileIdx) + 1;
+    const contentEnd = text.indexOf('<<<END>>>', contentStart);
+    if (contentEnd === -1) break;
+
+    let content = text.substring(contentStart, contentEnd).trim();
     if (filePath && content) {
       edits.push({ filePath, content });
     }
+    pos = contentEnd + 9;
   }
 
-  // Extract SUMMARY block
-  const summaryMatch = text.match(/<<<SUMMARY>>>([\s\S]*?)<<<END>>>/);
-  if (summaryMatch) summary = (summaryMatch[1] ?? '').trim();
+  // Extract SUMMARY block using indexOf
+  const summaryStart = text.indexOf('<<<SUMMARY>>>');
+  if (summaryStart !== -1) {
+    const summaryEnd = text.indexOf('<<<END>>>', summaryStart);
+    if (summaryEnd !== -1) {
+      summary = text.substring(summaryStart + 13, summaryEnd).trim();
+    }
+  }
 
-  // Extract REVIEW block
-  const reviewMatch = text.match(/<<<REVIEW>>>([\s\S]*?)<<<END>>>/);
-  if (reviewMatch) review = (reviewMatch[1] ?? '').trim();
+  // Extract REVIEW block using indexOf
+  const reviewStart = text.indexOf('<<<REVIEW>>>');
+  if (reviewStart !== -1) {
+    const reviewEnd = text.indexOf('<<<END>>>', reviewStart);
+    if (reviewEnd !== -1) {
+      review = text.substring(reviewStart + 12, reviewEnd).trim();
+    }
+  }
 
-  // Extract ANALYSIS block
-  const analysisMatch = text.match(/<<<ANALYSIS>>>([\s\S]*?)<<<END>>>/);
-  if (analysisMatch) analysis = (analysisMatch[1] ?? '').trim();
+  // Extract ANALYSIS block using indexOf
+  const analysisStart = text.indexOf('<<<ANALYSIS>>>');
+  if (analysisStart !== -1) {
+    const analysisEnd = text.indexOf('<<<END>>>', analysisStart);
+    if (analysisEnd !== -1) {
+      analysis = text.substring(analysisStart + 14, analysisEnd).trim();
+    }
+  }
 
-  // Extract EXPLANATION block
-  const explanationMatch = text.match(/<<<EXPLANATION>>>([\s\S]*?)<<<END>>>/);
-  if (explanationMatch) explanation = (explanationMatch[1] ?? '').trim();
+  // Extract EXPLANATION block using indexOf
+  const explanationStart = text.indexOf('<<<EXPLANATION>>>');
+  if (explanationStart !== -1) {
+    const explanationEnd = text.indexOf('<<<END>>>', explanationStart);
+    if (explanationEnd !== -1) {
+      explanation = text.substring(explanationStart + 17, explanationEnd).trim();
+    }
+  }
 
   return { edits, summary, review, analysis, explanation };
 }
@@ -502,8 +537,10 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
       // Ensure directory exists
       const dir = path.dirname(abs);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      // Write new content
-      writeFileSync(abs, edit.content, 'utf-8');
+      // Write to temp file first, then atomic rename (prevents partial writes)
+      const tmpPath = `${abs}.tmp`;
+      writeFileSync(tmpPath, edit.content, 'utf-8');
+      renameSync(tmpPath, abs);
       const rel = path.relative(PROJECT_ROOT, abs);
       applied.push(rel);
       logger.info({ path: rel }, 'arsenal: file written');
@@ -629,9 +666,16 @@ export const arsenalTool: ToolDefinition = {
     // ---- STEP 3: Build AI prompt ----
     const systemPrompt = SYSTEM_PROMPTS[mode] ?? SYSTEM_PROMPTS['fix']!;
 
+    // Sanitize context to prevent prompt injection
+    const sanitizedContext = context
+      ? context
+          .replace(/<<<(FILE|SUMMARY|REVIEW|ANALYSIS|EXPLANATION|END)/g, '[REDACTED]')
+          .replace(/SYSTEM:/g, '[REDACTED]')
+      : '';
+
     const userPrompt = [
       `TASK: ${task}`,
-      context ? `\nADDITIONAL CONTEXT:\n${context}` : '',
+      sanitizedContext ? `\nADDITIONAL CONTEXT:\n${sanitizedContext}` : '',
       baselineTsc && !baselineTsc.clean
         ? `\nBASELINE STATE: ${baselineTsc.errorCount} TypeScript errors exist before your changes.`
         : '',
