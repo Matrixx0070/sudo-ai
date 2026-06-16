@@ -64,6 +64,67 @@ describe('parseCriticOutput', () => {
     const r = parseCriticOutput('I would render my VERDICT: maybe later. Ship now.');
     expect(r.verdict).toBe('error');
   });
+
+  // ---- hardening: prefixes real LLMs actually emit ----
+
+  it('tolerates a markdown heading prefix (## VERDICT: ...)', () => {
+    const r = parseCriticOutput('## VERDICT: APPROVE\nFix is targeted.');
+    expect(r.verdict).toBe('approve');
+    expect(r.critique).toBe('Fix is targeted.');
+  });
+
+  it('tolerates a single-hash heading prefix (# VERDICT: ...)', () => {
+    const r = parseCriticOutput('# VERDICT: NEEDS_REVISION\nMissed the null check.');
+    expect(r.verdict).toBe('needs_revision');
+  });
+
+  it('tolerates a dash list-marker prefix', () => {
+    const r = parseCriticOutput('- VERDICT: APPROVE\nLGTM');
+    expect(r.verdict).toBe('approve');
+    expect(r.critique).toBe('LGTM');
+  });
+
+  it('tolerates a numbered-list prefix', () => {
+    const r = parseCriticOutput('1. VERDICT: NEEDS_REVISION\nfix the root cause');
+    expect(r.verdict).toBe('needs_revision');
+    expect(r.critique).toBe('fix the root cause');
+  });
+
+  it('tolerates a blockquote prefix', () => {
+    const r = parseCriticOutput('> VERDICT: APPROVE\nclean.');
+    expect(r.verdict).toBe('approve');
+  });
+
+  it('captures same-line trailing critique after an em-dash', () => {
+    const r = parseCriticOutput('VERDICT: APPROVE — clean refactor, behavior preserved.');
+    expect(r.verdict).toBe('approve');
+    expect(r.critique).toBe('clean refactor, behavior preserved.');
+  });
+
+  it('captures same-line trailing critique after a period', () => {
+    const r = parseCriticOutput('VERDICT: NEEDS_REVISION. Tests still red after the patch.');
+    expect(r.verdict).toBe('needs_revision');
+    expect(r.critique).toBe('Tests still red after the patch.');
+  });
+
+  it('joins same-line tail and following lines into one critique', () => {
+    const r = parseCriticOutput('VERDICT: APPROVE — looks good.\nNo regressions visible.');
+    expect(r.verdict).toBe('approve');
+    expect(r.critique).toBe('looks good.\nNo regressions visible.');
+  });
+
+  it('rejects keywords that only match by prefix (APPROVED / NEEDS_REVISIONS)', () => {
+    expect(parseCriticOutput('VERDICT: APPROVED\nstuff').verdict).toBe('error');
+    expect(parseCriticOutput('VERDICT: NEEDS_REVISIONS\nstuff').verdict).toBe('error');
+  });
+
+  it('finds the verdict on a later line when the LLM opens with a preamble', () => {
+    const r = parseCriticOutput(
+      'Reviewed the diff and tsc/test signals.\n\n## VERDICT: APPROVE\nMinimal, targeted change.',
+    );
+    expect(r.verdict).toBe('approve');
+    expect(r.critique).toBe('Minimal, targeted change.');
+  });
 });
 
 describe('runCritic — happy paths', () => {
