@@ -8,6 +8,8 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  blendScores,
+  collapseByMode,
   loadRecentStats,
   loadRecentStatsByMode,
   rankCascade,
@@ -390,5 +392,140 @@ describe('rankCascade with per-mode stats (integration)', () => {
 
     expect(fixCascade).toEqual(['A', 'B']); // A wins for fix
     expect(refCascade).toEqual(['B', 'A']); // B wins for refactor
+  });
+});
+
+describe('blendScores', () => {
+  it('returns defaultScore when both inputs are null', () => {
+    expect(blendScores(null, null, 0, 10, 0.5)).toBe(0.5);
+  });
+  it('returns globalScore when only it is present (no mode data)', () => {
+    expect(blendScores(null, 0.8, 0, 10, 0.5)).toBe(0.8);
+  });
+  it('returns modeScore when only it is present (no global data)', () => {
+    expect(blendScores(0.6, null, 5, 10, 0.5)).toBe(0.6);
+  });
+  it('weights 50/50 when modeAttempts === modeShrinkageK', () => {
+    // m=10, k=10 → w_mode = 10/20 = 0.5; final = 0.5 * 0.9 + 0.5 * 0.5 = 0.7
+    expect(blendScores(0.9, 0.5, 10, 10, 0)).toBeCloseTo(0.7, 5);
+  });
+  it('shifts toward mode as modeAttempts grow', () => {
+    const low = blendScores(0.9, 0.5, 1, 10, 0);   // w ≈ 0.09 → ~0.54
+    const mid = blendScores(0.9, 0.5, 10, 10, 0);  // w = 0.5 → 0.7
+    const high = blendScores(0.9, 0.5, 90, 10, 0); // w = 0.9 → 0.86
+    expect(low).toBeLessThan(mid);
+    expect(mid).toBeLessThan(high);
+  });
+  it('pathological k=0 with no global falls back gracefully', () => {
+    // denom = modeAttempts + 0; if modeAttempts > 0 the formula works (w=1, pure mode).
+    expect(blendScores(0.8, 0.4, 5, 0, 0.5)).toBeCloseTo(0.8, 5);
+    // denom = 0 + 0 = 0 → pathological — fall back to global.
+    expect(blendScores(0.8, 0.4, 0, 0, 0.5)).toBe(0.4);
+  });
+});
+
+describe('collapseByMode', () => {
+  it('returns an empty map when input is empty', () => {
+    expect(collapseByMode(new Map()).size).toBe(0);
+  });
+
+  it('preserves a single-mode map as-is (defensive copy)', () => {
+    const inner = new Map<string, ModelStats>();
+    const a: ModelStats = {
+      model: 'A', attempts: 5, approvals: 3, rejections: 1, errors: 1, successes: 3,
+      avgDurationMs: 1000, lastSeen: 100, weightedAttempts: 5, weightedApprovals: 3,
+    };
+    inner.set('A', a);
+    const out = collapseByMode(new Map([['fix', inner]]));
+    expect(out.get('A')).toEqual(a);
+    // Defensive copy: mutating the result doesn't leak into the input.
+    out.get('A')!.attempts = 999;
+    expect(inner.get('A')!.attempts).toBe(5);
+  });
+
+  it('sums counts and weighted sums across modes for the same model', () => {
+    const fix = new Map<string, ModelStats>();
+    fix.set('A', {
+      model: 'A', attempts: 3, approvals: 3, rejections: 0, errors: 0, successes: 3,
+      avgDurationMs: 1000, lastSeen: 100, weightedAttempts: 2.5, weightedApprovals: 2.5,
+    });
+    const refactor = new Map<string, ModelStats>();
+    refactor.set('A', {
+      model: 'A', attempts: 7, approvals: 2, rejections: 4, errors: 1, successes: 2,
+      avgDurationMs: 2000, lastSeen: 200, weightedAttempts: 5, weightedApprovals: 1.5,
+    });
+    const out = collapseByMode(new Map([['fix', fix], ['refactor', refactor]]));
+    const a = out.get('A')!;
+    expect(a.attempts).toBe(10);
+    expect(a.approvals).toBe(5);
+    expect(a.rejections).toBe(4);
+    expect(a.errors).toBe(1);
+    expect(a.successes).toBe(5);
+    expect(a.weightedAttempts).toBeCloseTo(7.5, 5);
+    expect(a.weightedApprovals).toBeCloseTo(4.0, 5);
+    expect(a.lastSeen).toBe(200);
+    // avgDurationMs is attempt-weighted: (3*1000 + 7*2000) / 10 = 1700
+    expect(a.avgDurationMs).toBe(1700);
+  });
+
+  it('keeps separate model buckets independent', () => {
+    const fix = new Map<string, ModelStats>();
+    fix.set('A', {
+      model: 'A', attempts: 5, approvals: 5, rejections: 0, errors: 0, successes: 5,
+      avgDurationMs: 1000, lastSeen: 100, weightedAttempts: 5, weightedApprovals: 5,
+    });
+    fix.set('B', {
+      model: 'B', attempts: 5, approvals: 0, rejections: 5, errors: 0, successes: 0,
+      avgDurationMs: 2000, lastSeen: 200, weightedAttempts: 5, weightedApprovals: 0,
+    });
+    const out = collapseByMode(new Map([['fix', fix]]));
+    expect(out.get('A')!.approvals).toBe(5);
+    expect(out.get('B')!.approvals).toBe(0);
+  });
+});
+
+describe('slice-11 cross-mode fallback in rankCascade', () => {
+  it('a model with strong global but zero mode data is no longer treated as fully unknown', async () => {
+    // A: 10 approvals in fix mode, 0 rows in refactor mode → mode is empty,
+    // but global has 10 approvals.
+    // B: 10 rejections in fix mode, 0 rows in refactor → global has 10 rejections.
+    await seed([
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'A', criticVerdict: 'approve' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'B', criticVerdict: 'needs_revision' })),
+    ]);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 0 });
+    const refactorStats = byMode.get('refactor') ?? new Map<string, ModelStats>();
+    const globalStats = collapseByMode(byMode);
+    // Refactor stats are empty for both — without global, both are unknown
+    // (defaultScore) and the declared order would be preserved.
+    const declaredOrder = rankCascade(['B', 'A'], refactorStats);
+    expect(declaredOrder).toEqual(['B', 'A']);
+    // With global: A's strong fix-mode history bubbles up via the blend.
+    const blended = rankCascade(['B', 'A'], refactorStats, { globalStats });
+    expect(blended).toEqual(['A', 'B']);
+  });
+
+  it('strong in-mode signal still beats a weaker general signal (slice-9 isolation preserved)', async () => {
+    // A is great at fix, terrible at refactor (10/10 vs 0/10).
+    // B is the opposite. With cross-mode fallback enabled, mode signal
+    // should still dominate when both models have enough mode samples.
+    await seed([
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'A', criticVerdict: 'approve' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'B', criticVerdict: 'needs_revision' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'refactor', model: 'B', criticVerdict: 'approve' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'refactor', model: 'A', criticVerdict: 'needs_revision' })),
+    ]);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 0 });
+    const globalStats = collapseByMode(byMode);
+    const fixCascade = rankCascade(['B', 'A'], byMode.get('fix')!, { globalStats });
+    const refCascade = rankCascade(['A', 'B'], byMode.get('refactor')!, { globalStats });
+    expect(fixCascade).toEqual(['A', 'B']);
+    expect(refCascade).toEqual(['B', 'A']);
+  });
+
+  it('declared order is preserved when global is also empty', async () => {
+    // No telemetry at all — no file, no rows. Cascade should be unchanged.
+    const out = rankCascade(['A', 'B', 'C'], new Map(), { globalStats: new Map() });
+    expect(out).toEqual(['A', 'B', 'C']);
   });
 });

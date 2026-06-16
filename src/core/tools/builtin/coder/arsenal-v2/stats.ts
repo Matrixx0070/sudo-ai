@@ -213,6 +213,45 @@ function finalizeAverages(
   }
 }
 
+/**
+ * Collapse the slice-9 per-mode stats into a single all-modes-summed
+ * map. Slice 11 uses this as the "global" signal that `rankCascade`
+ * blends with the mode-specific signal when a model is sparse in the
+ * active mode but well-attested elsewhere.
+ *
+ * Counts and decay-weighted sums add directly. `avgDurationMs` becomes
+ * the attempt-weighted mean across modes. `lastSeen` is the max
+ * across modes.
+ */
+export function collapseByMode(
+  byMode: Map<string, Map<string, ModelStats>>,
+): Map<string, ModelStats> {
+  const out = new Map<string, ModelStats>();
+  for (const modelMap of byMode.values()) {
+    for (const [model, s] of modelMap) {
+      const agg = out.get(model);
+      if (!agg) {
+        // Defensive copy so callers can't mutate per-mode stats by reference.
+        out.set(model, { ...s });
+        continue;
+      }
+      // Attempt-weighted average of the durations BEFORE the counts merge,
+      // so the denominator below reflects the post-merge attempts total.
+      const sumDuration = agg.avgDurationMs * agg.attempts + s.avgDurationMs * s.attempts;
+      agg.attempts += s.attempts;
+      agg.approvals += s.approvals;
+      agg.rejections += s.rejections;
+      agg.errors += s.errors;
+      agg.successes += s.successes;
+      agg.weightedAttempts += s.weightedAttempts;
+      agg.weightedApprovals += s.weightedApprovals;
+      agg.avgDurationMs = agg.attempts > 0 ? Math.round(sumDuration / agg.attempts) : 0;
+      if (s.lastSeen > agg.lastSeen) agg.lastSeen = s.lastSeen;
+    }
+  }
+  return out;
+}
+
 export interface RankOptions {
   /** Minimum (raw integer) attempts before a model's score is used. Default 3. */
   minSamples?: number;
@@ -224,6 +263,21 @@ export interface RankOptions {
    * textbook 95% CI if you want a heavier penalty on low-n models.
    */
   z?: number;
+  /**
+   * Slice 11 — optional collapsed-across-modes stats. When provided, the
+   * score blends the mode-specific Wilson lower bound with the global
+   * Wilson lower bound, weighted by mode-specific sample count. Stops a
+   * model with strong fix-mode history from being treated as fully
+   * unknown for its first few refactor invocations.
+   */
+  globalStats?: Map<string, ModelStats>;
+  /**
+   * Slice 11 — shrinkage constant for the mode/global blend. With m
+   * mode samples, mode weight = m / (m + modeShrinkageK). Default 10:
+   * 0 mode samples → 100% global; 10 mode samples → 50/50; 30 mode
+   * samples → 75% mode-weighted.
+   */
+  modeShrinkageK?: number;
 }
 
 /**
@@ -248,14 +302,27 @@ export function rankCascade(
   const minSamples = opts.minSamples ?? 3;
   const defaultScore = opts.defaultScore ?? 0.5;
   const z = opts.z ?? DEFAULT_WILSON_Z;
+  const globalStats = opts.globalStats;
+  const k = opts.modeShrinkageK ?? 10;
 
   const scored = cascade.map((model, index) => {
-    const s = stats.get(model);
-    const isKnown = !!s && s.attempts >= minSamples;
-    const score = isKnown && s!.weightedAttempts > 0
-      ? wilsonLowerBound(s!.weightedApprovals, s!.weightedAttempts, z)
-      : defaultScore;
-    return { model, index, score, isKnown };
+    const sMode = stats.get(model);
+    const sGlobal = globalStats?.get(model);
+    // Total attempts seen anywhere — when global is provided that's the
+    // sum across all modes; otherwise fall back to the mode-only count
+    // (slice-10 semantics).
+    const totalAttempts = sGlobal?.attempts ?? sMode?.attempts ?? 0;
+    if (totalAttempts < minSamples) {
+      return { model, index, score: defaultScore };
+    }
+    const modeScore = sMode && sMode.weightedAttempts > 0
+      ? wilsonLowerBound(sMode.weightedApprovals, sMode.weightedAttempts, z)
+      : null;
+    const globalScore = sGlobal && sGlobal.weightedAttempts > 0
+      ? wilsonLowerBound(sGlobal.weightedApprovals, sGlobal.weightedAttempts, z)
+      : null;
+    const score = blendScores(modeScore, globalScore, sMode?.attempts ?? 0, k, defaultScore);
+    return { model, index, score };
   });
 
   // Stable sort by score desc, original index asc as tiebreaker. JS's
@@ -267,6 +334,38 @@ export function rankCascade(
   });
 
   return scored.map((s) => s.model);
+}
+
+/**
+ * Slice 11 — combine the mode-specific Wilson score with the global
+ * (collapsed-across-modes) Wilson score using a shrinkage weight.
+ *
+ *   w_mode = modeAttempts / (modeAttempts + k)
+ *   score  = w_mode * modeScore + (1 - w_mode) * globalScore
+ *
+ * Cases:
+ *   - both null         → defaultScore (caller should also have gated this)
+ *   - only modeScore    → modeScore   (no global signal available)
+ *   - only globalScore  → globalScore (no mode data — pure global)
+ *   - both present      → linear blend
+ *
+ * Exported for direct testing; production callers use it through
+ * {@link rankCascade}.
+ */
+export function blendScores(
+  modeScore: number | null,
+  globalScore: number | null,
+  modeAttempts: number,
+  k: number,
+  defaultScore: number,
+): number {
+  if (modeScore === null && globalScore === null) return defaultScore;
+  if (modeScore === null) return globalScore!;
+  if (globalScore === null) return modeScore;
+  const denom = modeAttempts + k;
+  if (denom <= 0) return globalScore; // pathological k — fall back to global
+  const wMode = modeAttempts / denom;
+  return wMode * modeScore + (1 - wMode) * globalScore;
 }
 
 /**
