@@ -60,12 +60,17 @@ export function writeIndex(indexPath: string, index: SessionIndex): void {
 
 /**
  * Find a single entry by sessionId within an already-loaded index.
+ * Matches against entry.id and entry.aliases (drift between SQLite primary
+ * and the journal-store is reconciled by recording the foreign id under
+ * aliases — see DualSessionManager.getOrCreate).
  */
 export function findEntry(
   index: SessionIndex,
   sessionId: string,
 ): SessionIndexEntry | undefined {
-  return index.entries.find((e) => e.id === sessionId);
+  return index.entries.find(
+    (e) => e.id === sessionId || (e.aliases?.includes(sessionId) ?? false),
+  );
 }
 
 /**
