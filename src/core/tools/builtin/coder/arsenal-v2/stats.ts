@@ -336,6 +336,13 @@ export interface EmpiricalSimilarityOptions {
    * before its (rate, rate) point contributes to Pearson. Default 3.
    */
   minPerModelSamples?: number;
+  /**
+   * Slice 14 — Fisher z-score for the Pearson CI lower bound. Default
+   * 1.0 (~84% CI), matching slice 10's Wilson calibration. Pass 1.96
+   * for the textbook 95% CI if you want a heavier penalty on low-n
+   * mode pairs.
+   */
+  z?: number;
 }
 
 export interface EmpiricalSimilarityResult {
@@ -368,6 +375,7 @@ export function computeEmpiricalSimilarity(
   opts: EmpiricalSimilarityOptions = {},
 ): EmpiricalSimilarityResult {
   const minPerModel = opts.minPerModelSamples ?? DEFAULT_EMPIRICAL_MIN_SAMPLES;
+  const z = opts.z ?? DEFAULT_WILSON_Z;
   const matrix: ModeSimilarityMatrix = {};
   const sharedCounts = new Map<string, Map<string, number>>();
   const modes = Array.from(byMode.keys());
@@ -393,9 +401,11 @@ export function computeEmpiricalSimilarity(
         rates2.push(s2.weightedApprovals / s2.weightedAttempts);
       }
       sharedRow.set(m2, rates1.length);
-      if (rates1.length < 2) continue;
-      const r = pearson(rates1, rates2);
-      if (r > 0) row[m2] = Math.min(1, r);
+      // Slice 14: pearsonLowerBound enforces n >= 4; below that it
+      // returns 0 and the entry is omitted, leaving the blend to fall
+      // back to the slice-12 prior.
+      const rLower = pearsonLowerBound(rates1, rates2, z);
+      if (rLower > 0) row[m2] = rLower;
     }
   }
   return { matrix, sharedCounts };
@@ -461,6 +471,42 @@ export function effectiveSimilarity(
 ): ModeSimilarityMatrix {
   const { matrix: empirical, sharedCounts } = computeEmpiricalSimilarity(byMode, opts);
   return blendSimilarity(empirical, defaults, sharedCounts, opts);
+}
+
+/**
+ * Slice 14 — Fisher-z lower bound of the 1-sided CI on a Pearson
+ * correlation. Stops "r = 0.9 from 3 shared models" contributing the
+ * same weight as "r = 0.9 from 30" in the slice-13 blend.
+ *
+ * Method:
+ *   1. Compute the raw point estimate r via {@link pearson}.
+ *   2. Apply Fisher z-transform: z_r = atanh(r) = ½·ln((1+r)/(1-r)).
+ *   3. Standard error: SE = 1 / √(n - 3). Requires n ≥ 4.
+ *   4. Lower bound on z: z_lower = z_r - z · SE  (z parameter, default 1.0).
+ *   5. Back-transform: r_lower = tanh(z_lower). Clamped to [0, 1].
+ *
+ * Edge cases:
+ *   - n < 4 → 0. Fisher SE diverges at n = 3; falling back to the
+ *     slice-12 hand-crafted prior via the blend is honest.
+ *   - r ≤ 0 → 0. The matrix is defined on [0, 1]; anti-correlation
+ *     carries no positive evidence.
+ *   - r ≥ 1 → 1. Perfect correlation: tanh(∞) = 1.
+ *
+ * Worked example (z = 1.0):
+ *   r = 0.9, n = 5    → r_lower ≈ 0.64    (large haircut)
+ *   r = 0.9, n = 100  → r_lower ≈ 0.88    (small haircut)
+ */
+export function pearsonLowerBound(xs: number[], ys: number[], z = DEFAULT_WILSON_Z): number {
+  if (xs.length < 4 || ys.length < 4) return 0;
+  const r = pearson(xs, ys);
+  if (!Number.isFinite(r) || r <= 0) return 0;
+  if (r >= 1) return 1;
+  const n = xs.length;
+  const zr = 0.5 * Math.log((1 + r) / (1 - r)); // atanh
+  const se = 1 / Math.sqrt(n - 3);
+  const zLower = zr - z * se;
+  const rLower = Math.tanh(zLower);
+  return Math.max(0, Math.min(1, rLower));
 }
 
 /**
