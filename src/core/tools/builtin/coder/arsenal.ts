@@ -29,6 +29,7 @@ import {
   readFileSync, writeFileSync, existsSync,
   mkdirSync, copyFileSync, statSync, lstatSync, renameSync, readdirSync, unlinkSync, mkdtempSync, realpathSync, rmSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -53,6 +54,7 @@ async function getCodeReviewTool() {
 }
 
 // Validate path is within project root (check symlinks and parent for new files)
+// Also validates no symlink components exist in the path chain (TOCTOU defense)
 function assertPathWithinRoot(abs: string): boolean {
   try {
     // For existing files/symlinks, resolve the real path
@@ -61,13 +63,32 @@ function assertPathWithinRoot(abs: string): boolean {
       const rel = path.relative(PROJECT_ROOT, real);
       return !rel.startsWith('..');
     }
-    // For non-existent files, check the parent directory's real path
+    // For non-existent files, check the parent directory and all path components
     const dir = path.dirname(abs);
     if (existsSync(dir)) {
       const realDir = realpathSync(dir);
       const rel = path.relative(PROJECT_ROOT, realDir);
-      return !rel.startsWith('..');
+      if (rel.startsWith('..')) return false;
     }
+
+    // TOCTOU defense: verify no symlink components exist in the path
+    // This prevents an attacker from swapping in a symlink between check and write
+    const components = abs.split(path.sep);
+    let current = '';
+    for (let i = 0; i < components.length - 1; i++) { // skip final component (target)
+      current = path.join(current || path.sep, components[i]);
+      if (current && existsSync(current)) {
+        try {
+          const stat = lstatSync(current);
+          if (stat.isSymbolicLink()) {
+            return false; // Reject if any path component is a symlink
+          }
+        } catch {
+          return false; // On error, reject for safety
+        }
+      }
+    }
+
     // Fallback: check the path itself against PROJECT_ROOT
     const rel = path.relative(PROJECT_ROOT, abs);
     return !rel.startsWith('..');
@@ -77,14 +98,11 @@ function assertPathWithinRoot(abs: string): boolean {
 }
 
 // Escape AI-protocol markers in file content to prevent prompt injection
+// Uses HTML entity encoding: <<< becomes &lt;&lt;&lt; which is safe from both
+// LLM interpretation (sees entity) and the parser (which only matches raw <<<)
 function escapeProtocolMarkers(content: string): string {
   return content
-    .replace(/<<<FILE:/g, '<\\<\\<FILE:')
-    .replace(/<<<END>>>/g, '<\\<\\<END>>>')
-    .replace(/<<<SUMMARY>>>/g, '<\\<\\<SUMMARY>>>')
-    .replace(/<<<REVIEW>>>/g, '<\\<\\<REVIEW>>>')
-    .replace(/<<<ANALYSIS>>>/g, '<\\<\\<ANALYSIS>>>')
-    .replace(/<<<EXPLANATION>>>/g, '<\\<\\<EXPLANATION>>>');
+    .replace(/</g, '&lt;');
 }
 
 // Rotate old backups (7+ days) to prevent unbounded directory growth
@@ -330,8 +348,8 @@ function createBackup(abs: string): void {
       logger.warn({ abs }, 'arsenal: backup skipped (path outside root)');
       return;
     }
-    // Add random suffix to prevent collision when multiple concurrent calls happen within same millisecond
-    const rand = Math.random().toString(36).slice(2, 10);
+    // Use cryptographic random suffix to prevent collision and poisoning attacks
+    const rand = randomBytes(4).toString('hex');
     const dest = path.join(BACKUP_DIR, `${Date.now()}_${rand}_${rel}`);
     if (existsSync(abs)) copyFileSync(abs, dest);
   } catch { /* non-fatal */ }
@@ -556,6 +574,14 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
       continue;
     }
 
+    // Reject relative path traversal (../), normalized form must have no .. segments
+    const normalized = path.normalize(filePath);
+    if (normalized.includes('..') || normalized.startsWith('/') || normalized.startsWith('\\')) {
+      pos = text.indexOf('<<<END>>>', startIdx) + 9;
+      if (pos - 9 === -1) break;
+      continue;
+    }
+
     const nlIdx = text.indexOf('\n', endFileIdx);
     if (nlIdx === -1) break; // malformed: no newline after >>>
     const contentStart = nlIdx + 1;
@@ -564,19 +590,33 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
 
     fileBlockRanges.push({ start: startIdx, end: contentEnd + 9 });
 
-    let content = text.substring(contentStart, contentEnd).trim();
+    // DON'T trim content — preserve whitespace-sensitive files (Makefiles, Python, etc)
+    // Only strip final trailing newline if present to match intent
+    let content = text.substring(contentStart, contentEnd);
+    if (content.endsWith('\n')) {
+      content = content.slice(0, -1);
+    }
     if (filePath && content) {
       edits.push({ filePath, content });
     }
     pos = contentEnd + 9;
   }
 
-  // Helper: check if position is inside a FILE block
+  // Helper: check if position is inside a FILE block using binary search O(log k)
   const isInFileBlock = (idx: number): boolean => {
-    return fileBlockRanges.some(range => idx >= range.start && idx < range.end);
+    // Binary search in sorted fileBlockRanges
+    let left = 0, right = fileBlockRanges.length - 1;
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      const range = fileBlockRanges[mid];
+      if (idx >= range.start && idx < range.end) return true;
+      if (idx < range.start) right = mid - 1;
+      else left = mid + 1;
+    }
+    return false;
   };
 
-  // Helper: find marker outside FILE blocks
+  // Helper: find marker outside FILE blocks, O(n log k) where n = response length, k = FILE count
   const findMarkerOutsideBlocks = (marker: string, startPos: number = 0): number => {
     let pos = startPos;
     while (true) {
