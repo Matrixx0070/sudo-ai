@@ -20,7 +20,7 @@
  */
 
 import { generateText, streamText } from 'ai';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ToolContext, ToolDefinition, ToolResult } from '../../../types.js';
@@ -93,16 +93,19 @@ interface AttemptRecord {
 function runTsc(): TscResult {
   if (!existsSync(TSC)) return { clean: true, errorCount: 0, summary: '(tsc not available — skipped)' };
   try {
-    execSync(`"${TSC}" --noEmit`, {
+    execFileSync(TSC, ['--noEmit'], {
       cwd: PROJECT_ROOT,
       encoding: 'utf-8',
       timeout: 90_000,
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 512 * 1024,
     });
     return { clean: true, errorCount: 0, summary: 'TypeScript: clean ✓' };
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string };
-    const raw = `${e.stdout ?? ''}\n${e.stderr ?? ''}`.trim();
+    let raw = `${e.stdout ?? ''}\n${e.stderr ?? ''}`.trim();
+    // Sanitize CRLF and ANSI escape codes to prevent injection into LLM prompt
+    raw = raw.replace(/\r\n/g, '\n').replace(/\x1B\[[0-9;]*m/g, '');
     const matches = raw.match(/error TS\d+/g);
     const count = matches?.length ?? 0;
     const firstTen = raw.split('\n').filter((l) => l.includes('error TS')).slice(0, 10);
@@ -235,9 +238,12 @@ export const arsenalV2Tool: ToolDefinition = {
       // similarity. Opt-out drops back to the slice-12 static matrix.
       const dataDrivenEnabled = process.env['SUDO_ARSENAL_V2_NO_DATA_SIMILARITY'] !== '1';
       const simShrinkageK = Number(process.env['SUDO_ARSENAL_V2_SIM_SHRINKAGE_K']);
+      const corrMethodRaw = process.env['SUDO_ARSENAL_V2_CORR_METHOD'];
+      const corrMethod = corrMethodRaw === 'spearman' ? 'spearman' : undefined; // anything else → default 'pearson'
       const simMatrix = dataDrivenEnabled
         ? effectiveSimilarity(byMode, baseMatrix, {
             shrinkageK: Number.isFinite(simShrinkageK) && simShrinkageK > 0 ? simShrinkageK : undefined,
+            method: corrMethod,
           })
         : baseMatrix;
       const globalStats = weightedCollapseByMode(byMode, mode, simMatrix);
@@ -455,6 +461,13 @@ export const arsenalV2Tool: ToolDefinition = {
         );
       }
 
+      // Check for unrecoverable drift: all operations were skipped due to file changes
+      // In this case, retrying won't help — the files don't match the LLM's plan anymore
+      if (applied === 0 && skipped > 0 && failed === 0 && parsed.ops.length > 0) {
+        loopAbortReason = `all_ops_skipped_drift_detected_on_attempt_${attemptIdx}`;
+        break;
+      }
+
       const retry = shouldRetry({
         criticVerdict: criticResult?.verdict ?? null,
         criticSkipped: criticResult?.skipped ?? true,
@@ -471,7 +484,7 @@ export const arsenalV2Tool: ToolDefinition = {
       try {
         reconResult = await recon(reconTask, { projectRoot: PROJECT_ROOT, searchRoot: PROJECT_ROOT });
       } catch (err) {
-        loopAbortReason = `recon_failed_on_attempt_${attemptIdx + 1}: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`;
+        loopAbortReason = `recon_failed_after_attempt_${attemptIdx}: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`;
         break;
       }
       const nextPrompt = buildUserPrompt(reconResult.payload, buildRetryAppendix(previousForPrompt));
@@ -534,6 +547,9 @@ export const arsenalV2Tool: ToolDefinition = {
         criticResult.verdict === 'approve' ? '✓' : criticResult.verdict === 'needs_revision' ? '⚠' : '✗';
       lines.push('## Critic');
       lines.push(`  Verdict: ${verdictGlyph} ${criticResult.verdict.toUpperCase()} (${criticResult.modelId})`);
+      if (criticResult.verdict === 'error') {
+        logger.warn({ model: criticResult.modelId }, 'critic verdict returned error — safety net bypassed, changes approved anyway');
+      }
       if (criticResult.critique) {
         for (const l of criticResult.critique.split('\n')) lines.push(`  ${l}`);
       }

@@ -428,7 +428,8 @@ export async function registerRoutes(
     }
     if (pathname === '/api/alignment') { sendJson(res, 200, server.getAlignment()); return; }
     if (pathname === '/api/activity') {
-      const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+      const limitRaw = parseInt(url.searchParams.get('limit') ?? '50', 10);
+      const limit = Math.max(1, Math.min(10000, Number.isFinite(limitRaw) ? limitRaw : 50));
       sendJson(res, 200, server.getRecentActivity(limit));
       return;
     }
@@ -451,10 +452,8 @@ export async function registerRoutes(
     }
     if (pathname === '/api/admin/logs') {
       const linesRaw = url.searchParams.get('lines');
-      // Default 200 mirrors LogRing's own DEFAULT_USER_LINES_REQUEST. parseInt
-      // returns NaN for non-numeric input; LogRing.tail() handles NaN by
-      // re-defaulting + clamping internally, so we don't need a separate guard.
-      const lines = linesRaw === null ? 200 : parseInt(linesRaw, 10);
+      const linesParsed = linesRaw === null ? 200 : parseInt(linesRaw, 10);
+      const lines = Math.max(1, Math.min(100000, Number.isFinite(linesParsed) ? linesParsed : 200));
       const result = server.getLogTail(actor, lines);
       if (!result.available) {
         sendJson(res, 503, result);
@@ -487,8 +486,9 @@ export async function registerRoutes(
         return;
       }
       const limitRaw = url.searchParams.get('limit');
-      const limit = limitRaw === null ? 50 : parseInt(limitRaw, 10);
-      const rows = queue.listForDevice(deviceId, Number.isFinite(limit) ? limit : 50);
+      const limitParsed = limitRaw === null ? 50 : parseInt(limitRaw, 10);
+      const limit = Math.max(1, Math.min(50000, Number.isFinite(limitParsed) ? limitParsed : 50));
+      const rows = queue.listForDevice(deviceId, limit);
       sendJson(res, 200, { deviceId, count: rows.length, commands: rows.map(projectCommand) });
       return;
     }
@@ -521,9 +521,10 @@ export async function registerRoutes(
         return;
       }
       const limitRaw = url.searchParams.get('limit');
-      const limit = limitRaw === null ? 100 : parseInt(limitRaw, 10);
+      const limitParsed = limitRaw === null ? 100 : parseInt(limitRaw, 10);
+      const limit = Math.max(1, Math.min(100000, Number.isFinite(limitParsed) ? limitParsed : 100));
       // Audit the read with non-secret metadata only (count, limit, actor).
-      const devices = registrar.list(Number.isFinite(limit) ? limit : 100);
+      const devices = registrar.list(limit);
       server.appendFleetReadAudit(actor, devices.length, Number.isFinite(limit) ? limit : 100);
       // metadata_json is an opaque JSON blob; parse defensively (a row from
       // an older slice could have a malformed value and we don't want a

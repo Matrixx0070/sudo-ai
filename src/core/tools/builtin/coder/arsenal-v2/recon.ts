@@ -25,7 +25,7 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 export interface ReconOptions {
@@ -61,6 +61,16 @@ const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', 'coverage', '__pycache__',
   '.next', '.nuxt', '.cache', '.turbo', '.parcel-cache', 'out',
 ]);
+
+function escapeProtocolMarkers(content: string): string {
+  return content
+    .replace(/<<<FILE:/g, '<\\<\\<FILE:')
+    .replace(/<<<END>>>/g, '<\\<\\<END>>>')
+    .replace(/<<<SUMMARY>>>/g, '<\\<\\<SUMMARY>>>')
+    .replace(/<<<REVIEW>>>/g, '<\\<\\<REVIEW>>>')
+    .replace(/<<<ANALYSIS>>>/g, '<\\<\\<ANALYSIS>>>')
+    .replace(/<<<EXPLANATION>>>/g, '<\\<\\<EXPLANATION>>>');
+}
 
 export interface ReconResult {
   /** Files chosen, in priority order. Relative to projectRoot. */
@@ -141,11 +151,15 @@ function rgRank(keywords: string[], searchRoot: string): string[] {
   // keywords rank higher.
   const fileScores = new Map<string, number>();
   for (const kw of keywords) {
-    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/"/g, '');
+    // Reject keywords starting with `-` to prevent rg flag injection (e.g., `--exec`)
+    if (kw.startsWith('-')) {
+      continue;
+    }
     let out = '';
     try {
-      out = execSync(
-        `rg -l --max-count=1 -g "*.ts" -g "*.tsx" -g "*.js" -g "*.jsx" -g "*.json" -g "*.md" "${escaped}" "${searchRoot}"`,
+      out = execFileSync(
+        'rg',
+        ['-l', '--max-count=1', '--fixed-strings', '-g', '*.ts', '-g', '*.tsx', '-g', '*.js', '-g', '*.jsx', '-g', '*.json', '-g', '*.md', kw, searchRoot],
         { encoding: 'utf-8', timeout: 8_000, stdio: ['ignore', 'pipe', 'pipe'] },
       );
     } catch {
@@ -216,7 +230,8 @@ function collect(
     let content: string;
     try { content = readFileSync(abs, 'utf-8'); } catch { continue; }
     const rel = path.relative(projectRoot, abs);
-    const chunk = `### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+    const escapedContent = escapeProtocolMarkers(content);
+    const chunk = `### ${rel}\n\`\`\`\n${escapedContent}\n\`\`\`\n\n`;
     if (totalBytes + chunk.length > maxTotalBytes) { truncationReason = 'max_total_bytes'; break; }
     parts.push(chunk);
     chosen.push(rel);

@@ -20,6 +20,8 @@ import {
   pearson,
   pearsonLowerBound,
   rankCascade,
+  spearman,
+  spearmanLowerBound,
   weightedCollapseByMode,
   wilsonLowerBound,
   type ModelStats,
@@ -1032,5 +1034,133 @@ describe('pearsonLowerBound (slice 14)', () => {
     const lo1 = pearsonLowerBound(xs, ys, 1.0); // ~84% CI
     const lo196 = pearsonLowerBound(xs, ys, 1.96); // 95% CI
     expect(lo196).toBeLessThan(lo1);
+  });
+});
+
+describe('spearman (slice 15)', () => {
+  it('returns 0 for length < 2 or length mismatch', () => {
+    expect(spearman([], [])).toBe(0);
+    expect(spearman([1], [1])).toBe(0);
+    expect(spearman([1, 2], [1])).toBe(0);
+  });
+
+  it('returns 1 for a perfectly monotonic relationship even when non-linear', () => {
+    // y = exp(x): non-linear but strictly monotonic. Pearson < 1; Spearman = 1.
+    const xs = [1, 2, 3, 4, 5];
+    const ys = xs.map((x) => Math.exp(x));
+    const p = pearson(xs, ys);
+    const s = spearman(xs, ys);
+    expect(p).toBeLessThan(0.99);
+    expect(s).toBeCloseTo(1, 5);
+  });
+
+  it('returns -1 for a perfectly monotonic-decreasing relationship', () => {
+    const xs = [1, 2, 3, 4, 5];
+    const ys = xs.map((x) => -Math.exp(x));
+    expect(spearman(xs, ys)).toBeCloseTo(-1, 5);
+  });
+
+  it('handles tied values with average ranks', () => {
+    // [3, 5, 5, 7] → ranks [1, 2.5, 2.5, 4]
+    const xs = [3, 5, 5, 7];
+    const ys = [10, 20, 20, 30];
+    expect(spearman(xs, ys)).toBeCloseTo(1, 5);
+  });
+
+  it('returns 0 when either vector has zero variance', () => {
+    expect(spearman([1, 1, 1, 1], [1, 2, 3, 4])).toBe(0);
+    expect(spearman([1, 2, 3, 4], [5, 5, 5, 5])).toBe(0);
+  });
+});
+
+describe('spearmanLowerBound (slice 15)', () => {
+  it('returns 0 for n < 4', () => {
+    expect(spearmanLowerBound([1, 2, 3], [1, 2, 3])).toBe(0);
+  });
+
+  it('returns 1 for a perfectly monotonic relationship', () => {
+    const xs = [0.1, 0.2, 0.3, 0.4, 0.5];
+    const ys = xs.map((x) => Math.exp(x));
+    expect(spearmanLowerBound(xs, ys)).toBe(1);
+  });
+
+  it('beats pearsonLowerBound on a monotonic non-linear relationship', () => {
+    // y = x^3: strictly monotonic, but Pearson on raw values is < 1.
+    const xs = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
+    const ys = xs.map((x) => x ** 3);
+    const p = pearsonLowerBound(xs, ys);
+    const s = spearmanLowerBound(xs, ys);
+    expect(s).toBeGreaterThan(p);
+  });
+
+  it('applies the same Fisher haircut shape as pearsonLowerBound', () => {
+    // On a strictly linear relationship, Pearson = Spearman = 1 (both
+    // produce 1.0 from the perfect-correlation early return).
+    const xs = [1, 2, 3, 4, 5];
+    const ys = [2, 4, 6, 8, 10];
+    expect(pearsonLowerBound(xs, ys)).toBe(1);
+    expect(spearmanLowerBound(xs, ys)).toBe(1);
+  });
+});
+
+describe('computeEmpiricalSimilarity — method dispatch (slice 15)', () => {
+  const mkS = (m: string, attempts: number, approvals: number): ModelStats => ({
+    model: m,
+    attempts,
+    approvals,
+    rejections: 0,
+    errors: 0,
+    successes: approvals,
+    avgDurationMs: 1000,
+    lastSeen: 100,
+    weightedAttempts: attempts,
+    weightedApprovals: approvals,
+  });
+
+  it('default method is pearson (slice-14 behavior preserved)', () => {
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    byMode.set('fix', new Map([
+      ['A', mkS('A', 10, 9)],
+      ['B', mkS('B', 10, 7)],
+      ['C', mkS('C', 10, 5)],
+      ['D', mkS('D', 10, 3)],
+      ['E', mkS('E', 10, 1)],
+    ]));
+    byMode.set('build', new Map([
+      ['A', mkS('A', 10, 8)],
+      ['B', mkS('B', 10, 7)],
+      ['C', mkS('C', 10, 5)],
+      ['D', mkS('D', 10, 4)],
+      ['E', mkS('E', 10, 2)],
+    ]));
+    const noOpt = computeEmpiricalSimilarity(byMode);
+    const pearsonOpt = computeEmpiricalSimilarity(byMode, { method: 'pearson' });
+    expect(noOpt.matrix.fix?.build).toBeCloseTo(pearsonOpt.matrix.fix?.build ?? 0, 5);
+  });
+
+  it('spearman picks up monotonic non-linear correlation where pearson is weaker', () => {
+    // Rates rank-correlated but with a non-linear shape — Spearman should
+    // produce a higher correlation than Pearson.
+    const byMode = new Map<string, Map<string, ModelStats>>();
+    const ratesFix = [0.95, 0.7, 0.5, 0.3, 0.05];
+    // Build rates: roughly the same ranks but with a different curve.
+    const ratesBuild = [0.99, 0.6, 0.55, 0.15, 0.01];
+    const models = ['A', 'B', 'C', 'D', 'E'];
+    const fixMap = new Map<string, ModelStats>();
+    const buildMap = new Map<string, ModelStats>();
+    models.forEach((m, i) => {
+      const approvalsFix = Math.round(ratesFix[i]! * 100);
+      const approvalsBuild = Math.round(ratesBuild[i]! * 100);
+      fixMap.set(m, mkS(m, 100, approvalsFix));
+      buildMap.set(m, mkS(m, 100, approvalsBuild));
+    });
+    byMode.set('fix', fixMap);
+    byMode.set('build', buildMap);
+
+    const pearsonR = computeEmpiricalSimilarity(byMode, { method: 'pearson' }).matrix.fix!.build!;
+    const spearmanR = computeEmpiricalSimilarity(byMode, { method: 'spearman' }).matrix.fix!.build!;
+    // Both should detect a positive correlation; Spearman should equal or
+    // exceed Pearson since the relationship is strictly rank-correlated.
+    expect(spearmanR).toBeGreaterThanOrEqual(pearsonR);
   });
 });

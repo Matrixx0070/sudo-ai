@@ -31,6 +31,7 @@ import {
   readSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -110,12 +111,29 @@ export function recordAttempt(record: TelemetryRecord, opts: RecordOptions): voi
   }
 
   // Slice 8: enforce the file size cap. Cheap stat → no read unless over.
+  // Use a lock file to prevent concurrent truncation race conditions
   const maxBytes = resolveCap(opts.maxBytes, env['SUDO_ARSENAL_V2_TELEMETRY_MAX_BYTES'], DEFAULT_MAX_BYTES);
   const retainBytes = opts.retainBytes ?? Math.floor(maxBytes * 0.7);
+  const lockPath = `${opts.path}.truncate-lock`;
   try {
     const size = statSync(opts.path).size;
     if (size > maxBytes) {
-      truncateToTail(opts.path, retainBytes);
+      // Attempt to acquire lock: if someone else holds it, skip truncation this time
+      // to avoid concurrent truncation race. Next append will try again.
+      try {
+        // Try to create lock file exclusively - only succeeds if no one else holds it
+        const fd = openSync(lockPath, 'wx');
+        closeSync(fd);
+        try {
+          truncateToTail(opts.path, retainBytes);
+        } finally {
+          // Always release lock, even if truncate fails - use unlinkSync to delete it
+          try { unlinkSync(lockPath); } catch { }
+        }
+      } catch (lockErr) {
+        // Another process holds the lock - skip truncation, try next time
+        logger.debug({ path: opts.path }, 'telemetry truncation skipped (locked)');
+      }
     }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);

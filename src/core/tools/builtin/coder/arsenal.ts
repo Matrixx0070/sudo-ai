@@ -27,11 +27,13 @@
 import { generateText } from 'ai';
 import {
   readFileSync, writeFileSync, existsSync,
-  mkdirSync, copyFileSync, statSync,
+  mkdirSync, copyFileSync, statSync, lstatSync, renameSync, readdirSync, unlinkSync, mkdtempSync, realpathSync, rmSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getModel } from '../../../brain/providers.js';
@@ -40,6 +42,94 @@ import { PROJECT_ROOT } from '../../../shared/paths.js';
 const logger = createLogger('coder.arsenal');
 const TSC = path.join(PROJECT_ROOT, 'node_modules/.bin/tsc');
 const BACKUP_DIR = path.join(PROJECT_ROOT, 'data', 'arsenal-backups');
+
+// Cache for code-review tool to avoid repeated dynamic imports
+let _codeReviewToolCache: typeof import('./code-review.js') | null = null;
+
+async function getCodeReviewTool() {
+  if (!_codeReviewToolCache) {
+    _codeReviewToolCache = await import('./code-review.js');
+  }
+  return _codeReviewToolCache;
+}
+
+// Validate path is within project root (check symlinks and parent for new files)
+// Also validates no symlink components exist in the path chain (TOCTOU defense)
+function assertPathWithinRoot(abs: string): boolean {
+  try {
+    // For existing files/symlinks, resolve the real path
+    if (existsSync(abs)) {
+      const real = realpathSync(abs);
+      const rel = path.relative(PROJECT_ROOT, real);
+      return !rel.startsWith('..');
+    }
+    // For non-existent files, check the parent directory and all path components
+    const dir = path.dirname(abs);
+    if (existsSync(dir)) {
+      const realDir = realpathSync(dir);
+      const rel = path.relative(PROJECT_ROOT, realDir);
+      if (rel.startsWith('..')) return false;
+    }
+
+    // TOCTOU defense: verify no symlink components exist in the path
+    // This prevents an attacker from swapping in a symlink between check and write
+    const parsed = path.parse(abs);
+    const components = abs.split(path.sep).filter(c => c); // Remove empty segments from leading/trailing slashes
+    let current = parsed.root; // Start from filesystem root (handles Windows drive correctly)
+
+    for (let i = 0; i < components.length - 1; i++) { // skip final component (target)
+      current = path.join(current, components[i]);
+      if (current && existsSync(current)) {
+        try {
+          const stat = lstatSync(current);
+          if (stat.isSymbolicLink()) {
+            return false; // Reject if any path component is a symlink
+          }
+        } catch {
+          return false; // On error, reject for safety
+        }
+      }
+    }
+
+    // Fallback: check the path itself against PROJECT_ROOT
+    const rel = path.relative(PROJECT_ROOT, abs);
+    return !rel.startsWith('..');
+  } catch {
+    return false; // Any error = reject
+  }
+}
+
+// Escape AI-protocol markers in file content to prevent prompt injection
+// Only escapes triple-angle-bracket markers (<<<FILE:, <<<SUMMARY>, etc.), not all <
+// Uses HTML entity encoding on the opening markers to prevent parser from matching them
+function escapeProtocolMarkers(content: string): string {
+  return content
+    .replace(/<<<(FILE:|SUMMARY|REVIEW|ANALYSIS|EXPLANATION|END)/g, '&lt;&lt;&lt;$1');
+}
+
+// Rotate old backups (7+ days) to prevent unbounded directory growth
+function rotateBackups(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): void {
+  if (!existsSync(BACKUP_DIR)) return;
+  try {
+    const now = Date.now();
+    const files = readdirSync(BACKUP_DIR);
+    for (const file of files) {
+      const filePath = path.join(BACKUP_DIR, file);
+      try {
+        const stat = lstatSync(filePath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          if (stat.isFile()) {
+            unlinkSync(filePath);
+          } else if (stat.isDirectory()) {
+            rmSync(filePath, { recursive: true, force: true });
+          }
+        }
+      } catch { /* skip if stat/delete fails */ }
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'arsenal: backup rotation failed');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Model cascade
@@ -258,7 +348,14 @@ function createBackup(abs: string): void {
   try {
     if (!existsSync(BACKUP_DIR)) mkdirSync(BACKUP_DIR, { recursive: true });
     const rel = path.relative(PROJECT_ROOT, abs).replace(/[\\/]/g, '__');
-    const dest = path.join(BACKUP_DIR, `${Date.now()}_${rel}`);
+    // Security: reject paths containing .. (outside PROJECT_ROOT)
+    if (rel.includes('..')) {
+      logger.warn({ abs }, 'arsenal: backup skipped (path outside root)');
+      return;
+    }
+    // Use cryptographic random suffix (8 bytes = 64-bit collision resistance) to prevent collision and poisoning attacks
+    const rand = randomBytes(8).toString('hex');
+    const dest = path.join(BACKUP_DIR, `${Date.now()}_${rand}_${rel}`);
     if (existsSync(abs)) copyFileSync(abs, dest);
   } catch { /* non-fatal */ }
 }
@@ -273,10 +370,13 @@ function resolveProjectPath(p: string): string {
 
 async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): Promise<string> {
   // 1. Extract keywords: split on non-word chars, filter short words, take top 10
-  const stopWords = new Set(['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'boy', 'did', 'its', 'let', 'put', 'say', 'she', 'too', 'use', 'fix', 'add', 'run', 'use', 'via', 'per', 'set']);
+  // Deduplicated stop words (removed duplicate 'its', 'use')
+  const stopWords = new Set(['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'boy', 'did', 'let', 'put', 'say', 'she', 'too', 'use', 'via', 'per', 'set', 'fix', 'add', 'run']);
   const keywords = task
     .split(/\W+/)
     .filter(w => w.length >= 4 && !stopWords.has(w.toLowerCase()))
+    .map(w => w.replace(/[^a-zA-Z0-9_-]/g, '')) // Sanitize: remove special chars to prevent DoS
+    .filter(w => w.length >= 4) // Re-filter after sanitization
     .slice(0, 10);
 
   // 2. Extract explicit file references from task
@@ -299,12 +399,20 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
     const rgResults = await Promise.allSettled(
       keywords.map(keyword => new Promise<string[]>((resolve) => {
         try {
-          const out = execSync(
-            `rg -l --max-count=1 -g "*.ts" -g "*.js" "${keyword.replace(/"/g, '')}" "${baseDir}"`,
-            { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] }
+          // Reject keywords starting with `-` to prevent rg flag injection (e.g., `--exec`)
+          if (keyword.startsWith('-')) {
+            resolve([]);
+            return;
+          }
+          const out = execFileSync(
+            'rg',
+            ['-l', '--max-count=1', '--fixed-strings', '-g', '*.ts', '-g', '*.js', keyword, baseDir],
+            { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024 }
           );
           resolve(out.trim().split('\n').filter(Boolean));
-        } catch {
+        } catch (err) {
+          // Silently skip failed searches — avoid leaking path structure in logs
+          logger.debug({ keyword, err: err instanceof Error ? err.message : String(err) }, 'arsenal: keyword search failed');
           resolve([]);
         }
       }))
@@ -335,7 +443,8 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
       if (s.size > 80_000) continue;
       const content = readFileSync(abs, 'utf-8');
       const rel = path.relative(PROJECT_ROOT, abs);
-      parts.push(`### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`);
+      const escapedContent = escapeProtocolMarkers(content);
+      parts.push(`### ${rel}\n\`\`\`\n${escapedContent}\n\`\`\`\n\n`);
     } catch { /* skip unreadable */ }
   }
 
@@ -350,6 +459,16 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
 
   async function walk(d: string): Promise<void> {
     if (totalBytes >= maxBytes) return;
+    // Prevent traversal into symlink directories (TOCTOU safety)
+    // Use lstatSync directly without existsSync pre-check to avoid race window
+    try {
+      const stat = lstatSync(d);
+      if (stat.isSymbolicLink()) return; // Skip symlink directories
+      if (!stat.isDirectory()) return; // Skip non-directories
+    } catch {
+      // lstatSync throws on missing directory or permission error — skip
+      return;
+    }
     let entries: string[];
     try { entries = await readdir(d); } catch { return; }
     for (const entry of entries.sort()) {
@@ -357,7 +476,8 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
       if (['node_modules', '.git', 'dist', 'build', '__pycache__', 'coverage'].includes(entry)) continue;
       const full = path.join(d, entry);
       let s;
-      try { s = statSync(full); } catch { continue; }
+      try { s = lstatSync(full); } catch { continue; }
+      if (s.isSymbolicLink()) continue; // Skip symlinks — block exfiltration
       if (s.isDirectory()) { await walk(full); continue; }
       const ext = path.extname(entry).toLowerCase();
       if (!['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json', '.yaml', '.yml', '.md'].includes(ext)) continue;
@@ -365,7 +485,10 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
       try {
         const content = readFileSync(full, 'utf-8');
         const rel = path.relative(PROJECT_ROOT, full);
-        const chunk = `### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+        const escapedContent = escapeProtocolMarkers(content);
+        const chunk = `### ${rel}\n\`\`\`\n${escapedContent}\n\`\`\`\n\n`;
+        // Pre-check: only append if it won't exceed the limit
+        if (totalBytes + chunk.length > maxBytes) break;
         parts.push(chunk);
         totalBytes += chunk.length;
       } catch { /* skip */ }
@@ -378,13 +501,27 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
 
 function readSpecificFiles(filePaths: string[]): string {
   const parts: string[] = [];
+  const maxFileSize = 80_000; // 80KB hard cap, same as collectSourceFiles
   for (const fp of filePaths) {
     const abs = resolveProjectPath(fp);
+
+    // Security: must be within project root (includes symlink resolution)
+    if (!assertPathWithinRoot(abs)) {
+      parts.push(`### ${path.basename(fp)}\n[ACCESS DENIED — outside project root]\n\n`);
+      continue;
+    }
+
     if (!existsSync(abs)) { parts.push(`### ${fp}\n[FILE NOT FOUND]\n\n`); continue; }
     try {
+      const stat = statSync(abs);
+      if (stat.size > maxFileSize) {
+        parts.push(`### ${fp}\n[FILE TOO LARGE: ${stat.size} bytes — skipped]\n\n`);
+        continue;
+      }
       const content = readFileSync(abs, 'utf-8');
-      const rel = path.relative(PROJECT_ROOT, abs);
-      parts.push(`### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`);
+      const relative = path.relative(PROJECT_ROOT, abs);
+      const escapedContent = escapeProtocolMarkers(content);
+      parts.push(`### ${relative}\n\`\`\`\n${escapedContent}\n\`\`\`\n\n`);
     } catch { parts.push(`### ${fp}\n[CANNOT READ]\n\n`); }
   }
   return parts.join('');
@@ -400,21 +537,27 @@ interface TscResult {
   summary: string;
 }
 
-function runTsc(): TscResult {
+function runTsc(workingDir: string = PROJECT_ROOT): TscResult {
   if (!existsSync(TSC)) return { clean: true, errorCount: 0, summary: '(tsc not available)' };
   try {
-    execSync(`"${TSC}" --noEmit`, {
-      cwd: PROJECT_ROOT, encoding: 'utf-8', timeout: 90_000,
+    // Use execFileSync to avoid shell interpolation of TSC path
+    execFileSync(TSC, ['--noEmit'], {
+      cwd: workingDir, encoding: 'utf-8', timeout: 90_000,
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 512 * 1024, // 512KB cap (output capped at 100KB anyway)
     });
     return { clean: true, errorCount: 0, summary: 'TypeScript: clean ✓' };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string };
-    const raw = ((e.stdout ?? '') + '\n' + (e.stderr ?? '')).trim();
-    const matches = raw.match(/error TS\d+/g);
+    let raw = ((e.stdout ?? '') + '\n' + (e.stderr ?? '')).trim();
+    // Sanitize CRLF and ANSI escape codes to prevent injection
+    raw = raw.replace(/\r\n/g, '\n').replace(/\x1B\[[0-9;]*m/g, '');
+    // Cap output length to prevent unbounded memory use
+    const rawCapped = raw.length > 100_000 ? raw.slice(0, 100_000) + '\n[... truncated]' : raw;
+    const matches = rawCapped.match(/error TS\d+/g);
     const count = matches?.length ?? 0;
     // Show first 10 errors
-    const lines = raw.split('\n').filter(l => l.includes('error TS')).slice(0, 10);
+    const lines = rawCapped.split('\n').filter(l => l.includes('error TS')).slice(0, 10);
     return { clean: false, errorCount: count, summary: `TypeScript: ${count} error(s)\n${lines.join('\n')}` };
   }
 }
@@ -435,34 +578,127 @@ function parseAIResponse(text: string): { edits: ParsedEdit[]; summary: string; 
   let analysis = '';
   let explanation = '';
 
-  // Extract FILE blocks
-  const fileRegex = /<<<FILE:\s*([^\n>]+)>>>\n([\s\S]*?)<<<END>>>/g;
-  let m: RegExpExecArray | null;
-  while ((m = fileRegex.exec(text)) !== null) {
-    const filePath = (m[1] ?? '').trim();
-    let content = (m[2] ?? '').trim();
-    // Strip markdown code fences if AI wrapped in ```
-    content = content.replace(/^```[^\n]*\n/, '').replace(/\n```$/, '');
+  // Track FILE block regions to avoid extracting markers inside file content
+  const fileBlockRanges: Array<{ start: number; end: number }> = [];
+
+  // Parse FILE blocks using indexOf (no ReDoS risk from lazy quantifiers)
+  let pos = 0;
+  while (true) {
+    const startIdx = text.indexOf('<<<FILE:', pos);
+    if (startIdx === -1) break;
+    const endFileIdx = text.indexOf('>>>', startIdx + 8);
+    if (endFileIdx === -1) break;
+    const filePath = text.substring(startIdx + 8, endFileIdx).trim();
+
+    // Validate filePath: reject empty, dot paths, absolute paths, or paths with null bytes
+    if (!filePath || filePath === '.' || filePath === '..' || /^\s*$/.test(filePath) || /^[/\\]/.test(filePath) || filePath.includes('\0')) {
+      // Find and skip to the end of this block
+      const blockEnd = text.indexOf('<<<END>>>', startIdx);
+      if (blockEnd === -1) {
+        // No closing marker - break to avoid infinite loop
+        break;
+      }
+      pos = blockEnd + 9;
+      continue;
+    }
+
+    // Reject relative path traversal (../), normalized form must have no .. segments
+    const normalized = path.normalize(filePath);
+    if (normalized.includes('..') || normalized.startsWith('/') || normalized.startsWith('\\')) {
+      // Find and skip to the end of this block
+      const blockEnd = text.indexOf('<<<END>>>', startIdx);
+      if (blockEnd === -1) {
+        // No closing marker - break to avoid infinite loop
+        break;
+      }
+      pos = blockEnd + 9;
+      continue;
+    }
+
+    const nlIdx = text.indexOf('\n', endFileIdx);
+    if (nlIdx === -1) break; // malformed: no newline after >>>
+    const contentStart = nlIdx + 1;
+    const contentEnd = text.indexOf('<<<END>>>', contentStart);
+    if (contentEnd === -1) {
+      // Malformed: no closing <<<END>>> found
+      // Break unconditionally to prevent infinite loop of re-parsing same malformed block
+      break;
+    }
+
+    fileBlockRanges.push({ start: startIdx, end: contentEnd + 9 });
+
+    // DON'T trim content — preserve whitespace-sensitive files (Makefiles, Python, etc)
+    // Only strip final trailing newline if present to match intent
+    let content = text.substring(contentStart, contentEnd);
+    if (content.endsWith('\n')) {
+      content = content.slice(0, -1);
+    }
     if (filePath && content) {
       edits.push({ filePath, content });
     }
+    pos = contentEnd + 9;
   }
 
+  // Helper: check if position is inside a FILE block using binary search O(log k)
+  const isInFileBlock = (idx: number): boolean => {
+    // Binary search in sorted fileBlockRanges
+    let left = 0, right = fileBlockRanges.length - 1;
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      const range = fileBlockRanges[mid];
+      if (idx >= range.start && idx < range.end) return true;
+      if (idx < range.start) right = mid - 1;
+      else left = mid + 1;
+    }
+    return false;
+  };
+
+  // Helper: find marker outside FILE blocks, O(n log k) where n = response length, k = FILE count
+  const findMarkerOutsideBlocks = (marker: string, startPos: number = 0): number => {
+    let pos = startPos;
+    while (true) {
+      const idx = text.indexOf(marker, pos);
+      if (idx === -1) return -1;
+      if (!isInFileBlock(idx)) return idx;
+      pos = idx + marker.length;
+    }
+  };
+
   // Extract SUMMARY block
-  const summaryMatch = text.match(/<<<SUMMARY>>>([\s\S]*?)<<<END>>>/);
-  if (summaryMatch) summary = (summaryMatch[1] ?? '').trim();
+  const summaryStart = findMarkerOutsideBlocks('<<<SUMMARY>>>');
+  if (summaryStart !== -1) {
+    const summaryEnd = findMarkerOutsideBlocks('<<<END>>>', summaryStart);
+    if (summaryEnd !== -1) {
+      summary = text.substring(summaryStart + 13, summaryEnd).trim();
+    }
+  }
 
   // Extract REVIEW block
-  const reviewMatch = text.match(/<<<REVIEW>>>([\s\S]*?)<<<END>>>/);
-  if (reviewMatch) review = (reviewMatch[1] ?? '').trim();
+  const reviewStart = findMarkerOutsideBlocks('<<<REVIEW>>>');
+  if (reviewStart !== -1) {
+    const reviewEnd = findMarkerOutsideBlocks('<<<END>>>', reviewStart);
+    if (reviewEnd !== -1) {
+      review = text.substring(reviewStart + 12, reviewEnd).trim();
+    }
+  }
 
   // Extract ANALYSIS block
-  const analysisMatch = text.match(/<<<ANALYSIS>>>([\s\S]*?)<<<END>>>/);
-  if (analysisMatch) analysis = (analysisMatch[1] ?? '').trim();
+  const analysisStart = findMarkerOutsideBlocks('<<<ANALYSIS>>>');
+  if (analysisStart !== -1) {
+    const analysisEnd = findMarkerOutsideBlocks('<<<END>>>', analysisStart);
+    if (analysisEnd !== -1) {
+      analysis = text.substring(analysisStart + 14, analysisEnd).trim();
+    }
+  }
 
   // Extract EXPLANATION block
-  const explanationMatch = text.match(/<<<EXPLANATION>>>([\s\S]*?)<<<END>>>/);
-  if (explanationMatch) explanation = (explanationMatch[1] ?? '').trim();
+  const explanationStart = findMarkerOutsideBlocks('<<<EXPLANATION>>>');
+  if (explanationStart !== -1) {
+    const explanationEnd = findMarkerOutsideBlocks('<<<END>>>', explanationStart);
+    if (explanationEnd !== -1) {
+      explanation = text.substring(explanationStart + 17, explanationEnd).trim();
+    }
+  }
 
   return { edits, summary, review, analysis, explanation };
 }
@@ -483,23 +719,113 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
   for (const edit of edits) {
     const abs = resolveProjectPath(edit.filePath);
 
-    // Security: must be within project root
-    if (!abs.startsWith(PROJECT_ROOT)) {
-      failed.push(`${edit.filePath} (path traversal blocked)`);
+    // Security: basic path validation before any filesystem operation
+    // Reject obvious traversals before attempting any write
+    const normalizedPath = path.normalize(edit.filePath);
+    if (normalizedPath.includes('..') || normalizedPath.startsWith('/') || normalizedPath.startsWith('\\')) {
+      failed.push(`${edit.filePath} (invalid path)`);
       continue;
     }
 
     try {
+      // CRITICAL PRE-WRITE GUARD: verify target path is within project root
+      // This runs BEFORE any write, backup, or mkdir — the authoritative check
+      if (!assertPathWithinRoot(abs)) {
+        throw new Error('Path validation failed: outside project root');
+      }
+
       // Create backup of existing file
       createBackup(abs);
-      // Ensure directory exists
+
+      // Ensure directory exists AND verify no symlinks in directory chain
       const dir = path.dirname(abs);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      // Write new content
-      writeFileSync(abs, edit.content, 'utf-8');
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+        // Re-verify after mkdir in case a TOCTOU symlink was inserted
+        if (!assertPathWithinRoot(abs)) {
+          throw new Error('Path validation failed after mkdir: possible symlink injection');
+        }
+      } else {
+        // Verify no symlink components in the directory path
+        const components = dir.split(path.sep);
+        let current = '';
+        for (let i = 0; i < components.length; i++) {
+          current = path.join(current || path.sep, components[i]);
+          if (current && existsSync(current)) {
+            try {
+              const stat = lstatSync(current);
+              if (stat.isSymbolicLink()) {
+                throw new Error(`Path component is symlink: ${current}`);
+              }
+            } catch (err) {
+              throw err;
+            }
+          }
+        }
+      }
+
+      // Write to temp file in TARGET DIRECTORY (not os.tmpdir) to ensure same filesystem
+      // This makes rename atomic and prevents EXDEV
+      const tmpPath = `${abs}.arsenal-${randomBytes(4).toString('hex')}.tmp`;
+      let renameSucceeded = false;
+
+      try {
+        writeFileSync(tmpPath, edit.content, 'utf-8');
+
+        // Atomic rename - kernel prevents symlink traversal
+        try {
+          renameSync(tmpPath, abs);
+          renameSucceeded = true;
+        } catch (renameErr: unknown) {
+          // If rename fails with EXDEV (different filesystem), use copy path
+          const e = renameErr as { code?: string; message?: string };
+          if (e.code === 'EXDEV') {
+            // For cross-filesystem: verify target isn't a symlink BEFORE copy
+            if (existsSync(abs)) {
+              try {
+                const stat = lstatSync(abs);
+                if (stat.isSymbolicLink()) {
+                  throw new Error('Target is symlink - refusing copy');
+                }
+              } catch (err) {
+                throw err;
+              }
+            }
+            // Copy and clean up tmp
+            copyFileSync(tmpPath, abs);
+            renameSucceeded = true;
+          } else {
+            throw renameErr;
+          }
+        }
+
+        // POST-WRITE VALIDATION: verify file is actually within root
+        // This happens AFTER the atomic operation completes
+        if (existsSync(abs)) {
+          try {
+            const realAbs = realpathSync(abs);
+            const rel = path.relative(PROJECT_ROOT, realAbs);
+            if (rel.startsWith('..')) {
+              // File ended up outside root - this is a security failure
+              // DO NOT delete abs here — the production file is now at abs.
+              // Instead, we log and throw; the caller should handle cleanup if needed.
+              throw new Error('SECURITY: File written outside project root (validation failed post-write)');
+            }
+          } catch (validateErr) {
+            throw validateErr;
+          }
+        }
+      } finally {
+        // Clean up temp file only if rename/copy did not succeed
+        // If rename/copy succeeded, tmpPath no longer exists and abs is the production file
+        if (!renameSucceeded) {
+          try { unlinkSync(tmpPath); } catch { }
+        }
+      }
+
       const rel = path.relative(PROJECT_ROOT, abs);
       applied.push(rel);
-      logger.info({ path: rel }, 'arsenal: file written');
+      logger.debug({ path: rel }, 'arsenal: file written');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       failed.push(`${edit.filePath}: ${msg}`);
@@ -571,21 +897,36 @@ export const arsenalTool: ToolDefinition = {
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-    const task       = typeof params['task']    === 'string' ? params['task'].trim()    : '';
+    // Cap task length and reject if it contains file markers (prompt injection defense)
+    const taskRaw = typeof params['task'] === 'string' ? params['task'].trim() : '';
+    const task = taskRaw.slice(0, 50_000);
+    if (!task) {
+      return { success: false, output: 'coder.arsenal: "task" is required.' };
+    }
+    if (task.includes('<<<FILE') || task.includes('<<<END>>>')) {
+      logger.warn({ taskLength: taskRaw.length }, 'arsenal: task rejected (contains file markers)');
+      return { success: false, output: 'coder.arsenal: task contains reserved markers.' };
+    }
+
     const mode       = typeof params['mode']    === 'string' ? params['mode'].trim()    : 'fix';
     const rawCode    = typeof params['code']    === 'string' ? params['code'].trim()    : '';
     const context    = typeof params['context'] === 'string' ? params['context'].trim() : '';
     const forcedModel= typeof params['model']   === 'string' ? params['model'].trim()   : '';
     const filesParam = Array.isArray(params['files']) ? (params['files'] as string[]) : [];
 
+    // Validate forcedModel: alphanumeric, dashes, underscores, slashes, dots only; max 200 chars
+    const ALLOWED_MODEL_PATTERN = /^[a-zA-Z0-9\-_.\/]+$/;
+    if (forcedModel && (!ALLOWED_MODEL_PATTERN.test(forcedModel) || forcedModel.length > 200)) {
+      return { success: false, output: 'coder.arsenal: invalid model identifier.' };
+    }
+
     // Default: apply edits for mutating modes, not for read-only modes
     const readOnlyModes = new Set(['review', 'analyze', 'explain']);
     const defaultApply = !readOnlyModes.has(mode);
     const shouldApply = typeof params['applyEdits'] === 'boolean' ? params['applyEdits'] : defaultApply;
 
-    if (!task) {
-      return { success: false, output: 'coder.arsenal: "task" is required.' };
-    }
+    // Rotate old backups once per session
+    rotateBackups();
 
     logger.info({ session: ctx.sessionId, mode, files: filesParam.length, forcedModel }, 'coder.arsenal invoked');
 
@@ -601,6 +942,11 @@ export const arsenalTool: ToolDefinition = {
       const parts: string[] = [];
       for (const fp of filesParam) {
         const abs = resolveProjectPath(fp);
+        // Security: reject paths outside project root (prevents exfiltration)
+        if (!assertPathWithinRoot(abs)) {
+          parts.push(`[Access denied: ${fp} (outside project root)]\n`);
+          continue;
+        }
         if (!existsSync(abs)) { parts.push(`[Not found: ${fp}]\n`); continue; }
         const s = statSync(abs);
         if (s.isDirectory()) {
@@ -615,16 +961,23 @@ export const arsenalTool: ToolDefinition = {
     // ---- STEP 2: Baseline typecheck (for mutating modes) ----
     let baselineTsc: TscResult | null = null;
     if (shouldApply && ['fix', 'build', 'refactor', 'test'].includes(mode)) {
-      baselineTsc = runTsc();
+      baselineTsc = runTsc(ctx.workingDir);
       logger.info({ errors: baselineTsc.errorCount }, 'arsenal: baseline tsc');
     }
 
     // ---- STEP 3: Build AI prompt ----
     const systemPrompt = SYSTEM_PROMPTS[mode] ?? SYSTEM_PROMPTS['fix']!;
 
+    // Sanitize context to prevent prompt injection
+    const sanitizedContext = context
+      ? context
+          .replace(/<<<(FILE|SUMMARY|REVIEW|ANALYSIS|EXPLANATION|END)/g, '[REDACTED]')
+          .replace(/SYSTEM:/g, '[REDACTED]')
+      : '';
+
     const userPrompt = [
       `TASK: ${task}`,
-      context ? `\nADDITIONAL CONTEXT:\n${context}` : '',
+      sanitizedContext ? `\nADDITIONAL CONTEXT:\n${sanitizedContext}` : '',
       baselineTsc && !baselineTsc.clean
         ? `\nBASELINE STATE: ${baselineTsc.errorCount} TypeScript errors exist before your changes.`
         : '',
@@ -633,7 +986,7 @@ export const arsenalTool: ToolDefinition = {
 
     // ---- STEP 4: Call AI with cascade ----
     const cascade = forcedModel
-      ? [{ model: forcedModel, label: forcedModel }, ...MODEL_CASCADE]
+      ? [{ model: forcedModel, label: forcedModel }, ...MODEL_CASCADE.filter(m => m.model !== forcedModel)]
       : MODEL_CASCADE;
 
     const errors: string[] = [];
@@ -643,6 +996,10 @@ export const arsenalTool: ToolDefinition = {
     for (const option of cascade) {
       try {
         const model = getModel(option.model);
+        if (!model) {
+          errors.push(`${option.label}: model not configured`);
+          continue;
+        }
         logger.info({ model: option.model, mode }, 'arsenal: trying model');
 
         const result = await generateText({
@@ -694,7 +1051,7 @@ export const arsenalTool: ToolDefinition = {
       logger.info({ applied: applyResult.applied.length, failed: applyResult.failed.length }, 'arsenal: edits applied');
 
       // Re-run typecheck after edits
-      afterTsc = runTsc();
+      afterTsc = runTsc(ctx.workingDir);
       logger.info({ errors: afterTsc.errorCount }, 'arsenal: post-edit tsc');
     }
 
@@ -703,22 +1060,26 @@ export const arsenalTool: ToolDefinition = {
     let autoReviewFindings = '';
     if (shouldApply && applyResult.applied.length > 0 && ['fix', 'build', 'refactor'].includes(mode)) {
       try {
-        const { codeReviewTool } = await import('./code-review.js');
+        const { codeReviewTool } = await getCodeReviewTool();
         const reviewCtx = { sessionId: ctx.sessionId, logger: logger };
         // Review each changed TS file for critical/high findings
         const tsFiles = applyResult.applied.filter(f => f.endsWith('.ts') || f.endsWith('.tsx'));
         if (tsFiles.length > 0) {
-          const reviewResult = await codeReviewTool.execute(
-            { path: tsFiles[0]!, focus: 'security' },
-            reviewCtx as typeof ctx,
-          );
-          if (reviewResult.success && reviewResult.output && !reviewResult.output.includes('No issues found')) {
-            // Only surface critical/high findings
-            const lines = reviewResult.output.split('\n');
-            const critical = lines.filter(l => l.includes('CRITICAL') || l.includes('HIGH'));
-            if (critical.length > 0) {
-              autoReviewFindings = `\n## Auto-Verification (Security)\n${critical.slice(0, 5).join('\n')}\n⚠ Fix these before deploying.`;
+          const allFindings: string[] = [];
+          // Review ALL modified TS files, not just the first
+          for (const file of tsFiles) {
+            const reviewResult = await codeReviewTool.execute(
+              { path: file, focus: 'security' },
+              reviewCtx as typeof ctx,
+            );
+            if (reviewResult.success && reviewResult.output && !reviewResult.output.includes('No issues found')) {
+              const lines = reviewResult.output.split('\n');
+              const critical = lines.filter(l => l.includes('CRITICAL') || l.includes('HIGH'));
+              allFindings.push(...critical);
             }
+          }
+          if (allFindings.length > 0) {
+            autoReviewFindings = `\n## Auto-Verification (Security)\n${allFindings.slice(0, 10).join('\n')}\n⚠ Fix these before deploying.`;
           }
         }
       } catch { /* non-fatal — don't let review failure break the main flow */ }
@@ -812,14 +1173,23 @@ export const arsenalTool: ToolDefinition = {
  * Stub ctx for direct use (PROJECT_ROOT guard preserved).
  */
 export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
+  // Security: sanitize task — reject prompt-injection markers
+  if (task.includes('<<<') || task.includes('>>>') || task.includes('SYSTEM:')) {
+    logger.warn({ task }, 'KAIROS: task rejected (contains injection markers)');
+    return { success: false, output: 'error: task contains invalid markers' };
+  }
+
   // KAIROS self-repair hook. Real dry-run call (applyEdits:false) to avoid side effects in background tick.
   // Matches "as before" verified patterns (sim + guards); uses internal execute for full pipeline (recon/baseline/AI/verify).
   logger.info({ task, mode }, 'KAIROS requested arsenal self-repair (dry-run wired)');
   try {
-    // Minimal ctx (session/logger only; full ToolContext not required for read-only dry).
-    // Partial stub asserted through unknown: execute() does not touch the missing fields
-    // on the applyEdits:false path.
-    const ctx = { sessionId: 'kairos-self-repair', logger } as unknown as ToolContext;
+    // Full ToolContext with all required fields
+    const ctx: ToolContext = {
+      sessionId: 'kairos-self-repair',
+      workingDir: PROJECT_ROOT,
+      config: {} as unknown,
+      logger,
+    };
     const result = await arsenalTool.execute({ task, mode, applyEdits: false }, ctx);
     return { success: !!result.success, output: String(result.output || '').slice(0, 300) };
   } catch (e) {
