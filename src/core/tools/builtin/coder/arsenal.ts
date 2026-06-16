@@ -41,6 +41,16 @@ const logger = createLogger('coder.arsenal');
 const TSC = path.join(PROJECT_ROOT, 'node_modules/.bin/tsc');
 const BACKUP_DIR = path.join(PROJECT_ROOT, 'data', 'arsenal-backups');
 
+// Cache for code-review tool to avoid repeated dynamic imports
+let _codeReviewToolCache: typeof import('./code-review.js') | null = null;
+
+async function getCodeReviewTool() {
+  if (!_codeReviewToolCache) {
+    _codeReviewToolCache = await import('./code-review.js');
+  }
+  return _codeReviewToolCache;
+}
+
 // ---------------------------------------------------------------------------
 // Model cascade
 // ---------------------------------------------------------------------------
@@ -418,11 +428,11 @@ interface TscResult {
   summary: string;
 }
 
-function runTsc(): TscResult {
+function runTsc(workingDir: string = PROJECT_ROOT): TscResult {
   if (!existsSync(TSC)) return { clean: true, errorCount: 0, summary: '(tsc not available)' };
   try {
     execSync(`"${TSC}" --noEmit`, {
-      cwd: PROJECT_ROOT, encoding: 'utf-8', timeout: 90_000,
+      cwd: workingDir, encoding: 'utf-8', timeout: 90_000,
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 5 * 1024 * 1024, // 5MB cap on output
     });
@@ -666,7 +676,7 @@ export const arsenalTool: ToolDefinition = {
     // ---- STEP 2: Baseline typecheck (for mutating modes) ----
     let baselineTsc: TscResult | null = null;
     if (shouldApply && ['fix', 'build', 'refactor', 'test'].includes(mode)) {
-      baselineTsc = runTsc();
+      baselineTsc = runTsc(ctx.workingDir);
       logger.info({ errors: baselineTsc.errorCount }, 'arsenal: baseline tsc');
     }
 
@@ -691,7 +701,7 @@ export const arsenalTool: ToolDefinition = {
 
     // ---- STEP 4: Call AI with cascade ----
     const cascade = forcedModel
-      ? [{ model: forcedModel, label: forcedModel }, ...MODEL_CASCADE]
+      ? [{ model: forcedModel, label: forcedModel }, ...MODEL_CASCADE.filter(m => m.model !== forcedModel)]
       : MODEL_CASCADE;
 
     const errors: string[] = [];
@@ -752,7 +762,7 @@ export const arsenalTool: ToolDefinition = {
       logger.info({ applied: applyResult.applied.length, failed: applyResult.failed.length }, 'arsenal: edits applied');
 
       // Re-run typecheck after edits
-      afterTsc = runTsc();
+      afterTsc = runTsc(ctx.workingDir);
       logger.info({ errors: afterTsc.errorCount }, 'arsenal: post-edit tsc');
     }
 
@@ -761,22 +771,26 @@ export const arsenalTool: ToolDefinition = {
     let autoReviewFindings = '';
     if (shouldApply && applyResult.applied.length > 0 && ['fix', 'build', 'refactor'].includes(mode)) {
       try {
-        const { codeReviewTool } = await import('./code-review.js');
+        const { codeReviewTool } = await getCodeReviewTool();
         const reviewCtx = { sessionId: ctx.sessionId, logger: logger };
         // Review each changed TS file for critical/high findings
         const tsFiles = applyResult.applied.filter(f => f.endsWith('.ts') || f.endsWith('.tsx'));
         if (tsFiles.length > 0) {
-          const reviewResult = await codeReviewTool.execute(
-            { path: tsFiles[0]!, focus: 'security' },
-            reviewCtx as typeof ctx,
-          );
-          if (reviewResult.success && reviewResult.output && !reviewResult.output.includes('No issues found')) {
-            // Only surface critical/high findings
-            const lines = reviewResult.output.split('\n');
-            const critical = lines.filter(l => l.includes('CRITICAL') || l.includes('HIGH'));
-            if (critical.length > 0) {
-              autoReviewFindings = `\n## Auto-Verification (Security)\n${critical.slice(0, 5).join('\n')}\n⚠ Fix these before deploying.`;
+          const allFindings: string[] = [];
+          // Review ALL modified TS files, not just the first
+          for (const file of tsFiles) {
+            const reviewResult = await codeReviewTool.execute(
+              { path: file, focus: 'security' },
+              reviewCtx as typeof ctx,
+            );
+            if (reviewResult.success && reviewResult.output && !reviewResult.output.includes('No issues found')) {
+              const lines = reviewResult.output.split('\n');
+              const critical = lines.filter(l => l.includes('CRITICAL') || l.includes('HIGH'));
+              allFindings.push(...critical);
             }
+          }
+          if (allFindings.length > 0) {
+            autoReviewFindings = `\n## Auto-Verification (Security)\n${allFindings.slice(0, 10).join('\n')}\n⚠ Fix these before deploying.`;
           }
         }
       } catch { /* non-fatal — don't let review failure break the main flow */ }
