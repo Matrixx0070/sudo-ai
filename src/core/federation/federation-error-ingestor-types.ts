@@ -13,6 +13,17 @@ export interface FederationErrorReport {
   sessionId?: string;
   phase?: string;
   meta?: Record<string, unknown>;
+  /**
+   * Milliseconds-since-epoch. Required so this type structurally matches the
+   * wire-side `FederationErrorReport` in `gateway/federation-error-types.ts`
+   * — the gateway's `FederationErrorRoutesDeps` declares `queryReports(): ...[]`
+   * to return rows that carry a `timestamp`, and the response handler returns
+   * those rows straight to HTTP clients. The ingestor currently overrides
+   * the wire-supplied value on read with the server-receipt time
+   * (`new Date(created_at).getTime()`) — the wire value is peer-clock-derived and
+   * untrusted; server-receipt time is what an admin viewer actually wants.
+   */
+  timestamp: number;
 }
 
 export interface FederationErrorIngestResult {

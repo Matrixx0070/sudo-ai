@@ -215,6 +215,11 @@ export class FederationErrorIngestor {
         meta: row.meta ? JSON.parse(row.meta) : undefined,
         githubIssueNumber: row.github_issue_number ?? undefined,
         deduplicated: row.deduplicated === 1,
+        // Server-receipt time. The wire-supplied timestamp is intentionally
+        // not persisted (peer clocks are untrusted) — created_at is set
+        // server-side at ingestReport call time and is the truthful
+        // first-seen-at marker an admin viewer should see.
+        timestamp: new Date(row.created_at).getTime(),
       }));
     } catch (err) {
       log.warn({ err: String(err) }, 'Failed to query reports');

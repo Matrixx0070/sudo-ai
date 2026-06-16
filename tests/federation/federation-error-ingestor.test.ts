@@ -93,6 +93,7 @@ function makeReport(overrides?: Partial<FederationErrorReport>): FederationError
     sessionId: 'sesn-001',
     phase: 'tool-execution',
     meta: { extra: 'data' },
+    timestamp: Date.now(),
     ...overrides,
   };
 }
@@ -614,6 +615,45 @@ describe('FederationErrorIngestor — multiple dedup', () => {
 
     // GitHub search only called once (for first report)
     expect(mockGithubIssues.searchIssues).toHaveBeenCalledTimes(1);
+
+    ingestor.destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FED-ERR-21: queryReports emits timestamp (ms-epoch from server-receipt time)
+// ---------------------------------------------------------------------------
+
+describe('FederationErrorIngestor — queryReports timestamp contract', () => {
+  it('FED-ERR-21: each returned row carries a finite ms-epoch timestamp derived from created_at', async () => {
+    const { db, mockGithubIssues } = createMockDeps();
+    const ingestor = new FederationErrorIngestor({
+      errorReporter: { capture: vi.fn(), normalizeSignature: vi.fn() },
+      githubIssues: mockGithubIssues,
+      db,
+    });
+
+    const beforeMs = Date.now();
+    await ingestor.ingestReport(makeReport());
+    const afterMs = Date.now();
+
+    const reports = ingestor.queryReports();
+    expect(reports).toHaveLength(1);
+
+    const row = reports[0]!;
+    expect(typeof row.timestamp).toBe('number');
+    expect(Number.isFinite(row.timestamp)).toBe(true);
+
+    // Server-receipt time, not the wire-supplied value: the fixture's
+    // timestamp is Date.now() at fixture-build time but the ingestor
+    // overrides on read with the parsed created_at it stamped on insert.
+    // Both ingestReport and queryReports run within the before/after
+    // window, so the emitted timestamp must fall inside it. No jitter
+    // slack — Date.now() and new Date().toISOString() share the same
+    // V8 monotonic clock and the round-trip through ISO 8601 is
+    // millisecond-exact.
+    expect(row.timestamp).toBeGreaterThanOrEqual(beforeMs);
+    expect(row.timestamp).toBeLessThanOrEqual(afterMs);
 
     ingestor.destroy();
   });
