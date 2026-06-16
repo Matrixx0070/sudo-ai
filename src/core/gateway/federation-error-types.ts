@@ -20,6 +20,28 @@ export interface FederationErrorReport {
   meta?: Record<string, unknown>;
 }
 
+/**
+ * Stored row shape — what `errorIngestor.queryReports()` returns and what
+ * `GET /v1/admin/federation/error-reports` emits over the wire. Extends the
+ * submission-side {@link FederationErrorReport} with server-set fields the
+ * ingestor stamps at persistence time. Declared on the gateway side so this
+ * file owns the wire contract without importing ingestor internals.
+ *
+ * Mirrors the structural shape the live `FederationErrorIngestor` in
+ * `core/federation/federation-error-ingestor-types.ts`
+ * (`FederationErrorReportStored`) emits — the duplication is intentional:
+ * the gateway is the public boundary and should not depend on ingestor types.
+ */
+export interface FederationErrorReportRow extends FederationErrorReport {
+  /** UUID assigned by the ingestor at insert time. */
+  id: string;
+  /** Linked GitHub issue number, when one was created or commented on. */
+  githubIssueNumber?: number;
+  /** True when the same peer/signature combination collapsed onto an
+   *  existing row within the 24h dedup window. */
+  deduplicated: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Fix Notify — admin broadcasts fix to peers
 // ---------------------------------------------------------------------------
@@ -52,7 +74,7 @@ export interface FederationTokenContribution {
 export interface FederationErrorRoutesDeps {
   errorIngestor: {
     ingestReport(report: FederationErrorReport): Promise<{ reportId: string; githubIssueNumber?: number; deduplicated: boolean }>;
-    queryReports(opts: { peerId?: string; signature?: string; limit?: number }): FederationErrorReport[];
+    queryReports(opts: { peerId?: string; signature?: string; limit?: number }): FederationErrorReportRow[];
   };
   tokenPool: {
     contributeToken(contribution: FederationTokenContribution): Promise<{ id: string; success: boolean; error?: string }>;
