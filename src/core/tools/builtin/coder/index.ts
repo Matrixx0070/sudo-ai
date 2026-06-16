@@ -42,6 +42,7 @@ import { scaffoldTool } from './project-scaffold.js';
 import { codeReviewTool } from './code-review.js';
 import { analyzeCodeTool } from './analyze.js';
 import { arsenalTool } from './arsenal.js';
+import { arsenalV2Tool } from './arsenal-v2/index.js';
 import { testRunnerTool } from './test-runner.js';
 import { debuggerTool } from './debugger.js';
 import { swarmTool } from './swarm.js';
@@ -67,6 +68,7 @@ export const CODER_TOOLS = [
   codeReviewTool,
   analyzeCodeTool,
   arsenalTool,
+  arsenalV2Tool,
   testRunnerTool,
   debuggerTool,
   swarmTool,
@@ -102,6 +104,7 @@ export {
   codeReviewTool,
   analyzeCodeTool,
   arsenalTool,
+  arsenalV2Tool,
   testRunnerTool,
   debuggerTool,
   swarmTool,
