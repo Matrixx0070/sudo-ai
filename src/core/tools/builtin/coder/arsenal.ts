@@ -27,7 +27,7 @@
 import { generateText } from 'ai';
 import {
   readFileSync, writeFileSync, existsSync,
-  mkdirSync, copyFileSync, statSync, lstatSync, renameSync, readdirSync, unlinkSync, mkdtempSync, realpathSync,
+  mkdirSync, copyFileSync, statSync, lstatSync, renameSync, readdirSync, unlinkSync, mkdtempSync, realpathSync, rmSync,
 } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
@@ -616,8 +616,8 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
         writeFileSync(tmpPath, edit.content, 'utf-8');
         renameSync(tmpPath, abs);
       } finally {
-        // Clean up temp directory
-        try { unlinkSync(tmpPath); } catch { }
+        // Clean up temp directory (not tmpPath — it's been renamed to abs)
+        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { }
       }
 
       const rel = path.relative(PROJECT_ROOT, abs);
