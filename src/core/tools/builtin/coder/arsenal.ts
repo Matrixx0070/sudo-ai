@@ -310,7 +310,9 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
             { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] }
           );
           resolve(out.trim().split('\n').filter(Boolean));
-        } catch {
+        } catch (err) {
+          // Silently skip failed searches — avoid leaking path structure in logs
+          logger.debug({ keyword, err: err instanceof Error ? err.message : String(err) }, 'arsenal: keyword search failed');
           resolve([]);
         }
       }))
@@ -373,6 +375,8 @@ async function collectSourceFiles(dir: string, maxBytes = 600_000): Promise<stri
         const content = readFileSync(full, 'utf-8');
         const rel = path.relative(PROJECT_ROOT, full);
         const chunk = `### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+        // Pre-check: only append if it won't exceed the limit
+        if (totalBytes + chunk.length > maxBytes) break;
         parts.push(chunk);
         totalBytes += chunk.length;
       } catch { /* skip */ }
@@ -420,15 +424,18 @@ function runTsc(): TscResult {
     execSync(`"${TSC}" --noEmit`, {
       cwd: PROJECT_ROOT, encoding: 'utf-8', timeout: 90_000,
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 5 * 1024 * 1024, // 5MB cap on output
     });
     return { clean: true, errorCount: 0, summary: 'TypeScript: clean ✓' };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string };
     const raw = ((e.stdout ?? '') + '\n' + (e.stderr ?? '')).trim();
-    const matches = raw.match(/error TS\d+/g);
+    // Cap output length to prevent unbounded memory use
+    const rawCapped = raw.length > 100_000 ? raw.slice(0, 100_000) + '\n[... truncated]' : raw;
+    const matches = rawCapped.match(/error TS\d+/g);
     const count = matches?.length ?? 0;
     // Show first 10 errors
-    const lines = raw.split('\n').filter(l => l.includes('error TS')).slice(0, 10);
+    const lines = rawCapped.split('\n').filter(l => l.includes('error TS')).slice(0, 10);
     return { clean: false, errorCount: count, summary: `TypeScript: ${count} error(s)\n${lines.join('\n')}` };
   }
 }
