@@ -1085,12 +1085,18 @@ describe('spearmanLowerBound (slice 15)', () => {
   });
 
   it('beats pearsonLowerBound on a monotonic non-linear relationship', () => {
-    // y = x^3: strictly monotonic, but Pearson on raw values is < 1.
-    const xs = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
-    const ys = xs.map((x) => x ** 3);
+    // y ≈ x^3 with the last two points swapped, so Spearman r < 1
+    // (the rank-mismatch on the swapped pair) AND Pearson r < 1 (the
+    // raw values are non-linear AND non-monotonic on that tail). This
+    // exercises the SE multiplier — the perfect y = x^3 sample would
+    // short-circuit Spearman to 1 via the r ≥ 1 early return, making
+    // the comparison vacuous regardless of multiplier.
+    const xs = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+    const ys = [0.001, 0.008, 0.027, 0.064, 0.125, 0.216, 0.512, 0.343];
     const p = pearsonLowerBound(xs, ys);
     const s = spearmanLowerBound(xs, ys);
     expect(s).toBeGreaterThan(p);
+    expect(s).toBeLessThan(1); // confirms SE path was actually taken
   });
 
   it('applies the same Fisher haircut shape as pearsonLowerBound', () => {
@@ -1100,6 +1106,52 @@ describe('spearmanLowerBound (slice 15)', () => {
     const ys = [2, 4, 6, 8, 10];
     expect(pearsonLowerBound(xs, ys)).toBe(1);
     expect(spearmanLowerBound(xs, ys)).toBe(1);
+  });
+});
+
+describe('spearmanLowerBound — exact SE multiplier (slice 16)', () => {
+  it('applies a wider SE than pearsonLowerBound on the same r', () => {
+    // xs, ys are already ranks (small ints, no ties), so the underlying
+    // r is identical for Pearson and Spearman: pearson(xs, ys) ===
+    // spearman(xs, ys). The only difference between the two lower bounds
+    // is the SE multiplier (1 vs 1.06), so Spearman's must be strictly
+    // smaller.
+    const xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const ys = [1, 2, 3, 4, 5, 7, 6, 8, 9, 10]; // single adjacent swap
+    const p = pearsonLowerBound(xs, ys);
+    const s = spearmanLowerBound(xs, ys);
+    expect(p).toBeGreaterThan(s);
+    // Direction-only check: the exact multiplier is pinned to 10 decimals
+    // by the identity test below; here we only assert "wider SE → smaller
+    // lower bound".
+    expect(p - s).toBeGreaterThan(0);
+  });
+
+  it('matches the identity spearmanLowerBound(z) == pearsonLowerBound(z * 1.06)', () => {
+    // Slice 16 inflates the Fisher SE by exactly 1.06 for Spearman, so
+    // for the same xs, ys (ranks → same r) the Spearman lower bound at
+    // confidence z must equal the Pearson lower bound at confidence
+    // z * 1.06. This pins the exact multiplier rather than asserting a
+    // direction.
+    const xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const ys = [1, 2, 3, 4, 5, 7, 6, 8, 9, 10];
+    const z = 1.0;
+    expect(spearmanLowerBound(xs, ys, z)).toBeCloseTo(
+      pearsonLowerBound(xs, ys, z * 1.06),
+      10,
+    );
+  });
+
+  it('still early-returns 1 for perfect monotonic data (multiplier irrelevant)', () => {
+    // r = 1 short-circuits before SE is applied, so the 1.06 multiplier
+    // never participates — the slice 15 contract on perfect data holds.
+    const xs = [0.1, 0.2, 0.3, 0.4, 0.5];
+    const ys = xs.map((x) => Math.exp(x));
+    expect(spearmanLowerBound(xs, ys)).toBe(1);
+  });
+
+  it('still returns 0 for n < 4 (multiplier irrelevant)', () => {
+    expect(spearmanLowerBound([1, 2, 3], [1, 2, 3])).toBe(0);
   });
 });
 

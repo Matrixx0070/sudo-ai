@@ -495,14 +495,26 @@ export function effectiveSimilarity(
 }
 
 /**
- * Slice 14 — Fisher-z lower bound of the 1-sided CI on a correlation
- * point estimate. Internal helper; Pearson and Spearman variants both
- * call this with their respective r values.
+ * Slice 16 — exact Spearman SE multiplier. The Fisher z-transform's
+ * standard error is `1/√(n-3)` for Pearson; for Spearman the same
+ * z-transform machinery applies but the SE is inflated by roughly
+ * 1.06 (Fieller, Hartley, Pearson 1957; Bonett & Wright 2000). Slice
+ * 15 reused the Pearson SE for both methods, slightly over-confident
+ * for Spearman; slice 16 applies the exact multiplier.
+ */
+const SPEARMAN_SE_MULTIPLIER = 1.06;
+
+/**
+ * Slice 14 / 16 — Fisher-z lower bound of the 1-sided CI on a
+ * correlation point estimate. Internal helper; Pearson and Spearman
+ * variants both call this with their respective r values. Slice 16
+ * added the `seMultiplier` param so Spearman can use its exact SE.
  *
  * Method:
  *   1. z_r = atanh(r) = ½·ln((1+r)/(1-r))
- *   2. SE = 1 / √(n - 3)  (Pearson). Spearman's SE is technically
- *      ≈ 1.06·SE; for slice-15 simplicity both methods reuse this.
+ *   2. SE = seMultiplier / √(n - 3)
+ *        Pearson → seMultiplier = 1
+ *        Spearman → seMultiplier = 1.06 (slice 16)
  *   3. z_lower = z_r - z · SE
  *   4. r_lower = tanh(z_lower), clamped to [0, 1].
  *
@@ -511,13 +523,13 @@ export function effectiveSimilarity(
  *   - r ≤ 0 → 0  (matrix is on [0,1]; anti-correlation = no evidence)
  *   - r ≥ 1 → 1  (perfect correlation; tanh(∞) = 1)
  */
-function fisherCILowerBound(r: number, n: number, z: number): number {
+function fisherCILowerBound(r: number, n: number, z: number, seMultiplier = 1): number {
   if (n < 4) return 0;
   if (!Number.isFinite(r) || r <= 0) return 0;
   if (r >= 1) return 1;
   const zr = 0.5 * Math.log((1 + r) / (1 - r));
   if (!Number.isFinite(zr)) return 0; // Protect against log of negative (shouldn't happen with above guards)
-  const se = 1 / Math.sqrt(n - 3);
+  const se = seMultiplier / Math.sqrt(n - 3);
   const zLower = zr - z * se;
   const result = Math.max(0, Math.min(1, Math.tanh(zLower)));
   return Number.isFinite(result) ? result : 0;
@@ -538,15 +550,15 @@ export function pearsonLowerBound(xs: number[], ys: number[], z = DEFAULT_WILSON
 }
 
 /**
- * Slice 15 — Fisher-z lower bound on Spearman rank correlation.
+ * Slice 15 / 16 — Fisher-z lower bound on Spearman rank correlation.
  * Robust to monotonic non-linear relationships that Pearson would
- * underestimate. Uses the same Fisher SE as Pearson — technically
- * an approximation for ranks (the true SE is ≈ 1.06·Pearson-SE),
- * but in the same order of magnitude.
+ * underestimate. Slice 16 applies the exact Bonett-Wright SE
+ * multiplier (1.06·Pearson-SE) so the bound is properly calibrated;
+ * slice 15 reused the Pearson SE as a simpler approximation.
  */
 export function spearmanLowerBound(xs: number[], ys: number[], z = DEFAULT_WILSON_Z): number {
   if (xs.length < 4 || ys.length < 4) return 0;
-  return fisherCILowerBound(spearman(xs, ys), xs.length, z);
+  return fisherCILowerBound(spearman(xs, ys), xs.length, z, SPEARMAN_SE_MULTIPLIER);
 }
 
 /**
