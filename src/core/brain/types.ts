@@ -97,7 +97,7 @@ export interface BrainRequest {
   /** Max tokens to generate. */
   maxTokens?: number;
   /** Vercel AI SDK-compatible tool schema objects. */
-  tools?: object[];
+  tools?: import('../tools/types.js').ToolSchema[];
   /** Whether to use streaming mode. */
   stream?: boolean;
   /**

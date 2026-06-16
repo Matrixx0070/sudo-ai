@@ -15,6 +15,7 @@ import type {
   ChatCompletionChunk,
 } from './types.js';
 import type { BrainMessage } from '../brain/types.js';
+import type { ToolSchema } from '../tools/types.js';
 
 const log = createLogger('api:handlers');
 
@@ -98,7 +99,7 @@ export async function handleNonStreaming(
       model: body.model,
       temperature: body.temperature,
       maxTokens: body.max_tokens,
-      tools: body.tools as object[] | undefined,
+      tools: body.tools as ToolSchema[] | undefined,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -177,7 +178,7 @@ export async function handleStreaming(
       model: body.model,
       temperature: body.temperature,
       maxTokens: body.max_tokens,
-      tools: body.tools as object[] | undefined,
+      tools: body.tools as ToolSchema[] | undefined,
     })) {
       sendChunk({ content: chunk }, null);
     }

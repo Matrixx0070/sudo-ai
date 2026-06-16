@@ -72,7 +72,7 @@ export interface MCPToolDef {
   name: string;
   description: string;
   /** JSON Schema for the tool's input. */
-  inputSchema: object;
+  inputSchema: Record<string, unknown>;
   /** ID of the MCP server that provides this tool. */
   serverId: string;
   /** Whether this tool is currently enabled (for filtering). */
@@ -382,7 +382,7 @@ export class MCPAdapter {
     this._assertConnected();
 
     const result = await this._rpc('tools/list', {}) as {
-      tools?: Array<{ name: string; description?: string; inputSchema?: object }>;
+      tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
     };
 
     const rawTools = Array.isArray(result?.tools) ? result.tools : [];
@@ -957,7 +957,7 @@ export class HTTPMCPAdapter {
       const data = JSON.parse(bodyText) as {
         jsonrpc: string;
         id: number;
-        result?: { tools?: Array<{ name: string; description?: string; inputSchema?: object }> };
+        result?: { tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> };
         error?: { code: number; message: string };
       };
 

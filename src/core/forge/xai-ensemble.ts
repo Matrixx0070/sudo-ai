@@ -76,7 +76,12 @@ export class XaiEnsemble {
     if (!model) {
       throw new Error(`Unrecognised role: ${role}`);
     }
-    const body: any = {
+    const body: {
+      model: string;
+      messages: ChatMessage[];
+      temperature?: number;
+      max_tokens?: number;
+    } = {
       model,
       messages,
     };
@@ -92,7 +97,7 @@ export class XaiEnsemble {
     };
     const url = 'https://api.x.ai/v1/chat/completions';
     let attempt = 0;
-    let lastError: any;
+    let lastError: unknown;
     while (attempt < 3) {
       try {
         const response = await fetch(url, {
@@ -129,7 +134,7 @@ export class XaiEnsemble {
           });
         }
         return typeof choice === 'string' ? choice : JSON.stringify(choice);
-      } catch (err: any) {
+      } catch (err: unknown) {
         lastError = err;
         // For transient network or server errors, apply exponential backoff.
         const delayMs = Math.pow(2, attempt) * 1000;
@@ -137,6 +142,7 @@ export class XaiEnsemble {
         attempt++;
       }
     }
-    throw new Error(`Failed to call xAI model after retries: ${lastError}`);
+    const lastErrorMessage = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`Failed to call xAI model after retries: ${lastErrorMessage}`);
   }
 }

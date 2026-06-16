@@ -87,18 +87,23 @@ export class AutoOptimizer {
     if (!topic?.trim()) throw new Error('topic is required');
     logger.info({ topic }, 'generateBlueprint called');
 
-    const decisions: ContentDecision[] = [];
-
-    decisions.push(await this.decide('hook_type',
-      ['curiosity', 'shock', 'how-to', 'story', 'challenge', 'question']));
-    decisions.push(await this.decide('thumbnail_style',
-      ['face-reaction', 'text-heavy', 'minimal', 'split-screen', 'collage']));
-    decisions.push(await this.decide('duration_bucket',
-      ['short (<5m)', 'medium (5-10m)', 'long (10-20m)', 'deep-dive (>20m)']));
-    decisions.push(await this.decide('posting_time',
-      ['morning (6-9am)', 'midday (11am-1pm)', 'evening (5-8pm)', 'night (9pm+)']));
-    decisions.push(await this.decide('music_mood',
-      ['energetic', 'calm', 'suspenseful', 'uplifting', 'dark', 'neutral']));
+    // Capture each decide() return directly. Previously this used a
+    // decisions[] array followed by 5 `.find(d => d.dimension === '...')!`
+    // calls — the non-null assertions were sound (decide() always tags
+    // its return with the input dimension) but encoded a brittle
+    // rename-and-crash invariant. Direct assignment removes the assertions
+    // while keeping the same call order and `decisions` array contents.
+    const hookDec = await this.decide('hook_type',
+      ['curiosity', 'shock', 'how-to', 'story', 'challenge', 'question']);
+    const thumbDec = await this.decide('thumbnail_style',
+      ['face-reaction', 'text-heavy', 'minimal', 'split-screen', 'collage']);
+    const durDec = await this.decide('duration_bucket',
+      ['short (<5m)', 'medium (5-10m)', 'long (10-20m)', 'deep-dive (>20m)']);
+    const timeDec = await this.decide('posting_time',
+      ['morning (6-9am)', 'midday (11am-1pm)', 'evening (5-8pm)', 'night (9pm+)']);
+    const moodDec = await this.decide('music_mood',
+      ['energetic', 'calm', 'suspenseful', 'uplifting', 'dark', 'neutral']);
+    const decisions: ContentDecision[] = [hookDec, thumbDec, durDec, timeDec, moodDec];
 
     const durationMap: Record<string, number> = {
       'short (<5m)': 4, 'medium (5-10m)': 8,
@@ -116,12 +121,6 @@ export class AutoOptimizer {
       ctr: Math.round(((perfRow?.avg_ctr ?? 0) * 1.1) * 10000) / 10000,
       retention: Math.round(((perfRow?.avg_ret ?? 0) * 1.05) * 100) / 100,
     };
-
-    const hookDec = decisions.find(d => d.dimension === 'hook_type')!;
-    const thumbDec = decisions.find(d => d.dimension === 'thumbnail_style')!;
-    const durDec = decisions.find(d => d.dimension === 'duration_bucket')!;
-    const timeDec = decisions.find(d => d.dimension === 'posting_time')!;
-    const moodDec = decisions.find(d => d.dimension === 'music_mood')!;
 
     const blueprint: ContentBlueprint = {
       topic,

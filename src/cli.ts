@@ -908,9 +908,9 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   let federationDeps: import('./core/gateway/federation-routes.js').FederationRoutesDeps | undefined;
   // Federation Error Protocol (hoisted for later init)
-  let federationErrorIngestor: any;
-  let federationTokenPool: any;
-  let peerRegistryForAuth: any;
+  let federationErrorIngestor: import('./core/federation/federation-error-ingestor.js').FederationErrorIngestor | undefined;
+  let federationTokenPool: import('./core/federation/federation-token-pool.js').FederationTokenPool | undefined;
+  let peerRegistryForAuth: import('./core/federation/peer-registry.js').PeerRegistry | undefined;
   try {
     const dataDir64h = process.env['DATA_DIR'];
     if (dataDir64h) {
@@ -3320,7 +3320,23 @@ async function boot(): Promise<void> {
         reanchorMonitor,
         autoThresholdTuner,
         federation: federationDeps,
-        errorIngestor: federationErrorIngestor,
+        // Pre-existing structural gap (masked by `any` until T4):
+        //   - gateway/federation-error-types.FederationErrorReport requires
+        //     `timestamp: number` and is what FederationErrorRoutesDeps's
+        //     queryReports() declares as its return-element shape.
+        //   - federation/federation-error-ingestor-types.FederationErrorReport
+        //     (the ingestor's own base) has NO `timestamp` field; its
+        //     `FederationErrorReportStored` extension adds id/
+        //     githubIssueNumber/deduplicated but still no `timestamp`. The
+        //     live FederationErrorIngestor.queryReports() row map (federation-
+        //     error-ingestor.ts:205-218) does NOT emit a `timestamp` either,
+        //     even though the DB row has `created_at`.
+        // Net runtime impact: the /v1/admin/federation/error-reports response
+        // body lacks `timestamp` despite the gateway type promising one — a
+        // consumer-visible gap that existed before T4 and remains after.
+        // Structural alignment (map created_at → timestamp epoch, declare it
+        // on the stored type) is its own slice.
+        errorIngestor: federationErrorIngestor as unknown as import('./core/gateway/federation-error-types.js').FederationErrorRoutesDeps['errorIngestor'] | undefined,
         tokenPool: federationTokenPool,
         fedAuth: peerRegistryForAuth?.isInboundTokenValid?.bind(peerRegistryForAuth),
         alignmentAutoRemediator,
