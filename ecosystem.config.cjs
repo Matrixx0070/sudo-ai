@@ -107,6 +107,14 @@ module.exports = {
         // Autonomous mode: all tools auto-approved (kill-switch: set to '0' to re-enable approval gates)
         SUDO_AUTO_APPROVE: '1',
 
+        // Bash allowlist fast-path: ApprovalManager auto-approves a strict
+        // allowlist of read-only commands (ls, pwd, cat, grep, git status/log/diff, ...)
+        // without consulting the policy store or sending a confirmation prompt.
+        // Defense-in-depth: DANGEROUS_PREFIXES still runs BEFORE the fast-path;
+        // the metachar veto (no ;&|<>`$()"') rejects chaining/substitution/redirection/quotes.
+        // Kill-switch: SUDO_BASH_ALLOWLIST_FASTPATH=0 disables.
+        SUDO_BASH_ALLOWLIST_FASTPATH: process.env['SUDO_BASH_ALLOWLIST_FASTPATH'] || '1',
+
         // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
         SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
         SUDO_UPDATE_CHANNEL: process.env['SUDO_UPDATE_CHANNEL'] || 'latest',
@@ -189,6 +197,10 @@ module.exports = {
 
         // Autonomous mode: all tools auto-approved (kill-switch: set to '0' to re-enable approval gates)
         SUDO_AUTO_APPROVE: '1',
+
+        // Bash allowlist fast-path (see prod block for full rationale).
+        // Enabled on staging so any UX regression surfaces here before prod.
+        SUDO_BASH_ALLOWLIST_FASTPATH: process.env['SUDO_BASH_ALLOWLIST_FASTPATH'] || '1',
 
         // Kill-switch: enables tool.synthesize pipeline (bwrap sandbox + AST analysis).
         // MUST remain staging-only — never copy to apps[0] production env block.
