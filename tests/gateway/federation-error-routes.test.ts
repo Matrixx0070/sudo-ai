@@ -41,13 +41,15 @@
  *   FED-ERR-36  POST /token-contribute — non-printable ASCII token rejected
  *   FED-ERR-37  POST /token-contribute — peerId too long rejected
  *   FED-ERR-38  Rate limiter cleanup — old entries evicted
+ *   FED-ERR-39  POST /token-contribute — ollama provider accepted
+ *   FED-ERR-40  GET /error-reports — response rows carry server-set id + deduplicated fields (Stored shape)
  */
 
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import http from 'node:http';
 import { registerFederationErrorRoutes, type FederationErrorRoutesDeps } from '../../src/core/gateway/federation-error-routes.js';
 import { clearRateLimitMap } from '../../src/core/gateway/federation-error-helpers.js';
-import type { FederationErrorReport, FederationTokenContribution } from '../../src/core/gateway/federation-error-types.js';
+import type { FederationErrorReport, FederationErrorReportRow, FederationTokenContribution } from '../../src/core/gateway/federation-error-types.js';
 import type { AddressInfo } from 'node:net';
 
 // ---------------------------------------------------------------------------
@@ -72,7 +74,7 @@ function makeFederationAuth(federationToken: string): (req: any) => boolean {
 function makeMockDeps(opts?: {
   ingestResult?: { reportId: string; githubIssueNumber?: number; deduplicated: boolean };
   tokenResult?: { id: string; success: boolean };
-  reports?: FederationErrorReport[];
+  reports?: FederationErrorReportRow[];
   tokens?: Array<{ id: string; peerId: string; provider: string; active: boolean; createdAt: string }>;
 }): FederationErrorRoutesDeps {
   const ingestResult = opts?.ingestResult ?? { reportId: 'rpt_123', deduplicated: false };
@@ -437,20 +439,24 @@ describe('GET /v1/federation/error-reports', () => {
   let deps: FederationErrorRoutesDeps;
 
   beforeEach(() => {
-    const sampleReports: FederationErrorReport[] = [
+    const sampleReports: FederationErrorReportRow[] = [
       {
+        id: 'rpt_1',
         errorSignature: 'Error1',
         botVersion: '1.0.0',
         peerId: 'peer-1',
         timestamp: Date.now(),
         severity: 'HIGH',
+        deduplicated: false,
       },
       {
+        id: 'rpt_2',
         errorSignature: 'Error2',
         botVersion: '1.0.0',
         peerId: 'peer-2',
         timestamp: Date.now(),
         severity: 'MEDIUM',
+        deduplicated: false,
       },
     ];
     deps = makeMockDeps({ reports: sampleReports });
@@ -483,6 +489,23 @@ describe('GET /v1/federation/error-reports', () => {
     const { status } = await doGet(`${ts.baseUrl}/v1/federation/error-reports?limit=1`, ADMIN_TOKEN);
     expect(status).toBe(200);
     expect(deps.errorIngestor.queryReports).toHaveBeenCalledWith({ limit: 1, peerId: undefined, signature: undefined });
+  });
+
+  it('FED-ERR-40: response rows carry server-set id + deduplicated fields (Stored shape)', async () => {
+    ts = await startServer(deps, makeAdminTokenBuf());
+    const { status, json } = await doGet(`${ts.baseUrl}/v1/federation/error-reports`, ADMIN_TOKEN);
+    expect(status).toBe(200);
+    const body = json as { ok: boolean; data: { reports: FederationErrorReportRow[]; count: number } };
+    expect(body.data.reports).toHaveLength(2);
+
+    // Server-set fields the FederationErrorReportRow type declares but the
+    // base FederationErrorReport (submission shape) does not — these used
+    // to flow through sanitizeReport's spread to clients undeclared. The
+    // route contract now pins them.
+    expect(body.data.reports[0]!.id).toBe('rpt_1');
+    expect(body.data.reports[1]!.id).toBe('rpt_2');
+    expect(body.data.reports[0]!.deduplicated).toBe(false);
+    expect(body.data.reports[1]!.deduplicated).toBe(false);
   });
 });
 
@@ -617,14 +640,16 @@ describe('Security: Data leakage prevention', () => {
   let deps: FederationErrorRoutesDeps;
 
   beforeEach(() => {
-    const sampleReports: FederationErrorReport[] = [
+    const sampleReports: FederationErrorReportRow[] = [
       {
+        id: 'rpt_sec_1',
         errorSignature: 'Error1',
         botVersion: '1.0.0',
         peerId: 'peer-1',
         timestamp: Date.now(),
         severity: 'HIGH',
         sessionId: 'sensitive-session-123',
+        deduplicated: false,
         meta: {
           customField: 'value',
           apiToken: 'sk-secret-123',
@@ -633,12 +658,14 @@ describe('Security: Data leakage prevention', () => {
         },
       },
       {
+        id: 'rpt_sec_2',
         errorSignature: 'Error2',
         botVersion: '1.0.0',
         peerId: 'peer-2',
         timestamp: Date.now(),
         severity: 'MEDIUM',
         sessionId: 'another-session-456',
+        deduplicated: false,
       },
     ];
     deps = makeMockDeps({ reports: sampleReports });

@@ -7,7 +7,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
-import type { FederationErrorRoutesDeps, FederationErrorReport } from './federation-error-types.js';
+import type { FederationErrorRoutesDeps, FederationErrorReportRow } from './federation-error-types.js';
 import {
   sendJson,
   sendError,
@@ -249,7 +249,7 @@ function redactMeta(meta: Record<string, unknown> | undefined): Record<string, u
 /**
  * Sanitize report for public response (redact sessionId and sensitive meta).
  */
-function sanitizeReport(report: FederationErrorReport): FederationErrorReport {
+function sanitizeReport(report: FederationErrorReportRow): FederationErrorReportRow {
   return {
     ...report,
     sessionId: report.sessionId !== undefined ? '***' : undefined,
