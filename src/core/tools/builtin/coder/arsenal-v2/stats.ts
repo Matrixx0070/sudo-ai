@@ -330,19 +330,29 @@ const DEFAULT_EMPIRICAL_MIN_SAMPLES = 3;
 /** Default shrinkage constant for the empirical vs hand-crafted blend. */
 const DEFAULT_SIM_BLEND_K = 5;
 
+export type CorrelationMethod = 'pearson' | 'spearman';
+
 export interface EmpiricalSimilarityOptions {
   /**
    * Minimum (raw integer) attempts a model needs in BOTH modes of a pair
-   * before its (rate, rate) point contributes to Pearson. Default 3.
+   * before its (rate, rate) point contributes to the correlation. Default 3.
    */
   minPerModelSamples?: number;
   /**
-   * Slice 14 — Fisher z-score for the Pearson CI lower bound. Default
-   * 1.0 (~84% CI), matching slice 10's Wilson calibration. Pass 1.96
-   * for the textbook 95% CI if you want a heavier penalty on low-n
-   * mode pairs.
+   * Slice 14 — Fisher z-score for the CI lower bound. Default 1.0
+   * (~84% CI), matching slice 10's Wilson calibration. Pass 1.96 for
+   * the textbook 95% CI if you want a heavier penalty on low-n mode
+   * pairs.
    */
   z?: number;
+  /**
+   * Slice 15 — choice of correlation. `'pearson'` (default) measures
+   * linear correlation between approval rates. `'spearman'` measures
+   * monotonic correlation — robust when the relationship between
+   * modes is non-linear (e.g., model strengths rank-correlate but the
+   * rates aren't linearly proportional).
+   */
+  method?: CorrelationMethod;
 }
 
 export interface EmpiricalSimilarityResult {
@@ -376,6 +386,8 @@ export function computeEmpiricalSimilarity(
 ): EmpiricalSimilarityResult {
   const minPerModel = opts.minPerModelSamples ?? DEFAULT_EMPIRICAL_MIN_SAMPLES;
   const z = opts.z ?? DEFAULT_WILSON_Z;
+  const method: CorrelationMethod = opts.method ?? 'pearson';
+  const lowerBound = method === 'spearman' ? spearmanLowerBound : pearsonLowerBound;
   const matrix: ModeSimilarityMatrix = {};
   const sharedCounts = new Map<string, Map<string, number>>();
   const modes = Array.from(byMode.keys());
@@ -401,10 +413,12 @@ export function computeEmpiricalSimilarity(
         rates2.push(s2.weightedApprovals / s2.weightedAttempts);
       }
       sharedRow.set(m2, rates1.length);
-      // Slice 14: pearsonLowerBound enforces n >= 4; below that it
-      // returns 0 and the entry is omitted, leaving the blend to fall
-      // back to the slice-12 prior.
-      const rLower = pearsonLowerBound(rates1, rates2, z);
+      // Slice 14: lower bound enforces n >= 4; below that it returns
+      // 0 and the entry is omitted, leaving the blend to fall back
+      // to the slice-12 prior.
+      // Slice 15: `method` chooses Pearson or Spearman; both share the
+      // same Fisher CI path via lowerBound.
+      const rLower = lowerBound(rates1, rates2, z);
       if (rLower > 0) row[m2] = rLower;
     }
   }
@@ -474,23 +488,36 @@ export function effectiveSimilarity(
 }
 
 /**
- * Slice 14 — Fisher-z lower bound of the 1-sided CI on a Pearson
- * correlation. Stops "r = 0.9 from 3 shared models" contributing the
- * same weight as "r = 0.9 from 30" in the slice-13 blend.
+ * Slice 14 — Fisher-z lower bound of the 1-sided CI on a correlation
+ * point estimate. Internal helper; Pearson and Spearman variants both
+ * call this with their respective r values.
  *
  * Method:
- *   1. Compute the raw point estimate r via {@link pearson}.
- *   2. Apply Fisher z-transform: z_r = atanh(r) = ½·ln((1+r)/(1-r)).
- *   3. Standard error: SE = 1 / √(n - 3). Requires n ≥ 4.
- *   4. Lower bound on z: z_lower = z_r - z · SE  (z parameter, default 1.0).
- *   5. Back-transform: r_lower = tanh(z_lower). Clamped to [0, 1].
+ *   1. z_r = atanh(r) = ½·ln((1+r)/(1-r))
+ *   2. SE = 1 / √(n - 3)  (Pearson). Spearman's SE is technically
+ *      ≈ 1.06·SE; for slice-15 simplicity both methods reuse this.
+ *   3. z_lower = z_r - z · SE
+ *   4. r_lower = tanh(z_lower), clamped to [0, 1].
  *
  * Edge cases:
- *   - n < 4 → 0. Fisher SE diverges at n = 3; falling back to the
- *     slice-12 hand-crafted prior via the blend is honest.
- *   - r ≤ 0 → 0. The matrix is defined on [0, 1]; anti-correlation
- *     carries no positive evidence.
- *   - r ≥ 1 → 1. Perfect correlation: tanh(∞) = 1.
+ *   - n < 4 → 0  (SE divergent / undefined)
+ *   - r ≤ 0 → 0  (matrix is on [0,1]; anti-correlation = no evidence)
+ *   - r ≥ 1 → 1  (perfect correlation; tanh(∞) = 1)
+ */
+function fisherCILowerBound(r: number, n: number, z: number): number {
+  if (n < 4) return 0;
+  if (!Number.isFinite(r) || r <= 0) return 0;
+  if (r >= 1) return 1;
+  const zr = 0.5 * Math.log((1 + r) / (1 - r));
+  const se = 1 / Math.sqrt(n - 3);
+  const zLower = zr - z * se;
+  return Math.max(0, Math.min(1, Math.tanh(zLower)));
+}
+
+/**
+ * Fisher-z lower bound on Pearson. Public entry point; wraps
+ * {@link pearson} and {@link fisherCILowerBound}. See the helper for
+ * the math + edge cases.
  *
  * Worked example (z = 1.0):
  *   r = 0.9, n = 5    → r_lower ≈ 0.64    (large haircut)
@@ -498,15 +525,51 @@ export function effectiveSimilarity(
  */
 export function pearsonLowerBound(xs: number[], ys: number[], z = DEFAULT_WILSON_Z): number {
   if (xs.length < 4 || ys.length < 4) return 0;
-  const r = pearson(xs, ys);
-  if (!Number.isFinite(r) || r <= 0) return 0;
-  if (r >= 1) return 1;
-  const n = xs.length;
-  const zr = 0.5 * Math.log((1 + r) / (1 - r)); // atanh
-  const se = 1 / Math.sqrt(n - 3);
-  const zLower = zr - z * se;
-  const rLower = Math.tanh(zLower);
-  return Math.max(0, Math.min(1, rLower));
+  return fisherCILowerBound(pearson(xs, ys), xs.length, z);
+}
+
+/**
+ * Slice 15 — Fisher-z lower bound on Spearman rank correlation.
+ * Robust to monotonic non-linear relationships that Pearson would
+ * underestimate. Uses the same Fisher SE as Pearson — technically
+ * an approximation for ranks (the true SE is ≈ 1.06·Pearson-SE),
+ * but in the same order of magnitude.
+ */
+export function spearmanLowerBound(xs: number[], ys: number[], z = DEFAULT_WILSON_Z): number {
+  if (xs.length < 4 || ys.length < 4) return 0;
+  return fisherCILowerBound(spearman(xs, ys), xs.length, z);
+}
+
+/**
+ * Spearman rank correlation. Robust to monotonic non-linear
+ * relationships. Returns 0 when n < 2 or when either rank vector
+ * has zero variance (constant input).
+ *
+ * Ties handled with average ranks (standard convention): [3, 5, 5, 7]
+ * → ranks [1, 2.5, 2.5, 4].
+ */
+export function spearman(xs: number[], ys: number[]): number {
+  if (xs.length !== ys.length || xs.length < 2) return 0;
+  const rxs = rankArray(xs);
+  const rys = rankArray(ys);
+  return pearson(rxs, rys);
+}
+
+/** 1-based average-rank ranking. Tied values share the average of their positions. */
+function rankArray(arr: number[]): number[] {
+  const n = arr.length;
+  const indexed = arr.map((v, i) => ({ v, i }));
+  indexed.sort((a, b) => a.v - b.v);
+  const ranks = new Array<number>(n);
+  let i = 0;
+  while (i < n) {
+    let j = i;
+    while (j + 1 < n && indexed[j + 1]!.v === indexed[i]!.v) j++;
+    const avgRank = (i + j) / 2 + 1; // 1-based; tie group [i..j]
+    for (let k = i; k <= j; k++) ranks[indexed[k]!.i] = avgRank;
+    i = j + 1;
+  }
+  return ranks;
 }
 
 /**

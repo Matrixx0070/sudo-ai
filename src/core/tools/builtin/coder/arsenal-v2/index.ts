@@ -235,9 +235,12 @@ export const arsenalV2Tool: ToolDefinition = {
       // similarity. Opt-out drops back to the slice-12 static matrix.
       const dataDrivenEnabled = process.env['SUDO_ARSENAL_V2_NO_DATA_SIMILARITY'] !== '1';
       const simShrinkageK = Number(process.env['SUDO_ARSENAL_V2_SIM_SHRINKAGE_K']);
+      const corrMethodRaw = process.env['SUDO_ARSENAL_V2_CORR_METHOD'];
+      const corrMethod = corrMethodRaw === 'spearman' ? 'spearman' : undefined; // anything else → default 'pearson'
       const simMatrix = dataDrivenEnabled
         ? effectiveSimilarity(byMode, baseMatrix, {
             shrinkageK: Number.isFinite(simShrinkageK) && simShrinkageK > 0 ? simShrinkageK : undefined,
+            method: corrMethod,
           })
         : baseMatrix;
       const globalStats = weightedCollapseByMode(byMode, mode, simMatrix);
