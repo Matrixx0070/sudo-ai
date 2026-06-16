@@ -14,6 +14,7 @@
 import { EventEmitter } from 'events';
 import { Worker, MessageChannel, isMainThread, parentPort, workerData } from 'worker_threads';
 import { TeamBus } from './team-bus.js';
+import type { BrainMessage } from '../../brain/types.js';
 
 // -----------------------------------------------------------------------------
 // Type declarations
@@ -47,6 +48,22 @@ export interface AgentStatus {
 
 /** A map of agent names to their current statuses. */
 export type TeamStatus = Record<string, AgentStatus>;
+
+/**
+ * Discriminated union of messages a worker thread can post back to the
+ * main thread over `parentPort`. The worker script is generated as a
+ * template-literal in {@link IntelligenceTeam.run} — the three `type`
+ * variants below pin the contract.
+ *
+ * `brainRequest` originates worker→main and triggers a main→worker
+ * `{ type: 'brainResponse', id, result | error }` reply; the reply
+ * shape lives on the main thread side only and is intentionally NOT
+ * part of this union.
+ */
+type WorkerToMainMessage =
+  | { type: 'brainRequest'; id: number; messages: BrainMessage[] }
+  | { type: 'result'; result?: unknown }
+  | { type: 'error'; error?: unknown };
 
 /**
  * The result returned when the team finishes. Each agent's output
@@ -159,17 +176,17 @@ export class IntelligenceTeam {
         .replace(/^```/i, '')
         .replace(/```\s*$/i, '')
         .trim();
-      const parsed = JSON.parse(jsonString);
+      const parsed: unknown = JSON.parse(jsonString);
       if (Array.isArray(parsed)) {
-        agentRoles = parsed.map((item: any) => {
-          const role: AgentRole = {
+        agentRoles = parsed.map((raw: unknown): AgentRole => {
+          const item = (raw ?? {}) as Record<string, unknown>;
+          return {
             name: String(item.name),
             systemPrompt: String(item.systemPrompt),
             task: String(item.task),
             fileBoundaries: Array.isArray(item.fileBoundaries) ? item.fileBoundaries.map(String) : [],
-            teammates: Array.isArray(item.teammates) ? item.teammates.map(String) : []
+            teammates: Array.isArray(item.teammates) ? item.teammates.map(String) : [],
           };
-          return role;
         });
       }
     } catch (err) {
@@ -210,18 +227,19 @@ export class IntelligenceTeam {
     const completionPromises: Promise<void>[] = [];
 
     // Handler for worker messages common to all workers
-    const handleWorkerMessage = async (worker: Worker, agent: AgentRole, msg: any) => {
-      if (!msg || typeof msg !== 'object') return;
-      const { type } = msg;
-      switch (type) {
+    const handleWorkerMessage = async (worker: Worker, agent: AgentRole, raw: unknown) => {
+      if (!raw || typeof raw !== 'object') return;
+      const msg = raw as WorkerToMainMessage;
+      switch (msg.type) {
         case 'brainRequest': {
           const { id, messages } = msg;
           // Forward the completion request to the Brain and respond
           try {
             const result = await this.brain.call({ messages });
             worker.postMessage({ type: 'brainResponse', id, result });
-          } catch (err: any) {
-            worker.postMessage({ type: 'brainResponse', id, error: err?.message ?? String(err) });
+          } catch (err: unknown) {
+            const errMessage = err instanceof Error ? err.message : String(err);
+            worker.postMessage({ type: 'brainResponse', id, error: errMessage });
           }
           break;
         }

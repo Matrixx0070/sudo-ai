@@ -15,6 +15,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import type { ToolRegistryLike } from './loop-helpers.js';
+import type { ToolSchema } from '../tools/types.js';
 
 const log = createLogger('agent:tool-router');
 
@@ -350,7 +351,7 @@ export class ToolRouter {
    * @param recentToolNames  - Names of the last few tools used (continuity).
    * @returns Array of OpenAI-compatible tool schemas, at most MAX_ROUTED_TOOLS.
    */
-  route(message: string, recentToolNames: string[] = []): object[] {
+  route(message: string, recentToolNames: string[] = []): ToolSchema[] {
     if (typeof message !== 'string') {
       log.warn({ messageType: typeof message }, 'ToolRouter.route: message must be a string — using empty string');
       message = '';
@@ -366,7 +367,7 @@ export class ToolRouter {
     const rankedCategories = this._rankCategories(normalised);
 
     const selectedNames = new Set<string>();
-    const result: object[] = [];
+    const result: ToolSchema[] = [];
 
     // Step 4: always add base tools
     for (const baseName of BASE_TOOLS) {
@@ -432,13 +433,13 @@ export class ToolRouter {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  private _getAllSchemas(): object[] {
+  private _getAllSchemas(): ToolSchema[] {
     return this.registry.getSchemaForLLM();
   }
 
   /** Build a name → schema map for O(1) lookups. */
-  private _indexByName(schemas: object[]): Map<string, object> {
-    const map = new Map<string, object>();
+  private _indexByName(schemas: ToolSchema[]): Map<string, ToolSchema> {
+    const map = new Map<string, ToolSchema>();
     for (const s of schemas) {
       const name = this._schemaName(s);
       if (name) map.set(name, s);
@@ -447,9 +448,8 @@ export class ToolRouter {
   }
 
   /** Extract the tool name from an OpenAI-format schema object. */
-  private _schemaName(schema: object): string {
-    const s = schema as { function?: { name?: string }; name?: string };
-    return s?.function?.name ?? s?.name ?? '';
+  private _schemaName(schema: ToolSchema): string {
+    return schema.function?.name ?? '';
   }
 
   /**
@@ -484,9 +484,9 @@ export class ToolRouter {
   private _fillFromCategories(
     rankedCategories: Array<[CategoryName, number]>,
     normalised: string,
-    schemasByName: Map<string, object>,
+    schemasByName: Map<string, ToolSchema>,
     selectedNames: Set<string>,
-    result: object[],
+    result: ToolSchema[],
   ): void {
     const toolsByCategory = this._groupByCategory(schemasByName);
 
@@ -526,9 +526,9 @@ export class ToolRouter {
    */
   private _fillFallback(
     normalised: string,
-    schemasByName: Map<string, object>,
+    schemasByName: Map<string, ToolSchema>,
     selectedNames: Set<string>,
-    result: object[],
+    result: ToolSchema[],
   ): void {
     const toolsByCategory = this._groupByCategory(schemasByName);
 
@@ -562,8 +562,8 @@ export class ToolRouter {
    * category prefix, which works for any registry that uses `<category>.<action>`
    * naming conventions.
    */
-  private _groupByCategory(schemasByName: Map<string, object>): Map<string, object[]> {
-    const map = new Map<string, object[]>();
+  private _groupByCategory(schemasByName: Map<string, ToolSchema>): Map<string, ToolSchema[]> {
+    const map = new Map<string, ToolSchema[]>();
 
     // Prefer registry-native category data when available.
     if (typeof (this.registry as unknown as { listEnabled?: () => SlimTool[] }).listEnabled === 'function') {

@@ -12,6 +12,7 @@
  */
 
 import { Bot, type Context, GrammyError, InputFile, InlineKeyboard } from 'grammy';
+import type { Update as TelegramUpdate } from 'grammy/types';
 import { saveFeedback, addNoteToFeedback } from '../feedback/store.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -370,14 +371,15 @@ export class TelegramAdapter implements ChannelAdapter {
           let res: Response;
           try {
             res = await fetch(url, { signal: abort.signal });
-          } catch (fetchErr: any) {
-            if (abort.signal.aborted || fetchErr.name === 'AbortError') break;
+          } catch (fetchErr: unknown) {
+            const isAbort = fetchErr instanceof Error && fetchErr.name === 'AbortError';
+            if (abort.signal.aborted || isAbort) break;
             log.warn({ err: String(fetchErr) }, 'Poll fetch error — retrying in 3s');
             await new Promise(r => setTimeout(r, 3000));
             continue;
           }
 
-          let data: { ok: boolean; result?: any[]; description?: string };
+          let data: { ok: boolean; result?: TelegramUpdate[]; description?: string };
           try {
             data = await res.json() as typeof data;
           } catch {
@@ -413,9 +415,9 @@ export class TelegramAdapter implements ChannelAdapter {
               log.error({ updateId: update.update_id, err: String(err) }, 'Error handling update');
             }
           }
-        } catch (err: any) {
+        } catch (err: unknown) {
           if (abort.signal.aborted) break;
-          if (err.name === 'AbortError') break;
+          if (err instanceof Error && err.name === 'AbortError') break;
           // NEVER exit the loop on error — always retry
           log.error({ err: String(err) }, 'Poll loop unexpected error — retrying in 5s');
           await new Promise(r => setTimeout(r, 5000));

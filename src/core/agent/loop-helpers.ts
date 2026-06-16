@@ -14,6 +14,7 @@ import { PRE_COMPACTION_FLUSH, PRE_COMPACTION_FLUSH_THRESHOLD } from '../shared/
 import { approvalManager } from './approval.js';
 import { PermissionManager } from './permissions.js';
 import type { AgentState, AgentEvent } from './types.js';
+import type { ToolSchema } from '../tools/types.js';
 import { resolveEffort, type EffortLevel } from './effort.js';
 import { shouldUseInterleavedThinking, buildThinkingBlock } from './interleaved-thinking.js';
 import {
@@ -41,7 +42,7 @@ export interface BrainMessage {
 export interface BrainRequest {
   messages: BrainMessage[];
   model?: string;
-  tools?: object[];
+  tools?: ToolSchema[];
   race?: boolean;
 }
 
@@ -104,7 +105,7 @@ export interface ToolDescriptor {
 
 export interface ToolRegistryLike {
   execute(name: string, params: Record<string, unknown>, ctx: ToolContext): Promise<{ success: boolean; output: string }>;
-  getSchemaForLLM(): object[];
+  getSchemaForLLM(): ToolSchema[];
   /** Return whether a tool requires user confirmation before execution. */
   requiresConfirmation?(name: string): boolean;
   /**

@@ -18,6 +18,7 @@
 
 import type { RpcHandlerFn } from './rpc-types.js';
 import type { WsServerDeps } from './ws-server.js';
+import type { ToolSchema } from '../tools/types.js';
 import { createLogger } from '../shared/logger.js';
 
 const log = createLogger('rpc-handlers');
@@ -64,12 +65,12 @@ export function buildRpcRouter(deps: WsServerDeps): Map<string, RpcHandlerFn> {
   router.set('tools.catalog', async (_params: unknown) => {
     log.debug('tools.catalog called');
     try {
-      const registry = deps.toolRegistry as { getSchemaForLLM?: () => object[] } | undefined;
+      const registry = deps.toolRegistry as { getSchemaForLLM?: () => ToolSchema[] } | undefined;
       if (registry && typeof registry.getSchemaForLLM === 'function') {
         return registry.getSchemaForLLM();
       }
       log.warn('tools.catalog: toolRegistry.getSchemaForLLM not available');
-      return [] as unknown[];
+      return [] as ToolSchema[];
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ err: msg }, 'tools.catalog handler error');

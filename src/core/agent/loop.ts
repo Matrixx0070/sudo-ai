@@ -391,7 +391,11 @@ export class AgentLoop {
     if (!brain || typeof (brain as BrainLike).call !== 'function') {
       throw new PipelineError('AgentLoop: brain must have a call() method', 'pipeline_invalid_brain');
     }
-    if (!toolRegistry || typeof (toolRegistry as ToolRegistryLike).execute !== 'function') {
+    if (
+      !toolRegistry
+      || typeof (toolRegistry as ToolRegistryLike).execute !== 'function'
+      || typeof (toolRegistry as ToolRegistryLike).getSchemaForLLM !== 'function'
+    ) {
       throw new PipelineError('AgentLoop: toolRegistry must have execute() and getSchemaForLLM()', 'pipeline_invalid_registry');
     }
     if (!sessionManager || typeof (sessionManager as SessionManagerLike).get !== 'function') {
@@ -2875,7 +2879,7 @@ export class AgentLoop {
           const userContent = session.messages
             .filter(m => m.role === 'user').at(-1)?.content ?? '';
           const toolCount = this.toolRouter
-            ? (this.toolRegistry as { getSchemaForLLM?: (names?: string[]) => unknown[] }).getSchemaForLLM?.()?.length ?? 0
+            ? this.toolRegistry.getSchemaForLLM().length
             : 0;
           const complexity = scoreComplexity({
             prompt: userContent,

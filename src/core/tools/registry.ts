@@ -16,6 +16,7 @@ import {
   type ToolResult,
   type ToolCallRequest,
   type ToolCallResult,
+  type ToolSchema,
 } from './types.js';
 import { createLogger } from '../shared/logger.js';
 import { ToolError } from '../shared/errors.js';
@@ -331,7 +332,7 @@ export class ToolRegistry {
    *
    * @returns Array of `{ type: 'function', function: { name, description, parameters } }` objects.
    */
-  getSchemaForLLM(): object[] {
+  getSchemaForLLM(): ToolSchema[] {
     const nativeSchemas = this.listEnabled().map((tool) => ({
       type: 'function' as const,
       function: {

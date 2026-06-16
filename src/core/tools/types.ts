@@ -210,6 +210,26 @@ export interface ToolCallRequest {
 }
 
 /**
+ * OpenAI-compatible function-calling schema, as emitted by
+ * `ToolRegistry.getSchemaForLLM` and consumed by the Vercel AI SDK
+ * `tools` option. Native {@link ToolDefinition}s and MCP tools are
+ * both mapped into this shape inside the registry.
+ *
+ * `parameters` is a JSON Schema object — kept as `Record<string,
+ * unknown>` rather than a concrete schema type to avoid pinning a
+ * JSON-Schema dialect at the type level (the registry emits Draft-07
+ * shape, MCP servers may emit other dialects).
+ */
+export interface ToolSchema {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+/**
  * The execution result paired with its originating request ID.
  */
 export interface ToolCallResult {

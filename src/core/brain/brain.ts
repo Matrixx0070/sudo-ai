@@ -654,14 +654,10 @@ export class Brain {
 
     // Extract tool names/descriptions to include in the system prompt so the LLM
     // knows what tools are available and when to use them.
-    const toolSummaries = (request.tools ?? []).map((t) => {
-      const raw = t as Record<string, unknown>;
-      const fn = raw['function'] as Record<string, unknown> | undefined;
-      return {
-        name: (fn?.['name'] as string | undefined) ?? (raw['name'] as string | undefined) ?? '',
-        description: (fn?.['description'] as string | undefined) ?? (raw['description'] as string | undefined) ?? '',
-      };
-    }).filter((s) => s.name);
+    const toolSummaries = (request.tools ?? []).map((t) => ({
+      name: t.function?.name ?? '',
+      description: t.function?.description ?? '',
+    })).filter((s) => s.name);
 
     // RAG: retrieve relevant memory context from the last user message.
     // Failures are fully swallowed — never let RAG break the main call path.
@@ -944,11 +940,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
         if (request.tools && request.tools.length > 0) {
           const toolEntries = request.tools.map((t): [string, object] => {
-            const raw = t as Record<string, unknown>;
-            const fn = raw['function'] as Record<string, unknown> | undefined;
-            const name = (fn?.['name'] as string | undefined) ?? (raw['name'] as string | undefined) ?? '';
-            const desc = (fn?.['description'] as string | undefined) ?? (raw['description'] as string | undefined) ?? '';
-            const params = (fn?.['parameters'] as Record<string, unknown> | undefined) ?? (raw['parameters'] as Record<string, unknown> | undefined) ?? {};
+            const name = t.function?.name ?? '';
+            const desc = t.function?.description ?? '';
+            const params = t.function?.parameters ?? {};
             return [name, aiTool({
               description: desc,
               inputSchema: jsonSchema(params),
