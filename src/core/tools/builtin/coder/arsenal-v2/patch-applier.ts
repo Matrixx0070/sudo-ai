@@ -149,9 +149,9 @@ function applyToFile(
     }));
   }
 
-  if (hasCreate) return applyCreate(absFile, relFile, ops, backupDir);
+  if (hasCreate) return applyCreate(absFile, relFile, ops, backupDir, opts.projectRoot);
   if (hasDelete) return applyDelete(absFile, relFile, ops, backupDir);
-  return applyMutations(absFile, relFile, ops, backupDir);
+  return applyMutations(absFile, relFile, ops, backupDir, opts.projectRoot);
 }
 
 function applyCreate(
@@ -159,6 +159,7 @@ function applyCreate(
   relFile: string,
   ops: PatchOp[],
   backupDir: string,
+  projectRoot: string,
 ): PatchOpResult[] {
   // Only one create_file per file is meaningful; if more were submitted the
   // group above already passed them as a batch — apply the first, mark rest
@@ -174,7 +175,7 @@ function applyCreate(
   }
   try {
     mkdirSync(path.dirname(absFile), { recursive: true });
-    atomicWrite(absFile, first.content);
+    atomicWrite(absFile, first.content, projectRoot);
     // No prior content to back up — drop a marker so the backup dir reflects
     // every touched file consistently.
     writeFileSync(path.join(backupDir, encodePath(relFile) + '.created'), '');
@@ -225,6 +226,7 @@ function applyMutations(
   relFile: string,
   ops: PatchOp[],
   backupDir: string,
+  projectRoot: string,
 ): PatchOpResult[] {
   if (!existsSync(absFile)) {
     return ops.map((op) => ({
@@ -262,7 +264,7 @@ function applyMutations(
   try {
     const backupPath = path.join(backupDir, encodePath(relFile));
     copyFileSync(absFile, backupPath);
-    atomicWrite(absFile, current);
+    atomicWrite(absFile, current, projectRoot);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     // I/O failure at the rename layer — mark every previously-applied op as
@@ -320,7 +322,7 @@ function applyOneMutation(op: PatchOp, current: string): { result: PatchOpResult
 }
 
 /** Atomic write: temp -> fsync -> rename (with EXDEV fallback and TOCTOU validation). */
-function atomicWrite(absFile: string, content: string): void {
+function atomicWrite(absFile: string, content: string, projectRoot: string): void {
   const tmp = absFile + '.arsenal-tmp';
   writeFileSync(tmp, content, 'utf-8');
   // fsync to ensure durability before rename
@@ -338,13 +340,14 @@ function atomicWrite(absFile: string, content: string): void {
       throw renameErr;
     }
   }
-  // TOCTOU validation: after write, verify target is still within project root
+  // TOCTOU validation: after write, verify target is still within project root.
+  // Resolve projectRoot too so a symlinked tmpdir (e.g. macOS /var → /private/var)
+  // doesn't trip a false positive.
   if (existsSync(absFile)) {
     try {
-      // Get the project root from absFile's parent chain or use a fallback
-      const projectRoot = process.env.PROJECT_ROOT || process.cwd();
+      const realRoot = realpathSync(projectRoot);
       const realAbs = realpathSync(absFile);
-      const rel = path.relative(projectRoot, realAbs);
+      const rel = path.relative(realRoot, realAbs);
       if (rel.startsWith('..')) {
         throw new Error('TOCTOU: file was moved outside project root after write');
       }

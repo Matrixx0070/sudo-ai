@@ -740,14 +740,8 @@ export function rankCascade(
     // sum across all modes; otherwise fall back to the mode-only count
     // (slice-10 semantics).
     const totalAttempts = sGlobal?.attempts ?? sMode?.attempts ?? 0;
-    // Use continuous scoring: if below minSamples, use Laplace smoothing
-    // ((approvals + 0.5) / (attempts + 1)) instead of hard defaultScore gate.
-    // This eliminates the discontinuity at the minSamples boundary.
     if (totalAttempts < minSamples) {
-      const approvals = (sGlobal?.approvals ?? sMode?.approvals ?? 0);
-      const attempts = totalAttempts;
-      const laplaceScore = (approvals + 0.5) / (attempts + 1);
-      return { model, index, score: laplaceScore };
+      return { model, index, score: defaultScore };
     }
     const modeScore = sMode && sMode.weightedAttempts > 0
       ? wilsonLowerBound(sMode.weightedApprovals, sMode.weightedAttempts, z)
