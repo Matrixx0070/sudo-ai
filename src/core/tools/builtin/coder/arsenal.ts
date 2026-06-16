@@ -30,7 +30,7 @@ import {
   mkdirSync, copyFileSync, statSync,
 } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
@@ -258,6 +258,11 @@ function createBackup(abs: string): void {
   try {
     if (!existsSync(BACKUP_DIR)) mkdirSync(BACKUP_DIR, { recursive: true });
     const rel = path.relative(PROJECT_ROOT, abs).replace(/[\\/]/g, '__');
+    // Security: reject paths containing .. (outside PROJECT_ROOT)
+    if (rel.includes('..')) {
+      logger.warn({ abs }, 'arsenal: backup skipped (path outside root)');
+      return;
+    }
     const dest = path.join(BACKUP_DIR, `${Date.now()}_${rel}`);
     if (existsSync(abs)) copyFileSync(abs, dest);
   } catch { /* non-fatal */ }
@@ -299,8 +304,9 @@ async function smartSelectFiles(task: string, baseDir: string, maxFiles = 15): P
     const rgResults = await Promise.allSettled(
       keywords.map(keyword => new Promise<string[]>((resolve) => {
         try {
-          const out = execSync(
-            `rg -l --max-count=1 -g "*.ts" -g "*.js" "${keyword.replace(/"/g, '')}" "${baseDir}"`,
+          const out = execFileSync(
+            'rg',
+            ['-l', '--max-count=1', '-g', '*.ts', '-g', '*.js', keyword, baseDir],
             { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] }
           );
           resolve(out.trim().split('\n').filter(Boolean));
@@ -483,8 +489,9 @@ function applyEdits(edits: ParsedEdit[]): ApplyResult {
   for (const edit of edits) {
     const abs = resolveProjectPath(edit.filePath);
 
-    // Security: must be within project root
-    if (!abs.startsWith(PROJECT_ROOT)) {
+    // Security: must be within project root (check with path.sep boundary)
+    const relative = path.relative(PROJECT_ROOT, abs);
+    if (relative.startsWith('..')) {
       failed.push(`${edit.filePath} (path traversal blocked)`);
       continue;
     }
@@ -812,6 +819,12 @@ export const arsenalTool: ToolDefinition = {
  * Stub ctx for direct use (PROJECT_ROOT guard preserved).
  */
 export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
+  // Security: sanitize task — reject prompt-injection markers
+  if (task.includes('<<<') || task.includes('>>>') || task.includes('SYSTEM:')) {
+    logger.warn({ task }, 'KAIROS: task rejected (contains injection markers)');
+    return { success: false, output: 'error: task contains invalid markers' };
+  }
+
   // KAIROS self-repair hook. Real dry-run call (applyEdits:false) to avoid side effects in background tick.
   // Matches "as before" verified patterns (sim + guards); uses internal execute for full pipeline (recon/baseline/AI/verify).
   logger.info({ task, mode }, 'KAIROS requested arsenal self-repair (dry-run wired)');
