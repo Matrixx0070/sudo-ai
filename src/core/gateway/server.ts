@@ -19,6 +19,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
+import { isHostGateEnabled, isHostAllowed } from './host-gate.js';
 import { progress } from './progress.js';
 import { getCacheKey, cacheGet, cacheSet } from './cache.js';
 import { scoreComplexity } from '../agent/complexity-scorer.js';
@@ -94,6 +95,22 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   const method = req.method ?? 'GET';
   const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   log.info({ requestId, method, url, activeRequests }, 'Incoming request');
+
+  // SSRF / DNS-rebind defense: reject requests whose Host header doesn't
+  // resolve to a hostname in the allowlist. Default ON; SUDO_SSRF_HOST_GATE=0
+  // disables. Socket is destroyed after the 403 so any sibling listeners
+  // registered via server.on('request', ...) fail fast instead of trying to
+  // serve the attack request.
+  if (isHostGateEnabled() && !isHostAllowed(req.headers.host)) {
+    log.warn(
+      { requestId, host: req.headers.host, url, remote: req.socket.remoteAddress },
+      'Rejecting request with disallowed Host header (SSRF/DNS-rebind defense)',
+    );
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Forbidden', type: 'gateway_error' } }));
+    req.socket.destroy();
+    return;
+  }
 
   // Health endpoint
   if (url === '/health' && method === 'GET') {
