@@ -1,5 +1,5 @@
 /**
- * meta.self-modify — SUDO-AI self-modification pipeline.
+ * meta.self-modify — Rewrite SUDO-AI source code on disk.
  *
  * The single tool the owner uses to tell SUDO-AI to update its own code, config,
  * or settings through web chat or Telegram — no Claude Code needed.
@@ -357,10 +357,12 @@ function doHistory(): ToolResult {
 export const selfModifyTool: ToolDefinition = {
   name: 'meta.self-modify',
   description:
-    'SUDO-AI self-modification pipeline. Use this when the owner asks you to update code, settings, ' +
+    'Rewrite SUDO-AI source code on disk. Use when the owner asks you to update code, settings, ' +
     'or config files through web chat or Telegram. Supports reading files, finding files, ' +
     'searching code, editing files, writing files, editing config, building, restarting, ' +
     'and the full edit→build→restart cycle (full-cycle). ' +
+    'NOT for inspecting current runtime config, enabled channels, model selection, version, or ' +
+    'capabilities — those introspective questions are answered from the system prompt directly. ' +
     'No external tool or Claude Code needed — SUDO-AI modifies itself directly.',
   category: 'meta',
   timeout: 180_000,
