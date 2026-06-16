@@ -27,6 +27,7 @@ import type { ToolContext, ToolDefinition, ToolResult } from '../../../types.js'
 import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../../shared/paths.js';
 import { getModel } from '../../../../brain/providers.js';
+import { modelForAttempt, parseCascade } from './cascade.js';
 import { runCritic, type CriticResult } from './critic.js';
 import { buildDiffSummary } from './diff-summary.js';
 import { applyPatches } from './patch-applier.js';
@@ -44,11 +45,13 @@ import {
   buildSystemPrompt,
   isMutatingMode,
 } from './system-prompt.js';
+import { recordAttempt } from './telemetry.js';
 import { runRelatedTests, type VerifyResult } from './verify.js';
 
 const logger = createLogger('coder.arsenal-v2');
 
 const BACKUP_ROOT = path.join(PROJECT_ROOT, 'data', 'arsenal-v2-backups');
+const TELEMETRY_PATH = path.join(PROJECT_ROOT, 'data', 'arsenal-v2-telemetry.jsonl');
 const TSC = path.join(PROJECT_ROOT, 'node_modules', '.bin', 'tsc');
 
 const SUPPORTED_MODES: readonly ArsenalV2Mode[] = ['fix', 'build', 'refactor', 'test', 'review', 'analyze', 'explain'];
@@ -65,6 +68,8 @@ interface TscResult {
 /** One iteration of the retry loop — captured for the report + retry prompt. */
 interface AttemptRecord {
   index: number;
+  /** Patcher model id used for this attempt (per-attempt due to slice-6 cascade). */
+  model: string;
   applyResult: ApplyResult;
   applied: number;
   skipped: number;
@@ -73,6 +78,8 @@ interface AttemptRecord {
   testResult: VerifyResult | null;
   criticResult: CriticResult | null;
   diffSummary: string;
+  /** Wall-clock ms for this attempt (LLM call + apply + tsc + tests + critic). */
+  durationMs: number;
 }
 
 function runTsc(): TscResult {
@@ -143,11 +150,19 @@ export const arsenalV2Tool: ToolDefinition = {
     },
     model: {
       type: 'string',
-      description: 'Force a specific model id (e.g. "claude-oauth/claude-sonnet-4-6"). Default: SUDO_ARSENAL_V2_MODEL env var, else "claude-oauth/claude-sonnet-4-6".',
+      description: 'Force a specific model id (e.g. "claude-oauth/claude-sonnet-4-6"). Single-model fallback; superseded by `models` when both are set. Default: SUDO_ARSENAL_V2_MODEL env var, else "claude-oauth/claude-sonnet-4-6".',
+    },
+    models: {
+      type: 'array',
+      description: 'Cascade — ordered list of model ids, one per retry attempt. Attempt 1 uses models[0]; attempt 2 uses models[1]; beyond the list the last entry is reused. Overrides `model` and SUDO_ARSENAL_V2_CASCADE env when set.',
     },
     maxAttempts: {
       type: 'number',
       description: 'Maximum patch attempts when the critic returns NEEDS_REVISION. Clamped to [1, 5]. Default: SUDO_ARSENAL_V2_MAX_ATTEMPTS env var, else 3. Set to 1 to disable the retry loop.',
+    },
+    telemetry: {
+      type: 'boolean',
+      description: 'Write one JSONL row per attempt to data/arsenal-v2-telemetry.jsonl. Default: true unless SUDO_ARSENAL_V2_TELEMETRY=0.',
     },
   },
 
@@ -166,7 +181,17 @@ export const arsenalV2Tool: ToolDefinition = {
     const filesParam = Array.isArray(params['files']) ? (params['files'] as string[]) : [];
     const context = typeof params['context'] === 'string' ? params['context'].trim() : '';
     const forcedModel = typeof params['model'] === 'string' ? params['model'].trim() : '';
-    const modelId = forcedModel || process.env['SUDO_ARSENAL_V2_MODEL'] || DEFAULT_MODEL;
+
+    // Model cascade — one entry per retry attempt; last entry repeats. The
+    // cascade collapses to a single-element list when only `model` / env are
+    // set, which preserves slice-5 behavior (same model every attempt).
+    const cascade = parseCascade({
+      models: params['models'],
+      model: forcedModel,
+      envCascade: process.env['SUDO_ARSENAL_V2_CASCADE'],
+      envModel: process.env['SUDO_ARSENAL_V2_MODEL'],
+      defaultModel: DEFAULT_MODEL,
+    });
 
     // Retry-loop budget. Tool param wins; otherwise env; otherwise the
     // clampMaxAttempts default (3). Always clamped to [1, 5].
@@ -174,8 +199,12 @@ export const arsenalV2Tool: ToolDefinition = {
       params['maxAttempts'] ?? process.env['SUDO_ARSENAL_V2_MAX_ATTEMPTS'],
     );
 
+    // Telemetry opt-out. Tool param wins; falls back to env-controlled
+    // behavior in recordAttempt itself.
+    const telemetryEnabled = params['telemetry'] === false ? false : true;
+
     logger.info(
-      { session: ctx.sessionId, mode, mutating, shouldApply, modelId, maxAttempts, explicitFiles: filesParam.length },
+      { session: ctx.sessionId, mode, mutating, shouldApply, cascade, maxAttempts, telemetry: telemetryEnabled, explicitFiles: filesParam.length },
       'coder.arsenal-v2 invoked',
     );
 
@@ -190,7 +219,8 @@ export const arsenalV2Tool: ToolDefinition = {
     // ---- 2. Baseline tsc (mutating modes only) ----
     const baseline = shouldApply && mutating ? runTsc() : null;
 
-    // ---- 3. Build prompt + call LLM (attempt 1) ----
+    // ---- 3. Build prompt + call LLM (attempt 1, model = cascade[0]) ----
+    const firstModel = modelForAttempt(cascade, 1);
     const systemPrompt = buildSystemPrompt(mode);
     const buildUserPrompt = (payload: string, retryAppendix: string): string =>
       [
@@ -201,24 +231,25 @@ export const arsenalV2Tool: ToolDefinition = {
         retryAppendix,
       ].filter(Boolean).join('');
 
+    const firstAttemptStart = Date.now();
     let aiText: string;
     try {
-      aiText = await callLLM(modelId, systemPrompt, buildUserPrompt(reconResult.payload, ''));
+      aiText = await callLLM(firstModel, systemPrompt, buildUserPrompt(reconResult.payload, ''));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ modelId, err: msg }, 'LLM call failed');
-      return { success: false, output: `coder.arsenal-v2: LLM call failed (${modelId}): ${msg.slice(0, 200)}` };
+      logger.warn({ model: firstModel, err: msg }, 'LLM call failed');
+      return { success: false, output: `coder.arsenal-v2: LLM call failed (${firstModel}): ${msg.slice(0, 200)}` };
     }
     if (!aiText.trim()) {
-      return { success: false, output: `coder.arsenal-v2: LLM (${modelId}) returned empty response.` };
+      return { success: false, output: `coder.arsenal-v2: LLM (${firstModel}) returned empty response.` };
     }
 
     // ---- 4. Read-only modes return the model's text directly ----
     if (!mutating) {
       return {
         success: true,
-        output: `**[coder.arsenal-v2 — ${modelId} — ${mode}]**\n\n${aiText.trim()}`,
-        data: { model: modelId, mode, files: reconResult.files },
+        output: `**[coder.arsenal-v2 — ${firstModel} — ${mode}]**\n\n${aiText.trim()}`,
+        data: { model: firstModel, mode, files: reconResult.files },
       };
     }
 
@@ -234,29 +265,33 @@ export const arsenalV2Tool: ToolDefinition = {
             '--- Raw LLM response (first 2000 chars) ---',
             aiText.slice(0, 2000),
           ].join('\n'),
-          data: { model: modelId, mode, parseError: parsed.error },
+          data: { model: firstModel, mode, parseError: parsed.error },
         };
       }
       return {
         success: true,
         output: [
-          `**[coder.arsenal-v2 — ${modelId} — ${mode} — DRY RUN]**`,
+          `**[coder.arsenal-v2 — ${firstModel} — ${mode} — DRY RUN]**`,
           '',
           `Would apply ${parsed.ops.length} op(s):`,
           ...parsed.ops.map((o) => `  • ${o.op} → ${o.file}`),
         ].join('\n'),
-        data: { model: modelId, mode, dryRun: true, ops: parsed.ops },
+        data: { model: firstModel, mode, dryRun: true, ops: parsed.ops },
       };
     }
 
     // ---- 6. Retry loop: parse → apply → tsc → tests → critic; on
     //        critic=needs_revision and budget remaining, re-invoke patcher
     //        with the prior diff + critique appended to the user prompt.
-    const criticModelId = process.env['SUDO_ARSENAL_V2_CRITIC_MODEL'] || modelId;
+    //        Each attempt uses modelForAttempt(cascade, idx).
+    const criticModelId = process.env['SUDO_ARSENAL_V2_CRITIC_MODEL'] || firstModel;
+    const telemetryPath = TELEMETRY_PATH;
     const attempts: AttemptRecord[] = [];
     const previousForPrompt: PreviousAttempt[] = [];
     let attemptIdx = 1;
     let currentAiText = aiText;
+    let currentModel = firstModel;
+    let attemptStartedAt = firstAttemptStart;
     let loopAbortReason: string | null = null;
 
     // eslint-disable-next-line no-constant-condition
@@ -272,19 +307,19 @@ export const arsenalV2Tool: ToolDefinition = {
               '--- Raw LLM response (first 2000 chars) ---',
               currentAiText.slice(0, 2000),
             ].join('\n'),
-            data: { model: modelId, mode, parseError: parsed.error },
+            data: { model: currentModel, mode, parseError: parsed.error },
           };
         }
         loopAbortReason = `parse_failed_on_attempt_${attemptIdx}: ${parsed.error}`;
         break;
       }
-      logger.info({ attempt: attemptIdx, ops: parsed.ops.length }, 'patch block parsed');
+      logger.info({ attempt: attemptIdx, model: currentModel, ops: parsed.ops.length }, 'patch block parsed');
 
       const applyResult = applyPatches(parsed.ops, { projectRoot: PROJECT_ROOT, backupRoot: BACKUP_ROOT });
       const applied = applyResult.results.filter((r) => r.status === 'applied').length;
       const skipped = applyResult.results.filter((r) => r.status === 'skipped').length;
       const failed = applyResult.results.filter((r) => r.status === 'failed').length;
-      logger.info({ attempt: attemptIdx, applied, skipped, failed, backupDir: applyResult.backupDir }, 'patches applied');
+      logger.info({ attempt: attemptIdx, model: currentModel, applied, skipped, failed, backupDir: applyResult.backupDir }, 'patches applied');
 
       const after = runTsc();
 
@@ -306,7 +341,50 @@ export const arsenalV2Tool: ToolDefinition = {
           })
         : null;
 
-      attempts.push({ index: attemptIdx, applyResult, applied, skipped, failed, tscAfter: after, testResult, criticResult, diffSummary });
+      const durationMs = Date.now() - attemptStartedAt;
+      attempts.push({
+        index: attemptIdx,
+        model: currentModel,
+        applyResult,
+        applied,
+        skipped,
+        failed,
+        tscAfter: after,
+        testResult,
+        criticResult,
+        diffSummary,
+        durationMs,
+      });
+
+      // Per-attempt success same shape as the final success bool — used to
+      // make the telemetry row's "success" interpretable in aggregate later.
+      const attemptTscOk = after.clean || (baseline ? after.errorCount < baseline.errorCount : true);
+      const attemptTestsOk = !testResult || testResult.skipped || testResult.passed;
+      const attemptCriticOk = !criticResult || criticResult.skipped || criticResult.verdict === 'approve';
+      const attemptSuccess = failed === 0 && attemptTscOk && attemptTestsOk && attemptCriticOk;
+
+      if (telemetryEnabled) {
+        recordAttempt(
+          {
+            ts: Date.now(),
+            sessionId: ctx.sessionId,
+            mode,
+            attemptIndex: attemptIdx,
+            maxAttempts,
+            model: currentModel,
+            applied,
+            skipped,
+            failed,
+            tscClean: after.clean,
+            tscErrorCount: after.errorCount,
+            testsPassed: testResult ? testResult.passed : null,
+            criticVerdict: criticResult?.verdict ?? null,
+            success: attemptSuccess,
+            durationMs,
+          },
+          { path: telemetryPath },
+        );
+      }
 
       const retry = shouldRetry({
         criticVerdict: criticResult?.verdict ?? null,
@@ -318,7 +396,8 @@ export const arsenalV2Tool: ToolDefinition = {
       if (!retry) break;
 
       // Prep the next iteration: record this attempt for the appendix,
-      // refresh recon against the now-mutated files, ask the patcher again.
+      // refresh recon against the now-mutated files, escalate the model,
+      // ask the patcher again.
       previousForPrompt.push({ diffSummary, critique: criticResult?.critique ?? '' });
       try {
         reconResult = await recon(reconTask, { projectRoot: PROJECT_ROOT, searchRoot: PROJECT_ROOT });
@@ -329,11 +408,13 @@ export const arsenalV2Tool: ToolDefinition = {
       const nextPrompt = buildUserPrompt(reconResult.payload, buildRetryAppendix(previousForPrompt));
 
       attemptIdx += 1;
+      currentModel = modelForAttempt(cascade, attemptIdx);
+      attemptStartedAt = Date.now();
       try {
-        currentAiText = await callLLM(modelId, systemPrompt, nextPrompt);
+        currentAiText = await callLLM(currentModel, systemPrompt, nextPrompt);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ attempt: attemptIdx, modelId, err: msg }, 'retry LLM call failed; using prior attempt result');
+        logger.warn({ attempt: attemptIdx, model: currentModel, err: msg }, 'retry LLM call failed; using prior attempt result');
         loopAbortReason = `llm_failed_on_attempt_${attemptIdx}: ${msg.slice(0, 200)}`;
         attemptIdx -= 1;
         break;
@@ -351,7 +432,8 @@ export const arsenalV2Tool: ToolDefinition = {
     const final = attempts[attempts.length - 1]!;
     const { applyResult, applied, skipped, failed, tscAfter: after, testResult, criticResult } = final;
 
-    const lines: string[] = [`**[coder.arsenal-v2 — ${modelId} — ${mode}]**`, ''];
+    const finalModel = final.model;
+    const lines: string[] = [`**[coder.arsenal-v2 — ${finalModel} — ${mode}]**`, ''];
     lines.push('## Patches');
     for (const r of applyResult.results) {
       const status = r.status === 'applied' ? '✓' : r.status === 'skipped' ? '↷' : '✗';
@@ -393,7 +475,7 @@ export const arsenalV2Tool: ToolDefinition = {
       lines.push('## Attempts');
       for (const a of attempts) {
         const v = a.criticResult?.verdict ?? 'no-critic';
-        lines.push(`  Attempt ${a.index}/${maxAttempts}: ${a.applied} applied, ${a.skipped} skipped, ${a.failed} failed — critic=${v}`);
+        lines.push(`  Attempt ${a.index}/${maxAttempts} [${a.model}]: ${a.applied} applied, ${a.skipped} skipped, ${a.failed} failed — critic=${v} (${a.durationMs}ms)`);
       }
       if (loopAbortReason) lines.push(`  Aborted: ${loopAbortReason}`);
       lines.push('');
@@ -413,7 +495,9 @@ export const arsenalV2Tool: ToolDefinition = {
       success,
       output: lines.join('\n'),
       data: {
-        model: modelId,
+        model: finalModel,
+        cascade,
+        modelsUsed: attempts.map((a) => a.model),
         mode,
         filesWritten: applyResult.filesWritten,
         filesDeleted: applyResult.filesDeleted,
@@ -437,6 +521,7 @@ export const arsenalV2Tool: ToolDefinition = {
         maxAttempts,
         attemptVerdicts: attempts.map((a) => a.criticResult?.verdict ?? null),
         loopAbortReason,
+        telemetryEnabled,
       },
     };
   },
