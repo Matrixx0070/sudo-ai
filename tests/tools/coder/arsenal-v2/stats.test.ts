@@ -11,6 +11,7 @@ import {
   loadRecentStats,
   loadRecentStatsByMode,
   rankCascade,
+  wilsonLowerBound,
   type ModelStats,
 } from '../../../../src/core/tools/builtin/coder/arsenal-v2/stats.js';
 
@@ -155,6 +156,12 @@ describe('rankCascade', () => {
     successes: approvals,
     avgDurationMs: 1000,
     lastSeen: NOW,
+    // Slice 10: assume no decay in synthetic stats — equivalent to weights
+    // of 1.0 per row. The slice-10 Wilson-on-weighted scoring then collapses
+    // to plain Wilson on integer counts, preserving the slice-7 test
+    // expectations under the new score function.
+    weightedAttempts: attempts,
+    weightedApprovals: approvals,
   });
 
   it('returns single-element cascade unchanged', () => {
@@ -261,6 +268,107 @@ describe('loadRecentStatsByMode', () => {
     const out = loadRecentStatsByMode({ path: logPath, now: NOW });
     expect(out.get('fix')!.get('A')!.avgDurationMs).toBe(1500);
     expect(out.get('refactor')!.get('A')!.avgDurationMs).toBe(10_000);
+  });
+});
+
+describe('wilsonLowerBound', () => {
+  it('returns 0 when attempts is 0 or negative', () => {
+    expect(wilsonLowerBound(0, 0)).toBe(0);
+    expect(wilsonLowerBound(0, -1)).toBe(0);
+  });
+
+  it('returns 0 for attempts = NaN', () => {
+    expect(wilsonLowerBound(1, NaN)).toBe(0);
+  });
+
+  it('never returns negative — clamps at 0', () => {
+    // For p=0 the formula can dip negative due to the margin; we clamp.
+    expect(wilsonLowerBound(0, 100)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('penalizes small samples heavily compared to large samples at the same ratio', () => {
+    // 3/3 (100%) vs 100/100 (100%) — Wilson should give the larger sample
+    // a meaningfully higher lower bound.
+    const small = wilsonLowerBound(3, 3);
+    const large = wilsonLowerBound(100, 100);
+    expect(large).toBeGreaterThan(small);
+    expect(large).toBeGreaterThan(0.95);
+  });
+
+  it('matches the textbook value at p=0.5, n=100, z=1.96 within tolerance', () => {
+    // Wilson lower bound for 50/100 at z=1.96 is ~0.402.
+    const v = wilsonLowerBound(50, 100, 1.96);
+    expect(v).toBeGreaterThan(0.4);
+    expect(v).toBeLessThan(0.41);
+  });
+
+  it('is monotonic in approvals (more approvals → higher bound) at fixed n', () => {
+    const a = wilsonLowerBound(50, 100);
+    const b = wilsonLowerBound(60, 100);
+    const c = wilsonLowerBound(70, 100);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(c);
+  });
+
+  it('tolerates non-integer (decay-weighted) inputs', () => {
+    // 6.0 approvals / 8.5 attempts — realistic post-decay values.
+    expect(() => wilsonLowerBound(6.0, 8.5)).not.toThrow();
+    const v = wilsonLowerBound(6.0, 8.5);
+    expect(v).toBeGreaterThan(0);
+    expect(v).toBeLessThan(1);
+  });
+});
+
+describe('slice-10 decay weighting in loadRecentStats', () => {
+  it('a row at age 0 has weight ~1, at one half-life has weight ~0.5', async () => {
+    await seed([
+      row({ model: 'A', ts: NOW, criticVerdict: 'approve' }),         // weight ~1
+      row({ model: 'A', ts: NOW - 3 * dayMs, criticVerdict: 'approve' }), // weight ~0.5 at 3-day halfLife
+    ]);
+    const stats = loadRecentStats({ path: logPath, now: NOW, halfLifeMs: 3 * dayMs });
+    const a = stats.get('A')!;
+    expect(a.attempts).toBe(2); // raw count unchanged
+    expect(a.approvals).toBe(2);
+    expect(a.weightedAttempts).toBeGreaterThan(1.4);
+    expect(a.weightedAttempts).toBeLessThan(1.6);
+    expect(a.weightedApprovals).toBeCloseTo(a.weightedAttempts, 5);
+  });
+
+  it('halfLifeMs <= 0 disables decay (all weights = 1)', async () => {
+    await seed([
+      row({ model: 'A', ts: NOW - 6 * dayMs, criticVerdict: 'approve' }),
+      row({ model: 'A', ts: NOW, criticVerdict: 'approve' }),
+    ]);
+    const stats = loadRecentStats({ path: logPath, now: NOW, halfLifeMs: 0 });
+    const a = stats.get('A')!;
+    expect(a.weightedAttempts).toBe(2);
+    expect(a.weightedApprovals).toBe(2);
+  });
+});
+
+describe('slice-10 Wilson + decay integration with rankCascade', () => {
+  it('Wilson stops a tiny-sample 100% from outranking a large-sample 95%', async () => {
+    // A: 3/3 approvals (100%). B: 95/100 approvals (95%). Plain ratio would
+    // tie at A=1.0 > B=0.95. Wilson should pick B.
+    await seed([
+      ...Array.from({ length: 3 }, () => row({ mode: 'fix', model: 'A', ts: NOW, criticVerdict: 'approve' })),
+      ...Array.from({ length: 95 }, () => row({ mode: 'fix', model: 'B', ts: NOW, criticVerdict: 'approve' })),
+      ...Array.from({ length: 5 }, () => row({ mode: 'fix', model: 'B', ts: NOW, criticVerdict: 'needs_revision' })),
+    ]);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 0 });
+    const ranked = rankCascade(['A', 'B'], byMode.get('fix')!);
+    expect(ranked).toEqual(['B', 'A']);
+  });
+
+  it('decay lets a recent approval streak outrank an old rejection streak', async () => {
+    // A: 10 rejections 6 days ago. B: 10 approvals 1 hour ago.
+    await seed([
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'A', ts: NOW - 6 * dayMs, criticVerdict: 'needs_revision' })),
+      ...Array.from({ length: 10 }, () => row({ mode: 'fix', model: 'B', ts: NOW - 3600 * 1000, criticVerdict: 'approve' })),
+    ]);
+    const byMode = loadRecentStatsByMode({ path: logPath, now: NOW, halfLifeMs: 3 * dayMs });
+    const ranked = rankCascade(['A', 'B'], byMode.get('fix')!);
+    expect(ranked).toEqual(['B', 'A']);
   });
 });
 
