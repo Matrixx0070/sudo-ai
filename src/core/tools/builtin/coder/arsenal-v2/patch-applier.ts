@@ -364,8 +364,11 @@ function atomicWrite(absFile: string, content: string, projectRoot: string): voi
  * Escape a project-relative path so it's safe as a filename in the backup
  * directory. Path separators become double-underscores; everything else is
  * preserved verbatim so the backup name is recognizable by humans.
+ *
+ * Exported so revert.ts can decode without duplicating the rule — keeps the
+ * write + read sides of the backup contract pinned to a single source.
  */
-function encodePath(relFile: string): string {
+export function encodePath(relFile: string): string {
   return relFile.replace(/[\\/]/g, '__');
 }
 
