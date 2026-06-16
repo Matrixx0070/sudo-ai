@@ -208,6 +208,7 @@ export const arsenalV2Tool: ToolDefinition = {
           ? false
           : true;
     const statsWindowMs = Number(process.env['SUDO_ARSENAL_V2_STATS_WINDOW_MS']);
+    const halfLifeMs = Number(process.env['SUDO_ARSENAL_V2_STATS_HALF_LIFE_MS']);
     const cascade =
       reorderEnabled && cascadeOriginal.length > 1
         ? rankCascade(
@@ -219,6 +220,7 @@ export const arsenalV2Tool: ToolDefinition = {
             loadRecentStatsByMode({
               path: TELEMETRY_PATH,
               windowMs: Number.isFinite(statsWindowMs) && statsWindowMs > 0 ? statsWindowMs : undefined,
+              halfLifeMs: Number.isFinite(halfLifeMs) && halfLifeMs > 0 ? halfLifeMs : undefined,
             }).get(mode) ?? new Map(),
           )
         : cascadeOriginal;
