@@ -27,6 +27,8 @@ import type { ToolContext, ToolDefinition, ToolResult } from '../../../types.js'
 import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../../shared/paths.js';
 import { getModel } from '../../../../brain/providers.js';
+import { runCritic } from './critic.js';
+import { buildDiffSummary } from './diff-summary.js';
 import { applyPatches } from './patch-applier.js';
 import { parsePatchBlock } from './patch-parser.js';
 import { recon } from './recon.js';
@@ -235,6 +237,22 @@ export const arsenalV2Tool: ToolDefinition = {
       ? runRelatedTests(applyResult.filesWritten, { projectRoot: PROJECT_ROOT })
       : null;
 
+    // ---- 7c. Critic — second-pass LLM review of the applied diff ----
+    const criticModelId =
+      process.env['SUDO_ARSENAL_V2_CRITIC_MODEL'] || modelId;
+    const criticResult =
+      applied > 0
+        ? await runCritic({
+            task,
+            mode,
+            diffSummary: buildDiffSummary(applyResult.results),
+            tscSummary: after.summary,
+            testSummary: testResult ? testResult.summary : null,
+            llm: ({ modelId: mId, system, user }) => callLLM(mId, system, user),
+            modelId: criticModelId,
+          })
+        : null;
+
     // ---- 8. Build structured report ----
     const lines: string[] = [`**[coder.arsenal-v2 — ${modelId} — ${mode}]**`, ''];
     lines.push('## Patches');
@@ -263,12 +281,27 @@ export const arsenalV2Tool: ToolDefinition = {
       lines.push('');
     }
 
+    if (criticResult) {
+      const verdictGlyph =
+        criticResult.verdict === 'approve' ? '✓' : criticResult.verdict === 'needs_revision' ? '⚠' : '✗';
+      lines.push('## Critic');
+      lines.push(`  Verdict: ${verdictGlyph} ${criticResult.verdict.toUpperCase()} (${criticResult.modelId})`);
+      if (criticResult.critique) {
+        for (const l of criticResult.critique.split('\n')) lines.push(`  ${l}`);
+      }
+      lines.push('');
+    }
+
     lines.push(`## Backups`);
     lines.push(`  ${applyResult.backupDir}`);
 
     const tscOk = after.clean || (baseline ? after.errorCount < baseline.errorCount : true);
     const testsOk = !testResult || testResult.skipped || testResult.passed;
-    const success = failed === 0 && tscOk && testsOk;
+    // Critic blocks tool success only when it ran and returned needs_revision.
+    // An 'error' verdict (LLM call failed or output malformed) does NOT block —
+    // graceful degrade, matching how tsc / tests treat their own skip paths.
+    const criticOk = !criticResult || criticResult.skipped || criticResult.verdict === 'approve';
+    const success = failed === 0 && tscOk && testsOk && criticOk;
     return {
       success,
       output: lines.join('\n'),
@@ -289,6 +322,10 @@ export const arsenalV2Tool: ToolDefinition = {
         testsRun: testResult?.testsRun ?? null,
         testFailures: testResult?.failures ?? null,
         testSkipReason: testResult?.skipReason ?? null,
+        criticRan: criticResult?.ran ?? false,
+        criticVerdict: criticResult?.verdict ?? null,
+        criticModel: criticResult?.modelId ?? null,
+        criticSkipReason: criticResult?.skipReason ?? null,
       },
     };
   },
