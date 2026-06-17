@@ -48,9 +48,18 @@ interface CompactionResponse {
   content: string;
 }
 
-/** Duck-typed brain interface — avoids circular imports. */
+/**
+ * Duck-typed brain interface — avoids circular imports. The optional
+ * second `opts` arg lets compaction pass a tier hint (`'high-stakes'`)
+ * so the env-driven strategy upgrade from PR #242 can promote the
+ * summary call to debate/tree-search. Existing minimal mocks without
+ * the opts arg still satisfy this contract structurally.
+ */
 interface BrainLike {
-  call(request: CompactionRequest): Promise<CompactionResponse>;
+  call(
+    request: CompactionRequest,
+    opts?: { tier?: 'fast' | 'routine' | 'high-stakes' },
+  ): Promise<CompactionResponse>;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,14 +160,20 @@ export async function compact(brain: unknown, messages: unknown[]): Promise<stri
     log.debug({ attempt, maxRetries: MAX_COMPACTION_RETRIES }, 'Compaction attempt');
 
     try {
-      const response = await brainLike.call({
-        messages: [
-          { role: 'system' as const, content: systemPrompt },
-          { role: 'user' as const, content: userContent },
-        ],
-        temperature: 0.2,
-        maxTokens: 4_096,
-      });
+      // tier: 'high-stakes' — context compaction is one-shot per fill, and a
+      // malformed summary loses state every subsequent turn depends on. Opts
+      // into the env-driven strategy upgrade from PR #242.
+      const response = await brainLike.call(
+        {
+          messages: [
+            { role: 'system' as const, content: systemPrompt },
+            { role: 'user' as const, content: userContent },
+          ],
+          temperature: 0.2,
+          maxTokens: 4_096,
+        },
+        { tier: 'high-stakes' },
+      );
 
       const summary = response.content?.trim() ?? '';
 
@@ -264,7 +279,12 @@ export function resetAutoCompactFailures(): void {
 
 export async function autoCompact(
   history: Array<{ role: string; content: string }>,
-  brain: { call(opts: { messages: Array<{ role: string; content: string }>; maxTokens?: number }): Promise<{ content: string }> },
+  brain: {
+    call(
+      request: { messages: Array<{ role: string; content: string }>; maxTokens?: number },
+      opts?: { tier?: 'fast' | 'routine' | 'high-stakes' },
+    ): Promise<{ content: string }>;
+  },
   currentTokens: number,
   tokenLimit: number,
   options: AutoCompactOptions = {},
@@ -285,12 +305,15 @@ export async function autoCompact(
     const middle = history.slice(2, -6);
     const middleText = middle.map(m => `${m.role}: ${m.content}`).join('\n\n');
 
-    const summary = await brain.call({
-      messages: [
-        { role: 'user', content: `Summarize this conversation history concisely, preserving all important context, decisions, and state:\n\n${middleText}` },
-      ],
-      maxTokens: maxSummaryTokens,
-    });
+    const summary = await brain.call(
+      {
+        messages: [
+          { role: 'user', content: `Summarize this conversation history concisely, preserving all important context, decisions, and state:\n\n${middleText}` },
+        ],
+        maxTokens: maxSummaryTokens,
+      },
+      { tier: 'high-stakes' },
+    );
 
     counter.count = 0;
     const compacted = [
@@ -311,16 +334,24 @@ export async function autoCompact(
 // ---------------------------------------------------------------------------
 export async function fullCompact(
   history: Array<{ role: string; content: string }>,
-  brain: { call(opts: { messages: Array<{ role: string; content: string }>; maxTokens?: number }): Promise<{ content: string }> },
+  brain: {
+    call(
+      request: { messages: Array<{ role: string; content: string }>; maxTokens?: number },
+      opts?: { tier?: 'fast' | 'routine' | 'high-stakes' },
+    ): Promise<{ content: string }>;
+  },
   workspaceFiles: string[] = [],
 ): Promise<Array<{ role: string; content: string }>> {
   const allText = history.map(m => `${m.role}: ${m.content}`).join('\n\n');
   const lastUser = history.filter(m => m.role === 'user').at(-1);
 
-  const summary = await brain.call({
-    messages: [{ role: 'user', content: `Create a dense summary of this entire conversation, capturing all decisions, context, state, and important details:\n\n${allText}` }],
-    maxTokens: 16000,
-  });
+  const summary = await brain.call(
+    {
+      messages: [{ role: 'user', content: `Create a dense summary of this entire conversation, capturing all decisions, context, state, and important details:\n\n${allText}` }],
+      maxTokens: 16000,
+    },
+    { tier: 'high-stakes' },
+  );
 
   const fileContext = workspaceFiles
     .slice(0, 3)
