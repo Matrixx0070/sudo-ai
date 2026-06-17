@@ -112,6 +112,20 @@ module.exports = {
         // which matches the owner's intent (#216, #220, #221).
         SUDO_BRAIN_CONSENSUS_DISABLE: '1',
 
+        // Opt-in high-stakes strategy upgrade (PR #242, 2026-06-17): when set
+        // to 'debate' or 'tree-search', any brain.call passing
+        // { tier: 'high-stakes' } that didn't pin opts.strategy gets routed
+        // through the Blue/Red/Revise pipeline (#239) or N-candidate
+        // verifier-guided tree search (#240). First wire-in is
+        // task-decomposer — one-shot per complex user request, where a wrong
+        // decomposition derails the whole downstream task. Other tagged call
+        // sites adopt automatically as they're added.
+        // Kill-switch: unset (or any non-debate/tree-search value) → single.
+        // Cost note: debate adds ~15–30s + ~3× tokens per upgraded call;
+        // tree-search adds ~60–90s + ~6× tokens. Worth it on the one-shot
+        // paths; do NOT set for hot inner loops.
+        SUDO_BRAIN_HIGH_STAKES_STRATEGY: 'debate',
+
         // Autopilot mode (owner ask 2026-06-17): raise the LoopGuard
         // consecutive-tool-iteration ceiling so a single turn can chain
         // many tool calls (langchain-agent-style ReAct loops) instead of
