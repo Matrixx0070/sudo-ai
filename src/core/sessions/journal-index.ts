@@ -63,14 +63,23 @@ export function writeIndex(indexPath: string, index: SessionIndex): void {
  * Matches against entry.id and entry.aliases (drift between SQLite primary
  * and the journal-store is reconciled by recording the foreign id under
  * aliases — see DualSessionManager.getOrCreate).
+ *
+ * When the same id-or-alias resolves to multiple entries (e.g. a session
+ * fork archives the old entry under the primary id while a fresh active
+ * entry carries the primary id as alias), state='active' wins. Without
+ * this preference, post-fork appendEvent/save calls land on the archived
+ * JSONL file because it appears first in the array, leaving the active
+ * entry's file stranded at its session-created event.
  */
 export function findEntry(
   index: SessionIndex,
   sessionId: string,
 ): SessionIndexEntry | undefined {
-  return index.entries.find(
+  const matches = index.entries.filter(
     (e) => e.id === sessionId || (e.aliases?.includes(sessionId) ?? false),
   );
+  if (matches.length === 0) return undefined;
+  return matches.find((e) => e.state === 'active') ?? matches[0];
 }
 
 /**
