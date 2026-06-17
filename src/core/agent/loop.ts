@@ -2245,8 +2245,16 @@ export class AgentLoop {
 
           // Cross-iteration loop detection: if the model keeps returning tool calls
           // instead of text, break after a threshold to prevent runaway loops.
+          // Threshold is env-configurable so deep-research asks ("review your
+          // own code", "audit all features") aren't artificially cut short.
+          // Default 15; clamped to [3, 100]. The outer agents.maxIterations
+          // (default 150) remains the absolute ceiling.
           state.consecutiveToolIterations++;
-          if (state.consecutiveToolIterations >= 5) {
+          const envCap = parseInt(process.env['SUDO_LOOP_MAX_CONSECUTIVE_TOOL_ITERS'] ?? '', 10);
+          const consecutiveToolCap = Number.isFinite(envCap)
+            ? Math.min(100, Math.max(3, envCap))
+            : 15;
+          if (state.consecutiveToolIterations >= consecutiveToolCap) {
             const loopMsg = `[LoopGuard] Model returned tool calls for ${state.consecutiveToolIterations} consecutive iterations — forcing text response to break potential loop.`;
             log.warn({ sessionId: state.sessionId, consecutiveToolIterations: state.consecutiveToolIterations }, 'Cross-iteration tool loop detected — breaking');
             session.messages.push({ role: 'system', content: loopMsg });
