@@ -59,4 +59,32 @@ describe('task-decomposer', () => {
     expect(isComplexRequest('build X then deploy Y')).toBe(true);
     expect(isComplexRequest('hello')).toBe(false);
   });
+
+  it('TD-6: passes { tier: "high-stakes" } so the env upgrade can apply', async () => {
+    const brain = mockBrain('1. a\n2. b\n3. c');
+    await decomposeIfComplex(brain, COMPLEX);
+    // brain.call is invoked with two args: request + opts
+    expect(brain.call.mock.calls[0][1]).toEqual({ tier: 'high-stakes' });
+  });
+
+  it('TD-7: SUDO_BRAIN_HIGH_STAKES_STRATEGY=debate bumps the decomposition timeout', async () => {
+    const saved = process.env['SUDO_BRAIN_HIGH_STAKES_STRATEGY'];
+    process.env['SUDO_BRAIN_HIGH_STAKES_STRATEGY'] = 'debate';
+    try {
+      // Brain hangs longer than the original 10s but finishes within the bumped window.
+      const brain = {
+        call: vi.fn().mockImplementation(
+          () =>
+            new Promise((resolve) =>
+              setTimeout(() => resolve({ content: '1. a\n2. b\n3. c' }), 50),
+            ),
+        ),
+      };
+      const r = await decomposeIfComplex(brain, COMPLEX);
+      expect(r.isComplex).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env['SUDO_BRAIN_HIGH_STAKES_STRATEGY'];
+      else process.env['SUDO_BRAIN_HIGH_STAKES_STRATEGY'] = saved;
+    }
+  });
 });

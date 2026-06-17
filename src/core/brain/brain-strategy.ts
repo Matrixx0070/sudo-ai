@@ -62,10 +62,30 @@ export const DEFAULT_BRAIN_STRATEGY: BrainStrategy = 'single';
 export const DEFAULT_BRAIN_TIER: BrainCallTier = 'routine';
 
 /**
- * Returns the effective strategy after applying tier short-circuits.
- * `fast` tier always wins over the configured strategy because the
- * cost/latency profile of multi-step pipelines is incompatible with
- * background work (cognitive stream ticks, classifiers).
+ * Env var that opts the system into auto-upgrading `tier: 'high-stakes'`
+ * calls to a multi-step strategy. Accepted values: `debate`, `tree-search`.
+ * Unset / any other value → no upgrade (default behaviour preserved).
+ *
+ * Wired in PR #242 so call sites can mark themselves high-stakes (`{ tier:
+ * 'high-stakes' }`) once, and the operator decides via env whether to pay
+ * for the extra quality. Explicit `opts.strategy` always wins — the upgrade
+ * only fires when the caller left strategy unspecified.
+ */
+export const HIGH_STAKES_UPGRADE_ENV = 'SUDO_BRAIN_HIGH_STAKES_STRATEGY';
+
+/**
+ * Returns the effective strategy after applying tier short-circuits and
+ * the high-stakes env upgrade.
+ *
+ * Resolution order:
+ *   1. `tier: 'fast'` → always `single`, even if strategy is set. Multi-step
+ *      pipelines are incompatible with background work (cognitive ticks,
+ *      classifiers).
+ *   2. Explicit `opts.strategy` wins next — caller knows best.
+ *   3. `tier: 'high-stakes'` + env `SUDO_BRAIN_HIGH_STAKES_STRATEGY` set to
+ *      a valid strategy → use that. Lets operators flip multi-step on for
+ *      high-stakes paths without touching call sites.
+ *   4. Otherwise → the brain's ambient `configured` strategy.
  */
 export function resolveEffectiveStrategy(
   configured: BrainStrategy,
@@ -73,5 +93,12 @@ export function resolveEffectiveStrategy(
 ): BrainStrategy {
   const tier = opts?.tier ?? DEFAULT_BRAIN_TIER;
   if (tier === 'fast') return 'single';
-  return opts?.strategy ?? configured;
+  if (opts?.strategy) return opts.strategy;
+  if (tier === 'high-stakes') {
+    const envUpgrade = process.env[HIGH_STAKES_UPGRADE_ENV];
+    if (envUpgrade === 'debate' || envUpgrade === 'tree-search') {
+      return envUpgrade;
+    }
+  }
+  return configured;
 }
