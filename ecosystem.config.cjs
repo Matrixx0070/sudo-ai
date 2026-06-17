@@ -112,6 +112,16 @@ module.exports = {
         // which matches the owner's intent (#216, #220, #221).
         SUDO_BRAIN_CONSENSUS_DISABLE: '1',
 
+        // Autopilot mode (owner ask 2026-06-17): raise the LoopGuard
+        // consecutive-tool-iteration ceiling so a single turn can chain
+        // many tool calls (langchain-agent-style ReAct loops) instead of
+        // getting cut off at 15. Default in #219 was 15; bumping to 50
+        // gives ~3× the headroom while keeping the absolute outer
+        // agents.maxIterations:150 safety ceiling intact. Real runaway
+        // tool loops still trigger long before 50; legitimate
+        // multi-step research can now finish without artificial cutoff.
+        SUDO_LOOP_MAX_CONSECUTIVE_TOOL_ITERS: '50',
+
         // Web chat token — set explicitly so relay scripts can authenticate
         WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
 
