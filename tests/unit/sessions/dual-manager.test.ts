@@ -312,6 +312,57 @@ describe('DualSessionManager', () => {
       expect(lastEvent.content).toBe('hello via aliased id');
     });
 
+    it('post-reconcile lookup prefers the ACTIVE entry over an archived collision', async () => {
+      // Mirror today's prod state: a pre-existing entry was renamed to the
+      // primary id and then archived during a session fork; a new active
+      // entry got the same primary id under aliases[]. findEntry must land
+      // on the active entry, not the archived one.
+      await realJournal.getOrCreate('telegram', 'user-collision');
+      const idxPath = path.join(tempDir, 'sessions.json');
+      let raw = JSON.parse(readFileSync(idxPath, 'utf8')) as SessionIndex;
+      const seeded = raw.entries.find(
+        (e) => e.channel === 'telegram' && e.peerId === 'user-collision',
+      );
+      if (!seeded) throw new Error('seed entry missing');
+      seeded.id = 'sess-001';
+      seeded.state = 'archived';
+      const { writeIndex } = await import('../../../src/core/sessions/journal-index.js');
+      writeIndex(idxPath, raw);
+
+      // A fresh active entry is allocated by journal.getOrCreate; dual
+      // reconciliation adds sess-001 (the primary mock's id) to its aliases.
+      await realJournal.getOrCreate('telegram', 'user-collision');
+      await realDual.getOrCreate('telegram', 'user-collision');
+
+      raw = JSON.parse(readFileSync(idxPath, 'utf8')) as SessionIndex;
+      const archived = raw.entries.find(
+        (e) => e.state === 'archived' && e.peerId === 'user-collision',
+      );
+      const active = raw.entries.find(
+        (e) => e.state === 'active' && e.peerId === 'user-collision',
+      );
+      expect(archived?.id).toBe('sess-001');
+      expect(active?.aliases).toContain('sess-001');
+
+      // appendEvent keyed off the primary id must land on the ACTIVE entry.
+      await realJournal.appendEvent('sess-001', {
+        ts: new Date().toISOString(),
+        sessionId: 'sess-001',
+        type: 'message',
+        role: 'user',
+        content: 'reply must land on active',
+      });
+      const activeJsonl = readFileSync(path.join(tempDir, active!.file), 'utf8')
+        .split('\n')
+        .filter(Boolean);
+      const archivedJsonl = readFileSync(path.join(tempDir, archived!.file), 'utf8')
+        .split('\n')
+        .filter(Boolean);
+      expect(activeJsonl[activeJsonl.length - 1]).toContain('reply must land on active');
+      // Archived file unchanged.
+      expect(archivedJsonl.length).toBe(1);
+    });
+
     it('does NOT write alias when ids already match', async () => {
       // Force the journal to use the same id as the primary mock.
       primary.getOrCreate = vi.fn(async (channel: string, peerId: string) =>
