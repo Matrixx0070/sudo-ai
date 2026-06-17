@@ -206,6 +206,40 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
                 delete (parsed as Record<string, unknown>)['temperature'];
               }
 
+              // ---- 1c. Enable extended thinking for opus-4-8+.
+              // The Anthropic Max Plan unlocks high thinking budgets on opus
+              // 4.8+. We enable on every request to those models so each reply
+              // gets the deeper reasoning the plan pays for.
+              //
+              // Budget defaults to 32768 (matches EFFORT_LEVELS.max preset).
+              // Override via SUDO_THINKING_BUDGET (1024-65536 valid range).
+              // Kill-switch: SUDO_THINKING_DISABLE=1.
+              //
+              // max_tokens must be > budget_tokens; we bump it when needed so
+              // a stale 8192-cap caller doesn't 400 with
+              // "max_tokens must be greater than thinking.budget_tokens".
+              if (
+                typeof parsed['model'] === 'string' &&
+                /^claude-opus-4-(8|9|[1-9][0-9]+)/.test(parsed['model']) &&
+                process.env['SUDO_THINKING_DISABLE'] !== '1' &&
+                parsed['thinking'] === undefined
+              ) {
+                const envBudget = parseInt(process.env['SUDO_THINKING_BUDGET'] ?? '', 10);
+                const budgetTokens = Number.isFinite(envBudget)
+                  ? Math.min(65536, Math.max(1024, envBudget))
+                  : 32768;
+                (parsed as Record<string, unknown>)['thinking'] = {
+                  type: 'enabled',
+                  budget_tokens: budgetTokens,
+                };
+                const currentMax = typeof parsed['max_tokens'] === 'number'
+                  ? (parsed['max_tokens'] as number)
+                  : 0;
+                if (currentMax <= budgetTokens) {
+                  (parsed as Record<string, unknown>)['max_tokens'] = budgetTokens + 4096;
+                }
+              }
+
               // ---- 2. Tool-name sanitisation --------------------------
               if (Array.isArray(parsed.tools)) {
                 for (const tool of parsed.tools as Array<Record<string, unknown>>) {
