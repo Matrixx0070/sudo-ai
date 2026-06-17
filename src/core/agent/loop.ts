@@ -57,6 +57,7 @@ import type {
   UnifiedMemoryLike,
   PredictorLike,
 } from './loop-types.js';
+import { AgentLoopInjections } from './loop-injections.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
 import { LoopGuard } from './loop-guard.js';
 import { buildLoopFallbackReply } from './loop-fallback.js';
@@ -169,7 +170,7 @@ export interface AgentRunResult {
  * All dependencies are duck-typed to avoid circular imports.
  */
 
-export class AgentLoop {
+export class AgentLoop extends AgentLoopInjections {
   private readonly brain: BrainLike;
   private readonly toolRegistry: ToolRegistryLike;
   private readonly sessionManager: SessionManagerLike;
@@ -259,15 +260,15 @@ export class AgentLoop {
   private _criticPass?: import('./loop-helpers.js').CriticPassLike;
 
   // Negative Router — 3-tier DFA routing (block/redirect/model selection)
-  private _negativeRouter?: NegativeRouter;
+  // _negativeRouter moved to AgentLoopInjections base (#231)
 
   // Context Compressor — graduated 4-stage compression
-  private _contextCompressor?: ContextCompressor;
+  // _contextCompressor moved to AgentLoopInjections base (#231)
 
   // Phase 2: TraceStore — persistent execution trace recording (optional, fail-open).
-  private _traceStore?: TraceStore;
+  // _traceStore moved to AgentLoopInjections base (#231)
   // Phase 2: TraceDrivenPolicy — learned model/tool/param policy (optional, fail-open).
-  private _traceDrivenPolicy?: TraceDrivenPolicy;
+  // _traceDrivenPolicy moved to AgentLoopInjections base (#231)
 
   // P0: LazinessNudge — detects lazy text-only responses (no tool calls).
   private _lazinessNudge?: LazinessNudge;
@@ -281,7 +282,7 @@ export class AgentLoop {
   private _goalStopDetector?: GoalStopDetector;
   // Opt-in (SUDO_PREDICTOR_LOOP): Predictor for anticipatory injection. Falls back
   // to the shared meta.predictor singleton when not explicitly injected.
-  private _predictor?: PredictorLike;
+  // _predictor moved to AgentLoopInjections base (#231)
   // P0: PlanModeStateMachine — manages plan mode enter/exit tool definitions.
   private _planModeStateMachine?: PlanModeStateMachine;
   // P0: ProfileManager — sandbox profile management (exposed via getter for SandboxManager).
@@ -304,6 +305,7 @@ export class AgentLoop {
     hooks?: unknown,
     sandboxManager?: unknown,
   ) {
+    super();
     if (!brain || typeof (brain as BrainLike).call !== 'function') {
       throw new PipelineError('AgentLoop: brain must have a call() method', 'pipeline_invalid_brain');
     }
@@ -798,65 +800,10 @@ export class AgentLoop {
     return this._feedbackMemory;
   }
 
-  /** Wire NegativeRouter after construction. Fail-open if duck-type mismatch. */
-  setNegativeRouter(router: NegativeRouter): void {
-    if (router && typeof router.route === 'function') {
-      this._negativeRouter = router;
-      log.info('AgentLoop: NegativeRouter attached');
-    } else {
-      log.warn('AgentLoop: setNegativeRouter: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Returns the NegativeRouter instance if attached. */
-  getNegativeRouter(): NegativeRouter | undefined {
-    return this._negativeRouter;
-  }
-
-  /** Wire ContextCompressor after construction. Fail-open if duck-type mismatch. */
-  setContextCompressor(compressor: ContextCompressor): void {
-    if (compressor && typeof compressor.shouldCompress === 'function' && typeof compressor.compress === 'function') {
-      this._contextCompressor = compressor;
-      log.info('AgentLoop: ContextCompressor attached');
-    } else {
-      log.warn('AgentLoop: setContextCompressor: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Returns the ContextCompressor instance if attached. */
-  getContextCompressor(): ContextCompressor | undefined {
-    return this._contextCompressor;
-  }
-
-  /** Wire TraceStore after construction (Phase 2: persistent trace recording). Fail-open if duck-type mismatch. */
-  setTraceStore(ts: TraceStore): void {
-    if (ts && typeof ts.recordToolCall === 'function' && typeof ts.recordBrainCall === 'function' && typeof ts.recordRouting === 'function') {
-      this._traceStore = ts;
-      log.info('AgentLoop: TraceStore attached');
-    } else {
-      log.warn('AgentLoop: setTraceStore: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Returns the TraceStore instance if attached. */
-  getTraceStore(): TraceStore | undefined {
-    return this._traceStore;
-  }
-
-  /** Wire TraceDrivenPolicy after construction (Phase 2: learned policy evaluation). Fail-open if duck-type mismatch. */
-  setTraceDrivenPolicy(policy: TraceDrivenPolicy): void {
-    if (policy && typeof policy.evaluate === 'function' && typeof policy.recordOutcome === 'function') {
-      this._traceDrivenPolicy = policy;
-      log.info('AgentLoop: TraceDrivenPolicy attached');
-    } else {
-      log.warn('AgentLoop: setTraceDrivenPolicy: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Returns the TraceDrivenPolicy instance if attached. */
-  getTraceDrivenPolicy(): TraceDrivenPolicy | undefined {
-    return this._traceDrivenPolicy;
-  }
+  // setNegativeRouter/getNegativeRouter, setContextCompressor/getContextCompressor,
+  // setTraceStore/getTraceStore, setTraceDrivenPolicy/getTraceDrivenPolicy all
+  // moved to AgentLoopInjections base (#231). The fields they set are protected
+  // in the base, so internal references via `this._foo` still resolve.
 
   /** Wire LazinessNudge after construction (P0: lazy response detection). Fail-open if duck-type mismatch. */
   setLazinessNudge(ln: LazinessNudge): void {
@@ -898,15 +845,7 @@ export class AgentLoop {
     }
   }
 
-  /** Wire a Predictor for opt-in anticipatory injection (SUDO_PREDICTOR_LOOP). Fail-open if duck-type mismatch. */
-  setPredictor(p: PredictorLike): void {
-    if (p && typeof p.anticipate === 'function') {
-      this._predictor = p;
-      log.info('AgentLoop: Predictor attached');
-    } else {
-      log.warn('AgentLoop: setPredictor: invalid duck-type — ignoring');
-    }
-  }
+  // setPredictor moved to AgentLoopInjections base (#231).
 
   /** Wire GoalStopDetector after construction (P0: goal completion checking). Fail-open if duck-type mismatch. */
   setGoalStopDetector(gsd: GoalStopDetector): void {
