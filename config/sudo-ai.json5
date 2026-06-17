@@ -11,11 +11,15 @@
     systemPrompt: "You are SUDO-AI. Be helpful, concise, accurate. Owner loyalty per SOUL.",
   },
   models: {
-    // Single-LLM mode: every Brain routing decision (primary, fallback, cheap
-    // fast-path, premium reasoning-tier) maps to claude-oauth/claude-opus-4-8.
-    // Pinning cheap+premium to the same id keeps _smartRoute's cheap branch
-    // and reasoning-tier branch as no-ops, since both only fire when the
-    // alternate differs from primaryModel.
+    // Claude-oauth-only routing. Primary = opus-4-8 (Max-Plan-grade
+    // reasoning with extended thinking enabled by the provider interceptor).
+    // Fallback = sonnet-4-6 — same OAuth provider, lighter model that
+    // anthropic doesn't 529 as often when opus is overloaded. Without a
+    // fallback at all, every opus 529 = "Agent turn failed" with no reply
+    // (observed live 2026-06-17 00:54).
+    // cheap + premium pinned to primary so _smartRoute's cheap branch and
+    // reasoning-tier branch stay no-ops; the only path the fallback can
+    // run is sequential failover after primary errors.
     primary: [
       {
         id: 'claude-oauth/claude-opus-4-8',
@@ -25,7 +29,7 @@
       },
     ],
     fallback: {
-      id: 'claude-oauth/claude-opus-4-8',
+      id: 'claude-oauth/claude-sonnet-4-6',
       contextWindow: 200000,
       maxOutputTokens: 8192,
       temperature: 0.7,
