@@ -254,6 +254,55 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
                 }
               }
 
+              // ---- 3. Orphan tool_result strip ----------------------------
+              // Anthropic rejects with 400 invalid_request_error when a
+              // tool_result block references a tool_use_id that has no
+              // matching tool_use in the preceding message. The session-fork
+              // path (sliding window + proactive trim) sometimes drops the
+              // original tool_use message while keeping its tool_result,
+              // producing orphans with synthesized "fallback_<ts>" ids.
+              // Pre-2026-06-17 the multi-model failover chain hid this by
+              // rotating to a less strict validator; now single-claude-oauth
+              // surfaces it as "Agent turn failed" with no reply.
+              // Strategy: scan once for every tool_use_id present in any
+              // assistant message, then drop tool_result blocks whose id is
+              // not in that set. Leaves valid pairs untouched.
+              if (Array.isArray(parsed['messages'])) {
+                const msgs = parsed['messages'] as Array<Record<string, unknown>>;
+                const validToolUseIds = new Set<string>();
+                for (const m of msgs) {
+                  if (Array.isArray(m['content'])) {
+                    for (const b of m['content'] as Array<Record<string, unknown>>) {
+                      if (b['type'] === 'tool_use' && typeof b['id'] === 'string') {
+                        validToolUseIds.add(b['id']);
+                      }
+                    }
+                  }
+                }
+                let droppedCount = 0;
+                for (const m of msgs) {
+                  if (!Array.isArray(m['content'])) continue;
+                  const filtered = (m['content'] as Array<Record<string, unknown>>).filter((b) => {
+                    if (b['type'] !== 'tool_result') return true;
+                    const tid = b['tool_use_id'];
+                    if (typeof tid !== 'string') return true;
+                    if (validToolUseIds.has(tid)) return true;
+                    droppedCount++;
+                    return false;
+                  });
+                  m['content'] = filtered;
+                }
+                if (droppedCount > 0) {
+                  log.warn({ droppedCount }, 'claude-oauth: dropped orphan tool_result blocks');
+                  // Drop any message whose content array is now empty — empty
+                  // content arrays are also a 400.
+                  parsed['messages'] = msgs.filter((m) => {
+                    if (!Array.isArray(m['content'])) return true;
+                    return (m['content'] as unknown[]).length > 0;
+                  });
+                }
+              }
+
               body = JSON.stringify(parsed);
             } catch {
               // Body wasn't JSON — leave as-is. The SDK only sends JSON to
