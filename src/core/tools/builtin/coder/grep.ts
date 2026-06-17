@@ -6,6 +6,7 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
+import { resolveSandboxOrHostPath } from './sandbox-path.js';
 import { promisify } from 'node:util';
 import { resolve, join, relative } from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
@@ -212,40 +213,10 @@ export const grepTool: ToolDefinition = {
       return { success: false, output: 'coder.grep: "pattern" parameter is required.' };
     }
 
-    // searchPath resolution:
-    //  - No path param → search ctx.workingDir directly (existing behaviour).
-    //  - Path provided → resolve against ctx.workingDir first.
-    //  - Fallback: if the workingDir is a workspace session sandbox and the
-    //    resolved path doesn't exist there, retry against the host project
-    //    root. Mirrors the #223 coder.read-file fix — without this, every
-    //    bot attempt to grep host source from inside the sandbox hits
-    //    ENOENT and the call falls through to the catch (level:50 "Grep
-    //    failed", observed live 2026-06-17 01:12).
     const rawPath = params['path'];
-    let searchPath: string;
-    if (typeof rawPath !== 'string') {
-      searchPath = ctx.workingDir;
-    } else {
-      searchPath = resolve(ctx.workingDir, rawPath);
-      try {
-        await stat(searchPath);
-      } catch (err: unknown) {
-        const code = (err as NodeJS.ErrnoException).code;
-        const inSandbox = /\/workspace\/sessions\//.test(ctx.workingDir);
-        if (code === 'ENOENT' && inSandbox) {
-          const projectRoot = ctx.workingDir.replace(/\/workspace\/sessions\/.*/, '');
-          const fallback = resolve(projectRoot, rawPath);
-          try {
-            await stat(fallback);
-            searchPath = fallback;
-          } catch {
-            // Fallback also missing — keep the original path so the
-            // downstream stat() emits the same error users would have
-            // seen before, no behaviour change for genuinely-missing paths.
-          }
-        }
-      }
-    }
+    const searchPath = typeof rawPath !== 'string'
+      ? ctx.workingDir
+      : await resolveSandboxOrHostPath(ctx.workingDir, rawPath);
     const include = typeof params['include'] === 'string' ? params['include'] : undefined;
     const exclude = typeof params['exclude'] === 'string' ? params['exclude'] : undefined;
     const contextLines = typeof params['contextLines'] === 'number' ? Math.max(0, params['contextLines']) : 0;

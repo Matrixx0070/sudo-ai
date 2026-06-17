@@ -4,8 +4,8 @@
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { resolveSandboxOrHostPath } from './sandbox-path.js';
 
 // ---------------------------------------------------------------------------
 // Stack trace parsing
@@ -189,7 +189,7 @@ export const debuggerTool: ToolDefinition = {
 
     const stackTrace = typeof params['stackTrace'] === 'string' ? params['stackTrace'] : '';
     const debugCwd = typeof params['cwd'] === 'string'
-      ? resolve(ctx.workingDir, params['cwd'])
+      ? await resolveSandboxOrHostPath(ctx.workingDir, params['cwd'])
       : ctx.workingDir;
     const autoFix = params['autoFix'] === true;
 

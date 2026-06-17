@@ -5,8 +5,9 @@
  */
 
 import { glob as nodeGlob, readdir, stat } from 'node:fs/promises';
-import { resolve, relative, join } from 'node:path';
+import { relative, join } from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { resolveSandboxOrHostPath } from './sandbox-path.js';
 
 /**
  * Convert a glob pattern to a RegExp for simple fallback matching.
@@ -93,7 +94,7 @@ export const globTool: ToolDefinition = {
     }
 
     const searchDir = typeof params['cwd'] === 'string'
-      ? resolve(ctx.workingDir, params['cwd'])
+      ? await resolveSandboxOrHostPath(ctx.workingDir, params['cwd'])
       : ctx.workingDir;
 
     const ignoreRaw = Array.isArray(params['ignore']) ? (params['ignore'] as unknown[]) : [];
