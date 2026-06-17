@@ -41,6 +41,12 @@ import type {
   HookEmitterLike,
   FeedbackMemoryLike,
 } from './loop-helpers.js';
+import type {
+  SessionManagerLike,
+  ConsciousnessLike,
+  UnifiedMemoryLike,
+  PredictorLike,
+} from './loop-types.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
 import { LoopGuard } from './loop-guard.js';
 import { buildLoopFallbackReply } from './loop-fallback.js';
@@ -156,64 +162,6 @@ export interface AgentRunResult {
 }
 
 // ---------------------------------------------------------------------------
-// Duck-typed SessionManager interface
-// ---------------------------------------------------------------------------
-
-interface SessionManagerLike {
-  get(sessionId: string): Promise<SessionLike | undefined>;
-  save(session: SessionLike): Promise<void>;
-  archive(sessionId: string): Promise<void>;
-  getOrCreate(channel: import('../channels/types.js').ChannelType, peerId: string): Promise<SessionLike>;
-}
-
-// ---------------------------------------------------------------------------
-// Duck-typed Consciousness interface
-// ---------------------------------------------------------------------------
-
-interface ConsciousnessLike {
-  onInteractionStart(
-    userId: string,
-    message: string,
-  ): Promise<{ contextSummary: string; activeConcepts: string[] }>;
-  onInteractionEnd(
-    sessionId: string,
-    messages: Array<{ role: string; content: string }>,
-    outcome: string,
-  ): Promise<void>;
-  getConsciousnessContext(): string;
-  getIntelligenceBriefContext?: (message: string) => {
-    dominantDrive: { name: string; intensity: number } | null;
-    emotionalState: { emotion: string; intensity: number } | null;
-    matchingProcedure: { name: string; steps: string[]; successRate: number } | null;
-    relevantPredictions: Array<{ domain: string; prediction: string; confidence: number; outcome: string }>;
-    recentEpisodes: Array<{ summary: string; outcome: string; significance: number; timestamp: string }>;
-    counterfactualLessons?: Array<{ lessonLearned: string; deltaAssessment: string }>;
-    metacognitiveReflections?: Array<{ conclusion: string; actionItem: string }>;
-    surpriseLevel?: number;
-    temporalNarrative?: string;
-    activeConcepts?: string[];
-  };
-  /** Deep-bridge methods — surfaced by ConsciousnessOrchestrator. */
-  getDeepInsights?(userId: string): import('../consciousness/orchestrator.js').DeepInsights;
-  getCounterfactualLessons?(count?: number): import('../consciousness/orchestrator.js').CounterfactualInsight[];
-  getMetacognitiveGuidance?(limit?: number): import('../consciousness/orchestrator.js').MetacognitiveInsight[];
-  getSurpriseInsight?(hours?: number): import('../consciousness/orchestrator.js').SurpriseInsight;
-  getTemporalNarrative?(): import('../consciousness/orchestrator.js').TemporalInsight;
-  getUserAdaptation?(userId: string): import('../consciousness/orchestrator.js').UserAdaptation | null;
-  getRelationshipContext?(userId: string): string;
-  getDriveInfluenceForAgent?(): { promptAddition: string; temperatureDelta: number };
-  getActiveConcepts?(count?: number): string[];
-}
-
-// ---------------------------------------------------------------------------
-// Duck-typed UnifiedMemory interface
-// ---------------------------------------------------------------------------
-
-interface UnifiedMemoryLike {
-  search(params: { query: string; limit?: number }): Promise<Array<{ content?: string; text?: string; source?: string; score?: number; relevance?: number }>>;
-}
-
-// ---------------------------------------------------------------------------
 // Default config
 // ---------------------------------------------------------------------------
 
@@ -248,11 +196,6 @@ const DEFAULT_CONFIG: AgentConfig = {
  * Inject Brain, ToolRegistry, and SessionManager via the constructor.
  * All dependencies are duck-typed to avoid circular imports.
  */
-
-/** Minimal slice of Predictor the loop needs for opt-in anticipatory injection. */
-interface PredictorLike {
-  anticipate(): Promise<Prediction[]>;
-}
 
 export class AgentLoop {
   private readonly brain: BrainLike;
