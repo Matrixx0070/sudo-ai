@@ -14,7 +14,17 @@ import { createLogger } from '../shared/logger.js';
 import { isToolResultSuccess } from './tool-result-classifier.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError } from '../shared/errors.js';
-import { MAX_AGENT_ITERATIONS } from '../shared/constants.js';
+import {
+  EPISTEMIC_TAG_CONFIDENCE_MAP,
+  MAX_PLAN_STEPS,
+  MAX_PLAN_STEP_CHARS,
+  GOAL_PLANNER_MIN_CONFIDENCE,
+  PREDICTOR_MIN_CONFIDENCE,
+  MAX_PREDICTOR_INJECTED,
+  MAX_SUMMARY_ACTIONS,
+  PLAN_COVERAGE_THRESHOLD,
+  DEFAULT_CONFIG,
+} from './loop-constants.js';
 import { decomposeIfComplex, type DecomposerBrainLike } from './task-decomposer.js';
 import { buildReasoningSummary, formatReasoningSummary, type AgentAction } from './reasoning-summary.js';
 import {
@@ -119,19 +129,6 @@ function computeContentHash(toolName: string, args: Record<string, unknown>): st
 const log = createLogger('agent:loop');
 
 // ---------------------------------------------------------------------------
-// Confidence calibration — deterministic EpistemicTag → predicted confidence map.
-// CERTAIN=0.9, PROBABLE=0.7, CONJECTURE=0.4, UNKNOWN=0.2.
-// Used to pair predicted confidence with observed tool-call outcome for Brier scoring.
-// ---------------------------------------------------------------------------
-
-const EPISTEMIC_TAG_CONFIDENCE_MAP: Record<string, number> = {
-  CERTAIN:    0.9,
-  PROBABLE:   0.7,
-  CONJECTURE: 0.4,
-  UNKNOWN:    0.2,
-} as const;
-
-// ---------------------------------------------------------------------------
 // AgentRunResult — returned by run() so callers can receive file attachments
 // ---------------------------------------------------------------------------
 
@@ -160,31 +157,6 @@ export interface AgentRunResult {
    */
   planProgress?: { totalSteps: number; addressedCount: number; unaddressed: string[] };
 }
-
-// ---------------------------------------------------------------------------
-// Default config
-// ---------------------------------------------------------------------------
-
-/** Theme 2 (auto-plan): max decomposed subtasks injected as a plan checklist. */
-const MAX_PLAN_STEPS = 8;
-/** Theme 2 (auto-plan): max chars per subtask after sanitization (bloat + injection guard). */
-const MAX_PLAN_STEP_CHARS = 200;
-/** Theme 2 heavy (GoalPlanner): skip strategy injection below this classification confidence. */
-const GOAL_PLANNER_MIN_CONFIDENCE = 0.5;
-/** Predictor loop injection (opt-in): only inject anticipatory predictions at/above this confidence. */
-const PREDICTOR_MIN_CONFIDENCE = 0.8;
-/** Predictor loop injection (opt-in): cap how many predictions are folded into one heads-up. */
-const MAX_PREDICTOR_INJECTED = 3;
-/** Theme 2.2 (reasoning-summary): max recent tool actions folded into the summary. */
-const MAX_SUMMARY_ACTIONS = 20;
-/** Theme 2 step-tracking: a plan step counts as "addressed" when at least this
- *  fraction of its content words (>=4 chars) appear in the turn's tool actions. */
-const PLAN_COVERAGE_THRESHOLD = 0.3;
-
-const DEFAULT_CONFIG: AgentConfig = {
-  maxIterations: MAX_AGENT_ITERATIONS,
-  timeout: 0,
-};
 
 // ---------------------------------------------------------------------------
 // AgentLoop
