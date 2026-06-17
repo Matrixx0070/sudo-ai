@@ -83,7 +83,14 @@ export interface TeamResult {
 // other behaviour used by the agents. ToolRegistry is passed through to
 // workers but is never cloned across threads.
 export interface Brain {
-  call(args: { messages: Array<{ role: string; content: string }> }): Promise<{ content: string }>;
+  call(
+    args: { messages: Array<{ role: string; content: string }> },
+    // Optional tier hint matches the real Brain.call signature so callers
+    // here can pass `{ tier: 'high-stakes' }` and opt into the env-driven
+    // strategy upgrade from PR #242. Existing minimal mocks without the
+    // opts arg still satisfy this contract structurally.
+    opts?: { tier?: 'fast' | 'routine' | 'high-stakes' },
+  ): Promise<{ content: string }>;
 }
 export interface ToolRegistry {}
 
@@ -167,7 +174,10 @@ export class IntelligenceTeam {
     ];
     let agentRoles: AgentRole[] = [];
     try {
-      const response = await brain.call({ messages: planningMessages });
+      // tier: 'high-stakes' — team planning is one-shot per IntelligenceTeam
+      // spawn; a wrong agent-role decomposition derails every worker spawned
+      // below. Opts into the env-driven strategy upgrade from PR #242.
+      const response = await brain.call({ messages: planningMessages }, { tier: 'high-stakes' });
       const trimmed = (response && response.content) ? response.content.trim() : '';
       // Attempt to parse the LLM response as JSON. Guard against trailing
       // characters by trimming common code fences.
@@ -422,13 +432,17 @@ export class IntelligenceTeam {
     if (managerResult) {
       synthesis = managerResult.result;
     } else {
-      // Fallback: call the brain with all agent results to summarise
+      // Fallback: call the brain with all agent results to summarise.
+      // tier: 'high-stakes' — final synthesis is the user-facing answer
+      // for the entire team task. A malformed synthesis loses every
+      // worker's contribution. Opts into the env-driven strategy upgrade
+      // from PR #242.
       try {
         const summaryMessages = [
           { role: 'system', content: 'You are a helpful assistant that synthesises multiple agent outputs into a coherent summary.' },
           { role: 'user', content: `Combine the following outputs into a concise summary:\n${results.map(r => `Role ${r.role}: ${r.result}`).join('\n')}` }
         ];
-        const summaryResponse = await this.brain.call({ messages: summaryMessages });
+        const summaryResponse = await this.brain.call({ messages: summaryMessages }, { tier: 'high-stakes' });
         synthesis = summaryResponse.content;
       } catch (err) {
         synthesis = results.map(r => r.result).join('\n');
