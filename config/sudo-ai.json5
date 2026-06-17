@@ -11,15 +11,21 @@
     systemPrompt: "You are SUDO-AI. Be helpful, concise, accurate. Owner loyalty per SOUL.",
   },
   models: {
-    // Claude-oauth-only routing. Primary = opus-4-8 (Max-Plan-grade
-    // reasoning with extended thinking enabled by the provider interceptor).
-    // Fallback = sonnet-4-6 — same OAuth provider, lighter model that
-    // anthropic doesn't 529 as often when opus is overloaded. Without a
-    // fallback at all, every opus 529 = "Agent turn failed" with no reply
-    // (observed live 2026-06-17 00:54).
+    // Three-tier failover. Sequential failover order is
+    // [...primary, fallback] per cli.ts wiring.
+    //   1. claude-oauth/claude-opus-4-8   — primary, Max-Plan opus with the
+    //      provider's thinking-enable interceptor (#217) injecting a 32k
+    //      thinking budget on every request.
+    //   2. claude-oauth/claude-sonnet-4-6 — second-tier within the same OAuth
+    //      token. Tried when opus 529's or otherwise fails. Sonnet doesn't
+    //      get the thinking-enable injection (gated to opus-4-8+).
+    //   3. ollama/kimi-k2.7-code:cloud   — last-resort outside-anthropic
+    //      fallback. K2.7-code (1.04T params, 262k ctx, tools+thinking) on
+    //      ollama:cloud. Only runs when both claude-oauth attempts have
+    //      failed — covers the "anthropic-wide outage" case where every
+    //      OAuth call 529s.
     // cheap + premium pinned to primary so _smartRoute's cheap branch and
-    // reasoning-tier branch stay no-ops; the only path the fallback can
-    // run is sequential failover after primary errors.
+    // reasoning-tier branch stay no-ops.
     primary: [
       {
         id: 'claude-oauth/claude-opus-4-8',
@@ -27,10 +33,16 @@
         maxOutputTokens: 8192,
         temperature: 0.7,
       },
+      {
+        id: 'claude-oauth/claude-sonnet-4-6',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+        temperature: 0.7,
+      },
     ],
     fallback: {
-      id: 'claude-oauth/claude-sonnet-4-6',
-      contextWindow: 200000,
+      id: 'ollama/kimi-k2.7-code:cloud',
+      contextWindow: 262144,
       maxOutputTokens: 8192,
       temperature: 0.7,
     },
