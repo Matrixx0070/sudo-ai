@@ -212,9 +212,40 @@ export const grepTool: ToolDefinition = {
       return { success: false, output: 'coder.grep: "pattern" parameter is required.' };
     }
 
-    const searchPath = typeof params['path'] === 'string'
-      ? resolve(ctx.workingDir, params['path'])
-      : ctx.workingDir;
+    // searchPath resolution:
+    //  - No path param → search ctx.workingDir directly (existing behaviour).
+    //  - Path provided → resolve against ctx.workingDir first.
+    //  - Fallback: if the workingDir is a workspace session sandbox and the
+    //    resolved path doesn't exist there, retry against the host project
+    //    root. Mirrors the #223 coder.read-file fix — without this, every
+    //    bot attempt to grep host source from inside the sandbox hits
+    //    ENOENT and the call falls through to the catch (level:50 "Grep
+    //    failed", observed live 2026-06-17 01:12).
+    const rawPath = params['path'];
+    let searchPath: string;
+    if (typeof rawPath !== 'string') {
+      searchPath = ctx.workingDir;
+    } else {
+      searchPath = resolve(ctx.workingDir, rawPath);
+      try {
+        await stat(searchPath);
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const inSandbox = /\/workspace\/sessions\//.test(ctx.workingDir);
+        if (code === 'ENOENT' && inSandbox) {
+          const projectRoot = ctx.workingDir.replace(/\/workspace\/sessions\/.*/, '');
+          const fallback = resolve(projectRoot, rawPath);
+          try {
+            await stat(fallback);
+            searchPath = fallback;
+          } catch {
+            // Fallback also missing — keep the original path so the
+            // downstream stat() emits the same error users would have
+            // seen before, no behaviour change for genuinely-missing paths.
+          }
+        }
+      }
+    }
     const include = typeof params['include'] === 'string' ? params['include'] : undefined;
     const exclude = typeof params['exclude'] === 'string' ? params['exclude'] : undefined;
     const contextLines = typeof params['contextLines'] === 'number' ? Math.max(0, params['contextLines']) : 0;
