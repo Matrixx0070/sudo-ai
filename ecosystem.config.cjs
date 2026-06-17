@@ -101,6 +101,17 @@ module.exports = {
         // Consciousness ticks and background tasks use sequential failover, not race.
         SUDO_BRAIN_RACE_DISABLE: '1',
 
+        // Disable consensus too. Brain.getCloudProfiles() only treats
+        // `ollama/*` profiles as "cloud" candidates, so when the chain has
+        // any ollama model in the fallback chain (as kimi-k2.7-code now is
+        // for outage protection — PR #221), consensus picks kimi as the
+        // "winner" even though opus is configured primary. selectedModel
+        // shows opus, activeModel shows kimi, switched=true on every turn.
+        // Disabling consensus forces strict sequential failover:
+        //   primary[0]=opus -> primary[1]=sonnet -> fallback=kimi
+        // which matches the owner's intent (#216, #220, #221).
+        SUDO_BRAIN_CONSENSUS_DISABLE: '1',
+
         // Web chat token — set explicitly so relay scripts can authenticate
         WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'] || 'sudo-ai-relay-token-2026',
 
