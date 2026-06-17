@@ -231,20 +231,20 @@ export class AgentLoop extends AgentLoopInjections {
   private _lastTaintIds: Map<string, string> = new Map();
 
   // ToolOutcomeLearner — optional, set via setter after construction.
-  private _toolOutcomeLearner?: ToolOutcomeLearner;
+  // _toolOutcomeLearner moved to AgentLoopInjections base (#235)
 
   // Phase 3: AlignmentEngine — real 7-signal alignment after each tool call.
-  private _alignmentEngine?: AlignmentEngine;
+  // _alignmentEngine moved to AgentLoopInjections base (#235)
   private _consecutiveRedCount = 0;
   private _lastAlignmentLevel: AlignmentLevel | null = null;
 
   // Phase 2 polish: FeedbackMemory (live recordSuccess/recordFailure wired into tool exec paths)
-  private _feedbackMemory?: FeedbackMemory;
+  // _feedbackMemory moved to AgentLoopInjections base (#235)
 
   // Verify-gate (slice 1: confidence dispatcher). Opt-in via SUDO_VERIFY_GATE=1.
   // When attached, executeToolCalls consults it before executing each destructive
   // tool call; 'escalate' decisions log + emit a hook event.
-  private _verifyGate?: import('./loop-helpers.js').VerifyGateLike;
+  // _verifyGate moved to AgentLoopInjections base (#235)
 
   // Verify-gate (slice 2: grounding check). Wired alongside _verifyGate when
   // SUDO_VERIFY_GATE=1. Runs only when slice-1 escalates a call; re-reads the
@@ -257,7 +257,7 @@ export class AgentLoop extends AgentLoopInjections {
   // SUDO_VERIFY_GATE=1. Runs only after slice 1 escalates AND slice 2 has
   // settled; observable-only — verdict ships as a hook event and does NOT
   // block execution. Per-session budget enforced internally.
-  private _criticPass?: import('./loop-helpers.js').CriticPassLike;
+  // _criticPass moved to AgentLoopInjections base (#235)
 
   // Negative Router — 3-tier DFA routing (block/redirect/model selection)
   // _negativeRouter moved to AgentLoopInjections base (#231)
@@ -706,25 +706,7 @@ export class AgentLoop extends AgentLoopInjections {
     }
   }
 
-  /** Wire ToolOutcomeLearner after construction. Fail-open if duck-type mismatch. */
-  setToolOutcomeLearner(learner: ToolOutcomeLearner): void {
-    this._toolOutcomeLearner = learner;
-    log.info('AgentLoop: ToolOutcomeLearner attached');
-  }
-
-  /**
-   * Wire a verify-gate after construction (slice 1 of the in-loop verification gate).
-   * Duck-typed against `VerifyGateLike` — invalid handles are ignored with a warning,
-   * mirroring the setFeedbackMemory/setAlignmentEngine pattern.
-   */
-  setVerifyGate(gate: import('./loop-helpers.js').VerifyGateLike): void {
-    if (gate && typeof gate.evaluate === 'function') {
-      this._verifyGate = gate;
-      log.info('AgentLoop: VerifyGate attached');
-    } else {
-      log.warn('AgentLoop: setVerifyGate: invalid duck-type — ignoring');
-    }
-  }
+  // setToolOutcomeLearner / setVerifyGate moved to AgentLoopInjections base (#235).
 
   /**
    * Wire a grounding checker (slice 2 of the verify-gate campaign). Consulted
@@ -753,52 +735,8 @@ export class AgentLoop extends AgentLoopInjections {
     }
   }
 
-  /**
-   * Wire a critic pass (slice 3 of the verify-gate campaign). Auto-invokes the
-   * `reviewer` agent role on the strongest verify-gate signal — observable
-   * grounding failure with execution still proceeding. Strictly observable:
-   * the verdict ships out as a hook event but never blocks tool execution in
-   * slice 3. Per-session invocation budget is enforced inside the critic.
-   * Duck-typed against `CriticPassLike` — invalid handles ignored with a warning.
-   */
-  setCriticPass(critic: import('./loop-helpers.js').CriticPassLike): void {
-    if (critic && typeof critic.review === 'function') {
-      this._criticPass = critic;
-      log.info('AgentLoop: CriticPass attached');
-    } else {
-      log.warn('AgentLoop: setCriticPass: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Wire FeedbackMemory after construction (Phase 2: enables recordSuccess/recordFailure in execute paths). */
-  setFeedbackMemory(fb: FeedbackMemory): void {
-    if (fb && typeof fb.recordSuccess === 'function' && typeof fb.recordFailure === 'function') {
-      this._feedbackMemory = fb;
-      log.info('AgentLoop: FeedbackMemory attached');
-    } else {
-      log.warn('AgentLoop: setFeedbackMemory: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Wire AlignmentEngine after construction (Phase 3: real 7-signal alignment). */
-  setAlignmentEngine(ae: AlignmentEngine): void {
-    if (ae && typeof ae.computeSignals === 'function') {
-      this._alignmentEngine = ae;
-      log.info('AgentLoop: AlignmentEngine attached');
-    } else {
-      log.warn('AgentLoop: setAlignmentEngine: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Returns the AlignmentEngine instance if attached. */
-  getAlignmentEngine(): AlignmentEngine | undefined {
-    return this._alignmentEngine;
-  }
-
-  /** Returns the FeedbackMemory if attached (for admin/inspect). */
-  getFeedbackMemory(): FeedbackMemory | undefined {
-    return this._feedbackMemory;
-  }
+  // setCriticPass / setFeedbackMemory / getFeedbackMemory /
+  // setAlignmentEngine / getAlignmentEngine moved to AgentLoopInjections base (#235).
 
   // setNegativeRouter/getNegativeRouter, setContextCompressor/getContextCompressor,
   // setTraceStore/getTraceStore, setTraceDrivenPolicy/getTraceDrivenPolicy all
