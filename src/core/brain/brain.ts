@@ -17,6 +17,8 @@ import {
   DEFAULT_BRAIN_STRATEGY,
   resolveEffectiveStrategy,
 } from './brain-strategy.js';
+import { runDebate } from './brain-debate.js';
+import { runTreeSearch } from './brain-tree-search.js';
 import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { isCustomProvider } from './custom-providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
@@ -712,15 +714,22 @@ export class Brain {
       throw new LLMError('BrainRequest.messages must be non-empty', 'llm_invalid_request');
     }
 
-    // Stage 1 plumbing: resolve the effective strategy from configured +
-    // opts. `fast` tier short-circuits to single regardless of strategy.
-    // Today every branch funnels into the same single-call path because
-    // debate/tree-search routing lands in #239/#240. Capturing the
-    // resolution here lets every call site already start passing tier
-    // hints (cognitive ticks → 'fast') without waiting for the routing
-    // PRs.
+    // Strategy router: resolve the effective strategy from configured +
+    // opts (fast tier always short-circuits to single), then route to the
+    // matching orchestrator. `single` flows down into the existing
+    // smart-route / consensus / sequential-failover path below. `debate`
+    // (Blue/Red/Revise, #239) and `tree-search` (Verifier-guided + Reflexion,
+    // #240) re-enter brain.call() per-round with `strategy: 'single'` so the
+    // existing failover, RAG, lenses, telemetry, and negative-routing all
+    // still run inside each round. Recursion is prevented by the inner
+    // forcing of `strategy: 'single'`.
     const effectiveStrategy = resolveEffectiveStrategy(this.brainStrategy, opts);
-    void effectiveStrategy; // intentionally unused in Stage 1; routed in #239+
+    if (effectiveStrategy === 'debate') {
+      return runDebate(this, request);
+    }
+    if (effectiveStrategy === 'tree-search') {
+      return runTreeSearch(this, request);
+    }
 
     // Extract tool names/descriptions to include in the system prompt so the LLM
     // knows what tools are available and when to use them.
