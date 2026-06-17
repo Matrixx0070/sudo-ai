@@ -271,24 +271,24 @@ export class AgentLoop extends AgentLoopInjections {
   // _traceDrivenPolicy moved to AgentLoopInjections base (#231)
 
   // P0: LazinessNudge — detects lazy text-only responses (no tool calls).
-  private _lazinessNudge?: LazinessNudge;
+  // _lazinessNudge moved to AgentLoopInjections base (#234)
   // P0: TodoGate — blocks premature loop exit when TODOs remain.
-  private _todoGate?: TodoGate;
+  // _todoGate moved to AgentLoopInjections base (#234)
   // P0: SelfVerify — post-run goal verification.
-  private _selfVerify?: SelfVerify;
+  // _selfVerify moved to AgentLoopInjections base (#234)
   // P0: GoalClassifier — classifies user's first message for goal tracking.
-  private _goalClassifier?: GoalClassifier;
+  // _goalClassifier moved to AgentLoopInjections base (#234)
   // P0: GoalStopDetector — checks if goal appears complete before loop exit.
-  private _goalStopDetector?: GoalStopDetector;
+  // _goalStopDetector moved to AgentLoopInjections base (#234)
   // Opt-in (SUDO_PREDICTOR_LOOP): Predictor for anticipatory injection. Falls back
   // to the shared meta.predictor singleton when not explicitly injected.
   // _predictor moved to AgentLoopInjections base (#231)
   // P0: PlanModeStateMachine — manages plan mode enter/exit tool definitions.
-  private _planModeStateMachine?: PlanModeStateMachine;
+  // _planModeStateMachine moved to AgentLoopInjections base (#234)
   // P0: ProfileManager — sandbox profile management (exposed via getter for SandboxManager).
   private _profileManager?: ProfileManager;
   // P0: BestOfNExecutor — multi-candidate execution with selection.
-  private _bestOfNExecutor?: BestOfNExecutor;
+  // _bestOfNExecutor moved to AgentLoopInjections base (#234)
   // ConsciousnessDeepBridge — surfaces ALL 20 consciousness modules to the agent loop.
   private _deepBridge?: ConsciousnessDeepBridge;
   // FeedbackTierManager — tracks sustained engagement and adapts agent behavior.
@@ -805,92 +805,20 @@ export class AgentLoop extends AgentLoopInjections {
   // moved to AgentLoopInjections base (#231). The fields they set are protected
   // in the base, so internal references via `this._foo` still resolve.
 
-  /** Wire LazinessNudge after construction (P0: lazy response detection). Fail-open if duck-type mismatch. */
-  setLazinessNudge(ln: LazinessNudge): void {
-    if (ln && typeof ln.classify === 'function') {
-      this._lazinessNudge = ln;
-      log.info('AgentLoop: LazinessNudge attached');
-    } else {
-      log.warn('AgentLoop: setLazinessNudge: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Wire TodoGate after construction (P0: premature exit blocking). Fail-open if duck-type mismatch. */
-  setTodoGate(tg: TodoGate): void {
-    if (tg && typeof tg.check === 'function') {
-      this._todoGate = tg;
-      log.info('AgentLoop: TodoGate attached');
-    } else {
-      log.warn('AgentLoop: setTodoGate: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Wire SelfVerify after construction (P0: post-run verification). Fail-open if duck-type mismatch. */
-  setSelfVerify(sv: SelfVerify): void {
-    if (sv && typeof sv.verify === 'function') {
-      this._selfVerify = sv;
-      log.info('AgentLoop: SelfVerify attached');
-    } else {
-      log.warn('AgentLoop: setSelfVerify: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Wire GoalClassifier after construction (P0: goal classification at turn start). Fail-open if duck-type mismatch. */
-  setGoalClassifier(gc: GoalClassifier): void {
-    if (gc && typeof gc.classify === 'function') {
-      this._goalClassifier = gc;
-      log.info('AgentLoop: GoalClassifier attached');
-    } else {
-      log.warn('AgentLoop: setGoalClassifier: invalid duck-type — ignoring');
-    }
-  }
+  // setLazinessNudge / setTodoGate / setSelfVerify / setGoalClassifier moved
+  // to AgentLoopInjections base (#234).
 
   // setPredictor moved to AgentLoopInjections base (#231).
 
-  /** Wire GoalStopDetector after construction (P0: goal completion checking). Fail-open if duck-type mismatch. */
-  setGoalStopDetector(gsd: GoalStopDetector): void {
-    if (gsd && typeof gsd.detect === 'function') {
-      this._goalStopDetector = gsd;
-      log.info('AgentLoop: GoalStopDetector attached');
-    } else {
-      log.warn('AgentLoop: setGoalStopDetector: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Wire PlanModeStateMachine after construction (P0: plan mode tool definitions). Fail-open if duck-type mismatch. */
-  setPlanModeStateMachine(pms: PlanModeStateMachine): void {
-    if (pms && typeof pms.enterPlanMode === 'function' && typeof pms.exitPlanMode === 'function') {
-      this._planModeStateMachine = pms;
-      log.info('AgentLoop: PlanModeStateMachine attached');
-    } else {
-      log.warn('AgentLoop: setPlanModeStateMachine: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Returns the PlanModeStateMachine instance if attached. */
-  getPlanModeStateMachine(): PlanModeStateMachine | undefined {
-    return this._planModeStateMachine;
-  }
+  // setGoalStopDetector / setPlanModeStateMachine / getPlanModeStateMachine
+  // moved to AgentLoopInjections base (#234).
 
   /** Returns the ProfileManager instance if attached (for SandboxManager use). */
   getProfileManager(): ProfileManager | undefined {
     return this._profileManager;
   }
 
-  /** Wire BestOfNExecutor after construction (P0: multi-candidate execution). Fail-open if duck-type mismatch. */
-  setBestOfNExecutor(bne: BestOfNExecutor): void {
-    if (bne && typeof bne.execute === 'function') {
-      this._bestOfNExecutor = bne;
-      log.info('AgentLoop: BestOfNExecutor attached');
-    } else {
-      log.warn('AgentLoop: setBestOfNExecutor: invalid duck-type — ignoring');
-    }
-  }
-
-  /** Returns the BestOfNExecutor instance if attached. */
-  getBestOfNExecutor(): BestOfNExecutor | undefined {
-    return this._bestOfNExecutor;
-  }
+  // setBestOfNExecutor / getBestOfNExecutor moved to AgentLoopInjections base (#234).
 
   /** Returns the FeedbackTierManager instance if initialized. */
   getFeedbackTierManager(): FeedbackTierManager | undefined {

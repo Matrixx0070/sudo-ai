@@ -28,6 +28,13 @@ import type { NegativeRouter } from '../brain/negative-router.js';
 import type { ContextCompressor } from '../brain/context-compressor.js';
 import type { TraceStore } from '../learning/trace-store.js';
 import type { TraceDrivenPolicy } from '../learning/trace-driven-policy.js';
+import type { LazinessNudge } from './laziness-nudge.js';
+import type { TodoGate } from './todo-gate.js';
+import type { SelfVerify } from './self-verify.js';
+import type { GoalClassifier } from '../autonomy/goal-pipeline.js';
+import type { GoalStopDetector } from '../autonomy/goal-stop-detector.js';
+import type { PlanModeStateMachine } from './plan-mode-v2.js';
+import type { BestOfNExecutor } from './best-of-n.js';
 
 const log = createLogger('agent:loop:injections');
 
@@ -42,6 +49,13 @@ export abstract class AgentLoopInjections {
   protected _contextCompressor?: ContextCompressor;
   protected _traceStore?: TraceStore;
   protected _traceDrivenPolicy?: TraceDrivenPolicy;
+  protected _lazinessNudge?: LazinessNudge;
+  protected _todoGate?: TodoGate;
+  protected _selfVerify?: SelfVerify;
+  protected _goalClassifier?: GoalClassifier;
+  protected _goalStopDetector?: GoalStopDetector;
+  protected _planModeStateMachine?: PlanModeStateMachine;
+  protected _bestOfNExecutor?: BestOfNExecutor;
 
   /** Wire a Predictor for opt-in anticipatory injection (SUDO_PREDICTOR_LOOP). Fail-open if duck-type mismatch. */
   setPredictor(p: PredictorLike): void {
@@ -111,5 +125,85 @@ export abstract class AgentLoopInjections {
   /** Returns the TraceDrivenPolicy instance if attached. */
   getTraceDrivenPolicy(): TraceDrivenPolicy | undefined {
     return this._traceDrivenPolicy;
+  }
+
+  /** Wire LazinessNudge after construction. Fail-open if duck-type mismatch. */
+  setLazinessNudge(ln: LazinessNudge): void {
+    if (ln && typeof ln.classify === 'function') {
+      this._lazinessNudge = ln;
+      log.info('AgentLoop: LazinessNudge attached');
+    } else {
+      log.warn('AgentLoop: setLazinessNudge: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire TodoGate after construction. Fail-open if duck-type mismatch. */
+  setTodoGate(tg: TodoGate): void {
+    if (tg && typeof tg.check === 'function') {
+      this._todoGate = tg;
+      log.info('AgentLoop: TodoGate attached');
+    } else {
+      log.warn('AgentLoop: setTodoGate: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire SelfVerify after construction. Fail-open if duck-type mismatch. */
+  setSelfVerify(sv: SelfVerify): void {
+    if (sv && typeof sv.verify === 'function') {
+      this._selfVerify = sv;
+      log.info('AgentLoop: SelfVerify attached');
+    } else {
+      log.warn('AgentLoop: setSelfVerify: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire GoalClassifier after construction. Fail-open if duck-type mismatch. */
+  setGoalClassifier(gc: GoalClassifier): void {
+    if (gc && typeof gc.classify === 'function') {
+      this._goalClassifier = gc;
+      log.info('AgentLoop: GoalClassifier attached');
+    } else {
+      log.warn('AgentLoop: setGoalClassifier: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire GoalStopDetector after construction. Fail-open if duck-type mismatch. */
+  setGoalStopDetector(gsd: GoalStopDetector): void {
+    if (gsd && typeof gsd.detect === 'function') {
+      this._goalStopDetector = gsd;
+      log.info('AgentLoop: GoalStopDetector attached');
+    } else {
+      log.warn('AgentLoop: setGoalStopDetector: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire PlanModeStateMachine after construction. Fail-open if duck-type mismatch. */
+  setPlanModeStateMachine(pms: PlanModeStateMachine): void {
+    if (pms && typeof pms.enterPlanMode === 'function' && typeof pms.exitPlanMode === 'function') {
+      this._planModeStateMachine = pms;
+      log.info('AgentLoop: PlanModeStateMachine attached');
+    } else {
+      log.warn('AgentLoop: setPlanModeStateMachine: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the PlanModeStateMachine instance if attached. */
+  getPlanModeStateMachine(): PlanModeStateMachine | undefined {
+    return this._planModeStateMachine;
+  }
+
+  /** Wire BestOfNExecutor after construction. Fail-open if duck-type mismatch. */
+  setBestOfNExecutor(bne: BestOfNExecutor): void {
+    if (bne && typeof bne.execute === 'function') {
+      this._bestOfNExecutor = bne;
+      log.info('AgentLoop: BestOfNExecutor attached');
+    } else {
+      log.warn('AgentLoop: setBestOfNExecutor: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the BestOfNExecutor instance if attached. */
+  getBestOfNExecutor(): BestOfNExecutor | undefined {
+    return this._bestOfNExecutor;
   }
 }
