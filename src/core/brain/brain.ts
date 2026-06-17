@@ -11,6 +11,12 @@ import { recordPromptCacheUsageFromProviderMetadata } from '../shared/prompt-cac
 import { LLMError } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
+import {
+  type BrainStrategy,
+  type BrainCallOpts,
+  DEFAULT_BRAIN_STRATEGY,
+  resolveEffectiveStrategy,
+} from './brain-strategy.js';
 import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { isCustomProvider } from './custom-providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
@@ -246,6 +252,14 @@ export class Brain {
   private readonly failover: ModelFailover;
   private currentPersona: PersonaType = 'assistant';
   private currentMood: MoodType = 'focused';
+  /**
+   * Execution strategy for brain.call(). `single` keeps the existing
+   * sequential-failover behaviour. `debate` (wired in #239) runs Blue
+   * (kimi) + Red (glm) + Revise. `tree-search` (wired in #240) runs N
+   * debates with shared Reflexion memory + algorithmic verifier.
+   * Stage 1 plumbing only — `single` is the only honoured strategy here.
+   */
+  private brainStrategy: BrainStrategy = DEFAULT_BRAIN_STRATEGY;
   private readonly config: SudoConfig | null;
   /** RAG engine — injected post-construction via setRAGEngine(). Null = no retrieval. */
   private ragEngine: RAGEngineInterface | null = null;
@@ -675,12 +689,38 @@ export class Brain {
     return response.content ?? '';
   }
 
-  async call(request: BrainRequest): Promise<BrainResponse> {
+  /**
+   * Set the active brain execution strategy. Affects subsequent call()
+   * invocations that don't override via opts. Stage 1 plumbing — only
+   * `single` is honoured today; `debate` and `tree-search` arrive in
+   * #239 and #240.
+   */
+  setStrategy(strategy: BrainStrategy): void {
+    this.brainStrategy = strategy;
+    log.info({ strategy }, 'Brain strategy set');
+  }
+
+  /** Returns the currently-configured brain execution strategy. */
+  getStrategy(): BrainStrategy {
+    return this.brainStrategy;
+  }
+
+  async call(request: BrainRequest, opts?: BrainCallOpts): Promise<BrainResponse> {
     await this.providersReady;
 
     if (!request.messages || request.messages.length === 0) {
       throw new LLMError('BrainRequest.messages must be non-empty', 'llm_invalid_request');
     }
+
+    // Stage 1 plumbing: resolve the effective strategy from configured +
+    // opts. `fast` tier short-circuits to single regardless of strategy.
+    // Today every branch funnels into the same single-call path because
+    // debate/tree-search routing lands in #239/#240. Capturing the
+    // resolution here lets every call site already start passing tier
+    // hints (cognitive ticks → 'fast') without waiting for the routing
+    // PRs.
+    const effectiveStrategy = resolveEffectiveStrategy(this.brainStrategy, opts);
+    void effectiveStrategy; // intentionally unused in Stage 1; routed in #239+
 
     // Extract tool names/descriptions to include in the system prompt so the LLM
     // knows what tools are available and when to use them.
