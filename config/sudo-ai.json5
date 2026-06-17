@@ -11,20 +11,27 @@
     systemPrompt: "You are SUDO-AI. Be helpful, concise, accurate. Owner loyalty per SOUL.",
   },
   models: {
+    // Single-LLM mode: every Brain routing decision (primary, fallback, cheap
+    // fast-path, premium reasoning-tier) maps to claude-oauth/claude-opus-4-8.
+    // Pinning cheap+premium to the same id keeps _smartRoute's cheap branch
+    // and reasoning-tier branch as no-ops, since both only fire when the
+    // alternate differs from primaryModel.
     primary: [
       {
-        id: 'ollama/kimi-k2.6:cloud',
-        contextWindow: 131072,
+        id: 'claude-oauth/claude-opus-4-8',
+        contextWindow: 200000,
         maxOutputTokens: 8192,
         temperature: 0.7,
       },
     ],
     fallback: {
-      id: 'xai/grok-4-1-fast-non-reasoning',
-      contextWindow: 131072,
-      maxOutputTokens: 4096,
+      id: 'claude-oauth/claude-opus-4-8',
+      contextWindow: 200000,
+      maxOutputTokens: 8192,
       temperature: 0.7,
     },
+    cheap: 'claude-oauth/claude-opus-4-8',
+    premium: 'claude-oauth/claude-opus-4-8',
     embedding: { id: 'openai/text-embedding-3-small', dims: 1536 },
   },
   auth: {
