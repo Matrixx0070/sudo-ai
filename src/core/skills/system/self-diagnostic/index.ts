@@ -88,7 +88,11 @@ function checkDatabase(): DiagnosticCheck {
     const db = new Database(DB_PATH, { readonly: true });
     db.pragma('journal_mode = WAL');
     const row = db.prepare<[], { count: number }>('SELECT COUNT(*) as count FROM sessions').get();
-    const skillRow = db.prepare<[], { count: number }>('SELECT COUNT(*) as count FROM skills WHERE enabled = 1').get();
+    // The `skills` table tracks lifecycle via archived_at (NULL = active),
+    // not an `enabled` column. The prior query threw "no such column:
+    // enabled" on every self-diagnostic run, which bubbled up as "mind.db
+    // status: FAIL" in every meta.health-check, even though the DB was fine.
+    const skillRow = db.prepare<[], { count: number }>('SELECT COUNT(*) as count FROM skills WHERE archived_at IS NULL').get();
     db.close();
 
     const sizeMB = statSync(DB_PATH).size / 1024 / 1024;
