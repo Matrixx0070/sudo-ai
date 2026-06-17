@@ -102,6 +102,14 @@ export interface SessionIndexEntry {
   updatedAt: string;
   /** Current lifecycle state. */
   state: 'active' | 'archived';
+  /**
+   * Foreign session IDs that map to this entry. Populated when the SQLite
+   * primary and the journal-store independently allocated IDs for the same
+   * (channel, peerId) pair (pre-existing journals). dual-manager records the
+   * primary ID here so subsequent appendEvent/save calls keyed off the primary
+   * ID resolve to this entry instead of warn-and-noop'ing.
+   */
+  aliases?: string[];
 }
 
 /** Top-level shape of sessions.json. */
