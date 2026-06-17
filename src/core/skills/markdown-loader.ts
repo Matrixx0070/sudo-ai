@@ -241,8 +241,14 @@ export async function loadMarkdownSkills(skillsDir: string): Promise<MarkdownSki
     }
     log.info({ skillCount: skills.length, skillsDir }, 'Loaded markdown skills');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+    const code = (err as NodeJS.ErrnoException).code;
+    // ENOENT (missing dir) and ENOTDIR (path exists but is a file/symlink)
+    // are both "no skills here, nothing to load" — not errors. Anything else
+    // (EACCES, EIO, …) is still surfaced loud.
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
       log.error({ skillsDir, error: (err as Error).message }, 'Error loading skills');
+    } else {
+      log.debug({ skillsDir, code }, 'No skills dir at path — skipping');
     }
   }
   return skills;
