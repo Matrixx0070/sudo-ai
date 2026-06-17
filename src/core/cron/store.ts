@@ -34,10 +34,31 @@ const RUNS_FILE = path.join(CRON_DIR, 'runs.jsonl');
  * All file I/O is synchronous (better-sqlite3 style) to keep it simple and
  * avoid partially written states on concurrent scheduler ticks.
  */
+// Minimal duck-typed sink so we don't pull in MindDB types (would force the
+// cron module to depend on the memory module). Anything with a compatible
+// storeCronRun signature works.
+export interface CronRunSink {
+  storeCronRun(run: {
+    job_name: string;
+    status: 'ok' | 'failed' | 'skipped';
+    duration_ms?: number;
+    error?: string | null;
+    result?: unknown;
+  }): number;
+}
+
 export class CronStore {
   private jobs: Map<string, CronJob> = new Map();
+  private readonly mirrorSink?: CronRunSink;
 
-  constructor() {
+  /**
+   * @param mirrorSink Optional secondary persistence target (e.g. MindDB).
+   *                   When set, appendRun also writes to this sink so
+   *                   downstream consumers (self-diagnostic, analytics)
+   *                   that query mind.db.cron_runs see real history.
+   */
+  constructor(mirrorSink?: CronRunSink) {
+    this.mirrorSink = mirrorSink;
     this._ensureDir();
     this._load();
   }
@@ -151,6 +172,23 @@ export class CronStore {
       appendFileSync(RUNS_FILE, JSON.stringify(full) + '\n', 'utf8');
     } catch (err) {
       log.error({ err, jobName: record.jobName }, 'Failed to append run record');
+    }
+
+    // Mirror to the SQLite sink when configured. Self-diagnostic and
+    // analytics both query mind.db.cron_runs, which would otherwise stay
+    // empty forever even though jobs ARE firing — bot's "Last run: never"
+    // false-fail came directly from this gap.
+    if (this.mirrorSink) {
+      try {
+        this.mirrorSink.storeCronRun({
+          job_name: full.jobName,
+          status: full.success ? 'ok' : 'failed',
+          duration_ms: full.durationMs,
+          error: full.error ?? null,
+        });
+      } catch (err) {
+        log.warn({ err, jobName: full.jobName }, 'mirror sink storeCronRun failed (non-fatal)');
+      }
     }
   }
 

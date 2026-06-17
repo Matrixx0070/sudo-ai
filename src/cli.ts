@@ -2504,7 +2504,11 @@ async function boot(): Promise<void> {
     log.warn({ err: String(err) }, 'DB chmod 0600 sweep failed');
   }
 
-  const cronStore = new CronStore();
+  // Pass mindDb as the optional secondary sink so cron run history mirrors
+  // into mind.db.cron_runs. Without this, the table stays empty forever even
+  // though jobs fire on schedule, and self-diagnostic reports "Last run: never"
+  // for every cron health probe.
+  const cronStore = new CronStore(db);
   const cronScheduler = new CronScheduler(cronStore, cronRunner);
   cronScheduler.start();
   registerShutdown(async () => cronScheduler.stop());
