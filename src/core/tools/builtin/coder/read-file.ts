@@ -5,8 +5,15 @@
  */
 
 import { readFile, stat } from 'node:fs/promises';
-import { resolve, extname } from 'node:path';
+import { resolve, extname, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+
+// ESM-safe __dirname replacement. tsx (Node's --loader) runs source as ESM,
+// where the CommonJS-only `__dirname` global is undefined and reading it
+// throws ReferenceError. fileURLToPath(import.meta.url) is the standard
+// portable replacement.
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Binary file extensions — return metadata instead of raw bytes.
 const BINARY_EXTENSIONS = new Set([
