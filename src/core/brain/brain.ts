@@ -65,7 +65,10 @@ function failoverBackoffMs(category: string, attempt: number, retryAfterMs?: num
   if (typeof retryAfterMs === 'number' && retryAfterMs > 0) {
     return Math.min(retryAfterMs, 5000);
   }
-  return Math.min(2000, 250 * Math.pow(2, attempt));
+  // Cap at 5000ms to ride out longer cloud outages (observed live 2026-06-17
+  // 02:58: anthropic + ollama-cloud both 500ed for ~2+ seconds, 2000ms cap
+  // exhausted before either recovered).
+  return Math.min(5000, 250 * Math.pow(2, attempt));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -73,7 +76,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Maximum number of provider failover attempts per call. */
-const MAX_FAILOVER_ATTEMPTS = 4;
+// Raised 4 → 6 alongside the 5000ms backoff cap (#233) so a multi-second
+// cloud incident has more chances to recover before the chain exhausts.
+// Worst-case latency on a fully-failing chain: 5 × ~3.5s avg backoff = ~17s.
+const MAX_FAILOVER_ATTEMPTS = 6;
 
 // ---------------------------------------------------------------------------
 // Concatenated-JSON splitter — handles LLMs that batch multiple tool call
