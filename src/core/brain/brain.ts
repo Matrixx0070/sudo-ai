@@ -48,6 +48,30 @@ import type { HistoryMessage } from '../agent/cheap-model-router.js';
 
 const log = createLogger('brain');
 
+/**
+ * Backoff between sequential failover attempts when the previous profile
+ * failed with a transient/overloaded category. Without this, the entire
+ * chain fires in <2ms — a single anthropic blip 500s opus, sonnet, and
+ * any same-window upstream simultaneously (observed live 2026-06-17 02:40).
+ * If the upstream sent a retry-after header, honour it (capped). Otherwise
+ * exponential: 250ms × 2^attempt, capped at 2000ms.
+ *
+ * Kill-switch: SUDO_FAILOVER_BACKOFF_DISABLE=1 restores the zero-wait
+ * burst (default off — always wait).
+ */
+function failoverBackoffMs(category: string, attempt: number, retryAfterMs?: number): number {
+  if (process.env['SUDO_FAILOVER_BACKOFF_DISABLE'] === '1') return 0;
+  if (category !== 'overloaded' && category !== 'transient' && category !== 'timeout') return 0;
+  if (typeof retryAfterMs === 'number' && retryAfterMs > 0) {
+    return Math.min(retryAfterMs, 5000);
+  }
+  return Math.min(2000, 250 * Math.pow(2, attempt));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Maximum number of provider failover attempts per call. */
 const MAX_FAILOVER_ATTEMPTS = 4;
 
@@ -882,6 +906,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         const category = this.failover.categorizeError(status, body);
         log.warn({ attempt, profileId: profile.id, status, category, retryAfterMs }, 'LLM call failed — trying next profile');
         this.failover.recordError(profile.id, category, { retryAfterMs });
+        if (attempt < MAX_FAILOVER_ATTEMPTS - 1) {
+          const waitMs = failoverBackoffMs(category, attempt, retryAfterMs);
+          if (waitMs > 0) {
+            log.info({ attempt, category, waitMs }, 'Failover backoff before next attempt');
+            await sleep(waitMs);
+          }
+        }
       }
     }
 
@@ -1019,6 +1050,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
         log.warn({ attempt, modelId, status, category, retryAfterMs, err }, 'Streaming LLM call failed — trying next profile');
         this.failover.recordError(profile.id, category, { retryAfterMs });
+        if (attempt < MAX_FAILOVER_ATTEMPTS - 1) {
+          const waitMs = failoverBackoffMs(category, attempt, retryAfterMs);
+          if (waitMs > 0) {
+            log.info({ attempt, category, waitMs }, 'Streaming failover backoff before next attempt');
+            await sleep(waitMs);
+          }
+        }
       }
     }
 
