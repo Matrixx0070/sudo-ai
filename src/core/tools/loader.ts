@@ -151,15 +151,28 @@ export async function loadBuiltinTools(
   let totalFunctionsInvoked = 0;
 
   for (const subdir of subdirs) {
-    // Try .ts first (tsx/development), fall back to .js (compiled/production)
+    // Try .ts first (tsx/development), fall back to .js (compiled/production).
+    // If NEITHER exists, the subdir is a subsystem with its own internal
+    // layout (e.g. computer-use/cross-platform/) rather than a tool category,
+    // and there is no tool module to load. Skip with a debug log instead of
+    // letting the import attempt fail loudly on every boot.
     const tsPath = join(builtinDir, subdir, 'index.ts');
     const jsPath = join(builtinDir, subdir, 'index.js');
-    let indexPath: string;
+    let indexPath: string | undefined;
     try {
       await stat(tsPath);
       indexPath = tsPath;
     } catch {
-      indexPath = jsPath;
+      try {
+        await stat(jsPath);
+        indexPath = jsPath;
+      } catch {
+        logger.debug(
+          { module: subdir, builtinDir },
+          'Subdir has no index.ts/index.js — not a tool category, skipping',
+        );
+        continue;
+      }
     }
     const indexUrl = pathToFileURL(indexPath).href;
 
