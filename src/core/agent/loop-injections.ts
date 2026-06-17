@@ -35,6 +35,10 @@ import type { GoalClassifier } from '../autonomy/goal-pipeline.js';
 import type { GoalStopDetector } from '../autonomy/goal-stop-detector.js';
 import type { PlanModeStateMachine } from './plan-mode-v2.js';
 import type { BestOfNExecutor } from './best-of-n.js';
+import type { ToolOutcomeLearner } from './tool-outcome-learner.js';
+import type { VerifyGateLike, CriticPassLike } from './loop-helpers.js';
+import type { FeedbackMemory } from '../self-improvement/feedback-memory.js';
+import type { AlignmentEngine } from '../alignment/alignment-engine.js';
 
 const log = createLogger('agent:loop:injections');
 
@@ -56,6 +60,11 @@ export abstract class AgentLoopInjections {
   protected _goalStopDetector?: GoalStopDetector;
   protected _planModeStateMachine?: PlanModeStateMachine;
   protected _bestOfNExecutor?: BestOfNExecutor;
+  protected _toolOutcomeLearner?: ToolOutcomeLearner;
+  protected _verifyGate?: VerifyGateLike;
+  protected _criticPass?: CriticPassLike;
+  protected _feedbackMemory?: FeedbackMemory;
+  protected _alignmentEngine?: AlignmentEngine;
 
   /** Wire a Predictor for opt-in anticipatory injection (SUDO_PREDICTOR_LOOP). Fail-open if duck-type mismatch. */
   setPredictor(p: PredictorLike): void {
@@ -205,5 +214,61 @@ export abstract class AgentLoopInjections {
   /** Returns the BestOfNExecutor instance if attached. */
   getBestOfNExecutor(): BestOfNExecutor | undefined {
     return this._bestOfNExecutor;
+  }
+
+  /** Wire ToolOutcomeLearner after construction. Fail-open if duck-type mismatch. */
+  setToolOutcomeLearner(learner: ToolOutcomeLearner): void {
+    this._toolOutcomeLearner = learner;
+    log.info('AgentLoop: ToolOutcomeLearner attached');
+  }
+
+  /** Wire a verify-gate after construction. Fail-open if duck-type mismatch. */
+  setVerifyGate(gate: VerifyGateLike): void {
+    if (gate && typeof gate.evaluate === 'function') {
+      this._verifyGate = gate;
+      log.info('AgentLoop: VerifyGate attached');
+    } else {
+      log.warn('AgentLoop: setVerifyGate: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire a critic pass after construction. Fail-open if duck-type mismatch. */
+  setCriticPass(critic: CriticPassLike): void {
+    if (critic && typeof critic.review === 'function') {
+      this._criticPass = critic;
+      log.info('AgentLoop: CriticPass attached');
+    } else {
+      log.warn('AgentLoop: setCriticPass: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Wire FeedbackMemory after construction. */
+  setFeedbackMemory(fb: FeedbackMemory): void {
+    if (fb && typeof fb.recordSuccess === 'function' && typeof fb.recordFailure === 'function') {
+      this._feedbackMemory = fb;
+      log.info('AgentLoop: FeedbackMemory attached');
+    } else {
+      log.warn('AgentLoop: setFeedbackMemory: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the FeedbackMemory if attached (for admin/inspect). */
+  getFeedbackMemory(): FeedbackMemory | undefined {
+    return this._feedbackMemory;
+  }
+
+  /** Wire AlignmentEngine after construction. */
+  setAlignmentEngine(ae: AlignmentEngine): void {
+    if (ae && typeof ae.computeSignals === 'function') {
+      this._alignmentEngine = ae;
+      log.info('AgentLoop: AlignmentEngine attached');
+    } else {
+      log.warn('AgentLoop: setAlignmentEngine: invalid duck-type — ignoring');
+    }
+  }
+
+  /** Returns the AlignmentEngine instance if attached. */
+  getAlignmentEngine(): AlignmentEngine | undefined {
+    return this._alignmentEngine;
   }
 }
