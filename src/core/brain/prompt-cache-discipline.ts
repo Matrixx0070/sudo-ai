@@ -34,9 +34,19 @@ export function isCacheBreakpointsEnabled(): boolean {
   return isPromptCacheEnabled() && process.env['SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE'] !== '1';
 }
 
-/** Model strings are "provider/model-id" (providers.ts getModel). */
+/**
+ * Model strings are "provider/model-id" (providers.ts getModel).
+ *
+ * Both Anthropic-direct (`anthropic/…`) and Claude OAuth subscription
+ * (`claude-oauth/…`) calls reach the same upstream API and accept the same
+ * `cache_control` markers. Without the `claude-oauth/` branch, subscription
+ * users pay full price on every call because the cache-control breakpoints
+ * silently never attach (gated on this function via brain.ts:1025 + :1157).
+ * Observed empirically in the pm2 daemon's logs: zero `cacheReadInputTokens`
+ * across 1600+ claude-oauth calls, full ~27 000 promptTokens billed each time.
+ */
 export function isAnthropicModelId(modelId: string): boolean {
-  return modelId.startsWith('anthropic/');
+  return modelId.startsWith('anthropic/') || modelId.startsWith('claude-oauth/');
 }
 
 /** Fresh object per call — providerOptions values must be plain mutable JSON. */
