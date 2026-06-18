@@ -20,6 +20,7 @@ import type {
   SessionAnalytics,
   CostAnalytics,
   ModelCostEntry,
+  SourceCostEntry,
   ToolUsageAnalytics,
   ToolUsageEntry,
   FileChangeAnalytics,
@@ -352,6 +353,7 @@ export class InsightsDashboardGenerator {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     const byModelMap = new Map<string, ModelCostEntry>();
+    const bySourceMap = new Map<string, SourceCostEntry>();
     const costByDay: Record<string, number> = {};
 
     try {
@@ -410,6 +412,13 @@ export class InsightsDashboardGenerator {
               entry._totalLatency += row.latency_ms ?? 0;
               if (row.success ?? 0) entry._successCount++;
               byModelMap.set(model, entry);
+
+              // Group by caller source
+              const source = row.source ?? 'unknown';
+              const sEntry = bySourceMap.get(source) ?? { source, callCount: 0, estimatedCostUsd: 0 };
+              sEntry.callCount++;
+              sEntry.estimatedCostUsd += cost;
+              bySourceMap.set(source, sEntry);
             }
           }
         } finally {
@@ -440,12 +449,16 @@ export class InsightsDashboardGenerator {
 
     const tokensPerDollar = totalCost > 0 ? (totalInputTokens + totalOutputTokens) / totalCost : 0;
 
+    const bySource = Array.from(bySourceMap.values())
+      .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
+
     return {
       totalCostUsd: totalCost,
       todayCostUsd: todayCost,
       weekCostUsd: weekCost,
       monthCostUsd: monthCost,
       byModel: cleanByModel as ModelCostEntry[],
+      bySource,
       costByDay,
       totalInputTokens,
       totalOutputTokens,
@@ -935,6 +948,19 @@ export class InsightsDashboardGenerator {
         }
         lines.push('');
       }
+
+      if (c.bySource.length > 0) {
+        const grand = c.bySource.reduce((s, r) => s + r.estimatedCostUsd, 0);
+        lines.push('### Cost by Source');
+        lines.push('');
+        lines.push(`| Source | Calls | Cost | Share |`);
+        lines.push(`|--------|-------|------|-------|`);
+        for (const s of c.bySource) {
+          const share = grand > 0 ? `${Math.round((s.estimatedCostUsd / grand) * 100)}%` : '—';
+          lines.push(`| ${s.source} | ${s.callCount} | ${formatUsd(s.estimatedCostUsd)} | ${share} |`);
+        }
+        lines.push('');
+      }
     }
 
     // Tool Usage
@@ -1069,6 +1095,7 @@ export class InsightsDashboardGenerator {
       weekCostUsd: 0,
       monthCostUsd: 0,
       byModel: [],
+      bySource: [],
       costByDay: {},
       totalInputTokens: 0,
       totalOutputTokens: 0,

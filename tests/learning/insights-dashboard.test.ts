@@ -477,3 +477,54 @@ describe('Tool Usage Analytics', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cost Analytics — per-source breakdown
+// ---------------------------------------------------------------------------
+
+describe('InsightsDashboard — cost by source', () => {
+  let dataRoot: string;
+
+  beforeEach(() => {
+    dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'insights-bysource-'));
+  });
+  afterEach(() => {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  });
+
+  it('aggregates and renders cost grouped by caller source', async () => {
+    // Seed a mind.db api_call_log with multiple sources.
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(dataRoot, 'mind.db'));
+    db.exec(`
+      CREATE TABLE api_call_log (
+        id TEXT PRIMARY KEY, provider TEXT, model TEXT,
+        prompt_tokens INTEGER DEFAULT 0, completion_tokens INTEGER DEFAULT 0,
+        total_tokens INTEGER DEFAULT 0, estimated_cost_usd REAL DEFAULT 0,
+        latency_ms INTEGER DEFAULT 0, success INTEGER DEFAULT 1, error TEXT,
+        source TEXT DEFAULT 'chat', called_at TEXT NOT NULL
+      )`);
+    const ins = db.prepare(`INSERT INTO api_call_log
+      (id, provider, model, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, latency_ms, success, source, called_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+    const now = new Date().toISOString();
+    ins.run('1', 'anthropic', 'm', 100, 10, 110, 0.02, 100, 1, 'consciousness', now);
+    ins.run('2', 'anthropic', 'm', 100, 10, 110, 0.02, 100, 1, 'consciousness', now);
+    ins.run('3', 'anthropic', 'm', 100, 10, 110, 0.10, 100, 1, 'agent', now);
+    ins.run('4', 'anthropic', 'm', 100, 10, 110, 0.01, 100, 1, 'api', now);
+    db.close();
+
+    const gen = new InsightsDashboardGenerator(undefined, dataRoot);
+    const dash = await gen.generateDashboard('24h');
+
+    expect(dash.costs.bySource.map((s) => s.source)).toEqual(['agent', 'consciousness', 'api']); // cost desc
+    const consciousness = dash.costs.bySource.find((s) => s.source === 'consciousness')!;
+    expect(consciousness.callCount).toBe(2);
+    expect(consciousness.estimatedCostUsd).toBeCloseTo(0.04, 6);
+
+    const md = gen.formatMarkdown(dash);
+    expect(md).toContain('### Cost by Source');
+    expect(md).toContain('consciousness');
+    expect(md).toContain('agent');
+  });
+});
