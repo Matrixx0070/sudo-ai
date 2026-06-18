@@ -16,6 +16,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { MIND_DB } from '../shared/paths.js';
+import { estimateCost as estimateBrainCost } from '../brain/costs.js';
 
 const logger = createLogger('cost-tracker');
 
@@ -27,7 +28,7 @@ export interface ApiCallRecord {
   id: string;
   provider: string;           // 'xai' | 'anthropic' | 'google' | 'openai'
   model: string;              // full model ID
-  promptTokens: number;
+  promptTokens: number;       // TOTAL input incl. cached (as the SDK reports)
   completionTokens: number;
   totalTokens: number;
   estimatedCostUsd: number;
@@ -36,6 +37,11 @@ export interface ApiCallRecord {
   error?: string;
   calledAt: string;           // ISO-8601
   source: string;             // 'chat' | 'consciousness' | 'cron' | 'tool'
+  // Anthropic prompt-cache split (optional). Persisted so the dashboard's cost
+  // reflects the cache discount: cache reads bill ~0.1x, writes ~1.25x. When
+  // present, record() computes a cache-discounted cost if one isn't supplied.
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
 }
 
 export interface CostSummary {
@@ -59,33 +65,24 @@ export interface ModelStat {
   totalCost: number;
 }
 
-// ---------------------------------------------------------------------------
-// Pricing table  (USD per million tokens, input / output)
-// ---------------------------------------------------------------------------
-
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  'xai/grok-4-1-fast-non-reasoning': { input: 0.20,  output: 0.50  },
-  'xai/grok-4-fast-reasoning':        { input: 2.00,  output: 10.00 },
-  'openai/gpt-4o':                    { input: 2.50,  output: 10.00 },
-  'google/gemini-2.5-flash':          { input: 0.15,  output: 0.60  },
-  // Free via Max subscription — cost = 0
-  'anthropic/claude-sonnet-4-20250514': { input: 0,   output: 0     },
-};
-
 /**
  * Estimate cost in USD for a completed API call.
- * Falls back to zero if the model is not in the pricing table.
+ *
+ * Delegates to the canonical, cache-aware rate model in `brain/costs.ts` (single
+ * source of truth — full Anthropic/xAI/OpenAI/Google rate table, claude-oauth/
+ * prefix normalisation, and the prompt-cache discount: reads ~0.1x, writes
+ * ~1.25x). `promptTokens` is the TOTAL input incl. cached, so passing the cache
+ * split here is what makes the dashboard reflect the discount.
  */
 export function estimateCost(
   model: string,
   promptTokens: number,
   completionTokens: number,
+  cacheReadTokens = 0,
+  cacheCreationTokens = 0,
 ): number {
-  const pricing = MODEL_PRICING[model];
-  if (!pricing) return 0;
-  const inputCost  = (promptTokens     / 1_000_000) * pricing.input;
-  const outputCost = (completionTokens / 1_000_000) * pricing.output;
-  return Math.round((inputCost + outputCost) * 1_000_000) / 1_000_000; // 6 dp
+  const cost = estimateBrainCost(model, promptTokens, completionTokens, cacheReadTokens, cacheCreationTokens);
+  return Math.round(cost * 1_000_000) / 1_000_000; // 6 dp
 }
 
 // ---------------------------------------------------------------------------
@@ -105,10 +102,21 @@ const DDL_TABLE = `
     success             INTEGER NOT NULL DEFAULT 1,
     error               TEXT,
     source              TEXT    NOT NULL DEFAULT 'chat',
+    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     called_at           TEXT    NOT NULL
                           DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )
 `;
+
+// Additive migrations for DBs created before the prompt-cache split columns
+// existed. ALTER TABLE ADD COLUMN is idempotent here via the "duplicate column"
+// guard in _applyDdl (CREATE TABLE IF NOT EXISTS never adds columns to an
+// existing table).
+const DDL_MIGRATIONS = [
+  `ALTER TABLE api_call_log ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE api_call_log ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0`,
+];
 
 const DDL_IDX_CALLED_AT  = `CREATE INDEX IF NOT EXISTS idx_acl_called_at ON api_call_log(called_at)`;
 const DDL_IDX_PROVIDER   = `CREATE INDEX IF NOT EXISTS idx_acl_provider   ON api_call_log(provider)`;
@@ -153,12 +161,14 @@ export class CostTracker {
   // -------------------------------------------------------------------------
 
   private _applyDdl(): void {
-    for (const stmt of [DDL_TABLE, DDL_IDX_CALLED_AT, DDL_IDX_PROVIDER, DDL_IDX_MODEL, DDL_IDX_SUCCESS]) {
+    for (const stmt of [DDL_TABLE, ...DDL_MIGRATIONS, DDL_IDX_CALLED_AT, DDL_IDX_PROVIDER, DDL_IDX_MODEL, DDL_IDX_SUCCESS]) {
       try {
         this.db.exec(stmt);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes('already exists')) {
+        // "duplicate column name" → migration already applied; "already exists"
+        // → table/index already present. Both are expected idempotency no-ops.
+        if (!msg.includes('already exists') && !msg.includes('duplicate column')) {
           logger.warn({ stmt: stmt.slice(0, 80), err: msg }, 'DDL warning');
         }
       }
@@ -173,18 +183,28 @@ export class CostTracker {
    * Persist a single API call record.  Fire-and-forget; errors are logged but
    * never propagated to the caller so tracking never blocks the main flow.
    */
-  record(call: Omit<ApiCallRecord, 'id' | 'calledAt'>): void {
+  record(call: Omit<ApiCallRecord, 'id' | 'calledAt' | 'estimatedCostUsd'> & { estimatedCostUsd?: number }): void {
     try {
       const id       = randomUUID();
       const calledAt = new Date().toISOString();
 
+      const cacheRead     = call.cacheReadTokens     ?? 0;
+      const cacheCreation = call.cacheCreationTokens ?? 0;
+      // Trust a supplied cost (the brain already computes a cache-aware one), but
+      // when it's omitted, derive a cache-discounted estimate so the dashboard
+      // never falls back to billing cached tokens at the full input rate.
+      const estimatedCostUsd = call.estimatedCostUsd
+        ?? estimateCost(call.model, call.promptTokens ?? 0, call.completionTokens ?? 0, cacheRead, cacheCreation);
+
       this.db.prepare(`
         INSERT INTO api_call_log
           (id, provider, model, prompt_tokens, completion_tokens, total_tokens,
-           estimated_cost_usd, latency_ms, success, error, source, called_at)
+           estimated_cost_usd, latency_ms, success, error, source,
+           cache_read_tokens, cache_creation_tokens, called_at)
         VALUES
           (:id, :provider, :model, :prompt_tokens, :completion_tokens, :total_tokens,
-           :estimated_cost_usd, :latency_ms, :success, :error, :source, :called_at)
+           :estimated_cost_usd, :latency_ms, :success, :error, :source,
+           :cache_read_tokens, :cache_creation_tokens, :called_at)
       `).run({
         id,
         provider:           call.provider,
@@ -192,15 +212,17 @@ export class CostTracker {
         prompt_tokens:      call.promptTokens      ?? 0,
         completion_tokens:  call.completionTokens  ?? 0,
         total_tokens:       call.totalTokens       ?? 0,
-        estimated_cost_usd: call.estimatedCostUsd  ?? 0,
+        estimated_cost_usd: estimatedCostUsd,
         latency_ms:         call.latencyMs         ?? 0,
         success:            call.success ? 1 : 0,
         error:              call.error ?? null,
         source:             call.source ?? 'chat',
+        cache_read_tokens:     cacheRead,
+        cache_creation_tokens: cacheCreation,
         called_at:          calledAt,
       });
 
-      logger.debug({ id, provider: call.provider, model: call.model, cost: call.estimatedCostUsd }, 'API call recorded');
+      logger.debug({ id, provider: call.provider, model: call.model, cost: estimatedCostUsd }, 'API call recorded');
     } catch (err) {
       logger.error({ err: err instanceof Error ? err.message : String(err) }, 'CostTracker.record failed');
     }
@@ -274,6 +296,7 @@ export class CostTracker {
       prompt_tokens: number; completion_tokens: number; total_tokens: number;
       estimated_cost_usd: number; latency_ms: number;
       success: number; error: string | null; source: string; called_at: string;
+      cache_read_tokens: number; cache_creation_tokens: number;
     }
     const rows = this.db.prepare<{ limit: number }, Row>(`
       SELECT * FROM api_call_log
@@ -292,6 +315,8 @@ export class CostTracker {
       latencyMs:         r.latency_ms,
       success:           r.success === 1,
       error:             r.error ?? undefined,
+      cacheReadTokens:      r.cache_read_tokens ?? 0,
+      cacheCreationTokens:  r.cache_creation_tokens ?? 0,
       calledAt:          r.called_at,
       source:            r.source,
     }));
