@@ -1162,7 +1162,11 @@ async function boot(): Promise<void> {
   if (process.env['SUDO_VERIFY_GATE'] === '1') {
     try {
       const { ConfidenceGate } = await import('./core/agent/verify-gate.js');
-      const gate = new ConfidenceGate(registry as unknown as import('./core/agent/verify-gate.js').ToolRegistryForGate);
+      // ToolRegistry.get returns ToolDefinition | undefined; ToolDefinition
+      // has both `name` and `safety?: 'readonly' | 'destructive'` — the only
+      // two fields ToolRegistryForGate.get's return shape requires — so it
+      // structurally satisfies the narrower interface via width-extension.
+      const gate = new ConfidenceGate(registry);
       finalAgentLoop.setVerifyGate(gate);
 
       const { GroundingChecker, isGroundingBlockEnabled } = await import('./core/agent/verify-gate-grounding.js');
