@@ -103,6 +103,16 @@ export interface ModelCostEntry {
   _successCount: number;
 }
 
+/** Cost breakdown by caller source (consciousness, agent, api, …). */
+export interface SourceCostEntry {
+  /** Caller source tag. */
+  source: string;
+  /** Number of calls. */
+  callCount: number;
+  /** Estimated cost in USD. */
+  estimatedCostUsd: number;
+}
+
 /** Cost analytics summary. */
 export interface CostAnalytics {
   /** Total estimated cost in USD. */
@@ -115,6 +125,8 @@ export interface CostAnalytics {
   monthCostUsd: number;
   /** Cost breakdown by model. */
   byModel: ModelCostEntry[];
+  /** Cost breakdown by caller source. */
+  bySource: SourceCostEntry[];
   /** Cost per day. */
   costByDay: Record<string, number>;
   /** Total input tokens. */
