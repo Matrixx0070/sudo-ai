@@ -88,7 +88,7 @@ describe('ExecVerifier — integration with bwrap', () => {
     });
     const response = '```python\ndef add(a, b):\n    return a + b\n```';
     const r = await v.verify(TASK, response);
-    expect(r.passed).toBe(true);
+    expect(r.passed, `expected pass; verifier detail: ${r.detail}`).toBe(true);
     expect(r.score).toBe(1);
   });
 
@@ -100,7 +100,7 @@ describe('ExecVerifier — integration with bwrap', () => {
     });
     const response = '```python\ndef add(a, b):\n    return a + b\n```';
     const r = await v.verify(TASK, response);
-    expect(r.passed).toBe(false);
+    expect(r.passed, `expected fail; verifier detail: ${r.detail}`).toBe(false);
     expect(r.score).toBe(0);
     expect(r.detail).toMatch(/exit=/);
   });
