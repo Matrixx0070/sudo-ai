@@ -135,13 +135,17 @@ function rotateBackups(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): void {
 // Model cascade
 // ---------------------------------------------------------------------------
 
+// Sequential failover: tried in order, first success wins. Ordered by what's
+// verified working on this deployment. The previous lead entries (grok-*,
+// claude-oauth sonnet, gemini-2.5-flash, groq llama) had a 0% success rate —
+// grok returns "Bad Request" (stale ids), claude.ai OAuth serves Opus reliably
+// but stalls on *any* Sonnet id (undici HeadersTimeoutError), and gemini-flash
+// hits the free-tier quota. They only burned a failed attempt (and, for sonnet,
+// the ~45s headers-timeout) before failover, so arsenal succeeded 0× all day.
 const MODEL_CASCADE = [
-  { model: 'xai/grok-4-0709',              label: 'Grok 4 (2M ctx)'      },
-  { model: 'xai/grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning'  },
-  { model: 'xai/grok-4-1-fast-reasoning',  label: 'Grok Fast Reasoning'  },
-  { model: 'claude-oauth/claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5 (OAuth)' },
-  { model: 'google/gemini-2.5-flash',      label: 'Gemini 2.5 Flash'     },
-  { model: 'groq/llama-3.3-70b-versatile', label: 'Groq Llama 3.3 70B'  },
+  { model: 'claude-oauth/claude-opus-4-8', label: 'Claude Opus 4.8 (OAuth)' },
+  { model: 'ollama/kimi-k2.7-code:cloud',  label: 'Kimi K2.7 Code (Ollama)' },
+  { model: 'openai/o4-mini',               label: 'OpenAI o4-mini'          },
 ];
 
 // ---------------------------------------------------------------------------
