@@ -501,6 +501,7 @@ SUDO_DASHBOARD_DISABLE=1
 # Brain / consensus / autonomy
 SUDO_BRAIN_RACE_DISABLE=1            # Disable parallel race (use sequential)
 SUDO_BRAIN_CONSENSUS_DISABLE=1       # Disable 3-model Jaccard consensus (fallback sequential)
+SUDO_BRAIN_OAUTH_STREAM_DISABLE=1    # Force legacy buffered generateText for claude-oauth (default streams to dodge the 45s headers-timer false-abort on long Opus turns)
 SUDO_AUTO_APPROVE=1                  # Favor automatic approval in the autonomy tiers
 
 # Other common

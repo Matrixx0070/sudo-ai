@@ -252,6 +252,23 @@ interface RAGEngineInterface {
   retrieveContext(query: string, maxChunks?: number): Promise<string>;
 }
 
+/**
+ * The subset of a resolved generateText result that `_callSingleModel` consumes.
+ * A full generateText result is structurally assignable to this; the streaming
+ * path (`_completeOnce` for claude-oauth) reconstructs it from streamText's
+ * aggregate promises. `reasoning`/`providerMetadata` stay `unknown` because the
+ * downstream code already accesses them through casts and tolerates absence.
+ */
+type BrainCompletion = {
+  text: Awaited<ReturnType<typeof generateText>>['text'];
+  toolCalls: Awaited<ReturnType<typeof generateText>>['toolCalls'];
+  usage: Awaited<ReturnType<typeof generateText>>['usage'];
+  finishReason: Awaited<ReturnType<typeof generateText>>['finishReason'];
+  reasoning: unknown;
+  reasoningText: string | undefined;
+  providerMetadata: unknown;
+};
+
 /** Core LLM interface with failover, persona, and mood management. */
 export class Brain {
   private readonly failover: ModelFailover;
@@ -1256,7 +1273,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       delete noToolParams.tools;
       // Slightly raise temperature for the retry to avoid deterministic empty loops
       noToolParams.temperature = Math.min(temperature + 0.1, 1.0);
-      result = await generateText(noToolParams as Parameters<typeof generateText>[0]);
+      result = await this._completeOnce(profile.provider, noToolParams);
       log.info({ modelId, textLen: result.text?.length ?? 0 }, 'Retried without tools');
     }
     // --- end tool-empty retry ---
@@ -1355,7 +1372,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           stablePrefixHash,
           stablePrefixLen,
           providerMetadata: (result as { providerMetadata?: unknown }).providerMetadata,
-        }, 'prompt-cache-debug: raw providerMetadata (generateText path)');
+        }, 'prompt-cache-debug: raw providerMetadata (call path)');
       } catch (e) {
         log.warn({ err: e }, 'prompt-cache-debug: providerMetadata logging failed');
       }
@@ -1461,7 +1478,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
   private async _generateWithKeyRotation(
     profile: ModelProfile,
     callParams: Record<string, unknown>,
-  ): Promise<Awaited<ReturnType<typeof generateText>>> {
+  ): Promise<BrainCompletion> {
     const provider = profile.provider;
 
     // Custom providers (gap #27) carry a single configured key and have no
@@ -1469,7 +1486,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // for a custom name don't spin the loop with keys that never get used.
     if (isCustomProvider(provider)) {
       callParams.model = getModel(profile.id);
-      return generateText(callParams as Parameters<typeof generateText>[0]);
+      return this._completeOnce(provider, callParams);
     }
 
     const keyCount = this._ensureRotationKeys(provider);
@@ -1477,7 +1494,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // Single-key / env path — unchanged behavior.
     if (keyCount < 2) {
       callParams.model = getModel(profile.id);
-      return generateText(callParams as Parameters<typeof generateText>[0]);
+      return this._completeOnce(provider, callParams);
     }
 
     let lastErr: unknown;
@@ -1486,7 +1503,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       if (!key) break;
       try {
         callParams.model = await getModelWithKey(profile.id, key.apiKey);
-        const res = await generateText(callParams as Parameters<typeof generateText>[0]);
+        const res = await this._completeOnce(provider, callParams);
         this.authRotation.reportSuccess(provider, key.keyId);
         return res;
       } catch (err) {
@@ -1501,6 +1518,50 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
     throw lastErr ?? new LLMError('All API keys for provider exhausted', 'llm_all_keys_exhausted', { provider });
+  }
+
+  /**
+   * Run one completion and return it in generateText's resolved shape.
+   *
+   * For `claude-oauth` this streams instead of buffering. A non-streaming
+   * generateText holds the claude-oauth response headers until the whole
+   * completion finishes, which trips the provider's fast-fail headers timer
+   * (default 45s, providers.ts) on long Opus turns and surfaces as a false stall
+   * — the exact trap PRs #277-#279 fixed in the coder tools (swarm/analyze/codex/
+   * arsenal). The central brain.call() path had the same defect, and it sits on
+   * the highest-frequency caller (consciousness/cognitive-stream every tick).
+   * streamText sends `stream:true`, so Anthropic lands headers in ~1-2s, the
+   * headers timer clears, and the body-idle guard (providers.ts) bounds a stall
+   * mid-body; awaiting the aggregate promises drains the stream to the full
+   * completion. Reasoning/providerMetadata are best-effort — a post-completion
+   * rejection (e.g. a cancelled stream) must not fail an otherwise-served call,
+   * mirroring stream()'s defensive handling.
+   *
+   * Every other provider has no headers timer, so it keeps the simpler buffered
+   * generateText path byte-for-byte. Kill-switch SUDO_BRAIN_OAUTH_STREAM_DISABLE=1
+   * forces the legacy generateText path for claude-oauth too.
+   */
+  private async _completeOnce(
+    provider: string,
+    callParams: Record<string, unknown>,
+  ): Promise<BrainCompletion> {
+    if (provider !== 'claude-oauth' || process.env['SUDO_BRAIN_OAUTH_STREAM_DISABLE'] === '1') {
+      return generateText(callParams as Parameters<typeof generateText>[0]);
+    }
+    const result = streamText(callParams as Parameters<typeof streamText>[0]);
+    // Awaiting these aggregates consumes the stream (feeding the body-idle guard)
+    // and resolves the same fields generateText returns. A rejection here is a
+    // real call failure and propagates to the rotation/failover loop.
+    const [text, toolCalls, usage, finishReason] = await Promise.all([
+      result.text,
+      result.toolCalls,
+      result.usage,
+      result.finishReason,
+    ]);
+    const reasoning: unknown = await Promise.resolve(result.reasoning).catch(() => undefined);
+    const reasoningText: string | undefined = await Promise.resolve(result.reasoningText).catch(() => undefined);
+    const providerMetadata: unknown = await Promise.resolve(result.providerMetadata).catch(() => undefined);
+    return { text, toolCalls, usage, finishReason, reasoning, reasoningText, providerMetadata };
   }
 
   /**
