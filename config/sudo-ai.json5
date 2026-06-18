@@ -13,15 +13,19 @@
   models: {
     primary: [
       {
-        id: 'ollama/kimi-k2.6:cloud',
-        contextWindow: 131072,
+        // Claude.ai Max subscription via PKCE OAuth (no API key needed).
+        // Connect with: `pnpm tsx src/cli/index.ts claude-oauth login`.
+        id: 'claude-oauth/claude-opus-4-8',
+        contextWindow: 200000,
         maxOutputTokens: 8192,
         temperature: 0.7,
       },
     ],
     fallback: {
-      id: 'xai/grok-4-1-fast-non-reasoning',
-      contextWindow: 131072,
+      // Claude.ai Sonnet 4.5 via the same OAuth — kicks in if Opus 4.8 is
+      // rate-limited (Anthropic enforces lower per-account quotas on Opus tier).
+      id: 'claude-oauth/claude-sonnet-4-5-20250929',
+      contextWindow: 200000,
       maxOutputTokens: 4096,
       temperature: 0.7,
     },
@@ -34,7 +38,7 @@
     google: { envKey: 'GOOGLE_API_KEY' },
   },
   channels: {
-    telegram: { enabled: false, tokenEnvKey: 'TELEGRAM_BOT_TOKEN', allowedUsers: [] },
+    telegram: { enabled: true, tokenEnvKey: 'TELEGRAM_BOT_TOKEN', allowedUsers: ['8087386717'] },
     whatsapp: { enabled: false, sessionPath: 'data/whatsapp', allowedJids: [] },
     discord: { enabled: false, tokenEnvKey: 'DISCORD_BOT_TOKEN', allowedChannelIds: [] },
   },
