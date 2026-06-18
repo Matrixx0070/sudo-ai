@@ -92,7 +92,54 @@ describe('AgentBenchRunner — with mock agent loop', () => {
     expect(result.toolCallCount).toBe(2);
     expect(result.transcriptHash).toMatch(/^[0-9a-f]{64}$/);
     expect(result.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(result.costUsd).toBe(0); // no cost meter injected → 0
     expect(agentLoop.run).toHaveBeenCalledOnce();
+  });
+
+  it('records costUsd as the cost-meter delta across the run', async () => {
+    const { task, agentLoop } = makeTask({
+      initialFile: 'file.txt',
+      initialContent: 'before',
+      agentEdit: async (dir) => fs.writeFile(path.join(dir, 'file.txt'), 'after', 'utf8'),
+      verifierPasses: true,
+    });
+    // Meter is read twice: before the run, then after. Delta is the task cost.
+    const values = [0.10, 0.137];
+    let i = 0;
+    const costMeter = { totalCostUsd: vi.fn(() => values[Math.min(i++, values.length - 1)]!) };
+
+    const runner = new AgentBenchRunner({
+      agentLoop,
+      sessionManager: dummySessionManager,
+      modelLabel: 'mock-model',
+      costMeter,
+    });
+
+    const result = await runner.run(task);
+    expect(costMeter.totalCostUsd).toHaveBeenCalledTimes(2);
+    expect(result.costUsd).toBeCloseTo(0.037, 6);
+  });
+
+  it('clamps a negative cost delta (day-boundary reset) to 0', async () => {
+    const { task, agentLoop } = makeTask({
+      initialFile: 'file.txt',
+      initialContent: 'before',
+      agentEdit: async (dir) => fs.writeFile(path.join(dir, 'file.txt'), 'after', 'utf8'),
+      verifierPasses: true,
+    });
+    const values = [0.20, 0.05]; // tracker reset mid-run → after < before
+    let i = 0;
+    const costMeter = { totalCostUsd: () => values[Math.min(i++, values.length - 1)]! };
+
+    const runner = new AgentBenchRunner({
+      agentLoop,
+      sessionManager: dummySessionManager,
+      modelLabel: 'mock-model',
+      costMeter,
+    });
+
+    const result = await runner.run(task);
+    expect(result.costUsd).toBe(0);
   });
 
   it('records passed=false when verifier rejects the agent\'s edit', async () => {

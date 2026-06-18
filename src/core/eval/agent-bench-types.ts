@@ -54,6 +54,12 @@ export interface AgentBenchResult {
   agentText: string;
   /** Wall-clock time for the entire run (agent + verifier), in ms. */
   wallTimeMs: number;
+  /**
+   * Estimated USD cost of the agent loop for this task — the delta in the bench's
+   * isolated cost tracker across the run. 0 when no cost meter is wired (e.g.
+   * injected-deps tests). Feeds passesPerDollar in the regression gate.
+   */
+  costUsd: number;
   /** Number of agent-loop tool-call events observed during the run. */
   toolCallCount: number;
   /** SHA-256 of the agent's final text (transcript dedup, no storage of full text). */

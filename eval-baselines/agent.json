@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "savedAt": "2026-06-18T11:31:14.095Z",
+  "savedAt": "2026-06-18T11:44:38.116Z",
   "summary": {
     "runId": "agent-suite-baseline",
     "label": "agent-suite @ claude-opus-4-8",
@@ -9,56 +9,56 @@
         "taskId": "agent-dead-code-cleanup",
         "passed": true,
         "score": 1,
-        "costUsd": 0,
-        "latencyMs": 26789,
+        "costUsd": 0.52969,
+        "latencyMs": 10712,
         "seedCount": 1
       },
       {
         "taskId": "agent-divide-bug",
         "passed": true,
         "score": 1,
-        "costUsd": 0,
-        "latencyMs": 47016,
+        "costUsd": 0.6529700000000002,
+        "latencyMs": 14576,
         "seedCount": 1
       },
       {
         "taskId": "agent-implement-from-spec",
         "passed": true,
         "score": 1,
-        "costUsd": 0,
-        "latencyMs": 10626,
+        "costUsd": 0.5231950000000001,
+        "latencyMs": 9876,
         "seedCount": 1
       },
       {
         "taskId": "agent-js-bug-fix",
         "passed": true,
         "score": 1,
-        "costUsd": 0,
-        "latencyMs": 9768,
+        "costUsd": 0.49844999999999984,
+        "latencyMs": 12249,
         "seedCount": 1
       },
       {
         "taskId": "agent-multi-file-rename",
         "passed": true,
         "score": 1,
-        "costUsd": 0,
-        "latencyMs": 22258,
+        "costUsd": 0.5280900000000002,
+        "latencyMs": 9708,
         "seedCount": 1
       },
       {
         "taskId": "agent-slugify-edges",
         "passed": true,
         "score": 1,
-        "costUsd": 0,
-        "latencyMs": 54574,
+        "costUsd": 0.672695,
+        "latencyMs": 17517,
         "seedCount": 1
       },
       {
         "taskId": "agent-stack-trace-debug",
         "passed": true,
         "score": 1,
-        "costUsd": 0,
-        "latencyMs": 12061,
+        "costUsd": 0.525255,
+        "latencyMs": 8590,
         "seedCount": 1
       }
     ],
@@ -66,9 +66,9 @@
     "passed": 7,
     "passRate": 1,
     "meanScore": 1,
-    "totalCostUsd": 0,
-    "totalLatencyMs": 183092,
-    "passesPerDollar": 0,
-    "passesPerMinute": 2.2939287352806237
+    "totalCostUsd": 3.9303450000000004,
+    "totalLatencyMs": 83228,
+    "passesPerDollar": 1.781014134891466,
+    "passesPerMinute": 5.04637862257894
   }
 }

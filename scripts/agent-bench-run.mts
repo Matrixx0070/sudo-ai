@@ -65,6 +65,7 @@ async function main(): Promise<number> {
         score:          r.score,
         detail:         r.detail.slice(0, 400),
         wallTimeMs:     r.wallTimeMs,
+        costUsd:        r.costUsd,
         toolCallCount:  r.toolCallCount,
         agentTextLen:   r.agentText.length,
       });
