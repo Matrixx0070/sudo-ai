@@ -18,7 +18,7 @@ import { AgentBenchRunner } from '../src/core/eval/agent-bench-runner.js';
 import { divideBugTask } from '../src/core/eval/agent-tasks/divide-bug.js';
 
 async function main(): Promise<number> {
-  const model = process.env['AGENT_BENCH_MODEL'] ?? 'claude-oauth/claude-sonnet-4-5';
+  const model = process.env['AGENT_BENCH_MODEL'] ?? 'claude-oauth/claude-opus-4-8';
   const runner = new AgentBenchRunner({ bootstrap: { modelOverride: model } });
   const keep = process.env['AGENT_BENCH_KEEP_WORKSPACE'] === '1';
 
