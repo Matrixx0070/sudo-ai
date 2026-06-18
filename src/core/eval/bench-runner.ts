@@ -31,7 +31,7 @@ export interface BrainCallable {
    * Call the model and return the response text.
    * Should throw on hard errors; resolution failure counts as success=false.
    */
-  call(opts: { messages: Array<{ role: string; content: string }>; model: string }): Promise<{ content: string }>;
+  call(opts: { messages: Array<{ role: string; content: string }>; model: string; source?: string }): Promise<{ content: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +167,7 @@ async function runOne(
     const t0 = Date.now();
     try {
       const resp = await brain.call({
+        source: 'eval',
         messages: [{ role: 'user', content: effectivePrompt }],
         model,
       });

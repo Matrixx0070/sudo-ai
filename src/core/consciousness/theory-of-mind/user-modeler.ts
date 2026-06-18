@@ -238,6 +238,7 @@ export class TheoryOfMind {
           'Respond with JSON only: {"mood":"...","intent":"...","urgency":0.0}';
 
         const result = await this.brain.call({
+          source: 'consciousness',
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },

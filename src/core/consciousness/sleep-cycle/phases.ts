@@ -95,6 +95,7 @@ export async function runPhase2PatternFinding(
   try {
     const summaryBlock = acc.summaries.slice(0, 10).map((s, i) => `${i + 1}. ${s}`).join('\n');
     const response = await brain.call({
+      source: 'consciousness',
       messages: [{
         role: 'user',
         content: [

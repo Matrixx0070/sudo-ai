@@ -131,6 +131,7 @@ export async function handleNonStreaming(
   try {
     brainRes = await brain.call({
       messages: brainMessages,
+      source: 'api',
       model: body.model,
       temperature: body.temperature,
       maxTokens: body.max_tokens,

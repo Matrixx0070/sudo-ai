@@ -148,6 +148,7 @@ export async function generateSoulUpdate(
 
   try {
     const result = await brain.call({
+      source: 'consciousness',
       messages: [
         { role: 'system', content: buildSystemPrompt() },
         {

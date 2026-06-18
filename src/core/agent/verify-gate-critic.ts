@@ -84,6 +84,7 @@ export interface CriticBrainLike {
   call(req: {
     messages: Array<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
     model?: string;
+    source?: string;
   }): Promise<{ content: string }>;
 }
 
@@ -294,6 +295,7 @@ export class CriticPass {
     let raw: string;
     try {
       const response = await this.brain.call({
+        source: 'verify-gate',
         messages: [
           { role: 'system', content: this.systemPrompt },
           { role: 'system', content: criticDirective() },

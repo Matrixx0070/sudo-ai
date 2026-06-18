@@ -46,6 +46,7 @@ interface BrainLike {
     messages: Array<{ role: string; content: string }>;
     maxTokens?: number;
     temperature?: number;
+    source?: string;
   }): Promise<{ content: string }>;
 }
 
@@ -528,6 +529,7 @@ export class AutoDream {
       '- Skip sections that have nothing meaningful to report (write "None" as placeholder).';
 
     const response = await this.brain.call({
+      source: 'consciousness',
       messages: [
         { role: 'system', content: systemMsg },
         {
@@ -589,6 +591,7 @@ export class AutoDream {
             const toKeep = sections.slice(sections.length - 2).join('\n---\n');
 
             const summaryResponse = await this.brain.call({
+              source: 'consciousness',
               messages: [
                 {
                   role: 'system',

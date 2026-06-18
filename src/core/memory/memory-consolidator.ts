@@ -65,6 +65,7 @@ export interface ConsolidatorBrain {
     model?: string;
     temperature?: number;
     maxTokens?: number;
+    source?: string;
   }): Promise<{ content: string }>;
 }
 
@@ -232,6 +233,7 @@ export async function consolidateMemoryFile(
   let raw: string;
   try {
     const response = await brain.call({
+      source: 'memory',
       messages: [
         { role: 'system', content: systemPrompt },
         {

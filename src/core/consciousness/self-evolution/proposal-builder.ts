@@ -80,6 +80,7 @@ export async function buildFixProposal(
   let brainResponse: string;
   try {
     const result = await brain.call({
+      source: 'consciousness',
       messages: [
         {
           role: 'system',

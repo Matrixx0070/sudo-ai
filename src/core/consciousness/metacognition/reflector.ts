@@ -165,6 +165,7 @@ export async function reflect(
   let rawResponse: string;
   try {
     const result = await brain.call({
+      source: 'consciousness',
       messages: [{ role: 'user', content: prompt }],
       maxTokens: REFLECT_MAX_TOKENS,
       temperature: REFLECT_TEMPERATURE,

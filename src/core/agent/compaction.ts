@@ -41,6 +41,7 @@ interface CompactionRequest {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  source?: string;
 }
 
 /** Minimal BrainResponse shape returned by brain.call(). */
@@ -281,7 +282,7 @@ export async function autoCompact(
   history: Array<{ role: string; content: string }>,
   brain: {
     call(
-      request: { messages: Array<{ role: string; content: string }>; maxTokens?: number },
+      request: { messages: Array<{ role: string; content: string }>; maxTokens?: number; source?: string },
       opts?: { tier?: 'fast' | 'routine' | 'high-stakes' },
     ): Promise<{ content: string }>;
   },
@@ -307,6 +308,7 @@ export async function autoCompact(
 
     const summary = await brain.call(
       {
+        source: 'compaction',
         messages: [
           { role: 'user', content: `Summarize this conversation history concisely, preserving all important context, decisions, and state:\n\n${middleText}` },
         ],
@@ -336,7 +338,7 @@ export async function fullCompact(
   history: Array<{ role: string; content: string }>,
   brain: {
     call(
-      request: { messages: Array<{ role: string; content: string }>; maxTokens?: number },
+      request: { messages: Array<{ role: string; content: string }>; maxTokens?: number; source?: string },
       opts?: { tier?: 'fast' | 'routine' | 'high-stakes' },
     ): Promise<{ content: string }>;
   },
@@ -347,6 +349,7 @@ export async function fullCompact(
 
   const summary = await brain.call(
     {
+      source: 'compaction',
       messages: [{ role: 'user', content: `Create a dense summary of this entire conversation, capturing all decisions, context, state, and important details:\n\n${allText}` }],
       maxTokens: 16000,
     },

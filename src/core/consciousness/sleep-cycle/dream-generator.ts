@@ -95,6 +95,7 @@ export async function generateDream(
 
   try {
     const response = await brain.call({
+      source: 'consciousness',
       messages: [{ role: 'user', content: prompt }],
       maxTokens: DREAM_MAX_TOKENS,
       temperature: DREAM_TEMPERATURE,
