@@ -219,4 +219,42 @@ describe('assembleSystemPrompt prefix stability', () => {
     });
     expect(prompt.indexOf('- **zz.last**')).toBeLessThan(prompt.indexOf('- **aa.first**'));
   });
+
+  it('flag on: AGENTS.md, TOOLS.md, Tool Capability Manifest, Long-Term Memory all sit ABOVE the boundary', async () => {
+    process.env[FLAG] = '1';
+    const prompt = await assembleSystemPrompt({});
+    const boundaryIdx = prompt.indexOf(BOUNDARY);
+    expect(boundaryIdx).toBeGreaterThan(-1);
+
+    const agentsIdx = prompt.indexOf('AGENTS — Agent Manual');
+    const toolsIdx = prompt.indexOf('TOOLS — Environment-Specific Notes');
+    const manifestIdx = prompt.indexOf('Tool Capability Manifest');
+    const memoryIdx = prompt.indexOf('Long-Term Memory');
+
+    // Each section must be present AND ordered before the boundary.
+    expect(agentsIdx).toBeGreaterThan(-1);
+    expect(toolsIdx).toBeGreaterThan(-1);
+    expect(manifestIdx).toBeGreaterThan(-1);
+    expect(memoryIdx).toBeGreaterThan(-1);
+    expect(agentsIdx).toBeLessThan(boundaryIdx);
+    expect(toolsIdx).toBeLessThan(boundaryIdx);
+    expect(manifestIdx).toBeLessThan(boundaryIdx);
+    expect(memoryIdx).toBeLessThan(boundaryIdx);
+  });
+
+  it('flag off: AGENTS.md, TOOLS.md, Tool Capability Manifest, Long-Term Memory all sit BELOW the boundary (legacy layout)', async () => {
+    const prompt = await assembleSystemPrompt({});
+    const boundaryIdx = prompt.indexOf(BOUNDARY);
+    expect(boundaryIdx).toBeGreaterThan(-1);
+
+    const agentsIdx = prompt.indexOf('AGENTS — Agent Manual');
+    const toolsIdx = prompt.indexOf('TOOLS — Environment-Specific Notes');
+    const manifestIdx = prompt.indexOf('Tool Capability Manifest');
+    const memoryIdx = prompt.indexOf('Long-Term Memory');
+
+    expect(agentsIdx).toBeGreaterThan(boundaryIdx);
+    expect(toolsIdx).toBeGreaterThan(boundaryIdx);
+    expect(manifestIdx).toBeGreaterThan(boundaryIdx);
+    expect(memoryIdx).toBeGreaterThan(boundaryIdx);
+  });
 });

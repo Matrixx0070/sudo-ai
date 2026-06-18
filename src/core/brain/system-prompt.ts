@@ -155,6 +155,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     frontendContent,
     dirtyWorktreeContent,
     thinkingRulesContent,
+    longTermMemoryContent,
   ] =
     await Promise.all([
       readWorkspaceFile('SOUL.md'),
@@ -174,7 +175,13 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
       readWorkspaceFile('FRONTEND.md'),
       readWorkspaceFile('DIRTY-WORKTREE.md'),
       readWorkspaceFile('THINKING-RULES.md'),
+      readWorkspaceFile('MEMORY.md'),
     ]);
+
+  // Long-term memory is only included when peerId matches mainPeerId (or peerId
+  // is unset). Hoisted above the boundary push so the cache-aware branch can
+  // gate on the same predicate.
+  const shouldIncludeMemory = peerId === undefined || peerId === mainPeerId;
 
   // Read daily memory log (separate path).
   const dailyMemory = memoryContext ?? (await readTodayMemoryLog());
@@ -281,9 +288,30 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     parts.push(sectionWithHeader('Available Tools', toolsListBlock));
   }
 
+  // With SUDO_PROMPT_CACHE=1 we lift the workspace markdown blocks (AGENTS,
+  // TOOLS, Tool Capability Manifest, Long-Term Memory) ABOVE the boundary too.
+  // They are static-on-the-scale-of-minutes — far slower-moving than the
+  // provider cache's 5-minute TTL. Expands the cacheable prefix from ~1k tokens
+  // (SOUL+IDENTITY+USER) to ~16k+ tokens, which is what actually moves the
+  // per-call cost. Without the flag set, these blocks remain in their legacy
+  // positions below the boundary.
+  if (promptCacheStable) {
+    parts.push(section(agentsContent));
+    parts.push(section(toolsContent));
+    if (isCapabilityManifestEnabled()) {
+      parts.push(sectionWithHeader('Tool Capability Manifest', getCapabilityManifestBody()));
+    }
+    if (shouldIncludeMemory && longTermMemoryContent) {
+      parts.push(sectionWithHeader('Long-Term Memory', longTermMemoryContent));
+    }
+  }
+
   // --- PROMPT CACHE BOUNDARY ---
-  // Everything above: stable (SOUL, IDENTITY, USER, tools) → reused across calls.
-  // Everything below: dynamic (date, mood, memory, consciousness) → fresh each call.
+  // Everything above: stable (SOUL, IDENTITY, USER, tools[, AGENTS, TOOLS,
+  //   capability manifest, long-term memory when SUDO_PROMPT_CACHE=1])
+  //   → reused across calls.
+  // Everything below: dynamic (date, mood, consciousness, persona, recent
+  //   memory, custom instructions) → fresh each call.
   // With SUDO_PROMPT_CACHE=1 the date/time block also sits below this line.
   parts.push('\n' + DYNAMIC_BOUNDARY_MARKER);
 
@@ -325,17 +353,22 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     parts.push(sectionWithHeader('Reasoning Lens', reasoningLens));
   }
 
-  // 8. AGENTS.md
-  parts.push(section(agentsContent));
+  // 8. AGENTS.md (lifted above the boundary when SUDO_PROMPT_CACHE=1)
+  if (!promptCacheStable) {
+    parts.push(section(agentsContent));
+  }
 
-  // 9. TOOLS.md
-  parts.push(section(toolsContent));
+  // 9. TOOLS.md (lifted above the boundary when SUDO_PROMPT_CACHE=1)
+  if (!promptCacheStable) {
+    parts.push(section(toolsContent));
+  }
 
   // 9.25 Tool Capability Manifest — single static block that maps the most
   // common access mismatches (sandbox vs host repo vs project workspace) to
   // the right tool. The bot's audit identified the sandbox/host split as the
   // #4 wall agents repeatedly run into. Opt out with SUDO_CAPABILITY_MANIFEST=0.
-  if (isCapabilityManifestEnabled()) {
+  // (Lifted above the boundary when SUDO_PROMPT_CACHE=1.)
+  if (!promptCacheStable && isCapabilityManifestEnabled()) {
     parts.push(sectionWithHeader('Tool Capability Manifest', getCapabilityManifestBody()));
   }
 
@@ -355,13 +388,11 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   }
 
   // 12. Long-term MEMORY.md — only when peerId matches mainPeerId (or peerId not provided)
-  //     This mirrors the scoping logic in injector.ts line 157
-  const shouldIncludeMemory = peerId === undefined || peerId === mainPeerId;
-  if (shouldIncludeMemory) {
-    const memoryContent = await readWorkspaceFile('MEMORY.md');
-    if (memoryContent) {
-      parts.push(sectionWithHeader('Long-Term Memory', memoryContent));
-    }
+  //     This mirrors the scoping logic in injector.ts line 157.
+  //     Lifted above the boundary when SUDO_PROMPT_CACHE=1; the file is read
+  //     in the parallel Promise.all at the top of this function either way.
+  if (!promptCacheStable && shouldIncludeMemory && longTermMemoryContent) {
+    parts.push(sectionWithHeader('Long-Term Memory', longTermMemoryContent));
   }
 
   // 13. Learnings — autonomous self-improvement rules
