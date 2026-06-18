@@ -16,7 +16,7 @@ import { DATA_DIR } from '../shared/paths.js';
 import type { CommandRegistry } from './registry.js';
 import type { CommandContext } from './types.js';
 import type { ToolRegistry } from '../tools/registry.js';
-import type { SessionManager } from '../sessions/manager.js';
+import type { Session } from '../sessions/types.js';
 import type { CostTracker } from '../brain/cost-tracker.js';
 
 const log = createLogger('commands:builtin');
@@ -25,9 +25,21 @@ const log = createLogger('commands:builtin');
 // Dependencies injected at registration time
 // ---------------------------------------------------------------------------
 
+/**
+ * Minimal session-manager surface the slash commands need. Lets both
+ * SessionManager and DualSessionManager satisfy BuiltinDeps directly
+ * without an `as unknown as` bridge at the wiring site — both classes
+ * expose the same three methods with identical signatures.
+ */
+export interface SessionManagerForBuiltins {
+  get(sessionId: string): Promise<Session | undefined>;
+  save(session: Session): Promise<void>;
+  exportSession(sessionId: string): Promise<string | undefined>;
+}
+
 export interface BuiltinDeps {
   toolRegistry: ToolRegistry;
-  sessionManager: SessionManager;
+  sessionManager: SessionManagerForBuiltins;
   costTracker: CostTracker;
   /** Optional consciousness orchestrator (duck-typed). */
   consciousness?: {

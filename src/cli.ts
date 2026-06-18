@@ -1384,7 +1384,7 @@ async function boot(): Promise<void> {
     const { registerBuiltinCommands } = await import('./core/commands/builtin.js');
     registerBuiltinCommands(commandRegistry, {
       toolRegistry: registry,
-      sessionManager: dualSessionManager as unknown as SessionManager,
+      sessionManager: dualSessionManager,
       costTracker,
       consciousness: consciousness ?? undefined,
     });
