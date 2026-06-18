@@ -37,6 +37,7 @@ function makePrimaryMock() {
     save: vi.fn(async (_s: Session) => {}),
     archive: vi.fn(async (_id: string) => {}),
     getOrCreate: vi.fn(async (channel: string, peerId: string): Promise<Session> => makeSession('sess-001', channel, peerId)),
+    exportSession: vi.fn(async (id: string): Promise<string | undefined> => (id === 'sess-001' ? '# exported markdown' : undefined)),
     peerQueue: { enqueue: vi.fn(async (_k: string, fn: () => Promise<unknown>) => fn()) },
     scopeMode: 'main' as const,
     cacheSize: 3,
@@ -223,6 +224,39 @@ describe('DualSessionManager', () => {
 
     it('throws TypeError when peerId is empty', async () => {
       await expect(dual.getOrCreate('telegram', '')).rejects.toThrow(TypeError);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // exportSession() — read-only delegation. Without this method on
+  // DualSessionManager the cli.ts→builtin /export slash command would
+  // silently land on `undefined` at runtime, returning "Export failed:
+  // TypeError: exportSession is not a function" to the user.
+  // -------------------------------------------------------------------------
+
+  describe('exportSession()', () => {
+    it('delegates to primary.exportSession and returns its markdown', async () => {
+      const result = await dual.exportSession('sess-001');
+      expect(result).toBe('# exported markdown');
+      expect(primary.exportSession).toHaveBeenCalledWith('sess-001');
+    });
+
+    it('returns undefined when primary cannot find the session', async () => {
+      const result = await dual.exportSession('does-not-exist');
+      expect(result).toBeUndefined();
+    });
+
+    it('does NOT touch the journal (read-only)', async () => {
+      await dual.exportSession('sess-001');
+      // Journal mock has no exportSession member; assert no other journal
+      // method was called either.
+      expect(journal.get).not.toHaveBeenCalled();
+      expect(journal.save).not.toHaveBeenCalled();
+    });
+
+    it('throws TypeError when sessionId is empty (matches sibling methods)', async () => {
+      await expect(dual.exportSession('')).rejects.toThrow(TypeError);
+      expect(primary.exportSession).not.toHaveBeenCalled();
     });
   });
 

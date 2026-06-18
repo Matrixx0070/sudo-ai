@@ -93,6 +93,18 @@ export class DualSessionManager {
     return this.primary.get(sessionId);
   }
 
+  /**
+   * Export a session as a Markdown transcript. Pure read — delegates to
+   * the primary SessionManager. Without this method the cli.ts bridge
+   * cast to SessionManager would silently land on `undefined` at runtime
+   * when the `/export` slash command fires, returning "Export failed:
+   * TypeError: exportSession is not a function" to the user.
+   */
+  async exportSession(sessionId: string): Promise<string | undefined> {
+    if (!sessionId) throw new TypeError('sessionId must not be empty');
+    return this.primary.exportSession(sessionId);
+  }
+
   // ---------------------------------------------------------------------------
   // Writes — primary + journal (dual write)
   // ---------------------------------------------------------------------------
