@@ -270,6 +270,20 @@ export interface BenchResult {
   complexityTier: ComplexityTier;
   /** ISO-8601 timestamp of the measurement. */
   timestamp: string;
+  /** Partial-credit score in [0, 1] from the task verifier. Mirrors `success` as 1.0/0.0 when no verifier. */
+  score?: number;
+  /** Verifier kind that produced `success` / `score` ('string' | 'exec' | 'legacy' | custom). */
+  verifierType?: string;
+  /** Verifier human-readable detail (e.g. failing assertion, stderr tail). Trimmed to ~2KB. */
+  verifierDetail?: string;
+  /** Brain strategy identifier used for this call ('single' | 'debate' | 'tree-search' | custom). */
+  strategy?: string;
+  /** Total tokens consumed by this call when reported by the brain. */
+  tokens?: number;
+  /** Wall-clock duration of the brain call + verifier, in ms. Distinct from `latencyMs` (brain only). */
+  wallTimeMs?: number;
+  /** SHA-256 of the response content. Enables transcript dedup without storing the full payload. */
+  transcriptHash?: string;
 }
 
 /** Aggregated benchmark report across all results in a run. */
@@ -312,6 +326,31 @@ export interface BenchTask {
   complexityTier: ComplexityTier;
   /** Optional per-task tags for filtering. */
   tags?: string[];
+  /** Optional verifier. When absent, BenchRunner falls back to the legacy non-empty-response check. */
+  verifier?: BenchVerifier;
+}
+
+/** Verdict from a {@link BenchVerifier}. */
+export interface VerifierResult {
+  /** Whether the response is accepted as correct. */
+  passed: boolean;
+  /** Partial-credit score in [0, 1]. For binary verifiers: 1.0 if passed else 0.0. */
+  score: number;
+  /** Human-readable detail for debugging (failing test name, stderr tail, etc.). */
+  detail: string;
+  /** Verifier kind tag — used for storage / reporting. */
+  type: string;
+}
+
+/**
+ * Verifier interface for {@link BenchTask}. Pure inputs → deterministic verdict.
+ * Implementations must NOT mutate the task or response.
+ */
+export interface BenchVerifier {
+  /** Stable kind identifier (e.g. 'string', 'exec'). Recorded on each BenchResult. */
+  readonly type: string;
+  /** Verify a single response against the task. */
+  verify(task: BenchTask, response: string): Promise<VerifierResult>;
 }
 
 // ---------------------------------------------------------------------------

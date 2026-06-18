@@ -54,6 +54,21 @@ CREATE TABLE IF NOT EXISTS bench_reports (
 );
 `;
 
+/**
+ * Additive columns introduced in Phase 1 of the eval gate work. Applied via
+ * `ensureColumns()` after the base schema runs, so existing databases pick them up
+ * with NULL defaults on the next open.
+ */
+const RESULT_PHASE1_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: 'score',           ddl: 'REAL' },
+  { name: 'verifier_type',   ddl: 'TEXT' },
+  { name: 'verifier_detail', ddl: 'TEXT' },
+  { name: 'strategy',        ddl: 'TEXT' },
+  { name: 'tokens',          ddl: 'INTEGER' },
+  { name: 'wall_time_ms',    ddl: 'REAL' },
+  { name: 'transcript_hash', ddl: 'TEXT' },
+];
+
 // ---------------------------------------------------------------------------
 // Filter type for listing results
 // ---------------------------------------------------------------------------
@@ -76,10 +91,25 @@ export class BenchStore {
     try {
       this.db = new Database(dbPath);
       this.db.exec(SCHEMA_SQL);
+      this.ensureColumns('bench_results', RESULT_PHASE1_COLUMNS);
       log.info({ dbPath }, 'BenchStore initialised');
     } catch (err) {
       log.error({ err: String(err), dbPath }, 'BenchStore: failed to initialise database');
       throw err;
+    }
+  }
+
+  /**
+   * Idempotently add columns to a table. Used for additive schema migrations —
+   * SQLite has no `ADD COLUMN IF NOT EXISTS`, so we introspect PRAGMA table_info first.
+   */
+  private ensureColumns(table: string, columns: Array<{ name: string; ddl: string }>): void {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    const existing = new Set(rows.map(r => r.name));
+    for (const col of columns) {
+      if (existing.has(col.name)) continue;
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col.name} ${col.ddl}`);
+      log.info({ table, column: col.name }, 'BenchStore: added column via additive migration');
     }
   }
 
@@ -90,16 +120,7 @@ export class BenchStore {
   /** Insert a single BenchResult row. Throws if id collision. */
   insertResult(r: BenchResult): void {
     try {
-      this.db.prepare(`
-        INSERT INTO bench_results
-          (id, run_id, model, agent_id, task_id, condition, seed_index,
-           success, latency_ms, cost_usd, complexity_tier, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        r.id, r.runId, r.model, r.agentId, r.taskId, r.condition,
-        r.seedIndex, r.success ? 1 : 0, r.latencyMs, r.costUsd,
-        r.complexityTier, r.timestamp,
-      );
+      this.db.prepare(INSERT_RESULT_SQL).run(...resultRowParams(r));
     } catch (err) {
       log.error({ err: String(err), id: r.id }, 'BenchStore.insertResult failed');
       throw err;
@@ -108,20 +129,9 @@ export class BenchStore {
 
   /** Batch insert multiple results in a single transaction. */
   insertResults(results: BenchResult[]): void {
-    const insert = this.db.prepare(`
-      INSERT INTO bench_results
-        (id, run_id, model, agent_id, task_id, condition, seed_index,
-         success, latency_ms, cost_usd, complexity_tier, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const insert = this.db.prepare(INSERT_RESULT_SQL);
     const tx = this.db.transaction((rows: BenchResult[]) => {
-      for (const r of rows) {
-        insert.run(
-          r.id, r.runId, r.model, r.agentId, r.taskId, r.condition,
-          r.seedIndex, r.success ? 1 : 0, r.latencyMs, r.costUsd,
-          r.complexityTier, r.timestamp,
-        );
-      }
+      for (const r of rows) insert.run(...resultRowParams(r));
     });
     tx(results);
     log.info({ count: results.length }, 'BenchStore.insertResults completed');
@@ -201,8 +211,31 @@ export class BenchStore {
 // Row mappers
 // ---------------------------------------------------------------------------
 
+const INSERT_RESULT_SQL = `
+  INSERT INTO bench_results
+    (id, run_id, model, agent_id, task_id, condition, seed_index,
+     success, latency_ms, cost_usd, complexity_tier, timestamp,
+     score, verifier_type, verifier_detail, strategy, tokens, wall_time_ms, transcript_hash)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`;
+
+function resultRowParams(r: BenchResult): unknown[] {
+  return [
+    r.id, r.runId, r.model, r.agentId, r.taskId, r.condition,
+    r.seedIndex, r.success ? 1 : 0, r.latencyMs, r.costUsd,
+    r.complexityTier, r.timestamp,
+    r.score ?? null,
+    r.verifierType ?? null,
+    r.verifierDetail ?? null,
+    r.strategy ?? null,
+    r.tokens ?? null,
+    r.wallTimeMs ?? null,
+    r.transcriptHash ?? null,
+  ];
+}
+
 function mapResultRow(r: Record<string, unknown>): BenchResult {
-  return {
+  const row: BenchResult = {
     id:             String(r['id'] ?? ''),
     runId:          String(r['run_id'] ?? ''),
     model:          String(r['model'] ?? ''),
@@ -216,6 +249,14 @@ function mapResultRow(r: Record<string, unknown>): BenchResult {
     complexityTier: String(r['complexity_tier'] ?? 'simple') as BenchResult['complexityTier'],
     timestamp:      String(r['timestamp'] ?? ''),
   };
+  if (r['score']           !== null && r['score']           !== undefined) row.score          = Number(r['score']);
+  if (r['verifier_type']   !== null && r['verifier_type']   !== undefined) row.verifierType   = String(r['verifier_type']);
+  if (r['verifier_detail'] !== null && r['verifier_detail'] !== undefined) row.verifierDetail = String(r['verifier_detail']);
+  if (r['strategy']        !== null && r['strategy']        !== undefined) row.strategy       = String(r['strategy']);
+  if (r['tokens']          !== null && r['tokens']          !== undefined) row.tokens         = Number(r['tokens']);
+  if (r['wall_time_ms']    !== null && r['wall_time_ms']    !== undefined) row.wallTimeMs     = Number(r['wall_time_ms']);
+  if (r['transcript_hash'] !== null && r['transcript_hash'] !== undefined) row.transcriptHash = String(r['transcript_hash']);
+  return row;
 }
 
 function mapReportRow(r: Record<string, unknown>): BenchReport {

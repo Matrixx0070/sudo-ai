@@ -13,7 +13,7 @@
  * apart from writing to the store and invoking the brain callable.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import type { BenchResult, BenchReport, BenchTask, SkillCondition } from '../shared/wave10-types.js';
 import { scoreComplexity } from '../agent/complexity-scorer.js';
@@ -61,6 +61,17 @@ export interface BenchRunOptions {
   skillOptimizer?: {
     getApprovedForSkill(skillId: string): { proposedValue: string; targetField: string } | null;
   };
+  /**
+   * Optional task override. When provided, BenchRunner uses these tasks instead of the
+   * built-in set. `taskIds` is ignored when this is set. Required for tests that need to
+   * exercise the runner without coupling to built-in task verifiers.
+   */
+  tasks?: BenchTask[];
+  /**
+   * Optional brain-strategy label recorded on every BenchResult ('single' | 'debate' | 'tree-search' | custom).
+   * Defaults to 'single'. Does not change runner behavior — purely a tag for downstream slicing.
+   */
+  strategy?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +117,7 @@ async function runOne(
   agentId: string,
   condition: SkillCondition,
   seedIndex: number,
+  strategy: string,
   brain?: BrainCallable,
   skillOptimizer?: {
     getApprovedForSkill(skillId: string): { proposedValue: string; targetField: string } | null;
@@ -113,6 +125,7 @@ async function runOne(
 ): Promise<BenchResult> {
   const id = randomUUID();
   const timestamp = new Date().toISOString();
+  const wallStart = Date.now();
 
   // Determine the effective prompt for this condition.
   // skills_post_optimizer: augment prompt with approved proposal if available;
@@ -143,8 +156,12 @@ async function runOne(
   const complexity = scoreComplexity({ prompt: effectivePrompt, modelName: model });
 
   let success = false;
+  let score = 0;
+  let verifierType = 'legacy';
+  let verifierDetail = 'no brain response';
   let latencyMs = 0;
   const costUsd = 0; // Cost estimation is delegated to brain; default 0
+  let responseContent = '';
 
   if (brain) {
     const t0 = Date.now();
@@ -154,14 +171,43 @@ async function runOne(
         model,
       });
       latencyMs = Date.now() - t0;
-      // Basic success: non-empty response
-      success = typeof resp.content === 'string' && resp.content.trim().length > 0;
+      responseContent = typeof resp.content === 'string' ? resp.content : '';
+
+      if (task.verifier) {
+        try {
+          const v = await task.verifier.verify(task, responseContent);
+          success = v.passed;
+          score = v.score;
+          verifierType = v.type;
+          verifierDetail = v.detail;
+        } catch (verErr) {
+          log.warn({ err: String(verErr), taskId: task.id }, 'Verifier threw — counted as failure');
+          success = false;
+          score = 0;
+          verifierType = task.verifier.type;
+          verifierDetail = `verifier error: ${String(verErr)}`;
+        }
+      } else {
+        // Legacy non-empty-response check (pre-Phase 1 behavior).
+        success = responseContent.trim().length > 0;
+        score = success ? 1 : 0;
+        verifierType = 'legacy';
+        verifierDetail = success ? 'non-empty response' : 'empty response';
+      }
     } catch (err) {
       latencyMs = Date.now() - t0;
       log.warn({ err: String(err), taskId: task.id, model, condition }, 'Brain call failed — marking as failure');
       success = false;
+      score = 0;
+      verifierType = task.verifier?.type ?? 'legacy';
+      verifierDetail = `brain error: ${String(err)}`;
     }
   }
+
+  const wallTimeMs = Date.now() - wallStart;
+  const transcriptHash = responseContent.length > 0
+    ? createHash('sha256').update(responseContent).digest('hex')
+    : '';
 
   return {
     id,
@@ -176,6 +222,12 @@ async function runOne(
     costUsd,
     complexityTier: complexity.tier,
     timestamp,
+    score,
+    verifierType,
+    verifierDetail,
+    strategy,
+    wallTimeMs,
+    transcriptHash,
   };
 }
 
@@ -273,6 +325,8 @@ export class BenchRunner {
       seeds = 1,
       brain,
       skillOptimizer,
+      tasks: tasksOverride,
+      strategy = 'single',
     } = opts;
 
     if (!models || models.length === 0) {
@@ -282,16 +336,16 @@ export class BenchRunner {
     const runId = randomUUID();
     const startedAt = new Date().toISOString();
 
-    log.info({ runId, models, conditions, seeds }, 'BenchRunner: starting sweep');
+    log.info({ runId, models, conditions, seeds, strategy }, 'BenchRunner: starting sweep');
 
-    const tasks = getBuiltinTasks(taskIds);
+    const tasks = tasksOverride && tasksOverride.length > 0 ? tasksOverride : getBuiltinTasks(taskIds);
     const allResults: BenchResult[] = [];
 
     for (const model of models) {
       for (const task of tasks) {
         for (const condition of conditions) {
           for (let si = 0; si < seeds; si++) {
-            const result = await runOne(runId, task, model, agentId, condition, si, brain, skillOptimizer);
+            const result = await runOne(runId, task, model, agentId, condition, si, strategy, brain, skillOptimizer);
             allResults.push(result);
           }
         }

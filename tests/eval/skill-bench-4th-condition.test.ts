@@ -25,7 +25,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { runSkillBench } from '../../src/core/eval/skill-bench.js';
 import { BenchRunner } from '../../src/core/eval/bench-runner.js';
 import { BenchStore } from '../../src/core/eval/bench-store.js';
-import type { SkillCondition } from '../../src/core/shared/wave10-types.js';
+import type { BenchTask, SkillCondition } from '../../src/core/shared/wave10-types.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -43,6 +43,17 @@ function makeSuccessBrain() {
   return {
     call: vi.fn().mockResolvedValue({ content: 'response text' }),
   };
+}
+
+/** 5 verifier-less tasks — runner falls back to legacy non-empty-response check. */
+function makeSimpleTasks(): BenchTask[] {
+  return Array.from({ length: 5 }, (_, i) => ({
+    id: `simple-${i}`,
+    name: `Simple task ${i}`,
+    prompt: `Echo task ${i}.`,
+    expectedOutput: 'non-empty response',
+    complexityTier: 'simple',
+  }));
 }
 
 /** Minimal duck-typed SkillOptimizer mock with approved proposal for any skillId. */
@@ -202,6 +213,7 @@ describe('Wave 13 — 4th SkillCondition: skills_post_optimizer', () => {
       brain,
       store,
       skillOptimizer,
+      tasks: makeSimpleTasks(),
     });
 
     // 5 tasks × 1 condition × 1 seed
