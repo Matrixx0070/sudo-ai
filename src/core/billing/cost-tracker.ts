@@ -65,6 +65,28 @@ export interface ModelStat {
   totalCost: number;
 }
 
+// ---------------------------------------------------------------------------
+// Retention
+// ---------------------------------------------------------------------------
+
+/** Default rolling window of api_call_log history to keep (days). */
+const DEFAULT_RETENTION_DAYS = 30;
+/** Prune at most this often (ms) — record() is hot (~120 rows/hr from ticks). */
+const PRUNE_THROTTLE_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Resolve the retention window. `SUDO_COST_RETENTION_DAYS` overrides the
+ * default; `0` disables pruning entirely (keep everything). Negative/invalid
+ * values fall back to the default.
+ */
+function resolveRetentionDays(): number {
+  const raw = process.env['SUDO_COST_RETENTION_DAYS'];
+  if (raw === undefined || raw.trim() === '') return DEFAULT_RETENTION_DAYS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_RETENTION_DAYS;
+  return Math.floor(n);
+}
+
 /**
  * Estimate cost in USD for a completed API call.
  *
@@ -138,6 +160,8 @@ const DDL_IDX_SUCCESS    = `CREATE INDEX IF NOT EXISTS idx_acl_success     ON ap
  */
 export class CostTracker {
   private readonly db: Database.Database;
+  /** Epoch ms of the last prune; throttles pruning off the hot record() path. */
+  private _lastPrunedAt = 0;
 
   constructor(dbPath: string) {
     if (!dbPath?.trim()) throw new TypeError('CostTracker: dbPath must be a non-empty string');
@@ -153,7 +177,9 @@ export class CostTracker {
     this.db.pragma('foreign_keys = ON');
 
     this._applyDdl();
-    logger.info({ dbPath }, 'CostTracker initialised');
+    // Trim any backlog left from before retention existed, once at startup.
+    this.prune();
+    logger.info({ dbPath, retentionDays: resolveRetentionDays() }, 'CostTracker initialised');
   }
 
   // -------------------------------------------------------------------------
@@ -223,9 +249,44 @@ export class CostTracker {
       });
 
       logger.debug({ id, provider: call.provider, model: call.model, cost: estimatedCostUsd }, 'API call recorded');
+      this._maybePrune();
     } catch (err) {
       logger.error({ err: err instanceof Error ? err.message : String(err) }, 'CostTracker.record failed');
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Retention
+  // -------------------------------------------------------------------------
+
+  /**
+   * Delete api_call_log rows older than the retention window. Returns the number
+   * of rows removed. `retentionDays = 0` is a no-op (retention disabled). Safe to
+   * call any time; errors are swallowed so retention never breaks recording.
+   *
+   * @param retentionDays - Override the resolved window (mainly for tests).
+   */
+  prune(retentionDays = resolveRetentionDays()): number {
+    this._lastPrunedAt = Date.now(); // throttle even when disabled / on error
+    if (retentionDays <= 0) return 0; // retention disabled — keep everything
+    try {
+      const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+      const info = this.db.prepare(`DELETE FROM api_call_log WHERE called_at < :cutoff`).run({ cutoff });
+      const deleted = info.changes ?? 0;
+      if (deleted > 0) {
+        logger.info({ deleted, retentionDays, cutoff }, 'Pruned old api_call_log rows');
+      }
+      return deleted;
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'CostTracker.prune failed');
+      return 0;
+    }
+  }
+
+  /** Prune at most once per {@link PRUNE_THROTTLE_MS}; called after each insert. */
+  private _maybePrune(): void {
+    if (Date.now() - this._lastPrunedAt < PRUNE_THROTTLE_MS) return;
+    this.prune();
   }
 
   // -------------------------------------------------------------------------

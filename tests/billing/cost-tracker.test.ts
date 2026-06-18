@@ -108,3 +108,65 @@ describe('CostTracker — additive migration on a pre-existing table', () => {
     expect(tracker.getRecentCalls(1)[0].cacheReadTokens).toBe(800);
   });
 });
+
+describe('CostTracker — retention policy', () => {
+  const RET = 'SUDO_COST_RETENTION_DAYS';
+  let savedRet: string | undefined;
+
+  beforeEach(() => { savedRet = process.env[RET]; delete process.env[RET]; });
+  afterEach(() => {
+    if (savedRet === undefined) delete process.env[RET]; else process.env[RET] = savedRet;
+  });
+
+  /** Insert a row at an explicit called_at via a raw handle (record() can't backdate). */
+  function insertAt(path: string, calledAt: string): void {
+    const raw = new Database(path);
+    raw.prepare(`
+      INSERT INTO api_call_log
+        (id, provider, model, prompt_tokens, completion_tokens, total_tokens,
+         estimated_cost_usd, latency_ms, success, source,
+         cache_read_tokens, cache_creation_tokens, called_at)
+      VALUES (:id,'anthropic','m',0,0,0,0.01,0,1,'chat',0,0,:called_at)
+    `).run({ id: `${calledAt}-${Math.random()}`, called_at: calledAt });
+    raw.close();
+  }
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+
+  it('prune(days) deletes rows older than the window and keeps recent ones', () => {
+    const tracker = new CostTracker(dbPath);
+    insertAt(dbPath, daysAgo(40));
+    insertAt(dbPath, daysAgo(31));
+    insertAt(dbPath, daysAgo(5));
+    const deleted = tracker.prune(30);
+    expect(deleted).toBe(2);
+    const rows = tracker.getRecentCalls(50);
+    expect(rows.length).toBe(1);
+    expect(new Date(rows[0].calledAt).getTime()).toBeGreaterThan(Date.now() - 10 * 86_400_000);
+  });
+
+  it('SUDO_COST_RETENTION_DAYS=0 disables pruning (keep everything)', () => {
+    process.env[RET] = '0';
+    const tracker = new CostTracker(dbPath);
+    insertAt(dbPath, daysAgo(400));
+    expect(tracker.prune()).toBe(0);
+    expect(tracker.getRecentCalls(50).length).toBe(1);
+  });
+
+  it('honours SUDO_COST_RETENTION_DAYS override', () => {
+    process.env[RET] = '7';
+    const tracker = new CostTracker(dbPath);
+    insertAt(dbPath, daysAgo(10));
+    insertAt(dbPath, daysAgo(3));
+    expect(tracker.prune()).toBe(1); // 10d old > 7d window
+    expect(tracker.getRecentCalls(50).length).toBe(1);
+  });
+
+  it('prunes the backlog once at construction', () => {
+    // Materialise the current schema (incl. cache columns) via a throwaway
+    // tracker, seed an old row, then re-open: the new tracker prunes on init.
+    new CostTracker(dbPath);
+    insertAt(dbPath, daysAgo(90));
+    const reopened = new CostTracker(dbPath); // constructor calls prune()
+    expect(reopened.getRecentCalls(50).length).toBe(0);
+  });
+});
