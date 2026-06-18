@@ -109,6 +109,28 @@ describe('CostTracker — additive migration on a pre-existing table', () => {
   });
 });
 
+describe('CostTracker.getCostBySource — per-source attribution', () => {
+  it('aggregates calls and cost per source, sorted by cost descending', () => {
+    const tracker = new CostTracker(dbPath);
+    const rec = (source: string, cost: number) => tracker.record({
+      provider: 'anthropic', model: 'claude-oauth/claude-opus-4-8',
+      promptTokens: 100, completionTokens: 10, totalTokens: 110,
+      estimatedCostUsd: cost, latencyMs: 100, success: true, source,
+    });
+    rec('consciousness', 0.02);
+    rec('consciousness', 0.02);
+    rec('agent', 0.10);
+    rec('api', 0.01);
+
+    const bySource = tracker.getCostBySource();
+    expect(bySource.map((s) => s.source)).toEqual(['agent', 'consciousness', 'api']); // cost desc
+    const consciousness = bySource.find((s) => s.source === 'consciousness')!;
+    expect(consciousness.calls).toBe(2);
+    expect(consciousness.totalCost).toBeCloseTo(0.04, 6);
+    expect(bySource.find((s) => s.source === 'agent')!.totalCost).toBeCloseTo(0.10, 6);
+  });
+});
+
 describe('CostTracker — retention policy', () => {
   const RET = 'SUDO_COST_RETENTION_DAYS';
   let savedRet: string | undefined;
