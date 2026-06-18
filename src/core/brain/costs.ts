@@ -57,8 +57,13 @@ export const COST_RATES: Record<string, CostRate> = {
   'openai/gpt-4o-mini': { inputPerM: 0.15, outputPerM: 0.6 },
   'openai/o3': { inputPerM: 10.0, outputPerM: 40.0 },
   // Anthropic
+  'anthropic/claude-opus-4-8': { inputPerM: 5.0, outputPerM: 25.0 },
+  'anthropic/claude-opus-4-7': { inputPerM: 5.0, outputPerM: 25.0 },
+  'anthropic/claude-opus-4-6': { inputPerM: 5.0, outputPerM: 25.0 },
   'anthropic/claude-opus-4-5': { inputPerM: 15.0, outputPerM: 75.0 },
+  'anthropic/claude-sonnet-4-6': { inputPerM: 3.0, outputPerM: 15.0 },
   'anthropic/claude-sonnet-4-5': { inputPerM: 3.0, outputPerM: 15.0 },
+  'anthropic/claude-haiku-4-5': { inputPerM: 1.0, outputPerM: 5.0 },
   'anthropic/claude-haiku-3-5': { inputPerM: 0.8, outputPerM: 4.0 },
   // Google
   'google/gemini-2.0-flash': { inputPerM: 0.1, outputPerM: 0.4 },
@@ -178,20 +183,59 @@ export function getEnergyProfile(modelId: string): EnergyProfile & { provider: s
 // ---------------------------------------------------------------------------
 
 /**
+ * Anthropic prompt-cache price multipliers, relative to the base input rate.
+ * Cache reads bill at ~0.1x; 5-minute cache writes at ~1.25x. See the prompt-
+ * caching economics in the Claude API reference.
+ */
+const CACHE_READ_MULTIPLIER = 0.1;
+const CACHE_WRITE_MULTIPLIER = 1.25;
+
+/**
+ * Resolve a cost rate for a model ID. Claude subscription calls arrive as
+ * `claude-oauth/<model>` but hit the same upstream models as `anthropic/<model>`
+ * — normalise the prefix so the rate table doesn't silently fall through to the
+ * generic default (which billed Opus 4.8 output at $20/M instead of $25/M).
+ */
+function resolveCostRate(modelId: string): CostRate {
+  const direct = COST_RATES[modelId];
+  if (direct) return direct;
+  if (modelId.startsWith('claude-oauth/')) {
+    const normalised = `anthropic/${modelId.slice('claude-oauth/'.length)}`;
+    const viaOauth = COST_RATES[normalised];
+    if (viaOauth) return viaOauth;
+  }
+  return DEFAULT_COST_RATE;
+}
+
+/**
  * Estimate the USD cost of a single LLM call.
  *
- * @param modelId       - Provider-qualified model ID, e.g. "xai/grok-3-fast".
- * @param promptTokens  - Number of input tokens consumed.
- * @param outputTokens  - Number of output tokens generated.
+ * `promptTokens` is the SDK's TOTAL input count, which on Anthropic INCLUDES
+ * cache-read and cache-creation tokens. Billing those at the full input rate
+ * overstates cost ~6x on a heavily-cached call (e.g. a 27k-token consciousness
+ * tick that is 25.7k cache-read). When the cache counts are known, split them
+ * out: non-cached input at 1x, cache reads at 0.1x, cache writes at 1.25x.
+ *
+ * @param modelId        - Provider-qualified model ID, e.g. "xai/grok-3-fast".
+ * @param promptTokens   - TOTAL input tokens (incl. cached, as the SDK reports).
+ * @param outputTokens   - Number of output tokens generated.
+ * @param cacheReadTokens     - Tokens served from the provider cache (~0.1x).
+ * @param cacheCreationTokens - Tokens written to the provider cache (~1.25x).
  * @returns Estimated cost in USD.
  */
 export function estimateCost(
   modelId: string,
   promptTokens: number,
   outputTokens: number,
+  cacheReadTokens = 0,
+  cacheCreationTokens = 0,
 ): number {
-  const rate = COST_RATES[modelId] ?? DEFAULT_COST_RATE;
-  return (promptTokens / 1_000_000) * rate.inputPerM +
+  const rate = resolveCostRate(modelId);
+  const cachedPortion = Math.max(0, cacheReadTokens) + Math.max(0, cacheCreationTokens);
+  const nonCachedInput = Math.max(0, promptTokens - cachedPortion);
+  return (nonCachedInput / 1_000_000) * rate.inputPerM +
+         (Math.max(0, cacheReadTokens) / 1_000_000) * rate.inputPerM * CACHE_READ_MULTIPLIER +
+         (Math.max(0, cacheCreationTokens) / 1_000_000) * rate.inputPerM * CACHE_WRITE_MULTIPLIER +
          (outputTokens / 1_000_000) * rate.outputPerM;
 }
 
@@ -211,16 +255,19 @@ export function buildTokenUsage(
     outputTokens?: number;
     totalTokens?: number;
   },
+  cache?: { read?: number; create?: number },
 ): TokenUsage {
   // The Vercel AI SDK v6 exposes inputTokens/outputTokens; older shapes use
   // promptTokens/completionTokens. Accept either naming convention.
   const promptTokens = raw?.promptTokens ?? raw?.inputTokens ?? 0;
   const completionTokens = raw?.completionTokens ?? raw?.outputTokens ?? 0;
   const totalTokens = raw?.totalTokens ?? promptTokens + completionTokens;
+  // promptTokens is the TOTAL input (incl. cached on Anthropic). Pass the cache
+  // split so estimateCost discounts reads/writes instead of billing all at 1x.
   return {
     promptTokens,
     completionTokens,
     totalTokens,
-    estimatedCost: estimateCost(modelId, promptTokens, completionTokens),
+    estimatedCost: estimateCost(modelId, promptTokens, completionTokens, cache?.read ?? 0, cache?.create ?? 0),
   };
 }

@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   recordPromptCacheUsage,
   recordPromptCacheUsageFromProviderMetadata,
+  extractPromptCacheTokens,
   getPromptCacheStats,
   _resetPromptCacheStatsForTest,
 } from '../../src/core/shared/prompt-cache-telemetry.js';
@@ -98,5 +99,62 @@ describe('recordPromptCacheUsageFromProviderMetadata', () => {
       anthropic: { cacheCreationInputTokens: 'oops', cacheReadInputTokens: null },
     });
     expect(getPromptCacheStats().promptCacheTurnsTotal).toBe(0);
+  });
+
+  // Regression: ai@6 / @ai-sdk/anthropic@3 surface the READ count ONLY at the
+  // nested snake_case `anthropic.usage.cache_read_input_tokens`. There is no
+  // top-level `cacheReadInputTokens`, so the old camelCase-only extractor
+  // recorded every cache HIT as (0,0) and bailed — /health showed readTokens=0
+  // and turnsTotal=1 across thousands of cache-amortised consciousness ticks.
+  // This is the verbatim providerMetadata shape captured live from the daemon.
+  it('records cache READS from the nested anthropic.usage shape (the live SDK shape)', () => {
+    recordPromptCacheUsageFromProviderMetadata({
+      anthropic: {
+        usage: {
+          input_tokens: 1279,
+          output_tokens: 115,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 25749,
+        },
+        cacheCreationInputTokens: 0, // top-level camelCase present, read field absent
+        stopSequence: null,
+      },
+    });
+    const s = getPromptCacheStats();
+    expect(s.promptCacheReadTokens).toBe(25749);
+    expect(s.promptCacheTurnsWithRead).toBe(1);
+    expect(s.promptCacheTurnsTotal).toBe(1);
+    expect(s.promptCacheHitRate).toBe(1);
+  });
+
+  it('records the cold-start MINT from the nested usage shape', () => {
+    recordPromptCacheUsageFromProviderMetadata({
+      anthropic: {
+        usage: { cache_creation_input_tokens: 25749, cache_read_input_tokens: 0 },
+        cacheCreationInputTokens: 25749,
+      },
+    });
+    const s = getPromptCacheStats();
+    expect(s.promptCacheCreateTokens).toBe(25749);
+    expect(s.promptCacheReadTokens).toBe(0);
+    expect(s.promptCacheTurnsWithRead).toBe(0);
+  });
+});
+
+describe('extractPromptCacheTokens', () => {
+  it('prefers nested usage and falls back to top-level camelCase', () => {
+    expect(extractPromptCacheTokens({
+      anthropic: { usage: { cache_read_input_tokens: 25749, cache_creation_input_tokens: 0 } },
+    })).toEqual({ create: 0, read: 25749 });
+
+    // Fallback path: only the top-level camelCase creation field present.
+    expect(extractPromptCacheTokens({
+      anthropic: { cacheCreationInputTokens: 2048 },
+    })).toEqual({ create: 2048, read: 0 });
+  });
+
+  it('returns zeros for non-Anthropic / malformed metadata', () => {
+    expect(extractPromptCacheTokens(undefined)).toEqual({ create: 0, read: 0 });
+    expect(extractPromptCacheTokens({ openai: { cachedTokens: 100 } })).toEqual({ create: 0, read: 0 });
   });
 });

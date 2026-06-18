@@ -57,18 +57,43 @@ export function getPromptCacheStats(): PromptCacheStats {
 }
 
 /**
- * Defensive extractor for Vercel AI SDK `providerMetadata` shapes. Accepts
- * the direct object (generateText) or undefined; callers awaiting a streaming
- * result should pass the resolved value (not the PromiseLike itself).
+ * Defensive extractor for Vercel AI SDK `providerMetadata` shapes. Returns the
+ * Anthropic prompt-cache token counts, or zeros for non-Anthropic / malformed
+ * shapes.
+ *
+ * Field-shape note (ai@6 / @ai-sdk/anthropic@3): the authoritative counts live
+ * NESTED under `anthropic.usage.{cache_creation_input_tokens,cache_read_input_tokens}`
+ * (snake_case, the raw Anthropic usage object the SDK passes through). The SDK
+ * ALSO surfaces a top-level camelCase `anthropic.cacheCreationInputTokens`, but
+ * there is NO top-level `cacheReadInputTokens` — so reading only the camelCase
+ * fields silently loses every cache READ (creation records, reads vanish). We
+ * read the nested usage first and fall back to the camelCase top-level for
+ * forward/backward compatibility.
+ */
+export function extractPromptCacheTokens(metadata: unknown): { create: number; read: number } {
+  const zero = { create: 0, read: 0 };
+  if (!metadata || typeof metadata !== 'object') return zero;
+  const anthropic = (metadata as { anthropic?: unknown }).anthropic;
+  if (!anthropic || typeof anthropic !== 'object') return zero;
+  const a = anthropic as {
+    usage?: { cache_creation_input_tokens?: unknown; cache_read_input_tokens?: unknown };
+    cacheCreationInputTokens?: unknown;
+    cacheReadInputTokens?: unknown;
+  };
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const create = num(a.usage?.cache_creation_input_tokens) || num(a.cacheCreationInputTokens);
+  const read = num(a.usage?.cache_read_input_tokens) || num(a.cacheReadInputTokens);
+  return { create, read };
+}
+
+/**
+ * Record one LLM call's prompt-cache usage straight from `providerMetadata`.
+ * Accepts the direct object (generateText) or undefined; callers awaiting a
+ * streaming result should pass the resolved value (not the PromiseLike itself).
  * No-ops cleanly on non-Anthropic providers and on malformed shapes.
  */
 export function recordPromptCacheUsageFromProviderMetadata(metadata: unknown): void {
-  if (!metadata || typeof metadata !== 'object') return;
-  const anthropic = (metadata as { anthropic?: unknown }).anthropic;
-  if (!anthropic || typeof anthropic !== 'object') return;
-  const m = anthropic as { cacheCreationInputTokens?: unknown; cacheReadInputTokens?: unknown };
-  const create = typeof m.cacheCreationInputTokens === 'number' ? m.cacheCreationInputTokens : 0;
-  const read = typeof m.cacheReadInputTokens === 'number' ? m.cacheReadInputTokens : 0;
+  const { create, read } = extractPromptCacheTokens(metadata);
   recordPromptCacheUsage(create, read);
 }
 

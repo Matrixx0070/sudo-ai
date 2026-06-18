@@ -151,6 +151,32 @@ describe('estimateEnergy', () => {
     expect(usage.estimatedCost).toBeGreaterThan(0);
   });
 
+  it('19. estimateCost discounts cache-read tokens (consciousness-tick shape)', () => {
+    // 27k total input, of which 25749 are cache reads (0.1x) + ~1279 uncached (1x).
+    const full = estimateCost('claude-oauth/claude-opus-4-8', 27028, 115);
+    const cached = estimateCost('claude-oauth/claude-opus-4-8', 27028, 115, 25749, 0);
+    // Discounting the read portion must drop the estimate sharply (~5-6x lower).
+    expect(cached).toBeLessThan(full / 4);
+    // Sanity: matches the hand-computed ~$0.02/tick, not the phantom ~$0.137.
+    expect(cached).toBeGreaterThan(0.01);
+    expect(cached).toBeLessThan(0.04);
+  });
+
+  it('20. claude-oauth/ prefix resolves to the anthropic rate, not the default', () => {
+    // Opus 4.8 output is $25/M; the generic default is $20/M. A pure-output call
+    // distinguishes them.
+    const oauth = estimateCost('claude-oauth/claude-opus-4-8', 0, 1_000_000);
+    expect(oauth).toBeCloseTo(25, 5);
+  });
+
+  it('21. buildTokenUsage threads the cache split into the cost', () => {
+    const cheap = buildTokenUsage('claude-oauth/claude-opus-4-8',
+      { promptTokens: 27028, completionTokens: 115 }, { read: 25749, create: 0 });
+    const dear = buildTokenUsage('claude-oauth/claude-opus-4-8',
+      { promptTokens: 27028, completionTokens: 115 });
+    expect(cheap.estimatedCost).toBeLessThan(dear.estimatedCost / 4);
+  });
+
   it('18. wh rounded to 6 decimal places', () => {
     const result = estimateEnergy('openai/gpt-4o', 1000, 500);
     const decimals = result.wh.toString().split('.')[1];

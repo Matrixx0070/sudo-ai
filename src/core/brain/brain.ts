@@ -6,8 +6,9 @@
  */
 
 import { generateText, streamText, tool as aiTool, jsonSchema } from 'ai';
+import { createHash } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
-import { recordPromptCacheUsageFromProviderMetadata } from '../shared/prompt-cache-telemetry.js';
+import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } from '../shared/prompt-cache-telemetry.js';
 import { LLMError } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
@@ -1097,14 +1098,19 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         } catch (usageErr) {
           log.warn({ modelId, err: usageErr }, 'Usage unavailable after completed stream');
         }
-        const usage = finalUsage ? buildTokenUsage(modelId, finalUsage) : undefined;
-
         // Anthropic prompt-cache telemetry. providerMetadata is a PromiseLike on streamText;
         // await defensively so a cancelled-after-completion stream can't poison the success path.
+        // Resolve it BEFORE building usage so the cost estimate can discount cached tokens.
+        let cacheTokens = { create: 0, read: 0 };
         try {
           const meta = await (result as { providerMetadata?: PromiseLike<unknown> }).providerMetadata;
+          cacheTokens = extractPromptCacheTokens(meta);
           recordPromptCacheUsageFromProviderMetadata(meta);
         } catch { /* providerMetadata may reject on cancelled streams — non-fatal */ }
+
+        const usage = finalUsage
+          ? buildTokenUsage(modelId, finalUsage, cacheTokens)
+          : undefined;
 
         this.failover.recordSuccess(profile.id);
         log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
@@ -1251,7 +1257,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     }
     // --- end reasoning extraction ---
 
-    const usage = buildTokenUsage(modelId, result.usage);
+    const usage = buildTokenUsage(modelId, result.usage, extractPromptCacheTokens((result as { providerMetadata?: unknown }).providerMetadata));
     const toolCalls = this.extractToolCalls(result.toolCalls ?? []);
     const finishReason = (result.finishReason ?? 'stop') as BrainResponse['finishReason'];
 
@@ -1288,6 +1294,29 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     }
 
     this.failover.recordSuccess(profile.id);
+    // Prompt-cache diagnostic (gated, no behaviour change when unset). Logs the raw
+    // providerMetadata Anthropic returned plus a stable-prefix fingerprint, so we can
+    // tell mint-vs-read-vs-silent and detect byte-instability across consciousness ticks.
+    if (process.env['SUDO_PROMPT_CACHE_DEBUG'] === '1') {
+      try {
+        let stablePrefixHash: string | undefined;
+        let stablePrefixLen: number | undefined;
+        if (cacheBreakpoints) {
+          const cached = buildCachedSystemMessages(systemPrompt)[0]?.content ?? '';
+          stablePrefixLen = cached.length;
+          stablePrefixHash = createHash('sha256').update(cached).digest('hex').slice(0, 12);
+        }
+        log.info({
+          modelId,
+          cacheBreakpoints,
+          stablePrefixHash,
+          stablePrefixLen,
+          providerMetadata: (result as { providerMetadata?: unknown }).providerMetadata,
+        }, 'prompt-cache-debug: raw providerMetadata (generateText path)');
+      } catch (e) {
+        log.warn({ err: e }, 'prompt-cache-debug: providerMetadata logging failed');
+      }
+    }
     recordPromptCacheUsageFromProviderMetadata((result as { providerMetadata?: unknown }).providerMetadata);
     log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
 
