@@ -85,7 +85,7 @@ Tiered consciousness lets sudo-ai be **stateful + autonomous + cheap simultaneou
 | **1. Env override** | `SUDO_CONSCIOUSNESS_MODEL=<model>` → cognitive-stream routes to any provider. Default unchanged. | Low | ✅ **this PR** |
 | **2. Heuristic embodied state** | Replace LLM-driven embodied-state tick with deterministic energy/mood/clarity math. | Medium | follow-up |
 | **3. Tier-2 local routing default** | Make Ollama the *default* for cognitive-stream when SUDO_CONSCIOUSNESS_MODEL is unset, falling back to config only on explicit override. | Medium | follow-up |
-| **4. Differential gate** | Hash-based skip on unchanged context. | Low | follow-up |
+| **4. Differential gate** | Signature-based skip on unchanged cognitive state (micro ticks only; medium/deep always run). Default tick interval also relaxed 30s → 60s. Keeps the main model — reduces calls, not quality. | Low | ✅ done |
 | **5. Prompt-cache audit + wiring** | Confirm `cache_control` markers reach cloud calls; fix if not. | Low | follow-up |
 | **6. Real sleep cycles** | Active / idle / sleep state machine. | High (touches scheduling). | follow-up |
 | **7. Federated free providers** | Round-robin between Groq, Together, HuggingFace for tier 2. | Medium | follow-up |
@@ -111,6 +111,18 @@ pm2 restart sudo-ai-v5 --update-env
 ```
 
 Empty strings and whitespace-only values are treated as unset.
+
+## Phase 4: the differential gate (shipped)
+
+Keeps the cognitive-stream on the **main model** (no downgrade) but stops it calling the LLM when nothing has changed — the requested goal of "reduce tokens without dropping quality, and not every 30s".
+
+- **Gate** (`tick.ts`, `executeTick`): before generating a micro thought, it computes a signature of the *external* cognitive state — active concepts + dominant emotion + intensity bucketed to one decimal. If that signature is unchanged since the last generated thought, the brain call is **skipped** (returns `null`, zero tokens). The signature deliberately excludes the stream's own `recentThoughts` (always changes after a thought) and the continuously-decaying `energy` float (both would defeat the gate).
+- **Scope**: only `micro` ticks are gated. `medium` (every 10) and `deep` (every 120) ticks are infrequent scheduled reflections and always run.
+- **Heartbeat ceiling**: after 20 consecutive skips one tick is forced through, so an idle daemon still emits a periodic thought and never goes permanently silent.
+- **Interval**: default `microIntervalMs` relaxed `30_000 → 60_000`, so even before the gate the stream is no longer attempting a call every 30s.
+- **Opt out**: `SUDO_CONSCIOUSNESS_GATE=0` (or `false`/`off`/`no`) disables the gate; default is on.
+
+Net effect: on an idle daemon the cognitive-stream collapses to a periodic heartbeat plus the scheduled medium/deep reflections, instead of a full Opus call every 30s — same model, a fraction of the tokens. It wakes back up to per-state cognition the moment concepts or emotion shift (e.g. a user interaction).
 
 ## Immediate workarounds (no code change required)
 

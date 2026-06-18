@@ -16,6 +16,7 @@ import { saveThought } from './store.js';
 import { generateThought } from './thought-generator.js';
 import type {
   ThoughtConfig,
+  ThoughtContext,
   StreamBrainLike,
   BodyStateLike,
   SpreadingActivationLike,
@@ -39,6 +40,53 @@ export interface TickContext {
   emotional: EmotionalStateLike;
   config: ThoughtConfig;
   currentThought: StreamThought | null;
+  /**
+   * Mutable differential-gate state, owned by the stream and carried across
+   * ticks. When present, micro ticks whose cognitive state is unchanged since
+   * the last generated thought are skipped (no brain call). Omit to disable.
+   */
+  gate?: GateState;
+}
+
+/** Cross-tick state for the differential gate. Lives on the CognitiveStream. */
+export interface GateState {
+  /** Signature of the last state that actually produced a brain call. */
+  lastSignature: string | null;
+  /** Consecutive ticks skipped since the last brain call. */
+  skipStreak: number;
+}
+
+// ---------------------------------------------------------------------------
+// Differential gate
+// ---------------------------------------------------------------------------
+
+/**
+ * After this many consecutive skips the gate forces one tick through, so an
+ * idle daemon still emits a periodic "heartbeat" thought and never goes
+ * permanently silent.
+ */
+const GATE_FORCE_AFTER_SKIPS = 20;
+
+/** Differential gate is on by default; `SUDO_CONSCIOUSNESS_GATE=0|false|off|no` disables it. */
+function gateEnabled(): boolean {
+  const v = process.env['SUDO_CONSCIOUSNESS_GATE'];
+  if (v === undefined) return true;
+  const s = v.trim().toLowerCase();
+  return !(s === '0' || s === 'false' || s === 'off' || s === 'no');
+}
+
+/**
+ * Stable signature of the *external* cognitive state that drives a thought.
+ *
+ * Intentionally excludes `recentThoughts` (the stream's own output — always
+ * changes after a thought) and raw `bodyState` floats like energy (which decay
+ * continuously and would defeat the gate). Intensity is bucketed to one decimal
+ * so micro float drift doesn't count as a change.
+ */
+export function computeStateSignature(ctx: ThoughtContext): string {
+  const concepts = ctx.activeConcepts.join(',');
+  const emotion = `${ctx.emotionalState.dominantEmotion}:${ctx.emotionalState.intensity.toFixed(1)}`;
+  return `${concepts}|${emotion}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +138,7 @@ export function tierParams(
  * @returns The newly created StreamThought, or null if the tick was skipped.
  */
 export async function executeTick(ctx: TickContext): Promise<StreamThought | null> {
-  const { tickCount, cache, cdb, brain, embodied, spreading, emotional, config, currentThought } = ctx;
+  const { tickCount, cache, cdb, brain, embodied, spreading, emotional, config, currentThought, gate } = ctx;
 
   // --- 1. Get body state ---
   const bodyState = embodied.getState();
@@ -113,6 +161,25 @@ export async function executeTick(ctx: TickContext): Promise<StreamThought | nul
     emotionalState,
     recentThoughts: cache.slice(-8),
   };
+
+  // --- 5b. Differential gate (cost lever) ---
+  // Skip the brain call when the external cognitive state is unchanged since
+  // the last generated thought — a background thought rebuilt from an identical
+  // state is wasted tokens. Only micro ticks are gated; medium/deep ticks are
+  // infrequent, scheduled reflections and always run. A force-tick ceiling
+  // guarantees a heartbeat so the stream never goes permanently silent. Keeps
+  // the model fixed — this reduces calls, it does not downgrade cognition.
+  if (gate && tier === 'micro' && gateEnabled()) {
+    const signature = computeStateSignature(context);
+    if (signature === gate.lastSignature && gate.skipStreak < GATE_FORCE_AFTER_SKIPS) {
+      gate.skipStreak += 1;
+      log.debug({ tick: tickCount, skipStreak: gate.skipStreak },
+        'differential gate: state unchanged — tick skipped, no brain call');
+      return null;
+    }
+    gate.lastSignature = signature;
+    gate.skipStreak = 0;
+  }
 
   // --- 6. Tier params ---
   const { model: configModel, maxTokens } = tierParams(tier, config);
