@@ -20,6 +20,12 @@ export interface WorkspaceExecVerifierOptions {
   command: string;
   /** Per-run timeout in ms. Default 15_000. */
   timeoutMs?: number;
+  /**
+   * Virtual memory limit in MB (ulimit -v). Default uses DEFAULT_SANDBOX_POLICY (512).
+   * Node.js V8 reserves ~1GB of address space at startup for CodeRange, so any verifier
+   * running `node …` should bump this to at least 1536.
+   */
+  memoryMB?: number;
 }
 
 /**
@@ -30,7 +36,7 @@ export async function verifyWorkspaceExec(
   workspaceDir: string,
   opts: WorkspaceExecVerifierOptions,
 ): Promise<VerifierResult> {
-  const { command, timeoutMs = 15_000 } = opts;
+  const { command, timeoutMs = 15_000, memoryMB } = opts;
 
   if (!isSandboxAvailable()) {
     return {
@@ -42,11 +48,16 @@ export async function verifyWorkspaceExec(
   }
 
   try {
+    const policy = {
+      ...DEFAULT_SANDBOX_POLICY,
+      network: 'host' as const,
+      ...(memoryMB !== undefined ? { memoryMB } : {}),
+    };
     const result = await runInSandbox({
       command,
       workspaceDir,
       // Use host network — unprivileged runners can't unshare-net (loopback EPERM).
-      policy: { ...DEFAULT_SANDBOX_POLICY, network: 'host' },
+      policy,
       timeoutMs,
     });
 
