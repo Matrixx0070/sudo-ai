@@ -230,6 +230,26 @@ export async function runDebate(
   const reviseResp = await brain.call(reviseRequest, { strategy: 'single' });
   totalUsage = addUsage(totalUsage, reviseResp.usage);
 
+  // Reasoning models (kimi-k2.7-code, glm-5.2) emit content ONLY after
+  // their `reasoning` field completes. On a hard prompt, Revise can burn
+  // its entire maxTokens budget on reasoning and finish with empty
+  // content. Observed live on a Damerau-Levenshtein run (2026-06-17):
+  // Revise returned empty content despite Blue+Red rounds being healthy.
+  // Fall back to Blue's answer in that case — telemetry still records
+  // the Revise round happened (summed usage) so the cost/quality story
+  // stays honest, but the caller sees a valid answer instead of an empty
+  // string. Tree-search's Reflexion loop already routes around this at a
+  // higher layer, but the bare-debate path (no tree-search) needs its own
+  // floor.
+  const reviseAnswer = (reviseResp.content ?? '').trim();
+  if (reviseAnswer === '') {
+    log.warn(
+      { ms: Date.now() - t0, critiqueLen: redCritique.length, blueLen: blueAnswer.length },
+      'Debate: Revise returned empty content — falling back to Blue',
+    );
+    return { ...blueResp, usage: totalUsage };
+  }
+
   log.info(
     { ms: Date.now() - t0, critiqueLen: redCritique.length, finalLen: (reviseResp.content ?? '').length },
     'Debate: complete',

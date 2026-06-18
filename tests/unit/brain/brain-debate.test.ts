@@ -138,4 +138,35 @@ describe('runDebate — Blue/Red/Revise', () => {
     expect(call.mock.calls[1]?.[1]).toEqual({ strategy: 'single' });
     expect(call.mock.calls[2]?.[1]).toEqual({ strategy: 'single' });
   });
+
+  it('falls back to Blue when Revise returns empty content (reasoning blew its budget)', async () => {
+    // Reasoning models (kimi-k2.7-code, glm-5.2) emit content only after
+    // the reasoning field completes. On a hard prompt Revise can burn
+    // its maxTokens budget on reasoning and finish with empty content.
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue draft', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('1. you missed a case', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(mkResp('', DEFAULT_BLUE_MODEL)); // Revise empty
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest());
+
+    expect(call).toHaveBeenCalledTimes(3);
+    // Caller sees Blue's draft, NOT the empty Revise.
+    expect(resp.content).toBe('blue draft');
+    // Usage still summed across all three rounds — telemetry stays honest.
+    expect(resp.usage.totalTokens).toBe(90);
+  });
+
+  it('also falls back to Blue when Revise returns whitespace-only content', async () => {
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue draft', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('1. fix something', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(mkResp('   \n\t  ', DEFAULT_BLUE_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest());
+
+    expect(resp.content).toBe('blue draft');
+  });
 });
