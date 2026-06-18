@@ -13,7 +13,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
+import fs, { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createLogger } from '../../shared/logger.js';
@@ -126,11 +126,26 @@ export function extractLastCodeBlock(text: string, regex: RegExp): string | null
 
 let sandboxCheckCache: boolean | null = null;
 
+/**
+ * Returns true only when bwrap is installed AND can actually run a trivial command.
+ * GHA / some Docker runners install bwrap but restrict unprivileged user namespaces
+ * via AppArmor, causing it to fail at "setting up uid map". A `bwrap --version`
+ * check returns 0 even in that case, which is why we also smoke-test `/bin/true`.
+ */
 export function isSandboxAvailable(): boolean {
   if (sandboxCheckCache !== null) return sandboxCheckCache;
   try {
-    const r = spawnSync('bwrap', ['--version'], { stdio: 'ignore' });
-    sandboxCheckCache = r.status === 0;
+    const ver = spawnSync('bwrap', ['--version'], { stdio: 'ignore' });
+    if (ver.status !== 0) { sandboxCheckCache = false; return sandboxCheckCache; }
+    const smokeArgs = [
+      '--die-with-parent',
+      '--ro-bind', '/usr', '/usr',
+      '--ro-bind', '/lib', '/lib',
+    ];
+    if (existsSync('/lib64')) smokeArgs.push('--ro-bind', '/lib64', '/lib64');
+    smokeArgs.push('--proc', '/proc', '--dev', '/dev', '--unshare-pid', '--', '/usr/bin/true');
+    const smoke = spawnSync('bwrap', smokeArgs, { stdio: 'ignore' });
+    sandboxCheckCache = smoke.status === 0;
   } catch {
     sandboxCheckCache = false;
   }
