@@ -41,11 +41,23 @@ export interface SessionManagerLike {
   getOrCreate(channel: string, peerId: string): Promise<{ id: string | number }>;
 }
 
+/**
+ * Reads cumulative estimated cost (USD) from the bench's cost tracker. The runner
+ * snapshots it before and after each task; the delta is that task's cost. Kept as
+ * a one-method interface so tests can inject a fake and the bootstrap can back it
+ * with the real (isolated) CostTracker.
+ */
+export interface CostMeter {
+  totalCostUsd(): number;
+}
+
 export interface AgentBenchDeps {
   agentLoop: AgentLoopLike;
   sessionManager: SessionManagerLike;
   /** Optional model label recorded in the result. Default 'unknown'. */
   modelLabel?: string;
+  /** Optional cost meter. When absent, recorded cost is 0. */
+  costMeter?: CostMeter;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,8 +118,11 @@ export class AgentBenchRunner {
       };
 
       log.info({ taskId: task.id, sessionId, model: deps.modelLabel }, 'AgentBenchRunner: invoking agent loop');
+      const costBefore = deps.costMeter?.totalCostUsd() ?? 0;
       const agentResult = await deps.agentLoop.run(sessionId, prompt, onEvent);
       const agentText = typeof agentResult.text === 'string' ? agentResult.text : '';
+      // Delta over the run. Guarded against a day-boundary reset in getTodayCost().
+      const costUsd = Math.max(0, (deps.costMeter?.totalCostUsd() ?? 0) - costBefore);
 
       const verdict = await task.verifyWorkspace(workspaceDir);
       const wallTimeMs = Date.now() - wallStart;
@@ -123,13 +138,14 @@ export class AgentBenchRunner {
         detail: verdict.detail,
         agentText,
         wallTimeMs,
+        costUsd,
         toolCallCount,
         transcriptHash,
         startedAt,
       };
 
       log.info(
-        { taskId: task.id, passed: result.passed, score: result.score, wallTimeMs, toolCallCount },
+        { taskId: task.id, passed: result.passed, score: result.score, wallTimeMs, costUsd, toolCallCount },
         'AgentBenchRunner: run complete',
       );
       return result;
@@ -193,6 +209,13 @@ export async function bootstrapRealAgentLoop(opts: BootstrapOptions = {}): Promi
   await configLoader.load();
   const config = configLoader.get();
 
+  // Seed the cost-tracker singleton to the bench's ISOLATED mind.db BEFORE the
+  // Brain is constructed, so per-task cost deltas measure only this process's
+  // calls — not the pm2 daemon's concurrent traffic against the shared DB.
+  const benchMindDb = path.join(benchDataDir, 'mind.db');
+  const { getCostTracker } = await import('../billing/cost-tracker.js');
+  const costTracker = getCostTracker(benchMindDb);
+
   const { Brain } = await import('../brain/brain.js');
   const brain = new Brain(config);
 
@@ -205,7 +228,7 @@ export async function bootstrapRealAgentLoop(opts: BootstrapOptions = {}): Promi
 
   const { MindDB } = await import('../memory/db.js');
   const { SessionManager } = await import('../sessions/manager.js');
-  const db = new MindDB(path.join(benchDataDir, 'mind.db'));
+  const db = new MindDB(benchMindDb);
   const sessionMgr = new SessionManager(db);
 
   const { AgentLoop } = await import('../agent/loop.js');
@@ -237,5 +260,6 @@ export async function bootstrapRealAgentLoop(opts: BootstrapOptions = {}): Promi
     agentLoop: agentLoop as unknown as AgentLoopLike,
     sessionManager: sessionMgr as unknown as SessionManagerLike,
     modelLabel,
+    costMeter: { totalCostUsd: () => costTracker.getTodayCost().total },
   };
 }
