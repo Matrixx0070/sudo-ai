@@ -16,9 +16,12 @@
     //   1. claude-oauth/claude-opus-4-8   — primary, Max-Plan opus with the
     //      provider's thinking-enable interceptor (#217) injecting a 32k
     //      thinking budget on every request.
-    //   2. claude-oauth/claude-sonnet-4-6 — second-tier within the same OAuth
-    //      token. Tried when opus 529's or otherwise fails. Sonnet doesn't
-    //      get the thinking-enable injection (gated to opus-4-8+).
+    //   2. claude-oauth/claude-sonnet-4-5-20250929 — second-tier within the
+    //      same OAuth token. Tried when opus 529's or otherwise fails. Sonnet
+    //      doesn't get the thinking-enable injection (gated to opus-4-8+).
+    //      NB: the undated `claude-sonnet-4-6` id stalls on the claude.ai OAuth
+    //      endpoint (no response headers → undici HeadersTimeoutError, ~99% of
+    //      calls); the dated 4-5 id is served reliably. Don't revert to 4-6.
     //   3. ollama/kimi-k2.7-code:cloud   — last-resort outside-anthropic
     //      fallback. K2.7-code (1.04T params, 262k ctx, tools+thinking) on
     //      ollama:cloud. Only runs when both claude-oauth attempts have
@@ -34,7 +37,7 @@
         temperature: 0.7,
       },
       {
-        id: 'claude-oauth/claude-sonnet-4-6',
+        id: 'claude-oauth/claude-sonnet-4-5-20250929',
         contextWindow: 200000,
         maxOutputTokens: 8192,
         temperature: 0.7,
