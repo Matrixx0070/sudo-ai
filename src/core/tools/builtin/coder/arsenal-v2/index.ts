@@ -67,11 +67,12 @@ const SUPPORTED_MODES: readonly ArsenalV2Mode[] = ['fix', 'build', 'refactor', '
 
 /**
  * Default model when neither task forces one nor SUDO_ARSENAL_V2_MODEL is set.
- * Uses the dated sonnet-4-5 id: the undated `claude-sonnet-4-6` stalls on the
- * claude.ai OAuth endpoint (no response headers → undici HeadersTimeoutError),
- * which surfaced here as repeated "arsenal: model failed". Don't revert to 4-6.
+ * Opus is the only model the claude.ai OAuth endpoint serves reliably — *every*
+ * Sonnet id (4-6 and the dated 4-5) stalls there with no response headers
+ * (undici HeadersTimeoutError), so they surfaced as "arsenal: model failed".
+ * Don't use a claude-oauth Sonnet id here.
  */
-const DEFAULT_MODEL = 'claude-oauth/claude-sonnet-4-5-20250929';
+const DEFAULT_MODEL = 'claude-oauth/claude-opus-4-8';
 
 interface TscResult {
   clean: boolean;
@@ -173,7 +174,7 @@ export const arsenalV2Tool: ToolDefinition = {
     },
     model: {
       type: 'string',
-      description: 'Force a specific model id (e.g. "claude-oauth/claude-opus-4-8"). Single-model fallback; superseded by `models` when both are set. Default: SUDO_ARSENAL_V2_MODEL env var, else "claude-oauth/claude-sonnet-4-5-20250929".',
+      description: 'Force a specific model id (e.g. "claude-oauth/claude-opus-4-8"). Single-model fallback; superseded by `models` when both are set. Default: SUDO_ARSENAL_V2_MODEL env var, else "claude-oauth/claude-opus-4-8".',
     },
     models: {
       type: 'array',
