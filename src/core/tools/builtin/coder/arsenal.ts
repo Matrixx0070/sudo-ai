@@ -139,7 +139,7 @@ const MODEL_CASCADE = [
   { model: 'xai/grok-4-0709',              label: 'Grok 4 (2M ctx)'      },
   { model: 'xai/grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning'  },
   { model: 'xai/grok-4-1-fast-reasoning',  label: 'Grok Fast Reasoning'  },
-  { model: 'claude-oauth/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (OAuth)' },
+  { model: 'claude-oauth/claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5 (OAuth)' },
   { model: 'google/gemini-2.5-flash',      label: 'Gemini 2.5 Flash'     },
   { model: 'groq/llama-3.3-70b-versatile', label: 'Groq Llama 3.3 70B'  },
 ];
