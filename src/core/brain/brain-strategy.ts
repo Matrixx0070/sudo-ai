@@ -28,9 +28,24 @@
  *     budget bumped).
  */
 
+import type { BrainResponse, BrainRequest } from './types.js';
+import type { VerifierResult } from './brain-tree-search.js';
+
 export type BrainStrategy = 'single' | 'debate' | 'tree-search';
 
 export type BrainCallTier = 'fast' | 'routine' | 'high-stakes';
+
+/**
+ * Per-call verifier signature for tree-search. Mirrors
+ * `TreeSearchOpts.verifier` so call sites can hand in factory output
+ * from `brain-verifier-{exec,schema,compose}.ts` directly without an
+ * extra adapter type. Only consulted when the effective strategy is
+ * `tree-search`; ignored on `single` and `debate`.
+ */
+export type BrainCallVerifier = (
+  candidate: BrainResponse,
+  request: BrainRequest,
+) => Promise<VerifierResult> | VerifierResult;
 
 /**
  * Per-call options that complement BrainRequest. Optional so existing
@@ -53,6 +68,22 @@ export interface BrainCallOpts {
    * higher-budget paths.
    */
   tier?: BrainCallTier;
+
+  /**
+   * Custom verifier passed to tree-search. Lets a call site that knows
+   * its expected output shape (JSON plan, code patch, classifier
+   * verdict) hand in a `make…Verifier()` factory result so tree-search
+   * can reroll on rejection with Reflexion feedback. Ignored when the
+   * effective strategy isn't `tree-search`. Use the factories in
+   * `brain-verifier-{exec,schema,compose}.ts`.
+   */
+  verifier?: BrainCallVerifier;
+
+  /**
+   * Override tree-search breadth (candidate count). Default 3. Only
+   * meaningful when the effective strategy is `tree-search`.
+   */
+  breadth?: number;
 }
 
 /** Default strategy preserves current behaviour — same as no strategy ever existed. */

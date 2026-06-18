@@ -15,6 +15,8 @@ import { EventEmitter } from 'events';
 import { Worker, MessageChannel, isMainThread, parentPort, workerData } from 'worker_threads';
 import { TeamBus } from './team-bus.js';
 import type { BrainMessage } from '../../brain/types.js';
+import { makeSchemaVerifier } from '../../brain/brain-verifier-schema.js';
+import type { BrainCallVerifier } from '../../brain/brain-strategy.js';
 
 // -----------------------------------------------------------------------------
 // Type declarations
@@ -32,6 +34,60 @@ export interface AgentRole {
   task: string;
   fileBoundaries: string[];
   teammates: string[];
+}
+
+/** Min / max team size the planner is allowed to return. */
+const MIN_TEAM_SIZE = 1;
+const MAX_TEAM_SIZE = 6;
+
+/** Required object fields on each agent-role entry in the plan. */
+const REQUIRED_ROLE_FIELDS = ['name', 'systemPrompt', 'task'] as const;
+
+/**
+ * Build the schema verifier handed to `brain.call` when planning a
+ * team. Exported for unit-testing the predicate independently of the
+ * tree-search machinery.
+ *
+ * The verifier accepts when the candidate is:
+ *   - a JSON array (root array enabled via allowArray)
+ *   - of length in [MIN_TEAM_SIZE, MAX_TEAM_SIZE]
+ *   - where every entry is an object with `name`, `systemPrompt`, and
+ *     `task` as non-empty strings.
+ *
+ * `fileBoundaries` / `teammates` are NOT required because the
+ * downstream `map` in `spawn` already tolerates missing arrays (falls
+ * back to `[]`). Verifying them too strictly would force tree-search
+ * to reroll on cosmetic gaps that don't break the team.
+ */
+export function buildTeamPlanVerifier(): ReturnType<typeof makeSchemaVerifier> {
+  return makeSchemaVerifier({
+    allowArray: true,
+    predicate: (parsed) => {
+      if (!Array.isArray(parsed)) {
+        return { ok: false, reason: 'team plan must be a JSON array of agent objects' };
+      }
+      if (parsed.length < MIN_TEAM_SIZE || parsed.length > MAX_TEAM_SIZE) {
+        return {
+          ok: false,
+          reason: `team size ${parsed.length} out of range [${MIN_TEAM_SIZE}, ${MAX_TEAM_SIZE}]`,
+        };
+      }
+      for (let i = 0; i < parsed.length; i++) {
+        const item = parsed[i];
+        if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+          return { ok: false, reason: `agent ${i} is not an object` };
+        }
+        const obj = item as Record<string, unknown>;
+        for (const field of REQUIRED_ROLE_FIELDS) {
+          const val = obj[field];
+          if (typeof val !== 'string' || val.trim() === '') {
+            return { ok: false, reason: `agent ${i} missing or non-string field: ${field}` };
+          }
+        }
+      }
+      return true;
+    },
+  });
 }
 
 /**
@@ -89,7 +145,11 @@ export interface Brain {
     // here can pass `{ tier: 'high-stakes' }` and opt into the env-driven
     // strategy upgrade from PR #242. Existing minimal mocks without the
     // opts arg still satisfy this contract structurally.
-    opts?: { tier?: 'fast' | 'routine' | 'high-stakes' },
+    opts?: {
+      tier?: 'fast' | 'routine' | 'high-stakes';
+      verifier?: BrainCallVerifier;
+      breadth?: number;
+    },
   ): Promise<{ content: string }>;
 }
 export interface ToolRegistry {}
@@ -151,6 +211,13 @@ export class IntelligenceTeam {
    * have. The Brain receives a carefully crafted prompt instructing it
    * to output a JSON array describing each agent. If parsing fails or
    * the LLM response is unusable, a fallback single agent is created.
+   *
+   * When the operator has flipped `SUDO_BRAIN_HIGH_STAKES_STRATEGY=
+   * tree-search` (or the caller pins strategy), the call also passes a
+   * schema verifier that rerolls candidates with malformed JSON,
+   * missing required agent fields, or out-of-range team sizes. Default
+   * single/debate strategies ignore the verifier — same behaviour as
+   * before that flip.
    */
   static async spawn(task: string, registry: ToolRegistry, brain: Brain): Promise<IntelligenceTeam> {
     // Compose a system prompt asking the Brain to plan the team. We
@@ -177,7 +244,15 @@ export class IntelligenceTeam {
       // tier: 'high-stakes' — team planning is one-shot per IntelligenceTeam
       // spawn; a wrong agent-role decomposition derails every worker spawned
       // below. Opts into the env-driven strategy upgrade from PR #242.
-      const response = await brain.call({ messages: planningMessages }, { tier: 'high-stakes' });
+      // The verifier scores each tree-search candidate; tree-search rerolls
+      // up to `breadth` times with Reflexion feedback when the plan is
+      // malformed. Only consulted when the effective strategy is
+      // `tree-search` (debate/single ignore it).
+      const verifier = buildTeamPlanVerifier();
+      const response = await brain.call(
+        { messages: planningMessages },
+        { tier: 'high-stakes', verifier },
+      );
       const trimmed = (response && response.content) ? response.content.trim() : '';
       // Attempt to parse the LLM response as JSON. Guard against trailing
       // characters by trimming common code fences.
