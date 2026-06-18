@@ -143,7 +143,9 @@ export type HookEvent =
   | 'memory:scan:triggered'
   // Task management events
   | 'task:created'
-  | 'task:completed';
+  | 'task:completed'
+  // Cost / billing events
+  | 'cost_rate_alert';
 
 /**
  * Context bag passed to every hook handler.

@@ -502,6 +502,9 @@ SUDO_DASHBOARD_DISABLE=1
 SUDO_BRAIN_RACE_DISABLE=1            # Disable parallel race (use sequential)
 SUDO_BRAIN_CONSENSUS_DISABLE=1       # Disable 3-model Jaccard consensus (fallback sequential)
 SUDO_BRAIN_OAUTH_STREAM_DISABLE=1    # Force legacy buffered generateText for claude-oauth (default streams to dodge the 45s headers-timer false-abort on long Opus turns)
+SUDO_COST_RATE_ALERT=1               # Live $/hr cost watchdog → emits cost_rate_alert hook on ceiling/deviation breach (observable-only, fail-open)
+SUDO_COST_RATE_ALERT_CEILING_USD_PER_HR=10   # Absolute $/hr ceiling (critical); 0 disables the ceiling check
+SUDO_COST_RATE_ALERT_DEVIATION_PCT=150       # Percent-above-rolling-baseline that fires a warning; 0 disables
 SUDO_AUTO_APPROVE=1                  # Favor automatic approval in the autonomy tiers
 
 # Other common
