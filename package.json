@@ -46,6 +46,8 @@
     "tui:fleetview": "tsx src/tui/fleetview/index.ts",
     "gateway:fleetview": "tsx src/gateway/jsonrpc/index.ts",
     "desktop:fleetview": "tsx src/desktop/fleetview/index.ts",
+    "eval:agent-bench": "tsx scripts/agent-bench-run.mts",
+    "eval:gate": "tsx scripts/eval-gate.mts",
     "preview": "pnpm build && pnpm start",
     "doctor": "tsx src/cli/index.ts doctor",
     "cli": "tsx src/cli.ts",

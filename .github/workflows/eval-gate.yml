@@ -1,0 +1,130 @@
+# eval-gate.yml — Eval regression gate
+#
+# Runs the agentic benchmark suite and compares it against a committed baseline
+# (eval-baselines/agent.json), failing the job on a quality regression and
+# posting a Markdown report.
+#
+# This is OPT-IN, not part of the per-PR CI gate: a real eval run drives live
+# LLM calls (cost + flakiness + needs a provider secret), so it runs only on a
+# manual dispatch or the nightly schedule — never automatically on every PR.
+#
+# Required repo secret: ANTHROPIC_API_KEY (or the provider key your configured
+# model uses). The job no-ops gracefully when the secret is absent.
+
+name: Eval Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Bench suite to run (task id, or "all")'
+        required: false
+        default: 'all'
+      model:
+        description: 'Model id for the agent loop'
+        required: false
+        default: 'claude-oauth/claude-opus-4-8'
+      update_baseline:
+        description: 'Capture this run as the new baseline instead of gating'
+        type: boolean
+        required: false
+        default: false
+      pr_number:
+        description: 'PR number to comment the report on (optional)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 4 * * *'   # nightly at 04:00 UTC
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  eval-gate:
+    name: Run bench · gate vs baseline
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare runtime dirs
+        run: |
+          mkdir -p data .githooks
+          mkdir -p /tmp/claude-0
+
+      # Agent tasks score via a sandboxed pytest run — bubblewrap + python3.
+      - name: Install bubblewrap + python3
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap python3
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Skip the live-run + gate when no provider secret is configured, so the
+      # workflow stays green on forks / unconfigured repos instead of erroring.
+      - name: Check for provider secret
+        id: secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANTHROPIC_API_KEY not set — skipping eval gate."
+          fi
+
+      - name: Run agent benchmark suite
+        if: steps.secret.outputs.present == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_BENCH_TASK: ${{ github.event.inputs.suite || 'all' }}
+          AGENT_BENCH_MODEL: ${{ github.event.inputs.model || 'claude-oauth/claude-opus-4-8' }}
+        run: pnpm eval:agent-bench > results.json
+
+      - name: Gate against baseline
+        if: steps.secret.outputs.present == 'true'
+        env:
+          # Tune these to set tolerances; unset = strict (any drop / flip fails).
+          EVAL_GATE_MAX_PASS_RATE_DROP: ${{ vars.EVAL_GATE_MAX_PASS_RATE_DROP }}
+          EVAL_GATE_MAX_COST_INCREASE_PCT: ${{ vars.EVAL_GATE_MAX_COST_INCREASE_PCT }}
+          EVAL_GATE_MAX_LATENCY_INCREASE_PCT: ${{ vars.EVAL_GATE_MAX_LATENCY_INCREASE_PCT }}
+        run: |
+          UPDATE=""
+          if [ "${{ github.event.inputs.update_baseline }}" = "true" ]; then
+            UPDATE="--update-baseline"
+          fi
+          pnpm eval:gate \
+            --current results.json \
+            --baseline eval-baselines/agent.json \
+            --from-agent \
+            --output report.md \
+            $UPDATE
+
+      - name: Upload artifacts
+        if: steps.secret.outputs.present == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-gate-report
+          path: |
+            report.md
+            results.json
+            eval-baselines/agent.json
+          if-no-files-found: ignore
+
+      - name: Comment report on PR
+        if: steps.secret.outputs.present == 'true' && always() && github.event.inputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr comment "${{ github.event.inputs.pr_number }}" --body-file report.md
