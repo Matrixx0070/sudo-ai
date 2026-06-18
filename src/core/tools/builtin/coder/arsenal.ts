@@ -24,7 +24,7 @@
  * Model: Grok 4 (grok-4-0709, 2M tokens) → cascade fallback
  */
 
-import { generateText } from 'ai';
+import { streamText } from 'ai';
 import {
   readFileSync, writeFileSync, existsSync,
   mkdirSync, copyFileSync, statSync, lstatSync, renameSync, readdirSync, unlinkSync, mkdtempSync, realpathSync, rmSync,
@@ -1006,7 +1006,16 @@ export const arsenalTool: ToolDefinition = {
         }
         logger.info({ model: option.model, mode }, 'arsenal: trying model');
 
-        const result = await generateText({
+        // Stream rather than buffer: generateText sends stream:false, so the
+        // upstream holds ALL response headers until the entire (up to 32k-token)
+        // generation completes — minutes for a heavy model like Opus. That stalls
+        // time-to-first-byte past the claude-oauth fast-fail headers timeout
+        // (providers.ts), so every Opus arsenal call was aborted mid-flight and
+        // the cascade fell through to a fallback. streamText sends stream:true →
+        // headers (SSE) land in ~1-2s, the fast-fail timer clears, and the long
+        // body streams normally. Awaiting result.text drains the stream to the
+        // full completion, so downstream handling is unchanged.
+        const result = streamText({
           model,
           system: systemPrompt,
           prompt: userPrompt,
@@ -1014,7 +1023,7 @@ export const arsenalTool: ToolDefinition = {
           temperature: mode === 'review' || mode === 'analyze' ? 0.2 : 0.4,
         });
 
-        const text = result.text?.trim() ?? '';
+        const text = (await result.text)?.trim() ?? '';
         if (!text) { errors.push(`${option.label}: empty response`); continue; }
 
         aiText = text;
