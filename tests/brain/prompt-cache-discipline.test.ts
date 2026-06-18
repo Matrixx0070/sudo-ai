@@ -61,10 +61,23 @@ describe('isCacheBreakpointsEnabled', () => {
 });
 
 describe('isAnthropicModelId', () => {
-  it('matches only the anthropic/ provider prefix', () => {
+  it('matches the anthropic/ provider prefix', () => {
     expect(isAnthropicModelId('anthropic/claude-sonnet-4-5')).toBe(true);
     expect(isAnthropicModelId('xai/grok-3-fast')).toBe(false);
     expect(isAnthropicModelId('ollama/anthropic-style')).toBe(false);
+  });
+
+  it('also matches the claude-oauth/ subscription prefix', () => {
+    // Without this, subscription users pay full price on every call because
+    // cache_control breakpoints silently never attach (gated on this fn).
+    expect(isAnthropicModelId('claude-oauth/claude-opus-4-8')).toBe(true);
+    expect(isAnthropicModelId('claude-oauth/claude-sonnet-4-6')).toBe(true);
+    expect(isAnthropicModelId('claude-oauth/claude-fable-5')).toBe(true);
+  });
+
+  it('does not match unrelated providers that happen to mention claude', () => {
+    expect(isAnthropicModelId('ollama/claude-mimic')).toBe(false);
+    expect(isAnthropicModelId('openai/gpt-4-claude-style')).toBe(false);
   });
 });
 
