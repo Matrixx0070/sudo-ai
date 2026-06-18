@@ -319,6 +319,24 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
             ? (() => { try { return (JSON.parse(body) as { model?: string }).model; } catch { return undefined; } })()
             : undefined;
 
+          // Prompt-cache diagnostic (gated). Counts cache_control breakpoints in the
+          // FINAL outgoing body and reports the system-field shape, so we can confirm
+          // whether cache_control actually reaches the wire on every claude-oauth call.
+          if (process.env['SUDO_PROMPT_CACHE_DEBUG'] === '1' && typeof body === 'string') {
+            try {
+              const cacheControlCount = (body.match(/cache_control/g) ?? []).length;
+              let systemShape = 'absent';
+              try {
+                const pj = JSON.parse(body) as { system?: unknown };
+                systemShape = Array.isArray(pj.system)
+                  ? `array[${(pj.system as unknown[]).length}]`
+                  : pj.system != null ? typeof pj.system : 'absent';
+              } catch { /* body already known JSON; shape best-effort */ }
+              log.info({ model: outgoingModel, cacheControlCount, systemShape, bodyBytes: body.length },
+                'prompt-cache-debug: outgoing claude-oauth body');
+            } catch { /* never let diagnostics break the request */ }
+          }
+
           let res: Response;
           try {
             res = await globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, body, headers });
