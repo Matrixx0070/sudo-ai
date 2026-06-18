@@ -63,6 +63,8 @@ export interface TransparencyReport {
     topTool: string;
     tokensPerDollar: number;
   };
+  /** Spend attribution per caller source (consciousness, agent, api, …). */
+  bySource: Array<{ source: string; calls: number; cost: number }>;
   competitors: CompetitorCostComparison[];
   budgetStatus: {
     dailySpend: number;
@@ -162,6 +164,7 @@ export class CostReporter {
     const monthlyCost = this.tracker.getMonthlyCost();
     const recentCalls = this.tracker.getRecentCalls(100);
     const modelStats = this.tracker.getCostByModel();
+    const sourceStats = this.tracker.getCostBySource();
 
     // Calculate SUDO-AI metrics
     const totalDailyCost = todayCost.total;
@@ -194,6 +197,11 @@ export class CostReporter {
         topTool: recentCalls.length > 0 ? recentCalls[0].source : 'none',
         tokensPerDollar,
       },
+      bySource: sourceStats.map((s) => ({
+        source: s.source,
+        calls: s.calls,
+        cost: Math.round((s.totalCost ?? 0) * 1_000_000) / 1_000_000,
+      })),
       competitors: COMPETITOR_COSTS,
       budgetStatus,
       trend,
@@ -237,6 +245,20 @@ export class CostReporter {
     const trendIcon = report.trend.direction === 'up' ? '📈' : report.trend.direction === 'down' ? '📉' : '➡️';
     lines.push(`**Trend:** ${trendIcon} ${report.trend.direction} (${report.trend.percentChange}% change)`);
     lines.push('');
+
+    // Spend by source — which subsystem is driving cost (consciousness, agent, …)
+    if (report.bySource.length > 0) {
+      const grand = report.bySource.reduce((s, r) => s + r.cost, 0);
+      lines.push('## 🧭 Spend by Source');
+      lines.push('');
+      lines.push('| Source | Requests | Cost | Share |');
+      lines.push('|--------|----------|------|-------|');
+      for (const r of report.bySource) {
+        const share = grand > 0 ? `${Math.round((r.cost / grand) * 100)}%` : '—';
+        lines.push(`| ${r.source} | ${r.calls} | $${r.cost.toFixed(4)} | ${share} |`);
+      }
+      lines.push('');
+    }
 
     // Competitor comparison — THE key table for Reddit engagement
     lines.push('## 🏆 Cost Comparison vs Competitors');

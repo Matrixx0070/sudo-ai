@@ -65,6 +65,12 @@ export interface ModelStat {
   totalCost: number;
 }
 
+export interface SourceStat {
+  source: string;
+  calls: number;
+  totalCost: number;
+}
+
 // ---------------------------------------------------------------------------
 // Retention
 // ---------------------------------------------------------------------------
@@ -394,6 +400,19 @@ export class CostTracker {
       GROUP BY model
       ORDER BY totalCost DESC
     `).all() as ModelStat[];
+  }
+
+  /** Aggregate calls and total cost per caller source, sorted by cost descending. */
+  getCostBySource(): SourceStat[] {
+    interface Row { source: string; calls: number; totalCost: number }
+    return this.db.prepare<[], Row>(`
+      SELECT source,
+             COUNT(*)                     AS calls,
+             SUM(estimated_cost_usd)      AS totalCost
+      FROM api_call_log
+      GROUP BY source
+      ORDER BY totalCost DESC
+    `).all() as SourceStat[];
   }
 
   // -------------------------------------------------------------------------
