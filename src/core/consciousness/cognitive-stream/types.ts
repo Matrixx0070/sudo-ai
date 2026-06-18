@@ -39,7 +39,7 @@ export interface StreamThought {
  * All fields have safe defaults applied in stream.ts.
  */
 export interface ThoughtConfig {
-  /** Milliseconds between micro-thought ticks. Default: 30000 */
+  /** Milliseconds between micro-thought ticks. Default: 60000 */
   microIntervalMs: number;
   /** Every Nth tick produces a medium thought. Default: 10 */
   mediumEveryN: number;

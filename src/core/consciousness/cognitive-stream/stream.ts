@@ -12,7 +12,7 @@ import { createLogger } from '../../shared/logger.js';
 import type { ConsciousnessDB } from '../consciousness-db.js';
 import type { ThoughtTier } from '../types.js';
 import { getRecentThoughts } from './store.js';
-import { executeTick, resolveTier } from './tick.js';
+import { executeTick, resolveTier, type GateState } from './tick.js';
 import type {
   ThoughtConfig,
   StreamState,
@@ -31,7 +31,7 @@ const log = createLogger('consciousness:cognitive-stream');
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CONFIG: ThoughtConfig = {
-  microIntervalMs: 30_000,
+  microIntervalMs: 60_000,
   mediumEveryN: 10,
   deepEveryN: 120,
   microModel: '',
@@ -82,6 +82,8 @@ export class CognitiveStream {
   private _isRunning = false;
   private _timer: ReturnType<typeof setInterval> | null = null;
   private _ticking = false;
+  /** Differential-gate state carried across ticks (see tick.ts). */
+  private readonly _gate: GateState = { lastSignature: null, skipStreak: 0 };
 
   constructor(
     brain: StreamBrainLike,
@@ -289,6 +291,7 @@ export class CognitiveStream {
         emotional: this._emotional,
         config: this._config,
         currentThought: this._currentThought,
+        gate: this._gate,
       });
 
       if (thought === null) return;
