@@ -133,6 +133,12 @@ export interface BrainRequest {
   consensusMinResponders?: number;
   /** Overall wall-clock cap (ms) for the consensus phase. Env: SUDO_CONSENSUS_TIMEOUT_MS. */
   consensusTimeoutMs?: number;
+  /**
+   * Caller tag for cost/usage attribution in the billing dashboard, e.g.
+   * 'consciousness' | 'chat' | 'cron' | 'tool' | 'self-build'. Defaults to
+   * 'llm' when unset. Purely observational — does not affect routing.
+   */
+  source?: string;
 }
 
 /** Token usage and estimated cost for a single LLM call. */
