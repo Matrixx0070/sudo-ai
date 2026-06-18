@@ -115,7 +115,15 @@ export async function executeTick(ctx: TickContext): Promise<StreamThought | nul
   };
 
   // --- 6. Tier params ---
-  const { model, maxTokens } = tierParams(tier, config);
+  const { model: configModel, maxTokens } = tierParams(tier, config);
+
+  // Phase-1 cost lever (consciousness-tiering design): opt-in env override so
+  // operators can route the cognitive-stream tier to a cheaper model (Haiku,
+  // local Ollama, etc.) without editing config. Default behaviour unchanged
+  // when the env is unset — `model` falls back to whatever tierParams picked.
+  // Empty string is intentional: brain falls back to its own default.
+  const envModel = process.env['SUDO_CONSCIOUSNESS_MODEL'];
+  const model = envModel && envModel.trim().length > 0 ? envModel.trim() : configModel;
 
   // --- 7. Temperature: 0.9 + energy * 0.3, clamped [0.1, 1.2] ---
   const temperature = Math.max(0.1, Math.min(1.2, 0.9 + bodyState.energy * 0.3));
