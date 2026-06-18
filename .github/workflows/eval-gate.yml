@@ -91,7 +91,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AGENT_BENCH_TASK: ${{ github.event.inputs.suite || 'all' }}
           AGENT_BENCH_MODEL: ${{ github.event.inputs.model || 'claude-oauth/claude-opus-4-8' }}
-        run: pnpm eval:agent-bench > results.json
+          # File channel — contamination-proof vs a stdout redirect (logger noise).
+          AGENT_BENCH_OUT: results.json
+        run: pnpm eval:agent-bench
 
       - name: Gate against baseline
         if: steps.secret.outputs.present == 'true'

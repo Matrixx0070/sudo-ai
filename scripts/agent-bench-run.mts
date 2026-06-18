@@ -23,6 +23,7 @@
 //
 // Exits 0 only if every task passed; 1 if any failed; 2 on bootstrap error.
 
+import fs from 'node:fs';
 import { AgentBenchRunner } from '../src/core/eval/agent-bench-runner.js';
 import {
   AGENT_TASKS_BY_ID,
@@ -74,7 +75,17 @@ async function main(): Promise<number> {
     }
   }
 
-  console.log(JSON.stringify(results, null, 2));
+  const json = JSON.stringify(results, null, 2);
+  // AGENT_BENCH_OUT gives a contamination-proof channel: the JSON lands in a file
+  // regardless of any logger output on stdout. The gate (scripts/eval-gate.mts)
+  // reads this file. Without it, results still print to stdout for interactive use
+  // (run with SUDO_LOG_STDERR=1 to keep that stream clean — see pnpm eval:agent-bench).
+  const outFile = process.env['AGENT_BENCH_OUT'];
+  if (outFile) {
+    fs.writeFileSync(outFile, json + '\n', 'utf8');
+    console.error(`[agent-bench] results written to ${outFile}`);
+  }
+  console.log(json);
   return anyFailed ? 1 : 0;
 }
 
