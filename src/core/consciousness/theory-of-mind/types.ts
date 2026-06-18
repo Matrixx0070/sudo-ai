@@ -70,5 +70,6 @@ export interface MindReaderBrainLike {
     messages: Array<{ role: string; content: string }>;
     maxTokens?: number;
     temperature?: number;
+    source?: string;
   }): Promise<{ content: string }>;
 }

@@ -140,7 +140,7 @@ export interface TeamResult {
 // workers but is never cloned across threads.
 export interface Brain {
   call(
-    args: { messages: Array<{ role: string; content: string }> },
+    args: { messages: Array<{ role: string; content: string }>; source?: string },
     // Optional tier hint matches the real Brain.call signature so callers
     // here can pass `{ tier: 'high-stakes' }` and opt into the env-driven
     // strategy upgrade from PR #242. Existing minimal mocks without the
@@ -250,7 +250,7 @@ export class IntelligenceTeam {
       // `tree-search` (debate/single ignore it).
       const verifier = buildTeamPlanVerifier();
       const response = await brain.call(
-        { messages: planningMessages },
+        { messages: planningMessages, source: 'agent' },
         { tier: 'high-stakes', verifier },
       );
       const trimmed = (response && response.content) ? response.content.trim() : '';
@@ -320,7 +320,7 @@ export class IntelligenceTeam {
           const { id, messages } = msg;
           // Forward the completion request to the Brain and respond
           try {
-            const result = await this.brain.call({ messages });
+            const result = await this.brain.call({ messages, source: 'agent' });
             worker.postMessage({ type: 'brainResponse', id, result });
           } catch (err: unknown) {
             const errMessage = err instanceof Error ? err.message : String(err);
@@ -517,7 +517,7 @@ export class IntelligenceTeam {
           { role: 'system', content: 'You are a helpful assistant that synthesises multiple agent outputs into a coherent summary.' },
           { role: 'user', content: `Combine the following outputs into a concise summary:\n${results.map(r => `Role ${r.role}: ${r.result}`).join('\n')}` }
         ];
-        const summaryResponse = await this.brain.call({ messages: summaryMessages }, { tier: 'high-stakes' });
+        const summaryResponse = await this.brain.call({ messages: summaryMessages, source: 'agent' }, { tier: 'high-stakes' });
         synthesis = summaryResponse.content;
       } catch (err) {
         synthesis = results.map(r => r.result).join('\n');

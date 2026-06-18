@@ -1817,6 +1817,7 @@ export class AgentLoop extends AgentLoopInjections {
 
         const response: BrainResponse = await this.brain.call({
           messages: trimmed,
+          source: 'agent',
           model: effectiveModel,
           tools: this.toolRouter.route(
             session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '',

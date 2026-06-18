@@ -146,6 +146,7 @@ export async function simulate(
   let rawResponse: string;
   try {
     const result = await brain.call({
+      source: 'consciousness',
       messages: [{ role: 'user', content: prompt }],
       maxTokens: SIMULATE_MAX_TOKENS,
       temperature: SIMULATE_TEMPERATURE,
@@ -257,6 +258,7 @@ export async function runIdleBatch(
     let alternativeAction: string;
     try {
       const altResult = await brain.call({
+        source: 'consciousness',
         messages: [{ role: 'user', content: altPrompt }],
         maxTokens: ALT_ACTION_MAX_TOKENS,
         temperature: ALT_ACTION_TEMPERATURE,

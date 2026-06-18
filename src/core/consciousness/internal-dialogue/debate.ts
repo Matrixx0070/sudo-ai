@@ -202,6 +202,7 @@ export async function runDebate(
   let response: string;
   try {
     const result = await brain.call({
+      source: 'consciousness',
       messages: [{ role: 'user', content: prompt }],
       maxTokens: MAX_TOKENS,
       temperature: TEMPERATURE,

@@ -39,6 +39,7 @@ interface ForkBrain {
     messages: Array<{ role: string; content: string }>;
     maxTokens?: number;
     temperature?: number;
+    source?: string;
   }): Promise<{ content: string }>;
 }
 
@@ -101,6 +102,7 @@ async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Pro
 
   try {
     const resp = await brain.call({
+      source: 'session-fork',
       messages: [{ role: 'user', content: prompt }],
       maxTokens: 2048,
       temperature: 0.1,

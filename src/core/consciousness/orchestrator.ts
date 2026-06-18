@@ -87,7 +87,7 @@ export interface DeepInsights {
 }
 
 export interface OrchestratorBrainLike {
-  call(opts: { messages: Array<{ role: string; content: string }>; maxTokens?: number; temperature?: number; model?: string }): Promise<{ content: string }>;
+  call(opts: { messages: Array<{ role: string; content: string }>; maxTokens?: number; temperature?: number; model?: string; source?: string }): Promise<{ content: string }>;
 }
 interface SleepCycleLike {
   shouldSleep(lastInteractionMs: number, isQuietHours: boolean): boolean;
@@ -803,6 +803,7 @@ export class ConsciousnessOrchestrator {
       this.getConsciousnessContext();
     try {
       const result = await this.brain.call({
+        source: 'consciousness',
         messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: question }],
         maxTokens: 400, temperature: 0.7,
       });

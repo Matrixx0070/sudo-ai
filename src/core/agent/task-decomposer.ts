@@ -37,6 +37,7 @@ export interface DecomposerBrainLike {
       messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>;
       maxTokens?: number;
       temperature?: number;
+      source?: string;
     },
     // Optional second arg matches Brain.call(request, opts?). Duck-typed so a
     // minimal mock without opts still satisfies the contract.
@@ -202,6 +203,7 @@ export async function decomposeIfComplex(
   try {
     const brainCallPromise = brain.call(
       {
+        source: 'agent',
         messages: [
           {
             role: 'user',

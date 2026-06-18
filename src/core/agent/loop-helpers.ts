@@ -45,6 +45,7 @@ export interface BrainRequest {
   model?: string;
   tools?: ToolSchema[];
   race?: boolean;
+  source?: string;
 }
 
 export interface BrainResponse {
