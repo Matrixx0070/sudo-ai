@@ -219,4 +219,40 @@ describe('assembleSystemPrompt prefix stability', () => {
     });
     expect(prompt.indexOf('- **zz.last**')).toBeLessThan(prompt.indexOf('- **aa.first**'));
   });
+
+  // Workspace files (AGENTS.md / TOOLS.md / MEMORY.md) aren't guaranteed to
+  // exist in CI's checkout — they live in workspace/ which is gitignored on
+  // some setups. The Tool Capability Manifest, in contrast, is sourced from
+  // capability-manifest.ts (compiled source, deterministic). So the manifest
+  // is asserted unconditionally, while the workspace-backed sections are
+  // asserted only when their content is actually present in the prompt.
+  it('flag on: Tool Capability Manifest sits ABOVE the boundary (and workspace blocks when present)', async () => {
+    process.env[FLAG] = '1';
+    const prompt = await assembleSystemPrompt({});
+    const boundaryIdx = prompt.indexOf(BOUNDARY);
+    expect(boundaryIdx).toBeGreaterThan(-1);
+
+    const manifestIdx = prompt.indexOf('Tool Capability Manifest');
+    expect(manifestIdx).toBeGreaterThan(-1);
+    expect(manifestIdx).toBeLessThan(boundaryIdx);
+
+    for (const marker of ['AGENTS — Agent Manual', 'TOOLS — Environment-Specific Notes', 'Long-Term Memory']) {
+      const idx = prompt.indexOf(marker);
+      if (idx >= 0) expect(idx).toBeLessThan(boundaryIdx);
+    }
+  });
+
+  it('flag off: Tool Capability Manifest sits BELOW the boundary (and workspace blocks when present)', async () => {
+    const prompt = await assembleSystemPrompt({});
+    const boundaryIdx = prompt.indexOf(BOUNDARY);
+    expect(boundaryIdx).toBeGreaterThan(-1);
+
+    const manifestIdx = prompt.indexOf('Tool Capability Manifest');
+    expect(manifestIdx).toBeGreaterThan(boundaryIdx);
+
+    for (const marker of ['AGENTS — Agent Manual', 'TOOLS — Environment-Specific Notes', 'Long-Term Memory']) {
+      const idx = prompt.indexOf(marker);
+      if (idx >= 0) expect(idx).toBeGreaterThan(boundaryIdx);
+    }
+  });
 });
