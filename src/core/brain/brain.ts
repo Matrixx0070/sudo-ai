@@ -29,6 +29,7 @@ import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
+import { getCostTracker } from '../billing/cost-tracker.js';
 import { queryAllModelsConsensus, type ConsensusOptions } from './model-consensus.js';
 import { DispatchRouter } from './dispatch-router.js';
 import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
@@ -49,6 +50,7 @@ import type {
   ReasoningLevel,
   ModelProfile,
   ErrorCategory,
+  TokenUsage,
 } from './types.js';
 import type { SudoConfig } from '../config/types.js';
 import { ToolRegistry } from '../tools/registry.js';
@@ -1015,6 +1017,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
 
       const modelId = profile.id;
+      const _streamStartedAt = Date.now();
       log.info({ attempt, modelId }, 'Streaming LLM call starting');
 
       try {
@@ -1113,6 +1116,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           : undefined;
 
         this.failover.recordSuccess(profile.id);
+        this._recordBillingUsage(modelId, usage, cacheTokens, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
         log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
         return;
 
@@ -1137,6 +1141,42 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       attempts: MAX_FAILOVER_ATTEMPTS,
       lastError: String(lastError),
     });
+  }
+
+  /**
+   * Fire-and-forget billing record for one completed LLM call. Persists the
+   * cache-aware cost + prompt-cache split to api_call_log so the cost-reporter /
+   * insights dashboards show live, cache-discounted spend (previously the table
+   * had no writer and the dashboard read $0). Never throws — cost tracking must
+   * not break a call. Skipped under vitest (no test-DB pollution) and via the
+   * SUDO_COST_TRACKING=0 kill-switch.
+   */
+  private _recordBillingUsage(
+    modelId: string,
+    usage: TokenUsage | undefined,
+    cache: { read: number; create: number },
+    latencyMs: number,
+    success: boolean,
+    source: string,
+    errorMsg?: string,
+  ): void {
+    if (process.env['VITEST'] || process.env['SUDO_COST_TRACKING'] === '0') return;
+    try {
+      getCostTracker().record({
+        provider: modelId.split('/')[0] ?? 'unknown',
+        model: modelId,
+        promptTokens: usage?.promptTokens ?? 0,
+        completionTokens: usage?.completionTokens ?? 0,
+        totalTokens: usage?.totalTokens ?? 0,
+        estimatedCostUsd: usage?.estimatedCost,
+        latencyMs,
+        success,
+        error: errorMsg,
+        source,
+        cacheReadTokens: cache.read,
+        cacheCreationTokens: cache.create,
+      });
+    } catch { /* best-effort; cost tracking never breaks the call path */ }
   }
 
   /**
@@ -1194,6 +1234,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // across multiple API keys for this provider on rate-limit/auth/billing errors
     // before model-level failover gives up. Sets callParams.model to the chosen
     // key's handle; the single env-key path runs unchanged when <2 keys exist.
+    const _callStartedAt = Date.now();
     let result = await this._generateWithKeyRotation(profile, callParams);
 
     // --- Tool-empty retry: some providers (Ollama cloud) return empty content
@@ -1257,7 +1298,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     }
     // --- end reasoning extraction ---
 
-    const usage = buildTokenUsage(modelId, result.usage, extractPromptCacheTokens((result as { providerMetadata?: unknown }).providerMetadata));
+    const cacheTokens = extractPromptCacheTokens((result as { providerMetadata?: unknown }).providerMetadata);
+    const usage = buildTokenUsage(modelId, result.usage, cacheTokens);
+    this._recordBillingUsage(modelId, usage, cacheTokens, Date.now() - _callStartedAt, true, request.source ?? 'llm');
     const toolCalls = this.extractToolCalls(result.toolCalls ?? []);
     const finishReason = (result.finishReason ?? 'stop') as BrainResponse['finishReason'];
 

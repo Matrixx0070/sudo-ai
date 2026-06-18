@@ -221,10 +221,12 @@ export async function generateThought(
     maxTokens: number;
     temperature: number;
     model?: string;
+    source?: string;
   } = {
     messages: [{ role: 'user', content: prompt }],
     maxTokens,
     temperature: Math.max(0, Math.min(2, temperature)),
+    source: 'consciousness',
   };
 
   if (model && model.trim().length > 0) {
