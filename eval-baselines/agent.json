@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "savedAt": "2026-06-18T11:31:14.095Z",
+  "summary": {
+    "runId": "agent-suite-baseline",
+    "label": "agent-suite @ claude-opus-4-8",
+    "tasks": [
+      {
+        "taskId": "agent-dead-code-cleanup",
+        "passed": true,
+        "score": 1,
+        "costUsd": 0,
+        "latencyMs": 26789,
+        "seedCount": 1
+      },
+      {
+        "taskId": "agent-divide-bug",
+        "passed": true,
+        "score": 1,
+        "costUsd": 0,
+        "latencyMs": 47016,
+        "seedCount": 1
+      },
+      {
+        "taskId": "agent-implement-from-spec",
+        "passed": true,
+        "score": 1,
+        "costUsd": 0,
+        "latencyMs": 10626,
+        "seedCount": 1
+      },
+      {
+        "taskId": "agent-js-bug-fix",
+        "passed": true,
+        "score": 1,
+        "costUsd": 0,
+        "latencyMs": 9768,
+        "seedCount": 1
+      },
+      {
+        "taskId": "agent-multi-file-rename",
+        "passed": true,
+        "score": 1,
+        "costUsd": 0,
+        "latencyMs": 22258,
+        "seedCount": 1
+      },
+      {
+        "taskId": "agent-slugify-edges",
+        "passed": true,
+        "score": 1,
+        "costUsd": 0,
+        "latencyMs": 54574,
+        "seedCount": 1
+      },
+      {
+        "taskId": "agent-stack-trace-debug",
+        "passed": true,
+        "score": 1,
+        "costUsd": 0,
+        "latencyMs": 12061,
+        "seedCount": 1
+      }
+    ],
+    "total": 7,
+    "passed": 7,
+    "passRate": 1,
+    "meanScore": 1,
+    "totalCostUsd": 0,
+    "totalLatencyMs": 183092,
+    "passesPerDollar": 0,
+    "passesPerMinute": 2.2939287352806237
+  }
+}
