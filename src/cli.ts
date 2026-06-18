@@ -1137,7 +1137,12 @@ async function boot(): Promise<void> {
     try {
       finalAgentLoop.setConfidenceCalibrationTracker(confidenceCalibrationTracker);
       // Also inject into AlignmentAggregator's 8th signal (Brier-drift) — fail-open.
-      (finalAgentLoop.getAlignmentAggregator() as unknown as Record<string, unknown>)['confidenceCalibrationTracker'] = confidenceCalibrationTracker;
+      // The earlier `as unknown as Record` poke masked that
+      // getAlignmentAggregator() can return null; surface it honestly.
+      const alignAgg = finalAgentLoop.getAlignmentAggregator();
+      if (alignAgg) {
+        alignAgg.setConfidenceCalibrationTracker(confidenceCalibrationTracker);
+      }
     } catch (err: unknown) {
       log.warn({ err: String(err) }, 'ConfidenceCalibrationTracker wiring failed — calibration hooks disabled');
     }
@@ -1165,7 +1170,15 @@ async function boot(): Promise<void> {
       finalAgentLoop.setGroundingChecker(grounding, blockOnFail);
 
       const { CriticPass, readCriticBudget } = await import('./core/agent/verify-gate-critic.js');
-      const critic = new CriticPass(brain as unknown as import('./core/agent/verify-gate-critic.js').CriticBrainLike);
+      // Brain structurally satisfies CriticBrainLike (same call(req)→{content}
+      // surface) — the earlier unknown bridge papered over three width
+      // extensions that all satisfy the critic's narrower type:
+      // (a) BrainResponse extends {content: string} with usage/finishReason,
+      // (b) BrainRequest extends the input shape with extra optional fields,
+      // (c) Brain.call has an extra optional `opts?: BrainCallOpts` parameter
+      //     the narrower interface doesn't declare — invisible to callers
+      //     using CriticBrainLike, so structurally fine.
+      const critic = new CriticPass(brain);
       finalAgentLoop.setCriticPass(critic);
 
       log.info(
@@ -2974,18 +2987,18 @@ async function boot(): Promise<void> {
       if (result.ok) {
         const { startFleetExecutor } = await import('./core/fleet/registrar-client.js')
           .then(() => import('./core/fleet/fleet-executor.js'));
-        // Brain handle for model.get/set — same getModel/setModel surface
-        // §28b slice 1 wired into /api/admin/model[/set]. If brain doesn't
-        // expose those, the executor still polls + returns brain_not_registered
-        // on model.* commands.
-        const brainCandidate = brain as unknown as { getModel?: () => string; setModel?: (m: string) => void };
-        const brainHandle = brainCandidate && typeof brainCandidate.getModel === 'function' && typeof brainCandidate.setModel === 'function'
-          ? { getModel: brainCandidate.getModel.bind(brainCandidate), setModel: brainCandidate.setModel.bind(brainCandidate) }
-          : undefined;
+        // Brain handle for model.get/set — Brain class guarantees both
+        // methods at construction (brain.ts:334/347), so the earlier
+        // defensive duck-probe is unnecessary; if the surface ever changes,
+        // the compiler catches it here.
+        const brainHandle = {
+          getModel: brain.getModel.bind(brain),
+          setModel: brain.setModel.bind(brain),
+        };
         const handle = startFleetExecutor({
           registrarUrl: process.env['SUDO_FLEET_REGISTRAR_URL']!,
           identity: fleetIdentity,
-          ...(brainHandle ? { brain: brainHandle } : {}),
+          brain: brainHandle,
           // Gap #28d slice 2 — same closure as registerDashboardGlobals so
           // fleet rollup and local /api/alignment never diverge. Method
           // name differs (`digest` vs `getDigest`) so the adapter is
@@ -2998,7 +3011,7 @@ async function boot(): Promise<void> {
         // module init (which creates goalEngine) runs in §9, and the cycle
         // itself is constructed in §9.2.
         fleetExecutorHandle = handle;
-        log.info({ deviceId: fleetIdentity.deviceId, hasBrain: brainHandle !== undefined }, 'Fleet executor started (#28c slice 2)');
+        log.info({ deviceId: fleetIdentity.deviceId }, 'Fleet executor started (#28c slice 2)');
         registerShutdown(async () => { await handle.stop(); });
       }
     } catch (err) {

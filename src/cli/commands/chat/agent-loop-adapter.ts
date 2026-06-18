@@ -144,8 +144,12 @@ export class TuiAgentAdapter {
       const { ConfidenceCalibrationTracker } = await import('../../../core/cognition/confidence-calibration-tracker.js');
       const tracker = new ConfidenceCalibrationTracker(calDb);
       agentLoop.setConfidenceCalibrationTracker(tracker);
-      // Wire 8th signal (Brier-drift) into AlignmentAggregator — mirror cli.ts line 913.
-      (agentLoop.getAlignmentAggregator() as unknown as Record<string, unknown>)['confidenceCalibrationTracker'] = tracker;
+      // Wire 8th signal (Brier-drift) into AlignmentAggregator. Honest
+      // null-check — the aggregator may not be present on this loop.
+      const alignAgg = agentLoop.getAlignmentAggregator();
+      if (alignAgg) {
+        alignAgg.setConfidenceCalibrationTracker(tracker);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       void msg; // fail-open — calibration is defense-in-depth

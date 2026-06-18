@@ -44,7 +44,8 @@ export interface AlignmentSignals {
 /**
  * Minimal CalibrationTracker interface for non-circular injection.
  * Only the fields the aggregator reads from the report are required.
- * Wired optionally via constructor — 6Q will inject the real instance.
+ * Wired optionally — constructor accepts an instance, or boot-time
+ * late-bind via setConfidenceCalibrationTracker().
  */
 export interface CalibrationTrackerLike {
   getReport(opts?: { windowDays?: number; tag?: string }): {
@@ -160,7 +161,7 @@ export class AlignmentAggregator {
   private readonly log = createLogger('agent:alignment-aggregator');
   private readonly auditTrail: AuditTrailLike | null;
   private readonly trustTierTracker: TrustTierTrackerLike | null;
-  private readonly confidenceCalibrationTracker: CalibrationTrackerLike | null;
+  private confidenceCalibrationTracker: CalibrationTrackerLike | null;
   private _lastReport: LastReport | null = null;
   /** Holds the calibration signal value from the most recent _compute() call. */
   private _lastCalibrationSignal = 1.0;
@@ -183,6 +184,16 @@ export class AlignmentAggregator {
     this.trustTierTracker = trustTierTracker ?? null;
     this.confidenceCalibrationTracker = confidenceCalibrationTracker ?? null;
     this.log.info('AlignmentAggregator initialised');
+  }
+
+  /**
+   * Late-bind the calibration tracker. Used by cli.ts boot when the
+   * tracker is constructed after the aggregator (the tracker depends
+   * on a resolved agent loop, so it can't be wired at aggregator
+   * construction). Replaces the earlier `as unknown as Record` poke.
+   */
+  setConfidenceCalibrationTracker(tracker: CalibrationTrackerLike): void {
+    this.confidenceCalibrationTracker = tracker;
   }
 
   /**
