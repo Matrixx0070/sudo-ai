@@ -126,6 +126,18 @@ module.exports = {
         // paths; do NOT set for hot inner loops.
         SUDO_BRAIN_HIGH_STAKES_STRATEGY: 'debate',
 
+        // Auto-plan: invokes task-decomposer on complex user requests
+        // (5+ tool calls expected) and injects the parsed steps as a
+        // SYSTEM message before the agent loop runs. Opt-in because the
+        // decomposition micro-call costs an extra LLM round per turn.
+        // Combined with SUDO_BRAIN_HIGH_STAKES_STRATEGY=debate above, the
+        // decomposition call routes through Blue/Red/Revise (PR #242
+        // wire-in). Flipped on 2026-06-18 to exercise the upgrade on
+        // live Telegram traffic — heuristic gate (isComplexRequest) keeps
+        // simple turns out of the decomposition path so the cost is
+        // bounded.
+        SUDO_AUTO_PLAN: '1',
+
         // Autopilot mode (owner ask 2026-06-17): raise the LoopGuard
         // consecutive-tool-iteration ceiling so a single turn can chain
         // many tool calls (langchain-agent-style ReAct loops) instead of
