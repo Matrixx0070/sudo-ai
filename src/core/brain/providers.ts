@@ -26,6 +26,20 @@ import {
 
 const log = createLogger('brain:providers');
 
+/**
+ * Fast-fail timeout (ms) for the *headers* phase of a claude-oauth request.
+ * undici's default headersTimeout is long (minutes), so a stalled tier — e.g.
+ * a model the OAuth endpoint accepts but never streams headers for — blocks the
+ * whole failover chain. We race the fetch (which resolves once headers arrive)
+ * against this timer and abort if it elapses, so failover advances in seconds.
+ * Cleared the instant headers land, so long streaming response bodies are
+ * unaffected. Override with SUDO_OAUTH_HEADERS_TIMEOUT_MS; 0 disables.
+ */
+const OAUTH_HEADERS_TIMEOUT_MS = (() => {
+  const raw = Number(process.env['SUDO_OAUTH_HEADERS_TIMEOUT_MS']);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 45_000;
+})();
+
 // ---------------------------------------------------------------------------
 // Provider name union
 // ---------------------------------------------------------------------------
@@ -337,9 +351,27 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
             } catch { /* never let diagnostics break the request */ }
           }
 
+          // Fast-fail headers timeout: race the fetch (resolves once response
+          // headers arrive) against a timer. If headers stall, abort so the
+          // failover chain advances in seconds instead of blocking on undici's
+          // long default. Cleared the moment headers land → long streaming
+          // bodies are unaffected. Merged with any caller-supplied signal so we
+          // don't clobber upstream cancellation.
+          const headersController = new AbortController();
+          const headersTimer = OAUTH_HEADERS_TIMEOUT_MS > 0
+            ? setTimeout(
+                () => headersController.abort(new Error('claude-oauth headers timeout (sudo fast-fail)')),
+                OAUTH_HEADERS_TIMEOUT_MS,
+              )
+            : null;
+          const callerSignal = init?.signal ?? undefined;
+          const signal = callerSignal
+            ? AbortSignal.any([callerSignal, headersController.signal])
+            : headersController.signal;
+
           let res: Response;
           try {
-            res = await globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, body, headers });
+            res = await globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], { ...init, body, headers, signal });
           } catch (err) {
             // Network-layer failure: DNS, TLS, abort, timeout, EAI_AGAIN, etc.
             // Never produced a Response, so the non-2xx branch below never
@@ -354,8 +386,15 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
               errMessage: e.message || '(empty)',
               errCode: (e as { code?: string }).code,
               cause: cause ? (cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)) : undefined,
+              // True when OUR fast-fail headers timeout fired (vs an upstream
+              // network error). Distinguishes a stalled tier from a real failure.
+              headersTimeout: headersController.signal.aborted,
             }, 'claude-oauth: fetch threw before response');
             throw err;
+          } finally {
+            // Headers have arrived (or the call failed) — stop the headers timer
+            // so it can't abort a long, healthy streaming body.
+            if (headersTimer) clearTimeout(headersTimer);
           }
           if (!res.ok) {
             try {
