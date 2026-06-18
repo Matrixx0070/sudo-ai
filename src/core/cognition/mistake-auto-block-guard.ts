@@ -47,10 +47,16 @@ const DEFAULT_THRESHOLDS: Readonly<GuardThresholds> = {
 // ---------------------------------------------------------------------------
 
 export interface PatternRecognizerLike {
+  /**
+   * Returns matched patterns. The guard reads `signatureHash` and
+   * `occurrences` only; concrete implementations may return richer
+   * row shapes (e.g. MistakePattern), which TypeScript accepts via
+   * structural width-extension.
+   */
   findSimilar(
     text: string,
     opts?: { windowDays?: number },
-  ): Array<{ signatureHash: string; occurrences: number; [k: string]: unknown }>;
+  ): Array<{ signatureHash: string; occurrences: number }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +119,7 @@ export class MistakeAutoBlockGuard {
     }
 
     // Query the recognizer — fail-open on any error
-    let patterns: Array<{ signatureHash: string; occurrences: number; [k: string]: unknown }>;
+    let patterns: Array<{ signatureHash: string; occurrences: number }>;
     try {
       patterns = this._recognizer.findSimilar(candidateText, { windowDays });
     } catch (err: unknown) {

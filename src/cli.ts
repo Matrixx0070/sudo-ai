@@ -709,12 +709,13 @@ async function boot(): Promise<void> {
         log.error({ err: mprMsg }, 'MistakePatternRecognizer init failed — pattern endpoints will return 503');
       }
       // Wire MistakeAutoBlockGuard into veto-gate pre-check (fail-open).
-      // Cast via unknown: MistakePattern satisfies the structural duck type but lacks
-      // an index signature, which is a TypeScript structural quirk, not a runtime issue.
+      // MistakePatternRecognizer.findSimilar returns MistakePattern[] which
+      // structurally satisfies PatternRecognizerLike — the guard only reads
+      // signatureHash + occurrences, the rest is width-extension.
       if (mistakePatternRecognizer) {
         try {
           const autoBlockGuard = new MistakeAutoBlockGuard({
-            patternRecognizer: mistakePatternRecognizer as unknown as import('./core/cognition/mistake-auto-block-guard.js').PatternRecognizerLike,
+            patternRecognizer: mistakePatternRecognizer,
           });
           setAutoBlockGuard(autoBlockGuard);
           log.info('MistakeAutoBlockGuard wired into veto-gate (pre-veto pattern block active)');
