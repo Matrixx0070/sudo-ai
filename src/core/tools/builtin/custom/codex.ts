@@ -7,7 +7,7 @@
  * Provider priority (auto-fallback):
  *   1. xai/grok-4-1-fast-reasoning   — always available (paid subscription)
  *   2. openai/o4-mini                 — when OpenAI billing OK
- *   3. claude-oauth/claude-sonnet-4-6 — via Claude Code OAuth token
+ *   3. claude-oauth/claude-sonnet-4-5-20250929 — via Claude Code OAuth token
  *   4. google/gemini-2.5-flash        — when Gemini key available
  *   5. groq/llama-3.3-70b-versatile   — when Groq key available (free tier)
  *
@@ -37,7 +37,7 @@ const PROVIDER_CASCADE: ProviderOption[] = [
   { model: 'xai/grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning',maxTokens: 32768 },
   { model: 'xai/grok-4-1-fast-reasoning',  label: 'Grok Fast Reasoning',maxTokens: 16384 },
   { model: 'openai/o4-mini',               label: 'OpenAI o4-mini',     maxTokens: 16384 },
-  { model: 'claude-oauth/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (OAuth)', maxTokens: 8192 },
+  { model: 'claude-oauth/claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5 (OAuth)', maxTokens: 8192 },
   { model: 'google/gemini-2.5-flash',      label: 'Gemini 2.5 Flash',   maxTokens: 8192  },
   { model: 'groq/llama-3.3-70b-versatile', label: 'Groq Llama 3.3 70B', maxTokens: 8192  },
 ];

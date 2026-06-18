@@ -400,7 +400,7 @@ export class MigrationToolkit {
     return {
       agent: {
         name: oc.name ?? 'migrated-openclaw',
-        model: oc.model ?? 'claude-sonnet-4-6',
+        model: oc.model ?? 'claude-sonnet-4-5-20250929',
         profile: 'full',
       },
       skills: {
