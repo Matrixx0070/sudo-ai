@@ -2537,6 +2537,29 @@ async function boot(): Promise<void> {
   registerShutdown(() => heartbeat.stop());
   log.info('HeartbeatRunner started');
 
+  // Cost-rate watchdog (opt-in, default OFF). Samples $/hour from the
+  // api_call_log on a timer and emits a `cost_rate_alert` hook event when spend
+  // crosses an absolute ceiling or deviates sharply above the rolling baseline —
+  // the live counterpart to the on-demand day-grain predictor anomaly detector.
+  // Observable-only: never blocks spend. Fail-open.
+  if (process.env['SUDO_COST_RATE_ALERT'] === '1') {
+    const { CostRateMonitor, resolveCostRateMonitorConfig } = await import('./core/billing/cost-rate-monitor.js');
+    // NB: the billing-module CostTracker (api_call_log / $/hr), distinct from the
+    // session-level brain CostTracker constructed above.
+    const { getCostTracker } = await import('./core/billing/cost-tracker.js');
+    // Adapt HookManager onto the monitor's single-event emitter. `cost_rate_alert`
+    // is a first-class HookEvent member, so no cast is needed; the structured alert
+    // payload rides the designated `meta` channel.
+    const hookEmitter = {
+      emit: (event: 'cost_rate_alert', context: Record<string, unknown>): Promise<void> =>
+        hooks.emit(event, { event, meta: context }),
+    };
+    const costRateMonitor = new CostRateMonitor(getCostTracker(), hookEmitter, resolveCostRateMonitorConfig());
+    costRateMonitor.start();
+    registerShutdown(() => costRateMonitor.stop());
+    log.info('CostRateMonitor started (SUDO_COST_RATE_ALERT=1)');
+  }
+
   // Wire proactive-notifier to channel adapters
   proactiveNotifier.onNotification(async (n) => {
     const isHighCrit = n.priority === 'high' || n.priority === 'critical';

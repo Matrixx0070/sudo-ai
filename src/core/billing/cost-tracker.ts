@@ -71,6 +71,21 @@ export interface SourceStat {
   totalCost: number;
 }
 
+export interface SpendRate {
+  /** USD spent in the trailing window. */
+  windowUsd: number;
+  /** Trailing window length in hours. */
+  windowHours: number;
+  /** Extrapolated USD/hour over the trailing window. */
+  usdPerHour: number;
+  /** Mean USD/hour over the baseline window preceding the trailing one; null when no baseline history. */
+  baselineUsdPerHour: number | null;
+  /** Percent deviation of `usdPerHour` vs baseline ((cur-base)/base*100); null when no baseline. */
+  deviationPct: number | null;
+  /** Number of calls in the trailing window. */
+  samples: number;
+}
+
 // ---------------------------------------------------------------------------
 // Retention
 // ---------------------------------------------------------------------------
@@ -413,6 +428,51 @@ export class CostTracker {
       GROUP BY source
       ORDER BY totalCost DESC
     `).all() as SourceStat[];
+  }
+
+  /**
+   * Trailing spend rate ($/hour) over a recent window, plus the mean hourly rate
+   * over the preceding baseline window so callers can flag deviation.
+   *
+   * Compares `called_at` against JS-ISO cutoffs (`Date#toISOString`), NOT SQLite
+   * `datetime('now', ...)`: the table stores ISO-8601 (`...THH:MM:SS.sssZ`), whose
+   * `T` separator sorts AFTER `datetime()`'s space within the same day — using
+   * `datetime()` here would silently include same-day rows that fall outside an
+   * hour-grain window. Same string-compare idiom as `getWeeklyCost`.
+   */
+  getSpendRate(opts: { windowMs?: number; baselineWindows?: number } = {}): SpendRate {
+    const windowMs = Number.isFinite(opts.windowMs) && (opts.windowMs as number) > 0 ? (opts.windowMs as number) : 60 * 60 * 1000;
+    const baselineWindows = Number.isFinite(opts.baselineWindows) && (opts.baselineWindows as number) > 0 ? Math.floor(opts.baselineWindows as number) : 24;
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const windowStart = new Date(now - windowMs).toISOString();
+    const baselineStart = new Date(now - windowMs * (baselineWindows + 1)).toISOString();
+
+    interface AggRow { total: number; n: number }
+    // Bound the trailing window on BOTH ends so a future-dated row (clock skew /
+    // manual insert) can't inflate the rate; symmetric with the baseline's
+    // half-open `[start, end)` range.
+    const win = this.db.prepare<{ since: string; now: string }, AggRow>(`
+      SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total, COUNT(*) AS n
+      FROM api_call_log WHERE called_at >= :since AND called_at < :now
+    `).get({ since: windowStart, now: nowIso }) ?? { total: 0, n: 0 };
+    const base = this.db.prepare<{ start: string; end: string }, AggRow>(`
+      SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total, COUNT(*) AS n
+      FROM api_call_log WHERE called_at >= :start AND called_at < :end
+    `).get({ start: baselineStart, end: windowStart }) ?? { total: 0, n: 0 };
+
+    const windowHours = windowMs / (60 * 60 * 1000);
+    const windowUsd = win.total;
+    const usdPerHour = windowUsd / windowHours;
+    const baselineHours = (windowMs * baselineWindows) / (60 * 60 * 1000);
+    // No calls in the baseline window means "unknown", not "$0/hr" — a zero
+    // baseline would make any spend read as infinite deviation.
+    const baselineUsdPerHour = base.n > 0 ? base.total / baselineHours : null;
+    const deviationPct = baselineUsdPerHour && baselineUsdPerHour > 0
+      ? ((usdPerHour - baselineUsdPerHour) / baselineUsdPerHour) * 100
+      : null;
+
+    return { windowUsd, windowHours, usdPerHour, baselineUsdPerHour, deviationPct, samples: win.n };
   }
 
   // -------------------------------------------------------------------------

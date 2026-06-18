@@ -300,6 +300,9 @@ export const TYPED_HOOK_MAP: Record<HookEvent, { runnerType: HookRunnerType; res
   // -- Task management events --
   'task:created':         { runnerType: 'void',      resultType: 'GenericResult' },
   'task:completed':       { runnerType: 'void',      resultType: 'GenericResult' },
+
+  // -- Cost / billing events --
+  'cost_rate_alert':      { runnerType: 'void',      resultType: 'GenericResult' },
 };
 
 // ---------------------------------------------------------------------------
