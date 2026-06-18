@@ -9,7 +9,7 @@
  * Model: Grok 4 (grok-4-0709) with grok-4-1-fast-reasoning fallback.
  */
 
-import { generateText } from 'ai';
+import { streamText } from 'ai';
 import {
   readFileSync, writeFileSync, existsSync,
   mkdirSync, copyFileSync, statSync,
@@ -195,14 +195,18 @@ async function callModel(system: string, prompt: string): Promise<string> {
   for (const option of SWARM_MODELS) {
     try {
       const model = getModel(option.model);
-      const result = await generateText({
+      // Stream: a non-streaming generateText holds claude-oauth response headers
+      // until the full generation completes, tripping the fast-fail headers timer
+      // on the sonnet OAuth tier (same trap as PR #277). streamText lands headers
+      // in ~1-2s; awaiting result.text drains the stream to the full completion.
+      const result = streamText({
         model,
         system,
         prompt,
         maxOutputTokens: 32768,
         temperature: 0.3,
       });
-      const text = result.text?.trim() ?? '';
+      const text = (await result.text)?.trim() ?? '';
       if (!text) { errors.push(`${option.label}: empty response`); continue; }
       return text;
     } catch (err) {

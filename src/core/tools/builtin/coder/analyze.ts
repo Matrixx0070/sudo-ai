@@ -12,7 +12,7 @@
  * Modes: architecture | security | performance | complexity | refactor | full | attack-surface
  */
 
-import { generateText } from 'ai';
+import { streamText } from 'ai';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -357,7 +357,11 @@ export const analyzeCodeTool: ToolDefinition = {
         const model = getModel(option.model);
         logger.info({ model: option.model, mode }, 'Trying model for analysis');
 
-        const result = await generateText({
+        // Stream: a non-streaming generateText holds claude-oauth response headers
+        // until the full generation completes, tripping the fast-fail headers timer
+        // on the sonnet OAuth tier (same trap as PR #277). streamText lands headers
+        // in ~1-2s; awaiting result.text drains the stream to the full completion.
+        const result = streamText({
           model,
           system: systemPrompt,
           prompt: userPrompt,
@@ -365,7 +369,7 @@ export const analyzeCodeTool: ToolDefinition = {
           temperature: 0.2,
         });
 
-        const output = result.text?.trim() ?? '';
+        const output = (await result.text)?.trim() ?? '';
         if (!output) {
           errors.push(`${option.label}: empty response`);
           continue;

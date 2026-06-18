@@ -1,7 +1,7 @@
 /**
  * custom.codex — Autonomous coding agent using Vercel AI SDK.
  *
- * Uses generateText() with all configured providers in priority order.
+ * Uses streamText() with all configured providers in priority order.
  * No external CLI binary — pure SDK, works with any provider that has an API key.
  *
  * Provider priority (auto-fallback):
@@ -14,7 +14,7 @@
  * Actions: run (default), review
  */
 
-import { generateText } from 'ai';
+import { streamText } from 'ai';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getModel, listAvailableProviders } from '../../../brain/providers.js';
@@ -151,7 +151,11 @@ export const codexTool: ToolDefinition = {
         const model = getModel(option.model);
         logger.info({ model: option.model, action }, 'Trying provider');
 
-        const result = await generateText({
+        // Stream: a non-streaming generateText holds claude-oauth response headers
+        // until the full generation completes, tripping the fast-fail headers timer
+        // on the sonnet OAuth tier (same trap as PR #277). streamText lands headers
+        // in ~1-2s; awaiting result.text drains the stream to the full completion.
+        const result = streamText({
           model,
           system: systemPrompt,
           prompt: userPrompt,
@@ -159,7 +163,7 @@ export const codexTool: ToolDefinition = {
           temperature: action === 'review' ? 0.3 : 0.5,
         });
 
-        const output = result.text?.trim() ?? '';
+        const output = (await result.text)?.trim() ?? '';
         if (!output) {
           errors.push(`${option.label}: empty response`);
           continue;
