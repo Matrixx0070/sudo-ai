@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { BenchRunner } from '../../src/core/eval/bench-runner.js';
 import { BenchStore } from '../../src/core/eval/bench-store.js';
+import type { BenchTask } from '../../src/core/shared/wave10-types.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -29,6 +30,22 @@ function makeSuccessBrain(): import('../../src/core/eval/bench-runner.js').Brain
   return {
     call: vi.fn().mockResolvedValue({ content: 'Test response from model' }),
   };
+}
+
+/**
+ * 5 verifier-less tasks. Decouples runner-mechanics tests from the built-in task
+ * verifiers — when `verifier` is absent, BenchRunner falls back to the legacy
+ * non-empty-response check, which matches the historical successRate=1 assertions
+ * with any non-empty mock brain.
+ */
+function makeSimpleTasks(): BenchTask[] {
+  return Array.from({ length: 5 }, (_, i) => ({
+    id: `simple-${i}`,
+    name: `Simple task ${i}`,
+    prompt: `Echo task ${i}.`,
+    expectedOutput: 'non-empty response',
+    complexityTier: 'simple',
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -52,12 +69,13 @@ describe('BenchRunner — basic sweep', () => {
       seeds:      1,
       brain,
       store,
+      tasks:      makeSimpleTasks(),
     });
 
     expect(report).toBeDefined();
     expect(typeof report.runId).toBe('string');
-    expect(report.totalTasks).toBe(5); // 5 built-in tasks × 1 condition × 1 seed
-    expect(report.successRate).toBe(1); // mock brain always succeeds
+    expect(report.totalTasks).toBe(5); // 5 simple tasks × 1 condition × 1 seed
+    expect(report.successRate).toBe(1); // mock brain always succeeds (verifier-less → legacy length>0)
     expect(report.markdownSummary).toContain('Benchmark Report');
     store.close();
   });
@@ -72,6 +90,7 @@ describe('BenchRunner — basic sweep', () => {
       conditions: ['no_skills'],
       seeds:      1,
       store,
+      tasks:      makeSimpleTasks(),
     });
 
     expect(report.successRate).toBe(0); // no brain → all fail
@@ -91,6 +110,7 @@ describe('BenchRunner — basic sweep', () => {
       seeds:      1,
       brain,
       store,
+      tasks:      makeSimpleTasks(),
     });
 
     expect(Object.keys(report.byModel)).toContain('model-a');
@@ -111,6 +131,7 @@ describe('BenchRunner — basic sweep', () => {
       seeds:      1,
       brain,
       store,
+      tasks:      makeSimpleTasks(),
     });
 
     expect(report.byCondition['no_skills']).toBeDefined();
@@ -132,6 +153,7 @@ describe('BenchRunner — basic sweep', () => {
       seeds:      3,
       brain,
       store,
+      tasks:      makeSimpleTasks(),
     });
 
     expect(report.totalTasks).toBe(15); // 5 tasks × 3 seeds
@@ -181,6 +203,7 @@ describe('BenchRunner — basic sweep', () => {
       seeds:      1,
       brain,
       store,
+      tasks:      makeSimpleTasks(),
     });
 
     expect(report.successRate).toBe(0);
@@ -201,6 +224,7 @@ describe('BenchRunner — BenchReport content', () => {
       seeds:      1,
       brain,
       store,
+      tasks:      makeSimpleTasks(),
     });
 
     expect(report.markdownSummary).toContain('## Benchmark Report');
@@ -222,6 +246,7 @@ describe('BenchRunner — BenchReport content', () => {
       seeds:      1,
       brain,
       store,
+      tasks:      makeSimpleTasks(),
     });
 
     const retrieved = store.getReport(report.runId);

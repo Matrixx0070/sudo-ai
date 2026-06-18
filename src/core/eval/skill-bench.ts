@@ -19,7 +19,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
-import type { BenchReport, SkillCondition } from '../shared/wave10-types.js';
+import type { BenchReport, BenchTask, SkillCondition } from '../shared/wave10-types.js';
 import { BenchRunner, type BrainCallable } from './bench-runner.js';
 import { BenchStore } from './bench-store.js';
 
@@ -56,6 +56,10 @@ export interface SkillBenchOptions {
   skillOptimizer?: {
     getApprovedForSkill(skillId: string): { proposedValue: string; targetField: string } | null;
   };
+  /** Optional task override forwarded to BenchRunner. When set, `taskIds` is ignored. */
+  tasks?: BenchTask[];
+  /** Optional brain-strategy label forwarded to BenchRunner. Defaults to 'single'. */
+  strategy?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +114,7 @@ function buildConditionComparisonTable(report: BenchReport): string {
  * that sets conditions to all 3 and builds the comparison table.
  */
 export async function runSkillBench(opts: SkillBenchOptions): Promise<SkillBenchResult> {
-  const { models, agentId = 'default', taskIds, seeds = 1, brain, store, skillOptimizer } = opts;
+  const { models, agentId = 'default', taskIds, seeds = 1, brain, store, skillOptimizer, tasks, strategy } = opts;
 
   log.info({ models, seeds }, 'SkillBench: starting 4-condition sweep');
 
@@ -124,6 +128,8 @@ export async function runSkillBench(opts: SkillBenchOptions): Promise<SkillBench
     brain,
     store,
     skillOptimizer,
+    ...(tasks ? { tasks } : {}),
+    ...(strategy ? { strategy } : {}),
   });
 
   const conditionTable = buildConditionComparisonTable(report);

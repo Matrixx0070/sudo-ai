@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { runSkillBench } from '../../src/core/eval/skill-bench.js';
 import { BenchStore } from '../../src/core/eval/bench-store.js';
+import type { BenchTask } from '../../src/core/shared/wave10-types.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -18,6 +19,17 @@ import fs from 'node:fs';
 function makeTempDb(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-bench-'));
   return path.join(dir, 'bench.db');
+}
+
+/** 5 verifier-less tasks — runner falls back to legacy non-empty-response check. */
+function makeSimpleTasks(): BenchTask[] {
+  return Array.from({ length: 5 }, (_, i) => ({
+    id: `simple-${i}`,
+    name: `Simple task ${i}`,
+    prompt: `Echo task ${i}.`,
+    expectedOutput: 'non-empty response',
+    complexityTier: 'simple',
+  }));
 }
 
 describe('runSkillBench — 4-condition sweep', () => {
@@ -32,6 +44,7 @@ describe('runSkillBench — 4-condition sweep', () => {
       seeds:   1,
       brain,
       store,
+      tasks:   makeSimpleTasks(),
     });
 
     expect(report.byCondition['no_skills']).toBeDefined();
@@ -51,6 +64,7 @@ describe('runSkillBench — 4-condition sweep', () => {
       seeds:   1,
       brain,
       store,
+      tasks:   makeSimpleTasks(),
     });
 
     expect(markdownReport).toContain('Skill Condition Comparison');
@@ -71,6 +85,7 @@ describe('runSkillBench — 4-condition sweep', () => {
       seeds:   1,
       brain,
       store,
+      tasks:   makeSimpleTasks(),
     });
 
     expect(markdownReport).toContain('Benchmark Report');
@@ -81,7 +96,7 @@ describe('runSkillBench — 4-condition sweep', () => {
     const store = new BenchStore(makeTempDb());
     const brain = { call: vi.fn().mockResolvedValue({ content: 'ok' }) };
 
-    const result = await runSkillBench({ models: ['model'], seeds: 1, brain, store });
+    const result = await runSkillBench({ models: ['model'], seeds: 1, brain, store, tasks: makeSimpleTasks() });
     expect(result).toHaveProperty('report');
     expect(result).toHaveProperty('markdownReport');
     expect(typeof result.markdownReport).toBe('string');
@@ -91,7 +106,7 @@ describe('runSkillBench — 4-condition sweep', () => {
   it('works without brain (synthetic results)', async () => {
     const store = new BenchStore(makeTempDb());
 
-    const { report } = await runSkillBench({ models: ['synthetic'], seeds: 1, store });
+    const { report } = await runSkillBench({ models: ['synthetic'], seeds: 1, store, tasks: makeSimpleTasks() });
     expect(report.successRate).toBe(0);
     expect(report.totalTasks).toBe(20); // 5 tasks × 4 conditions × 1 seed
     store.close();
