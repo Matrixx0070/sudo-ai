@@ -520,7 +520,22 @@ export class InsightsDashboardGenerator {
       log.debug({ err: String(err) }, 'Failed to read traces data');
     }
 
-    // Build tool entries
+    // Totals across ALL tools in the window. Must be computed BEFORE
+    // the slice(0, 10) below — otherwise an account with >10 distinct
+    // tools silently under-reports activity (only the displayed top
+    // 10 are summed, the tail is dropped).
+    let totalCalls = 0;
+    let totalSuccesses = 0;
+    let totalToolErrors = 0;
+    for (const data of toolMap.values()) {
+      totalCalls += data.calls;
+      totalSuccesses += data.successes;
+      totalToolErrors += data.errors;
+    }
+
+    // topTools is the display ranking (capped at 10). overallSuccessRate
+    // and the totals above reflect the full toolset, so they don't drift
+    // when the tail grows.
     const topTools: ToolUsageEntry[] = Array.from(toolMap.entries())
       .map(([name, data]) => {
         const sortedLatencies = data.latencies.sort((a, b) => a - b);
@@ -539,10 +554,6 @@ export class InsightsDashboardGenerator {
       })
       .sort((a, b) => b.callCount - a.callCount)
       .slice(0, 10);
-
-    const totalCalls = topTools.reduce((sum, t) => sum + t.callCount, 0);
-    const totalSuccesses = topTools.reduce((sum, t) => sum + t.successCount, 0);
-    const totalToolErrors = topTools.reduce((sum, t) => sum + t.errorCount, 0);
     const errorRates: Record<string, number> = {};
     for (const tool of topTools) {
       // Every entry in topTools has callCount >= 1, so successRate is well-defined

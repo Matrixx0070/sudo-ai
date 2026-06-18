@@ -429,4 +429,51 @@ describe('Tool Usage Analytics', () => {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
   });
+
+  it('counts ALL tools in totals, not just the displayed top 10 (regression)', async () => {
+    // Pre-fix: totals were summed AFTER slice(0,10), so a workspace with
+    // >10 distinct tools under-reported every total. Record 12 distinct
+    // tools and assert the displayed top is capped at 10 while totalCalls
+    // reflects all 12.
+    const testDir = path.join(os.tmpdir(), `sudo-ai-insights-undercount-${Date.now()}`);
+    fs.mkdirSync(testDir, { recursive: true });
+
+    try {
+      const { TraceStore } = await import('../../src/core/learning/trace-store.js');
+      const store = new TraceStore(path.join(testDir, 'traces.db'));
+      await store.init();
+      // Tools t01..t10 each get 5 calls; t11+t12 each get 1 call. After
+      // sort-by-callCount, the top 10 are t01..t10 (50 calls displayed)
+      // and t11+t12 fall off — but totals must still include them.
+      for (let i = 1; i <= 10; i++) {
+        const name = `t${String(i).padStart(2, '0')}`;
+        for (let j = 0; j < 5; j++) store.recordToolCall('s1', name, true, 10);
+      }
+      store.recordToolCall('s1', 't11', true, 10);
+      store.recordToolCall('s1', 't12', false, 10, { type: 'tool_error', message: 'tail-tool error' });
+      store.close();
+
+      const generator = new InsightsDashboardGenerator(
+        { includeCosts: false, includeFileChanges: false, includeAnomalies: false },
+        testDir,
+      );
+      const dashboard = await generator.generateDashboard('24h');
+      const tools = dashboard.tools;
+
+      // Display is capped at 10.
+      expect(tools.topTools.length).toBe(10);
+      // Tail tools (t11, t12) must NOT be in the displayed list (sorted by
+      // callCount, t11 and t12 only have 1 call each).
+      expect(tools.topTools.find((t) => t.toolName === 't11')).toBeUndefined();
+      expect(tools.topTools.find((t) => t.toolName === 't12')).toBeUndefined();
+      // …but totals MUST include them: 10*5 + 1 + 1 = 52 calls, 51 successes, 1 error.
+      expect(tools.totalCalls).toBe(52);
+      expect(tools.totalSuccesses).toBe(51);
+      expect(tools.totalErrors).toBe(1);
+      // overallSuccessRate uses the honest totals (51/52 ≈ 0.9808), not 50/50.
+      expect(tools.overallSuccessRate).toBeCloseTo(51 / 52, 5);
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
 });
