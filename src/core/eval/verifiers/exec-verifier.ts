@@ -79,7 +79,12 @@ export class ExecVerifier implements BenchVerifier {
       const result = await runInSandbox({
         command,
         workspaceDir,
-        policy: { ...DEFAULT_SANDBOX_POLICY, network: 'none' },
+        // Use host network (skip `--unshare-net`) because unprivileged runners
+        // (GitHub Actions, default Docker) lack CAP_NET_ADMIN, which makes bwrap's
+        // loopback setup fail and corrupts the child's exit status. The verifier
+        // controls the held-out test content, so network exposure is acceptable;
+        // filesystem/PID/IPC isolation still applies.
+        policy: { ...DEFAULT_SANDBOX_POLICY, network: 'host' },
         timeoutMs: this.timeoutMs,
       });
 
