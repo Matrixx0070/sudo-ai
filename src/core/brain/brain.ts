@@ -728,7 +728,19 @@ export class Brain {
       return runDebate(this, request);
     }
     if (effectiveStrategy === 'tree-search') {
-      return runTreeSearch(this, request);
+      // Forward only the tree-search-relevant opts. The verifier opt is
+      // ignored on `single` and `debate` by design — debate doesn't
+      // candidate-score, and single has nothing to reroll against.
+      const treeOpts: Parameters<typeof runTreeSearch>[2] = {};
+      if (opts?.verifier !== undefined) treeOpts.verifier = opts.verifier;
+      // Guard breadth: tree-search clamps with Math.max(1, n) which
+      // leaves NaN as NaN — `for (let i = 0; i < NaN; i++)` never
+      // executes and surfaces as "every candidate failed". Drop the
+      // opt on non-finite input so tree-search picks its own default.
+      if (opts?.breadth !== undefined && Number.isFinite(opts.breadth)) {
+        treeOpts.breadth = opts.breadth;
+      }
+      return runTreeSearch(this, request, treeOpts);
     }
 
     // Extract tool names/descriptions to include in the system prompt so the LLM
