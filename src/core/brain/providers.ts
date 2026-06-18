@@ -40,6 +40,62 @@ const OAUTH_HEADERS_TIMEOUT_MS = (() => {
   return Number.isFinite(raw) && raw >= 0 ? raw : 45_000;
 })();
 
+/**
+ * Idle window (ms) for the *body* phase of a claude-oauth stream. The headers
+ * timeout above only bounds time-to-first-byte and is cleared the instant
+ * headers arrive — so a stream that opens then stalls mid-body (the model hangs
+ * after the first byte) would otherwise block on undici's long default. We reset
+ * a timer on every chunk and abort if the body goes silent for longer than this.
+ * Anthropic emits periodic `ping` events throughout long generations, so a
+ * healthy slow stream (e.g. Opus with a big thinking budget) keeps the timer fed
+ * and stays well under the window. Override with SUDO_OAUTH_BODY_IDLE_TIMEOUT_MS;
+ * 0 disables.
+ */
+const OAUTH_BODY_IDLE_TIMEOUT_MS = (() => {
+  const raw = Number(process.env['SUDO_OAUTH_BODY_IDLE_TIMEOUT_MS']);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 120_000;
+})();
+
+/**
+ * Wrap a response body stream so it aborts the underlying request if no chunk
+ * arrives within idleMs. Backpressure-preserving: the idle timer is armed only
+ * while actively awaiting the next chunk (pull), so a slow downstream consumer
+ * never trips it — only a silent upstream does. Forwards chunks unchanged and
+ * clears the timer on completion, cancellation, or error.
+ */
+export function attachBodyIdleTimeout(
+  body: ReadableStream<Uint8Array>,
+  abortController: AbortController,
+  idleMs: number,
+  model: string | undefined,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const clear = (): void => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  };
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      idleTimer = setTimeout(() => {
+        log.warn({ model, idleMs }, 'claude-oauth: body idle timeout — aborting stalled stream');
+        abortController.abort(new Error('claude-oauth body idle timeout (sudo fast-fail)'));
+      }, idleMs);
+      return reader.read().then(
+        ({ done, value }) => {
+          clear();
+          if (done) { controller.close(); return; }
+          controller.enqueue(value);
+        },
+        (err) => { clear(); controller.error(err); },
+      );
+    },
+    cancel(reason) {
+      clear();
+      return reader.cancel(reason);
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Provider name union
 // ---------------------------------------------------------------------------
@@ -413,8 +469,23 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
           // occurrence we see. Robust to streaming because the substitution
           // is per-chunk (Anthropic emits the name inside one event line —
           // there's no splitting of the name across chunks).
-          if (toolNameMap.size === 0 || !res.body) return res;
-          const reader = res.body.getReader();
+          // Body-idle guard: bound a stream that opens then stalls mid-body
+          // (the headers timer is already cleared by here). Both the raw and the
+          // tool-name-rewrite paths below read through this wrapped stream, so a
+          // silent upstream aborts in seconds instead of blocking on undici's
+          // long default. headersController is reused as the abort handle — its
+          // signal is what fetch is still streaming the body on.
+          const guardedBody = res.body && OAUTH_BODY_IDLE_TIMEOUT_MS > 0
+            ? attachBodyIdleTimeout(res.body, headersController, OAUTH_BODY_IDLE_TIMEOUT_MS, outgoingModel)
+            : res.body;
+
+          if (toolNameMap.size === 0 || !guardedBody) {
+            // No tool-name rewrite needed. Return the body, idle-guarded when enabled.
+            return guardedBody && guardedBody !== res.body
+              ? new Response(guardedBody, { status: res.status, statusText: res.statusText, headers: res.headers })
+              : res;
+          }
+          const reader = guardedBody.getReader();
           const decoder = new TextDecoder();
           const encoder = new TextEncoder();
           const replacements: Array<[string, string]> = [];
