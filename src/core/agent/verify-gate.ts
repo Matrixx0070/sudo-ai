@@ -120,6 +120,32 @@ export function readMinSamples(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MIN_SAMPLES;
 }
 
+/** Default TTL (ms) for the per-tool confidence cache when enabled. */
+const DEFAULT_CACHE_TTL_MS = 5000;
+/** Default max distinct tools held in the confidence cache. */
+const DEFAULT_CACHE_MAX = 256;
+
+/**
+ * Returns true when `SUDO_VERIFY_GATE_CACHE=1`. Default OFF. The cache memoises
+ * the per-tool confidence lookup so a burst of evaluations of the same
+ * destructive tool doesn't re-open `audit.db` (+ `calibration.db`) every call.
+ */
+export function isCacheEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['SUDO_VERIFY_GATE_CACHE'] === '1';
+}
+
+/** Parses `SUDO_VERIFY_GATE_CACHE_TTL_MS`; floors to >=0 (`0` disables caching). */
+export function readCacheTtlMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env['SUDO_VERIFY_GATE_CACHE_TTL_MS']);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_CACHE_TTL_MS;
+}
+
+/** Parses `SUDO_VERIFY_GATE_CACHE_MAX`; floors to >=1. */
+export function readCacheMax(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env['SUDO_VERIFY_GATE_CACHE_MAX']);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_CACHE_MAX;
+}
+
 // ---------------------------------------------------------------------------
 // Calibration lookup
 // ---------------------------------------------------------------------------
@@ -266,6 +292,21 @@ export interface ConfidenceGateOptions {
   minSamples?: number;
   /** Inject a custom confidence lookup (tests). */
   confidenceLookup?: (toolName: string) => { confidence: number; samples: number } | null;
+  /** Override env-derived cache enablement (tests). */
+  cacheEnabled?: boolean;
+  /** Override cache TTL in ms (tests). `0` disables the cache. */
+  cacheTtlMs?: number;
+  /** Override cache max entries (tests). */
+  cacheMax?: number;
+  /** Injectable clock for deterministic TTL tests; defaults to `Date.now`. */
+  now?: () => number;
+}
+
+/** Cached lookup result + its expiry. `value` may be `null` (no-history). */
+type LookupResult = { confidence: number; samples: number } | null;
+interface CacheEntry {
+  value: LookupResult;
+  expiresAt: number;
 }
 
 /**
@@ -280,7 +321,12 @@ export class ConfidenceGate {
   private readonly enabled: boolean;
   private readonly threshold: number;
   private readonly minSamples: number;
-  private readonly lookup: (toolName: string) => { confidence: number; samples: number } | null;
+  private readonly lookup: (toolName: string) => LookupResult;
+  /** TTL-LRU over the lookup result; null when caching is disabled. */
+  private readonly cache: Map<string, CacheEntry> | null;
+  private readonly cacheTtlMs: number;
+  private readonly cacheMax: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly registry: ToolRegistryForGate,
@@ -294,6 +340,48 @@ export class ConfidenceGate {
     // row never displaces a richer audit signal.
     this.lookup =
       opts.confidenceLookup ?? ((name) => computeCompositeConfidence(name, { minSamples: this.minSamples }));
+    this.cacheTtlMs = opts.cacheTtlMs ?? readCacheTtlMs();
+    // Floor to >=1 — readCacheMax already floors the env path, but a direct
+    // opts.cacheMax: 0 injection would make every set evict immediately.
+    this.cacheMax = Math.max(1, opts.cacheMax ?? readCacheMax());
+    this.now = opts.now ?? Date.now;
+    // Only allocate the map when caching is both enabled and has a live TTL.
+    const cacheEnabled = opts.cacheEnabled ?? isCacheEnabled();
+    this.cache = cacheEnabled && this.cacheTtlMs > 0 ? new Map() : null;
+  }
+
+  /**
+   * Memoised wrapper over `this.lookup`. Within the TTL window a repeated
+   * evaluation of the same destructive tool returns the cached result instead
+   * of re-opening audit.db (+ calibration.db). Insertion-order map acts as an
+   * LRU — a hit is promoted (delete + re-insert), and the oldest entries are
+   * evicted past capacity. `null` (no-history) is cached too, since that path
+   * also opens a DB. A throwing lookup is never cached (it propagates).
+   *
+   * Semantics: an entry is live for exactly `cacheTtlMs` (`expiresAt > now`,
+   * strict — expired at the boundary instant). Expired entries are pruned lazily
+   * on the next access to that key; the map holds at most `cacheMax` entries
+   * regardless of staleness, so a tool never re-evaluated keeps a stale entry
+   * until capacity eviction reclaims it (bounded, intentional).
+   */
+  private cachedLookup(toolName: string): LookupResult {
+    if (!this.cache) return this.lookup(toolName);
+    const nowMs = this.now();
+    const hit = this.cache.get(toolName);
+    if (hit && hit.expiresAt > nowMs) {
+      this.cache.delete(toolName);
+      this.cache.set(toolName, hit); // promote to most-recent
+      return hit.value;
+    }
+    if (hit) this.cache.delete(toolName); // expired — drop before refresh
+    const value = this.lookup(toolName);
+    this.cache.set(toolName, { value, expiresAt: nowMs + this.cacheTtlMs });
+    while (this.cache.size > this.cacheMax) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
+    return value;
   }
 
   /**
@@ -323,9 +411,9 @@ export class ConfidenceGate {
       return { decision: 'allow', confidence: null, threshold: this.threshold, samples: 0, reason: 'readonly' };
     }
 
-    let live: { confidence: number; samples: number } | null;
+    let live: LookupResult;
     try {
-      live = this.lookup(toolName);
+      live = this.cachedLookup(toolName);
     } catch (err) {
       log.warn({ tool: toolName, err: String(err) }, 'verify-gate: confidence lookup threw — failing open');
       return { decision: 'allow', confidence: null, threshold: this.threshold, samples: 0, reason: 'error' };
