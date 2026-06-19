@@ -11,6 +11,7 @@
 import nodemailer from 'nodemailer';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { isCommsIdempotencyEnabled, getCommsIdempotencyStore } from '../../../comms/idempotency.js';
 
 const log = createLogger('comms:email');
 
@@ -145,6 +146,24 @@ export const emailTool: ToolDefinition = {
 
     const html = typeof params['html'] === 'string' ? params['html'] : undefined;
 
+    // Idempotency guard (opt-in): never re-send an identical email to the same
+    // recipient on a task re-dispatch within the dedup window.
+    const idemOn = isCommsIdempotencyEnabled();
+    let idemKey: string | undefined;
+    if (idemOn) {
+      const claim = getCommsIdempotencyStore().begin({ channel: 'email', recipient: to, body: `${subject}\n${body}` });
+      idemKey = claim.key;
+      if (claim.duplicate) {
+        log.warn({ sessionId: ctx.sessionId, to, key: idemKey }, 'comms.email: duplicate suppressed (idempotency)');
+        const priorNote = claim.messageId ? ` Prior message ID: ${claim.messageId}.` : '';
+        return {
+          success: true,
+          output: `comms.email: duplicate suppressed — an identical email to ${to} was already sent within the idempotency window.${priorNote}`,
+          data: { to, duplicate: true, messageId: claim.messageId },
+        };
+      }
+    }
+
     try {
       const info = await transport.sendMail({
         to,
@@ -153,6 +172,7 @@ export const emailTool: ToolDefinition = {
         ...(html ? { html } : {}),
         ...(attachments.length > 0 ? { attachments } : {}),
       });
+      if (idemOn && idemKey) getCommsIdempotencyStore().confirm(idemKey, info.messageId);
 
       log.info(
         { sessionId: ctx.sessionId, to, messageId: info.messageId, accepted: info.accepted },
@@ -169,6 +189,7 @@ export const emailTool: ToolDefinition = {
         },
       };
     } catch (err) {
+      if (idemOn && idemKey) getCommsIdempotencyStore().release(idemKey); // allow retry of a genuine failure
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ sessionId: ctx.sessionId, to, err }, 'Failed to send email');
       return { success: false, output: `comms.email error: ${msg}` };

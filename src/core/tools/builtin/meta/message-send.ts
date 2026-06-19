@@ -8,6 +8,7 @@
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { getChannelRouter } from './index.js';
+import { isCommsIdempotencyEnabled, getCommsIdempotencyStore } from '../../../comms/idempotency.js';
 
 const logger = createLogger('meta.message.send');
 
@@ -80,8 +81,28 @@ export const messageSendTool: ToolDefinition = {
       };
     }
 
+    // Idempotency guard (opt-in): suppress a duplicate send if an identical
+    // message to this peer/channel is in-flight or was sent within the window —
+    // prevents a re-dispatched task from double-sending.
+    const idemOn = isCommsIdempotencyEnabled();
+    let idemKey: string | undefined;
+    if (idemOn) {
+      const claim = getCommsIdempotencyStore().begin({ channel, recipient: peerId, body: text });
+      idemKey = claim.key;
+      if (claim.duplicate) {
+        logger.warn({ session: ctx.sessionId, channel, peerId, key: idemKey }, 'message.send: duplicate suppressed (idempotency)');
+        const priorNote = claim.messageId ? ` Prior message ID: ${claim.messageId}.` : '';
+        return {
+          success: true,
+          output: `message.send: duplicate suppressed — an identical message to ${peerId} via ${channel} was already sent within the idempotency window.${priorNote}`,
+          data: { channel, peerId, duplicate: true, messageId: claim.messageId },
+        };
+      }
+    }
+
     try {
       const result = await channelRouter.send(channel, peerId, text);
+      if (idemOn && idemKey) getCommsIdempotencyStore().confirm(idemKey, result.messageId);
       logger.info({ session: ctx.sessionId, channel, peerId, messageId: result.messageId }, 'Message sent');
 
       const idNote = result.messageId ? ` (message ID: ${result.messageId})` : '';
@@ -91,6 +112,7 @@ export const messageSendTool: ToolDefinition = {
         data: { channel, peerId, messageId: result.messageId, timestamp: result.timestamp },
       };
     } catch (err) {
+      if (idemOn && idemKey) getCommsIdempotencyStore().release(idemKey); // allow retry of a genuine failure
       const msg = err instanceof Error ? err.message : String(err);
       logger.error({ session: ctx.sessionId, channel, peerId, err: msg }, 'message.send error');
       return { success: false, output: `message.send error: ${msg}` };
