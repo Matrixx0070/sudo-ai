@@ -174,6 +174,12 @@ module.exports = {
         // a duplicate. Collapses heartbeat-replay bloat. Kill-switch: set to '0'.
         SUDO_EPISODIC_DEDUP: process.env['SUDO_EPISODIC_DEDUP'] || '1',
 
+        // Consciousness world-model: predict-then-resolve surprise loop (tool_use
+        // forecast per turn, confidence prior seeded from the learned base rate).
+        // Was previously set only in PM2's saved process def, so a restart from
+        // this file would silently disable it — pinned here. Kill-switch: '0'.
+        SUDO_CONSCIOUSNESS_WORLD_MODEL: process.env['SUDO_CONSCIOUSNESS_WORLD_MODEL'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the
