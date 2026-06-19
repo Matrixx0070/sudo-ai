@@ -46,6 +46,14 @@ export interface StructuredMemory {
   createdAt: string;
   /** ISO-8601 last-update timestamp. */
   updatedAt: string;
+  /**
+   * Set when this record was superseded by a newer fact about the same subject
+   * (same type+name). Holds the id of the superseding record. Absent = active.
+   * Superseded records are excluded from listing/search but kept for audit.
+   */
+  supersededBy?: string;
+  /** ISO-8601 timestamp when this record was superseded. */
+  supersededAt?: string;
 }
 
 /** Options for searchMemories(). */
@@ -215,7 +223,40 @@ export async function saveMemory(
   const fp = filePath(memory.type, id);
   await fs.writeFile(fp, JSON.stringify(record, null, 2), 'utf-8');
   log.info({ type: memory.type, id, name: record.name }, 'Structured memory saved');
+
+  // Contradiction resolution (opt-in, SUDO_MEMORY_SUPERSEDE=1): a newer fact
+  // about the same subject (same type+name) supersedes older active ones, so
+  // recall returns the current value instead of letting contradictory facts
+  // coexist. Superseded records are MARKED (kept for audit), not deleted.
+  if (process.env['SUDO_MEMORY_SUPERSEDE'] === '1') {
+    try {
+      await supersedeConflicts(memory.type, record.name, id, now);
+    } catch (err) {
+      log.warn({ type: memory.type, name: record.name, err: String(err) }, 'memory supersede: failed (non-fatal)');
+    }
+  }
   return record;
+}
+
+/**
+ * Mark every still-active memory of the same `(type, name)` (case-insensitive),
+ * other than `keepId`, as superseded by `keepId`. Returns the count superseded.
+ */
+async function supersedeConflicts(
+  type: MemoryType,
+  name: string,
+  keepId: string,
+  now: string,
+): Promise<number> {
+  const key = name.trim().toLowerCase();
+  const actives = await listMemories(type); // excludes already-superseded
+  const conflicts = actives.filter((m) => m.id !== keepId && m.name.trim().toLowerCase() === key);
+  for (const old of conflicts) {
+    const superseded: StructuredMemory = { ...old, supersededBy: keepId, supersededAt: now };
+    await fs.writeFile(filePath(type, old.id), JSON.stringify(superseded, null, 2), 'utf-8');
+    log.info({ type, name, supersededId: old.id, by: keepId }, 'memory: superseded conflicting fact');
+  }
+  return conflicts.length;
 }
 
 /**
@@ -246,10 +287,18 @@ export async function getMemory(type: MemoryType, id: string): Promise<Structure
 /**
  * List all stored memories, optionally filtered by type.
  *
- * @param type - Optional type filter.
+ * Superseded records (a newer fact won for the same type+name) are excluded by
+ * default so recall returns only current facts; pass `{ includeSuperseded: true }`
+ * to see them (e.g. for an audit of what was retracted).
+ *
+ * @param type    - Optional type filter.
+ * @param options - `includeSuperseded` (default false).
  * @returns Array of StructuredMemory objects sorted by updatedAt descending.
  */
-export async function listMemories(type?: MemoryType): Promise<StructuredMemory[]> {
+export async function listMemories(
+  type?: MemoryType,
+  options?: { includeSuperseded?: boolean },
+): Promise<StructuredMemory[]> {
   if (type !== undefined) assertValidType(type);
   await ensureStoreDir();
 
@@ -277,9 +326,13 @@ export async function listMemories(type?: MemoryType): Promise<StructuredMemory[
     }),
   );
 
-  records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  log.debug({ type: type ?? 'all', count: records.length }, 'Listed structured memories');
-  return records;
+  const visible = options?.includeSuperseded ? records : records.filter((m) => !m.supersededBy);
+  visible.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  log.debug(
+    { type: type ?? 'all', count: visible.length, includeSuperseded: options?.includeSuperseded ?? false },
+    'Listed structured memories',
+  );
+  return visible;
 }
 
 /**
