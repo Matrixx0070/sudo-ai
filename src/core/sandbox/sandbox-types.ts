@@ -53,6 +53,37 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
 };
 
 /**
+ * Advisory trusted-host set for the agent's outbound network, seeded from the
+ * hosts the operator flagged as needed (Hugging Face model files, Python/npm
+ * packages, GitHub assets, external LLM APIs).
+ *
+ * IMPORTANT: in network:'host' mode this is NOT enforced — the sandbox shares
+ * the full host network and can reach any host. It is logged at startup as the
+ * declared trusted set and is the seed for a future per-host allowlist mode.
+ * Override with SUDO_SANDBOX_EGRESS_ALLOWLIST (comma-separated hostnames).
+ */
+export const DEFAULT_EGRESS_ALLOWLIST: ReadonlyArray<string> = [
+  // Hugging Face — model files (e.g. Kokoro ONNX TTS)
+  'huggingface.co',
+  'cdn-lfs.huggingface.co',
+  'hf.co',
+  // Python / npm packages
+  'pypi.org',
+  'files.pythonhosted.org',
+  'registry.npmjs.org',
+  // GitHub release assets + raw content
+  'github.com',
+  'raw.githubusercontent.com',
+  'objects.githubusercontent.com',
+  // External LLM APIs
+  'api.openai.com',
+  'api.anthropic.com',
+  'generativelanguage.googleapis.com',
+  'api.x.ai',
+  'api.deepseek.com',
+];
+
+/**
  * Base set of environment variable names passed through to the sandbox.
  * HOME and USER are always overridden (not inherited from process.env).
  */

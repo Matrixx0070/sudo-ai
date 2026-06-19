@@ -6,10 +6,59 @@
  */
 
 import path from 'node:path';
-import { type SandboxPolicy, DEFAULT_SANDBOX_POLICY, SandboxPolicyError } from './sandbox-types.js';
+import {
+  type SandboxPolicy,
+  DEFAULT_SANDBOX_POLICY,
+  DEFAULT_EGRESS_ALLOWLIST,
+  SandboxPolicyError,
+} from './sandbox-types.js';
 import { createLogger } from '../shared/logger.js';
 
 const log = createLogger('sandbox:policy');
+
+// ---------------------------------------------------------------------------
+// Agent network mode resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the network mode for the autonomous agent's exec sandbox from the
+ * SUDO_SANDBOX_NETWORK env var.
+ *
+ *   'host' (default) — share the host network namespace; buildBwrapArgs also
+ *                      binds the DNS + CA files so the agent can actually reach
+ *                      external hosts (download model files, hit external APIs).
+ *   'none'           — full network isolation (--unshare-net), the legacy default.
+ *
+ * Defaults to 'host' so the autonomous agent can do network-dependent work
+ * itself; set SUDO_SANDBOX_NETWORK=none to restore strict isolation. This only
+ * affects the agent's injected default policy (cli.ts), NOT DEFAULT_SANDBOX_POLICY
+ * itself, so eval/verifier sandboxes that build their own policies stay isolated.
+ */
+export function resolveAgentNetworkMode(): 'none' | 'host' {
+  const raw = (process.env['SUDO_SANDBOX_NETWORK'] ?? '').trim().toLowerCase();
+  if (raw === 'none') return 'none';
+  if (raw === 'host' || raw === '') return 'host';
+  log.warn({ value: raw }, 'SUDO_SANDBOX_NETWORK: unrecognized value — defaulting to host');
+  return 'host';
+}
+
+/**
+ * Resolve the advisory egress allowlist (the declared trusted-host set). Reads
+ * SUDO_SANDBOX_EGRESS_ALLOWLIST (comma-separated) when set, else the built-in
+ * DEFAULT_EGRESS_ALLOWLIST. NOT enforced in network:'host' mode — see the note
+ * on DEFAULT_EGRESS_ALLOWLIST.
+ */
+export function resolveEgressAllowlist(): string[] {
+  const raw = process.env['SUDO_SANDBOX_EGRESS_ALLOWLIST'];
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const hosts = raw
+      .split(',')
+      .map((h) => h.trim().toLowerCase())
+      .filter((h) => h.length > 0);
+    if (hosts.length > 0) return hosts;
+  }
+  return [...DEFAULT_EGRESS_ALLOWLIST];
+}
 
 // ---------------------------------------------------------------------------
 // Bind path validation

@@ -33,6 +33,32 @@ const execFileAsync = promisify(execFile);
 
 const BWRAP_BIN = '/usr/bin/bwrap';
 
+/**
+ * Read-only host paths bound into the sandbox ONLY when policy.network === 'host'.
+ *
+ * Sharing the host network namespace (omitting --unshare-net) is necessary but
+ * NOT sufficient for real egress: buildBwrapArgs otherwise mounts no /etc, so
+ * glibc cannot resolve DNS (needs /etc/resolv.conf + nsswitch) and curl/openssl
+ * cannot complete TLS (needs the CA bundle). Without these a shared-net sandbox
+ * still fails with "Could not resolve host" or a missing-CA TLS error — verified
+ * empirically against huggingface.co.
+ *
+ * Each entry is existence-gated in buildBwrapArgs: the set varies across distros
+ * (Debian/Ubuntu use /etc/ssl/certs, RHEL/Fedora use /etc/pki) and a --ro-bind
+ * with a missing source path makes bwrap abort. All are read-only and specific
+ * files/dirs — never the whole /etc.
+ */
+const HOST_NETWORK_RO_BINDS: ReadonlyArray<string> = [
+  '/etc/resolv.conf',
+  '/etc/nsswitch.conf',
+  '/etc/hosts',
+  '/etc/host.conf',
+  '/etc/gai.conf',
+  '/etc/ssl/certs', // Debian/Ubuntu CA bundle dir
+  '/etc/pki', // RHEL/Fedora CA location
+  '/etc/ca-certificates', // additional CA store on some distros
+];
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -167,6 +193,15 @@ export function buildBwrapArgs(
 
   if (policy.network === 'none') {
     args.push('--unshare-net');
+  } else {
+    // network === 'host': share the host network namespace AND bind the DNS +
+    // CA files the sandbox needs to actually reach hosts (see HOST_NETWORK_RO_BINDS).
+    // Existence-gated — a missing --ro-bind source makes bwrap abort.
+    for (const p of HOST_NETWORK_RO_BINDS) {
+      if (checkExists(p)) {
+        args.push('--ro-bind', p, p);
+      }
+    }
   }
 
   // Workspace: writable bind

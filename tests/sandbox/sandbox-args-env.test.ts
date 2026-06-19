@@ -6,9 +6,16 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { buildBwrapArgs, buildSandboxEnv } from '../../src/core/sandbox/sandbox-runner.js';
-import { mergePolicy, parsePolicy, validateBindPath } from '../../src/core/sandbox/sandbox-policy.js';
+import {
+  mergePolicy,
+  parsePolicy,
+  validateBindPath,
+  resolveAgentNetworkMode,
+  resolveEgressAllowlist,
+} from '../../src/core/sandbox/sandbox-policy.js';
 import {
   DEFAULT_SANDBOX_POLICY,
+  DEFAULT_EGRESS_ALLOWLIST,
   ENV_ALLOWLIST_BASE,
   SandboxPolicyError,
   type SandboxPolicy,
@@ -31,6 +38,29 @@ describe('buildBwrapArgs', () => {
     const policy: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, network: 'host' };
     const args = buildBwrapArgs('echo hi', workspaceDir, policy);
     expect(args).not.toContain('--unshare-net');
+  });
+
+  it('test 2b: network=host binds DNS + CA files read-only (existence-gated)', () => {
+    const policy: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, network: 'host' };
+    // Stub existsSync so the test is deterministic regardless of host distro.
+    const present = new Set(['/etc/resolv.conf', '/etc/ssl/certs', '/lib64']);
+    const args = buildBwrapArgs('echo hi', workspaceDir, policy, (p) => present.has(p));
+    const joined = args.join(' ');
+    // DNS + TLS files that exist are bound read-only so egress actually works.
+    expect(joined).toContain('--ro-bind /etc/resolv.conf /etc/resolv.conf');
+    expect(joined).toContain('--ro-bind /etc/ssl/certs /etc/ssl/certs');
+    // Absent paths are NOT bound (a missing --ro-bind source aborts bwrap).
+    expect(joined).not.toContain('/etc/pki');
+    expect(joined).not.toContain('/etc/nsswitch.conf');
+  });
+
+  it('test 2c: network=none does NOT bind DNS/CA files', () => {
+    const policy: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, network: 'none' };
+    const args = buildBwrapArgs('echo hi', workspaceDir, policy, () => true);
+    const joined = args.join(' ');
+    expect(joined).toContain('--unshare-net');
+    expect(joined).not.toContain('/etc/resolv.conf');
+    expect(joined).not.toContain('/etc/ssl/certs');
   });
 
   it('test 3: includes extraReadOnlyBinds', () => {
@@ -321,5 +351,66 @@ describe('fix 6: bind array length cap at 32', () => {
     const entries = Array.from({ length: 100 }, (_, i) => `/opt/tool-${i}`);
     const policy = parsePolicy({ extraReadOnlyBinds: entries });
     expect((policy.extraReadOnlyBinds ?? []).length).toBeLessThanOrEqual(32);
+  });
+});
+
+describe('resolveAgentNetworkMode', () => {
+  const KEY = 'SUDO_SANDBOX_NETWORK';
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env[KEY];
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env[KEY];
+    else process.env[KEY] = saved;
+  });
+
+  it('defaults to host when unset (agent can reach the network)', () => {
+    delete process.env[KEY];
+    expect(resolveAgentNetworkMode()).toBe('host');
+  });
+
+  it('returns none when explicitly set to none (restores isolation)', () => {
+    process.env[KEY] = 'none';
+    expect(resolveAgentNetworkMode()).toBe('none');
+  });
+
+  it('returns host when set to host (case/space insensitive)', () => {
+    process.env[KEY] = '  HOST ';
+    expect(resolveAgentNetworkMode()).toBe('host');
+  });
+
+  it('falls back to host on an unrecognized value', () => {
+    process.env[KEY] = 'vpn';
+    expect(resolveAgentNetworkMode()).toBe('host');
+  });
+});
+
+describe('resolveEgressAllowlist', () => {
+  const KEY = 'SUDO_SANDBOX_EGRESS_ALLOWLIST';
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env[KEY];
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env[KEY];
+    else process.env[KEY] = saved;
+  });
+
+  it('returns the built-in default set (incl. huggingface.co) when unset', () => {
+    delete process.env[KEY];
+    const hosts = resolveEgressAllowlist();
+    expect(hosts).toEqual([...DEFAULT_EGRESS_ALLOWLIST]);
+    expect(hosts).toContain('huggingface.co');
+  });
+
+  it('parses a comma-separated env override (trimmed, lowercased)', () => {
+    process.env[KEY] = ' Example.com , internal.host ,';
+    expect(resolveEgressAllowlist()).toEqual(['example.com', 'internal.host']);
+  });
+
+  it('falls back to the default set when the override is blank', () => {
+    process.env[KEY] = '   ';
+    expect(resolveEgressAllowlist()).toEqual([...DEFAULT_EGRESS_ALLOWLIST]);
   });
 });

@@ -10,6 +10,7 @@
 export {
   type SandboxPolicy,
   DEFAULT_SANDBOX_POLICY,
+  DEFAULT_EGRESS_ALLOWLIST,
   ENV_ALLOWLIST_BASE,
 } from './sandbox-types.js';
 // Cross-platform: platform + enableCrossPlatform now in SandboxPolicy (see types + runner shims for win/mac)
@@ -17,6 +18,8 @@ export {
 export {
   mergePolicy,
   parsePolicy,
+  resolveAgentNetworkMode,
+  resolveEgressAllowlist,
 } from './sandbox-policy.js';
 
 export {
