@@ -18,6 +18,12 @@ import { createLogger } from './core/shared/logger.js';
 import { PROJECT_ROOT, DATA_DIR, WORKSPACE_DIR, projectPath } from './core/shared/paths.js';
 import { ConfigLoader } from './core/config/loader.js';
 import { MindDB } from './core/memory/db.js';
+import { EmbeddingService } from './core/memory/embeddings.js';
+import {
+  resolveChunkContradictions,
+  isChunkContradictionEnabled,
+  type ContradictionJudge,
+} from './core/memory/chunk-contradiction.js';
 import { Brain } from './core/brain/brain.js';
 import { ToolRegistry } from './core/tools/registry.js';
 import { loadBuiltinTools } from './core/tools/loader.js';
@@ -3105,11 +3111,49 @@ async function boot(): Promise<void> {
     const agentIdentity = new AgentIdentity('sudo-ai-v5');
     const steeringChannel = new InMemorySteeringChannel();
 
-    // AutoDream: pass a stub brain caller and the raw better-sqlite3 Database
-    // (MindDB exposes it as the public readonly `db` field).
+    // Semantic contradiction resolution for dreamed facts (#7, opt-in via
+    // SUDO_CHUNK_CONTRADICT=1). Stage 1 = embedding cosine (text-embedding-3-small,
+    // threshold validated at 0.65); stage 2 = a Claude-backed opposition judge.
+    // Scoped to source='learning' so a free-text fact is only compared against
+    // other facts, not session-meta JSON. Fail-open throughout.
+    const chunkEmbeddings = new EmbeddingService(db);
+    const contradictionJudge: ContradictionJudge = async (incoming, existing) => {
+      const prompt = [
+        'You compare two stored memory facts and decide if the NEW one CONTRADICTS the EXISTING one.',
+        'Answer with exactly one word: YES or NO.',
+        'YES only when they concern the SAME subject and assert incompatible/opposing things.',
+        'NO when the new fact merely restates, refines, adds to, or is unrelated to the existing one.',
+        '',
+        `NEW fact:      ${incoming}`,
+        `EXISTING fact: ${existing}`,
+        '',
+        'Does the NEW fact contradict the EXISTING fact? Answer YES or NO.',
+      ].join('\n');
+      try {
+        const resp = await brain.chat([{ role: 'user', content: prompt }]);
+        return resp.trim().toLowerCase().startsWith('yes');
+      } catch {
+        return false; // judge unavailable → treat as non-contradiction (fail-open)
+      }
+    };
+    const resolveFactContradiction = async (chunkId: number): Promise<void> => {
+      if (!isChunkContradictionEnabled()) return;
+      const chunk = db.getChunk(chunkId);
+      if (!chunk) return;
+      await resolveChunkContradictions(
+        chunk,
+        { db, embed: (t) => chunkEmbeddings.embed(t), judge: contradictionJudge },
+        { candidateFilter: (c) => c.source === 'learning' },
+      );
+    };
+
+    // AutoDream: brain caller + the raw better-sqlite3 Database (MindDB exposes
+    // it as the public readonly `db` field) + the post-write contradiction hook.
     autoDream = new AutoDream(
       async (prompt: string) => brain.chat([{ role: 'user', content: prompt }]),
       db.db,
+      undefined,
+      resolveFactContradiction,
     );
 
     // Background agent executor (needs an agentRunner function)

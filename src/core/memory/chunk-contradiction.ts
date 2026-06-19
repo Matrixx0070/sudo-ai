@@ -60,6 +60,13 @@ export interface ContradictionOptions {
   maxCandidates?: number;
   /** Max candidates actually sent to the judge per incoming chunk (bounds LLM calls). */
   maxJudged?: number;
+  /**
+   * Optional predicate to scope which active chunks are eligible candidates,
+   * applied before embedding. Use to keep comparison within a comparable corpus
+   * (e.g. `c => c.source === 'learning'` so a free-text fact isn't compared
+   * against session-meta JSON blobs). Default: all active chunks.
+   */
+  candidateFilter?: (chunk: MemoryChunk) => boolean;
 }
 
 /**
@@ -85,7 +92,8 @@ export interface ContradictionOptions {
  */
 const DEFAULT_SIM_THRESHOLD = 0.65;
 
-const DEFAULTS: Required<ContradictionOptions> = {
+// candidateFilter is excluded — it has no default (absent = all active chunks).
+const DEFAULTS: Required<Omit<ContradictionOptions, 'candidateFilter'>> = {
   simThreshold: DEFAULT_SIM_THRESHOLD,
   maxCandidates: 200,
   maxJudged: 5,
@@ -157,8 +165,9 @@ export async function resolveChunkContradictions(
     if (!incomingVec) return empty; // no embeddings → cannot judge subject overlap
 
     // Stage 1: cosine-rank active chunks to find same-subject candidates.
+    const filter = options.candidateFilter;
     const actives = deps.db.getActiveChunks(opts.maxCandidates)
-      .filter((c) => c.id !== incoming.id);
+      .filter((c) => c.id !== incoming.id && (!filter || filter(c)));
 
     const scored: Array<{ chunk: MemoryChunk; sim: number }> = [];
     for (const cand of actives) {

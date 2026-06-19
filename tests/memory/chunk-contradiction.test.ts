@@ -235,6 +235,24 @@ describe('resolveChunkContradictions (two-stage detector)', () => {
     expect(db.getChunk(a.id)!.supersededBy).toBeUndefined();
   });
 
+  it('C-8: candidateFilter scopes eligible candidates — filtered-out chunks are never judged', async () => {
+    process.env['SUDO_CHUNK_CONTRADICT'] = '1';
+    // An earlier same-subject fact in a DIFFERENT source (e.g. session-meta).
+    const meta = db.storeChunk('topic:editor prefers spaces', 'session:x:meta', 'conversation');
+    const learn = db.storeChunk('topic:editor prefers tabs', 'memory/auto-dream', 'learning');
+    let judged = 0;
+    const countingYes: ContradictionJudge = async () => { judged++; return true; };
+    // Filter to source==='learning' → the 'conversation' meta chunk is excluded.
+    const res = await resolveChunkContradictions(
+      learn,
+      deps(fakeEmbedder(), countingYes),
+      { candidateFilter: (c) => c.source === 'learning' },
+    );
+    expect(judged).toBe(0);                       // meta chunk never reached the judge
+    expect(res.supersededIds).toEqual([]);
+    expect(db.getChunk(meta.id)!.supersededBy).toBeUndefined();
+  });
+
   it('C-6: judge throwing is swallowed — never blocks, candidate skipped', async () => {
     process.env['SUDO_CHUNK_CONTRADICT'] = '1';
     const a = db.storeChunk('topic:editor prefers spaces', 'p', 'conversation');
