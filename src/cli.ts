@@ -31,6 +31,7 @@ import type { UnifiedMessage } from './core/channels/types.js';
 import { CronStore } from './core/cron/store.js';
 import { CronScheduler } from './core/cron/scheduler.js';
 import { HeartbeatRunner, type HeartbeatPayloadRunner } from './core/cron/heartbeat.js';
+import { maybeGuardedSend } from './core/comms/idempotency.js';
 import { CommandRegistry } from './core/commands/registry.js';
 import { tryDispatchDirective } from './core/commands/dispatch.js';
 import type { CommandContext } from './core/commands/types.js';
@@ -1609,9 +1610,9 @@ async function boot(): Promise<void> {
               (msg.text ?? replyText).slice(0, 120),
               'telegram',
             );
-            await telegram.sendWithKeyboard(msg.peerId, replyText, keyboard);
+            await maybeGuardedSend('telegram', msg.peerId, replyText, () => telegram.sendWithKeyboard(msg.peerId, replyText, keyboard));
           } else {
-            await telegram.send(msg.peerId, replyText);
+            await maybeGuardedSend('telegram', msg.peerId, replyText, () => telegram.send(msg.peerId, replyText));
           }
           log.info({ peerId: msg.peerId, streamed: streamSink !== null }, 'Reply sent to Telegram');
         } catch (err: unknown) {
@@ -1962,7 +1963,7 @@ async function boot(): Promise<void> {
               });
             } catch { /* journal append is non-fatal */ }
 
-            await whatsapp.send(msg.peerId, replyText);
+            await maybeGuardedSend('whatsapp', msg.peerId, replyText, () => whatsapp.send(msg.peerId, replyText));
             log.info({ peerId: msg.peerId }, 'Reply sent to WhatsApp');
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
