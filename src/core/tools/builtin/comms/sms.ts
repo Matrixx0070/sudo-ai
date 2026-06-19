@@ -11,6 +11,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { isCommsIdempotencyEnabled, getCommsIdempotencyStore } from '../../../comms/idempotency.js';
 
 const log = createLogger('comms:sms');
 
@@ -129,8 +130,27 @@ export const smsTool: ToolDefinition = {
       };
     }
 
+    // Idempotency guard (opt-in): never re-send an identical SMS to the same
+    // number on a task re-dispatch within the dedup window.
+    const idemOn = isCommsIdempotencyEnabled();
+    let idemKey: string | undefined;
+    if (idemOn) {
+      const claim = getCommsIdempotencyStore().begin({ channel: 'sms', recipient: to, body });
+      idemKey = claim.key;
+      if (claim.duplicate) {
+        log.warn({ sessionId: ctx.sessionId, to, key: idemKey }, 'comms.sms: duplicate suppressed (idempotency)');
+        const priorNote = claim.messageId ? ` Prior SID: ${claim.messageId}.` : '';
+        return {
+          success: true,
+          output: `comms.sms: duplicate suppressed — an identical SMS to ${to} was already sent within the idempotency window.${priorNote}`,
+          data: { to, from, duplicate: true, sid: claim.messageId },
+        };
+      }
+    }
+
     try {
       const result = await twilioSend(accountSid, authToken, from, to, body, ctx.signal);
+      if (idemOn && idemKey) getCommsIdempotencyStore().confirm(idemKey, result.sid);
 
       log.info(
         { sessionId: ctx.sessionId, to, sid: result.sid, status: result.status },
@@ -143,6 +163,7 @@ export const smsTool: ToolDefinition = {
         data: { sid: result.sid, status: result.status, to, from },
       };
     } catch (err) {
+      if (idemOn && idemKey) getCommsIdempotencyStore().release(idemKey); // allow retry of a genuine failure
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ sessionId: ctx.sessionId, to, err }, 'Failed to send SMS');
       return { success: false, output: `comms.sms error: ${msg}` };
