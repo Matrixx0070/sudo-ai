@@ -15,6 +15,7 @@
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { getAgentLoop, getChannelRouter, getSessionManager } from './index.js';
+import { isCommsIdempotencyEnabled, getCommsIdempotencyStore } from '../../../comms/idempotency.js';
 
 const logger = createLogger('meta.sessions.spawn');
 
@@ -258,8 +259,24 @@ export const sessionsSpawnTool: ToolDefinition = {
           const channelRouter = getChannelRouter() as ChannelRouterLike | null;
           if (channelRouter) {
             const announcement = `[Sub-agent result for: ${task}]\n\n${result.text}`;
-            await channelRouter.send(resolvedChannel, ctx.sessionId, announcement);
-            logger.info({ session: ctx.sessionId, spawnedSession: sessionId }, 'Announce-back sent to parent session');
+            // Idempotency guard (opt-in): a re-dispatched spawn must not
+            // re-announce an identical result to the same parent session.
+            const idemOn = isCommsIdempotencyEnabled();
+            const claim = idemOn
+              ? getCommsIdempotencyStore().begin({ channel: resolvedChannel, recipient: ctx.sessionId, body: announcement })
+              : null;
+            if (claim?.duplicate) {
+              logger.warn({ session: ctx.sessionId, key: claim.key }, 'sessions.spawn: duplicate announce-back suppressed (idempotency)');
+            } else {
+              try {
+                await channelRouter.send(resolvedChannel, ctx.sessionId, announcement);
+                if (claim) getCommsIdempotencyStore().confirm(claim.key);
+                logger.info({ session: ctx.sessionId, spawnedSession: sessionId }, 'Announce-back sent to parent session');
+              } catch (sendErr) {
+                if (claim) getCommsIdempotencyStore().release(claim.key); // allow retry of a genuine failure
+                throw sendErr;
+              }
+            }
           } else {
             logger.warn({ session: ctx.sessionId }, 'sessions.spawn: channelRouter not available — skipping announce-back');
           }
