@@ -162,6 +162,18 @@ module.exports = {
         // Kill-switch: SUDO_BASH_ALLOWLIST_FASTPATH=0 disables.
         SUDO_BASH_ALLOWLIST_FASTPATH: process.env['SUDO_BASH_ALLOWLIST_FASTPATH'] || '1',
 
+        // Safe-service-restart fast-path: auto-approves the EXACT shape
+        // `pm2|systemctl restart|reload <unit>` (3 tokens, no metachars) so the
+        // agent can self-heal the daemon without a prompt. Every other mutating
+        // command stays gated. Principled narrow allowlist that still applies
+        // even if SUDO_AUTO_APPROVE is set back to '0'. Kill-switch: set to '0'.
+        SUDO_EXEC_SAFE_RESTART: process.env['SUDO_EXEC_SAFE_RESTART'] || '1',
+
+        // Episodic-memory dedup: byte-identical summaries recorded within the
+        // window (default 24h) strengthen the prior episode instead of inserting
+        // a duplicate. Collapses heartbeat-replay bloat. Kill-switch: set to '0'.
+        SUDO_EPISODIC_DEDUP: process.env['SUDO_EPISODIC_DEDUP'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the

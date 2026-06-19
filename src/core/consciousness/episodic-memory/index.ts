@@ -24,6 +24,31 @@ import {
 } from './store.js';
 import { searchEpisodes } from './retrieval.js';
 
+// ---------------------------------------------------------------------------
+// Deduplication config
+// ---------------------------------------------------------------------------
+
+/**
+ * Episodes whose summary is byte-identical to one already recorded within this
+ * window are treated as a recurrence rather than a new episode: the prior
+ * episode is strengthened and the duplicate insert is skipped. This collapses
+ * heartbeat-replay loops and repeated greetings that would otherwise accumulate
+ * (observed: 781 rows / 136 distinct summaries, one heartbeat ×178).
+ *
+ * Opt-in (default off, preserving the prior always-insert behaviour): enable
+ * with SUDO_EPISODIC_DEDUP=1. Window tunable via SUDO_EPISODIC_DEDUP_WINDOW_MS.
+ * Both env vars are read per-call so the daemon can toggle without code change.
+ */
+function dedupEnabled(): boolean {
+  return process.env.SUDO_EPISODIC_DEDUP === '1';
+}
+function dedupWindowMs(): number {
+  const raw = Number(process.env.SUDO_EPISODIC_DEDUP_WINDOW_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 24 * 60 * 60 * 1000; // 24h default
+}
+/** Significance bump applied to the surviving episode on each suppressed recurrence. */
+const DEDUP_STRENGTHEN_DELTA = 0.02;
+
 // Re-export types so callers only need to import from this barrel.
 export type { Episode, EpisodeQuery } from './types.js';
 export {
@@ -94,9 +119,46 @@ export class EpisodicMemory {
       );
     }
 
+    // Suppress byte-identical recurrences (heartbeat-replay loops, repeated
+    // greetings) within the dedup window. On a hit, strengthen the surviving
+    // episode instead of inserting a duplicate row.
+    if (dedupEnabled() && typeof episode.summary === 'string' && episode.summary.trim().length > 0) {
+      const existingId = this.findRecentDuplicate(episode.summary, episode.startedAt);
+      if (existingId) {
+        strengthenEpisode(this.cdb.getDb(), existingId, DEDUP_STRENGTHEN_DELTA);
+        log.info(
+          { duplicateOf: existingId, topic: episode.topic },
+          'Recording episode: duplicate suppressed, strengthened existing',
+        );
+        return;
+      }
+    }
+
     log.info({ id: episode.id, topic: episode.topic }, 'Recording episode');
     saveEpisode(this.cdb.getDb(), episode);
     log.info({ id: episode.id }, 'Episode recorded successfully');
+  }
+
+  /**
+   * Find the most recent episode with a byte-identical summary recorded within
+   * the dedup window. Returns its id, or null when no recent duplicate exists.
+   *
+   * @param summary   - Candidate episode summary.
+   * @param startedAt - Candidate episode start timestamp (ISO); falls back to now.
+   */
+  private findRecentDuplicate(summary: string, startedAt?: string): string | null {
+    const anchorMs = startedAt ? Date.parse(startedAt) : Date.now();
+    const base = Number.isFinite(anchorMs) ? anchorMs : Date.now();
+    const cutoff = new Date(base - dedupWindowMs()).toISOString();
+    const row = this.cdb
+      .getDb()
+      .prepare<[string, string], { id: string }>(
+        `SELECT id FROM episodes
+         WHERE summary = ? AND started_at >= ?
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(summary, cutoff);
+    return row?.id ?? null;
   }
 
   // -------------------------------------------------------------------------
