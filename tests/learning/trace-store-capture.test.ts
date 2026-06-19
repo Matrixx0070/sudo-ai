@@ -74,6 +74,48 @@ describe('TraceStore replay capture (opt-in)', () => {
     store.close();
   });
 
+  it('CAP-B1: brain-call capture OFF (default) keeps only fact-of-call', async () => {
+    const store = new TraceStore(dbPath);
+    await store.init();
+    store.recordBrainCall('s1', 'anthropic/claude', true, 0, undefined, undefined, {
+      prompt: [{ role: 'user', content: 'hi' }],
+      response: { content: 'hello', toolCalls: [] },
+      modelParams: { temperature: 0.5, maxTokens: 4096 },
+    });
+    const [t] = store.query({ sessionId: 's1', type: 'brain_call' });
+    expect(t.promptRaw).toBeUndefined();   // flag off -> no raw payloads
+    expect(t.responseRaw).toBeUndefined();
+    expect(t.modelParams).toBeUndefined();
+    store.close();
+  });
+
+  it('CAP-B2: brain-call capture ON stores prompt, response, and model params', async () => {
+    process.env['SUDO_TRACE_CAPTURE'] = '1';
+    const store = new TraceStore(dbPath);
+    await store.init();
+    const prompt = [{ role: 'user', content: 'what is 2+2?' }];
+    const response = { content: '4', toolCalls: [] };
+    const modelParams = { model: 'anthropic/claude', source: 'agent', temperature: 0.5, maxTokens: 4096 };
+    store.recordBrainCall('s1', 'anthropic/claude', true, 0, undefined, undefined, { prompt, response, modelParams });
+    const [t] = store.query({ sessionId: 's1', type: 'brain_call' });
+    expect(t.promptRaw).toBe(JSON.stringify(prompt));
+    expect(t.responseRaw).toBe(JSON.stringify(response));
+    expect(t.modelParams).toBe(JSON.stringify(modelParams));
+    store.close();
+  });
+
+  it('CAP-B3: brain-call capture ON but no capture arg keeps fact-of-call only', async () => {
+    process.env['SUDO_TRACE_CAPTURE'] = '1';
+    const store = new TraceStore(dbPath);
+    await store.init();
+    store.recordBrainCall('s1', 'anthropic/claude', true, 0); // legacy call shape
+    const [t] = store.query({ sessionId: 's1', type: 'brain_call' });
+    expect(t.promptRaw).toBeUndefined();
+    expect(t.modelParams).toBeUndefined();
+    expect(t.model).toBe('anthropic/claude'); // still recorded
+    store.close();
+  });
+
   it('CAP-4: additive migration adds columns to a pre-existing traces.db', async () => {
     // Seed an OLD-schema traces table (no capture columns).
     const seed = new Database(dbPath);

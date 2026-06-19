@@ -361,14 +361,27 @@ export class TraceStore {
     });
   }
 
-  /** Convenience: record a brain (LLM) call trace. Returns the inserted row ID. */
+  /**
+   * Convenience: record a brain (LLM) call trace. Returns the inserted row ID.
+   *
+   * When SUDO_TRACE_CAPTURE=1 and `capture` is supplied, the raw prompt,
+   * response, and resolved sampling params are stored (size-capped) so the call
+   * becomes replay-capable — the brain-call analogue of recordToolCall's
+   * args/result capture. Without capture (or with the flag off) only the
+   * fact-of-call + token usage is kept, exactly as before.
+   */
   recordBrainCall(
     sessionId: string, model: string, success: boolean, latencyMs: number,
     tokenUsage?: TokenUsage, error?: { type?: ErrorType; message?: string },
+    capture?: { prompt?: unknown; response?: unknown; modelParams?: unknown },
   ): number {
+    const cap = isTraceCaptureEnabled() && capture != null;
     return this.record({
       traceType: 'brain_call', sessionId, model, success, latencyMs,
       tokenUsage, errorType: error?.type, errorMessage: error?.message,
+      promptRaw: cap ? capCaptured(safeStringify(capture.prompt)) : undefined,
+      responseRaw: cap ? capCaptured(safeStringify(capture.response)) : undefined,
+      modelParams: cap ? capCaptured(safeStringify(capture.modelParams)) : undefined,
     });
   }
 

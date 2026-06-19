@@ -160,6 +160,15 @@ export interface BrainResponse {
   finishReason: 'stop' | 'tool-calls' | 'length' | 'content-filter' | 'error';
   /** Routing/observability trace for this call (which path, cost, switches). */
   routing?: RoutingTrace;
+  /**
+   * Resolved sampling params actually used for this call (temperature + max
+   * output tokens; `seed` only when the request pinned one). Surfaced so the
+   * trace store can capture them for deterministic replay — they're resolved
+   * inside Brain (resolveTemperature/resolveMaxTokens) and are otherwise not
+   * visible to callers. Absent on synthetic returns (e.g. negative-router block)
+   * where no real model call ran.
+   */
+  sampling?: { temperature: number; maxTokens: number; seed?: number };
 }
 
 // ---------------------------------------------------------------------------

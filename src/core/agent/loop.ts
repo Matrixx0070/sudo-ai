@@ -1851,6 +1851,23 @@ export class AgentLoop extends AgentLoopInjections {
               response.model ?? effectiveModel ?? model ?? 'unknown',
               response.finishReason !== 'error',
               0, // latencyMs not available from BrainResponse; placeholder
+              undefined, // tokenUsage not threaded here
+              undefined, // no error object
+              // Replay capture (only stored under SUDO_TRACE_CAPTURE=1): the exact
+              // prompt sent, the response, and the resolved sampling params. Turns a
+              // brain-call trace from "fact-of-call" into something replayable.
+              {
+                prompt: trimmed,
+                response: { content: response.content, toolCalls: response.toolCalls },
+                modelParams: {
+                  model: response.model ?? effectiveModel ?? model ?? 'unknown',
+                  requestedModel: effectiveModel ?? model,
+                  source: 'agent',
+                  race: opts?.race ?? false,
+                  finishReason: response.finishReason,
+                  ...(response.sampling ?? {}),
+                },
+              },
             );
           }
         } catch { /* fail-open */ }
