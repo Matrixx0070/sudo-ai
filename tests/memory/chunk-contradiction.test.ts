@@ -17,6 +17,7 @@ import { hybridSearch } from '../../src/core/memory/hybrid-search.js';
 import {
   resolveChunkContradictions,
   isChunkContradictionEnabled,
+  resolveSimThreshold,
   cosineSimilarity,
   type ChunkContradictionDeps,
   type ContradictionJudge,
@@ -26,6 +27,7 @@ let tmpDir: string;
 let dbPath: string;
 let db: MindDB;
 let savedFlag: string | undefined;
+let savedSim: string | undefined;
 
 /**
  * Deterministic fake embedder: a vector keyed by the chunk's *topic* (first word
@@ -49,18 +51,34 @@ function fakeEmbedder(): (text: string) => Promise<Float32Array | null> {
 const judgeYes: ContradictionJudge = async () => true;
 const judgeNo: ContradictionJudge = async () => false;
 
+/**
+ * Embedder producing a controlled cosine ~`sim` between any "near:" text and a
+ * fixed anchor, used to probe the threshold gate. Two unit vectors at angle θ
+ * have cosine cos θ; we place "near:" texts at a fixed small angle from the
+ * anchor and everything else orthogonal.
+ */
+function gradedEmbedder(sim: number): (text: string) => Promise<Float32Array | null> {
+  const anchor = new Float32Array([1, 0]);
+  const near = new Float32Array([sim, Math.sqrt(Math.max(0, 1 - sim * sim))]);
+  return async (text: string) => (text.includes('near:') ? near : (text.includes('anchor') ? anchor : new Float32Array([0, 1])));
+}
+
 beforeEach(() => {
   tmpDir = path.join(os.tmpdir(), `sudo-chunk-contra-${Date.now()}-${Math.floor(performance.now())}`);
   mkdirSync(tmpDir, { recursive: true });
   dbPath = path.join(tmpDir, 'mind.db');
   db = new MindDB(dbPath);
   savedFlag = process.env['SUDO_CHUNK_CONTRADICT'];
+  savedSim = process.env['SUDO_CHUNK_CONTRADICT_SIM'];
   delete process.env['SUDO_CHUNK_CONTRADICT'];
+  delete process.env['SUDO_CHUNK_CONTRADICT_SIM'];
 });
 afterEach(() => {
   try { db.close(); } catch { /* ignore */ }
   if (savedFlag === undefined) delete process.env['SUDO_CHUNK_CONTRADICT'];
   else process.env['SUDO_CHUNK_CONTRADICT'] = savedFlag;
+  if (savedSim === undefined) delete process.env['SUDO_CHUNK_CONTRADICT_SIM'];
+  else process.env['SUDO_CHUNK_CONTRADICT_SIM'] = savedSim;
   try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
@@ -88,6 +106,20 @@ describe('pure helpers', () => {
     expect(cosineSimilarity(a, c)).toBeCloseTo(0, 6);
     expect(cosineSimilarity(a, new Float32Array([0, 0, 0]))).toBe(0); // zero vector
     expect(cosineSimilarity(a, new Float32Array([1, 0]))).toBe(0);    // length mismatch
+  });
+
+  it('H-3: resolveSimThreshold — default, env override, clamp, malformed fallback', () => {
+    delete process.env['SUDO_CHUNK_CONTRADICT_SIM'];
+    expect(resolveSimThreshold()).toBeCloseTo(0.65, 6);      // calibrated default
+    expect(resolveSimThreshold(0.9)).toBeCloseTo(0.9, 6);    // explicit wins
+    expect(resolveSimThreshold(5)).toBe(1);                  // explicit clamped high
+    expect(resolveSimThreshold(-1)).toBe(0);                 // explicit clamped low
+    process.env['SUDO_CHUNK_CONTRADICT_SIM'] = '0.72';
+    expect(resolveSimThreshold()).toBeCloseTo(0.72, 6);      // env override
+    process.env['SUDO_CHUNK_CONTRADICT_SIM'] = '9';          // out of [0,1]
+    expect(resolveSimThreshold()).toBeCloseTo(0.65, 6);      // → default
+    process.env['SUDO_CHUNK_CONTRADICT_SIM'] = 'abc';        // non-numeric
+    expect(resolveSimThreshold()).toBeCloseTo(0.65, 6);      // → default
   });
 });
 
@@ -179,6 +211,27 @@ describe('resolveChunkContradictions (two-stage detector)', () => {
     const b = db.storeChunk('topic:editor prefers tabs', 'p', 'conversation');
     const res = await resolveChunkContradictions(b, deps(async () => null, judgeYes));
     expect(res.supersededIds).toEqual([]);
+    expect(db.getChunk(a.id)!.supersededBy).toBeUndefined();
+  });
+
+  it('C-7a: candidate at cosine ~0.70 is admitted at the default threshold (0.65) → judged → superseded', async () => {
+    process.env['SUDO_CHUNK_CONTRADICT'] = '1';
+    const a = db.storeChunk('anchor existing fact', 'p', 'conversation');
+    const b = db.storeChunk('near: incoming fact', 'p', 'conversation');
+    const res = await resolveChunkContradictions(b, deps(gradedEmbedder(0.70), judgeYes));
+    expect(res.supersededIds).toEqual([a.id]);
+  });
+
+  it('C-7b: SUDO_CHUNK_CONTRADICT_SIM=0.75 excludes the ~0.70 candidate → judge never reached', async () => {
+    process.env['SUDO_CHUNK_CONTRADICT'] = '1';
+    process.env['SUDO_CHUNK_CONTRADICT_SIM'] = '0.75';
+    const a = db.storeChunk('anchor existing fact', 'p', 'conversation');
+    const b = db.storeChunk('near: incoming fact', 'p', 'conversation');
+    let judged = 0;
+    const countingJudge: ContradictionJudge = async () => { judged++; return true; };
+    const res = await resolveChunkContradictions(b, deps(gradedEmbedder(0.70), countingJudge));
+    expect(res.supersededIds).toEqual([]);
+    expect(judged).toBe(0);
     expect(db.getChunk(a.id)!.supersededBy).toBeUndefined();
   });
 
