@@ -70,7 +70,12 @@ import { injectWorkspaceContext } from './core/workspace/injector.js';
 import { DailyLogManager } from './core/workspace/daily-log.js';
 import { FileStore, registerFileRoutes } from './core/files/index.js';
 import { SkillRegistry, registerSkillRoutes } from './core/skills/index.js';
-import { SandboxManager, DEFAULT_SANDBOX_POLICY } from './core/sandbox/index.js';
+import {
+  SandboxManager,
+  DEFAULT_SANDBOX_POLICY,
+  resolveAgentNetworkMode,
+  resolveEgressAllowlist,
+} from './core/sandbox/index.js';
 import { createGoalEvaluator, SessionOutcomeListener } from './core/outcomes/index.js';
 import { CommitmentAuditor } from './core/cognition/commitment-auditor.js';
 import { MistakePatternRecognizer } from './core/cognition/mistake-pattern-recognizer.js';
@@ -631,12 +636,30 @@ async function boot(): Promise<void> {
   // constructors receive sandboxManager immediately.
   // -------------------------------------------------------------------------
   const sandboxProxyBus = new EventEmitter();
+  // Network mode for the agent's exec sandbox. Default 'host' so the autonomous
+  // agent can download model files / reach external APIs itself; the runner binds
+  // DNS+CA into the sandbox so egress actually works. SUDO_SANDBOX_NETWORK=none
+  // restores --unshare-net isolation. Only the agent's injected policy changes —
+  // DEFAULT_SANDBOX_POLICY (used by eval/verifier sandboxes) stays network:'none'.
+  const agentNetworkMode = resolveAgentNetworkMode();
   const sandboxManager = new SandboxManager({
     stateMachine: sandboxProxyBus,
     workspaceRoot: path.join(WORKSPACE_DIR, 'sessions'),
-    defaultPolicy: DEFAULT_SANDBOX_POLICY,
+    defaultPolicy: { ...DEFAULT_SANDBOX_POLICY, network: agentNetworkMode },
   });
   registerShutdown(async () => sandboxManager.teardownAll());
+  if (agentNetworkMode === 'host') {
+    const allow = resolveEgressAllowlist();
+    log.warn(
+      { network: 'host', trustedHostCount: allow.length },
+      'Sandbox egress OPEN: agent system.exec shares the host network (DNS+CA bound in), ' +
+        'so the autonomous agent can reach ANY external host. ' +
+        'Set SUDO_SANDBOX_NETWORK=none to restore network isolation. ' +
+        `Declared trusted set (advisory, NOT enforced in host mode): ${allow.join(', ')}`,
+    );
+  } else {
+    log.info({ network: 'none' }, 'SandboxManager: agent exec network isolated (--unshare-net)');
+  }
   log.info('SandboxManager pre-initialized with proxy event bus');
 
   // -------------------------------------------------------------------------
