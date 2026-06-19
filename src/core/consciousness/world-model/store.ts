@@ -227,3 +227,40 @@ export function getConfidenceForDomain(cdb: ConsciousnessDB, domain: string): nu
     );
   }
 }
+
+/**
+ * Empirical match rate for a domain: `confirmed / (confirmed + violated)`.
+ * Unlike getConfidenceForDomain (which averages the stored confidence values),
+ * this is the raw outcome frequency — the true base rate the predictor should
+ * converge toward. Returns `{ rate, resolved }`; `resolved` is the sample size
+ * so callers can apply a cold-start floor, and `rate` is 0.5 when nothing has
+ * resolved yet.
+ */
+export function getDomainMatchRate(
+  cdb: ConsciousnessDB,
+  domain: string,
+): { rate: number; resolved: number } {
+  if (!domain || typeof domain !== 'string') {
+    throw new ConsciousnessError(
+      'getDomainMatchRate: domain must be a non-empty string',
+      'consciousness_world_model_invalid_domain',
+      { domain },
+    );
+  }
+  try {
+    const { matchRate } = getStatements(cdb.getDb());
+    const row = matchRate.get(domain) as { confirmed: number | null; resolved: number } | undefined;
+    const resolved = row?.resolved ?? 0;
+    const confirmed = row?.confirmed ?? 0;
+    const rate = resolved > 0 ? confirmed / resolved : 0.5;
+    log.debug({ domain, rate, resolved }, 'Domain match rate calculated');
+    return { rate, resolved };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new ConsciousnessError(
+      `getDomainMatchRate failed: ${msg}`,
+      'consciousness_world_model_read_failed',
+      { domain, cause: msg },
+    );
+  }
+}

@@ -61,6 +61,7 @@ let _getPendingStmt: AnyStmt | null = null;
 let _updateOutcomeStmt: AnyStmt | null = null;
 let _expireOldStmt: AnyStmt | null = null;
 let _avgConfidenceStmt: AnyStmt | null = null;
+let _matchRateStmt: AnyStmt | null = null;
 let _getByIdStmt: AnyStmt | null = null;
 
 export interface StatementsCache {
@@ -73,6 +74,7 @@ export interface StatementsCache {
   updateOutcome: AnyStmt;
   expireOld: AnyStmt;
   avgConfidence: AnyStmt;
+  matchRate: AnyStmt;
   getById: AnyStmt;
 }
 
@@ -151,6 +153,18 @@ export function getStatements(db: BetterSqlite3DB): StatementsCache {
          AND outcome IN ('confirmed', 'violated')
     `);
 
+    // Empirical match rate for a domain: how often resolved predictions were
+    // confirmed. `resolved` is the sample size so callers can apply a
+    // cold-start floor before trusting `confirmed / resolved`.
+    _matchRateStmt = db.prepare(`
+      SELECT
+        SUM(CASE WHEN outcome = 'confirmed' THEN 1 ELSE 0 END) AS confirmed,
+        COUNT(*)                                               AS resolved
+        FROM world_model
+       WHERE domain = ?
+         AND outcome IN ('confirmed', 'violated')
+    `);
+
     _getByIdStmt = db.prepare(`
       SELECT id, domain, prediction, confidence, evidence_count,
              made_at, expires_at, last_validated, outcome, actual_result
@@ -169,6 +183,7 @@ export function getStatements(db: BetterSqlite3DB): StatementsCache {
     updateOutcome: _updateOutcomeStmt!,
     expireOld: _expireOldStmt!,
     avgConfidence: _avgConfidenceStmt!,
+    matchRate: _matchRateStmt!,
     getById: _getByIdStmt!,
   };
 }

@@ -25,10 +25,11 @@ export {
   updateOutcome,
   expireOld,
   getConfidenceForDomain,
+  getDomainMatchRate,
 } from './store.js';
 
-// Predictor factory
-export { makePrediction } from './predictor.js';
+// Predictor factory + learned-prior helper
+export { makePrediction, computeToolUsePrior, TOOL_USE_PRIOR_MIN_SAMPLES } from './predictor.js';
 
 // Tracker
 export { recordOutcome } from './tracker.js';

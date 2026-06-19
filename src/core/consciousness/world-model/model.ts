@@ -17,7 +17,7 @@
 import { createLogger } from '../../shared/logger.js';
 import type { ConsciousnessDB } from '../consciousness-db.js';
 import type { WorldModelEntry } from './types.js';
-import { savePrediction, getPredictions, getPending, getConfidenceForDomain, expireOld } from './store.js';
+import { savePrediction, getPredictions, getPending, getConfidenceForDomain, getDomainMatchRate, expireOld } from './store.js';
 import { makePrediction } from './predictor.js';
 import { recordOutcome as _recordOutcome } from './tracker.js';
 
@@ -133,6 +133,18 @@ export class WorldModel {
    */
   getConfidenceForDomain(domain: string): number {
     return getConfidenceForDomain(this.cdb, domain);
+  }
+
+  /**
+   * Empirical match rate for a domain: confirmed / (confirmed + violated),
+   * with the backing sample size. Used to seed a learned confidence prior so
+   * predictions converge toward the true base rate instead of oscillating.
+   *
+   * @param domain - Domain to query.
+   * @returns `{ rate, resolved }`; rate is 0.5 when nothing has resolved.
+   */
+  getDomainMatchRate(domain: string): { rate: number; resolved: number } {
+    return getDomainMatchRate(this.cdb, domain);
   }
 
   // -------------------------------------------------------------------------

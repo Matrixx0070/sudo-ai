@@ -88,3 +88,51 @@ export function makePrediction(
   log.debug({ id, domain, confidence }, 'Prediction created');
   return entry;
 }
+
+// ---------------------------------------------------------------------------
+// Learned confidence prior for the 'tool_use' domain
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimum number of resolved outcomes before the learned base rate is trusted
+ * over the cold-start length heuristic.
+ */
+export const TOOL_USE_PRIOR_MIN_SAMPLES = 5;
+/** Per-message length-feature nudge applied around the learned base rate. */
+const LENGTH_NUDGE = 0.1;
+/** Message-length threshold (chars) above which tool use is a-priori likelier. */
+const LONG_MESSAGE_CHARS = 120;
+/** Clamp bounds so the prior stays differentiating (never a degenerate 0 or 1). */
+const PRIOR_MIN = 0.05;
+const PRIOR_MAX = 0.95;
+
+/** Cold-start heuristic: the legacy fixed prior, kept for the warm-up window. */
+function lengthHeuristic(messageLength: number): number {
+  return messageLength > LONG_MESSAGE_CHARS ? 0.75 : 0.35;
+}
+
+/**
+ * Confidence prior for the `tool_use` prediction ("this interaction will
+ * require tool use"). Closes the world-model learning loop: once at least
+ * {@link TOOL_USE_PRIOR_MIN_SAMPLES} outcomes have resolved, anchor on the
+ * empirical match rate and nudge by the message-length feature, instead of the
+ * fixed 0.35/0.75 heuristic that made confidence oscillate trip-to-trip
+ * regardless of history. Falls back to the heuristic during cold start (or on
+ * a non-finite base rate), so warm-up behaviour is unchanged.
+ *
+ * @param messageLength - Length of the incoming user message in characters.
+ * @param baseRate      - Empirical confirmed/(confirmed+violated) for the domain.
+ * @param resolved      - Number of resolved predictions backing `baseRate`.
+ * @returns A confidence prior in [PRIOR_MIN, PRIOR_MAX].
+ */
+export function computeToolUsePrior(
+  messageLength: number,
+  baseRate: number,
+  resolved: number,
+): number {
+  if (!Number.isFinite(resolved) || resolved < TOOL_USE_PRIOR_MIN_SAMPLES || !Number.isFinite(baseRate)) {
+    return lengthHeuristic(messageLength);
+  }
+  const nudge = messageLength > LONG_MESSAGE_CHARS ? LENGTH_NUDGE : -LENGTH_NUDGE;
+  return Math.min(PRIOR_MAX, Math.max(PRIOR_MIN, baseRate + nudge));
+}
