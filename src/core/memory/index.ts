@@ -47,6 +47,19 @@ export {
 // Compaction flush
 export { flushBeforeCompaction } from './compaction-flush.js';
 
+// Semantic contradiction resolution for the free-text chunks store (#7)
+export {
+  resolveChunkContradictions,
+  isChunkContradictionEnabled,
+  cosineSimilarity,
+} from './chunk-contradiction.js';
+export type {
+  ChunkContradictionDeps,
+  ContradictionJudge,
+  ContradictionOptions,
+  ContradictionResult,
+} from './chunk-contradiction.js';
+
 // Schema utilities (needed by devops / migration tooling)
 export { initializeSchema, initializeVecTable, SCHEMA_SQL } from './schema.js';
 

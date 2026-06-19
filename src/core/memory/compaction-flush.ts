@@ -17,6 +17,11 @@
 import type { MindDB } from './db.js';
 import type { MessageRow } from './db.js';
 import type { MemoryChunk } from './types.js';
+import {
+  isChunkContradictionEnabled,
+  resolveChunkContradictions,
+  type ChunkContradictionDeps,
+} from './chunk-contradiction.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -57,17 +62,24 @@ const IMPORTANT_PATTERNS: RegExp[] = [
  *
  * @param db              - Open MindDB instance (synchronous writes)
  * @param sessionMessages - Full message array from the current session
+ * @param contradiction   - Optional embedding+judge deps. When supplied AND
+ *                          SUDO_CHUNK_CONTRADICT=1, each newly-stored chunk
+ *                          supersedes any active chunk it semantically
+ *                          contradicts. Absent → prior accrete behaviour.
  * @returns               - Array of chunks that were newly stored (empty if all were deduped)
  */
 export async function flushBeforeCompaction(
   db: MindDB,
   sessionMessages: MessageRow[],
+  contradiction?: ChunkContradictionDeps,
 ): Promise<MemoryChunk[]> {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const path  = `memory/${today}.md`;
 
   const candidates = selectCandidates(sessionMessages);
   const stored: MemoryChunk[] = [];
+  // Only attempt contradiction resolution when wired AND flag-enabled.
+  const resolveContradictions = contradiction != null && isChunkContradictionEnabled();
 
   for (const text of candidates) {
     const trimmed = text.slice(0, MAX_CHUNK_CHARS).trim();
@@ -78,6 +90,10 @@ export async function flushBeforeCompaction(
         isEvergreen: isEvergreen(trimmed),
       });
       stored.push(chunk);
+      // Supersede older chunks this one contradicts (fail-open inside the helper).
+      if (resolveContradictions) {
+        await resolveChunkContradictions(chunk, contradiction!);
+      }
     } catch (err) {
       // Log but do not throw — compaction must not be blocked by storage errors
       console.warn('[compaction-flush] Failed to store chunk:', err);

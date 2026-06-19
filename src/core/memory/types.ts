@@ -33,6 +33,14 @@ export interface MemoryChunk {
    * Use for permanent facts: project name, API keys path, user preferences, etc.
    */
   isEvergreen: boolean;
+  /**
+   * Id of the newer chunk that semantically contradicts and supersedes this one
+   * (contradiction resolution, opt-in). Undefined = active. Superseded chunks are
+   * retained for audit but excluded from recall. See chunk-contradiction.ts.
+   */
+  supersededBy?: number;
+  /** ISO-8601 timestamp when this chunk was superseded. */
+  supersededAt?: string;
   /** ISO-8601 creation timestamp */
   createdAt: string;
   /** ISO-8601 last-update timestamp */
