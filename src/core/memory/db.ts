@@ -165,6 +165,11 @@ export class MindDB {
     // Build all tables (idempotent)
     initializeSchema(this.db);
 
+    // Additive migration: add the contradiction-resolution columns to a
+    // pre-existing chunks table (CREATE TABLE IF NOT EXISTS won't alter one that
+    // already exists). ALTER TABLE ADD COLUMN is O(1) in SQLite. Idempotent.
+    this._migrateChunkSupersession();
+
     // Attempt sqlite-vec extension load
     this.vecLoaded = this._tryLoadVec();
   }
@@ -172,6 +177,18 @@ export class MindDB {
   // -------------------------------------------------------------------------
   // Extension loading
   // -------------------------------------------------------------------------
+
+  /**
+   * Add `superseded_by`/`superseded_at` to a pre-existing chunks table.
+   * No-op when the columns already exist (fresh DBs get them from schema.ts).
+   */
+  private _migrateChunkSupersession(): void {
+    const existing = new Set(
+      (this.db.prepare('PRAGMA table_info(chunks)').all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!existing.has('superseded_by')) this.db.exec('ALTER TABLE chunks ADD COLUMN superseded_by INTEGER');
+    if (!existing.has('superseded_at')) this.db.exec('ALTER TABLE chunks ADD COLUMN superseded_at TEXT');
+  }
 
   private _tryLoadVec(): boolean {
     try {
@@ -303,6 +320,37 @@ export class MindDB {
       .prepare<{ hash: string }, MemoryChunkRow>('SELECT * FROM chunks WHERE hash = :hash')
       .get({ hash });
     return row ? rowToChunk(row) : undefined;
+  }
+
+  /**
+   * Mark `oldId` as superseded by `byId` (contradiction resolution). The row is
+   * kept for audit, not deleted, and excluded from recall thereafter. Idempotent:
+   * only flips a still-active row, so a second call (or self-supersede) is a no-op.
+   *
+   * @returns true when a row was newly marked, false otherwise.
+   */
+  markChunkSuperseded(oldId: number, byId: number): boolean {
+    if (oldId === byId) return false; // a chunk never supersedes itself
+    const info = this.db.prepare(`
+      UPDATE chunks
+      SET superseded_by = :byId,
+          superseded_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = :oldId AND superseded_by IS NULL
+    `).run({ oldId, byId });
+    return info.changes > 0;
+  }
+
+  /**
+   * Active (non-superseded) chunks, newest first. Used by contradiction detection
+   * to fetch comparison candidates. `limit` bounds the scan (default 200).
+   */
+  getActiveChunks(limit = 200): MemoryChunk[] {
+    const rows = this.db
+      .prepare<{ limit: number }, MemoryChunkRow>(
+        'SELECT * FROM chunks WHERE superseded_by IS NULL ORDER BY id DESC LIMIT :limit',
+      )
+      .all({ limit });
+    return rows.map(rowToChunk);
   }
 
   // -------------------------------------------------------------------------
@@ -622,6 +670,8 @@ interface MemoryChunkRow {
   hash: string;
   model: string | null;
   is_evergreen: number;
+  superseded_by: number | null;
+  superseded_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -638,6 +688,8 @@ function rowToChunk(row: MemoryChunkRow): MemoryChunk {
     hash:        row.hash,
     model:       row.model       ?? undefined,
     isEvergreen: row.is_evergreen === 1,
+    supersededBy: row.superseded_by ?? undefined,
+    supersededAt: row.superseded_at ?? undefined,
     createdAt:   row.created_at,
     updatedAt:   row.updated_at,
   };

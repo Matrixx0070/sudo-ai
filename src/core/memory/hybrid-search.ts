@@ -180,6 +180,8 @@ interface ChunkRow {
   hash: string;
   model: string | null;
   is_evergreen: number;
+  superseded_by: number | null;
+  superseded_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -195,6 +197,8 @@ function rowToChunk(row: ChunkRow): MemoryChunk {
     hash:        row.hash,
     model:       row.model       ?? undefined,
     isEvergreen: row.is_evergreen === 1,
+    supersededBy: row.superseded_by ?? undefined,
+    supersededAt: row.superseded_at ?? undefined,
     createdAt:   row.created_at,
     updatedAt:   row.updated_at,
   };
@@ -271,6 +275,7 @@ export async function hybridSearch(
           .prepare<{ id: number }, ChunkRow>('SELECT * FROM chunks WHERE id = :id')
           .get({ id: vr.chunk_id });
         if (!row) continue;
+        if (row.superseded_by != null) continue; // retired by contradiction resolution
         if (pathFilter && !row.path.startsWith(pathFilter)) continue;
 
         // Convert cosine distance [0,2] → similarity [0,1]
@@ -297,6 +302,7 @@ export async function hybridSearch(
       .prepare<{ id: number }, ChunkRow>('SELECT * FROM chunks WHERE id = :id')
       .get({ id: fr.rowid });
     if (!row) continue;
+    if (row.superseded_by != null) continue; // retired by contradiction resolution
     if (pathFilter && !row.path.startsWith(pathFilter)) continue;
 
     bm25Results.push({

@@ -66,6 +66,12 @@ const TABLE_STATEMENTS: readonly string[] = [
     model        TEXT,
     -- When 1, skip temporal decay for this chunk (permanent facts)
     is_evergreen INTEGER NOT NULL DEFAULT 0 CHECK (is_evergreen IN (0,1)),
+    -- Contradiction resolution (opt-in, SUDO_CHUNK_CONTRADICT=1): id of the newer
+    -- chunk that semantically contradicts and supersedes this one. NULL = active.
+    -- The superseded row is kept for audit, NOT deleted, and excluded from recall.
+    -- Plain INTEGER (no FK) so deleting a superseding chunk never blocks on it.
+    superseded_by INTEGER,
+    superseded_at TEXT,
     created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
