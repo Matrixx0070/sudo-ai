@@ -21,6 +21,8 @@ import {
 import {
   isBashAllowlistFastPathEnabled,
   isAllowlistEligible,
+  isServiceRestartFastPathEnabled,
+  isSafeServiceRestart,
   extractCommand,
 } from './bash-allowlist.js';
 
@@ -154,6 +156,21 @@ export class ApprovalManager {
         log.info(
           { toolName, commandPrefix: command.slice(0, 80), riskScore: clampedRisk },
           'Approval auto-decided by bash-allowlist fast-path (safe + read-only)',
+        );
+        void this._emitHook('tool:approved', toolName, params, clampedRisk);
+        return true;
+      }
+    }
+    // Safe-service-restart fast-path: mutating but reversible `pm2|systemctl
+    // restart|reload <unit>`. Gated separately so read-only auto-approval and
+    // restart auto-approval can be toggled independently. The dangerous-prefix
+    // ban above still applies.
+    if (isServiceRestartFastPathEnabled()) {
+      const command = extractCommand(params);
+      if (command && isSafeServiceRestart(command)) {
+        log.info(
+          { toolName, commandPrefix: command.slice(0, 80), riskScore: clampedRisk },
+          'Approval auto-decided by safe-service-restart fast-path',
         );
         void this._emitHook('tool:approved', toolName, params, clampedRisk);
         return true;
