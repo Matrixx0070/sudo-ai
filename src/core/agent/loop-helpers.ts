@@ -61,6 +61,13 @@ export interface BrainResponse {
     totalTokens: number;
     estimatedCost: number;
   };
+  /**
+   * Resolved sampling params actually used (temperature + max output tokens;
+   * `seed` only when pinned). Surfaced by Brain for deterministic replay capture
+   * — see the brain-call recording in loop.ts. Optional: not all return paths
+   * (e.g. negative-router blocks) populate it.
+   */
+  sampling?: { temperature: number; maxTokens: number; seed?: number };
 }
 
 export interface ToolContext {

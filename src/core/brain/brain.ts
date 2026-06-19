@@ -946,6 +946,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           usage: consensusResult.usage,
           model: consensusResult.model,
           finishReason: consensusResult.toolCalls.length > 0 ? 'tool-calls' : 'stop',
+          // Consensus builds its own response shape (doesn't spread _callSingleModel)
+          // so surface the resolved sampling here too for replay capture.
+          sampling: { temperature, maxTokens },
           routing: this._trace({
             path: 'consensus',
             reason: `consensus:${method}`,
@@ -1380,7 +1383,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     recordPromptCacheUsageFromProviderMetadata((result as { providerMetadata?: unknown }).providerMetadata);
     log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
 
-    return { content: finalContent, toolCalls: finalToolCalls, usage, model: modelId, finishReason: finalFinishReason };
+    return {
+      content: finalContent, toolCalls: finalToolCalls, usage,
+      model: modelId, finishReason: finalFinishReason,
+      // Resolved sampling — captured for deterministic replay (SUDO_TRACE_CAPTURE).
+      sampling: { temperature, maxTokens },
+    };
   }
 
   /**
