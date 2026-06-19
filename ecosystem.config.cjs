@@ -185,6 +185,12 @@ module.exports = {
         // Window via SUDO_COMMS_IDEMPOTENCY_WINDOW_MS (default 1h). Kill-switch: '0'.
         SUDO_COMMS_IDEMPOTENCY: process.env['SUDO_COMMS_IDEMPOTENCY'] || '1',
 
+        // Trace replay capture: persist size-capped raw tool args/result (and
+        // model params) on execution traces so runs become replay-capable for
+        // the eval harness. Cap via SUDO_TRACE_CAPTURE_MAX_BYTES (default 16KB).
+        // Kill-switch: '0' (traces then keep only hashes, as before).
+        SUDO_TRACE_CAPTURE: process.env['SUDO_TRACE_CAPTURE'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the
