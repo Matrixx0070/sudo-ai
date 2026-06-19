@@ -926,6 +926,8 @@ export class AgentLoop extends AgentLoopInjections {
               _isSuccess,
               0, // latencyMs not available in emit; placeholder
               _errMsg ? { type: 'tool_error', message: _errMsg.slice(0, 500) } : undefined,
+              undefined,    // args not in scope on the tool-result event
+              _tr.result,   // captured raw (size-capped) only under SUDO_TRACE_CAPTURE=1
             );
           }
         } catch { /* fail-open */ }
