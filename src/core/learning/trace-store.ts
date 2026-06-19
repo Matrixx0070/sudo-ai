@@ -20,6 +20,37 @@ import { DATA_DIR } from '../shared/paths.js';
 const log = createLogger('learning:trace-store');
 
 // ---------------------------------------------------------------------------
+// Replay capture (opt-in) — store raw payloads + model params so a run can be
+// deterministically replayed. Default OFF (traces otherwise keep only hashes,
+// bounding size + avoiding storing sensitive payloads). Per-field size cap
+// keeps a captured trace from ballooning traces.db.
+// ---------------------------------------------------------------------------
+
+/** Whether raw replay capture is enabled (read per-call so the daemon can toggle). */
+export function isTraceCaptureEnabled(): boolean {
+  return process.env['SUDO_TRACE_CAPTURE'] === '1';
+}
+
+function captureMaxBytes(): number {
+  const raw = Number(process.env['SUDO_TRACE_CAPTURE_MAX_BYTES']);
+  return Number.isFinite(raw) && raw > 0 ? raw : 16384; // 16 KB default
+}
+
+/** Truncate a captured field to the byte cap, annotating how many chars were dropped. */
+export function capCaptured(s: string | undefined | null): string | undefined {
+  if (s == null) return undefined;
+  const max = captureMaxBytes();
+  return s.length > max ? `${s.slice(0, max)}…[+${s.length - max} chars truncated]` : s;
+}
+
+/** Best-effort JSON for an arbitrary value (strings pass through). */
+function safeStringify(v: unknown): string | undefined {
+  if (v == null) return undefined;
+  if (typeof v === 'string') return v;
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -52,6 +83,16 @@ export interface TraceRecord {
   routingConfidence?: number;
   argsHash?: string;
   resultHash?: string;
+  /**
+   * Raw (size-capped) payloads + model params for deterministic replay. Captured
+   * only when SUDO_TRACE_CAPTURE=1; otherwise null. Hashes above are always kept.
+   */
+  argsRaw?: string;
+  resultRaw?: string;
+  promptRaw?: string;
+  responseRaw?: string;
+  /** JSON of model sampling params (model/temperature/top_p/seed/max_tokens). */
+  modelParams?: string;
   createdAt?: string;
 }
 
@@ -124,6 +165,11 @@ CREATE TABLE IF NOT EXISTS traces (
   routing_confidence REAL,
   args_hash TEXT,
   result_hash TEXT,
+  args_raw TEXT,
+  result_raw TEXT,
+  prompt_raw TEXT,
+  response_raw TEXT,
+  model_params TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_traces_type ON traces(trace_type);
@@ -222,16 +268,29 @@ export class TraceStore {
     this.db.pragma('busy_timeout = 5000');
     this.db.exec(SCHEMA_TRACES);
     this.db.exec(SCHEMA_AGGREGATES);
+    // Additive migration: add the replay-capture columns to a pre-existing
+    // traces table (CREATE TABLE IF NOT EXISTS won't alter one that already
+    // exists). ALTER TABLE ADD COLUMN is O(1) in SQLite. Idempotent.
+    {
+      const existing = new Set(
+        (this.db.prepare('PRAGMA table_info(traces)').all() as Array<{ name: string }>).map((c) => c.name),
+      );
+      for (const col of ['args_raw', 'result_raw', 'prompt_raw', 'response_raw', 'model_params']) {
+        if (!existing.has(col)) this.db.exec(`ALTER TABLE traces ADD COLUMN ${col} TEXT`);
+      }
+    }
 
     this.stmtInsertTrace = this.db.prepare(`
       INSERT INTO traces (
         trace_type, session_id, model, tool_name, intent, category,
         success, error_type, error_message, latency_ms, token_usage,
-        routing_tier, routing_confidence, args_hash, result_hash
+        routing_tier, routing_confidence, args_hash, result_hash,
+        args_raw, result_raw, prompt_raw, response_raw, model_params
       ) VALUES (
         @traceType, @sessionId, @model, @toolName, @intent, @category,
         @success, @errorType, @errorMessage, @latencyMs, @tokenUsage,
-        @routingTier, @routingConfidence, @argsHash, @resultHash
+        @routingTier, @routingConfidence, @argsHash, @resultHash,
+        @argsRaw, @resultRaw, @promptRaw, @responseRaw, @modelParams
       )
     `);
 
@@ -275,6 +334,11 @@ export class TraceStore {
       routingConfidence: trace.routingConfidence ?? null,
       argsHash: trace.argsHash ?? null,
       resultHash: trace.resultHash ?? null,
+      argsRaw: trace.argsRaw ?? null,
+      resultRaw: trace.resultRaw ?? null,
+      promptRaw: trace.promptRaw ?? null,
+      responseRaw: trace.responseRaw ?? null,
+      modelParams: trace.modelParams ?? null,
     });
     return info.lastInsertRowid as number;
   }
@@ -284,11 +348,16 @@ export class TraceStore {
     sessionId: string, toolName: string, success: boolean, latencyMs: number,
     error?: { type?: ErrorType; message?: string }, args?: unknown, result?: unknown,
   ): number {
+    const capture = isTraceCaptureEnabled();
     return this.record({
       traceType: 'tool_call', sessionId, toolName, success, latencyMs,
       errorType: error?.type, errorMessage: error?.message,
       argsHash: args != null ? contentHash(JSON.stringify(args)) : undefined,
       resultHash: result != null ? contentHash(JSON.stringify(result)) : undefined,
+      // Raw args/result captured only under SUDO_TRACE_CAPTURE=1 (size-capped) —
+      // turns the trace from "fact-of-call" into something replay-capable.
+      argsRaw: capture ? capCaptured(safeStringify(args)) : undefined,
+      resultRaw: capture ? capCaptured(safeStringify(result)) : undefined,
     });
   }
 
@@ -530,6 +599,11 @@ function rowToTraceRecord(row: Record<string, unknown>): TraceRecord {
     routingConfidence: row.routing_confidence as number | undefined,
     argsHash: row.args_hash as string | undefined,
     resultHash: row.result_hash as string | undefined,
+    argsRaw: (row.args_raw as string | null) ?? undefined,
+    resultRaw: (row.result_raw as string | null) ?? undefined,
+    promptRaw: (row.prompt_raw as string | null) ?? undefined,
+    responseRaw: (row.response_raw as string | null) ?? undefined,
+    modelParams: (row.model_params as string | null) ?? undefined,
     createdAt: row.created_at as string | undefined,
   };
 }
