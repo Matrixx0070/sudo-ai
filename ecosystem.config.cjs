@@ -180,6 +180,11 @@ module.exports = {
         // this file would silently disable it — pinned here. Kill-switch: '0'.
         SUDO_CONSCIOUSNESS_WORLD_MODEL: process.env['SUDO_CONSCIOUSNESS_WORLD_MODEL'] || '1',
 
+        // Comms idempotency: a re-dispatched send (email/message) that already
+        // succeeded within the window is suppressed instead of double-sending.
+        // Window via SUDO_COMMS_IDEMPOTENCY_WINDOW_MS (default 1h). Kill-switch: '0'.
+        SUDO_COMMS_IDEMPOTENCY: process.env['SUDO_COMMS_IDEMPOTENCY'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the
