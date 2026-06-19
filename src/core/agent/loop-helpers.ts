@@ -16,6 +16,7 @@ import { PermissionManager } from './permissions.js';
 import type { AgentState, AgentEvent } from './types.js';
 import type { ToolSchema } from '../tools/types.js';
 import { resolveEffort, type EffortLevel } from './effort.js';
+import { clampToolOutput } from './tool-output-clamp.js';
 import { shouldUseInterleavedThinking, buildThinkingBlock } from './interleaved-thinking.js';
 import {
   readCriticFeedbackEnabled,
@@ -905,7 +906,11 @@ async function executeSingleToolCall(
       ? tc.arguments
       : {};
     const result = await toolRegistry.execute(tc.name, safeArgs, ctx);
-    resultContent = typeof result.output === 'string' ? result.output : String(result.output ?? '');
+    // Central size cap before the output re-enters the model context — guards
+    // against a single un-truncated tool result (large scrape/MCP/file) blowing
+    // up context. The clamped string is what the model sees AND what the trace
+    // captures, so a replay reproduces exactly what drove the run.
+    resultContent = clampToolOutput(typeof result.output === 'string' ? result.output : String(result.output ?? ''));
     // Forward the tool's authoritative success so outcome sinks (ToolOutcomeLearner,
     // SkillDiscovery, TraceStore, after:tool-call) don't re-guess it from the output string.
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: result.success });
@@ -917,7 +922,7 @@ async function executeSingleToolCall(
       const safeArgs = (tc.arguments && typeof tc.arguments === 'object' && !Array.isArray(tc.arguments))
         ? tc.arguments
         : {};
-      const fallbackResult = await _toolNotFoundFallback(tc.name, safeArgs, toolRegistry, ctx);
+      const fallbackResult = clampToolOutput(await _toolNotFoundFallback(tc.name, safeArgs, toolRegistry, ctx));
       emit({ type: 'tool-result', name: tc.name, result: fallbackResult, toolId: tc.id });
       // Slice-4: even on tool_not_found the critic verdict (if any) was
       // about the *call the agent planned*, so it's still informative for
