@@ -11,7 +11,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
-import { isToolResultSuccess } from './tool-result-classifier.js';
+import { isToolResultSuccess, resolveToolSuccess } from './tool-result-classifier.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError } from '../shared/errors.js';
 import {
@@ -883,7 +883,7 @@ export class AgentLoop extends AgentLoopInjections {
         let _taintIdForHook: string | undefined;
         try {
           if (this._taintTracker && event.type === 'tool-result') {
-            const _tr = event as { type: string; name: string; result: unknown };
+            const _tr = event as { type: string; name: string; result: unknown; success?: boolean };
             const taintResult = this._taintTracker.onToolResult({ name: _tr.name, result: _tr.result });
             this._lastTaintIds.set(_tr.name, taintResult.taintId);
             _taintIdForHook = taintResult.taintId;
@@ -898,14 +898,14 @@ export class AgentLoop extends AgentLoopInjections {
           event: 'after:tool-call',
           sessionId,
           toolName,
-          success: isToolResultSuccess(result),
+          success: resolveToolSuccess({ success: (event as { success?: boolean }).success, result }),
           meta: _taintIdForHook ? { taintId: _taintIdForHook } : undefined,
         });
         // Feed SkillDiscovery (fail-open)
         try {
           if (this._skillDiscovery && event.type === 'tool-result') {
-            const _tr = event as { type: string; name: string; result: unknown };
-            const _isSuccess = isToolResultSuccess(_tr.result);
+            const _tr = event as { type: string; name: string; result: unknown; success?: boolean };
+            const _isSuccess = resolveToolSuccess(_tr);
             this._skillDiscovery.recordToolCall(sessionId, _tr.name, _isSuccess);
             _w10bToolCallCount++;
             if (_isSuccess) _w10bToolSuccessCount++;
@@ -917,8 +917,8 @@ export class AgentLoop extends AgentLoopInjections {
         // Phase 2: TraceStore — record tool call (fail-open).
         try {
           if (this._traceStore && event.type === 'tool-result') {
-            const _tr = event as { type: string; name: string; result: unknown };
-            const _isSuccess = isToolResultSuccess(_tr.result);
+            const _tr = event as { type: string; name: string; result: unknown; success?: boolean };
+            const _isSuccess = resolveToolSuccess(_tr);
             const _errMsg = !_isSuccess ? (typeof _tr.result === 'string' ? _tr.result : JSON.stringify(_tr.result)) : undefined;
             this._traceStore.recordToolCall(
               sessionId,
@@ -933,8 +933,8 @@ export class AgentLoop extends AgentLoopInjections {
         // ToolOutcomeLearner: record tool outcome (fail-open)
         try {
           if (this._toolOutcomeLearner && event.type === 'tool-result') {
-            const _tr = event as { type: string; name: string; result: unknown };
-            const _isSuccess = isToolResultSuccess(_tr.result);
+            const _tr = event as { type: string; name: string; result: unknown; success?: boolean };
+            const _isSuccess = resolveToolSuccess(_tr);
             const _error = _isSuccess ? undefined : (typeof _tr.result === 'string' ? _tr.result : JSON.stringify(_tr.result));
             this._toolOutcomeLearner.onToolResult(_tr.name, {}, _isSuccess, _error, sessionId);
           }

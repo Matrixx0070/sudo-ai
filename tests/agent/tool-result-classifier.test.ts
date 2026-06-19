@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isToolResultSuccess } from '../../src/core/agent/tool-result-classifier.js';
+import { isToolResultSuccess, resolveToolSuccess } from '../../src/core/agent/tool-result-classifier.js';
 
 describe('isToolResultSuccess', () => {
   // TRC-1 — null → true
@@ -69,5 +69,35 @@ describe('isToolResultSuccess', () => {
   // TRC-12 — false (boolean) → false
   it('TRC-12: boolean false returns false', () => {
     expect(isToolResultSuccess(false)).toBe(false);
+  });
+
+  // TRC-13 — honor the canonical ToolResult.success field (was previously ignored,
+  // so a self-reported failure with no `error` field was mislabeled as success).
+  it('TRC-13: object with success=false returns false even without an error field', () => {
+    expect(isToolResultSuccess({ success: false, output: 'No matching records found' })).toBe(false);
+  });
+  it('TRC-13b: object with success=true returns true', () => {
+    expect(isToolResultSuccess({ success: true, output: '' })).toBe(true);
+  });
+});
+
+describe('resolveToolSuccess — authoritative success over string re-guessing', () => {
+  // The loop emits `result` as the tool's OUTPUT STRING; the event also carries
+  // the tool's authoritative `success`. resolveToolSuccess must prefer it.
+  it('RTS-1: authoritative success=false overrides a non-error-looking output string', () => {
+    // This is the core fix: previously classified as success (string doesn't start with "error").
+    expect(resolveToolSuccess({ success: false, result: 'No matching records found' })).toBe(false);
+  });
+  it('RTS-2: authoritative success=true overrides a scary-looking output string', () => {
+    expect(resolveToolSuccess({ success: true, result: 'Error-looking text the tool says is fine' })).toBe(true);
+  });
+  it('RTS-3: no authoritative success → falls back to string classification (positive)', () => {
+    expect(resolveToolSuccess({ result: 'plain successful output' })).toBe(true);
+  });
+  it('RTS-4: no authoritative success → falls back to string classification (negative)', () => {
+    expect(resolveToolSuccess({ result: 'error: boom' })).toBe(false);
+  });
+  it('RTS-5: no authoritative success, object result → classifier honors its success field', () => {
+    expect(resolveToolSuccess({ result: { success: false, output: 'x' } })).toBe(false);
   });
 });

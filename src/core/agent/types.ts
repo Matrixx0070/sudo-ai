@@ -53,7 +53,15 @@ export interface AgentState {
 export type AgentEvent =
   | { type: 'message'; content: string }
   | { type: 'tool-call'; name: string; args: Record<string, unknown>; toolId: string }
-  | { type: 'tool-result'; name: string; result: unknown; toolId: string }
+  | { type: 'tool-result'; name: string; result: unknown; toolId: string;
+      /**
+       * Authoritative success from the tool's ToolResult.success. Additive and
+       * OPTIONAL (preserves union narrowing / back-compat): `result` is still
+       * the output string for the model/UI; downstream outcome sinks should
+       * prefer this over re-classifying the string. Omitted by legacy emitters,
+       * in which case consumers fall back to result-string classification.
+       */
+      success?: boolean }
   | { type: 'stream-chunk'; chunk: string }
   | { type: 'compaction'; summary: string }
   | { type: 'error'; error: string }
