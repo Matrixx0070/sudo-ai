@@ -68,16 +68,20 @@ export interface ContradictionOptions {
  * over labeled contradiction / restatement / unrelated chunk pairs:
  *
  *   model                    100%-recall thr   FP there   note
- *   nomic-embed-text (local) ~0.62             ~15%       classes overlap
- *   gemini-embedding-001     ~0.72             ~1%        cleaner separation
- *   text-embedding-3-small   unmeasured        —          prod key quota-dead
+ *   text-embedding-3-small   ~0.63             0%         PROD model — clean +0.045 gap, band [0.63–0.665]
+ *   nomic-embed-text (local) ~0.62             ~15%       classes overlap (−0.12 gap)
+ *   gemini-embedding-001     ~0.72             ~1%        classes overlap (−0.07 gap)
  *
- * 0.83 dropped ~50% of true same-subject pairs on nomic and ~18% on gemini — a
- * stage-1 false negative silently loses a contradiction forever, whereas a false
- * positive is only a bounded extra judge call (the judge is the real filter, and
- * maxJudged caps the cost). So we favor recall. The cutoff is MODEL-SPECIFIC:
- * override per deployment via SUDO_CHUNK_CONTRADICT_SIM to match the embedding
- * model actually wired in (see resolveSimThreshold).
+ * The prod model (text-embedding-3-small) is the only one that separates same-
+ * subject from unrelated cleanly (max-unrelated 0.620 < min-same 0.665). The
+ * 0.65 default sits inside its clean band → 100% same-subject recall AND 0%
+ * unrelated false-positives, validated against the live key. 0.83 by contrast
+ * dropped ~50% of true same-subject pairs on nomic and ~18% on gemini — a stage-1
+ * false negative silently loses a contradiction forever, whereas a false positive
+ * is only a bounded extra judge call (the judge is the real filter, and maxJudged
+ * caps the cost). So we favor recall. The cutoff is MODEL-SPECIFIC: override per
+ * deployment via SUDO_CHUNK_CONTRADICT_SIM to match the embedding model actually
+ * wired in (nomic → ~0.60, gemini → ~0.70). See resolveSimThreshold.
  */
 const DEFAULT_SIM_THRESHOLD = 0.65;
 
