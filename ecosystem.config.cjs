@@ -191,6 +191,12 @@ module.exports = {
         // Kill-switch: '0' (traces then keep only hashes, as before).
         SUDO_TRACE_CAPTURE: process.env['SUDO_TRACE_CAPTURE'] || '1',
 
+        // Memory contradiction resolution: a newer structured fact about the
+        // same subject (type+name) supersedes older ones, so recall returns the
+        // current value instead of coexisting contradictions. Superseded records
+        // are kept for audit, not deleted. Kill-switch: '0'.
+        SUDO_MEMORY_SUPERSEDE: process.env['SUDO_MEMORY_SUPERSEDE'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the
