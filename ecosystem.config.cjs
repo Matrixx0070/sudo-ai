@@ -202,6 +202,15 @@ module.exports = {
         // are kept for audit, not deleted. Kill-switch: '0'.
         SUDO_MEMORY_SUPERSEDE: process.env['SUDO_MEMORY_SUPERSEDE'] || '1',
 
+        // Free-text chunk contradiction resolution (#7): a newly dreamed fact
+        // (auto-dream, source='learning') that semantically contradicts an
+        // earlier one supersedes it — embedding cosine narrows to same-subject,
+        // a Claude judge confirms opposition. Threshold validated for
+        // text-embedding-3-small at 0.65 (override: SUDO_CHUNK_CONTRADICT_SIM).
+        // Superseded chunks are kept for audit + excluded from recall.
+        // Kill-switch: '0'.
+        SUDO_CHUNK_CONTRADICT: process.env['SUDO_CHUNK_CONTRADICT'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the

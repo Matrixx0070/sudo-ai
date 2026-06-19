@@ -136,16 +136,25 @@ export class AutoDream {
   private readonly brainCall: (prompt: string) => Promise<string>;
   private readonly db: Database.Database;
   private readonly hookManager?: HookManager;
+  /**
+   * Optional post-write hook fired once per newly-stored synthesized fact (by
+   * chunk id). Wired in cli.ts to semantic contradiction resolution so a dreamed
+   * fact that contradicts an earlier one supersedes it. Fail-open — a throw here
+   * never blocks the dream. See chunk-contradiction.ts.
+   */
+  private readonly onFactStored?: (chunkId: number) => Promise<void>;
 
   constructor(
     brainCall: (prompt: string) => Promise<string>,
     db: Database.Database,
     hookManager?: HookManager,
+    onFactStored?: (chunkId: number) => Promise<void>,
   ) {
     if (typeof brainCall !== 'function') throw new TypeError('brainCall must be a function');
     this.brainCall = brainCall;
     this.db = db;
     this.hookManager = hookManager;
+    this.onFactStored = onFactStored;
   }
 
   // -------------------------------------------------------------------------
@@ -318,7 +327,7 @@ Output ONLY the JSON array, nothing else.`;
 
         if (existing) continue;
 
-        this.db.prepare(`
+        const info = this.db.prepare(`
           INSERT INTO chunks (text, path, source, hash, is_evergreen)
           VALUES (:text, :path, :source, :hash, :is_evergreen)
         `).run({
@@ -329,6 +338,16 @@ Output ONLY the JSON array, nothing else.`;
           is_evergreen: 0,
         });
         stored++;
+
+        // Post-write: resolve semantic contradictions against earlier facts
+        // (opt-in, fail-open — never blocks the dream).
+        if (this.onFactStored) {
+          try {
+            await this.onFactStored(info.lastInsertRowid as number);
+          } catch (err) {
+            log.warn({ err: String(err), hash }, 'Phase 2: onFactStored hook failed (non-fatal)');
+          }
+        }
       } catch (err) {
         log.warn({ err: String(err), hash }, 'Phase 2: failed to store fact chunk');
       }
