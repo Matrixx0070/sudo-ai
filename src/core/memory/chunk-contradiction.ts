@@ -62,11 +62,47 @@ export interface ContradictionOptions {
   maxJudged?: number;
 }
 
+/**
+ * Default stage-1 cosine cutoff. Lowered from the original 0.83 guess after
+ * calibration against real embeddings (scripts/calibrate-chunk-threshold.mjs)
+ * over labeled contradiction / restatement / unrelated chunk pairs:
+ *
+ *   model                    100%-recall thr   FP there   note
+ *   nomic-embed-text (local) ~0.62             ~15%       classes overlap
+ *   gemini-embedding-001     ~0.72             ~1%        cleaner separation
+ *   text-embedding-3-small   unmeasured        —          prod key quota-dead
+ *
+ * 0.83 dropped ~50% of true same-subject pairs on nomic and ~18% on gemini — a
+ * stage-1 false negative silently loses a contradiction forever, whereas a false
+ * positive is only a bounded extra judge call (the judge is the real filter, and
+ * maxJudged caps the cost). So we favor recall. The cutoff is MODEL-SPECIFIC:
+ * override per deployment via SUDO_CHUNK_CONTRADICT_SIM to match the embedding
+ * model actually wired in (see resolveSimThreshold).
+ */
+const DEFAULT_SIM_THRESHOLD = 0.65;
+
 const DEFAULTS: Required<ContradictionOptions> = {
-  simThreshold: 0.83,
+  simThreshold: DEFAULT_SIM_THRESHOLD,
   maxCandidates: 200,
   maxJudged: 5,
 };
+
+/**
+ * Resolve the stage-1 cosine threshold: explicit option > SUDO_CHUNK_CONTRADICT_SIM
+ * env (clamped to [0,1]) > DEFAULT_SIM_THRESHOLD. A malformed/out-of-range env
+ * value falls back to the default rather than silently disabling detection.
+ */
+export function resolveSimThreshold(explicit?: number): number {
+  if (explicit !== undefined && Number.isFinite(explicit)) {
+    return Math.min(1, Math.max(0, explicit));
+  }
+  const raw = process.env['SUDO_CHUNK_CONTRADICT_SIM'];
+  if (raw !== undefined) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
+  }
+  return DEFAULT_SIM_THRESHOLD;
+}
 
 export interface ContradictionResult {
   /** Ids of previously-active chunks now superseded by the incoming chunk. */
@@ -104,7 +140,13 @@ export async function resolveChunkContradictions(
   const empty: ContradictionResult = { supersededIds: [] };
   if (!isChunkContradictionEnabled()) return empty;
 
-  const opts = { ...DEFAULTS, ...options };
+  // simThreshold resolves through the env override + clamp; other knobs take the
+  // explicit option then the default.
+  const opts = {
+    ...DEFAULTS,
+    ...options,
+    simThreshold: resolveSimThreshold(options.simThreshold),
+  };
 
   try {
     const incomingVec = await deps.embed(incoming.text);

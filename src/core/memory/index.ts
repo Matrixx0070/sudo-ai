@@ -51,6 +51,7 @@ export { flushBeforeCompaction } from './compaction-flush.js';
 export {
   resolveChunkContradictions,
   isChunkContradictionEnabled,
+  resolveSimThreshold,
   cosineSimilarity,
 } from './chunk-contradiction.js';
 export type {
