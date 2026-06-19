@@ -18,7 +18,7 @@ import type { InterruptResult } from './cognitive-stream/index.js';
 import { EpisodicMemory } from './episodic-memory/index.js';
 import type { Episode } from './episodic-memory/index.js';
 import { DriveManager } from './drive-system/index.js';
-import { WorldModel } from './world-model/index.js';
+import { WorldModel, computeToolUsePrior } from './world-model/index.js';
 import { SelfModel } from './self-model/index.js';
 import { TheoryOfMind } from './theory-of-mind/index.js';
 import { ProspectiveMemory } from './prospective-memory/index.js';
@@ -302,7 +302,14 @@ export class ConsciousnessOrchestrator {
     // fail-open, bounded. `userId` here is the loop's sessionId (see call site).
     if (process.env['SUDO_CONSCIOUSNESS_WORLD_MODEL'] === '1' && !this._zdrEnabled) {
       try {
-        const confidence = message.length > 120 ? 0.75 : 0.35;
+        // Seed the prior from the LEARNED base rate (confirmed/(confirmed+
+        // violated) for this domain) once enough outcomes have resolved, nudged
+        // by the message-length feature. This closes the predict->resolve loop:
+        // confidence converges toward the true tool-use rate instead of
+        // oscillating between the fixed 0.35/0.75 heuristic every turn. Cold
+        // start falls back to that heuristic.
+        const { rate, resolved } = this.worldModel.getDomainMatchRate('tool_use');
+        const confidence = computeToolUsePrior(message.length, rate, resolved);
         // 1h expiry so an unresolved (orphaned) prediction auto-expires rather than
         // lingering 'pending' in the DB forever (e.g. if onInteractionEnd never fires).
         const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
