@@ -22,9 +22,28 @@ export function isToolResultSuccess(result: unknown): boolean {
   if (Array.isArray(result)) return true;
   if (typeof result === 'object') {
     const r = result as Record<string, unknown>;
+    // Honor the canonical ToolResult.success contract first — a tool that
+    // explicitly self-reports failure must not be classified as success just
+    // because it lacks an `error` field.
+    if (r['success'] === false) return false;
     if (r['error'] != null) return false;
     if (r['ok'] === false) return false;
     return true;
   }
   return true; // symbol, function, bigint — treat as success
+}
+
+/**
+ * Resolve the success of a tool-result event, preferring the tool's own
+ * authoritative `success` self-report when present and falling back to
+ * classifying the (string) result only when it is absent.
+ *
+ * The agent loop emits `result` as the tool's OUTPUT STRING (the `ToolResult`
+ * is unwrapped at emit time), so `isToolResultSuccess` alone re-guesses success
+ * from text via `/^error/i` — which mislabels e.g. `{success:false,
+ * output:"No matching records found"}` as success and reinforces it in the
+ * policy learner. When the emitter forwards the authoritative `success`, use it.
+ */
+export function resolveToolSuccess(ev: { success?: boolean; result: unknown }): boolean {
+  return typeof ev.success === 'boolean' ? ev.success : isToolResultSuccess(ev.result);
 }

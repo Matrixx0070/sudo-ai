@@ -660,7 +660,7 @@ async function executeSingleToolCall(
     if (!secResult.allowed) {
       const blockedMsg = `[SecurityGuard] Tool call blocked: ${tc.name} — ${secResult.reason ?? 'policy violation'}`;
       log.warn({ tool: tc.name, reason: secResult.reason, sessionId: ctx.sessionId }, 'Tool call blocked by security');
-      emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id });
+      emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id, success: false });
       return { tc, resultContent: blockedMsg };
     }
   }
@@ -669,7 +669,7 @@ async function executeSingleToolCall(
   if (permMode === 'deny') {
     const deniedMsg = `[PermissionManager] Tool execution permanently denied: ${tc.name}`;
     log.warn({ tool: tc.name, sessionId: ctx.sessionId }, deniedMsg);
-    emit({ type: 'tool-result', name: tc.name, result: deniedMsg, toolId: tc.id });
+    emit({ type: 'tool-result', name: tc.name, result: deniedMsg, toolId: tc.id, success: false });
     return { tc, resultContent: deniedMsg };
   }
 
@@ -762,7 +762,7 @@ async function executeSingleToolCall(
               // `blocked: true`) is the sole correlator event subscribers
               // get for this path.
               const blockedMsg = `[VerifyGate] Tool call blocked: ${tc.name} — grounding mismatch (${grounding.reason})`;
-              emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id });
+              emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id, success: false });
               return { tc, resultContent: blockedMsg };
             }
             // Observable-only mismatch — slice-3 critic gets the strong trigger.
@@ -858,7 +858,7 @@ async function executeSingleToolCall(
               rationale: criticResult.rationale ?? null,
               message: blockedMsg,
             });
-            emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id });
+            emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id, success: false });
             return { tc, resultContent: blockedMsg };
           }
 
@@ -906,7 +906,9 @@ async function executeSingleToolCall(
       : {};
     const result = await toolRegistry.execute(tc.name, safeArgs, ctx);
     resultContent = typeof result.output === 'string' ? result.output : String(result.output ?? '');
-    emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
+    // Forward the tool's authoritative success so outcome sinks (ToolOutcomeLearner,
+    // SkillDiscovery, TraceStore, after:tool-call) don't re-guess it from the output string.
+    emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: result.success });
     log.info({ tool: tc.name, success: result.success }, 'Tool call completed');
     guardedRecordFeedback(feedbackMemory, true, tc.name, tc.arguments ?? {}, resultContent || 'success', ctx.sessionId);
   } catch (err) {
@@ -923,7 +925,7 @@ async function executeSingleToolCall(
       return { tc, resultContent: fallbackResult, ...(criticFeedback ? { criticFeedback } : {}) };
     }
     resultContent = `Error executing tool ${tc.name}: ${String(err)}`;
-    emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id });
+    emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: false });
     log.error({ tool: tc.name, err }, 'Tool call failed');
     guardedRecordFeedback(feedbackMemory, false, tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
   }
@@ -1083,7 +1085,7 @@ export async function executeToolCalls(
     if (permMode === 'deny') {
       const deniedMsg = `[PermissionManager] Tool execution permanently denied: ${tc.name}`;
       log.warn({ tool: tc.name, sessionId: state.sessionId }, deniedMsg);
-      emit({ type: 'tool-result', name: tc.name, result: deniedMsg, toolId: tc.id });
+      emit({ type: 'tool-result', name: tc.name, result: deniedMsg, toolId: tc.id, success: false });
       session.messages.push({ role: 'tool', content: deniedMsg, toolCallId: tc.id, toolName: tc.name });
       state.pendingToolCalls--;
       continue;
@@ -1101,7 +1103,7 @@ export async function executeToolCalls(
       if (!approved) {
         const denied = `Tool execution denied by user: ${tc.name}`;
         log.warn({ tool: tc.name }, denied);
-        emit({ type: 'tool-result', name: tc.name, result: denied, toolId: tc.id });
+        emit({ type: 'tool-result', name: tc.name, result: denied, toolId: tc.id, success: false });
         session.messages.push({ role: 'tool', content: denied, toolCallId: tc.id, toolName: tc.name });
         state.pendingToolCalls--;
         continue;
