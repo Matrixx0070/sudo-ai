@@ -30,7 +30,7 @@ import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coal
 import type { UnifiedMessage } from './core/channels/types.js';
 import { CronStore } from './core/cron/store.js';
 import { CronScheduler } from './core/cron/scheduler.js';
-import { HeartbeatRunner } from './core/cron/heartbeat.js';
+import { HeartbeatRunner, type HeartbeatPayloadRunner } from './core/cron/heartbeat.js';
 import { CommandRegistry } from './core/commands/registry.js';
 import { tryDispatchDirective } from './core/commands/dispatch.js';
 import type { CommandContext } from './core/commands/types.js';
@@ -2430,6 +2430,47 @@ async function boot(): Promise<void> {
     'Heartbeat dedup window initialised',
   );
 
+  // Execute an agent-turn payload in its dedicated session and mirror a summary
+  // into the daily memory log. Returns the agent's response text so heartbeat
+  // wrapping can inspect it for HEARTBEAT_OK suppression.
+  const executeAgentTurn = async (
+    payload: Extract<CronPayload, { kind: 'agentTurn' }>,
+    job: CronJob,
+  ): Promise<string> => {
+    const sessionTarget = job.sessionTarget === 'isolated' ? `cron:isolated:${job.id}` : `cron:main`;
+    const session = await dualSessionManager.getOrCreate('web', sessionTarget);
+    const cronResult = await finalAgentLoop.run(session.id, payload.message);
+    try {
+      const cronTurnSummary = `**Cron (${job.name}):** ${payload.message.slice(0, 200)}\n**Agent:** ${(cronResult?.text ?? '').slice(0, 500)}`;
+      await dailyLog.append(cronTurnSummary);
+    } catch { /* daily log write is non-fatal */ }
+    log.info({ jobId: job.id }, 'Cron job agent turn completed');
+    return cronResult?.text ?? '';
+  };
+
+  // Base heartbeat runner, wrapped below by HeartbeatRunner.wrapRunner. Applies
+  // the content dedup guard (drop replays inside the window) then runs the turn,
+  // returning the response text so wrapRunner can apply HEARTBEAT_OK suppression.
+  const runHeartbeatTurn: HeartbeatPayloadRunner = async (payload, job) => {
+    if (payload.kind !== 'agentTurn') return; // heartbeat payloads are always agentTurn
+    if (process.env['HEARTBEAT_DEDUP'] !== '0') {
+      const verdict = heartbeatDedup.check(payload.message);
+      if (!verdict.shouldProcess) {
+        const ageMin = verdict.firstSeenAt ? Math.round((Date.now() - verdict.firstSeenAt) / 60_000) : 0;
+        log.info(
+          { jobId: job.id, hash: verdict.hash, firstSeenMinAgo: ageMin },
+          'Heartbeat skipped — duplicate content already processed in window',
+        );
+        return;
+      }
+    }
+    return executeAgentTurn(payload, job);
+  };
+
+  // Assigned once the HeartbeatRunner is constructed (it owns wrapRunner). The
+  // ?? fallback in cronRunner covers the brief window before assignment.
+  let wrappedHeartbeat: HeartbeatPayloadRunner | null = null;
+
   /**
    * Payload runner: executes a cron job payload as an isolated agent turn.
    * Creates or reuses a dedicated session for the cron job.
@@ -2483,49 +2524,21 @@ async function boot(): Promise<void> {
       return;
     }
 
-    // Gate heartbeat jobs with quiet hours before spinning up an agent turn.
+    // Heartbeat jobs route through HeartbeatRunner.wrapRunner (assigned below),
+    // which layers quiet-hours, per-task interval due-filtering, live
+    // HEARTBEAT.md re-read, task-state persistence, and HEARTBEAT_OK
+    // suppression on top of runHeartbeatTurn (dedup guard + the agent turn).
     if (job.name === 'system.heartbeat') {
-      const { isWithinActiveHours, parseHour } = await import('./core/cron/heartbeat-hours.js');
-      const tz = process.env['HEARTBEAT_TIMEZONE'] ?? 'UTC';
-      const start = parseHour(process.env['HEARTBEAT_ACTIVE_START']);
-      const end = parseHour(process.env['HEARTBEAT_ACTIVE_END']);
-      if (!isWithinActiveHours(new Date(), tz, start, end)) {
-        log.debug({ jobId: job.id }, 'Heartbeat skipped — outside active hours');
-        return;
-      }
-
-      // Dedup guard: drop ticks whose normalised content matches one we
-      // already processed inside the window. The bot's audit identified
-      // this replay as the #1 recurring failure — MEMORY.md was dominated
-      // by 100+ identical heartbeat acknowledgments per session. Disabled
-      // by setting HEARTBEAT_DEDUP=0.
-      if (process.env['HEARTBEAT_DEDUP'] !== '0') {
-        const verdict = heartbeatDedup.check(payload.message);
-        if (!verdict.shouldProcess) {
-          const ageMin = verdict.firstSeenAt
-            ? Math.round((Date.now() - verdict.firstSeenAt) / 60_000)
-            : 0;
-          log.info(
-            { jobId: job.id, hash: verdict.hash, firstSeenMinAgo: ageMin },
-            'Heartbeat skipped — duplicate content already processed in window',
-          );
-          return;
-        }
-      }
+      const run = wrappedHeartbeat ?? runHeartbeatTurn;
+      await run(payload, job);
+      return;
     }
 
-    const sessionTarget = job.sessionTarget === 'isolated' ? `cron:isolated:${job.id}` : `cron:main`;
-    const channel = 'web' as const;
-    const session = await dualSessionManager.getOrCreate(channel, sessionTarget);
-    const cronResult = await finalAgentLoop.run(session.id, payload.message);
-
-    // Save cron-triggered agent turn to daily memory log
-    try {
-      const cronTurnSummary = `**Cron (${job.name}):** ${payload.message.slice(0, 200)}\n**Agent:** ${(cronResult?.text ?? '').slice(0, 500)}`;
-      await dailyLog.append(cronTurnSummary);
-    } catch { /* daily log write is non-fatal */ }
-
-    log.info({ jobId: job.id }, 'Cron job agent turn completed');
+    // Generic agent-turn payload (non-heartbeat). payload is narrowed to the
+    // agentTurn variant here (systemEvent returned above).
+    if (payload.kind === 'agentTurn') {
+      await executeAgentTurn(payload, job);
+    }
   };
 
   // -------------------------------------------------------------------------
@@ -2556,9 +2569,13 @@ async function boot(): Promise<void> {
   log.info('CronScheduler started');
 
   const heartbeat = new HeartbeatRunner(cronStore, cronScheduler);
+  // Route the live heartbeat through wrapRunner so per-task intervals,
+  // HEARTBEAT_OK suppression, live HEARTBEAT.md re-read, and task-state
+  // persistence apply (previously wrapRunner was defined but never wired).
+  wrappedHeartbeat = heartbeat.wrapRunner(runHeartbeatTurn);
   heartbeat.start();
   registerShutdown(() => heartbeat.stop());
-  log.info('HeartbeatRunner started');
+  log.info('HeartbeatRunner started (wrapRunner wired)');
 
   // Cost-rate watchdog (opt-in, default OFF). Samples $/hour from the
   // api_call_log on a timer and emits a `cost_rate_alert` hook event when spend
