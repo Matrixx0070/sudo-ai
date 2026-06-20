@@ -22,7 +22,7 @@ import { createLogger } from '../shared/logger.js';
 import { isHostGateEnabled, isHostAllowed } from './host-gate.js';
 import { getPromptCacheStats } from '../shared/prompt-cache-telemetry.js';
 import { progress } from './progress.js';
-import { getCacheKey, cacheGet, cacheSet } from './cache.js';
+import { cacheStats } from './cache.js';
 import { scoreComplexity } from '../agent/complexity-scorer.js';
 
 const log = createLogger('gateway');
@@ -51,8 +51,6 @@ const stats = {
   totalRequests: 0,
   raceWins: {} as Record<string, number>,
   latencySamples: [] as number[],
-  cacheHits: 0,
-  cacheMisses: 0,
   activeStreams: 0,
 };
 
@@ -124,7 +122,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     res.end(JSON.stringify({
       status: 'ok',
       uptime: Math.floor((Date.now() - startTime) / 1000),
-      stats: { ...stats, ...getPromptCacheStats(), avgLatencyMs: avgLatency(), queueDepths: queueDepths() },
+      stats: { ...stats, ...cacheStats(), ...getPromptCacheStats(), avgLatencyMs: avgLatency(), queueDepths: queueDepths() },
     }));
     return;
   }

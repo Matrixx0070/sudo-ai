@@ -16,6 +16,7 @@ import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 import { serveStaticFile } from './static-middleware.js';
+import { getCacheKey, cacheGet, cacheSet } from './cache.js';
 import { registerAdminRoutes } from './admin-routes.js';
 import { registerAdminSleepRoutes } from './admin-sleep-routes.js';
 import { registerAdminClaudeOAuthRoutes } from './admin-claude-oauth-routes.js';
@@ -366,11 +367,13 @@ function handleModels(res: ServerResponse): void {
   sendJson(res, 200, { object: 'list', data: [{ id: MODEL_ID, object: 'model', created: MODEL_CREATED, owned_by: 'sudo-ai' }] });
 }
 
-async function handleChatCompletions(req: IncomingMessage, res: ServerResponse, deps: HttpApiDeps): Promise<void> {
+export async function handleChatCompletions(req: IncomingMessage, res: ServerResponse, deps: HttpApiDeps): Promise<void> {
   // Parse + validate body
   let raw: ChatRequest;
+  let bodyStr = '';
   try {
-    raw = JSON.parse(await readBody(req)) as ChatRequest;
+    bodyStr = await readBody(req);
+    raw = JSON.parse(bodyStr) as ChatRequest;
   } catch {
     sendError(res, 400, 'Invalid or oversized request body'); return;
   }
@@ -392,6 +395,24 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse, 
   } catch (err: unknown) {
     log.error({ err: err instanceof Error ? err.message : String(err) }, 'sessionManager.getOrCreate failed');
     sendError(res, 500, 'Internal server error'); return;
+  }
+
+  // Response cache (orphan wiring): a repeated identical request — same session +
+  // model + last user message — within the 60s TTL returns the prior completion and
+  // skips a full agent run. Per-session keying prevents cross-client collisions;
+  // streaming responses are never cached. Opt-in SUDO_RESPONSE_CACHE=1 (default OFF →
+  // byte-identical behavior). Fail-open: any cache error falls through to a live run.
+  const cacheOn = process.env['SUDO_RESPONSE_CACHE'] === '1' && !wantStream;
+  const cacheKey = cacheOn ? `${sessionId}::${getCacheKey(bodyStr)}` : '';
+  if (cacheOn) {
+    try {
+      const cached = cacheGet(cacheKey);
+      if (cached) {
+        sendJson(res, 200, JSON.parse(cached));
+        log.info({ sessionId, cache: 'hit' }, 'chat.completions cache hit');
+        return;
+      }
+    } catch (cErr) { log.warn({ err: cErr instanceof Error ? cErr.message : String(cErr) }, 'response cache read failed — continuing'); }
   }
 
   // Run agent
@@ -425,6 +446,7 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse, 
     res.end();
   } else {
     const completion = Object.assign({}, buildCompletion(completionId, agentText) as Record<string, unknown>, complexityResult ? { complexity: complexityResult } : {});
+    if (cacheOn) { try { cacheSet(cacheKey, JSON.stringify(completion)); } catch (cErr) { log.warn({ err: cErr instanceof Error ? cErr.message : String(cErr) }, 'response cache write failed — continuing'); } }
     sendJson(res, 200, completion);
   }
 
