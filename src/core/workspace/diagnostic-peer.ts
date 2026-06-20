@@ -73,3 +73,20 @@ export function shouldSkipDailyLog(
 ): boolean {
   return diagnosticDailyLogSkipEnabled(env) && isDiagnosticPeer(peerId, env);
 }
+
+/**
+ * Message-level gate: skip when the opt-in flag is enabled AND either the peerId
+ * OR the peer's network address is diagnostic. Web turns carry a synthetic
+ * `web-<uuid>` peerId that can never match a loopback literal, so the loopback
+ * skip only works when the socket IP (UnifiedMessage.peerIp) is consulted too.
+ */
+export function shouldSkipDailyLogForMessage(
+  peerId: string | undefined | null,
+  peerIp: string | undefined | null,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    diagnosticDailyLogSkipEnabled(env) &&
+    (isDiagnosticPeer(peerId, env) || isDiagnosticPeer(peerIp, env))
+  );
+}

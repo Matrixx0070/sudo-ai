@@ -161,7 +161,7 @@ export class WebAdapter implements ChannelAdapter {
         const data = args[0] as Buffer | string;
         const text = data.toString().trim();
         if (!text) return;
-        void this._dispatch(peerId, text);
+        void this._dispatch(peerId, text, (httpReq.socket as { remoteAddress?: string } | null)?.remoteAddress);
       });
 
       ws.on('close', () => {
@@ -391,7 +391,7 @@ export class WebAdapter implements ChannelAdapter {
           if (senderWs) {
             try { senderWs.send(JSON.stringify({ type: 'user_echo', text: data.text })); } catch { /* best-effort */ }
           }
-          void this._dispatch(data.peerId, data.text)
+          void this._dispatch(data.peerId, data.text, (req.socket as { remoteAddress?: string } | null)?.remoteAddress)
             .then(() => {
               if (res.headersSent || res.writableEnded) return;
               res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -422,7 +422,7 @@ export class WebAdapter implements ChannelAdapter {
   // Normalize
   // ---------------------------------------------------------------------------
 
-  private async _dispatch(peerId: string, text: string): Promise<void> {
+  private async _dispatch(peerId: string, text: string, peerIp?: string): Promise<void> {
     if (!this._handler) {
       log.warn({ peerId }, 'No handler — Web message dropped');
       return;
@@ -432,6 +432,7 @@ export class WebAdapter implements ChannelAdapter {
       id: `${Date.now()}-${peerId}`,
       channel: 'web',
       peerId,
+      ...(peerIp ? { peerIp } : {}),
       peerName: peerId,
       chatType: 'dm',
       text,

@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isDiagnosticPeer,
   shouldSkipDailyLog,
+  shouldSkipDailyLogForMessage,
   diagnosticDailyLogSkipEnabled,
 } from '../../src/core/workspace/diagnostic-peer.js';
 
@@ -72,5 +73,30 @@ describe('shouldSkipDailyLog (combined gate)', () => {
   it('never skips a real peer even with the flag enabled', () => {
     expect(shouldSkipDailyLog('203.0.113.7', ON)).toBe(false);
     expect(shouldSkipDailyLog('telegram-user-99', ON)).toBe(false);
+  });
+});
+
+describe('shouldSkipDailyLogForMessage (peerId OR peerIp)', () => {
+  // The bug this fixes: web turns carry peerId 'web-<uuid>' (never a loopback
+  // literal), so the peerId-only gate was a no-op on the web path — the socket
+  // IP (peerIp) must be consulted.
+  it('skips a loopback web client whose peerId is web-<uuid> (via peerIp)', () => {
+    expect(shouldSkipDailyLog('web-abc123', ON)).toBe(false); // peerId alone never matches
+    expect(shouldSkipDailyLogForMessage('web-abc123', '127.0.0.1', ON)).toBe(true);
+    expect(shouldSkipDailyLogForMessage('web-abc123', '::ffff:127.0.0.1', ON)).toBe(true);
+    expect(shouldSkipDailyLogForMessage('web-abc123', '::1', ON)).toBe(true);
+  });
+
+  it('does not skip a web client from a real remote IP', () => {
+    expect(shouldSkipDailyLogForMessage('web-abc123', '203.0.113.7', ON)).toBe(false);
+  });
+
+  it('still matches a diagnostic peerId when peerIp is absent (non-web channels)', () => {
+    expect(shouldSkipDailyLogForMessage('127.0.0.1', undefined, ON)).toBe(true);
+    expect(shouldSkipDailyLogForMessage('telegram-user-99', undefined, ON)).toBe(false);
+  });
+
+  it('never skips when the flag is off, regardless of peerIp', () => {
+    expect(shouldSkipDailyLogForMessage('web-abc123', '127.0.0.1', OFF)).toBe(false);
   });
 });

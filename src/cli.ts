@@ -80,7 +80,7 @@ import { setInspectionQueue } from './core/security/injection-detector.js';
 import { setRationalizationQueue } from './core/agent/rationalization-guard.js';
 import { injectWorkspaceContext } from './core/workspace/injector.js';
 import { DailyLogManager } from './core/workspace/daily-log.js';
-import { shouldSkipDailyLog } from './core/workspace/diagnostic-peer.js';
+import { shouldSkipDailyLogForMessage } from './core/workspace/diagnostic-peer.js';
 import { FileStore, registerFileRoutes } from './core/files/index.js';
 import { SkillRegistry, registerSkillRoutes } from './core/skills/index.js';
 import {
@@ -2061,7 +2061,7 @@ async function boot(): Promise<void> {
           // Save web turn to daily memory log (skip loopback/diagnostic probes —
           // those pollute the "## Today" prompt injection; opt-in via
           // SUDO_SKIP_DIAGNOSTIC_DAILY_LOG).
-          if (shouldSkipDailyLog(msg.peerId)) {
+          if (shouldSkipDailyLogForMessage(msg.peerId, msg.peerIp)) {
             log.debug({ peerId: msg.peerId }, 'daily-log: skipped diagnostic/loopback web turn');
           } else {
             try {
@@ -2378,7 +2378,7 @@ async function boot(): Promise<void> {
           }
           const replyText = result?.text ?? 'No response generated.';
 
-          if (shouldSkipDailyLog(msg.peerId)) {
+          if (shouldSkipDailyLogForMessage(msg.peerId, msg.peerIp)) {
             log.debug({ channel: msg.channel, peerId: msg.peerId }, 'daily-log: skipped diagnostic/loopback turn');
           } else {
             try {
