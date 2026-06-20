@@ -77,11 +77,44 @@ export function shouldFork(session: Session): boolean {
   return chars > FORK_THRESHOLD_CHARS || count > FORK_MESSAGE_COUNT;
 }
 
+/**
+ * Pull the `## Key Facts` section out of the most recent prior fork bridge in
+ * the history, if any. Forking is a telephone game: each fork re-summarises the
+ * previous summary, so specific identifiers (IDs, names, codewords, paths) erode
+ * across repeated forks. Carrying the prior facts forward verbatim pins them so
+ * they survive. Pure + exported for tests.
+ */
+export function extractPriorKeyFacts(messages: BrainMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const c = m?.content;
+    if (m?.role === 'system' && typeof c === 'string' && c.includes('[SESSION FORK') && c.includes('## Key Facts')) {
+      const rest = c.slice(c.indexOf('## Key Facts'));
+      const nextHeading = rest.indexOf('\n## ', 1); // start of the following section
+      return (nextHeading > 0 ? rest.slice(0, nextHeading) : rest).trim();
+    }
+  }
+  return '';
+}
+
 async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Promise<string> {
   const serialised = messages
     .filter(m => m.role !== 'system' || !m.content.startsWith('[AutoCompact'))
     .map(m => `[${m.role.toUpperCase()}]\n${(m.content ?? '').slice(0, 2000)}`)
     .join('\n\n---\n\n');
+
+  // Anti-telephone-game: pin facts carried from a prior fork so repeated forks
+  // don't erode them. Bounded — they compete within the same char budget, so
+  // the bridge (and the per-turn tokens it folds into) does not grow unbounded.
+  const priorFacts = extractPriorKeyFacts(messages);
+  const factCarry = priorFacts
+    ? [
+        '',
+        'CARRIED KEY FACTS — this conversation has been forked before. You MUST reproduce every item below VERBATIM in your "## Key Facts" section (identifiers, names, codewords, paths, URLs must NEVER be lost across session forks), then add any new ones:',
+        priorFacts,
+        '',
+      ].join('\n')
+    : '';
 
   const prompt = [
     'You are a conversation memory system. Produce a dense handoff brief for a NEW session that continues this conversation.',
@@ -93,8 +126,11 @@ async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Pro
     '## Key Facts (IDs, paths, URLs, names)',
     '## Last User Request',
     '',
-    'Rules: be specific, use bullet points, max 2000 chars total.',
-    '',
+    'Rules: be specific; use bullet points; max 2000 chars total. In ## Key Facts',
+    'capture EVERY concrete identifier verbatim — IDs, file paths, URLs, names,',
+    'codewords, numbers, credentials-references — these are the highest priority;',
+    'drop prose before you drop a fact.',
+    factCarry,
     'Conversation to summarise:',
     '',
     serialised,
