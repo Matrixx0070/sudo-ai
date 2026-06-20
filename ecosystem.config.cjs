@@ -114,6 +114,13 @@ module.exports = {
         // registered. Leave SUDO_NATIVE_TOOL_CORRECTION unset (=0 would hard-disable correction).
         SUDO_NATIVE_TOOL_CORRECTION_FALLBACK: '1',
 
+        // Completion verification (orphan wiring, PR #340): after each turn, run a cheap
+        // NO-LLM heuristic check of the final response for phantom completion (placeholder /
+        // truncated / too-short / does-not-address-request) and surface a confidence signal.
+        // Default OFF; enabled on prod here 2026-06-20. Observable-only (never alters the
+        // response), fail-open, no API cost. Read per-turn in the agent loop's post-run region.
+        SUDO_COMPLETION_VERIFY: '1',
+
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
         SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18900',
 
