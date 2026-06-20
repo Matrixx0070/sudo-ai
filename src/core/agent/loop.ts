@@ -26,6 +26,7 @@ import {
   DEFAULT_CONFIG,
 } from './loop-constants.js';
 import { decomposeIfComplex, type DecomposerBrainLike } from './task-decomposer.js';
+import { TaskTracker } from './task-tracker.js';
 import { buildReasoningSummary, formatReasoningSummary, type AgentAction } from './reasoning-summary.js';
 import {
   runCompaction,
@@ -252,6 +253,14 @@ export class AgentLoop extends AgentLoopInjections {
   // default; SUDO_VERIFY_GATE_BLOCK=1 upgrades a mismatch to a hard block.
   private _groundingChecker?: import('./loop-helpers.js').GroundingCheckerLike;
   private _groundingBlockEnabled = false;
+
+  // TaskTracker (orphan-wiring follow-up): per-session subgoal-lifecycle tracker.
+  // Opt-in SUDO_TASK_TRACKER=1 (default OFF → zero behavior change). Populated
+  // from auto-plan steps, completed by the turn-end coverage heuristic, and
+  // re-presented to the agent at the NEXT turn's start so open subgoals survive
+  // across messages — which `_planProgress` (returned only to the caller) does
+  // not. Per-session Map, capped for long-lived daemons.
+  private readonly _taskTrackers = new Map<string, TaskTracker>();
 
   // Verify-gate (slice 3: auto-critic). Wired alongside _verifyGate when
   // SUDO_VERIFY_GATE=1. Runs only after slice 1 escalates AND slice 2 has
@@ -1132,6 +1141,14 @@ export class AgentLoop extends AgentLoopInjections {
     // Theme 2 step-tracking: the most recent auto-plan steps injected this run
     // (empty unless SUDO_AUTO_PLAN produced a plan). Used for turn-end coverage.
     let _lastPlanSteps: string[] = [];
+    // TaskTracker: ids of the per-session tasks created from this turn's plan
+    // steps (parallel to _lastPlanSteps). Empty unless SUDO_TASK_TRACKER=1.
+    let _planTaskIds: string[] = [];
+    // TaskTracker: prior-turn progress note, rendered before auto-plan clears the
+    // tracker and prepended to THIS turn's user message (the only channel that
+    // survives the sliding window cross-turn). Empty unless SUDO_TASK_TRACKER=1
+    // and the session has earlier subgoals.
+    let _planProgressNote = '';
 
     // Theme 2 follow-up: per-run cap on GoalPlanner semantic (brain.chat) calls.
     // SUDO_GOAL_PLANNER_SEMANTIC upgrades planning to one brain.chat per follow-up
@@ -1287,6 +1304,30 @@ export class AgentLoop extends AgentLoopInjections {
         }
       }
 
+      // TaskTracker (opt-in SUDO_TASK_TRACKER=1): render prior-turn subgoal
+      // progress BEFORE auto-plan clears the tracker. Rides the user message
+      // (below) rather than a system message: prepareMessages' sliding window
+      // keeps only the first 2 system messages, which in a multi-turn session
+      // are the earliest ones — so a late system message never reaches the
+      // agent. _planProgress is returned to the caller but never shown back to
+      // the agent; this closes that gap. Fail-open.
+      if (process.env['SUDO_TASK_TRACKER'] === '1') {
+        try {
+          const prior = this._taskTrackers.get(sessionId);
+          const priorTasks = prior?.list() ?? [];
+          if (priorTasks.length > 0) {
+            const open = priorTasks.filter((t) => t.status !== 'completed').map((t) => t.subject);
+            _planProgressNote =
+              `[Session progress — ${prior!.getProgress()}.` +
+              (open.length > 0 ? ` Still open from earlier: ${open.join('; ')}.` : ' Earlier subgoals all done.') +
+              ' Carry this forward.]';
+            log.info({ sessionId, open: open.length, progress: prior!.getProgress() }, 'TaskTracker: rendered prior progress for user message');
+          }
+        } catch (ttErr) {
+          log.warn({ sessionId, err: String(ttErr) }, 'TaskTracker: progress render failed — continuing');
+        }
+      }
+
       // Theme 2 (auto-plan): decompose a genuinely complex request into an
       // explicit subtask checklist, injected as a system message so the agent
       // works against a plan instead of discovering structure by trial-and-error
@@ -1319,6 +1360,23 @@ export class AgentLoop extends AgentLoopInjections {
             });
             _lastPlanSteps = steps;
             log.info({ sessionId, stepCount: steps.length }, 'Auto-plan: decomposed task injected');
+            // TaskTracker: back the plan steps with a per-session lifecycle so
+            // progress can be re-presented to the agent next turn. Opt-in.
+            if (process.env['SUDO_TASK_TRACKER'] === '1') {
+              let tracker = this._taskTrackers.get(sessionId);
+              if (!tracker) {
+                tracker = new TaskTracker();
+                this._taskTrackers.set(sessionId, tracker);
+                // Bound the per-session map for long-lived daemons; evict oldest.
+                while (this._taskTrackers.size > 500) {
+                  const oldest = this._taskTrackers.keys().next().value;
+                  if (oldest === undefined || oldest === sessionId) break;
+                  this._taskTrackers.delete(oldest);
+                }
+              }
+              tracker.clear(); // a fresh plan supersedes the prior turn's subgoals
+              _planTaskIds = steps.map((s) => tracker!.create(s).id);
+            }
           }
         } catch (planErr) {
           log.warn({ sessionId, err: String(planErr) }, 'Auto-plan: decomposition failed — continuing without a plan');
@@ -1383,7 +1441,10 @@ export class AgentLoop extends AgentLoopInjections {
         }
       }
 
-      session.messages.push({ role: 'user', content: current });
+      // TaskTracker: prepend prior-turn progress to the stored user message (the
+      // channel that survives the sliding window). The emit below carries the
+      // original `current` so telemetry/UI show the user's actual message.
+      session.messages.push({ role: 'user', content: _planProgressNote ? `${_planProgressNote}\n\n${current}` : current });
       emit({ type: 'message', content: current });
       finalResponse = await this._innerLoop(session, state, emit, opts);
     }
@@ -1543,6 +1604,19 @@ export class AgentLoop extends AgentLoopInjections {
           if (hits / tokens.length < PLAN_COVERAGE_THRESHOLD) unaddressed.push(step);
         }
         _planProgress = { totalSteps: _lastPlanSteps.length, addressedCount: _lastPlanSteps.length - unaddressed.length, unaddressed };
+        // TaskTracker: mark addressed steps complete (reuse the same coverage
+        // heuristic). Unaddressed tasks stay pending and are re-presented next
+        // turn. Opt-in; index-aligned with _lastPlanSteps.
+        if (process.env['SUDO_TASK_TRACKER'] === '1' && _planTaskIds.length === _lastPlanSteps.length) {
+          const tracker = this._taskTrackers.get(sessionId);
+          if (tracker) {
+            const unaddressedSet = new Set(unaddressed);
+            _lastPlanSteps.forEach((step, i) => {
+              const id = _planTaskIds[i];
+              if (id && !unaddressedSet.has(step)) tracker.complete(id);
+            });
+          }
+        }
         if (unaddressed.length > 0) {
           log.warn({ sessionId, unaddressed: unaddressed.length, total: _lastPlanSteps.length }, 'Plan tracking: some planned steps appear unaddressed (approximate)');
         } else {
