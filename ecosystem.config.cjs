@@ -118,6 +118,13 @@ module.exports = {
         // sandbox of system.exec. Danger subset (process.exit-style) N/A here.
         SUDO_BG_SHELL: '1',
 
+        // Local Whisper STT model (PR #352). Code default is onnx-community/
+        // whisper-base; bumped to whisper-small here 2026-06-20 for better
+        // dictation accuracy (heavier: ~5s vs ~2.5s CPU per clip). Offline,
+        // key-free; weights cached after first load. STT stays local-only
+        // unless SUDO_STT_CLOUD=1; disable local Whisper with SUDO_WHISPER_STT=0.
+        SUDO_WHISPER_MODEL: process.env['SUDO_WHISPER_MODEL'] || 'onnx-community/whisper-small',
+
         // Semantic memory compaction (gap #8): at the end of each auto-dream cycle,
         // collapse same-source near-duplicate chunks (cosine >= 0.92) into one canonical
         // row — DELETES the younger duplicate and sums applied_count. Wired in PR #337;
