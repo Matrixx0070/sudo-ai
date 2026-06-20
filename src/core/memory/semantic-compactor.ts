@@ -204,12 +204,20 @@ export async function compactSemanticDuplicates(
     vectors.set(row.id, v);
   }
 
-  // Walk newest → oldest so when we merge we delete the YOUNGER row.
-  // Same-source only (already filtered above). Evergreen rows never get
-  // deleted — if a non-evergreen row matches an evergreen row, the
-  // non-evergreen one is the duplicate.
+  // Walk oldest → newest (rows are ORDER BY created_at ASC); the already-bucketed
+  // match is the OLDER row and becomes the canonical keeper, so the newer row is
+  // the duplicate that gets deleted. Same-source only (already filtered above).
+  // Evergreen rows never get deleted — if a non-evergreen row matches an
+  // evergreen row, the non-evergreen one is the duplicate.
   const incCount = db.prepare("UPDATE chunks SET applied_count = applied_count + ? WHERE id = ?");
   const del = db.prepare("DELETE FROM chunks WHERE id = ?");
+  // Keep the vec0 ANN index (chunks_vec) in sync when present — it has no
+  // FK/trigger linkage to chunks, so a deleted chunk's vector must be removed
+  // explicitly or it orphans and wastes a KNN slot. vec0 binds its PK as BigInt;
+  // the table only exists when sqlite-vec is loaded, so prepare best-effort.
+  let delVec: ReturnType<typeof db.prepare> | null = null;
+  try { delVec = db.prepare("DELETE FROM chunks_vec WHERE chunk_id = ?"); }
+  catch { delVec = null; /* sqlite-vec not loaded — skip ANN cleanup */ }
   const survivors = new Map<string, ChunkRow[]>(); // by source
   for (const row of rows) {
     if (!vectors.has(row.id)) continue;
@@ -243,6 +251,7 @@ export async function compactSemanticDuplicates(
 
       incCount.run(loser.applied_count, keeper.id);
       del.run(loser.id);
+      if (delVec) { try { delVec.run(BigInt(loser.id)); } catch { /* vector absent — ignore */ } }
       result.merged++;
       result.deleted++;
 
