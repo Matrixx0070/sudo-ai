@@ -108,6 +108,34 @@ const CFG0: OrchestratorConfig = { streamModel: '', quietHoursStart: 1, quietHou
 const log = createLogger('consciousness:orchestrator');
 const swallow = (label: string) => (e: unknown) => log.debug({ err: String(e) }, label);
 
+/** Stop-words excluded from somatic-marker trigger extraction. */
+const SOMATIC_STOPWORDS = new Set([
+  'the', 'and', 'for', 'are', 'was', 'were', 'have', 'has', 'had', 'you', 'your', 'our', 'this', 'that',
+  'these', 'those', 'with', 'from', 'about', 'into', 'what', 'when', 'where', 'which', 'will', 'would',
+  'could', 'should', 'just', 'really', 'very', 'some', 'any', 'not', 'but', 'because', 'please', 'they',
+  'them', 'their', 'over', 'than', 'then', 'how', 'why', 'get', 'been', 'can', 'will', 'said', 'make',
+  'like', 'more', 'also', 'need', 'want', 'help', 'use', 'used', 'using', 'still', 'here', 'there',
+]);
+
+/**
+ * Extract up to `max` salient lowercase keywords from a user message to use as
+ * somatic-marker triggers. Skips short words (<=3 chars) and stop-words. These
+ * are the recurring EXTERNAL stimulus a learned emotional response keys on —
+ * always present at turn-end, unlike the agent's internal spreading-activation
+ * concepts (which are empty in the live process and made the loop a no-op).
+ */
+export function extractTriggerConcepts(text: string, max = 3): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const word of (text || '').toLowerCase().split(/[^a-z0-9]+/)) {
+    if (word.length <= 3 || SOMATIC_STOPWORDS.has(word) || seen.has(word)) continue;
+    seen.add(word);
+    out.push(word);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 export class ConsciousnessOrchestrator {
   private readonly brain: OrchestratorBrainLike;
   private readonly config: OrchestratorConfig;
@@ -361,7 +389,7 @@ export class ConsciousnessOrchestrator {
     // turn and discarding it. The SomaticMarkerStore has a schema + an admin read
     // surface but no production writer, so somatic_markers stayed empty. Additive
     // learning only (no per-turn behavior change yet) and NO LLM cost — reuses the
-    // already-computed valence + the cheap active-concept set. Opt-in
+    // already-computed valence + keyword triggers from the user's message. Opt-in
     // SUDO_CONSCIOUSNESS_SOMATIC_MARKERS=1; fail-open. Gates on !this._zdrEnabled
     // INTENTIONALLY (like the episodic block above — markers persist interaction-
     // derived data; the procedural-learn block below relies only on the caller's ZDR
@@ -373,17 +401,23 @@ export class ConsciousnessOrchestrator {
         const minIntensity = 0.6; // only learn emotionally-significant associations
         const emotion = this.emotionalState.getCurrentState();
         if (emotion && emotion.intensity >= minIntensity) {
-          const concepts = this.getActiveConcepts(3).filter((c) => c && c.trim().length > 0);
+          // Trigger = salient keywords from the user's CURRENT message. (getActiveConcepts()
+          // — the agent's spreading-activation concepts — is empty in the live process at
+          // turn-end, which made this loop a no-op; the user's words are always present AND
+          // the more meaningful recurring trigger.) Use the LAST user message: onInteractionEnd
+          // may be passed the full session history, where the first user message is stale.
+          const triggerText = [...messages].reverse().find((m) => m.role === 'user')?.content ?? userMsg;
+          const concepts = extractTriggerConcepts(triggerText);
           if (concepts.length > 0) {
             this._somaticMarkers ??= new SomaticMarkerStore(this.db);
-            // Reinforce markers for the active concepts (bumps times_triggered), then
-            // learn ONE new association when none yet links these concepts to the
-            // current dominant emotion — bounds growth to genuinely novel feelings.
+            // Reinforce markers matching these triggers (bumps times_triggered), then
+            // learn ONE new association when none yet links them to the current
+            // dominant emotion — bounds growth to genuinely novel feelings.
             const reinforced = this._somaticMarkers.getSomaticResponse(concepts);
             if (!reinforced.some((m) => m.emotion === emotion.dominantEmotion)) {
               this._somaticMarkers.createMarker(concepts[0]!, emotion.dominantEmotion, emotion.intensity, episode.id);
             }
-            log.debug({ activeConcepts: concepts.length, reinforced: reinforced.length, emotion: emotion.dominantEmotion, intensity: emotion.intensity }, 'Somatic markers: emotional-memory loop');
+            log.debug({ triggers: concepts.length, reinforced: reinforced.length, emotion: emotion.dominantEmotion, intensity: emotion.intensity }, 'Somatic markers: emotional-memory loop');
           }
         }
       } catch (e) { swallow('somatic marker learn')(e); }
