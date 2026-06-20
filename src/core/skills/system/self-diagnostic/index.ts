@@ -162,6 +162,10 @@ function checkApiCosts(): DiagnosticCheck {
 
     const budget = dailyBudgetUsd();
     const total = row?.total ?? 0;
+    if (!Number.isFinite(budget)) {
+      // Budget disabled (SUDO_DAILY_BUDGET_USD=off/0) — report spend, never fail.
+      return { name: 'api_costs', status: 'pass', value: `$${total.toFixed(4)} today (budget disabled)` };
+    }
     const pct = (total / budget) * 100;
     const value = `$${total.toFixed(4)} today (${pct.toFixed(0)}% of $${budget.toFixed(2)} budget)`;
 

@@ -265,6 +265,20 @@ describe('SB-06 budget-exceeded', () => {
     expect(result.status).toBe('budget-exceeded');
     expect(result.budgetUsdToday).toBeGreaterThanOrEqual(10);
   });
+
+  it('does NOT abort on spend when SUDO_DAILY_LLM_BUDGET_USD=off (gate disabled)', async () => {
+    process.env['SUDO_SELF_BUILD_MODE'] = '1';
+    process.env['SUDO_DAILY_LLM_BUDGET_USD'] = 'off';
+    const deps = buildDeps({
+      mindDb: buildTestDb(999), // far above the $20 default — would trip any finite cap
+      // BLOCK at the very next gate proves execution got PAST the (disabled) budget gate.
+      mistakeAutoBlockGuard: { decide: vi.fn().mockReturnValue({ verdict: 'BLOCK' }) },
+    });
+    const result = await runSelfBuildTick(deps);
+    expect(result.status).not.toBe('budget-exceeded');
+    expect(result.status).toBe('mistake-blocked');
+    expect(result.budgetUsdToday).toBe(999); // spend computed, just not gated
+  });
 });
 
 // ---------------------------------------------------------------------------

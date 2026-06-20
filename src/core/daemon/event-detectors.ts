@@ -18,6 +18,7 @@ import Database from 'better-sqlite3';
 import { existsSync, readFileSync } from 'node:fs';
 import { createLogger } from '../shared/logger.js';
 import { dataPath } from '../shared/paths.js';
+import { dailyBudgetDisabled } from '../billing/daily-budget.js';
 import type { DaemonEvent, EventPriority } from './event-daemon-schema.js';
 
 const log = createLogger('daemon:detectors');
@@ -162,6 +163,9 @@ export function detectSystemHealth(persist: PersistFn): DaemonEvent[] {
 
 export function detectQuotaWarning(persist: PersistFn): DaemonEvent[] {
   try {
+    // Master off-switch: when the daily budget is disabled
+    // (SUDO_DAILY_BUDGET_USD=off), emit no quota-proximity warnings.
+    if (dailyBudgetDisabled()) return [];
     if (!existsSync(COST_FILE)) return [];
     const raw = readFileSync(COST_FILE, 'utf8');
     const data = JSON.parse(raw) as { todayUsd?: number; dailyBudgetUsd?: number };

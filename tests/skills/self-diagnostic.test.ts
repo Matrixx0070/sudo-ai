@@ -118,4 +118,23 @@ describe('system.self-diagnostic — API cost check', () => {
     expect(check.status).toBe('warn');
     expect(check.detail).toBe('>80% budget used');
   });
+
+  it('SD-5: SUDO_DAILY_BUDGET_USD=off disables the budget — passes at any spend', async () => {
+    process.env['SUDO_DAILY_BUDGET_USD'] = 'off';
+    seedDb([{ cost: 999.0, calledAt: TODAY }]);
+    const check = await apiCostCheck();
+    // Disabled budget ⇒ never warn/fail, regardless of spend; spend is still reported.
+    expect(check.status).toBe('pass');
+    expect(check.value).toContain('budget disabled');
+    expect(check.value).toContain('$999.0000');
+    expect(check.detail).toBeUndefined();
+  });
+
+  it('SD-6: SUDO_DAILY_BUDGET_USD=0 also disables (non-positive ⇒ no cap)', async () => {
+    process.env['SUDO_DAILY_BUDGET_USD'] = '0';
+    seedDb([{ cost: 50.0, calledAt: TODAY }]);
+    const check = await apiCostCheck();
+    expect(check.status).toBe('pass');
+    expect(check.value).toContain('budget disabled');
+  });
 });
