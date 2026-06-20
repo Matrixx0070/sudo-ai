@@ -133,4 +133,29 @@ describe('Theme 2: SUDO_AUTO_PLAN task decomposition', () => {
     expect(result.text).toBe('done');
     expect(planInMessages(brain, 'PLAN FOR THIS TASK')).toBe(false);
   });
+
+  it("PLAN-7: turn 2 sees the CURRENT turn's plan, not a stale one (sliding-window freshness)", async () => {
+    // Regression: prepareMessages' LAYER 3 used to keep the OLDEST 2 system
+    // messages, so on turn 2 the agent saw turn-1's plan (for a different
+    // request) and never the fresh one. The window now keeps index 0 + the two
+    // most recent system messages, so current-turn guidance survives.
+    process.env['SUDO_AUTO_PLAN'] = '1';
+    const brain = createMockBrain();
+    brain.call
+      .mockResolvedValueOnce(resp('1. ALPHASTEP build\n2. BETASTEP test'))     // turn 1 decomposition
+      .mockResolvedValueOnce(resp('done'))                                     // turn 1 main
+      .mockResolvedValueOnce(resp('1. GAMMASTEP deploy\n2. DELTASTEP monitor')) // turn 2 decomposition
+      .mockResolvedValue(resp('done'));                                        // turn 2 main
+    const loop = makeLoop(brain);
+
+    await loop.run('test-session-id', 'build a CLI tool, then test the modules, and finally write the docs');
+    await loop.run('test-session-id', 'deploy the service, then configure monitoring, and finally notify the team');
+
+    // Inspect ONLY the last (turn-2 main) brain call.
+    const lastCall = brain.call.mock.calls[brain.call.mock.calls.length - 1] as unknown[];
+    const lastMsgs = ((lastCall[0] as { messages?: Array<{ content: string }> })?.messages ?? []);
+    const blob = lastMsgs.map((m) => m.content ?? '').join('\n');
+    expect(blob).toContain('GAMMASTEP'); // current turn's plan reaches the model
+    expect(blob).not.toContain('ALPHASTEP'); // stale turn-1 plan no longer shadows it
+  });
 });

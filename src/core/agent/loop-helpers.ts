@@ -1497,8 +1497,19 @@ export async function prepareMessages(
   if (firstNonOrphan > 0) {
     windowedNonSystem = windowedNonSystem.slice(firstNonOrphan);
   }
+  // Keep the FIRST system message (any durable session-level header) PLUS the
+  // most RECENT system guidance. The old `slice(0, 2)` kept the OLDEST two: in a
+  // multi-turn session, ephemeral per-turn guidance (auto-plan's PLAN, the
+  // negative router's AUTO-ROUTING) accumulates as system messages, so the
+  // current turn's fresh guidance was shadowed by stale turn-1 copies — the
+  // agent saw a plan for a PREVIOUS request. Retaining index 0 + the last two
+  // preserves any persistent header while letting current guidance through.
+  // (When length > 3, index 0 never overlaps the last two, so no dedup needed.)
+  const keptSystem = systemMsgs.length <= 3
+    ? systemMsgs
+    : [systemMsgs[0]!, ...systemMsgs.slice(-2)];
   const windowed: BrainMessage[] = [
-    ...systemMsgs.slice(0, 2),
+    ...keptSystem,
     ...windowedNonSystem,
   ];
 
