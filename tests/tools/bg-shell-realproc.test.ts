@@ -48,8 +48,13 @@ describe('background shell — real process (Branch A)', () => {
   beforeAll(async () => { T = await loadTools({ EXEC_APPROVAL_MODE: 'off' }); });
   afterEach(() => { T.reg.killAll(); });
 
-  it('IT-1: streams output incrementally and reports exit 0', async () => {
-    const r = await T.start.execute({ command: 'for i in 1 2 3; do echo $i; sleep 0.2; done' }, ctx());
+  it('IT-1: captures ordered stdout and reports exit 0', async () => {
+    // Fork-free command: echo is a bash builtin. The sandbox bakes in
+    // `ulimit -SHu 64` (shared with system.exec), so a forking command like
+    // `sleep` can fail to fork on a busy host where the per-user process count
+    // already exceeds 64 — that would make the test flaky for an unrelated
+    // reason. Streaming/timing is exercised by IT-2's poll-until-tick loop.
+    const r = await T.start.execute({ command: 'for i in 1 2 3; do echo $i; done' }, ctx());
     expect(r.success).toBe(true);
     const shellId = data(r)['shellId'] as string;
     expect(shellId).toBeTruthy();
