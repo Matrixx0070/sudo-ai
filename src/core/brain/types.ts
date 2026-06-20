@@ -96,6 +96,13 @@ export interface BrainRequest {
   temperature?: number;
   /** Max tokens to generate. */
   maxTokens?: number;
+  /**
+   * Optional sampling seed for (best-effort) deterministic generation. Forwarded
+   * to providers that support it; ignored by those that don't. Surfaced back in
+   * BrainResponse.sampling and captured in trace model_params so a replay can pin
+   * it (see learning/replay-engine.ts). Unset by default.
+   */
+  seed?: number;
   /** Vercel AI SDK-compatible tool schema objects. */
   tools?: import('../tools/types.js').ToolSchema[];
   /** Whether to use streaming mode. */

@@ -948,7 +948,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           finishReason: consensusResult.toolCalls.length > 0 ? 'tool-calls' : 'stop',
           // Consensus builds its own response shape (doesn't spread _callSingleModel)
           // so surface the resolved sampling here too for replay capture.
-          sampling: { temperature, maxTokens },
+          sampling: { temperature, maxTokens, ...(request.seed !== undefined ? { seed: request.seed } : {}) },
           routing: this._trace({
             path: 'consensus',
             reason: `consensus:${method}`,
@@ -1229,6 +1229,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       temperature,
       maxOutputTokens: maxTokens,
     };
+    // Best-effort deterministic sampling — forwarded only when the caller pins a
+    // seed; providers that don't support it ignore the field.
+    if (request.seed !== undefined) callParams.seed = request.seed;
     if (!cacheBreakpoints) {
       callParams.system = systemPrompt;
     }
@@ -1387,7 +1390,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       content: finalContent, toolCalls: finalToolCalls, usage,
       model: modelId, finishReason: finalFinishReason,
       // Resolved sampling — captured for deterministic replay (SUDO_TRACE_CAPTURE).
-      sampling: { temperature, maxTokens },
+      sampling: { temperature, maxTokens, ...(request.seed !== undefined ? { seed: request.seed } : {}) },
     };
   }
 

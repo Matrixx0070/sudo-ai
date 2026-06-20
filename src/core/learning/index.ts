@@ -27,6 +27,10 @@ export type { FailureRecord } from './failure-learner.js';
 export { TraceStore } from './trace-store.js';
 export type { TraceRecord, TraceQuery, TraceType } from './trace-store.js';
 
+// Deterministic replay over captured traces (re-feed tool outputs + pinned sampling)
+export { ReplayEngine, makeReplayToolExecutor, ReplayMissError } from './replay-engine.js';
+export type { ReplayStep, ReplayToolStep, ReplayBrainStep, ReplaySampling, ToolLookup } from './replay-engine.js';
+
 // Phase 2: Trace Analysis Engine
 export { TraceAnalyzer } from './trace-analyzer.js';
 export type { ModelToolStats, AnomalyReport } from './trace-analyzer.js';
