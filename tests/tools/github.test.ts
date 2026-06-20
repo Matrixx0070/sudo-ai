@@ -14,6 +14,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { runCmdMock } = vi.hoisted(() => ({ runCmdMock: vi.fn() }));
 vi.mock('../../src/core/tools/builtin/system/exec.js', () => ({ runCmd: runCmdMock }));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, mkdirSync: vi.fn(), writeFileSync: vi.fn() };
+});
 
 import {
   GITHUB_TOOLS,
@@ -25,6 +29,7 @@ import {
 } from '../../src/core/tools/builtin/github/github.js';
 import { registerGitHubTools } from '../../src/core/tools/builtin/github/index.js';
 import type { ToolContext } from '../../src/core/tools/types.js';
+import { writeFileSync, mkdirSync } from 'node:fs';
 
 const ctx: ToolContext = { sessionId: 't', workingDir: '/repo', config: {}, logger: {} };
 const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
@@ -52,6 +57,8 @@ const mergeWasCalled = () =>
 
 beforeEach(() => {
   runCmdMock.mockReset();
+  vi.mocked(writeFileSync).mockClear();
+  vi.mocked(mkdirSync).mockClear();
   delete process.env['SUDO_GITHUB_TOOLS'];
 });
 
@@ -109,6 +116,45 @@ describe('github.commit', () => {
     const res = await githubCommitTool.execute({ message: 'm' }, ctx);
     expect(res.success).toBe(false);
     expect(res.output).toMatch(/git commit failed/i);
+  });
+});
+
+describe('github.commit — branch + files', () => {
+  it('creates a branch, writes files, stages only those, commits', async () => {
+    route((bin, args) => {
+      if (args[0] === 'checkout' && args[1] === '-B') return ok('');
+      if (args[0] === 'status') return ok(' A docs/x.md');
+      if (args[0] === 'commit') return ok('');
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return ok('deadbeefcafe');
+      if (args[0] === 'rev-parse') return ok('feat/auto');
+      return ok('');
+    });
+    const res = await githubCommitTool.execute(
+      { message: 'auto', branch: 'feat/auto', cwd: '/repo', files: [{ path: 'docs/x.md', content: '# hi\n' }] },
+      ctx,
+    );
+    expect(res.success).toBe(true);
+    expect((res.data as { branch: string }).branch).toBe('feat/auto');
+    // branch switched via checkout -B
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'git' && c[1][0] === 'checkout' && c[1][1] === '-B' && c[1][2] === 'feat/auto')).toBe(true);
+    // file written with exact content
+    const wrote = vi.mocked(writeFileSync).mock.calls.find((c) => String(c[0]).endsWith('docs/x.md'));
+    expect(wrote?.[1]).toBe('# hi\n');
+    // staged ONLY the written file, never `add -A`
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'git' && c[1][0] === 'add' && c[1].includes('docs/x.md'))).toBe(true);
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'git' && c[1][0] === 'add' && c[1].includes('-A'))).toBe(false);
+  });
+
+  it('rejects a repo-escaping file path (no write, no commit)', async () => {
+    route(() => ok(''));
+    const res = await githubCommitTool.execute(
+      { message: 'm', cwd: '/repo', files: [{ path: '../evil.md', content: 'x' }] },
+      ctx,
+    );
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/escaping|invalid/i);
+    expect(vi.mocked(writeFileSync)).not.toHaveBeenCalled();
+    expect(runCmdMock.mock.calls.some((c) => c[1][0] === 'commit')).toBe(false);
   });
 });
 
