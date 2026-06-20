@@ -26,6 +26,12 @@ export interface FailureLearnerLike {
   getPreventionRule(tool: string, error: string): string | undefined;
   hasSeenBefore(tool: string, error: string): boolean;
   getSolution(tool: string, error: string): string | undefined;
+  /**
+   * Attach a solution + optional prevention rule to a prior failure (by id).
+   * Optional so duck-typed wirings that predate the recovery producer still
+   * satisfy the interface; the producer guards on its presence at call time.
+   */
+  recordSolution?(failureId: string, solution: string, preventionRule?: string): void;
 }
 
 export interface ImprovementLoopLike {
@@ -76,6 +82,12 @@ export interface SessionEndData {
   outcomes: ToolOutcome[];
 }
 
+/** An in-session failure awaiting a same-tool success to mark it recovered. */
+interface PendingFailure {
+  failureId: string;
+  error: string;
+}
+
 // ---------------------------------------------------------------------------
 // Dependencies container
 // ---------------------------------------------------------------------------
@@ -101,6 +113,15 @@ export class ToolOutcomeLearner {
   private readonly trustTierTracker?: TrustTierTrackerLike;
   private readonly confidenceCalibrationTracker?: ConfidenceCalibrationTrackerLike;
   private readonly learningDisabled: boolean;
+
+  /**
+   * In-session unresolved failures, keyed by `${sessionId}:${toolName}`.
+   * When the same tool later succeeds, the latest entry is resolved into a
+   * stored solution + prevention rule (the recovery producer). Bounded per key
+   * and cleared on session end so it cannot grow without limit.
+   */
+  private readonly pendingFailures = new Map<string, PendingFailure[]>();
+  private static readonly MAX_PENDING_PER_KEY = 50;
 
   constructor(deps: ToolOutcomeLearnerDeps = {}) {
     this.failureLearner = deps.failureLearner;
@@ -152,13 +173,41 @@ export class ToolOutcomeLearner {
     const context = JSON.stringify(args).slice(0, 200);
     const timestamp = Date.now();
 
-    // a. If failed: call FailureLearner.record()
+    // a. If failed: call FailureLearner.record() and remember the id so a later
+    //    same-tool success can attach a solution (the recovery producer).
     if (!success && error && this.failureLearner) {
       try {
-        this.failureLearner.recordFailure(toolName, error, context);
+        const rec = this.failureLearner.recordFailure(toolName, error, context) as
+          | { id?: string }
+          | undefined;
         log.debug({ tool: toolName, error: error.slice(0, 50) }, 'Failure recorded');
+        if (rec?.id && typeof this.failureLearner.recordSolution === 'function') {
+          this._trackPendingFailure(sessionId, toolName, rec.id, error);
+        }
       } catch (err) {
         log.warn({ err, tool: toolName }, 'FailureLearner.recordFailure failed');
+      }
+    }
+
+    // a2. Recovery producer: if this tool previously failed in-session and now
+    //     succeeded, attach a solution + prevention rule so future sessions can
+    //     short-circuit the same mistake. Deterministic — no model call.
+    if (success && this.failureLearner && typeof this.failureLearner.recordSolution === 'function') {
+      const recovered = this._takeLatestPendingFailure(sessionId, toolName);
+      if (recovered) {
+        try {
+          const working = context; // current (successful) args, already trimmed
+          const errPrefix = recovered.error.slice(0, 80);
+          const solution = `Recovered on a later call in the same session. Working arguments: ${working}`;
+          const preventionRule =
+            `"${toolName}" previously failed with "${errPrefix}". ` +
+            `A later call in the same session succeeded using these arguments: ${working}. ` +
+            `Compare your arguments against that before retrying.`;
+          this.failureLearner.recordSolution(recovered.failureId, solution, preventionRule);
+          log.info({ tool: toolName }, 'Recovery recorded — solution + prevention rule stored');
+        } catch (err) {
+          log.warn({ err, tool: toolName }, 'FailureLearner.recordSolution failed');
+        }
       }
     }
 
@@ -294,7 +343,51 @@ export class ToolOutcomeLearner {
       }
     }
 
+    // Drop any unresolved in-session pending failures for this session so the
+    // pending map does not retain state across sessions.
+    const prefix = `${sessionId}:`;
+    for (const key of this.pendingFailures.keys()) {
+      if (key.startsWith(prefix)) this.pendingFailures.delete(key);
+    }
+
     log.info({ sessionId, outcomeCount: outcomes.length }, 'Session end recorded');
+  }
+
+  // -------------------------------------------------------------------------
+  // Recovery-producer helpers (in-session failure → success tracking)
+  // -------------------------------------------------------------------------
+
+  private _pendingKey(sessionId: string | undefined, toolName: string): string {
+    return `${sessionId ?? 'no-session'}:${toolName}`;
+  }
+
+  /** Remember an unresolved failure so a later same-tool success can resolve it. */
+  private _trackPendingFailure(
+    sessionId: string | undefined,
+    toolName: string,
+    failureId: string,
+    error: string,
+  ): void {
+    const key = this._pendingKey(sessionId, toolName);
+    const bucket = this.pendingFailures.get(key) ?? [];
+    bucket.push({ failureId, error });
+    if (bucket.length > ToolOutcomeLearner.MAX_PENDING_PER_KEY) {
+      bucket.splice(0, bucket.length - ToolOutcomeLearner.MAX_PENDING_PER_KEY);
+    }
+    this.pendingFailures.set(key, bucket);
+  }
+
+  /** Pop the most recent unresolved failure for a session+tool, if any (LIFO). */
+  private _takeLatestPendingFailure(
+    sessionId: string | undefined,
+    toolName: string,
+  ): PendingFailure | undefined {
+    const key = this._pendingKey(sessionId, toolName);
+    const bucket = this.pendingFailures.get(key);
+    if (!bucket || bucket.length === 0) return undefined;
+    const latest = bucket.pop();
+    if (bucket.length === 0) this.pendingFailures.delete(key);
+    return latest;
   }
 
   /**

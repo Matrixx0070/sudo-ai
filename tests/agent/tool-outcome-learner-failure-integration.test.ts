@@ -60,6 +60,8 @@ describe('ToolOutcomeLearner + real failure-learner module (cli.ts wiring shape)
     expect(typeof like.getPreventionRule).toBe('function');
     expect(typeof like.hasSeenBefore).toBe('function');
     expect(typeof like.getSolution).toBe('function');
+    // The recovery producer reaches recordSolution on the wired module namespace.
+    expect(typeof like.recordSolution).toBe('function');
   });
 
   it('INT-2: failed tool calls are recorded into the FailureLearner', async () => {
@@ -114,5 +116,47 @@ describe('ToolOutcomeLearner + real failure-learner module (cli.ts wiring shape)
     expect(() =>
       learner.onToolResult('web.fetch', {}, false, 'ETIMEDOUT', 's-1'),
     ).not.toThrow();
+  });
+
+  it('INT-7: a same-session fail→success records a solution + retrievable prevention rule', async () => {
+    const fl = await freshFailureLearner();
+    const learner = new ToolOutcomeLearner({ failureLearner: fl });
+
+    const err = 'ENOENT no such file: /tmp/missing.txt';
+    learner.onToolResult('fs.read', { path: '/tmp/missing.txt' }, false, err, 's-1');
+    // Only a failure is on record so far — no solution yet.
+    expect(fl.getPreventionRule('fs.read', err)).toBeUndefined();
+
+    // Same tool, same session, later succeeds with corrected args.
+    learner.onToolResult('fs.read', { path: '/tmp/real.txt' }, true, undefined, 's-1');
+
+    const rule = fl.getPreventionRule('fs.read', err);
+    expect(rule).toBeDefined();
+    expect(rule).toContain('/tmp/real.txt'); // working args captured in the rule
+    const hint = learner.checkPreventionRulesForError('fs.read', err);
+    expect(hint).toContain('Prevention rule:');
+  });
+
+  it('INT-8: a success for a different tool does not record a recovery', async () => {
+    const fl = await freshFailureLearner();
+    const learner = new ToolOutcomeLearner({ failureLearner: fl });
+
+    const err = 'ETIMEDOUT connecting to host';
+    learner.onToolResult('web.fetch', { url: 'x' }, false, err, 's-1');
+    learner.onToolResult('fs.read', { path: 'y' }, true, undefined, 's-1'); // different tool
+
+    expect(fl.getPreventionRule('web.fetch', err)).toBeUndefined();
+  });
+
+  it('INT-9: session end clears pending so a later success is not a false recovery', async () => {
+    const fl = await freshFailureLearner();
+    const learner = new ToolOutcomeLearner({ failureLearner: fl });
+
+    const err = 'ETIMEDOUT connecting to host';
+    learner.onToolResult('web.fetch', { url: 'x' }, false, err, 's-1');
+    learner.onSessionEnd('s-1', [{ toolName: 'web.fetch', success: false, error: err }]);
+
+    learner.onToolResult('web.fetch', { url: 'z' }, true, undefined, 's-1');
+    expect(fl.getPreventionRule('web.fetch', err)).toBeUndefined();
   });
 });
