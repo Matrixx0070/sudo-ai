@@ -312,6 +312,65 @@ describe('executeToolCalls — verify-gate slice 1 + slice 2 integration', () =>
     });
   });
 
+  it('VGI-06b critic self-confidence rides out on the invoked event as criticConfidence', async () => {
+    const { registry, executed } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'reject',
+      reason: 'invoked',
+      rationale: 'old_string not present in file',
+      confidence: 77,
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    expect(executed()).toEqual(['coder.write-file']);
+    await drainMicrotasks();
+    const invoked = events.find((e) => e.event === 'verify_gate_critic_invoked');
+    // criticConfidence (the critic's own 0-100) is distinct from confidence
+    // (the slice-1 gate confidence) — both present, not conflated.
+    expect(invoked?.ctx).toMatchObject({
+      toolName: 'coder.write-file',
+      verdict: 'reject',
+      criticConfidence: 77,
+      confidence: 0.2,
+    });
+  });
+
+  it('VGI-06c invoked event carries criticConfidence: null when the critic omits it', async () => {
+    const { registry } = makeRegistry();
+    const { hooks, events } = makeHooks();
+    const { critic } = recordingCritic(async () => ({
+      invoked: true,
+      verdict: 'approve',
+      reason: 'invoked',
+      rationale: 'fine',
+    }));
+    const calls = [call('coder.write-file', { file_path: '/tmp/x.txt', old_string: 'absent' })];
+
+    await executeToolCalls(
+      calls, makeSession(), makeState(), () => undefined,
+      registry, undefined, undefined, hooks, undefined, undefined,
+      escalatingGate('coder.write-file'),
+      fixedGrounding(false),
+      false,
+      critic,
+    );
+
+    await drainMicrotasks();
+    const invoked = events.find((e) => e.event === 'verify_gate_critic_invoked');
+    expect(invoked?.ctx).toMatchObject({ verdict: 'approve', criticConfidence: null });
+  });
+
   it('VGI-07 escalate + grounding ok → critic gets low-confidence trigger, skipped hook event', async () => {
     const { registry, executed } = makeRegistry();
     const { hooks, events } = makeHooks();

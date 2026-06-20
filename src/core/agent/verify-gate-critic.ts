@@ -77,6 +77,12 @@ export interface CriticReviewResult {
   reason: string;
   /** Single-sentence justification when invoked. */
   rationale?: string;
+  /**
+   * Critic's self-assessed 0-100 certainty in its own verdict, when the model
+   * supplied it (`APPROVE (85): ...`). Omitted when the critic did not run or
+   * omitted the parenthetical. Observable-only — does not gate execution.
+   */
+  confidence?: number;
 }
 
 /** Minimal brain surface the critic needs — mirrors BrainLike from loop-helpers. */
@@ -327,6 +333,7 @@ export class CriticPass {
       verdict: parsed.verdict,
       reason: 'invoked',
       rationale: parsed.rationale,
+      ...(parsed.confidence !== undefined ? { confidence: parsed.confidence } : {}),
     };
   }
 
@@ -365,8 +372,10 @@ function criticDirective(): string {
   return [
     'You are operating as an IN-LOOP CRITIC for a single planned tool call.',
     'Output EXACTLY one line in the form:',
-    '  APPROVE: <one short sentence justifying that the call is safe to proceed>',
-    '  REJECT: <one short sentence describing the specific concern>',
+    '  APPROVE (<confidence>): <one short sentence justifying that the call is safe to proceed>',
+    '  REJECT (<confidence>): <one short sentence describing the specific concern>',
+    'where <confidence> is an integer 0-100 giving your certainty in THIS verdict',
+    '(100 = certain, 50 = a coin-flip). The (<confidence>) is strongly preferred but optional.',
     'Do not output anything else. No preamble, no markdown, no quotes around the verdict.',
   ].join('\n');
 }
@@ -432,21 +441,28 @@ function previewJson(value: unknown, maxLen: number): string {
 /**
  * Parse the critic's output. Accepts the first `APPROVE:` / `REJECT:` line
  * (case-insensitive, optional leading whitespace) and treats everything after
- * the colon as the rationale (truncated). Returns `null` on no match so the
- * caller can fail open.
+ * the colon as the rationale (truncated). An OPTIONAL parenthetical confidence
+ * may follow the verdict word — `APPROVE (85): ...` or `REJECT (40%): ...` —
+ * expressing the critic's 0-100 certainty in its own verdict; it is clamped to
+ * [0,100] and omitted from the result when absent. Returns `null` on no match
+ * so the caller can fail open.
  */
 export function parseVerdict(
   raw: string,
-): { verdict: 'approve' | 'reject'; rationale: string } | null {
+): { verdict: 'approve' | 'reject'; rationale: string; confidence?: number } | null {
   if (typeof raw !== 'string' || raw.length === 0) return null;
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
-    const m = /^(approve|reject)\s*:\s*(.*)$/i.exec(trimmed);
+    const m = /^(approve|reject)\s*(?:\(\s*(\d{1,3})\s*%?\s*\))?\s*:\s*(.*)$/i.exec(trimmed);
     if (!m) continue;
     const verdict = m[1]!.toLowerCase() === 'approve' ? 'approve' : 'reject';
-    const rationale = (m[2] ?? '').trim().slice(0, RATIONALE_MAX);
-    return { verdict, rationale };
+    const rationale = (m[3] ?? '').trim().slice(0, RATIONALE_MAX);
+    const result: { verdict: 'approve' | 'reject'; rationale: string; confidence?: number } = { verdict, rationale };
+    if (m[2] !== undefined) {
+      result.confidence = Math.max(0, Math.min(100, Number.parseInt(m[2], 10)));
+    }
+    return result;
   }
   return null;
 }
