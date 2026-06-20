@@ -16,6 +16,18 @@ import type { SomaticMarker } from './types.js';
 
 const log = createLogger('consciousness:emotional-memory');
 
+/** Days after which a NEVER-reinforced marker (times_triggered=0) is pruned as noise. 0 disables. Default 30. */
+function somaticRetentionDays(): number {
+  const raw = Number(process.env['SUDO_SOMATIC_RETENTION_DAYS']);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 30;
+}
+
+/** Hard cap on total somatic markers — least-reinforced/oldest beyond this are pruned. 0 disables. Default 5000. */
+function somaticMaxRows(): number {
+  const raw = Number(process.env['SUDO_SOMATIC_MAX_ROWS']);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 5000;
+}
+
 // ---------------------------------------------------------------------------
 // Row shape from the somatic_markers table
 // ---------------------------------------------------------------------------
@@ -271,5 +283,51 @@ export class SomaticMarkerStore {
         { cause: msg },
       );
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Retention
+  // -------------------------------------------------------------------------
+
+  /**
+   * Keep somatic_markers bounded. This is a LEARNING store, so retention is
+   * VALUE-AWARE rather than pure age:
+   *   (1) drop never-reinforced markers (times_triggered = 0) older than
+   *       `retentionDays` — one-off associations that never recurred (noise);
+   *   (2) if still over `maxRows`, drop the least-valuable (lowest
+   *       times_triggered, then oldest), keeping the most-reinforced.
+   * Both default to SUDO_SOMATIC_RETENTION_DAYS / SUDO_SOMATIC_MAX_ROWS; pass 0
+   * to disable a bound. Returns rows deleted. Fail-open — never throws.
+   */
+  prune(opts: { retentionDays?: number; maxRows?: number } = {}): number {
+    const retentionDays = opts.retentionDays ?? somaticRetentionDays();
+    const maxRows = opts.maxRows ?? somaticMaxRows();
+    let deleted = 0;
+    try {
+      const db = this.cdb.getDb();
+      // (1) Never-reinforced + stale. created_at is ISO, so compare against an
+      //     ISO cutoff (strftime ...Z), not datetime() which is space-format.
+      if (retentionDays > 0) {
+        // retentionDays is Number-coerced + isFinite/>=0-guarded above, so the modifier is safe to interpolate.
+        deleted += db
+          .prepare("DELETE FROM somatic_markers WHERE times_triggered = 0 AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now', ?)")
+          .run(`-${retentionDays} days`).changes;
+      }
+      // (2) Hard cap: keep the most-reinforced (then most-recent) maxRows, drop the rest.
+      // `id IS NOT NULL` in the subquery avoids SQLite's NOT IN + NULL footgun (a single
+      // NULL would make NOT IN match nothing); id is NOT NULL PK so this is belt-and-suspenders.
+      if (maxRows > 0) {
+        const total = (db.prepare('SELECT COUNT(*) AS c FROM somatic_markers').get() as { c: number }).c;
+        if (total > maxRows) {
+          deleted += db
+            .prepare('DELETE FROM somatic_markers WHERE id NOT IN (SELECT id FROM somatic_markers WHERE id IS NOT NULL ORDER BY times_triggered DESC, created_at DESC LIMIT ?)')
+            .run(maxRows).changes;
+        }
+      }
+      if (deleted > 0) log.info({ deleted, retentionDays, maxRows }, 'Somatic markers pruned');
+    } catch (err: unknown) {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Somatic marker prune failed — continuing');
+    }
+    return deleted;
   }
 }
