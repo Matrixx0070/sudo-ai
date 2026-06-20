@@ -211,6 +211,23 @@ export function buildEffectiveSystemPrompt(
   return folded.length > 0 ? `${systemPrompt}\n\n${folded}` : systemPrompt;
 }
 
+/**
+ * Cache-safe fold for the Anthropic prompt-cache path: returns the folded
+ * content as a SEPARATE, uncached leading system message (no cache_control) to
+ * sit AFTER `buildCachedSystemMessages(systemPrompt)`. This keeps the cached
+ * persona prefix byte-identical turn to turn (cache hits preserved); the
+ * per-turn folded content is simply uncached input — which it must be, since
+ * new dynamic content can never be cached. Empty / disabled → [] (no-op).
+ */
+export function buildFoldedSystemMessages(
+  messages: BrainMessage[],
+  enabled: boolean = readFoldSystemEnabled(),
+): Array<{ role: 'system'; content: string }> {
+  if (!enabled) return [];
+  const folded = extractSystemMessageContent(messages);
+  return folded.length > 0 ? [{ role: 'system', content: folded }] : [];
+}
+
 function toSDKMessages(messages: BrainMessage[]): unknown[] {
   return messages
     .filter((msg) => {
@@ -1088,14 +1105,14 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         // last sorted tool marked. Non-Anthropic paths are byte-identical to before.
         const cacheBreakpoints = isCacheBreakpointsEnabled() && isAnthropicModelId(modelId);
 
-        // Fold dropped array system messages into the system param (opt-in).
-        // No-op when SUDO_FOLD_SYSTEM_MESSAGES is unset.
+        // Fold dropped array system messages into the model input (opt-in;
+        // cache-safe — see _callSingleModel). No-op when the flag is unset.
         const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
 
         const streamParams: Record<string, unknown> = {
           model: modelHandle,
           messages: cacheBreakpoints
-            ? [...buildCachedSystemMessages(effectiveSystem), ...toSDKMessages(request.messages)]
+            ? [...buildCachedSystemMessages(systemPrompt), ...buildFoldedSystemMessages(request.messages), ...toSDKMessages(request.messages)]
             : toSDKMessages(request.messages),
           temperature,
           maxOutputTokens: maxTokens,
@@ -1266,13 +1283,16 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // (see stream() — same gating; non-Anthropic paths unchanged).
     const cacheBreakpoints = isCacheBreakpointsEnabled() && isAnthropicModelId(modelId);
 
-    // Fold dropped array system messages into the system param (opt-in). No-op
+    // Fold dropped array system messages into the model input (opt-in). No-op
     // when SUDO_FOLD_SYSTEM_MESSAGES is unset → byte-identical to prior behavior.
+    // Cache path: persona stays in buildCachedSystemMessages(systemPrompt)
+    // (cached prefix preserved) and the folded content rides a separate uncached
+    // system message. Non-cache path: folded into the `system` param.
     const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
 
     const callParams: Record<string, unknown> = {
       messages: cacheBreakpoints
-        ? [...buildCachedSystemMessages(effectiveSystem), ...toSDKMessages(request.messages)]
+        ? [...buildCachedSystemMessages(systemPrompt), ...buildFoldedSystemMessages(request.messages), ...toSDKMessages(request.messages)]
         : toSDKMessages(request.messages),
       temperature,
       maxOutputTokens: maxTokens,
