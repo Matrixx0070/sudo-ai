@@ -97,6 +97,39 @@ export function extractPriorKeyFacts(messages: BrainMessage[]): string {
   return '';
 }
 
+/**
+ * Deterministically extract concrete identifiers from the RAW user/assistant
+ * content (full text, NOT the truncated serialisation) — URLs, emails, UUIDs,
+ * codewords (FOO-BAR-123), file paths, long hashes. These are force-fed into the
+ * summary's Key Facts so the LLM's lossy summarisation can't silently drop a
+ * specific token on the FIRST fork (carry-forward only helps a fact already
+ * captured). System content is skipped to avoid noise like AUTO-ROUTING /
+ * SESSION-FORK. Bounded by `cap`; each token length-capped. Pure + exported.
+ */
+export function extractIdentifiers(messages: BrainMessage[], cap = 40): string[] {
+  const text = messages
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => m.content ?? '')
+    .join('\n');
+  const patterns: RegExp[] = [
+    /https?:\/\/[^\s<>"')\]]+/g,                                                          // URLs
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,                                // emails
+    /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,   // UUIDs
+    /\b[A-Z][A-Z0-9]{1,}(?:-[A-Z0-9]+)+\b/g,                                              // FOO-BAR-123, ZEBRA-QUASAR-7731
+    /(?:[A-Za-z]:\\|\/)[A-Za-z0-9._/\\-]{3,}/g,                                           // unix/windows file paths
+    /\b[0-9a-f]{16,}\b/g,                                                                 // long hex / hashes
+  ];
+  const found = new Set<string>();
+  for (const re of patterns) {
+    for (const m of text.matchAll(re)) {
+      const tok = m[0].slice(0, 120);
+      if (tok.length >= 4) found.add(tok);
+      if (found.size >= cap) return [...found];
+    }
+  }
+  return [...found];
+}
+
 async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Promise<string> {
   const serialised = messages
     .filter(m => m.role !== 'system' || !m.content.startsWith('[AutoCompact'))
@@ -116,6 +149,19 @@ async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Pro
       ].join('\n')
     : '';
 
+  // First-capture guarantee: deterministically extracted identifiers the LLM
+  // must not drop. Bounded (cap) and competes within the same char budget, so
+  // the bridge — and the per-turn tokens the fold injects — stays bounded.
+  const identifiers = extractIdentifiers(messages);
+  const idBlock = identifiers.length > 0
+    ? [
+        '',
+        'EXTRACTED IDENTIFIERS — these exact tokens appear in the conversation and MUST each be reproduced VERBATIM in your "## Key Facts" section (highest priority — drop prose before dropping any of these):',
+        identifiers.map(s => `- ${s}`).join('\n'),
+        '',
+      ].join('\n')
+    : '';
+
   const prompt = [
     'You are a conversation memory system. Produce a dense handoff brief for a NEW session that continues this conversation.',
     '',
@@ -131,6 +177,7 @@ async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Pro
     'codewords, numbers, credentials-references — these are the highest priority;',
     'drop prose before you drop a fact.',
     factCarry,
+    idBlock,
     'Conversation to summarise:',
     '',
     serialised,

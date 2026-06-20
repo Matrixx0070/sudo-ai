@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractPriorKeyFacts, forkSession } from '../../src/core/sessions/session-fork.js';
+import { extractPriorKeyFacts, extractIdentifiers, forkSession } from '../../src/core/sessions/session-fork.js';
 import type { BrainMessage, Session } from '../../src/core/sessions/types.js';
 
 const PRIOR_BRIDGE = [
@@ -119,5 +119,63 @@ describe('forkSession carries prior key facts into the summarization prompt', ()
 
     await forkSession(old, brain, sm);
     expect(captured[0]).not.toContain('CARRIED KEY FACTS');
+  });
+});
+
+describe('extractIdentifiers (first-capture)', () => {
+  it('extracts codewords, URLs, emails, UUIDs, paths, hashes from user/assistant content', () => {
+    const ids = extractIdentifiers([
+      { role: 'user', content: 'codeword ZEBRA-QUASAR-7731, see https://api.example.com/v2/x and email a@b.co' },
+      { role: 'assistant', content: 'config /etc/app/limits.yaml, uuid 550e8400-e29b-41d4-a716-446655440000, hash deadbeefcafe1234' },
+    ]);
+    expect(ids).toContain('ZEBRA-QUASAR-7731');
+    expect(ids).toContain('https://api.example.com/v2/x');
+    expect(ids).toContain('a@b.co');
+    expect(ids).toContain('/etc/app/limits.yaml');
+    expect(ids).toContain('550e8400-e29b-41d4-a716-446655440000');
+    expect(ids).toContain('deadbeefcafe1234');
+  });
+
+  it('skips system content (no AUTO-ROUTING / SESSION-FORK noise) and dedupes', () => {
+    const ids = extractIdentifiers([
+      { role: 'system', content: 'AUTO-ROUTING [INTENT]\n[SESSION FORK — continued]' },
+      { role: 'user', content: 'KEEP-THIS-1 and KEEP-THIS-1 again' },
+    ]);
+    expect(ids).toContain('KEEP-THIS-1');
+    expect(ids.filter((x) => x === 'KEEP-THIS-1')).toHaveLength(1);
+    expect(ids).not.toContain('AUTO-ROUTING');
+    expect(ids).not.toContain('SESSION-FORK');
+  });
+
+  it('respects the cap and returns [] when nothing matches', () => {
+    const many: BrainMessage[] = [{ role: 'user', content: Array.from({ length: 60 }, (_, i) => `TOK-${i}-X`).join(' ') }];
+    expect(extractIdentifiers(many, 10)).toHaveLength(10);
+    expect(extractIdentifiers([{ role: 'user', content: 'just some plain words here' }])).toEqual([]);
+  });
+});
+
+describe('forkSession first-capture: extracted identifiers reach the prompt', () => {
+  function makeSession(id: string, messages: BrainMessage[]): Session {
+    return { id, channel: 'http', peerId: 'peer-1', messages } as unknown as Session;
+  }
+
+  it('FORK-FID-3: a FIRST fork forces a user-mentioned codeword into the prompt even with no prior bridge', async () => {
+    const captured: string[] = [];
+    const brain = {
+      call: async (o: { messages: Array<{ role: string; content: string }> }) => {
+        captured.push(o.messages[0]!.content);
+        return { content: '## Key Facts\n- ok' };
+      },
+    };
+    const sm = { getOrCreate: async () => makeSession('new', []), archive: async () => undefined, save: async () => undefined };
+    const old = makeSession('cur', [
+      { role: 'user', content: 'Please remember the deploy key MAGENTA-FALCON-5519 for later.' },
+      { role: 'assistant', content: 'Noted.' },
+    ]);
+
+    await forkSession(old, brain, sm);
+    expect(captured[0]).toContain('EXTRACTED IDENTIFIERS');
+    expect(captured[0]).toContain('MAGENTA-FALCON-5519');
+    expect(captured[0]).not.toContain('CARRIED KEY FACTS'); // first fork → no prior bridge
   });
 });
