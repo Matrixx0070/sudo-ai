@@ -209,6 +209,11 @@ describe('ConsciousnessOrchestrator deep insight contracts', () => {
         surpriseLevel: 0.4,
         temporalNarrative: 'Past: improved. Present: strong. Future: grow.',
         activeConcepts: ['react', 'typescript'],
+        selfCompetence: {
+          overallConfidence: 0.75,
+          strengths: [{ domain: 'coding', confidence: 0.9 }],
+          weaknesses: [{ domain: 'design', confidence: 0.3 }],
+        },
       };
 
       expect(ctx.counterfactualLessons).toBeDefined();
@@ -218,6 +223,9 @@ describe('ConsciousnessOrchestrator deep insight contracts', () => {
       expect(ctx.activeConcepts).toBeDefined();
       expect(ctx.counterfactualLessons.length).toBe(1);
       expect(ctx.surpriseLevel).toBe(0.4);
+      // Track 2: self-assessed competence is part of the brief contract.
+      expect(ctx.selfCompetence).toBeDefined();
+      expect(ctx.selfCompetence?.strengths[0]?.domain).toBe('coding');
     });
 
     it('should handle empty deep-bridge fields gracefully', () => {
@@ -232,6 +240,7 @@ describe('ConsciousnessOrchestrator deep insight contracts', () => {
         surpriseLevel: 0,
         temporalNarrative: '',
         activeConcepts: [],
+        selfCompetence: null,
       };
 
       expect(ctx.counterfactualLessons).toEqual([]);
@@ -239,6 +248,8 @@ describe('ConsciousnessOrchestrator deep insight contracts', () => {
       expect(ctx.surpriseLevel).toBe(0);
       expect(ctx.temporalNarrative).toBe('');
       expect(ctx.activeConcepts).toEqual([]);
+      // Track 2: competence is null when SelfModel has no signal yet.
+      expect(ctx.selfCompetence).toBeNull();
     });
   });
 });
