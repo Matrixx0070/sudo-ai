@@ -171,6 +171,46 @@ export function splitConcatenatedJsonObjects(raw: string): Record<string, unknow
  * - Assistant messages with tool calls use content array with ToolCallPart objects
  * - Tool result messages use content array with ToolResultPart objects
  */
+/**
+ * Opt-in (SUDO_FOLD_SYSTEM_MESSAGES=1). `toSDKMessages` drops every role:'system'
+ * message from request.messages (the SDK requires system content via the `system`
+ * param, not the array). That silently discards ALL in-loop guidance injected as
+ * system messages — auto-plan PLAN, compaction/session-fork summaries, safety
+ * warnings, routing hints, etc. — so the model never sees them. When this flag is
+ * on, their content is FOLDED into the `system` param instead, so it actually
+ * reaches the model. Default OFF: flipping it delivers many previously-inert
+ * injections at once — a real behavior + token change — so measure before enabling.
+ */
+export function readFoldSystemEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['SUDO_FOLD_SYSTEM_MESSAGES'] === '1';
+}
+
+/** Concatenate non-empty role:'system' message contents, in order (for folding). */
+export function extractSystemMessageContent(messages: BrainMessage[]): string {
+  return messages
+    .filter((m) => m.role === 'system' && typeof m.content === 'string' && m.content.trim().length > 0)
+    .map((m) => m.content)
+    .join('\n\n');
+}
+
+/**
+ * The effective system prompt: the base persona `systemPrompt` with any
+ * request-array system messages appended, when folding is enabled. Pure +
+ * exported for tests. Disabled or no system messages → returns `systemPrompt`
+ * unchanged (byte-identical to prior behavior). NOTE: when folding AND Anthropic
+ * prompt-caching are both on, the per-turn folded suffix reduces cache hits on
+ * the system prefix — acceptable for this opt-in flag; prod (ollama) is uncached.
+ */
+export function buildEffectiveSystemPrompt(
+  systemPrompt: string,
+  messages: BrainMessage[],
+  enabled: boolean = readFoldSystemEnabled(),
+): string {
+  if (!enabled) return systemPrompt;
+  const folded = extractSystemMessageContent(messages);
+  return folded.length > 0 ? `${systemPrompt}\n\n${folded}` : systemPrompt;
+}
+
 function toSDKMessages(messages: BrainMessage[]): unknown[] {
   return messages
     .filter((msg) => {
@@ -1048,16 +1088,20 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         // last sorted tool marked. Non-Anthropic paths are byte-identical to before.
         const cacheBreakpoints = isCacheBreakpointsEnabled() && isAnthropicModelId(modelId);
 
+        // Fold dropped array system messages into the system param (opt-in).
+        // No-op when SUDO_FOLD_SYSTEM_MESSAGES is unset.
+        const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
+
         const streamParams: Record<string, unknown> = {
           model: modelHandle,
           messages: cacheBreakpoints
-            ? [...buildCachedSystemMessages(systemPrompt), ...toSDKMessages(request.messages)]
+            ? [...buildCachedSystemMessages(effectiveSystem), ...toSDKMessages(request.messages)]
             : toSDKMessages(request.messages),
           temperature,
           maxOutputTokens: maxTokens,
         };
         if (!cacheBreakpoints) {
-          streamParams.system = systemPrompt;
+          streamParams.system = effectiveSystem;
         }
 
         if (request.tools && request.tools.length > 0) {
@@ -1222,9 +1266,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // (see stream() — same gating; non-Anthropic paths unchanged).
     const cacheBreakpoints = isCacheBreakpointsEnabled() && isAnthropicModelId(modelId);
 
+    // Fold dropped array system messages into the system param (opt-in). No-op
+    // when SUDO_FOLD_SYSTEM_MESSAGES is unset → byte-identical to prior behavior.
+    const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
+
     const callParams: Record<string, unknown> = {
       messages: cacheBreakpoints
-        ? [...buildCachedSystemMessages(systemPrompt), ...toSDKMessages(request.messages)]
+        ? [...buildCachedSystemMessages(effectiveSystem), ...toSDKMessages(request.messages)]
         : toSDKMessages(request.messages),
       temperature,
       maxOutputTokens: maxTokens,
@@ -1233,7 +1281,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // seed; providers that don't support it ignore the field.
     if (request.seed !== undefined) callParams.seed = request.seed;
     if (!cacheBreakpoints) {
-      callParams.system = systemPrompt;
+      callParams.system = effectiveSystem;
     }
     if (request.tools && request.tools.length > 0) {
       const toolEntries = request.tools.map((t: any): [string, object] => {
