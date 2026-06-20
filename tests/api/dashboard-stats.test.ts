@@ -1,8 +1,8 @@
 /**
  * @file tests/api/dashboard-stats.test.ts
  * @description GET /api/admin/dashboard/stats returns real measurements
- * (sessions from mind.db, tokens/cost from knowledge.db api_costs, disk via
- * statfs) and null — never a fabricated zero — when a source is unavailable.
+ * (sessions + tokens/cost from mind.db, disk via statfs) and null — never a
+ * fabricated zero — when a source is unavailable.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -75,24 +75,23 @@ describe('GET /api/admin/dashboard/stats', () => {
     );
     ins.run('session:s1:meta', sessionMeta('s1', 'active'));
     ins.run('session:s2:meta', sessionMeta('s2', 'archived'));
-    mind.close();
 
-    const know = new Database(path.join(seededDir, 'knowledge.db'));
-    know.exec(
-      `CREATE TABLE api_costs (
-         provider TEXT, model TEXT, operation TEXT,
-         input_tokens INTEGER, output_tokens INTEGER,
-         cost_usd REAL, created_at TEXT
+    // Real per-call spend lives in mind.db api_call_log (written by the
+    // cost-tracker), not the legacy knowledge.db api_costs table.
+    mind.exec(
+      `CREATE TABLE api_call_log (
+         id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
+         total_tokens INTEGER, estimated_cost_usd REAL, called_at TEXT
        )`,
     );
-    const cost = know.prepare(
-      `INSERT INTO api_costs
-         (provider, model, operation, input_tokens, output_tokens, cost_usd, created_at)
-       VALUES ('anthropic', 'm', 'completion', ?, ?, ?, ?)`,
+    const cost = mind.prepare(
+      `INSERT INTO api_call_log
+         (id, provider, model, total_tokens, estimated_cost_usd, called_at)
+       VALUES (?, 'anthropic', 'm', ?, ?, ?)`,
     );
-    cost.run(100, 50, 0.25, new Date().toISOString());
-    cost.run(999, 999, 9.99, '2020-01-01T00:00:00.000Z'); // before today — excluded
-    know.close();
+    cost.run('c1', 150, 0.25, new Date().toISOString());
+    cost.run('c2', 1998, 9.99, '2020-01-01T00:00:00.000Z'); // before today — excluded
+    mind.close();
   });
 
   afterAll(() => {
@@ -136,18 +135,18 @@ describe('GET /api/admin/dashboard/stats', () => {
     expect(typeof payload['cpu']).toBe('number');
   });
 
-  it('DS-3: empty api_costs table sums to a real zero (distinct from null)', async () => {
+  it('DS-3: empty api_call_log table sums to a real zero (distinct from null)', async () => {
     const zeroDir = mkdtempSync(path.join(os.tmpdir(), 'dash-stats-zero-'));
     try {
-      const know = new Database(path.join(zeroDir, 'knowledge.db'));
-      know.exec(
-        `CREATE TABLE api_costs (
-           provider TEXT, model TEXT, operation TEXT,
-           input_tokens INTEGER, output_tokens INTEGER,
-           cost_usd REAL, created_at TEXT
+      const mind = new Database(path.join(zeroDir, 'mind.db'));
+      mind.exec(`CREATE TABLE chunks (path TEXT, source TEXT, text TEXT)`);
+      mind.exec(
+        `CREATE TABLE api_call_log (
+           id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
+           total_tokens INTEGER, estimated_cost_usd REAL, called_at TEXT
          )`,
       );
-      know.close();
+      mind.close();
 
       const router = await importHandlerWithDataDir(zeroDir);
       const { res, body } = makeRes();
@@ -155,7 +154,7 @@ describe('GET /api/admin/dashboard/stats', () => {
       const payload = body();
       expect(payload['tokensToday']).toBe(0);
       expect(payload['costToday']).toBe(0);
-      expect(payload['activeSessions']).toBeNull(); // no mind.db in this dir
+      expect(payload['activeSessions']).toBe(0); // mind.db present, no sessions
     } finally {
       rmSync(zeroDir, { recursive: true, force: true });
     }
