@@ -67,6 +67,13 @@ export interface UnifiedMessage {
   channel: ChannelType;
   /** Platform-specific peer/chat identifier (user ID, JID, DM channel ID…). */
   peerId: string;
+  /**
+   * Network address of the sender when the transport exposes one (e.g. the web
+   * channel's socket remoteAddress). The web peerId is a synthetic `web-<uuid>`
+   * that never reveals loopback, so this carries the real IP for the
+   * diagnostic-peer / daily-log skip gate. Absent for channels without an IP.
+   */
+  peerIp?: string;
   /** Human-readable display name of the sender. */
   peerName: string;
   /** Whether this arrived in a DM or a group/guild channel. */

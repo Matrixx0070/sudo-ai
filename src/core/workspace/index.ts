@@ -8,6 +8,6 @@ export { WorkspaceManager } from './files.js';
 export { BootstrapRunner } from './bootstrap.js';
 export type { BootstrapSendFn, BootstrapReceiveFn } from './bootstrap.js';
 export { DailyLogManager } from './daily-log.js';
-export { isDiagnosticPeer, shouldSkipDailyLog, diagnosticDailyLogSkipEnabled } from './diagnostic-peer.js';
+export { isDiagnosticPeer, shouldSkipDailyLog, shouldSkipDailyLogForMessage, diagnosticDailyLogSkipEnabled } from './diagnostic-peer.js';
 export { injectWorkspaceContext } from './injector.js';
 export type { WorkspaceInjectorConfig, WorkspaceInjectorDeps } from './injector.js';
