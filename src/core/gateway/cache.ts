@@ -13,6 +13,8 @@ const MAX_ENTRIES = 200;
 
 interface CacheEntry { data: string; expiresAt: number }
 const store = new Map<string, CacheEntry>();
+let hits = 0;
+let misses = 0;
 
 /**
  * Build a short cache key from the model name and the last message in the
@@ -34,8 +36,9 @@ export function getCacheKey(body: string): string {
 /** Return cached data for `key`, or null if absent / expired. */
 export function cacheGet(key: string): string | null {
   const entry = store.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) { store.delete(key); return null; }
+  if (!entry) { misses++; return null; }
+  if (Date.now() > entry.expiresAt) { store.delete(key); misses++; return null; }
+  hits++;
   return entry.data;
 }
 
@@ -50,3 +53,15 @@ export function cacheSet(key: string, data: string): void {
 
 /** Current number of live cache entries (for health stats). */
 export function cacheSize(): number { return store.size; }
+
+/** Cache telemetry for /health — hits/misses since process start + live entry count. */
+export function cacheStats(): { cacheHits: number; cacheMisses: number; cacheSize: number } {
+  return { cacheHits: hits, cacheMisses: misses, cacheSize: store.size };
+}
+
+/** Reset the cache store + counters. For test isolation. */
+export function cacheClear(): void {
+  store.clear();
+  hits = 0;
+  misses = 0;
+}
