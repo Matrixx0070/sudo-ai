@@ -32,7 +32,7 @@ import {
 
 const log = createLogger('api:admin:dashboard');
 
-const KNOWLEDGE_DB_PATH = path.join(DATA_DIR, 'knowledge.db');
+const MIND_DB_PATH = path.join(DATA_DIR, 'mind.db');
 
 /** Percent of the DATA_DIR volume in use, or null when statfs fails. */
 async function diskUsagePercent(): Promise<number | null> {
@@ -77,30 +77,32 @@ interface UsageTodayRow {
 }
 
 /**
- * Tokens and USD recorded in knowledge.db api_costs since local midnight,
- * or null when the DB or table is unavailable (tracking not set up — unknown,
- * not zero).
+ * Tokens and USD recorded in mind.db api_call_log since local midnight, or null
+ * when the DB or table is unavailable (tracking not set up — unknown, not zero).
+ * Real per-call spend lives in api_call_log (written by the cost-tracker); the
+ * legacy knowledge.db api_costs table was never created, so this previously
+ * returned null on every request.
  */
 async function usageToday(): Promise<{ tokensToday: number; costToday: number } | null> {
   let db: BetterSqlite3T.Database | undefined;
   try {
     const mod = await import('better-sqlite3');
     const Database = (mod.default ?? mod) as typeof BetterSqlite3T;
-    db = new Database(KNOWLEDGE_DB_PATH, { readonly: true });
-    if (!tableExists(db, 'api_costs')) return null;
+    db = new Database(MIND_DB_PATH, { readonly: true });
+    if (!tableExists(db, 'api_call_log')) return null;
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const row = db
       .prepare(
-        `SELECT SUM(input_tokens + output_tokens) AS tokens,
-                SUM(cost_usd)                     AS cost
-         FROM api_costs
-         WHERE created_at >= ?`,
+        `SELECT SUM(total_tokens)        AS tokens,
+                SUM(estimated_cost_usd)  AS cost
+         FROM api_call_log
+         WHERE called_at >= ?`,
       )
       .get(todayStart) as UsageTodayRow;
     return { tokensToday: Number(row.tokens ?? 0), costToday: Number(row.cost ?? 0) };
   } catch (err) {
-    log.debug({ err }, 'api_costs query failed — token/cost usage unavailable');
+    log.debug({ err }, 'api_call_log query failed — token/cost usage unavailable');
     return null;
   } finally {
     db?.close();
