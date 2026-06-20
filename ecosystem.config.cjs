@@ -121,6 +121,13 @@ module.exports = {
         // response), fail-open, no API cost. Read per-turn in the agent loop's post-run region.
         SUDO_COMPLETION_VERIFY: '1',
 
+        // Somatic markers (orphan wiring PR #344 + trigger fix PR #346): at each interaction end,
+        // persist learned trigger→emotion associations (somatic_markers) when emotion intensity >= 0.6.
+        // Trigger keywords come from the user's last message (the earlier getActiveConcepts source was
+        // empty live → no-op). Default OFF; enabled on prod here 2026-06-20. Additive learning, fail-open,
+        // ZDR-gated, NO LLM cost. NOTE: somatic_markers has no retention cap yet (follow-up).
+        SUDO_CONSCIOUSNESS_SOMATIC_MARKERS: '1',
+
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
         SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18900',
 
