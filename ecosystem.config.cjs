@@ -85,6 +85,15 @@ module.exports = {
         // Wave 2.2h-tail security HIGH-1: must be set or admin endpoints are unauthenticated.
         GATEWAY_TOKEN: process.env['GATEWAY_TOKEN'] || '',
 
+        // Admin REST API (/api/admin/*) — read-only enabled on prod 2026-06-20 (PR #331).
+        // SUDO_ADMIN_API must live in this env block: gateway/server.ts reads it at
+        // module-load (ADMIN_API_ON), before ConfigLoader loads config/.env. The token
+        // value lives in config/.env (gitignored); fail-closed if unset. Danger routes
+        // (service/restart, service/stop, system/backup, system/restore) stay 403 until
+        // SUDO_ADMIN_API_DANGER=1.
+        SUDO_ADMIN_API: '1',
+        SUDO_AI_DASHBOARD_TOKEN: process.env['SUDO_AI_DASHBOARD_TOKEN'] || '',
+
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
         SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18900',
 
