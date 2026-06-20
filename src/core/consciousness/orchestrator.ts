@@ -11,7 +11,7 @@ import { ConsciousnessError } from './errors.js';
 import type { BodyState, EmotionalValence, AttentionSignal } from './types.js';
 import { EmbodiedStateEngine } from './embodied-state/index.js';
 import { SpreadingActivationNetwork } from './spreading-activation/index.js';
-import { EmotionalStateManager } from './emotional-memory/index.js';
+import { EmotionalStateManager, SomaticMarkerStore } from './emotional-memory/index.js';
 import { AttentionManager } from './attention-system/index.js';
 import { CognitiveStream } from './cognitive-stream/index.js';
 import type { InterruptResult } from './cognitive-stream/index.js';
@@ -117,6 +117,8 @@ export class ConsciousnessOrchestrator {
   private embodiedState!: EmbodiedStateEngine;
   private spreadingActivation!: SpreadingActivationNetwork;
   private emotionalState!: EmotionalStateManager;
+  /** Lazily-built somatic-marker store (orphan wiring), used only when SUDO_CONSCIOUSNESS_SOMATIC_MARKERS=1. */
+  private _somaticMarkers: SomaticMarkerStore | null = null;
   private attention!: AttentionManager;
   private cognitiveStream!: CognitiveStream;
   private episodicMemory!: EpisodicMemory;
@@ -352,6 +354,39 @@ export class ConsciousnessOrchestrator {
     if (!this._zdrEnabled) {
       try { this.episodicMemory.recordEpisode(episode); } catch (e) { swallow('episodic record')(e); }
       try { this.selfModel.updateFromEpisode(episode); } catch (e) { swallow('self-model update')(e); }
+    }
+
+    // Close the emotional-memory learning loop — persist learned trigger→emotion
+    // associations (somatic markers) instead of computing the emotional valence each
+    // turn and discarding it. The SomaticMarkerStore has a schema + an admin read
+    // surface but no production writer, so somatic_markers stayed empty. Additive
+    // learning only (no per-turn behavior change yet) and NO LLM cost — reuses the
+    // already-computed valence + the cheap active-concept set. Opt-in
+    // SUDO_CONSCIOUSNESS_SOMATIC_MARKERS=1; fail-open. Gates on !this._zdrEnabled
+    // INTENTIONALLY (like the episodic block above — markers persist interaction-
+    // derived data; the procedural-learn block below relies only on the caller's ZDR
+    // gate, so don't "align" them). KNOWN LIMIT: bounded to one new marker per novel
+    // (concept, emotion) per turn, but somatic_markers has no retention cap yet —
+    // follow-up should prune by age/row count like traces.db.
+    if (process.env['SUDO_CONSCIOUSNESS_SOMATIC_MARKERS'] === '1' && !this._zdrEnabled) {
+      try {
+        const minIntensity = 0.6; // only learn emotionally-significant associations
+        const emotion = this.emotionalState.getCurrentState();
+        if (emotion && emotion.intensity >= minIntensity) {
+          const concepts = this.getActiveConcepts(3).filter((c) => c && c.trim().length > 0);
+          if (concepts.length > 0) {
+            this._somaticMarkers ??= new SomaticMarkerStore(this.db);
+            // Reinforce markers for the active concepts (bumps times_triggered), then
+            // learn ONE new association when none yet links these concepts to the
+            // current dominant emotion — bounds growth to genuinely novel feelings.
+            const reinforced = this._somaticMarkers.getSomaticResponse(concepts);
+            if (!reinforced.some((m) => m.emotion === emotion.dominantEmotion)) {
+              this._somaticMarkers.createMarker(concepts[0]!, emotion.dominantEmotion, emotion.intensity, episode.id);
+            }
+            log.debug({ activeConcepts: concepts.length, reinforced: reinforced.length, emotion: emotion.dominantEmotion, intensity: emotion.intensity }, 'Somatic markers: emotional-memory loop');
+          }
+        }
+      } catch (e) { swallow('somatic marker learn')(e); }
     }
 
     const tomOutcome: 'positive' | 'negative' | 'neutral' =

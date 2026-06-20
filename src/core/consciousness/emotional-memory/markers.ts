@@ -66,7 +66,7 @@ export class SomaticMarkerStore {
       );
     }
     this.cdb = cdb;
-    log.info('SomaticMarkerStore initialised');
+    log.debug('SomaticMarkerStore initialised');
   }
 
   // -------------------------------------------------------------------------
