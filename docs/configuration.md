@@ -573,8 +573,21 @@ See `docs/cross-platform-control-guide.md` for per-OS examples, full setup, and 
 ### Voice
 
 ```bash
-ELEVENLABS_API_KEY=...              # Required for system.voice tool (text-to-speech)
+ELEVENLABS_API_KEY=...              # Cloud TTS (highest priority); xAI/OpenAI keys also used
+                                    # TTS provider priority: ElevenLabs → xAI → OpenAI → Kokoro
+
+# Kokoro — local, offline, key-free TTS (Kokoro-82M ONNX via kokoro-js).
+# Runs on-device; first synthesis downloads model weights (~80MB for q8), then cached.
+SUDO_KOKORO_TTS=1                   # Enable Kokoro in automatic provider selection
+                                    #   (explicit provider:"kokoro" works without this flag)
+SUDO_KOKORO_MODEL=onnx-community/Kokoro-82M-v1.0-ONNX   # Override model id
+SUDO_KOKORO_DTYPE=q8                # fp32|fp16|q8|q4|q4f16 (default q8)
+SUDO_KOKORO_DEVICE=cpu              # cpu|wasm|webgpu (default cpu)
+SUDO_KOKORO_VOICE=af_heart         # Default Kokoro voice (e.g. af_heart, am_adam, bf_emma)
 ```
+
+> Kokoro is an `optionalDependency` (`kokoro-js`). If absent, cloud providers still work and
+> Kokoro returns a clear install hint. Output is 24 kHz WAV.
 
 ### Email
 

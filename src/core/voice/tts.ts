@@ -1,14 +1,16 @@
 /**
  * TextToSpeech — synthesises text to audio.
  *
- * Provider priority (first with key wins unless overridden):
+ * Provider priority (first available wins unless overridden):
  *   ElevenLabs (ELEVENLABS_API_KEY) → xAI (XAI_VOICE_API_KEY) → OpenAI (OPENAI_API_KEY)
+ *   → Kokoro (local ONNX, opt-in via SUDO_KOKORO_TTS=1)
  *
- * Uses raw fetch — no SDK dependencies.
+ * Cloud providers use raw fetch — no SDK dependencies. Kokoro runs on-device.
  */
 
 import { createLogger } from '../shared/logger.js';
 import { ElevenLabsTTS } from './elevenlabs.js';
+import { KokoroLocalTTS } from './kokoro.js';
 import type { TTSResult, TTSOptions } from './types.js';
 
 const log = createLogger('voice:tts');
@@ -34,6 +36,22 @@ function estimateDurationMs(bufferBytes: number): number {
   return Math.round((bufferBytes / bitrateBytesPerSec) * 1000);
 }
 
+/**
+ * Duration of a canonical PCM/float WAV buffer, read from its header.
+ *
+ * Uses the byte-rate field (offset 28) so it is correct regardless of bit
+ * depth (Kokoro emits 24 kHz 32-bit float). Falls back to a 48000 B/s estimate
+ * for buffers too small or malformed to carry a header.
+ */
+function estimateWavDurationMs(buffer: Buffer): number {
+  const FALLBACK_BYTES_PER_SEC = 48_000;
+  if (buffer.length < 44 || buffer.toString('ascii', 0, 4) !== 'RIFF') {
+    return Math.round((Math.max(0, buffer.length - 44) / FALLBACK_BYTES_PER_SEC) * 1000);
+  }
+  const byteRate = buffer.readUInt32LE(28) || FALLBACK_BYTES_PER_SEC;
+  return Math.round(((buffer.length - 44) / byteRate) * 1000);
+}
+
 // ---------------------------------------------------------------------------
 // TextToSpeech
 // ---------------------------------------------------------------------------
@@ -42,11 +60,13 @@ export class TextToSpeech {
   private readonly xaiKey: string | undefined;
   private readonly openaiKey: string | undefined;
   private readonly elevenlabs: ElevenLabsTTS;
+  private readonly kokoro: KokoroLocalTTS;
 
   constructor() {
     this.xaiKey = process.env['XAI_VOICE_API_KEY'];
     this.openaiKey = process.env['OPENAI_API_KEY'];
     this.elevenlabs = new ElevenLabsTTS();
+    this.kokoro = new KokoroLocalTTS();
 
     if (this.elevenlabs.available) {
       log.info('TTS primary provider: ElevenLabs');
@@ -54,6 +74,8 @@ export class TextToSpeech {
       log.info('TTS primary provider: xAI');
     } else if (this.openaiKey) {
       log.info('TTS primary provider: OpenAI');
+    } else if (this.kokoro.available) {
+      log.info('TTS primary provider: Kokoro (local ONNX)');
     } else {
       log.warn('No TTS provider configured — synthesize() will fail');
     }
@@ -77,8 +99,25 @@ export class TextToSpeech {
       text = text.slice(0, 4096);
     }
 
-    const autoProvider = this.elevenlabs.available ? 'elevenlabs' : (this.xaiKey ? 'xai' : 'openai');
+    const autoProvider = this.elevenlabs.available
+      ? 'elevenlabs'
+      : this.xaiKey
+        ? 'xai'
+        : this.openaiKey
+          ? 'openai'
+          : this.kokoro.available
+            ? 'kokoro'
+            : 'openai';
     const provider = options.provider ?? autoProvider;
+
+    if (provider === 'kokoro') {
+      // Explicit requests run even when SUDO_KOKORO_TTS is unset.
+      const audioBuffer = await this.kokoro.synthesize(text, {
+        voice: options.voice,
+        speed: options.speed,
+      });
+      return { audioBuffer, format: 'wav', durationMs: estimateWavDurationMs(audioBuffer) };
+    }
 
     if (provider === 'elevenlabs') {
       if (!this.elevenlabs.available) {
