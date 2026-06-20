@@ -41,20 +41,22 @@ describe('KokoroLocalTTS', () => {
     fromPretrainedMock.mockReset();
     delete process.env['SUDO_KOKORO_TTS'];
     delete process.env['SUDO_KOKORO_VOICE'];
+    delete process.env['SUDO_KOKORO_DEVICE'];
     installFakeModel();
   });
 
   afterEach(() => {
     delete process.env['SUDO_KOKORO_TTS'];
     delete process.env['SUDO_KOKORO_VOICE'];
+    delete process.env['SUDO_KOKORO_DEVICE'];
   });
 
-  it('is not available for auto-selection unless SUDO_KOKORO_TTS is enabled', async () => {
+  it('is available by default and disabled only by SUDO_KOKORO_TTS=0', async () => {
     const { KokoroLocalTTS } = await import('../../src/core/voice/kokoro.js');
-    expect(new KokoroLocalTTS().available).toBe(false);
-
-    process.env['SUDO_KOKORO_TTS'] = '1';
     expect(new KokoroLocalTTS().available).toBe(true);
+
+    process.env['SUDO_KOKORO_TTS'] = '0';
+    expect(new KokoroLocalTTS().available).toBe(false);
   });
 
   it('synthesizes a WAV buffer using the configured default voice', async () => {
@@ -93,40 +95,83 @@ describe('KokoroLocalTTS', () => {
     const { KokoroLocalTTS } = await import('../../src/core/voice/kokoro.js');
     await expect(new KokoroLocalTTS().synthesize('')).rejects.toThrow(/non-empty string/);
   });
+
+  it('falls back to the cpu device when a non-cpu device fails to load', async () => {
+    process.env['SUDO_KOKORO_DEVICE'] = 'cuda';
+    const model = {
+      voices: { af_heart: {} },
+      generate: generateMock,
+    };
+    generateMock.mockResolvedValue({ toWav: () => fakeWav(48_000) });
+    fromPretrainedMock
+      .mockRejectedValueOnce(new Error('no CUDA device available'))
+      .mockResolvedValueOnce(model);
+
+    const { KokoroLocalTTS } = await import('../../src/core/voice/kokoro.js');
+    const buf = await new KokoroLocalTTS().synthesize('hello');
+
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(fromPretrainedMock).toHaveBeenCalledTimes(2);
+    // First attempt uses the configured cuda device, second falls back to cpu.
+    expect(fromPretrainedMock.mock.calls[0]?.[1]).toMatchObject({ device: 'cuda' });
+    expect(fromPretrainedMock.mock.calls[1]?.[1]).toMatchObject({ device: 'cpu' });
+
+    delete process.env['SUDO_KOKORO_DEVICE'];
+  });
+
+  it('does not retry when the configured device is already cpu, and throws an actionable error', async () => {
+    fromPretrainedMock.mockRejectedValue(new Error('native binding boom'));
+
+    const { KokoroLocalTTS } = await import('../../src/core/voice/kokoro.js');
+    await expect(new KokoroLocalTTS().synthesize('hello')).rejects.toThrow(/approve-builds/);
+    expect(fromPretrainedMock).toHaveBeenCalledTimes(1);
+    expect(fromPretrainedMock.mock.calls[0]?.[1]).toMatchObject({ device: 'cpu' });
+  });
 });
 
-describe('TextToSpeech kokoro routing', () => {
+describe('TextToSpeech local-only routing', () => {
   beforeEach(() => {
     vi.resetModules();
     generateMock.mockReset();
     fromPretrainedMock.mockReset();
+    // A cloud key is set to prove it is NOT used while cloud TTS is disabled.
+    process.env['OPENAI_API_KEY'] = 'sk-test';
     delete process.env['ELEVENLABS_API_KEY'];
     delete process.env['XAI_VOICE_API_KEY'];
-    delete process.env['OPENAI_API_KEY'];
     delete process.env['SUDO_KOKORO_TTS'];
+    delete process.env['SUDO_TTS_CLOUD'];
     installFakeModel();
   });
 
   afterEach(() => {
+    delete process.env['OPENAI_API_KEY'];
     delete process.env['SUDO_KOKORO_TTS'];
+    delete process.env['SUDO_TTS_CLOUD'];
   });
 
-  it('routes provider:"kokoro" to the local model and returns wav format', async () => {
+  it('defaults to local kokoro (wav) even when a cloud key is present', async () => {
+    const { TextToSpeech } = await import('../../src/core/voice/tts.js');
+    const result = await new TextToSpeech().synthesize('hello');
+
+    expect(result.format).toBe('wav');
+    expect(result.durationMs).toBe(1000); // 48000 data bytes / 48000 bytes-per-sec
+    expect(generateMock).toHaveBeenCalled();
+  });
+
+  it('falls back to kokoro when a cloud provider is requested but SUDO_TTS_CLOUD is off', async () => {
+    const { TextToSpeech } = await import('../../src/core/voice/tts.js');
+    const result = await new TextToSpeech().synthesize('hello', { provider: 'openai' });
+
+    expect(result.format).toBe('wav'); // routed to local kokoro, not OpenAI mp3
+    expect(generateMock).toHaveBeenCalled();
+  });
+
+  it('routes provider:"kokoro" to the local model', async () => {
     const { TextToSpeech } = await import('../../src/core/voice/tts.js');
     const result = await new TextToSpeech().synthesize('hello', { provider: 'kokoro' });
 
     expect(result.format).toBe('wav');
     expect(Buffer.isBuffer(result.audioBuffer)).toBe(true);
-    expect(result.durationMs).toBe(1000); // 48000 data bytes / 48000 bytes-per-sec
     expect(fromPretrainedMock).toHaveBeenCalled();
-  });
-
-  it('auto-selects kokoro when no cloud keys are set and SUDO_KOKORO_TTS=1', async () => {
-    process.env['SUDO_KOKORO_TTS'] = '1';
-    const { TextToSpeech } = await import('../../src/core/voice/tts.js');
-    const result = await new TextToSpeech().synthesize('hello');
-
-    expect(result.format).toBe('wav');
-    expect(generateMock).toHaveBeenCalled();
   });
 });

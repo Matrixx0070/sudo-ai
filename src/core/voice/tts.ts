@@ -61,6 +61,8 @@ export class TextToSpeech {
   private readonly openaiKey: string | undefined;
   private readonly elevenlabs: ElevenLabsTTS;
   private readonly kokoro: KokoroLocalTTS;
+  /** Cloud TTS (ElevenLabs/xAI/OpenAI) is opt-in; default is local-only. */
+  private readonly cloudEnabled: boolean;
 
   constructor() {
     this.xaiKey = process.env['XAI_VOICE_API_KEY'];
@@ -68,16 +70,19 @@ export class TextToSpeech {
     this.elevenlabs = new ElevenLabsTTS();
     this.kokoro = new KokoroLocalTTS();
 
-    if (this.elevenlabs.available) {
-      log.info('TTS primary provider: ElevenLabs');
+    const cloudFlag = process.env['SUDO_TTS_CLOUD'];
+    this.cloudEnabled = cloudFlag === '1' || cloudFlag === 'true';
+
+    if (!this.cloudEnabled) {
+      log.info('TTS: local-only mode (Kokoro ONNX). Set SUDO_TTS_CLOUD=1 to re-enable ElevenLabs/xAI/OpenAI.');
+    } else if (this.elevenlabs.available) {
+      log.info('TTS primary provider: ElevenLabs (cloud enabled)');
     } else if (this.xaiKey) {
-      log.info('TTS primary provider: xAI');
+      log.info('TTS primary provider: xAI (cloud enabled)');
     } else if (this.openaiKey) {
-      log.info('TTS primary provider: OpenAI');
-    } else if (this.kokoro.available) {
-      log.info('TTS primary provider: Kokoro (local ONNX)');
+      log.info('TTS primary provider: OpenAI (cloud enabled)');
     } else {
-      log.warn('No TTS provider configured — synthesize() will fail');
+      log.info('TTS: cloud enabled but no cloud key set — using local Kokoro');
     }
   }
 
@@ -99,19 +104,29 @@ export class TextToSpeech {
       text = text.slice(0, 4096);
     }
 
-    const autoProvider = this.elevenlabs.available
-      ? 'elevenlabs'
-      : this.xaiKey
-        ? 'xai'
-        : this.openaiKey
-          ? 'openai'
-          : this.kokoro.available
-            ? 'kokoro'
-            : 'openai';
-    const provider = options.provider ?? autoProvider;
+    // Provider resolution. Default is local-only (Kokoro); the paid cloud
+    // providers are kept in the code but only reachable when SUDO_TTS_CLOUD=1.
+    let provider = options.provider;
+    if (!this.cloudEnabled && provider && provider !== 'kokoro') {
+      log.warn(
+        { requested: provider },
+        'Cloud TTS provider requested but cloud TTS is disabled (set SUDO_TTS_CLOUD=1) — using local Kokoro',
+      );
+      provider = 'kokoro';
+    }
+    if (!provider) {
+      provider = this.cloudEnabled
+        ? this.elevenlabs.available
+          ? 'elevenlabs'
+          : this.xaiKey
+            ? 'xai'
+            : this.openaiKey
+              ? 'openai'
+              : 'kokoro'
+        : 'kokoro';
+    }
 
     if (provider === 'kokoro') {
-      // Explicit requests run even when SUDO_KOKORO_TTS is unset.
       const audioBuffer = await this.kokoro.synthesize(text, {
         voice: options.voice,
         speed: options.speed,

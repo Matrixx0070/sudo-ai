@@ -23,7 +23,7 @@ const logger = createLogger('voice-builtin');
 const ttsTool: ToolDefinition = {
   name: 'voice.tts',
   description:
-    'Convert text to speech audio. Supports ElevenLabs, xAI, OpenAI, and Kokoro (local ONNX) TTS providers. Saves the audio file and returns the path. Cloud providers require ELEVENLABS_API_KEY, XAI_VOICE_API_KEY, or OPENAI_API_KEY; Kokoro runs offline with no key (enable for auto-selection via SUDO_KOKORO_TTS=1).',
+    'Convert text to speech audio. Default is the local Kokoro (ONNX) provider — offline, no API key. Cloud providers (ElevenLabs/xAI/OpenAI) are disabled unless SUDO_TTS_CLOUD=1. Saves the audio file and returns the path.',
   category: 'voice',
   timeout: 60_000,
   parameters: {
@@ -34,8 +34,8 @@ const ttsTool: ToolDefinition = {
     },
     provider: {
       type: 'string',
-      description: 'TTS provider to use. Auto-selects based on available API keys (then local Kokoro) when omitted.',
-      enum: ['elevenlabs', 'xai', 'openai', 'kokoro'],
+      description: 'TTS provider. Defaults to local "kokoro". Cloud providers (elevenlabs/xai/openai) only work when SUDO_TTS_CLOUD=1, otherwise they fall back to kokoro.',
+      enum: ['kokoro', 'elevenlabs', 'xai', 'openai'],
     },
     voice: {
       type: 'string',
