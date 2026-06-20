@@ -150,6 +150,7 @@
     "vitest": "^4.1.1"
   },
   "optionalDependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "electron": "^33.0.0",
     "kokoro-js": "^1.2.1"
   }

@@ -89,7 +89,7 @@ const ttsTool: ToolDefinition = {
 const sttTool: ToolDefinition = {
   name: 'voice.stt',
   description:
-    'Transcribe an audio file to text using OpenAI Whisper. Supports mp3, wav, ogg, webm, m4a formats. Requires OPENAI_API_KEY.',
+    'Transcribe an audio file to text using Whisper. Default is the local Whisper (ONNX) provider — offline, no API key. Cloud Whisper (Groq/ElevenLabs/OpenAI) is disabled unless SUDO_STT_CLOUD=1. Supports mp3, wav, ogg, webm, m4a formats.',
   category: 'voice',
   timeout: 60_000,
   parameters: {

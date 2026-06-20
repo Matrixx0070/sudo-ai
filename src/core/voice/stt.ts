@@ -1,16 +1,18 @@
 /**
- * SpeechToText — multi-provider Whisper transcription.
+ * SpeechToText — Whisper transcription, local-first.
  *
- * Provider priority (first available key wins):
- *   1. Groq  (GROQ_API_KEY)   — FREE 28,800 sec/day, fastest
- *   2. xAI   (XAI_API_KEY)    — if xAI adds audio endpoint
- *   3. OpenAI (OPENAI_API_KEY) — paid, fallback
+ * Default is the local Whisper ONNX provider (offline, key-free, on-device).
+ * Cloud providers are opt-in and only reachable when SUDO_STT_CLOUD=1:
+ *   1. Groq      (GROQ_API_KEY)       — FREE 28,800 sec/day, fastest
+ *   2. ElevenLabs (ELEVENLABS_API_KEY) — scribe_v1
+ *   3. OpenAI    (OPENAI_API_KEY)      — paid, fallback
  *
- * All providers use the same OpenAI-compatible multipart/form-data API.
+ * Cloud providers use the same OpenAI-compatible multipart/form-data API.
  * Supported formats: mp3, wav, ogg, webm, m4a
  */
 
 import { createLogger } from '../shared/logger.js';
+import { WhisperLocalSTT } from './whisper-local.js';
 import type { STTResult, STTOptions } from './types.js';
 
 const log = createLogger('voice:stt');
@@ -108,29 +110,44 @@ export class SpeechToText {
   private readonly groqKey:        string | undefined;
   private readonly elevenLabsKey:  string | undefined;
   private readonly openaiKey:      string | undefined;
+  private readonly whisper:        WhisperLocalSTT;
+  /** Cloud STT (Groq/ElevenLabs/OpenAI) is opt-in; default is local-only. */
+  private readonly cloudEnabled:   boolean;
 
   constructor() {
     this.groqKey       = process.env['GROQ_API_KEY'];
     this.elevenLabsKey = process.env['ELEVENLABS_API_KEY'];
     this.openaiKey     = process.env['OPENAI_API_KEY'];
+    this.whisper       = new WhisperLocalSTT();
 
-    if (this.groqKey) {
-      log.info('STT primary provider: Groq (free Whisper)');
+    const cloudFlag = process.env['SUDO_STT_CLOUD'];
+    this.cloudEnabled = cloudFlag === '1' || cloudFlag === 'true';
+
+    if (!this.cloudEnabled) {
+      log.info('STT: local-only mode (Whisper ONNX). Set SUDO_STT_CLOUD=1 to re-enable Groq/ElevenLabs/OpenAI.');
+    } else if (this.groqKey) {
+      log.info('STT primary provider: Groq (free Whisper, cloud enabled)');
     } else if (this.elevenLabsKey) {
-      log.info('STT primary provider: ElevenLabs');
+      log.info('STT primary provider: ElevenLabs (cloud enabled)');
     } else if (this.openaiKey) {
-      log.info('STT primary provider: OpenAI Whisper');
+      log.info('STT primary provider: OpenAI Whisper (cloud enabled)');
     } else {
-      log.warn('No STT provider configured — set GROQ_API_KEY (free) or ELEVENLABS_API_KEY');
+      log.info('STT: cloud enabled but no cloud key set — using local Whisper');
     }
   }
 
   get available(): boolean {
+    return this.whisper.available || !!(this.cloudEnabled && (this.groqKey || this.elevenLabsKey || this.openaiKey));
+  }
+
+  /** True when at least one cloud STT key is configured. */
+  private get hasCloudKey(): boolean {
     return !!(this.groqKey || this.elevenLabsKey || this.openaiKey);
   }
 
   /**
-   * Transcribe audio. Priority: Groq (free) → ElevenLabs → OpenAI.
+   * Transcribe audio. Default is local Whisper (offline); cloud providers
+   * (Groq → ElevenLabs → OpenAI) are used only when SUDO_STT_CLOUD=1.
    */
   async transcribe(audioBuffer: Buffer, options: STTOptions = {}): Promise<STTResult> {
     if (!Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0) {
@@ -138,8 +155,39 @@ export class SpeechToText {
     }
 
     if (!this.available) {
-      log.warn('Skipping transcription — no STT provider configured');
+      log.warn('Skipping transcription — local Whisper disabled and no cloud STT provider configured');
       return { text: '', language: 'en', confidence: 0, durationMs: 0 };
+    }
+
+    // Provider resolution. Default is local-only (Whisper); the cloud providers
+    // are kept in the code but only reachable when SUDO_STT_CLOUD=1.
+    let provider = options.provider;
+    if (!this.cloudEnabled && provider && provider !== 'whisper-local') {
+      log.warn(
+        { requested: provider },
+        'Cloud STT provider requested but cloud STT is disabled (set SUDO_STT_CLOUD=1) — using local Whisper',
+      );
+      provider = 'whisper-local';
+    }
+    if (!provider) {
+      provider = this.cloudEnabled && this.hasCloudKey ? 'groq' : 'whisper-local';
+    }
+
+    // Local Whisper path (default).
+    if (provider === 'whisper-local') {
+      if (this.whisper.available) {
+        try {
+          return await this.whisper.transcribe(audioBuffer, options);
+        } catch (err) {
+          if (this.cloudEnabled && this.hasCloudKey) {
+            log.warn({ err: String(err) }, 'Local Whisper failed — falling back to cloud STT');
+          } else {
+            throw err;
+          }
+        }
+      } else if (!(this.cloudEnabled && this.hasCloudKey)) {
+        throw new Error('Local Whisper STT is disabled (SUDO_WHISPER_STT=0) and cloud STT is not configured');
+      }
     }
 
     const filename = inferFilename(audioBuffer);
@@ -171,6 +219,11 @@ export class SpeechToText {
         audioBuffer, filename, OPENAI_URL, this.openaiKey,
         options.model ?? DEFAULT_MODEL, options.language,
       );
+    }
+
+    // Last resort: local Whisper, even if it was not the first choice.
+    if (this.whisper.available) {
+      return await this.whisper.transcribe(audioBuffer, options);
     }
 
     throw new Error('All STT providers failed or unconfigured');

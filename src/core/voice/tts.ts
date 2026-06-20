@@ -1,9 +1,10 @@
 /**
  * TextToSpeech — synthesises text to audio.
  *
- * Provider priority (first available wins unless overridden):
- *   ElevenLabs (ELEVENLABS_API_KEY) → xAI (XAI_VOICE_API_KEY) → OpenAI (OPENAI_API_KEY)
- *   → Kokoro (local ONNX, opt-in via SUDO_KOKORO_TTS=1)
+ * Default is the local Kokoro ONNX provider (offline, key-free, on-device).
+ * Cloud providers are opt-in and only reachable when SUDO_TTS_CLOUD=1, in
+ * priority order: ElevenLabs (ELEVENLABS_API_KEY) → xAI (XAI_VOICE_API_KEY)
+ * → OpenAI (OPENAI_API_KEY). Local Kokoro can be disabled with SUDO_KOKORO_TTS=0.
  *
  * Cloud providers use raw fetch — no SDK dependencies. Kokoro runs on-device.
  */
