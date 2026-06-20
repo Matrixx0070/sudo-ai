@@ -1369,6 +1369,23 @@ async function boot(): Promise<void> {
         registerShutdown(() => traceStore.close());
         log.info({ db: path.join(traceDataDir, 'traces.db') }, 'Learning flywheel: TraceStore wired — recording execution traces');
 
+        // Retention: keep traces.db bounded — prune by age + row cap at boot, then
+        // daily (mirrors the LoopSignatureStore prune wiring). Defaults
+        // (SUDO_TRACE_RETENTION_DAYS=30, SUDO_TRACE_MAX_ROWS=200000) are on; set
+        // either to 0 to disable that bound. Fail-open; the timer is unref'd so it
+        // never holds the process open and is cleared on shutdown.
+        try {
+          const prunedTraces = traceStore.prune();
+          log.info({ pruned: prunedTraces }, 'TraceStore retention: pruned at boot');
+        } catch (err) {
+          log.warn({ err: String(err) }, 'TraceStore retention: boot prune failed — continuing');
+        }
+        const tracePruneTimer = setInterval(() => {
+          try { traceStore.prune(); } catch (err) { log.warn({ err: String(err) }, 'TraceStore retention: prune failed'); }
+        }, 24 * 60 * 60 * 1000);
+        if (tracePruneTimer.unref) tracePruneTimer.unref();
+        registerShutdown(() => clearInterval(tracePruneTimer));
+
         // Theme 1 slice 2: TraceDrivenPolicy — learned ROUTING INFLUENCE.
         // Strictly opt-in BEYOND recording (SUDO_TRACE_POLICY=1) and honoring the
         // module kill-switch (SUDO_POLICY_DISABLE=1). Conservative by construction
