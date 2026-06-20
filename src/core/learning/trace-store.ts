@@ -36,6 +36,18 @@ function captureMaxBytes(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 16384; // 16 KB default
 }
 
+/** Retention age in days — traces older than this (by created_at) are pruned. 0 disables. Default 30. */
+export function traceRetentionDays(): number {
+  const raw = Number(process.env['SUDO_TRACE_RETENTION_DAYS']);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 30;
+}
+
+/** Hard cap on total trace rows — oldest beyond this are pruned. 0 disables. Default 200000. */
+export function traceMaxRows(): number {
+  const raw = Number(process.env['SUDO_TRACE_MAX_ROWS']);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 200000;
+}
+
 /** Truncate a captured field to the byte cap, annotating how many chars were dropped. */
 export function capCaptured(s: string | undefined | null): string | undefined {
   if (s == null) return undefined;
@@ -575,6 +587,47 @@ export class TraceStore {
     ).get(params) as Record<string, unknown>;
 
     return (row.cnt as number) ?? 0;
+  }
+
+  // -- Retention -------------------------------------------------------------
+
+  /**
+   * Keep traces.db bounded by deleting old rows. Prunes by age (created_at
+   * older than `retentionDays`) and then by a hard row cap (oldest rows beyond
+   * `maxRows`). Both default to the SUDO_TRACE_RETENTION_DAYS /
+   * SUDO_TRACE_MAX_ROWS env values; pass 0 for either to disable that bound.
+   * Returns the number of rows deleted. DB errors propagate — callers guard
+   * with try/catch (the cli.ts boot + daily-timer wiring does).
+   */
+  prune(opts: { retentionDays?: number; maxRows?: number } = {}): number {
+    const db = this.ensure();
+    const retentionDays = opts.retentionDays ?? traceRetentionDays();
+    const maxRows = opts.maxRows ?? traceMaxRows();
+    let deleted = 0;
+
+    // Age-based. created_at is space-format `datetime('now')`, so compare against
+    // datetime('now', '-N days') (also space-format) — an ISO cutoff would
+    // silently no-op against the space-format column.
+    if (retentionDays > 0) {
+      deleted += db
+        .prepare("DELETE FROM traces WHERE created_at < datetime('now', ?)")
+        .run(`-${retentionDays} days`).changes;
+    }
+
+    // Hard row cap. id is monotonic (AUTOINCREMENT), so the row at OFFSET maxRows
+    // from the newest is the highest id to drop — delete it and everything older.
+    if (maxRows > 0) {
+      const cutoff = db
+        .prepare('SELECT id FROM traces ORDER BY id DESC LIMIT 1 OFFSET ?')
+        .get(maxRows) as { id: number } | undefined;
+      if (cutoff) {
+        deleted += db.prepare('DELETE FROM traces WHERE id <= ?').run(cutoff.id).changes;
+      }
+    }
+
+    if (deleted > 0) log.info({ deleted, retentionDays, maxRows }, 'TraceStore retention pruned');
+    else log.debug({ retentionDays, maxRows }, 'TraceStore retention: nothing to prune');
+    return deleted;
   }
 
   // -- Cleanup ---------------------------------------------------------------
