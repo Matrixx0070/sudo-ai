@@ -452,7 +452,12 @@ async function boot(): Promise<void> {
 
   try {
     const { RAGEngine } = await import('./core/knowledge/rag-engine.js');
-    ragEngine = new RAGEngine(db);
+    // Pass an EmbeddingService so RAG's hybrid search actually uses the vector
+    // path (it falls back to BM25-only when absent — which it always was). Pairs
+    // with the corpus vector backfill that populates chunks_vec; without both,
+    // vector recall is silently keyword-only. Self-degrades to BM25 if the
+    // embedding key is missing/quota-dead.
+    ragEngine = new RAGEngine(db, new EmbeddingService(db));
     brain.setRAGEngine(ragEngine);
     log.info('RAG engine attached to brain');
   } catch (err: unknown) {
