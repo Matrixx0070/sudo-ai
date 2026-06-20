@@ -75,6 +75,18 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
 
+        // ---- Cost budget guardrails: DISABLED by operator request ----
+        // `off` ⇒ Infinity (see src/core/billing/daily-budget.ts and
+        // src/core/self-build/orchestrator.ts). This turns off, in one place:
+        //   - the system.self-diagnostic API-cost FAIL/warn status,
+        //   - the intelligence.daily-brief "API costs high" nag,
+        //   - the daemon quota-warning events (detectQuotaWarning),
+        //   - the self-build loop's daily LLM spend gate.
+        // None of these ever *capped* spend — they only reported/aborted on it.
+        // Re-enable by setting a positive dollar figure (e.g. '5' / '20').
+        SUDO_DAILY_BUDGET_USD: 'off',
+        SUDO_DAILY_LLM_BUDGET_USD: 'off',
+
         // Add wasmtime to PATH for WASM sandbox tool execution
         PATH: `${process.env.PATH}:/root/.wasmtime/bin`,
 

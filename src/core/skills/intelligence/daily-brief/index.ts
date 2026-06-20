@@ -234,7 +234,9 @@ async function buildBrief(input: DailyBriefInput, ctx: ToolContext): Promise<Dai
 
   // Action items
   // Flag when today's spend crosses 80% of the configurable daily budget
-  // (default $5 → $4), matching the self-diagnostic warn tier.
+  // (default $5 → $4), matching the self-diagnostic warn tier. When the budget
+  // is disabled (SUDO_DAILY_BUDGET_USD=off ⇒ Infinity), the threshold is
+  // Infinity and this never fires.
   if (health.costToday > dailyBudgetUsd() * 0.8) {
     actionItems.push(`API costs high today ($${health.costToday.toFixed(3)}) — review usage`);
   }

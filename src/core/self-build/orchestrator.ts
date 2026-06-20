@@ -120,6 +120,25 @@ const DEFAULT_MAX_GATE_ABORT_TICKS = 3;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Self-build daily LLM spend cap (USD). SUDO_DAILY_LLM_BUDGET_USD overrides the
+ * $20 default. A value of 0, a negative number, or off/none/unlimited/inf/
+ * infinity (case-insensitive) disables the gate entirely (returns Infinity) —
+ * the self-build loop then runs regardless of daily spend. Unset ⇒ default.
+ */
+function resolveDailyLlmCap(): number {
+  const raw = process.env['SUDO_DAILY_LLM_BUDGET_USD'];
+  if (raw === undefined) return DEFAULT_DAILY_BUDGET_USD;
+  const trimmed = raw.trim();
+  if (['off', 'none', 'unlimited', 'inf', 'infinity'].includes(trimmed.toLowerCase())) {
+    return Infinity;
+  }
+  const parsed = parseFloat(trimmed);
+  if (!Number.isFinite(parsed)) return DEFAULT_DAILY_BUDGET_USD;
+  if (parsed <= 0) return Infinity;
+  return parsed;
+}
+
 function loadState(cwd: string): SelfBuildState {
   const statePath = join(cwd, STATE_FILENAME);
   const defaults: SelfBuildState = {
@@ -371,10 +390,12 @@ export async function runSelfBuildTick(deps: SelfBuildDeps): Promise<TickResult>
   // Gate 5: Budget gate
   // -------------------------------------------------------------------------
   const budgetUsdToday = queryDailySpend(deps.mindDb);
-  const cap = parseFloat(
-    process.env['SUDO_DAILY_LLM_BUDGET_USD'] ?? String(DEFAULT_DAILY_BUDGET_USD),
-  );
-  if (budgetUsdToday >= cap) {
+  const cap = resolveDailyLlmCap();
+  // A non-finite cap means the gate is disabled (SUDO_DAILY_LLM_BUDGET_USD=off):
+  // the self-build loop then runs regardless of daily spend. Finite caps keep
+  // the fail-closed behaviour (queryDailySpend returns Infinity on missing
+  // tables, which still trips the gate).
+  if (Number.isFinite(cap) && budgetUsdToday >= cap) {
     log.warn(
       { budgetUsdToday, cap },
       'self-build: daily LLM budget exceeded — abort',
