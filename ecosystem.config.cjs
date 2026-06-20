@@ -106,6 +106,14 @@ module.exports = {
         // 500/run, fail-open. Requires OPENAI_API_KEY (no-op without; key lives in config/.env).
         SUDO_SEMANTIC_COMPACT: '1',
 
+        // Native tool correction (gap #7): when an MCP tool call fails, auto-correct to
+        // the SUDO-AI native equivalent and re-dispatch (e.g. shell_execute -> system.exec,
+        // filesystem_read_file -> coder.read-file, code_search -> coder.grep). Default OFF;
+        // enabled on prod here 2026-06-20 (wired in PR #336). Read per-call in registry.execute,
+        // fail-open (any error returns the original MCP failure). All 6 native targets verified
+        // registered. Leave SUDO_NATIVE_TOOL_CORRECTION unset (=0 would hard-disable correction).
+        SUDO_NATIVE_TOOL_CORRECTION_FALLBACK: '1',
+
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
         SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18900',
 
