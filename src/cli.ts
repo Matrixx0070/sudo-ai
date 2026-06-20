@@ -2658,22 +2658,30 @@ async function boot(): Promise<void> {
     }
   });
 
-  // Schedule AutoDream memory consolidation every 6 hours
+  // Schedule AutoDream memory consolidation. Interval defaults to 6h; override
+  // with SUDO_DREAM_INTERVAL_MS (e.g. for verification or tuning). The schedule
+  // is re-upserted whenever the configured interval differs from the persisted
+  // job, so changing the env actually takes effect on the next boot (and reverts
+  // when unset) instead of being pinned by the original registration.
   try {
     const dreamJobId = 'auto-dream-consolidation';
+    const rawMs = Number(process.env['SUDO_DREAM_INTERVAL_MS']);
+    const dreamMs = Number.isFinite(rawMs) && rawMs >= 1000 ? rawMs : 6 * 60 * 60 * 1000;
     const existingDream = cronStore.get(dreamJobId);
-    if (!existingDream) {
+    const current = existingDream?.schedule;
+    const needsUpsert = !existingDream || current?.kind !== 'every' || current.ms !== dreamMs;
+    if (needsUpsert) {
       cronStore.upsert({
         id: dreamJobId,
         name: 'Memory Consolidation (AutoDream)',
         enabled: true,
-        schedule: { kind: 'every', ms: 6 * 60 * 60 * 1000 },
+        schedule: { kind: 'every', ms: dreamMs },
         payload: { kind: 'systemEvent', event: 'dream:run' },
         sessionTarget: 'isolated',
         consecutiveErrors: 0,
       });
     }
-    log.info('AutoDream scheduled every 6 hours');
+    log.info({ intervalMs: dreamMs, rescheduled: needsUpsert }, 'AutoDream scheduled');
   } catch (err) {
     log.warn({ err: String(err) }, 'AutoDream scheduling failed');
   }
@@ -3166,11 +3174,13 @@ async function boot(): Promise<void> {
       if (!isChunkContradictionEnabled()) return;
       const chunk = db.getChunk(chunkId);
       if (!chunk) return;
-      await resolveChunkContradictions(
+      const res = await resolveChunkContradictions(
         chunk,
         { db, embed: (t) => chunkEmbeddings.embed(t), judge: contradictionJudge },
         { candidateFilter: (c) => c.source === 'learning' },
       );
+      // Observable per-fact so the live hook is verifiable (no-op otherwise stays silent).
+      log.info({ chunkId, superseded: res.supersededIds.length }, 'dream fact: contradiction check');
     };
 
     // AutoDream: brain caller + the raw better-sqlite3 Database (MindDB exposes
