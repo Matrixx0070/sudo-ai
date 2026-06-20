@@ -309,6 +309,14 @@ export class MindDB {
     const info = this.db
       .prepare<{ id: number }>('DELETE FROM chunks WHERE id = :id')
       .run({ id });
+    // Keep the ANN index in sync — chunks_vec is a vec0 virtual table with no
+    // FK/trigger linkage to chunks, so its rows must be removed explicitly
+    // (only exists when sqlite-vec is loaded). Best-effort.
+    if (this.vecLoaded) {
+      // vec0 binds its primary key as a BigInt (a plain number is rejected).
+      try { this.db.prepare('DELETE FROM chunks_vec WHERE chunk_id = ?').run(BigInt(id)); }
+      catch { /* table absent or already gone — ignore */ }
+    }
     return info.changes > 0;
   }
 
