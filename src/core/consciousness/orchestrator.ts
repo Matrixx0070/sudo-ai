@@ -147,6 +147,8 @@ export class ConsciousnessOrchestrator {
   private emotionalState!: EmotionalStateManager;
   /** Lazily-built somatic-marker store (orphan wiring), used only when SUDO_CONSCIOUSNESS_SOMATIC_MARKERS=1. */
   private _somaticMarkers: SomaticMarkerStore | null = null;
+  /** Counts new somatic markers learned; triggers a retention prune every N (bounds somatic_markers growth). */
+  private _somaticWrites = 0;
   private attention!: AttentionManager;
   private cognitiveStream!: CognitiveStream;
   private episodicMemory!: EpisodicMemory;
@@ -393,9 +395,9 @@ export class ConsciousnessOrchestrator {
     // SUDO_CONSCIOUSNESS_SOMATIC_MARKERS=1; fail-open. Gates on !this._zdrEnabled
     // INTENTIONALLY (like the episodic block above — markers persist interaction-
     // derived data; the procedural-learn block below relies only on the caller's ZDR
-    // gate, so don't "align" them). KNOWN LIMIT: bounded to one new marker per novel
-    // (concept, emotion) per turn, but somatic_markers has no retention cap yet —
-    // follow-up should prune by age/row count like traces.db.
+    // gate, so don't "align" them). Bounded to one new marker per novel (concept,
+    // emotion) per turn; somatic_markers is retention-capped (value-aware prune every
+    // 25 writes — SUDO_SOMATIC_RETENTION_DAYS / SUDO_SOMATIC_MAX_ROWS).
     if (process.env['SUDO_CONSCIOUSNESS_SOMATIC_MARKERS'] === '1' && !this._zdrEnabled) {
       try {
         const minIntensity = 0.6; // only learn emotionally-significant associations
@@ -416,6 +418,10 @@ export class ConsciousnessOrchestrator {
             const reinforced = this._somaticMarkers.getSomaticResponse(concepts);
             if (!reinforced.some((m) => m.emotion === emotion.dominantEmotion)) {
               this._somaticMarkers.createMarker(concepts[0]!, emotion.dominantEmotion, emotion.intensity, episode.id);
+              // Bound somatic_markers growth — prune every 25 new associations
+              // (value-aware: keeps reinforced markers, drops never-reinforced noise).
+              // Reset the counter so it stays small (no eventual float-precision drift).
+              if (++this._somaticWrites % 25 === 0) { this._somaticWrites = 0; this._somaticMarkers.prune(); }
             }
             log.debug({ triggers: concepts.length, reinforced: reinforced.length, emotion: emotion.dominantEmotion, intensity: emotion.intensity }, 'Somatic markers: emotional-memory loop');
           }

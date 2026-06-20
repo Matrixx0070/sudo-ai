@@ -74,6 +74,38 @@ describe('SomaticMarkerStore (emotional-memory learning loop)', () => {
     expect(shouldCreate).toBe(false);
     expect(store.getAllMarkers()).toHaveLength(1);
   });
+
+  it('SM-7: prune drops never-reinforced stale markers, keeps reinforced + recent', () => {
+    const stale = store.createMarker('aaastale', 'fear', 0.7);        // never reinforced
+    const reinfOld = store.createMarker('bbbreinforced', 'joy', 0.7);
+    store.getSomaticResponse(['bbbreinforced']);                       // times_triggered = 1
+    store.createMarker('cccrecent', 'calm', 0.7);                     // never reinforced but recent
+    // Backdate the two "old" markers 40 days (ISO cutoff, matching created_at format).
+    const back = cdb.getDb().prepare("UPDATE somatic_markers SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-40 days') WHERE id = ?");
+    back.run(stale.id); back.run(reinfOld.id);
+
+    expect(store.prune({ retentionDays: 30, maxRows: 0 })).toBe(1); // only the never-reinforced stale one
+    expect(store.getAllMarkers().map((m) => m.triggerPattern).sort()).toEqual(['bbbreinforced', 'cccrecent']);
+  });
+
+  it('SM-8: prune caps total rows, keeping the most-reinforced', () => {
+    store.createMarker('m0', 'fear', 0.5);                              // 0
+    store.createMarker('m2', 'joy', 0.5);
+    store.getSomaticResponse(['m2']); store.getSomaticResponse(['m2']); // 2
+    store.createMarker('m1', 'calm', 0.5);
+    store.getSomaticResponse(['m1']);                                   // 1
+    store.createMarker('m0b', 'pride', 0.5);                           // 0
+
+    expect(store.prune({ retentionDays: 0, maxRows: 2 })).toBe(2);
+    expect(store.getAllMarkers().map((m) => m.triggerPattern).sort()).toEqual(['m1', 'm2']);
+  });
+
+  it('SM-9: prune is a no-op within bounds and when disabled (0/0)', () => {
+    store.createMarker('keepme', 'calm', 0.5);
+    expect(store.prune({ retentionDays: 30, maxRows: 100 })).toBe(0);
+    expect(store.prune({ retentionDays: 0, maxRows: 0 })).toBe(0);
+    expect(store.getAllMarkers()).toHaveLength(1);
+  });
 });
 
 describe('extractTriggerConcepts (somatic-marker trigger keywords)', () => {
