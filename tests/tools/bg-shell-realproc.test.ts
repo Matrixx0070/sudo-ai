@@ -54,22 +54,30 @@ describe('background shell — real process (Branch A)', () => {
     const shellId = data(r)['shellId'] as string;
     expect(shellId).toBeTruthy();
 
+    const linesOf = (s: string): string[] => s.split('\n').map((x) => x.trim()).filter(Boolean);
     let acc = '';
     let status = 'running';
-    for (let i = 0; i < 40 && status === 'running'; i++) {
+    for (let i = 0; i < 60 && status === 'running'; i++) {
       await sleep(100);
       const p = await T.poll.execute({ shellId }, ctx());
       acc += (data(p)['stdout'] as string) ?? '';
       status = data(p)['status'] as string;
     }
-    const final = await T.poll.execute({ shellId }, ctx());
-    acc += (data(final)['stdout'] as string) ?? '';
+    // The child's 'exit' event can fire before its last stdout 'data' events
+    // flush — keep polling (exactly how an agent polls again after 'exited')
+    // until all three lines have arrived, capturing the authoritative final state.
+    let fin: ToolResult | undefined;
+    for (let i = 0; i < 25; i++) {
+      fin = await T.poll.execute({ shellId }, ctx());
+      acc += (data(fin)['stdout'] as string) ?? '';
+      if (linesOf(acc).length >= 3 && data(fin)['status'] !== 'running') break;
+      await sleep(100);
+    }
 
-    const lines = acc.split('\n').map((s) => s.trim()).filter(Boolean);
-    expect(lines).toEqual(['1', '2', '3']); // ordered, complete
-    expect(data(final)['status']).toBe('exited');
-    expect(data(final)['exitCode']).toBe(0);
-  }, 15_000);
+    expect(linesOf(acc)).toEqual(['1', '2', '3']); // ordered, complete
+    expect(data(fin as ToolResult)['status']).toBe('exited');
+    expect(data(fin as ToolResult)['exitCode']).toBe(0);
+  }, 20_000);
 
   it('IT-2: kill stops the process and leaves no live pid', async () => {
     const r = await T.start.execute({ command: 'while true; do echo tick; sleep 0.1; done' }, ctx());
