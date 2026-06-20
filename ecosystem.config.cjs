@@ -39,10 +39,16 @@ module.exports = {
       namespace: 'default',
 
       // ---- Entrypoint ----
-      // pnpm cli = tsx src/cli.ts (headless, no Electron)
-      script: 'pnpm',
-      args: 'cli',
-      interpreter: 'none',          // pnpm is the interpreter; pm2 must not wrap it
+      // Run the daemon as a SINGLE node process that pm2 directly manages:
+      //   node --import tsx src/cli.ts
+      // WAS `pnpm cli` → pnpm → `sh -c tsx src/cli.ts` → tsx → node. pnpm/sh do NOT
+      // forward SIGTERM to their grandchildren, so on `pm2 restart` the node daemon
+      // re-parented to PID 1 (orphaned) and kept holding gateway :18900, serving STALE
+      // code — restarts silently no-op'd (see project-orphaned-daemon-stale-port).
+      // Direct node means pm2's SIGTERM hits the daemon itself → clean restart, no orphan.
+      script: 'src/cli.ts',
+      interpreter: 'node',
+      interpreter_args: '--import tsx',
 
       // ---- Working directory ----
       cwd: CWD,
@@ -54,6 +60,7 @@ module.exports = {
       max_restarts: 5,              // cap crash-loop restarts before pm2 gives up
       min_uptime: "30s",            // must stay alive 10 s to count as stable start
       restart_delay: 10000,          // ms between restart attempts
+      kill_timeout: 8000,           // grace for SIGTERM shutdown (save sessions / close DBs) before SIGKILL
 
       // ---- Logging ----
       time: true,                               // prefix every log line with timestamp
