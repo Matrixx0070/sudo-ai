@@ -176,4 +176,33 @@ describe('recovery reader — prevention hint injection on tool failure', () => 
     expect(stored).toContain('Prevention rule:');
     expect(stored.endsWith(err)).toBe(true); // raw tool output still present below the hint
   });
+
+  it('RDR-8: the tool-result event carries the real call args on success (feeds the learner)', async () => {
+    const session = makeSession();
+    const events: Array<{ type: string; args?: Record<string, unknown> }> = [];
+    await executeToolCalls(
+      [call('fs.read', { path: '/good.txt', mode: 'utf8' })], session, makeState(),
+      (ev) => events.push(ev as { type: string; args?: Record<string, unknown> }),
+      okRegistry(), undefined, undefined, makeHooks(), undefined, undefined,
+      undefined, undefined, false, undefined, undefined,
+    );
+    const tr = events.find((e) => e.type === 'tool-result');
+    // Previously this was hardcoded {} at the loop's onToolResult call site —
+    // now the event carries the actual args so the recovery rule is meaningful.
+    expect(tr?.args).toEqual({ path: '/good.txt', mode: 'utf8' });
+  });
+
+  it('RDR-9: the tool-result event carries args on failure too', async () => {
+    const session = makeSession();
+    const events: Array<{ type: string; args?: Record<string, unknown>; success?: boolean }> = [];
+    await executeToolCalls(
+      [call('web.fetch', { url: 'http://x' })], session, makeState(),
+      (ev) => events.push(ev as { type: string; args?: Record<string, unknown>; success?: boolean }),
+      softFailRegistry('ETIMEDOUT'), undefined, undefined, makeHooks(), undefined, undefined,
+      undefined, undefined, false, undefined, undefined,
+    );
+    const tr = events.find((e) => e.type === 'tool-result');
+    expect(tr?.success).toBe(false);
+    expect(tr?.args).toEqual({ url: 'http://x' });
+  });
 });
