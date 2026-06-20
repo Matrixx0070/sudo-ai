@@ -119,11 +119,13 @@ module.exports = {
         SUDO_BG_SHELL: '1',
 
         // Local Whisper STT model (PR #352). Code default is onnx-community/
-        // whisper-base; bumped to whisper-small here 2026-06-20 for better
-        // dictation accuracy (heavier: ~5s vs ~2.5s CPU per clip). Offline,
-        // key-free; weights cached after first load. STT stays local-only
-        // unless SUDO_STT_CLOUD=1; disable local Whisper with SUDO_WHISPER_STT=0.
-        SUDO_WHISPER_MODEL: process.env['SUDO_WHISPER_MODEL'] || 'onnx-community/whisper-small',
+        // whisper-base; bumped to whisper-medium-ONNX here 2026-06-20 for the
+        // best dictation accuracy. Measured on prod: ~5s warm CPU inference for
+        // a ~4.6s clip (vs ~3.6s small / ~1.7s base); the FIRST call ever pays a
+        // one-time ~37s weight download, then cached on disk. Offline, key-free.
+        // STT stays local-only unless SUDO_STT_CLOUD=1; disable local Whisper
+        // with SUDO_WHISPER_STT=0. Drop back to whisper-small for lower latency.
+        SUDO_WHISPER_MODEL: process.env['SUDO_WHISPER_MODEL'] || 'onnx-community/whisper-medium-ONNX',
 
         // Semantic memory compaction (gap #8): at the end of each auto-dream cycle,
         // collapse same-source near-duplicate chunks (cosine >= 0.92) into one canonical
