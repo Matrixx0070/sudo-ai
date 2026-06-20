@@ -48,6 +48,16 @@ const BASE_TOOLS: readonly string[] = [
   'meta.task-manager',     // Manage tasks
   'coder.multi-read',      // Read multiple files
   'meta.self-update',      // Git pull + build
+  // GitHub connector tools. Pinned to BASE so the agent can reliably
+  // commit / open / merge PRs — their category ('dev') is not keyword-routable
+  // for "pull request" / "merge" prompts, so category ranking would usually
+  // omit them. Absent (and skipped here) unless SUDO_GITHUB_TOOLS is enabled,
+  // so this is a no-op when the connector is off.
+  'github.commit',
+  'github.push',
+  'github.open_pr',
+  'github.pr_status',
+  'github.merge_pr',
 ] as const;
 
 // ---------------------------------------------------------------------------
