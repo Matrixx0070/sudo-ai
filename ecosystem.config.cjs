@@ -99,6 +99,13 @@ module.exports = {
         // sandbox of system.exec. Danger subset (process.exit-style) N/A here.
         SUDO_BG_SHELL: '1',
 
+        // Semantic memory compaction (gap #8): at the end of each auto-dream cycle,
+        // collapse same-source near-duplicate chunks (cosine >= 0.92) into one canonical
+        // row — DELETES the younger duplicate and sums applied_count. Wired in PR #337;
+        // enabled on prod here 2026-06-20. Evergreen-protected, same-source-only, capped
+        // 500/run, fail-open. Requires OPENAI_API_KEY (no-op without; key lives in config/.env).
+        SUDO_SEMANTIC_COMPACT: '1',
+
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
         SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18900',
 
