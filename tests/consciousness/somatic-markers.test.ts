@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConsciousnessDB } from '../../src/core/consciousness/consciousness-db.js';
 import { SomaticMarkerStore } from '../../src/core/consciousness/emotional-memory/markers.js';
+import { extractTriggerConcepts } from '../../src/core/consciousness/orchestrator.js';
 
 describe('SomaticMarkerStore (emotional-memory learning loop)', () => {
   let tempDir: string;
@@ -72,5 +73,21 @@ describe('SomaticMarkerStore (emotional-memory learning loop)', () => {
     const shouldCreate = !reinforced.some((m) => m.emotion === 'fear');
     expect(shouldCreate).toBe(false);
     expect(store.getAllMarkers()).toHaveLength(1);
+  });
+});
+
+describe('extractTriggerConcepts (somatic-marker trigger keywords)', () => {
+  it('extracts salient keywords, skipping short words + stop-words', () => {
+    expect(extractTriggerConcepts('I am really frustrated about the deployment failure'))
+      .toEqual(['frustrated', 'deployment', 'failure']);
+  });
+
+  it('dedupes and caps at max', () => {
+    expect(extractTriggerConcepts('budget budget budget overrun crisis panic', 2)).toEqual(['budget', 'overrun']);
+  });
+
+  it('returns [] for empty or all-stop-word/short input', () => {
+    expect(extractTriggerConcepts('')).toEqual([]);
+    expect(extractTriggerConcepts('the and you are')).toEqual([]);
   });
 });
