@@ -666,6 +666,14 @@ async function boot(): Promise<void> {
     defaultPolicy: { ...DEFAULT_SANDBOX_POLICY, network: agentNetworkMode },
   });
   registerShutdown(async () => sandboxManager.teardownAll());
+  // Background shells (gap #10): kill all on daemon shutdown so none orphan.
+  // Dynamic import keeps the bg-shell graph unloaded when the flag is off.
+  if (process.env['SUDO_BG_SHELL'] === '1') {
+    registerShutdown(async () => {
+      const { killAll } = await import('./core/tools/builtin/system/bg-shell/index.js');
+      killAll();
+    });
+  }
   if (agentNetworkMode === 'host') {
     const allow = resolveEgressAllowlist();
     log.warn(
@@ -3538,6 +3546,16 @@ async function boot(): Promise<void> {
           });
         }
         log.info('SandboxManager wired to real SessionStateMachine events');
+        // Background shells (gap #10): kill a session's shells on its terminal events.
+        if (process.env['SUDO_BG_SHELL'] === '1') {
+          const { killSession } = await import('./core/tools/builtin/system/bg-shell/index.js');
+          for (const ev of ['session:status:terminated', 'session:status:archived'] as const) {
+            sessionDeps.stateMachine.on(ev, (payload: { sessionId: string }) => {
+              killSession(payload.sessionId);
+            });
+          }
+          log.info('Background-shell per-session cleanup wired (SUDO_BG_SHELL=1)');
+        }
         registerSessionRoutes(gatewayServer, sessionDeps);
         log.info('Session REST API attached (/v1/sessions)');
 
