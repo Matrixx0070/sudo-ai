@@ -17,6 +17,7 @@
  */
 
 import * as nodePath from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { runCmd } from '../system/exec.js';
@@ -134,6 +135,17 @@ function fail(output: string, data?: unknown): ToolResult {
   return { success: false, output, data };
 }
 
+/**
+ * Resolve a repo-relative path to an absolute path strictly inside cwd.
+ * Returns null for absolute paths or any path that escapes the repo (e.g. `..`).
+ */
+function validateRepoRelPath(cwd: string, rel: string): string | null {
+  if (!rel || nodePath.isAbsolute(rel)) return null;
+  const abs = nodePath.resolve(cwd, rel);
+  const root = nodePath.resolve(cwd) + nodePath.sep;
+  return abs.startsWith(root) ? abs : null;
+}
+
 // ---------------------------------------------------------------------------
 // github.commit
 // ---------------------------------------------------------------------------
@@ -141,24 +153,54 @@ function fail(output: string, data?: unknown): ToolResult {
 export const githubCommitTool: ToolDefinition = {
   name: 'github.commit',
   description:
-    'Stage and commit local changes in a git repo. Stages all changes by default (or only `paths` if given), '
-    + 'then commits with `message`. Refuses if there is nothing to commit. Returns the new commit SHA.',
+    'Stage and commit changes in a git repo. Optionally create/switch to `branch` first, and write `files` '
+    + '([{path,content}]) into the repo before committing (only those files are staged); otherwise stages all '
+    + 'changes (or only `paths`). Refuses if there is nothing to commit. Returns the new commit SHA + branch. '
+    + 'Use branch+files together to author a change for a new PR.',
   category: 'dev',
   safety: 'destructive',
   timeout: DEFAULT_TIMEOUT_MS,
   parameters: {
     message: { type: 'string', description: 'Commit message.', required: true },
     cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
-    paths: { type: 'array', description: 'Specific paths to stage. Omit to stage all changes (git add -A).', required: false, items: { type: 'string', description: 'Path to stage' } },
+    branch: { type: 'string', description: 'If set, create/switch to this branch (git checkout -B) before committing — use a feature branch to open a PR off it.', required: false },
+    files: { type: 'array', description: 'Files to write into the repo then commit; each {path (repo-relative), content}. When given, only these paths are staged.', required: false, items: { type: 'object', description: 'A file to write', properties: { path: { type: 'string', description: 'Repo-relative path' }, content: { type: 'string', description: 'Full file content' } } } },
+    paths: { type: 'array', description: 'Specific existing paths to stage (ignored when `files` is given). Omit to stage all changes (git add -A).', required: false, items: { type: 'string', description: 'Path to stage' } },
   },
   async execute(params, ctx): Promise<ToolResult> {
     try {
       const cwd = resolveCwd(params, ctx);
       const message = asString(params['message'], 'message');
       const paths = Array.isArray(params['paths']) ? (params['paths'] as unknown[]).map(String) : null;
+      const branch = typeof params['branch'] === 'string' && (params['branch'] as string).trim()
+        ? (params['branch'] as string).trim() : null;
+      const files = Array.isArray(params['files'])
+        ? (params['files'] as Array<{ path?: unknown; content?: unknown }>) : null;
+
+      // Optional: create/switch to a feature branch first (idempotent -B).
+      if (branch) {
+        if (!/^[A-Za-z0-9._/-]+$/.test(branch)) return fail(`invalid branch name: ${branch}`);
+        const co = await git(['checkout', '-B', branch], cwd, ctx.signal);
+        if (co.exitCode !== 0) return fail(`git checkout -B ${branch} failed: ${co.stderr || co.stdout}`);
+      }
+
+      // Optional: write files into the repo, then stage exactly those.
+      let stagePaths: string[] | null = paths;
+      if (files && files.length > 0) {
+        const written: string[] = [];
+        for (const f of files) {
+          const rel = String(f?.path ?? '');
+          const abs = validateRepoRelPath(cwd, rel);
+          if (!abs) return fail(`invalid or repo-escaping file path: ${rel}`);
+          mkdirSync(nodePath.dirname(abs), { recursive: true });
+          writeFileSync(abs, typeof f?.content === 'string' ? f.content : '');
+          written.push(rel);
+        }
+        stagePaths = written;
+      }
 
       // Stage.
-      const stageArgs = paths && paths.length > 0 ? ['add', '--', ...paths] : ['add', '-A'];
+      const stageArgs = stagePaths && stagePaths.length > 0 ? ['add', '--', ...stagePaths] : ['add', '-A'];
       const staged = await git(stageArgs, cwd, ctx.signal);
       if (staged.exitCode !== 0) return fail(`git add failed: ${staged.stderr || staged.stdout}`);
 
@@ -170,9 +212,9 @@ export const githubCommitTool: ToolDefinition = {
       if (committed.exitCode !== 0) return fail(`git commit failed: ${committed.stderr || committed.stdout}`);
 
       const sha = (await git(['rev-parse', 'HEAD'], cwd, ctx.signal)).stdout.trim();
-      const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, ctx.signal)).stdout.trim();
-      logger.info({ sha, branch, session: ctx.sessionId }, 'github.commit');
-      return { success: true, output: `Committed ${sha.slice(0, 8)} on ${branch}`, data: { sha, branch } };
+      const currentBranch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, ctx.signal)).stdout.trim();
+      logger.info({ sha, branch: currentBranch, session: ctx.sessionId }, 'github.commit');
+      return { success: true, output: `Committed ${sha.slice(0, 8)} on ${currentBranch}`, data: { sha, branch: currentBranch } };
     } catch (err) {
       return fail(`github.commit error: ${err instanceof Error ? err.message : String(err)}`);
     }
