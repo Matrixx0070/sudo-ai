@@ -80,6 +80,7 @@ import { setInspectionQueue } from './core/security/injection-detector.js';
 import { setRationalizationQueue } from './core/agent/rationalization-guard.js';
 import { injectWorkspaceContext } from './core/workspace/injector.js';
 import { DailyLogManager } from './core/workspace/daily-log.js';
+import { shouldSkipDailyLog } from './core/workspace/diagnostic-peer.js';
 import { FileStore, registerFileRoutes } from './core/files/index.js';
 import { SkillRegistry, registerSkillRoutes } from './core/skills/index.js';
 import {
@@ -2049,11 +2050,17 @@ async function boot(): Promise<void> {
           const webReplyText = webResult?.text ?? 'No response generated.';
           log.info({ replyLen: webReplyText.length }, 'Web agent reply ready');
 
-          // Save web turn to daily memory log
-          try {
-            const webTurnSummary = `**User (web):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${webReplyText.slice(0, 500)}`;
-            await dailyLog.append(webTurnSummary);
-          } catch { /* daily log write is non-fatal */ }
+          // Save web turn to daily memory log (skip loopback/diagnostic probes —
+          // those pollute the "## Today" prompt injection; opt-in via
+          // SUDO_SKIP_DIAGNOSTIC_DAILY_LOG).
+          if (shouldSkipDailyLog(msg.peerId)) {
+            log.debug({ peerId: msg.peerId }, 'daily-log: skipped diagnostic/loopback web turn');
+          } else {
+            try {
+              const webTurnSummary = `**User (web):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${webReplyText.slice(0, 500)}`;
+              await dailyLog.append(webTurnSummary);
+            } catch { /* daily log write is non-fatal */ }
+          }
 
           await web.send(msg.peerId, webReplyText);
           log.info({ peerId: msg.peerId }, 'Reply sent to Web');
@@ -2363,10 +2370,14 @@ async function boot(): Promise<void> {
           }
           const replyText = result?.text ?? 'No response generated.';
 
-          try {
-            const turnSummary = `**User (${msg.channel}):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
-            await dailyLog.append(turnSummary);
-          } catch { /* daily log write is non-fatal */ }
+          if (shouldSkipDailyLog(msg.peerId)) {
+            log.debug({ channel: msg.channel, peerId: msg.peerId }, 'daily-log: skipped diagnostic/loopback turn');
+          } else {
+            try {
+              const turnSummary = `**User (${msg.channel}):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
+              await dailyLog.append(turnSummary);
+            } catch { /* daily log write is non-fatal */ }
+          }
 
           try {
             const nowTs = new Date().toISOString();
