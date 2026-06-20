@@ -10,12 +10,12 @@
  * Returns WAV audio (24 kHz, 16-bit, mono) as a Buffer.
  *
  * `kokoro-js` is an optionalDependency and is imported lazily, so the
- * voice subsystem still loads when it is absent. Availability for
- * auto-selection is opt-in via SUDO_KOKORO_TTS=1; explicit
- * provider:'kokoro' requests run regardless.
+ * voice subsystem still loads when it is absent. Kokoro is the default
+ * (local-only) TTS provider; cloud providers are gated behind
+ * SUDO_TTS_CLOUD=1 in TextToSpeech.
  *
  * Env overrides:
- *   SUDO_KOKORO_TTS=1            — enable Kokoro in auto provider selection
+ *   SUDO_KOKORO_TTS=0           — disable Kokoro (otherwise on by default)
  *   SUDO_KOKORO_MODEL=<repo>     — model id (default onnx-community/Kokoro-82M-v1.0-ONNX)
  *   SUDO_KOKORO_DTYPE=<dtype>    — fp32|fp16|q8|q4|q4f16 (default q8)
  *   SUDO_KOKORO_DEVICE=<device>  — cpu|wasm|webgpu (default cpu)
@@ -82,8 +82,10 @@ export class KokoroLocalTTS {
   private readonly defaultVoice: string;
 
   constructor() {
+    // Kokoro is the default (local-only) TTS provider; available unless
+    // explicitly disabled with SUDO_KOKORO_TTS=0.
     const flag = process.env['SUDO_KOKORO_TTS'];
-    this.available = flag === '1' || flag === 'true';
+    this.available = flag !== '0' && flag !== 'false';
     this.modelId = process.env['SUDO_KOKORO_MODEL'] ?? DEFAULT_MODEL_ID;
     this.dtype = process.env['SUDO_KOKORO_DTYPE'] ?? DEFAULT_DTYPE;
     this.device = process.env['SUDO_KOKORO_DEVICE'] ?? DEFAULT_DEVICE;
@@ -92,7 +94,7 @@ export class KokoroLocalTTS {
     if (this.available) {
       log.info({ modelId: this.modelId, dtype: this.dtype }, 'Kokoro local TTS provider enabled');
     } else {
-      log.debug('Kokoro local TTS not enabled (set SUDO_KOKORO_TTS=1 to use for auto-selection)');
+      log.debug('Kokoro local TTS disabled (SUDO_KOKORO_TTS=0)');
     }
   }
 
@@ -102,27 +104,59 @@ export class KokoroLocalTTS {
 
   private async getModel(): Promise<KokoroModelLike> {
     if (!_modelPromise) {
-      log.info(
-        { modelId: this.modelId, dtype: this.dtype, device: this.device },
-        'Loading Kokoro ONNX model (first run downloads weights, then cached)',
-      );
-      _modelPromise = (async () => {
-        let mod: { KokoroTTS: { from_pretrained: (id: string, opts: Record<string, unknown>) => Promise<KokoroModelLike> } };
-        try {
-          mod = (await import('kokoro-js')) as unknown as typeof mod;
-        } catch (err) {
-          throw new Error(
-            `kokoro-js is not installed — run \`pnpm add kokoro-js\` to enable local Kokoro TTS (${String(err)})`,
-          );
-        }
-        return mod.KokoroTTS.from_pretrained(this.modelId, { dtype: this.dtype, device: this.device });
-      })();
+      _modelPromise = this.loadModel();
       // Allow a later retry if this load fails.
       _modelPromise.catch(() => {
         _modelPromise = null;
       });
     }
     return _modelPromise;
+  }
+
+  /**
+   * Load the Kokoro model, falling back across execution-provider devices so
+   * first-run synthesis survives an unavailable backend.
+   *
+   * Under Node, kokoro-js / @huggingface/transformers only support the `cpu`
+   * (onnxruntime-node) and `cuda` devices — there is no `wasm` device in the
+   * Node runtime (it is browser-only). So when a non-cpu device (e.g. `cuda`
+   * with no GPU) fails to load, this retries on `cpu`, which is universally
+   * available. If `cpu` itself fails it is almost always a missing
+   * onnxruntime-node native binary; the thrown error says how to fix that.
+   */
+  private async loadModel(): Promise<KokoroModelLike> {
+    let mod: { KokoroTTS: { from_pretrained: (id: string, opts: Record<string, unknown>) => Promise<KokoroModelLike> } };
+    try {
+      mod = (await import('kokoro-js')) as unknown as typeof mod;
+    } catch (err) {
+      throw new Error(
+        `kokoro-js is not installed — run \`pnpm add kokoro-js\` to enable local Kokoro TTS (${String(err)})`,
+      );
+    }
+
+    // Configured device first, then cpu as a universal CPU fallback.
+    const candidates = this.device === 'cpu' ? ['cpu'] : [this.device, 'cpu'];
+    let lastErr: unknown;
+
+    for (const device of candidates) {
+      try {
+        log.info(
+          { modelId: this.modelId, dtype: this.dtype, device },
+          'Loading Kokoro ONNX model (first run downloads weights, then cached)',
+        );
+        return await mod.KokoroTTS.from_pretrained(this.modelId, { dtype: this.dtype, device });
+      } catch (err) {
+        lastErr = err;
+        log.warn({ device, err: String(err) }, 'Kokoro model load failed on device');
+      }
+    }
+
+    throw new Error(
+      `Kokoro model load failed (devices tried: ${candidates.join(', ')}). ` +
+        'If this is a native onnxruntime-node binding error, run `pnpm approve-builds` ' +
+        '(or reinstall) so the prebuilt binary is fetched. ' +
+        `Last error: ${String(lastErr)}`,
+    );
   }
 
   // -------------------------------------------------------------------------
