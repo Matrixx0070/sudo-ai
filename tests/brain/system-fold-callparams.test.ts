@@ -27,8 +27,10 @@ import {
   readFoldSystemEnabled,
   extractSystemMessageContent,
   buildEffectiveSystemPrompt,
+  buildFoldedSystemMessages,
 } from '../../src/core/brain/brain.js';
 import { AuthProfileRotation } from '../../src/core/brain/auth-profile-rotation.js';
+import { DYNAMIC_BOUNDARY_MARKER } from '../../src/core/brain/prompt-cache-discipline.js';
 import type { ModelProfile, BrainMessage } from '../../src/core/brain/types.js';
 
 function profile(id: string, provider: string): ModelProfile {
@@ -140,5 +142,74 @@ describe('Brain callParams — system folding', () => {
     process.env['SUDO_FOLD_SYSTEM_MESSAGES'] = '1';
     const params = await callBrain({ messages: [{ role: 'user', content: 'hi' }] });
     expect(params.system).toBe(SYS);
+  });
+});
+
+describe('buildFoldedSystemMessages helper', () => {
+  it('disabled → []; enabled + system msgs → one uncached system message; none → []', () => {
+    const msgs: BrainMessage[] = [{ role: 'system', content: 'X' }, { role: 'user', content: 'hi' }, { role: 'system', content: 'Y' }];
+    expect(buildFoldedSystemMessages(msgs, false)).toEqual([]);
+    expect(buildFoldedSystemMessages(msgs, true)).toEqual([{ role: 'system', content: 'X\n\nY' }]);
+    expect(buildFoldedSystemMessages([{ role: 'user', content: 'hi' }], true)).toEqual([]);
+  });
+});
+
+describe('Brain callParams — Anthropic cache path preserves the cached prefix', () => {
+  const KEYS = ['SUDO_FOLD_SYSTEM_MESSAGES', 'SUDO_PROMPT_CACHE', 'SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE', 'ANTHROPIC_API_KEY'];
+  const saved: Record<string, string | undefined> = {};
+  const SYS_CACHE = `STABLE PERSONA PREFIX${DYNAMIC_BOUNDARY_MARKER}dynamic tail`;
+
+  beforeEach(() => {
+    for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-test';
+    process.env['SUDO_PROMPT_CACHE'] = '1'; // → cacheBreakpoints true for the Anthropic profile
+    AuthProfileRotation.resetInstance();
+    generateTextMock.mockReset();
+    generateTextMock.mockResolvedValue(okResult());
+  });
+  afterEach(() => {
+    for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    AuthProfileRotation.resetInstance();
+  });
+
+  async function callCache(request: object): Promise<Record<string, any>> {
+    const brain = new Brain(null);
+    await (brain as any).providersReady;
+    await (brain as any)._callSingleModel(profile('anthropic/claude-test', 'anthropic'), request, SYS_CACHE, 0.5, 1000);
+    return generateTextMock.mock.calls[0]![0];
+  }
+
+  const REQ = { messages: [{ role: 'system', content: '# PLAN FOR THIS TASK\n1. a' }, { role: 'user', content: 'hi' }] };
+
+  it('FOLD-5: flag ON → cached prefix unchanged; folded content rides a SEPARATE uncached system message; no system param', async () => {
+    process.env['SUDO_FOLD_SYSTEM_MESSAGES'] = '1';
+    const params = await callCache(REQ);
+    const msgs = params.messages as any[];
+    // cache path → no top-level system param
+    expect(params).not.toHaveProperty('system');
+    // cached prefix message carries the breakpoint and the STABLE content ONLY
+    expect(msgs[0].content).toBe('STABLE PERSONA PREFIX');
+    expect(msgs[0].providerOptions).toBeDefined();
+    expect(msgs[0].content).not.toContain('PLAN FOR THIS TASK');
+    // folded guidance present as a system message, and it is UNCACHED (no providerOptions)
+    const folded = msgs.find((m) => m.role === 'system' && typeof m.content === 'string' && m.content.includes('# PLAN FOR THIS TASK'));
+    expect(folded).toBeDefined();
+    expect(folded.providerOptions).toBeUndefined();
+  });
+
+  it('FOLD-6: flag OFF → cached prefix present, no folded message (pre-fold cache behavior)', async () => {
+    const msgs = (await callCache(REQ)).messages as any[];
+    expect(msgs[0].content).toBe('STABLE PERSONA PREFIX');
+    expect(msgs[0].providerOptions).toBeDefined();
+    expect(msgs.some((m) => m.role === 'system' && String(m.content).includes('PLAN FOR THIS TASK'))).toBe(false);
+  });
+
+  it('FOLD-7: the cached prefix message is IDENTICAL whether folding is on or off (cache key preserved)', async () => {
+    const offPrefix = ((await callCache(REQ)).messages as any[])[0];
+    generateTextMock.mockReset();
+    generateTextMock.mockResolvedValue(okResult());
+    process.env['SUDO_FOLD_SYSTEM_MESSAGES'] = '1';
+    const onPrefix = ((await callCache(REQ)).messages as any[])[0];
+    expect(onPrefix).toEqual(offPrefix);
   });
 });
