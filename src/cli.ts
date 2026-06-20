@@ -19,6 +19,7 @@ import { PROJECT_ROOT, DATA_DIR, WORKSPACE_DIR, projectPath } from './core/share
 import { ConfigLoader } from './core/config/loader.js';
 import { MindDB } from './core/memory/db.js';
 import { EmbeddingService } from './core/memory/embeddings.js';
+import { compactSemanticDuplicates, type EmbeddingFn as SemanticEmbeddingFn } from './core/memory/semantic-compactor.js';
 import {
   resolveChunkContradictions,
   isChunkContradictionEnabled,
@@ -2529,6 +2530,33 @@ async function boot(): Promise<void> {
           }
         } else {
           log.warn({ jobId: job.id }, 'AutoDream not initialized — skipping dream:run');
+        }
+        // Semantic compaction (opt-in SUDO_SEMANTIC_COMPACT=1): collapse
+        // same-source near-duplicate chunks (cosine >= 0.92) into one canonical
+        // row — DELETES the younger duplicate and sums applied_count into the
+        // keeper. Evergreen-protected, same-source-only, capped 500/run,
+        // fail-open. Adds applied_count + embedding_json columns on first run;
+        // when the flag is off the chunks table is never touched. Requires
+        // OPENAI_API_KEY (a no-op without it).
+        if (process.env['SUDO_SEMANTIC_COMPACT'] === '1') {
+          try {
+            const emb = new EmbeddingService(db);
+            if (emb.isAvailable) {
+              const embedder: SemanticEmbeddingFn = {
+                async embed(text: string): Promise<Float32Array> {
+                  const v = await emb.embed(text);
+                  if (!v) throw new Error('embedding unavailable');
+                  return v;
+                },
+              };
+              const res = await compactSemanticDuplicates(db.db, embedder);
+              log.info({ jobId: job.id, ...res }, 'Semantic compaction pass complete');
+            } else {
+              log.debug({ jobId: job.id }, 'Semantic compaction skipped — no embedding API key');
+            }
+          } catch (scErr) {
+            log.warn({ err: String(scErr) }, 'Semantic compaction failed (non-fatal)');
+          }
         }
         // Corpus vector backfill (opt-in SUDO_VECTOR_BACKFILL=1): embed active
         // chunks missing an ANN vector into chunks_vec so hybrid-search's vector

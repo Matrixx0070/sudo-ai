@@ -136,6 +136,22 @@ describe('compactSemanticDuplicates', () => {
     expect(survivors[0]!.text).toContain('tick 1'); // oldest kept
   });
 
+  it('removes the deleted duplicate from chunks_vec (ANN sync — no orphan)', async () => {
+    const a = insert(db, 'heartbeat acknowledged tick 1', 'conversation', '2026-06-14T22:00:00Z');
+    const b = insert(db, 'heartbeat acknowledged tick 2', 'conversation', '2026-06-14T22:01:00Z'); // dup of A
+    // Stand-in for the vec0 ANN table — a plain table exercises the DELETE path.
+    db.exec('CREATE TABLE chunks_vec (chunk_id INTEGER)');
+    db.prepare('INSERT INTO chunks_vec (chunk_id) VALUES (?)').run(a);
+    db.prepare('INSERT INTO chunks_vec (chunk_id) VALUES (?)').run(b);
+
+    const r = await compactSemanticDuplicates(db, embed, { threshold: 0.5 });
+    expect(r.deleted).toBe(1);
+
+    const vecIds = (db.prepare('SELECT chunk_id FROM chunks_vec ORDER BY chunk_id').all() as Array<{ chunk_id: number }>)
+      .map((x) => x.chunk_id);
+    expect(vecIds).toEqual([a]); // the deleted duplicate's vector is gone; the keeper's remains
+  });
+
   it('does not merge rows below the threshold', async () => {
     insert(db, 'heartbeat acknowledged ping pong wow', 'conversation', '2026-06-14T22:00:00Z');
     insert(db, 'completely different rocket science topic xyz', 'conversation', '2026-06-14T22:01:00Z');
