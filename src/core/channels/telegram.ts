@@ -197,6 +197,37 @@ export class TelegramAdapter implements ChannelAdapter {
   private _pollAbort: AbortController | null = null;
   private _pollOffset = 0;
   private _hooks: HookEmitterLike | null = null;
+  /**
+   * Peers whose most-recent inbound was a voice/audio note and who are owed a
+   * voice reply. peerId → expiry epoch-ms. The next non-empty text reply to
+   * that peer is synthesised (Kokoro TTS) and sent as a voice note, then the
+   * marker is consumed. Auto voice-in → voice-out; disable with
+   * SUDO_TELEGRAM_VOICE_REPLY=0.
+   */
+  private readonly _voiceReplyPending = new Map<string, number>();
+  /** How long a pending voice-reply marker stays valid after the voice note. */
+  private static readonly VOICE_REPLY_TTL_MS = 120_000;
+
+  /** True unless explicitly disabled — voice-in triggers an auto voice reply. */
+  private get _autoVoiceReply(): boolean {
+    return process.env['SUDO_TELEGRAM_VOICE_REPLY'] !== '0'
+      && process.env['SUDO_TELEGRAM_VOICE_REPLY'] !== 'false';
+  }
+
+  /** Mark a peer as owed a voice reply (called when a voice/audio note arrives). */
+  private _markVoiceReply(peerId: string): void {
+    if (this._autoVoiceReply) {
+      this._voiceReplyPending.set(peerId, Date.now() + TelegramAdapter.VOICE_REPLY_TTL_MS);
+    }
+  }
+
+  /** Consume the pending voice-reply marker for a peer (true once, within TTL). */
+  private _consumeVoiceReply(peerId: string): boolean {
+    const expiry = this._voiceReplyPending.get(peerId);
+    if (expiry == null) return false;
+    this._voiceReplyPending.delete(peerId);
+    return expiry >= Date.now();
+  }
 
   /**
    * @param tokenEnvKey  - Environment variable holding the bot token.
@@ -460,9 +491,16 @@ export class TelegramAdapter implements ChannelAdapter {
         ? { reply_parameters: { message_id: parseInt(options.replyToId, 10) } }
         : {};
 
+    // Voice reply when the caller asked explicitly, OR when this peer just sent
+    // a voice/audio note (auto voice-in → voice-out, consumed once within TTL).
+    // Gated on having text so an empty/media-only send never burns the marker.
+    const wantVoiceReply =
+      text.trim().length > 0
+      && (options?.['voiceReply'] === true || this._consumeVoiceReply(peerId));
+
     try {
       // Voice reply — synthesise text and send as Telegram voice note
-      if (options?.['voiceReply'] === true && text.trim().length > 0) {
+      if (wantVoiceReply) {
         try {
           const tts = getTts();
           const ttsResult = await tts.synthesize(text.trim().slice(0, 4000));
@@ -802,6 +840,10 @@ export class TelegramAdapter implements ChannelAdapter {
 
         log.info({ peerId, text: result.text, lang: result.language }, 'Voice message transcribed');
 
+        // Auto voice-out: mark this peer so the agent's reply is sent back as a
+        // Kokoro TTS voice note (consumed by send()). Disable: SUDO_TELEGRAM_VOICE_REPLY=0.
+        this._markVoiceReply(peerId);
+
         // Pass the transcribed text through the normal message pipeline
         // Append a hint so the brain knows it came from voice (for voice reply logic)
         const textWithHint = `${result.text.trim()} [voice message — user may prefer a voice reply]`;
@@ -832,6 +874,8 @@ export class TelegramAdapter implements ChannelAdapter {
           const result = await stt.transcribe(downloaded.buffer);
           try { if (existsSync(downloaded.path)) unlinkSync(downloaded.path); } catch { /* ignore */ }
           if (result.text.trim()) {
+            // Auto voice-out for audio notes too (consumed by send()).
+            this._markVoiceReply(String(ctx.from?.id ?? ctx.chat.id));
             const text = caption
               ? `${caption}\n[Audio transcription: ${result.text.trim()}]`
               : result.text.trim();
