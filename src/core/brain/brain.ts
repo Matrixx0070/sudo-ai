@@ -1108,6 +1108,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         // Fold dropped array system messages into the model input (opt-in;
         // cache-safe — see _callSingleModel). No-op when the flag is unset.
         const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
+        if (readFoldSystemEnabled()) {
+          const foldedChars = extractSystemMessageContent(request.messages).length;
+          if (foldedChars > 0) {
+            log.info({ foldedChars, approxTokens: Math.round(foldedChars / 4), cachePath: cacheBreakpoints, model: modelId, stream: true }, 'system-fold: in-loop guidance delivered to model');
+          }
+        }
 
         const streamParams: Record<string, unknown> = {
           model: modelHandle,
@@ -1289,6 +1295,14 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // (cached prefix preserved) and the folded content rides a separate uncached
     // system message. Non-cache path: folded into the `system` param.
     const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
+    // Telemetry: exact size of the in-loop system guidance folded into the model
+    // input this call (the per-turn token cost of SUDO_FOLD_SYSTEM_MESSAGES).
+    if (readFoldSystemEnabled()) {
+      const foldedChars = extractSystemMessageContent(request.messages).length;
+      if (foldedChars > 0) {
+        log.info({ foldedChars, approxTokens: Math.round(foldedChars / 4), cachePath: cacheBreakpoints, model: modelId }, 'system-fold: in-loop guidance delivered to model');
+      }
+    }
 
     const callParams: Record<string, unknown> = {
       messages: cacheBreakpoints
