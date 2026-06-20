@@ -16,6 +16,7 @@ import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { createLogger } from '../../../shared/logger.js';
 import { MIND_DB } from '../../../shared/paths.js';
+import { dailyBudgetUsd } from '../../../billing/daily-budget.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../tools/types.js';
 import type { ToolRegistry } from '../../../tools/registry.js';
 
@@ -146,11 +147,17 @@ function fetchSystemHealth(): SystemHealthSummary {
     `).all({ cutoff });
     result.cronFailures = cronFails.map((r) => `${r.job_name}${r.error ? `: ${r.error.slice(0, 80)}` : ''}`);
 
-    // API cost today
+    // API cost today. Real spend is recorded in api_call_log (by the
+    // cost-tracker); the legacy api_costs table is never populated, so the
+    // prior query always summed to $0. Half-open [today, tomorrow) UTC window
+    // mirrors CostTracker.getTodayCost(); called_at is full ISO, so the
+    // YYYY-MM-DD bounds compare lexicographically as day edges.
     const today = new Date().toISOString().slice(0, 10);
-    const costRow = db.prepare<{ today: string }, { total: number }>(`
-      SELECT COALESCE(SUM(cost_usd), 0) as total FROM api_costs WHERE created_at >= :today
-    `).get({ today });
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const costRow = db.prepare<{ today: string; tomorrow: string }, { total: number }>(`
+      SELECT COALESCE(SUM(estimated_cost_usd), 0) as total
+      FROM api_call_log WHERE called_at >= :today AND called_at < :tomorrow
+    `).get({ today, tomorrow });
     result.costToday = costRow?.total ?? 0;
 
     // Pending content ideas
@@ -226,7 +233,9 @@ async function buildBrief(input: DailyBriefInput, ctx: ToolContext): Promise<Dai
   sections.push('');
 
   // Action items
-  if (health.costToday > 4) {
+  // Flag when today's spend crosses 80% of the configurable daily budget
+  // (default $5 → $4), matching the self-diagnostic warn tier.
+  if (health.costToday > dailyBudgetUsd() * 0.8) {
     actionItems.push(`API costs high today ($${health.costToday.toFixed(3)}) — review usage`);
   }
   if (health.pendingIdeas > 10) {

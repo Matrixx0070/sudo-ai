@@ -21,6 +21,7 @@ import { existsSync, statSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
 import { DATA_DIR } from '../../../shared/paths.js';
+import { dailyBudgetUsd } from '../../../billing/daily-budget.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../tools/types.js';
 import type { ToolRegistry } from '../../../tools/registry.js';
 
@@ -32,7 +33,6 @@ const logger = createLogger('skill.system.self-diagnostic');
 
 const DB_PATH = join(DATA_DIR, 'mind.db');
 const LOG_DIR = join(DATA_DIR, 'logs');
-const DAILY_BUDGET_USD = 5.0;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -147,18 +147,26 @@ function checkApiCosts(): DiagnosticCheck {
   }
   try {
     const db = new Database(DB_PATH, { readonly: true });
-    const cutoff = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    const row = db.prepare<{ cutoff: string }, { total: number }>(`
-      SELECT COALESCE(SUM(cost_usd), 0) as total FROM api_costs WHERE created_at >= :cutoff
-    `).get({ cutoff });
+    // Real spend is recorded in api_call_log (by the cost-tracker); the legacy
+    // api_costs table is never populated, so the prior query summed an empty
+    // table and reported $0.00/pass on every run. Half-open [today, tomorrow)
+    // UTC window mirrors the canonical CostTracker.getTodayCost(); called_at is
+    // full ISO, so the YYYY-MM-DD bounds compare lexicographically as day edges.
+    const cutoff = new Date().toISOString().slice(0, 10); // today, YYYY-MM-DD (UTC)
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const row = db.prepare<{ cutoff: string; tomorrow: string }, { total: number }>(`
+      SELECT COALESCE(SUM(estimated_cost_usd), 0) as total
+      FROM api_call_log WHERE called_at >= :cutoff AND called_at < :tomorrow
+    `).get({ cutoff, tomorrow });
     db.close();
 
+    const budget = dailyBudgetUsd();
     const total = row?.total ?? 0;
-    const pct = (total / DAILY_BUDGET_USD) * 100;
-    const value = `$${total.toFixed(4)} today (${pct.toFixed(0)}% of $${DAILY_BUDGET_USD} budget)`;
+    const pct = (total / budget) * 100;
+    const value = `$${total.toFixed(4)} today (${pct.toFixed(0)}% of $${budget.toFixed(2)} budget)`;
 
-    if (total > DAILY_BUDGET_USD) return { name: 'api_costs', status: 'fail', value, detail: 'Daily budget exceeded' };
-    if (total > DAILY_BUDGET_USD * 0.8) return { name: 'api_costs', status: 'warn', value, detail: '>80% budget used' };
+    if (total > budget) return { name: 'api_costs', status: 'fail', value, detail: 'Daily budget exceeded' };
+    if (total > budget * 0.8) return { name: 'api_costs', status: 'warn', value, detail: '>80% budget used' };
     return { name: 'api_costs', status: 'pass', value };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
