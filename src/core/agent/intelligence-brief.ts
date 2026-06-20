@@ -29,6 +29,12 @@ export interface ConsciousnessLike {
     temporalNarrative?: string;
     /** Top active concepts from spreading activation. */
     activeConcepts?: string[];
+    /** Self-assessed competence: per-domain strengths/weaknesses + overall confidence. */
+    selfCompetence?: {
+      overallConfidence: number;
+      strengths: Array<{ domain: string; confidence: number }>;
+      weaknesses: Array<{ domain: string; confidence: number }>;
+    } | null;
   };
 }
 
@@ -95,6 +101,12 @@ export interface IntelligenceBrief {
   temporalNarrative: string;
   /** Top active concepts from spreading activation. */
   activeConcepts: string[];
+  /** Self-assessed competence on the current task type (null when no signal). */
+  selfCompetence: {
+    overallConfidence: number;
+    strengths: Array<{ domain: string; confidence: number }>;
+    weaknesses: Array<{ domain: string; confidence: number }>;
+  } | null;
   formatted: string;
   generationMs: number;
 }
@@ -172,6 +184,17 @@ function formatBrief(
     });
   }
 
+  if (brief.selfCompetence) {
+    const sc = brief.selfCompetence;
+    parts.push(`\n### Self-Assessed Competence (overall ${Math.round(sc.overallConfidence * 100)}%)`);
+    if (sc.strengths.length > 0) {
+      parts.push('- Strengths: ' + sc.strengths.map(s => `${s.domain.substring(0, 40)} (${Math.round(s.confidence * 100)}%)`).join(', '));
+    }
+    if (sc.weaknesses.length > 0) {
+      parts.push('- Weaknesses: ' + sc.weaknesses.map(w => `${w.domain.substring(0, 40)} (${Math.round(w.confidence * 100)}%)`).join(', '));
+    }
+  }
+
   if (brief.surpriseLevel && brief.surpriseLevel > 0.2) {
     parts.push(`\n### Surprise Level: ${brief.surpriseLevel.toFixed(2)}`);
     if (brief.surpriseLevel > 0.7) {
@@ -220,6 +243,7 @@ export async function generateIntelligenceBrief(
     surpriseLevel: 0,
     temporalNarrative: '',
     activeConcepts: [],
+    selfCompetence: null,
     formatted: '',
     generationMs: 0,
   };
@@ -304,6 +328,9 @@ export async function generateIntelligenceBrief(
     const activeConcepts = consciousnessResult.status === 'fulfilled' && consciousnessResult.value
       ? (consciousnessResult.value.activeConcepts ?? [])
       : [];
+    const selfCompetence = consciousnessResult.status === 'fulfilled' && consciousnessResult.value
+      ? (consciousnessResult.value.selfCompetence ?? null)
+      : null;
 
     // Map structured memory results → StructuredMemoryHit[]
     const structuredMemory: StructuredMemoryHit[] = [];
@@ -323,6 +350,7 @@ export async function generateIntelligenceBrief(
     const briefPayload = {
       wisdom, procedures, episodes, predictions, structuredMemory,
       counterfactualLessons, metacognitiveReflections, surpriseLevel, temporalNarrative, activeConcepts,
+      selfCompetence,
     };
     const formatted = formatBrief(briefPayload);
 

@@ -488,6 +488,11 @@ export class ConsciousnessOrchestrator {
     surpriseLevel: number;
     temporalNarrative: string;
     activeConcepts: string[];
+    selfCompetence: {
+      overallConfidence: number;
+      strengths: Array<{ domain: string; confidence: number }>;
+      weaknesses: Array<{ domain: string; confidence: number }>;
+    } | null;
   } {
     const empty = {
       dominantDrive: null,
@@ -500,6 +505,7 @@ export class ConsciousnessOrchestrator {
       surpriseLevel: 0,
       temporalNarrative: '',
       activeConcepts: [],
+      selfCompetence: null,
     };
     if (!this._booted) return empty;
 
@@ -592,9 +598,27 @@ export class ConsciousnessOrchestrator {
       activeConcepts = this.spreadingActivation.getTopActive(5).map((n) => n.id);
     } catch { /* ignore */ }
 
+    // Read SelfModel — self-assessed competence on the current task type.
+    // Previously this only fed an internal status line (truncated to 80 chars);
+    // surfacing it here delivers the agent its own strengths/weaknesses. Only
+    // emitted when there is real signal, to avoid baseline-confidence noise.
+    let selfCompetence: {
+      overallConfidence: number;
+      strengths: Array<{ domain: string; confidence: number }>;
+      weaknesses: Array<{ domain: string; confidence: number }>;
+    } | null = null;
+    try {
+      const strengths = this.selfModel.getStrengths(3).map((s) => ({ domain: s.domain, confidence: s.confidence }));
+      const weaknesses = this.selfModel.getWeaknesses(2).map((w) => ({ domain: w.domain, confidence: w.confidence }));
+      if (strengths.length > 0 || weaknesses.length > 0) {
+        selfCompetence = { overallConfidence: this.selfModel.getOverallConfidence(), strengths, weaknesses };
+      }
+    } catch { /* ignore */ }
+
     return {
       dominantDrive, emotionalState, matchingProcedure, relevantPredictions, recentEpisodes,
       counterfactualLessons, metacognitiveReflections, surpriseLevel, temporalNarrative, activeConcepts,
+      selfCompetence,
     };
   }
 
