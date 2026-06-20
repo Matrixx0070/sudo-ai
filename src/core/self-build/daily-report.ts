@@ -92,15 +92,19 @@ function readPriorTestCount(gitCwd: string, today: string, logger: Logger): numb
 }
 
 /**
- * Query budget spent in the last 24 hours from api_costs table.
+ * Query budget spent in the last 24 hours from api_call_log.
  */
 function queryBudget(db: Database.Database, logger: Logger): number {
   try {
+    // Real spend is recorded in api_call_log (ISO called_at); the legacy
+    // api_costs table is never populated. Use an ISO cutoff — datetime('now', …)
+    // yields a space-separated string that never compares against ISO timestamps.
+    const cutoff = new Date(Date.now() - 86_400_000).toISOString();
     const row = db
       .prepare(
-        `SELECT COALESCE(SUM(cost_usd), 0) AS total FROM api_costs WHERE created_at > datetime('now', '-1 day')`,
+        `SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total FROM api_call_log WHERE called_at > ?`,
       )
-      .get() as { total: number };
+      .get(cutoff) as { total: number };
     return row.total ?? 0;
   } catch (err: unknown) {
     logger.warn({ err: String(err).slice(0, 200) }, '[daily-report] budget query failed');

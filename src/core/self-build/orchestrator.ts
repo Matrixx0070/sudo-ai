@@ -160,31 +160,27 @@ function latchHalt(cwd: string, state: SelfBuildState, reason: string): SelfBuil
 }
 
 /**
- * Query daily LLM spend from BOTH cost tables, as per spec §3.
- * Fail-CLOSED: returns Infinity if tables are missing (MEDIUM-2).
- * An agent cannot bypass the budget gate by dropping tables.
+ * Query daily LLM spend from api_call_log (the table the cost-tracker writes).
+ * The legacy api_costs table is never populated, so it is no longer summed —
+ * keeping it would only risk double-counting if it were ever backfilled.
+ * Fail-CLOSED: returns Infinity if api_call_log is missing, so an agent cannot
+ * bypass the budget gate by dropping the table that holds real spend.
  */
 function queryDailySpend(db: Database.Database): number {
   try {
-    // Assert both tables exist — fail-closed if missing
-    const tables = db.prepare(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('api_costs','api_call_log')`,
-    ).all() as Array<{ name: string }>;
-    if (tables.length < 2) {
-      // Tables missing — budget defense compromised. Return Infinity to abort.
+    // Assert the spend table exists — fail-closed if missing
+    const exists = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='api_call_log'`,
+    ).get();
+    if (!exists) {
+      // Spend table missing — budget defense compromised. Return Infinity to abort.
       return Infinity;
     }
     const cutoff = new Date(Date.now() - 86_400_000).toISOString();
-    let total = 0;
-    const r1 = db.prepare(
-      `SELECT COALESCE(SUM(cost_usd), 0) AS s FROM api_costs WHERE created_at > ?`,
-    ).get(cutoff) as { s: number };
-    total += r1.s;
-    const r2 = db.prepare(
+    const row = db.prepare(
       `SELECT COALESCE(SUM(estimated_cost_usd), 0) AS s FROM api_call_log WHERE called_at > ?`,
     ).get(cutoff) as { s: number };
-    total += r2.s;
-    return total;
+    return row.s;
   } catch {
     // Query failed — fail closed
     return Infinity;
