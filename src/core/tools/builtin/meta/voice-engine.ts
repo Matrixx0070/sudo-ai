@@ -43,7 +43,7 @@ function getEngine(): VoiceEngine {
 export const voiceEngineTool: ToolDefinition = {
   name: 'meta.voice',
   description:
-    'Voice Engine: synthesize text to speech (TTS), transcribe audio files (STT), manage voice library, initiate outbound phone calls, and review voice message history. Synthesis defaults to local Kokoro (ONNX, key-free, offline); cloud TTS (ElevenLabs/xAI/OpenAI) is disabled unless SUDO_TTS_CLOUD=1. Transcription uses OpenAI Whisper. Phone calling requires Twilio credentials.',
+    'Voice Engine: synthesize text to speech (TTS), transcribe audio files (STT), manage voice library, initiate outbound phone calls, and review voice message history. Synthesis defaults to local Kokoro (ONNX, key-free, offline); cloud TTS (ElevenLabs/xAI/OpenAI) is disabled unless SUDO_TTS_CLOUD=1. Transcription defaults to local Whisper (ONNX, key-free, offline); cloud STT (Groq/ElevenLabs/OpenAI) is disabled unless SUDO_STT_CLOUD=1. Phone calling requires Twilio credentials.',
   category: 'meta',
   timeout: 90_000,
 

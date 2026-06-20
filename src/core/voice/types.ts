@@ -22,8 +22,14 @@ export interface STTResult {
 export interface STTOptions {
   /** BCP-47 language code hint (e.g. "en", "hi"). Auto-detect when omitted. */
   language?: string;
-  /** Whisper model variant to use. Default: "whisper-1". */
+  /** Whisper model variant to use (cloud providers only). Default: "whisper-1". */
   model?: string;
+  /**
+   * Provider to use. Priority when omitted: whisper-local (default, offline) →
+   * cloud (groq → elevenlabs → openai) only when SUDO_STT_CLOUD=1.
+   * 'whisper-local' runs a Whisper ONNX model locally (offline, key-free).
+   */
+  provider?: 'whisper-local' | 'groq' | 'elevenlabs' | 'openai';
 }
 
 // ---------------------------------------------------------------------------
