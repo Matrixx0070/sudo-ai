@@ -51,10 +51,11 @@ export async function runAnticipate(db: Database.Database): Promise<Prediction[]
       'Run meta.youtube-feedback action=report + meta.cost-tracker action=weekly', now, 6));
   }
 
-  // Content gap detection
+  // Content gap detection. predictions.created_at is ISO-8601 (strftime
+  // default) — a space-format datetime('now') cutoff mis-compares (see ~L230).
   const rc = db.prepare(`
     SELECT COUNT(*) AS cnt FROM predictions
-    WHERE type = 'content' AND created_at > datetime('now', '-2 days')
+    WHERE type = 'content' AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')
   `).get() as { cnt: number };
   if (rc.cnt === 0) {
     predictions.push(buildPrediction('content',
@@ -65,9 +66,10 @@ export async function runAnticipate(db: Database.Database): Promise<Prediction[]
 
   // Elevated API cost
   try {
+    // api_call_log.called_at is ISO-8601; use strftime, not space-format datetime('now').
     const costRow = db.prepare(`
       SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total FROM api_call_log
-      WHERE called_at > datetime('now', '-1 hour')
+      WHERE called_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hour')
     `).get() as ApiCostRow;
     const lastHourCost = costRow?.total ?? 0;
     if (lastHourCost > 0.5) {
@@ -187,9 +189,10 @@ export async function runDetectAnomalies(
 
   // API cost anomaly
   try {
+    // api_call_log.called_at is ISO-8601; use strftime, not space-format datetime('now').
     const costData = db.prepare(`
       SELECT date(called_at) AS day, SUM(estimated_cost_usd) AS daily_cost
-      FROM api_call_log WHERE called_at > datetime('now', '-8 days')
+      FROM api_call_log WHERE called_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-8 days')
       GROUP BY date(called_at) ORDER BY day ASC
     `).all() as Array<{ day: string; daily_cost: number }>;
 
@@ -243,9 +246,10 @@ export async function runDetectAnomalies(
 
   // Low video views
   try {
+    // video_performance.published_at is ISO-8601 (YouTube API publishedAt); use strftime.
     const vidData = db.prepare(`
       SELECT AVG(views) AS avg_views, COUNT(*) AS cnt
-      FROM video_performance WHERE published_at > datetime('now', '-30 days')
+      FROM video_performance WHERE published_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')
     `).get() as { avg_views: number | null; cnt: number };
     if ((vidData.cnt ?? 0) > 0 && (vidData.avg_views ?? 0) < 500) {
       anomalies.push(storeAnomaly({

@@ -197,10 +197,11 @@ export function savePersonalityObservation(
  */
 export function getPersonalityTraits(db: Database.Database): Record<string, number> {
   try {
+    // personality_observations.created_at is ISO-8601; use strftime, not datetime('now').
     const rows = db.prepare(
       `SELECT trait, AVG(value) AS avg_value
          FROM personality_observations
-        WHERE created_at >= datetime('now', '-30 days')
+        WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')
         GROUP BY trait
         ORDER BY avg_value DESC`,
     ).all() as PersonalityRow[];

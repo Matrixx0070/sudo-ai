@@ -166,11 +166,12 @@ export function getAverageSurprise(db: Database.Database, hours: number): number
   }
 
   try {
+    // surprise_events.created_at is ISO-8601; use strftime, not datetime('now').
     const row = db
       .prepare<[string], { avg: number | null }>(
         `SELECT AVG(magnitude) AS avg
          FROM surprise_events
-         WHERE created_at > datetime('now', ?)`,
+         WHERE created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now',?)`,
       )
       .get(`-${hours} hours`);
 
