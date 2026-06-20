@@ -45,9 +45,12 @@ export interface TTSOptions {
   /** Voice identifier (provider-specific). */
   voice?: string;
   /**
-   * Provider to use. Priority when omitted: elevenlabs → xai → openai.
+   * Provider to use. Priority when omitted: elevenlabs → xai → openai → kokoro.
+   * 'kokoro' runs the Kokoro-82M ONNX model locally (offline, key-free).
    */
-  provider?: 'elevenlabs' | 'xai' | 'openai';
+  provider?: 'elevenlabs' | 'xai' | 'openai' | 'kokoro';
+  /** Playback speed multiplier (0.5–2.0). Currently honoured by the kokoro provider. */
+  speed?: number;
 }
 
 // ---------------------------------------------------------------------------

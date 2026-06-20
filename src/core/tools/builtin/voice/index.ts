@@ -23,7 +23,7 @@ const logger = createLogger('voice-builtin');
 const ttsTool: ToolDefinition = {
   name: 'voice.tts',
   description:
-    'Convert text to speech audio. Supports ElevenLabs, xAI, and OpenAI TTS providers. Saves the audio file and returns the path. Requires ELEVENLABS_API_KEY, XAI_VOICE_API_KEY, or OPENAI_API_KEY.',
+    'Convert text to speech audio. Supports ElevenLabs, xAI, OpenAI, and Kokoro (local ONNX) TTS providers. Saves the audio file and returns the path. Cloud providers require ELEVENLABS_API_KEY, XAI_VOICE_API_KEY, or OPENAI_API_KEY; Kokoro runs offline with no key (enable for auto-selection via SUDO_KOKORO_TTS=1).',
   category: 'voice',
   timeout: 60_000,
   parameters: {
@@ -34,12 +34,12 @@ const ttsTool: ToolDefinition = {
     },
     provider: {
       type: 'string',
-      description: 'TTS provider to use. Auto-selects based on available API keys when omitted.',
-      enum: ['elevenlabs', 'xai', 'openai'],
+      description: 'TTS provider to use. Auto-selects based on available API keys (then local Kokoro) when omitted.',
+      enum: ['elevenlabs', 'xai', 'openai', 'kokoro'],
     },
     voice: {
       type: 'string',
-      description: 'Voice ID or name. Provider-specific (e.g. ElevenLabs voice ID, xAI "rex", OpenAI "alloy").',
+      description: 'Voice ID or name. Provider-specific (e.g. ElevenLabs voice ID, xAI "rex", OpenAI "alloy", Kokoro "af_heart").',
     },
     outputPath: {
       type: 'string',
@@ -57,13 +57,13 @@ const ttsTool: ToolDefinition = {
     if (!text?.trim()) return { success: false, output: 'text is required.' };
     if (text.length > 4096) return { success: false, output: 'text must be 4096 characters or fewer.' };
 
-    const outPath = (params['outputPath'] as string | undefined) ??
-      join('/tmp', `sudo-ai-tts-${Date.now()}.mp3`);
-
     try {
       const { TextToSpeech } = await import('../../../voice/tts.js');
       const tts = new TextToSpeech();
       const result = await tts.synthesize(text, { provider, voice });
+
+      const outPath = (params['outputPath'] as string | undefined) ??
+        join('/tmp', `sudo-ai-tts-${Date.now()}.${result.format}`);
 
       await writeFile(outPath, result.audioBuffer);
 

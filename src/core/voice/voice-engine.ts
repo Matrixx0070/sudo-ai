@@ -44,6 +44,8 @@ const KNOWN_VOICES: string[] = [
   'rex', 'nova', 'aria', 'sage', 'echo', 'onyx',
   // OpenAI
   'alloy', 'fable', 'shimmer',
+  // Kokoro (local ONNX) — common voices
+  'af_heart', 'af_bella', 'af_nicole', 'am_adam', 'am_michael', 'bf_emma', 'bm_george',
   // system
   'default',
 ];
@@ -93,16 +95,17 @@ export class VoiceEngine {
     const resolvedVoice = voice ?? this.config.defaultVoice;
     const { randomUUID } = await import('node:crypto');
     const id            = randomUUID();
-    const audioPath     = outPath ?? join('/tmp', `sudo-ai-voice-${id}.mp3`);
 
     log.info({ id, textLen: truncated.length, voice: resolvedVoice }, 'Synthesizing speech');
 
     let durationMs: number | undefined;
+    let audioPath: string;
 
     try {
       const { TextToSpeech } = await import('./tts.js');
       const tts    = new TextToSpeech();
       const result = await tts.synthesize(truncated, { voice: resolvedVoice });
+      audioPath    = outPath ?? join('/tmp', `sudo-ai-voice-${id}.${result.format}`);
       await writeFile(audioPath, result.audioBuffer);
       durationMs = result.durationMs;
       log.info({ id, audioPath, durationMs }, 'TTS synthesis complete');
