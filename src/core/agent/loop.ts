@@ -935,10 +935,13 @@ export class AgentLoop extends AgentLoopInjections {
         // ToolOutcomeLearner: record tool outcome (fail-open)
         try {
           if (this._toolOutcomeLearner && event.type === 'tool-result') {
-            const _tr = event as { type: string; name: string; result: unknown; success?: boolean };
+            const _tr = event as { type: string; name: string; result: unknown; success?: boolean; args?: Record<string, unknown> };
             const _isSuccess = resolveToolSuccess(_tr);
             const _error = _isSuccess ? undefined : (typeof _tr.result === 'string' ? _tr.result : JSON.stringify(_tr.result));
-            this._toolOutcomeLearner.onToolResult(_tr.name, {}, _isSuccess, _error, sessionId);
+            // Real call args (added to the tool-result event) so the recovery
+            // producer's prevention rule captures the working arguments instead
+            // of an empty object. Falls back to {} for legacy/pre-execution emits.
+            this._toolOutcomeLearner.onToolResult(_tr.name, _tr.args ?? {}, _isSuccess, _error, sessionId);
           }
         } catch { /* fail-open */ }
       }

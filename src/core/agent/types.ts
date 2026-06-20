@@ -61,7 +61,15 @@ export type AgentEvent =
        * prefer this over re-classifying the string. Omitted by legacy emitters,
        * in which case consumers fall back to result-string classification.
        */
-      success?: boolean }
+      success?: boolean;
+      /**
+       * The arguments the tool was invoked with. Additive + OPTIONAL. Lets
+       * outcome sinks (ToolOutcomeLearner) record the real call args — e.g. the
+       * recovery producer's prevention rule captures the working arguments
+       * instead of an empty object. Populated by the real-execution emit paths;
+       * omitted by pre-execution policy blocks where no execution args exist.
+       */
+      args?: Record<string, unknown> }
   | { type: 'stream-chunk'; chunk: string }
   | { type: 'compaction'; summary: string }
   | { type: 'error'; error: string }

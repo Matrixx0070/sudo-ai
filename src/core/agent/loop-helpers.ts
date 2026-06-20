@@ -947,7 +947,7 @@ async function executeSingleToolCall(
     resultContent = clampToolOutput(typeof result.output === 'string' ? result.output : String(result.output ?? ''));
     // Forward the tool's authoritative success so outcome sinks (ToolOutcomeLearner,
     // SkillDiscovery, TraceStore, after:tool-call) don't re-guess it from the output string.
-    emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: result.success });
+    emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: result.success, args: tc.arguments ?? {} });
     log.info({ tool: tc.name, success: result.success }, 'Tool call completed');
     guardedRecordFeedback(feedbackMemory, true, tc.name, tc.arguments ?? {}, resultContent || 'success', ctx.sessionId);
     // A tool can report failure via its authoritative `success` flag without throwing.
@@ -959,14 +959,14 @@ async function executeSingleToolCall(
         ? tc.arguments
         : {};
       const fallbackResult = clampToolOutput(await _toolNotFoundFallback(tc.name, safeArgs, toolRegistry, ctx));
-      emit({ type: 'tool-result', name: tc.name, result: fallbackResult, toolId: tc.id });
+      emit({ type: 'tool-result', name: tc.name, result: fallbackResult, toolId: tc.id, args: tc.arguments ?? {} });
       // Slice-4: even on tool_not_found the critic verdict (if any) was
       // about the *call the agent planned*, so it's still informative for
       // the next-turn replanning. Surface it.
       return { tc, resultContent: fallbackResult, ...(criticFeedback ? { criticFeedback } : {}) };
     }
     resultContent = `Error executing tool ${tc.name}: ${String(err)}`;
-    emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: false });
+    emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: false, args: tc.arguments ?? {} });
     log.error({ tool: tc.name, err }, 'Tool call failed');
     guardedRecordFeedback(feedbackMemory, false, tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
     callError = resultContent;
