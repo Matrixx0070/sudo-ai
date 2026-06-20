@@ -49,6 +49,8 @@ export interface TrackedTask {
  */
 export class TaskTracker {
   private readonly tasks: Map<string, TrackedTask> = new Map();
+  /** Monotonic counter so ids are unique even within the same millisecond. */
+  private seq = 0;
 
   // -------------------------------------------------------------------------
   // Lifecycle methods
@@ -64,7 +66,10 @@ export class TaskTracker {
     if (!subject || typeof subject !== 'string') {
       throw new TypeError('TaskTracker.create: subject must be a non-empty string');
     }
-    const id = `task-${Date.now()}`;
+    // Include a monotonic counter: `task-${Date.now()}` alone collides for
+    // tasks created within the same millisecond (e.g. a plan's steps mapped in
+    // a tight loop), silently overwriting earlier entries in the Map.
+    const id = `task-${Date.now()}-${++this.seq}`;
     const task: TrackedTask = { id, subject, status: 'pending' };
     this.tasks.set(id, task);
     log.info({ id, subject }, 'Task created');
