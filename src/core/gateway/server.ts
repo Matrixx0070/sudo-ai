@@ -30,6 +30,11 @@ const log = createLogger('gateway');
 const GATEWAY_PORT: number = parseInt(process.env['GATEWAY_PORT'] ?? '18900', 10);
 const MAX_CONCURRENT = 6;
 
+// Opt-in admin REST API (/api/admin/*), mounted by api/admin/register.ts behind
+// a fail-closed Bearer gate. When off (default), the OR term below is dead and
+// /api/admin still falls through to the 404 — byte-identical to prior behavior.
+const ADMIN_API_ON: boolean = process.env['SUDO_ADMIN_API'] === '1';
+
 // ---------------------------------------------------------------------------
 // Stats
 // ---------------------------------------------------------------------------
@@ -137,6 +142,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     pathname.startsWith('/v1/skills') ||
     pathname.startsWith('/v1/vaults') ||
     pathname.startsWith('/v1/registry') ||
+    (ADMIN_API_ON && pathname.startsWith('/api/admin')) ||   // opt-in admin REST API (SUDO_ADMIN_API=1), token-gated by api/admin/register.ts
     pathname.startsWith('/v1/federation/') ||   // Federation routes (registered via server.on('request'))
     pathname.startsWith('/.well-known') ||   // agentskills.io discovery (public no-auth)
     pathname === '/v1/models' ||
