@@ -87,6 +87,14 @@ module.exports = {
         SUDO_DAILY_BUDGET_USD: 'off',
         SUDO_DAILY_LLM_BUDGET_USD: 'off',
 
+        // ---- GitHub connector tools (opt-in) ----
+        // Enables the github.* agent tools (commit / push / open_pr / merge_pr /
+        // pr_status) — see src/core/tools/builtin/github/. They wrap local git +
+        // the already-authenticated gh CLI. merge_pr only merges when the PR's
+        // required CI checks are green. Default OFF (group not registered); set
+        // to '0' to disable.
+        SUDO_GITHUB_TOOLS: '1',
+
         // Add wasmtime to PATH for WASM sandbox tool execution
         PATH: `${process.env.PATH}:/root/.wasmtime/bin`,
 
