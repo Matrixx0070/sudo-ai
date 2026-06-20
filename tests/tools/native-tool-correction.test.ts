@@ -20,84 +20,84 @@ describe('DEFAULT_MCP_TO_NATIVE_MAPPINGS', () => {
     expect(DEFAULT_MCP_TO_NATIVE_MAPPINGS).toHaveLength(10);
   });
 
-  it('maps filesystem_read_file to Read', () => {
+  it('maps filesystem_read_file to coder.read-file', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'filesystem_read_file',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('Read');
+    expect(m!.nativeTool).toBe('coder.read-file');
   });
 
-  it('maps shell_execute to Bash', () => {
+  it('maps shell_execute to system.exec', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'shell_execute',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('Bash');
+    expect(m!.nativeTool).toBe('system.exec');
   });
 
-  it('maps search_web to WebSearch', () => {
+  it('maps search_web to browser.search', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'search_web',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('WebSearch');
+    expect(m!.nativeTool).toBe('browser.search');
   });
 
-  it('maps fetch_url to WebFetch', () => {
+  it('maps fetch_url to browser.fetch', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'fetch_url',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('WebFetch');
+    expect(m!.nativeTool).toBe('browser.fetch');
   });
 
-  it('maps grep_* pattern to Grep', () => {
+  it('maps grep_* pattern to coder.grep', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'grep_*',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('Grep');
+    expect(m!.nativeTool).toBe('coder.grep');
   });
 
-  it('maps bash_* pattern to Bash', () => {
+  it('maps bash_* pattern to system.exec', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'bash_*',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('Bash');
+    expect(m!.nativeTool).toBe('system.exec');
   });
 
-  it('maps filesystem_list_directory to Bash', () => {
+  it('maps filesystem_list_directory to system.exec', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'filesystem_list_directory',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('Bash');
+    expect(m!.nativeTool).toBe('system.exec');
   });
 
-  it('maps code_search to Grep', () => {
+  it('maps code_search to coder.grep', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'code_search',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('Grep');
+    expect(m!.nativeTool).toBe('coder.grep');
   });
 
-  it('maps code_read to Read', () => {
+  it('maps code_read to coder.read-file', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'code_read',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('Read');
+    expect(m!.nativeTool).toBe('coder.read-file');
   });
 
-  it('maps filesystem_write_file to Write', () => {
+  it('maps filesystem_write_file to coder.write-file', () => {
     const m = DEFAULT_MCP_TO_NATIVE_MAPPINGS.find(
       (x) => x.mcpPattern === 'filesystem_write_file',
     );
     expect(m).toBeDefined();
-    expect(m!.nativeTool).toBe('Write');
+    expect(m!.nativeTool).toBe('coder.write-file');
   });
 });
 
@@ -112,28 +112,28 @@ describe('NativeToolCorrection.findNativeEquivalent', () => {
     correction = new NativeToolCorrection();
   });
 
-  it('returns Read for filesystem_read_file (exact match)', () => {
-    expect(correction.findNativeEquivalent('filesystem_read_file')).toBe('Read');
+  it('returns coder.read-file for filesystem_read_file (exact match)', () => {
+    expect(correction.findNativeEquivalent('filesystem_read_file')).toBe('coder.read-file');
   });
 
-  it('returns Write for filesystem_write_file (exact match)', () => {
-    expect(correction.findNativeEquivalent('filesystem_write_file')).toBe('Write');
+  it('returns coder.write-file for filesystem_write_file (exact match)', () => {
+    expect(correction.findNativeEquivalent('filesystem_write_file')).toBe('coder.write-file');
   });
 
-  it('returns Bash for shell_execute (exact match)', () => {
-    expect(correction.findNativeEquivalent('shell_execute')).toBe('Bash');
+  it('returns system.exec for shell_execute (exact match)', () => {
+    expect(correction.findNativeEquivalent('shell_execute')).toBe('system.exec');
   });
 
-  it('returns WebSearch for search_web (exact match)', () => {
-    expect(correction.findNativeEquivalent('search_web')).toBe('WebSearch');
+  it('returns browser.search for search_web (exact match)', () => {
+    expect(correction.findNativeEquivalent('search_web')).toBe('browser.search');
   });
 
-  it('returns Grep for grep_search (prefix match)', () => {
-    expect(correction.findNativeEquivalent('grep_search')).toBe('Grep');
+  it('returns coder.grep for grep_search (prefix match)', () => {
+    expect(correction.findNativeEquivalent('grep_search')).toBe('coder.grep');
   });
 
-  it('returns Bash for bash_run_something (prefix match)', () => {
-    expect(correction.findNativeEquivalent('bash_run_something')).toBe('Bash');
+  it('returns system.exec for bash_run_something (prefix match)', () => {
+    expect(correction.findNativeEquivalent('bash_run_something')).toBe('system.exec');
   });
 
   it('returns null for an unknown MCP tool', () => {
@@ -176,7 +176,7 @@ describe('NativeToolCorrection.shouldCorrect', () => {
     // Need a mapping for this to work — add one
     correction.addMapping({
       mcpPattern: 'experimental_file_read',
-      nativeTool: 'Read',
+      nativeTool: 'coder.read-file',
       priority: 5,
     });
     expect(correction.shouldCorrect('experimental_file_read')).toBe(true);
@@ -185,7 +185,7 @@ describe('NativeToolCorrection.shouldCorrect', () => {
   it('returns true when tool name contains "beta"', () => {
     correction.addMapping({
       mcpPattern: 'beta_search',
-      nativeTool: 'WebSearch',
+      nativeTool: 'browser.search',
       priority: 5,
     });
     expect(correction.shouldCorrect('beta_search')).toBe(true);
@@ -194,7 +194,7 @@ describe('NativeToolCorrection.shouldCorrect', () => {
   it('returns true when tool name contains "legacy"', () => {
     correction.addMapping({
       mcpPattern: 'legacy_shell',
-      nativeTool: 'Bash',
+      nativeTool: 'system.exec',
       priority: 5,
     });
     expect(correction.shouldCorrect('legacy_shell')).toBe(true);
@@ -225,37 +225,42 @@ describe('NativeToolCorrection.correct', () => {
     correction = new NativeToolCorrection();
   });
 
-  it('converts filesystem_read_file args: path -> file_path', () => {
+  it('converts filesystem_read_file args: path -> path', () => {
     const result = correction.correct('filesystem_read_file', { path: '/tmp/x.txt' });
     expect(result).toEqual({
-      nativeTool: 'Read',
-      convertedArgs: { file_path: '/tmp/x.txt' },
+      nativeTool: 'coder.read-file',
+      convertedArgs: { path: '/tmp/x.txt' },
     });
   });
 
-  it('converts filesystem_write_file args: path + content -> file_path + content', () => {
+  it('converts filesystem_write_file args: path + content -> path + content', () => {
     const result = correction.correct('filesystem_write_file', {
       path: '/tmp/out.txt',
       content: 'hello world',
     });
     expect(result).toEqual({
-      nativeTool: 'Write',
-      convertedArgs: { file_path: '/tmp/out.txt', content: 'hello world' },
+      nativeTool: 'coder.write-file',
+      convertedArgs: { path: '/tmp/out.txt', content: 'hello world' },
     });
   });
 
-  it('converts filesystem_list_directory args to Bash ls command', () => {
+  it('converts filesystem_list_directory args to a quoted system.exec ls command', () => {
     const result = correction.correct('filesystem_list_directory', { path: '/home' });
     expect(result).toEqual({
-      nativeTool: 'Bash',
-      convertedArgs: { command: 'ls /home' },
+      nativeTool: 'system.exec',
+      convertedArgs: { command: "ls -- '/home'" },
     });
+  });
+
+  it('single-quotes the listed path so spaces / shell metachars cannot inject', () => {
+    const result = correction.correct('filesystem_list_directory', { path: '/home/a b; rm -rf /' });
+    expect(result!.convertedArgs).toEqual({ command: "ls -- '/home/a b; rm -rf /'" });
   });
 
   it('converts shell_execute args: command passed through', () => {
     const result = correction.correct('shell_execute', { command: 'npm test' });
     expect(result).toEqual({
-      nativeTool: 'Bash',
+      nativeTool: 'system.exec',
       convertedArgs: { command: 'npm test' },
     });
   });
@@ -263,58 +268,58 @@ describe('NativeToolCorrection.correct', () => {
   it('converts search_web args: query passed through', () => {
     const result = correction.correct('search_web', { query: 'typescript best practices' });
     expect(result).toEqual({
-      nativeTool: 'WebSearch',
+      nativeTool: 'browser.search',
       convertedArgs: { query: 'typescript best practices' },
     });
   });
 
-  it('converts fetch_url args: url + prompt', () => {
+  it('converts fetch_url args: extracts url (drops MCP-specific prompt)', () => {
     const result = correction.correct('fetch_url', {
       url: 'https://example.com',
       prompt: 'summarize',
     });
     expect(result).toEqual({
-      nativeTool: 'WebFetch',
-      convertedArgs: { url: 'https://example.com', prompt: 'summarize' },
+      nativeTool: 'browser.fetch',
+      convertedArgs: { url: 'https://example.com' },
     });
   });
 
-  it('converts fetch_url with missing prompt to empty string', () => {
-    const result = correction.correct('fetch_url', { url: 'https://example.com' });
-    expect(result).toEqual({
-      nativeTool: 'WebFetch',
-      convertedArgs: { url: 'https://example.com', prompt: '' },
-    });
-  });
-
-  it('converts code_read args: path -> file_path', () => {
+  it('converts code_read args: path -> path', () => {
     const result = correction.correct('code_read', { path: '/src/index.ts' });
     expect(result).toEqual({
-      nativeTool: 'Read',
-      convertedArgs: { file_path: '/src/index.ts' },
+      nativeTool: 'coder.read-file',
+      convertedArgs: { path: '/src/index.ts' },
     });
   });
 
-  it('converts code_search args: passed through unchanged', () => {
+  it('converts code_search args: extracts pattern for coder.grep', () => {
     const result = correction.correct('code_search', { pattern: 'TODO', path: '/src' });
     expect(result).toEqual({
-      nativeTool: 'Grep',
-      convertedArgs: { pattern: 'TODO', path: '/src' },
+      nativeTool: 'coder.grep',
+      convertedArgs: { pattern: 'TODO' },
     });
   });
 
-  it('converts grep_* prefix match args: passed through unchanged', () => {
-    const result = correction.correct('grep_search', { regex: 'import', cwd: '/app' });
+  it('converts grep_* prefix match args: extracts pattern (query alias) for coder.grep', () => {
+    const result = correction.correct('grep_search', { query: 'import', cwd: '/app' });
     expect(result).toEqual({
-      nativeTool: 'Grep',
-      convertedArgs: { regex: 'import', cwd: '/app' },
+      nativeTool: 'coder.grep',
+      convertedArgs: { pattern: 'import' },
+    });
+  });
+
+  it('converts grep_* args from a regex alias (ripgrep-style MCP args)', () => {
+    const result = correction.correct('grep_search', { regex: 'import .*', path: '/src' });
+    expect(result).toEqual({
+      nativeTool: 'coder.grep',
+      convertedArgs: { pattern: 'import .*' },
     });
   });
 
   it('converts bash_* prefix match args: command or cmd -> command', () => {
     const result = correction.correct('bash_run', { cmd: 'echo hi' });
     expect(result).toEqual({
-      nativeTool: 'Bash',
+      nativeTool: 'system.exec',
       convertedArgs: { command: 'echo hi' },
     });
   });
@@ -415,12 +420,12 @@ describe('NativeToolCorrection.getStats', () => {
     // Most frequent first
     expect(stats.topCorrections[0]).toEqual({
       from: 'filesystem_read_file',
-      to: 'Read',
+      to: 'coder.read-file',
       count: 2,
     });
     expect(stats.topCorrections[1]).toEqual({
       from: 'shell_execute',
-      to: 'Bash',
+      to: 'system.exec',
       count: 1,
     });
   });
@@ -457,22 +462,22 @@ describe('NativeToolCorrection pattern matching', () => {
   });
 
   it('prefix match works for tools starting with grep_', () => {
-    expect(correction.findNativeEquivalent('grep_files')).toBe('Grep');
-    expect(correction.findNativeEquivalent('grep_code')).toBe('Grep');
+    expect(correction.findNativeEquivalent('grep_files')).toBe('coder.grep');
+    expect(correction.findNativeEquivalent('grep_code')).toBe('coder.grep');
   });
 
   it('prefix match works for tools starting with bash_', () => {
-    expect(correction.findNativeEquivalent('bash_exec')).toBe('Bash');
-    expect(correction.findNativeEquivalent('bash_run')).toBe('Bash');
+    expect(correction.findNativeEquivalent('bash_exec')).toBe('system.exec');
+    expect(correction.findNativeEquivalent('bash_run')).toBe('system.exec');
   });
 
   it('glob match works for patterns with * in middle', () => {
     correction.addMapping({
       mcpPattern: 'tool_*_read',
-      nativeTool: 'Read',
+      nativeTool: 'coder.read-file',
       priority: 5,
     });
-    expect(correction.findNativeEquivalent('tool_special_read')).toBe('Read');
+    expect(correction.findNativeEquivalent('tool_special_read')).toBe('coder.read-file');
   });
 
   it('exact match wins over glob match when both match', () => {

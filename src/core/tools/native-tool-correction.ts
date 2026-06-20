@@ -41,16 +41,16 @@ export interface ToolMapping {
  * the same `mcpPattern`.
  */
 export const DEFAULT_MCP_TO_NATIVE_MAPPINGS: ToolMapping[] = [
-  { mcpPattern: 'filesystem_read_file', nativeTool: 'Read', priority: 10 },
-  { mcpPattern: 'filesystem_write_file', nativeTool: 'Write', priority: 10 },
-  { mcpPattern: 'filesystem_list_directory', nativeTool: 'Bash', priority: 10 },
-  { mcpPattern: 'shell_execute', nativeTool: 'Bash', priority: 10 },
-  { mcpPattern: 'search_web', nativeTool: 'WebSearch', priority: 10 },
-  { mcpPattern: 'fetch_url', nativeTool: 'WebFetch', priority: 10 },
-  { mcpPattern: 'code_search', nativeTool: 'Grep', priority: 10 },
-  { mcpPattern: 'code_read', nativeTool: 'Read', priority: 10 },
-  { mcpPattern: 'grep_*', nativeTool: 'Grep', priority: 5 },
-  { mcpPattern: 'bash_*', nativeTool: 'Bash', priority: 5 },
+  { mcpPattern: 'filesystem_read_file', nativeTool: 'coder.read-file', priority: 10 },
+  { mcpPattern: 'filesystem_write_file', nativeTool: 'coder.write-file', priority: 10 },
+  { mcpPattern: 'filesystem_list_directory', nativeTool: 'system.exec', priority: 10 },
+  { mcpPattern: 'shell_execute', nativeTool: 'system.exec', priority: 10 },
+  { mcpPattern: 'search_web', nativeTool: 'browser.search', priority: 10 },
+  { mcpPattern: 'fetch_url', nativeTool: 'browser.fetch', priority: 10 },
+  { mcpPattern: 'code_search', nativeTool: 'coder.grep', priority: 10 },
+  { mcpPattern: 'code_read', nativeTool: 'coder.read-file', priority: 10 },
+  { mcpPattern: 'grep_*', nativeTool: 'coder.grep', priority: 5 },
+  { mcpPattern: 'bash_*', nativeTool: 'system.exec', priority: 5 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ const ENV_DISABLE_FLAG = 'SUDO_NATIVE_TOOL_CORRECTION';
  * ```ts
  * const correction = new NativeToolCorrection();
  * const result = correction.correct('filesystem_read_file', { path: '/tmp/x.txt' });
- * // result = { nativeTool: 'Read', convertedArgs: { file_path: '/tmp/x.txt' } }
+ * // result = { nativeTool: 'coder.read-file', convertedArgs: { path: '/tmp/x.txt' } }
  * ```
  */
 export class NativeToolCorrection {
@@ -233,17 +233,17 @@ export class NativeToolCorrection {
    * Returns `{ nativeTool, convertedArgs }` on success, or `null` if no
    * correction is available (no mapping found, or correction is disabled).
    *
-   * Argument conversion rules:
-   * - `filesystem_read_file` -> `Read`: `{ file_path: args.path }`
-   * - `filesystem_write_file` -> `Write`: `{ file_path: args.path, content: args.content }`
-   * - `filesystem_list_directory` -> `Bash`: `{ command: "ls <args.path>" }`
-   * - `shell_execute` -> `Bash`: `{ command: args.command }`
-   * - `search_web` -> `WebSearch`: `{ query: args.query }`
-   * - `fetch_url` -> `WebFetch`: `{ url: args.url, prompt: args.prompt ?? '' }`
-   * - `code_search` -> `Grep`: args passed through unchanged
-   * - `code_read` -> `Read`: `{ file_path: args.path ?? args.file_path }`
-   * - `grep_*` prefix match -> `Grep`: args passed through unchanged
-   * - `bash_*` prefix match -> `Bash`: `{ command: args.command ?? args.cmd }`
+   * Argument conversion rules (targets are real SUDO-AI tools):
+   * - `filesystem_read_file` -> `coder.read-file`: `{ path: args.path ?? args.file_path }`
+   * - `filesystem_write_file` -> `coder.write-file`: `{ path, content }`
+   * - `filesystem_list_directory` -> `system.exec`: `{ command: "ls <args.path>" }`
+   * - `shell_execute` -> `system.exec`: `{ command: args.command }`
+   * - `search_web` -> `browser.search`: `{ query: args.query }`
+   * - `fetch_url` -> `browser.fetch`: `{ url: args.url }`
+   * - `code_search` -> `coder.grep`: `{ pattern: args.pattern ?? args.query ?? args.regex ?? args.q }`
+   * - `code_read` -> `coder.read-file`: `{ path: args.path ?? args.file_path }`
+   * - `grep_*` prefix match -> `coder.grep`: `{ pattern: ... }`
+   * - `bash_*` prefix match -> `system.exec`: `{ command: args.command ?? args.cmd }`
    * - Any other match: args passed through unchanged
    */
   correct(
@@ -307,18 +307,23 @@ export class NativeToolCorrection {
     nativeTool: string,
     args: Record<string, unknown>,
   ): Record<string, unknown> {
-    // Explicit per-tool conversion
+    // Explicit per-tool conversion. Targets are real SUDO-AI tools:
+    // coder.read-file/write-file use `path`; system.exec uses `command`;
+    // coder.grep uses `pattern`; browser.search uses `query`; browser.fetch `url`.
     if (mcpToolName === 'filesystem_read_file') {
-      return { file_path: args.path ?? args.file_path };
+      return { path: args.path ?? args.file_path };
     }
 
     if (mcpToolName === 'filesystem_write_file') {
-      return { file_path: args.path ?? args.file_path, content: args.content };
+      return { path: args.path ?? args.file_path, content: args.content };
     }
 
     if (mcpToolName === 'filesystem_list_directory') {
       const dir = (args.path ?? args.dir ?? '.').toString();
-      return { command: `ls ${dir}` };
+      // Single-quote the path so spaces / shell metacharacters in an
+      // attacker-influenced MCP arg can't inject into the system.exec command.
+      const quoted = `'${dir.replace(/'/g, `'\\''`)}'`;
+      return { command: `ls -- ${quoted}` };
     }
 
     if (mcpToolName === 'shell_execute') {
@@ -330,20 +335,20 @@ export class NativeToolCorrection {
     }
 
     if (mcpToolName === 'fetch_url') {
-      return { url: args.url, prompt: (args.prompt as string) ?? '' };
+      return { url: args.url };
     }
 
     if (mcpToolName === 'code_search') {
-      return { ...args };
+      return { pattern: args.pattern ?? args.query ?? args.regex ?? args.q };
     }
 
     if (mcpToolName === 'code_read') {
-      return { file_path: args.path ?? args.file_path };
+      return { path: args.path ?? args.file_path };
     }
 
     // Prefix / glob matches — generic conversions
     if (mcpToolName.startsWith('grep_')) {
-      return { ...args };
+      return { pattern: args.pattern ?? args.query ?? args.regex ?? args.q };
     }
 
     if (mcpToolName.startsWith('bash_')) {
