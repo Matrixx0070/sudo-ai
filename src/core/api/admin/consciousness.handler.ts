@@ -62,8 +62,9 @@ adminRouter.get('/api/admin/consciousness/state', async (_req, res) => {
       } catch { /* ignore malformed valence */ }
     }
 
+    // thoughts.created_at is ISO-8601; use strftime, not space-format datetime('now').
     const thoughtRow = db.prepare(
-      `SELECT COUNT(*) as cnt FROM thoughts WHERE created_at >= datetime('now', '-1 day')`,
+      `SELECT COUNT(*) as cnt FROM thoughts WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')`,
     ).get() as { cnt: number };
 
     const episodeRow = db.prepare(
@@ -93,7 +94,7 @@ adminRouter.get('/api/admin/consciousness/modules', async (_req, res) => {
   log.debug('GET /api/admin/consciousness/modules');
 
   const db = await openDb();
-  const RECENT_WINDOW = "datetime('now', '-1 hour')";
+  const RECENT_WINDOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hour')";
 
   const modules = CONSCIOUSNESS_MODULES.map((name) => {
     let healthy = false;
