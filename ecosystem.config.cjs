@@ -232,6 +232,15 @@ module.exports = {
         // Kill-switch: '0'.
         SUDO_FAILURE_PREVENTION_HINT: process.env['SUDO_FAILURE_PREVENTION_HINT'] || '1',
 
+        // Fold dropped role:'system' messages into the model input (cache-safe:
+        // persona prefix stays cached, folded content rides a separate uncached
+        // system message). Without this, ~38 in-loop guidance/safety injections
+        // (auto-plan PLAN, brief, prompt-injection warning, veto/loop-guard,
+        // compaction + session-fork summaries) are silently dropped by
+        // toSDKMessages and never reach the model. Per-turn cost ≈ the windowed
+        // in-loop system messages. Kill-switch: '0'.
+        SUDO_FOLD_SYSTEM_MESSAGES: process.env['SUDO_FOLD_SYSTEM_MESSAGES'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the
