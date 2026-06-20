@@ -94,6 +94,11 @@ module.exports = {
         SUDO_ADMIN_API: '1',
         SUDO_AI_DASHBOARD_TOKEN: process.env['SUDO_AI_DASHBOARD_TOKEN'] || '',
 
+        // Background-shell tools (gap #10): system.shell.start/poll/kill. Default OFF;
+        // enabled on prod 2026-06-20 (PR #333). Reuses the EXEC_APPROVAL_MODE gate +
+        // sandbox of system.exec. Danger subset (process.exit-style) N/A here.
+        SUDO_BG_SHELL: '1',
+
         // Pins /.well-known/agentskills.json 'registry' field origin — MUST NOT trust request headers (Wave 10 P1 HIGH-1).
         SUDO_PUBLIC_BASE_URL: 'http://127.0.0.1:18900',
 
