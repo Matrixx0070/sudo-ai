@@ -241,6 +241,14 @@ module.exports = {
         // in-loop system messages. Kill-switch: '0'.
         SUDO_FOLD_SYSTEM_MESSAGES: process.env['SUDO_FOLD_SYSTEM_MESSAGES'] || '1',
 
+        // Skip loopback/diagnostic web turns (127.0.0.1, ::1, localhost) from the
+        // daily activity log so local probes / health checks / manual gateway
+        // tests don't pollute the "## Today" prompt injection. Default-off in
+        // code; enabled here because this deployment's loopback traffic is all
+        // diagnostic (real users arrive via Telegram/cron). Extra peers via
+        // SUDO_DIAGNOSTIC_PEERS. Kill-switch: '0'.
+        SUDO_SKIP_DIAGNOSTIC_DAILY_LOG: process.env['SUDO_SKIP_DIAGNOSTIC_DAILY_LOG'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the
