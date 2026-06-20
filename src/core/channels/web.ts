@@ -127,15 +127,10 @@ export class WebAdapter implements ChannelAdapter {
       log.warn('WEB_CHAT_TOKEN is not set — web chat is unauthenticated (set token for production use)');
     }
 
-    // Fire-and-forget one-shot admin handler registration (non-blocking).
-    void (async () => {
-      try {
-        const { registerAdminHandlers } = await import('../api/admin/index.js');
-        await registerAdminHandlers();
-      } catch (err) {
-        log.error({ err }, 'registerAdminHandlers init failed in WebAdapter.attach');
-      }
-    })();
+    // Admin REST handlers are registered (and dispatched) solely by
+    // api/admin/register.ts via the gateway wiring in cli.ts when
+    // SUDO_ADMIN_API=1. The WebAdapter has no /api/admin dispatcher, so it no
+    // longer registers them here.
 
     // Build a noServer WebSocketServer for /chat/ws connections only.
     const wss = new WebSocketServer({ noServer: true });

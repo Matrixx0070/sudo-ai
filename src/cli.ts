@@ -3563,6 +3563,16 @@ async function boot(): Promise<void> {
         registerFileRoutes(gatewayServer, fileStore);
         log.info('Files API attached (/v1/files)');
 
+        // Admin REST API (/api/admin/*) — opt-in (SUDO_ADMIN_API=1), fail-closed,
+        // Bearer token-gated. No-op + zero side effects when the flag is off.
+        if (process.env['SUDO_ADMIN_API'] === '1') {
+          const { registerAdminApi } = await import('./core/api/admin/register.js');
+          const mounted = await registerAdminApi(gatewayServer);
+          log.info({ mounted }, mounted
+            ? 'Admin API attached (/api/admin/*) — token-gated'
+            : 'Admin API NOT mounted (fail-closed: no admin token set)');
+        }
+
         // Skills Registry
         const skillRegistry = new SkillRegistry(db.db);
         skillRegistry.scanAndRegister();
