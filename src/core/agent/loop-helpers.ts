@@ -635,7 +635,23 @@ interface SingleCallResult {
    * path (no critic wired / skipped / approved / env flag off).
    */
   criticFeedback?: string;
+  /**
+   * Recovery-reader carrier: when this call FAILED and a `preventionLookup`
+   * surfaced a known prevention rule / solution for the same tool+error, the
+   * `commit` closure prepends this string to the tool message in session
+   * history so the model sees the prior lesson before it retries. Undefined on
+   * success, when no lookup is wired, or when nothing is on record.
+   */
+  preventionHint?: string;
 }
+
+/**
+ * Looks up a prior-failure prevention hint for a (tool, error) pair. Returns a
+ * model-facing hint string, or null when nothing is on record. Sourced from
+ * ToolOutcomeLearner.checkPreventionRulesForError; wired only when
+ * SUDO_FAILURE_PREVENTION_HINT=1.
+ */
+export type PreventionLookupLike = (toolName: string, error: string) => string | null;
 
 /**
  * Execute one tool call (security + permission gated) and return its result.
@@ -653,6 +669,7 @@ async function executeSingleToolCall(
   groundingChecker?: GroundingCheckerLike,
   groundingBlockEnabled: boolean = false,
   criticPass?: CriticPassLike,
+  preventionLookup?: PreventionLookupLike,
 ): Promise<SingleCallResult> {
   emit({ type: 'tool-call', name: tc.name, args: tc.arguments, toolId: tc.id });
   log.info({ tool: tc.name, toolCallId: tc.id, sessionId: ctx.sessionId }, 'Executing tool call');
@@ -908,6 +925,9 @@ async function executeSingleToolCall(
   }
 
   let resultContent: string;
+  // Recovery-reader: the error string of a failed call, used to look up a
+  // prior-failure prevention hint just before the final return.
+  let callError: string | undefined;
   try {
     const safeArgs = (tc.arguments && typeof tc.arguments === 'object' && !Array.isArray(tc.arguments))
       ? tc.arguments
@@ -923,6 +943,8 @@ async function executeSingleToolCall(
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: result.success });
     log.info({ tool: tc.name, success: result.success }, 'Tool call completed');
     guardedRecordFeedback(feedbackMemory, true, tc.name, tc.arguments ?? {}, resultContent || 'success', ctx.sessionId);
+    // A tool can report failure via its authoritative `success` flag without throwing.
+    if (!result.success) callError = resultContent;
   } catch (err) {
     if (err instanceof ToolError && err.code === 'tool_not_found') {
       log.warn({ tool: tc.name }, 'Tool not found — invoking fallback chain');
@@ -940,9 +962,27 @@ async function executeSingleToolCall(
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: false });
     log.error({ tool: tc.name, err }, 'Tool call failed');
     guardedRecordFeedback(feedbackMemory, false, tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
+    callError = resultContent;
   }
 
-  return { tc, resultContent, ...(criticFeedback ? { criticFeedback } : {}) };
+  // Recovery-reader: if this call failed and a prior recovery for the same
+  // tool+error is on record, surface the lesson so the model sees it before
+  // retrying. Fail-open — a throwing lookup must not break the tool path.
+  let preventionHint: string | undefined;
+  if (callError && preventionLookup) {
+    try {
+      preventionHint = preventionLookup(tc.name, callError) ?? undefined;
+    } catch (err) {
+      log.warn({ tool: tc.name, err: String(err) }, 'preventionLookup threw — skipping hint');
+    }
+  }
+
+  return {
+    tc,
+    resultContent,
+    ...(criticFeedback ? { criticFeedback } : {}),
+    ...(preventionHint ? { preventionHint } : {}),
+  };
 }
 
 /**
@@ -1054,6 +1094,7 @@ export async function executeToolCalls(
   groundingChecker?: GroundingCheckerLike,
   groundingBlockEnabled: boolean = false,
   criticPass?: CriticPassLike,
+  preventionLookup?: PreventionLookupLike,
 ): Promise<void> {
   const policyFromSandbox = sandboxManager?.getPolicyFor(state.sessionId);
   // Provision workspace if sandboxManager is available — ensures directory exists before bwrap tries to mount it.
@@ -1137,9 +1178,13 @@ export async function executeToolCalls(
     // model-facing history is annotated. `tool_result_persist` carries
     // the annotated content so a hook subscriber can correlate it with
     // the `verify_gate_critic_invoked` event.
-    const stored = res.criticFeedback
-      ? `${res.criticFeedback}\n\n${res.resultContent}`
-      : res.resultContent;
+    // Prepend agent-facing annotations to the model-facing history (outermost
+    // first): the critic rejection, then the prior-failure prevention hint.
+    // Both rarely co-occur (critic fires on reject/grounding; the hint fires on
+    // an actual tool failure) but stacking is well-defined if they do.
+    let stored = res.resultContent;
+    if (res.preventionHint) stored = `${res.preventionHint}\n\n${stored}`;
+    if (res.criticFeedback) stored = `${res.criticFeedback}\n\n${stored}`;
     // toolCallId and toolName MUST be present for the Vercel AI SDK to
     // correctly match tool results back to tool calls on the next LLM turn.
     session.messages.push({
@@ -1162,7 +1207,7 @@ export async function executeToolCalls(
 
   // Phase 2a: leading sequential block.
   for (const tc of leadingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass, preventionLookup);
     commit(res);
   }
 
@@ -1176,19 +1221,19 @@ export async function executeToolCalls(
     for (let i = 0; i < parallel.length; i += cap) {
       const chunk = parallel.slice(i, i + cap);
       const results = await Promise.all(
-        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass)),
+        chunk.map(tc => executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass, preventionLookup)),
       );
       // Append in original order so the LLM context stays coherent.
       for (const res of results) commit(res);
     }
   } else if (parallel.length === 1) {
-    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass);
+    const res = await executeSingleToolCall(parallel[0]!, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass, preventionLookup);
     commit(res);
   }
 
   // Phase 2c: trailing sequential block.
   for (const tc of trailingSequential) {
-    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass);
+    const res = await executeSingleToolCall(tc, ctx, emit, toolRegistry, security, feedbackMemory, verifyGate, hooks, groundingChecker, groundingBlockEnabled, criticPass, preventionLookup);
     commit(res);
   }
 

@@ -2416,7 +2416,13 @@ export class AgentLoop extends AgentLoopInjections {
             }
 
             _stuckPreCount = session.messages.length;
-            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass);
+            // Recovery-reader (opt-in SUDO_FAILURE_PREVENTION_HINT=1): on a tool
+            // failure, surface any prior-recovery prevention rule/solution the
+            // ToolOutcomeLearner recorded so the model sees it before retrying.
+            const _preventionLookup = process.env['SUDO_FAILURE_PREVENTION_HINT'] === '1' && this._toolOutcomeLearner
+              ? (t: string, e: string): string | null => this._toolOutcomeLearner!.checkPreventionRulesForError(t, e)
+              : undefined;
+            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass, _preventionLookup);
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
 
