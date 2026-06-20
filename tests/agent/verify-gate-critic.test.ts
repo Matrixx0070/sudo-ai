@@ -63,6 +63,37 @@ describe('parseVerdict', () => {
     expect(parseVerdict('')).toBeNull();
     expect(parseVerdict('\n\n')).toBeNull();
   });
+
+  it('parses an optional parenthetical confidence', () => {
+    expect(parseVerdict('APPROVE (85): file exists')).toEqual({
+      verdict: 'approve', rationale: 'file exists', confidence: 85,
+    });
+    expect(parseVerdict('REJECT (40): old_string missing')).toEqual({
+      verdict: 'reject', rationale: 'old_string missing', confidence: 40,
+    });
+  });
+
+  it('accepts a percent sign and surrounding whitespace in the confidence', () => {
+    expect(parseVerdict('approve ( 73 % ) : ok')?.confidence).toBe(73);
+    expect(parseVerdict('REJECT(0): no')?.confidence).toBe(0);
+  });
+
+  it('omits confidence when the parenthetical is absent (backward compatible)', () => {
+    const r = parseVerdict('APPROVE: file exists');
+    expect(r).toEqual({ verdict: 'approve', rationale: 'file exists' });
+    expect(r && 'confidence' in r).toBe(false);
+  });
+
+  it('does not treat a bare percentage in the rationale as confidence', () => {
+    const r = parseVerdict("APPROVE: I'm 85% sure this is fine");
+    expect(r?.confidence).toBeUndefined();
+    expect(r?.rationale).toBe("I'm 85% sure this is fine");
+  });
+
+  it('clamps confidence to [0,100]', () => {
+    expect(parseVerdict('APPROVE (200): ok')?.confidence).toBe(100);
+    expect(parseVerdict('REJECT (999): no')?.confidence).toBe(100);
+  });
 });
 
 describe('readCriticBudget', () => {
@@ -123,6 +154,27 @@ describe('CriticPass.review', () => {
     expect(r.invoked).toBe(true);
     expect(r.verdict).toBe('reject');
     expect(r.rationale).toBe('old_string not present');
+  });
+
+  it('surfaces the critic self-confidence when the model supplies it', async () => {
+    const brain: CriticBrainLike = {
+      call: vi.fn(async () => ({ content: 'APPROVE (88): target file exists and edit is reversible' })),
+    };
+    const cp = new CriticPass(brain, { budget: 5 });
+    const r = await cp.review(makeInput());
+    expect(r.invoked).toBe(true);
+    expect(r.verdict).toBe('approve');
+    expect(r.confidence).toBe(88);
+  });
+
+  it('leaves confidence undefined when the model omits it', async () => {
+    const brain: CriticBrainLike = {
+      call: vi.fn(async () => ({ content: 'APPROVE: looks fine' })),
+    };
+    const cp = new CriticPass(brain, { budget: 5 });
+    const r = await cp.review(makeInput());
+    expect(r.invoked).toBe(true);
+    expect(r.confidence).toBeUndefined();
   });
 
   it('returns malformed skip when brain output has no verdict line', async () => {
@@ -235,10 +287,12 @@ describe('CriticPass.review', () => {
     await cp.review(makeInput());
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0]).toEqual({ role: 'system', content: 'CUSTOM REVIEWER' });
-    // Second system message carries the critic output contract.
+    // Second system message carries the critic output contract, including the
+    // 0-100 self-confidence instruction (Track 3).
     expect(calls[0]?.[1]?.role).toBe('system');
-    expect(calls[0]?.[1]?.content).toMatch(/APPROVE:/);
-    expect(calls[0]?.[1]?.content).toMatch(/REJECT:/);
+    expect(calls[0]?.[1]?.content).toMatch(/APPROVE \(<confidence>\):/);
+    expect(calls[0]?.[1]?.content).toMatch(/REJECT \(<confidence>\):/);
+    expect(calls[0]?.[1]?.content).toMatch(/0-100/);
     // User message names the tool + trigger + threshold.
     const user = calls[0]?.[2];
     expect(user?.role).toBe('user');

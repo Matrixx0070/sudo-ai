@@ -216,6 +216,8 @@ export interface CriticPassLike {
     verdict: 'approve' | 'reject' | 'skip';
     reason: string;
     rationale?: string;
+    /** Critic's self-assessed 0-100 certainty in its verdict (observable-only). */
+    confidence?: number;
   }>;
 }
 
@@ -296,6 +298,10 @@ async function runCriticPass(
     ...baseCtx,
     verdict: result.verdict,
     rationale: result.rationale ?? null,
+    // Distinct from baseCtx.confidence (the slice-1 gate confidence): this is
+    // the critic's own 0-100 certainty in its verdict. Null when the model
+    // omitted it. Observable-only — does not gate execution.
+    criticConfidence: result.confidence ?? null,
   });
   return result;
 }
@@ -881,6 +887,7 @@ async function executeSingleToolCall(
               confidence: gate.confidence,
               threshold: gate.threshold,
               rationale: criticResult.rationale ?? null,
+              criticConfidence: criticResult.confidence ?? null,
               message: blockedMsg,
             });
             emit({ type: 'tool-result', name: tc.name, result: blockedMsg, toolId: tc.id, success: false });
