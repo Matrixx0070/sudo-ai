@@ -3926,6 +3926,22 @@ if (process.argv[2] === 'chat') {
     console.error('[chat] Failed to load chat module:', msg);
     process.exit(1);
   });
+} else if (process.argv[2] === 'replay') {
+  // replay subcommand — read-only inspection of a captured session trace
+  // (traces.db). Intercept BEFORE full boot so it never starts the daemon.
+  import('./cli/commands/replay.js').then(({ runReplay }) => {
+    runReplay(process.argv.slice(3))
+      .then((code) => process.exit(code))
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[replay] Fatal error:', msg);
+        process.exit(1);
+      });
+  }).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[replay] Failed to load replay module:', msg);
+    process.exit(1);
+  });
 } else {
   // ---------------------------------------------------------------------------
   // Signal handlers — wire before boot so any early failure still cleans up
