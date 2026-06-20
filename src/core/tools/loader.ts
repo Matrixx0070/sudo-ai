@@ -11,7 +11,7 @@
  * ```
  * builtin/
  *   coder/index.ts      → export function registerCoderTools(r: ToolRegistry)
- *   system/index.ts     → export function registerSystemTools(r: ToolRegistry)
+ *   system/index.ts     → export async function registerSystemTools(r: ToolRegistry)
  *   browser/index.ts    → export function registerBrowserTools(r: ToolRegistry)
  *   ...
  * ```

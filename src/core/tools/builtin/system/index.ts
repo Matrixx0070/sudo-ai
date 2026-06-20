@@ -54,10 +54,18 @@ const SYSTEM_TOOLS = [
  *
  * @param registry - The {@link ToolRegistry} to register tools into.
  */
-export function registerSystemTools(registry: ToolRegistry): void {
+export async function registerSystemTools(registry: ToolRegistry): Promise<void> {
   logger.info({ count: SYSTEM_TOOLS.length }, 'Registering system tools');
   for (const tool of SYSTEM_TOOLS) {
     registry.register(tool);
+  }
+  // Background-shell family (gap #10) — opt-in, default OFF. The barrel is
+  // dynamic-imported ONLY when the flag is set, so when unset the bg-shell module
+  // graph is never even loaded (zero side effects, byte-identical behavior).
+  if (process.env['SUDO_BG_SHELL'] === '1') {
+    const { BG_SHELL_TOOLS } = await import('./bg-shell/index.js');
+    for (const tool of BG_SHELL_TOOLS) registry.register(tool);
+    logger.info({ count: BG_SHELL_TOOLS.length }, 'Background-shell tools registered (SUDO_BG_SHELL=1)');
   }
   logger.info({ count: SYSTEM_TOOLS.length }, 'System tools registered');
 }

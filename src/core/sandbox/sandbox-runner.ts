@@ -31,7 +31,7 @@ import { selectExecBackendName, resolveExecBackend } from './exec-backend.js';
 const log = createLogger('sandbox:runner');
 const execFileAsync = promisify(execFile);
 
-const BWRAP_BIN = '/usr/bin/bwrap';
+export const BWRAP_BIN = '/usr/bin/bwrap';
 
 /**
  * Read-only host paths bound into the sandbox ONLY when policy.network === 'host'.
