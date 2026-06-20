@@ -39,6 +39,7 @@ import {
 import { ToolRouter } from './tool-router.js';
 import { classifyIntent, formatIntentHint } from './intent-classifier.js';
 import { getPredictor } from '../tools/builtin/meta/predictor.js';
+import { CompletionVerifier } from '../tools/completion-verifier.js';
 import type { Prediction } from '../prediction/predictor.js';
 import type {
   BrainLike,
@@ -158,6 +159,12 @@ export interface AgentRunResult {
    * `unaddressed` is a soft anti-"phantom-completion" signal, not a hard verdict.
    */
   planProgress?: { totalSteps: number; addressedCount: number; unaddressed: string[] };
+  /**
+   * Heuristic phantom-completion check of the final response (placeholder /
+   * truncation / length / request cross-reference). Present only when
+   * SUDO_COMPLETION_VERIFY=1. Observable-only — never alters the response.
+   */
+  completionVerification?: { passed: boolean; confidence: number; failedChecks: string[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +197,8 @@ export class AgentLoop extends AgentLoopInjections {
   private unifiedMemory: UnifiedMemoryLike | null = null;
   private readonly workspaceInjector: ((session: any) => Promise<void>) | undefined;
   private readonly hooks?: HookEmitterLike;
+  /** Lazily-built heuristic completion verifier (orphan wiring), used only when SUDO_COMPLETION_VERIFY=1. */
+  private _completionVerifier: CompletionVerifier | null = null;
   private readonly sandboxManager: SandboxManagerLike;
   private readonly identityLoader?: IdentityLoaderInstance;
   private auditTrail: AuditTrail | null = null;
@@ -1557,6 +1566,29 @@ export class AgentLoop extends AgentLoopInjections {
       }
     }
 
+    // CompletionVerify — a cheap, no-LLM heuristic check of the final response
+    // for phantom completion (empty / placeholder / truncated / does-not-address
+    // the request). Opt-in SUDO_COMPLETION_VERIFY=1 (default OFF → zero overhead),
+    // fail-open, observable-only: it NEVER alters finalResponse — it surfaces a
+    // confidence signal on the result and logs a warning when a phantom completion
+    // is detected. Complements the LLM CriticPass and the preventive SUDO_AUTO_PLAN.
+    let _completionVerification: { passed: boolean; confidence: number; failedChecks: string[] } | undefined;
+    if (process.env['SUDO_COMPLETION_VERIFY'] === '1') {
+      try {
+        this._completionVerifier ??= new CompletionVerifier();
+        const _cv = this._completionVerifier.verify(finalResponse, message);
+        const _failed = _cv.checks.filter((c) => c.severity === 'fail').map((c) => c.name);
+        _completionVerification = { passed: _cv.passed, confidence: _cv.confidence, failedChecks: _failed };
+        if (_cv.passed) {
+          log.info({ sessionId, confidence: _cv.confidence }, 'CompletionVerify: final-response check passed');
+        } else {
+          log.warn({ sessionId, confidence: _cv.confidence, failedChecks: _failed }, 'CompletionVerify: possible phantom completion');
+        }
+      } catch (err) {
+        log.warn({ sessionId, err: String(err) }, 'CompletionVerify: verify threw — continuing');
+      }
+    }
+
     // Theme 2.2: reasoning-summary — surface a transparent recap of what the
     // agent did this turn (approach, recent steps, confidence). Opt-in
     // (SUDO_REASONING_SUMMARY=1), additive (attached to the result + logged),
@@ -1627,7 +1659,7 @@ export class AgentLoop extends AgentLoopInjections {
       }
     }
 
-    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress };
+    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress, completionVerification: _completionVerification };
   }
 
   /** Return the resolved config for this loop instance. */

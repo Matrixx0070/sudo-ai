@@ -206,7 +206,10 @@ export class CompletionVerifier {
       verifiedAt: new Date().toISOString(),
     };
 
-    log.info(
+    // debug-level: callers that wire this into a per-turn path (e.g. the agent
+    // loop's SUDO_COMPLETION_VERIFY block) log the result themselves, so keep
+    // the module's own per-call line off the info channel to avoid double-logging.
+    log.debug(
       { passed, confidence, checkCount: checks.length },
       'Completion verification complete',
     );
@@ -423,6 +426,12 @@ export class CompletionVerifier {
     };
   }
 
+  /**
+   * Cross-reference the output against key terms in the request. NOTE: the
+   * fail/warn paths only fire when the request has MORE THAN 2 content terms
+   * (after stop-word stripping) — very short requests skip this check (returns
+   * pass) to avoid false positives on terse asks like "fix bug".
+   */
   private _checkCrossReference(output: string, originalRequest: string): VerificationCheck {
     const reqLower = originalRequest.toLowerCase();
     const outLower = output.toLowerCase();
