@@ -24,6 +24,11 @@ import {
   isChunkContradictionEnabled,
   type ContradictionJudge,
 } from './core/memory/chunk-contradiction.js';
+import {
+  backfillChunkVectors,
+  isVectorBackfillEnabled,
+  MindDBVectorStore,
+} from './core/memory/vector-backfill.js';
 import { Brain } from './core/brain/brain.js';
 import { ToolRegistry } from './core/tools/registry.js';
 import { loadBuiltinTools } from './core/tools/loader.js';
@@ -2500,6 +2505,22 @@ async function boot(): Promise<void> {
           }
         } else {
           log.warn({ jobId: job.id }, 'AutoDream not initialized — skipping dream:run');
+        }
+        // Corpus vector backfill (opt-in SUDO_VECTOR_BACKFILL=1): embed active
+        // chunks missing an ANN vector into chunks_vec so hybrid-search's vector
+        // path returns results instead of silently falling back to BM25. Bounded
+        // per run and self-healing — clears the backlog over successive dreams.
+        if (isVectorBackfillEnabled() && db.vecLoaded) {
+          try {
+            const res = await backfillChunkVectors(
+              db,
+              new EmbeddingService(db),
+              new MindDBVectorStore(db.db),
+            );
+            log.info({ jobId: job.id, ...res }, 'Vector backfill pass complete');
+          } catch (vbErr) {
+            log.warn({ err: String(vbErr) }, 'Vector backfill failed (non-fatal)');
+          }
         }
       } else {
         log.info({ event: payload.event, jobId: job.id }, 'System event dispatched');

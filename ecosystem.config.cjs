@@ -211,6 +211,13 @@ module.exports = {
         // Kill-switch: '0'.
         SUDO_CHUNK_CONTRADICT: process.env['SUDO_CHUNK_CONTRADICT'] || '1',
 
+        // Corpus vector backfill (#RAG): after each dream, embed active chunks
+        // that have no chunks_vec row and upsert them, so hybrid-search's vector
+        // path actually returns results instead of silent BM25-only fallback.
+        // Bounded per run, self-healing. Requires sqlite-vec loaded + an
+        // embedding key. Kill-switch: '0'.
+        SUDO_VECTOR_BACKFILL: process.env['SUDO_VECTOR_BACKFILL'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the

@@ -61,6 +61,20 @@ export type {
   ContradictionResult,
 } from './chunk-contradiction.js';
 
+// Corpus-side ANN backfill — embeds stored chunks into chunks_vec so the
+// hybrid-search vector path actually returns results (was BM25-only).
+export {
+  backfillChunkVectors,
+  isVectorBackfillEnabled,
+  MindDBVectorStore,
+} from './vector-backfill.js';
+export type {
+  ChunkVectorStore,
+  BackfillEmbedder,
+  BackfillOptions,
+  BackfillResult,
+} from './vector-backfill.js';
+
 // Schema utilities (needed by devops / migration tooling)
 export { initializeSchema, initializeVecTable, SCHEMA_SQL } from './schema.js';
 
