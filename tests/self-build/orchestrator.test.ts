@@ -70,8 +70,12 @@ const mockedExistsSync = existsSync as MockedFunction<typeof existsSync>;
 const mockedWriteFileSync = writeFileSync as MockedFunction<typeof writeFileSync>;
 const mockedRealpathSync = realpathSync as MockedFunction<typeof realpathSync>;
 
-/** Build an in-memory SQLite database with the required cost tables. */
-function buildTestDb(apiCostsSumUsd = 0): Database.Database {
+/**
+ * Build an in-memory SQLite database with the cost tables. api_costs is created
+ * empty to mirror prod (the legacy table exists but is never written or read);
+ * real spend goes into api_call_log, which queryDailySpend reads.
+ */
+function buildTestDb(dailySpendUsd = 0): Database.Database {
   const db = new Database(':memory:');
   db.exec(`
     CREATE TABLE IF NOT EXISTS api_costs (
@@ -85,10 +89,12 @@ function buildTestDb(apiCostsSumUsd = 0): Database.Database {
       called_at TEXT NOT NULL
     );
   `);
-  if (apiCostsSumUsd > 0) {
+  if (dailySpendUsd > 0) {
+    // Real spend lives in api_call_log (ISO called_at) — the table
+    // queryDailySpend reads; the legacy api_costs table is left empty.
     db.prepare(
-      `INSERT INTO api_costs (cost_usd, created_at) VALUES (?, datetime('now'))`,
-    ).run(apiCostsSumUsd);
+      `INSERT INTO api_call_log (estimated_cost_usd, called_at) VALUES (?, ?)`,
+    ).run(dailySpendUsd, new Date().toISOString());
   }
   return db;
 }

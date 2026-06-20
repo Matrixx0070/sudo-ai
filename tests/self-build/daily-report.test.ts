@@ -176,7 +176,7 @@ describe('generateDailyReport', () => {
 
     expect(result.budgetUsd).toBe(3.75);
     expect(vi.mocked(db.prepare)).toHaveBeenCalledWith(
-      expect.stringContaining('api_costs'),
+      expect.stringContaining('api_call_log'),
     );
     const [, content] = vi.mocked(writeFileSync).mock.calls[0]!;
     expect(String(content)).toContain('$3.75');
