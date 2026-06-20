@@ -22,6 +22,7 @@ import { createLogger } from '../shared/logger.js';
 import { ToolError } from '../shared/errors.js';
 import type { MCPAdapter, MCPAdapterLike, MCPToolDef } from './mcp-adapter.js';
 import { isReadOnlyTool } from '../agent/plan-mode-gate.js';
+import { NativeToolCorrection } from './native-tool-correction.js';
 
 const logger = createLogger('tool-registry');
 
@@ -76,6 +77,9 @@ export class ToolRegistry {
 
   /** Plan-mode gate (gap #18). Null until setPlanModeGate() called. */
   private _planModeGate: import('../agent/plan-mode-gate.js').PlanModeGate | null = null;
+
+  /** Lazily-built native-tool fallback (gap #7), used only when SUDO_NATIVE_TOOL_CORRECTION_FALLBACK=1. */
+  private _nativeCorrection: NativeToolCorrection | null = null;
 
   // -------------------------------------------------------------------------
   // Global singleton — allows tools to self-register at runtime
@@ -392,7 +396,8 @@ export class ToolRegistry {
   ): Promise<ToolResult> {
     // Route MCP tools (name starts with "mcp__") to the appropriate adapter.
     if (name.startsWith('mcp__')) {
-      return this._executeMCPTool(name, params);
+      const result = await this._executeMCPTool(name, params);
+      return this._maybeCorrectMcpFailure(name, params, ctx, result);
     }
 
     let tool = this.tools.get(name);
@@ -570,6 +575,44 @@ export class ToolRegistry {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error({ tool: name, err: msg }, 'MCP tool execution failed');
       return { success: false, output: msg };
+    }
+  }
+
+  /**
+   * When an MCP tool call fails, optionally auto-correct to a native SUDO-AI
+   * equivalent and re-dispatch (gap #7). Opt-in via
+   * SUDO_NATIVE_TOOL_CORRECTION_FALLBACK=1 (default OFF → returns the original
+   * result unchanged, byte-identical). Fail-open: any error in the correction
+   * path returns the original MCP failure.
+   */
+  private async _maybeCorrectMcpFailure(
+    mcpName: string,
+    params: Record<string, unknown>,
+    ctx: ToolContext,
+    result: ToolResult,
+  ): Promise<ToolResult> {
+    if (result.success) return result;
+    if (process.env['SUDO_NATIVE_TOOL_CORRECTION_FALLBACK'] !== '1') return result;
+    try {
+      if (!this._nativeCorrection) this._nativeCorrection = new NativeToolCorrection();
+      // mcp__<serverId>__<toolName> → bare <toolName> (the mappings use bare names).
+      const bareTool = mcpName.split('__').slice(2).join('__');
+      if (!bareTool || !this._nativeCorrection.shouldCorrect(bareTool, result.output)) {
+        return result;
+      }
+      const corrected = this._nativeCorrection.correct(bareTool, params);
+      if (!corrected) return result;
+      logger.info(
+        { from: mcpName, to: corrected.nativeTool },
+        'MCP tool failed — auto-correcting to native equivalent',
+      );
+      return await this.execute(corrected.nativeTool, corrected.convertedArgs, ctx);
+    } catch (err) {
+      logger.warn(
+        { tool: mcpName, err: err instanceof Error ? err.message : String(err) },
+        'native tool correction failed — returning original MCP failure (fail-open)',
+      );
+      return result;
     }
   }
 }
