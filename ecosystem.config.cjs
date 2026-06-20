@@ -218,6 +218,20 @@ module.exports = {
         // embedding key. Kill-switch: '0'.
         SUDO_VECTOR_BACKFILL: process.env['SUDO_VECTOR_BACKFILL'] || '1',
 
+        // Failure-learner durable store: persist the failure log + prevention
+        // rules to mind.db so lessons survive a restart (default is process-
+        // lifetime in-memory). Pairs with the recovery producer (fail→success
+        // records a solution+rule) so the WHY memory accumulates across
+        // sessions. Kill-switch: '0' (reverts to in-memory).
+        SUDO_FAILURE_LEARNER_DB: process.env['SUDO_FAILURE_LEARNER_DB'] || '1',
+
+        // Recovery reader: on a tool failure, prepend any prior-recovery
+        // prevention rule/solution (recorded for the same tool+error) to the
+        // tool result the model sees, so it applies the past fix before
+        // retrying. Closes the read side of the learning loop. Fail-open.
+        // Kill-switch: '0'.
+        SUDO_FAILURE_PREVENTION_HINT: process.env['SUDO_FAILURE_PREVENTION_HINT'] || '1',
+
         // Prompt-cache discipline: deterministic tool ordering + stable system-prompt prefix +
         // explicit Anthropic cache_control breakpoints (anthropic/* models only). Saves ~40% on
         // cached input tokens. Kill-switch: SUDO_PROMPT_CACHE_BREAKPOINTS_DISABLE=1 keeps the
