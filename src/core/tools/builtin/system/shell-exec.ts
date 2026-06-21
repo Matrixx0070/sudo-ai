@@ -29,6 +29,12 @@ import {
 } from '../../../security/approval/index.js';
 import { runInSandbox } from '../../../sandbox/sandbox-runner.js';
 import { clampHeadTail } from '../../../shared/head-tail-buffer.js';
+import {
+  checkRepoCommand,
+  repoExecEnabled,
+  runRepoArgv,
+  auditExec,
+} from '../../../security/approval/repo-allowlist.js';
 
 const logger = createLogger('system.exec');
 
@@ -311,6 +317,59 @@ async function executeWithGate(opts: GateOptions): Promise<ToolResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Repo target — run an allowlisted command against the REAL repo (no sandbox)
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle system.exec target:'repo'. Gated by SUDO_REPO_EXEC=1 AND the repo
+ * allowlist (read/verify commands only), then run via execFile in PROJECT_ROOT —
+ * a deliberate, narrow bridge to the real repo that bypasses the /workspace
+ * sandbox. Every attempt (allowed or refused) is audited to data/exec-audit.jsonl.
+ */
+async function runRepoTarget(
+  command: string,
+  timeoutMs: number,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  if (!repoExecEnabled()) {
+    auditExec({ session: sessionId, command, allowed: false, reason: 'SUDO_REPO_EXEC not set' });
+    return {
+      success: false,
+      output: 'system.exec target:"repo" is disabled. The operator must set SUDO_REPO_EXEC=1 to allow allowlisted commands against the real repo.',
+      data: { repo: true, disabled: true },
+    };
+  }
+
+  const match = checkRepoCommand(command);
+  if (!match.allowed) {
+    auditExec({ session: sessionId, command, allowed: false, reason: match.reason });
+    return {
+      success: false,
+      output: `Refused: ${match.reason}. target:"repo" allows only read/verify commands (pnpm/npm test|lint|build, read-only git, rg, ls, wc, read-only pm2).`,
+      data: { repo: true, refused: true, reason: match.reason },
+    };
+  }
+
+  const start = Date.now();
+  logger.info({ session: sessionId, argv: match.argv }, 'system.exec repo-target: running allowlisted command');
+  const { stdout, stderr, exitCode } = await runRepoArgv(match.argv, timeoutMs, signal);
+  const durationMs = Date.now() - start;
+  const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
+  const { text: output, truncated } = truncate(combined || '(no output)');
+  const success = exitCode === 0;
+
+  auditExec({ session: sessionId, command, allowed: true, exitCode });
+  logger.info({ session: sessionId, exitCode, durationMs, truncated, repo: true }, 'Repo-target command completed');
+
+  return {
+    success,
+    output: success ? output : `Command exited with code ${exitCode}:\n${output}`,
+    data: { exitCode, durationMs, truncated, repo: true },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Tool definition
 // ---------------------------------------------------------------------------
 
@@ -320,20 +379,29 @@ export const execTool: ToolDefinition = {
     'Execute any shell command and return stdout/stderr. Use for running scripts, ' +
     'installing packages, compiling code, or any operation not covered by other tools. ' +
     'Supports pipes, redirects, and all bash features. Non-allowlisted commands require ' +
-    'human approval (set EXEC_APPROVAL_MODE=off to disable the gate).',
+    'human approval (set EXEC_APPROVAL_MODE=off to disable the gate). ' +
+    'Set target:"repo" to run an allowlisted read/verify command (pnpm/npm test|lint|build, ' +
+    'read-only git, rg) against the REAL repo instead of the sandbox — gated by SUDO_REPO_EXEC.',
   category: 'system',
   requiresConfirmation: true,
-  timeout: 120_000,
+  // Raised from 120s: target:"repo" build/test runs legitimately take minutes.
+  timeout: 300_000,
   parameters: {
     command: {
       type: 'string',
       required: true,
-      description: 'Shell command to execute (run via /bin/bash -c).',
+      description: 'Shell command to execute (run via /bin/bash -c; for target:"repo", an allowlisted argv with no shell metacharacters).',
     },
     cwd: {
       type: 'string',
       required: false,
-      description: 'Working directory for the command. Defaults to the session working directory.',
+      description: 'Working directory for the command. Defaults to the session working directory. Ignored when target:"repo" (always runs in the repo root).',
+    },
+    target: {
+      type: 'string',
+      required: false,
+      description: 'Where to run: "sandbox" (default — isolated /workspace) or "repo" (the real project repo, allowlisted read/verify commands only, requires SUDO_REPO_EXEC=1).',
+      enum: ['sandbox', 'repo'],
     },
     timeout: {
       type: 'number',
@@ -364,6 +432,18 @@ export const execTool: ToolDefinition = {
       typeof params['timeout'] === 'number' && params['timeout'] > 0
         ? params['timeout']
         : DEFAULT_TIMEOUT;
+
+    // target:"repo" — allowlisted read/verify command against the real repo,
+    // outside the sandbox. Self-gating (SUDO_REPO_EXEC + allowlist), so it never
+    // touches the EXEC_APPROVAL_MODE / sandbox flow below. Default to a longer
+    // window since build/test runs take minutes (capped at the tool timeout).
+    if (params['target'] === 'repo') {
+      const repoTimeout =
+        typeof params['timeout'] === 'number' && params['timeout'] > 0
+          ? Math.min(params['timeout'], 300_000)
+          : 180_000;
+      return runRepoTarget(command, repoTimeout, ctx.sessionId, ctx.signal);
+    }
 
     // Security: workspaceDir must always be system-controlled (provisioned by SandboxManager).
     // Fall back to ctx.workingDir (also system-set), never to agent-supplied params.cwd.
