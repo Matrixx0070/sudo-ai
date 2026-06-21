@@ -21,6 +21,7 @@ import type { CronScheduler } from '../cron/scheduler.js';
 import type { CronJob } from '../cron/types.js';
 import { runSelfBuildTick, type SelfBuildDeps, type TickResult } from './orchestrator.js';
 import { generateDailyReport, type DailyReportDeps, type DailyReportResult } from './daily-report.js';
+import { openSelfBuildReviewPr, selfBuildOpenPrEnabled } from './review-pr.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -60,6 +61,17 @@ export async function handleSelfBuildTick(deps: SelfBuildDeps): Promise<TickResu
       { status: result.status, commitSha: result.commitSha, message: result.message },
       'Self-build tick completed',
     );
+    // Self-improvement loop → review PR: surface a committed improvement as a
+    // pull request for human review via the gated github connector (opt-in via
+    // SUDO_SELF_BUILD_OPEN_PR; never auto-merges self-generated code).
+    if (result.status === 'committed' && selfBuildOpenPrEnabled()) {
+      try {
+        const pr = await openSelfBuildReviewPr(deps.gitCwd ?? PROJECT_ROOT, result, deps.logger);
+        log.info({ pr }, 'self-build: review PR step complete');
+      } catch (prErr) {
+        log.warn({ err: String(prErr) }, 'self-build: review PR step failed (non-fatal)');
+      }
+    }
     return result;
   } catch (err: unknown) {
     log.error({ err: String(err) }, 'handleSelfBuildTick: unexpected error — swallowed');
