@@ -16,7 +16,7 @@ const { runCmdMock } = vi.hoisted(() => ({ runCmdMock: vi.fn() }));
 vi.mock('../../src/core/tools/builtin/system/exec.js', () => ({ runCmd: runCmdMock }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  return { ...actual, mkdirSync: vi.fn(), writeFileSync: vi.fn(), readFileSync: vi.fn(actual.readFileSync) };
+  return { ...actual, mkdirSync: vi.fn(), writeFileSync: vi.fn(), readFileSync: vi.fn(actual.readFileSync), appendFileSync: vi.fn() };
 });
 
 import {
@@ -27,6 +27,10 @@ import {
   githubOpenPrTool,
   githubReadFileTool,
   githubVerifyTool,
+  githubListPrsTool,
+  githubPrDiffTool,
+  githubPrCommentTool,
+  githubClosePrTool,
   gitHubToolsEnabled,
 } from '../../src/core/tools/builtin/github/github.js';
 import { registerGitHubTools } from '../../src/core/tools/builtin/github/index.js';
@@ -83,7 +87,7 @@ describe('github tools — enablement & registration', () => {
     const reg = { register: vi.fn() };
     registerGitHubTools(reg as never);
     expect(reg.register).toHaveBeenCalledTimes(GITHUB_TOOLS.length);
-    expect(GITHUB_TOOLS.length).toBe(7);
+    expect(GITHUB_TOOLS.length).toBe(13);
   });
 });
 
@@ -319,6 +323,38 @@ describe('github.merge_pr — CI-green gate', () => {
     expect(res.success).toBe(false);
     expect(res.output).toMatch(/protected path/i);
     expect(mergeWasCalled()).toBe(false);
+  });
+});
+
+describe('github PR feature tools', () => {
+  it('list_prs parses gh json into a summary', async () => {
+    route((bin, args) => (bin === 'gh' && args[0] === 'pr' && args[1] === 'list'
+      ? ok(JSON.stringify([{ number: 5, title: 'Fix', state: 'OPEN', headRefName: 'fix/x', isDraft: false }]))
+      : ok('')));
+    const res = await githubListPrsTool.execute({}, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/#5 \[OPEN\] Fix/);
+  });
+
+  it('pr_diff returns the diff', async () => {
+    route((bin, args) => (bin === 'gh' && args[1] === 'diff' ? ok('diff --git a/x b/x\n+hi') : ok('')));
+    const res = await githubPrDiffTool.execute({ pr: '5' }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toContain('diff --git');
+  });
+
+  it('pr_comment posts a comment', async () => {
+    route((bin, args) => (bin === 'gh' && args[1] === 'comment' ? ok('https://github.com/o/r/pull/5#c1') : ok('')));
+    const res = await githubPrCommentTool.execute({ pr: '5', body: 'LGTM' }, ctx);
+    expect(res.success).toBe(true);
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1][1] === 'comment')).toBe(true);
+  });
+
+  it('close_pr closes without merging', async () => {
+    route((bin, args) => (bin === 'gh' && args[1] === 'close' ? ok('') : ok('')));
+    const res = await githubClosePrTool.execute({ pr: '5' }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/closed pr/i);
   });
 });
 

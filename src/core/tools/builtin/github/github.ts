@@ -176,7 +176,7 @@ export const githubCommitTool: ToolDefinition = {
     + '([{path,content}]) into the repo before committing (only those files are staged); otherwise stages all '
     + 'changes (or only `paths`). Refuses if there is nothing to commit. Returns the new commit SHA + branch. '
     + 'Use branch+files together to author a change for a new PR.',
-  category: 'dev',
+  category: 'github',
   safety: 'destructive',
   timeout: DEFAULT_TIMEOUT_MS,
   parameters: {
@@ -293,7 +293,7 @@ export const githubPushTool: ToolDefinition = {
   name: 'github.push',
   description:
     'Push the current branch to origin, setting upstream. Use after github.commit and before github.open_pr.',
-  category: 'dev',
+  category: 'github',
   safety: 'destructive',
   timeout: DEFAULT_TIMEOUT_MS,
   parameters: {
@@ -323,7 +323,7 @@ export const githubOpenPrTool: ToolDefinition = {
   name: 'github.open_pr',
   description:
     'Open a pull request for the current branch (pushes it first unless push=false). Returns the PR number and URL.',
-  category: 'dev',
+  category: 'github',
   safety: 'destructive',
   timeout: DEFAULT_TIMEOUT_MS,
   parameters: {
@@ -377,7 +377,7 @@ export const githubPrStatusTool: ToolDefinition = {
   description:
     'Report a PR\'s state, mergeability, and CI check rollup (passing/pending/failing). '
     + 'Omit `pr` to use the current branch\'s PR. Read-only.',
-  category: 'dev',
+  category: 'github',
   safety: 'readonly',
   timeout: DEFAULT_TIMEOUT_MS,
   parameters: {
@@ -409,7 +409,7 @@ export const githubMergePrTool: ToolDefinition = {
     'Merge a pull request — ONLY if its required CI checks are green and it is conflict-free. '
     + 'Refuses (does not wait) when checks are pending or failing. Omit `pr` to use the current branch. '
     + 'Default method is squash with branch deletion.',
-  category: 'dev',
+  category: 'github',
   safety: 'destructive',
   requiresConfirmation: false,
   timeout: DEFAULT_TIMEOUT_MS,
@@ -471,7 +471,7 @@ export const githubReadFileTool: ToolDefinition = {
   description:
     'Read a file from the repository working tree so you can see its CURRENT content before making a '
     + 'targeted edit. Repo-relative path. Read-only; refuses protected paths (CI/config/secrets).',
-  category: 'dev',
+  category: 'github',
   safety: 'readonly',
   timeout: DEFAULT_TIMEOUT_MS,
   parameters: {
@@ -512,7 +512,7 @@ export const githubVerifyTool: ToolDefinition = {
   description:
     'Validate the working tree BEFORE opening a PR: run lint (tsc --noEmit) and, optionally, the test suite. '
     + 'Returns pass/fail per check plus the tail of any failure output, so you can fix issues before pushing.',
-  category: 'dev',
+  category: 'github',
   safety: 'readonly',
   timeout: 300_000,
   parameters: {
@@ -548,6 +548,193 @@ export const githubVerifyTool: ToolDefinition = {
 };
 
 // ---------------------------------------------------------------------------
+// github.list_prs / pr_diff (readonly)
+// ---------------------------------------------------------------------------
+
+export const githubListPrsTool: ToolDefinition = {
+  name: 'github.list_prs',
+  description: 'List pull requests (number, title, state, branch, draft flag). Read-only.',
+  category: 'github',
+  safety: 'readonly',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    state: { type: 'string', description: 'Filter by state. Default open.', required: false, enum: ['open', 'closed', 'merged', 'all'] },
+    limit: { type: 'number', description: 'Max PRs to return (≤100). Default 20.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const state = ['open', 'closed', 'merged', 'all'].includes(String(params['state'])) ? String(params['state']) : 'open';
+      const n = Number(params['limit']);
+      const limit = Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 20;
+      const res = await gh(['pr', 'list', '--state', state, '--limit', String(limit), '--json', 'number,title,state,headRefName,isDraft'], cwd, ctx.signal);
+      if (res.exitCode !== 0) return fail(`gh pr list failed: ${res.stderr || res.stdout}`);
+      const prs = JSON.parse(res.stdout || '[]') as Array<{ number: number; title: string; state: string; headRefName: string; isDraft: boolean }>;
+      const lines = prs.map((p) => `#${p.number} [${p.state}${p.isDraft ? ',draft' : ''}] ${p.title} (${p.headRefName})`);
+      return { success: true, output: lines.join('\n') || `No ${state} PRs.`, data: { prs } };
+    } catch (err) {
+      return fail(`github.list_prs error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+export const githubPrDiffTool: ToolDefinition = {
+  name: 'github.pr_diff',
+  description: 'Show a pull request\'s diff (or only changed file paths with name_only=true). Read-only. Omit `pr` for the current branch.',
+  category: 'github',
+  safety: 'readonly',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    pr: { type: 'string', description: 'PR number/url/branch. Omit for the current branch.', required: false },
+    name_only: { type: 'boolean', description: 'Return only changed file paths. Default false.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
+      const args = ['pr', 'diff'];
+      if (prRef) args.push(prRef);
+      if (params['name_only'] === true) args.push('--name-only');
+      const res = await gh(args, cwd, ctx.signal);
+      if (res.exitCode !== 0) return fail(`gh pr diff failed: ${res.stderr || res.stdout}`);
+      const MAX = 32 * 1024;
+      const out = res.stdout;
+      return { success: true, output: out.length > MAX ? out.slice(0, MAX) + '\n…[diff truncated]' : (out || '(no diff)'), data: { bytes: out.length } };
+    } catch (err) {
+      return fail(`github.pr_diff error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// github.pr_comment / update_branch / pr_ready / close_pr (mutating, audited)
+// ---------------------------------------------------------------------------
+
+export const githubPrCommentTool: ToolDefinition = {
+  name: 'github.pr_comment',
+  description: 'Post a comment on a pull request. Omit `pr` for the current branch.',
+  category: 'github',
+  safety: 'destructive',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    body: { type: 'string', description: 'Comment body (markdown).', required: true },
+    pr: { type: 'string', description: 'PR number/url/branch. Omit for the current branch.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const body = asString(params['body'], 'body');
+      const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
+      const args = ['pr', 'comment'];
+      if (prRef) args.push(prRef);
+      args.push('--body', body);
+      const res = await gh(args, cwd, ctx.signal);
+      if (res.exitCode !== 0) { auditGitHub({ action: 'pr_comment', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh pr comment failed: ${res.stderr || res.stdout}`); }
+      auditGitHub({ action: 'pr_comment', session: sess, ok: true, data: { pr: prRef ?? 'current' } });
+      return { success: true, output: `Commented on PR ${prRef ?? '(current branch)'}`, data: { url: res.stdout.trim() } };
+    } catch (err) {
+      auditGitHub({ action: 'pr_comment', session: sess, ok: false, detail: String(err) });
+      return fail(`github.pr_comment error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+export const githubUpdateBranchTool: ToolDefinition = {
+  name: 'github.update_branch',
+  description: 'Update a PR\'s branch with the latest base (non-destructive merge of base into the head branch) — use when a PR is BEHIND. Omit `pr` for the current branch.',
+  category: 'github',
+  safety: 'destructive',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    pr: { type: 'string', description: 'PR number/url/branch. Omit for the current branch.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
+      const args = ['pr', 'update-branch'];
+      if (prRef) args.push(prRef);
+      const res = await gh(args, cwd, ctx.signal);
+      if (res.exitCode !== 0) { auditGitHub({ action: 'update_branch', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh pr update-branch failed: ${res.stderr || res.stdout}`); }
+      auditGitHub({ action: 'update_branch', session: sess, ok: true, data: { pr: prRef ?? 'current' } });
+      return { success: true, output: `Updated PR ${prRef ?? '(current branch)'} branch with base`, data: {} };
+    } catch (err) {
+      auditGitHub({ action: 'update_branch', session: sess, ok: false, detail: String(err) });
+      return fail(`github.update_branch error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+export const githubPrReadyTool: ToolDefinition = {
+  name: 'github.pr_ready',
+  description: 'Mark a draft PR ready for review, or (with draft=true) convert a PR back to draft. Omit `pr` for the current branch.',
+  category: 'github',
+  safety: 'destructive',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    pr: { type: 'string', description: 'PR number/url/branch. Omit for the current branch.', required: false },
+    draft: { type: 'boolean', description: 'If true, convert to draft instead of ready. Default false.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
+      const toDraft = params['draft'] === true;
+      const args = ['pr', 'ready'];
+      if (prRef) args.push(prRef);
+      if (toDraft) args.push('--undo');
+      const res = await gh(args, cwd, ctx.signal);
+      if (res.exitCode !== 0) { auditGitHub({ action: 'pr_ready', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh pr ready failed: ${res.stderr || res.stdout}`); }
+      auditGitHub({ action: 'pr_ready', session: sess, ok: true, data: { pr: prRef ?? 'current', draft: toDraft } });
+      return { success: true, output: `PR ${prRef ?? '(current branch)'} marked ${toDraft ? 'draft' : 'ready'}`, data: { draft: toDraft } };
+    } catch (err) {
+      auditGitHub({ action: 'pr_ready', session: sess, ok: false, detail: String(err) });
+      return fail(`github.pr_ready error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+export const githubClosePrTool: ToolDefinition = {
+  name: 'github.close_pr',
+  description: 'Close a pull request WITHOUT merging (reversible — it can be reopened). Optionally delete the head branch and/or leave a comment. Omit `pr` for the current branch.',
+  category: 'github',
+  safety: 'destructive',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    pr: { type: 'string', description: 'PR number/url/branch. Omit for the current branch.', required: false },
+    comment: { type: 'string', description: 'Optional closing comment.', required: false },
+    delete_branch: { type: 'boolean', description: 'Delete the head branch on close. Default false.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
+      const args = ['pr', 'close'];
+      if (prRef) args.push(prRef);
+      if (typeof params['comment'] === 'string' && params['comment']) args.push('--comment', params['comment'] as string);
+      if (params['delete_branch'] === true) args.push('--delete-branch');
+      const res = await gh(args, cwd, ctx.signal);
+      if (res.exitCode !== 0) { auditGitHub({ action: 'close_pr', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh pr close failed: ${res.stderr || res.stdout}`); }
+      auditGitHub({ action: 'close_pr', session: sess, ok: true, data: { pr: prRef ?? 'current' } });
+      return { success: true, output: `Closed PR ${prRef ?? '(current branch)'} (not merged)`, data: {} };
+    } catch (err) {
+      auditGitHub({ action: 'close_pr', session: sess, ok: false, detail: String(err) });
+      return fail(`github.close_pr error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Group
 // ---------------------------------------------------------------------------
 
@@ -556,7 +743,13 @@ export const GITHUB_TOOLS: readonly ToolDefinition[] = [
   githubCommitTool,
   githubPushTool,
   githubOpenPrTool,
+  githubListPrsTool,
+  githubPrDiffTool,
   githubPrStatusTool,
   githubVerifyTool,
+  githubPrCommentTool,
+  githubUpdateBranchTool,
+  githubPrReadyTool,
   githubMergePrTool,
+  githubClosePrTool,
 ] as const;

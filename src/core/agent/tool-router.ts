@@ -48,18 +48,6 @@ const BASE_TOOLS: readonly string[] = [
   'meta.task-manager',     // Manage tasks
   'coder.multi-read',      // Read multiple files
   'meta.self-update',      // Git pull + build
-  // GitHub connector tools. Pinned to BASE so the agent can reliably
-  // commit / open / merge PRs — their category ('dev') is not keyword-routable
-  // for "pull request" / "merge" prompts, so category ranking would usually
-  // omit them. Absent (and skipped here) unless SUDO_GITHUB_TOOLS is enabled,
-  // so this is a no-op when the connector is off.
-  'github.read_file',
-  'github.commit',
-  'github.push',
-  'github.open_pr',
-  'github.pr_status',
-  'github.verify',
-  'github.merge_pr',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -80,7 +68,7 @@ interface CategoryRule {
 type CategoryName =
   | 'browser' | 'coder' | 'system' | 'content' | 'media'
   | 'research' | 'comms' | 'social' | 'marketing' | 'data'
-  | 'meta' | 'dev' | 'knowledge' | 'voice' | 'business'
+  | 'meta' | 'dev' | 'github' | 'knowledge' | 'voice' | 'business'
   | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal';
 
 /**
@@ -249,6 +237,19 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     patterns: [],
     priority: 5,
     maxFromCategory: 3,
+  },
+  github: {
+    keywords: [
+      'github', 'pull request', 'open pr', 'merge pr', 'pr comment',
+      'review pr', 'close pr', 'draft pr', 'list prs', 'pr diff',
+      'pr status', 'rebase', 'issue', 'gh pr', 'gh issue', 'merge',
+    ],
+    patterns: [
+      /\bpull request\b/i, /\bpr\b/i, /\bgithub\b/i, /\bissues?\b/i,
+      /\bmerge\b/i, /\brebase\b/i,
+    ],
+    priority: 9,
+    maxFromCategory: 15, // cover the whole github.* connector when github-relevant
   },
   knowledge: {
     keywords: ['knowledge', 'notes', 'remember', 'recall', 'zettelkasten', 'wiki'],
