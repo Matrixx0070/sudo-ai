@@ -6,7 +6,7 @@
  * so no real SQLite or file-system access happens.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Mock all consciousness sub-modules with proper class constructors
@@ -256,6 +256,13 @@ describe('ConsciousnessOrchestrator — after boot', () => {
     brain = makeMockBrain();
     orch = new ConsciousnessOrchestrator(brain);
     await orch.boot();
+  });
+
+  afterEach(async () => {
+    // Each test boots a fresh orchestrator; shut it down so its process
+    // 'sudo:consciousness:control' listener (and DB handle) is released and does
+    // not accumulate across tests (MaxListenersExceededWarning).
+    try { await orch.shutdown(); } catch { /* a test may have already shut it down */ }
   });
 
   it('boot() sets isBooted to true', () => {

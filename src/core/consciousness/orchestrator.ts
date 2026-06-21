@@ -169,6 +169,8 @@ export class ConsciousnessOrchestrator {
   private sleepCycle: SleepCycleLike | null = null;
   private selfEvolution: SelfEvolutionLike | null = null;
   private _booted = false;
+  /** Handler bound to process 'sudo:consciousness:control'; held so shutdown() can remove it. */
+  private _controlHandler: ((payload: { module: string; action: string }) => void) | null = null;
   private _lastInteractionAt: string | null = null;
   private _zdrEnabled = false;
   /**
@@ -260,8 +262,12 @@ export class ConsciousnessOrchestrator {
       if (!skipEmbodied) this.embodiedState.start();
       if (!skipStream) this.cognitiveStream.start();
 
-      // Listen for runtime consciousness control signals
-      process.on('sudo:consciousness:control', (payload: { module: string; action: string }) => {
+      // Listen for runtime consciousness control signals. Hold the handler
+      // reference so shutdown() can remove it — an anonymous listener here leaks
+      // on the global `process` object on every boot (re-instantiation in prod;
+      // one per instance across many tests → MaxListenersExceededWarning).
+      if (this._controlHandler) process.removeListener('sudo:consciousness:control', this._controlHandler);
+      this._controlHandler = (payload: { module: string; action: string }) => {
         try {
           if (payload.module === 'cognitiveStream') {
             if (payload.action === 'stop' && this.cognitiveStream) {
@@ -281,7 +287,8 @@ export class ConsciousnessOrchestrator {
             }
           }
         } catch (e) { swallow('consciousness control signal')(e); }
-      });
+      };
+      process.on('sudo:consciousness:control', this._controlHandler);
 
       this._booted = true;
       log.info('Consciousness online');
@@ -293,6 +300,10 @@ export class ConsciousnessOrchestrator {
 
   async shutdown(): Promise<void> {
     this._assertBooted('shutdown');
+    if (this._controlHandler) {
+      process.removeListener('sudo:consciousness:control', this._controlHandler);
+      this._controlHandler = null;
+    }
     try { this.cognitiveStream.stop(); } catch (e) { swallow('stream stop')(e); }
     try { this.embodiedState.stop(); } catch (e) { swallow('embodied stop')(e); }
     try { this.db.close(); } catch (e) { swallow('db close')(e); }

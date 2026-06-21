@@ -58,7 +58,7 @@ function buildTransport(): pino.TransportMultiOptions {
         messageFormat: '[{module}] {msg}',
       },
     };
-    return { targets: isTest ? [prettyTarget] : [prettyTarget, fileTarget] };
+    return { targets: [prettyTarget, fileTarget] };
   }
 
   const stdoutTarget: pino.TransportTargetOptions = {
@@ -67,7 +67,7 @@ function buildTransport(): pino.TransportMultiOptions {
     options: { destination: logFd },
   };
 
-  return { targets: isTest ? [stdoutTarget] : [stdoutTarget, fileTarget] };
+  return { targets: [stdoutTarget, fileTarget] };
 }
 
 const baseOptions: pino.LoggerOptions = {
@@ -76,8 +76,21 @@ const baseOptions: pino.LoggerOptions = {
   timestamp: pino.stdTimeFunctions.isoTime,
 };
 
-/** Default application-level logger. Multi-transport: pretty stdout in dev, JSON to file in prod. */
-export const logger: Logger = pino(baseOptions, pino.transport(buildTransport()));
+/**
+ * Default application-level logger. Multi-transport: pretty stdout in dev, JSON to file in prod.
+ *
+ * Under vitest, module isolation re-imports this file for every test file, and `pino.transport()`
+ * spawns a thread-stream worker that registers a `process.on('exit')` flush handler
+ * (pino/lib/transport.js → buildStream → process.addListener('exit')). Across 11+ test files in
+ * one worker those handlers accumulate on the shared `process` object and trip Node's
+ * MaxListenersExceededWarning ("11 exit listeners added to [process]") — plus a needless worker
+ * thread per file. Tests don't need the worker transport, so log synchronously to stdout (no
+ * worker, no exit handler). Production imports this module once, so the daemon registers exactly
+ * one handler and is unaffected.
+ */
+export const logger: Logger = isTest
+  ? pino(baseOptions)
+  : pino(baseOptions, pino.transport(buildTransport()));
 
 /**
  * Create a child logger scoped to a named module.
