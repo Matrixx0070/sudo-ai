@@ -251,7 +251,7 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       /\bmerge\b/i, /\brebase\b/i, /\bci\b/i,
     ],
     priority: 9,
-    maxFromCategory: 22, // cover the whole github.* connector when github-relevant
+    maxFromCategory: 25, // cover the whole github.* connector when github-relevant
   },
   knowledge: {
     keywords: ['knowledge', 'notes', 'remember', 'recall', 'zettelkasten', 'wiki'],

@@ -762,6 +762,50 @@ export const githubClosePrTool: ToolDefinition = {
 };
 
 // ---------------------------------------------------------------------------
+// github.review_pr — PR-review intelligence (approve / request changes / comment)
+// ---------------------------------------------------------------------------
+
+export const githubReviewPrTool: ToolDefinition = {
+  name: 'github.review_pr',
+  description:
+    'Submit a review on a pull request: approve, request changes, or comment — with a body. Use after reading '
+    + 'the diff (github.pr_diff) to act as a reviewer. Omit `pr` for the current branch. (Approving is a review '
+    + 'state, not a merge; merging still goes through github.merge_pr.)',
+  category: 'github',
+  safety: 'destructive',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    event: { type: 'string', description: 'Review verdict.', required: true, enum: ['approve', 'request_changes', 'comment'] },
+    body: { type: 'string', description: 'Review body (markdown). Required for request_changes and comment.', required: false },
+    pr: { type: 'string', description: 'PR number/url/branch. Omit for the current branch.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
+      const event = String(params['event']);
+      if (!['approve', 'request_changes', 'comment'].includes(event)) return fail(`event must be approve|request_changes|comment (got: ${event})`);
+      const body = typeof params['body'] === 'string' ? (params['body'] as string) : '';
+      if ((event === 'request_changes' || event === 'comment') && !body.trim()) return fail(`github.review_pr: body is required for '${event}'`);
+      const flag = event === 'approve' ? '--approve' : event === 'request_changes' ? '--request-changes' : '--comment';
+      const args = ['pr', 'review'];
+      if (prRef) args.push(prRef);
+      args.push(flag);
+      if (body) args.push('--body', body);
+      const res = await gh(args, cwd, ctx.signal);
+      if (res.exitCode !== 0) { auditGitHub({ action: 'review_pr', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh pr review failed: ${res.stderr || res.stdout}`); }
+      auditGitHub({ action: 'review_pr', session: sess, ok: true, data: { pr: prRef ?? 'current', event } });
+      return { success: true, output: `Reviewed PR ${prRef ?? '(current branch)'}: ${event}`, data: { event } };
+    } catch (err) {
+      auditGitHub({ action: 'review_pr', session: sess, ok: false, detail: String(err) });
+      return fail(`github.review_pr error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // github.list_issues / view_issue (readonly)
 // ---------------------------------------------------------------------------
 
@@ -1137,6 +1181,7 @@ export const GITHUB_TOOLS: readonly ToolDefinition[] = [
   githubPrReadyTool,
   githubMergePrTool,
   githubClosePrTool,
+  githubReviewPrTool,
   githubListIssuesTool,
   githubViewIssueTool,
   githubCreateIssueTool,
