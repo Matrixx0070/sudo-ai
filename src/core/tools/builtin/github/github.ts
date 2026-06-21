@@ -1002,7 +1002,9 @@ export const githubFixCiTool: ToolDefinition = {
       const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
       const wait = params['wait'] !== false;
       let s = await getPrSummary(cwd, prRef, ctx.signal);
-      for (let i = 0; wait && i < 12 && s.state === 'OPEN' && s.checks.total > 0 && s.checks.pending > 0; i++) {
+      // Poll while checks are still pending OR have not registered yet (the
+      // rollup is briefly empty right after a PR opens, before the run appears).
+      for (let i = 0; wait && i < 12 && s.state === 'OPEN' && (s.checks.total === 0 || s.checks.pending > 0); i++) {
         await new Promise<void>((r) => setTimeout(r, ciPollMs()));
         s = await getPrSummary(cwd, prRef, ctx.signal);
       }
@@ -1104,8 +1106,8 @@ export const githubAutopilotTool: ToolDefinition = {
         await git(['checkout', base], cwd, ctx.signal); // best-effort: return the working tree to base
         return { success: true, output: `autopilot: shipped ✅ — committed ${sha.slice(0, 8)}, opened PR #${prNum}, CI green, merged (${method}).`, data: { pr: prNum, merged: true, sha } };
       }
-      if (status === 'pending') {
-        return { success: true, output: `autopilot: opened PR #${prNum}; CI still running — call autopilot (or github.fix_ci) again shortly to finish the merge.`, data: { pr: prNum, merged: false, status } };
+      if (status === 'pending' || status === 'none') {
+        return { success: true, output: `autopilot: opened PR #${prNum}; CI ${status === 'none' ? 'has not registered yet' : 'still running'} — call autopilot (or github.fix_ci) again shortly to finish the merge.`, data: { pr: prNum, merged: false, status } };
       }
       return fail(`autopilot stopped — CI is FAILING on PR #${prNum}. Fix the code and call autopilot again:\n${fixRes.output}`, { pr: prNum, status });
     } catch (err) {
