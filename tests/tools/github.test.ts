@@ -89,9 +89,10 @@ describe('github.commit', () => {
     route((bin, args) => {
       if (args[0] === 'add') return ok('');
       if (args[0] === 'status') return ok(' M file.ts');
+      if (args[0] === 'diff' && args[1] === '--cached') return ok('file.ts');
       if (args[0] === 'commit') return ok('');
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return ok('abc1234deadbeef');
-      if (args[0] === 'rev-parse') return ok('feature/x');
+      if (args[0] === 'rev-parse') return ok('feature/x'); // --abbrev-ref HEAD (feature branch)
       return ok('');
     });
     const res = await githubCommitTool.execute({ message: 'msg' }, ctx);
@@ -110,6 +111,7 @@ describe('github.commit', () => {
   it('fails when git commit errors', async () => {
     route((bin, args) => {
       if (args[0] === 'status') return ok(' M f');
+      if (args[0] === 'diff' && args[1] === '--cached') return ok('f');
       if (args[0] === 'commit') return err('hook rejected');
       return ok('');
     });
@@ -124,6 +126,7 @@ describe('github.commit — branch + files', () => {
     route((bin, args) => {
       if (args[0] === 'checkout' && args[1] === '-B') return ok('');
       if (args[0] === 'status') return ok(' A docs/x.md');
+      if (args[0] === 'diff' && args[1] === '--cached') return ok('docs/x.md');
       if (args[0] === 'commit') return ok('');
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return ok('deadbeefcafe');
       if (args[0] === 'rev-parse') return ok('feat/auto');
@@ -154,6 +157,30 @@ describe('github.commit — branch + files', () => {
     expect(res.success).toBe(false);
     expect(res.output).toMatch(/escaping|invalid/i);
     expect(vi.mocked(writeFileSync)).not.toHaveBeenCalled();
+    expect(runCmdMock.mock.calls.some((c) => c[1][0] === 'commit')).toBe(false);
+  });
+
+  it('refuses to write/commit a protected path (files)', async () => {
+    route(() => ok(''));
+    const res = await githubCommitTool.execute(
+      { message: 'm', cwd: '/repo', branch: 'feat/x', files: [{ path: '.github/workflows/ci.yml', content: 'evil' }] },
+      ctx,
+    );
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/protected path/i);
+    expect(vi.mocked(writeFileSync)).not.toHaveBeenCalled();
+    expect(runCmdMock.mock.calls.some((c) => c[1][0] === 'commit')).toBe(false);
+  });
+
+  it('refuses to commit directly on the default branch (no branch param)', async () => {
+    route((bin, args) => {
+      if (args[0] === 'rev-parse') return ok('main');           // current branch = main
+      if (args[0] === 'symbolic-ref') return ok('origin/main'); // default branch = main
+      return ok('');
+    });
+    const res = await githubCommitTool.execute({ message: 'm', cwd: '/repo' }, ctx);
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/won't commit directly on|protected branch/i);
     expect(runCmdMock.mock.calls.some((c) => c[1][0] === 'commit')).toBe(false);
   });
 });
@@ -208,6 +235,17 @@ describe('github.merge_pr — CI-green gate', () => {
     const res = await githubMergePrTool.execute({}, ctx);
     expect(res.success).toBe(false);
     expect(res.output).toMatch(/conflict/i);
+    expect(mergeWasCalled()).toBe(false);
+  });
+
+  it('refuses to merge a PR that touches protected paths (even when CI is green)', async () => {
+    routePr(prView({
+      files: [{ path: '.github/workflows/ci.yml' }],
+      statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    }));
+    const res = await githubMergePrTool.execute({}, ctx);
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/protected path/i);
     expect(mergeWasCalled()).toBe(false);
   });
 });
