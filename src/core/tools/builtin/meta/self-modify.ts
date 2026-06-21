@@ -12,8 +12,9 @@
  *   write-file  — Overwrite an entire file with new content
  *   edit-config — Set a key in config/sudo-ai.json5 (key-value shorthand)
  *   build       — Run `npm run build` (compile TypeScript)
+ *   test        — Run the vitest suite (optional testTarget to scope it)
  *   restart     — Restart the SUDO-AI systemd service
- *   full-cycle  — edit-file + build + restart in one shot (most common)
+ *   full-cycle  — edit-file + build + test + restart in one shot (most common)
  *   history     — Show last 20 modifications from the modification log
  *
  * Typical flow when the owner says "change X to Y":
@@ -26,7 +27,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
   appendFileSync, copyFileSync, realpathSync,
@@ -85,6 +86,60 @@ function trim(s: string): string {
   if (s.length <= MAX_OUTPUT) return s;
   const half = Math.floor(MAX_OUTPUT / 2);
   return s.slice(0, half) + '\n...[truncated]...\n' + s.slice(-half);
+}
+
+/**
+ * Run a command with an explicit argument array — NO shell, so agent-supplied
+ * tokens can never inject (`;`, `&&`, `$()`, backticks are inert). Returns the
+ * exit code (unlike run(), which masks it) so callers can distinguish pass/fail.
+ */
+function runWithCode(cmd: string, args: string[], timeoutMs = 60_000): { code: number; output: string } {
+  try {
+    const out = execFileSync(cmd, args, {
+      encoding: 'utf-8', timeout: timeoutMs, cwd: PROJECT_ROOT, stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    return { code: 0, output: out };
+  } catch (err: unknown) {
+    const e = (err ?? {}) as { status?: number | null; signal?: string | null; stdout?: string; stderr?: string };
+    const out = ((e.stdout ?? '') + '\n' + (e.stderr ?? '')).trim();
+    const code = typeof e.status === 'number' ? e.status : (e.signal ? 124 : 1);
+    return { code, output: out || `command failed: ${cmd} ${args.join(' ')}` };
+  }
+}
+
+/** A vitest target is a path or filename glob — reject anything with shell metacharacters. */
+const TEST_TARGET_RE = /^[A-Za-z0-9_./*-]+$/;
+
+/**
+ * Build the `npm test` argument array for an optional, validated vitest target.
+ * Exported for unit testing the injection guard without executing the suite.
+ */
+export function buildTestArgs(testTarget?: string): { args: string[] } | { error: string } {
+  const target = (testTarget ?? '').trim();
+  if (target && !TEST_TARGET_RE.test(target)) {
+    return { error: `Invalid testTarget "${target}". Only letters, digits and . _ - / * are allowed (a vitest path or filename pattern).` };
+  }
+  // `npm test -- <target>` → `vitest run <target>`; no target → full suite.
+  return { args: target ? ['test', '--', target] : ['test'] };
+}
+
+function doTest(testTarget?: string): ToolResult {
+  const built = buildTestArgs(testTarget);
+  if ('error' in built) return { success: false, output: built.error };
+
+  const target = (testTarget ?? '').trim();
+  const label = target ? ` (${target})` : ' (full suite)';
+  logger.info({ target: target || '(full suite)' }, 'Running test suite');
+  const { code, output } = runWithCode('npm', built.args, 300_000);
+  const success = code === 0;
+  logMod('test', success ? `OK${target ? ` ${target}` : ''}` : `FAILED${target ? ` ${target}` : ''} (exit ${code})`);
+  return {
+    success,
+    output: success
+      ? `Tests passed${label}.\n${trim(output)}`
+      : `Tests FAILED${label} (exit ${code}):\n${trim(output)}`,
+    data: { exitCode: code, target: target || null },
+  };
 }
 
 /** Resolve a user-supplied path — must be within PROJECT_ROOT.
@@ -308,7 +363,7 @@ function doRestart(): ToolResult {
   };
 }
 
-async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false): Promise<ToolResult> {
+async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false, testTarget?: string): Promise<ToolResult> {
   if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
     return { success: false, output: 'meta.self-modify full-cycle is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
@@ -326,13 +381,23 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
     };
   }
 
-  // Step 3: Restart
+  // Step 3: Test — never restart into a fix that breaks the suite.
+  const testResult = doTest(testTarget);
+  if (!testResult.success) {
+    return {
+      success: false,
+      output: `Edit applied and build succeeded, but TESTS FAILED — NOT restarting. Fix the tests or restore the backup.\n\n${testResult.output}`,
+      data: { editResult, buildResult, testResult },
+    };
+  }
+
+  // Step 4: Restart
   const restartResult = doRestart();
 
   return {
     success: restartResult.success,
-    output: `DONE!\n\n✓ Edit: ${editResult.output}\n✓ Build: success\n${restartResult.success ? '✓ Restart: online' : '⚠ Restart: ' + restartResult.output}`,
-    data: { editResult, buildResult, restartResult },
+    output: `DONE!\n\n✓ Edit: ${editResult.output}\n✓ Build: success\n✓ Tests: passed\n${restartResult.success ? '✓ Restart: online' : '⚠ Restart: ' + restartResult.output}`,
+    data: { editResult, buildResult, testResult, restartResult },
   };
 }
 
@@ -359,19 +424,20 @@ export const selfModifyTool: ToolDefinition = {
   description:
     'Rewrite SUDO-AI source code on disk. Use when the owner asks you to update code, settings, ' +
     'or config files through web chat or Telegram. Supports reading files, finding files, ' +
-    'searching code, editing files, writing files, editing config, building, restarting, ' +
-    'and the full edit→build→restart cycle (full-cycle). ' +
+    'searching code, editing files, writing files, editing config, building, running the test ' +
+    'suite (test), restarting, and the full edit→build→test→restart cycle (full-cycle). ' +
     'NOT for inspecting current runtime config, enabled channels, model selection, version, or ' +
     'capabilities — those introspective questions are answered from the system prompt directly. ' +
     'No external tool or Claude Code needed — SUDO-AI modifies itself directly.',
   category: 'meta',
-  timeout: 180_000,
+  // Generous: full-cycle now runs edit + build (~2m) + test (up to 5m) + restart.
+  timeout: 600_000,
   parameters: {
     action: {
       type: 'string',
       required: true,
       description: 'What to do.',
-      enum: ['read-file', 'find-file', 'search-code', 'edit-file', 'write-file', 'edit-config', 'build', 'restart', 'full-cycle', 'history'],
+      enum: ['read-file', 'find-file', 'search-code', 'edit-file', 'write-file', 'edit-config', 'build', 'test', 'restart', 'full-cycle', 'history'],
     },
     path: {
       type: 'string',
@@ -423,6 +489,12 @@ export const selfModifyTool: ToolDefinition = {
       required: false,
       description: 'New value for the config key (string). Used by: edit-config.',
     },
+    testTarget: {
+      type: 'string',
+      required: false,
+      description: 'Optional vitest path or filename pattern to scope the run (e.g. "tests/meta" or "self-modify"). '
+        + 'Omit to run the full suite. Used by: test, full-cycle. Only letters, digits and . _ - / * are allowed.',
+    },
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -466,6 +538,9 @@ export const selfModifyTool: ToolDefinition = {
         case 'build':
           return doBuild();
 
+        case 'test':
+          return doTest(params['testTarget'] as string | undefined);
+
         case 'restart':
           return doRestart();
 
@@ -475,6 +550,7 @@ export const selfModifyTool: ToolDefinition = {
             (params['oldText'] as string | undefined) ?? '',
             (params['newText'] as string | undefined) ?? '',
             (params['replaceAll'] as boolean | undefined) ?? false,
+            params['testTarget'] as string | undefined,
           );
 
         case 'history':
