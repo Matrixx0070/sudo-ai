@@ -735,6 +735,162 @@ export const githubClosePrTool: ToolDefinition = {
 };
 
 // ---------------------------------------------------------------------------
+// github.list_issues / view_issue (readonly)
+// ---------------------------------------------------------------------------
+
+export const githubListIssuesTool: ToolDefinition = {
+  name: 'github.list_issues',
+  description: 'List issues (number, title, state, labels). Read-only.',
+  category: 'github',
+  safety: 'readonly',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    state: { type: 'string', description: 'Filter by state. Default open.', required: false, enum: ['open', 'closed', 'all'] },
+    limit: { type: 'number', description: 'Max issues (≤100). Default 20.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const state = ['open', 'closed', 'all'].includes(String(params['state'])) ? String(params['state']) : 'open';
+      const n = Number(params['limit']);
+      const limit = Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 20;
+      const res = await gh(['issue', 'list', '--state', state, '--limit', String(limit), '--json', 'number,title,state,labels'], cwd, ctx.signal);
+      if (res.exitCode !== 0) return fail(`gh issue list failed: ${res.stderr || res.stdout}`);
+      const issues = JSON.parse(res.stdout || '[]') as Array<{ number: number; title: string; state: string; labels: Array<{ name: string }> }>;
+      const lines = issues.map((i) => `#${i.number} [${i.state}] ${i.title}${i.labels?.length ? ' [' + i.labels.map((l) => l.name).join(',') + ']' : ''}`);
+      return { success: true, output: lines.join('\n') || `No ${state} issues.`, data: { issues } };
+    } catch (err) {
+      return fail(`github.list_issues error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+export const githubViewIssueTool: ToolDefinition = {
+  name: 'github.view_issue',
+  description: 'View one issue: title, state, labels, and body. Read-only.',
+  category: 'github',
+  safety: 'readonly',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    number: { type: 'string', description: 'Issue number.', required: true },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const num = asString(params['number'], 'number');
+      const res = await gh(['issue', 'view', num, '--json', 'number,title,state,body,labels'], cwd, ctx.signal);
+      if (res.exitCode !== 0) return fail(`gh issue view failed: ${res.stderr || res.stdout}`);
+      const j = JSON.parse(res.stdout) as { number: number; title: string; state: string; body: string; labels: Array<{ name: string }> };
+      const MAX = 16 * 1024;
+      const body = (j.body || '').length > MAX ? j.body.slice(0, MAX) + '…[truncated]' : (j.body || '(no body)');
+      const labels = j.labels?.length ? `labels: ${j.labels.map((l) => l.name).join(', ')}\n` : '';
+      return { success: true, output: `#${j.number} [${j.state}] ${j.title}\n${labels}\n${body}`, data: { number: j.number, title: j.title, state: j.state, labels: j.labels } };
+    } catch (err) {
+      return fail(`github.view_issue error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// github.create_issue / comment_issue / close_issue (mutating, audited)
+// ---------------------------------------------------------------------------
+
+export const githubCreateIssueTool: ToolDefinition = {
+  name: 'github.create_issue',
+  description: 'Create a new issue. Returns the issue number and URL.',
+  category: 'github',
+  safety: 'destructive',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    title: { type: 'string', description: 'Issue title.', required: true },
+    body: { type: 'string', description: 'Issue body (markdown).', required: false },
+    labels: { type: 'array', description: 'Label names to apply.', required: false, items: { type: 'string', description: 'label' } },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const title = asString(params['title'], 'title');
+      const body = typeof params['body'] === 'string' ? (params['body'] as string) : '';
+      const labels = Array.isArray(params['labels']) ? (params['labels'] as unknown[]).map(String).filter(Boolean) : [];
+      const args = ['issue', 'create', '--title', title, '--body', body];
+      for (const l of labels) args.push('--label', l);
+      const res = await gh(args, cwd, ctx.signal);
+      if (res.exitCode !== 0) { auditGitHub({ action: 'create_issue', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh issue create failed: ${res.stderr || res.stdout}`); }
+      const url = res.stdout.trim().split('\n').filter(Boolean).pop() ?? '';
+      const num = Number(url.match(/\/issues\/(\d+)/)?.[1] ?? 0);
+      auditGitHub({ action: 'create_issue', session: sess, ok: true, data: { number: num } });
+      return { success: true, output: `Created issue #${num}: ${url}`, data: { number: num, url } };
+    } catch (err) {
+      auditGitHub({ action: 'create_issue', session: sess, ok: false, detail: String(err) });
+      return fail(`github.create_issue error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+export const githubCommentIssueTool: ToolDefinition = {
+  name: 'github.comment_issue',
+  description: 'Add a comment to an issue.',
+  category: 'github',
+  safety: 'destructive',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    number: { type: 'string', description: 'Issue number.', required: true },
+    body: { type: 'string', description: 'Comment body (markdown).', required: true },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const num = asString(params['number'], 'number');
+      const body = asString(params['body'], 'body');
+      const res = await gh(['issue', 'comment', num, '--body', body], cwd, ctx.signal);
+      if (res.exitCode !== 0) { auditGitHub({ action: 'comment_issue', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh issue comment failed: ${res.stderr || res.stdout}`); }
+      auditGitHub({ action: 'comment_issue', session: sess, ok: true, data: { number: num } });
+      return { success: true, output: `Commented on issue #${num}`, data: { url: res.stdout.trim() } };
+    } catch (err) {
+      auditGitHub({ action: 'comment_issue', session: sess, ok: false, detail: String(err) });
+      return fail(`github.comment_issue error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+export const githubCloseIssueTool: ToolDefinition = {
+  name: 'github.close_issue',
+  description: 'Close an issue (reversible — it can be reopened). Optional closing comment and reason.',
+  category: 'github',
+  safety: 'destructive',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    number: { type: 'string', description: 'Issue number.', required: true },
+    comment: { type: 'string', description: 'Optional closing comment.', required: false },
+    reason: { type: 'string', description: 'Close reason.', required: false, enum: ['completed', 'not planned'] },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const num = asString(params['number'], 'number');
+      const args = ['issue', 'close', num];
+      if (typeof params['comment'] === 'string' && params['comment']) args.push('--comment', params['comment'] as string);
+      if (params['reason'] === 'completed' || params['reason'] === 'not planned') args.push('--reason', params['reason'] as string);
+      const res = await gh(args, cwd, ctx.signal);
+      if (res.exitCode !== 0) { auditGitHub({ action: 'close_issue', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh issue close failed: ${res.stderr || res.stdout}`); }
+      auditGitHub({ action: 'close_issue', session: sess, ok: true, data: { number: num } });
+      return { success: true, output: `Closed issue #${num}`, data: {} };
+    } catch (err) {
+      auditGitHub({ action: 'close_issue', session: sess, ok: false, detail: String(err) });
+      return fail(`github.close_issue error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Group
 // ---------------------------------------------------------------------------
 
@@ -752,4 +908,9 @@ export const GITHUB_TOOLS: readonly ToolDefinition[] = [
   githubPrReadyTool,
   githubMergePrTool,
   githubClosePrTool,
+  githubListIssuesTool,
+  githubViewIssueTool,
+  githubCreateIssueTool,
+  githubCommentIssueTool,
+  githubCloseIssueTool,
 ] as const;

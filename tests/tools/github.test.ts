@@ -31,6 +31,10 @@ import {
   githubPrDiffTool,
   githubPrCommentTool,
   githubClosePrTool,
+  githubListIssuesTool,
+  githubCreateIssueTool,
+  githubCommentIssueTool,
+  githubCloseIssueTool,
   gitHubToolsEnabled,
 } from '../../src/core/tools/builtin/github/github.js';
 import { registerGitHubTools } from '../../src/core/tools/builtin/github/index.js';
@@ -87,7 +91,7 @@ describe('github tools — enablement & registration', () => {
     const reg = { register: vi.fn() };
     registerGitHubTools(reg as never);
     expect(reg.register).toHaveBeenCalledTimes(GITHUB_TOOLS.length);
-    expect(GITHUB_TOOLS.length).toBe(13);
+    expect(GITHUB_TOOLS.length).toBe(18);
   });
 });
 
@@ -355,6 +359,38 @@ describe('github PR feature tools', () => {
     const res = await githubClosePrTool.execute({ pr: '5' }, ctx);
     expect(res.success).toBe(true);
     expect(res.output).toMatch(/closed pr/i);
+  });
+});
+
+describe('github issue tools', () => {
+  it('list_issues parses gh json', async () => {
+    route((bin, args) => (bin === 'gh' && args[0] === 'issue' && args[1] === 'list'
+      ? ok(JSON.stringify([{ number: 9, title: 'Bug', state: 'OPEN', labels: [{ name: 'bug' }] }]))
+      : ok('')));
+    const res = await githubListIssuesTool.execute({}, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/#9 \[OPEN\] Bug \[bug\]/);
+  });
+
+  it('create_issue parses the number/url', async () => {
+    route((bin, args) => (bin === 'gh' && args[0] === 'issue' && args[1] === 'create' ? ok('https://github.com/o/r/issues/42') : ok('')));
+    const res = await githubCreateIssueTool.execute({ title: 'New', body: 'b' }, ctx);
+    expect(res.success).toBe(true);
+    expect((res.data as { number: number }).number).toBe(42);
+  });
+
+  it('comment_issue posts a comment', async () => {
+    route((bin, args) => (bin === 'gh' && args[0] === 'issue' && args[1] === 'comment' ? ok('') : ok('')));
+    const res = await githubCommentIssueTool.execute({ number: '42', body: 'hi' }, ctx);
+    expect(res.success).toBe(true);
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1][0] === 'issue' && c[1][1] === 'comment')).toBe(true);
+  });
+
+  it('close_issue closes (reversible)', async () => {
+    route((bin, args) => (bin === 'gh' && args[0] === 'issue' && args[1] === 'close' ? ok('') : ok('')));
+    const res = await githubCloseIssueTool.execute({ number: '42' }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/closed issue #42/i);
   });
 });
 
