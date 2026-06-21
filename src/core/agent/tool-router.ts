@@ -244,6 +244,7 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'review pr', 'close pr', 'draft pr', 'list prs', 'pr diff',
       'pr status', 'rebase', 'issue', 'gh pr', 'gh issue', 'merge',
       'fix ci', 'ci logs', 'ci failing', 'failing checks',
+      'autopilot', 'ship it', 'ship the', 'ship this', 'open a pr',
     ],
     patterns: [
       /\bpull request\b/i, /\bpr\b/i, /\bgithub\b/i, /\bissues?\b/i,

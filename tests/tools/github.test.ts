@@ -29,6 +29,7 @@ import {
   githubVerifyTool,
   githubCiLogsTool,
   githubFixCiTool,
+  githubAutopilotTool,
   githubListPrsTool,
   githubPrDiffTool,
   githubPrCommentTool,
@@ -96,7 +97,7 @@ describe('github tools — enablement & registration', () => {
     const reg = { register: vi.fn() };
     registerGitHubTools(reg as never);
     expect(reg.register).toHaveBeenCalledTimes(GITHUB_TOOLS.length);
-    expect(GITHUB_TOOLS.length).toBe(20);
+    expect(GITHUB_TOOLS.length).toBe(21);
   });
 });
 
@@ -482,6 +483,80 @@ describe('github CI auto-fix loop', () => {
     expect(res.output).toMatch(/FAILING/);
     expect(res.output).toContain('error TS9999');
     expect(res.output).toMatch(/github\.fix_ci again/);
+  });
+});
+
+describe('github.autopilot (ship-loop)', () => {
+  it('ships a change end-to-end: commit → verify → PR → CI green → merge', async () => {
+    process.env['SUDO_GITHUB_CI_POLL_MS'] = '0';
+    process.env['SUDO_GITHUB_MERGE_POLL_MS'] = '0';
+    route((bin, args) => {
+      if (bin === 'git') {
+        if (args[0] === 'diff' && args[1] === '--cached') return ok('docs/x.md');
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return ok('sha123abc');
+        if (args[0] === 'rev-parse') return ok('feat/auto');
+        return ok(''); // checkout -B, add, commit, push, checkout base
+      }
+      if (bin === 'gh') {
+        if (args[0] === 'pr' && args[1] === 'list') return ok('[]');                 // no existing PR
+        if (args[0] === 'pr' && args[1] === 'create') return ok('https://github.com/o/r/pull/99');
+        if (args[0] === 'pr' && args[1] === 'view') return prView({ number: 99, statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }] });
+        if (args[0] === 'pr' && args[1] === 'merge') return ok('');
+        return ok('');
+      }
+      if (bin.endsWith('tsc') || bin.endsWith('vitest')) return ok(''); // verify
+      return ok('');
+    });
+    const res = await githubAutopilotTool.execute({ title: 'Add doc', branch: 'feat/auto', files: [{ path: 'docs/x.md', content: 'hi\n' }] }, ctx);
+    expect(res.success).toBe(true);
+    expect((res.data as { merged: boolean; pr: number }).merged).toBe(true);
+    expect((res.data as { pr: number }).pr).toBe(99);
+    expect(res.output).toMatch(/shipped/i);
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1][0] === 'pr' && c[1][1] === 'merge')).toBe(true);
+  });
+
+  it('stops at local verify failure — never opens a PR', async () => {
+    route((bin, args) => {
+      if (bin === 'git') {
+        if (args[0] === 'diff' && args[1] === '--cached') return ok('docs/x.md');
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return ok('sha1');
+        if (args[0] === 'rev-parse') return ok('feat/auto');
+        return ok('');
+      }
+      if (bin.endsWith('tsc')) return err('src/x.ts: error TS1: bad', 2); // lint fails
+      return ok('');
+    });
+    const res = await githubAutopilotTool.execute({ title: 'X', branch: 'feat/auto', files: [{ path: 'docs/x.md', content: 'hi' }] }, ctx);
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/verify failed/i);
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1][1] === 'create')).toBe(false);
+  });
+
+  it('stops when CI fails — returns logs, never merges', async () => {
+    process.env['SUDO_GITHUB_CI_POLL_MS'] = '0';
+    route((bin, args) => {
+      if (bin === 'git') {
+        if (args[0] === 'diff' && args[1] === '--cached') return ok('docs/x.md');
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return ok('sha1');
+        if (args[0] === 'rev-parse') return ok('feat/auto');
+        return ok('');
+      }
+      if (bin === 'gh') {
+        if (args[0] === 'pr' && args[1] === 'list') return ok('[]');
+        if (args[0] === 'pr' && args[1] === 'create') return ok('https://github.com/o/r/pull/77');
+        if (args[0] === 'pr' && args[1] === 'view') return prView({ number: 77, statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'FAILURE' }] });
+        if (args[0] === 'run' && args[1] === 'list') return ok(JSON.stringify([{ databaseId: 5, conclusion: 'FAILURE', workflowName: 'CI' }]));
+        if (args[0] === 'run' && args[1] === 'view') return ok('error TS5: nope');
+        return ok('');
+      }
+      if (bin.endsWith('tsc')) return ok('');
+      return ok('');
+    });
+    const res = await githubAutopilotTool.execute({ title: 'X', branch: 'feat/auto', files: [{ path: 'docs/x.md', content: 'hi' }] }, ctx);
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/CI is FAILING/i);
+    expect(res.output).toContain('error TS5');
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1][1] === 'merge')).toBe(false);
   });
 });
 

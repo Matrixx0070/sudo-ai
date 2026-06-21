@@ -1025,10 +1025,101 @@ export const githubFixCiTool: ToolDefinition = {
 };
 
 // ---------------------------------------------------------------------------
+// github.autopilot — one-action ship-loop (composes the gated tools)
+// ---------------------------------------------------------------------------
+
+/** Open PR number for a branch, or null. */
+async function findOpenPrForBranch(cwd: string, branch: string, signal?: AbortSignal): Promise<number | null> {
+  const r = await gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '--limit', '1'], cwd, signal);
+  if (r.exitCode !== 0) return null;
+  try { const a = JSON.parse(r.stdout || '[]') as Array<{ number: number }>; return a[0]?.number ?? null; } catch { return null; }
+}
+
+export const githubAutopilotTool: ToolDefinition = {
+  name: 'github.autopilot',
+  description:
+    'Ship a change end-to-end in ONE action: create/switch a feature branch, write the given files, run lint '
+    + '(and optionally tests), commit, open (or update) a PR, wait for CI, and merge when green. If local '
+    + 'verify or CI fails it STOPS and returns the errors/logs — fix the files and call autopilot again with '
+    + 'the same branch. All zero-risk gates apply (protected paths, feature-branch-only, CI-green merge).',
+  category: 'github',
+  safety: 'destructive',
+  timeout: 360_000,
+  parameters: {
+    title: { type: 'string', description: 'PR title (and default commit message).', required: true },
+    branch: { type: 'string', description: 'Feature branch to ship on (created if missing).', required: true },
+    files: { type: 'array', description: 'Files to write/edit (same shape as github.commit: {path,content} or {path,edits:[{find,replace,all?}]}).', required: true, items: { type: 'object', description: 'file', properties: { path: { type: 'string', description: 'repo-relative path' }, content: { type: 'string', description: 'full content' }, edits: { type: 'array', description: 'find/replace edits', items: { type: 'object', description: 'edit', properties: { find: { type: 'string', description: 'find' }, replace: { type: 'string', description: 'replace' }, all: { type: 'boolean', description: 'all occurrences' } } } } } } },
+    body: { type: 'string', description: 'PR body (markdown).', required: false },
+    base: { type: 'string', description: 'Base branch. Default main.', required: false },
+    message: { type: 'string', description: 'Commit message. Defaults to title.', required: false },
+    run_tests: { type: 'boolean', description: 'Also run the test suite in local verify (slower). Default false (lint only).', required: false },
+    merge: { type: 'boolean', description: 'Merge when CI is green. Default true; false stops after opening the PR.', required: false },
+    method: { type: 'string', description: 'Merge method.', required: false, enum: ['squash', 'merge', 'rebase'] },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const title = asString(params['title'], 'title');
+      const branch = asString(params['branch'], 'branch');
+      const base = typeof params['base'] === 'string' && params['base'] ? (params['base'] as string) : 'main';
+      const message = typeof params['message'] === 'string' && params['message'] ? (params['message'] as string) : title;
+      const body = typeof params['body'] === 'string' ? (params['body'] as string) : '';
+      const doMerge = params['merge'] !== false;
+      const runTests = params['run_tests'] === true;
+      const method = ['squash', 'merge', 'rebase'].includes(String(params['method'])) ? String(params['method']) : 'squash';
+      const files = params['files'];
+
+      // 1. Commit — creates the branch + writes files; all safety gates inside.
+      const commitRes = await githubCommitTool.execute({ cwd, branch, files, message }, ctx);
+      if (!commitRes.success) return fail(`autopilot stopped at commit — ${commitRes.output}`, commitRes.data);
+      const sha = String((commitRes.data as { sha?: string })?.sha ?? '');
+
+      // 2. Local verify (lint always; tests optional) — catch errors before pushing.
+      const verifyRes = await githubVerifyTool.execute({ cwd, lint: true, tests: runTests }, ctx);
+      if (!verifyRes.success) return fail(`autopilot stopped — local verify failed. Fix the code and call autopilot again:\n${verifyRes.output}`, { sha });
+
+      // 3. Open or update the PR.
+      let prNum = await findOpenPrForBranch(cwd, branch, ctx.signal);
+      if (prNum) {
+        const pushRes = await githubPushTool.execute({ cwd }, ctx);
+        if (!pushRes.success) return fail(`autopilot stopped at push — ${pushRes.output}`);
+      } else {
+        const openRes = await githubOpenPrTool.execute({ cwd, title, body, base }, ctx);
+        if (!openRes.success) return fail(`autopilot stopped at open_pr — ${openRes.output}`);
+        prNum = (openRes.data as { number?: number })?.number ?? null;
+      }
+      if (!prNum) return fail('autopilot: could not determine the PR number after opening/updating.');
+
+      if (!doMerge) {
+        return { success: true, output: `autopilot: committed ${sha.slice(0, 8)}, opened/updated PR #${prNum}, local verify passed. merge=false — call github.fix_ci then github.merge_pr to finish.`, data: { pr: prNum, merged: false } };
+      }
+
+      // 4. Wait for CI, then merge when green.
+      const fixRes = await githubFixCiTool.execute({ cwd, pr: String(prNum), wait: true }, ctx);
+      const status = (fixRes.data as { status?: string })?.status;
+      if (status === 'green') {
+        const mergeRes = await githubMergePrTool.execute({ cwd, pr: String(prNum), method }, ctx);
+        if (!mergeRes.success) return fail(`autopilot: CI was green but merge failed — ${mergeRes.output}`, mergeRes.data);
+        await git(['checkout', base], cwd, ctx.signal); // best-effort: return the working tree to base
+        return { success: true, output: `autopilot: shipped ✅ — committed ${sha.slice(0, 8)}, opened PR #${prNum}, CI green, merged (${method}).`, data: { pr: prNum, merged: true, sha } };
+      }
+      if (status === 'pending') {
+        return { success: true, output: `autopilot: opened PR #${prNum}; CI still running — call autopilot (or github.fix_ci) again shortly to finish the merge.`, data: { pr: prNum, merged: false, status } };
+      }
+      return fail(`autopilot stopped — CI is FAILING on PR #${prNum}. Fix the code and call autopilot again:\n${fixRes.output}`, { pr: prNum, status });
+    } catch (err) {
+      return fail(`github.autopilot error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Group
 // ---------------------------------------------------------------------------
 
 export const GITHUB_TOOLS: readonly ToolDefinition[] = [
+  githubAutopilotTool,
   githubReadFileTool,
   githubCommitTool,
   githubPushTool,
