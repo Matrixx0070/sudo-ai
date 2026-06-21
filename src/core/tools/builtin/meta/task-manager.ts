@@ -10,11 +10,12 @@
  *   cancel       — cancel a specific task by ID
  *   stats        — queue health summary (counts, avgDuration)
  *   retry-failed — re-queue all failed tasks that still have retries left
- *   get          — fetch a single task by ID
+ *   get          — fetch a single task by ID (full UUID or unique short prefix)
+ *   prune        — delete terminal (completed/cancelled/failed) tasks by age
  */
 
 import path from 'node:path';
-import { TaskQueue, type EnqueueInput, type TaskPriority } from '../../../orchestration/task-queue.js';
+import { TaskQueue, type EnqueueInput, type TaskPriority, type Task } from '../../../orchestration/task-queue.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { MIND_DB } from '../../../shared/paths.js';
@@ -58,6 +59,21 @@ function validatePriority(p: unknown): p is TaskPriority {
   return typeof p === 'string' && VALID_PRIORITIES.has(p);
 }
 
+/**
+ * Resolve a task from a full id or the short id prefix shown by `list`
+ * (`id.slice(0, 8)`). Without this, copying the visible 8-char id into get/cancel
+ * fails an exact-UUID lookup with "Task not found".
+ */
+function resolveTaskId(queue: TaskQueue, raw: string): { task?: Task; error?: string } {
+  const matches = queue.findByIdPrefix(raw);
+  if (matches.length === 0) return { error: `Task not found: ${raw}` };
+  if (matches.length > 1) {
+    const ids = matches.map(t => t.id.slice(0, 8)).join(', ');
+    return { error: `Ambiguous task id "${raw}" matches ${matches.length} tasks (${ids}). Use more characters.` };
+  }
+  return { task: matches[0] };
+}
+
 // ---------------------------------------------------------------------------
 // Tool definition
 // ---------------------------------------------------------------------------
@@ -74,7 +90,7 @@ export const taskManagerTool: ToolDefinition = {
       type: 'string',
       required: true,
       description: 'Operation to perform.',
-      enum: ['enqueue', 'list', 'get', 'cancel', 'stats', 'retry-failed'],
+      enum: ['enqueue', 'list', 'get', 'cancel', 'stats', 'retry-failed', 'prune'],
     },
 
     // enqueue params
@@ -138,7 +154,16 @@ export const taskManagerTool: ToolDefinition = {
     // get / cancel params
     taskId: {
       type: 'string',
-      description: '[get, cancel] The task UUID to operate on.',
+      description: '[get, cancel] The task id to operate on. Accepts the full UUID or the short '
+        + 'id prefix shown by `list` (as long as the prefix is unambiguous).',
+    },
+
+    // prune params
+    olderThanDays: {
+      type: 'number',
+      description: '[prune] Delete terminal tasks (completed/cancelled/failed) finished more than '
+        + 'this many days ago (default: 7). Use 0 to clear all terminal tasks regardless of age.',
+      default: 7,
     },
   },
 
@@ -233,8 +258,8 @@ export const taskManagerTool: ToolDefinition = {
           const taskId = (params['taskId'] as string | undefined)?.trim();
           if (!taskId) return { success: false, output: 'taskId is required for get.' };
 
-          const task = queue.getTask(taskId);
-          if (!task) return { success: false, output: `Task not found: ${taskId}` };
+          const { task, error } = resolveTaskId(queue, taskId);
+          if (!task) return { success: false, output: error ?? `Task not found: ${taskId}` };
 
           const summary = [
             `ID:          ${task.id}`,
@@ -257,15 +282,15 @@ export const taskManagerTool: ToolDefinition = {
           const taskId = (params['taskId'] as string | undefined)?.trim();
           if (!taskId) return { success: false, output: 'taskId is required for cancel.' };
 
-          const before = queue.getTask(taskId);
-          if (!before) return { success: false, output: `Task not found: ${taskId}` };
+          const { task: before, error } = resolveTaskId(queue, taskId);
+          if (!before) return { success: false, output: error ?? `Task not found: ${taskId}` };
           if (['completed', 'cancelled'].includes(before.status)) {
             return { success: false, output: `Task is already in terminal state: ${before.status}` };
           }
 
-          queue.cancel(taskId);
-          logger.info({ taskId }, 'Task cancelled via tool');
-          return { success: true, output: `Task cancelled: ${taskId} (was: ${before.status})` };
+          queue.cancel(before.id);
+          logger.info({ taskId: before.id }, 'Task cancelled via tool');
+          return { success: true, output: `Task cancelled: ${before.id} (was: ${before.status})` };
         }
 
         // -------------------------------------------------------------------
@@ -298,6 +323,21 @@ export const taskManagerTool: ToolDefinition = {
             : 'No failed tasks with remaining retries found.';
           logger.info({ requeued: count }, 'retry-failed executed via tool');
           return { success: true, output: msg, data: { requeued: count } };
+        }
+
+        // -------------------------------------------------------------------
+        case 'prune': {
+          const rawDays = params['olderThanDays'];
+          const olderThanDays = typeof rawDays === 'number' && Number.isFinite(rawDays)
+            ? Math.max(0, rawDays)
+            : 7;
+
+          const removed = queue.pruneTerminal(olderThanDays);
+          const msg = removed > 0
+            ? `Pruned ${removed} terminal task(s) — completed/cancelled/failed older than ${olderThanDays} day(s).`
+            : `No terminal tasks older than ${olderThanDays} day(s) to prune.`;
+          logger.info({ removed, olderThanDays }, 'prune executed via tool');
+          return { success: true, output: msg, data: { removed, olderThanDays } };
         }
 
         // -------------------------------------------------------------------
