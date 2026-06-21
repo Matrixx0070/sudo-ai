@@ -30,6 +30,7 @@ import {
   githubListPrsTool,
   githubPrDiffTool,
   githubPrCommentTool,
+  githubUpdateBranchTool,
   githubClosePrTool,
   githubListIssuesTool,
   githubCreateIssueTool,
@@ -71,6 +72,7 @@ beforeEach(() => {
   vi.mocked(mkdirSync).mockClear();
   vi.mocked(readFileSync).mockClear();
   delete process.env['SUDO_GITHUB_TOOLS'];
+  delete process.env['SUDO_GITHUB_MERGE_POLL_MS'];
 });
 
 describe('github tools — enablement & registration', () => {
@@ -328,6 +330,32 @@ describe('github.merge_pr — CI-green gate', () => {
     expect(res.output).toMatch(/protected path/i);
     expect(mergeWasCalled()).toBe(false);
   });
+
+  it('polls then merges when mergeability resolves from UNKNOWN', async () => {
+    process.env['SUDO_GITHUB_MERGE_POLL_MS'] = '0';
+    let views = 0;
+    runCmdMock.mockImplementation((bin: string, args: string[]) => {
+      if (bin === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        views++;
+        return Promise.resolve(prView({ mergeable: views < 2 ? 'UNKNOWN' : 'MERGEABLE', statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }] }));
+      }
+      if (bin === 'gh' && args[0] === 'pr' && args[1] === 'merge') return Promise.resolve(ok(''));
+      return Promise.resolve(ok(''));
+    });
+    const res = await githubMergePrTool.execute({}, ctx);
+    expect(res.success).toBe(true);
+    expect(views).toBeGreaterThan(1); // it re-polled
+    expect(mergeWasCalled()).toBe(true);
+  });
+
+  it('refuses if mergeability stays UNKNOWN after polling', async () => {
+    process.env['SUDO_GITHUB_MERGE_POLL_MS'] = '0';
+    routePr(prView({ mergeable: 'UNKNOWN', statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }] }));
+    const res = await githubMergePrTool.execute({}, ctx);
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/unknown/i);
+    expect(mergeWasCalled()).toBe(false);
+  });
 });
 
 describe('github PR feature tools', () => {
@@ -359,6 +387,15 @@ describe('github PR feature tools', () => {
     const res = await githubClosePrTool.execute({ pr: '5' }, ctx);
     expect(res.success).toBe(true);
     expect(res.output).toMatch(/closed pr/i);
+  });
+
+  it('update_branch treats "not behind" as success (no-op)', async () => {
+    route((bin, args) => (bin === 'gh' && args[1] === 'update-branch'
+      ? err('the pull request is not behind the base branch', 1)
+      : ok('')));
+    const res = await githubUpdateBranchTool.execute({ pr: '5' }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/already up to date/i);
   });
 });
 
