@@ -35,6 +35,7 @@ import {
   githubPrCommentTool,
   githubUpdateBranchTool,
   githubClosePrTool,
+  githubReviewPrTool,
   githubListIssuesTool,
   githubCreateIssueTool,
   githubCommentIssueTool,
@@ -97,7 +98,7 @@ describe('github tools — enablement & registration', () => {
     const reg = { register: vi.fn() };
     registerGitHubTools(reg as never);
     expect(reg.register).toHaveBeenCalledTimes(GITHUB_TOOLS.length);
-    expect(GITHUB_TOOLS.length).toBe(21);
+    expect(GITHUB_TOOLS.length).toBe(22);
   });
 });
 
@@ -575,6 +576,30 @@ describe('github.autopilot (ship-loop)', () => {
     expect(res.output).toMatch(/CI is FAILING/i);
     expect(res.output).toContain('error TS5');
     expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1][1] === 'merge')).toBe(false);
+  });
+});
+
+describe('github.review_pr (PR-review intelligence)', () => {
+  it('approves a PR', async () => {
+    route((bin, args) => (bin === 'gh' && args[0] === 'pr' && args[1] === 'review' ? ok('') : ok('')));
+    const res = await githubReviewPrTool.execute({ pr: '5', event: 'approve' }, ctx);
+    expect(res.success).toBe(true);
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1][1] === 'review' && c[1].includes('--approve'))).toBe(true);
+  });
+
+  it('requires a body for request_changes (no review call)', async () => {
+    route(() => ok(''));
+    const res = await githubReviewPrTool.execute({ pr: '5', event: 'request_changes' }, ctx);
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/body is required/i);
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1][1] === 'review')).toBe(false);
+  });
+
+  it('requests changes with a body', async () => {
+    route((bin, args) => (bin === 'gh' && args[1] === 'review' ? ok('') : ok('')));
+    const res = await githubReviewPrTool.execute({ pr: '5', event: 'request_changes', body: 'please fix the null check' }, ctx);
+    expect(res.success).toBe(true);
+    expect(runCmdMock.mock.calls.some((c) => c[0] === 'gh' && c[1].includes('--request-changes') && c[1].includes('--body'))).toBe(true);
   });
 });
 
