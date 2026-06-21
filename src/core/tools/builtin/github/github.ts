@@ -5,12 +5,20 @@
  * runCmd (execFile — no shell, no sandbox), so they inherit the daemon's
  * credentials (gh credential helper in ~/.gitconfig, token in ~/.config/gh).
  *
- * Safety model:
+ * Safety model (zero-risk — see safety.ts):
  *  - The whole group is registered only when SUDO_GITHUB_TOOLS is enabled
  *    (see index.ts) — default OFF, so the tools do not exist unless opted in.
+ *  - PROTECTED PATHS: commit refuses to write/stage, and merge_pr refuses to
+ *    merge, any change to critical files (CI, config, secrets, manifests, the
+ *    connector + router themselves).
+ *  - FEATURE BRANCHES ONLY: commit refuses to commit onto the default/protected
+ *    branch — the agent must work on a feature branch.
  *  - github.merge_pr will NOT merge unless the PR's required CI checks are
  *    green and the PR is conflict-free (operator policy: "merge only after CI
  *    green"). It refuses (does not wait) on pending/failing checks.
+ *  - No destructive primitives are exposed (no force-push / reset / history
+ *    rewrite / --admin merge). Every mutating action is appended to the audit
+ *    log (data/github-audit.jsonl).
  *
  * All commands use execFile argument arrays — caller strings (commit messages,
  * PR titles/bodies) are passed as discrete args and never shell-interpolated.
@@ -21,6 +29,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { runCmd } from '../system/exec.js';
+import { isProtectedBranch, protectedHits, defaultBranch, auditGitHub } from './safety.js';
 
 const logger = createLogger('github-tools');
 
@@ -96,6 +105,7 @@ export interface PrSummary {
   state: string;        // OPEN | MERGED | CLOSED
   mergeable: string;    // MERGEABLE | CONFLICTING | UNKNOWN
   url: string;
+  changedFiles: string[]; // repo-relative paths the PR touches (for protected-path gate)
   checks: { passing: number; pending: number; failing: number; total: number; failingNames: string[]; pendingNames: string[] };
   green: boolean;       // total>0 && failing==0 && pending==0
 }
@@ -104,7 +114,7 @@ export interface PrSummary {
 async function getPrSummary(cwd: string, prRef: string | undefined, signal?: AbortSignal): Promise<PrSummary> {
   const args = ['pr', 'view'];
   if (prRef) args.push(prRef);
-  args.push('--json', 'number,title,state,mergeable,url,statusCheckRollup');
+  args.push('--json', 'number,title,state,mergeable,url,statusCheckRollup,files');
   const res = await gh(args, cwd, signal);
   if (res.exitCode !== 0) {
     throw new Error(`gh pr view failed: ${res.stderr || res.stdout || 'no PR found for this branch'}`);
@@ -112,6 +122,7 @@ async function getPrSummary(cwd: string, prRef: string | undefined, signal?: Abo
   const json = JSON.parse(res.stdout) as {
     number: number; title: string; state: string; mergeable: string; url: string;
     statusCheckRollup?: Array<Record<string, unknown>>;
+    files?: Array<{ path?: string }>;
   };
   const rollup = Array.isArray(json.statusCheckRollup) ? json.statusCheckRollup : [];
   let passing = 0, pending = 0, failing = 0;
@@ -124,8 +135,11 @@ async function getPrSummary(cwd: string, prRef: string | undefined, signal?: Abo
     else { failing++; failingNames.push(name); }
   }
   const total = rollup.length;
+  const changedFiles = Array.isArray(json.files)
+    ? json.files.map((f) => String(f.path ?? '')).filter(Boolean) : [];
   return {
     number: json.number, title: json.title, state: json.state, mergeable: json.mergeable, url: json.url,
+    changedFiles,
     checks: { passing, pending, failing, total, failingNames, pendingNames },
     green: total > 0 && failing === 0 && pending === 0,
   };
@@ -168,6 +182,11 @@ export const githubCommitTool: ToolDefinition = {
     paths: { type: 'array', description: 'Specific existing paths to stage (ignored when `files` is given). Omit to stage all changes (git add -A).', required: false, items: { type: 'string', description: 'Path to stage' } },
   },
   async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    const deny = (msg: string, data?: unknown): ToolResult => {
+      auditGitHub({ action: 'commit', session: sess, ok: false, detail: msg });
+      return fail(msg, data);
+    };
     try {
       const cwd = resolveCwd(params, ctx);
       const message = asString(params['message'], 'message');
@@ -177,11 +196,27 @@ export const githubCommitTool: ToolDefinition = {
       const files = Array.isArray(params['files'])
         ? (params['files'] as Array<{ path?: unknown; content?: unknown }>) : null;
 
-      // Optional: create/switch to a feature branch first (idempotent -B).
+      // Zero-risk: never write/commit protected paths (declared up front).
+      const declaredHits = protectedHits([
+        ...(files ? files.map((f) => String(f?.path ?? '')) : []),
+        ...(paths ?? []),
+      ].filter(Boolean));
+      if (declaredHits.length > 0) {
+        return deny(`Refused — the agent may not commit protected path(s): ${declaredHits.join(', ')}`);
+      }
+
+      // Zero-risk: feature branches only — never commit onto a protected/default branch.
       if (branch) {
-        if (!/^[A-Za-z0-9._/-]+$/.test(branch)) return fail(`invalid branch name: ${branch}`);
+        if (!/^[A-Za-z0-9._/-]+$/.test(branch)) return deny(`invalid branch name: ${branch}`);
+        if (isProtectedBranch(branch)) return deny(`Refused — '${branch}' is a protected branch; use a feature branch.`);
         const co = await git(['checkout', '-B', branch], cwd, ctx.signal);
-        if (co.exitCode !== 0) return fail(`git checkout -B ${branch} failed: ${co.stderr || co.stdout}`);
+        if (co.exitCode !== 0) return deny(`git checkout -B ${branch} failed: ${co.stderr || co.stdout}`);
+      } else {
+        const cur = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, ctx.signal)).stdout.trim();
+        const def = await defaultBranch(cwd, ctx.signal);
+        if (cur === def || isProtectedBranch(cur)) {
+          return deny(`Refused — won't commit directly on '${cur}'. Pass branch='feature/...' to use a feature branch.`);
+        }
       }
 
       // Optional: write files into the repo, then stage exactly those.
@@ -191,7 +226,7 @@ export const githubCommitTool: ToolDefinition = {
         for (const f of files) {
           const rel = String(f?.path ?? '');
           const abs = validateRepoRelPath(cwd, rel);
-          if (!abs) return fail(`invalid or repo-escaping file path: ${rel}`);
+          if (!abs) return deny(`invalid or repo-escaping file path: ${rel}`);
           mkdirSync(nodePath.dirname(abs), { recursive: true });
           writeFileSync(abs, typeof f?.content === 'string' ? f.content : '');
           written.push(rel);
@@ -202,21 +237,28 @@ export const githubCommitTool: ToolDefinition = {
       // Stage.
       const stageArgs = stagePaths && stagePaths.length > 0 ? ['add', '--', ...stagePaths] : ['add', '-A'];
       const staged = await git(stageArgs, cwd, ctx.signal);
-      if (staged.exitCode !== 0) return fail(`git add failed: ${staged.stderr || staged.stdout}`);
+      if (staged.exitCode !== 0) return deny(`git add failed: ${staged.stderr || staged.stdout}`);
 
-      // Anything to commit?
-      const stat = await git(['status', '--porcelain'], cwd, ctx.signal);
-      if (stat.stdout.trim() === '') return fail('Nothing to commit — working tree clean.', { clean: true });
+      // Zero-risk: re-check what is ACTUALLY staged (covers add -A) — never commit protected files.
+      const stagedList = (await git(['diff', '--cached', '--name-only'], cwd, ctx.signal))
+        .stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+      const stagedHits = protectedHits(stagedList);
+      if (stagedHits.length > 0) {
+        await git(['reset', '-q'], cwd, ctx.signal); // unstage everything; working tree untouched
+        return deny(`Refused — staged changes include protected path(s): ${stagedHits.join(', ')}`);
+      }
+      if (stagedList.length === 0) return deny('Nothing to commit — working tree clean.');
 
       const committed = await git(['commit', '-m', message], cwd, ctx.signal);
-      if (committed.exitCode !== 0) return fail(`git commit failed: ${committed.stderr || committed.stdout}`);
+      if (committed.exitCode !== 0) return deny(`git commit failed: ${committed.stderr || committed.stdout}`);
 
       const sha = (await git(['rev-parse', 'HEAD'], cwd, ctx.signal)).stdout.trim();
       const currentBranch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, ctx.signal)).stdout.trim();
-      logger.info({ sha, branch: currentBranch, session: ctx.sessionId }, 'github.commit');
+      logger.info({ sha, branch: currentBranch, session: sess }, 'github.commit');
+      auditGitHub({ action: 'commit', session: sess, ok: true, data: { sha, branch: currentBranch, files: stagedList.length } });
       return { success: true, output: `Committed ${sha.slice(0, 8)} on ${currentBranch}`, data: { sha, branch: currentBranch } };
     } catch (err) {
-      return fail(`github.commit error: ${err instanceof Error ? err.message : String(err)}`);
+      return deny(`github.commit error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -243,6 +285,7 @@ export const githubPushTool: ToolDefinition = {
       const res = await git(['push', '-u', 'origin', 'HEAD'], cwd, ctx.signal);
       if (res.exitCode !== 0) return fail(`git push failed: ${res.stderr || res.stdout}`);
       logger.info({ branch, session: ctx.sessionId }, 'github.push');
+      auditGitHub({ action: 'push', session: ctx.sessionId, ok: true, data: { branch } });
       return { success: true, output: `Pushed ${branch} to origin`, data: { branch } };
     } catch (err) {
       return fail(`github.push error: ${err instanceof Error ? err.message : String(err)}`);
@@ -295,6 +338,7 @@ export const githubOpenPrTool: ToolDefinition = {
       const url = res.stdout.trim().split('\n').filter(Boolean).pop() ?? '';
       const num = Number(url.match(/\/pull\/(\d+)/)?.[1] ?? 0);
       logger.info({ branch, base, num, url, session: ctx.sessionId }, 'github.open_pr');
+      auditGitHub({ action: 'open_pr', session: ctx.sessionId, ok: true, data: { number: num, branch, base } });
       return { success: true, output: `Opened PR #${num}: ${url}`, data: { number: num, url, branch, base } };
     } catch (err) {
       return fail(`github.open_pr error: ${err instanceof Error ? err.message : String(err)}`);
@@ -355,6 +399,11 @@ export const githubMergePrTool: ToolDefinition = {
     cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
   },
   async execute(params, ctx): Promise<ToolResult> {
+    const sess = ctx.sessionId;
+    const deny = (msg: string, data?: unknown): ToolResult => {
+      auditGitHub({ action: 'merge_pr', session: sess, ok: false, detail: msg });
+      return fail(msg, data);
+    };
     try {
       const cwd = resolveCwd(params, ctx);
       const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
@@ -364,23 +413,29 @@ export const githubMergePrTool: ToolDefinition = {
 
       // --- CI-green gate ---
       const s = await getPrSummary(cwd, prRef, ctx.signal);
-      if (s.state !== 'OPEN') return fail(`PR #${s.number} is ${s.state}, not OPEN — cannot merge.`, s);
-      if (s.mergeable === 'CONFLICTING') return fail(`PR #${s.number} has merge conflicts — resolve before merging.`, s);
-      if (s.checks.total === 0 && !allowNoChecks) {
-        return fail(`PR #${s.number} has no CI checks. Pass allow_no_checks=true to merge anyway.`, s);
+      if (s.state !== 'OPEN') return deny(`PR #${s.number} is ${s.state}, not OPEN — cannot merge.`, s);
+      if (s.mergeable === 'CONFLICTING') return deny(`PR #${s.number} has merge conflicts — resolve before merging.`, s);
+      // --- Zero-risk: never merge a PR that touches protected paths ---
+      const protHits = protectedHits(s.changedFiles);
+      if (protHits.length > 0) {
+        return deny(`PR #${s.number} changes protected path(s): ${protHits.join(', ')} — refusing to merge (human review required).`, s);
       }
-      if (s.checks.failing > 0) return fail(`PR #${s.number} has ${s.checks.failing} failing check(s): ${s.checks.failingNames.join(', ')} — refusing to merge.`, s);
-      if (s.checks.pending > 0) return fail(`PR #${s.number} has ${s.checks.pending} pending check(s): ${s.checks.pendingNames.join(', ')} — CI not finished, refusing to merge (retry later).`, s);
+      if (s.checks.total === 0 && !allowNoChecks) {
+        return deny(`PR #${s.number} has no CI checks. Pass allow_no_checks=true to merge anyway.`, s);
+      }
+      if (s.checks.failing > 0) return deny(`PR #${s.number} has ${s.checks.failing} failing check(s): ${s.checks.failingNames.join(', ')} — refusing to merge.`, s);
+      if (s.checks.pending > 0) return deny(`PR #${s.number} has ${s.checks.pending} pending check(s): ${s.checks.pendingNames.join(', ')} — CI not finished, refusing to merge (retry later).`, s);
 
       // --- Merge ---
       const args = ['pr', 'merge', String(s.number), `--${method}`];
       if (deleteBranch) args.push('--delete-branch');
       const res = await gh(args, cwd, ctx.signal);
-      if (res.exitCode !== 0) return fail(`gh pr merge failed: ${res.stderr || res.stdout}`, s);
-      logger.info({ pr: s.number, method, session: ctx.sessionId }, 'github.merge_pr');
+      if (res.exitCode !== 0) return deny(`gh pr merge failed: ${res.stderr || res.stdout}`, s);
+      logger.info({ pr: s.number, method, session: sess }, 'github.merge_pr');
+      auditGitHub({ action: 'merge_pr', session: sess, ok: true, data: { number: s.number, method, checks: s.checks.passing } });
       return { success: true, output: `Merged PR #${s.number} (${method}) — CI was green (${s.checks.passing} checks).`, data: { number: s.number, method, url: s.url } };
     } catch (err) {
-      return fail(`github.merge_pr error: ${err instanceof Error ? err.message : String(err)}`);
+      return deny(`github.merge_pr error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
