@@ -60,37 +60,56 @@ import type { HistoryMessage } from '../agent/cheap-model-router.js';
 const log = createLogger('brain');
 
 /**
+ * Per-attempt backoff cap (ms) for failover when a provider is overloaded /
+ * transient / timing out. Raised 5s → 15s and tunable via
+ * SUDO_FAILOVER_BACKOFF_CAP_MS so a multi-second-to-minute cloud incident can
+ * be ridden out instead of immediately surfacing "All failover attempts
+ * failed". Clamped to [1s, 60s].
+ */
+export const FAILOVER_BACKOFF_CAP_MS = Math.min(
+  60_000,
+  Math.max(1_000, Number(process.env['SUDO_FAILOVER_BACKOFF_CAP_MS']) || 15_000),
+);
+
+/**
  * Backoff between sequential failover attempts when the previous profile
  * failed with a transient/overloaded category. Without this, the entire
  * chain fires in <2ms — a single anthropic blip 500s opus, sonnet, and
  * any same-window upstream simultaneously (observed live 2026-06-17 02:40).
  * If the upstream sent a retry-after header, honour it (capped). Otherwise
- * exponential: 250ms × 2^attempt, capped at 2000ms.
+ * exponential: 250ms × 2^attempt, capped at FAILOVER_BACKOFF_CAP_MS.
  *
  * Kill-switch: SUDO_FAILOVER_BACKOFF_DISABLE=1 restores the zero-wait
  * burst (default off — always wait).
  */
-function failoverBackoffMs(category: string, attempt: number, retryAfterMs?: number): number {
+export function failoverBackoffMs(category: string, attempt: number, retryAfterMs?: number): number {
   if (process.env['SUDO_FAILOVER_BACKOFF_DISABLE'] === '1') return 0;
   if (category !== 'overloaded' && category !== 'transient' && category !== 'timeout') return 0;
   if (typeof retryAfterMs === 'number' && retryAfterMs > 0) {
-    return Math.min(retryAfterMs, 5000);
+    return Math.min(retryAfterMs, FAILOVER_BACKOFF_CAP_MS);
   }
-  // Cap at 5000ms to ride out longer cloud outages (observed live 2026-06-17
-  // 02:58: anthropic + ollama-cloud both 500ed for ~2+ seconds, 2000ms cap
-  // exhausted before either recovered).
-  return Math.min(5000, 250 * Math.pow(2, attempt));
+  return Math.min(FAILOVER_BACKOFF_CAP_MS, 250 * Math.pow(2, attempt));
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Maximum number of provider failover attempts per call. */
-// Raised 4 → 6 alongside the 5000ms backoff cap (#233) so a multi-second
-// cloud incident has more chances to recover before the chain exhausts.
-// Worst-case latency on a fully-failing chain: 5 × ~3.5s avg backoff = ~17s.
-const MAX_FAILOVER_ATTEMPTS = 6;
+/**
+ * Maximum number of provider failover attempts per call. Raised 6 → 10 and
+ * tunable via SUDO_FAILOVER_MAX_ATTEMPTS (clamped [1, 30]). Combined with the
+ * 15s FAILOVER_BACKOFF_CAP_MS, a fully-overloaded chain now rides out ~60-75s
+ * before surfacing an error (was ~9s) — per the operator's request to keep
+ * retrying past 60s on a total upstream outage.
+ *
+ * Trade-off: when EVERY provider is down, a single reply can now take up to
+ * ~75s instead of failing fast. Normal operation is unaffected — backoff only
+ * applies to overloaded/transient/timeout categories, which are rare.
+ */
+export const MAX_FAILOVER_ATTEMPTS = Math.min(
+  30,
+  Math.max(1, Number(process.env['SUDO_FAILOVER_MAX_ATTEMPTS']) || 10),
+);
 
 // ---------------------------------------------------------------------------
 // Concatenated-JSON splitter — handles LLMs that batch multiple tool call
