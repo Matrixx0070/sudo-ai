@@ -16,7 +16,7 @@
  */
 
 import * as nodePath from 'node:path';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync, renameSync } from 'node:fs';
 import { DATA_DIR } from '../../../shared/paths.js';
 import { runCmd } from '../system/exec.js';
 import { createLogger } from '../../../shared/logger.js';
@@ -136,6 +136,8 @@ export interface AuditEntry {
 export function auditGitHub(entry: AuditEntry): void {
   try {
     mkdirSync(DATA_DIR, { recursive: true });
+    // Cap growth: rotate to a single .1 backup when over 5 MB.
+    try { if (statSync(AUDIT_FILE).size > 5 * 1024 * 1024) renameSync(AUDIT_FILE, AUDIT_FILE + '.1'); } catch { /* no file yet */ }
     appendFileSync(AUDIT_FILE, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n');
   } catch (err) {
     log.warn({ err: String(err) }, 'github audit append failed (non-fatal)');

@@ -35,6 +35,12 @@ const logger = createLogger('github-tools');
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/** Poll interval (ms) for merge_pr UNKNOWN-mergeability retries; tunable for tests. */
+function mergePollMs(): number {
+  const v = Number(process.env['SUDO_GITHUB_MERGE_POLL_MS']);
+  return Number.isFinite(v) && v >= 0 ? v : 1500;
+}
+
 // ---------------------------------------------------------------------------
 // Enablement
 // ---------------------------------------------------------------------------
@@ -434,9 +440,16 @@ export const githubMergePrTool: ToolDefinition = {
       const allowNoChecks = params['allow_no_checks'] === true;
 
       // --- CI-green gate ---
-      const s = await getPrSummary(cwd, prRef, ctx.signal);
+      let s = await getPrSummary(cwd, prRef, ctx.signal);
+      // GitHub computes mergeability asynchronously after a push; if it is still
+      // UNKNOWN, poll briefly before deciding rather than guessing.
+      for (let i = 0; i < 3 && s.state === 'OPEN' && s.mergeable === 'UNKNOWN'; i++) {
+        await new Promise((r) => setTimeout(r, mergePollMs()));
+        s = await getPrSummary(cwd, prRef, ctx.signal);
+      }
       if (s.state !== 'OPEN') return deny(`PR #${s.number} is ${s.state}, not OPEN — cannot merge.`, s);
       if (s.mergeable === 'CONFLICTING') return deny(`PR #${s.number} has merge conflicts — resolve before merging.`, s);
+      if (s.mergeable === 'UNKNOWN') return deny(`PR #${s.number} mergeability is still UNKNOWN (GitHub hasn't finished computing it) — retry shortly.`, s);
       // --- Zero-risk: never merge a PR that touches protected paths ---
       const protHits = protectedHits(s.changedFiles);
       if (protHits.length > 0) {
@@ -661,7 +674,15 @@ export const githubUpdateBranchTool: ToolDefinition = {
       const args = ['pr', 'update-branch'];
       if (prRef) args.push(prRef);
       const res = await gh(args, cwd, ctx.signal);
-      if (res.exitCode !== 0) { auditGitHub({ action: 'update_branch', session: sess, ok: false, detail: res.stderr || res.stdout }); return fail(`gh pr update-branch failed: ${res.stderr || res.stdout}`); }
+      if (res.exitCode !== 0) {
+        const msg = (res.stderr || res.stdout || '').toLowerCase();
+        if (msg.includes('not behind') || msg.includes('up to date') || msg.includes('up-to-date') || msg.includes('already up')) {
+          auditGitHub({ action: 'update_branch', session: sess, ok: true, data: { pr: prRef ?? 'current', noop: true } });
+          return { success: true, output: `PR ${prRef ?? '(current branch)'} is already up to date with base`, data: { noop: true } };
+        }
+        auditGitHub({ action: 'update_branch', session: sess, ok: false, detail: res.stderr || res.stdout });
+        return fail(`gh pr update-branch failed: ${res.stderr || res.stdout}`);
+      }
       auditGitHub({ action: 'update_branch', session: sess, ok: true, data: { pr: prRef ?? 'current' } });
       return { success: true, output: `Updated PR ${prRef ?? '(current branch)'} branch with base`, data: {} };
     } catch (err) {
