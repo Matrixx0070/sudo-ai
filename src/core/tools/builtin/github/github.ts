@@ -41,6 +41,12 @@ function mergePollMs(): number {
   return Number.isFinite(v) && v >= 0 ? v : 1500;
 }
 
+/** Poll interval (ms) for fix_ci waiting on pending CI; tunable for tests. */
+function ciPollMs(): number {
+  const v = Number(process.env['SUDO_GITHUB_CI_POLL_MS']);
+  return Number.isFinite(v) && v >= 0 ? v : 20_000;
+}
+
 // ---------------------------------------------------------------------------
 // Enablement
 // ---------------------------------------------------------------------------
@@ -912,6 +918,113 @@ export const githubCloseIssueTool: ToolDefinition = {
 };
 
 // ---------------------------------------------------------------------------
+// CI helpers (for ci_logs / fix_ci)
+// ---------------------------------------------------------------------------
+
+/** Resolve the head branch for a PR ref (or the current branch). */
+async function resolveBranch(cwd: string, prRef: string | undefined, signal?: AbortSignal): Promise<string> {
+  if (prRef) {
+    const r = await gh(['pr', 'view', prRef, '--json', 'headRefName'], cwd, signal);
+    if (r.exitCode === 0) { try { return String(JSON.parse(r.stdout).headRefName || ''); } catch { /* fall through */ } }
+  }
+  return (await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, signal)).stdout.trim();
+}
+
+/** Latest failed workflow run for a branch (or null). */
+async function failingRun(cwd: string, branch: string, signal?: AbortSignal): Promise<{ id: number; workflow: string } | null> {
+  const r = await gh(['run', 'list', '--branch', branch, '--json', 'databaseId,conclusion,workflowName', '--limit', '15'], cwd, signal);
+  if (r.exitCode !== 0) return null;
+  const runs = JSON.parse(r.stdout || '[]') as Array<{ databaseId: number; conclusion: string; workflowName: string }>;
+  const f = runs.find((x) => (x.conclusion || '').toUpperCase() === 'FAILURE');
+  return f ? { id: f.databaseId, workflow: f.workflowName } : null;
+}
+
+/** Fetch the failed-step logs (tail) for a branch's latest failing run. */
+async function failingRunLogs(cwd: string, branch: string, maxBytes: number, signal?: AbortSignal): Promise<{ runId: number; workflow: string; logs: string } | null> {
+  const fr = await failingRun(cwd, branch, signal);
+  if (!fr) return null;
+  const lg = await gh(['run', 'view', String(fr.id), '--log-failed'], cwd, signal);
+  const raw = lg.stdout || lg.stderr || '(no logs returned)';
+  const logs = raw.length > maxBytes ? '…[earlier output truncated]\n' + raw.slice(-maxBytes) : raw;
+  return { runId: fr.id, workflow: fr.workflow, logs };
+}
+
+// ---------------------------------------------------------------------------
+// github.ci_logs (readonly)
+// ---------------------------------------------------------------------------
+
+export const githubCiLogsTool: ToolDefinition = {
+  name: 'github.ci_logs',
+  description: 'Fetch the failed-step logs of the latest failing CI run for a PR/branch, so you can see WHY CI failed. Read-only. Omit `pr` for the current branch.',
+  category: 'github',
+  safety: 'readonly',
+  timeout: 120_000,
+  parameters: {
+    pr: { type: 'string', description: 'PR number/url/branch. Omit for the current branch.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
+      const branch = await resolveBranch(cwd, prRef, ctx.signal);
+      const res = await failingRunLogs(cwd, branch, 16 * 1024, ctx.signal);
+      if (!res) return { success: true, output: `No failing CI run found for branch ${branch}.`, data: { failing: false } };
+      return { success: true, output: `Failing run: ${res.workflow} (#${res.runId})\n\n${res.logs}`, data: { failing: true, runId: res.runId, workflow: res.workflow } };
+    } catch (err) {
+      return fail(`github.ci_logs error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// github.fix_ci (readonly coordinator for the CI auto-fix loop)
+// ---------------------------------------------------------------------------
+
+export const githubFixCiTool: ToolDefinition = {
+  name: 'github.fix_ci',
+  description:
+    'CI auto-fix loop coordinator. Waits for a PR\'s CI to finish, then reports: GREEN (ready to merge), '
+    + 'still PENDING, or FAILING with the failed-step logs and the next step. The loop: call fix_ci → if '
+    + 'failing, edit the code + github.push → call fix_ci again → repeat until green (give up after a few '
+    + 'unsuccessful attempts). Omit `pr` for the current branch. Read-only (fixes go through github.commit/push).',
+  category: 'github',
+  safety: 'readonly',
+  timeout: 300_000,
+  parameters: {
+    pr: { type: 'string', description: 'PR number/url/branch. Omit for the current branch.', required: false },
+    wait: { type: 'boolean', description: 'Wait for in-progress checks to finish before reporting. Default true.', required: false },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const prRef = typeof params['pr'] === 'string' && params['pr'] ? (params['pr'] as string) : undefined;
+      const wait = params['wait'] !== false;
+      let s = await getPrSummary(cwd, prRef, ctx.signal);
+      for (let i = 0; wait && i < 12 && s.state === 'OPEN' && s.checks.total > 0 && s.checks.pending > 0; i++) {
+        await new Promise<void>((r) => setTimeout(r, ciPollMs()));
+        s = await getPrSummary(cwd, prRef, ctx.signal);
+      }
+      if (s.checks.total === 0) return { success: true, output: `PR #${s.number}: no CI checks.`, data: { status: 'none' } };
+      if (s.checks.pending > 0) return { success: true, output: `PR #${s.number}: CI still running (${s.checks.pending} pending) — call github.fix_ci again shortly.`, data: { status: 'pending' } };
+      if (s.checks.failing === 0) return { success: true, output: `PR #${s.number}: CI is GREEN ✅ — ready to merge (github.merge_pr).`, data: { status: 'green' } };
+      // Failing → fetch logs + next-step guidance.
+      const branch = await resolveBranch(cwd, prRef, ctx.signal);
+      const lg = await failingRunLogs(cwd, branch, 12 * 1024, ctx.signal);
+      const logs = lg ? `\n\n${lg.workflow} (#${lg.runId}) failed:\n${lg.logs}` : '\n\n(failed-step logs unavailable)';
+      return {
+        success: true,
+        output: `PR #${s.number}: CI FAILING ❌ (${s.checks.failingNames.join(', ')}).${logs}\n\nNext: fix the code, run github.push, then call github.fix_ci again to re-check. Give up after a few unsuccessful attempts.`,
+        data: { status: 'failing', failing: s.checks.failingNames },
+      };
+    } catch (err) {
+      return fail(`github.fix_ci error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Group
 // ---------------------------------------------------------------------------
 
@@ -924,6 +1037,8 @@ export const GITHUB_TOOLS: readonly ToolDefinition[] = [
   githubPrDiffTool,
   githubPrStatusTool,
   githubVerifyTool,
+  githubCiLogsTool,
+  githubFixCiTool,
   githubPrCommentTool,
   githubUpdateBranchTool,
   githubPrReadyTool,
