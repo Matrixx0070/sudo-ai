@@ -243,13 +243,14 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'github', 'pull request', 'open pr', 'merge pr', 'pr comment',
       'review pr', 'close pr', 'draft pr', 'list prs', 'pr diff',
       'pr status', 'rebase', 'issue', 'gh pr', 'gh issue', 'merge',
+      'fix ci', 'ci logs', 'ci failing', 'failing checks',
     ],
     patterns: [
       /\bpull request\b/i, /\bpr\b/i, /\bgithub\b/i, /\bissues?\b/i,
-      /\bmerge\b/i, /\brebase\b/i,
+      /\bmerge\b/i, /\brebase\b/i, /\bci\b/i,
     ],
     priority: 9,
-    maxFromCategory: 20, // cover the whole github.* connector when github-relevant
+    maxFromCategory: 22, // cover the whole github.* connector when github-relevant
   },
   knowledge: {
     keywords: ['knowledge', 'notes', 'remember', 'recall', 'zettelkasten', 'wiki'],

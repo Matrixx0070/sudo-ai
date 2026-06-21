@@ -27,6 +27,8 @@ import {
   githubOpenPrTool,
   githubReadFileTool,
   githubVerifyTool,
+  githubCiLogsTool,
+  githubFixCiTool,
   githubListPrsTool,
   githubPrDiffTool,
   githubPrCommentTool,
@@ -73,6 +75,7 @@ beforeEach(() => {
   vi.mocked(readFileSync).mockClear();
   delete process.env['SUDO_GITHUB_TOOLS'];
   delete process.env['SUDO_GITHUB_MERGE_POLL_MS'];
+  delete process.env['SUDO_GITHUB_CI_POLL_MS'];
 });
 
 describe('github tools — enablement & registration', () => {
@@ -93,7 +96,7 @@ describe('github tools — enablement & registration', () => {
     const reg = { register: vi.fn() };
     registerGitHubTools(reg as never);
     expect(reg.register).toHaveBeenCalledTimes(GITHUB_TOOLS.length);
-    expect(GITHUB_TOOLS.length).toBe(18);
+    expect(GITHUB_TOOLS.length).toBe(20);
   });
 });
 
@@ -428,6 +431,57 @@ describe('github issue tools', () => {
     const res = await githubCloseIssueTool.execute({ number: '42' }, ctx);
     expect(res.success).toBe(true);
     expect(res.output).toMatch(/closed issue #42/i);
+  });
+});
+
+describe('github CI auto-fix loop', () => {
+  it('ci_logs fetches the failing run logs', async () => {
+    route((bin, args) => {
+      if (bin === 'git' && args[0] === 'rev-parse') return ok('feat/x');
+      if (bin === 'gh' && args[0] === 'run' && args[1] === 'list') return ok(JSON.stringify([{ databaseId: 111, conclusion: 'FAILURE', workflowName: 'CI' }]));
+      if (bin === 'gh' && args[0] === 'run' && args[1] === 'view') return ok('src/x.ts(3,1): error TS2304: Cannot find name foo');
+      return ok('');
+    });
+    const res = await githubCiLogsTool.execute({}, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toContain('error TS2304');
+    expect(res.output).toContain('CI (#111)');
+  });
+
+  it('ci_logs reports when there is no failing run', async () => {
+    route((bin, args) => {
+      if (bin === 'git' && args[0] === 'rev-parse') return ok('feat/x');
+      if (bin === 'gh' && args[0] === 'run' && args[1] === 'list') return ok(JSON.stringify([{ databaseId: 1, conclusion: 'SUCCESS', workflowName: 'CI' }]));
+      return ok('');
+    });
+    const res = await githubCiLogsTool.execute({}, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/no failing ci/i);
+  });
+
+  it('fix_ci reports GREEN when checks pass', async () => {
+    process.env['SUDO_GITHUB_CI_POLL_MS'] = '0';
+    route((bin, args) => (bin === 'gh' && args[0] === 'pr' && args[1] === 'view'
+      ? prView({ statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }] }) : ok('')));
+    const res = await githubFixCiTool.execute({}, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/GREEN/);
+  });
+
+  it('fix_ci reports FAILING with logs + next step', async () => {
+    process.env['SUDO_GITHUB_CI_POLL_MS'] = '0';
+    route((bin, args) => {
+      if (bin === 'gh' && args[0] === 'pr' && args[1] === 'view') return prView({ statusCheckRollup: [{ name: 'Lint · Test · Build', status: 'COMPLETED', conclusion: 'FAILURE' }] });
+      if (bin === 'git' && args[0] === 'rev-parse') return ok('feat/x');
+      if (bin === 'gh' && args[0] === 'run' && args[1] === 'list') return ok(JSON.stringify([{ databaseId: 222, conclusion: 'FAILURE', workflowName: 'CI' }]));
+      if (bin === 'gh' && args[0] === 'run' && args[1] === 'view') return ok('error TS9999: boom');
+      return ok('');
+    });
+    const res = await githubFixCiTool.execute({}, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/FAILING/);
+    expect(res.output).toContain('error TS9999');
+    expect(res.output).toMatch(/github\.fix_ci again/);
   });
 });
 
