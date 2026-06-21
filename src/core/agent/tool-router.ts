@@ -53,10 +53,12 @@ const BASE_TOOLS: readonly string[] = [
   // for "pull request" / "merge" prompts, so category ranking would usually
   // omit them. Absent (and skipped here) unless SUDO_GITHUB_TOOLS is enabled,
   // so this is a no-op when the connector is off.
+  'github.read_file',
   'github.commit',
   'github.push',
   'github.open_pr',
   'github.pr_status',
+  'github.verify',
   'github.merge_pr',
 ] as const;
 

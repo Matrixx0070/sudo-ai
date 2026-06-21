@@ -25,7 +25,7 @@
  */
 
 import * as nodePath from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { runCmd } from '../system/exec.js';
@@ -160,6 +160,11 @@ function validateRepoRelPath(cwd: string, rel: string): string | null {
   return abs.startsWith(root) ? abs : null;
 }
 
+/** Keep the last n chars of s (for trimming long command output). */
+function tail(s: string, n: number): string {
+  return s.length > n ? `…${s.slice(-n)}` : s;
+}
+
 // ---------------------------------------------------------------------------
 // github.commit
 // ---------------------------------------------------------------------------
@@ -178,7 +183,7 @@ export const githubCommitTool: ToolDefinition = {
     message: { type: 'string', description: 'Commit message.', required: true },
     cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
     branch: { type: 'string', description: 'If set, create/switch to this branch (git checkout -B) before committing — use a feature branch to open a PR off it.', required: false },
-    files: { type: 'array', description: 'Files to write into the repo then commit; each {path (repo-relative), content}. When given, only these paths are staged.', required: false, items: { type: 'object', description: 'A file to write', properties: { path: { type: 'string', description: 'Repo-relative path' }, content: { type: 'string', description: 'Full file content' } } } },
+    files: { type: 'array', description: 'Files to write/edit then commit; each {path, content?} to write a whole file, OR {path, edits:[{find,replace,all?}]} for targeted find/replace on the existing file (read it first with github.read_file). Only these paths are staged.', required: false, items: { type: 'object', description: 'A file to write or edit', properties: { path: { type: 'string', description: 'Repo-relative path' }, content: { type: 'string', description: 'Full file content (whole-file write)' }, edits: { type: 'array', description: 'Targeted edits applied to the existing file content', items: { type: 'object', description: 'find/replace', properties: { find: { type: 'string', description: 'Exact substring to find' }, replace: { type: 'string', description: 'Replacement text' }, all: { type: 'boolean', description: 'Replace all occurrences (default: first only)' } } } } } } },
     paths: { type: 'array', description: 'Specific existing paths to stage (ignored when `files` is given). Omit to stage all changes (git add -A).', required: false, items: { type: 'string', description: 'Path to stage' } },
   },
   async execute(params, ctx): Promise<ToolResult> {
@@ -219,7 +224,7 @@ export const githubCommitTool: ToolDefinition = {
         }
       }
 
-      // Optional: write files into the repo, then stage exactly those.
+      // Optional: write/edit files into the repo, then stage exactly those.
       let stagePaths: string[] | null = paths;
       if (files && files.length > 0) {
         const written: string[] = [];
@@ -227,8 +232,25 @@ export const githubCommitTool: ToolDefinition = {
           const rel = String(f?.path ?? '');
           const abs = validateRepoRelPath(cwd, rel);
           if (!abs) return deny(`invalid or repo-escaping file path: ${rel}`);
-          mkdirSync(nodePath.dirname(abs), { recursive: true });
-          writeFileSync(abs, typeof f?.content === 'string' ? f.content : '');
+          const edits = Array.isArray((f as { edits?: unknown }).edits)
+            ? ((f as { edits?: unknown }).edits as Array<{ find?: unknown; replace?: unknown; all?: unknown }>) : null;
+          if (edits && edits.length > 0) {
+            // Targeted edit: apply find/replace to the file's CURRENT content.
+            let cur: string;
+            try { cur = readFileSync(abs, 'utf8'); }
+            catch { return deny(`cannot edit non-existent file (pass content to create it): ${rel}`); }
+            for (const e of edits) {
+              const find = typeof e?.find === 'string' ? e.find : '';
+              const replace = typeof e?.replace === 'string' ? e.replace : '';
+              if (!find) return deny(`edit for ${rel} is missing 'find'`);
+              if (!cur.includes(find)) return deny(`edit target not found in ${rel}: "${find.slice(0, 60)}"`);
+              cur = e?.all === true ? cur.split(find).join(replace) : cur.replace(find, () => replace);
+            }
+            writeFileSync(abs, cur);
+          } else {
+            mkdirSync(nodePath.dirname(abs), { recursive: true });
+            writeFileSync(abs, typeof f?.content === 'string' ? f.content : '');
+          }
           written.push(rel);
         }
         stagePaths = written;
@@ -441,13 +463,100 @@ export const githubMergePrTool: ToolDefinition = {
 };
 
 // ---------------------------------------------------------------------------
+// github.read_file (readonly)
+// ---------------------------------------------------------------------------
+
+export const githubReadFileTool: ToolDefinition = {
+  name: 'github.read_file',
+  description:
+    'Read a file from the repository working tree so you can see its CURRENT content before making a '
+    + 'targeted edit. Repo-relative path. Read-only; refuses protected paths (CI/config/secrets).',
+  category: 'dev',
+  safety: 'readonly',
+  timeout: DEFAULT_TIMEOUT_MS,
+  parameters: {
+    path: { type: 'string', description: 'Repo-relative file path.', required: true },
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const rel = asString(params['path'], 'path');
+      if (protectedHits([rel]).length > 0) {
+        return fail(`Refused — '${rel}' is a protected path and cannot be read by the agent.`);
+      }
+      const abs = validateRepoRelPath(cwd, rel);
+      if (!abs) return fail(`invalid or repo-escaping path: ${rel}`);
+      let content: string;
+      try { content = readFileSync(abs, 'utf8'); }
+      catch (e) { return fail(`cannot read ${rel}: ${e instanceof Error ? e.message : String(e)}`); }
+      const MAX = 256 * 1024;
+      const truncated = content.length > MAX;
+      return {
+        success: true,
+        output: truncated ? content.slice(0, MAX) + `\n…[truncated ${content.length - MAX} bytes]` : content,
+        data: { path: rel, bytes: content.length, truncated },
+      };
+    } catch (err) {
+      return fail(`github.read_file error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// github.verify (readonly) — run lint / tests on the working tree before a PR
+// ---------------------------------------------------------------------------
+
+export const githubVerifyTool: ToolDefinition = {
+  name: 'github.verify',
+  description:
+    'Validate the working tree BEFORE opening a PR: run lint (tsc --noEmit) and, optionally, the test suite. '
+    + 'Returns pass/fail per check plus the tail of any failure output, so you can fix issues before pushing.',
+  category: 'dev',
+  safety: 'readonly',
+  timeout: 300_000,
+  parameters: {
+    cwd: { type: 'string', description: 'Absolute path to the repo. Defaults to the session working dir.', required: false },
+    lint: { type: 'boolean', description: 'Run tsc --noEmit (type check). Default true.', required: false },
+    tests: { type: 'boolean', description: 'Run the full test suite (slower, ~minutes). Default false.', required: false },
+  },
+  async execute(params, ctx): Promise<ToolResult> {
+    try {
+      const cwd = resolveCwd(params, ctx);
+      const doLint = params['lint'] !== false;
+      const doTests = params['tests'] === true;
+      const parts: string[] = [];
+      let ok = true;
+      if (doLint) {
+        const r = await runCmd(nodePath.join(cwd, 'node_modules/.bin/tsc'), ['--noEmit'], { cwd, signal: ctx.signal, allowFailure: true });
+        const lintOk = r.exitCode === 0;
+        ok = ok && lintOk;
+        parts.push(`lint (tsc --noEmit): ${lintOk ? 'PASS' : 'FAIL'}${lintOk ? '' : '\n' + tail(r.stdout || r.stderr, 2000)}`);
+      }
+      if (doTests) {
+        const r = await runCmd(nodePath.join(cwd, 'node_modules/.bin/vitest'), ['run'], { cwd, signal: ctx.signal, allowFailure: true });
+        const testOk = r.exitCode === 0;
+        ok = ok && testOk;
+        parts.push(`tests (vitest run): ${testOk ? 'PASS' : 'FAIL'}${testOk ? '' : '\n' + tail(r.stdout || r.stderr, 2000)}`);
+      }
+      logger.info({ ok, lint: doLint, tests: doTests, session: ctx.sessionId }, 'github.verify');
+      return { success: ok, output: parts.join('\n\n') || 'nothing to verify (lint=false, tests=false)', data: { ok } };
+    } catch (err) {
+      return fail(`github.verify error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Group
 // ---------------------------------------------------------------------------
 
 export const GITHUB_TOOLS: readonly ToolDefinition[] = [
+  githubReadFileTool,
   githubCommitTool,
   githubPushTool,
   githubOpenPrTool,
   githubPrStatusTool,
+  githubVerifyTool,
   githubMergePrTool,
 ] as const;
