@@ -197,6 +197,27 @@ export class TaskQueue {
     return row ? rowToTask(row) : null;
   }
 
+  /**
+   * Find tasks by full id or id prefix. The management tool's list view shows
+   * only the first 8 chars of each id, so callers routinely have a prefix rather
+   * than the full UUID — looking up by exact id then returns "not found".
+   *
+   * An exact id match short-circuits to a single result. Otherwise every task
+   * whose id starts with `idOrPrefix` is returned (capped), so the caller can
+   * detect ambiguity. LIKE metacharacters in the input are escaped.
+   */
+  findByIdPrefix(idOrPrefix: string): Task[] {
+    this._assertId(idOrPrefix);
+    const exact = this.getTask(idOrPrefix);
+    if (exact) return [exact];
+
+    const escaped = idOrPrefix.replace(/[\\%_]/g, c => `\\${c}`);
+    const rows = this.db.prepare<{ p: string }, TaskRow>(
+      "SELECT * FROM task_queue WHERE id LIKE :p ESCAPE '\\' ORDER BY created_at DESC LIMIT 10"
+    ).all({ p: `${escaped}%` });
+    return rows.map(rowToTask);
+  }
+
   listTasks(filter: { status?: string; priority?: string; limit?: number } = {}): Task[] {
     const conditions: string[] = [];
     const params: Record<string, unknown> = {};
@@ -254,6 +275,27 @@ export class TaskQueue {
       "DELETE FROM task_queue WHERE status IN ('completed','cancelled') AND completed_at < :cutoff"
     ).run({ cutoff });
     logger.info({ removed: info.changes, olderThanDays }, 'pruneCompleted');
+    return info.changes;
+  }
+
+  /**
+   * Delete tasks in a terminal state — completed, cancelled, OR failed — that
+   * finished more than `olderThanDays` ago. Unlike {@link pruneCompleted} this
+   * also clears exhausted `failed` rows, and it falls back to `created_at` when a
+   * row has no `completed_at`. Non-terminal tasks (queued/running/blocked) are
+   * never touched. `olderThanDays = 0` prunes all terminal rows regardless of age.
+   * Returns the number of rows removed.
+   */
+  pruneTerminal(olderThanDays = 7): number {
+    const days = Math.max(0, olderThanDays);
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+    // Inclusive boundary: with olderThanDays = 0 the cutoff is "now", and a
+    // strict `<` would skip rows finished in that same millisecond — so `prune 0`
+    // would leave terminal rows behind. `<=` makes "0 = all terminal" exact.
+    const info = this.db.prepare(
+      "DELETE FROM task_queue WHERE status IN ('completed','cancelled','failed') AND COALESCE(completed_at, created_at) <= :cutoff"
+    ).run({ cutoff });
+    logger.info({ removed: info.changes, olderThanDays: days }, 'pruneTerminal');
     return info.changes;
   }
 

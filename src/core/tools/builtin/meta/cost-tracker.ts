@@ -15,6 +15,7 @@
 
 import path from 'node:path';
 import { getCostTracker } from '../../../billing/cost-tracker.js';
+import { dailyBudgetUsd, dailyBudgetDisabled } from '../../../billing/daily-budget.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { MIND_DB } from '../../../shared/paths.js';
@@ -35,6 +36,44 @@ function formatByProvider(byProvider: Record<string, number>): string {
   const entries = Object.entries(byProvider).sort((a, b) => b[1] - a[1]);
   if (entries.length === 0) return '  (no data)';
   return entries.map(([p, c]) => `  ${p}: ${usd(c)}`).join('\n');
+}
+
+/** Outcome of resolving a check-budget `dailyLimit` argument. */
+export type BudgetLimitResolution =
+  | { kind: 'disabled' }
+  | { kind: 'limit'; limit: number }
+  | { kind: 'error'; message: string };
+
+/**
+ * Resolve the daily limit for action=check-budget.
+ *
+ * The argument is optional: when omitted (the heartbeat cost-check path calls it
+ * with no argument), the limit falls back to the configured budget
+ * (`SUDO_DAILY_BUDGET_USD`, via {@link dailyBudgetUsd}). When that budget is
+ * disabled (the off/0 sentinel), the result is `disabled` so callers report
+ * "budget disabled" rather than erroring — this is what stops the heartbeat from
+ * failing every tick and tripping the doom-loop detector.
+ *
+ * An explicit argument wins and is accepted as a number or a numeric string;
+ * only genuinely non-numeric or negative values are rejected.
+ */
+export function resolveDailyLimit(rawLimit: unknown): BudgetLimitResolution {
+  const isEmpty =
+    rawLimit === undefined ||
+    rawLimit === null ||
+    (typeof rawLimit === 'string' && rawLimit.trim() === '');
+
+  if (isEmpty) {
+    return dailyBudgetDisabled()
+      ? { kind: 'disabled' }
+      : { kind: 'limit', limit: dailyBudgetUsd() };
+  }
+
+  const coerced = typeof rawLimit === 'number' ? rawLimit : Number(rawLimit);
+  if (!Number.isFinite(coerced) || coerced < 0) {
+    return { kind: 'error', message: `dailyLimit must be a non-negative number. Got: ${String(rawLimit)}` };
+  }
+  return { kind: 'limit', limit: coerced };
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +103,9 @@ export const costTrackerTool: ToolDefinition = {
     },
     dailyLimit: {
       type: 'number',
-      description: 'For action=check-budget: daily USD budget to compare against (e.g. 5.00).',
+      description: 'For action=check-budget: daily USD budget to compare against (e.g. 5.00). '
+        + 'Optional — when omitted, falls back to the configured SUDO_DAILY_BUDGET_USD; if the '
+        + 'budget is disabled, the check reports "budget disabled" instead of failing.',
     },
   },
 
@@ -162,15 +203,27 @@ export const costTrackerTool: ToolDefinition = {
         }
 
         case 'check-budget': {
-          const rawLimit = params['dailyLimit'];
-          if (rawLimit === undefined || rawLimit === null) {
-            return { success: false, output: 'dailyLimit is required for check-budget (e.g. dailyLimit: 5.00).' };
-          }
-          if (typeof rawLimit !== 'number' || rawLimit < 0) {
-            return { success: false, output: `dailyLimit must be a non-negative number. Got: ${String(rawLimit)}` };
+          const resolved = resolveDailyLimit(params['dailyLimit']);
+
+          if (resolved.kind === 'error') {
+            return { success: false, output: resolved.message };
           }
 
-          const status = tracker.checkBudget(rawLimit);
+          // Budget disabled (no limit set / off sentinel): report spend, never fail.
+          // The heartbeat cost-check calls this with no argument, so an error here
+          // recurs every tick and trips the doom-loop detector.
+          if (resolved.kind === 'disabled') {
+            const { total } = tracker.getTodayCost();
+            const output = [
+              'Daily budget: disabled (no limit set)',
+              `  Spent today: ${usd(total)}`,
+              '  Set SUDO_DAILY_BUDGET_USD to a positive number to enforce a cap.',
+            ].join('\n');
+            logger.info({ disabled: true, current: total }, 'cost-tracker budget check (disabled)');
+            return { success: true, output, data: { disabled: true, current: total, limit: null, exceeded: false } };
+          }
+
+          const status = tracker.checkBudget(resolved.limit);
           const verb   = status.exceeded ? 'EXCEEDED' : 'within limit';
           const output = [
             `Daily budget: ${verb}`,
