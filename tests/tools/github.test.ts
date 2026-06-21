@@ -16,7 +16,7 @@ const { runCmdMock } = vi.hoisted(() => ({ runCmdMock: vi.fn() }));
 vi.mock('../../src/core/tools/builtin/system/exec.js', () => ({ runCmd: runCmdMock }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  return { ...actual, mkdirSync: vi.fn(), writeFileSync: vi.fn() };
+  return { ...actual, mkdirSync: vi.fn(), writeFileSync: vi.fn(), readFileSync: vi.fn(actual.readFileSync) };
 });
 
 import {
@@ -25,11 +25,13 @@ import {
   githubMergePrTool,
   githubPrStatusTool,
   githubOpenPrTool,
+  githubReadFileTool,
+  githubVerifyTool,
   gitHubToolsEnabled,
 } from '../../src/core/tools/builtin/github/github.js';
 import { registerGitHubTools } from '../../src/core/tools/builtin/github/index.js';
 import type { ToolContext } from '../../src/core/tools/types.js';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 
 const ctx: ToolContext = { sessionId: 't', workingDir: '/repo', config: {}, logger: {} };
 const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
@@ -59,6 +61,7 @@ beforeEach(() => {
   runCmdMock.mockReset();
   vi.mocked(writeFileSync).mockClear();
   vi.mocked(mkdirSync).mockClear();
+  vi.mocked(readFileSync).mockClear();
   delete process.env['SUDO_GITHUB_TOOLS'];
 });
 
@@ -80,7 +83,7 @@ describe('github tools — enablement & registration', () => {
     const reg = { register: vi.fn() };
     registerGitHubTools(reg as never);
     expect(reg.register).toHaveBeenCalledTimes(GITHUB_TOOLS.length);
-    expect(GITHUB_TOOLS.length).toBe(5);
+    expect(GITHUB_TOOLS.length).toBe(7);
   });
 });
 
@@ -182,6 +185,75 @@ describe('github.commit — branch + files', () => {
     expect(res.success).toBe(false);
     expect(res.output).toMatch(/won't commit directly on|protected branch/i);
     expect(runCmdMock.mock.calls.some((c) => c[1][0] === 'commit')).toBe(false);
+  });
+
+  it('applies targeted edits (find/replace) to an existing file', async () => {
+    vi.mocked(readFileSync).mockReturnValueOnce('export const N = 1;\n');
+    route((bin, args) => {
+      if (args[0] === 'checkout' && args[1] === '-B') return ok('');
+      if (args[0] === 'diff' && args[1] === '--cached') return ok('src/x.ts');
+      if (args[0] === 'commit') return ok('');
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return ok('abc1234');
+      if (args[0] === 'rev-parse') return ok('feat/edit');
+      return ok('');
+    });
+    const res = await githubCommitTool.execute(
+      { message: 'm', cwd: '/repo', branch: 'feat/edit', files: [{ path: 'src/x.ts', edits: [{ find: 'N = 1', replace: 'N = 2' }] }] },
+      ctx,
+    );
+    expect(res.success).toBe(true);
+    const wrote = vi.mocked(writeFileSync).mock.calls.find((c) => String(c[0]).endsWith('src/x.ts'));
+    expect(wrote?.[1]).toBe('export const N = 2;\n');
+  });
+
+  it('fails an edit whose find target is missing (no write)', async () => {
+    vi.mocked(readFileSync).mockReturnValueOnce('export const N = 1;\n');
+    route((bin, args) => (args[0] === 'checkout' && args[1] === '-B' ? ok('') : ok('')));
+    const res = await githubCommitTool.execute(
+      { message: 'm', cwd: '/repo', branch: 'feat/edit', files: [{ path: 'src/x.ts', edits: [{ find: 'NOT_THERE', replace: 'x' }] }] },
+      ctx,
+    );
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/edit target not found/i);
+    expect(vi.mocked(writeFileSync)).not.toHaveBeenCalled();
+  });
+});
+
+describe('github.read_file', () => {
+  it('reads a repo file (read-only)', async () => {
+    vi.mocked(readFileSync).mockReturnValueOnce('export const A = 1;\n');
+    const res = await githubReadFileTool.execute({ path: 'src/x.ts', cwd: '/repo' }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toContain('export const A = 1;');
+  });
+
+  it('refuses to read a protected path', async () => {
+    const res = await githubReadFileTool.execute({ path: 'config/.env', cwd: '/repo' }, ctx);
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/protected path/i);
+  });
+});
+
+describe('github.verify', () => {
+  it('reports lint PASS when tsc exits 0', async () => {
+    route((bin) => (bin.endsWith('tsc') ? ok('') : ok('')));
+    const res = await githubVerifyTool.execute({ cwd: '/repo' }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/lint.*PASS/i);
+  });
+
+  it('reports lint FAIL when tsc exits non-zero', async () => {
+    route((bin) => (bin.endsWith('tsc') ? err('error TS1234', 2) : ok('')));
+    const res = await githubVerifyTool.execute({ cwd: '/repo' }, ctx);
+    expect(res.success).toBe(false);
+    expect(res.output).toMatch(/lint.*FAIL/i);
+  });
+
+  it('runs the test suite when tests=true', async () => {
+    route(() => ok(''));
+    const res = await githubVerifyTool.execute({ cwd: '/repo', tests: true }, ctx);
+    expect(res.success).toBe(true);
+    expect(runCmdMock.mock.calls.some((c) => String(c[0]).endsWith('vitest'))).toBe(true);
   });
 });
 
