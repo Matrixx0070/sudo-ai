@@ -484,6 +484,24 @@ describe('github CI auto-fix loop', () => {
     expect(res.output).toContain('error TS9999');
     expect(res.output).toMatch(/github\.fix_ci again/);
   });
+
+  it('waits through a transient empty rollup (just-opened PR) then reports green', async () => {
+    process.env['SUDO_GITHUB_CI_POLL_MS'] = '0';
+    let v = 0;
+    runCmdMock.mockImplementation((bin: string, args: string[]) => {
+      if (bin === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        v++;
+        return Promise.resolve(v < 2
+          ? prView({ statusCheckRollup: [] })  // run not registered yet
+          : prView({ statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }] }));
+      }
+      return Promise.resolve(ok(''));
+    });
+    const res = await githubFixCiTool.execute({}, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/GREEN/);
+    expect(v).toBeGreaterThan(1); // polled past the empty rollup instead of returning 'none'
+  });
 });
 
 describe('github.autopilot (ship-loop)', () => {
