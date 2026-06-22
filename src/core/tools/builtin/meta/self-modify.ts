@@ -13,7 +13,7 @@
  *   edit-config — Set a key in config/sudo-ai.json5 (key-value shorthand)
  *   build       — Run `npm run build` (compile TypeScript)
  *   test        — Run the vitest suite (optional testTarget to scope it)
- *   restart     — Restart the SUDO-AI systemd service
+ *   restart     — Restart the live SUDO-AI service (pm2; SUDO_RESTART_CMD override)
  *   full-cycle  — edit-file + build + test + restart in one shot (most common)
  *   history     — Show last 20 modifications from the modification log
  *
@@ -27,7 +27,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync, execFileSync, spawn } from 'node:child_process';
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
   appendFileSync, copyFileSync, realpathSync,
@@ -44,7 +44,6 @@ const SRC_DIR    = path.join(PROJECT_ROOT, 'src');
 const CONFIG_FILE = path.join(PROJECT_ROOT, 'config', 'sudo-ai.json5');
 const MOD_LOG    = path.join(DATA_DIR, 'self-modify.log');
 const BACKUP_DIR = path.join(DATA_DIR, 'file-backups');
-const SERVICE    = 'sudo-ai';
 const MAX_OUTPUT = 3000;
 
 // ---------------------------------------------------------------------------
@@ -345,21 +344,50 @@ function doBuild(): ToolResult {
   };
 }
 
+/**
+ * The command that restarts the live SUDO-AI service. Defaults to the pm2
+ * ecosystem-file form — correct for this deployment (the daemon runs as
+ * `sudo-ai-v5` under pm2; `sudo-ai.service` is masked) AND it reloads the
+ * ecosystem env, so a restart can't silently drop keys like
+ * SUDO_DAILY_BUDGET_USD via a stale pm2 dump. Override with SUDO_RESTART_CMD
+ * for other deployments. Exported for unit testing.
+ */
+export function restartCommand(): string {
+  const override = process.env['SUDO_RESTART_CMD'];
+  if (override && override.trim()) return override.trim();
+  return 'pm2 restart ecosystem.config.cjs --only sudo-ai-v5 --update-env';
+}
+
 function doRestart(): ToolResult {
   if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
     return { success: false, output: 'meta.self-modify restart is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
-  logger.info('Restarting sudo-ai service');
-  logMod('restart', 'service restart initiated');
-  run(`systemctl restart ${SERVICE}`, 30_000);
-  // Give it 2s then check
-  execSync('sleep 2');
-  const status = run(`systemctl is-active ${SERVICE}`, 5_000);
-  const ok = status.trim() === 'active';
+  const cmd = restartCommand();
+  logger.info({ cmd }, 'Scheduling self-restart');
+  logMod('restart', `scheduled: ${cmd}`);
+
+  // A self-restart kills THIS process, so the restart must outlive us: spawn a
+  // DETACHED child that waits a few seconds (letting this tool's result flush to
+  // the user) then restarts the service. We cannot synchronously confirm success
+  // — by the time pm2 bounces us, this process is gone.
+  try {
+    const child = spawn('sh', ['-c', `sleep 3; ${cmd}`], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: PROJECT_ROOT,
+      env: process.env,
+    });
+    child.unref();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logMod('restart', `FAILED to schedule: ${msg}`);
+    return { success: false, output: `Failed to schedule restart: ${msg}`, data: { cmd } };
+  }
+
   return {
-    success: ok,
-    output: ok ? 'Service restarted successfully — SUDO-AI is back online.' : `Restart may have failed. Status: ${status}`,
-    data: { status },
+    success: true,
+    output: `Restart scheduled via \`${cmd}\` (in ~3s). SUDO-AI will go offline briefly and come back on the new code — reconnect after a few seconds.`,
+    data: { scheduled: true, cmd },
   };
 }
 
