@@ -1395,6 +1395,39 @@ export async function escalateCompaction(
   }
 }
 
+/**
+ * Digest the file-mutating tool calls made so far in the current turn, so a long
+ * turn whose early edits were evicted by the sliding window can still see what
+ * it already did. Returns a deduped list of human-readable "path (tool action)"
+ * labels, newest occurrence kept once. Empty when the turn changed no files.
+ */
+export function extractTurnMutations(
+  turnMsgs: Array<{ role: string; toolCalls?: Array<{ name: string; arguments?: Record<string, unknown> }> }>,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of turnMsgs) {
+    if (m.role !== 'assistant' || !m.toolCalls) continue;
+    for (const tc of m.toolCalls) {
+      const name = tc.name ?? '';
+      const args = tc.arguments ?? {};
+      const action = typeof args['action'] === 'string' ? (args['action'] as string) : '';
+      const isMutation =
+        /write-file|smart-edit|apply-patch|create-file|edit-file/.test(name) ||
+        (name === 'meta.self-modify' && /edit-file|write-file|edit-config|full-cycle/.test(action)) ||
+        (/github/.test(name) && /commit|push|open_pr/.test(name));
+      if (!isMutation) continue;
+      const rawPath = args['path'] ?? args['filePath'] ?? args['file'];
+      const label = typeof rawPath === 'string' && rawPath ? rawPath : (action || name);
+      const key = `${name}:${label}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(`${label} (${name}${action ? ` ${action}` : ''})`);
+    }
+  }
+  return out;
+}
+
 export async function prepareMessages(
   brain: BrainLike,
   session: SessionLike,
@@ -1514,6 +1547,30 @@ export async function prepareMessages(
   const currentUserMsg = [...nonSystemMsgs].reverse().find(m => m.role === 'user');
   if (currentUserMsg && !windowedNonSystem.includes(currentUserMsg)) {
     windowedNonSystem = [currentUserMsg, ...windowedNonSystem];
+  }
+  // LONG-TURN WORK ANCHOR: a turn with many tool calls evicts the agent's OWN
+  // earlier file edits from the window, so it can lose track of work it already
+  // did and disown it ("none of those files exist / no change was made") then
+  // stop. When the window actually dropped messages, surface a compact digest
+  // of the file-mutating actions taken THIS turn so the agent continues from
+  // its work (verify/test/commit) instead of restarting or abandoning it.
+  if (nonSystemMsgs.length > WINDOW_SIZE) {
+    const turnStart = currentUserMsg ? nonSystemMsgs.indexOf(currentUserMsg) : -1;
+    const turnMsgs = turnStart >= 0 ? nonSystemMsgs.slice(turnStart + 1) : nonSystemMsgs;
+    const mutations = extractTurnMutations(turnMsgs);
+    if (mutations.length > 0) {
+      const digest: BrainMessage = {
+        role: 'system',
+        content:
+          '[Work you have ALREADY done earlier in THIS turn — continue from it, do not repeat or disown it]\n'
+          + 'Files you have changed this turn (real edits, on disk):\n'
+          + mutations.map(m => `- ${m}`).join('\n')
+          + '\nVerify/test/commit these as the next step; do NOT conclude the task is unstarted.',
+      };
+      // Insert right after the retained user instruction so it reads as turn context.
+      const insertAt = windowedNonSystem[0] === currentUserMsg ? 1 : 0;
+      windowedNonSystem.splice(insertAt, 0, digest);
+    }
   }
   // Keep the FIRST system message (any durable session-level header) PLUS the
   // most RECENT system guidance. The old `slice(0, 2)` kept the OLDEST two: in a
