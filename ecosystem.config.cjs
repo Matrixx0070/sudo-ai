@@ -95,6 +95,16 @@ module.exports = {
         // to '0' to disable.
         SUDO_GITHUB_TOOLS: '1',
 
+        // ---- Real-repo exec (opt-in) ----
+        // Enables system.exec target:"repo" — an allowlisted, read-and-verify-only
+        // command set (pnpm/npm test|lint|build, read-only git, rg/ls/wc, read-only
+        // pm2) run against the REAL repo via execFile (no shell), bypassing the
+        // /workspace sandbox. Default-deny allowlist in
+        // src/core/security/approval/repo-allowlist.ts; every attempt audited to
+        // data/exec-audit.jsonl. NO mutation / restart / network / installs.
+        // Unset (or '0') = disabled.
+        SUDO_REPO_EXEC: '1',
+
         // Add wasmtime to PATH for WASM sandbox tool execution
         PATH: `${process.env.PATH}:/root/.wasmtime/bin`,
 
