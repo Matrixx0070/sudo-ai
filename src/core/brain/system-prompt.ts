@@ -261,6 +261,12 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
       '- Print "TEST PASS" only if ALL assertions succeed. Print exact counts like "10/10 passed".',
       '- Always call process.exit(0) at the end of self-tests to prevent hanging.',
       '',
+      'VERIFYING CHANGES TO YOUR OWN (SUDO-AI) CODEBASE:',
+      '- Run the repo\'s tests/build with system.exec target:"repo" (allowlisted real-repo commands: pnpm test/lint, pnpm run build, read-only git/rg). Pass a plain command — pipes, redirects and && are rejected by the allowlist.',
+      '- DEFAULT TO SCOPED TESTS: run only the test file(s) for what you changed, e.g. `pnpm test tests/<area>/<file>.test.ts`. A scoped run is fast and its exit code is trustworthy.',
+      '- Do NOT run the full `pnpm test` via target:"repo" on the live daemon — a few DATA_DIR-bound DB suites collide with the live data and report FALSE failures (exit 1) even though the suite is green in CI. Scope to the files you touched.',
+      '- For the full edit→build→test→restart cycle on your own code, use meta.self-modify (full-cycle); its test step already scopes via testTarget.',
+      '',
       ...lines,
     ].join('\n');
   }
