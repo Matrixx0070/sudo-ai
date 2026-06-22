@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { checkRepoCommand, repoExecEnabled } from '../../src/core/security/approval/repo-allowlist.js';
+import { checkRepoCommand, repoExecEnabled, repoExecEnv } from '../../src/core/security/approval/repo-allowlist.js';
 
 describe('checkRepoCommand — allowed read/verify commands', () => {
   it.each([
@@ -108,6 +108,39 @@ describe('checkRepoCommand — refuses path traversal / absolute paths', () => {
   it('refuses empty / whitespace', () => {
     expect(checkRepoCommand('').allowed).toBe(false);
     expect(checkRepoCommand('   ').allowed).toBe(false);
+  });
+});
+
+describe('repoExecEnv — strips the daemon prod runtime env', () => {
+  const base = {
+    PATH: '/usr/bin:/bin',
+    HOME: '/root',
+    NODE_ENV: 'production',
+    GATEWAY_PORT: '18900',
+    GATEWAY_TOKEN: 'secret',
+    WEB_CHAT_ENABLED: 'true',
+    WEB_CHAT_TOKEN: 'tok',
+    WEB_CHAT_ALLOWED_ORIGINS: 'http://x',
+    SUDO_AI_CORS_ORIGINS: 'http://x',
+    SUDO_REPO_EXEC: '1',
+  } as NodeJS.ProcessEnv;
+
+  it('removes NODE_ENV and the web/gateway runtime keys', () => {
+    const env = repoExecEnv(base);
+    for (const k of ['NODE_ENV', 'GATEWAY_PORT', 'GATEWAY_TOKEN', 'WEB_CHAT_ENABLED', 'WEB_CHAT_TOKEN', 'WEB_CHAT_ALLOWED_ORIGINS', 'SUDO_AI_CORS_ORIGINS']) {
+      expect(env[k]).toBeUndefined();
+    }
+  });
+
+  it('keeps the base shell env so binaries still resolve', () => {
+    const env = repoExecEnv(base);
+    expect(env['PATH']).toBe('/usr/bin:/bin');
+    expect(env['HOME']).toBe('/root');
+  });
+
+  it('does not mutate the input env', () => {
+    repoExecEnv(base);
+    expect(base['NODE_ENV']).toBe('production');
   });
 });
 

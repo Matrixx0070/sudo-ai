@@ -441,7 +441,7 @@ export const execTool: ToolDefinition = {
       const repoTimeout =
         typeof params['timeout'] === 'number' && params['timeout'] > 0
           ? Math.min(params['timeout'], 300_000)
-          : 180_000;
+          : 240_000; // a full `pnpm test` runs ~2.5min; 180s would clip it into a timeout
       return runRepoTarget(command, repoTimeout, ctx.sessionId, ctx.signal);
     }
 
