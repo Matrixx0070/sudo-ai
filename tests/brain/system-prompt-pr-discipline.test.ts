@@ -35,6 +35,15 @@ describe('system prompt — PR discipline', () => {
     expect(prompt).toContain('is not a complete report');
   });
 
+  it('pushes the atomic ship path and forbids stopping after verify', async () => {
+    const prompt = await assembleSystemPrompt({});
+    // Single-call branch+commit (atomic ship), not a fragile multi-step sequence.
+    expect(prompt).toContain('github.commit({branch:"feature/<name>", message})');
+    // Anti-stop nudge — round 7 verified its work then stopped before shipping.
+    expect(prompt).toContain('do NOT stop after verifying');
+    expect(prompt).toContain('a green-but-unshipped change is NOT done');
+  });
+
   it('keeps the PR-discipline guidance above the cache boundary', async () => {
     process.env['SUDO_PROMPT_CACHE'] = '1';
     const prompt = await assembleSystemPrompt({});

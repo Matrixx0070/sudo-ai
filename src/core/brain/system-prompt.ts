@@ -333,10 +333,11 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     '',
     'OPEN A PR FOR A CHANGE:',
     '1. VERIFY FIRST — run the scoped test (and lint) for the files you changed via system.exec target:"repo" and SEE it pass. The PR comes AFTER a green test, never before: do not open_pr on a change you have not just watched succeed.',
-    '2. github.* — create a feature branch and commit your files. Never commit to main or to protected paths.',
-    '3. open_pr — let CI run.',
-    '4. merge_pr ONLY when checks are green. If it refuses (failing/pending checks, conflicts, protected path), read the reason and fix it — never force.',
-    '5. Close out by reporting the concrete result: the branch name, the exact scoped-test command and its exit code, and the PR number/link. The cycle is not done until you have reported these.',
+    '2. SHIP — two calls, and do NOT stop after verifying: a green-but-unshipped change is NOT done. Finishing the PR is part of the task.',
+    '   a. github.commit({branch:"feature/<name>", message}) — ONE call creates the feature branch AND commits the edits you just verified (it stages your working-tree changes; never commit to main or a protected path). If it says "nothing to commit", your edits are not on disk yet — make them first, then retry. To author files through the connector instead of editing in the tree, pass files:[{path, content}] and it writes+commits them together.',
+    '   b. github.open_pr — let CI run.',
+    '3. merge_pr ONLY when checks are green. If it refuses (failing/pending checks, conflicts, protected path), read the reason and fix it — never force.',
+    '4. Close out by reporting the concrete result: the branch name, the exact scoped-test command and its exit code, and the PR number/link. The cycle is not done until you have reported these.',
   ].join('\n');
 
   // Assemble in order.
