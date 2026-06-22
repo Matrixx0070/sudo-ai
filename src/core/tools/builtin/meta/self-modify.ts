@@ -180,16 +180,31 @@ function backup(filePath: string): string {
 // Action implementations
 // ---------------------------------------------------------------------------
 
-function doReadFile(rawPath: string): ToolResult {
+// Whole file by default; an unbounded read of a very large file pages from
+// the END (never the middle) so the agent always sees a contiguous, editable
+// slice. The 3000-char `trim()` cap is for command OUTPUT (find/grep/build) —
+// applying it to a source file you intend to edit gutted the middle and drove
+// a re-read loop, so reads are paginated by line instead.
+const READ_DEFAULT_MAX_LINES = 500;
+
+export function doReadFile(rawPath: string, offset = 1, limit?: number): ToolResult {
   const abs = resolveProjectPath(rawPath);
   if (!abs) return { success: false, output: `Path traversal blocked: ${rawPath}` };
   if (!existsSync(abs)) return { success: false, output: `File not found: ${abs}` };
   const content = readFileSync(abs, 'utf-8');
-  const lines = content.split('\n').length;
+  const allLines = content.split('\n');
+  const totalLines = allLines.length;
+  const startIdx = Math.max(0, offset - 1);
+  const endIdx = Math.min(totalLines, startIdx + (limit ?? READ_DEFAULT_MAX_LINES));
+  const sliced = allLines.slice(startIdx, endIdx);
+  const truncated = endIdx < totalLines;
+  const footer = truncated
+    ? `\n[Showing lines ${startIdx + 1}–${endIdx} of ${totalLines}. Pass offset=${endIdx + 1} to read more.]`
+    : '';
   return {
     success: true,
-    output: `--- ${abs} (${lines} lines) ---\n${trim(content)}`,
-    data: { path: abs, lines, size: content.length },
+    output: `--- ${abs} (${totalLines} lines) ---\n${sliced.join('\n')}${footer}`,
+    data: { path: abs, lines: totalLines, size: content.length, offset: startIdx + 1, linesReturned: sliced.length, truncated },
   };
 }
 
@@ -472,6 +487,17 @@ export const selfModifyTool: ToolDefinition = {
       required: false,
       description: `File path relative to ${PROJECT_ROOT}/ or absolute. Used by: read-file, edit-file, write-file, full-cycle.`,
     },
+    offset: {
+      type: 'number',
+      required: false,
+      description: '1-based line to start reading from. Used by: read-file. Default: 1.',
+    },
+    limit: {
+      type: 'number',
+      required: false,
+      description: 'Max lines to return (read-file). Default: 500. The whole file is returned when shorter; '
+        + 'for a longer file, page through it with offset — reads are never truncated in the middle.',
+    },
     pattern: {
       type: 'string',
       required: false,
@@ -532,7 +558,11 @@ export const selfModifyTool: ToolDefinition = {
     try {
       switch (action) {
         case 'read-file':
-          return doReadFile((params['path'] as string | undefined) ?? '');
+          return doReadFile(
+            (params['path'] as string | undefined) ?? '',
+            params['offset'] as number | undefined,
+            params['limit'] as number | undefined,
+          );
 
         case 'find-file':
           return doFindFile((params['pattern'] as string | undefined) ?? '*');
