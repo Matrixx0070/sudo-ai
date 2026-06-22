@@ -380,7 +380,29 @@ export const githubOpenPrTool: ToolDefinition = {
       const num = Number(url.match(/\/pull\/(\d+)/)?.[1] ?? 0);
       logger.info({ branch, base, num, url, session: ctx.sessionId }, 'github.open_pr');
       auditGitHub({ action: 'open_pr', session: ctx.sessionId, ok: true, data: { number: num, branch, base } });
-      return { success: true, output: `Opened PR #${num}: ${url}`, data: { number: num, url, branch, base } };
+
+      // Hygiene: the ship cycle is complete — the feature branch and its commit
+      // are pushed to origin and the PR is open — so return the working tree to
+      // the base branch. This un-strands the (often shared) checkout from the
+      // feature branch and stops the NEXT commit({branch}) from branching off
+      // this one (unintended stacked parents in the next PR). Skip when the tree
+      // is dirty so no uncommitted work is lost; non-fatal — a failure here does
+      // not undo the PR that was just opened.
+      let restoredTo: string | undefined;
+      try {
+        const dirty = (await git(['status', '--porcelain'], cwd, ctx.signal)).stdout.trim();
+        if (!dirty && branch !== base) {
+          const back = await git(['checkout', base], cwd, ctx.signal);
+          if (back.exitCode === 0) {
+            restoredTo = base;
+            logger.info({ base, session: ctx.sessionId }, 'open_pr: restored working tree to base');
+          }
+        }
+      } catch (e) {
+        logger.warn({ err: String(e), session: ctx.sessionId }, 'open_pr: base-restore skipped (non-fatal)');
+      }
+
+      return { success: true, output: `Opened PR #${num}: ${url}`, data: { number: num, url, branch, base, restoredTo } };
     } catch (err) {
       return fail(`github.open_pr error: ${err instanceof Error ? err.message : String(err)}`);
     }

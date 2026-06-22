@@ -638,4 +638,31 @@ describe('github.open_pr', () => {
     expect(res.success).toBe(false);
     expect(res.output).toMatch(/feature branch/i);
   });
+
+  it('restores the working tree to base after opening the PR (un-strand)', async () => {
+    const calls: string[] = [];
+    route((bin, args) => {
+      calls.push(`${bin} ${args.join(' ')}`);
+      if (bin === 'git' && args[0] === 'rev-parse') return ok('feature/x');
+      if (bin === 'git' && args[0] === 'status') return ok(''); // clean tree
+      if (bin === 'gh' && args[0] === 'pr') return ok('https://github.com/o/r/pull/88');
+      return ok('');
+    });
+    const res = await githubOpenPrTool.execute({ title: 'x', base: 'main' }, ctx);
+    expect(res.success).toBe(true);
+    expect((res.data as { restoredTo?: string }).restoredTo).toBe('main');
+    expect(calls).toContain('git checkout main');
+  });
+
+  it('does NOT restore when the tree is dirty (never loses uncommitted work)', async () => {
+    route((bin, args) => {
+      if (bin === 'git' && args[0] === 'rev-parse') return ok('feature/x');
+      if (bin === 'git' && args[0] === 'status') return ok(' M keep.ts'); // dirty
+      if (bin === 'gh' && args[0] === 'pr') return ok('https://github.com/o/r/pull/89');
+      return ok('');
+    });
+    const res = await githubOpenPrTool.execute({ title: 'x', base: 'main' }, ctx);
+    expect(res.success).toBe(true);
+    expect((res.data as { restoredTo?: string }).restoredTo).toBeUndefined();
+  });
 });
