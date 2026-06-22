@@ -1497,6 +1497,17 @@ export async function prepareMessages(
   if (firstNonOrphan > 0) {
     windowedNonSystem = windowedNonSystem.slice(firstNonOrphan);
   }
+  // Always retain the CURRENT turn's user instruction. A turn with many tool
+  // calls produces more than WINDOW_SIZE assistant/tool messages, so the
+  // slice(-WINDOW_SIZE) above evicts the user message that STARTED the turn —
+  // leaving the model with no instruction. It then concludes "no instruction
+  // came through" and stops (observed on a real web turn: 16 non-system
+  // messages, user message dropped). If the most recent user message fell
+  // outside the window, prepend it so the instruction always survives.
+  const currentUserMsg = [...nonSystemMsgs].reverse().find(m => m.role === 'user');
+  if (currentUserMsg && !windowedNonSystem.includes(currentUserMsg)) {
+    windowedNonSystem = [currentUserMsg, ...windowedNonSystem];
+  }
   // Keep the FIRST system message (any durable session-level header) PLUS the
   // most RECENT system guidance. The old `slice(0, 2)` kept the OLDEST two: in a
   // multi-turn session, ephemeral per-turn guidance (auto-plan's PLAN, the
