@@ -47,9 +47,9 @@ interface YTAnalyticsResponse {
 export function parseDuration(iso: string): number {
   const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
   if (!m) return 0;
-  return (parseInt(m[1] ?? '0') * 3600) +
-         (parseInt(m[2] ?? '0') * 60) +
-         parseInt(m[3] ?? '0');
+  return (parseInt(m[1] ?? '0', 10) * 3600) +
+         (parseInt(m[2] ?? '0', 10) * 60) +
+         parseInt(m[3] ?? '0', 10);
 }
 
 async function fetchJson<T>(url: string, label: string, headers?: Record<string, string>): Promise<T> {
@@ -97,9 +97,9 @@ export async function fetchVideoStats(
         videoId: item.id,
         title: item.snippet?.title ?? 'Unknown',
         publishedAt: item.snippet?.publishedAt ?? '',
-        views: parseInt(item.statistics?.viewCount ?? '0'),
-        likes: parseInt(item.statistics?.likeCount ?? '0'),
-        comments: parseInt(item.statistics?.commentCount ?? '0'),
+        views: parseInt(item.statistics?.viewCount ?? '0', 10),
+        likes: parseInt(item.statistics?.likeCount ?? '0', 10),
+        comments: parseInt(item.statistics?.commentCount ?? '0', 10),
         estimatedMinutesWatched: 0,
         averageViewDuration: 0,
         averageViewPercentage: 0,
