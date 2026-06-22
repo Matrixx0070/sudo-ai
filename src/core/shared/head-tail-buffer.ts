@@ -22,7 +22,8 @@
  * This buffer operates on JavaScript string length (UTF-16 code units), not raw
  * bytes, because its primary consumer is model-facing tool output measured
  * against a token budget. It never splits in the middle of a surrogate pair when
- * trimming the tail ring, so rendered output is always valid UTF-16.
+ * trimming either the head cut or the tail ring, so rendered output is always
+ * valid UTF-16.
  *
  * Memory
  * ------
@@ -58,6 +59,18 @@ function keepLast(s: string, max: number): string {
   const code = s.charCodeAt(start);
   if (code >= 0xdc00 && code <= 0xdfff) start += 1;
   return s.slice(start);
+}
+
+/**
+ * Largest cut index `<= max` that does not split a surrogate pair, i.e. never
+ * leaves a lone high surrogate as the last retained code unit. Mirrors
+ * `keepLast` for the head side of the buffer.
+ */
+function safeHeadCut(s: string, max: number): number {
+  if (max >= s.length) return s.length;
+  const last = s.charCodeAt(max - 1);
+  // A high surrogate at the boundary would be split from its low half — step back.
+  return last >= 0xd800 && last <= 0xdbff ? max - 1 : max;
 }
 
 /**
@@ -100,8 +113,9 @@ export class HeadTailBuffer {
         this.head += chunk;
         return;
       }
-      this.head += chunk.slice(0, room);
-      chunk = chunk.slice(room);
+      const cut = safeHeadCut(chunk, room);
+      this.head += chunk.slice(0, cut);
+      chunk = chunk.slice(cut);
     }
 
     // Everything past the head feeds the rolling tail.

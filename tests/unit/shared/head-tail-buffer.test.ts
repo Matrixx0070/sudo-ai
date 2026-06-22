@@ -9,6 +9,21 @@
 import { describe, it, expect } from 'vitest';
 import { HeadTailBuffer, clampHeadTail, clampToolOutput } from '../../../src/core/shared/head-tail-buffer.js';
 
+/** True if `s` contains a lone (unpaired) UTF-16 surrogate code unit. */
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true; // high not followed by low
+      i++; // valid pair — skip the low half
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return true; // low with no preceding high
+    }
+  }
+  return false;
+}
+
 describe('HeadTailBuffer', () => {
   it('returns content unchanged when it fits within head+tail budget', () => {
     const buf = new HeadTailBuffer({ headBudget: 10, tailBudget: 10 });
@@ -67,6 +82,18 @@ describe('HeadTailBuffer', () => {
     expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
     // The whole tail round-trips as well-formed (one full emoji)
     expect([...tail].length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('never splits a surrogate pair at the head cut', () => {
+    // headBudget=2 lands the cut between the high/low halves of the first 😀.
+    // A long push forces a mid-string drop, so the head is separated from the
+    // tail by the elision marker — without the guard the head would end in a
+    // lone high surrogate (concatenation would otherwise re-join and hide it).
+    const buf = new HeadTailBuffer({ headBudget: 2, tailBudget: 2, elisionMarker: '|CUT|' });
+    buf.push('A😀BBBBBBBBBB'); // A + 😀(2 units) + B… ; cut at 2 splits the emoji
+    const out = buf.toString();        // head + "\n" + marker + "\n" + tail
+    expect(hasLoneSurrogate(out)).toBe(false);          // well-formed UTF-16
+    expect(out.startsWith('A\n|CUT|\n')).toBe(true);    // stepped back to keep just 'A'
   });
 
   it('handles a zero-length head budget (tail-only)', () => {
