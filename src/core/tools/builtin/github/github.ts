@@ -186,8 +186,9 @@ export const githubCommitTool: ToolDefinition = {
   description:
     'Stage and commit changes in a git repo. Optionally create/switch to `branch` first, and write `files` '
     + '([{path,content}]) into the repo before committing (only those files are staged); otherwise stages all '
-    + 'changes (or only `paths`). Refuses if there is nothing to commit. Returns the new commit SHA + branch. '
-    + 'Use branch+files together to author a change for a new PR.',
+    + 'changes (or only `paths`). Your edits must exist before you commit: either pass `files` to write+commit in one '
+    + 'call, or make the edits first — committing a clean tree is refused (with guidance to recover). Returns the new '
+    + 'commit SHA + branch. Use branch+files together to author a change for a new PR.',
   category: 'github',
   safety: 'destructive',
   timeout: DEFAULT_TIMEOUT_MS,
@@ -281,7 +282,13 @@ export const githubCommitTool: ToolDefinition = {
         await git(['reset', '-q'], cwd, ctx.signal); // unstage everything; working tree untouched
         return deny(`Refused — staged changes include protected path(s): ${stagedHits.join(', ')}`);
       }
-      if (stagedList.length === 0) return deny('Nothing to commit — working tree clean.');
+      if (stagedList.length === 0) {
+        return deny(
+          'Nothing to commit — no changes are staged (you likely called commit before your edits exist in the repo). '
+          + 'Do ONE of: (a) pass files:[{path, content}] (or {path, edits:[{find,replace}]}) to write AND commit in a single call — preferred when authoring a change for a new PR; '
+          + 'or (b) make your file edits first so they appear in `git status`, then call github.commit again.',
+        );
+      }
 
       const committed = await git(['commit', '-m', message], cwd, ctx.signal);
       if (committed.exitCode !== 0) return deny(`git commit failed: ${committed.stderr || committed.stdout}`);

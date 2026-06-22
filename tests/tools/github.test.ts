@@ -119,11 +119,15 @@ describe('github.commit', () => {
     expect((res.data as { branch: string }).branch).toBe('feature/x');
   });
 
-  it('refuses when the tree is clean', async () => {
+  it('refuses a clean tree with ACTIONABLE recovery guidance (not a dead-end)', async () => {
     route((bin, args) => (args[0] === 'status' ? ok('') : ok('')));
     const res = await githubCommitTool.execute({ message: 'msg' }, ctx);
     expect(res.success).toBe(false);
     expect(res.output).toMatch(/nothing to commit/i);
+    // The error must tell the agent how to recover — pass files, or edit first —
+    // so an early/out-of-order commit doesn't strand the change-cycle.
+    expect(res.output).toContain('files:[{path, content}]');
+    expect(res.output.toLowerCase()).toContain('make your file edits first');
   });
 
   it('fails when git commit errors', async () => {
