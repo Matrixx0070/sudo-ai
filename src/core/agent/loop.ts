@@ -32,6 +32,7 @@ import {
   runCompaction,
   executeToolCalls,
   prepareMessages,
+  dropPriorAlignmentAdvisories,
   trimSessionMessages,
   resolveSemanticPlanCap,
   semanticPlanAllowed,
@@ -2488,6 +2489,10 @@ export class AgentLoop extends AgentLoopInjections {
               const alignResult = this.alignmentAggregator.evaluate(signals);
               if (alignResult.level === 'RED' || alignResult.level === 'YELLOW') {
                 const msg = `[AlignmentAggregator] ${alignResult.diagnosis}`;
+                // This advisory is recomputed every iteration; collapse to the
+                // latest so repeated YELLOWs don't pile up near-duplicate system
+                // messages that crowd the window and bury the task instruction.
+                dropPriorAlignmentAdvisories(session.messages);
                 session.messages.push({ role: 'system', content: msg });
                 if (alignResult.level === 'RED') {
                   emit({ type: 'error', error: msg });

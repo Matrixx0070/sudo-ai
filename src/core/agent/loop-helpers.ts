@@ -1428,6 +1428,25 @@ export function extractTurnMutations(
   return out;
 }
 
+/**
+ * Remove, in place, any prior `[AlignmentAggregator]` advisory system messages.
+ * The owner-loyalty check runs every loop iteration and pushes a near-identical
+ * YELLOW/RED advisory each time; left to accumulate, those most-recent
+ * duplicates fill the system-message window (keptSystem = first + last two),
+ * evicting the turn's actual task guidance. Call this right before pushing a
+ * fresh advisory so at most one is ever in context — always the latest.
+ */
+export function dropPriorAlignmentAdvisories(
+  messages: Array<{ role: string; content?: unknown }>,
+): void {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[AlignmentAggregator]')) {
+      messages.splice(i, 1);
+    }
+  }
+}
+
 export async function prepareMessages(
   brain: BrainLike,
   session: SessionLike,
