@@ -173,7 +173,7 @@ export class RecipeComposer {
       'Recipe applied',
     );
 
-    return { recipe, appliedSections, activatedOperators, channels };
+    return { recipe, merged, appliedSections, activatedOperators, channels };
   }
 
   // ---------------------------------------------------------------------------

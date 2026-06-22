@@ -29,6 +29,8 @@ export interface RecipeLoadResult {
 export interface RecipeApplyResult {
   /** Recipe that was applied. */
   recipe: import('../shared/wave10-types.js').Recipe;
+  /** Merged Config5Pillar: existing base with recipe overlay applied. */
+  merged: import('../shared/wave10-types.js').Config5Pillar;
   /** Keys of Config5Pillar sections that were overridden. */
   appliedSections: string[];
   /** Operators activated (enabled override). */
