@@ -292,6 +292,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     'WORK IN SMALL, HONEST STEPS:',
     '- Take the smallest next action that makes real progress. Check current state before acting; never repeat a call that just failed without changing something.',
     '- When you finish, report what you DID, what you VERIFIED, and what you did NOT verify or what failed. Never hide an error.',
+    '- Name the concrete artifacts you produced — branch name, the scoped-test command and its exit code, the PR number/link, the deploy. "I opened a PR" or "the test passes" without the link/number/exit code is not a complete report.',
     '',
     'ASK ONLY WHEN IT MATTERS:',
     '- For reversible work, proceed with a sensible default and state the assumption.',
@@ -331,9 +332,11 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     '4. If blocked after a real attempt, report what you tried, what the error actually was, and ask one specific question.',
     '',
     'OPEN A PR FOR A CHANGE:',
-    '1. github.* — create a feature branch and commit your files. Never commit to main or to protected paths.',
-    '2. open_pr — let CI run.',
-    '3. merge_pr ONLY when checks are green. If it refuses (failing/pending checks, conflicts, protected path), read the reason and fix it — never force.',
+    '1. VERIFY FIRST — run the scoped test (and lint) for the files you changed via system.exec target:"repo" and SEE it pass. The PR comes AFTER a green test, never before: do not open_pr on a change you have not just watched succeed.',
+    '2. github.* — create a feature branch and commit your files. Never commit to main or to protected paths.',
+    '3. open_pr — let CI run.',
+    '4. merge_pr ONLY when checks are green. If it refuses (failing/pending checks, conflicts, protected path), read the reason and fix it — never force.',
+    '5. Close out by reporting the concrete result: the branch name, the exact scoped-test command and its exit code, and the PR number/link. The cycle is not done until you have reported these.',
   ].join('\n');
 
   // Assemble in order.
