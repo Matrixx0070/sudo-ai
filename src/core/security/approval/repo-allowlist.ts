@@ -154,14 +154,24 @@ const STRIP_ENV_KEYS: readonly string[] = [
 ];
 
 /**
- * Build the environment for a repo-exec command: the daemon's env minus the
- * deployment/runtime keys above, so commands (especially `pnpm test`) run in a
- * CI-like env. The base shell env (PATH/HOME/…) is kept so binaries resolve; the
- * toolchain then sets its own NODE_ENV (vitest → 'test'). Exported for testing.
+ * Build the environment for a repo-exec command so it runs CI-like, not in the
+ * daemon's production runtime. The base shell env (PATH/HOME/…) is kept so
+ * binaries resolve; the toolchain sets its own NODE_ENV (vitest → 'test'). We:
+ *   - drop the infra keys above (NODE_ENV, web/gateway config);
+ *   - drop ALL `SUDO_*` feature flags — tests assert clean defaults
+ *     (e.g. "disabled by default (env flag absent)"), so an enabled flag in the
+ *     daemon env makes them fail where CI passes.
+ * NOTE: DATA_DIR is intentionally left as-is. Unsetting it aborts a native
+ * module on process teardown (SIGABRT), and pinning it to one dir makes
+ * DATA_DIR-derived test DBs collide. Tests that key off DATA_DIR (the few
+ * DB-heavy suites) therefore aren't reliable via a FULL repo-exec run on a live
+ * box — run scoped/file-level tests instead.
+ * Exported for testing.
  */
 export function repoExecEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const k of STRIP_ENV_KEYS) delete env[k];
+  for (const k of Object.keys(env)) if (k.startsWith('SUDO_')) delete env[k];
   return env;
 }
 

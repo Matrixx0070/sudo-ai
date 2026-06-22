@@ -123,13 +123,27 @@ describe('repoExecEnv — strips the daemon prod runtime env', () => {
     WEB_CHAT_ALLOWED_ORIGINS: 'http://x',
     SUDO_AI_CORS_ORIGINS: 'http://x',
     SUDO_REPO_EXEC: '1',
+    SUDO_DAILY_BUDGET_USD: 'off',
+    DATA_DIR: '/root/sudo-ai-v4/data',
   } as NodeJS.ProcessEnv;
 
   it('removes NODE_ENV and the web/gateway runtime keys', () => {
     const env = repoExecEnv(base);
-    for (const k of ['NODE_ENV', 'GATEWAY_PORT', 'GATEWAY_TOKEN', 'WEB_CHAT_ENABLED', 'WEB_CHAT_TOKEN', 'WEB_CHAT_ALLOWED_ORIGINS', 'SUDO_AI_CORS_ORIGINS']) {
+    for (const k of ['NODE_ENV', 'GATEWAY_PORT', 'GATEWAY_TOKEN', 'WEB_CHAT_ENABLED', 'WEB_CHAT_TOKEN', 'WEB_CHAT_ALLOWED_ORIGINS']) {
       expect(env[k]).toBeUndefined();
     }
+  });
+
+  it('removes ALL SUDO_* feature flags (clean CI defaults)', () => {
+    const env = repoExecEnv(base);
+    expect(env['SUDO_REPO_EXEC']).toBeUndefined();
+    expect(env['SUDO_DAILY_BUDGET_USD']).toBeUndefined();
+    expect(env['SUDO_AI_CORS_ORIGINS']).toBeUndefined();
+  });
+
+  it('leaves DATA_DIR untouched (unsetting it aborts a native module on teardown)', () => {
+    const env = repoExecEnv(base);
+    expect(env['DATA_DIR']).toBe('/root/sudo-ai-v4/data');
   });
 
   it('keeps the base shell env so binaries still resolve', () => {
@@ -141,6 +155,7 @@ describe('repoExecEnv — strips the daemon prod runtime env', () => {
   it('does not mutate the input env', () => {
     repoExecEnv(base);
     expect(base['NODE_ENV']).toBe('production');
+    expect(base['SUDO_REPO_EXEC']).toBe('1');
   });
 });
 
