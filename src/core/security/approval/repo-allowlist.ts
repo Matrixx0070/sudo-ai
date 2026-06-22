@@ -141,6 +141,31 @@ export function auditExec(entry: ExecAuditEntry): void {
 export interface RepoRunResult { stdout: string; stderr: string; exitCode: number }
 
 /**
+ * Daemon runtime env keys that must NOT leak into a repo-exec command. Inheriting
+ * the daemon's production env makes env-sensitive tests fail where CI (a clean
+ * env) passes — e.g. the gateway suite asserts on `NODE_ENV=production` +
+ * `WEB_CHAT_ENABLED`, and GATEWAY_PORT would point a test at the live :18900.
+ */
+const STRIP_ENV_KEYS: readonly string[] = [
+  'NODE_ENV',
+  'GATEWAY_PORT', 'GATEWAY_TOKEN',
+  'WEB_CHAT_ENABLED', 'WEB_CHAT_TOKEN', 'WEB_CHAT_ALLOWED_ORIGINS',
+  'SUDO_AI_CORS_ORIGINS',
+];
+
+/**
+ * Build the environment for a repo-exec command: the daemon's env minus the
+ * deployment/runtime keys above, so commands (especially `pnpm test`) run in a
+ * CI-like env. The base shell env (PATH/HOME/…) is kept so binaries resolve; the
+ * toolchain then sets its own NODE_ENV (vitest → 'test'). Exported for testing.
+ */
+export function repoExecEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const k of STRIP_ENV_KEYS) delete env[k];
+  return env;
+}
+
+/**
  * Run an already-allowlisted argv against PROJECT_ROOT via execFile (no shell).
  * Caller MUST have validated via checkRepoCommand first.
  */
@@ -149,7 +174,7 @@ export function runRepoArgv(argv: string[], timeoutMs: number, signal?: AbortSig
     const child = execFile(
       argv[0]!,
       argv.slice(1),
-      { cwd: PROJECT_ROOT, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: process.env, signal },
+      { cwd: PROJECT_ROOT, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: repoExecEnv(), signal },
       (err, stdout, stderr) => {
         if (!err) { resolve({ stdout, stderr, exitCode: 0 }); return; }
         const code = typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : 1;
