@@ -227,6 +227,9 @@ temperature = 0.2
     // Recipe wins
     expect(result.recipe.config.intelligence?.default_model).toBe('anthropic/claude-opus-4-5');
     expect(result.recipe.config.intelligence?.temperature).toBe(0.2);
+    // merged pillar surfaces the recipe overlay applied over base
+    expect(result.merged.intelligence?.default_model).toBe('anthropic/claude-opus-4-5');
+    expect(result.merged.intelligence?.temperature).toBe(0.2);
   });
 
   it('8. apply() returns correct appliedSections', async () => {
