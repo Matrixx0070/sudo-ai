@@ -25,6 +25,7 @@ describe('checkRepoCommand — allowed read/verify commands', () => {
     'git log --oneline -20',
     'git rev-parse HEAD',
     'git branch',
+    'git ls-files tests/unit/shared/utils.test.ts',
     'rg fooPattern',
     'rg fooPattern src',
     'ls src',

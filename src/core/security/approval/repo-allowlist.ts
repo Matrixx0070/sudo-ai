@@ -54,7 +54,7 @@ const RULES: readonly RepoRule[] = [
   { cmd: 'pnpm', ok: r => ['test', 'lint', 'build'].includes(r[0] ?? '') || (r[0] === 'run' && SCRIPT_VERBS.has(r[1] ?? '')) },
   { cmd: 'npm',  ok: r => r[0] === 'test' || (r[0] === 'run' && SCRIPT_VERBS.has(r[1] ?? '')) },
   // Read-only git only.
-  { cmd: 'git',  ok: r => ['status', 'log', 'diff', 'branch', 'rev-parse', 'describe', 'blame', 'shortlog'].includes(r[0] ?? '') },
+  { cmd: 'git',  ok: r => ['status', 'log', 'diff', 'branch', 'rev-parse', 'describe', 'blame', 'shortlog', 'ls-files'].includes(r[0] ?? '') },
   // Read-only inspection.
   { cmd: 'rg',   ok: () => true },
   { cmd: 'ls',   ok: () => true },

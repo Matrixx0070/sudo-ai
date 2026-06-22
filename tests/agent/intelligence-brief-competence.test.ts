@@ -79,6 +79,10 @@ describe('Intelligence Brief — self-assessed competence', () => {
     expect(brief.formatted).toContain('### Self-Assessed Competence (overall 82%)');
     expect(brief.formatted).toContain('Strengths: coding (91%), research (80%)');
     expect(brief.formatted).toContain('Weaknesses: design (34%)');
+
+    // The brief is framed as background, not the task, so the agent does not
+    // mistake injected memory for a stale/missing instruction and disown work.
+    expect(brief.formatted).toContain('Your actual task is the most recent user message');
   });
 
   it('IBC-2: strengths only → weaknesses line omitted', async () => {
