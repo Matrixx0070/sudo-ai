@@ -347,8 +347,13 @@ function collapseToolResults(messages: BrainMessage[]): BrainMessage[] {
   });
 }
 
-function collapseContent(content: string, toolName: string): string {
+export function collapseContent(content: string, toolName: string): string {
   const MAX = 3000;
+  // Reading source whole is a first-class need (self-edit, review), so file
+  // reads keep far more than other tool output before paging — a typical
+  // module (~400 lines) arrives intact in one read; beyond this the agent
+  // pages with offset/limit.
+  const MAX_READ = 16000;
   if (content.length <= MAX) return content;
 
   // Pattern 1: TypeScript error lists (tsc output)
@@ -376,11 +381,13 @@ function collapseContent(content: string, toolName: string): string {
     }
   }
 
-  // Pattern 4: Large file read contents
-  if (toolName.includes('read') || toolName.includes('multi')) {
-    if (content.length > MAX) {
-      return content.slice(0, MAX) + `\n\n[...${content.length - MAX} chars collapsed — use targeted read with line range if needed]`;
+  // Pattern 4: Large file read contents. meta.self-modify is the self-edit
+  // reader (read-file action), so it counts as a read tool here too.
+  if (toolName.includes('read') || toolName.includes('multi') || toolName.includes('self-modify')) {
+    if (content.length > MAX_READ) {
+      return content.slice(0, MAX_READ) + `\n\n[...${content.length - MAX_READ} chars collapsed — read the rest with a targeted offset/limit range]`;
     }
+    return content;
   }
 
   // Default: hard cap at MAX
