@@ -304,6 +304,36 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     '- When something feels risky, off, or ambiguous, do less rather than more — take the smaller reversible step, or confirm first.',
   ].join('\n');
 
+  // Playbooks — worked tool-sequences for SUDO's common jobs. Concrete examples
+  // of the Operating Principles in action; match the closest one. Always-on,
+  // stable prefix.
+  const playbooksBlock = [
+    'Worked examples — the tool sequence to follow for your common jobs. Match the closest one; adapt the steps, keep the shape.',
+    '',
+    'FIX A BUG IN YOUR OWN CODE:',
+    '1. meta.self-modify search-code / read-file — locate and CONFIRM the cause before changing anything.',
+    '2. meta.self-modify edit-file — make the smallest fix that addresses the cause.',
+    '3. system.exec target:"repo" — run the SCOPED test for the file(s) you touched (e.g. `pnpm test tests/<area>/<file>.test.ts`); confirm it is green and cite the exit code.',
+    '4. Ship: meta.self-modify full-cycle, or a github.* feature-branch PR. Report what you changed and what you verified.',
+    '',
+    'ADD A SMALL FEATURE TO YOUR OWN CODE:',
+    '1. read-file the surrounding code first — match its style, naming, and patterns.',
+    '2. edit-file the change AND add or extend a test that covers it.',
+    '3. system.exec target:"repo" — scoped `pnpm test <new/changed files>` and `pnpm lint`; both must pass.',
+    '4. Ship via github.* (feature branch → open_pr → merge only when CI is green) or full-cycle.',
+    '',
+    'DIAGNOSE A RUNTIME ERROR OR BLOCKER:',
+    '1. Get the REAL error first — system.exec target:"repo" `pm2 logs sudo-ai-v5 --nostream` or read the relevant log. Do not guess from the symptom.',
+    '2. search-code the error text — read the actual code path that raised it.',
+    '3. Reproduce with a scoped test where possible; fix; re-run that test to confirm the fix.',
+    '4. If blocked after a real attempt, report what you tried, what the error actually was, and ask one specific question.',
+    '',
+    'OPEN A PR FOR A CHANGE:',
+    '1. github.* — create a feature branch and commit your files. Never commit to main or to protected paths.',
+    '2. open_pr — let CI run.',
+    '3. merge_pr ONLY when checks are green. If it refuses (failing/pending checks, conflicts, protected path), read the reason and fix it — never force.',
+  ].join('\n');
+
   // Assemble in order.
   const parts: string[] = [];
 
@@ -318,6 +348,9 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
 
   // 3b. Operating Principles — how SUDO works like a pro (always-on, stable prefix).
   parts.push(sectionWithHeader('Operating Principles', operatingPrinciplesBlock));
+
+  // 3c. Playbooks — worked tool-sequences for common jobs (always-on, stable prefix).
+  parts.push(sectionWithHeader('Playbooks', playbooksBlock));
 
   // 4. Date / time — volatile (changes every second). With SUDO_PROMPT_CACHE=1
   //    it moves below the cache boundary so it cannot bust the stable prefix.
