@@ -1170,6 +1170,17 @@ export class AgentLoop extends AgentLoopInjections {
     const goalPlannerSemanticCap = resolveSemanticPlanCap(process.env['SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN']);
     let goalPlannerSemanticUsed = 0;
 
+    // Ship-completion guard (deterministic): a turn that calls github.commit has
+    // declared intent to ship a change. If the run ends without a successful
+    // github.open_pr, the change is committed-but-unshipped (or the edits are
+    // stranded after an early/failed commit). Re-enter with a hard nudge to
+    // finish the PR, capped to avoid runaway. Off with SUDO_SHIP_COMPLETION_GUARD=0.
+    const shipGuardEnabled = process.env['SUDO_SHIP_COMPLETION_GUARD'] !== '0';
+    const SHIP_COMPLETION_CAP = 2;
+    let shipCompletionNudges = 0;
+    let shipCommitSeen = false;
+    let shipPrSeen = false;
+
     // Outer loop: drains follow-up messages queued during this turn.
     while (state.followUpMessages.length > 0) {
       const current = state.followUpMessages.shift()!;
@@ -1456,7 +1467,38 @@ export class AgentLoop extends AgentLoopInjections {
       // original `current` so telemetry/UI show the user's actual message.
       session.messages.push({ role: 'user', content: _planProgressNote ? `${_planProgressNote}\n\n${current}` : current });
       emit({ type: 'message', content: current });
+      const _shipMsgBefore = session.messages.length;
       finalResponse = await this._innerLoop(session, state, emit, opts);
+
+      // Ship-completion guard: if github.commit ran this run but no PR was opened,
+      // re-enter (capped) to finish the cycle rather than ending with the change
+      // committed-but-unshipped or the edits stranded on a feature branch. Only
+      // fires when the turn would otherwise end (no other follow-ups queued).
+      if (shipGuardEnabled && shipCompletionNudges < SHIP_COMPLETION_CAP && state.followUpMessages.length === 0) {
+        const _turnMsgs = session.messages.slice(_shipMsgBefore);
+        if (!shipCommitSeen) {
+          shipCommitSeen = _turnMsgs.some((m) => m.role === 'tool' && m.toolName === 'github.commit');
+        }
+        if (!shipPrSeen) {
+          shipPrSeen = _turnMsgs.some(
+            (m) => m.role === 'tool' && m.toolName === 'github.open_pr'
+              && typeof m.content === 'string' && /Opened PR #\d+/.test(m.content),
+          );
+        }
+        if (shipCommitSeen && !shipPrSeen) {
+          shipCompletionNudges++;
+          log.warn(
+            { sessionId, attempt: shipCompletionNudges },
+            'Ship-completion guard: github.commit ran without a successful github.open_pr — re-entering to finish the PR',
+          );
+          state.followUpMessages.push(
+            '[Ship incomplete — do not end yet] You used github.commit this turn but no PR was opened, so the change is not shipped. '
+            + 'Finish the cycle now: if commit said "nothing to commit", your edits are not on disk yet — write them first; '
+            + 'otherwise ensure they are committed on a feature branch, then call github.open_pr. End only once the PR is open '
+            + '(report the branch, the scoped-test command + exit code, and the PR link) — or, if genuinely blocked, state the concrete blocker.',
+          );
+        }
+      }
     }
 
     // Persist session — ZDR gate: skip persistence when ZDR blocks session_persistence.
