@@ -400,7 +400,7 @@ export const execTool: ToolDefinition = {
     target: {
       type: 'string',
       required: false,
-      description: 'Where to run: "sandbox" (default — isolated /workspace) or "repo" (the real project repo, allowlisted read/verify commands only, requires SUDO_REPO_EXEC=1).',
+      description: 'Where to run. "sandbox" (default) is isolated in /workspace and CANNOT see the real repo, DBs, or logs. "repo" runs against the REAL project (allowlisted read/verify commands only — plain, no shell metacharacters): use it for tests, lint, git, rg, `pm2 logs sudo-ai-v5`, and reading data/* files. If a sandbox command returns empty when you expected real output, you needed target:"repo".',
       enum: ['sandbox', 'repo'],
     },
     timeout: {
