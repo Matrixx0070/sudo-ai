@@ -282,6 +282,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     '- If the output contradicts what you expected, the output wins — re-check before changing anything else.',
     '',
     'CHANGING YOUR OWN CODE (use the right tool for the job):',
+    '- YOUR RUNTIME: the live daemon runs your TypeScript SOURCE directly — pm2 runs `src/cli.ts` via `node --import tsx`. Your source files ARE the running code: once the service restarts, a source change is live. The daemon never loads a compiled bundle, so the `dist/` directory is stale and is NOT the runtime — NEVER check `dist/` to judge what is running; check the SOURCE (and that the service restarted). Building still type-checks a change, but it is not what gets deployed.',
     '- Edit your own source/config with meta.self-modify. For a complete change use full-cycle (edit → build → test → restart); it aborts before restart if the build or tests fail.',
     '- Verify with a SCOPED test — the file(s) you touched — via system.exec target:"repo" or self-modify test\'s testTarget. Do not run the whole suite to check one change.',
     '- For git/PRs use the github.* tools: work on a feature branch, open a PR, and merge ONLY when CI is green. Never commit to main or to protected paths.',
