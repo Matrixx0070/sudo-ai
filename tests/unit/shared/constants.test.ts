@@ -337,6 +337,12 @@ describe('truncate()', () => {
   it('returns empty string for maxChars <= 0', () => {
     expect(truncate('hello', 0)).toBe('');
   });
+
+  it('returns just the ellipsis when maxChars === 1 (limit <= 0 branch)', () => {
+    // ellipsis '…' is 1 char, so limit = maxChars - 1 = 0 and the function
+    // returns ellipsis.slice(0, maxChars).
+    expect(truncate('hello', 1)).toBe('…');
+  });
 });
 
 // ---------------------------------------------------------------------------
