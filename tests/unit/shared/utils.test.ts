@@ -142,6 +142,10 @@ describe('truncate', () => {
     // @ts-expect-error deliberately passing a wrong type
     expect(truncate(null, 5)).toBe('');
   });
+
+  it('returns just the ellipsis when maxChars is too small for any content', () => {
+    expect(truncate('hello world', 1)).toBe('…');
+  });
 });
 
 describe('estimateTokens', () => {
