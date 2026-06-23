@@ -48,9 +48,12 @@
     // 2026-06-25T16:00Z). kimi over-explored and could not complete full-cycle
     // drills; glm-5.2 is a stronger code/thinking model on the same ollama:cloud
     // provider (outside Anthropic). Revert to kimi-k2.7-code once Opus is back.
+    // contextWindow is glm-5.2's real 1,000,000-token window (ollama /api/show);
+    // pair with a larger SUDO_AGENT_WINDOW_SIZE so the loop actually feeds it more
+    // history instead of evicting reads at the default 12-message window.
     fallback: {
       id: 'ollama/glm-5.2:cloud',
-      contextWindow: 262144,
+      contextWindow: 1000000,
       maxOutputTokens: 8192,
       temperature: 0.7,
     },

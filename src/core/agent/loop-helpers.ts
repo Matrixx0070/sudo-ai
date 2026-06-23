@@ -1588,8 +1588,16 @@ export async function prepareMessages(
     }));
   }
 
-  // LAYER 3 — SLIDING WINDOW: keep system messages + last 12 non-system messages
-  const WINDOW_SIZE = 12;
+  // LAYER 3 — SLIDING WINDOW: keep system messages + last WINDOW_SIZE non-system
+  // messages. Default 12 suits ~200k-context models (Opus navigates it fine). A
+  // large-context model (e.g. glm-5.2 at 1M tokens) instead re-reads files the
+  // window evicted and thrashes into the LoopGuard / iteration cap ("stuck in a
+  // loop") — give it more memory via SUDO_AGENT_WINDOW_SIZE. Clamped [4,200];
+  // fail-open to 12 on a malformed value so default behaviour is byte-identical.
+  const WINDOW_SIZE = (() => {
+    const raw = parseInt(process.env['SUDO_AGENT_WINDOW_SIZE'] ?? '', 10);
+    return Number.isFinite(raw) && raw >= 4 && raw <= 200 ? raw : 12;
+  })();
   const systemMsgs = session.messages.filter(m => m.role === 'system');
   const nonSystemMsgs = session.messages.filter(m => m.role !== 'system');
   let windowedNonSystem = nonSystemMsgs.slice(-WINDOW_SIZE);

@@ -105,6 +105,20 @@ module.exports = {
         // Unset (or '0') = disabled.
         SUDO_REPO_EXEC: '1',
 
+        // ---- Large-context fallback tuning (TEMP, while Opus is rate-capped) ----
+        // The chat chain currently falls over to glm-5.2 (1M-token context). The
+        // agent loop's default 12-message sliding window (src/core/agent/
+        // loop-helpers.ts LAYER 3) evicts glm's reads, so it re-reads and thrashes
+        // into the LoopGuard / iteration cap ("stuck in a loop"). Widen the window
+        // so it remembers its exploration. Drop this (→ default 12) once the chain
+        // is back on Opus, which navigates 12 fine.
+        SUDO_AGENT_WINDOW_SIZE: '40',
+
+        // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
+        // long drill turns OOM-crashed the ~4GB default heap (FATAL: JavaScript
+        // heap out of memory). 8GB gives headroom. Opus never hit this.
+        NODE_OPTIONS: '--max-old-space-size=8192',
+
         // Add wasmtime to PATH for WASM sandbox tool execution
         PATH: `${process.env.PATH}:/root/.wasmtime/bin`,
 
