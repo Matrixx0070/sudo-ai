@@ -312,4 +312,32 @@ version = "1.0.0"
     expect(enabledOp?.enabled).toBe(true);
     expect(disabledOp?.enabled).toBe(false);
   });
+
+  it('16. apply() merged output preserves base sections absent from recipe', async () => {
+    // Recipe only sets intelligence; base also carries engine + agent.
+    writeRecipe('intel-only-merge.toml', `
+id = "intel-only-merge"
+name = "Intelligence Only Merge"
+description = "Only sets intelligence; base sections must survive in merged"
+author = "test"
+version = "1.0.0"
+[config.intelligence]
+default_model = "xai/grok-4-0709"
+`);
+    const composer = new RecipeComposer(tmpDir);
+    const recipe = await composer.load('intel-only-merge');
+
+    const base: Config5Pillar = {
+      engine: { runtime: 'ollama', prefer_local: true },
+      agent: { max_iterations: 42 },
+    };
+    const result = composer.apply(recipe, base);
+
+    // Recipe overlay is applied...
+    expect(result.merged.intelligence?.default_model).toBe('xai/grok-4-0709');
+    expect(result.appliedSections).toEqual(['intelligence']);
+    // ...and base-only sections are left fully intact in merged.
+    expect(result.merged.engine).toEqual({ runtime: 'ollama', prefer_local: true });
+    expect(result.merged.agent).toEqual({ max_iterations: 42 });
+  });
 });
