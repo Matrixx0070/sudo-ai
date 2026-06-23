@@ -43,8 +43,13 @@
         temperature: 0.7,
       },
     ],
+    // TEMP 2026-06-23: swapped kimi-k2.7-code → glm-5.2 while the claude-oauth
+    // weekly cap is active (anthropic-ratelimit-unified rejected, resets
+    // 2026-06-25T16:00Z). kimi over-explored and could not complete full-cycle
+    // drills; glm-5.2 is a stronger code/thinking model on the same ollama:cloud
+    // provider (outside Anthropic). Revert to kimi-k2.7-code once Opus is back.
     fallback: {
-      id: 'ollama/kimi-k2.7-code:cloud',
+      id: 'ollama/glm-5.2:cloud',
       contextWindow: 262144,
       maxOutputTokens: 8192,
       temperature: 0.7,
