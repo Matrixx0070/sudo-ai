@@ -136,6 +136,42 @@ describe('ship-completion guard — B: edit-without-commit', () => {
     expect(nudgeReached(brain)).toBe(true);
   });
 
+  // Live tool names arrive BOTH bare and category-prefixed. A live drill showed the
+  // model emitting the BARE "write-file" / "self-modify" — an anchored /^coder\.…$/
+  // regex missed them and the guard silently never fired. These lock the bare forms.
+  it('re-enters on a BARE write-file (live tool name, no coder. prefix)', async () => {
+    const brain = createMockBrain();
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('write-file', 'e1', { path: 'tests/scratch/x.test.ts' }),
+    );
+    brain.call.mockResolvedValue(stop('wrote it'));
+    await makeLoop(brain, ghRegistry(false)).run('test-session-id', 'write a file');
+    expect(nudgeReached(brain)).toBe(true);
+  });
+
+  it('re-enters on a BARE self-modify write-file action under src/', async () => {
+    const brain = createMockBrain();
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('self-modify', 'e1', { action: 'write-file', path: 'src/core/foo.ts' }),
+    );
+    brain.call.mockResolvedValue(stop('edited'));
+    await makeLoop(brain, ghRegistry(false)).run('test-session-id', 'edit a module');
+    expect(nudgeReached(brain)).toBe(true);
+  });
+
+  it('does NOT re-enter for a BARE self-modify full-cycle self-deploy', async () => {
+    const brain = createMockBrain();
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('self-modify', 'e1', { action: 'write-file', path: 'src/core/foo.ts' }),
+    );
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('self-modify', 'd1', { action: 'full-cycle' }),
+    );
+    brain.call.mockResolvedValue(stop('deployed'));
+    await makeLoop(brain, ghRegistry(false)).run('test-session-id', 'fix and deploy');
+    expect(nudgeReached(brain)).toBe(false);
+  });
+
   it('does NOT re-enter for a self-deploy (full-cycle) of an edited src file', async () => {
     const brain = createMockBrain();
     brain.call.mockResolvedValueOnce(
