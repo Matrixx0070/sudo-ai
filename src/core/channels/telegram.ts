@@ -32,6 +32,7 @@ import type {
   SendOptions,
   UnifiedMessage,
 } from './types.js';
+import { buildDocumentInbound } from './telegram-media.js';
 import type { CommandRegistry } from '../commands/registry.js';
 import type { CommandContext } from '../commands/types.js';
 
@@ -162,6 +163,51 @@ async function downloadTelegramVoice(
     return { path: savePath, buffer };
   } catch (err) {
     log.error({ fileId, err: String(err) }, 'Failed to download Telegram voice');
+    return undefined;
+  }
+}
+
+/**
+ * Download a Telegram document (any uploaded file) to disk. Returns the saved
+ * path + raw bytes. Preserves the original (sanitised) filename so the agent can
+ * tell the file type and read it back if needed.
+ */
+async function downloadTelegramDocument(
+  bot: Bot,
+  fileId: string,
+  token: string,
+  fileName?: string,
+): Promise<{ path: string; buffer: Buffer } | undefined> {
+  try {
+    mkdirSync(UPLOAD_DIR, { recursive: true });
+
+    const fileInfo = await bot.api.getFile(fileId);
+    const filePath = fileInfo.file_path;
+    if (!filePath) {
+      log.warn({ fileId }, 'getFile returned no file_path for document');
+      return undefined;
+    }
+
+    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      log.error({ fileId, status: res.status }, 'Document download HTTP error');
+      return undefined;
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const ext = filePath.split('.').pop() ?? 'bin';
+    // Keep the user's original filename (sanitised) prefixed with a short file-id
+    // slice for uniqueness, so collisions are avoided but the extension/type survives.
+    const safeName = (fileName ?? '').replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 100);
+    const filename = safeName ? `${fileId.slice(-8)}-${safeName}` : `doc-${fileId.slice(-12)}.${ext}`;
+    const savePath = join(UPLOAD_DIR, filename);
+    writeFileSync(savePath, buffer);
+
+    log.info({ fileId, savePath, bytes: buffer.length }, 'Telegram document downloaded');
+    return { path: savePath, buffer };
+  } catch (err) {
+    log.error({ fileId, err: String(err) }, 'Failed to download Telegram document');
     return undefined;
   }
 }
@@ -784,18 +830,25 @@ export class TelegramAdapter implements ChannelAdapter {
       return this._handleInbound(ctx, textWithHint, media);
     });
 
-    // Documents
-    bot.on('message:document', (ctx) => {
+    // Documents / files — download, then deliver a non-empty message that names
+    // the file (a caption-less file previously arrived as empty content, which
+    // AgentLoop.run rejects: "message must be a non-empty string"). Small
+    // text-like files get their contents inlined.
+    bot.on('message:document', async (ctx) => {
       const doc = ctx.message.document;
       const caption = ctx.message.caption ?? '';
-      const media: MediaAttachment[] = [
-        {
-          type: 'document',
-          mimeType: doc.mime_type ?? 'application/octet-stream',
-          filename: doc.file_name ?? doc.file_id,
-        },
-      ];
-      return this._handleInbound(ctx, caption, media);
+      const token = process.env[this.tokenEnvKey] ?? '';
+      const dl = token
+        ? await downloadTelegramDocument(bot, doc.file_id, token, doc.file_name)
+        : undefined;
+      const { text, media } = buildDocumentInbound({
+        caption,
+        filename: doc.file_name ?? doc.file_id,
+        mimeType: doc.mime_type ?? 'application/octet-stream',
+        savedPath: dl?.path,
+        buffer: dl?.buffer,
+      });
+      return this._handleInbound(ctx, text, media);
     });
 
     // Voice messages — transcribe with Whisper then process as text
@@ -957,6 +1010,16 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
 
+    // Safety net: never hand the agent an empty message. AgentLoop.run rejects
+    // empty strings ("message must be a non-empty string"), so a media-only
+    // message (a file/photo with no caption, or one whose download failed) would
+    // surface that error to the user. Describe the attachment(s) instead.
+    const safeText = text.trim()
+      ? text
+      : media.length > 0
+        ? `[Received ${media.map((m) => (m.filename ? `${m.type} "${m.filename}"` : m.type)).join(', ')} with no caption.]`
+        : '[empty message]';
+
     const chatType: ChatType = ctx.chat?.type === 'private' ? 'dm' : 'group';
     const msg: UnifiedMessage = {
       id: String(ctx.message?.message_id ?? Date.now()),
@@ -964,7 +1027,7 @@ export class TelegramAdapter implements ChannelAdapter {
       peerId: userId,
       peerName: [from?.first_name, from?.last_name].filter(Boolean).join(' ') || from?.username || userId,
       chatType,
-      text,
+      text: safeText,
       media: media.length > 0 ? media : undefined,
       replyToId: ctx.message?.reply_to_message?.message_id != null
         ? String(ctx.message.reply_to_message.message_id)
