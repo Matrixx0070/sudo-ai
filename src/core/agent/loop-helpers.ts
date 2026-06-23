@@ -17,6 +17,7 @@ import type { AgentState, AgentEvent } from './types.js';
 import type { ToolSchema } from '../tools/types.js';
 import { resolveEffort, type EffortLevel } from './effort.js';
 import { clampToolOutput } from './tool-output-clamp.js';
+import { enrichToolError, isToolErrorHintsEnabled } from '../tools/error-formatter.js';
 import { shouldUseInterleavedThinking, buildThinkingBlock } from './interleaved-thinking.js';
 import {
   readCriticFeedbackEnabled,
@@ -656,6 +657,13 @@ interface SingleCallResult {
    * success, when no lookup is wired, or when nothing is on record.
    */
   preventionHint?: string;
+  /**
+   * Structured tool-error hint (what/why/fix/example) appended to the
+   * model-facing tool message on failure so a weaker model can self-correct.
+   * Carried separately from `resultContent` so the recorded outcome / trace
+   * stays the raw output. Undefined on success or when hints are disabled.
+   */
+  errorHint?: string;
 }
 
 /**
@@ -979,6 +987,22 @@ async function executeSingleToolCall(
     callError = resultContent;
   }
 
+  // Idiot-proof error hints: on any failure, compute structured recovery
+  // guidance (what/why/fix/example) so a weaker model can self-correct instead
+  // of retrying the same broken call. Carried as a SEPARATE field (like
+  // preventionHint) so the recorded outcome and trace stay the raw output —
+  // the caller appends this to the model-facing message only, at the bottom
+  // where a model attends most before retrying. Fail-open. Kill-switch:
+  // SUDO_TOOL_ERROR_HINTS=0.
+  let errorHint: string | undefined;
+  if (callError && isToolErrorHintsEnabled()) {
+    try {
+      errorHint = enrichToolError(tc.name, callError);
+    } catch (err) {
+      log.warn({ tool: tc.name, err: String(err) }, 'error-hint enrichment threw — skipping');
+    }
+  }
+
   // Recovery-reader: if this call failed and a prior recovery for the same
   // tool+error is on record, surface the lesson so the model sees it before
   // retrying. Fail-open — a throwing lookup must not break the tool path.
@@ -996,6 +1020,7 @@ async function executeSingleToolCall(
     resultContent,
     ...(criticFeedback ? { criticFeedback } : {}),
     ...(preventionHint ? { preventionHint } : {}),
+    ...(errorHint ? { errorHint } : {}),
   };
 }
 
@@ -1197,6 +1222,9 @@ export async function executeToolCalls(
     // Both rarely co-occur (critic fires on reject/grounding; the hint fires on
     // an actual tool failure) but stacking is well-defined if they do.
     let stored = res.resultContent;
+    // Error hint goes at the BOTTOM (after the raw output) — closest to where the
+    // model resumes, so the "how to fix" is the last thing it reads before retry.
+    if (res.errorHint) stored = `${stored}\n\n${res.errorHint}`;
     if (res.preventionHint) stored = `${res.preventionHint}\n\n${stored}`;
     if (res.criticFeedback) stored = `${res.criticFeedback}\n\n${stored}`;
     // toolCallId and toolName MUST be present for the Vercel AI SDK to
