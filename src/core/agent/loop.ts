@@ -36,6 +36,7 @@ import {
   trimSessionMessages,
   resolveSemanticPlanCap,
   semanticPlanAllowed,
+  classifyShipEditSignals,
 } from './loop-helpers.js';
 import { ToolRouter } from './tool-router.js';
 import { classifyIntent, formatIntentHint } from './intent-classifier.js';
@@ -1170,16 +1171,23 @@ export class AgentLoop extends AgentLoopInjections {
     const goalPlannerSemanticCap = resolveSemanticPlanCap(process.env['SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN']);
     let goalPlannerSemanticUsed = 0;
 
-    // Ship-completion guard (deterministic): a turn that calls github.commit has
-    // declared intent to ship a change. If the run ends without a successful
-    // github.open_pr, the change is committed-but-unshipped (or the edits are
-    // stranded after an early/failed commit). Re-enter with a hard nudge to
-    // finish the PR, capped to avoid runaway. Off with SUDO_SHIP_COMPLETION_GUARD=0.
+    // Ship-completion guard (deterministic): a turn that changes the codebase has
+    // declared intent to ship. Two failure modes, both observed live in drills, end
+    // a run with the change unshipped — re-enter (capped) with a hard nudge:
+    //   A. committed-but-no-PR — github.commit ran but no successful github.open_pr
+    //      (rounds 6 & 11: wrote + committed work, then stopped).
+    //   B. edited-but-no-commit — edited src/ or tests/ code but never committed or
+    //      opened a PR, and it was not a self-deploy (rounds 14-16: wrote a real
+    //      change, verified it, then disowned/stopped before shipping). A self-deploy
+    //      (meta.self-modify restart/full-cycle) is excluded — that needs no PR.
+    // Off with SUDO_SHIP_COMPLETION_GUARD=0.
     const shipGuardEnabled = process.env['SUDO_SHIP_COMPLETION_GUARD'] !== '0';
     const SHIP_COMPLETION_CAP = 2;
     let shipCompletionNudges = 0;
     let shipCommitSeen = false;
     let shipPrSeen = false;
+    let shipEditedCodeSeen = false; // src/ or tests/ edit landed this run
+    let shipDeploySeen = false;     // a self-deploy (restart/full-cycle) ran this run
 
     // Outer loop: drains follow-up messages queued during this turn.
     while (state.followUpMessages.length > 0) {
@@ -1470,10 +1478,10 @@ export class AgentLoop extends AgentLoopInjections {
       const _shipMsgBefore = session.messages.length;
       finalResponse = await this._innerLoop(session, state, emit, opts);
 
-      // Ship-completion guard: if github.commit ran this run but no PR was opened,
-      // re-enter (capped) to finish the cycle rather than ending with the change
-      // committed-but-unshipped or the edits stranded on a feature branch. Only
-      // fires when the turn would otherwise end (no other follow-ups queued).
+      // Ship-completion guard: re-enter (capped) to finish the cycle rather than
+      // ending with the change unshipped. Two triggers (mutually exclusive on
+      // whether a commit was seen). Only fires when the turn would otherwise end
+      // (no other follow-ups queued). Flags accumulate across re-entries.
       if (shipGuardEnabled && shipCompletionNudges < SHIP_COMPLETION_CAP && state.followUpMessages.length === 0) {
         const _turnMsgs = session.messages.slice(_shipMsgBefore);
         if (!shipCommitSeen) {
@@ -1485,17 +1493,41 @@ export class AgentLoop extends AgentLoopInjections {
               && typeof m.content === 'string' && /Opened PR #\d+/.test(m.content),
           );
         }
+        // Trigger B inputs — read from tool CALLS (arguments carry path + action).
+        const _ship = classifyShipEditSignals(
+          _turnMsgs as Parameters<typeof classifyShipEditSignals>[0],
+        );
+        if (_ship.editedSrcOrTest) shipEditedCodeSeen = true;
+        if (_ship.deployed) shipDeploySeen = true;
+
+        // A — committed but never opened a PR (change is committed-but-unshipped,
+        // or the edits are stranded after an early/failed commit).
         if (shipCommitSeen && !shipPrSeen) {
           shipCompletionNudges++;
           log.warn(
             { sessionId, attempt: shipCompletionNudges },
-            'Ship-completion guard: github.commit ran without a successful github.open_pr — re-entering to finish the PR',
+            'Ship-completion guard (A: commit-without-PR) — re-entering to finish the PR',
           );
           state.followUpMessages.push(
             '[Ship incomplete — do not end yet] You used github.commit this turn but no PR was opened, so the change is not shipped. '
             + 'Finish the cycle now: if commit said "nothing to commit", your edits are not on disk yet — write them first; '
             + 'otherwise ensure they are committed on a feature branch, then call github.open_pr. End only once the PR is open '
             + '(report the branch, the scoped-test command + exit code, and the PR link) — or, if genuinely blocked, state the concrete blocker.',
+          );
+        }
+        // B — edited src/ or tests/ code but never committed it, and it was not a
+        // self-deploy. The edits are real and on disk but stranded with no PR.
+        else if (!shipCommitSeen && !shipPrSeen && shipEditedCodeSeen && !shipDeploySeen) {
+          shipCompletionNudges++;
+          log.warn(
+            { sessionId, attempt: shipCompletionNudges },
+            'Ship-completion guard (B: edit-without-commit) — re-entering to ship the change',
+          );
+          state.followUpMessages.push(
+            '[Ship incomplete — do not end yet] You edited code under src/ or tests/ this turn but did not github.commit or open a PR, so the change is not shipped. '
+            + 'Finish the cycle now: github.commit the edits onto a feature branch, then call github.open_pr. End only once the PR is open '
+            + '(report the branch, the scoped-test command + exit code, and the PR link). '
+            + 'If this edit was only a live self-deploy (meta.self-modify full-cycle/restart) or a throwaway you already reverted, say so explicitly and end — otherwise ship it.',
           );
         }
       }

@@ -1,11 +1,15 @@
 /**
  * @file ship-completion-guard.test.ts
- * @description Deterministic completion guarantee for the change-cycle. A turn
- * that calls github.commit has declared intent to ship; if the run ends without
- * a successful github.open_pr, the change is committed-but-unshipped (or the
- * edits are stranded after an early "nothing to commit"). The loop re-enters
- * (capped) with a hard nudge to finish the PR. Observed live: rounds 6 & 11
- * wrote + committed work then stopped before opening a PR.
+ * @description Deterministic completion guarantee for the change-cycle. Two
+ * failure modes end a run with the change unshipped; the loop re-enters (capped)
+ * with a hard nudge:
+ *   A. commit-without-PR — github.commit ran but no successful github.open_pr
+ *      (rounds 6 & 11: wrote + committed work, then stopped).
+ *   B. edit-without-commit — edited src/ or tests/ code but never committed or
+ *      opened a PR, and it was not a self-deploy (rounds 14-16: wrote a real
+ *      change, verified it, then stopped before shipping). A self-deploy
+ *      (meta.self-modify restart/full-cycle) needs no PR and is excluded;
+ *      workspace/memory edits are out of scope (not src/tests).
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -46,8 +50,13 @@ function ghRegistry(openPrSucceeds: boolean) {
 }
 
 function toolCall(name: string, id: string): BrainResponse {
+  return toolCallArgs(name, id, {});
+}
+/** A tool-call turn carrying arguments (path/action) — needed for trigger-B detection,
+ *  which reads the assistant tool CALL arguments, not the result string. */
+function toolCallArgs(name: string, id: string, args: Record<string, unknown>): BrainResponse {
   return {
-    content: 'working', toolCalls: [{ id, name, arguments: {} }],
+    content: 'working', toolCalls: [{ id, name, arguments: args }],
     usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimatedCost: 0 },
     model: 'xai/grok-3-fast', finishReason: 'tool-calls',
   };
@@ -102,6 +111,63 @@ describe('ship-completion guard', () => {
     brain.call.mockResolvedValueOnce(toolCall('github.commit', 'c1'));
     brain.call.mockResolvedValue(stop('done'));
     await makeLoop(brain, ghRegistry(false)).run('test-session-id', 'ship a change');
+    expect(nudgeReached(brain)).toBe(false);
+  });
+});
+
+describe('ship-completion guard — B: edit-without-commit', () => {
+  it('re-enters when a tests/ file was edited but never committed', async () => {
+    const brain = createMockBrain();
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('meta.self-modify', 'e1', { action: 'write-file', path: 'tests/agent/paths.test.ts' }),
+    );
+    brain.call.mockResolvedValue(stop('done — wrote a test'));
+    await makeLoop(brain, ghRegistry(false)).run('test-session-id', 'add a test');
+    expect(nudgeReached(brain)).toBe(true);
+  });
+
+  it('re-enters when a src/ file was edited via coder.write-file but never committed', async () => {
+    const brain = createMockBrain();
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('coder.write-file', 'e1', { path: 'src/core/foo.ts' }),
+    );
+    brain.call.mockResolvedValue(stop('done'));
+    await makeLoop(brain, ghRegistry(false)).run('test-session-id', 'edit a module');
+    expect(nudgeReached(brain)).toBe(true);
+  });
+
+  it('does NOT re-enter for a self-deploy (full-cycle) of an edited src file', async () => {
+    const brain = createMockBrain();
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('meta.self-modify', 'e1', { action: 'write-file', path: 'src/core/foo.ts' }),
+    );
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('meta.self-modify', 'd1', { action: 'full-cycle' }),
+    );
+    brain.call.mockResolvedValue(stop('deployed live'));
+    await makeLoop(brain, ghRegistry(false)).run('test-session-id', 'fix and deploy a live bug');
+    expect(nudgeReached(brain)).toBe(false);
+  });
+
+  it('does NOT re-enter for a workspace/memory edit (not src/tests)', async () => {
+    const brain = createMockBrain();
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('meta.self-modify', 'e1', { action: 'write-file', path: 'workspace/memory/2026-06-23.md' }),
+    );
+    brain.call.mockResolvedValue(stop('noted'));
+    await makeLoop(brain, ghRegistry(false)).run('test-session-id', 'jot a note');
+    expect(nudgeReached(brain)).toBe(false);
+  });
+
+  it('does NOT re-enter when the edited change is shipped (edit → commit → PR)', async () => {
+    const brain = createMockBrain();
+    brain.call.mockResolvedValueOnce(
+      toolCallArgs('coder.write-file', 'e1', { path: 'src/core/foo.ts' }),
+    );
+    brain.call.mockResolvedValueOnce(toolCall('github.commit', 'c1'));
+    brain.call.mockResolvedValueOnce(toolCall('github.open_pr', 'p1'));
+    brain.call.mockResolvedValue(stop('shipped'));
+    await makeLoop(brain, ghRegistry(true)).run('test-session-id', 'edit and ship');
     expect(nudgeReached(brain)).toBe(false);
   });
 });
