@@ -1457,12 +1457,18 @@ export function classifyShipEditSignals(
       const name = tc.name ?? '';
       const args = tc.arguments ?? {};
       const action = typeof args['action'] === 'string' ? (args['action'] as string) : '';
-      if (name === 'meta.self-modify' && /^(restart|full-cycle)$/.test(action)) {
+      // Tool names appear in live history BOTH bare ("write-file", "self-modify")
+      // AND category-prefixed ("coder.write-file", "meta.self-modify"), so match by
+      // substring — the proven style of extractTurnMutations above. An anchored
+      // /^coder\.…$/ silently missed the live bare names (caught in a live drill:
+      // the model emitted "write-file", the guard never fired).
+      const isSelfModify = /self-modify/.test(name);
+      if (isSelfModify && /^(restart|full-cycle)$/.test(action)) {
         deployed = true;
       }
       const isCodeEdit =
-        /^coder\.(write-file|edit-file|smart-edit|multi-edit|apply-patch|notebook-edit)$/.test(name) ||
-        (name === 'meta.self-modify' && /^(write-file|edit-file)$/.test(action));
+        /write-file|edit-file|smart-edit|multi-edit|apply-patch|create-file|notebook-edit/.test(name) ||
+        (isSelfModify && /^(write-file|edit-file)$/.test(action));
       if (!isCodeEdit) continue;
       const rawPath = args['path'] ?? args['filePath'] ?? args['file'];
       const p = typeof rawPath === 'string' ? rawPath : '';
