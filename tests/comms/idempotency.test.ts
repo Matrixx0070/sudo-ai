@@ -66,6 +66,18 @@ describe('CommsIdempotencyStore', () => {
     const stale = store.begin(email(), T0 + HOUR + 1); // just past the 1h window
     expect(stale.duplicate).toBe(false);
   });
+
+  it('IDEM-7: stale reclaim re-pends the row and clears the prior message id', () => {
+    const a = store.begin(email(), T0);
+    store.confirm(a.key, 'msg-1');
+    // Reclaim past the window: row becomes a fresh pending claim.
+    store.begin(email(), T0 + HOUR + 1);
+    // The reclaimed row is now in-flight again → an immediate identical claim
+    // is a duplicate, and it must NOT leak the old confirmed message id.
+    const dup = store.begin(email(), T0 + HOUR + 1);
+    expect(dup.duplicate).toBe(true);
+    expect(dup.messageId).toBeUndefined();
+  });
 });
 
 describe('deriveCommsKey & flag', () => {
