@@ -20,6 +20,7 @@ import {
   isCommsIdempotencyEnabled,
   isCommsAdapterIdempotencyEnabled,
   maybeGuardedSend,
+  __setCommsIdempotencyStoreForTests,
   type SendIdentity,
 } from './idempotency.js';
 
@@ -263,9 +264,14 @@ describe('maybeGuardedSend', () => {
   beforeEach(() => {
     dbPath = join(tmpdir(), `idem-send-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
     store = mkStore();
+    // maybeGuardedSend uses the process-wide store (over MIND_DB). Point it at
+    // this suite's isolated DB so the tests are deterministic and never mutate
+    // the real mind.db.
+    __setCommsIdempotencyStoreForTests(store);
   });
 
   afterEach(() => {
+    __setCommsIdempotencyStoreForTests(null); // restore the lazy MIND_DB singleton
     store.close();
     delete process.env['SUDO_COMMS_ADAPTER_IDEMPOTENCY'];
   });
