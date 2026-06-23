@@ -1,12 +1,17 @@
 /**
- * Unit coverage for the error hierarchy and HTTP-status categoriser in
- * src/core/shared/errors.ts.
+ * @file errors.test.ts
+ * @description Unit coverage for the SudoError hierarchy and the categorizeError
+ * HTTP-status categoriser in src/core/shared/errors.ts.
  *
- * This module had no dedicated test file. The SudoError hierarchy is relied on
- * for `instanceof` routing across channels and tools, and `categorizeError`
- * drives the LLM failover/backoff system's retry decisions, so pinning the
- * prototype-chain behaviour, code prefixes and every status branch down is
- * cheap insurance against regressions.
+ * The hierarchy is relied on for `instanceof` routing across channels and tools,
+ * and `categorizeError` drives the LLM failover/backoff system's retry decisions,
+ * so the prototype chain, code prefixes and every status branch are pinned down.
+ *
+ * Coverage:
+ * - SudoError base class (message, code, details, prototype chain, rethrow)
+ * - All subclasses (LLMError, ToolError, ChannelError, ConfigError, MemoryError,
+ *   PipelineError, BrowserError, SystemError, KnowledgeError, BusinessError)
+ * - categorizeError: every HTTP status branch + body disambiguation + edge cases
  */
 
 import { describe, it, expect } from 'vitest';
@@ -23,95 +28,330 @@ import {
   KnowledgeError,
   BusinessError,
   categorizeError,
-  type ErrorCategory,
 } from '../../../src/core/shared/errors.js';
 
+// ---------------------------------------------------------------------------
+// Error class hierarchy
+// ---------------------------------------------------------------------------
+
 describe('SudoError', () => {
-  it('carries message, code and optional details', () => {
-    const err = new SudoError('boom', 'generic_fail', { attempt: 2 });
-    expect(err.message).toBe('boom');
-    expect(err.code).toBe('generic_fail');
-    expect(err.details).toEqual({ attempt: 2 });
+  it('should set message, code, and details', () => {
+    const err = new SudoError('something broke', 'test_code', { foo: 42 });
+    expect(err.message).toBe('something broke');
+    expect(err.code).toBe('test_code');
+    expect(err.details).toEqual({ foo: 42 });
   });
 
-  it('is a real Error with a correct prototype chain', () => {
-    const err = new SudoError('x', 'c');
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(SudoError);
-    expect(err.name).toBe('SudoError');
+  it('should allow undefined details', () => {
+    const err = new SudoError('no details', 'test_code');
     expect(err.details).toBeUndefined();
   });
-});
 
-describe('typed subclasses', () => {
-  it('preserve the SudoError prototype chain for instanceof routing', () => {
-    const cases: Array<[SudoError, string]> = [
-      [new LLMError('m', 'llm_timeout'), 'LLMError'],
-      [new ToolError('m', 'tool_failed'), 'ToolError'],
-      [new ChannelError('m', 'channel_down'), 'ChannelError'],
-      [new ConfigError('m', 'config_invalid'), 'ConfigError'],
-      [new MemoryError('m', 'memory_oom'), 'MemoryError'],
-      [new PipelineError('m', 'pipeline_stall'), 'PipelineError'],
-    ];
-    for (const [err, name] of cases) {
-      expect(err).toBeInstanceOf(SudoError);
-      expect(err).toBeInstanceOf(Error);
-      expect(err.name).toBe(name);
+  it('should be an instance of Error', () => {
+    const err = new SudoError('msg', 'code');
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it('should have name SudoError', () => {
+    const err = new SudoError('msg', 'code');
+    expect(err.name).toBe('SudoError');
+  });
+
+  it('should preserve prototype chain after rethrow', () => {
+    const original = new SudoError('orig', 'code');
+    let caught: unknown;
+    try {
+      throw original;
+    } catch (e) {
+      caught = e;
     }
-  });
-
-  it('auto-prefix the code for prefixing subclasses', () => {
-    expect(new BrowserError('m', 'click_failed').code).toBe('browser_click_failed');
-    expect(new SystemError('m', 'exec_denied').code).toBe('system_exec_denied');
-    expect(new KnowledgeError('m', 'not_found').code).toBe('knowledge_not_found');
-    expect(new BusinessError('m', 'quota').code).toBe('business_quota');
-  });
-
-  it('keep the literal code for non-prefixing subclasses', () => {
-    expect(new LLMError('m', 'llm_rate_limit').code).toBe('llm_rate_limit');
-    expect(new ToolError('m', 'tool_x').code).toBe('tool_x');
+    expect(caught).toBeInstanceOf(SudoError);
+    expect((caught as SudoError).code).toBe('code');
   });
 });
+
+describe('LLMError', () => {
+  it('should accept llm_-prefixed code', () => {
+    const err = new LLMError('rate limited', 'llm_rate_limit');
+    expect(err.code).toBe('llm_rate_limit');
+    expect(err.name).toBe('LLMError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new LLMError('fail', 'llm_timeout');
+    expect(err).toBeInstanceOf(SudoError);
+    expect(err).toBeInstanceOf(LLMError);
+  });
+
+  it('should carry details', () => {
+    const err = new LLMError('fail', 'llm_timeout', { provider: 'openai' });
+    expect(err.details).toEqual({ provider: 'openai' });
+  });
+});
+
+describe('ToolError', () => {
+  it('should accept tool_-prefixed code', () => {
+    const err = new ToolError('exec failed', 'tool_exec_error');
+    expect(err.code).toBe('tool_exec_error');
+    expect(err.name).toBe('ToolError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new ToolError('fail', 'tool_misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+describe('ChannelError', () => {
+  it('should accept channel_-prefixed code', () => {
+    const err = new ChannelError('telegram down', 'channel_telegram_error');
+    expect(err.code).toBe('channel_telegram_error');
+    expect(err.name).toBe('ChannelError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new ChannelError('fail', 'channel_misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+describe('ConfigError', () => {
+  it('should accept config_-prefixed code', () => {
+    const err = new ConfigError('bad config', 'config_invalid_json');
+    expect(err.code).toBe('config_invalid_json');
+    expect(err.name).toBe('ConfigError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new ConfigError('fail', 'config_misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+describe('MemoryError', () => {
+  it('should accept memory_-prefixed code', () => {
+    const err = new MemoryError('db locked', 'memory_db_locked');
+    expect(err.code).toBe('memory_db_locked');
+    expect(err.name).toBe('MemoryError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new MemoryError('fail', 'memory_misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+describe('PipelineError', () => {
+  it('should accept pipeline_-prefixed code', () => {
+    const err = new PipelineError('step failed', 'pipeline_step_error');
+    expect(err.code).toBe('pipeline_step_error');
+    expect(err.name).toBe('PipelineError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new PipelineError('fail', 'pipeline_misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+describe('BrowserError', () => {
+  it('should prefix code with browser_', () => {
+    const err = new BrowserError('page not found', 'page_not_found');
+    expect(err.code).toBe('browser_page_not_found');
+    expect(err.name).toBe('BrowserError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new BrowserError('fail', 'misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+describe('SystemError', () => {
+  it('should prefix code with system_', () => {
+    const err = new SystemError('command failed', 'exec_failed');
+    expect(err.code).toBe('system_exec_failed');
+    expect(err.name).toBe('SystemError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new SystemError('fail', 'misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+describe('KnowledgeError', () => {
+  it('should prefix code with knowledge_', () => {
+    const err = new KnowledgeError('not found', 'not_found');
+    expect(err.code).toBe('knowledge_not_found');
+    expect(err.name).toBe('KnowledgeError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new KnowledgeError('fail', 'misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+describe('BusinessError', () => {
+  it('should prefix code with business_', () => {
+    const err = new BusinessError('api error', 'api_error');
+    expect(err.code).toBe('business_api_error');
+    expect(err.name).toBe('BusinessError');
+  });
+
+  it('should be instance of SudoError', () => {
+    const err = new BusinessError('fail', 'misc');
+    expect(err).toBeInstanceOf(SudoError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// categorizeError
+// ---------------------------------------------------------------------------
 
 describe('categorizeError', () => {
-  it('maps the documented status codes to their categories', () => {
-    const table: Array<[number, ErrorCategory]> = [
-      [402, 'billing'],
-      [429, 'rate_limit'],
-      [503, 'overloaded'],
-      [401, 'auth'],
-      [403, 'auth_permanent'],
-      [408, 'timeout'],
-      [400, 'format'],
-      [404, 'model_not_found'],
-      [410, 'session_expired'],
-    ];
-    for (const [status, category] of table) {
-      expect(categorizeError(status)).toBe(category);
-    }
+  // --- Direct status code mappings ---
+
+  it('should map 402 to billing', () => {
+    expect(categorizeError(402)).toBe('billing');
   });
 
-  it('treats 429 with quota-exhaustion bodies as billing', () => {
-    expect(categorizeError(429, 'You have insufficient_quota remaining')).toBe('billing');
-    expect(categorizeError(429, 'You exceeded your current quota')).toBe('billing');
-    expect(categorizeError(429, 'slow down, too many requests')).toBe('rate_limit');
+  it('should map 429 to rate_limit by default', () => {
+    expect(categorizeError(429)).toBe('rate_limit');
   });
 
-  it('disambiguates 400 via the response body', () => {
-    expect(categorizeError(400, 'the session expired, re-auth')).toBe('session_expired');
-    expect(categorizeError(400, 'the model not found here')).toBe('model_not_found');
-    expect(categorizeError(400, 'bad request payload')).toBe('format');
+  it('should map 429 with "insufficient_quota" body to billing', () => {
+    expect(categorizeError(429, '{"error": "insufficient_quota"}')).toBe('billing');
   });
 
-  it('treats other 5xx as transient overload', () => {
+  it('should map 429 with "insufficient quota" (space) body to billing', () => {
+    expect(categorizeError(429, 'insufficient quota reached')).toBe('billing');
+  });
+
+  it('should map 429 with "exceeded quota" body to billing', () => {
+    expect(categorizeError(429, 'You exceeded your quota')).toBe('billing');
+  });
+
+  it('should map 429 with unrelated body to rate_limit', () => {
+    expect(categorizeError(429, 'too many requests')).toBe('rate_limit');
+  });
+
+  it('should map 503 to overloaded', () => {
+    expect(categorizeError(503)).toBe('overloaded');
+  });
+
+  it('should map 401 to auth', () => {
+    expect(categorizeError(401)).toBe('auth');
+  });
+
+  it('should map 403 to auth_permanent', () => {
+    expect(categorizeError(403)).toBe('auth_permanent');
+  });
+
+  it('should map 408 to timeout', () => {
+    expect(categorizeError(408)).toBe('timeout');
+  });
+
+  it('should map 404 to model_not_found', () => {
+    expect(categorizeError(404)).toBe('model_not_found');
+  });
+
+  it('should map 410 to session_expired', () => {
+    expect(categorizeError(410)).toBe('session_expired');
+  });
+
+  // --- 400 body disambiguation ---
+
+  it('should map 400 with "session expired" body to session_expired', () => {
+    expect(categorizeError(400, 'The session expired')).toBe('session_expired');
+  });
+
+  it('should map 400 with "session_expired" body to session_expired', () => {
+    expect(categorizeError(400, 'session_expired error')).toBe('session_expired');
+  });
+
+  it('should map 400 with "model not found" body to model_not_found', () => {
+    expect(categorizeError(400, 'model not found')).toBe('model_not_found');
+  });
+
+  it('should map 400 with "model_not_found" body to model_not_found', () => {
+    expect(categorizeError(400, 'model_not_found')).toBe('model_not_found');
+  });
+
+  it('should map 400 with unrelated body to format', () => {
+    expect(categorizeError(400, 'bad request')).toBe('format');
+  });
+
+  it('should map 400 with no body to format', () => {
+    expect(categorizeError(400)).toBe('format');
+  });
+
+  // --- 5xx other than 503 ---
+
+  it('should map 500 to overloaded', () => {
     expect(categorizeError(500)).toBe('overloaded');
+  });
+
+  it('should map 502 to overloaded', () => {
     expect(categorizeError(502)).toBe('overloaded');
+  });
+
+  it('should map 504 to overloaded', () => {
     expect(categorizeError(504)).toBe('overloaded');
   });
 
-  it('falls back to format for unknown 4xx and non-numeric input', () => {
-    expect(categorizeError(418)).toBe('format');
-    // @ts-expect-error deliberately passing a wrong type
-    expect(categorizeError('429')).toBe('format');
+  it('should map 599 to overloaded', () => {
+    expect(categorizeError(599)).toBe('overloaded');
+  });
+
+  // --- Edge cases ---
+
+  it('should map unknown 4xx to format', () => {
+    expect(categorizeError(418)).toBe('format'); // I'm a teapot
+  });
+
+  it('should map unknown 2xx to format', () => {
+    expect(categorizeError(200)).toBe('format');
+  });
+
+  it('should map unknown 3xx to format', () => {
+    expect(categorizeError(301)).toBe('format');
+  });
+
+  it('should return format for non-number status', () => {
+    expect(categorizeError('500' as unknown as number)).toBe('format');
+  });
+
+  it('should return format for NaN status', () => {
+    expect(categorizeError(Number.NaN)).toBe('format');
+  });
+
+  it('should return format for undefined status', () => {
+    expect(categorizeError(undefined as unknown as number)).toBe('format');
+  });
+
+  it('should handle empty string body on 429 as rate_limit', () => {
+    expect(categorizeError(429, '')).toBe('rate_limit');
+  });
+
+  it('should handle empty string body on 400 as format', () => {
+    expect(categorizeError(400, '')).toBe('format');
+  });
+
+  it('should be case-insensitive for "insufficient_quota" detection', () => {
+    expect(categorizeError(429, 'INSUFFICIENT_QUOTA')).toBe('billing');
+  });
+
+  it('should be case-insensitive for "exceeded quota" detection', () => {
+    expect(categorizeError(429, 'EXCEEDED QUOTA')).toBe('billing');
+  });
+
+  it('should be case-insensitive for "session expired" detection', () => {
+    expect(categorizeError(400, 'SESSION EXPIRED')).toBe('session_expired');
+  });
+
+  it('should be case-insensitive for "model not found" detection', () => {
+    expect(categorizeError(400, 'MODEL NOT FOUND')).toBe('model_not_found');
   });
 });
