@@ -10,7 +10,7 @@
  * "work you've already done this turn" anchor when the window drops messages.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentLoop } from '../../src/core/agent/loop.js';
 import { extractTurnMutations } from '../../src/core/agent/loop-helpers.js';
 import {
@@ -81,7 +81,13 @@ function stop(content = 'done'): BrainResponse {
 }
 
 describe('long-turn work anchor — prepareMessages', () => {
+  // This turn edits src/ and never ships, which the (orthogonal) ship-completion
+  // guard would re-enter to nudge — shifting the last brain.call away from the
+  // work-anchor injection under test. Isolate the work anchor from the guard.
+  afterEach(() => { delete process.env['SUDO_SHIP_COMPLETION_GUARD']; });
+
   it('surfaces an evicted file edit so the agent does not disown it', async () => {
+    process.env['SUDO_SHIP_COMPLETION_GUARD'] = '0';
     const brain = createMockBrain();
     // First action edits a file, then 7 more distinct tool rounds push the edit
     // out of the 12-message window (8 rounds => 16 non-system + user = 17).

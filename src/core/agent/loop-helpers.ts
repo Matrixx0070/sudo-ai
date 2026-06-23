@@ -1429,6 +1429,50 @@ export function extractTurnMutations(
 }
 
 /**
+ * Ship-signal classification for the completion guard (trigger B: edit-without-ship).
+ * Scans this turn's assistant tool CALLS — where the arguments (path + action) live,
+ * unlike tool results — to decide two things:
+ *
+ *  - `editedSrcOrTest`: a code change landed under `src/` or `tests/` (the kind of
+ *    edit that normally ships as a PR). Counts `coder.*` write/edit tools and
+ *    `meta.self-modify` write-file/edit-file. Deliberately scoped to src/tests so
+ *    workspace/memory scratch edits and config tweaks do NOT trip the guard.
+ *  - `deployed`: the turn ran `meta.self-modify` restart/full-cycle — a self-deploy
+ *    to the live daemon, which legitimately needs no PR. This excludes the edit from
+ *    the ship nudge (build/test are NOT deploy signals: they are shared with the
+ *    pre-PR verify path, so a turn that edits + tests but forgets to commit still
+ *    gets nudged).
+ *
+ * Commit/PR detection stays on tool RESULTS in the guard itself, because a PR's
+ * success is only knowable from the result string ("Opened PR #N").
+ */
+export function classifyShipEditSignals(
+  turnMsgs: Array<{ role: string; toolCalls?: Array<{ name: string; arguments?: Record<string, unknown> }> }>,
+): { editedSrcOrTest: boolean; deployed: boolean } {
+  let editedSrcOrTest = false;
+  let deployed = false;
+  for (const m of turnMsgs) {
+    if (m.role !== 'assistant' || !m.toolCalls) continue;
+    for (const tc of m.toolCalls) {
+      const name = tc.name ?? '';
+      const args = tc.arguments ?? {};
+      const action = typeof args['action'] === 'string' ? (args['action'] as string) : '';
+      if (name === 'meta.self-modify' && /^(restart|full-cycle)$/.test(action)) {
+        deployed = true;
+      }
+      const isCodeEdit =
+        /^coder\.(write-file|edit-file|smart-edit|multi-edit|apply-patch|notebook-edit)$/.test(name) ||
+        (name === 'meta.self-modify' && /^(write-file|edit-file)$/.test(action));
+      if (!isCodeEdit) continue;
+      const rawPath = args['path'] ?? args['filePath'] ?? args['file'];
+      const p = typeof rawPath === 'string' ? rawPath : '';
+      if (/(^|\/)(src|tests)\//.test(p)) editedSrcOrTest = true;
+    }
+  }
+  return { editedSrcOrTest, deployed };
+}
+
+/**
  * Remove, in place, any prior `[AlignmentAggregator]` advisory system messages.
  * The owner-loyalty check runs every loop iteration and pushes a near-identical
  * YELLOW/RED advisory each time; left to accumulate, those most-recent

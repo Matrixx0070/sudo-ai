@@ -59,6 +59,7 @@ self-edit tools, and the GitHub connector that stranded an otherwise-correct tur
 | `git ls-files` allowlisted; Intelligence Brief framed as background | #401 | A `git ls-files` refusal stalled the commit step; past-episodes read as a stale "current task" |
 | `github.commit` empty-tree refusal made recoverable | #404 | Committing before editing dead-ended ("nothing to commit"), no retry |
 | `github.open_pr` returns the tree to base | #408 | The shared checkout was stranded on the feature branch → next branch stacked on it |
+| Ship-completion guard (deterministic re-entry) | #413 + follow-up | A turn that *commits-without-PR* (A), or *edits `src/`/`tests/` without committing* (B), re-enters (capped) with a hard nudge to finish the cycle — unless it was a self-deploy (`meta.self-modify` full-cycle/restart), which needs no PR |
 
 Earlier enabling work (narrow-autonomy slices): self-modify `test` action + full-cycle
 (#380), repo-allowlist + `repoExecEnv` sanitisation (#381/#384/#385), `SUDO_REPO_EXEC=1`
@@ -95,6 +96,14 @@ the session DB — no merging of SUDO's output without independent verification.
 A recurring observation: SUDO's *work* became reliably good early (it finds real gaps,
 writes green tests, self-verifies, and catches its own wrong assumptions). The last mile —
 **shipping** (branch → commit → PR → clean tree) — is what the #404/#406/#408 fixes hardened.
+
+Later rounds showed the failure shifting *earlier* in the cycle — rounds 6 & 11 wrote +
+committed then stopped before the PR; rounds 14–16 wrote a verified change then stopped
+before even committing. Prompt nudges (#403/#406) reduced but didn't eliminate it, so the
+**ship-completion guard** (#413 + follow-up) makes completion deterministic: if a turn would
+end with a commit-but-no-PR (A) or a `src/`/`tests/` edit-but-no-commit (B), the loop
+re-enters (capped at 2) with a hard finish-the-cycle nudge. Self-deploys
+(`meta.self-modify` full-cycle/restart) are excluded — they need no PR.
 
 ---
 
