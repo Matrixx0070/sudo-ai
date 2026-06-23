@@ -59,7 +59,7 @@ self-edit tools, and the GitHub connector that stranded an otherwise-correct tur
 | `git ls-files` allowlisted; Intelligence Brief framed as background | #401 | A `git ls-files` refusal stalled the commit step; past-episodes read as a stale "current task" |
 | `github.commit` empty-tree refusal made recoverable | #404 | Committing before editing dead-ended ("nothing to commit"), no retry |
 | `github.open_pr` returns the tree to base | #408 | The shared checkout was stranded on the feature branch → next branch stacked on it |
-| Ship-completion guard (deterministic re-entry) | #413 + follow-up | A turn that *commits-without-PR* (A), or *edits `src/`/`tests/` without committing* (B), re-enters (capped) with a hard nudge to finish the cycle — unless it was a self-deploy (`meta.self-modify` full-cycle/restart), which needs no PR |
+| Ship-completion guard (deterministic re-entry) | #413 + #418/#419 | A turn that *commits-without-PR* (A), or *edits `src/`/`tests/` without committing* (B), re-enters (capped) with a hard nudge to finish the cycle — unless it was a self-deploy (`meta.self-modify` full-cycle/restart), which needs no PR. **Live-verified** by a forced trigger; that drill also exposed #419 (the detector must substring-match tool names — live history carries both bare `write-file` and prefixed `coder.write-file`) |
 
 Earlier enabling work (narrow-autonomy slices): self-modify `test` action + full-cycle
 (#380), repo-allowlist + `repoExecEnv` sanitisation (#381/#384/#385), `SUDO_REPO_EXEC=1`
@@ -100,10 +100,20 @@ writes green tests, self-verifies, and catches its own wrong assumptions). The l
 Later rounds showed the failure shifting *earlier* in the cycle — rounds 6 & 11 wrote +
 committed then stopped before the PR; rounds 14–16 wrote a verified change then stopped
 before even committing. Prompt nudges (#403/#406) reduced but didn't eliminate it, so the
-**ship-completion guard** (#413 + follow-up) makes completion deterministic: if a turn would
+**ship-completion guard** (#413 + #418/#419) makes completion deterministic: if a turn would
 end with a commit-but-no-PR (A) or a `src/`/`tests/` edit-but-no-commit (B), the loop
 re-enters (capped at 2) with a hard finish-the-cycle nudge. Self-deploys
 (`meta.self-modify` full-cycle/restart) are excluded — they need no PR.
+
+A forced-trigger drill then **verified B live** — and earned its keep by exposing #419: the
+detector's first cut matched tool names with an anchored `/^coder\.…$/`, but live history
+carries both the bare `write-file` and the prefixed `coder.write-file`, so the guard silently
+never fired until it was switched to substring matching (the same style as the #398 work
+anchor, which is *why* that one fires live). A green unit suite had hidden the dead path by
+testing only the prefixed names — the recurring lesson of this campaign: verify on real
+outputs, never trust a passing unit test alone. On the live run the guard fired, re-entered
+twice, capped, and SUDO used the nudge's escape clause to correctly decline a throwaway edit
+(no junk PR) — the guard nudges without bullying.
 
 ---
 
