@@ -15,7 +15,7 @@
  * through the REAL failure-learner module — proving both halves connect.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   executeToolCalls,
   type ToolRegistryLike,
@@ -96,8 +96,16 @@ async function run(
 describe('recovery reader — prevention hint injection on tool failure', () => {
   // PermissionManager is a process-wide singleton — reset so a stray override
   // from another test can't short-circuit Phase-0 before our path runs.
+  // Also disable the structured tool-error hints (a SEPARATE feature, covered by
+  // tests/tools/error-formatter.test.ts) so these exact-match assertions see
+  // only the recovery-reader's prevention-hint behavior. RDR-8 re-enables them
+  // to verify the two features stack.
   beforeEach(() => {
     PermissionManager.getInstance().resetAll();
+    process.env['SUDO_TOOL_ERROR_HINTS'] = '0';
+  });
+  afterEach(() => {
+    delete process.env['SUDO_TOOL_ERROR_HINTS'];
   });
 
   it('RDR-1: failed tool + lookup hit → hint prepended, lookup called with (tool, error)', async () => {
@@ -204,5 +212,23 @@ describe('recovery reader — prevention hint injection on tool failure', () => 
     const tr = events.find((e) => e.type === 'tool-result');
     expect(tr?.success).toBe(false);
     expect(tr?.args).toEqual({ url: 'http://x' });
+  });
+
+  it('RDR-10: error hint stacks BELOW the prevention hint and raw output', async () => {
+    // Exercises both features together — re-enable the structured tool-error hint.
+    delete process.env['SUDO_TOOL_ERROR_HINTS'];
+    const session = makeSession();
+    const err = 'Path traversal blocked: src/x.ts';
+    const lookup = vi.fn(() => 'Prevention rule: use meta.self-modify') as PreventionLookupLike;
+    await run([call('coder.read-file', { path: 'src/x.ts' })], session, softFailRegistry(err), lookup);
+
+    const stored = String(session.messages[0]?.content ?? '');
+    // Top→bottom order: prevention hint, raw tool output, then the error hint.
+    expect(stored.startsWith('Prevention rule: use meta.self-modify')).toBe(true);
+    expect(stored).toContain(err);
+    expect(stored).toContain('↳ How to fix this:');
+    expect(stored.indexOf(err)).toBeLessThan(stored.indexOf('How to fix this'));
+    // The path-traversal rule fired (points the model at meta.self-modify).
+    expect(stored).toContain('meta.self-modify');
   });
 });

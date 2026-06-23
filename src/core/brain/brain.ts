@@ -54,6 +54,7 @@ import type {
 } from './types.js';
 import type { SudoConfig } from '../config/types.js';
 import { ToolRegistry } from '../tools/registry.js';
+import { tryParseJson, isJsonRepairEnabled } from '../tools/json-repair.js';
 import type { NegativeRouter, RoutingResult } from './negative-router.js';
 import type { HistoryMessage } from '../agent/cheap-model-router.js';
 
@@ -608,13 +609,18 @@ export class Brain {
 
     while ((match = pattern.exec(text)) !== null) {
       const raw = match[1]?.trim() ?? '';
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        log.warn({ raw }, 'Text tool-call fallback: JSON parse failed — skipping block');
+      // Weaker models emit almost-valid JSON here (trailing commas, single
+      // quotes, fences, truncated tail). Repair before dropping the call — a
+      // silently-skipped block strands the model into a retry loop.
+      const parsedRes = tryParseJson<Record<string, unknown>>(raw, isJsonRepairEnabled());
+      if (!parsedRes) {
+        log.warn({ raw }, 'Text tool-call fallback: JSON parse failed (repair exhausted) — skipping block');
         continue;
       }
+      if (parsedRes.repaired) {
+        log.warn({ raw }, 'Text tool-call fallback: malformed JSON repaired before parse');
+      }
+      const parsed = parsedRes.value;
 
       const name = typeof parsed['name'] === 'string' ? parsed['name'] : '';
       if (!name) {
@@ -669,19 +675,22 @@ export class Brain {
 
     while ((match = jsonPattern.exec(text)) !== null) {
       let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(match[0]) as Record<string, unknown>;
-      } catch {
+      const whole = tryParseJson<Record<string, unknown>>(match[0], isJsonRepairEnabled());
+      if (whole) {
+        if (whole.repaired) {
+          log.warn({ raw: match[0].slice(0, 200) }, 'JSON tool-call fallback: malformed JSON repaired before parse');
+        }
+        parsed = whole.value;
+      } else {
         // The outer JSON may be incomplete — try to extract just the tool_calls array.
         const arrMatch = /"tool_calls"\s*:\s*(\[[\s\S]*?\])/.exec(match[0]);
         if (!arrMatch) continue;
-        try {
-          const calls = JSON.parse(arrMatch[1]) as unknown[];
-          parsed = { tool_calls: calls };
-        } catch {
-          log.warn({ raw: match[0].slice(0, 200) }, 'JSON tool-call fallback: parse failed — skipping');
+        const arr = tryParseJson<unknown[]>(arrMatch[1], isJsonRepairEnabled());
+        if (!arr) {
+          log.warn({ raw: match[0].slice(0, 200) }, 'JSON tool-call fallback: parse failed (repair exhausted) — skipping');
           continue;
         }
+        parsed = { tool_calls: arr.value };
       }
 
       const calls = Array.isArray(parsed['tool_calls']) ? (parsed['tool_calls'] as unknown[]) : [];
