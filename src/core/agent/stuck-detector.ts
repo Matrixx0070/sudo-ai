@@ -45,6 +45,32 @@ export interface StuckDetectorResult {
 /** Max chars of normalized error content used for the signature. */
 const SIGNATURE_CONTENT_LENGTH = 300;
 
+/**
+ * Conservative failure markers for STRING tool results. `isToolResultSuccess`
+ * only flags strings that literally start with "error", so command/exec
+ * failures ("Command exited with code 127", "command not found", "No such
+ * file") are misclassified as SUCCESS — which made the StuckDetector inert for
+ * the most common error type (the stored tool message carries only text, not
+ * the tool's authoritative `success` flag). These high-precision markers catch
+ * those. Used to AUGMENT (never replace) isToolResultSuccess, so the signal is a
+ * strict superset — it can only ever classify MORE results as errors.
+ */
+const TOOL_ERROR_MARKERS: readonly RegExp[] = [
+  /\bcommand not found\b/i,
+  /\bno such file or directory\b/i,
+  /\bpermission denied\b/i,
+  /\bexited with (?:a )?(?:non-?zero|code [1-9][0-9]*)/i,
+  /\bthe tool call failed\b/i,
+  // No trailing \b here: these phrases often abut punctuation (e.g. a trailing
+  // ")" or ":"), and \b never matches between two non-word chars.
+  /(?:traceback \(most recent call last\)|unhandled exception|fatal error)/i,
+];
+
+/** True when a string tool result shows a clear command/exec failure marker. */
+export function looksLikeToolError(content: string): boolean {
+  return TOOL_ERROR_MARKERS.some((re) => re.test(content));
+}
+
 function envPositiveInt(name: string, fallback: number): number {
   const n = Number(process.env[name]);
   return Number.isInteger(n) && n > 0 ? n : fallback;

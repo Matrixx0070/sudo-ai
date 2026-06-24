@@ -67,7 +67,7 @@ import { LoopGuard } from './loop-guard.js';
 import { buildLoopFallbackReply } from './loop-fallback.js';
 import { DoomLoopDetector } from './doom-loop.js';
 import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
-import { StuckDetector } from './stuck-detector.js';
+import { StuckDetector, looksLikeToolError } from './stuck-detector.js';
 import { isSwarmRescueEnabled, getSwarmRescueStrategy, swarmRescueCallOpts } from './swarm-rescue.js';
 import { generateIntelligenceBrief } from './intelligence-brief.js';
 import { shouldFork, forkSession } from '../sessions/session-fork.js';
@@ -2806,7 +2806,13 @@ export class AgentLoop extends AgentLoopInjections {
                 if (!_sm || _sm.role !== 'tool') continue;
                 const _content = typeof _sm.content === 'string' ? _sm.content : JSON.stringify(_sm.content);
                 const _toolName = _sm.toolName ?? 'unknown';
-                const stuckResult = this.stuckDetector.recordResult(_toolName, _content, !isToolResultSuccess(_sm.content));
+                // isError = the authoritative-ish classifier OR a command/exec
+                // failure marker. isToolResultSuccess only flags strings starting
+                // with "error", so without the marker check exec failures
+                // ("Command exited with code 127") read as success and the streak
+                // never builds. The OR keeps the signal a strict superset.
+                const _isErr = !isToolResultSuccess(_sm.content) || looksLikeToolError(_content);
+                const stuckResult = this.stuckDetector.recordResult(_toolName, _content, _isErr);
                 if (stuckResult.action === 'warn') {
                   const stuckWarn = `[StuckDetector] ${stuckResult.reason ?? 'Repeated identical tool errors detected'}`;
                   session.messages.push({ role: 'system', content: stuckWarn });
