@@ -1,0 +1,34 @@
+{
+  "purpose": "Frozen pre-deploy baseline for verifying the Mythos harness slices (A behavioral layer, B JSON-repair + structured tool-error hints, C uniform tool-use discipline). Re-run scripts/verify-harness-failure-rate.mjs after several days of post-deploy traffic and compare AFTER columns against this BEFORE snapshot.",
+  "captured_at": "2026-06-24T00:30:00Z",
+  "deploy_boundary": "2026-06-24T00:26:05Z",
+  "deploy_boundary_note": "slice-C (uniform tool discipline, PR #427) live; slices A (#424) and B (#425) deployed earlier the same session. All baseline events predate this boundary.",
+  "baseline": {
+    "primary_exec_refusal": {
+      "source": "data/exec-audit.jsonl (append-only, one row per repo-exec attempt)",
+      "attempts": 305,
+      "refused": 107,
+      "refusal_rate_pct": 35.1,
+      "model_fixable_refused": 86,
+      "model_fixable_rate_pct": 28.2,
+      "by_reason": { "metacharacters": 70, "not_allowlisted": 16, "flag_not_set": 1, "other": 20 }
+    },
+    "secondary_failure_share": {
+      "source": "data/mind.db failure_log (append-only)",
+      "failures": 465,
+      "preventable_allowlist_plus_badarg": 127,
+      "preventable_rate_pct": 27.3,
+      "stuck_or_loop": 5,
+      "stuck_or_loop_rate_pct": 1.1
+    },
+    "loop_signatures": 0,
+    "loop_signatures_note": "LoopGuard cross-session learned-loop store is empty — recurring stuck-loops are not happening; corroborates deferring swarm-rescue."
+  },
+  "success_criteria": {
+    "min_after_sample": "Do not judge until AFTER has >= ~100 repo-exec attempts (else noise).",
+    "primary_win": "AFTER model_fixable_rate_pct materially below 28.2% (target: relative drop >= 30%, i.e. < ~20%).",
+    "secondary_corroboration": "AFTER preventable_rate_pct below 27.3%.",
+    "swarm_rescue_check": "If AFTER stuck_or_loop_rate stays ~1% or lower, the decision to defer swarm-rescue stands."
+  },
+  "rerun": "node scripts/verify-harness-failure-rate.mjs"
+}
