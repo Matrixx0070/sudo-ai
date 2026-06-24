@@ -30,6 +30,27 @@ export const DOOM_LOOP_THRESHOLD: number =
 export const DOOM_LOOP_RO_THRESHOLD: number =
   Number(process.env['SUDO_DOOM_LOOP_RO_THRESHOLD']) || 8;
 
+/**
+ * Staleness window (ms). A cross-turn repeat only counts toward a doom loop if
+ * it recurs within this window of the prior occurrence; if the previous call to
+ * the same tool+args was longer ago, the cycle is restarted (count → 1) because
+ * spaced-out reuse is legitimate, not a loop.
+ *
+ * Without this, a fixed-arg tool called once per turn over the daemon's uptime
+ * (e.g. `automation.cron-health` with `{}` args, invoked ~every 30min by
+ * heartbeats — measured min gap ~16min) accumulates unbounded, eventually
+ * tripping the warn (4) and then the force-terminate (8) threshold on its FIRST
+ * call in an otherwise-unrelated turn. A genuine loop repeats in seconds (within
+ * a turn's iterations or a tight burst), far inside this window, so detection is
+ * preserved. Set to 0 to disable the window (legacy accumulate-forever behavior).
+ */
+export const DOOM_LOOP_STALE_MS: number = (() => {
+  const raw = process.env['SUDO_DOOM_LOOP_STALE_MS'];
+  if (raw === undefined || raw === '') return 5 * 60_000; // 5 minutes
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 5 * 60_000;
+})();
+
 // ---------------------------------------------------------------------------
 // Telemetry event types (exported for HookManager integration)
 // ---------------------------------------------------------------------------
@@ -103,7 +124,7 @@ interface CycleFingerprint {
  */
 export class DoomLoopDetector {
   /** Tool calls grouped by "toolName:argsSignature" for cross-turn repeat detection. */
-  private cycleMap = new Map<string, { count: number; lastTurn: number; toolName: string }>();
+  private cycleMap = new Map<string, { count: number; lastTurn: number; lastSeenMs: number; toolName: string }>();
 
   /** All fingerprints in order (for sliding-window analysis). */
   private fingerprints: CycleFingerprint[] = [];
@@ -141,16 +162,28 @@ export class DoomLoopDetector {
     // Store fingerprint
     this.fingerprints.push({ toolName, argsSignature, turnNumber });
 
-    // Count across turns (cross-message detection)
+    // Count across turns (cross-message detection), but only while repeats stay
+    // within the staleness window. A repeat that recurs long after the prior one
+    // is independent legitimate reuse, not a loop, so the cycle is restarted —
+    // this is what stops a fixed-arg tool used once per turn (cron-health via
+    // heartbeats) from accumulating into a false loop over the daemon's uptime.
+    const now = Date.now();
     const existing = this.cycleMap.get(key);
     if (existing) {
-      // Only count as a new cycle if it happened in a different turn
-      if (existing.lastTurn !== turnNumber) {
+      const stale = DOOM_LOOP_STALE_MS > 0 && now - existing.lastSeenMs > DOOM_LOOP_STALE_MS;
+      if (stale) {
+        // Prior occurrence was long ago → restart the cycle and re-arm warnings.
+        existing.count = 1;
+        existing.lastTurn = turnNumber;
+        this.warnedKeys.delete(key);
+      } else if (existing.lastTurn !== turnNumber) {
+        // Only count as a new cycle if it happened in a different turn.
         existing.count++;
         existing.lastTurn = turnNumber;
       }
+      existing.lastSeenMs = now;
     } else {
-      this.cycleMap.set(key, { count: 1, lastTurn: turnNumber, toolName });
+      this.cycleMap.set(key, { count: 1, lastTurn: turnNumber, lastSeenMs: now, toolName });
     }
 
     const entry = this.cycleMap.get(key)!;
