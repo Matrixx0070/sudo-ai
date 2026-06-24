@@ -242,4 +242,11 @@ export interface SystemPromptOptions {
    * Defaults to process.env.TELEGRAM_CHAT_ID?.split(',')[0]?.trim()
    */
   mainPeerId?: string;
+  /**
+   * The active backing model ref (e.g. "claude-oauth/opus", "ollama/llama3.2").
+   * Used to classify the model tier and, for weak models, append the explicit
+   * operating addendum (adaptive amplification). Omitted → treated as 'strong'
+   * (no addendum). Lives below the cache boundary since it is model-dependent.
+   */
+  modelId?: string;
 }
