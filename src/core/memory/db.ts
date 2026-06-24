@@ -401,7 +401,18 @@ export class MindDB {
   ): number {
     // Security: scan for prompt-injection before persisting.
     // Pass the message role so assistant replies are not blocked by URL patterns.
-    const safeContent = guardMemoryWrite(content, 'MindDB.storeMessage', role);
+    //
+    // The conversation log must be DURABLE. A tool result legitimately containing
+    // ANSI escape codes (colorized `pm2`/`rg`/`git` output) or external URLs must
+    // be STORED with the offending bytes stripped, never rejected: a strict throw
+    // here propagates out of SessionManager._persistToDb's write loop and silently
+    // drops every later message in the turn — including the final assistant reply
+    // (observed live as "SUDO runs tools then goes quiet"). Sanitize replaces the
+    // payload with [REDACTED] — lossless for meaning and still neutralizing any
+    // re-injection vector. Opt back into the old throwing behavior with
+    // SUDO_MSG_SCAN_STRICT=1. Evergreen memory writes (storeChunk) stay strict.
+    const msgScanMode = process.env['SUDO_MSG_SCAN_STRICT'] === '1' ? 'strict' : 'sanitize';
+    const safeContent = guardMemoryWrite(content, 'MindDB.storeMessage', role, msgScanMode);
     const info = this.db.prepare(`
       INSERT INTO messages
         (session_id, role, content, tool_name, tool_input, tool_output,

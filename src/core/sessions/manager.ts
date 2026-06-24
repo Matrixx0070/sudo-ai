@@ -333,19 +333,35 @@ export class SessionManager {
 
       if (totalMessages > alreadyPersisted) {
         const newMessages = session.messages.slice(alreadyPersisted);
+        let failed = 0;
         for (const msg of newMessages) {
-          this.db.storeMessage(session.id, msg.role, msg.content ?? '', {
-            tool_name:  msg.toolName  ?? undefined,
-            tool_input: msg.toolInput ?? undefined,
-            tool_output: msg.toolOutput ?? undefined,
-          });
+          try {
+            this.db.storeMessage(session.id, msg.role, msg.content ?? '', {
+              tool_name:  msg.toolName  ?? undefined,
+              tool_input: msg.toolInput ?? undefined,
+              tool_output: msg.toolOutput ?? undefined,
+            });
+          } catch (msgErr) {
+            // A single un-persistable message (e.g. an injection-scanner
+            // rejection in strict mode) must NEVER abort the loop and silently
+            // drop every later message — including the turn's final assistant
+            // reply. That was the live "runs tools then goes quiet" bug. Log,
+            // skip, and keep going so the rest of the turn still persists.
+            failed++;
+            log.error(
+              { sessionId: session.id, role: msg.role, err: String(msgErr) },
+              'storeMessage failed — skipping this message, continuing persist',
+            );
+          }
         }
-        // Update the tracking counter so subsequent saves skip these.
+        // Advance the counter past EVERY message we attempted (stored or skipped)
+        // so a poison message is not retried forever and clean messages are not
+        // re-inserted as duplicates on the next save.
         if (cached) {
           cached.persistedMessageCount = totalMessages;
         }
         log.debug(
-          { sessionId: session.id, newCount: newMessages.length, total: totalMessages },
+          { sessionId: session.id, newCount: newMessages.length - failed, skipped: failed, total: totalMessages },
           'Messages persisted to DB',
         );
       }
