@@ -40,6 +40,15 @@ export interface BrainMessage {
   toolCallId?: string;
   /** Name of the tool that produced this result (present when role === 'tool'). */
   toolName?: string;
+  /** Internal marker: already written to the DB (set by SessionManager). Non-LLM. */
+  _persisted?: boolean;
+  /**
+   * Internal marker: an ephemeral, per-turn system block (intelligence brief,
+   * deep insights, drive prompt, tier adjustment, commitments, injection
+   * warning) re-generated from live state each turn. Persistence skips these so
+   * the DB holds only real conversation. Non-LLM. See SUDO_PERSIST_EPHEMERAL.
+   */
+  _ephemeral?: boolean;
 }
 
 export interface BrainRequest {

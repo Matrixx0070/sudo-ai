@@ -29,6 +29,21 @@ export interface BrainMessage {
   toolInput?: string;
   /** Tool call output JSON string, populated when role === 'tool'. */
   toolOutput?: string;
+  /**
+   * Internal (non-LLM) marker: this message has already been written to the DB.
+   * Set by SessionManager._persistToDb so identity-based persistence never
+   * re-writes or drops a message under in-memory array mutation. Enumerable on
+   * purpose so a `{...m}` spread carries it across a trim/window.
+   */
+  _persisted?: boolean;
+  /**
+   * Internal (non-LLM) marker: this is an ephemeral, per-turn system block
+   * (intelligence brief, deep insights, drive prompt, tier adjustment, active
+   * commitments, injection warning). It is re-generated from live state every
+   * turn, so persisting it would bloat the DB with stale duplicates and dilute
+   * the reload window. _persistToDb skips writing these (see SUDO_PERSIST_EPHEMERAL).
+   */
+  _ephemeral?: boolean;
 }
 
 // ---------------------------------------------------------------------------

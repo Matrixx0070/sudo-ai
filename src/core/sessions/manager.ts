@@ -361,9 +361,22 @@ export class SessionManager {
         // Hydrated messages are pre-marked at load (they came FROM the DB).
         let persisted = 0;
         let failed = 0;
+        let skippedEphemeral = 0;
+        const persistEphemeral = process.env['SUDO_PERSIST_EPHEMERAL'] === '1';
         for (const msg of session.messages) {
-          const m = msg as BrainMessage & { _persisted?: boolean };
+          const m = msg as BrainMessage & { _persisted?: boolean; _ephemeral?: boolean };
           if (m._persisted === true) continue;
+          // Ephemeral per-turn system blocks (intelligence brief, deep insights,
+          // drive prompt, tier adjustment, commitments, injection warning) are
+          // re-generated every turn from live state. Writing them would bloat the
+          // DB with stale duplicates and dilute the hydrate reload window — so we
+          // mark them persisted (bookkeeping stays consistent) but never write.
+          // Kill-switch SUDO_PERSIST_EPHEMERAL=1 restores the legacy write-all.
+          if (m._ephemeral === true && !persistEphemeral) {
+            m._persisted = true;
+            skippedEphemeral++;
+            continue;
+          }
           try {
             this.db.storeMessage(session.id, msg.role, msg.content ?? '', {
               tool_name:  msg.toolName  ?? undefined,
@@ -381,9 +394,9 @@ export class SessionManager {
           m._persisted = true; // mark even on failure: never retry a poison message forever
         }
         if (cached) cached.persistedMessageCount = session.messages.length;
-        if (persisted > 0 || failed > 0) {
+        if (persisted > 0 || failed > 0 || skippedEphemeral > 0) {
           log.debug(
-            { sessionId: session.id, newCount: persisted, skipped: failed, total: session.messages.length },
+            { sessionId: session.id, newCount: persisted, skipped: failed, skippedEphemeral, total: session.messages.length },
             'Messages persisted to DB (identity)',
           );
         }
