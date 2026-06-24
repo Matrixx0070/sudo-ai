@@ -120,6 +120,11 @@ module.exports = {
         SUDO_MAX_CONTEXT_TOKENS: process.env['SUDO_MAX_CONTEXT_TOKENS'] || '200000',
         SUDO_FORK_THRESHOLD_CHARS: process.env['SUDO_FORK_THRESHOLD_CHARS'] || '600000',
         SUDO_FORK_MESSAGE_COUNT: process.env['SUDO_FORK_MESSAGE_COUNT'] || '250',
+        // Messages reloaded into the working set on a cold reload (restart/eviction).
+        // Code default 100 (~7-8 turns once per-turn system blocks are counted);
+        // 500 restores far more conversation after a restart. Budget + compaction
+        // bound what actually reaches the model.
+        SUDO_HYDRATE_MESSAGE_LIMIT: process.env['SUDO_HYDRATE_MESSAGE_LIMIT'] || '500',
 
         // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
         // long drill turns OOM-crashed the ~4GB default heap (FATAL: JavaScript

@@ -112,3 +112,33 @@ describe('SessionManager — session-meta upsert (Phase 2b)', () => {
     (db as unknown as { close?: () => void }).close?.();
   });
 });
+
+describe('SessionManager — hydrate message limit (SUDO_HYDRATE_MESSAGE_LIMIT)', () => {
+  afterEach(() => { delete process.env['SUDO_HYDRATE_MESSAGE_LIMIT']; });
+
+  async function seed150(db: MindDB, channel: string, peer: string): Promise<string> {
+    const sm = new SessionManager(db);
+    const s = await sm.getOrCreate(channel as 'web', peer);
+    for (let i = 0; i < 150; i++) s.messages.push({ role: 'user', content: `m${i}` });
+    await sm.save(s);
+    return s.id;
+  }
+
+  it('cold reload loads only the default 100 when unset', async () => {
+    const db = new MindDB(freshDbPath());
+    delete process.env['SUDO_HYDRATE_MESSAGE_LIMIT'];
+    await seed150(db, 'web', 'h1');
+    const reloaded = await new SessionManager(db).getOrCreate('web', 'h1'); // cold cache → hydrate
+    expect(reloaded.messages.length).toBe(100);
+    (db as unknown as { close?: () => void }).close?.();
+  });
+
+  it('cold reload loads more when SUDO_HYDRATE_MESSAGE_LIMIT is raised', async () => {
+    const db = new MindDB(freshDbPath());
+    await seed150(db, 'web', 'h2');
+    process.env['SUDO_HYDRATE_MESSAGE_LIMIT'] = '300';
+    const reloaded = await new SessionManager(db).getOrCreate('web', 'h2'); // constructed AFTER env set
+    expect(reloaded.messages.length).toBe(150); // all 150 (limit 300 > 150)
+    (db as unknown as { close?: () => void }).close?.();
+  });
+});
