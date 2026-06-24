@@ -125,12 +125,18 @@ export class TaskExecutor {
 
   private async _tick(): Promise<void> {
     // Drain as many tasks as the concurrency window allows
-    let task: Task | null;
+    let next: Task | null;
 
-    while ((task = this.queue.dequeue()) !== null) {
-      // Don't await — run tasks in parallel up to maxConcurrent
+    while ((next = this.queue.dequeue()) !== null) {
+      // Capture per-iteration. The .catch() below runs ASYNChronously — after the
+      // loop has advanced and, on exit, reassigned the shared variable to null.
+      // Closing over a shared `let task` would make the catch read `null.id` and
+      // throw an *unhandled* rejection (the very bug this comment guards). A
+      // block-scoped const binds each catch to its own task.
+      const task = next;
+      // Don't await — run tasks in parallel up to maxConcurrent.
       this._executeTask(task).catch(err =>
-        logger.error({ taskId: task!.id, err: String(err) }, 'Unexpected executor error'),
+        logger.error({ taskId: task.id, err: String(err) }, 'Unexpected executor error'),
       );
     }
   }
