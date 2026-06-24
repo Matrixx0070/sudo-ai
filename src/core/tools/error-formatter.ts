@@ -55,12 +55,12 @@ const RULES: ErrorRule[] = [
   {
     // repo-allowlist.ts: 'shell metacharacters are not allowed in repo-exec'
     id: 'repo-exec-metachar',
-    test: (e) => e.includes('shell metacharacters are not allowed'),
+    test: (e) => e.includes('not allowed in repo-exec') || e.includes('shell metacharacters are not allowed'),
     hint: {
-      what: 'system.exec target:"repo" refused the command because it contains shell metacharacters.',
-      why: 'The real-repo channel only runs ONE plain command — no pipes, redirects, &&, globs, or substitutions.',
-      fix: 'Run a single plain command. If you were chaining, split it into separate calls.',
-      example: 'system.exec({ target: "repo", command: "pnpm test tests/brain/json-repair.test.ts" })',
+      what: 'system.exec target:"repo" refused the command because of an unquoted shell operator.',
+      why: 'The real-repo channel runs ONE command via execFile (no shell) — pipes, redirects, &&, and substitutions are not honored. But QUOTED arguments are fine: a regex like "a|b" or a glob like "*.ts" works as long as you wrap it in quotes.',
+      fix: 'Quote any pattern/glob argument (rg -n "a|b\\(\\)" src), and never pipe or redirect — run one plain command. To filter output, narrow the command itself instead of piping to grep/tail.',
+      example: 'system.exec({ target: "repo", command: "rg -n \\"as any|attach\\" src" })',
     },
   },
   {
@@ -69,9 +69,9 @@ const RULES: ErrorRule[] = [
     test: (e) => e.includes('is not a repo-allowlisted command'),
     hint: {
       what: 'That command is not on the repo-exec allowlist.',
-      why: 'target:"repo" permits only a fixed set of read/verify commands for safety.',
-      fix: 'Use an allowlisted command: pnpm test <path>, pnpm lint, pnpm run build, git status/diff/log, rg <pattern> <path>, or pm2 logs sudo-ai-v5 --nostream.',
-      example: 'system.exec({ target: "repo", command: "pnpm lint" })',
+      why: 'target:"repo" permits only a fixed set of read/verify commands for safety (pnpm/npm test|lint|build, read-only git, rg, ls, wc, read-only pm2). cat/head/tail/find/curl/node are NOT allowlisted.',
+      fix: 'To READ a repo file, use meta.self-modify action:"read-file" (or rg to search it) — not cat/head/tail. To FIND files, use rg --files -g "<glob>". To verify, use pnpm test/lint/build or read-only git.',
+      example: 'meta.self-modify({ action: "read-file", path: "src/core/agent/loop.ts" })',
     },
   },
   {

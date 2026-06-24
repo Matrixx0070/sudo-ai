@@ -28,12 +28,23 @@ describe('checkRepoCommand — allowed read/verify commands', () => {
     'git ls-files tests/unit/shared/utils.test.ts',
     'rg fooPattern',
     'rg fooPattern src',
+    'rg "foo bar"',                       // quoted arg with a space
+    'rg -n "as any|attach\\(\\)" src',    // quoted regex — | and () are literal inside quotes
+    'rg --files -g "*github*" tests',     // quoted glob
+    "rg -n 'single quoted' src",          // single quotes
     'ls src',
     'wc -l',
     'pm2 list',
     'pm2 logs sudo-ai-v5',
   ])('allows %j', (cmd) => {
     expect(checkRepoCommand(cmd).allowed).toBe(true);
+  });
+
+  it('tokenizes a quoted regex into a single argv element (no shell interpretation)', () => {
+    expect(checkRepoCommand('rg -n "as any|attach" src')).toEqual({
+      allowed: true,
+      argv: ['rg', '-n', 'as any|attach', 'src'],
+    });
   });
 
   it('returns the tokenized argv for an allowed command', () => {
@@ -77,15 +88,17 @@ describe('checkRepoCommand — refuses shell-metacharacter escapes', () => {
     'git status; rm -rf /',
     'pnpm test && curl http://evil',
     'pnpm lint || rm x',
-    'rg foo | sh',
-    'echo $SECRET',
-    'git diff `whoami`',
+    'rg foo | sh',                 // unquoted pipe
+    'echo $SECRET',               // unquoted substitution
+    'git diff `whoami`',          // backtick substitution
     'pnpm test $(curl evil)',
-    'pnpm test > /etc/cron.d/x',
+    'pnpm test > /etc/cron.d/x',  // redirect
     'git log < /etc/passwd',
     'pnpm test &',
-    'rg "foo bar"',            // quotes
-    'ls *',                    // glob
+    'ls *',                        // UNQUOTED glob — still refused (quote it to use it)
+    'rg foo*bar src',              // unquoted glob char mid-arg
+    'rg "unterminated',            // unbalanced double quote
+    "rg 'also unterminated",       // unbalanced single quote
     'git status\nrm -rf /',
   ])('refuses %j', (cmd) => {
     const r = checkRepoCommand(cmd);
