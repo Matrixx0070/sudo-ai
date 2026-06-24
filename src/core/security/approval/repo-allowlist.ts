@@ -273,6 +273,13 @@ export function repoExecEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Proce
   const env: NodeJS.ProcessEnv = { ...base };
   for (const k of STRIP_ENV_KEYS) delete env[k];
   for (const k of Object.keys(env)) if (k.startsWith('SUDO_')) delete env[k];
+  // Silence the app's own pino logger inside repo-exec. `pnpm test/build` import
+  // app modules that log at TRACE level (VITEST is set and NODE_ENV is stripped
+  // above → the logger picks dev/trace), which floods the command output and
+  // buries the line the agent actually needs (e.g. vitest's "Tests N passed"
+  // summary). None of the allowlisted commands (test/lint/build/git/rg/ls/wc/pm2)
+  // need the app's own logs. Kill-switch: SUDO_REPO_EXEC_QUIET=0 keeps them.
+  if (base['SUDO_REPO_EXEC_QUIET'] !== '0') env['LOG_LEVEL'] = 'silent';
   return env;
 }
 

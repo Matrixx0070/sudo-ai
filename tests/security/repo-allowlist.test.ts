@@ -192,6 +192,15 @@ describe('repoExecEnv — strips the daemon prod runtime env', () => {
     expect(env['DATA_DIR']).toBe('/root/sudo-ai-v4/data');
   });
 
+  it('silences the app pino logger (LOG_LEVEL=silent) so command output is readable', () => {
+    expect(repoExecEnv(base)['LOG_LEVEL']).toBe('silent');
+  });
+
+  it('honours SUDO_REPO_EXEC_QUIET=0 (keeps logs for debugging)', () => {
+    const env = repoExecEnv({ ...base, SUDO_REPO_EXEC_QUIET: '0', LOG_LEVEL: 'info' });
+    expect(env['LOG_LEVEL']).toBe('info'); // not forced to silent
+  });
+
   it('keeps the base shell env so binaries still resolve', () => {
     const env = repoExecEnv(base);
     expect(env['PATH']).toBe('/usr/bin:/bin');
