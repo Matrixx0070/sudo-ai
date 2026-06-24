@@ -154,7 +154,7 @@ export class SessionManager {
     // the root of the duplicate-message bug (up to 60 copies of one reply).
     const key = this._peerKey(session.channel, session.peerId);
     if (!this.cache.has(key)) {
-      this.cache.set(key, { session, persistedMessageCount: this.db.countMessages(session.id) });
+      this.cache.set(key, { session, persistedMessageCount: this.db.countMessages?.(session.id) ?? 0 });
       this._evictIfOverLimit();
     }
 
@@ -328,7 +328,7 @@ export class SessionManager {
       const cached = this.cache.get(key);
       // Never assume 0 on a cache miss — reconcile against the DB so an evicted
       // session doesn't re-insert its whole history (duplicate-message bug).
-      const alreadyPersisted = cached?.persistedMessageCount ?? this.db.countMessages(session.id);
+      const alreadyPersisted = cached?.persistedMessageCount ?? this.db.countMessages?.(session.id) ?? 0;
       const totalMessages = session.messages.length;
 
       if (totalMessages > alreadyPersisted) {
