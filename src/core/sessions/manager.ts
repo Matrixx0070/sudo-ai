@@ -321,49 +321,89 @@ export class SessionManager {
         updatedAt: session.updatedAt.toISOString(),
       });
 
+      // Phase 2b — meta upsert: storeChunk APPENDS a row each save, so a session's
+      // meta accumulated (one session had 9 'active' + 4 'archived' rows). That
+      // let an archived session be re-loaded via a stale older 'active' row (the
+      // no-op fork loop, #445). Replace this session's prior meta rows so exactly
+      // one current meta row exists. Best-effort; correctness is already covered
+      // by _loadFromDb's newest-meta-per-id (#445).
+      try {
+        this.db.db.prepare("DELETE FROM chunks WHERE path = ? AND source = 'conversation'").run(metaPath);
+      } catch (delErr) {
+        log.warn({ sessionId: session.id, err: String(delErr) }, 'meta upsert: prior-row delete failed (non-fatal)');
+      }
       this.db.storeChunk(meta, metaPath, 'conversation', { isEvergreen: true, role: 'system' });
 
       // Persist any new messages that have not yet been written to the DB.
       const key = this._peerKey(session.channel, session.peerId);
       const cached = this.cache.get(key);
-      // Never assume 0 on a cache miss — reconcile against the DB so an evicted
-      // session doesn't re-insert its whole history (duplicate-message bug).
-      const alreadyPersisted = cached?.persistedMessageCount ?? this.db.countMessages?.(session.id) ?? 0;
-      const totalMessages = session.messages.length;
 
-      if (totalMessages > alreadyPersisted) {
-        const newMessages = session.messages.slice(alreadyPersisted);
+      if (process.env['SUDO_IDENTITY_PERSIST'] !== '0') {
+        // Phase 2a — identity-based persistence. Each message carries a (non-DB)
+        // `_persisted` marker once written. We persist any message lacking it.
+        // Unlike the legacy positional `slice(persistedMessageCount)`, this
+        // survives in-memory array mutation — the fork's unshift,
+        // trimSessionMessages, and windowing `.map(m => ({...m}))` (the spread
+        // copies the enumerable marker) — so no turn's messages are dropped or
+        // duplicated across a fork/trim (the original "lost chats" failure mode).
+        // Hydrated messages are pre-marked at load (they came FROM the DB).
+        let persisted = 0;
         let failed = 0;
-        for (const msg of newMessages) {
+        for (const msg of session.messages) {
+          const m = msg as BrainMessage & { _persisted?: boolean };
+          if (m._persisted === true) continue;
           try {
             this.db.storeMessage(session.id, msg.role, msg.content ?? '', {
               tool_name:  msg.toolName  ?? undefined,
               tool_input: msg.toolInput ?? undefined,
               tool_output: msg.toolOutput ?? undefined,
             });
+            persisted++;
           } catch (msgErr) {
-            // A single un-persistable message (e.g. an injection-scanner
-            // rejection in strict mode) must NEVER abort the loop and silently
-            // drop every later message — including the turn's final assistant
-            // reply. That was the live "runs tools then goes quiet" bug. Log,
-            // skip, and keep going so the rest of the turn still persists.
             failed++;
             log.error(
               { sessionId: session.id, role: msg.role, err: String(msgErr) },
               'storeMessage failed — skipping this message, continuing persist',
             );
           }
+          m._persisted = true; // mark even on failure: never retry a poison message forever
         }
-        // Advance the counter past EVERY message we attempted (stored or skipped)
-        // so a poison message is not retried forever and clean messages are not
-        // re-inserted as duplicates on the next save.
-        if (cached) {
-          cached.persistedMessageCount = totalMessages;
+        if (cached) cached.persistedMessageCount = session.messages.length;
+        if (persisted > 0 || failed > 0) {
+          log.debug(
+            { sessionId: session.id, newCount: persisted, skipped: failed, total: session.messages.length },
+            'Messages persisted to DB (identity)',
+          );
         }
-        log.debug(
-          { sessionId: session.id, newCount: newMessages.length - failed, skipped: failed, total: totalMessages },
-          'Messages persisted to DB',
-        );
+      } else {
+        // Legacy positional path (kill-switch SUDO_IDENTITY_PERSIST=0). Fragile
+        // under array mutation; kept only as an escape hatch.
+        const alreadyPersisted = cached?.persistedMessageCount ?? this.db.countMessages?.(session.id) ?? 0;
+        const totalMessages = session.messages.length;
+        if (totalMessages > alreadyPersisted) {
+          const newMessages = session.messages.slice(alreadyPersisted);
+          let failed = 0;
+          for (const msg of newMessages) {
+            try {
+              this.db.storeMessage(session.id, msg.role, msg.content ?? '', {
+                tool_name:  msg.toolName  ?? undefined,
+                tool_input: msg.toolInput ?? undefined,
+                tool_output: msg.toolOutput ?? undefined,
+              });
+            } catch (msgErr) {
+              failed++;
+              log.error(
+                { sessionId: session.id, role: msg.role, err: String(msgErr) },
+                'storeMessage failed — skipping this message, continuing persist',
+              );
+            }
+          }
+          if (cached) cached.persistedMessageCount = totalMessages;
+          log.debug(
+            { sessionId: session.id, newCount: newMessages.length - failed, skipped: failed, total: totalMessages },
+            'Messages persisted to DB',
+          );
+        }
       }
     } catch (err) {
       log.error({ sessionId: session.id, err }, 'Failed to persist session to DB');
@@ -526,6 +566,9 @@ export class SessionManager {
       toolInput: m.tool_input ?? undefined,
       toolOutput: m.tool_output ?? undefined,
     }));
+    // These came FROM the DB → mark persisted so identity-based persistence does
+    // not re-insert the whole history as duplicates on the next save.
+    for (const m of messages) (m as BrainMessage & { _persisted?: boolean })._persisted = true;
 
     return {
       id: meta.id,
