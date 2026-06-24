@@ -364,15 +364,19 @@ export class SessionManager {
         let skippedEphemeral = 0;
         const persistEphemeral = process.env['SUDO_PERSIST_EPHEMERAL'] === '1';
         for (const msg of session.messages) {
-          const m = msg as BrainMessage & { _persisted?: boolean; _ephemeral?: boolean };
+          const m = msg as BrainMessage & { _persisted?: boolean; _ephemeral?: boolean; _durable?: boolean };
           if (m._persisted === true) continue;
-          // Ephemeral per-turn system blocks (intelligence brief, deep insights,
-          // drive prompt, tier adjustment, commitments, injection warning) are
-          // re-generated every turn from live state. Writing them would bloat the
-          // DB with stale duplicates and dilute the hydrate reload window — so we
-          // mark them persisted (bookkeeping stays consistent) but never write.
-          // Kill-switch SUDO_PERSIST_EPHEMERAL=1 restores the legacy write-all.
-          if (m._ephemeral === true && !persistEphemeral) {
+          // System messages are ephemeral turn-scaffolding by default — the agent
+          // loop re-generates them every turn from live state (intelligence brief,
+          // routing notes, idle nudges, LoopGuard, commitments, daily memory logs,
+          // …). On the live DB these were the LARGEST role (system 2.5x user),
+          // diluting the hydrate reload window with stale, re-injected noise. We
+          // persist a system message ONLY when explicitly marked `_durable` (the
+          // session-fork handoff notice). `_ephemeral` also forces a skip for any
+          // role. We mark skipped messages persisted so the per-message bookkeeping
+          // stays consistent. Kill-switch SUDO_PERSIST_EPHEMERAL=1 restores write-all.
+          const skip = m._ephemeral === true || (msg.role === 'system' && m._durable !== true);
+          if (skip && !persistEphemeral) {
             m._persisted = true;
             skippedEphemeral++;
             continue;

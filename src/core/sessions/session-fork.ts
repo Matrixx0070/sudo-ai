@@ -281,7 +281,7 @@ export async function forkSession(
     const newSession = await sessionManager.getOrCreate(channel, peerId);
 
     // 4. Inject summary as system context
-    const forkNotice: BrainMessage = {
+    const forkNotice: BrainMessage & { _durable?: boolean } = {
       role: 'system',
       content: [
         `[SESSION FORK — continued from ${oldId}]`,
@@ -291,6 +291,10 @@ export async function forkSession(
         '',
         summary,
       ].join('\n'),
+      // Durable: this carries the compacted pre-fork history and is the ONLY
+      // system message that must survive a cold reload (system messages are
+      // otherwise treated as ephemeral turn-scaffolding and not persisted).
+      _durable: true,
     };
     newSession.messages.unshift(forkNotice);
     await sessionManager.save(newSession);
