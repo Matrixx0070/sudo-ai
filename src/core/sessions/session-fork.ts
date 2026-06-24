@@ -23,11 +23,22 @@ const log = createLogger('sessions:fork');
 // Thresholds — tuned to trigger well before the model's context window fills.
 // ---------------------------------------------------------------------------
 
-/** Total character count across all messages that triggers a fork. ~40K tokens. */
-export const FORK_THRESHOLD_CHARS = 160_000 as const;
+/**
+ * Total character count across all messages that triggers a fork. Default
+ * 160K (~40K tokens). Raise via SUDO_FORK_THRESHOLD_CHARS to keep a longer
+ * single session before rotating (Claude-Code-style) — at higher token cost.
+ */
+export const FORK_THRESHOLD_CHARS: number = (() => {
+  const raw = Number(process.env['SUDO_FORK_THRESHOLD_CHARS']);
+  return Number.isInteger(raw) && raw >= 10_000 ? raw : 160_000;
+})();
 
-/** Message count that triggers a fork regardless of char count. */
-export const FORK_MESSAGE_COUNT = 80 as const;
+/** Non-system message count that triggers a fork. Default 80; raise via
+ *  SUDO_FORK_MESSAGE_COUNT to keep more conversation before rotating. */
+export const FORK_MESSAGE_COUNT: number = (() => {
+  const raw = Number(process.env['SUDO_FORK_MESSAGE_COUNT']);
+  return Number.isInteger(raw) && raw >= 10 ? raw : 80;
+})();
 
 /**
  * Max characters for the fork handoff brief. The old hard cap of 2000 was too
