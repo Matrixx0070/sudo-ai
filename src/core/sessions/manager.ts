@@ -386,6 +386,16 @@ export class SessionManager {
         )
         .all({ path: `session:%:meta` });
 
+      // Meta rows are append-only (storeChunk writes a NEW row on every save —
+      // state/updatedAt change so the content hash differs), and the scan is
+      // newest-first. Therefore the FIRST meta row seen for a given session id
+      // is its CURRENT state. Decide each id by its newest meta ONLY: a stale
+      // older 'active' row must never resurrect a session that has since been
+      // archived. That resurrection was the no-op fork loop — a telegram session
+      // past the fork threshold got archived then immediately re-loaded as
+      // 'active' (via an older meta row) every turn, so the fork never rotated
+      // and each turn's messages were lost.
+      const resolvedIds = new Set<string>();
       for (const row of rows) {
         try {
           const meta = JSON.parse(row.text) as {
@@ -397,15 +407,15 @@ export class SessionManager {
             createdAt: string;
             updatedAt: string;
           };
-          if (
-            meta.channel === channel &&
-            meta.peerId === peerId &&
-            meta.state === 'active'
-          ) {
+          if (meta.channel !== channel || meta.peerId !== peerId) continue;
+          if (resolvedIds.has(meta.id)) continue; // already saw this id's newest meta
+          resolvedIds.add(meta.id);
+          if (meta.state === 'active') {
             return this._hydrateSession(meta);
           }
+          // newest meta for this id is non-active → keep scanning for a DIFFERENT active id
         } catch {
-          // malformed row — skip
+          // malformed row — skip (does not mark any id as resolved)
         }
       }
       return undefined;
