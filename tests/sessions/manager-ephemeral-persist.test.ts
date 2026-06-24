@@ -48,18 +48,42 @@ describe('SessionManager — ephemeral system blocks are not persisted', () => {
     (db as unknown as { close?: () => void }).close?.();
   });
 
-  it('persists a non-ephemeral system block (the fork handoff notice)', async () => {
+  it('persists a _durable system block (the fork handoff notice) but drops a plain one', async () => {
     const db = new MindDB(freshDbPath());
     const sm = new SessionManager(db);
     const s = await sm.getOrCreate('telegram', 'e2');
-    // fork notice: role system, NOT flagged ephemeral → must survive
-    s.messages.push({ role: 'system', content: '[SESSION FORK — handoff brief]' });
-    s.messages.push({ role: 'system', content: 'EPHEMERAL BRIEF', _ephemeral: true });
+    // fork notice: durable → must survive
+    s.messages.push({ role: 'system', content: '[SESSION FORK — handoff brief]', _durable: true });
+    // an UNtagged system block (e.g. AUTO-ROUTING) — system is ephemeral by
+    // default in this architecture, so it must NOT be persisted.
+    s.messages.push({ role: 'system', content: 'AUTO-ROUTING [INTENT: single-tool]' });
     s.messages.push({ role: 'user', content: 'next turn' });
     await sm.save(s);
 
     const contents = db.getSessionMessages(s.id, 100).map((m) => m.content).sort();
     expect(contents).toEqual(['[SESSION FORK — handoff brief]', 'next turn']);
+    (db as unknown as { close?: () => void }).close?.();
+  });
+
+  it('drops every untagged system block (the real live offenders) regardless of content', async () => {
+    const db = new MindDB(freshDbPath());
+    const sm = new SessionManager(db);
+    const s = await sm.getOrCreate('telegram', 'e5');
+    s.messages.push({ role: 'user', content: 'do the thing' });
+    for (const c of [
+      '## Intelligence Brief',
+      'AUTO-ROUTING [INTENT: multi-tool]',
+      'CRITICAL: You have been idle',
+      '[LoopGuard] Model returned tool calls',
+      '# HEADS UP (anticipatory, advisory)',
+      '# PLAN FOR THIS TASK',
+      '## Today\n<!-- 2026-06-24 -->',
+    ]) s.messages.push({ role: 'system', content: c }); // none tagged — all ephemeral by default
+    s.messages.push({ role: 'assistant', content: 'did the thing' });
+    await sm.save(s);
+
+    const contents = db.getSessionMessages(s.id, 100).map((m) => m.content).sort();
+    expect(contents).toEqual(['did the thing', 'do the thing']); // only real conversation
     (db as unknown as { close?: () => void }).close?.();
   });
 

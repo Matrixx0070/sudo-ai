@@ -49,6 +49,9 @@ export interface BrainMessage {
    * the DB holds only real conversation. Non-LLM. See SUDO_PERSIST_EPHEMERAL.
    */
   _ephemeral?: boolean;
+  /** Internal marker: durable system message that must survive a cold reload
+   * (the fork handoff notice). System messages are ephemeral unless flagged. */
+  _durable?: boolean;
 }
 
 export interface BrainRequest {

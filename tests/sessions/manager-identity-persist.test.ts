@@ -53,8 +53,9 @@ describe('SessionManager — identity-based persistence (Phase 2a)', () => {
     s.messages.push({ role: 'user', content: 'm1' });
     s.messages.push({ role: 'assistant', content: 'm2' });
     await sm.save(s);
-    // Simulate forkSession.unshift + a new turn message appended.
-    s.messages.unshift({ role: 'system', content: 'FORK-NOTICE' });
+    // Simulate forkSession.unshift + a new turn message appended. The fork
+    // notice is _durable (system messages are otherwise ephemeral, not persisted).
+    s.messages.unshift({ role: 'system', content: 'FORK-NOTICE', _durable: true });
     s.messages.push({ role: 'user', content: 'm3' });
     await sm.save(s);
     const contents = db.getSessionMessages(s.id, 100).map((m) => m.content).sort();

@@ -44,6 +44,13 @@ export interface BrainMessage {
    * the reload window. _persistToDb skips writing these (see SUDO_PERSIST_EPHEMERAL).
    */
   _ephemeral?: boolean;
+  /**
+   * Internal (non-LLM) marker: this system message is durable conversation that
+   * MUST survive a cold reload (currently only the session-fork handoff notice).
+   * By default `role:'system'` messages are treated as ephemeral turn-scaffolding
+   * and NOT persisted; setting `_durable: true` opts a system message back in.
+   */
+  _durable?: boolean;
 }
 
 // ---------------------------------------------------------------------------
