@@ -54,6 +54,18 @@ export class SessionManager {
   private readonly queue = new KeyedAsyncQueue();
   private readonly db: MindDB;
   private readonly MAX_CACHE = 200;
+  /**
+   * How many recent messages to load into the working set on a cold reload
+   * (restart / cache eviction). Default 100 was only ~7-8 turns once per-turn
+   * system blocks (Today/brief/commitments) are counted. Raise via
+   * SUDO_HYDRATE_MESSAGE_LIMIT to restore more conversation after a restart —
+   * the MAX_CONTEXT_TOKENS budget + compaction bound what actually reaches the
+   * model, so a larger reload is safe (worst case: one compaction on reload).
+   */
+  private readonly HYDRATE_LIMIT: number = (() => {
+    const raw = Number(process.env['SUDO_HYDRATE_MESSAGE_LIMIT']);
+    return Number.isInteger(raw) && raw >= 20 ? raw : 100;
+  })();
   private readonly dmScope: DmScopeMode;
 
   /**
@@ -558,7 +570,7 @@ export class SessionManager {
     updatedAt: string;
   }): Session {
     // Load recent messages from DB.
-    const dbMessages = this.db.getSessionMessages(meta.id, 100);
+    const dbMessages = this.db.getSessionMessages(meta.id, this.HYDRATE_LIMIT);
     const messages: BrainMessage[] = dbMessages.map((m) => ({
       role: m.role,
       content: m.content,
