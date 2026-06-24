@@ -424,6 +424,20 @@ export class MindDB {
   }
 
   /**
+   * Count the messages already persisted for a session. Used by the session
+   * manager to reconcile its in-memory "persisted so far" index against the DB
+   * when its cache entry is missing (eviction / restart) — without this, a
+   * re-save of an evicted session re-inserts the whole history as duplicates.
+   * Backed by idx_messages_session_id, so it's a cheap index lookup.
+   */
+  countMessages(sessionId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM messages WHERE session_id = ?')
+      .get(sessionId) as { n: number } | undefined;
+    return row?.n ?? 0;
+  }
+
+  /**
    * Retrieve a single message by primary key.
    */
   getMessage(id: number): MessageRow | undefined {
