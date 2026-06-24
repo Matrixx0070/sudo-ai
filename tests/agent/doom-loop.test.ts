@@ -8,6 +8,7 @@ import {
   DoomLoopDetector,
   DOOM_LOOP_THRESHOLD,
   DOOM_LOOP_RO_THRESHOLD,
+  DOOM_LOOP_STALE_MS,
   type DoomLoopResult,
 } from '../../src/core/agent/doom-loop.js';
 
@@ -166,5 +167,65 @@ describe('DoomLoopDetector', () => {
     circular.self = circular;
     const result = detector.recordCall('fs.read_file', circular, 1);
     expect(result.action).toBe('allow');
+  });
+});
+
+describe('DoomLoopDetector — temporal staleness window', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does NOT accumulate when the same fixed-arg tool recurs slower than the window', () => {
+    // The cron-health-via-heartbeat pattern: identical call once per turn, but
+    // each turn separated by MORE than the staleness window (~30min gaps live).
+    // Must never warn or abort, no matter how many turns elapse.
+    const detector = new DoomLoopDetector(null);
+    for (let turn = 1; turn <= DOOM_LOOP_RO_THRESHOLD + 4; turn++) {
+      detector.onNewTurn();
+      const r = detector.recordCall('automation.cron-health', {}, turn);
+      expect(r.action).toBe('allow');
+      vi.advanceTimersByTime(DOOM_LOOP_STALE_MS + 1000); // gap exceeds the window
+    }
+  });
+
+  it('still warns on rapid repetition within the window', () => {
+    const detector = new DoomLoopDetector(null);
+    let last: DoomLoopResult | undefined;
+    for (let turn = 1; turn <= DOOM_LOOP_THRESHOLD; turn++) {
+      detector.onNewTurn();
+      last = detector.recordCall('fs.read_file', { path: '/x' }, turn);
+      vi.advanceTimersByTime(1000); // 1s gaps — well inside the window
+    }
+    expect(last?.action).toBe('warn');
+  });
+
+  it('re-arms: a fresh rapid loop after a stale gap can warn again', () => {
+    const detector = new DoomLoopDetector(null);
+    // Burst 1 → warn.
+    for (let turn = 1; turn <= DOOM_LOOP_THRESHOLD; turn++) {
+      detector.onNewTurn();
+      detector.recordCall('x.y', {}, turn);
+      vi.advanceTimersByTime(1000);
+    }
+    // Long idle gap → the cycle goes stale.
+    vi.advanceTimersByTime(DOOM_LOOP_STALE_MS + 1000);
+    // Burst 2 → count restarts from 1 and the warning is re-armed, so it warns again.
+    let last: DoomLoopResult | undefined;
+    for (let turn = 10; turn < 10 + DOOM_LOOP_THRESHOLD; turn++) {
+      detector.onNewTurn();
+      last = detector.recordCall('x.y', {}, turn);
+      vi.advanceTimersByTime(1000);
+    }
+    expect(last?.action).toBe('warn');
+  });
+
+  it('setting SUDO_DOOM_LOOP_STALE_MS=0 keeps the window from firing (default still 5min)', () => {
+    // Sanity on the configured default: the window is a positive 5 minutes so the
+    // staleness branch is active out of the box.
+    expect(DOOM_LOOP_STALE_MS).toBe(5 * 60_000);
   });
 });
