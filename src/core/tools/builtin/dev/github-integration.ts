@@ -117,6 +117,22 @@ export async function createBranch(name: string): Promise<string> {
     return `Branch ${safeName} created and checked out`;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // The branch may already exist — branch names here are semantic (e.g.
+    // `auto-fix/<issue>-<slug>`), so a retry of the same fix collides. Failing
+    // outright blocks the whole flow forever (observed live: 3× "fatal: a branch
+    // named '...' already exists"). Recover by switching onto the existing branch
+    // so the caller can continue and commit its changes on top.
+    if (/already exists/i.test(message)) {
+      try {
+        await execAsync(`git checkout ${safeName}`);
+        log.info({ name: safeName }, 'Branch already existed — checked out existing');
+        return `Branch ${safeName} already existed; checked out existing branch`;
+      } catch (coErr) {
+        const coMsg = coErr instanceof Error ? coErr.message : String(coErr);
+        log.error({ name: safeName, error: coMsg }, 'Existing-branch checkout failed');
+        return `ERROR: ${coMsg}`;
+      }
+    }
     log.error({ name: safeName, error: message }, 'Branch creation failed');
     return `ERROR: ${message}`;
   }
