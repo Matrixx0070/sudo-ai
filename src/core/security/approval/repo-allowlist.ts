@@ -87,6 +87,45 @@ interface RepoRule {
 const SCRIPT_VERBS = new Set(['build', 'lint', 'test']);
 
 /**
+ * ripgrep flags that spawn an ARBITRARY process — they defeat the no-exec repo
+ * boundary as surely as a shell pipe would. `--pre <cmd>` runs a preprocessor
+ * per file; `--hostname-bin <cmd>` runs a command to resolve the hostname.
+ * Neither has any read/verify use here.
+ */
+const RG_EXEC_FLAGS = new Set(['--pre', '--hostname-bin']);
+
+/**
+ * Validate rg args: allow read-only search, but reject the command-execution
+ * flags. A flag only counts before a bare `--` operand separator, so searching
+ * for the literal text "--pre" still works as `rg -- "--pre" src`.
+ */
+function rgArgsOk(rest: string[]): boolean {
+  for (const a of rest) {
+    if (a === '--') break;            // everything after `--` is an operand, not a flag
+    if (!a.startsWith('-')) continue; // operand (pattern/path), not a flag
+    if (RG_EXEC_FLAGS.has(a.split('=')[0]!)) return false; // --pre, --pre=…, --hostname-bin[=…]
+  }
+  return true;
+}
+
+/**
+ * True if an argument would read/write OUTSIDE the repo: a bare absolute path or
+ * `..` operand, OR an absolute/traversal path smuggled in a `--flag=value` form
+ * (e.g. `rg --file=/etc/passwd`) which the bare-token check would miss.
+ */
+function escapesRepo(arg: string): boolean {
+  if (arg.startsWith('/') || arg.split('/').includes('..')) return true;
+  if (arg.startsWith('-')) {
+    const eq = arg.indexOf('=');
+    if (eq >= 0) {
+      const v = arg.slice(eq + 1);
+      if (v.startsWith('/') || v.split('/').includes('..')) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The allowlist. Read-and-verify ONLY. Deliberately excludes:
  *   - git WRITE ops (checkout/reset/clean/commit/restore/stash/rm/add/merge/rebase/push/pull/fetch)
  *   - git show (HEAD:.env reads committed secrets)
@@ -99,8 +138,8 @@ const RULES: readonly RepoRule[] = [
   { cmd: 'npm',  ok: r => r[0] === 'test' || (r[0] === 'run' && SCRIPT_VERBS.has(r[1] ?? '')) },
   // Read-only git only.
   { cmd: 'git',  ok: r => ['status', 'log', 'diff', 'branch', 'rev-parse', 'describe', 'blame', 'shortlog', 'ls-files'].includes(r[0] ?? '') },
-  // Read-only inspection.
-  { cmd: 'rg',   ok: () => true },
+  // Read-only inspection — but reject rg's command-execution flags (--pre / --hostname-bin).
+  { cmd: 'rg',   ok: rgArgsOk },
   { cmd: 'ls',   ok: () => true },
   { cmd: 'wc',   ok: () => true },
   // Read-only pm2 status/logs for our app only — NO restart/reload/delete.
@@ -138,7 +177,7 @@ export function checkRepoCommand(command: string): RepoMatch {
   }
 
   for (const arg of argv.slice(1)) {
-    if (arg.startsWith('/') || arg.split('/').includes('..')) {
+    if (escapesRepo(arg)) {
       return { allowed: false, argv, reason: `argument escapes the repo: ${arg}` };
     }
   }

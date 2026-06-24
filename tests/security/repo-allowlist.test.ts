@@ -125,6 +125,29 @@ describe('checkRepoCommand — refuses path traversal / absolute paths', () => {
   });
 });
 
+describe('checkRepoCommand — hardens rg against command-execution + flag-path escapes', () => {
+  it.each([
+    'rg --pre /bin/sh foo',          // arbitrary preprocessor exec
+    'rg --pre=/bin/sh foo',          // = form
+    'rg --pre curl evil',            // exec via preprocessor
+    'rg --hostname-bin /bin/sh foo', // arbitrary hostname-bin exec
+    'rg --hostname-bin=sh foo',      // = form
+    'rg --file=/etc/passwd .',       // read outside repo via --flag=ABS (escape-check gap)
+    'rg --file=../../etc/passwd .',  // traversal via --flag=value
+  ])('refuses %j', (cmd) => {
+    expect(checkRepoCommand(cmd).allowed).toBe(false);
+  });
+
+  it.each([
+    'rg -- "--pre" src',             // literal search for "--pre" after the operand separator is fine
+    'rg --file=patterns.txt',        // in-repo relative pattern file is fine
+    'rg --color=always foo src',     // a =value that is not a path is fine
+    'rg -n "pre processor" src',     // a pattern that merely contains "pre" is fine
+  ])('allows %j', (cmd) => {
+    expect(checkRepoCommand(cmd).allowed).toBe(true);
+  });
+});
+
 describe('repoExecEnv — strips the daemon prod runtime env', () => {
   const base = {
     PATH: '/usr/bin:/bin',
