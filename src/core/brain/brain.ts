@@ -888,10 +888,6 @@ export class Brain {
     let systemPrompt = await this.getSystemPrompt({
       heartbeat: false,
       tools: toolSummaries.length > 0 ? toolSummaries : undefined,
-      // Adaptive amplification: classify against the model this turn will use
-      // (explicit request override, else the configured primary). A 'weak' tier
-      // appends the explicit operating addendum; frontier/strong get nothing.
-      modelId: request.model ?? this.primaryModel,
       ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
       ...(lens ? { reasoningLens: lens.text } : {}),
     });

@@ -14,7 +14,6 @@ import { getPersonaSystemBlock } from './personas.js';
 import { getMoodSystemBlock } from './moods.js';
 import { isPromptCacheEnabled, sortByName, DYNAMIC_BOUNDARY_MARKER } from './prompt-cache-discipline.js';
 import { getCapabilityManifestBody, isCapabilityManifestEnabled } from './capability-manifest.js';
-import { classifyModelTier, isAdaptiveAmplifyEnabled } from './model-tier.js';
 import type { SystemPromptOptions } from './types.js';
 
 const log = createLogger('brain:system-prompt');
@@ -127,7 +126,6 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     reasoningLens,
     peerId,
     mainPeerId: explicitMainPeerId,
-    modelId,
   } = options;
 
   // Default mainPeerId to TELEGRAM_CHAT_ID first value (matches cli.ts line 470)
@@ -208,8 +206,12 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
       '',
       'When a task DOES require tools:',
       '- Prefer the smallest next action that makes concrete progress. Avoid redundant calls.',
+      '- Call ONE tool at a time and wait for its result before the next; do not batch unrelated calls.',
       '- Before calling a tool, inspect what you already know, what was tried, and what failed.',
-      '- If a tool fails: identify the incorrect assumption → gather better information → adjust approach → retry.',
+      '- Use a tool name EXACTLY as listed. If unsure a tool exists, call tool.search to find it — never invent a name.',
+      '- Tool arguments must be valid JSON: double-quoted keys and strings, no trailing commas, no comments.',
+      '- Before editing a file, read it and copy the exact text you intend to replace (same indentation).',
+      '- If a tool fails: read the error\'s "How to fix this" hint, change exactly ONE thing (path, tool, or args), then retry — never repeat the same failing call unchanged.',
       '- If truly stuck after 3 attempts with different strategies, summarise what was tried, what blocked it, ask ONE targeted question, then stop.',
       '',
       'BROWSER AGENT RULES (MANDATORY — follow exactly):',
@@ -372,34 +374,6 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     '4. Close out by reporting the concrete result: the branch name, the exact scoped-test command and its exit code, and the PR number/link. The cycle is not done until you have reported these.',
   ].join('\n');
 
-  // Adaptive amplification: a weaker backing model needs the harness's
-  // scaffolding most. When the active model classifies as 'weak', append an
-  // explicit operating addendum below the cache boundary (it is model-dependent,
-  // so it must stay out of the stable cached prefix). Frontier/strong models and
-  // unknown models get nothing extra. Kill-switch: SUDO_ADAPTIVE_AMPLIFY=0.
-  const modelTier = classifyModelTier(modelId);
-  const weakModelAmplify = isAdaptiveAmplifyEnabled() && modelTier === 'weak';
-  const weakModelAddendum = [
-    'You are a capable model, and this harness is built to make you reliable. Follow these operating rules exactly — they prevent the most common ways a run goes wrong.',
-    '',
-    'ONE STEP AT A TIME:',
-    '- Call ONE tool, wait for its result, then decide the next step. Do not plan many tool calls ahead or batch unrelated calls.',
-    '- Take the smallest action that makes real progress. After each result, re-read what you now know before acting again.',
-    '',
-    'TOOL CALLS MUST BE EXACT:',
-    '- Use a tool name EXACTLY as it appears in the tools list. If you are unsure a tool exists, call tool.search to find it — never invent a name.',
-    '- Tool arguments must be valid JSON: double-quoted keys and strings, no trailing commas, no comments, no single quotes. Emit only the tool call, nothing around it.',
-    '- Before editing a file, read it first and copy the exact text you intend to replace (same indentation and characters).',
-    '',
-    'WHEN A TOOL FAILS:',
-    '- Read the "How to fix this" hint on the error and change exactly ONE thing — the path, the tool, or the arguments. Never repeat the same failing call unchanged.',
-    '- If the same step fails about three times with genuinely different approaches, stop and report what you tried and the exact error. Do not loop.',
-    '',
-    'ANSWERING:',
-    '- For plain conversation, greetings, or questions, reply in normal text — do NOT call a tool. Only use tools to DO something concrete.',
-    '- Keep replies focused: do the task, then say what you did and what you verified.',
-  ].join('\n');
-
   // Assemble in order.
   const parts: string[] = [];
 
@@ -465,12 +439,6 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
 
   if (promptCacheStable) {
     parts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
-  }
-
-  // 5b. Weak-model operating addendum — only for a 'weak' backing model, and
-  //     deliberately below the boundary (model-dependent → not cacheable).
-  if (weakModelAmplify) {
-    parts.push(sectionWithHeader('Reliable Operation', weakModelAddendum));
   }
 
   // 6. Persona
