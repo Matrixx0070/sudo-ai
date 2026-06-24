@@ -290,7 +290,16 @@ export class SelfVerify {
       };
     }
 
-    const brainLike = this.brain as { call?: (messages: Array<{ role: string; content: string }>) => Promise<{ content: string }> };
+    // The Brain exposes `call(request: BrainRequest)` — a request OBJECT whose
+    // `messages` field holds the conversation. The previous code passed a bare
+    // messages ARRAY, so the Brain read `request.messages` off an array
+    // (undefined) and threw "BrainRequest.messages must be non-empty" on EVERY
+    // call (62-172×/day). The check then silently fell through to "assuming
+    // aligned" — so goal alignment never actually ran. Cast to the real
+    // request-object shape and call it correctly.
+    const brainLike = this.brain as {
+      call?: (request: { messages: Array<{ role: string; content: string }> }) => Promise<{ content: string }>;
+    };
 
     if (!brainLike?.call || typeof brainLike.call !== 'function') {
       return {
@@ -301,16 +310,23 @@ export class SelfVerify {
     }
 
     try {
-      const response = await brainLike.call([
-        {
-          role: 'system',
-          content: 'You are a verification agent. Given a goal and the changes made, determine if the changes accomplish the goal. Reply with JSON: {"aligned": true/false, "reasoning": "..."}',
-        },
-        {
-          role: 'user',
-          content: `Goal: ${goal}\n\nFiles changed: ${filesChanged.join(', ')}\n\nDiff summary:\n${diffSummary.slice(0, 2000)}`,
-        },
-      ]);
+      // The instruction rides in the user message: BrainRequest excludes system
+      // (the Brain prepends its own), and system-role entries in `messages` are
+      // dropped/folded — so a system entry here would be unreliable.
+      const response = await brainLike.call({
+        messages: [
+          {
+            role: 'user',
+            content:
+              'You are a verification agent. Given a goal and the changes made, '
+              + 'determine if the changes accomplish the goal. Reply ONLY with JSON: '
+              + '{"aligned": true/false, "reasoning": "..."}\n\n'
+              + `Goal: ${goal}\n\n`
+              + `Files changed: ${filesChanged.join(', ')}\n\n`
+              + `Diff summary:\n${diffSummary.slice(0, 2000)}`,
+          },
+        ],
+      });
 
       const jsonMatch = response.content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {

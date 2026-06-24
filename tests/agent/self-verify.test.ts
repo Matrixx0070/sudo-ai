@@ -159,4 +159,35 @@ describe('SelfVerify', () => {
     expect(result.checks[0].description).toMatch(/skipped|no change history/i);
     expect(brain.call).not.toHaveBeenCalled();
   });
+
+  it('calls the brain with a BrainRequest object (not a bare array) so alignment actually runs', async () => {
+    // Mirror the REAL Brain contract: call(request) reads request.messages and
+    // throws "BrainRequest.messages must be non-empty" if it isn't a non-empty
+    // array. The pre-fix code passed a bare ARRAY, so request.messages was
+    // undefined → every goal-alignment call threw and silently fell through to
+    // "assuming aligned" (logged 62-172×/day). The prior mocks accepted any
+    // args, so they never caught it — this one enforces the contract.
+    const received: unknown[] = [];
+    const brain = {
+      call: vi.fn(async (request: { messages?: Array<{ role: string; content: string }> }) => {
+        received.push(request);
+        if (!request || Array.isArray(request) || !Array.isArray(request.messages) || request.messages.length === 0) {
+          throw new Error('BrainRequest.messages must be non-empty');
+        }
+        return { content: '{"aligned": true, "reasoning": "changes accomplish the goal"}' };
+      }),
+    };
+    const verifier = new SelfVerify(brain);
+    const result = await verifier.verify('add feature X', ['src/foo.ts'], process.cwd());
+
+    // Called once, with a request OBJECT carrying a non-empty messages array.
+    expect(brain.call).toHaveBeenCalledTimes(1);
+    expect(Array.isArray(received[0])).toBe(false);
+    expect(Array.isArray((received[0] as { messages?: unknown }).messages)).toBe(true);
+
+    // Goal alignment reflects the REAL semantic result, not the pre-fix
+    // "Semantic verification unavailable — assuming aligned" fallthrough.
+    const alignment = result.checks.find(c => /alignment/i.test(c.description));
+    expect(alignment?.evidence).toContain('changes accomplish the goal');
+  });
 });
