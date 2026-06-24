@@ -179,3 +179,52 @@ describe('forkSession first-capture: extracted identifiers reach the prompt', ()
     expect(captured[0]).not.toContain('CARRIED KEY FACTS'); // first fork → no prior bridge
   });
 });
+
+describe('forkSession — rich Claude-Code-style handoff brief (Phase 1)', () => {
+  function makeSession(id: string, messages: BrainMessage[]): Session {
+    return { id, channel: 'telegram', peerId: 'peer-9', messages } as unknown as Session;
+  }
+
+  it('FORK-RICH-1: the prompt asks for all 9 sections incl. verbatim user messages', async () => {
+    let prompt = '';
+    const brain = {
+      call: async (o: { messages: Array<{ role: string; content: string }> }) => {
+        prompt = o.messages[0]!.content;
+        return { content: 'ok' };
+      },
+    };
+    const sm = { getOrCreate: async () => makeSession('new', []), archive: async () => undefined, save: async () => undefined };
+    await forkSession(
+      makeSession('cur', [{ role: 'user', content: 'do X' }, { role: 'assistant', content: 'ok' }]),
+      brain,
+      sm,
+    );
+    for (const h of [
+      '## 1. Primary Request',
+      '## 2. Key Technical Concepts',
+      '## 4. Errors & Fixes',
+      '## 6. All User Messages',
+      '## 8. Current Work',
+      '## 9. Next Step',
+    ]) {
+      expect(prompt).toContain(h);
+    }
+    expect(prompt).toContain('verbatim'); // the "never drop a user message" instruction
+  });
+
+  it('FORK-RICH-2: on brain failure the fallback preserves recent user messages verbatim', async () => {
+    const brain = { call: async () => { throw new Error('brain down'); } };
+    const sm = { getOrCreate: async () => makeSession('new', []), archive: async () => undefined, save: async () => undefined };
+    const old = makeSession('cur', [
+      { role: 'user', content: 'FIRST ask: build the SEO report for ACME-SITE-42' },
+      { role: 'assistant', content: 'working' },
+      { role: 'user', content: 'SECOND ask: also check rankings' },
+    ]);
+    const result = await forkSession(old, brain, sm);
+    expect(result).not.toBeNull();
+    expect(result!.summary).toContain('## 6. All User Messages');
+    expect(result!.summary).toContain('FIRST ask');
+    expect(result!.summary).toContain('SECOND ask');     // every recent user message, not just the last
+    expect(result!.summary).toContain('ACME-SITE-42');   // identifier preserved in the fallback too
+  });
+});
