@@ -366,11 +366,20 @@ function getScanMode(): ScanMode {
  *                  URL-only patterns (external_url) are skipped because these
  *                  roles legitimately contain external URLs. Full scanning applies
  *                  for 'user' and undefined (backward compat).
+ * @param modeOverride - Force a scan mode for this call, ignoring the global
+ *                  SUDO_MEMORY_SCAN_MODE env. Used by the conversation-log writer
+ *                  to sanitize (never throw) so a flagged tool result does not
+ *                  abort persistence and drop the turn's final reply.
  * @returns The text to store — original when clean, sanitized text in sanitize mode.
  * @throws MemoryInjectionError in strict mode when patterns match.
  */
-export function guardMemoryWrite(text: string, context = 'unknown', role?: MessageRole): string {
-  const mode = getScanMode();
+export function guardMemoryWrite(
+  text: string,
+  context = 'unknown',
+  role?: MessageRole,
+  modeOverride?: ScanMode,
+): string {
+  const mode = modeOverride ?? getScanMode();
 
   if (mode === 'off') {
     return text;
