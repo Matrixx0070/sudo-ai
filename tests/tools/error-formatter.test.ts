@@ -30,14 +30,19 @@ describe('classifyToolError — real error strings → actionable hints', () => 
     expect(h.why.toLowerCase()).toContain('workspace');
   });
 
-  it('shell metacharacters → repo-exec plain-command guidance', () => {
-    const h = classifyToolError('system.exec', 'shell metacharacters are not allowed in repo-exec');
-    expect(h.fix.toLowerCase()).toContain('single plain command');
+  it('repo-exec operator refusal → steers to quoting + one plain command (new + legacy wording)', () => {
+    const hNew = classifyToolError('system.exec', 'shell operators (pipe/redirect/chaining/substitution/glob) are not allowed in repo-exec — quote them as an argument, or run one plain command');
+    expect(hNew.fix.toLowerCase()).toContain('quote');
+    expect(hNew.fix.toLowerCase()).toContain('one plain command');
+    // Legacy wording must still classify (back-compat).
+    const hOld = classifyToolError('system.exec', 'shell metacharacters are not allowed in repo-exec');
+    expect(hOld.what.toLowerCase()).toContain('repo');
   });
 
-  it('not repo-allowlisted → lists allowlisted commands', () => {
-    const h = classifyToolError('system.exec', "'curl' is not a repo-allowlisted command");
+  it('not repo-allowlisted → steers file reads to the native read tool', () => {
+    const h = classifyToolError('system.exec', "'cat' is not a repo-allowlisted command");
     expect(h.fix).toMatch(/pnpm|git|rg/);
+    expect(h.fix).toContain('read-file'); // operator's documented alternative, not cat
   });
 
   it('edit mismatch → re-read and copy verbatim', () => {

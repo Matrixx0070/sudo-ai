@@ -10,13 +10,17 @@
  * intentionally absent; granting those is a separate, deliberate decision.
  *
  * Safety model (mirrors security/approval/allowlist.ts):
- *   1. Reject ANY shell metacharacter first — no chaining/expansion/redirection.
- *   2. Tokenize on whitespace (safe once metachars are gone).
- *   3. argv[0] must be a bare command name (no path → no symlink/binary swap).
- *   4. No argument may escape the repo (absolute path or `..`).
- *   5. argv[0] + its args must match an explicit read/verify rule.
- * Commands are then executed via execFile arg-array (NO shell), so even a
- * matched command cannot expand or chain.
+ *   1. Quote-aware tokenize: split on unquoted whitespace, honor '…'/"…"
+ *      quoting, and reject any UNQUOTED shell operator (chaining/redirection/
+ *      substitution/globbing). Quotes are structural and their contents are
+ *      literal — safe because step 6 runs via execFile (no shell), so a quoted
+ *      `|`/`(` in an rg regex is just argument text, never interpreted.
+ *   2. argv[0] must be a bare command name (no path → no symlink/binary swap).
+ *   3. No argument may escape the repo (absolute path or `..`) — applied to the
+ *      TOKENIZED argv, so a quoted absolute path is still caught.
+ *   4. argv[0] + its args must match an explicit read/verify rule.
+ *   5. Commands are executed via execFile arg-array (NO shell), so even a
+ *      matched command cannot expand or chain.
  */
 
 import path from 'node:path';
@@ -28,11 +32,51 @@ import { PROJECT_ROOT, DATA_DIR } from '../../shared/paths.js';
 const log = createLogger('security:repo-allowlist');
 
 /**
- * Any of these in the command string aborts the match immediately. Covers
- * chaining (; & |), substitution ($ ` ()), redirection (< >), globbing (* ? ~),
- * braces, quotes, escapes, and newlines.
+ * Operators that imply chaining / redirection / substitution / globbing the
+ * execFile path cannot honor. Rejected only when UNQUOTED — inside '…'/"…" they
+ * are literal argument content (e.g. an rg regex `"a|b\(\)"`), which is safe
+ * because execution never goes through a shell.
  */
-const SHELL_METACHARS = /[;&|`$(){}<>\\!*?~\n\r'"]/;
+const UNQUOTED_OPERATORS = new Set([';', '&', '|', '<', '>', '$', '`', '(', ')', '{', '}', '*', '?', '~', '!', '\\', '\n', '\r']);
+
+interface TokenizeResult { argv?: string[]; error?: string }
+
+/**
+ * Shell-like tokenizer WITHOUT expansion. Splits on unquoted whitespace, honors
+ * single quotes (fully literal) and double quotes (literal except \" and \\),
+ * and rejects any unquoted operator from {@link UNQUOTED_OPERATORS}. Returns the
+ * argv, or an error reason. Pure.
+ */
+function tokenize(cmd: string): TokenizeResult {
+  const argv: string[] = [];
+  let cur = '';
+  let has = false; // current token has content (incl. an explicit empty "")
+  let q: '"' | "'" | null = null;
+
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i]!;
+    if (q === "'") { // single quote — everything literal until the closing '
+      if (c === "'") q = null; else cur += c;
+      continue;
+    }
+    if (q === '"') { // double quote — literal except escaped \" and \\
+      if (c === '\\' && (cmd[i + 1] === '"' || cmd[i + 1] === '\\')) cur += cmd[++i]!;
+      else if (c === '"') q = null;
+      else cur += c;
+      continue;
+    }
+    // unquoted
+    if (c === "'" || c === '"') { q = c; has = true; continue; }
+    if (c === ' ' || c === '\t') { if (has) { argv.push(cur); cur = ''; has = false; } continue; }
+    if (UNQUOTED_OPERATORS.has(c)) {
+      return { error: 'shell operators (pipe/redirect/chaining/substitution/glob) are not allowed in repo-exec — quote them as an argument, or run one plain command' };
+    }
+    cur += c; has = true;
+  }
+  if (q) return { error: 'unbalanced quote in repo-exec command' };
+  if (has) argv.push(cur);
+  return { argv };
+}
 
 /** A repo command rule: bare command name → validator for the remaining args. */
 interface RepoRule {
@@ -83,11 +127,10 @@ export function checkRepoCommand(command: string): RepoMatch {
   const cmd = (command ?? '').trim();
   if (!cmd) return { allowed: false, argv: [], reason: 'empty command' };
 
-  if (SHELL_METACHARS.test(cmd)) {
-    return { allowed: false, argv: [], reason: 'shell metacharacters are not allowed in repo-exec' };
-  }
-
-  const argv = cmd.split(/\s+/).filter(Boolean);
+  const tok = tokenize(cmd);
+  if (tok.error) return { allowed: false, argv: [], reason: tok.error };
+  const argv = tok.argv ?? [];
+  if (argv.length === 0) return { allowed: false, argv: [], reason: 'empty command' };
   const head = argv[0]!;
 
   if (head.includes('/')) {
