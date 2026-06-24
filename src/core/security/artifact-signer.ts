@@ -15,6 +15,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { genId, contentHash } from '../shared/utils.js';
@@ -71,7 +72,7 @@ function getSignerId(config?: SignerConfig): string {
   if (config?.signerId) return config.signerId;
   const envId = process.env['SUDO_ARTIFACT_SIGNER_ID'];
   if (envId) return envId;
-  return `${require('node:os').hostname()}:${process.pid}`;
+  return `${os.hostname()}:${process.pid}`;
 }
 
 /** Read or create the HMAC secret key. */
