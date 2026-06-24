@@ -344,6 +344,21 @@ module.exports = {
         // in-loop system messages. Kill-switch: '0'.
         SUDO_FOLD_SYSTEM_MESSAGES: process.env['SUDO_FOLD_SYSTEM_MESSAGES'] || '1',
 
+        // Mythos Tier C swarm-rescue (PR #442/#443) + its StuckDetector trigger,
+        // enabled 2026-06-24 after a verified live stuck-scenario test. When a
+        // repeated-identical-tool-error streak is detected (a task signal, not
+        // model identity), subsequent brain calls in that turn escalate to the
+        // `debate` strategy to break the rut. StuckDetector also aborts a turn
+        // after 5 consecutive identical errors. Thresholds use code defaults
+        // (warn 3 / abort 5). Kill-switch: set either flag to '0'. The two
+        // threshold keys are set explicitly to the code defaults so a `--update-env`
+        // restart overwrites any earlier runtime override (pm2 does not unset
+        // keys removed from this file).
+        SUDO_STUCK_DETECTOR: process.env['SUDO_STUCK_DETECTOR'] || '1',
+        SUDO_SWARM_RESCUE: process.env['SUDO_SWARM_RESCUE'] || '1',
+        SUDO_STUCK_DETECTOR_WARN_THRESHOLD: process.env['SUDO_STUCK_DETECTOR_WARN_THRESHOLD'] || '3',
+        SUDO_STUCK_DETECTOR_ABORT_THRESHOLD: process.env['SUDO_STUCK_DETECTOR_ABORT_THRESHOLD'] || '5',
+
         // Skip loopback/diagnostic web turns (127.0.0.1, ::1, localhost) from the
         // daily activity log so local probes / health checks / manual gateway
         // tests don't pollute the "## Today" prompt injection. Default-off in
