@@ -68,6 +68,7 @@ import { buildLoopFallbackReply } from './loop-fallback.js';
 import { DoomLoopDetector } from './doom-loop.js';
 import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
 import { StuckDetector } from './stuck-detector.js';
+import { isSwarmRescueEnabled, getSwarmRescueStrategy, swarmRescueCallOpts } from './swarm-rescue.js';
 import { generateIntelligenceBrief } from './intelligence-brief.js';
 import { shouldFork, forkSession } from '../sessions/session-fork.js';
 import type { ForkSessionManager } from '../sessions/session-fork.js';
@@ -1792,6 +1793,15 @@ export class AgentLoop extends AgentLoopInjections {
     state.isProcessing = true;
     const hooksHelper = this.hooks;
 
+    // Mythos Tier C — swarm-rescue (opt-in, default OFF). A per-turn latch: once
+    // a task signal (StuckDetector repeated-error 'warn') fires, subsequent brain
+    // calls in THIS turn escalate to a stronger strategy to break the rut. Reset
+    // every turn (local to this invocation); model-agnostic — fired on the
+    // failure signal, never on which model is running.
+    const swarmRescueEnabled = isSwarmRescueEnabled();
+    const swarmRescueStrategy = getSwarmRescueStrategy();
+    let swarmRescueActive = false;
+
     // P0: track total tool calls across inner loop iterations for LazinessNudge.
     let _innerLoopToolCallCount = 0;
     // P0: bound how many times GoalStopDetector may force continuation, so a
@@ -2013,7 +2023,7 @@ export class AgentLoop extends AgentLoopInjections {
               .map(m => m.toolName),
           ),
           race: opts?.race,
-        });
+        }, swarmRescueCallOpts(swarmRescueActive));
 
         log.info(
           {
@@ -2021,6 +2031,7 @@ export class AgentLoop extends AgentLoopInjections {
             iteration: state.iteration,
             finishReason: response.finishReason,
             toolCallCount: response.toolCalls.length,
+            ...(swarmRescueActive ? { swarmRescue: swarmRescueStrategy } : {}),
           },
           'Brain call completed',
         );
@@ -2801,6 +2812,17 @@ export class AgentLoop extends AgentLoopInjections {
                   session.messages.push({ role: 'system', content: stuckWarn });
                   emit({ type: 'error', error: stuckWarn });
                   log.warn({ tool: _toolName, sessionId: state.sessionId }, 'StuckDetector warning injected');
+                  // Mythos Tier C — swarm-rescue: the approach is failing (same
+                  // tool error repeating). Latch on so subsequent brain calls in
+                  // this turn escalate to a stronger strategy. Once per turn.
+                  if (swarmRescueEnabled && !swarmRescueActive) {
+                    swarmRescueActive = true;
+                    log.warn(
+                      { sessionId: state.sessionId, strategy: swarmRescueStrategy },
+                      'SwarmRescue: stuck signal — escalating brain strategy for the rest of this turn',
+                    );
+                    emit({ type: 'error', error: `[SwarmRescue] Stuck detected — escalating to ${swarmRescueStrategy} strategy to break the loop` });
+                  }
                 } else if (stuckResult.action === 'abort') {
                   const stuckAbort = `[StuckDetector] Stuck loop terminated — breaking: ${stuckResult.reason ?? ''}`;
                   emit({ type: 'error', error: stuckAbort });

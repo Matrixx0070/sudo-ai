@@ -91,7 +91,20 @@ export interface ToolContext {
 }
 
 export interface BrainLike {
-  call(req: BrainRequest): Promise<BrainResponse>;
+  /**
+   * @param opts Optional per-call overrides. `strategy` lets a caller escalate a
+   * single call to a stronger multi-model strategy (swarm-rescue) without
+   * mutating the brain's global strategy. Structurally matches the real
+   * Brain.call(request, BrainCallOpts); inlined to avoid coupling loop-helpers
+   * to the brain module. A 1-arg duck-typed mock still satisfies this.
+   */
+  call(
+    req: BrainRequest,
+    opts?: {
+      strategy?: 'single' | 'debate' | 'tree-search';
+      tier?: 'fast' | 'routine' | 'high-stakes';
+    },
+  ): Promise<BrainResponse>;
   /**
    * Optional chat-style entry point. Real Brain class has it (returns the
    * raw assistant text); duck-typed mocks may not. Callers must guard.
