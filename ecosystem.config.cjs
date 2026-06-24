@@ -105,14 +105,21 @@ module.exports = {
         // Unset (or '0') = disabled.
         SUDO_REPO_EXEC: '1',
 
-        // ---- Large-context fallback tuning (TEMP, while Opus is rate-capped) ----
-        // The chat chain currently falls over to glm-5.2 (1M-token context). The
-        // agent loop's default 12-message sliding window (src/core/agent/
-        // loop-helpers.ts LAYER 3) evicts glm's reads, so it re-reads and thrashes
-        // into the LoopGuard / iteration cap ("stuck in a loop"). Widen the window
-        // so it remembers its exploration. Drop this (→ default 12) once the chain
-        // is back on Opus, which navigates 12 fine.
-        SUDO_AGENT_WINDOW_SIZE: '40',
+        // ---- Claude-Code context parity (raised 2026-06-24 per operator) ----
+        // Match Claude Code's large working context instead of SUDO's tight
+        // defaults. These four govern the WORKING SET fed to the model each turn
+        // (the full history always lives in mind.db; only the working set is
+        // bounded). Higher = richer context but higher per-turn token cost +
+        // latency (especially on the glm-5.2 failover path). Revert any single
+        // value to shrink it back. Code defaults: window 12, budget 60K, fork
+        // 160K chars / 80 msgs.
+        //   - WINDOW_SIZE: non-system messages kept per brain call (was 40)
+        //   - MAX_CONTEXT_TOKENS: working token budget; compaction fires at 80%
+        //   - FORK_*: when a session rotates to a fresh one (kept near, under, the budget)
+        SUDO_AGENT_WINDOW_SIZE: process.env['SUDO_AGENT_WINDOW_SIZE'] || '200',
+        SUDO_MAX_CONTEXT_TOKENS: process.env['SUDO_MAX_CONTEXT_TOKENS'] || '200000',
+        SUDO_FORK_THRESHOLD_CHARS: process.env['SUDO_FORK_THRESHOLD_CHARS'] || '600000',
+        SUDO_FORK_MESSAGE_COUNT: process.env['SUDO_FORK_MESSAGE_COUNT'] || '250',
 
         // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
         // long drill turns OOM-crashed the ~4GB default heap (FATAL: JavaScript

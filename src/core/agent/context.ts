@@ -14,8 +14,16 @@ const log = createLogger('agent:context');
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Maximum context size in tokens before compaction should be triggered. */
-export const MAX_CONTEXT_TOKENS = 60_000 as const;
+/**
+ * Maximum context size in tokens before compaction should be triggered.
+ * Default 60K (conservative token-cost control). Raise via SUDO_MAX_CONTEXT_TOKENS
+ * to use more of the model's real window (Claude models are ~200K) — at higher
+ * per-turn token cost. Compaction fires at 80% of this (see shouldCompact).
+ */
+export const MAX_CONTEXT_TOKENS: number = (() => {
+  const raw = Number(process.env['SUDO_MAX_CONTEXT_TOKENS']);
+  return Number.isInteger(raw) && raw >= 10_000 ? raw : 60_000;
+})();
 
 /**
  * Default per-result character cap when trimming tool outputs.
