@@ -29,6 +29,18 @@ export const FORK_THRESHOLD_CHARS = 160_000 as const;
 /** Message count that triggers a fork regardless of char count. */
 export const FORK_MESSAGE_COUNT = 80 as const;
 
+/**
+ * Max characters for the fork handoff brief. The old hard cap of 2000 was too
+ * thin to preserve a long conversation's thread (Claude Code's handoff briefs
+ * run ~14K chars across 9 sections and survive dozens of compactions). Default
+ * 8000 — a balance between continuity and the per-turn token cost of folding the
+ * brief into every subsequent turn. Tunable via SUDO_FORK_SUMMARY_CHARS.
+ */
+export const FORK_SUMMARY_MAX_CHARS: number = (() => {
+  const raw = Number(process.env['SUDO_FORK_SUMMARY_CHARS']);
+  return Number.isInteger(raw) && raw >= 2000 ? raw : 8000;
+})();
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -163,19 +175,24 @@ async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Pro
     : '';
 
   const prompt = [
-    'You are a conversation memory system. Produce a dense handoff brief for a NEW session that continues this conversation.',
+    'You are a conversation memory system. Produce a DENSE, COMPLETE handoff brief',
+    'so a NEW session can continue this conversation with ZERO loss of thread or intent.',
     '',
-    'Output EXACTLY these sections:',
-    '## Context',
-    '## Decisions Made',
-    '## Open Tasks',
-    '## Key Facts (IDs, paths, URLs, names)',
-    '## Last User Request',
+    'Output EXACTLY these sections, in this order, with these headings:',
+    '## 1. Primary Request & Intent — what the user is ultimately trying to achieve, in detail.',
+    '## 2. Key Technical Concepts — technologies, systems, tools, and domain terms in play.',
+    '## 3. Files & Artifacts — files, URLs, IDs, and resources touched or referenced.',
+    '## 4. Errors & Fixes — problems encountered and how each was (or was not) resolved.',
+    '## 5. Problem Solving & Decisions — what was figured out, decisions made, and the reasoning.',
+    '## 6. All User Messages — EVERY user message so far, verbatim and in order. This is the',
+    '      HIGHEST priority: never paraphrase, summarise, or drop a user message.',
+    '## 7. Pending Tasks — what is still to be done.',
+    '## 8. Current Work — exactly what was happening at the moment of handoff.',
+    '## 9. Next Step — the single most likely next action.',
     '',
-    'Rules: be specific; use bullet points; max 2000 chars total. In ## Key Facts',
-    'capture EVERY concrete identifier verbatim — IDs, file paths, URLs, names,',
-    'codewords, numbers, credentials-references — these are the highest priority;',
-    'drop prose before you drop a fact.',
+    `Rules: be specific; use bullet points where natural; max ${FORK_SUMMARY_MAX_CHARS} chars.`,
+    'Capture EVERY concrete identifier verbatim (IDs, file paths, URLs, names, codewords,',
+    'numbers, credential-references) — drop prose before dropping a fact.',
     factCarry,
     idBlock,
     'Conversation to summarise:',
@@ -187,19 +204,29 @@ async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Pro
     const resp = await brain.call({
       source: 'session-fork',
       messages: [{ role: 'user', content: prompt }],
-      maxTokens: 2048,
+      maxTokens: Math.min(8192, Math.round(FORK_SUMMARY_MAX_CHARS / 3) + 512),
       temperature: 0.1,
     });
     return resp.content?.trim() ?? '[Fork summary unavailable]';
   } catch (err) {
     log.error({ err }, 'Fork summary LLM call failed — using fallback');
-    // Fallback: extract last few user messages as raw context
-    const lastUser = messages
+    // Deterministic fallback under the same structure: never lose user intent —
+    // preserve recent user messages verbatim plus the extracted identifiers.
+    const lastUsers = messages
       .filter(m => m.role === 'user')
-      .slice(-5)
-      .map(m => m.content.slice(0, 300))
-      .join('\n---\n');
-    return `## Context\n[Summary generation failed]\n\n## Last User Request\n${lastUser}`;
+      .slice(-8)
+      .map(m => `- ${(m.content ?? '').slice(0, 600)}`)
+      .join('\n');
+    return [
+      '## 6. All User Messages (recent — LLM summary unavailable)',
+      lastUsers || '(none captured)',
+      '',
+      '## 3. Files & Artifacts',
+      identifiers.length > 0 ? identifiers.map(s => `- ${s}`).join('\n') : '(none captured)',
+      '',
+      '## 8. Current Work',
+      '[Fork summary generation failed; recent user messages + identifiers above are preserved verbatim.]',
+    ].join('\n');
   }
 }
 
