@@ -147,9 +147,14 @@ export class SessionManager {
     session.updatedAt = new Date();
 
     // Ensure session is in cache before _persistToDb so message tracking works.
+    // Seed persistedMessageCount from the DB, NOT 0: this session may have been
+    // EVICTED from the cache (the cache is size-limited) while still holding its
+    // full in-memory message array. Re-registering at 0 would make _persistToDb
+    // re-insert the entire history as duplicates on every post-eviction save —
+    // the root of the duplicate-message bug (up to 60 copies of one reply).
     const key = this._peerKey(session.channel, session.peerId);
     if (!this.cache.has(key)) {
-      this.cache.set(key, { session, persistedMessageCount: 0 });
+      this.cache.set(key, { session, persistedMessageCount: this.db.countMessages(session.id) });
       this._evictIfOverLimit();
     }
 
@@ -321,7 +326,9 @@ export class SessionManager {
       // Persist any new messages that have not yet been written to the DB.
       const key = this._peerKey(session.channel, session.peerId);
       const cached = this.cache.get(key);
-      const alreadyPersisted = cached?.persistedMessageCount ?? 0;
+      // Never assume 0 on a cache miss — reconcile against the DB so an evicted
+      // session doesn't re-insert its whole history (duplicate-message bug).
+      const alreadyPersisted = cached?.persistedMessageCount ?? this.db.countMessages(session.id);
       const totalMessages = session.messages.length;
 
       if (totalMessages > alreadyPersisted) {
