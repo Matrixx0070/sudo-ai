@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { StuckDetector } from '../../src/core/agent/stuck-detector.js';
+import { StuckDetector, looksLikeToolError } from '../../src/core/agent/stuck-detector.js';
 
 const ERR = 'Error executing tool shell.exec: Error: ENOENT no such file';
 
@@ -143,5 +143,35 @@ describe('StuckDetector', () => {
       if (prev === undefined) delete process.env['SUDO_STUCK_DETECTOR'];
       else process.env['SUDO_STUCK_DETECTOR'] = prev;
     }
+  });
+});
+
+describe('looksLikeToolError — command/exec failure markers', () => {
+  it('flags common command/exec failures that do NOT start with "error"', () => {
+    expect(looksLikeToolError('Command exited with code 127:\n/bin/bash: line 1: foo: command not found')).toBe(true);
+    expect(looksLikeToolError('Command exited with code 1: boom')).toBe(true);
+    expect(looksLikeToolError('cat: /x: No such file or directory')).toBe(true);
+    expect(looksLikeToolError('bash: /etc/shadow: Permission denied')).toBe(true);
+    expect(looksLikeToolError('The tool call failed.')).toBe(true);
+    expect(looksLikeToolError('Traceback (most recent call last):\n  ...')).toBe(true);
+  });
+
+  it('does NOT flag successes or exit code 0', () => {
+    expect(looksLikeToolError('All checks passed. 0 errors.')).toBe(false);
+    expect(looksLikeToolError('Command exited with code 0: done')).toBe(false);
+    expect(looksLikeToolError('Saved file to /tmp/out.txt')).toBe(false);
+    expect(looksLikeToolError('{"ok":true,"rows":3}')).toBe(false);
+  });
+
+  it('makes StuckDetector build a streak on a repeated exec failure (the live-test case)', () => {
+    // This is the exact result shape the live test produced — it does NOT start
+    // with "error", so isToolResultSuccess alone called it a success and the
+    // streak never built. With the marker check the streak now accumulates.
+    const detector = new StuckDetector({ enabled: true, warnThreshold: 2, abortThreshold: 8 });
+    const exec = 'Command exited with code 127:\n/bin/bash: line 1: thiscommanddoesnotexist123: command not found';
+    const isErr = looksLikeToolError(exec); // what the loop now passes
+    expect(isErr).toBe(true);
+    expect(detector.recordResult('system.exec', exec, isErr).action).toBe('allow'); // streak 1
+    expect(detector.recordResult('system.exec', exec, isErr).action).toBe('warn');  // streak 2 → warn
   });
 });
