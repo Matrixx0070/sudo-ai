@@ -92,18 +92,36 @@ const SCRIPT_VERBS = new Set(['build', 'lint', 'test']);
  * per file; `--hostname-bin <cmd>` runs a command to resolve the hostname.
  * Neither has any read/verify use here.
  */
+/** rg flags that spawn an arbitrary process (long-only). */
 const RG_EXEC_FLAGS = new Set(['--pre', '--hostname-bin']);
+/**
+ * rg flags that break the repo boundary another way (long forms):
+ *   --follow      can follow an in-repo symlink OUT of the repo and read it
+ *   --search-zip  spawns external decompressors (gzip/xz/zstd/…) on archives
+ * Their short forms -L / -z are handled by the cluster scan below. The safe
+ * negations (--no-follow) are NOT in this set, so they stay allowed.
+ */
+const RG_ESCAPE_LONG = new Set(['--follow', '--search-zip']);
 
 /**
- * Validate rg args: allow read-only search, but reject the command-execution
- * flags. A flag only counts before a bare `--` operand separator, so searching
- * for the literal text "--pre" still works as `rg -- "--pre" src`.
+ * Validate rg args: allow read-only search, but reject command-execution and
+ * boundary-breaking flags. A flag only counts before a bare `--` operand
+ * separator, so searching for the literal text "--pre" still works as
+ * `rg -- "--pre" src`. Short-flag clusters (e.g. -Ln, -nz) are scanned for the
+ * uppercase L (--follow) and lowercase z (--search-zip) chars — the common
+ * lowercase -l (--files-with-matches) is deliberately left alone.
  */
 function rgArgsOk(rest: string[]): boolean {
   for (const a of rest) {
     if (a === '--') break;            // everything after `--` is an operand, not a flag
     if (!a.startsWith('-')) continue; // operand (pattern/path), not a flag
-    if (RG_EXEC_FLAGS.has(a.split('=')[0]!)) return false; // --pre, --pre=…, --hostname-bin[=…]
+    const flag = a.split('=')[0]!;
+    if (RG_EXEC_FLAGS.has(flag) || RG_ESCAPE_LONG.has(flag)) return false;
+    // Single-dash short cluster: block -L (follow) / -z (search-zip), case-sensitive.
+    if (!a.startsWith('--')) {
+      const cluster = flag.slice(1); // chars after the single '-'
+      if (cluster.includes('L') || cluster.includes('z')) return false;
+    }
   }
   return true;
 }
@@ -138,7 +156,8 @@ const RULES: readonly RepoRule[] = [
   { cmd: 'npm',  ok: r => r[0] === 'test' || (r[0] === 'run' && SCRIPT_VERBS.has(r[1] ?? '')) },
   // Read-only git only.
   { cmd: 'git',  ok: r => ['status', 'log', 'diff', 'branch', 'rev-parse', 'describe', 'blame', 'shortlog', 'ls-files'].includes(r[0] ?? '') },
-  // Read-only inspection — but reject rg's command-execution flags (--pre / --hostname-bin).
+  // Read-only inspection — but reject rg flags that exec (--pre/--hostname-bin)
+  // or break the repo boundary (--follow/-L symlink escape, --search-zip/-z).
   { cmd: 'rg',   ok: rgArgsOk },
   { cmd: 'ls',   ok: () => true },
   { cmd: 'wc',   ok: () => true },

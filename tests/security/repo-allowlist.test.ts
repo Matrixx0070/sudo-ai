@@ -134,6 +134,12 @@ describe('checkRepoCommand — hardens rg against command-execution + flag-path 
     'rg --hostname-bin=sh foo',      // = form
     'rg --file=/etc/passwd .',       // read outside repo via --flag=ABS (escape-check gap)
     'rg --file=../../etc/passwd .',  // traversal via --flag=value
+    'rg --follow foo .',             // symlink escape (long)
+    'rg -L foo .',                   // symlink escape (short)
+    'rg -Ln foo .',                  // symlink escape bundled with -n
+    'rg --search-zip foo .',         // spawns decompressors (long)
+    'rg -z foo .',                   // search-zip (short)
+    'rg -nz foo .',                  // search-zip bundled with -n
   ])('refuses %j', (cmd) => {
     expect(checkRepoCommand(cmd).allowed).toBe(false);
   });
@@ -143,6 +149,9 @@ describe('checkRepoCommand — hardens rg against command-execution + flag-path 
     'rg --file=patterns.txt',        // in-repo relative pattern file is fine
     'rg --color=always foo src',     // a =value that is not a path is fine
     'rg -n "pre processor" src',     // a pattern that merely contains "pre" is fine
+    'rg -l foo src',                 // -l (files-with-matches, lowercase) is NOT -L
+    'rg -li foo src',                // lowercase -l bundled — still fine
+    'rg --no-follow foo src',        // the safe negation stays allowed
   ])('allows %j', (cmd) => {
     expect(checkRepoCommand(cmd).allowed).toBe(true);
   });
