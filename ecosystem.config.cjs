@@ -447,6 +447,48 @@ module.exports = {
         SUDO_MEMORY_CONSOLIDATE: process.env['SUDO_MEMORY_CONSOLIDATE'] || '1',
         SUDO_COMPACT_ESCALATE: process.env['SUDO_COMPACT_ESCALATE'] || '1',
 
+        // ==== Full feature enablement (2026-06-25, operator: default-ON every built feature) ====
+        // All default-OFF in code; fail-open; env-overridable; per-flag kill-switch '0'.
+        // Deliberately NOT flipped (would remove safety / disable features — see PR):
+        //   security guards (ADMIN_POWERS/ADMIN_API_DANGER/DASHBOARD_INSECURE/
+        //   MCP_ALLOW_SHELL/MCP_ALLOW_PRIVATE_HOSTS/SELFBUILD_ALLOW_PROTECTED),
+        //   kill-switches/downgrades (ZDR/PERSIST_EPHEMERAL/LEGACY_*/NO_STATIC/
+        //   ARSENAL_V2_NO_REORDER/SMART_ROUTE_CHEAP/CHAT_APPROVALS/GROUP_MENTION_ONLY),
+        //   strict fail-closed (MSG_SCAN_STRICT/INJECTION_STRICT/SEAL_REQUIRED/
+        //   FED_STRICT_VERIFY), debug (PROMPT_CACHE_DEBUG/DESKTOP_DEVTOOLS).
+        // HELD for explicit operator go-ahead (unattended action / self-rewrite on
+        // a live, contact-connected box): SUDO_AUTONOMY_V1, SUDO_SELF_BUILD_MODE.
+        // Verification / quality:
+        SUDO_SELF_VERIFY: process.env['SUDO_SELF_VERIFY'] || '1',
+        SUDO_VERIFY_GATE: process.env['SUDO_VERIFY_GATE'] || '1',
+        SUDO_TASK_TRACKER: process.env['SUDO_TASK_TRACKER'] || '1',
+        SUDO_REASONING_SUMMARY: process.env['SUDO_REASONING_SUMMARY'] || '1',
+        SUDO_GOAL_PLANNER_SEMANTIC: process.env['SUDO_GOAL_PLANNER_SEMANTIC'] || '1',
+        SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN: process.env['SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN'] || '3',
+        SUDO_VETO_AUTO_TUNE: process.env['SUDO_VETO_AUTO_TUNE'] || '1',
+        // Consciousness engines (idle LLM work — deliberately reverses the earlier
+        // keep-tokens / no-idle-calls guidance per the default-ON-all directive):
+        SUDO_CONSCIOUSNESS_REFLECT: process.env['SUDO_CONSCIOUSNESS_REFLECT'] || '1',
+        SUDO_CONSCIOUSNESS_SEMANTIC: process.env['SUDO_CONSCIOUSNESS_SEMANTIC'] || '1',
+        SUDO_CONSCIOUSNESS_PROCEDURAL_LEARN: process.env['SUDO_CONSCIOUSNESS_PROCEDURAL_LEARN'] || '1',
+        // Capability / extensibility:
+        SUDO_WORKFLOWS: process.env['SUDO_WORKFLOWS'] || '1',
+        SUDO_WORKFLOWS_QUEUE: process.env['SUDO_WORKFLOWS_QUEUE'] || '1',
+        SUDO_PTC: process.env['SUDO_PTC'] || '1',
+        SUDO_PLUGINS: process.env['SUDO_PLUGINS'] || '1',
+        SUDO_USER_HOOKS: process.env['SUDO_USER_HOOKS'] || '1',
+        SUDO_CLAUDE_COMPAT: process.env['SUDO_CLAUDE_COMPAT'] || '1',
+        SUDO_PLAN_MODE: process.env['SUDO_PLAN_MODE'] || '1',
+        SUDO_EXEC_POLICY: process.env['SUDO_EXEC_POLICY'] || '1',
+        SUDO_FORK_CONTEXT: process.env['SUDO_FORK_CONTEXT'] || '1',
+        SUDO_SKILL_FORGE_ASYNC: process.env['SUDO_SKILL_FORGE_ASYNC'] || '1',
+        // Channels / UX (each a no-op until its channel is configured):
+        SUDO_CHANNEL_COMMANDS: process.env['SUDO_CHANNEL_COMMANDS'] || '1',
+        SUDO_STREAM_CHANNELS: process.env['SUDO_STREAM_CHANNELS'] || '1',
+        SUDO_MSG_COALESCE: process.env['SUDO_MSG_COALESCE'] || '1',
+        SUDO_WHATSAPP_ENABLE: process.env['SUDO_WHATSAPP_ENABLE'] || '1',
+        SUDO_FLEET_REGISTRAR_MODE: process.env['SUDO_FLEET_REGISTRAR_MODE'] || '1',
+
         // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
         SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
         SUDO_UPDATE_CHANNEL: process.env['SUDO_UPDATE_CHANNEL'] || 'latest',
