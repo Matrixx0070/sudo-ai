@@ -385,6 +385,28 @@ module.exports = {
         // stable prefix but skips explicit breakpoints; SUDO_PROMPT_CACHE=0 disables fully.
         SUDO_PROMPT_CACHE: process.env['SUDO_PROMPT_CACHE'] || '1',
 
+        // ---- Opt-in robustness + learning enables (2026-06-25) ----
+        // Low-cost, low-risk features that were previously dark in prod. Each is
+        // default-OFF in code (read as === '1'); set here, env-overridable,
+        // kill-switch '0'. None add a per-turn LLM call.
+        //   TRACE_LEARNING     — record routing/brain/tool traces to SQLite
+        //                        (storage only; prerequisite for outcome-learner
+        //                        / trace-policy, which stay OFF for now).
+        //   TWO_TIER_COMPACT   — zero-cost micro-compaction before LLM
+        //                        compression runs (fewer compression calls).
+        //   CRASH_SAFE         — session journal + resume of interrupted
+        //                        sessions (complements the session-continuity work).
+        //   RATE_LIMIT_PERSIST — rate-limit state survives restarts.
+        //   DOOM_LOOP_EXTRAS   — WriteCycle + PollingStagnation loop guards
+        //                        (heuristic; complement the live StuckDetector).
+        //   RESPONSE_CACHE     — 60s cache for identical gateway requests.
+        SUDO_TRACE_LEARNING: process.env['SUDO_TRACE_LEARNING'] || '1',
+        SUDO_TWO_TIER_COMPACT: process.env['SUDO_TWO_TIER_COMPACT'] || '1',
+        SUDO_CRASH_SAFE: process.env['SUDO_CRASH_SAFE'] || '1',
+        SUDO_RATE_LIMIT_PERSIST: process.env['SUDO_RATE_LIMIT_PERSIST'] || '1',
+        SUDO_DOOM_LOOP_EXTRAS: process.env['SUDO_DOOM_LOOP_EXTRAS'] || '1',
+        SUDO_RESPONSE_CACHE: process.env['SUDO_RESPONSE_CACHE'] || '1',
+
         // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
         SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
         SUDO_UPDATE_CHANNEL: process.env['SUDO_UPDATE_CHANNEL'] || 'latest',
