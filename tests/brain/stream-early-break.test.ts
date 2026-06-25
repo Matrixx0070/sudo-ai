@@ -161,4 +161,32 @@ describe('Brain.stream() early-break bookkeeping', () => {
     expect(recordSuccess).toHaveBeenCalledWith(MODEL);
     expect(recordError).not.toHaveBeenCalled();
   });
+
+  it('BREAK-5: an SDK-v6 onError-only failure (textStream ends WITHOUT throwing) fails over with the real status, never crediting the model', async () => {
+    // AI SDK v6: a provider error before/during streaming ends textStream
+    // without throwing — the real error (APICallError 401) is delivered ONLY to
+    // onError. Before the onError-capture fix this empty stream was mis-recorded
+    // as success; now it must surface the real 401 → category 'auth' → failover.
+    const apiErr = Object.assign(new Error('Invalid bearer token'), { statusCode: 401 });
+    streamTextMock.mockImplementation((opts: { onError?: (e: { error: unknown }) => void }) => {
+      opts.onError?.({ error: apiErr });
+      return {
+        textStream: (async function* () { /* no chunks, no throw */ })(),
+        usage: Promise.resolve(USAGE),
+      };
+    });
+    const brain = new Brain(null);
+    await (brain as any).providersReady;
+    const prof = profile(MODEL);
+    (brain as any).failover.getNextProfile = vi.fn().mockReturnValueOnce(prof).mockReturnValue(null);
+    const recordError = vi.spyOn((brain as any).failover, 'recordError');
+    const recordSuccess = vi.spyOn((brain as any).failover, 'recordSuccess').mockImplementation(() => {});
+
+    const consume = async () => { for await (const _chunk of brain.stream(REQUEST)) { /* drain */ } };
+    await expect(consume()).rejects.toThrow('exhausted');
+
+    expect(recordError).toHaveBeenCalledTimes(1);
+    expect(recordError).toHaveBeenCalledWith(MODEL, 'auth', { retryAfterMs: undefined });
+    expect(recordSuccess).not.toHaveBeenCalled();
+  });
 });

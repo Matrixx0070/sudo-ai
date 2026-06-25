@@ -1174,7 +1174,15 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           streamParams.tools = Object.fromEntries(sortedEntries);
         }
 
-        const result = streamText(streamParams as Parameters<typeof streamText>[0]);
+        // AI SDK v6: a provider error before/during streaming ends textStream
+        // WITHOUT throwing (the real error goes to onError, not the iterator).
+        // Capture it so an auth/rate-limit failure fails over instead of being
+        // recorded as an empty, successful stream.
+        let streamError: unknown;
+        const result = streamText({
+          ...(streamParams as Parameters<typeof streamText>[0]),
+          onError: (e: { error: unknown }) => { streamError = e.error; },
+        });
 
         let streamCompleted = false;
         let streamErrored = false;
@@ -1182,6 +1190,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           for await (const chunk of result.textStream) {
             yield chunk;
           }
+          if (streamError) throw streamError;
           streamCompleted = true;
         } catch (err) {
           streamErrored = true;
@@ -1669,16 +1678,28 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     if (provider !== 'claude-oauth' || process.env['SUDO_BRAIN_OAUTH_STREAM_DISABLE'] === '1') {
       return generateText(callParams as Parameters<typeof generateText>[0]);
     }
-    const result = streamText(callParams as Parameters<typeof streamText>[0]);
+    // AI SDK v6 streamText rejects the aggregate promises (result.text, …) with a
+    // generic NoOutputGeneratedError that DROPS the underlying cause — no
+    // statusCode, no responseBody. The real provider error (e.g. APICallError
+    // 401) is delivered ONLY to onError. Capture it so failover classifies the
+    // true status (auth/rate-limit/overloaded) instead of defaulting to 500
+    // "overloaded" and re-hammering a dead credential. (Verified empirically:
+    // 401 → aggregate throws NoOutputGeneratedError, onError gets APICallError.)
+    let streamError: unknown;
+    const result = streamText({
+      ...(callParams as Parameters<typeof streamText>[0]),
+      onError: (e: { error: unknown }) => { streamError = e.error; },
+    });
     // Awaiting these aggregates consumes the stream (feeding the body-idle guard)
     // and resolves the same fields generateText returns. A rejection here is a
-    // real call failure and propagates to the rotation/failover loop.
+    // real call failure and propagates to the rotation/failover loop — prefer the
+    // onError-captured provider error so its status survives.
     const [text, toolCalls, usage, finishReason] = await Promise.all([
       result.text,
       result.toolCalls,
       result.usage,
       result.finishReason,
-    ]);
+    ]).catch((err: unknown): never => { throw streamError ?? err; });
     const reasoning: unknown = await Promise.resolve(result.reasoning).catch(() => undefined);
     const reasoningText: string | undefined = await Promise.resolve(result.reasoningText).catch(() => undefined);
     const providerMetadata: unknown = await Promise.resolve(result.providerMetadata).catch(() => undefined);
