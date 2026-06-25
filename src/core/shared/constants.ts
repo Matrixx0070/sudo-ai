@@ -101,6 +101,23 @@ export const BILLING_COOLDOWN: readonly number[] = [
   600_000,   // 10min max
 ] as const;
 
+/**
+ * Cooldown durations for persistent auth failures (401 — invalid / expired /
+ * revoked token). Much longer than transient: a dead credential will not heal
+ * on a 60s retry, so we park the profile and let the working fallback serve
+ * while the token is re-authenticated out-of-band. Escalates by consecutive
+ * failure count; the profile self-recovers on the first success (recordSuccess
+ * resets the counter). Without this an invalid-token 401 is misread as a
+ * transient blip and the dead tier is re-hammered every minute.
+ * Values: 1 min, 5 min, 15 min, 30 min.
+ */
+export const AUTH_COOLDOWN: readonly number[] = [
+  60_000,     // 1min
+  300_000,    // 5min
+  900_000,    // 15min
+  1_800_000,  // 30min max
+] as const;
+
 // ---------------------------------------------------------------------------
 // File-system paths (absolute, resolved against PROJECT_ROOT via paths.ts —
 // honors SUDO_AI_HOME, falls back to cwd; previously these were cwd-relative
