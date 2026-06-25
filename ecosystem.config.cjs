@@ -432,6 +432,21 @@ module.exports = {
         SUDO_GOAL_PLANNER: process.env['SUDO_GOAL_PLANNER'] || '1',
         SUDO_TODO_GATE: process.env['SUDO_TODO_GATE'] || '1',
 
+        // ---- Opt-in deeper-reasoning enables — cost-bounded subset (2026-06-25) ----
+        // Selected subset: NO per-turn or idle LLM cost. The rest of this tier
+        // (self-verify, verify-gate auto-critic, semantic goal-planner, the
+        // consciousness idle engines) stays OFF — they add steady/idle brain
+        // calls, declined while the claude-oauth primary is rate-limited.
+        //   MEMORY_CONSOLIDATE — registers the agent-callable meta.memory-consolidate
+        //     tool (distills MEMORY.md via the brain). Costs ONLY when the agent
+        //     calls it; no timer, no per-turn cost.
+        //   COMPACT_ESCALATE — TIER 2/3 compaction escalation; a no-op unless a
+        //     heavy session is still over the threshold after LAYER 1. Per-session
+        //     circuit-breaker + fail-open, so it only spends on genuinely-stuck
+        //     large contexts.
+        SUDO_MEMORY_CONSOLIDATE: process.env['SUDO_MEMORY_CONSOLIDATE'] || '1',
+        SUDO_COMPACT_ESCALATE: process.env['SUDO_COMPACT_ESCALATE'] || '1',
+
         // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
         SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
         SUDO_UPDATE_CHANNEL: process.env['SUDO_UPDATE_CHANNEL'] || 'latest',
