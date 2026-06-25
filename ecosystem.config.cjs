@@ -407,6 +407,31 @@ module.exports = {
         SUDO_DOOM_LOOP_EXTRAS: process.env['SUDO_DOOM_LOOP_EXTRAS'] || '1',
         SUDO_RESPONSE_CACHE: process.env['SUDO_RESPONSE_CACHE'] || '1',
 
+        // ---- Opt-in learning-loop enables (2026-06-25) ----
+        // Build on SUDO_TRACE_LEARNING (above). All default-OFF in code; fail-open,
+        // env-overridable, kill-switch '0'. Conservative + bounded by construction.
+        //   TOOL_OUTCOME_LEARNER — attach the failure learner to the loop so failed
+        //     tool calls record + inject prevention hints (pairs with the live
+        //     FAILURE_LEARNER_DB / FAILURE_PREVENTION_HINT). Honors
+        //     SUDO_TOOL_LEARNING_DISABLE.
+        //   TRACE_POLICY — learned routing influence from accumulated traces; a
+        //     no-op until rules clear >=5 calls & >=0.3 confidence. POLICY_REFRESH_MS
+        //     rebuilds rules in a background unref'd timer (here every 6h) so they
+        //     warm up without a restart. Kill-switch: SUDO_POLICY_DISABLE=1.
+        //   PREDICTOR_LOOP — once per session, inject high-confidence anticipatory
+        //     hints (heuristic, no LLM call).
+        //   GOAL_PLANNER — template (no-LLM) type-aware strategy scaffold per
+        //     classified goal. NOTE: overlaps the live AUTO_PLAN on complex turns
+        //     (both inject an advisory system block); flip to '0' if redundant.
+        //   TODO_GATE — block turn-end while todos remain, bounded to 5 retries
+        //     (SUDO_TODO_GATE_MAX_RETRIES); no-op when there are no todos.
+        SUDO_TOOL_OUTCOME_LEARNER: process.env['SUDO_TOOL_OUTCOME_LEARNER'] || '1',
+        SUDO_TRACE_POLICY: process.env['SUDO_TRACE_POLICY'] || '1',
+        SUDO_POLICY_REFRESH_MS: process.env['SUDO_POLICY_REFRESH_MS'] || '21600000',
+        SUDO_PREDICTOR_LOOP: process.env['SUDO_PREDICTOR_LOOP'] || '1',
+        SUDO_GOAL_PLANNER: process.env['SUDO_GOAL_PLANNER'] || '1',
+        SUDO_TODO_GATE: process.env['SUDO_TODO_GATE'] || '1',
+
         // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
         SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
         SUDO_UPDATE_CHANNEL: process.env['SUDO_UPDATE_CHANNEL'] || 'latest',
