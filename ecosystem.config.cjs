@@ -456,8 +456,9 @@ module.exports = {
         //   ARSENAL_V2_NO_REORDER/SMART_ROUTE_CHEAP/CHAT_APPROVALS/GROUP_MENTION_ONLY),
         //   strict fail-closed (MSG_SCAN_STRICT/INJECTION_STRICT/SEAL_REQUIRED/
         //   FED_STRICT_VERIFY), debug (PROMPT_CACHE_DEBUG/DESKTOP_DEVTOOLS).
-        // HELD for explicit operator go-ahead (unattended action / self-rewrite on
-        // a live, contact-connected box): SUDO_AUTONOMY_V1, SUDO_SELF_BUILD_MODE.
+        // HELD for explicit operator go-ahead (self-rewrite/deploy on a live box):
+        // SUDO_SELF_BUILD_MODE. (SUDO_AUTONOMY_V1 enabled 2026-06-25 — drives
+        // GoalEngineV2; inert until a goal exists in data/goals.db.)
         // Verification / quality:
         SUDO_SELF_VERIFY: process.env['SUDO_SELF_VERIFY'] || '1',
         SUDO_VERIFY_GATE: process.env['SUDO_VERIFY_GATE'] || '1',
@@ -488,6 +489,11 @@ module.exports = {
         SUDO_MSG_COALESCE: process.env['SUDO_MSG_COALESCE'] || '1',
         SUDO_WHATSAPP_ENABLE: process.env['SUDO_WHATSAPP_ENABLE'] || '1',
         SUDO_FLEET_REGISTRAR_MODE: process.env['SUDO_FLEET_REGISTRAR_MODE'] || '1',
+        // Autonomy: background goal pursuit via WakeSleepCycle over GoalEngineV2
+        // (5-min ticks, 1h re-wake). Inert until goals exist in data/goals.db.
+        // Bounded by the tool sandbox/allowlist/veto guards. Does NOT modify code
+        // (that is SUDO_SELF_BUILD_MODE, still held). Kill-switch '0'.
+        SUDO_AUTONOMY_V1: process.env['SUDO_AUTONOMY_V1'] || '1',
 
         // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
         SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
