@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { ModelFailover } from '../../src/core/brain/failover.js';
 import { Brain } from '../../src/core/brain/brain.js';
-import { TRANSIENT_COOLDOWN } from '../../src/core/shared/constants.js';
+import { TRANSIENT_COOLDOWN, AUTH_COOLDOWN } from '../../src/core/shared/constants.js';
 
 const MODEL = 'xai/grok-3-fast';
 const BASE = TRANSIENT_COOLDOWN[0]; // 5000ms
@@ -101,6 +101,83 @@ describe('Phase B: failover backoff hardening', () => {
     it('BACKOFF-10: no header → undefined', () => {
       const r = extract({ statusCode: 500, message: 'boom' });
       expect(r.retryAfterMs).toBeUndefined();
+    });
+  });
+
+  describe('AUTH cooldown (401 — parked, recoverable, not disabled)', () => {
+    it('AUTH-1: a 401 parks the profile on the long AUTH schedule, not the 5s transient one', () => {
+      const f = fresh();
+      f.recordError(MODEL, 'auth', { rng: () => 0 });
+      const remaining = f.getCooldownRemaining(MODEL);
+      expect(remaining).toBeGreaterThanOrEqual(AUTH_COOLDOWN[0] - 100); // 60s
+      expect(remaining).toBeLessThanOrEqual(AUTH_COOLDOWN[0]);
+      expect(AUTH_COOLDOWN[0]).toBeGreaterThan(TRANSIENT_COOLDOWN[0]); // 60s ≫ 5s
+    });
+
+    it('AUTH-2: escalates by consecutive failure count', () => {
+      const f = fresh();
+      f.recordError(MODEL, 'auth', { rng: () => 0 }); // count 1 → 60s
+      f.recordError(MODEL, 'auth', { rng: () => 0 }); // count 2 → 5min
+      const remaining = f.getCooldownRemaining(MODEL);
+      expect(remaining).toBeGreaterThanOrEqual(AUTH_COOLDOWN[1] - 100);
+      expect(remaining).toBeLessThanOrEqual(AUTH_COOLDOWN[1]);
+    });
+
+    it('AUTH-3: self-recovers on the next success (not permanently disabled)', () => {
+      const f = fresh();
+      f.recordError(MODEL, 'auth', { rng: () => 0 });
+      expect(f.getCooldownRemaining(MODEL)).toBeGreaterThan(0);
+      f.recordSuccess(MODEL);
+      expect(f.getCooldownRemaining(MODEL)).toBe(0);
+    });
+
+    it('AUTH-4: contrasts with auth_permanent (403), which DISABLES the profile', () => {
+      const permanent = fresh();
+      permanent.recordError(MODEL, 'auth_permanent');
+      expect(permanent.getNextProfile()).toBeNull(); // disabled → no usable profile
+
+      const recoverable = fresh();
+      recoverable.recordError(MODEL, 'auth');
+      expect(recoverable.getNextProfile()).not.toBeNull(); // parked but rescuable
+    });
+  });
+
+  describe('Brain.extractErrorDetails auth recovery', () => {
+    const extract = (err: unknown) => (Brain as any).extractErrorDetails(err) as {
+      status: number; body: string | undefined; retryAfterMs: number | undefined;
+    };
+
+    it('AUTHX-1: digs a 401 statusCode out of a .cause chain', () => {
+      const err = {
+        message: 'No output generated. Check the stream for errors.',
+        cause: {
+          statusCode: 401,
+          responseBody: '{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}',
+        },
+      };
+      expect(extract(err).status).toBe(401);
+    });
+
+    it('AUTHX-2: recovers 401 by body signature when no status is present', () => {
+      expect(extract({ message: 'Invalid bearer token' }).status).toBe(401);
+      expect(extract(new Error('authentication_error: Invalid bearer token')).status).toBe(401);
+    });
+
+    it('AUTHX-3: recovers 401 from an invalid_grant refresh failure body', () => {
+      const err = { message: 'boom', cause: { message: '{"error":"invalid_grant","error_description":"Refresh token not found or invalid"}' } };
+      expect(extract(err).status).toBe(401);
+    });
+
+    it('AUTHX-4: a generic 500 with no auth signature stays 500 (no false positive)', () => {
+      expect(extract({ statusCode: 500, message: 'internal boom' }).status).toBe(500);
+    });
+
+    it('AUTHX-5: a real 429 is unaffected', () => {
+      expect(extract({ statusCode: 429, message: 'rate limited' }).status).toBe(429);
+    });
+
+    it('AUTHX-6: permission_error maps to 403', () => {
+      expect(extract({ message: 'permission_error: not allowed' }).status).toBe(403);
     });
   });
 });

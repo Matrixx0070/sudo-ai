@@ -8,7 +8,7 @@
  */
 
 import { categorizeError, LLMError } from '../shared/errors.js';
-import { TRANSIENT_COOLDOWN, BILLING_COOLDOWN } from '../shared/constants.js';
+import { TRANSIENT_COOLDOWN, BILLING_COOLDOWN, AUTH_COOLDOWN } from '../shared/constants.js';
 import { createLogger } from '../shared/logger.js';
 import type { ModelProfile, ErrorCategory } from './types.js';
 
@@ -29,6 +29,14 @@ const TRANSIENT_CATEGORIES = new Set<ErrorCategory>([
 const BILLING_CATEGORIES = new Set<ErrorCategory>(['billing']);
 
 const PERMANENT_CATEGORIES = new Set<ErrorCategory>(['auth_permanent']);
+
+/**
+ * Recoverable auth failures (401 — invalid/expired/revoked credential). Unlike
+ * 403 (auth_permanent → disable), a 401 can clear once the token is refreshed
+ * or re-authenticated, so we park the profile on a long, escalating cooldown
+ * rather than disabling it or treating it as a transient blip.
+ */
+const AUTH_CATEGORIES = new Set<ErrorCategory>(['auth']);
 
 /**
  * Additive jitter applied to scheduled cooldowns: the final wait is
@@ -167,6 +175,16 @@ export class ModelFailover {
       log.warn(
         { profileId, category, errClass: 'billing', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs, cooldownUntil: profile.cooldownUntil },
         'Billing cooldown applied',
+      );
+      return;
+    }
+
+    if (AUTH_CATEGORIES.has(category)) {
+      const cooldownMs = this._cooldownMs(AUTH_COOLDOWN, errorCount, opts);
+      profile.cooldownUntil = now + cooldownMs;
+      log.warn(
+        { profileId, category, errClass: 'auth', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
+        'Auth cooldown applied — token invalid/expired; parking profile until re-auth (fallback serves)',
       );
       return;
     }

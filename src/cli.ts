@@ -313,22 +313,36 @@ async function boot(): Promise<void> {
         }
       }
 
-      claudeToken.startAutoRefresh();
       claudeTokenManager = claudeToken;
       registerShutdown(() => claudeToken.stopAutoRefresh());
 
-      // Poll every minute and update ANTHROPIC_AUTH_TOKEN when the token rotates.
-      const tokenPollTimer = setInterval(() => {
-        if (!claudeTokenManager) return;
-        const newToken = claudeTokenManager.getAccessToken();
-        if (newToken && newToken !== process.env['ANTHROPIC_AUTH_TOKEN']) {
-          process.env['ANTHROPIC_AUTH_TOKEN'] = newToken;
-          log.info('ANTHROPIC_AUTH_TOKEN updated with refreshed Claude token');
-        }
-      }, TOKEN_POLL_INTERVAL_MS);
+      // The daemon-internal auto-refresh competes with sudo-ai's own
+      // claude-oauth PKCE manager — and any external `claude` CLI — on the SAME
+      // OAuth client_id grant. Anthropic rotates/revokes prior tokens per
+      // (account, client_id), so multiple refreshers invalidate each other (the
+      // observed 401 "Invalid bearer token" storm). The brain's failover chain
+      // routes claude-oauth/* (not anthropic/*), so this refresh loop adds no
+      // routing value today; default OFF. SUDO_CLAUDE_CLI_TOKEN_REFRESH=1
+      // restores the legacy self-refresh (e.g. if anthropic/* is put back in
+      // the chain and this host is the sole holder of the grant).
+      if (process.env['SUDO_CLAUDE_CLI_TOKEN_REFRESH'] === '1') {
+        claudeToken.startAutoRefresh();
 
-      if (tokenPollTimer.unref) tokenPollTimer.unref();
-      registerShutdown(() => clearInterval(tokenPollTimer));
+        // Poll every minute and update ANTHROPIC_AUTH_TOKEN when the token rotates.
+        const tokenPollTimer = setInterval(() => {
+          if (!claudeTokenManager) return;
+          const newToken = claudeTokenManager.getAccessToken();
+          if (newToken && newToken !== process.env['ANTHROPIC_AUTH_TOKEN']) {
+            process.env['ANTHROPIC_AUTH_TOKEN'] = newToken;
+            log.info('ANTHROPIC_AUTH_TOKEN updated with refreshed Claude token');
+          }
+        }, TOKEN_POLL_INTERVAL_MS);
+
+        if (tokenPollTimer.unref) tokenPollTimer.unref();
+        registerShutdown(() => clearInterval(tokenPollTimer));
+      } else {
+        log.info('Claude CLI token auto-refresh disabled (default) — prevents multi-refresher OAuth grant collision; set SUDO_CLAUDE_CLI_TOKEN_REFRESH=1 to re-enable');
+      }
     } else {
       log.info('Claude credentials not found — Claude provider unavailable; using configured providers');
     }

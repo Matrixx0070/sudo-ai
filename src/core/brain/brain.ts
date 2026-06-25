@@ -1815,40 +1815,53 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
    * with a `statusCode` property.
    */
   private static extractErrorDetails(err: unknown): { status: number; body: string | undefined; retryAfterMs: number | undefined } {
-    const asAny = err as Record<string, unknown>;
+    // Collect every node in the SDK's error wrapping. The real APICallError
+    // (carrying statusCode + responseBody) can be the error itself, nested
+    // under `.cause` (standard Error chaining the streamText path uses),
+    // `.lastError` (RetryError), or inside an `.errors[]` array. Walking all of
+    // them means a buried 401 is recovered instead of defaulting to 500 — the
+    // bug that made a dead OAuth token look like a transient "overloaded" blip.
+    const nodes: Record<string, unknown>[] = [];
+    const seen = new Set<unknown>();
+    const visit = (e: unknown, depth: number): void => {
+      if (!e || typeof e !== 'object' || seen.has(e) || depth > 6) return;
+      seen.add(e);
+      const obj = e as Record<string, unknown>;
+      nodes.push(obj);
+      visit(obj['cause'], depth + 1);
+      visit(obj['lastError'], depth + 1);
+      const errs = obj['errors'];
+      if (Array.isArray(errs)) for (const inner of errs) visit(inner, depth + 1);
+    };
+    visit(err, 0);
 
-    // Direct status or statusCode on the error object itself.
-    let status = (asAny['status'] as number | undefined) ?? (asAny['statusCode'] as number | undefined);
-    let body = (asAny['message'] as string | undefined);
-
-    // If this is a Vercel AI SDK RetryError, dig into lastError or errors array
-    // to find the APICallError with the real HTTP status code.
-    if (!status || status === 500) {
-      const lastError = asAny['lastError'] as Record<string, unknown> | undefined;
-      const errors = asAny['errors'] as unknown[] | undefined;
-
-      // Try lastError first (most recent failure).
-      if (lastError && typeof lastError === 'object') {
-        const innerStatus = (lastError['statusCode'] as number | undefined) ?? (lastError['status'] as number | undefined);
-        if (innerStatus) {
-          status = innerStatus;
-          body = (lastError['responseBody'] as string | undefined) ?? (lastError['message'] as string | undefined) ?? body;
-        }
+    // Prefer the most specific status: a concrete non-500 code from any node
+    // wins over a missing/500 one. Keep the body from the node we trust.
+    let status: number | undefined;
+    let body: string | undefined;
+    for (const obj of nodes) {
+      const s = (obj['statusCode'] as number | undefined) ?? (obj['status'] as number | undefined);
+      const b = (obj['responseBody'] as string | undefined) ?? (obj['message'] as string | undefined);
+      if (typeof s === 'number' && (status === undefined || (status === 500 && s !== 500))) {
+        status = s;
+        if (b) body = b;
       }
+      if (!body && b) body = b;
+    }
 
-      // If still no status, scan the errors array for any APICallError.
-      if ((!status || status === 500) && Array.isArray(errors)) {
-        for (let i = errors.length - 1; i >= 0; i--) {
-          const inner = errors[i] as Record<string, unknown> | undefined;
-          if (inner && typeof inner === 'object') {
-            const innerStatus = (inner['statusCode'] as number | undefined) ?? (inner['status'] as number | undefined);
-            if (innerStatus && innerStatus !== 500) {
-              status = innerStatus;
-              body = (inner['responseBody'] as string | undefined) ?? (inner['message'] as string | undefined) ?? body;
-              break;
-            }
-          }
-        }
+    // Signature fallback: a streamed auth failure can surface as a status-less
+    // (or 500-wrapped) error whose text still names the cause. Recover the real
+    // status so failover parks the tier on the long AUTH cooldown instead of
+    // re-hammering a dead credential every minute.
+    if (status === undefined || status === 500) {
+      const hay = nodes
+        .map((o) => `${String(o['responseBody'] ?? '')} ${String(o['message'] ?? '')}`)
+        .join(' ')
+        .toLowerCase();
+      if (/authentication_error|invalid bearer token|invalid[_ ]api[_ ]key|invalid x-api-key|invalid_grant|oauth token (?:expired|invalid)/.test(hay)) {
+        status = 401;
+      } else if (/permission_error/.test(hay)) {
+        status = 403;
       }
     }
 
