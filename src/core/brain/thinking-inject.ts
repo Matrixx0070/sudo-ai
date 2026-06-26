@@ -70,3 +70,29 @@ export function resolveThinkingBudget(
 
   return { budgetTokens, maxTokens };
 }
+
+/**
+ * Clamp a requested max-output-tokens to the model's true output ceiling.
+ *
+ * The brain passes `maxOutputTokens` to streamText from request.maxTokens /
+ * the complexity-scorer (which can suggest up to 32768). For opus-4-8 that
+ * exceeds the 32000 ceiling, so the AI SDK logs on EVERY call:
+ *   "(maxOutputTokens + thinkingBudget) > 32000 — limited to 32000"
+ * and clamps anyway. Clamping here first is behaviour-IDENTICAL (same effective
+ * 32000) but removes the per-call warning — closing the gap left by #461, which
+ * clamped the interceptor BODY's max_tokens but not the streamText param the SDK
+ * validates first. Accepts a provider-prefixed id ("claude-oauth/claude-opus-4-8").
+ * Non-opus models are returned unchanged (their own ceilings apply elsewhere).
+ */
+export function clampMaxTokensToModel(
+  model: string,
+  maxTokens: number,
+  env: Pick<ThinkingEnv, 'modelMax'> = {},
+): number {
+  if (typeof model !== 'string' || typeof maxTokens !== 'number') return maxTokens;
+  const bare = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
+  if (!OPUS_THINKING_RE.test(bare)) return maxTokens;
+  const envMax = parseInt(env.modelMax ?? '', 10);
+  const modelMax = Number.isFinite(envMax) ? Math.max(8192, envMax) : DEFAULT_MODEL_MAX;
+  return Math.min(maxTokens, modelMax);
+}
