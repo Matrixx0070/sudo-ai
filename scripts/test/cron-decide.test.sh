@@ -53,5 +53,59 @@ eq 0 "$(read_counter "$CF")" "port-bound reset => 0"
 printf 'garbage' > "$CF"
 eq 0 "$(read_counter "$CF")" "non-numeric file reads 0 (safe)"
 
+# ---- is_app_proc: path-anchored daemon match (B7.1 false-negative fix) ----
+# app_is <expected:yes|no> <argv> <msg>
+app_is() {
+  local want="$1" got=no
+  if is_app_proc "$2"; then got=yes; fi
+  eq "$want" "$got" "$3"
+}
+# The real prod argv (pm2 launches a direct node process) => MATCHES.
+app_is yes "node /root/sudo-ai-v4/src/cli.ts"             "real daemon argv => app"
+# The interpreter_args form (node --import tsx ...) => MATCHES.
+app_is yes "node --import tsx /root/sudo-ai-v4/src/cli.ts" "node --import tsx form => app"
+# A happy/Claude session whose PROMPT TEXT embeds the path mid-argv => NOT app
+# (anchored at start; this is the proc running THIS very session).
+app_is no  "node /usr/bin/happy --yolo -p [BATCH 7] ... node /root/sudo-ai-v4/src/cli.ts ..." "path mentioned mid-argv (happy session) => NOT app"
+app_is no  "/usr/bin/node --no-warnings /usr/lib/node_modules/happy/dist/index.mjs -p ... /root/sudo-ai-v4/src/cli.ts" "happy launcher mentioning path => NOT app"
+# Aether (different path / different command) => NEVER matches.
+app_is no  "bash /root/aether-blueprint/eval/coding/tasks/06_rust_bug/verify.sh" "aether verify.sh => NOT app"
+app_is no  "/tmp/aether-eval-rust-bug-target/debug/deps/rust_bug_fixture --quiet" "aether target binary => NOT app"
+# esbuild / tsx children => NOT the anchored app proc.
+app_is no  "/root/sudo-ai-v4/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.x" "esbuild child => NOT app"
+app_is no  "node /usr/bin/something-else /root/sudo-ai-v4/src/cli.ts" "non-anchored node arg ordering => NOT app"
+# A different home directory still anchors correctly (param form).
+eq yes "$(is_app_proc 'node /opt/app/src/cli.ts' /opt/app && echo yes || echo no)" "param app_home matches its own daemon"
+eq no  "$(is_app_proc 'node /root/sudo-ai-v4/src/cli.ts' /opt/app && echo yes || echo no)" "param app_home does not match a different home"
+
+# ---- select_dup_kill_pids: duplicate kill-selection safety ----
+# joinsel <pm2> <app...> => space-joined sorted selection (stable compare)
+sel() { select_dup_kill_pids "$@" | tr '\n' ' ' | sed 's/ $//'; }
+# Single healthy daemon (pm2 pid == only app pid) => select NOTHING.
+eq ""    "$(sel 100 100)"          "single healthy daemon => kill nothing"
+# Genuine duplicate: pm2 keeper + one orphan => select ONLY the orphan.
+eq "200" "$(sel 100 100 200)"      "duplicate => select only the non-pm2 orphan"
+# Two orphans + keeper => both orphans, NEVER the keeper.
+eq "200 300" "$(sel 100 100 200 300)" "two orphans => select both, never pm2 pid"
+# Keeper FIRST or LAST in the list — pm2 pid is never emitted.
+eq "200" "$(sel 100 200 100)"      "keeper position-independent, pm2 never emitted"
+# No pm2 keeper (app down / pm2 empty) => refuse to choose => NOTHING.
+eq ""    "$(sel '' 200 300)"       "empty pm2 pid => select nothing (no trusted keeper)"
+eq ""    "$(sel 0 200 300)"        "pm2 pid 0 => select nothing"
+# pm2 keeper not among the candidates => ambiguous => NOTHING.
+eq ""    "$(sel 100 200 300)"      "keeper absent from candidates => select nothing (ambiguous)"
+# No candidates / single candidate that is not the keeper => NOTHING.
+eq ""    "$(sel 100)"              "no app pids => select nothing"
+eq ""    "$(sel 100 200)"          "lone non-keeper app pid => select nothing (no duplicate proof)"
+# HARD INVARIANT: the pm2 pid must NEVER appear in any selection.
+for case in "100 100 200" "100 100 200 300" "100 200 100" "100 200 300"; do
+  # shellcheck disable=SC2086
+  if select_dup_kill_pids $case | grep -qx 100; then
+    echo "FAIL: pm2 pid 100 was selected for kill (case: $case)"; fail=1
+  else
+    ok "pm2 pid never selected (case: $case)"
+  fi
+done
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME FAILED"; exit 1; fi
