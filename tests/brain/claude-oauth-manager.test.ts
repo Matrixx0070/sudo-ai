@@ -47,7 +47,7 @@ describe('PKCE helpers', () => {
   it('builds an authorize URL with all required PKCE params', () => {
     const v = generatePkceVerifier();
     const state = 'abc123';
-    const redirectUri = 'http://localhost:39969/callback';
+    const redirectUri = 'https://platform.claude.com/oauth/code/callback';
     const url = new URL(buildAuthorizeUrl(v, state, redirectUri));
     expect(url.origin + url.pathname).toBe('https://claude.com/cai/oauth/authorize');
     expect(url.searchParams.get('client_id')).toBe('9d1c250a-e61b-44d9-88ed-5944d1962f5e');
@@ -72,7 +72,7 @@ describe('ClaudeOAuthManager — login + persistence', () => {
     const mgr = new ClaudeOAuthManager(storePath);
     const pending = mgr.startLogin();
     expect(pending.authorizeUrl).toContain('claude.com/cai/oauth/authorize');
-    expect(pending.redirectUri).toMatch(/^http:\/\/localhost:\d+\/callback$/);
+    expect(pending.redirectUri).toBe('https://platform.claude.com/oauth/code/callback');
 
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const u = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
