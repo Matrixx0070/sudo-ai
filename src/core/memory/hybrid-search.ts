@@ -17,9 +17,20 @@
 import { createLogger } from '../shared/logger.js';
 import type { MindDB } from './db.js';
 import type { EmbeddingService } from './embeddings.js';
+import { LocalEmbeddingProvider } from './local-embeddings.js';
 import type { MemoryChunk, SearchOptions, SearchResult } from './types.js';
 
 const log = createLogger('memory:hybrid-search');
+
+/**
+ * Minimal embedder shape for the local fallback (satisfied by
+ * {@link LocalEmbeddingProvider}). Injectable so the routing is unit-testable
+ * without loading the ONNX model.
+ */
+export interface LocalEmbedderLike {
+  readonly isAvailable: boolean;
+  embed(text: string): Promise<Float32Array | null>;
+}
 
 // ---------------------------------------------------------------------------
 // Scoring helpers (exported for unit testing)
@@ -233,6 +244,7 @@ export async function hybridSearch(
   db: MindDB,
   embeddings: EmbeddingService,
   options: SearchOptions,
+  localEmbedder?: LocalEmbedderLike,
 ): Promise<SearchResult[]> {
   const {
     query,
@@ -248,35 +260,65 @@ export async function hybridSearch(
   } = options;
 
   const candidateN = maxResults * 4;
-  const useVec     = db.vecLoaded && embeddings.isAvailable;
 
   let vectorResults: SearchResult[] = [];
   let bm25Results: SearchResult[]   = [];
 
   // -------------------------------------------------------------------------
   // Step 1: Vector search (conditional)
+  //
+  // Two embedding spaces, NEVER mixed (cross-model vectors aren't comparable):
+  //   • OpenAI 1536-dim → chunks_vec        (primary, when key + circuit OK)
+  //   • local  384-dim  → chunks_vec_local  (fallback, when OpenAI is down)
+  // Prefer OpenAI; use the local space only when OpenAI yields no query vector
+  // (no key / circuit-open / embed failed). Neither usable → BM25-only.
   // -------------------------------------------------------------------------
 
-  if (useVec) {
-    // Query-time embedding resilience (B5.2): a terminal embed() failure (e.g.
-    // the provider stays down after the #467 backoff is exhausted) must NOT sink
-    // the whole search — degrade to the BM25 path so the caller still gets text
-    // matches instead of an exception (and an empty RAG context). Default-ON;
-    // SUDO_EMBED_QUERY_DEGRADE=0 restores the old propagate-the-throw behavior.
+  const openaiUsable = db.vecLoaded && embeddings.isAvailable;
+  const local        = localEmbedder ?? new LocalEmbeddingProvider();
+  const localUsable  = db.vecLoaded && local.isAvailable;
+
+  if (openaiUsable || localUsable) {
+    // Query-time embedding resilience (B5.2): a terminal embed() failure must
+    // NOT sink the search — fall through to the local space, then BM25, so the
+    // caller still gets results instead of an exception (and an empty RAG
+    // context). Default-ON; SUDO_EMBED_QUERY_DEGRADE=0 restores propagate-throw
+    // for the OpenAI leg.
     const degradeOnEmbedFailure = process.env['SUDO_EMBED_QUERY_DEGRADE'] !== '0';
     let queryVec: Float32Array | null = null;
-    try {
-      queryVec = await embeddings.embed(query);
-    } catch (err) {
-      if (!degradeOnEmbedFailure) throw err;
-      log.debug({ err: String(err) }, 'hybrid-search: query embedding failed — degrading to BM25-only');
-      queryVec = null;
+    let vecTable: 'chunks_vec' | 'chunks_vec_local' = 'chunks_vec';
+
+    // Primary: OpenAI space.
+    if (openaiUsable) {
+      try {
+        queryVec = await embeddings.embed(query);
+      } catch (err) {
+        if (!degradeOnEmbedFailure) throw err;
+        log.debug({ err: String(err) }, 'hybrid-search: OpenAI query embedding failed — trying local/BM25');
+        queryVec = null;
+      }
     }
+
+    // Fallback: local space when OpenAI produced no vector (down / unavailable).
+    if (!queryVec && localUsable) {
+      try {
+        const lv = await local.embed(query);
+        if (lv) {
+          queryVec = lv;
+          vecTable = 'chunks_vec_local';
+          log.debug('hybrid-search: using LOCAL embedding space (OpenAI unavailable)');
+        }
+      } catch (err) {
+        log.debug({ err: String(err) }, 'hybrid-search: local query embedding failed — degrading to BM25-only');
+      }
+    }
+
     if (queryVec) {
-      // sqlite-vec KNN query — returns cosine distance (0=identical, 2=opposite)
+      // sqlite-vec KNN query — cosine distance (0=identical, 2=opposite).
+      // vecTable is a whitelisted literal, never user input.
       const vecRows = db.db.prepare<{ embedding: Buffer; k: number }, VecRow>(`
         SELECT chunk_id, distance
-        FROM chunks_vec
+        FROM ${vecTable}
         WHERE embedding MATCH :embedding
         ORDER BY distance
         LIMIT :k

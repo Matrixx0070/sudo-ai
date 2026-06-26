@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { initializeSchema, initializeVecTable } from './schema.js';
+import { initializeSchema, initializeVecTable, initializeVecTableLocal } from './schema.js';
 import { guardMemoryWrite, type MessageRole } from './injection-scanner.js';
 import type { MemoryChunk } from './types.js';
 
@@ -199,6 +199,9 @@ export class MindDB {
       }
       this.db.loadExtension(vecPath);
       initializeVecTable(this.db);
+      // Local fallback vector space (384-dim) — additive, independent of
+      // chunks_vec; populated by the backfill when OpenAI embeddings are down.
+      initializeVecTableLocal(this.db);
       console.info(`[MindDB] sqlite-vec loaded (${vecPath}) — vector search enabled`);
       return true;
     } catch (err) {
@@ -315,6 +318,9 @@ export class MindDB {
     if (this.vecLoaded) {
       // vec0 binds its primary key as a BigInt (a plain number is rejected).
       try { this.db.prepare('DELETE FROM chunks_vec WHERE chunk_id = ?').run(BigInt(id)); }
+      catch { /* table absent or already gone — ignore */ }
+      // Keep the local fallback index in sync too (best-effort).
+      try { this.db.prepare('DELETE FROM chunks_vec_local WHERE chunk_id = ?').run(BigInt(id)); }
       catch { /* table absent or already gone — ignore */ }
     }
     return info.changes > 0;

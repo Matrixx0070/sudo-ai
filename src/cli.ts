@@ -31,6 +31,7 @@ import {
   isVectorBackfillEnabled,
   MindDBVectorStore,
 } from './core/memory/vector-backfill.js';
+import { LocalEmbeddingProvider, LOCAL_EMBED_DIM } from './core/memory/local-embeddings.js';
 import { Brain } from './core/brain/brain.js';
 import { ToolRegistry } from './core/tools/registry.js';
 import { loadBuiltinTools } from './core/tools/loader.js';
@@ -2620,6 +2621,24 @@ async function boot(): Promise<void> {
             log.info({ jobId: job.id, ...res }, 'Vector backfill pass complete');
           } catch (vbErr) {
             log.warn({ err: String(vbErr) }, 'Vector backfill failed (non-fatal)');
+          }
+          // Local fallback index (chunks_vec_local, 384-dim): keep it populated so
+          // semantic search survives OpenAI outages (quota/circuit). Local embedding
+          // is CPU + key-free, so this runs independently of the OpenAI quota above
+          // (disable with SUDO_LOCAL_EMBED=0).
+          const localEmbedder = new LocalEmbeddingProvider();
+          if (localEmbedder.isAvailable) {
+            try {
+              const localRes = await backfillChunkVectors(
+                db,
+                localEmbedder,
+                new MindDBVectorStore(db.db, 'chunks_vec_local'),
+                { expectedDim: LOCAL_EMBED_DIM },
+              );
+              log.info({ jobId: job.id, space: 'local', ...localRes }, 'Local vector backfill pass complete');
+            } catch (lvErr) {
+              log.warn({ err: String(lvErr) }, 'Local vector backfill failed (non-fatal)');
+            }
           }
         }
       } else {
