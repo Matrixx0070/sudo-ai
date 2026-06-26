@@ -189,7 +189,7 @@ export class TheoryOfMind {
   getAdaptedStyle(userId: string): string {
     const model = getUserModel(this.db, userId);
     if (!model) {
-      log.warn({ userId }, 'getAdaptedStyle called for unknown user — returning defaults');
+      log.debug({ userId }, 'getAdaptedStyle called for unknown user — returning defaults');
       return 'Respond helpfully using a balanced, friendly tone.';
     }
 
