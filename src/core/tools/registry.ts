@@ -119,9 +119,19 @@ export class ToolRegistry {
       );
     }
     if (this.tools.has(tool.name)) {
-      // Benign last-wins: tools legitimately arrive via two paths (the global
-      // self-register singleton + explicit registration in cli.ts), so a
-      // re-register is routine, not an error. debug, not warn (~40/run of noise).
+      // Same-reference re-register is a true no-op. A tool legitimately arrives
+      // via more than one registration path — e.g. the superpowers built-in
+      // discovery bridge (builtin/superpowers) AND the explicit
+      // registerSuperpowers() call in cli.ts; plan-mode tools via the builtin
+      // loader AND cli.ts — but every such path imports the SAME ToolDefinition
+      // object (an ES-module singleton). The registry already maps the name to
+      // that exact object, so re-setting it changes nothing; skip it so the
+      // registry is idempotent-by-design for these duplicates and stops emitting
+      // redundant register churn. Only a genuinely DIVERGENT re-register
+      // (different object, same name) falls through to last-wins below.
+      if (this.tools.get(tool.name) === tool) return;
+      // Different definition, same name: keep prior last-wins behavior, debug
+      // (not warn — benign, e.g. core + plugin sets can overlap).
       logger.debug({ tool: tool.name }, 'tool re-registered (overwriting prior definition)');
     }
     this.tools.set(tool.name, tool);

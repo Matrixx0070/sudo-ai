@@ -56,6 +56,29 @@ describe('ToolRegistry', () => {
     expect(registry.size).toBe(1);
   });
 
+  it('re-registering the SAME object reference is an idempotent no-op (count unchanged, no overwrite)', () => {
+    // Mirrors the real boot duplication: a tool arrives via two paths that import
+    // the same ES-module singleton (superpowers bridge + cli.ts; plan-mode tools).
+    const tool = makeToolDefinition('system.hello', 'coder');
+    registry.register(tool);
+    registry.register(tool); // same reference → skipped
+    registry.register(tool); // again
+    expect(registry.size).toBe(1);
+    expect(registry.get('system.hello')).toBe(tool);
+  });
+
+  it('a DIVERGENT same-name re-register still wins last (behavior preserved)', () => {
+    // The guard must ONLY short-circuit identical references; a genuinely
+    // different definition for the same name must still overwrite (last-wins).
+    const first = makeToolDefinition('system.hello', 'system');
+    const second = makeToolDefinition('system.hello', 'coder');
+    registry.register(first);
+    registry.register(second);
+    expect(registry.size).toBe(1);
+    expect(registry.get('system.hello')).toBe(second);
+    expect(registry.get('system.hello')?.category).toBe('coder');
+  });
+
   // -------------------------------------------------------------------------
   // registerMany()
   // -------------------------------------------------------------------------
