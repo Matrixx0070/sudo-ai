@@ -98,6 +98,42 @@ export function attachBodyIdleTimeout(
 }
 
 // ---------------------------------------------------------------------------
+// Outgoing-message sanitisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Strip empty / whitespace-only `{type:'text'}` content blocks from outgoing
+ * messages, returning how many were removed.
+ *
+ * Anthropic rejects such blocks with 400 "messages: text content blocks must
+ * be non-empty" — observed live as 12/12 of the claude-oauth 400s. The sliding
+ * window / session-fork trim path can leave a message carrying an empty text
+ * block. Mutates each message's `content` array in place.
+ *
+ * SAFETY: this is a no-op for any message without an empty text block, and ANY
+ * request that contains one is ALREADY a guaranteed 400 — so the strip cannot
+ * regress a currently-succeeding request, only rescue a failing one. Messages
+ * whose content becomes empty are NOT dropped here; the caller drops
+ * empty-content messages (mirroring the orphan-tool_result cleanup), because an
+ * empty content array is also a 400.
+ */
+export function stripEmptyTextBlocks(messages: Array<Record<string, unknown>>): number {
+  let removed = 0;
+  for (const m of messages) {
+    if (!Array.isArray(m['content'])) continue;
+    const content = m['content'] as Array<Record<string, unknown>>;
+    const before = content.length;
+    m['content'] = content.filter((b) => {
+      if (b['type'] !== 'text') return true;
+      const t = b['text'];
+      return !(typeof t === 'string' && t.trim() === '');
+    });
+    removed += before - (m['content'] as unknown[]).length;
+  }
+  return removed;
+}
+
+// ---------------------------------------------------------------------------
 // Provider name union
 // ---------------------------------------------------------------------------
 
@@ -370,6 +406,27 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
                   // Drop any message whose content array is now empty — empty
                   // content arrays are also a 400.
                   parsed['messages'] = msgs.filter((m) => {
+                    if (!Array.isArray(m['content'])) return true;
+                    return (m['content'] as unknown[]).length > 0;
+                  });
+                }
+              }
+
+              // ---- 4. Empty text-block strip -----------------------------
+              // Anthropic 400s "messages: text content blocks must be non-empty"
+              // when a message carries an empty/whitespace-only {type:'text'}
+              // block — the exact malformation behind 12/12 of the live
+              // claude-oauth 400s. The window/fork trim path can leave one.
+              // No-op unless such a block is present (and any request with one
+              // is already a guaranteed 400), so this never regresses a
+              // succeeding request. SUDO_STRIP_EMPTY_TEXT=0 disables it.
+              if (process.env['SUDO_STRIP_EMPTY_TEXT'] !== '0' && Array.isArray(parsed['messages'])) {
+                const msgs2 = parsed['messages'] as Array<Record<string, unknown>>;
+                const strippedEmpty = stripEmptyTextBlocks(msgs2);
+                if (strippedEmpty > 0) {
+                  log.warn({ strippedEmpty }, 'claude-oauth: stripped empty text content blocks');
+                  // Drop any message left with an empty content array (also a 400).
+                  parsed['messages'] = msgs2.filter((m) => {
                     if (!Array.isArray(m['content'])) return true;
                     return (m['content'] as unknown[]).length > 0;
                   });
