@@ -440,7 +440,7 @@ export class CostTracker {
    * `datetime()` here would silently include same-day rows that fall outside an
    * hour-grain window. Same string-compare idiom as `getWeeklyCost`.
    */
-  getSpendRate(opts: { windowMs?: number; baselineWindows?: number } = {}): SpendRate {
+  getSpendRate(opts: { windowMs?: number; baselineWindows?: number; excludeProviders?: string[] } = {}): SpendRate {
     const windowMs = Number.isFinite(opts.windowMs) && (opts.windowMs as number) > 0 ? (opts.windowMs as number) : 60 * 60 * 1000;
     const baselineWindows = Number.isFinite(opts.baselineWindows) && (opts.baselineWindows as number) > 0 ? Math.floor(opts.baselineWindows as number) : 24;
     const now = Date.now();
@@ -448,18 +448,31 @@ export class CostTracker {
     const windowStart = new Date(now - windowMs).toISOString();
     const baselineStart = new Date(now - windowMs * (baselineWindows + 1)).toISOString();
 
+    // Optional provider exclusion: drop spend from flat-subscription providers
+    // (e.g. an OAuth Max plan whose real marginal cost is ~$0) so the rate
+    // reflects metered spend only. When the list is empty the SQL is byte-
+    // identical to the unfiltered form — no behavior change for any caller that
+    // does not pass `excludeProviders`.
+    const exclude = (opts.excludeProviders ?? []).filter((p) => typeof p === 'string' && p.trim() !== '');
+    const exParams: Record<string, string> = {};
+    let exClause = '';
+    if (exclude.length > 0) {
+      const placeholders = exclude.map((p, i) => { const k = `ex${i}`; exParams[k] = p; return `:${k}`; });
+      exClause = ` AND provider NOT IN (${placeholders.join(', ')})`;
+    }
+
     interface AggRow { total: number; n: number }
     // Bound the trailing window on BOTH ends so a future-dated row (clock skew /
     // manual insert) can't inflate the rate; symmetric with the baseline's
     // half-open `[start, end)` range.
-    const win = this.db.prepare<{ since: string; now: string }, AggRow>(`
+    const win = this.db.prepare<Record<string, string>, AggRow>(`
       SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total, COUNT(*) AS n
-      FROM api_call_log WHERE called_at >= :since AND called_at < :now
-    `).get({ since: windowStart, now: nowIso }) ?? { total: 0, n: 0 };
-    const base = this.db.prepare<{ start: string; end: string }, AggRow>(`
+      FROM api_call_log WHERE called_at >= :since AND called_at < :now${exClause}
+    `).get({ since: windowStart, now: nowIso, ...exParams }) ?? { total: 0, n: 0 };
+    const base = this.db.prepare<Record<string, string>, AggRow>(`
       SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total, COUNT(*) AS n
-      FROM api_call_log WHERE called_at >= :start AND called_at < :end
-    `).get({ start: baselineStart, end: windowStart }) ?? { total: 0, n: 0 };
+      FROM api_call_log WHERE called_at >= :start AND called_at < :end${exClause}
+    `).get({ start: baselineStart, end: windowStart, ...exParams }) ?? { total: 0, n: 0 };
 
     const windowHours = windowMs / (60 * 60 * 1000);
     const windowUsd = win.total;

@@ -30,7 +30,7 @@ export interface HookEmitterLike {
 
 /** The CostTracker surface this monitor depends on (eases testing). */
 export interface SpendRateSource {
-  getSpendRate(opts?: { windowMs?: number; baselineWindows?: number }): SpendRate;
+  getSpendRate(opts?: { windowMs?: number; baselineWindows?: number; excludeProviders?: string[] }): SpendRate;
 }
 
 export interface CostRateMonitorConfig {
@@ -46,6 +46,13 @@ export interface CostRateMonitorConfig {
   minUsdPerHourForDeviation: number;
   /** Minimum gap between emitted alerts (ms) so a persistent breach doesn't spam every interval. */
   cooldownMs: number;
+  /**
+   * Providers billed under a flat subscription (real marginal $≈0, e.g. an
+   * OAuth Max plan). Their spend is excluded from the rate so the watchdog
+   * reflects metered spend only and does not fire a NOTIONAL "$X/hr" alert on
+   * API-rate-priced flat-sub traffic. Empty = count every provider (legacy).
+   */
+  flatSubProviders: string[];
 }
 
 export interface CostRateAlert {
@@ -67,6 +74,10 @@ const DEFAULTS: CostRateMonitorConfig = {
   deviationPct: 150,
   minUsdPerHourForDeviation: 0.5,
   cooldownMs: 60 * 60 * 1000, // 1 h
+  // The daemon runs on a flat OAuth Max subscription whose marginal cost is ~$0
+  // but whose calls are logged at metered API rates — counting them produced a
+  // phantom "$X/hr critical" alert. Exclude by default; override via env.
+  flatSubProviders: ['claude-oauth'],
 };
 
 /** Parse a positive number env override, falling back to `def` on absent/invalid. `allowZero` keeps 0 (a disable sentinel). */
@@ -79,6 +90,17 @@ function numEnv(env: NodeJS.ProcessEnv, key: string, def: number, allowZero = fa
   return n;
 }
 
+/**
+ * Resolve a comma-separated provider list. Unset → `def`; set (incl. empty
+ * string) → parsed list, so `SUDO_FLAT_SUB_PROVIDERS=` is the explicit
+ * "count every provider" kill-switch.
+ */
+function listEnv(env: NodeJS.ProcessEnv, key: string, def: string[]): string[] {
+  const raw = env[key];
+  if (raw === undefined) return def;
+  return raw.split(',').map((s) => s.trim()).filter((s) => s !== '');
+}
+
 /** Resolve the monitor config from env (all overrides optional). */
 export function resolveCostRateMonitorConfig(env: NodeJS.ProcessEnv = process.env): CostRateMonitorConfig {
   return {
@@ -89,6 +111,7 @@ export function resolveCostRateMonitorConfig(env: NodeJS.ProcessEnv = process.en
     deviationPct: numEnv(env, 'SUDO_COST_RATE_ALERT_DEVIATION_PCT', DEFAULTS.deviationPct, true),
     minUsdPerHourForDeviation: numEnv(env, 'SUDO_COST_RATE_ALERT_MIN_USD_PER_HR', DEFAULTS.minUsdPerHourForDeviation, true),
     cooldownMs: numEnv(env, 'SUDO_COST_RATE_ALERT_COOLDOWN_MS', DEFAULTS.cooldownMs),
+    flatSubProviders: listEnv(env, 'SUDO_FLAT_SUB_PROVIDERS', DEFAULTS.flatSubProviders),
   };
 }
 
@@ -114,6 +137,7 @@ export class CostRateMonitor {
         windowMs: this.cfg.windowMs,
         ceilingUsdPerHour: this.cfg.ceilingUsdPerHour,
         deviationPct: this.cfg.deviationPct,
+        flatSubProviders: this.cfg.flatSubProviders,
       },
       'CostRateMonitor started',
     );
@@ -130,7 +154,7 @@ export class CostRateMonitor {
   async check(nowMs: number = Date.now()): Promise<CostRateAlert | null> {
     let alert: CostRateAlert | null;
     try {
-      const rate = this.tracker.getSpendRate({ windowMs: this.cfg.windowMs });
+      const rate = this.tracker.getSpendRate({ windowMs: this.cfg.windowMs, excludeProviders: this.cfg.flatSubProviders });
       alert = this.evaluate(rate);
     } catch (err) {
       log.warn({ err: String(err) }, 'CostRateMonitor.check: sampling failed (fail-open)');
