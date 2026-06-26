@@ -37,6 +37,46 @@ const BACKOFF_DEFAULT_BASE_MS = 500;
 /** Hard ceiling on any single backoff sleep. */
 const BACKOFF_MAX_DELAY_MS = 30_000;
 
+/**
+ * Circuit-breaker for persistent provider quota exhaustion (B8.1).
+ *
+ * When the OpenAI embedding quota is exhausted, EVERY call 429s — even with the
+ * backoff above each call still burns 4 API hits + sleeps, and the survey saw
+ * ~31 such hits hammering a dead quota. After N consecutive terminal 429s the
+ * circuit OPENS for a cooldown: callers fail fast (no network) and degrade to
+ * BM25, instead of repeatedly hammering the exhausted API. On expiry one probe
+ * call is allowed through; success closes the circuit, another 429 re-opens it.
+ *
+ * The circuit does NOT fix the quota (operator billing) — it makes the
+ * degradation cheap and VISIBLE (one clear warn per outage). Disable with
+ * SUDO_EMBED_CIRCUIT=0 (restores the pre-circuit always-attempt behaviour).
+ */
+const CIRCUIT_DEFAULT_THRESHOLD = 3;
+/** Default cooldown once the circuit opens (10 min — inside the 5–15 min band). */
+const CIRCUIT_DEFAULT_COOLDOWN_MS = 600_000;
+
+/**
+ * Shared circuit state. Module-level (NOT per-instance) because the OpenAI
+ * quota is global to the API key — one exhausted quota should silence every
+ * EmbeddingService in the process, not just the instance that first tripped.
+ */
+interface EmbedCircuitState {
+  /** Consecutive terminal-429 calls without an intervening success. */
+  consecutive429: number;
+  /** Epoch ms until which the circuit is OPEN (0 = closed). */
+  openUntil: number;
+  /** True once the OPEN was logged — keeps the warn to one per outage episode. */
+  loggedOpen: boolean;
+}
+const embedCircuit: EmbedCircuitState = { consecutive429: 0, openUntil: 0, loggedOpen: false };
+
+/** Test-only: reset the shared circuit between cases. */
+export function __resetEmbedCircuit(): void {
+  embedCircuit.consecutive429 = 0;
+  embedCircuit.openUntil = 0;
+  embedCircuit.loggedOpen = false;
+}
+
 // ---------------------------------------------------------------------------
 // EmbeddingService
 // ---------------------------------------------------------------------------
@@ -55,6 +95,12 @@ export class EmbeddingService {
   private readonly backoffEnabled: boolean;
   /** Base backoff delay in ms (SUDO_EMBED_BACKOFF_BASE_MS overrides; tests use 1). */
   private readonly backoffBaseMs: number;
+  /** When false (SUDO_EMBED_CIRCUIT=0), never open the quota circuit-breaker. */
+  private readonly circuitEnabled: boolean;
+  /** Consecutive terminal-429s that open the circuit (SUDO_EMBED_CIRCUIT_THRESHOLD). */
+  private readonly circuitThreshold: number;
+  /** How long the circuit stays open once tripped (SUDO_EMBED_CIRCUIT_COOLDOWN_MS). */
+  private readonly circuitCooldownMs: number;
 
   /**
    * @param db    - MindDB instance used for embedding_cache persistence.
@@ -67,6 +113,11 @@ export class EmbeddingService {
     this.backoffEnabled = process.env['SUDO_EMBED_BACKOFF'] !== '0';
     const baseMs = Number(process.env['SUDO_EMBED_BACKOFF_BASE_MS']);
     this.backoffBaseMs = Number.isFinite(baseMs) && baseMs >= 0 ? baseMs : BACKOFF_DEFAULT_BASE_MS;
+    this.circuitEnabled = process.env['SUDO_EMBED_CIRCUIT'] !== '0';
+    const thr = Number(process.env['SUDO_EMBED_CIRCUIT_THRESHOLD']);
+    this.circuitThreshold = Number.isFinite(thr) && thr >= 1 ? Math.floor(thr) : CIRCUIT_DEFAULT_THRESHOLD;
+    const cd = Number(process.env['SUDO_EMBED_CIRCUIT_COOLDOWN_MS']);
+    this.circuitCooldownMs = Number.isFinite(cd) && cd >= 0 ? cd : CIRCUIT_DEFAULT_COOLDOWN_MS;
 
     if (!this.apiKey) {
       console.warn('[EmbeddingService] OPENAI_API_KEY not set — running in BM25-only mode');
@@ -167,6 +218,13 @@ export class EmbeddingService {
    * pre-backoff code did (final-failure contract unchanged).
    */
   private async _fetchEmbeddings(texts: string[]): Promise<Float32Array[]> {
+    // Circuit OPEN — skip the API entirely so we don't hammer an exhausted
+    // quota. The OPEN was already logged once; throw fast so callers degrade to
+    // BM25 exactly as they do for any other terminal embedding failure.
+    if (this.circuitEnabled && embedCircuit.openUntil > Date.now()) {
+      throw new Error('[EmbeddingService] embedding circuit OPEN — provider quota/429, degrading');
+    }
+
     const maxAttempts = this.backoffEnabled ? BACKOFF_MAX_ATTEMPTS : 1;
     let lastNetworkError: unknown;
 
@@ -202,10 +260,17 @@ export class EmbeddingService {
           await this._sleep(this._backoffDelayMs(attempt));
           continue;
         }
+        // Terminal failure. A terminal 429 is a quota/rate signal — feed it to
+        // the circuit-breaker so sustained exhaustion opens the circuit and
+        // callers stop hammering the dead API.
+        if (response.status === 429) this._recordQuota429();
         throw new Error(`[EmbeddingService] API error ${response.status}: ${body}`);
       }
 
       const json = await response.json() as OpenAIEmbeddingResponse;
+
+      // A success closes the circuit / resets the consecutive-429 counter.
+      this._recordEmbedSuccess();
 
       // Sort by index to guarantee order matches input
       const sorted = [...json.data].sort((a, b) => a.index - b.index);
@@ -217,6 +282,38 @@ export class EmbeddingService {
     throw lastNetworkError instanceof Error
       ? lastNetworkError
       : new Error('[EmbeddingService] embedding fetch failed');
+  }
+
+  /**
+   * Record a terminal 429 toward the shared quota circuit-breaker. Once the
+   * consecutive count reaches the threshold the circuit OPENS for the cooldown
+   * window and logs ONCE per outage episode (loggedOpen stays set until a
+   * success resets it — sustained outages do not spam the log).
+   */
+  private _recordQuota429(): void {
+    if (!this.circuitEnabled) return;
+    embedCircuit.consecutive429++;
+    if (embedCircuit.consecutive429 >= this.circuitThreshold) {
+      embedCircuit.openUntil = Date.now() + this.circuitCooldownMs;
+      if (!embedCircuit.loggedOpen) {
+        embedCircuit.loggedOpen = true;
+        // VISIBLE, not silent — one clear warn so the degradation is obvious.
+        console.warn(
+          `[EmbeddingService] embedding circuit OPEN: provider quota/429 — degrading to BM25; restore billing ` +
+          `(threshold=${this.circuitThreshold}, cooldown=${Math.round(this.circuitCooldownMs / 1000)}s, ` +
+          `disable with SUDO_EMBED_CIRCUIT=0)`,
+        );
+      }
+    }
+  }
+
+  /** A successful embedding closes the circuit and resets the 429 counter. */
+  private _recordEmbedSuccess(): void {
+    if (embedCircuit.consecutive429 !== 0 || embedCircuit.openUntil !== 0 || embedCircuit.loggedOpen) {
+      embedCircuit.consecutive429 = 0;
+      embedCircuit.openUntil = 0;
+      embedCircuit.loggedOpen = false;
+    }
   }
 
   /** Exponential backoff with full jitter, capped at BACKOFF_MAX_DELAY_MS. */
