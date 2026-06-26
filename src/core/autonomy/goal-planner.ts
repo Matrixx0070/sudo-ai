@@ -449,8 +449,22 @@ export interface BrainForPlanning {
  * const plan = await plannerWithBrain.plan(classification, context);
  * ```
  */
-/** Max wall-clock for one semantic (LLM) planning call before falling back to template. */
-const SEMANTIC_PLAN_TIMEOUT_MS = 10_000;
+/**
+ * Max wall-clock for one semantic (LLM) planning call before falling back to
+ * template-based planning.
+ *
+ * The former flat 10s was too aggressive on the loaded box: the live survey saw
+ * 27 `semantic planning timed out` warns in ~13h, each discarding a started Opus
+ * call and degrading to templates. An Opus planning call with a thinking budget
+ * routinely exceeds 10s under load (the task-decomposer already allows 120s when
+ * the context-budget upgrade is active). Raised the default to 30s and made it
+ * env-tunable so the timeout can track real brain latency without a redeploy.
+ * Override with SUDO_SEMANTIC_PLAN_TIMEOUT_MS; the fallback path is unchanged.
+ */
+const SEMANTIC_PLAN_TIMEOUT_MS = (() => {
+  const raw = Number(process.env['SUDO_SEMANTIC_PLAN_TIMEOUT_MS']);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+})();
 
 export class GoalPlanner {
   private readonly brain: BrainForPlanning | null;
