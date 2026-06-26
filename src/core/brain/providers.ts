@@ -17,6 +17,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { LLMError } from '../shared/errors.js';
 import { createLogger } from '../shared/logger.js';
+import { resolveThinkingBudget } from './thinking-inject.js';
 import {
   registerCustomProvidersFromEnv,
   isCustomProvider,
@@ -288,25 +289,27 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
               // max_tokens must be > budget_tokens; we bump it when needed so
               // a stale 8192-cap caller doesn't 400 with
               // "max_tokens must be greater than thinking.budget_tokens".
-              if (
-                typeof parsed['model'] === 'string' &&
-                /^claude-opus-4-(8|9|[1-9][0-9]+)/.test(parsed['model']) &&
-                process.env['SUDO_THINKING_DISABLE'] !== '1' &&
-                parsed['thinking'] === undefined
-              ) {
-                const envBudget = parseInt(process.env['SUDO_THINKING_BUDGET'] ?? '', 10);
-                const budgetTokens = Number.isFinite(envBudget)
-                  ? Math.min(65536, Math.max(1024, envBudget))
-                  : 32768;
-                (parsed as Record<string, unknown>)['thinking'] = {
-                  type: 'enabled',
-                  budget_tokens: budgetTokens,
-                };
-                const currentMax = typeof parsed['max_tokens'] === 'number'
-                  ? (parsed['max_tokens'] as number)
-                  : 0;
-                if (currentMax <= budgetTokens) {
-                  (parsed as Record<string, unknown>)['max_tokens'] = budgetTokens + 4096;
+              if (typeof parsed['model'] === 'string' && parsed['thinking'] === undefined) {
+                // Clamp budget so budget_tokens + output headroom stays within the
+                // model's max_tokens ceiling — else the API/SDK caps the total
+                // (truncating the reply) and can 400 on budget >= max_tokens.
+                // See resolveThinkingBudget for the invariant + env overrides
+                // (SUDO_THINKING_DISABLE / SUDO_THINKING_BUDGET / SUDO_THINKING_MODEL_MAX).
+                const tb = resolveThinkingBudget(
+                  parsed['model'],
+                  typeof parsed['max_tokens'] === 'number' ? (parsed['max_tokens'] as number) : 0,
+                  {
+                    disable: process.env['SUDO_THINKING_DISABLE'],
+                    budget: process.env['SUDO_THINKING_BUDGET'],
+                    modelMax: process.env['SUDO_THINKING_MODEL_MAX'],
+                  },
+                );
+                if (tb) {
+                  (parsed as Record<string, unknown>)['thinking'] = {
+                    type: 'enabled',
+                    budget_tokens: tb.budgetTokens,
+                  };
+                  (parsed as Record<string, unknown>)['max_tokens'] = tb.maxTokens;
                 }
               }
 
