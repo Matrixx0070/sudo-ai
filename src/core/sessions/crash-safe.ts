@@ -24,7 +24,7 @@
  * for callers that have not asked for the invariant.
  */
 
-import { closeSync, fsyncSync, openSync, readFileSync, existsSync } from 'node:fs';
+import { closeSync, fsyncSync, openSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 
@@ -169,4 +169,221 @@ export async function scanInterruptedSessions(
     }
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Crash-safe reconcile — replay JSONL message tail into SQLite (additive-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * One ordered `type: 'message'` event read back from a journal file. Only the
+ * fields the reconcile compares/replays are surfaced.
+ */
+export interface JournalMessageRecord {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  /** ISO timestamp from the journal — informational only (not a match key). */
+  ts: string;
+}
+
+/**
+ * Read the ordered `type: 'message'` events from a JSONL journal file.
+ * Mirrors `countJournalMessages` but returns the records instead of a count,
+ * applying the same path-escape guard, missing-file = empty, and skip-malformed
+ * semantics. Non-message events (session/model_change/toolResult) are excluded
+ * so the result lines up 1:1 with the SQLite `messages` rows the reconcile
+ * compares against.
+ */
+export function readJournalMessages(journalDir: string, relFile: string): JournalMessageRecord[] {
+  const absFile = path.resolve(journalDir, relFile);
+  if (!absFile.startsWith(path.resolve(journalDir) + path.sep)) {
+    log.warn({ relFile }, 'readJournalMessages: file escapes journalDir — skipping');
+    return [];
+  }
+  if (!existsSync(absFile)) return [];
+  let raw: string;
+  try {
+    raw = readFileSync(absFile, 'utf8');
+  } catch (err) {
+    log.warn({ absFile, err: String(err) }, 'readJournalMessages: read failed');
+    return [];
+  }
+  const out: JournalMessageRecord[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line) as { type?: string; role?: string; content?: string; ts?: string };
+      if (
+        obj.type === 'message' &&
+        (obj.role === 'user' || obj.role === 'assistant' || obj.role === 'system' || obj.role === 'tool') &&
+        typeof obj.content === 'string'
+      ) {
+        out.push({ role: obj.role, content: obj.content, ts: typeof obj.ts === 'string' ? obj.ts : '' });
+      }
+    } catch { /* skip malformed line */ }
+  }
+  return out;
+}
+
+/**
+ * Duck-typed view of the SQLite message store (MindDB) the reconcile needs.
+ * Mirrors the three MindDB methods used, so the reconcile is unit-testable
+ * against a temp DB and never reaches past these primitives.
+ */
+export interface ReconcilePrimary {
+  /** Authoritative persisted message count (NOT the hydrated working-set size). */
+  countMessages(sessionId: string): number;
+  /** Persisted messages in chronological order, up to `limit`. */
+  getSessionMessages(sessionId: string, limit: number): Array<{ role: string; content: string }>;
+  /** Append ONE message; returns the new row id. Used only in apply mode. */
+  storeMessage(sessionId: string, role: JournalMessageRecord['role'], content: string): number;
+}
+
+export interface ReconcileOptions {
+  /** Absolute path to the journal baseDir, used to resolve session files. */
+  journalDir: string;
+  /**
+   * When true, INSERT the missing tail into SQLite (after capturing a backup).
+   * Default false = DRY-RUN: detect + report only, write NOTHING.
+   */
+  apply?: boolean;
+  /**
+   * Directory for per-session pre-apply backups (apply mode only).
+   * Defaults to `<journalDir>/.reconcile-backups`.
+   */
+  backupDir?: string;
+}
+
+export interface ReconcileResult {
+  sessionId: string;
+  channel: string;
+  peerId: string;
+  journalMessageCount: number;
+  primaryMessageCount: number;
+  /** Journal events past the SQLite tail — the additive backfill candidate. */
+  missingCount: number;
+  /** True when SQLite is a clean (role+content) prefix of the journal. */
+  cleanPrefix: boolean;
+  /** True only when apply mode ran AND the rows were inserted. */
+  applied: boolean;
+  /** How many rows were actually inserted (0 in dry-run or when skipped). */
+  insertedCount: number;
+  /** Set when the session was detected but not reconciled, with the reason. */
+  skippedReason?: 'no_lag' | 'divergent_prefix' | 'dry_run' | 'backup_failed';
+}
+
+/**
+ * Reconcile sessions whose JSONL journal leads the SQLite mirror by replaying
+ * ONLY the missing message tail into SQLite.
+ *
+ * STRICT SAFETY CONTRACT:
+ *  - **Additive-only.** Existing SQLite rows are never updated, deleted, or
+ *    reordered — the reconcile only INSERTs the trailing journal events SQLite
+ *    is missing. A session is reconciled only when SQLite is a verified clean
+ *    prefix (role+content) of the journal; any divergence → skipped (reported,
+ *    never mutated) for manual review.
+ *  - **Idempotent.** Once the tail is inserted, the next run sees equal counts
+ *    (no lag) and no-ops. Re-running is always safe.
+ *  - **DRY-RUN by default.** `opts.apply !== true` reports exactly what WOULD
+ *    be inserted and writes nothing. Real writes require `apply: true` AND a
+ *    successful per-session backup of the existing rows first.
+ */
+export async function reconcileInterruptedSessions(
+  journal: CrashSafeJournal,
+  primary: ReconcilePrimary,
+  opts: ReconcileOptions,
+): Promise<ReconcileResult[]> {
+  const apply = opts.apply === true;
+  const backupDir = opts.backupDir ?? path.join(opts.journalDir, '.reconcile-backups');
+  const results: ReconcileResult[] = [];
+  const entries = await journal.listSessions();
+
+  for (const entry of entries) {
+    const journalMsgs = readJournalMessages(opts.journalDir, entry.file);
+    const jCount = journalMsgs.length;
+
+    let sCount: number;
+    let sqliteMsgs: Array<{ role: string; content: string }>;
+    try {
+      sCount = primary.countMessages(entry.id);
+      // Pull at least as many rows as the journal has so the prefix overlap is
+      // fully comparable even when sCount exceeds the default page size.
+      sqliteMsgs = primary.getSessionMessages(entry.id, Math.max(jCount, sCount, 1));
+    } catch (err) {
+      log.warn({ sessionId: entry.id, err: String(err) }, 'reconcile: primary read failed — skipping session');
+      continue;
+    }
+
+    // Additive-only guard: only a journal that LEADS SQLite is a backfill
+    // candidate. Equal/behind (e.g. SQLite holds tool rows the journal logs as
+    // separate toolResult events) is never over-written.
+    if (jCount <= sCount) continue;
+
+    const base = {
+      sessionId: entry.id,
+      channel: entry.channel,
+      peerId: entry.peerId,
+      journalMessageCount: jCount,
+      primaryMessageCount: sCount,
+    };
+
+    // Verify SQLite is a clean prefix of the journal over the overlap.
+    let cleanPrefix = true;
+    const overlap = Math.min(sCount, sqliteMsgs.length);
+    for (let i = 0; i < overlap; i++) {
+      const j = journalMsgs[i]!;
+      const s = sqliteMsgs[i]!;
+      if (j.role !== s.role || j.content !== s.content) {
+        cleanPrefix = false;
+        break;
+      }
+    }
+
+    const tail = journalMsgs.slice(sCount);
+    const missingCount = tail.length;
+
+    if (!cleanPrefix) {
+      log.warn(
+        { ...base, missingCount },
+        'reconcile: SQLite is NOT a clean prefix of the journal — divergent, skipping (manual review)',
+      );
+      results.push({ ...base, missingCount, cleanPrefix: false, applied: false, insertedCount: 0, skippedReason: 'divergent_prefix' });
+      continue;
+    }
+
+    if (!apply) {
+      log.info(
+        { ...base, wouldInsert: missingCount },
+        'reconcile DRY-RUN: would backfill missing journal messages (no write)',
+      );
+      results.push({ ...base, missingCount, cleanPrefix: true, applied: false, insertedCount: 0, skippedReason: 'dry_run' });
+      continue;
+    }
+
+    // APPLY mode: capture a backup of the existing rows BEFORE inserting.
+    try {
+      mkdirSync(backupDir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupFile = path.join(backupDir, `${entry.id}.${stamp}.json`);
+      writeFileSync(
+        backupFile,
+        JSON.stringify({ sessionId: entry.id, capturedAt: new Date().toISOString(), existingCount: sCount, existing: sqliteMsgs.slice(0, sCount) }, null, 2),
+        'utf8',
+      );
+    } catch (err) {
+      log.warn({ ...base, err: String(err) }, 'reconcile: backup capture failed — NOT applying (safety)');
+      results.push({ ...base, missingCount, cleanPrefix: true, applied: false, insertedCount: 0, skippedReason: 'backup_failed' });
+      continue;
+    }
+
+    let inserted = 0;
+    for (const m of tail) {
+      primary.storeMessage(entry.id, m.role, m.content);
+      inserted++;
+    }
+    log.info({ ...base, inserted }, 'reconcile APPLY: backfilled missing journal messages into SQLite');
+    results.push({ ...base, missingCount, cleanPrefix: true, applied: true, insertedCount: inserted });
+  }
+
+  return results;
 }
