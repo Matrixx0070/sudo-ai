@@ -1715,7 +1715,7 @@ export class AgentLoop extends AgentLoopInjections {
           }
         }
         if (unaddressed.length > 0) {
-          log.warn({ sessionId, unaddressed: unaddressed.length, total: _lastPlanSteps.length }, 'Plan tracking: some planned steps appear unaddressed (approximate)');
+          log.info({ sessionId, unaddressed: unaddressed.length, total: _lastPlanSteps.length }, 'Plan tracking: some planned steps appear unaddressed (approximate)');
         } else {
           log.info({ sessionId, total: _lastPlanSteps.length }, 'Plan tracking: all planned steps appear addressed (approximate)');
         }
