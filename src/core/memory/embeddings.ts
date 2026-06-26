@@ -373,7 +373,7 @@ export class EmbeddingService {
    * no schema/PK migration required.
    */
   private _cacheKey(text: string): string {
-    return this._sha256(`${this.model} ${text}`);
+    return this._sha256(`${this.model}\x00${text}`);
   }
 }
 
