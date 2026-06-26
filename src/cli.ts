@@ -592,8 +592,21 @@ async function boot(): Promise<void> {
   log.info({ crashSafe }, 'SessionManager initialized');
   if (crashSafe) {
     try {
+      // B5.1 scope fix: exclude ephemeral machine-generated peers (cron/swarm/
+      // probe one-shots) and resolve a journal session to its canonical
+      // `<channel>:<peerId>` message total before counting drift — journal forks
+      // use non-canonical ids whose per-id mirror reads 0 even though the
+      // messages are persisted under the canonical title. Filter default-ON;
+      // SUDO_RECONCILE_NO_FILTER=1 disables it.
+      const filterEphemeral = process.env['SUDO_RECONCILE_NO_FILTER'] !== '1';
+      const resolveCanonicalCount = (channel: string, peerId: string): number | null => {
+        const n = db.countMessagesByTitle(`${channel}:${peerId}`);
+        return n > 0 ? n : null;
+      };
       const interrupted = await scanInterruptedSessions(journalStore, sessionManager, {
         journalDir: journalStore.journalDir,
+        filterEphemeral,
+        resolveCanonicalCount,
       });
       if (interrupted.length > 0) {
         log.warn(
@@ -615,6 +628,8 @@ async function boot(): Promise<void> {
           const recon = await reconcileInterruptedSessions(journalStore, db, {
             journalDir: journalStore.journalDir,
             apply: reconcileApply,
+            filterEphemeral,
+            resolveCanonicalCount,
           });
           const reconcilable = recon.filter((r) => r.cleanPrefix);
           const drift = reconcilable.reduce((n, r) => n + r.missingCount, 0);
