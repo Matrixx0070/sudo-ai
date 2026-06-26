@@ -80,7 +80,7 @@ import { createIdentityLoader } from '../identity/loader.js';
 import type { IdentityLoaderInstance } from '../identity/loader.js';
 import { AuditTrail } from '../security/audit-trail.js';
 import { recordRecovery, loadActiveCommitments, formatCommitmentSystemMessage } from './recovery-protocol.js';
-import { runVetoGate, sanitizeArgsForPrompt } from './veto-gate.js';
+import { runVetoGate } from './veto-gate.js';
 import { queryAllModels } from '../brain/model-consensus.js';
 import { AlignmentAggregator } from './alignment-aggregator.js';
 import type { AlignmentSignals } from './alignment-aggregator.js';
@@ -94,7 +94,7 @@ import { VetoOverrideStore } from './veto-override-store.js';
 import { genId } from '../shared/utils.js';
 import Database from 'better-sqlite3';
 import { EpistemicGate } from '../cognition/epistemic-gate.js';
-import { createHash } from 'node:crypto';
+import { computeContentHash } from './content-hash.js';
 import type { DetectionResult } from '../cognition/injection-detector.js';
 import { ToolOutcomeLearner, type ToolOutcomeLearnerDeps } from './tool-outcome-learner.js';
 import { FeedbackMemory } from '../self-improvement/feedback-memory.js';
@@ -120,17 +120,6 @@ import { ConsciousnessDeepBridge, type DeepBridgeOrchestratorLike } from '../con
 import { FeedbackTierManager } from './feedback-tier.js';
 import { getZDRManager, isZDRBlocked } from '../privacy/zdr-mode.js';
 import { WORKSPACE_DIR, DATA_DIR, projectPath } from '../shared/paths.js';
-
-// ---------------------------------------------------------------------------
-// Content-hash helper — A1: deterministic 32-char hex per tool+args combo.
-// Used by the veto gate section to enable content-addressable pre-approvals.
-// ---------------------------------------------------------------------------
-
-function computeContentHash(toolName: string, args: Record<string, unknown>): string {
-  const sanitized = sanitizeArgsForPrompt(args);  // returns JSON.stringify(sanitized, null, 2)
-  const payload   = `${toolName}:${sanitized}`;
-  return createHash('sha256').update(payload, 'utf8').digest('hex').slice(0, 32);
-}
 
 const log = createLogger('agent:loop');
 
