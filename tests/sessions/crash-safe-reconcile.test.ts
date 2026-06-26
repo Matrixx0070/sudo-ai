@@ -18,6 +18,7 @@ import { MindDB } from '../../src/core/memory/db.js';
 import {
   reconcileInterruptedSessions,
   readJournalMessages,
+  isEphemeralPeer,
   type CrashSafeJournal,
   type ReconcilePrimary,
 } from '../../src/core/sessions/crash-safe.js';
@@ -173,6 +174,97 @@ describe('reconcileInterruptedSessions', () => {
     const res = await reconcileInterruptedSessions(makeJournal([journalEntry]), db, { journalDir: baseDir, apply: true });
     expect(res).toEqual([]);
     expect(db.countMessages('s1')).toBe(2);
+  });
+});
+
+describe('B5.1 reconcile scope fix — ephemeral exclusion + canonical resolution', () => {
+  /** Resolver backed by the temp MindDB title convention `<channel>:<peerId>`. */
+  const canonicalResolver = (channel: string, peerId: string): number | null => {
+    const n = db.countMessagesByTitle(`${channel}:${peerId}`);
+    return n > 0 ? n : null;
+  };
+
+  it('isEphemeralPeer flags machine-generated one-shots, not real peers', () => {
+    for (const p of [
+      'cron:isolated:abc', 'subagent:xyz', 'goal:goal-x', '127.0.0.1',
+      'web-probe', 'web-e2e-open', 'web-merge-smoke', 'web-listprs', 'web-guardb-verify',
+      'web-drill-17', 'drill-3', 'reverify-stable', 'verify458', 'stt-probe-1', 'claude-nudge',
+      'web-0291f5ce-a281-40fb-a482-1ac7994050f1', 'web-1776212538066-t1qzg',
+    ]) {
+      expect(isEphemeralPeer('web', p)).toBe(true);
+    }
+    for (const p of ['8087386717', 'cli-user-real', 'someuser']) {
+      expect(isEphemeralPeer('telegram', p)).toBe(false);
+    }
+  });
+
+  it('(i) excludes ephemeral peers from candidate selection (default-ON)', async () => {
+    // Ephemeral journal session with a genuine tail lead — must be skipped.
+    writeJournal('e/cron.jsonl', [
+      { role: 'user', content: 'c0' },
+      { role: 'assistant', content: 'c1' },
+    ]);
+    const entry = { id: 'cron-sess', channel: 'web', peerId: 'cron:isolated:zzz', file: 'e/cron.jsonl' };
+
+    const filtered = await reconcileInterruptedSessions(makeJournal([entry]), db, { journalDir: baseDir });
+    expect(filtered).toEqual([]); // excluded entirely
+
+    // With the kill-switch, it IS a candidate again (reported as drift).
+    const unfiltered = await reconcileInterruptedSessions(makeJournal([entry]), db, {
+      journalDir: baseDir, filterEphemeral: false,
+    });
+    expect(unfiltered).toHaveLength(1);
+    expect(unfiltered[0]).toMatchObject({ sessionId: 'cron-sess', missingCount: 2, skippedReason: 'dry_run' });
+  });
+
+  it('(ii) telegram journal whose msgs already live under the canonical title → 0 drift', async () => {
+    // Canonical mirror: 689 msgs spread over forked rows all titled telegram:<peer>.
+    db.storeSession({ id: 'canon-a', title: 'telegram:8087386717', model: 'm', total_tokens: 0, total_cost_usd: 0 });
+    db.storeSession({ id: 'canon-b', title: 'telegram:8087386717', model: 'm', total_tokens: 0, total_cost_usd: 0 });
+    for (let i = 0; i < 5; i++) db.storeMessage('canon-a', 'user', `a${i}`);
+    for (let i = 0; i < 5; i++) db.storeMessage('canon-b', 'assistant', `b${i}`);
+    expect(db.countMessagesByTitle('telegram:8087386717')).toBe(10);
+
+    // Journal fork uses a NON-canonical id with its own 4-msg file; per-id mirror = 0.
+    writeJournal('t/fork.jsonl', [
+      { role: 'user', content: 'f0' }, { role: 'assistant', content: 'f1' },
+      { role: 'user', content: 'f2' }, { role: 'assistant', content: 'f3' },
+    ]);
+    const entry = { id: 'fork-id', channel: 'telegram', peerId: '8087386717', file: 't/fork.jsonl' };
+
+    const res = await reconcileInterruptedSessions(makeJournal([entry]), db, {
+      journalDir: baseDir, resolveCanonicalCount: canonicalResolver,
+    });
+    // 10 canonical ≥ 4 journal → no loss → skipped silently (not reported as drift).
+    expect(res).toEqual([]);
+  });
+
+  it('(iii) a genuinely-missing telegram tail → drift = true missing count, never applied', async () => {
+    // Canonical holds only 3 msgs but the journal fork has 5 → 2 genuinely missing.
+    db.storeSession({ id: 'canon-a', title: 'telegram:8087386717', model: 'm', total_tokens: 0, total_cost_usd: 0 });
+    for (let i = 0; i < 3; i++) db.storeMessage('canon-a', 'user', `a${i}`);
+
+    writeJournal('t/fork.jsonl', [
+      { role: 'user', content: 'f0' }, { role: 'assistant', content: 'f1' },
+      { role: 'user', content: 'f2' }, { role: 'assistant', content: 'f3' },
+      { role: 'user', content: 'f4' },
+    ]);
+    const entry = { id: 'fork-id', channel: 'telegram', peerId: '8087386717', file: 't/fork.jsonl' };
+    const beforeCanon = db.countMessages('canon-a');
+
+    // Even APPLY mode must NOT write — ambiguous target across the namespace.
+    const res = await reconcileInterruptedSessions(makeJournal([entry]), db, {
+      journalDir: baseDir, apply: true, resolveCanonicalCount: canonicalResolver,
+    });
+    expect(res).toHaveLength(1);
+    expect(res[0]).toMatchObject({
+      sessionId: 'fork-id', journalMessageCount: 5, primaryMessageCount: 3,
+      missingCount: 2, cleanPrefix: true, applied: false, insertedCount: 0,
+      skippedReason: 'canonical_ambiguous',
+    });
+    // No write to the canonical session or the fork id.
+    expect(db.countMessages('canon-a')).toBe(beforeCanon);
+    expect(db.countMessages('fork-id')).toBe(0);
   });
 });
 

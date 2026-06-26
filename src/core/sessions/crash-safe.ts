@@ -58,6 +58,53 @@ export function fsyncFile(filePath: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Ephemeral-peer exclusion (B5.1 — reconcile scope fix)
+// ---------------------------------------------------------------------------
+
+/**
+ * Peer-id patterns for sessions that are machine-generated one-shots, NOT real
+ * conversations: cron-isolated runs, swarm sub-agents, autonomy goal smoke-
+ * tests, loopback health probes, and the web e2e/drill/probe namespaces. These
+ * have no durable canonical mirror and must never be treated as drift (and must
+ * never be resurrected by an APPLY backfill — e.g. the purged `verify458`).
+ *
+ * Matched against the journal index `peerId`. The set is intentionally narrow:
+ * it only excludes structurally machine-namespaced peers + the explicit probe
+ * names. Any peer NOT matched here still gets canonical-resolution counting
+ * (see `resolveCanonicalCount`), so a genuine human peer is never silently
+ * dropped from the drift report.
+ */
+export const EPHEMERAL_PEER_PATTERNS: readonly RegExp[] = [
+  /^cron:/,                          // cron:isolated:* scheduled-run sessions
+  /^subagent:/,                      // swarm sub-agent ephemeral sessions
+  /^goal:/,                          // autonomy goal smoke-tests
+  /^127\.0\.0\./,                    // loopback HTTP health probes
+  /^web-probe$/,                     // web warmup/health probe
+  /^web-e2e/,                        // web end-to-end test peers
+  /^web-merge/,                      // web merge-flow test peers
+  /^web-listprs$/,                   // web PR-list smoke peer
+  /^web-guardb/,                     // web guardrail-branch test peers
+  /^web-drill/,                      // web drill test peers
+  /^drill-/,                         // drill test peers
+  /^reverify-/,                      // re-verification probe peers
+  /^verify/,                         // verify* probe peers (incl. the purged verify458)
+  /^stt-/,                           // speech-to-text probe peers
+  /^claude-nudge/,                   // autonomy nudge probe peers
+  /^web-[0-9a-f]{8}-[0-9a-f]{4}-/,   // web-<uuid> one-shot web sessions
+  /^web-\d{10,}-/,                   // web-<epoch-ms>-<rand> timestamped web sessions
+];
+
+/**
+ * True when a (channel, peerId) is an ephemeral machine-generated one-shot that
+ * the reconcile/scan should exclude from candidate selection. Default-ON;
+ * callers gate it off via `SUDO_RECONCILE_NO_FILTER=1` (passed as
+ * `filterEphemeral: false`).
+ */
+export function isEphemeralPeer(_channel: string, peerId: string): boolean {
+  return EPHEMERAL_PEER_PATTERNS.some((re) => re.test(peerId));
+}
+
+// ---------------------------------------------------------------------------
 // Interrupted-session detection
 // ---------------------------------------------------------------------------
 
@@ -129,6 +176,21 @@ export function countJournalMessages(journalDir: string, relFile: string): numbe
 export interface ScanOptions {
   /** Absolute path to the journal baseDir, used to resolve session files. */
   journalDir: string;
+  /**
+   * Exclude ephemeral machine-generated peers (see `isEphemeralPeer`) from the
+   * candidate set. Default true; set false to scan everything
+   * (`SUDO_RECONCILE_NO_FILTER=1`).
+   */
+  filterEphemeral?: boolean;
+  /**
+   * Resolve the CANONICAL persisted message count for a (channel, peerId) — the
+   * total across every SQLite session row titled `<channel>:<peerId>`. Journal
+   * sessions use non-canonical forked ids, so the per-id mirror often reads 0
+   * even though the messages live under the canonical title (id-namespace
+   * mismatch, not loss). When this returns a count ≥ the journal's, the session
+   * is NOT drift. Returns null when there is no canonical row.
+   */
+  resolveCanonicalCount?: (channel: string, peerId: string) => number | null;
 }
 
 /**
@@ -147,8 +209,10 @@ export async function scanInterruptedSessions(
   opts: ScanOptions,
 ): Promise<InterruptedSession[]> {
   const result: InterruptedSession[] = [];
+  const filterEphemeral = opts.filterEphemeral !== false;
   const entries = await journal.listSessions();
   for (const entry of entries) {
+    if (filterEphemeral && isEphemeralPeer(entry.channel, entry.peerId)) continue;
     const journalMessageCount = countJournalMessages(opts.journalDir, entry.file);
     let primaryMessageCount = 0;
     try {
@@ -157,14 +221,21 @@ export async function scanInterruptedSessions(
     } catch (err) {
       log.warn({ sessionId: entry.id, err: String(err) }, 'scan: primary.get failed — treating as zero');
     }
-    if (journalMessageCount > primaryMessageCount) {
+    // Canonical resolution: the journal id is often a non-canonical fork whose
+    // messages already live under the `<channel>:<peerId>` title. Count against
+    // the larger of the per-id mirror and the canonical total so the namespace
+    // mismatch is not reported as a lost-message interruption.
+    const canonical = opts.resolveCanonicalCount?.(entry.channel, entry.peerId);
+    const effectiveCount =
+      typeof canonical === 'number' ? Math.max(primaryMessageCount, canonical) : primaryMessageCount;
+    if (journalMessageCount > effectiveCount) {
       result.push({
         sessionId: entry.id,
         channel: entry.channel,
         peerId: entry.peerId,
         journalMessageCount,
-        primaryMessageCount,
-        lagBy: journalMessageCount - primaryMessageCount,
+        primaryMessageCount: effectiveCount,
+        lagBy: journalMessageCount - effectiveCount,
       });
     }
   }
@@ -252,6 +323,23 @@ export interface ReconcileOptions {
    * Defaults to `<journalDir>/.reconcile-backups`.
    */
   backupDir?: string;
+  /**
+   * Exclude ephemeral machine-generated peers (see `isEphemeralPeer`) from the
+   * candidate set. Default true; set false to consider everything
+   * (`SUDO_RECONCILE_NO_FILTER=1`).
+   */
+  filterEphemeral?: boolean;
+  /**
+   * Resolve the CANONICAL persisted message count for a (channel, peerId) — the
+   * total across every SQLite session row titled `<channel>:<peerId>`. Journal
+   * sessions use non-canonical forked ids, so the per-id mirror often reads 0
+   * even though the messages live under the canonical title (id-namespace
+   * mismatch, not loss). When the canonical count ≥ the journal's, the session
+   * is NOT drift. When it leads but the canonical still trails, the residual is
+   * reported but NEVER auto-applied (target session is ambiguous across the
+   * namespace). Returns null when there is no canonical row.
+   */
+  resolveCanonicalCount?: (channel: string, peerId: string) => number | null;
 }
 
 export interface ReconcileResult {
@@ -269,7 +357,7 @@ export interface ReconcileResult {
   /** How many rows were actually inserted (0 in dry-run or when skipped). */
   insertedCount: number;
   /** Set when the session was detected but not reconciled, with the reason. */
-  skippedReason?: 'no_lag' | 'divergent_prefix' | 'dry_run' | 'backup_failed';
+  skippedReason?: 'no_lag' | 'divergent_prefix' | 'dry_run' | 'backup_failed' | 'canonical_ambiguous';
 }
 
 /**
@@ -294,11 +382,17 @@ export async function reconcileInterruptedSessions(
   opts: ReconcileOptions,
 ): Promise<ReconcileResult[]> {
   const apply = opts.apply === true;
+  const filterEphemeral = opts.filterEphemeral !== false;
   const backupDir = opts.backupDir ?? path.join(opts.journalDir, '.reconcile-backups');
   const results: ReconcileResult[] = [];
   const entries = await journal.listSessions();
 
   for (const entry of entries) {
+    // Scope fix (B5.1): never reconcile ephemeral machine-generated one-shots —
+    // they have no durable canonical mirror and an APPLY would resurrect purged
+    // probes (e.g. verify458). Default-ON; SUDO_RECONCILE_NO_FILTER=1 disables.
+    if (filterEphemeral && isEphemeralPeer(entry.channel, entry.peerId)) continue;
+
     const journalMsgs = readJournalMessages(opts.journalDir, entry.file);
     const jCount = journalMsgs.length;
 
@@ -311,6 +405,37 @@ export async function reconcileInterruptedSessions(
       sqliteMsgs = primary.getSessionMessages(entry.id, Math.max(jCount, sCount, 1));
     } catch (err) {
       log.warn({ sessionId: entry.id, err: String(err) }, 'reconcile: primary read failed — skipping session');
+      continue;
+    }
+
+    // Canonical resolution (B5.1): journal sessions use non-canonical forked
+    // ids whose per-id mirror reads 0, but their messages already live under the
+    // `<channel>:<peerId>` titled session(s). When the canonical total already
+    // holds ≥ the journal's messages there is NO loss — skip silently (the
+    // telegram:8087386717 case: 689 canonical ≥ any 64-msg journal fork).
+    const canonicalCount = opts.resolveCanonicalCount?.(entry.channel, entry.peerId) ?? null;
+    if (canonicalCount !== null && canonicalCount > sCount) {
+      if (jCount <= canonicalCount) continue; // already persisted under the canonical title
+      // Residual: the journal leads even the canonical total. Report the true
+      // missing count but NEVER auto-apply — the target session is ambiguous
+      // across the namespace (messages are split over multiple canonical rows),
+      // so a safe backfill needs operator routing, not an INSERT into the fork id.
+      log.warn(
+        { sessionId: entry.id, channel: entry.channel, peerId: entry.peerId, journalMessageCount: jCount, canonicalCount },
+        'reconcile: journal leads the canonical mirror — reporting residual drift, NOT applying (ambiguous target)',
+      );
+      results.push({
+        sessionId: entry.id,
+        channel: entry.channel,
+        peerId: entry.peerId,
+        journalMessageCount: jCount,
+        primaryMessageCount: canonicalCount,
+        missingCount: jCount - canonicalCount,
+        cleanPrefix: true,
+        applied: false,
+        insertedCount: 0,
+        skippedReason: 'canonical_ambiguous',
+      });
       continue;
     }
 

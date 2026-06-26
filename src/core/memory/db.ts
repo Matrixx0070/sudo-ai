@@ -449,6 +449,26 @@ export class MindDB {
   }
 
   /**
+   * Count messages across EVERY session row sharing an exact title. Session
+   * titles follow the `<channel>:<peerId>` convention, so this returns the
+   * canonical persisted message total for a peer even when its history is
+   * spread over several forked session ids (the crash-safe reconcile uses it to
+   * tell an id-namespace mismatch apart from genuine message loss). Backed by
+   * the sessions(title) lookup + idx_messages_session_id.
+   */
+  countMessagesByTitle(title: string): number {
+    const row = this.db
+      .prepare(`
+        SELECT COUNT(*) AS n
+        FROM messages m
+        JOIN sessions s ON s.id = m.session_id
+        WHERE s.title = ?
+      `)
+      .get(title) as { n: number } | undefined;
+    return row?.n ?? 0;
+  }
+
+  /**
    * Retrieve a single message by primary key.
    */
   getMessage(id: number): MessageRow | undefined {
