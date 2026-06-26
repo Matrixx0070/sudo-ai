@@ -15,6 +15,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from './core/shared/logger.js';
+import { registerShutdown, runShutdown } from './core/cli/shutdown.js';
 import { PROJECT_ROOT, DATA_DIR, WORKSPACE_DIR, projectPath } from './core/shared/paths.js';
 import { ConfigLoader } from './core/config/loader.js';
 import { MindDB } from './core/memory/db.js';
@@ -128,41 +129,8 @@ import { artifactSigner } from './core/security/signer.js';
 
 const log = createLogger('cli');
 
-// ---------------------------------------------------------------------------
-// Shutdown registry — all teardown functions collected here
-// ---------------------------------------------------------------------------
-
-const shutdownHandlers: Array<() => Promise<void> | void> = [];
-
-let isShuttingDown = false;
-
-function registerShutdown(fn: () => Promise<void> | void): void {
-  shutdownHandlers.push(fn);
-}
-
-async function runShutdown(signal: string): Promise<void> {
-  // Re-entrancy guard: SIGINT and SIGTERM are independent one-shot handlers,
-  // so a second signal arriving during async teardown would otherwise re-run
-  // every handler (double db.close(), double adapter stop, etc.).
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-
-  log.info({ signal }, 'Graceful shutdown initiated');
-
-  // Run in reverse-registration order (LIFO — last-started stops first).
-  // Iterate over a copy so the source array is not mutated in place.
-  for (const handler of [...shutdownHandlers].reverse()) {
-    try {
-      await handler();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error({ err: msg }, 'Shutdown handler error — continuing teardown');
-    }
-  }
-
-  log.info('SUDO-AI v5 shutdown complete');
-  process.exit(0);
-}
+// Shutdown registry (registerShutdown / runShutdown) extracted to
+// ./core/cli/shutdown.js — pure move, no behaviour change.
 
 // ---------------------------------------------------------------------------
 // Bootstrap
