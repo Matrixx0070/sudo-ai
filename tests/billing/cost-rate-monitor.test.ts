@@ -101,6 +101,36 @@ describe('CostTracker.getSpendRate', () => {
     expect(rate.baselineUsdPerHour).toBeNull();
     expect(rate.samples).toBe(0);
   });
+
+  it('excludeProviders drops flat-sub spend from the rate, leaving metered spend', () => {
+    const raw = new Database(dbPath);
+    const insertP = (provider: string, costUsd: number, agoMs: number): void => {
+      const calledAt = new Date(NOW - agoMs).toISOString();
+      raw.prepare(
+        `INSERT INTO api_call_log (id, provider, model, estimated_cost_usd, source, called_at)
+         VALUES (:id, :provider, 'm', :cost, 'consciousness', :calledAt)`,
+      ).run({ id: `${provider}-${agoMs}-${Math.round(costUsd * 1e6)}`, provider, cost: costUsd, calledAt });
+    };
+    // Trailing hour: $10 flat-sub (claude-oauth) + $2 metered (anthropic).
+    insertP('claude-oauth', 10.0, 5 * 60 * 1000);
+    insertP('anthropic', 2.0, 30 * 60 * 1000);
+    raw.close();
+
+    // Default (no exclusion) counts everything — byte-identical legacy behavior.
+    const all = tracker.getSpendRate({ windowMs: 60 * 60 * 1000 });
+    expect(all.windowUsd).toBeCloseTo(12.0, 6);
+    expect(all.samples).toBe(2);
+
+    // Excluding the flat-sub provider leaves only the metered $2/hr.
+    const metered = tracker.getSpendRate({ windowMs: 60 * 60 * 1000, excludeProviders: ['claude-oauth'] });
+    expect(metered.windowUsd).toBeCloseTo(2.0, 6);
+    expect(metered.usdPerHour).toBeCloseTo(2.0, 6);
+    expect(metered.samples).toBe(1);
+
+    // An all-empty / whitespace exclusion list is a no-op (counts everything).
+    const noop = tracker.getSpendRate({ windowMs: 60 * 60 * 1000, excludeProviders: ['', '  '] });
+    expect(noop.windowUsd).toBeCloseTo(12.0, 6);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -114,6 +144,7 @@ const CFG: CostRateMonitorConfig = {
   deviationPct: 150,
   minUsdPerHourForDeviation: 0.5,
   cooldownMs: 3_600_000,
+  flatSubProviders: [],
 };
 
 function fixedRate(over: Partial<SpendRate>): SpendRateSource {
@@ -221,6 +252,19 @@ describe('CostRateMonitor.check', () => {
     const m = new CostRateMonitor(fixedRate({ usdPerHour: 20 }), badHooks, CFG);
     await expect(m.check(0)).resolves.not.toBeNull(); // alert still returned
   });
+
+  it('forwards cfg.flatSubProviders to getSpendRate as excludeProviders', async () => {
+    let seenOpts: { excludeProviders?: string[] } | undefined;
+    const spy: SpendRateSource = {
+      getSpendRate: (opts) => {
+        seenOpts = opts;
+        return { windowUsd: 0, windowHours: 1, usdPerHour: 0, baselineUsdPerHour: null, deviationPct: null, samples: 0 };
+      },
+    };
+    const m = new CostRateMonitor(spy, recordingHooks(), { ...CFG, flatSubProviders: ['claude-oauth'] });
+    await m.check(0);
+    expect(seenOpts?.excludeProviders).toEqual(['claude-oauth']);
+  });
 });
 
 describe('resolveCostRateMonitorConfig', () => {
@@ -245,5 +289,20 @@ describe('resolveCostRateMonitorConfig', () => {
   it('falls back to default on a 0 interval (0 is not a valid period)', () => {
     const cfg = resolveCostRateMonitorConfig({ SUDO_COST_RATE_ALERT_INTERVAL_MS: '0' } as NodeJS.ProcessEnv);
     expect(cfg.intervalMs).toBe(600_000);
+  });
+
+  it('defaults flatSubProviders to [claude-oauth] when unset', () => {
+    const cfg = resolveCostRateMonitorConfig({});
+    expect(cfg.flatSubProviders).toEqual(['claude-oauth']);
+  });
+
+  it('treats an empty SUDO_FLAT_SUB_PROVIDERS as the count-everything kill-switch', () => {
+    const cfg = resolveCostRateMonitorConfig({ SUDO_FLAT_SUB_PROVIDERS: '' } as NodeJS.ProcessEnv);
+    expect(cfg.flatSubProviders).toEqual([]);
+  });
+
+  it('parses a custom comma-separated flat-sub provider list', () => {
+    const cfg = resolveCostRateMonitorConfig({ SUDO_FLAT_SUB_PROVIDERS: 'claude-oauth, kimi-flat ' } as NodeJS.ProcessEnv);
+    expect(cfg.flatSubProviders).toEqual(['claude-oauth', 'kimi-flat']);
   });
 });
