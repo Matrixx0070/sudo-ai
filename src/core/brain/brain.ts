@@ -254,9 +254,13 @@ function toSDKMessages(messages: BrainMessage[]): unknown[] {
       // System messages are handled via the 'system' param of generateText.
       // Including them in the messages array causes SDK schema validation errors.
       if (msg.role === 'system') {
-        log.warn(
+        // Expected + handled, not an error: system content belongs in the
+        // `system` param, and with SUDO_FOLD_SYSTEM_MESSAGES=1 it's folded in
+        // (no loss). Routine → debug. (Was 90+/run of WARN noise for a by-design
+        // drop — the single highest-frequency warning in the daemon logs.)
+        log.debug(
           { contentPreview: String(msg.content ?? '').slice(0, 80) },
-          'Dropping system-role message from request.messages — system content must go through the system prompt, not the message array',
+          'system-role message routed out of request.messages array (handled via system prompt / folding)',
         );
         return false;
       }
