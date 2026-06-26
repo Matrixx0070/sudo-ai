@@ -72,6 +72,7 @@ import { isSwarmRescueEnabled, getSwarmRescueStrategy, swarmRescueCallOpts } fro
 import { generateIntelligenceBrief } from './intelligence-brief.js';
 import { shouldFork, forkSession } from '../sessions/session-fork.js';
 import { toForkSession, toForkSessionManager, fromForkSession } from './session-fork-bridge.js';
+import { isEphemeralPeer } from '../sessions/crash-safe.js';
 import { buildContentBlocks, toRichResponse } from './content-types.js';
 import type { HistoryMessage } from './cheap-model-router.js';
 import { DispatchRouter } from '../brain/dispatch-router.js';
@@ -1639,18 +1640,28 @@ export class AgentLoop extends AgentLoopInjections {
     // is detected. Complements the LLM CriticPass and the preventive SUDO_AUTO_PLAN.
     let _completionVerification: { passed: boolean; confidence: number; failedChecks: string[] } | undefined;
     if (process.env['SUDO_COMPLETION_VERIFY'] === '1') {
-      try {
-        this._completionVerifier ??= new CompletionVerifier();
-        const _cv = this._completionVerifier.verify(finalResponse, message);
-        const _failed = _cv.checks.filter((c) => c.severity === 'fail').map((c) => c.name);
-        _completionVerification = { passed: _cv.passed, confidence: _cv.confidence, failedChecks: _failed };
-        if (_cv.passed) {
-          log.info({ sessionId, confidence: _cv.confidence }, 'CompletionVerify: final-response check passed');
-        } else {
-          log.warn({ sessionId, confidence: _cv.confidence, failedChecks: _failed }, 'CompletionVerify: possible phantom completion');
+      // Ephemeral machine turns (cron/isolated heartbeats, health probes, swarm
+      // sub-agents) legitimately end with terse acks like "HEARTBEAT_OK" that the
+      // no-LLM heuristic misreads as a phantom completion (output_length +
+      // cross_reference fail → confidence ~35) — there is no real user task to
+      // verify. Skip them so the gate only fires on genuine task turns.
+      // SUDO_COMPLETION_VERIFY_ALL=1 restores verifying every turn.
+      if (process.env['SUDO_COMPLETION_VERIFY_ALL'] !== '1' && isEphemeralPeer(session.channel, session.peerId)) {
+        log.debug({ sessionId, peerId: session.peerId }, 'CompletionVerify: skipped — ephemeral autonomy turn');
+      } else {
+        try {
+          this._completionVerifier ??= new CompletionVerifier();
+          const _cv = this._completionVerifier.verify(finalResponse, message);
+          const _failed = _cv.checks.filter((c) => c.severity === 'fail').map((c) => c.name);
+          _completionVerification = { passed: _cv.passed, confidence: _cv.confidence, failedChecks: _failed };
+          if (_cv.passed) {
+            log.info({ sessionId, confidence: _cv.confidence }, 'CompletionVerify: final-response check passed');
+          } else {
+            log.warn({ sessionId, confidence: _cv.confidence, failedChecks: _failed }, 'CompletionVerify: possible phantom completion');
+          }
+        } catch (err) {
+          log.warn({ sessionId, err: String(err) }, 'CompletionVerify: verify threw — continuing');
         }
-      } catch (err) {
-        log.warn({ sessionId, err: String(err) }, 'CompletionVerify: verify threw — continuing');
       }
     }
 
