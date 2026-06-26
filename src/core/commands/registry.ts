@@ -57,6 +57,13 @@ export class CommandRegistry {
       );
     }
     if (this.commands.has(cmd.name)) {
+      // Same-reference re-register is a true no-op: a command can arrive via more
+      // than one registration path that imports the SAME SlashCommand object (an
+      // ES-module singleton). The registry already maps the name to that exact
+      // object, so re-setting it changes nothing; skip it so the registry is
+      // idempotent-by-design for these duplicates. Only a genuinely DIVERGENT
+      // re-register (different object, same name) falls through to last-wins.
+      if (this.commands.get(cmd.name) === cmd) return;
       // Benign last-wins re-register (core + plugin command sets can overlap);
       // routine, not an error. debug, not warn.
       log.debug({ name: cmd.name }, 'slash command re-registered (overwriting prior definition)');
