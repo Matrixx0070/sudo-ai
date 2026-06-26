@@ -58,8 +58,8 @@ module.exports = {
       exec_mode: 'fork',            // fork mode (not cluster — ESM + native addons)
       autorestart: true,            // restart on crash
       max_restarts: 5,              // cap crash-loop restarts before pm2 gives up
-      min_uptime: "30s",            // must stay alive 10 s to count as stable start
-      restart_delay: 10000,          // ms between restart attempts
+      min_uptime: "60s",            // must stay alive 60s to count as a stable start (boot headroom under load)
+      restart_delay: 20000,         // ms between restart attempts (reduce restart-storm churn)
       kill_timeout: 8000,           // grace for SIGTERM shutdown (save sessions / close DBs) before SIGKILL
 
       // ---- Logging ----
