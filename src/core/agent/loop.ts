@@ -1646,7 +1646,7 @@ export class AgentLoop extends AgentLoopInjections {
       // cross_reference fail → confidence ~35) — there is no real user task to
       // verify. Skip them so the gate only fires on genuine task turns.
       // SUDO_COMPLETION_VERIFY_ALL=1 restores verifying every turn.
-      if (process.env['SUDO_COMPLETION_VERIFY_ALL'] !== '1' && isEphemeralPeer(session.channel, session.peerId)) {
+      if (process.env['SUDO_COMPLETION_VERIFY_ALL'] !== '1' && isEphemeralPeer(session.channel ?? '', session.peerId ?? '')) {
         log.debug({ sessionId, peerId: session.peerId }, 'CompletionVerify: skipped — ephemeral autonomy turn');
       } else {
         try {
