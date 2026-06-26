@@ -57,7 +57,9 @@ export class CommandRegistry {
       );
     }
     if (this.commands.has(cmd.name)) {
-      log.warn({ name: cmd.name }, 'Command already registered — overwriting');
+      // Benign last-wins re-register (core + plugin command sets can overlap);
+      // routine, not an error. debug, not warn.
+      log.debug({ name: cmd.name }, 'slash command re-registered (overwriting prior definition)');
     }
     this.commands.set(cmd.name, cmd);
     log.info({ name: cmd.name }, 'Slash command registered');
