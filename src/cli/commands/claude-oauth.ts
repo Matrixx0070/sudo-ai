@@ -38,8 +38,9 @@ export async function runClaudeOAuthLogin(): Promise<number> {
   const pending = mgr.startLogin();
 
   console.log('');
-  console.log('  Open this URL in your browser, approve the request, then');
-  console.log('  copy the authorization code shown on the callback page:');
+  console.log('  1. Sign in to https://claude.ai first, with the account you want');
+  console.log('     sudo-ai to use (otherwise the authorize page drops redirect_uri).');
+  console.log('  2. Open this URL, approve, then copy the code shown on the callback page:');
   console.log('');
   console.log(`    ${pending.authorizeUrl}`);
   console.log('');

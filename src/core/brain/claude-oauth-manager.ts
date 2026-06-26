@@ -39,13 +39,16 @@ const AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize';
 const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 /**
- * Loopback redirect host — the per-login URI is built by combining this with
- * a random port chosen at startLogin() time. The authorize endpoint accepts
- * any loopback port (RFC 8252 §7.3). The user's browser will fail to reach
- * the port (we're typically on a remote host), but the URL bar shows
- * `?code=...&state=...` which is what they paste back.
+ * Fixed OAuth redirect URI registered for the Claude Code client_id. Anthropic
+ * rejects arbitrary loopback redirects for this client ("Invalid OAuth Request
+ * — Missing redirect_uri parameter"); the authorize request and the token
+ * exchange must BOTH use this exact hosted callback. After approval it renders
+ * the `code#state` for the user to paste back. NB: the user must already be
+ * signed in to claude.ai, or the authorize endpoint bounces through login and
+ * drops the query params (same "Missing redirect_uri" error). Verified against
+ * the claude CLI bundle (oauth/code/callback on platform.claude.com).
  */
-const LOOPBACK_HOST = 'http://localhost';
+const OAUTH_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
 const OAUTH_SCOPE = 'user:inference';
 
 /** Anthropic `/v1/models` endpoint — same host the AI SDK uses for inference. */
@@ -168,19 +171,6 @@ export function pkceChallengeFor(verifier: string): string {
   return base64UrlEncode(createHash('sha256').update(verifier).digest());
 }
 
-/**
- * Pick a random ephemeral port in the range [10000, 60000). The exact port
- * does not matter — the authorize endpoint accepts any loopback port — but it
- * must match between the authorize URL and the exchange body.
- */
-function randomLoopbackPort(): number {
-  return 10000 + Math.floor(Math.random() * 50000);
-}
-
-export function buildLoopbackRedirectUri(port: number): string {
-  return `${LOOPBACK_HOST}:${port}/callback`;
-}
-
 export function buildAuthorizeUrl(verifier: string, state: string, redirectUri: string): string {
   const params = new URLSearchParams({
     code: 'true',
@@ -272,11 +262,10 @@ export class ClaudeOAuthManager {
     // base64url) — Anthropic accepts shorter, but mirroring is the safest
     // forward-compatible choice.
     const state = base64UrlEncode(randomBytes(32));
-    const port = randomLoopbackPort();
-    const redirectUri = buildLoopbackRedirectUri(port);
+    const redirectUri = OAUTH_REDIRECT_URI;
     const authorizeUrl = buildAuthorizeUrl(verifier, state, redirectUri);
     this.pending = { verifier, state, authorizeUrl, redirectUri, createdAt: Date.now() };
-    log.info({ port }, 'PKCE login started — authorize URL ready');
+    log.info('PKCE login started — authorize URL ready');
     return this.pending;
   }
 
