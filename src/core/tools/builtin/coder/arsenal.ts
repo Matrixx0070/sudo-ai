@@ -37,6 +37,7 @@ import os from 'node:os';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getModel } from '../../../brain/providers.js';
+import { clampMaxTokensToModel } from '../../../brain/thinking-inject.js';
 import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.arsenal');
@@ -1019,7 +1020,12 @@ export const arsenalTool: ToolDefinition = {
           model,
           system: systemPrompt,
           prompt: userPrompt,
-          maxOutputTokens: 32768,
+          // Clamp to the model's output ceiling so opus-4-8 (32000) doesn't trip
+          // the AI SDK "maxOutputTokens > max" warning on every KAIROS-triggered
+          // repair. Behaviour-identical — the SDK already clamps to 32000; this
+          // just does it first. No-op for non-opus cascade models. (Closes the
+          // gap #484 left: it clamped brain.ts but not the coder-tool call sites.)
+          maxOutputTokens: clampMaxTokensToModel(option.model, 32768, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
           temperature: mode === 'review' || mode === 'analyze' ? 0.2 : 0.4,
         });
 
