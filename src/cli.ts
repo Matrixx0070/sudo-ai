@@ -70,7 +70,7 @@ import { attachWsRpc } from './core/gateway/ws-server.js';
 import { attachHttpApi } from './core/gateway/http-api.js';
 import { DualSessionManager } from './core/sessions/dual-manager.js';
 import { JournalSessionStore } from './core/sessions/journal-store.js';
-import { scanInterruptedSessions } from './core/sessions/crash-safe.js';
+import { scanInterruptedSessions, reconcileInterruptedSessions } from './core/sessions/crash-safe.js';
 import { buildSessionRouteDeps, registerSessionRoutes } from './core/sessions/routes.js';
 import { AgentConfigStore, registerAgentRoutes } from './core/agents/index.js';
 import { registerSseRoutes } from './core/gateway/sse-stream.js';
@@ -634,6 +634,40 @@ async function boot(): Promise<void> {
         );
       } else {
         log.info('crash-safe boot scan: no interrupted sessions detected');
+      }
+
+      // Crash-safe reconcile (NP.5). Replays the missing JSONL message tail into
+      // SQLite, additive-only + idempotent. DRY-RUN by default (writes NOTHING,
+      // just reports the drift) — real INSERTs require SUDO_SESSION_RECONCILE_APPLY=1
+      // (and a per-session backup first). Disable the pass entirely with
+      // SUDO_SESSION_RECONCILE=0.
+      if (process.env['SUDO_SESSION_RECONCILE'] !== '0') {
+        const reconcileApply = process.env['SUDO_SESSION_RECONCILE_APPLY'] === '1';
+        try {
+          const recon = await reconcileInterruptedSessions(journalStore, db, {
+            journalDir: journalStore.journalDir,
+            apply: reconcileApply,
+          });
+          const reconcilable = recon.filter((r) => r.cleanPrefix);
+          const drift = reconcilable.reduce((n, r) => n + r.missingCount, 0);
+          const insertedTotal = recon.reduce((n, r) => n + r.insertedCount, 0);
+          const divergent = recon.filter((r) => !r.cleanPrefix).length;
+          log.info(
+            {
+              mode: reconcileApply ? 'apply' : 'dry-run',
+              candidateSessions: reconcilable.length,
+              driftMessages: drift,
+              divergentSessions: divergent,
+              inserted: insertedTotal,
+            },
+            reconcileApply
+              ? 'crash-safe reconcile: backfilled missing journal messages into SQLite'
+              : 'crash-safe reconcile DRY-RUN: missing journal messages detected — set SUDO_SESSION_RECONCILE_APPLY=1 to backfill',
+          );
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn({ err: msg }, 'crash-safe reconcile failed — continuing without backfill');
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
