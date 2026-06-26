@@ -11,8 +11,12 @@ export HOME=/root
 export PM2_HOME=/root/.pm2
 readonly LOG=/tmp/sudo-ai-v5-cron-keepalive.log
 readonly LOCK=/tmp/sudo-ai-cron.lock
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly SUDO_HOME="${SUDO_AI_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+# Declare-then-assign (not `readonly X="$(...)"`) so a failing subshell can't be
+# masked by the readonly builtin's own exit status (shellcheck SC2155).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+SUDO_HOME="${SUDO_AI_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+readonly SUDO_HOME
 
 # ---- Singleton: only one copy of this script may run at a time ----
 exec 200>"$LOCK"
@@ -47,10 +51,13 @@ if [ "$LEAKED_TSX" -gt 1 ] || { [ "$LEAKED_ESBUILD" -gt 0 ] && [ "$LEAKED_TSX" -
   # Age guard: during a restart the old + new app processes can briefly coexist.
   # Skip the hard-reset when the app process is young (boot overlap, not an
   # orphaned leak) — nuking the legit replacement caused restart storms under load.
-  if [ "$(daemon_age)" -lt 300 ]; then
-    echo "[$(date -u +%FT%TZ)] leak-suspect (tsx=$LEAKED_TSX esbuild=$LEAKED_ESBUILD) but pm2 daemon <5min old -- boot overlap, skipping hard-reset" >> "$LOG"
+  # Compute the age ONCE so the skip decision and the log line agree (and so the
+  # log records exactly the age the branch keyed off — restart-reason forensics).
+  LEAK_DAEMON_AGE=$(daemon_age)
+  if [ "$LEAK_DAEMON_AGE" -lt 300 ]; then
+    echo "[$(date -u +%FT%TZ)] leak-suspect (tsx=$LEAKED_TSX esbuild=$LEAKED_ESBUILD daemon_age=${LEAK_DAEMON_AGE}s) but pm2 daemon <5min old -- boot overlap, skipping hard-reset" >> "$LOG"
   else
-    echo "[$(date -u +%FT%TZ)] LEAK DETECTED: tsx=$LEAKED_TSX esbuild=$LEAKED_ESBUILD -- hard-resetting" >> "$LOG"
+    echo "[$(date -u +%FT%TZ)] LEAK DETECTED: tsx=$LEAKED_TSX esbuild=$LEAKED_ESBUILD daemon_age=${LEAK_DAEMON_AGE}s -- hard-resetting" >> "$LOG"
 
     # Kill all leaked application processes (not pm2 daemon itself)
     pkill -9 -f "tsx src/cli\.ts" 2>/dev/null || true
@@ -110,7 +117,11 @@ if [ "$CLI_AGE" -lt 90 ]; then
 fi
 
 cd "$SUDO_HOME"
-echo "[$(date -u +%FT%TZ)] sudo-ai-v5 down, restarting via ecosystem config" >> "$LOG"
+# Restart-reason forensics: record WHY the down-path fired. daemon_age=999999
+# means `pm2 pid` returned empty — the signature of a pm2 restart/deploy
+# transition racing this cron (port briefly unbound, pid not yet re-registered).
+echo "[$(date -u +%FT%TZ)] DOWN-PATH: sudo-ai-v5 port unbound + pm2 not online (daemon_age=${CLI_AGE}s) -- restarting via ecosystem config" >> "$LOG"
 pm2 delete sudo-ai-v5         >> "$LOG" 2>&1 || true
 pm2 start ecosystem.config.cjs --only sudo-ai-v5 --update-env >> "$LOG" 2>&1
 pm2 save --force              >> "$LOG" 2>&1 || true
+echo "[$(date -u +%FT%TZ)] DOWN-PATH restart issued (pm2 start invoked)" >> "$LOG"
