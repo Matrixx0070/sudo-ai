@@ -63,6 +63,25 @@ app_running() {
   if kill -0 "$pid" 2>/dev/null; then echo yes; else echo no; fi
 }
 
+# ---- Helper: list the distinct prod app pids, PATH-ANCHORED (set-e safe). ----
+# Each candidate from the anchored pgrep is RE-VERIFIED against is_app_proc on
+# its real argv, so a process that merely MENTIONS the path (e.g. this happy/
+# Claude session, whose prompt text embeds `node .../src/cli.ts`, or an Aether
+# proc) can never enter the list. Echoes pids one per line. Empty if the pure
+# lib is unavailable (caller degrades to no duplicate handling — never to a
+# blind kill).
+app_pids() {
+  local pat pid
+  command -v app_proc_regex >/dev/null 2>&1 || return 0
+  pat=$(app_proc_regex "$SUDO_HOME")
+  while IFS= read -r pid; do
+    [ -z "$pid" ] && continue
+    if is_app_proc "$(ps -o args= -p "$pid" 2>/dev/null)" "$SUDO_HOME"; then
+      echo "$pid"
+    fi
+  done < <(pgrep -f "$pat" 2>/dev/null || true)
+}
+
 # ---- Step 1: Detect leaked / duplicate Node processes ----
 # We expect exactly ONE tsx process (prod). tsx legitimately spawns esbuild as
 # a child during compile, so esbuild is only a leak when there is NO tsx
@@ -77,11 +96,37 @@ LEAKED_ESBUILD=$(count_pids "esbuild")
 # daemon's OWN transient esbuild child triggered a `pm2 delete+start` bounce
 # every ~30min (self-inflicted restart churn). The gate adds the missing
 # precondition: arm (2) is a real leak ONLY when the app is genuinely DOWN.
+# ---- Duplicate-daemon detection (PATH-ANCHORED; replaces the inert stale-tsx
+# `LEAKED_TSX>1` arm, which never matched the real `node .../src/cli.ts` argv).
+# The genuine-duplicate KILL is gated behind SUDO_CRON_DUP_KILL (DEFAULT-OFF):
+# by default this DETECTS + LOGS only — no process is killed. Kill-selection is
+# delegated to the pure select_dup_kill_pids, which NEVER targets the
+# pm2-managed pid and only fires when a clear keeper (the managed pid) is among
+# the candidates. Runs independently of the esbuild leak-gate below. ----
+if command -v select_dup_kill_pids >/dev/null 2>&1; then
+  DUP_PM2_PID=$(pm2 pid sudo-ai-v5 2>/dev/null | head -1) || DUP_PM2_PID=""
+  mapfile -t DUP_APP_PIDS < <(app_pids)
+  mapfile -t DUP_KILL_PIDS < <(select_dup_kill_pids "$DUP_PM2_PID" "${DUP_APP_PIDS[@]}")
+  if [ "${#DUP_KILL_PIDS[@]}" -gt 0 ]; then
+    if [ "${SUDO_CRON_DUP_KILL:-0}" = "1" ]; then
+      echo "[$(date -u +%FT%TZ)] DUPLICATE DAEMON: app_pids='${DUP_APP_PIDS[*]}' keeper(pm2)=$DUP_PM2_PID -- killing non-pm2 dup(s): ${DUP_KILL_PIDS[*]} (SUDO_CRON_DUP_KILL=1)" >> "$LOG"
+      for dpid in "${DUP_KILL_PIDS[@]}"; do
+        # Re-verify under the singleton lock immediately before the kill: still
+        # a real app proc AND still not the pm2 keeper — belt-and-suspenders so
+        # a pid that recycled between detection and kill cannot be hit.
+        if [ "$dpid" != "$DUP_PM2_PID" ] && is_app_proc "$(ps -o args= -p "$dpid" 2>/dev/null)" "$SUDO_HOME"; then
+          kill -9 "$dpid" 2>/dev/null || true
+        fi
+      done
+    else
+      echo "[$(date -u +%FT%TZ)] DUPLICATE DAEMON DETECTED: app_pids='${DUP_APP_PIDS[*]}' keeper(pm2)=$DUP_PM2_PID would-kill='${DUP_KILL_PIDS[*]}' -- DETECT-ONLY (set SUDO_CRON_DUP_KILL=1 to enable kill)" >> "$LOG"
+    fi
+  fi
+fi
+
 LEAK_TRIGGERED=no
 LEAK_APP_RUNNING=n/a
-if [ "$LEAKED_TSX" -gt 1 ]; then
-  LEAK_TRIGGERED=yes
-elif [ "$LEAKED_ESBUILD" -gt 0 ] && [ "$LEAKED_TSX" -eq 0 ]; then
+if [ "$LEAKED_ESBUILD" -gt 0 ] && [ "$LEAKED_TSX" -eq 0 ]; then
   LEAK_APP_RUNNING=$(app_running)
   if [ "${SUDO_CRON_LEAK_GATE:-1}" != "0" ] && command -v is_orphan_esbuild_leak >/dev/null 2>&1; then
     if is_orphan_esbuild_leak "$LEAKED_TSX" "$LEAKED_ESBUILD" "$LEAK_APP_RUNNING"; then
@@ -106,8 +151,16 @@ if [ "$LEAK_TRIGGERED" = "yes" ]; then
   else
     echo "[$(date -u +%FT%TZ)] LEAK DETECTED: tsx=$LEAKED_TSX esbuild=$LEAKED_ESBUILD app_running=$LEAK_APP_RUNNING daemon_age=${LEAK_DAEMON_AGE}s -- hard-resetting" >> "$LOG"
 
-    # Kill all leaked application processes (not pm2 daemon itself)
-    pkill -9 -f "tsx src/cli\.ts" 2>/dev/null || true
+    # Kill leaked application processes (PATH-ANCHORED; never the pm2-managed
+    # daemon, never an Aether/happy proc) + the orphaned esbuild children. This
+    # arm only runs when the app is genuinely DOWN (esbuild orphan, app_running
+    # =no), so excluding the pm2 keeper still cleans every leftover app proc.
+    HR_PM2_PID=$(pm2 pid sudo-ai-v5 2>/dev/null | head -1) || HR_PM2_PID=""
+    while IFS= read -r hrpid; do
+      [ -z "$hrpid" ] && continue
+      [ "$hrpid" = "$HR_PM2_PID" ] && continue
+      kill -9 "$hrpid" 2>/dev/null || true
+    done < <(app_pids)
     pkill -9 -f "esbuild"          2>/dev/null || true
     sleep 2
 

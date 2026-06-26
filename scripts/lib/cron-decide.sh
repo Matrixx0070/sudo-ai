@@ -52,3 +52,55 @@ read_counter() {
 write_counter() {
   echo "$2" > "$1" 2>/dev/null || true
 }
+
+# =============================================================================
+# Anchored app-process matching + duplicate-daemon kill-selection.
+#
+# Replaces the legacy stale `tsx src/cli.ts` pgrep pattern, which never matched
+# the real prod argv `node /root/sudo-ai-v4/src/cli.ts` (pm2 launches it as a
+# direct node process) — so the duplicate-detection arm + the hard-reset pkill
+# were both inert (false-NEGATIVE: a genuine second daemon went undetected).
+#
+# PARANOIA NOTE (shared box): a naive `pgrep -f` for the path matches ANY proc
+# whose command line merely MENTIONS it — e.g. this very happy/Claude session,
+# whose prompt text embeds `node /root/sudo-ai-v4/src/cli.ts`. The pattern is
+# therefore ANCHORED at the start of the command line (`^node ...`) so only a
+# process actually EXECUTING the daemon matches; a prompt that quotes the path
+# in a later argument does not. Aether runs from /root/aether-blueprint and
+# never matches.
+# =============================================================================
+
+# app_proc_regex [app_home] — echo the ERE that matches ONLY the prod daemon
+# argv `node [--import tsx] <app_home>/src/cli.ts`, anchored at command-line
+# start. Default app_home is the prod path. app_home is a controlled deploy
+# path assumed free of regex metacharacters other than `.` (which is escaped).
+app_proc_regex() {
+  local home="${1:-/root/sudo-ai-v4}" esc
+  esc=$(printf '%s' "$home/src/cli.ts" | sed 's/\./\\./g')
+  printf '^node( --import tsx)? %s([[:space:]]|$)' "$esc"
+}
+
+# is_app_proc <argv> [app_home] — true (0) when <argv> is the prod daemon's
+# command line. Pure: matches a string, runs no pm2/pgrep, reads no env.
+is_app_proc() {
+  printf '%s' "${1:-}" | grep -Eq "$(app_proc_regex "${2:-/root/sudo-ai-v4}")"
+}
+
+# select_dup_kill_pids <pm2_pid> <app_pid...> — echo (one per line) the app pids
+# that are SAFE to kill as duplicate daemons. Conservative by construction:
+#   * emits NOTHING unless there are >1 app pids (no duplicate ⇒ nothing);
+#   * emits NOTHING when <pm2_pid> is empty/0 (no trusted keeper to protect);
+#   * emits NOTHING when <pm2_pid> is not among the candidates (ambiguous — we
+#     refuse to guess which surviving proc is the real one);
+#   * NEVER emits <pm2_pid> itself (the pm2-managed daemon is always protected).
+# So the single-healthy-daemon case selects nothing, and a genuine orphan dup
+# alongside the managed daemon selects ONLY the orphan.
+select_dup_kill_pids() {
+  local pm2="${1:-}"; shift 2>/dev/null || true
+  case "$pm2" in ''|0) return 0 ;; esac
+  local apps=("$@") p found=no
+  [ "${#apps[@]}" -gt 1 ] || return 0
+  for p in "${apps[@]}"; do [ "$p" = "$pm2" ] && found=yes; done
+  [ "$found" = yes ] || return 0
+  for p in "${apps[@]}"; do [ "$p" = "$pm2" ] || echo "$p"; done
+}
