@@ -119,7 +119,10 @@ export class ToolRegistry {
       );
     }
     if (this.tools.has(tool.name)) {
-      logger.warn({ tool: tool.name }, 'Tool already registered — overwriting');
+      // Benign last-wins: tools legitimately arrive via two paths (the global
+      // self-register singleton + explicit registration in cli.ts), so a
+      // re-register is routine, not an error. debug, not warn (~40/run of noise).
+      logger.debug({ tool: tool.name }, 'tool re-registered (overwriting prior definition)');
     }
     this.tools.set(tool.name, tool);
     logger.info({ tool: tool.name, category: tool.category }, 'Tool registered');
