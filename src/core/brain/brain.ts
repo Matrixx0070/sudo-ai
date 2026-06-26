@@ -21,6 +21,7 @@ import {
 import { runDebate } from './brain-debate.js';
 import { runTreeSearch } from './brain-tree-search.js';
 import { getModel, getModelWithKey, initProviders } from './providers.js';
+import { clampMaxTokensToModel } from './thinking-inject.js';
 import { isCustomProvider } from './custom-providers.js';
 import { assembleSystemPrompt } from './system-prompt.js';
 import { sortToolEntries, isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages, markLastToolForCache } from './prompt-cache-discipline.js';
@@ -1153,7 +1154,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
             ? [...buildCachedSystemMessages(systemPrompt), ...buildFoldedSystemMessages(request.messages), ...toSDKMessages(request.messages)]
             : toSDKMessages(request.messages),
           temperature,
-          maxOutputTokens: maxTokens,
+          maxOutputTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
         };
         if (!cacheBreakpoints) {
           streamParams.system = effectiveSystem;
@@ -1350,7 +1351,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         ? [...buildCachedSystemMessages(systemPrompt), ...buildFoldedSystemMessages(request.messages), ...toSDKMessages(request.messages)]
         : toSDKMessages(request.messages),
       temperature,
-      maxOutputTokens: maxTokens,
+      maxOutputTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
     };
     // Best-effort deterministic sampling — forwarded only when the caller pins a
     // seed; providers that don't support it ignore the field.

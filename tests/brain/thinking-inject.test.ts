@@ -5,7 +5,7 @@
  * so the API/SDK never caps the total (which truncated replies / risked a 400).
  */
 import { describe, it, expect } from 'vitest';
-import { resolveThinkingBudget } from '../../src/core/brain/thinking-inject.js';
+import { resolveThinkingBudget, clampMaxTokensToModel } from '../../src/core/brain/thinking-inject.js';
 
 describe('resolveThinkingBudget', () => {
   it('returns null for non-opus models', () => {
@@ -80,5 +80,40 @@ describe('resolveThinkingBudget', () => {
         }
       }
     }
+  });
+});
+
+describe('clampMaxTokensToModel', () => {
+  it('clamps opus-4-8 above the 32000 ceiling (the SDK-warning case)', () => {
+    expect(clampMaxTokensToModel('claude-opus-4-8', 32768)).toBe(32000);
+    expect(clampMaxTokensToModel('claude-opus-4-8', 100000)).toBe(32000);
+  });
+
+  it('accepts a provider-prefixed id', () => {
+    expect(clampMaxTokensToModel('claude-oauth/claude-opus-4-8', 32768)).toBe(32000);
+    expect(clampMaxTokensToModel('claude-oauth/claude-opus-4-9', 40000)).toBe(32000);
+  });
+
+  it('leaves opus values already within the ceiling unchanged', () => {
+    expect(clampMaxTokensToModel('claude-opus-4-8', 8192)).toBe(8192);
+    expect(clampMaxTokensToModel('claude-opus-4-8', 32000)).toBe(32000);
+  });
+
+  it('leaves NON-opus models unchanged (their own ceilings apply elsewhere)', () => {
+    expect(clampMaxTokensToModel('claude-sonnet-4-5-20250929', 32768)).toBe(32768);
+    expect(clampMaxTokensToModel('claude-oauth/claude-sonnet-4-5-20250929', 32768)).toBe(32768);
+    expect(clampMaxTokensToModel('ollama/glm-5.2', 50000)).toBe(50000);
+    expect(clampMaxTokensToModel('xai/grok-4-0709', 32768)).toBe(32768);
+    expect(clampMaxTokensToModel('claude-opus-4-7', 32768)).toBe(32768); // 4-7 not 4-8+
+  });
+
+  it('respects SUDO_THINKING_MODEL_MAX override', () => {
+    expect(clampMaxTokensToModel('claude-opus-4-8', 100000, { modelMax: '64000' })).toBe(64000);
+    expect(clampMaxTokensToModel('claude-opus-4-8', 40000, { modelMax: '64000' })).toBe(40000);
+  });
+
+  it('is a no-op for malformed input', () => {
+    expect(clampMaxTokensToModel('', 32768)).toBe(32768);
+    expect(clampMaxTokensToModel('claude-opus-4-8', Number.NaN)).toBeNaN();
   });
 });
