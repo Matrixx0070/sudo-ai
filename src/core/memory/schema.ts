@@ -528,3 +528,24 @@ export function initializeVecTable(db: Database): void {
     )
   `);
 }
+
+/**
+ * Create the chunks_vec_local virtual table — the LOCAL embedding space used as
+ * a fallback when OpenAI embeddings are unavailable (quota/circuit/no key).
+ *
+ * Dimension 384 matches the default local model (all-MiniLM-L6-v2,
+ * {@link import('./local-embeddings.js').LOCAL_EMBED_DIM}). Additive and
+ * independent of chunks_vec: cross-model vectors are NOT comparable, so a local
+ * query is only ever searched against this table, never against chunks_vec.
+ * Called alongside initializeVecTable, only after sqlite-vec is confirmed loaded.
+ *
+ * @param db - An open better-sqlite3 Database instance with sqlite-vec loaded.
+ */
+export function initializeVecTableLocal(db: Database): void {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec_local USING vec0(
+      chunk_id  INTEGER PRIMARY KEY,
+      embedding FLOAT[384]
+    )
+  `);
+}

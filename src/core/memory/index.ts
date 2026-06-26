@@ -75,8 +75,12 @@ export type {
   BackfillResult,
 } from './vector-backfill.js';
 
+// Local ONNX embedding fallback — restores semantic recall when OpenAI
+// embeddings are unavailable (quota/circuit/no key).
+export { LocalEmbeddingProvider, LOCAL_EMBED_DIM } from './local-embeddings.js';
+
 // Schema utilities (needed by devops / migration tooling)
-export { initializeSchema, initializeVecTable, SCHEMA_SQL } from './schema.js';
+export { initializeSchema, initializeVecTable, initializeVecTableLocal, SCHEMA_SQL } from './schema.js';
 
 // Unified cross-store memory search
 export { UnifiedMemory } from './unified.js';

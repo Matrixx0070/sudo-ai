@@ -48,6 +48,13 @@ export interface ChunkVectorStore {
 export interface BackfillOptions {
   /** Max chunks embedded per run (bounds API cost + latency). Default 256. */
   maxPerRun?: number;
+  /**
+   * Vector width the embedder must emit, asserted before each write so a
+   * wrong-width vector never corrupts the index. Default 1536 (OpenAI
+   * text-embedding-3-small / chunks_vec); pass 384 for the local model /
+   * chunks_vec_local.
+   */
+  expectedDim?: number;
 }
 
 export interface BackfillResult {
@@ -65,10 +72,24 @@ export interface BackfillResult {
  * encoding hybrid-search and embedding_cache use.
  */
 export class MindDBVectorStore implements ChunkVectorStore {
-  constructor(private readonly raw: import('better-sqlite3').Database) {}
+  private readonly table: string;
+
+  /**
+   * @param raw   - The better-sqlite3 handle (sqlite-vec loaded).
+   * @param table - vec0 table to target. Whitelisted to the two known index
+   *   tables so the interpolated name can never be attacker-controlled:
+   *   'chunks_vec' (OpenAI 1536-dim, default) or 'chunks_vec_local' (local 384).
+   */
+  constructor(
+    private readonly raw: import('better-sqlite3').Database,
+    table: 'chunks_vec' | 'chunks_vec_local' = 'chunks_vec',
+  ) {
+    // Defensive whitelist — the value is interpolated into DDL/DML below.
+    this.table = table === 'chunks_vec_local' ? 'chunks_vec_local' : 'chunks_vec';
+  }
 
   existingChunkIds(): Set<number> {
-    const rows = this.raw.prepare('SELECT chunk_id FROM chunks_vec').all() as Array<{ chunk_id: number }>;
+    const rows = this.raw.prepare(`SELECT chunk_id FROM ${this.table}`).all() as Array<{ chunk_id: number }>;
     return new Set(rows.map((r) => r.chunk_id));
   }
 
@@ -77,7 +98,7 @@ export class MindDBVectorStore implements ChunkVectorStore {
     // sqlite-vec rejects a plain JS number for the vec0 primary key ("Only
     // integers are allowed…") — it must be bound as a BigInt, positionally.
     this.raw
-      .prepare('INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding) VALUES (?, ?)')
+      .prepare(`INSERT OR REPLACE INTO ${this.table}(chunk_id, embedding) VALUES (?, ?)`)
       .run(BigInt(chunkId), blob);
   }
 }
@@ -100,6 +121,7 @@ export async function backfillChunkVectors(
   if (!embedder.isAvailable) return result;
 
   const maxPerRun = options.maxPerRun && options.maxPerRun > 0 ? options.maxPerRun : 256;
+  const expectedDim = options.expectedDim && options.expectedDim > 0 ? options.expectedDim : EXPECTED_DIM;
 
   const existing = store.existingChunkIds();
   // Active, embeddable chunks (skip session-meta JSON + superseded rows),
@@ -128,7 +150,7 @@ export async function backfillChunkVectors(
   for (let i = 0; i < batch.length; i++) {
     const vec = vectors[i];
     const id = batch[i]!.id;
-    if (!vec || vec.length !== EXPECTED_DIM) {
+    if (!vec || vec.length !== expectedDim) {
       result.skipped++;
       continue;
     }
