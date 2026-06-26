@@ -62,7 +62,7 @@ import type {
   PredictorLike,
 } from './loop-types.js';
 import { AgentLoopInjections } from './loop-injections.js';
-import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler } from './types.js';
+import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler, AgentRunResult } from './types.js';
 import { LoopGuard } from './loop-guard.js';
 import { buildLoopFallbackReply } from './loop-fallback.js';
 import { DoomLoopDetector } from './doom-loop.js';
@@ -123,42 +123,6 @@ import { getZDRManager, isZDRBlocked } from '../privacy/zdr-mode.js';
 import { WORKSPACE_DIR, DATA_DIR, projectPath } from '../shared/paths.js';
 
 const log = createLogger('agent:loop');
-
-// ---------------------------------------------------------------------------
-// AgentRunResult — returned by run() so callers can receive file attachments
-// ---------------------------------------------------------------------------
-
-/**
- * Structured return value from AgentLoop.run().
- * Contains the final text response plus any file attachments produced during
- * the turn (e.g. screenshots, generated images, exported documents).
- */
-export interface AgentRunResult {
-  /** Final assistant text response. */
-  text: string;
-  /** File attachments produced during the turn (screenshots, images, etc.). */
-  attachments: Array<{
-    type: 'image' | 'video' | 'audio' | 'document';
-    path: string;
-    filename?: string;
-  }>;
-  /** P0: SelfVerify — post-run verification summary if SUDO_SELF_VERIFY is enabled. */
-  verificationSummary?: string;
-  /** Theme 2.2: reasoning recap (approach/steps/confidence) if SUDO_REASONING_SUMMARY is enabled. */
-  reasoningSummary?: string;
-  /**
-   * Theme 2 step-tracking: APPROXIMATE coverage of the auto-plan's steps by this
-   * turn's tool actions (present only when SUDO_AUTO_PLAN produced a plan).
-   * `unaddressed` is a soft anti-"phantom-completion" signal, not a hard verdict.
-   */
-  planProgress?: { totalSteps: number; addressedCount: number; unaddressed: string[] };
-  /**
-   * Heuristic phantom-completion check of the final response (placeholder /
-   * truncation / length / request cross-reference). Present only when
-   * SUDO_COMPLETION_VERIFY=1. Observable-only — never alters the response.
-   */
-  completionVerification?: { passed: boolean; confidence: number; failedChecks: string[] };
-}
 
 // ---------------------------------------------------------------------------
 // AgentLoop
