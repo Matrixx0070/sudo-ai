@@ -71,7 +71,7 @@ import { StuckDetector, looksLikeToolError } from './stuck-detector.js';
 import { isSwarmRescueEnabled, getSwarmRescueStrategy, swarmRescueCallOpts } from './swarm-rescue.js';
 import { generateIntelligenceBrief } from './intelligence-brief.js';
 import { shouldFork, forkSession } from '../sessions/session-fork.js';
-import type { ForkSessionManager } from '../sessions/session-fork.js';
+import { toForkSession, toForkSessionManager, fromForkSession } from './session-fork-bridge.js';
 import { buildContentBlocks, toRichResponse } from './content-types.js';
 import type { HistoryMessage } from './cheap-model-router.js';
 import { DispatchRouter } from '../brain/dispatch-router.js';
@@ -1208,14 +1208,13 @@ export class AgentLoop extends AgentLoopInjections {
       // SessionLike (loop-helpers) is intentionally a structural subset of the
       // concrete Session (sessions/types.ts) so the loop stays decoupled from
       // session-storage internals. At runtime the loop only ever runs against
-      // the real SessionManager which yields real Session instances, so the
-      // narrowing below is a one-shot bridge at the helper boundary and not a
-      // dynamic guess. SessionManagerLike → ForkSessionManager is the same
-      // SessionLike↔Session impedance plus covariant return shifts, so both
-      // bridges live in the same single statement and nowhere else in the
-      // loop.
-      const fullSession = session as unknown as import('../sessions/types.js').Session;
-      const forkSessionManager = this.sessionManager as unknown as ForkSessionManager;
+      // the real SessionManager which yields real Session instances, so these
+      // are sound one-shot re-types at the helper boundary, not dynamic guesses.
+      // Both impedance points (and the reverse Session → SessionLike below) are
+      // contained in the named, identity-preserving bridges in
+      // session-fork-bridge.ts so no opaque inline cast lives in the loop.
+      const fullSession = toForkSession(session);
+      const forkSessionManager = toForkSessionManager(this.sessionManager);
       if (shouldFork(fullSession)) {
         log.info({ sessionId: state.sessionId }, 'Session fork threshold reached — forking');
         try {
@@ -1225,11 +1224,10 @@ export class AgentLoop extends AgentLoopInjections {
             forkSessionManager,
           );
           if (fork) {
-            // Session → SessionLike: SessionLike has an open index
-            // signature for ad-hoc session metadata (loop-helpers.ts)
-            // which the concrete Session does not declare, so this is
-            // the second unavoidable bridge cast at the boundary.
-            session = fork.newSession as unknown as SessionLike;
+            // Identity-preserving bridge back to the loop's SessionLike view —
+            // see session-fork-bridge.ts. Reassigns the live `session` to the
+            // real forked object so subsequent mutations/persistence land on it.
+            session = fromForkSession(fork.newSession);
             state.sessionId = fork.newSession.id;
             log.info({ newSessionId: fork.newSession.id, oldSessionId: fork.archivedSessionId }, 'Session forked — continuing in new session');
           }
