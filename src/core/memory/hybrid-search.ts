@@ -14,9 +14,12 @@
  * If sqlite-vec is not loaded, only steps 3, 4 (BM25-only path), 5, 6, 7 run.
  */
 
+import { createLogger } from '../shared/logger.js';
 import type { MindDB } from './db.js';
 import type { EmbeddingService } from './embeddings.js';
 import type { MemoryChunk, SearchOptions, SearchResult } from './types.js';
+
+const log = createLogger('memory:hybrid-search');
 
 // ---------------------------------------------------------------------------
 // Scoring helpers (exported for unit testing)
@@ -255,7 +258,20 @@ export async function hybridSearch(
   // -------------------------------------------------------------------------
 
   if (useVec) {
-    const queryVec = await embeddings.embed(query);
+    // Query-time embedding resilience (B5.2): a terminal embed() failure (e.g.
+    // the provider stays down after the #467 backoff is exhausted) must NOT sink
+    // the whole search — degrade to the BM25 path so the caller still gets text
+    // matches instead of an exception (and an empty RAG context). Default-ON;
+    // SUDO_EMBED_QUERY_DEGRADE=0 restores the old propagate-the-throw behavior.
+    const degradeOnEmbedFailure = process.env['SUDO_EMBED_QUERY_DEGRADE'] !== '0';
+    let queryVec: Float32Array | null = null;
+    try {
+      queryVec = await embeddings.embed(query);
+    } catch (err) {
+      if (!degradeOnEmbedFailure) throw err;
+      log.debug({ err: String(err) }, 'hybrid-search: query embedding failed — degrading to BM25-only');
+      queryVec = null;
+    }
     if (queryVec) {
       // sqlite-vec KNN query — returns cosine distance (0=identical, 2=opposite)
       const vecRows = db.db.prepare<{ embedding: Buffer; k: number }, VecRow>(`
