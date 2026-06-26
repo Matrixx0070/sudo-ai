@@ -14,11 +14,12 @@ vi.mock('ai', async (importOriginal) => {
 });
 
 const warnSpy = vi.hoisted(() => vi.fn());
+const debugSpy = vi.hoisted(() => vi.fn());
 vi.mock('../../src/core/shared/logger.js', () => ({
   createLogger: () => ({
     warn: warnSpy,
     info: vi.fn(),
-    debug: vi.fn(),
+    debug: debugSpy,
     error: vi.fn(),
     trace: vi.fn(),
     fatal: vi.fn(),
@@ -87,6 +88,7 @@ describe('Brain callParams construction under SUDO_PROMPT_CACHE', () => {
     AuthProfileRotation.resetInstance();
     generateTextMock.mockReset();
     warnSpy.mockClear();
+    debugSpy.mockClear();
   });
 
   afterEach(() => {
@@ -198,7 +200,7 @@ describe('Brain callParams construction under SUDO_PROMPT_CACHE', () => {
     expect(msgs[1]).toMatchObject({ role: 'system' });
   });
 
-  it('DROP-1: system-role message in request.messages is dropped with a warning', async () => {
+  it('DROP-1: system-role message in request.messages is dropped (logged at debug)', async () => {
     process.env['ANTHROPIC_API_KEY'] = 'sk-ant-test';
     generateTextMock.mockResolvedValueOnce(okResult());
 
@@ -210,10 +212,12 @@ describe('Brain callParams construction under SUDO_PROMPT_CACHE', () => {
     });
 
     expect((params.messages as any[]).every((m) => m.role !== 'system')).toBe(true);
-    const dropWarn = warnSpy.mock.calls.find((c) =>
-      String(c[1]).includes('Dropping system-role message'),
+    // Demoted to debug: with system-message folding the drop is handled
+    // (no content loss), so it's routine, not a warning.
+    const dropLog = debugSpy.mock.calls.find((c) =>
+      String(c[1]).includes('routed out of request.messages array'),
     );
-    expect(dropWarn).toBeDefined();
-    expect(dropWarn![0]).toEqual({ contentPreview: 'sneaky system message' });
+    expect(dropLog).toBeDefined();
+    expect(dropLog![0]).toEqual({ contentPreview: 'sneaky system message' });
   });
 });
