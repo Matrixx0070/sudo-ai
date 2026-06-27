@@ -221,4 +221,29 @@ describe('compactSemanticDuplicates', () => {
     expect(r.embedded).toBe(0);
     expect((db.prepare("SELECT COUNT(*) AS c FROM chunks").get() as { c: number }).c).toBe(1);
   });
+
+  it('re-embeds a cached vector whose width != expectedDim (stale cross-dim cache)', async () => {
+    ensureCompactionColumns(db);
+    const id = insert(db, 'a chunk with a stale cache', 'conversation', '2026-06-14T22:00:00Z');
+    // Plant a stale 3-dim cached embedding (e.g. a leftover 1536-dim OpenAI vector).
+    db.prepare("UPDATE chunks SET embedding_json = ? WHERE id = ?").run(JSON.stringify([0.1, 0.2, 0.3]), id);
+
+    let embedCalls = 0;
+    const counting: EmbeddingFn = { async embed(t) { embedCalls++; return embed.embed(t); } };
+    await compactSemanticDuplicates(db, counting, { expectedDim: 64 });
+
+    expect(embedCalls).toBe(1); // wrong-dim cache invalidated → re-embedded
+    const cached = JSON.parse((db.prepare("SELECT embedding_json AS e FROM chunks WHERE id = ?").get(id) as { e: string }).e);
+    expect(cached).toHaveLength(64); // cache now holds the fresh 64-dim vector
+  });
+
+  it('reuses a cached vector whose width matches expectedDim (no re-embed)', async () => {
+    insert(db, 'cached at the right dim', 'conversation', '2026-06-14T22:00:00Z');
+    let embedCalls = 0;
+    const counting: EmbeddingFn = { async embed(t) { embedCalls++; return embed.embed(t); } };
+    await compactSemanticDuplicates(db, counting, { expectedDim: 64 });
+    expect(embedCalls).toBe(1);
+    await compactSemanticDuplicates(db, counting, { expectedDim: 64 }); // 64-dim cache matches → reuse
+    expect(embedCalls).toBe(1);
+  });
 });

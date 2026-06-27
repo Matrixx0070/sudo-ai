@@ -2634,15 +2634,21 @@ async function boot(): Promise<void> {
         if (process.env['SUDO_SEMANTIC_COMPACT'] === '1') {
           try {
             const emb = new EmbeddingService(db);
-            if (emb.isAvailable) {
+            const localEmb = new LocalEmbeddingProvider();
+            // Dedup embeds its own texts live for an in-memory cosine compare (no
+            // stored cross-model index), so prefer the always-up local model and
+            // only fall back to OpenAI — keeps semantic dedup working through the
+            // OpenAI quota outage (no 429 "Embedding failed — skipping row").
+            if (emb.isAvailable || localEmb.isAvailable) {
+              const localFirst = makeLocalFirstEmbed((t: string) => emb.embed(t), localEmb);
               const embedder: SemanticEmbeddingFn = {
                 async embed(text: string): Promise<Float32Array> {
-                  const v = await emb.embed(text);
+                  const v = await localFirst(text);
                   if (!v) throw new Error('embedding unavailable');
                   return v;
                 },
               };
-              const res = await compactSemanticDuplicates(db.db, embedder);
+              const res = await compactSemanticDuplicates(db.db, embedder, { expectedDim: LOCAL_EMBED_DIM });
               log.info({ jobId: job.id, ...res }, 'Semantic compaction pass complete');
             } else {
               log.debug({ jobId: job.id }, 'Semantic compaction skipped — no embedding API key');
