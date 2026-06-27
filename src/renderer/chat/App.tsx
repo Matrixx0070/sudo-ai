@@ -7,7 +7,7 @@ import { InputArea } from './components/InputArea';
 
 export function App() {
   const { messages, currentResponse, error, addMessage, setCurrentResponse, setError } = useChatSession();
-  const { connected, sendMessage } = useWebSocket({
+  const { connected, sendMessage, sendAttachment } = useWebSocket({
     onMessage: (data) => {
       if (data.type === 'thinking') {
         setCurrentResponse({ type: 'thinking', text: data.text || 'Thinking...' });
@@ -32,7 +32,25 @@ export function App() {
 
   const handleSend = (text: string) => {
     if (!connected) return;
+    // The WS path doesn't echo the sender's own message, so show it optimistically.
+    addMessage({ role: 'user', content: text, timestamp: new Date() });
     sendMessage(text);
+    setCurrentResponse({ type: 'thinking', text: 'Thinking...' });
+  };
+
+  const handleSendAttachment = (file: File, caption: string) => {
+    if (!connected) return;
+    const isImage = file.type.startsWith('image/');
+    addMessage({
+      role: 'user',
+      content: caption,
+      timestamp: new Date(),
+      ...(isImage ? { imageUrl: URL.createObjectURL(file) } : { fileName: file.name }),
+    });
+    void sendAttachment(file, caption).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Failed to send attachment');
+    });
+    setCurrentResponse({ type: 'thinking', text: 'Thinking...' });
   };
 
   return (
@@ -51,7 +69,7 @@ export function App() {
       <ChatWindow messages={messages} currentResponse={currentResponse} error={error} />
 
       <div className="p-4 border-t border-gray-700">
-        <InputArea onSend={handleSend} disabled={!connected} />
+        <InputArea onSend={handleSend} onSendAttachment={handleSendAttachment} disabled={!connected} />
       </div>
     </div>
   );
