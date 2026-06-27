@@ -233,6 +233,54 @@ describe('ScheduledMessageDispatcher — dynamic prompt (generate-at-send)', () 
   });
 });
 
+describe('ScheduledMessageDispatcher — concurrency & timeout', () => {
+  let db: DatabaseType;
+  beforeEach(() => { db = createDb(); });
+
+  it('delivers due messages with bounded concurrency (max in-flight == cap)', async () => {
+    let inFlight = 0, maxInFlight = 0;
+    const sender = vi.fn(async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 10));
+      inFlight--;
+    });
+    const d = new ScheduledMessageDispatcher(db, sender as unknown as ChannelSender, undefined, { concurrency: 2 });
+    for (let i = 0; i < 6; i++) d.store.insert(baseMsg({ peerId: `p${i}` }));
+    await d.tick();
+    expect(sender).toHaveBeenCalledTimes(6);
+    expect(maxInFlight).toBe(2);
+  });
+
+  it('concurrency=1 is sequential (max in-flight == 1)', async () => {
+    let inFlight = 0, maxInFlight = 0;
+    const sender = vi.fn(async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+    });
+    const d = new ScheduledMessageDispatcher(db, sender as unknown as ChannelSender, undefined, { concurrency: 1 });
+    d.store.insert(baseMsg({ peerId: 'a' }));
+    d.store.insert(baseMsg({ peerId: 'b' }));
+    await d.tick();
+    expect(maxInFlight).toBe(1);
+  });
+
+  it('times out a hung generator → that message fails; siblings still deliver', async () => {
+    const sender = vi.fn().mockResolvedValue(undefined);
+    const generator = vi.fn().mockImplementation(() => new Promise<string>(() => {})); // never resolves
+    const d = new ScheduledMessageDispatcher(
+      db, sender as unknown as ChannelSender, generator as unknown as ContentGenerator,
+      { concurrency: 2, generatorTimeoutMs: 20 },
+    );
+    const hung = d.store.insert(baseMsg({ content: '', prompt: 'slow', peerId: 'H' }));
+    d.store.insert(baseMsg({ content: 'fixed', peerId: 'F' }));
+    await d.tick();
+    expect(d.store.get(hung.id)?.status).toBe('failed');
+    expect(d.store.get(hung.id)?.errorMessage).toMatch(/timed out/i);
+    expect(sender).toHaveBeenCalledWith('telegram', 'F', 'fixed'); // sibling unaffected
+  });
+});
+
 describe('scheduled-message singleton', () => {
   it('set/get returns the live dispatcher', () => {
     const db = createDb();
