@@ -25,6 +25,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'docx.create', // → Word document
   'data.chart', // → rendered chart PNG
   'media.qr', // → rendered QR code PNG
+  'media.diagram', // → rendered tree/hierarchy diagram PNG
 ]);
 
 /**
