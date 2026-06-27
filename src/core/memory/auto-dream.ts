@@ -11,7 +11,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { existsSync, writeFileSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
+import { existsSync, writeFileSync, readFileSync, unlinkSync, renameSync, appendFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -26,6 +26,30 @@ const COLLECT_LIMIT = 1000;
 const PRUNE_DAYS = 30;
 const MAX_FACT_LENGTH = 500;
 const MAX_MEMORY_FILE_BYTES = 50 * 1024; // 50 KB
+
+/**
+ * Trim a MEMORY.md body to fit under `targetBytes` by dropping the OLDEST dated
+ * entries (lines starting with "- ["), keeping the header and the newest entries.
+ * Append-only growth means the oldest entries are at the top, so this is a rolling
+ * buffer: memory promotion never stalls at the cap. Returns the rebuilt body plus
+ * the trimmed lines (for archiving). At least one entry is always kept.
+ */
+export function trimMemoryToFit(content: string, targetBytes: number): { kept: string; trimmed: string[] } {
+  const lines = content.split('\n');
+  const firstEntryIdx = lines.findIndex((l) => l.startsWith('- ['));
+  if (firstEntryIdx < 0) return { kept: content, trimmed: [] };
+
+  const header = lines.slice(0, firstEntryIdx);
+  const kept = lines.slice(firstEntryIdx).filter((l) => l.startsWith('- ['));
+  const trimmed: string[] = [];
+  const rebuild = (): string => [...header, ...kept].join('\n').replace(/\n*$/, '\n');
+
+  while (kept.length > 1 && Buffer.byteLength(rebuild(), 'utf-8') > targetBytes) {
+    const dropped = kept.shift();
+    if (dropped) trimmed.push(dropped);
+  }
+  return { kept: rebuild(), trimmed };
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -409,10 +433,22 @@ Output ONLY the JSON array, nothing else.`;
       existing = '# Long-Term Memory\n\n';
     }
 
-    // Max file size guard — refuse to grow MEMORY.md beyond 50 KB
+    // At cap: self-heal instead of silently dropping new learnings. Trim the
+    // oldest dated entries down to 80% of the cap (rolling buffer), archiving the
+    // trimmed lines so nothing is permanently lost, then continue appending.
     if (Buffer.byteLength(existing, 'utf-8') >= MAX_MEMORY_FILE_BYTES) {
-      log.warn({ memoryPath, size: existing.length }, '_promoteToMemoryMd: MEMORY.md at max size — skipping append');
-      return 0;
+      const { kept, trimmed } = trimMemoryToFit(existing, Math.floor(MAX_MEMORY_FILE_BYTES * 0.8));
+      if (trimmed.length > 0) {
+        this._archiveTrimmedMemory(workspaceDir, trimmed);
+        existing = kept;
+        log.info(
+          { memoryPath, trimmedCount: trimmed.length, newSize: Buffer.byteLength(existing, 'utf-8') },
+          '_promoteToMemoryMd: MEMORY.md was at cap — trimmed oldest entries to make room',
+        );
+      } else {
+        log.warn({ memoryPath, size: existing.length }, '_promoteToMemoryMd: MEMORY.md at max size and not trimmable — skipping append');
+        return 0;
+      }
     }
 
     // Build today's date prefix
@@ -455,6 +491,21 @@ Output ONLY the JSON array, nothing else.`;
     }
 
     return appended;
+  }
+
+  /**
+   * Append trimmed (oldest) memory lines to MEMORY.archive.md so the rolling
+   * buffer never permanently loses a learning. The archive is NOT loaded into the
+   * system prompt. Best-effort; never throws.
+   */
+  private _archiveTrimmedMemory(workspaceDir: string, trimmedLines: string[]): void {
+    try {
+      const archivePath = path.join(workspaceDir, 'MEMORY.archive.md');
+      const header = existsSync(archivePath) ? '' : '# Long-Term Memory — Archive (trimmed from MEMORY.md)\n\n';
+      appendFileSync(archivePath, header + trimmedLines.join('\n') + '\n', 'utf-8');
+    } catch (err) {
+      log.warn({ err: String(err) }, '_promoteToMemoryMd: failed to archive trimmed memory (non-fatal)');
+    }
   }
 
   // -------------------------------------------------------------------------
