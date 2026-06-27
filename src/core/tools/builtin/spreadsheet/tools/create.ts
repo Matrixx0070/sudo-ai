@@ -18,6 +18,48 @@ function isAllowedPath(outputPath: string): boolean {
   return ALLOWED_DIRS.some((dir) => resolved.startsWith(dir + path.sep) || resolved === dir);
 }
 
+export interface SheetColumn { header: string; key: string; width?: number }
+export interface SheetDef { name: string; columns: SheetColumn[]; rows: Record<string, unknown>[] }
+
+/**
+ * Coerce the model's `sheets` argument into clean SheetDef[]. LLMs frequently pass
+ * this deeply-nested array (sheets → columns/rows) as a JSON STRING, or stringify
+ * the per-sheet `columns`/`rows` — normalise all of them, defaulting a column's
+ * `key` to its header. Sheets without a name are dropped. Returns [] when nothing
+ * usable is found. Pure + exported for unit testing.
+ */
+export function normalizeSheetsArg(raw: unknown): SheetDef[] {
+  let arr: unknown = raw;
+  if (typeof arr === 'string') {
+    try { arr = JSON.parse(arr); } catch { return []; }
+  }
+  if (!Array.isArray(arr)) return [];
+
+  const parseArr = (v: unknown): unknown[] => {
+    if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return []; } }
+    return Array.isArray(v) ? v : [];
+  };
+
+  const out: SheetDef[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    if (typeof o['name'] !== 'string' || !o['name'].trim()) continue;
+    const columns: SheetColumn[] = [];
+    for (const c of parseArr(o['columns'])) {
+      if (!c || typeof c !== 'object') continue;
+      const cc = c as Record<string, unknown>;
+      const header = typeof cc['header'] === 'string' ? cc['header'] : typeof cc['key'] === 'string' ? (cc['key'] as string) : '';
+      if (!header.trim()) continue;
+      const key = typeof cc['key'] === 'string' && cc['key'].trim() ? (cc['key'] as string) : header;
+      columns.push({ header, key, ...(typeof cc['width'] === 'number' ? { width: cc['width'] as number } : {}) });
+    }
+    const rows = parseArr(o['rows']).filter((r): r is Record<string, unknown> => !!r && typeof r === 'object');
+    out.push({ name: o['name'].trim(), columns, rows });
+  }
+  return out;
+}
+
 export const spreadsheetCreateTool: ToolDefinition = {
   name: 'spreadsheet.create',
   description:
@@ -65,7 +107,6 @@ export const spreadsheetCreateTool: ToolDefinition = {
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const outputPath = params['outputPath'] as string | undefined;
-    const rawSheets = params['sheets'] as unknown[] | undefined;
 
     logger.info({ session: ctx.sessionId, outputPath }, 'spreadsheet.create invoked');
 
@@ -78,18 +119,13 @@ export const spreadsheetCreateTool: ToolDefinition = {
         output: `outputPath must be under /tmp/ or ${PROJECT_ROOT}/data/spreadsheets/. Got: ${outputPath}`,
       };
     }
-    if (!rawSheets || !Array.isArray(rawSheets) || rawSheets.length === 0) {
-      return { success: false, output: 'sheets array is required and must not be empty.' };
+
+    const sheets = normalizeSheetsArg(params['sheets']);
+    if (sheets.length === 0) {
+      return { success: false, output: 'sheets must be a non-empty array of { name, columns[], rows[] } (a JSON string of that array is also accepted).' };
     }
-
-    type ColumnDef = { header: string; key: string; width?: number };
-    type SheetDef = { name: string; columns: ColumnDef[]; rows: Record<string, unknown>[] };
-
-    const sheets = rawSheets as SheetDef[];
-
     for (const sheet of sheets) {
-      if (!sheet.name?.trim()) return { success: false, output: 'Each sheet must have a name.' };
-      if (!Array.isArray(sheet.columns) || sheet.columns.length === 0) {
+      if (sheet.columns.length === 0) {
         return { success: false, output: `Sheet "${sheet.name}" must have at least one column.` };
       }
     }
@@ -98,7 +134,10 @@ export const spreadsheetCreateTool: ToolDefinition = {
       // Ensure output directory exists
       await mkdir(path.dirname(path.resolve(outputPath)), { recursive: true });
 
-      const ExcelJS = await import('exceljs');
+      // exceljs is CJS: its dynamic-import namespace exposes the API under `.default`,
+      // not as named members — `(ns).Workbook` is undefined, so resolve `.default`.
+      const ExcelJSmod = await import('exceljs');
+      const ExcelJS = ExcelJSmod.default ?? ExcelJSmod;
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'SUDO-AI';
       workbook.created = new Date();
