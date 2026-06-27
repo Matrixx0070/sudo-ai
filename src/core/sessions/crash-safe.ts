@@ -24,7 +24,7 @@
  * for callers that have not asked for the invariant.
  */
 
-import { closeSync, fsyncSync, openSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { closeSync, fsyncSync, openSync, readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 
@@ -488,12 +488,18 @@ export async function reconcileInterruptedSessions(
     // APPLY mode: capture a backup of the existing rows BEFORE inserting.
     try {
       mkdirSync(backupDir, { recursive: true });
+      // Expire backup files older than 7 days to prevent unbounded accumulation.
+      const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+      for (const f of readdirSync(backupDir)) {
+        const fp = path.join(backupDir, f);
+        try { if (Date.now() - statSync(fp).mtimeMs > ONE_WEEK_MS) unlinkSync(fp); } catch { /* non-fatal */ }
+      }
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const backupFile = path.join(backupDir, `${entry.id}.${stamp}.json`);
       writeFileSync(
         backupFile,
         JSON.stringify({ sessionId: entry.id, capturedAt: new Date().toISOString(), existingCount: sCount, existing: sqliteMsgs.slice(0, sCount) }, null, 2),
-        'utf8',
+        { encoding: 'utf8', mode: 0o600 }, // owner-only: session content is PII
       );
     } catch (err) {
       log.warn({ ...base, err: String(err) }, 'reconcile: backup capture failed — NOT applying (safety)');

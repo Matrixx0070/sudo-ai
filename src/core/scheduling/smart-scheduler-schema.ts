@@ -153,11 +153,21 @@ export function nextPeakISO(peakHours: number[], nowIST: Date, preferMorning: bo
   return result.toISOString();
 }
 
-/** Return a Date representing "now" expressed in IST (UTC+5:30). */
-export function nowInIST(): Date {
+/**
+ * Return a Date whose .getHours()/.getDay() read as local time in `tz`.
+ * Defaults to SUDO_SCHEDULER_TZ env var, then 'Asia/Kolkata' (IST) for
+ * backward compatibility.
+ */
+export function nowInTZ(tz = process.env['SUDO_SCHEDULER_TZ'] ?? 'Asia/Kolkata'): Date {
   const now = new Date();
-  const offsetMs = 5.5 * 60 * 60 * 1000;
-  return new Date(now.getTime() + offsetMs);
+  // en-CA produces "YYYY-MM-DD, HH:MM:SS" — parseable by Date() and gives
+  // the correct clock reading for the target timezone.
+  return new Date(now.toLocaleString('en-CA', { timeZone: tz, hour12: false }));
+}
+
+/** Backward-compat alias — returns current time in the configured scheduler timezone. */
+export function nowInIST(): Date {
+  return nowInTZ();
 }
 
 /** True if the given Date falls on Sat/Sun in IST. */
