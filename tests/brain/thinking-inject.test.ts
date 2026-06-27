@@ -116,4 +116,18 @@ describe('clampMaxTokensToModel', () => {
     expect(clampMaxTokensToModel('', 32768)).toBe(32768);
     expect(clampMaxTokensToModel('claude-opus-4-8', Number.NaN)).toBeNaN();
   });
+
+  // Guards the coder-tool call sites (arsenal.ts / arsenal-v2) that hardcode a
+  // 32768 maxOutputTokens against their real model ids. arsenal's MODEL_CASCADE[0]
+  // and arsenal-v2's DEFAULT_MODEL are both 'claude-oauth/claude-opus-4-8', which
+  // KAIROS triggers ~every 3-5 min — so without clamping the SDK warned on every
+  // repair. swarm's cascade has no opus, so its 32768 stays a no-op (documented).
+  it('clamps the exact (id, 32768) pairs the coder tools pass', () => {
+    // arsenal MODEL_CASCADE[0] + arsenal-v2 DEFAULT_MODEL (the warned path)
+    expect(clampMaxTokensToModel('claude-oauth/claude-opus-4-8', 32_768)).toBe(32000);
+    // swarm + arsenal cascade fallbacks — non-opus, must stay 32768 (byte-identical)
+    expect(clampMaxTokensToModel('xai/grok-4-0709', 32_768)).toBe(32_768);
+    expect(clampMaxTokensToModel('claude-oauth/claude-sonnet-4-5-20250929', 32_768)).toBe(32_768);
+    expect(clampMaxTokensToModel('google/gemini-2.5-flash', 32_768)).toBe(32_768);
+  });
 });

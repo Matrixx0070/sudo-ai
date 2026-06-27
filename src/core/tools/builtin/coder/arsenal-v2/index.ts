@@ -27,6 +27,7 @@ import type { ToolContext, ToolDefinition, ToolResult } from '../../../types.js'
 import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../../shared/paths.js';
 import { getModel } from '../../../../brain/providers.js';
+import { clampMaxTokensToModel } from '../../../../brain/thinking-inject.js';
 import { modelForAttempt, parseCascade } from './cascade.js';
 import {
   DEFAULT_MODE_SIMILARITY,
@@ -135,7 +136,10 @@ async function callLLM(modelId: string, system: string, user: string): Promise<s
   // streamText avoids the undici HeadersTimeout that plagued v1 on large
   // bodies — the server responds with stream headers immediately and we
   // accumulate text as it arrives.
-  const stream = await streamText({ model, system, prompt: user, maxOutputTokens: 32_768 });
+  // Clamp to the model's output ceiling (opus-4-8 → 32000) so the AI SDK doesn't
+  // warn on every call; behaviour-identical (the SDK clamps anyway), no-op for
+  // non-opus. DEFAULT_MODEL is opus-4-8, so this path warned without the clamp.
+  const stream = await streamText({ model, system, prompt: user, maxOutputTokens: clampMaxTokensToModel(modelId, 32_768, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }) });
   let buf = '';
   for await (const chunk of stream.textStream) buf += chunk;
   return buf;
