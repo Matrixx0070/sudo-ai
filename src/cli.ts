@@ -40,7 +40,7 @@ import { runGenerations } from './core/sessions/run-generation.js';
 import { AgentLoop } from './core/agent/loop.js';
 import { approvalManager } from './core/agent/approval.js';
 import { TelegramAdapter } from './core/channels/telegram.js';
-import { registerOutboundAdapter, sendToChannelOutbox } from './core/channels/channel-outbox.js';
+import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
 import type { UnifiedMessage } from './core/channels/types.js';
 import { CronStore } from './core/cron/store.js';
@@ -1466,12 +1466,9 @@ async function boot(): Promise<void> {
   // Hoisted so web handler can send Telegram notifications when long tasks finish.
   let telegramNotifier: TelegramAdapter | null = null;
 
-  // Hoisted so the channelRouter in section 9.6 can dispatch to active adapters.
-  let discordAdapter: import('./core/channels/discord.js').DiscordAdapter | null = null;
-  let slackAdapter: import('./core/channels/slack.js').SlackAdapter | null = null;
+  // Hoisted so the long-task / high-crit notification handlers can reach WhatsApp.
+  // (All other adapters dispatch via the channel-outbox registry, not hoisted vars.)
   let whatsAppAdapter: import('./core/channels/whatsapp.js').WhatsAppAdapter | null = null;
-  let emailAdapter: import('./core/channels/email.js').EmailAdapter | null = null;
-  let smsAdapter: import('./core/channels/sms.js').SmsAdapter | null = null;
 
   // Slash command registration — shared by ALL channel adapters (previously
   // inside the Telegram block, so a Telegram-disabled boot had no commands).
@@ -1792,9 +1789,7 @@ async function boot(): Promise<void> {
 
       const discord = new DiscordAdapter('DISCORD_TOKEN', discordAllowedChannels);
       registerOutboundAdapter(discord);
-      discord.setHookEmitter(hooks);
-      discordAdapter = discord;
-      if (chatApprovals) approvalManager.registerSender('discord', discord);
+      discord.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('discord', discord);
 
       discord.onMessage(async (msg) => {
         log.info(
@@ -1882,7 +1877,6 @@ async function boot(): Promise<void> {
       // SlackAdapter reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from env internally.
       const slack = new SlackAdapter();
       registerOutboundAdapter(slack);
-      slackAdapter = slack;
       if (chatApprovals) approvalManager.registerSender('slack', slack);
 
       slack.onMessage(async (msg) => {
@@ -2180,9 +2174,7 @@ async function boot(): Promise<void> {
       const { EmailAdapter } = await import('./core/channels/email.js');
       const email = new EmailAdapter();
       registerOutboundAdapter(email);
-      email.setHookEmitter(hooks);
-      emailAdapter = email;
-      if (chatApprovals) approvalManager.registerSender('email', email);
+      email.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('email', email);
 
       email.onMessage(async (msg) => {
         log.info(
@@ -2268,9 +2260,7 @@ async function boot(): Promise<void> {
       const { SmsAdapter } = await import('./core/channels/sms.js');
       const sms = new SmsAdapter();
       registerOutboundAdapter(sms);
-      sms.setHookEmitter(hooks);
-      smsAdapter = sms;
-      if (chatApprovals) approvalManager.registerSender('sms', sms);
+      sms.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('sms', sms);
 
       sms.onMessage(async (msg) => {
         log.info(
@@ -3801,34 +3791,15 @@ async function boot(): Promise<void> {
   try {
     const { injectMetaToolDeps } = await import('./core/tools/builtin/meta/index.js');
 
-    // Build a thin channelRouter wrapper that delegates to all active channel adapters.
-    const channelRouter = (telegramNotifier || discordAdapter || slackAdapter || whatsAppAdapter || emailAdapter || smsAdapter) ? {
+    // channelRouter for meta tools — delegates to the channel-outbox registry that
+    // every channel adapter registered into at construction. Replaces the former
+    // per-adapter if-chain (and also covers web). Undefined when no channel is
+    // active so meta tools still see "channels unavailable"; an unregistered
+    // channel throws from sendToChannelOutbox, same as the old "not available".
+    const channelRouter = registeredOutboundChannels().length > 0 ? {
       send: async (channel: string, peerId: string, text: string) => {
-        if (channel === 'telegram' && telegramNotifier) {
-          await telegramNotifier.send(peerId, text);
-          return { timestamp: new Date().toISOString() };
-        }
-        if (channel === 'discord' && discordAdapter) {
-          await discordAdapter.send(peerId, text);
-          return { timestamp: new Date().toISOString() };
-        }
-        if (channel === 'slack' && slackAdapter) {
-          await slackAdapter.send(peerId, text);
-          return { timestamp: new Date().toISOString() };
-        }
-        if (channel === 'whatsapp' && whatsAppAdapter) {
-          await whatsAppAdapter.send(peerId, text);
-          return { timestamp: new Date().toISOString() };
-        }
-        if (channel === 'email' && emailAdapter) {
-          await emailAdapter.send(peerId, text);
-          return { timestamp: new Date().toISOString() };
-        }
-        if (channel === 'sms' && smsAdapter) {
-          await smsAdapter.send(peerId, text);
-          return { timestamp: new Date().toISOString() };
-        }
-        throw new Error(`Channel "${channel}" not available`);
+        await sendToChannelOutbox(channel as import('./core/channels/types.js').ChannelType, peerId, text);
+        return { timestamp: new Date().toISOString() };
       },
     } : undefined;
 
