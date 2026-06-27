@@ -166,8 +166,9 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'shorts', 'clips', 'render', 'animation',
       'qr', 'qr code', 'qrcode', 'barcode',
       'diagram', 'org chart', 'mind map', 'hierarchy', 'flowchart', 'tree diagram',
+      'code image', 'code screenshot', 'code snippet', 'snippet image', 'carbon', 'syntax highlight',
     ],
-    patterns: [/\.(png|jpg|jpeg|gif|mp4|webm|svg)\b/i, /\bqr\s*code\b/i, /\b(org\s*chart|mind\s*map|tree\s*diagram|flow\s*chart)\b/i],
+    patterns: [/\.(png|jpg|jpeg|gif|mp4|webm|svg)\b/i, /\bqr\s*code\b/i, /\b(org\s*chart|mind\s*map|tree\s*diagram|flow\s*chart)\b/i, /\bcode\s*(image|screenshot|snippet)\b/i, /\bsyntax\s*highlight/i],
     priority: 7,
     maxFromCategory: 4,
   },
@@ -488,6 +489,20 @@ export class ToolRouter {
   }
 
   /**
+   * Count how many distinct ≥3-char words from a tool's name (namespace + action,
+   * de-hyphenated) appear in the message. Lets a multi-word tool outrank its
+   * siblings when the user names it ("code image" → media.code-image scores 2 on
+   * code+image vs 1 for media.image-generate). The shared namespace word is neutral
+   * across a category, so it never skews the within-category order.
+   */
+  private _nameMatchScore(name: string, normalised: string): number {
+    const words = new Set(name.split(/[.\-_]/).filter((w) => w.length >= 3));
+    let n = 0;
+    for (const w of words) if (normalised.includes(w)) n++;
+    return n;
+  }
+
+  /**
    * Score every category against the normalised message and return
    * them sorted by (rawScore * priority) descending.
    */
@@ -534,14 +549,14 @@ export class ToolRouter {
       const remaining = MAX_ROUTED_TOOLS - result.length;
       const limit = Math.min(rule.maxFromCategory, remaining);
 
-      // Sort: tools whose action appears in the message come first.
-      const sorted = [...candidates].sort((a, b) => {
-        const aAction = this._schemaName(a).split('.')[1] ?? '';
-        const bAction = this._schemaName(b).split('.')[1] ?? '';
-        const aHit = aAction && normalised.includes(aAction) ? -1 : 0;
-        const bHit = bAction && normalised.includes(bAction) ? -1 : 0;
-        return aHit - bHit;
-      });
+      // Rank within the category by how many of each tool's own name words appear
+      // in the message, so multi-word tools (e.g. media.code-image) surface when the
+      // user names what they want ("code image"/"code screenshot") even though the
+      // hyphenated action segment never matches a spaced phrase. Stable for ties →
+      // registration order preserved.
+      const sorted = [...candidates].sort(
+        (a, b) => this._nameMatchScore(this._schemaName(b), normalised) - this._nameMatchScore(this._schemaName(a), normalised),
+      );
 
       let added = 0;
       for (const schema of sorted) {

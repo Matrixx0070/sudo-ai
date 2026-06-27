@@ -27,6 +27,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'data.chart', // → rendered chart PNG
   'media.qr', // → rendered QR code PNG
   'media.diagram', // → rendered tree/hierarchy diagram PNG
+  'media.code-image', // → syntax-highlighted code screenshot PNG
 ]);
 
 /**
