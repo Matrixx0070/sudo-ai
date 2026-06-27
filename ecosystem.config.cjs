@@ -495,6 +495,11 @@ module.exports = {
         // (that is SUDO_SELF_BUILD_MODE, still held). Kill-switch '0'.
         SUDO_AUTONOMY_V1: process.env['SUDO_AUTONOMY_V1'] || '1',
 
+        // Proactive scheduled messaging (#487): the agent can schedule reminders/
+        // digests/follow-ups the daemon delivers to a chat channel unprompted via
+        // comms.schedule-message. Kill-switch '0'.
+        SUDO_SCHEDULED_MESSAGES: process.env['SUDO_SCHEDULED_MESSAGES'] || '1',
+
         // Auto-update configuration (kill-switch: SUDO_UPDATE_DISABLE=1 disables entirely)
         SUDO_UPDATE_DISABLE: process.env['SUDO_UPDATE_DISABLE'] || '0',
         SUDO_UPDATE_CHANNEL: process.env['SUDO_UPDATE_CHANNEL'] || 'latest',
