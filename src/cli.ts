@@ -4075,6 +4075,32 @@ async function boot(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Process-level safety net — the daemon runs unsupervised under PM2/systemd.
+// Without these, an unhandled promise rejection terminates the process with no
+// diagnostics (Node's default since v15) and an uncaught exception leaves it in
+// an undefined state. Registered before the subcommand dispatch so the chat,
+// replay, and daemon paths are all covered.
+// ---------------------------------------------------------------------------
+
+const processLog = createLogger('process');
+
+process.on('unhandledRejection', (reason: unknown) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  // Log loudly but stay alive: a single stray rejection should not drop active
+  // Telegram/web sessions on a long-running daemon.
+  processLog.error({ err }, 'unhandledRejection — kept alive (investigate)');
+});
+
+process.on('uncaughtException', (err: Error, origin: string) => {
+  // Undefined state after an uncaught throw: drain the shutdown registry
+  // (close DBs, flush sessions) then exit so the supervisor restarts clean.
+  processLog.fatal({ err, origin }, 'uncaughtException — draining then exiting');
+  // Backstop: force-exit if the graceful drain stalls (within the pm2 kill grace).
+  setTimeout(() => process.exit(1), 8000).unref();
+  void runShutdown('uncaughtException');
+});
+
+// ---------------------------------------------------------------------------
 // chat subcommand — intercept BEFORE full boot so readline owns SIGINT
 // ---------------------------------------------------------------------------
 
