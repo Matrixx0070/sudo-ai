@@ -74,6 +74,7 @@ import { shouldFork, forkSession } from '../sessions/session-fork.js';
 import { toForkSession, toForkSessionManager, fromForkSession } from './session-fork-bridge.js';
 import { isEphemeralPeer } from '../sessions/crash-safe.js';
 import { buildContentBlocks, toRichResponse } from './content-types.js';
+import { extractFileAttachments } from './file-attachments.js';
 import type { HistoryMessage } from './cheap-model-router.js';
 import { DispatchRouter } from '../brain/dispatch-router.js';
 import path from 'node:path';
@@ -801,18 +802,6 @@ export class AgentLoop extends AgentLoopInjections {
 
     // Pattern that matches file paths embedded in tool result strings.
     // Covers: "Saved: /abs/path.png", "saved to /abs/path.jpg", "path: /abs/path.webp", etc.
-    const FILE_PATH_PATTERN = /(?:saved?(?:\s+to)?|path)[:\s]+([^\s\n"']+\.(?:png|jpg|jpeg|gif|webp|pdf|mp4|mov|avi|mp3|wav|ogg))/gi;
-
-    const TOOL_NAMES_PRODUCING_FILES = new Set([
-      'browser.screenshot',
-      'media.image-generate',
-      'media.image',
-      'media.screenshot',
-      'media.record',
-      'browser.capture',
-      'voice.tts', // synthesized speech → delivered to the chat as an audio/voice note
-    ]);
-
     const emit: Emitter = (event: AgentEvent): void => {
       // Intercept tool-result events to extract file attachment paths.
       if (event.type === 'tool-result') {
@@ -821,34 +810,12 @@ export class AgentLoop extends AgentLoopInjections {
         const resultStr = typeof result === 'string' ? result : (result ? JSON.stringify(result) : '');
         log.info({ tool: toolName, resultLen: resultStr.length, resultType: typeof result, hasFile: resultStr.includes('Saved') || resultStr.includes('path') }, 'tool-result event intercepted');
 
-        const isFileTool = TOOL_NAMES_PRODUCING_FILES.has(toolName)
-          || toolName.includes('screenshot')
-          || toolName.includes('image')
-          || toolName.includes('record')
-          || toolName.includes('capture');
-
-        if (isFileTool && resultStr) {
-          // Reset regex lastIndex before each scan (global flag retains state).
-          FILE_PATH_PATTERN.lastIndex = 0;
-          let match: RegExpExecArray | null;
-          while ((match = FILE_PATH_PATTERN.exec(resultStr)) !== null) {
-            const filePath = match[1];
-            if (!filePath) continue;
-            const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
-            const attType: AgentRunResult['attachments'][number]['type'] =
-              ['mp4', 'mov', 'avi'].includes(ext) ? 'video'
-              : ['mp3', 'wav', 'ogg'].includes(ext) ? 'audio'
-              : ['pdf'].includes(ext) ? 'document'
-              : 'image';
-            // Avoid duplicates.
-            if (!attachments.some(a => a.path === filePath)) {
-              attachments.push({
-                type: attType,
-                path: filePath,
-                filename: filePath.split('/').pop(),
-              });
-              log.info({ tool: toolName, path: filePath, type: attType }, 'Attachment collected from tool result');
-            }
+        // Collect any deliverable files the tool named in its output (images,
+        // voice notes, generated PDFs/DOCX…) so they're attached to the reply.
+        for (const att of extractFileAttachments(toolName, resultStr)) {
+          if (!attachments.some((a) => a.path === att.path)) {
+            attachments.push(att);
+            log.info({ tool: toolName, path: att.path, type: att.type }, 'Attachment collected from tool result');
           }
         }
 
