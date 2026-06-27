@@ -353,10 +353,10 @@ describe('document.pdf-extract-tables — input validation', () => {
 // ---------------------------------------------------------------------------
 
 describe('registerDocumentTools — registry', () => {
-  it('exports DOCUMENT_TOOLS array with 6 tools', async () => {
+  it('exports DOCUMENT_TOOLS array with 8 tools', async () => {
     const mod = await import('../../src/core/tools/builtin/document/index.js');
     expect(Array.isArray(mod.DOCUMENT_TOOLS)).toBe(true);
-    expect(mod.DOCUMENT_TOOLS.length).toBe(6);
+    expect(mod.DOCUMENT_TOOLS.length).toBe(8);
   });
 
   it('all tools have required ToolDefinition fields', async () => {

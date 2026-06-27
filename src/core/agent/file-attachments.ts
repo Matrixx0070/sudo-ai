@@ -23,6 +23,8 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'document.markdown-to-pdf', // → PDF
   'document.pdf-from-html', // → PDF
   'document.webpage', // → interactive .html (+ .png preview)
+  'document.pdf-merge', // → merged PDF
+  'document.pdf-extract-pages', // → extracted page-range PDF
   'document.slides', // → slide-deck PDF
   'docx.create', // → Word document
   'spreadsheet.create', // → Excel .xlsx workbook

@@ -168,6 +168,7 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'extract text', 'extract tables', 'from html',
       'presentation', 'slide deck', 'slides', 'powerpoint', 'keynote',
       'webpage', 'web page', 'landing page', 'website', 'html page', 'interactive', 'web app', 'widget',
+      'merge pdf', 'combine pdf', 'split pdf', 'extract pages', 'concatenate pdf', 'pdf pages',
     ],
     patterns: [
       /\b(pdf|docx?)\b/i,
@@ -175,6 +176,8 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       /\bword\s+document\b/i,
       /\b(presentation|slide\s*deck|slides|powerpoint)\b/i,
       /\b(web\s*page|webpage|landing\s*page|web\s*app|html\s*page)\b/i,
+      /\b(merge|combine|concatenate|split)\s+(the\s+)?pdf/i,
+      /\bextract\s+pages?\b/i,
     ],
     priority: 7,
     maxFromCategory: 4,
