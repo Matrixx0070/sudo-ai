@@ -153,3 +153,6 @@ internal/misc/json         # duplicate of the above
 # graphify knowledge-graph output — ~145MB of generated, regenerable artifacts
 /graphify-out/
 /.graphifyignore
+
+# Playwright MCP session artifacts (snapshots, screenshots, console logs)
+.playwright-mcp/

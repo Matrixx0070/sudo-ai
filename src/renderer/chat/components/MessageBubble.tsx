@@ -5,10 +5,13 @@ interface MessageBubbleProps {
   role: 'user' | 'ai';
   content: string;
   timestamp: Date;
+  imageUrl?: string;
+  fileName?: string;
 }
 
-export function MessageBubble({ role, content, timestamp }: MessageBubbleProps) {
+export function MessageBubble({ role, content, timestamp, imageUrl, fileName }: MessageBubbleProps) {
   const time = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const hasText = content.trim().length > 0;
 
   return (
     <div className={`flex gap-2.5 animation-fade-in ${role === 'user' ? 'flex-row-reverse' : ''}`}>
@@ -29,7 +32,20 @@ export function MessageBubble({ role, content, timestamp }: MessageBubbleProps) 
               : 'bg-gray-700 border border-gray-600 rounded-tl-sm'
           }`}
         >
-          {role === 'ai' ? (
+          {imageUrl && (
+            <img
+              src={imageUrl}
+              alt={fileName ?? 'attachment'}
+              className={`rounded-lg max-w-full max-h-64 object-contain ${hasText ? 'mb-2' : ''}`}
+            />
+          )}
+          {fileName && !imageUrl && (
+            <div className={`flex items-center gap-1.5 text-xs opacity-90 ${hasText ? 'mb-1.5' : ''}`}>
+              <span aria-hidden>📎</span>
+              <span className="truncate">{fileName}</span>
+            </div>
+          )}
+          {hasText && (role === 'ai' ? (
             <ReactMarkdown
               components={{
                 code({ node, className, children, ...props }) {
@@ -52,7 +68,7 @@ export function MessageBubble({ role, content, timestamp }: MessageBubbleProps) 
             </ReactMarkdown>
           ) : (
             content
-          )}
+          ))}
         </div>
         <span className="text-[10px] text-gray-400 px-1">{time}</span>
       </div>

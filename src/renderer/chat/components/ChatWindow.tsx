@@ -39,7 +39,14 @@ export function ChatWindow({ messages, currentResponse, error }: ChatWindowProps
       )}
 
       {messages.map((msg, idx) => (
-        <MessageBubble key={idx} role={msg.role} content={msg.content} timestamp={msg.timestamp} />
+        <MessageBubble
+          key={idx}
+          role={msg.role}
+          content={msg.content}
+          timestamp={msg.timestamp}
+          imageUrl={msg.imageUrl}
+          fileName={msg.fileName}
+        />
       ))}
 
       {currentResponse?.type === 'thinking' && (

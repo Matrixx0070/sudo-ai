@@ -4,6 +4,10 @@ export type Message = {
   role: 'user' | 'ai';
   content: string;
   timestamp: Date;
+  /** Object/data URL for an attached image, rendered inline as a preview. */
+  imageUrl?: string;
+  /** Filename for a non-image attachment, shown as a chip. */
+  fileName?: string;
 };
 
 export type CurrentResponse =

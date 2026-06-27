@@ -16,19 +16,65 @@
 
 import http from 'node:http';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, basename } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '../shared/logger.js';
 import { ChannelError } from '../shared/errors.js';
+import { projectPath } from '../shared/paths.js';
 import { serveStaticFile, buildSpaCSPHeader } from '../gateway/static-middleware.js';
 import type { ChannelAdapter } from './adapter.js';
 import type {
   ChannelType,
+  MediaAttachment,
   MessageHandler,
   SendOptions,
   UnifiedMessage,
 } from './types.js';
 
 const log = createLogger('channels:web');
+
+// ---------------------------------------------------------------------------
+// File-upload support
+// ---------------------------------------------------------------------------
+
+/** Directory where browser-uploaded files are saved (shared with Telegram). */
+const WEB_UPLOAD_DIR = projectPath('data', 'uploads');
+/** Hard cap on a decoded upload (10 MB). base64 inflates ~1.37x on the wire. */
+const WEB_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+/** WS frame cap — covers base64 payload + JSON envelope overhead above the decoded cap. */
+const WEB_WS_MAX_PAYLOAD = 16 * 1024 * 1024;
+
+/** Envelope the browser sends over the WS to upload a file. */
+interface AttachmentEnvelope {
+  name: string;
+  mime: string;
+  dataBase64: string;
+  caption?: string;
+}
+
+/**
+ * Parse a raw WS frame as an attachment envelope.
+ * Returns null for anything that isn't a `{ type:'__attachment', ... }` object
+ * with the required string fields — so plain-text messages (the common case,
+ * including text that happens to be JSON) fall through to normal dispatch.
+ */
+export function parseAttachmentEnvelope(raw: string): AttachmentEnvelope | null {
+  let obj: unknown;
+  try { obj = JSON.parse(raw); } catch { return null; }
+  if (!obj || typeof obj !== 'object') return null;
+  const o = obj as Record<string, unknown>;
+  if (o['type'] !== '__attachment') return null;
+  if (typeof o['name'] !== 'string' || typeof o['mime'] !== 'string' || typeof o['dataBase64'] !== 'string') {
+    return null;
+  }
+  return {
+    name: o['name'],
+    mime: o['mime'],
+    dataBase64: o['dataBase64'],
+    ...(typeof o['caption'] === 'string' ? { caption: o['caption'] } : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Security helpers
@@ -133,7 +179,9 @@ export class WebAdapter implements ChannelAdapter {
     // longer registers them here.
 
     // Build a noServer WebSocketServer for /chat/ws connections only.
-    const wss = new WebSocketServer({ noServer: true });
+    // maxPayload bounds inbound frames so a large file upload (base64 over WS)
+    // is accepted up to the cap but cannot exhaust memory.
+    const wss = new WebSocketServer({ noServer: true, maxPayload: WEB_WS_MAX_PAYLOAD });
 
     wss.on('connection', (ws: WSClient, req: unknown) => {
       const httpReq = req as http.IncomingMessage;
@@ -159,9 +207,17 @@ export class WebAdapter implements ChannelAdapter {
 
       ws.on('message', (...args: unknown[]) => {
         const data = args[0] as Buffer | string;
-        const text = data.toString().trim();
+        const raw = data.toString();
+        const ip = (httpReq.socket as { remoteAddress?: string } | null)?.remoteAddress;
+        // A file upload arrives as a JSON attachment envelope; everything else
+        // is a plain-text message. Only frames starting with '{' are parse-probed.
+        if (raw.length > 0 && raw[0] === '{') {
+          const env = parseAttachmentEnvelope(raw);
+          if (env) { void this._handleAttachment(peerId, env, ip); return; }
+        }
+        const text = raw.trim();
         if (!text) return;
-        void this._dispatch(peerId, text, (httpReq.socket as { remoteAddress?: string } | null)?.remoteAddress);
+        void this._dispatch(peerId, text, ip);
       });
 
       ws.on('close', () => {
@@ -422,7 +478,74 @@ export class WebAdapter implements ChannelAdapter {
   // Normalize
   // ---------------------------------------------------------------------------
 
-  private async _dispatch(peerId: string, text: string, peerIp?: string): Promise<void> {
+  /**
+   * Push a structured status frame ({ type, error }) to a connected client.
+   * Best-effort: silently no-ops if the peer has no open socket.
+   */
+  private _notifyClient(peerId: string, type: 'error', message: string): void {
+    const ws = this._clients.get(peerId);
+    if (!ws) return;
+    try { ws.send(JSON.stringify({ type, error: message })); } catch { /* best-effort */ }
+  }
+
+  /**
+   * Handle a browser file upload: decode + size-check, sanitize the filename,
+   * persist under data/uploads/, then dispatch a normal message whose text names
+   * the saved path (with a vision hint for images) and carries `media` metadata —
+   * mirroring the Telegram photo/document path so the agent treats it identically.
+   */
+  private async _handleAttachment(peerId: string, env: AttachmentEnvelope, peerIp?: string): Promise<void> {
+    let buf: Buffer;
+    try {
+      buf = Buffer.from(env.dataBase64, 'base64');
+    } catch {
+      log.warn({ peerId }, 'Web attachment: invalid base64 — dropped');
+      this._notifyClient(peerId, 'error', 'Attachment could not be decoded.');
+      return;
+    }
+    if (buf.length === 0) {
+      this._notifyClient(peerId, 'error', 'Attachment was empty.');
+      return;
+    }
+    if (buf.length > WEB_UPLOAD_MAX_BYTES) {
+      log.warn({ peerId, bytes: buf.length }, 'Web attachment too large — dropped');
+      this._notifyClient(peerId, 'error', `Attachment too large (max ${Math.floor(WEB_UPLOAD_MAX_BYTES / 1024 / 1024)}MB).`);
+      return;
+    }
+
+    // Sanitize: basename only (no path traversal), allowlist chars, bound length.
+    const rawName = basename(env.name || 'upload');
+    const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 128) || 'upload';
+    const savedPath = join(WEB_UPLOAD_DIR, `web-${Date.now()}-${safeName}`);
+    try {
+      mkdirSync(WEB_UPLOAD_DIR, { recursive: true });
+      writeFileSync(savedPath, buf);
+    } catch (err) {
+      log.error({ peerId, err }, 'Web attachment: failed to save');
+      this._notifyClient(peerId, 'error', 'Failed to save the attachment.');
+      return;
+    }
+
+    const isImage = env.mime.startsWith('image/');
+    const label = isImage ? 'Image' : 'File';
+    const visionHint = isImage ? ' Use browser.vision to analyze it if needed.' : '';
+    const caption = env.caption?.trim() ?? '';
+    const textWithHint = caption
+      ? `${caption}\n[${label} attached: ${savedPath}.${visionHint}]`
+      : `[${label} attached: ${savedPath}.${visionHint}]`;
+
+    const media: MediaAttachment[] = [{
+      type: isImage ? 'image' : 'document',
+      mimeType: env.mime || 'application/octet-stream',
+      filename: safeName,
+      url: savedPath,
+    }];
+
+    log.info({ peerId, savedPath, bytes: buf.length, mime: env.mime }, 'Web attachment received');
+    void this._dispatch(peerId, textWithHint, peerIp, media);
+  }
+
+  private async _dispatch(peerId: string, text: string, peerIp?: string, media?: MediaAttachment[]): Promise<void> {
     if (!this._handler) {
       log.warn({ peerId }, 'No handler — Web message dropped');
       return;
@@ -437,6 +560,7 @@ export class WebAdapter implements ChannelAdapter {
       chatType: 'dm',
       text,
       timestamp: new Date(),
+      ...(media && media.length ? { media } : {}),
     };
 
     log.debug({ peerId, textLen: text.length }, 'inbound Web message');

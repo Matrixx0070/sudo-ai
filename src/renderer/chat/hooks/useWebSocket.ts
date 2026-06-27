@@ -84,6 +84,40 @@ export function useWebSocket(options: UseWebSocketOptions) {
     }
   }, []);
 
+  // Upload a file by reading it as base64 and sending an attachment envelope.
+  // The server decodes it, saves it under data/uploads/, and dispatches it to
+  // the agent with a vision hint (mirrors the Telegram photo/document path).
+  const sendAttachment = useCallback((file: File, caption: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        // readAsDataURL → "data:<mime>;base64,<payload>"; keep only the payload.
+        const result = String(reader.result);
+        const comma = result.indexOf(',');
+        const dataBase64 = comma >= 0 ? result.slice(comma + 1) : result;
+        try {
+          ws.send(JSON.stringify({
+            type: '__attachment',
+            name: file.name,
+            mime: file.type || 'application/octet-stream',
+            dataBase64,
+            caption,
+          }));
+          resolve();
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      };
+      reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
   useEffect(() => {
     closingRef.current = false;
     connect();
@@ -98,5 +132,5 @@ export function useWebSocket(options: UseWebSocketOptions) {
     };
   }, [connect]);
 
-  return { connected, sendMessage };
+  return { connected, sendMessage, sendAttachment };
 }
