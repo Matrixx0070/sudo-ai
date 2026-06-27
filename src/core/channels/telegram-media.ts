@@ -72,3 +72,20 @@ export function buildDocumentInbound(opts: {
   const text = caption.trim() ? `${caption.trim()}\n${hint}` : hint;
   return { text, media };
 }
+
+/** Telegram Bot API methods used for outbound media attachments. */
+export type TelegramSendMethod = 'sendPhoto' | 'sendAnimation' | 'sendVideo' | 'sendAudio' | 'sendDocument';
+
+/**
+ * Choose the Telegram send method for an outbound attachment. GIFs arrive typed as
+ * 'image' (they animate in an <img> on the web) but Telegram's sendPhoto flattens a
+ * GIF to a static photo — they must go via sendAnimation to actually loop. Pure +
+ * exported so the mapping is unit-tested without a live bot.
+ */
+export function pickTelegramSendMethod(type: string, filename?: string): TelegramSendMethod {
+  const name = (filename ?? '').toLowerCase();
+  if (type === 'image') return name.endsWith('.gif') ? 'sendAnimation' : 'sendPhoto';
+  if (type === 'video') return 'sendVideo';
+  if (type === 'audio') return 'sendAudio';
+  return 'sendDocument';
+}

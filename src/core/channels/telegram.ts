@@ -32,7 +32,7 @@ import type {
   SendOptions,
   UnifiedMessage,
 } from './types.js';
-import { buildDocumentInbound } from './telegram-media.js';
+import { buildDocumentInbound, pickTelegramSendMethod } from './telegram-media.js';
 import type { CommandRegistry } from '../commands/registry.js';
 import type { CommandContext } from '../commands/types.js';
 
@@ -1146,14 +1146,24 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
 
-    if (attachment.type === 'image') {
-      await this.bot.api.sendPhoto(peerId, source as string, replyParams);
-    } else if (attachment.type === 'video') {
-      await this.bot.api.sendVideo(peerId, source as string, replyParams);
-    } else if (attachment.type === 'audio') {
-      await this.bot.api.sendAudio(peerId, source as string, replyParams);
-    } else {
-      await this.bot.api.sendDocument(peerId, source as string, replyParams);
+    // GIFs are classified 'image' but Telegram flattens sendPhoto'd GIFs to a
+    // static frame — pickTelegramSendMethod routes them to sendAnimation instead.
+    const method = pickTelegramSendMethod(attachment.type, attachment.filename ?? attachment.url ?? undefined);
+    switch (method) {
+      case 'sendAnimation':
+        await this.bot.api.sendAnimation(peerId, source as string, replyParams);
+        break;
+      case 'sendVideo':
+        await this.bot.api.sendVideo(peerId, source as string, replyParams);
+        break;
+      case 'sendAudio':
+        await this.bot.api.sendAudio(peerId, source as string, replyParams);
+        break;
+      case 'sendDocument':
+        await this.bot.api.sendDocument(peerId, source as string, replyParams);
+        break;
+      default:
+        await this.bot.api.sendPhoto(peerId, source as string, replyParams);
     }
   }
 }

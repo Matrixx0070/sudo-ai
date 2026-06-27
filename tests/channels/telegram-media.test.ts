@@ -11,6 +11,7 @@ import {
   buildDocumentInbound,
   isTextLikeFile,
   DOC_PREVIEW_MAX_CHARS,
+  pickTelegramSendMethod,
 } from '../../src/core/channels/telegram-media.js';
 
 describe('isTextLikeFile', () => {
@@ -24,6 +25,25 @@ describe('isTextLikeFile', () => {
     expect(isTextLikeFile('application/pdf', 'report.pdf')).toBe(false);
     expect(isTextLikeFile('image/png', 'pic.png')).toBe(false);
     expect(isTextLikeFile('application/octet-stream', 'blob.bin')).toBe(false);
+  });
+});
+
+describe('pickTelegramSendMethod — GIFs animate via sendAnimation', () => {
+  it('routes a GIF (typed image) to sendAnimation, not sendPhoto', () => {
+    expect(pickTelegramSendMethod('image', 'animation-123.gif')).toBe('sendAnimation');
+    expect(pickTelegramSendMethod('image', '/tmp/loop.GIF')).toBe('sendAnimation'); // case-insensitive
+  });
+
+  it('keeps still images on sendPhoto', () => {
+    expect(pickTelegramSendMethod('image', 'chart.png')).toBe('sendPhoto');
+    expect(pickTelegramSendMethod('image', 'photo.jpg')).toBe('sendPhoto');
+    expect(pickTelegramSendMethod('image', undefined)).toBe('sendPhoto');
+  });
+
+  it('maps the other attachment types unchanged', () => {
+    expect(pickTelegramSendMethod('video', 'clip.mp4')).toBe('sendVideo');
+    expect(pickTelegramSendMethod('audio', 'note.mp3')).toBe('sendAudio');
+    expect(pickTelegramSendMethod('document', 'report.pdf')).toBe('sendDocument');
   });
 });
 
