@@ -237,6 +237,27 @@ export class LocalEmbeddingProvider {
   }
 }
 
+/**
+ * Build an embed function that PREFERS the always-up local ONNX model and only
+ * falls back to `fallback` (e.g. the OpenAI service) when local is unavailable
+ * (disabled via SUDO_LOCAL_EMBED=0 / model load failed). Because local stays
+ * available for the duration of a call, every vector a single caller produces
+ * keeps one consistent dimension (never a 384/1536 mix).
+ *
+ * Use for LIVE, self-contained embedding where the caller embeds + compares its
+ * own texts (e.g. chunk-contradiction's cosine narrowing) — NOT for writing into
+ * a fixed-dimension stored index.
+ */
+export function makeLocalFirstEmbed(
+  fallback: (text: string) => Promise<Float32Array | null>,
+  provider: { embed(text: string): Promise<Float32Array | null> } = new LocalEmbeddingProvider(),
+): (text: string) => Promise<Float32Array | null> {
+  return async (text: string): Promise<Float32Array | null> => {
+    const local = await provider.embed(text);
+    return local ?? fallback(text);
+  };
+}
+
 /** Test-only: reset the shared lazy pipeline between cases. */
 export function __resetLocalEmbedder(): void {
   _extractorPromise = null;
