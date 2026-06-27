@@ -68,3 +68,35 @@ describe('ToolRouter — document category routing', () => {
     expect(n).not.toContain('document.markdown-to-pdf');
   });
 });
+
+describe('ToolRouter — multi-word tool surfacing (name-word ranking)', () => {
+  // media.code-image is registered LAST of many media tools; with maxFromCategory
+  // it only surfaces if name-word overlap ranks it above its siblings for a
+  // "code image"/"code screenshot" prompt (the hyphenated action never matches a
+  // spaced phrase). Earlier siblings whose action segment also won't match.
+  const MEDIA_TOOLS = [
+    ...TOOLS,
+    { name: 'media.image-generate', category: 'media' },
+    { name: 'media.image-edit-advanced', category: 'media' },
+    { name: 'media.thumbnail-generate', category: 'media' },
+    { name: 'media.video-edit', category: 'media' },
+    { name: 'media.video-generate', category: 'media' },
+    { name: 'media.qr', category: 'media' },
+    { name: 'media.diagram', category: 'media' },
+    { name: 'media.code-image', category: 'media' }, // last → must be ranked up to surface
+  ];
+  const router = new ToolRouter(fakeRegistry(MEDIA_TOOLS) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  it('surfaces media.code-image for "code screenshot" despite being registered last', () => {
+    expect(names('make a code screenshot of this python function')).toContain('media.code-image');
+  });
+
+  it('surfaces media.code-image for "code image"', () => {
+    expect(names('turn this code into a shareable image')).toContain('media.code-image');
+  });
+
+  it('does NOT surface media.code-image for an unrelated prompt', () => {
+    expect(names('what time is it in Tokyo')).not.toContain('media.code-image');
+  });
+});
