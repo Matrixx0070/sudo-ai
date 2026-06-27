@@ -17,6 +17,7 @@ export type Message = {
 export type CurrentResponse =
   | { type: 'thinking'; text: string }
   | { type: 'progress'; text: string; progress?: number }
+  | { type: 'streaming'; text: string }
   | null;
 
 export function useChatSession() {

@@ -2,11 +2,11 @@ import React, { useEffect, useRef } from 'react';
 import { MessageBubble } from './MessageBubble';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { ProgressBar } from './ProgressBar';
-import type { Message } from '../hooks/useChatSession';
+import type { Message, CurrentResponse } from '../hooks/useChatSession';
 
 interface ChatWindowProps {
   messages: Message[];
-  currentResponse: { type: 'thinking'; text: string } | { type: 'progress'; text: string; progress?: number } | null;
+  currentResponse: CurrentResponse;
   error: string | null;
 }
 
@@ -50,6 +50,10 @@ export function ChatWindow({ messages, currentResponse, error }: ChatWindowProps
           fileName={msg.fileName}
         />
       ))}
+
+      {currentResponse?.type === 'streaming' && (
+        <MessageBubble role="ai" content={currentResponse.text} timestamp={new Date()} />
+      )}
 
       {currentResponse?.type === 'thinking' && (
         <ThinkingIndicator text={currentResponse.text} />

@@ -15,6 +15,7 @@ export type ChatWSMedia = {
 type ChatWSMessage =
   | { type: 'thinking'; text?: string }
   | { type: 'progress'; text: string; progress?: number }
+  | { type: 'token'; text: string }
   | { type: 'user_echo'; text: string }
   | { type: 'reply'; content: string; text?: string; media?: ChatWSMedia[] }
   | { type: 'error'; error: string };
