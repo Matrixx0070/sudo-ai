@@ -5,11 +5,18 @@ type ChatWSOptions = {
   peerId?: string;
 };
 
+export type ChatWSMedia = {
+  type: 'image' | 'video' | 'audio' | 'document';
+  mimeType: string;
+  filename: string;
+  dataBase64: string;
+};
+
 type ChatWSMessage =
   | { type: 'thinking'; text?: string }
   | { type: 'progress'; text: string; progress?: number }
   | { type: 'user_echo'; text: string }
-  | { type: 'reply'; content: string; text?: string }
+  | { type: 'reply'; content: string; text?: string; media?: ChatWSMedia[] }
   | { type: 'error'; error: string };
 
 type UseWebSocketOptions = {

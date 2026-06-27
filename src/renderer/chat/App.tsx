@@ -18,7 +18,23 @@ export function App() {
         setCurrentResponse({ type: 'thinking', text: 'Thinking...' });
       } else if (data.type === 'reply') {
         const content = 'content' in data ? data.content : (data as { text?: string }).text || '';
-        addMessage({ role: 'ai', content, timestamp: new Date() });
+        // Media frames carry agent attachments (voice reply, image, file) as data URLs.
+        for (const m of data.media ?? []) {
+          const url = `data:${m.mimeType};base64,${m.dataBase64}`;
+          addMessage({
+            role: 'ai',
+            content: '',
+            timestamp: new Date(),
+            ...(m.type === 'image'
+              ? { imageUrl: url }
+              : m.type === 'audio'
+              ? { audioUrl: url }
+              : { fileUrl: url, fileName: m.filename }),
+          });
+        }
+        if (content.trim()) {
+          addMessage({ role: 'ai', content, timestamp: new Date() });
+        }
         setCurrentResponse(null);
       } else if (data.type === 'error') {
         setError(data.error);

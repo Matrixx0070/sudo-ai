@@ -8,7 +8,7 @@
  * never get mis-routed into the upload path.
  */
 import { describe, it, expect } from 'vitest';
-import { parseAttachmentEnvelope } from '../../../src/core/channels/web.js';
+import { parseAttachmentEnvelope, buildMediaReplyFrame } from '../../../src/core/channels/web.js';
 
 describe('parseAttachmentEnvelope', () => {
   it('accepts a well-formed envelope (with caption)', () => {
@@ -61,5 +61,23 @@ describe('parseAttachmentEnvelope', () => {
     }));
     expect(env).not.toBeNull();
     expect(env!.caption).toBeUndefined();
+  });
+});
+
+describe('buildMediaReplyFrame', () => {
+  it('builds a reply frame the SPA renders as inline media', () => {
+    const frame = JSON.parse(buildMediaReplyFrame({
+      type: 'audio', mimeType: 'audio/wav', filename: 'hello.wav', dataBase64: 'aGk=',
+    }));
+    expect(frame).toEqual({
+      type: 'reply',
+      content: '',
+      media: [{ type: 'audio', mimeType: 'audio/wav', filename: 'hello.wav', dataBase64: 'aGk=' }],
+    });
+  });
+
+  it('defaults a missing filename to "file"', () => {
+    const frame = JSON.parse(buildMediaReplyFrame({ type: 'image', mimeType: 'image/png', dataBase64: 'eA==' }));
+    expect(frame.media[0].filename).toBe('file');
   });
 });

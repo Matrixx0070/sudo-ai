@@ -45,6 +45,8 @@ export function ChatWindow({ messages, currentResponse, error }: ChatWindowProps
           content={msg.content}
           timestamp={msg.timestamp}
           imageUrl={msg.imageUrl}
+          audioUrl={msg.audioUrl}
+          fileUrl={msg.fileUrl}
           fileName={msg.fileName}
         />
       ))}

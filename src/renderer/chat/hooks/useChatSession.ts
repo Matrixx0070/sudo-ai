@@ -6,7 +6,11 @@ export type Message = {
   timestamp: Date;
   /** Object/data URL for an attached image, rendered inline as a preview. */
   imageUrl?: string;
-  /** Filename for a non-image attachment, shown as a chip. */
+  /** Data URL for an attached audio clip (e.g. a voice reply), rendered as a player. */
+  audioUrl?: string;
+  /** Data/object URL for a non-image, non-audio file, rendered as a download link. */
+  fileUrl?: string;
+  /** Filename for a non-image attachment, shown as a chip / download label. */
   fileName?: string;
 };
 

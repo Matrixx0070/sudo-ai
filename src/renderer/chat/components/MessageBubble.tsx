@@ -6,12 +6,15 @@ interface MessageBubbleProps {
   content: string;
   timestamp: Date;
   imageUrl?: string;
+  audioUrl?: string;
+  fileUrl?: string;
   fileName?: string;
 }
 
-export function MessageBubble({ role, content, timestamp, imageUrl, fileName }: MessageBubbleProps) {
+export function MessageBubble({ role, content, timestamp, imageUrl, audioUrl, fileUrl, fileName }: MessageBubbleProps) {
   const time = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const hasText = content.trim().length > 0;
+  const hasMedia = !!(imageUrl || audioUrl || fileUrl);
 
   return (
     <div className={`flex gap-2.5 animation-fade-in ${role === 'user' ? 'flex-row-reverse' : ''}`}>
@@ -39,7 +42,22 @@ export function MessageBubble({ role, content, timestamp, imageUrl, fileName }: 
               className={`rounded-lg max-w-full max-h-64 object-contain ${hasText ? 'mb-2' : ''}`}
             />
           )}
-          {fileName && !imageUrl && (
+          {audioUrl && (
+            <audio controls src={audioUrl} className={`w-full max-w-xs ${hasText ? 'mb-2' : ''}`}>
+              Your browser does not support audio playback.
+            </audio>
+          )}
+          {fileUrl && (
+            <a
+              href={fileUrl}
+              download={fileName ?? 'file'}
+              className={`flex items-center gap-1.5 text-xs underline opacity-90 hover:opacity-100 ${hasText ? 'mb-1.5' : ''}`}
+            >
+              <span aria-hidden>📎</span>
+              <span className="truncate">{fileName ?? 'Download file'}</span>
+            </a>
+          )}
+          {fileName && !hasMedia && (
             <div className={`flex items-center gap-1.5 text-xs opacity-90 ${hasText ? 'mb-1.5' : ''}`}>
               <span aria-hidden>📎</span>
               <span className="truncate">{fileName}</span>

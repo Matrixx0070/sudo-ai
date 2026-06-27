@@ -2106,7 +2106,8 @@ async function boot(): Promise<void> {
             return;
           }
           const webReplyText = webResult?.text ?? 'No response generated.';
-          log.info({ replyLen: webReplyText.length }, 'Web agent reply ready');
+          const webAttachments = webResult?.attachments ?? [];
+          log.info({ replyLen: webReplyText.length, attachmentCount: webAttachments.length }, 'Web agent reply ready');
 
           // Save web turn to daily memory log (skip loopback/diagnostic probes —
           // those pollute the "## Today" prompt injection; opt-in via
@@ -2118,6 +2119,39 @@ async function boot(): Promise<void> {
               const webTurnSummary = `**User (web):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${webReplyText.slice(0, 500)}`;
               await dailyLog.append(webTurnSummary);
             } catch { /* daily log write is non-fatal */ }
+          }
+
+          // Deliver agent file attachments (voice replies, images, generated files)
+          // to the browser before the text reply — mirrors the Telegram path.
+          if (webAttachments.length > 0) {
+            const { readFileSync, existsSync } = await import('node:fs');
+            for (const att of webAttachments) {
+              try {
+                if (!existsSync(att.path)) {
+                  log.warn({ path: att.path }, 'Web attachment file not found on disk — skipping');
+                  continue;
+                }
+                const buffer = readFileSync(att.path);
+                const ext = att.path.split('.').pop()?.toLowerCase() ?? '';
+                const mimeType =
+                  att.type === 'image'
+                    ? (ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/png')
+                    : att.type === 'audio'
+                    ? (ext === 'mp3' ? 'audio/mpeg' : ext === 'ogg' ? 'audio/ogg' : 'audio/wav')
+                    : att.type === 'video'
+                    ? 'video/mp4'
+                    : 'application/octet-stream';
+                await web.sendMedia(msg.peerId, {
+                  type: att.type,
+                  mimeType,
+                  buffer,
+                  filename: att.filename ?? att.path.split('/').pop() ?? 'file',
+                });
+                log.info({ peerId: msg.peerId, path: att.path, type: att.type }, 'Attachment sent to Web');
+              } catch (attErr) {
+                log.warn({ err: String(attErr), path: att.path }, 'Failed to send web attachment — continuing');
+              }
+            }
           }
 
           await web.send(msg.peerId, webReplyText);
