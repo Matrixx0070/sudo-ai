@@ -22,6 +22,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'voice.tts', // synthesized speech → audio/voice note
   'document.markdown-to-pdf', // → PDF
   'document.pdf-from-html', // → PDF
+  'document.webpage', // → interactive .html (+ .png preview)
   'document.slides', // → slide-deck PDF
   'docx.create', // → Word document
   'data.chart', // → rendered chart PNG
@@ -38,7 +39,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
  * images, audio/video, and document/data deliverables.
  */
 export const FILE_ATTACHMENT_PATTERN =
-  /(?:saved?(?:\s+to)?|created|generated|wrote|written|path)[:\s]+([^\s\n"']+\.(?:png|jpg|jpeg|gif|webp|pdf|mp4|mov|avi|mp3|wav|ogg|docx|doc|xlsx|pptx|csv|odt|rtf|zip))/gi;
+  /(?:saved?(?:\s+to)?|created|generated|wrote|written|path)[:\s]+([^\s\n"']+\.(?:png|jpg|jpeg|gif|webp|pdf|mp4|mov|avi|mp3|wav|ogg|docx|doc|xlsx|pptx|csv|odt|rtf|zip|html))/gi;
 
 export type FileAttachmentType = 'image' | 'video' | 'audio' | 'document';
 
