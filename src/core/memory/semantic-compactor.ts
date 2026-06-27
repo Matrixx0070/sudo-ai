@@ -156,11 +156,18 @@ export async function compactSemanticDuplicates(
     threshold?: number;
     maxChunks?: number;
     sources?: ReadonlyArray<string>;
+    /**
+     * Dimension the current embedder emits. A cached embedding_json of a DIFFERENT
+     * width (e.g. a stale 1536-dim OpenAI vector when now embedding with the 384-dim
+     * local model) is ignored + re-embedded, so a run's vectors stay comparable.
+     */
+    expectedDim?: number;
   } = {},
 ): Promise<CompactionResult> {
   const threshold = opts.threshold ?? DEFAULT_SIMILARITY_THRESHOLD;
   const maxChunks = opts.maxChunks ?? DEFAULT_MAX_CHUNKS_PER_RUN;
   const sources = opts.sources ?? ['conversation', 'tool', 'learning'];
+  const expectedDim = opts.expectedDim;
 
   const result: CompactionResult = {
     scanned: 0,
@@ -191,6 +198,10 @@ export async function compactSemanticDuplicates(
   const vectors = new Map<number, Float32Array>();
   for (const row of rows) {
     let v = parseEmbedding(row.embedding_json);
+    // Ignore a cached vector whose width doesn't match the current embedder (e.g. a
+    // stale 1536-dim OpenAI cache while now embedding locally at 384) — it can't be
+    // compared against this run's vectors, so drop it and re-embed.
+    if (v && expectedDim !== undefined && v.length !== expectedDim) v = null;
     if (!v) {
       try {
         v = await embedder.embed(row.text);
