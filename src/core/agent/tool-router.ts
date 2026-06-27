@@ -149,11 +149,13 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'pdf', 'document', 'docx', 'word document', 'report', 'render pdf',
       'generate pdf', 'create pdf', 'export pdf', 'make a pdf', 'to pdf',
       'extract text', 'extract tables', 'from html',
+      'presentation', 'slide deck', 'slides', 'powerpoint', 'keynote',
     ],
     patterns: [
       /\b(pdf|docx?)\b/i,
       /\b(generate|create|make|export|render)\s+(a\s+)?(pdf|document|report)\b/i,
       /\bword\s+document\b/i,
+      /\b(presentation|slide\s*deck|slides|powerpoint)\b/i,
     ],
     priority: 7,
     maxFromCategory: 4,

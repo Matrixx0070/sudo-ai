@@ -22,6 +22,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'voice.tts', // synthesized speech → audio/voice note
   'document.markdown-to-pdf', // → PDF
   'document.pdf-from-html', // → PDF
+  'document.slides', // → slide-deck PDF
   'docx.create', // → Word document
   'data.chart', // → rendered chart PNG
   'media.qr', // → rendered QR code PNG
