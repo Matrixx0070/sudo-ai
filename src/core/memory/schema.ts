@@ -342,6 +342,32 @@ const TABLE_STATEMENTS: readonly string[] = [
     ON scheduled_posts(status, schedule_time)`,
 
   // ==========================================================================
+  // scheduled_messages
+  // Persistent queue for proactive chat-channel messages delivered by
+  // ScheduledMessageDispatcher (channels/scheduled-messages.ts). The chat-channel
+  // sibling of scheduled_posts. recurrence_sec set = recurring (rescheduled
+  // forward after each send); null = one-shot. retry_count >= 3 = permanently
+  // failed per getDue().
+  // ==========================================================================
+  `CREATE TABLE IF NOT EXISTS scheduled_messages (
+    id TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    peer_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    schedule_time TEXT NOT NULL,
+    recurrence_sec INTEGER,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending','sent','failed','cancelled')),
+    dispatched_at TEXT,
+    error_message TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_scheduled_messages_status_time
+    ON scheduled_messages(status, schedule_time)`,
+
+  // ==========================================================================
   // session_messages_fts (FTS5 — full-text search over messages)
   // Content-table mirrors messages; rowid = messages.id.
   // Note: corresponding ALTER TABLE columns are run by SqliteSessionStore

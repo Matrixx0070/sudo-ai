@@ -1,0 +1,276 @@
+/**
+ * @file scheduled-messages.ts
+ * @description Proactive scheduled messaging for chat channels. A daemon polls
+ * the `scheduled_messages` SQLite table every 60s and delivers due messages to
+ * the target chat channel (telegram/discord/slack/…) via an injected sender —
+ * normally {@link MessageRouter.sendToChannel}.
+ *
+ * This is the chat-channel sibling of `social/schedule-dispatcher.ts` (which
+ * targets Mastodon/Twitter): same store/tick/retry shape, separate table, and
+ * an injectable `ChannelSender` so the agent can schedule reminders, digests,
+ * and follow-ups that the daemon sends WITHOUT the user prompting first.
+ *
+ * One-shot messages are marked `sent`. Recurring messages (recurrenceSec set)
+ * are rescheduled forward from "now" after each successful send so a daemon
+ * that was down for a while fires once and then resumes cadence (no catch-up
+ * storm). Opt-in via SUDO_SCHEDULED_MESSAGES=1 (wired in cli.ts).
+ */
+
+import type { Database, Statement } from 'better-sqlite3';
+import { createLogger } from '../shared/logger.js';
+import { genId } from '../shared/utils.js';
+import type { ChannelType } from './types.js';
+
+const logger = createLogger('channels:scheduled-messages');
+
+/** Lower bound on a recurrence interval — guards against runaway tight loops. */
+export const MIN_RECURRENCE_SEC = 60;
+/** Retry ceiling: a message that fails this many times is left `failed`. */
+export const MAX_RETRIES = 3;
+
+export type ScheduledMessageStatus = 'pending' | 'sent' | 'failed' | 'cancelled';
+
+export interface ScheduledMessage {
+  id: string;
+  channel: ChannelType;
+  peerId: string;
+  content: string;
+  /** ISO-8601 time at/after which the message becomes due. */
+  scheduleTime: string;
+  /** Repeat interval in seconds; undefined/null = one-shot. */
+  recurrenceSec?: number | undefined;
+  createdAt: string;
+  status: ScheduledMessageStatus;
+  dispatchedAt?: string | undefined;
+  errorMessage?: string | undefined;
+  retryCount: number;
+}
+
+/** Delivers one message to a chat channel. Injected so the store/tick is testable. */
+export type ChannelSender = (channel: ChannelType, peerId: string, text: string) => Promise<void>;
+
+// ---------------------------------------------------------------------------
+// Row shape (snake_case) → domain model
+// ---------------------------------------------------------------------------
+
+interface ScheduledMessageRow {
+  id: string;
+  channel: string;
+  peer_id: string;
+  content: string;
+  schedule_time: string;
+  recurrence_sec: number | null;
+  created_at: string;
+  status: string;
+  dispatched_at: string | null;
+  error_message: string | null;
+  retry_count: number;
+}
+
+function rowToMessage(row: ScheduledMessageRow): ScheduledMessage {
+  return {
+    id: row.id,
+    channel: row.channel as ChannelType,
+    peerId: row.peer_id,
+    content: row.content,
+    scheduleTime: row.schedule_time,
+    recurrenceSec: row.recurrence_sec ?? undefined,
+    createdAt: row.created_at,
+    status: row.status as ScheduledMessageStatus,
+    dispatchedAt: row.dispatched_at ?? undefined,
+    errorMessage: row.error_message ?? undefined,
+    retryCount: row.retry_count,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// ScheduledMessageStore — thin SQLite wrapper with prepared statements
+// ---------------------------------------------------------------------------
+
+export class ScheduledMessageStore {
+  private readonly stmtInsert: Statement;
+  private readonly stmtGetDue: Statement;
+  private readonly stmtMarkSent: Statement;
+  private readonly stmtReschedule: Statement;
+  private readonly stmtMarkFailed: Statement;
+  private readonly stmtCancel: Statement;
+  private readonly stmtList: Statement;
+  private readonly stmtGet: Statement;
+
+  constructor(private readonly db: Database) {
+    this.stmtInsert = db.prepare(`
+      INSERT INTO scheduled_messages
+        (id, channel, peer_id, content, schedule_time, recurrence_sec, created_at, status, retry_count)
+      VALUES
+        (@id, @channel, @peerId, @content, @scheduleTime, @recurrenceSec, @createdAt, 'pending', 0)
+    `);
+
+    this.stmtGetDue = db.prepare(`
+      SELECT * FROM scheduled_messages
+      WHERE status IN ('pending', 'failed')
+        AND retry_count < ${MAX_RETRIES}
+        AND schedule_time <= @now
+      ORDER BY schedule_time ASC
+    `);
+
+    this.stmtMarkSent = db.prepare(`
+      UPDATE scheduled_messages
+      SET status = 'sent', dispatched_at = @dispatchedAt, error_message = NULL
+      WHERE id = @id
+    `);
+
+    // Recurring: keep the row 'pending', push schedule_time forward, reset retries.
+    this.stmtReschedule = db.prepare(`
+      UPDATE scheduled_messages
+      SET status = 'pending', schedule_time = @next, dispatched_at = @dispatchedAt,
+          error_message = NULL, retry_count = 0
+      WHERE id = @id
+    `);
+
+    this.stmtMarkFailed = db.prepare(`
+      UPDATE scheduled_messages
+      SET status = 'failed', error_message = @errorMessage, retry_count = retry_count + 1
+      WHERE id = @id
+    `);
+
+    this.stmtCancel = db.prepare(`
+      UPDATE scheduled_messages SET status = 'cancelled' WHERE id = @id
+    `);
+
+    this.stmtList = db.prepare(`SELECT * FROM scheduled_messages ORDER BY schedule_time ASC`);
+    this.stmtGet = db.prepare(`SELECT * FROM scheduled_messages WHERE id = @id`);
+  }
+
+  insert(
+    msg: Omit<ScheduledMessage, 'status' | 'retryCount' | 'dispatchedAt' | 'errorMessage' | 'createdAt' | 'id'>
+      & { id?: string; createdAt?: string },
+  ): ScheduledMessage {
+    const id = msg.id || genId();
+    const now = new Date().toISOString();
+    const createdAt = msg.createdAt || now;
+    this.stmtInsert.run({
+      id,
+      channel: msg.channel,
+      peerId: msg.peerId,
+      content: msg.content,
+      scheduleTime: msg.scheduleTime,
+      recurrenceSec: msg.recurrenceSec ?? null,
+      createdAt,
+    });
+    logger.debug({ id, channel: msg.channel }, 'scheduled_message inserted');
+    return { ...msg, id, createdAt, status: 'pending', retryCount: 0 };
+  }
+
+  getDue(now: string): ScheduledMessage[] {
+    return (this.stmtGetDue.all({ now }) as ScheduledMessageRow[]).map(rowToMessage);
+  }
+
+  markSent(id: string): void {
+    this.stmtMarkSent.run({ id, dispatchedAt: new Date().toISOString() });
+    logger.debug({ id }, 'scheduled_message marked sent');
+  }
+
+  /** Push a recurring message's next fire time forward and re-arm it. */
+  reschedule(id: string, nextScheduleTime: string): void {
+    this.stmtReschedule.run({ id, next: nextScheduleTime, dispatchedAt: new Date().toISOString() });
+    logger.debug({ id, next: nextScheduleTime }, 'scheduled_message rescheduled');
+  }
+
+  markFailed(id: string, errorMessage: string): void {
+    // permanent exclusion at retry_count >= MAX_RETRIES is enforced by getDue()
+    this.stmtMarkFailed.run({ id, errorMessage });
+    logger.debug({ id }, 'scheduled_message marked failed');
+  }
+
+  cancel(id: string): boolean {
+    const info = this.stmtCancel.run({ id });
+    logger.debug({ id, changes: info.changes }, 'scheduled_message cancelled');
+    return info.changes > 0;
+  }
+
+  list(): ScheduledMessage[] {
+    return (this.stmtList.all() as ScheduledMessageRow[]).map(rowToMessage);
+  }
+
+  get(id: string): ScheduledMessage | undefined {
+    const row = this.stmtGet.get({ id }) as ScheduledMessageRow | undefined;
+    return row ? rowToMessage(row) : undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ScheduledMessageDispatcher — lifecycle wrapper
+// ---------------------------------------------------------------------------
+
+export class ScheduledMessageDispatcher {
+  readonly store: ScheduledMessageStore;
+  private interval: ReturnType<typeof setInterval> | null = null;
+
+  constructor(db: Database, private readonly sender: ChannelSender) {
+    this.store = new ScheduledMessageStore(db);
+  }
+
+  start(): void {
+    if (this.interval !== null) {
+      logger.warn('ScheduledMessageDispatcher.start() called while already running — ignoring');
+      return;
+    }
+    logger.info('ScheduledMessageDispatcher starting (60s interval)');
+    this.interval = setInterval(() => {
+      this.tick().catch((err: unknown) => {
+        logger.error({ err: err instanceof Error ? err.message : String(err) }, 'tick error');
+      });
+    }, 60_000);
+    // Node: don't keep the event loop alive solely for this timer.
+    this.interval.unref?.();
+  }
+
+  stop(): void {
+    if (this.interval === null) return;
+    clearInterval(this.interval);
+    this.interval = null;
+    logger.info('ScheduledMessageDispatcher stopped');
+  }
+
+  async tick(): Promise<void> {
+    const now = new Date().toISOString();
+    const due = this.store.getDue(now);
+    if (due.length === 0) { logger.debug({ now }, 'tick: no due messages'); return; }
+    logger.info({ count: due.length, now }, 'tick: delivering due messages');
+
+    for (const msg of due) {
+      try {
+        await this.sender(msg.channel, msg.peerId, msg.content);
+        if (msg.recurrenceSec && msg.recurrenceSec >= MIN_RECURRENCE_SEC) {
+          // Reschedule forward from NOW (not scheduleTime) so a downtime gap
+          // fires once and resumes cadence rather than replaying every missed slot.
+          const next = new Date(Date.now() + msg.recurrenceSec * 1000).toISOString();
+          this.store.reschedule(msg.id, next);
+          logger.info({ id: msg.id, channel: msg.channel, next }, 'recurring message delivered — rescheduled');
+        } else {
+          this.store.markSent(msg.id);
+          logger.info({ id: msg.id, channel: msg.channel }, 'scheduled message delivered');
+        }
+      } catch (err: unknown) {
+        const emsg = err instanceof Error ? err.message : String(err);
+        logger.error({ id: msg.id, channel: msg.channel, retryCount: msg.retryCount, err: emsg }, 'scheduled message delivery failed');
+        this.store.markFailed(msg.id, emsg);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level singleton (so the schedule-message tool reaches the live store)
+// ---------------------------------------------------------------------------
+
+let _instance: ScheduledMessageDispatcher | null = null;
+
+export function setScheduledMessageInstance(d: ScheduledMessageDispatcher): void {
+  _instance?.stop();
+  _instance = d;
+}
+
+export function getScheduledMessageInstance(): ScheduledMessageDispatcher | null {
+  return _instance;
+}
