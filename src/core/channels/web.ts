@@ -44,6 +44,8 @@ const WEB_UPLOAD_DIR = projectPath('data', 'uploads');
 const WEB_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** WS frame cap — covers base64 payload + JSON envelope overhead above the decoded cap. */
 const WEB_WS_MAX_PAYLOAD = 16 * 1024 * 1024;
+/** Max size of an outbound media attachment embedded (base64) in a WS reply frame. */
+const WEB_MEDIA_OUT_MAX_BYTES = 8 * 1024 * 1024;
 
 /** Envelope the browser sends over the WS to upload a file. */
 interface AttachmentEnvelope {
@@ -59,6 +61,25 @@ interface AttachmentEnvelope {
  * with the required string fields — so plain-text messages (the common case,
  * including text that happens to be JSON) fall through to normal dispatch.
  */
+/**
+ * Build the WS frame that delivers an agent media attachment to the browser.
+ * The SPA's reply handler renders `media[]` (image preview / audio player /
+ * download link) from these data-URL parts — keep the shape in sync with the
+ * client's `ChatWSMedia` type.
+ */
+export function buildMediaReplyFrame(part: { type: string; mimeType: string; filename?: string; dataBase64: string }): string {
+  return JSON.stringify({
+    type: 'reply',
+    content: '',
+    media: [{
+      type: part.type,
+      mimeType: part.mimeType,
+      filename: part.filename ?? 'file',
+      dataBase64: part.dataBase64,
+    }],
+  });
+}
+
 export function parseAttachmentEnvelope(raw: string): AttachmentEnvelope | null {
   let obj: unknown;
   try { obj = JSON.parse(raw); } catch { return null; }
@@ -347,6 +368,53 @@ export class WebAdapter implements ChannelAdapter {
     } catch (err) {
       log.error({ peerId, err }, 'Web send failed');
       throw new ChannelError('Failed to send Web message', 'channel_send_failed', {
+        peerId,
+        cause: String(err),
+      });
+    }
+  }
+
+  /**
+   * Deliver an agent media attachment (image, voice/audio, generated file) to the
+   * browser by base64-embedding it in a `{type:'reply', media:[…]}` WS frame, which
+   * the SPA renders inline (image preview / audio player / download link). The
+   * symmetric counterpart to the inbound upload path. `attachment.buffer` must be
+   * populated by the caller; oversized files are dropped (logged), not embedded.
+   */
+  async sendMedia(peerId: string, attachment: MediaAttachment): Promise<void> {
+    if (!peerId) {
+      throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
+    }
+    if (!this._isConnected) {
+      throw new ChannelError('Web adapter is not connected', 'channel_not_connected', { peerId });
+    }
+    const ws = this._clients.get(peerId);
+    if (!ws) {
+      log.warn({ peerId }, 'Web sendMedia: no active WS connection for peerId — dropped');
+      return;
+    }
+    const buf = attachment.buffer;
+    if (!buf || buf.length === 0) {
+      log.warn({ peerId, filename: attachment.filename }, 'Web sendMedia: no bytes — dropped');
+      return;
+    }
+    if (buf.length > WEB_MEDIA_OUT_MAX_BYTES) {
+      log.warn({ peerId, bytes: buf.length, filename: attachment.filename }, 'Web sendMedia: attachment too large to embed — dropped');
+      return;
+    }
+
+    const frame = buildMediaReplyFrame({
+      type: attachment.type,
+      mimeType: attachment.mimeType,
+      ...(attachment.filename ? { filename: attachment.filename } : {}),
+      dataBase64: buf.toString('base64'),
+    });
+    try {
+      ws.send(frame);
+      log.info({ peerId, type: attachment.type, bytes: buf.length }, 'Web media reply sent');
+    } catch (err) {
+      log.error({ peerId, err }, 'Web sendMedia failed');
+      throw new ChannelError('Failed to send Web media', 'channel_send_failed', {
         peerId,
         cause: String(err),
       });

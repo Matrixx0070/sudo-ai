@@ -53,6 +53,7 @@ export function buildSpaCSPHeader(nonce: string): string {
     `script-src 'nonce-${nonce}' 'self'`,
     `style-src 'nonce-${nonce}' 'self'`,
     `img-src 'self' data: blob:`,
+    `media-src 'self' data: blob:`,
     `font-src 'self'`,
     `connect-src 'self' ws: wss: http://127.0.0.1:* ws://127.0.0.1:*`,
     `object-src 'none'`,
