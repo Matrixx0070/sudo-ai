@@ -23,6 +23,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'document.markdown-to-pdf', // → PDF
   'document.pdf-from-html', // → PDF
   'docx.create', // → Word document
+  'data.chart', // → rendered chart PNG
 ]);
 
 /**
