@@ -40,6 +40,7 @@ import { runGenerations } from './core/sessions/run-generation.js';
 import { AgentLoop } from './core/agent/loop.js';
 import { approvalManager } from './core/agent/approval.js';
 import { TelegramAdapter } from './core/channels/telegram.js';
+import { registerOutboundAdapter, sendToChannelOutbox } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
 import type { UnifiedMessage } from './core/channels/types.js';
 import { CronStore } from './core/cron/store.js';
@@ -1533,6 +1534,7 @@ async function boot(): Promise<void> {
     );
     telegram.setHookEmitter(hooks);
     telegramNotifier = telegram;
+    registerOutboundAdapter(telegram); // proactive scheduled-message delivery (channel-outbox)
     if (chatApprovals) approvalManager.registerSender('telegram', telegram);
 
     // Serialized per-peer: enqueue so concurrent messages from the same user
@@ -1789,6 +1791,7 @@ async function boot(): Promise<void> {
         .split(',').map((s) => s.trim()).filter(Boolean);
 
       const discord = new DiscordAdapter('DISCORD_TOKEN', discordAllowedChannels);
+      registerOutboundAdapter(discord);
       discord.setHookEmitter(hooks);
       discordAdapter = discord;
       if (chatApprovals) approvalManager.registerSender('discord', discord);
@@ -1878,6 +1881,7 @@ async function boot(): Promise<void> {
 
       // SlackAdapter reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from env internally.
       const slack = new SlackAdapter();
+      registerOutboundAdapter(slack);
       slackAdapter = slack;
       if (chatApprovals) approvalManager.registerSender('slack', slack);
 
@@ -1980,6 +1984,7 @@ async function boot(): Promise<void> {
         .split(',').map((s) => s.trim()).filter(Boolean);
 
       const whatsapp = new WhatsAppAdapter(undefined, whatsAppAllowedJids);
+      registerOutboundAdapter(whatsapp);
       whatsapp.setHookEmitter(hooks);
       whatsAppAdapter = whatsapp;
       if (chatApprovals) approvalManager.registerSender('whatsapp', whatsapp);
@@ -2072,6 +2077,7 @@ async function boot(): Promise<void> {
   if (process.env['WEB_CHAT_ENABLED'] === 'true') try {
     const { WebAdapter } = await import('./core/channels/web.js');
     const web = new WebAdapter();
+    registerOutboundAdapter(web);
     if (chatApprovals) approvalManager.registerSender('web', web);
 
     web.onMessage(async (msg) => {
@@ -2173,6 +2179,7 @@ async function boot(): Promise<void> {
     try {
       const { EmailAdapter } = await import('./core/channels/email.js');
       const email = new EmailAdapter();
+      registerOutboundAdapter(email);
       email.setHookEmitter(hooks);
       emailAdapter = email;
       if (chatApprovals) approvalManager.registerSender('email', email);
@@ -2260,6 +2267,7 @@ async function boot(): Promise<void> {
     try {
       const { SmsAdapter } = await import('./core/channels/sms.js');
       const sms = new SmsAdapter();
+      registerOutboundAdapter(sms);
       sms.setHookEmitter(hooks);
       smsAdapter = sms;
       if (chatApprovals) approvalManager.registerSender('sms', sms);
@@ -3763,6 +3771,28 @@ async function boot(): Promise<void> {
     log.info('ScheduleDispatcher started (60s tick)');
   } catch (err) {
     log.warn({ err: String(err) }, 'ScheduleDispatcher failed to start — scheduled posts will not be dispatched');
+  }
+
+  // -------------------------------------------------------------------------
+  // 9.56 Proactive scheduled messaging — chat-channel scheduling daemon
+  //      (opt-in: SUDO_SCHEDULED_MESSAGES=1. Lets the agent enqueue reminders /
+  //      digests / follow-ups the daemon delivers to a chat channel WITHOUT the
+  //      user prompting first. Delivery routes through the channel-outbox each
+  //      adapter registered into above, so it reaches any enabled channel.)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_SCHEDULED_MESSAGES'] === '1') {
+    try {
+      const { ScheduledMessageDispatcher, setScheduledMessageInstance } = await import('./core/channels/scheduled-messages.js');
+      const smDispatcher = new ScheduledMessageDispatcher(db.db, sendToChannelOutbox);
+      setScheduledMessageInstance(smDispatcher);
+      smDispatcher.start();
+      registerShutdown(() => smDispatcher.stop());
+      const { scheduleMessageTool } = await import('./core/tools/builtin/comms/schedule-message-tool.js');
+      registry.register(scheduleMessageTool);
+      log.info('Proactive scheduled messaging enabled (SUDO_SCHEDULED_MESSAGES=1) — comms.schedule-message live, dispatcher 60s tick');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'Scheduled messaging failed to start — comms.schedule-message unavailable');
+    }
   }
 
   // -------------------------------------------------------------------------
