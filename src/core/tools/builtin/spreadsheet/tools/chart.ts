@@ -81,7 +81,9 @@ export const spreadsheetChartTool: ToolDefinition = {
     }
 
     try {
-      const ExcelJS = await import('exceljs');
+      // exceljs is CJS — resolve `.default` from the dynamic-import namespace.
+      const ExcelJSmod = await import('exceljs');
+      const ExcelJS = ExcelJSmod.default ?? ExcelJSmod;
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.readFile(filePath);
 

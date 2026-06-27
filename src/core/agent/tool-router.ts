@@ -233,9 +233,9 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
   data: {
     keywords: [
       'data', 'csv', 'sql', 'database', 'query', 'chart',
-      'spreadsheet', 'visualize', 'graph data',
+      'spreadsheet', 'excel', 'workbook', 'visualize', 'graph data',
     ],
-    patterns: [/\.(csv|xlsx|sql)\b/i],
+    patterns: [/\.(csv|xlsx|sql)\b/i, /\b(excel|spreadsheet|workbook|pivot\s*table)\b/i],
     priority: 5,
     maxFromCategory: 3,
   },

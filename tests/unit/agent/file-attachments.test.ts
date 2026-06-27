@@ -19,6 +19,16 @@ describe('extractFileAttachments', () => {
     expect(out).toEqual([{ type: 'document', path: '/tmp/doc.docx', filename: 'doc.docx' }]);
   });
 
+  it('delivers a generated spreadsheet (spreadsheet.create, "Workbook created:") as a document', () => {
+    const out = extractFileAttachments('spreadsheet.create', 'Workbook created: /tmp/budget.xlsx (2 sheet(s), 30 row(s), 8123 bytes)');
+    expect(out).toEqual([{ type: 'document', path: '/tmp/budget.xlsx', filename: 'budget.xlsx' }]);
+  });
+
+  it('delivers a pivot-table workbook (spreadsheet.pivot, "Pivot table created:")', () => {
+    const out = extractFileAttachments('spreadsheet.pivot', 'Pivot table created: /tmp/pivot.xlsx (5 rows, 3 column groups)');
+    expect(out[0]).toMatchObject({ type: 'document', filename: 'pivot.xlsx' });
+  });
+
   it('delivers a PDF from document.pdf-from-html under data/documents', () => {
     const out = extractFileAttachments('document.pdf-from-html', 'PDF created: /root/sudo-ai-v4/data/documents/x.pdf (5000 bytes, ~1 page(s))');
     expect(out[0]).toMatchObject({ type: 'document', filename: 'x.pdf' });

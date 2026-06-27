@@ -427,3 +427,31 @@ describe('spreadsheet tool registration', () => {
     expect(registered.length).toBe(5);
   });
 });
+
+describe('normalizeSheetsArg — LLM arg coercion (nested sheets stringified)', () => {
+  it('passes a proper nested array through', async () => {
+    const { normalizeSheetsArg } = await import('../../src/core/tools/builtin/spreadsheet/tools/create.js');
+    const out = normalizeSheetsArg([{ name: 'S', columns: [{ header: 'A', key: 'a' }], rows: [{ a: 1 }] }]);
+    expect(out).toEqual([{ name: 'S', columns: [{ header: 'A', key: 'a' }], rows: [{ a: 1 }] }]);
+  });
+
+  it('parses the whole sheets array passed as a JSON string', async () => {
+    const { normalizeSheetsArg } = await import('../../src/core/tools/builtin/spreadsheet/tools/create.js');
+    const out = normalizeSheetsArg('[{"name":"S","columns":[{"header":"A","key":"a"}],"rows":[{"a":1}]}]');
+    expect(out[0]).toMatchObject({ name: 'S', columns: [{ header: 'A', key: 'a' }] });
+  });
+
+  it('parses per-sheet columns/rows passed as JSON strings, and defaults key to header', async () => {
+    const { normalizeSheetsArg } = await import('../../src/core/tools/builtin/spreadsheet/tools/create.js');
+    const out = normalizeSheetsArg([{ name: 'S', columns: '[{"header":"Total"}]', rows: '[{"Total":9}]' }]);
+    expect(out[0]!.columns).toEqual([{ header: 'Total', key: 'Total' }]); // key defaulted to header
+    expect(out[0]!.rows).toEqual([{ Total: 9 }]);
+  });
+
+  it('drops sheets without a name; non-array/garbage → []', async () => {
+    const { normalizeSheetsArg } = await import('../../src/core/tools/builtin/spreadsheet/tools/create.js');
+    expect(normalizeSheetsArg([{ columns: [] }, { name: 'Keep', columns: [{ header: 'A', key: 'a' }], rows: [] }])).toHaveLength(1);
+    expect(normalizeSheetsArg('not json')).toEqual([]);
+    expect(normalizeSheetsArg(99)).toEqual([]);
+  });
+});

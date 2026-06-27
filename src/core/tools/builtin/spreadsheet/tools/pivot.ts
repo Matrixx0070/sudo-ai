@@ -102,7 +102,9 @@ export const spreadsheetPivotTool: ToolDefinition = {
     if (!valueDefs?.length) return { success: false, output: 'values array is required.' };
 
     try {
-      const ExcelJS = await import('exceljs');
+      // exceljs is CJS — resolve `.default` from the dynamic-import namespace.
+      const ExcelJSmod = await import('exceljs');
+      const ExcelJS = ExcelJSmod.default ?? ExcelJSmod;
 
       // Read source workbook
       const srcWorkbook = new ExcelJS.Workbook();

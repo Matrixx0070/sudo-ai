@@ -25,6 +25,8 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'document.webpage', // → interactive .html (+ .png preview)
   'document.slides', // → slide-deck PDF
   'docx.create', // → Word document
+  'spreadsheet.create', // → Excel .xlsx workbook
+  'spreadsheet.pivot', // → Excel .xlsx pivot table
   'data.chart', // → rendered chart PNG
   'media.qr', // → rendered QR code PNG
   'media.diagram', // → rendered tree/hierarchy diagram PNG
