@@ -117,6 +117,8 @@ describe('ToolRouter — distinctive-word relevance (description-aware ranking)'
     { name: 'media.code-image', category: 'media', description: 'Render a source-code snippet as a syntax-highlighted code screenshot PNG' },
     { name: 'media.equation', category: 'media', description: 'Render a mathematical equation or formula written in LaTeX as a PNG — fractions, integrals, Greek math notation' },
     { name: 'media.animation', category: 'media', description: 'Create a looping animated GIF from an ordered sequence of caption frames' },
+    { name: 'media.diagram', category: 'media', description: 'Render a tree or hierarchy as a PNG — org charts, mind maps, hierarchies, file trees, from a flat node list' },
+    { name: 'media.mermaid', category: 'media', description: 'Render a Mermaid diagram — flowchart, sequence diagram, class diagram, state diagram, entity-relationship ER diagram of a database schema, gantt chart, pie, mindmap, timeline' },
   ];
   const router = new ToolRouter(registryWithDesc(MEDIA) as never);
   const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
@@ -145,5 +147,26 @@ describe('ToolRouter — distinctive-word relevance (description-aware ranking)'
     expect(n).toContain('media.animation');
     expect(n.indexOf('media.animation')).toBeLessThan(n.indexOf('media.code-image'));
     expect(n.indexOf('media.animation')).toBeLessThan(n.indexOf('media.image-generate'));
+  });
+
+  it('ranks media.mermaid first among media tools for mermaid-type diagrams', () => {
+    for (const q of [
+      'draw a sequence diagram of the login flow',
+      'make a gantt chart for the project plan',
+      'render an ER diagram of the database schema',
+      'draw a state diagram for the order lifecycle',
+    ]) {
+      const n = names(q);
+      expect(n).toContain('media.mermaid');
+      const firstMedia = n.findIndex((x) => x.startsWith('media.'));
+      expect(n.indexOf('media.mermaid')).toBe(firstMedia); // the top media pick
+    }
+  });
+
+  it('prefers media.diagram when the user gives a flat node list', () => {
+    // both can draw hierarchies; the "flat node list" phrasing is media.diagram's niche
+    const n = names('make an org chart from a flat node list of people and managers');
+    expect(n).toContain('media.diagram');
+    expect(n.indexOf('media.diagram')).toBeLessThan(n.indexOf('media.mermaid'));
   });
 });

@@ -31,6 +31,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'media.code-image', // → syntax-highlighted code screenshot PNG
   'media.equation', // → rendered LaTeX equation PNG
   'media.animation', // → looping animated GIF
+  'media.mermaid', // → rendered Mermaid diagram PNG
 ]);
 
 /**

@@ -111,6 +111,7 @@
     "katex": "^0.17.0",
     "mailparser": "^3.9.8",
     "marked": "^18.0.1",
+    "mermaid": "^11.16.0",
     "nanoid": "^5.1.7",
     "nodemailer": "^8.0.4",
     "openai": "^6.34.0",
