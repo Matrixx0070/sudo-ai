@@ -354,6 +354,7 @@ const TABLE_STATEMENTS: readonly string[] = [
     channel TEXT NOT NULL,
     peer_id TEXT NOT NULL,
     content TEXT NOT NULL,
+    prompt TEXT,
     schedule_time TEXT NOT NULL,
     recurrence_sec INTEGER,
     created_at TEXT NOT NULL,

@@ -14,6 +14,7 @@ import {
   MIN_RECURRENCE_SEC,
   MAX_RETRIES,
   type ChannelSender,
+  type ContentGenerator,
 } from '../../../src/core/channels/scheduled-messages.js';
 
 function createDb(): DatabaseType {
@@ -162,6 +163,73 @@ describe('ScheduledMessageDispatcher.tick', () => {
     dispatcher.store.insert(baseMsg({ peerId: 'B' }));
     await dispatcher.tick();
     expect(sender).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ScheduledMessageDispatcher — dynamic prompt (generate-at-send)', () => {
+  let db: DatabaseType;
+  let sender: ReturnType<typeof vi.fn>;
+  let generator: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    db = createDb();
+    sender = vi.fn().mockResolvedValue(undefined);
+    generator = vi.fn().mockResolvedValue('generated digest body');
+  });
+
+  function makeDispatcher(withGenerator = true): ScheduledMessageDispatcher {
+    return new ScheduledMessageDispatcher(
+      db,
+      sender as unknown as ChannelSender,
+      withGenerator ? (generator as unknown as ContentGenerator) : undefined,
+    );
+  }
+
+  it('generates the body from the prompt at send time and delivers it', async () => {
+    const d = makeDispatcher();
+    const m = d.store.insert(baseMsg({ content: '', prompt: 'summarize today', peerId: 'P' }));
+    await d.tick();
+    expect(generator).toHaveBeenCalledWith('summarize today');
+    expect(sender).toHaveBeenCalledWith('telegram', 'P', 'generated digest body');
+    expect(d.store.get(m.id)?.status).toBe('sent');
+  });
+
+  it('fixed-content messages ignore the generator', async () => {
+    const d = makeDispatcher();
+    d.store.insert(baseMsg({ content: 'fixed text', peerId: 'Q' }));
+    await d.tick();
+    expect(generator).not.toHaveBeenCalled();
+    expect(sender).toHaveBeenCalledWith('telegram', 'Q', 'fixed text');
+  });
+
+  it('fails (and retries) when the generator returns empty', async () => {
+    generator.mockResolvedValue('   ');
+    const d = makeDispatcher();
+    const m = d.store.insert(baseMsg({ content: '', prompt: 'x' }));
+    await d.tick();
+    expect(sender).not.toHaveBeenCalled();
+    expect(d.store.get(m.id)?.status).toBe('failed');
+  });
+
+  it('fails when a prompt message has no generator configured', async () => {
+    const d = makeDispatcher(false);
+    const m = d.store.insert(baseMsg({ content: '', prompt: 'x' }));
+    await d.tick();
+    expect(sender).not.toHaveBeenCalled();
+    expect(d.store.get(m.id)?.status).toBe('failed');
+    expect(d.store.get(m.id)?.errorMessage).toMatch(/generator/i);
+  });
+
+  it('regenerates fresh content on each recurring delivery', async () => {
+    generator.mockResolvedValueOnce('digest #1').mockResolvedValueOnce('digest #2');
+    const d = makeDispatcher();
+    d.store.insert(baseMsg({ content: '', prompt: 'daily', recurrenceSec: MIN_RECURRENCE_SEC, scheduleTime: pastTime() }));
+    await d.tick();
+    expect(sender).toHaveBeenNthCalledWith(1, 'telegram', '12345', 'digest #1');
+    const id = d.store.list()[0]!.id;
+    d.store.reschedule(id, pastTime()); // force due again
+    await d.tick();
+    expect(sender).toHaveBeenNthCalledWith(2, 'telegram', '12345', 'digest #2');
   });
 });
 

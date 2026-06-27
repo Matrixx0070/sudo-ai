@@ -49,7 +49,8 @@ export const scheduleMessageTool: ToolDefinition = {
     action: { type: 'string', required: true, description: 'Operation.', enum: ['schedule', 'list', 'cancel'] },
     channel: { type: 'string', description: 'Target chat channel (required for schedule).', enum: VALID_CHANNELS as string[] },
     to: { type: 'string', description: 'Destination peer/chat id on that channel (required for schedule). For telegram this is the chat id.' },
-    content: { type: 'string', description: 'Message text to send (required for schedule).' },
+    content: { type: 'string', description: 'Fixed message text to send. Provide content OR prompt (not both).' },
+    prompt: { type: 'string', description: 'Alternative to content: a prompt the brain expands into the message body AT send time (dynamic digest/check-in). Pair with repeat_seconds for a recurring AI digest.' },
     at: { type: 'string', description: 'ISO 8601 datetime to send at. Use this OR in_seconds.' },
     in_seconds: { type: 'number', description: 'Send after this many seconds from now. Use this OR at.' },
     repeat_seconds: { type: 'number', description: `Optional: repeat every N seconds (minimum ${MIN_RECURRENCE_SEC}). Omit for a one-shot message.` },
@@ -72,11 +73,16 @@ export const scheduleMessageTool: ToolDefinition = {
           const channel = (params['channel'] as string | undefined)?.trim();
           const to = (params['to'] as string | undefined)?.trim();
           const content = (params['content'] as string | undefined);
+          const prompt = (params['prompt'] as string | undefined);
           if (!channel || !VALID_CHANNELS.includes(channel)) {
             return { success: false, output: `channel is required and must be one of: ${VALID_CHANNELS.join(', ')}.` };
           }
           if (!to) return { success: false, output: 'to (destination peer/chat id) is required.' };
-          if (!content?.trim()) return { success: false, output: 'content is required.' };
+          const hasContent = !!content?.trim();
+          const hasPrompt = !!prompt?.trim();
+          if (hasContent === hasPrompt) {
+            return { success: false, output: 'provide exactly one of "content" (fixed text) or "prompt" (brain-generated at send time).' };
+          }
 
           const resolved = resolveScheduleTime(params['at'], params['in_seconds']);
           if ('error' in resolved) return { success: false, output: resolved.error };
@@ -94,14 +100,16 @@ export const scheduleMessageTool: ToolDefinition = {
             id: genId(),
             channel: channel as ChannelType,
             peerId: to,
-            content,
+            content: hasContent ? content!.trim() : '',
+            prompt: hasPrompt ? prompt!.trim() : undefined,
             scheduleTime: resolved.iso,
             recurrenceSec,
           });
           const repeatNote = recurrenceSec ? `, repeating every ${recurrenceSec}s` : '';
+          const kindNote = hasPrompt ? ' (brain-generated at send time)' : '';
           return {
             success: true,
-            output: `Message scheduled for ${entry.scheduleTime} on ${channel}${repeatNote} (id: ${entry.id}).`,
+            output: `Message scheduled for ${entry.scheduleTime} on ${channel}${repeatNote}${kindNote} (id: ${entry.id}).`,
             data: entry,
           };
         }

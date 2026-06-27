@@ -74,11 +74,25 @@ describe('comms.schedule-message — schedule', () => {
     expect(getScheduledMessageInstance()!.store.list()[0]!.recurrenceSec).toBe(3600);
   });
 
+  it('schedules a dynamic-digest with a prompt instead of content', async () => {
+    const res = await scheduleMessageTool.execute(
+      { action: 'schedule', channel: 'telegram', to: '1', prompt: 'daily summary of my tasks', in_seconds: 60, repeat_seconds: 86400 },
+      ctx,
+    );
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/brain-generated/i);
+    const m = getScheduledMessageInstance()!.store.list()[0]!;
+    expect(m.prompt).toBe('daily summary of my tasks');
+    expect(m.content).toBe('');
+    expect(m.recurrenceSec).toBe(86400);
+  });
+
   it.each([
     [{ action: 'schedule', to: '1', content: 'x', in_seconds: 60 }, /channel is required/i],
     [{ action: 'schedule', channel: 'nope', to: '1', content: 'x', in_seconds: 60 }, /must be one of/i],
     [{ action: 'schedule', channel: 'telegram', content: 'x', in_seconds: 60 }, /to .*is required/i],
-    [{ action: 'schedule', channel: 'telegram', to: '1', in_seconds: 60 }, /content is required/i],
+    [{ action: 'schedule', channel: 'telegram', to: '1', in_seconds: 60 }, /provide exactly one/i],
+    [{ action: 'schedule', channel: 'telegram', to: '1', content: 'x', prompt: 'y', in_seconds: 60 }, /provide exactly one/i],
     [{ action: 'schedule', channel: 'telegram', to: '1', content: 'x' }, /at.*or.*in_seconds/i],
     [{ action: 'schedule', channel: 'telegram', to: '1', content: 'x', in_seconds: 60, repeat_seconds: 5 }, /repeat_seconds must be/i],
   ])('rejects invalid input %#', async (params, pattern) => {
