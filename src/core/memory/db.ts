@@ -169,6 +169,7 @@ export class MindDB {
     // pre-existing chunks table (CREATE TABLE IF NOT EXISTS won't alter one that
     // already exists). ALTER TABLE ADD COLUMN is O(1) in SQLite. Idempotent.
     this._migrateChunkSupersession();
+    this._migrateScheduledMessagePrompt();
 
     // Attempt sqlite-vec extension load
     this.vecLoaded = this._tryLoadVec();
@@ -188,6 +189,17 @@ export class MindDB {
     );
     if (!existing.has('superseded_by')) this.db.exec('ALTER TABLE chunks ADD COLUMN superseded_by INTEGER');
     if (!existing.has('superseded_at')) this.db.exec('ALTER TABLE chunks ADD COLUMN superseded_at TEXT');
+  }
+
+  /**
+   * Add `prompt` to a pre-existing scheduled_messages table (dynamic-digest
+   * generate-at-send). No-op when present (fresh DBs get it from schema.ts).
+   */
+  private _migrateScheduledMessagePrompt(): void {
+    const cols = new Set(
+      (this.db.prepare('PRAGMA table_info(scheduled_messages)').all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has('prompt')) this.db.exec('ALTER TABLE scheduled_messages ADD COLUMN prompt TEXT');
   }
 
   private _tryLoadVec(): boolean {

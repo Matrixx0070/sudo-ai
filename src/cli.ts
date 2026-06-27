@@ -3773,7 +3773,19 @@ async function boot(): Promise<void> {
   if (process.env['SUDO_SCHEDULED_MESSAGES'] === '1') {
     try {
       const { ScheduledMessageDispatcher, setScheduledMessageInstance } = await import('./core/channels/scheduled-messages.js');
-      const smDispatcher = new ScheduledMessageDispatcher(db.db, sendToChannelOutbox);
+      // Dynamic digests: when a scheduled message carries a `prompt` instead of
+      // fixed content, the brain expands it into the body at delivery time.
+      const digestGenerator = async (prompt: string): Promise<string> => {
+        const resp = await brain.call({
+          messages: [{
+            role: 'user',
+            content: `Generate a single proactive chat message to send to a user on a schedule. Output ONLY the message body — concise, friendly, ready to send, with no preamble, quotes, or meta-commentary.\n\nWhat to say: ${prompt}`,
+          }],
+          maxTokens: 800,
+        });
+        return (resp.content ?? '').trim();
+      };
+      const smDispatcher = new ScheduledMessageDispatcher(db.db, sendToChannelOutbox, digestGenerator);
       setScheduledMessageInstance(smDispatcher);
       smDispatcher.start();
       registerShutdown(() => smDispatcher.stop());
