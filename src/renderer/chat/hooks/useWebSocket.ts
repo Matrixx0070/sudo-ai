@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { getChatPeerId } from '../peer';
 
 type ChatWSOptions = {
   token?: string;
@@ -47,7 +48,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const connect = useCallback(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token') || undefined;
-    const peerId = params.get('peer') || undefined;
+    // Stable peer id (localStorage) so reconnects/reloads resume the same server session.
+    const peerId = getChatPeerId();
 
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/chat/ws`;
     const qp = new URLSearchParams();

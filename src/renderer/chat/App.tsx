@@ -4,9 +4,10 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { ChatWindow } from './components/ChatWindow';
 import { InputArea } from './components/InputArea';
+import { resetChatPeerId } from './peer';
 
 export function App() {
-  const { messages, currentResponse, error, addMessage, setCurrentResponse, setError } = useChatSession();
+  const { messages, currentResponse, error, addMessage, clearMessages, setCurrentResponse, setError } = useChatSession();
   const { connected, sendMessage, sendAttachment } = useWebSocket({
     onMessage: (data) => {
       if (data.type === 'thinking') {
@@ -73,6 +74,14 @@ export function App() {
     setCurrentResponse({ type: 'thinking', text: 'Thinking...' });
   };
 
+  // New chat: clear the persisted conversation, mint a fresh peer (new server
+  // session), and reload so the WS reconnects on the new identity.
+  const handleNewChat = () => {
+    clearMessages();
+    resetChatPeerId();
+    window.location.reload();
+  };
+
   return (
     <div className="flex flex-col h-screen max-w-3xl mx-auto">
       <header className="flex items-center gap-3 px-5 py-4 border-b border-gray-700">
@@ -83,7 +92,16 @@ export function App() {
           <h1 className="text-sm font-semibold">SUDO-AI</h1>
           <p className="text-xs text-gray-400">Digital Life Form v5</p>
         </div>
-        <ConnectionStatus connected={connected} />
+        <div className="ml-auto flex items-center gap-3">
+          <ConnectionStatus connected={connected} />
+          <button
+            onClick={handleNewChat}
+            title="New chat — clears this conversation and starts a fresh session"
+            className="text-xs text-gray-400 hover:text-gray-100 border border-gray-700 hover:border-gray-500 rounded-lg px-2.5 py-1 transition-colors"
+          >
+            New chat
+          </button>
+        </div>
       </header>
 
       <ChatWindow messages={messages} currentResponse={currentResponse} error={error} />

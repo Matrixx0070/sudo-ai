@@ -1,4 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { getChatPeerId } from '../peer';
+import { loadHistory, saveHistory, clearHistory } from '../history';
 
 export type Message = {
   role: 'user' | 'ai';
@@ -20,14 +22,29 @@ export type CurrentResponse =
   | { type: 'streaming'; text: string }
   | null;
 
+const HISTORY_KEY = `sudo-chat-history:${getChatPeerId()}`;
+
 export function useChatSession() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Restore the prior conversation (text + media markers) persisted on this browser.
+  const [messages, setMessages] = useState<Message[]>(() => loadHistory(HISTORY_KEY));
   const [currentResponse, setCurrentResponse] = useState<CurrentResponse>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Persist on every change so a reload restores the conversation.
+  useEffect(() => {
+    saveHistory(HISTORY_KEY, messages);
+  }, [messages]);
 
   const addMessage = useCallback((message: Message) => {
     setMessages((prev) => [...prev, message]);
     setError(null);
+  }, []);
+
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    setCurrentResponse(null);
+    setError(null);
+    clearHistory(HISTORY_KEY);
   }, []);
 
   return {
@@ -35,6 +52,7 @@ export function useChatSession() {
     currentResponse,
     error,
     addMessage,
+    clearMessages,
     setCurrentResponse,
     setError,
   };
