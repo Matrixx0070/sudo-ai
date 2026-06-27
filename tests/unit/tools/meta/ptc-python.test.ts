@@ -1,15 +1,27 @@
 /**
  * Integration tests for meta.ptc-python: spawns the REAL python3 harness and
  * drives the line-protocol against a mocked ToolRegistry.execute.
+ *
+ * Two suites:
+ *   - "protocol (unconfined)" runs with SUDO_PTC_PYTHON_BWRAP=0 (direct python3),
+ *     so the protocol/cap/timeout/recursion logic is covered even on CI runners
+ *     without bubblewrap.
+ *   - "bwrap confinement" runs the DEFAULT (bwrap) path, skipped when bwrap is
+ *     absent; it proves the jail blocks host fs + network while tool() still works.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { spawnSync, execSync } from 'node:child_process';
 import { ptcPythonTool, setPtcPythonRegistry } from '../../../../src/core/tools/builtin/meta/ptc-python.js';
 import type { ToolContext } from '../../../../src/core/tools/types.js';
 import type { ToolRegistry } from '../../../../src/core/tools/registry.js';
 
-const hasPython3 = (() => {
-  try { return spawnSync('python3', ['--version']).status === 0; } catch { return false; }
+const hasPython3 = (() => { try { return spawnSync('python3', ['--version']).status === 0; } catch { return false; } })();
+// `bwrap --version` passes even when the kernel denies unshare (e.g. GitHub
+// Actions containers), so run a minimal SANDBOXED command to confirm bwrap can
+// actually create a namespace — else the confinement tests skip there.
+const hasBwrap = (() => {
+  try { execSync("bwrap --dev /dev --bind / / sh -c 'exit 0'", { stdio: 'ignore' }); return true; }
+  catch { return false; }
 })();
 
 const ctx = { sessionId: 'test', workingDir: process.cwd(), config: {}, logger: console } as unknown as ToolContext;
@@ -19,7 +31,10 @@ function mockRegistry(execute: (name: string, args: Record<string, unknown>) => 
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-describe.skipIf(!hasPython3)('meta.ptc-python', () => {
+describe.skipIf(!hasPython3)('meta.ptc-python — protocol (unconfined)', () => {
+  beforeEach(() => { process.env['SUDO_PTC_PYTHON_BWRAP'] = '0'; });
+  afterEach(() => { delete process.env['SUDO_PTC_PYTHON_BWRAP']; });
+
   it('returns disabled when no registry is injected', async () => {
     setPtcPythonRegistry(null);
     const res = await ptcPythonTool.execute({ script: 'result = 1' }, ctx);
@@ -31,11 +46,7 @@ describe.skipIf(!hasPython3)('meta.ptc-python', () => {
     const reg = mockRegistry((_name, args) => ({ ok: true, echoed: args }));
     setPtcPythonRegistry(reg);
     const res = await ptcPythonTool.execute({
-      script: [
-        'print("hi from python")',
-        'r = tool("demo.echo", {"x": 7})',
-        'result = {"got": r, "n": 7}',
-      ].join('\n'),
+      script: ['print("hi from python")', 'r = tool("demo.echo", {"x": 7})', 'result = {"got": r, "n": 7}'].join('\n'),
     }, ctx);
     expect(res.success).toBe(true);
     expect(reg.execute as any).toHaveBeenCalledWith('demo.echo', { x: 7 }, ctx);
@@ -47,8 +58,7 @@ describe.skipIf(!hasPython3)('meta.ptc-python', () => {
   });
 
   it('surfaces a registry tool error as a python exception', async () => {
-    const reg = mockRegistry(() => { throw new Error('boom from host'); });
-    setPtcPythonRegistry(reg);
+    setPtcPythonRegistry(mockRegistry(() => { throw new Error('boom from host'); }));
     const res = await ptcPythonTool.execute({ script: 'result = tool("will.fail", {})' }, ctx);
     expect(res.success).toBe(false);
     expect((res.data as any).error).toMatch(/boom from host/);
@@ -64,19 +74,10 @@ describe.skipIf(!hasPython3)('meta.ptc-python', () => {
   });
 
   it('caps tool calls at MAX_TOOL_CALLS (50)', async () => {
-    const reg = mockRegistry(() => ({}));
-    setPtcPythonRegistry(reg);
+    setPtcPythonRegistry(mockRegistry(() => ({})));
     const res = await ptcPythonTool.execute({
-      script: [
-        'caught = None',
-        'for i in range(60):',
-        '    try:',
-        '        tool("x.y", {})',
-        '    except Exception as e:',
-        '        caught = str(e)',
-        '        break',
-        'result = caught',
-      ].join('\n'),
+      script: ['caught = None', 'for i in range(60):', '    try:', '        tool("x.y", {})',
+        '    except Exception as e:', '        caught = str(e)', '        break', 'result = caught'].join('\n'),
     }, ctx);
     const data = res.data as any;
     expect(data.capped).toBe(true);
@@ -85,8 +86,7 @@ describe.skipIf(!hasPython3)('meta.ptc-python', () => {
   });
 
   it('times out a runaway script', async () => {
-    const reg = mockRegistry(() => ({}));
-    setPtcPythonRegistry(reg);
+    setPtcPythonRegistry(mockRegistry(() => ({})));
     const res = await ptcPythonTool.execute({ script: 'while True:\n    pass', timeout_seconds: 0.4 }, ctx);
     expect(res.success).toBe(false);
     expect((res.data as any).timedOut).toBe(true);
@@ -98,4 +98,38 @@ describe.skipIf(!hasPython3)('meta.ptc-python', () => {
     expect(res.success).toBe(false);
     expect(res.output).toMatch(/non-empty/);
   });
+});
+
+describe.skipIf(!hasPython3 || !hasBwrap)('meta.ptc-python — bwrap confinement (default)', () => {
+  beforeEach(() => { delete process.env['SUDO_PTC_PYTHON_BWRAP']; }); // default = ON
+  afterEach(() => { delete process.env['SUDO_PTC_PYTHON_BWRAP']; });
+
+  it('still bridges tool() through the registry under bwrap', async () => {
+    const reg = mockRegistry((_n, a) => ({ echoed: a }));
+    setPtcPythonRegistry(reg);
+    const res = await ptcPythonTool.execute({ script: 'result = tool("demo", {"k": 9})' }, ctx);
+    expect(res.success).toBe(true);
+    expect(reg.execute as any).toHaveBeenCalledWith('demo', { k: 9 }, ctx);
+    expect((res.data as any).value).toEqual({ echoed: { k: 9 } });
+  }, 15_000);
+
+  it('confines the filesystem — the script cannot read a host file outside the jail', async () => {
+    setPtcPythonRegistry(mockRegistry(() => ({})));
+    const res = await ptcPythonTool.execute({
+      script: ['try:', '    open("/etc/hostname").read()', '    result = "READ (bad)"',
+        'except Exception as e:', '    result = "blocked:" + type(e).__name__'].join('\n'),
+    }, ctx);
+    expect(res.success).toBe(true);
+    expect(String((res.data as any).value)).toMatch(/^blocked:/);
+  }, 15_000);
+
+  it('confines the network — the script cannot open a socket', async () => {
+    setPtcPythonRegistry(mockRegistry(() => ({})));
+    const res = await ptcPythonTool.execute({
+      script: ['import socket', 'try:', '    socket.create_connection(("1.1.1.1", 53), timeout=2)',
+        '    result = "REACHED (bad)"', 'except Exception as e:', '    result = "blocked:" + type(e).__name__'].join('\n'),
+    }, ctx);
+    expect(res.success).toBe(true);
+    expect(String((res.data as any).value)).toMatch(/^blocked:/);
+  }, 15_000);
 });
