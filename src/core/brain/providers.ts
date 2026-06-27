@@ -11,6 +11,7 @@
  * (SUDO_CUSTOM_PROVIDERS, gap #27) remain a parallel registry consulted on miss.
  */
 
+import { createHash } from 'node:crypto';
 import { createXai } from '@ai-sdk/xai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
@@ -738,7 +739,9 @@ const keyedProviderCache = new Map<string, AnyProvider>();
  * provider name + key so repeated calls reuse the same SDK instance.
  */
 async function buildProviderWithKey(name: ProviderName, apiKey: string): Promise<AnyProvider | null> {
-  const cacheKey = `${name}#${apiKey}`;
+  // Hash the raw key so it is never stored as a string in the long-lived Map
+  // (heap snapshots would otherwise expose it verbatim).
+  const cacheKey = name + '#' + createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
   const cached = keyedProviderCache.get(cacheKey);
   if (cached) return cached;
   const instance = await instantiateProvider(name, apiKey);

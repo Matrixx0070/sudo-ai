@@ -109,7 +109,9 @@ export const MEMORY_THREAT_PATTERNS: readonly ThreatPattern[] = Object.freeze([
   //    Covers: а е і о р с у х (Cyrillic) commonly used to spoof ASCII
   {
     name: 'homoglyph_cyrillic',
-    pattern: /[\u0430\u0435\u0456\u043E\u0440\u0441\u0443\u0445]/,
+    // Lowercase: \u0430 \u0435 \u0456 \u043E \u0440 \u0441 \u0443 \u0445  (original set)
+    // Uppercase: \u0412 \u041A \u041C \u041D \u0422 \u0425  (added \u2014 visually match B K M H T X)
+    pattern: /[\u0412\u041A\u041C\u041D\u0422\u0425\u0430\u0435\u0456\u043E\u0440\u0441\u0443\u0445]/,
   },
   // 9. Shell exfiltration markers (curl, wget, bash pipe)
   {
@@ -188,7 +190,14 @@ export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
  * `role === 'user'` (or undefined) originates from untrusted external parties.
  * Everything our own system produces is trusted to contain legitimate URLs.
  */
-// UNTRUSTED_ONLY_PATTERNS: max 5 entries. Skip for role !== 'user' only if pattern is transcript-echo-safe (no active compromise indicator). Strict patterns must stay STRICT for all roles.
+// UNTRUSTED_ONLY_PATTERNS: patterns skipped when role is 'assistant', 'tool', or
+// 'system'. These roles are treated as internally-generated (model replies, tool
+// outputs relayed by the harness, system scaffolding) — not direct user input.
+// 'external_url' is also skipped because assistant/tool/system messages legitimately
+// contain URLs and would otherwise produce false positives.
+// NOTE: tool results that carry externally-fetched content (browser.search etc.)
+// are still not scanned for jailbreak/dan_prompt — this is intentional operator
+// posture (see tests/memory/injection-scanner.test.ts role-scoped section).
 const UNTRUSTED_ONLY_PATTERNS = new Set<string>(['external_url', 'jailbreak', 'dan_prompt']);
 
 // ---------------------------------------------------------------------------
