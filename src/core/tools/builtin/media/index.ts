@@ -26,6 +26,7 @@ import { imageGenerateTool, imageEditAdvancedTool } from './image-tools.js';
 import { thumbnailGenerateTool } from './thumbnail-tool.js';
 import { videoEditTool, videoGenerateTool, videoToClipsTool } from './video-tools.js';
 import { shortsFactoryTool } from './factory-tools.js';
+import { chartTool } from './tools/chart.js';
 
 const logger = createLogger('media-builtin');
 
@@ -41,6 +42,7 @@ const MEDIA_TOOLS: ToolDefinition[] = [
   videoGenerateTool,
   shortsFactoryTool,
   videoToClipsTool,
+  chartTool,
 ];
 
 // ---------------------------------------------------------------------------
