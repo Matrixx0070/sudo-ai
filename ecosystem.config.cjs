@@ -476,6 +476,11 @@ module.exports = {
         SUDO_WORKFLOWS: process.env['SUDO_WORKFLOWS'] || '1',
         SUDO_WORKFLOWS_QUEUE: process.env['SUDO_WORKFLOWS_QUEUE'] || '1',
         SUDO_PTC: process.env['SUDO_PTC'] || '1',
+        // Python PTC (#492/#493): meta.ptc-python — python3 script calls host
+        // tools via tool(), bwrap-confined (read-only fs, no net) so it reaches
+        // host capabilities ONLY through gated tool(). Kill-switch '0';
+        // SUDO_PTC_PYTHON_BWRAP=0 drops confinement.
+        SUDO_PTC_PYTHON: process.env['SUDO_PTC_PYTHON'] || '1',
         SUDO_PLUGINS: process.env['SUDO_PLUGINS'] || '1',
         SUDO_USER_HOOKS: process.env['SUDO_USER_HOOKS'] || '1',
         SUDO_CLAUDE_COMPAT: process.env['SUDO_CLAUDE_COMPAT'] || '1',
