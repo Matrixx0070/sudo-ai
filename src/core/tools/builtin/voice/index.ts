@@ -23,7 +23,7 @@ const logger = createLogger('voice-builtin');
 const ttsTool: ToolDefinition = {
   name: 'voice.tts',
   description:
-    'Convert text to speech audio. Default is the local Kokoro (ONNX) provider — offline, no API key. Cloud providers (ElevenLabs/xAI/OpenAI) are disabled unless SUDO_TTS_CLOUD=1. Saves the audio file and returns the path.',
+    'Convert text to speech and DELIVER it to the user as an audio/voice note in the current chat — use this to reply with voice. Default is the local Kokoro (ONNX) provider — offline, no API key. Cloud providers (ElevenLabs/xAI/OpenAI) are disabled unless SUDO_TTS_CLOUD=1.',
   category: 'voice',
   timeout: 60_000,
   parameters: {
@@ -70,7 +70,7 @@ const ttsTool: ToolDefinition = {
       logger.info({ outPath, durationMs: result.durationMs, format: result.format }, 'TTS synthesis complete');
       return {
         success: true,
-        output: `Audio synthesised: ${outPath} (${result.format}, ~${Math.round(result.durationMs / 1000)}s)`,
+        output: `Audio saved to: ${outPath} — delivered to the chat as a ${result.format} voice note (~${Math.round(result.durationMs / 1000)}s).`,
         data: { path: outPath, format: result.format, durationMs: result.durationMs, bytes: result.audioBuffer.length },
         artifacts: [{ path: outPath, action: 'created', size: result.audioBuffer.length }],
       };
@@ -244,7 +244,7 @@ const phoneCallTool: ToolDefinition = {
 // Registration
 // ---------------------------------------------------------------------------
 
-const VOICE_TOOLS: ToolDefinition[] = [
+export const VOICE_TOOLS: ToolDefinition[] = [
   ttsTool,
   sttTool,
   phoneCallTool,

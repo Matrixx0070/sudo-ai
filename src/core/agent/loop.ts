@@ -810,6 +810,7 @@ export class AgentLoop extends AgentLoopInjections {
       'media.screenshot',
       'media.record',
       'browser.capture',
+      'voice.tts', // synthesized speech → delivered to the chat as an audio/voice note
     ]);
 
     const emit: Emitter = (event: AgentEvent): void => {
