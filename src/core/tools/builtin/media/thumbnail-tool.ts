@@ -45,7 +45,6 @@ export const thumbnailGenerateTool: ToolDefinition = {
     logger.info({ session: ctx.sessionId, source, isVideo }, 'media.thumbnail-generate invoked');
 
     try {
-      // @ts-expect-error sharp optional dep
       const sharp = await import('sharp').catch(() => {
         throw new Error('sharp is not installed. Run: npm install sharp');
       });

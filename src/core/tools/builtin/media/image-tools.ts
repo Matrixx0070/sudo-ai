@@ -161,7 +161,6 @@ export const imageEditAdvancedTool: ToolDefinition = {
     const specialOps = ops.filter((o) => advancedTypes.has(String(o['type'])));
 
     try {
-      // @ts-expect-error sharp optional dep
       const sharp = await import('sharp').catch(() => { throw new Error('sharp is not installed. Run: npm install sharp'); });
       let currentInput = input;
 

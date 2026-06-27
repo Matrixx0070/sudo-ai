@@ -31,6 +31,7 @@ import { spreadsheetValidateTool } from '../../src/core/tools/builtin/spreadshee
 import { spreadsheetPivotTool } from '../../src/core/tools/builtin/spreadsheet/tools/pivot.js';
 import { spreadsheetChartTool } from '../../src/core/tools/builtin/spreadsheet/tools/chart.js';
 import { docxCreateTool } from '../../src/core/tools/builtin/docx/tools/create.js';
+import { imageEditAdvancedTool } from '../../src/core/tools/builtin/media/image-tools.js';
 
 // Minimal ToolContext — these tools only read sessionId + an optional logger here.
 const ctx = { sessionId: 'smoke', logger: { info() {}, warn() {}, error() {}, debug() {} } } as never;
@@ -38,7 +39,10 @@ const ctx = { sessionId: 'smoke', logger: { info() {}, warn() {}, error() {}, de
 const xlsx = join(tmpdir(), 'sudo-smoke.xlsx');
 const pivotOut = join(tmpdir(), 'sudo-smoke-pivot.xlsx');
 const docx = join(tmpdir(), 'sudo-smoke.docx');
-for (const f of [xlsx, pivotOut, docx]) rmSync(f, { force: true });
+const srcPng = join(tmpdir(), 'sudo-smoke-src.png');
+const outJpg = join(tmpdir(), 'sudo-smoke-out.jpg');
+const tmpFiles = [xlsx, pivotOut, docx, srcPng, outJpg];
+for (const f of tmpFiles) rmSync(f, { force: true });
 
 let failed = 0;
 async function step(label: string, fn: () => Promise<{ success: boolean; output?: string }>, outFile?: string): Promise<void> {
@@ -82,7 +86,18 @@ await step('docx.create (docx)', () => docxCreateTool.execute({
   outputPath: docx, title: 'Smoke', sections: [{ heading: 'S', paragraphs: ['hello'] }],
 }, ctx), docx);
 
-for (const f of [xlsx, pivotOut, docx]) rmSync(f, { force: true });
+// sharp — media.image-edit-advanced was silently broken in prod (sharp was a
+// transitive-only dep so `await import('sharp')` couldn't resolve; the tool masked
+// it as "sharp is not installed"). Make a source PNG via sharp (also directly
+// proves it resolves + the native binding works), then resize+convert it.
+const sharpNs = await import('sharp');
+const sharp = (sharpNs as { default?: typeof sharpNs }).default ?? sharpNs;
+await sharp({ create: { width: 120, height: 90, channels: 3, background: '#2563eb' } }).png().toFile(srcPng);
+await step('media.image-edit-advanced (sharp resize+convert)', () => imageEditAdvancedTool.execute({
+  input: srcPng, output: outJpg, operations: [{ type: 'resize', width: 60 }, { type: 'convert', format: 'jpeg' }],
+}, ctx), outJpg);
+
+for (const f of tmpFiles) rmSync(f, { force: true });
 
 if (failed > 0) {
   console.error(
@@ -92,4 +107,4 @@ if (failed > 0) {
   );
   process.exit(1);
 }
-console.log(`\nprod-runtime smoke OK: spreadsheet (×5) + docx file-producing tools work under the tsx runtime.`);
+console.log(`\nprod-runtime smoke OK: spreadsheet (×5) + docx + image-edit (sharp) tools work under the tsx runtime.`);
