@@ -146,20 +146,29 @@ echo "[install] $BIN_NAME now at: $(command -v "$BIN_NAME")" | tee -a "$LOG"
 echo "[install] Running $BIN_NAME doctor (env checks)..." | tee -a "$LOG"
 "$BIN_NAME" doctor --fix 2>&1 | tail -10 | tee -a "$LOG" || true
 
-# --- Wave2 wizard hook (first-time/ongoing setup; integrates with Wave2 TUI) ---
-echo "[install] Running first-time setup wizard (sudo-ai quickstart --force or sudo-ai setup)..." | tee -a "$LOG"
-"$BIN_NAME" quickstart --force 2>&1 | tail -8 | tee -a "$LOG" || "$BIN_NAME" setup 2>&1 | tail -5 | tee -a "$LOG" || true
-echo "[install] Wizard hook complete (Wave2 owns full impl; current may be basic readline, becomes rich Ink TUI)." | tee -a "$LOG"
+# --- First-time setup wizard (ONLY when no config exists; re-runs must not clobber) ---
+# `quickstart --force` overwrites config without prompting, so it is confined to
+# the genuine first install. If a config already exists (config/.env in the
+# install home or CWD), skip the wizard so re-running this script is idempotent.
+if [ -f "$SUDO_AI_HOME/config/.env" ] || [ -f "config/.env" ]; then
+  echo "[install] Existing config detected — skipping setup wizard (run 'sudo-ai setup' to reconfigure)." | tee -a "$LOG"
+else
+  echo "[install] Running first-time setup wizard (sudo-ai quickstart or sudo-ai setup)..." | tee -a "$LOG"
+  "$BIN_NAME" quickstart --force 2>&1 | tail -8 | tee -a "$LOG" || "$BIN_NAME" setup 2>&1 | tail -5 | tee -a "$LOG" || true
+fi
 
 # --- Start healthy (pm2 preferred; service optional) ---
 echo "[install] Starting healthy stack (pm2 $PM2_NAME or service)..." | tee -a "$LOG"
 if command -v pm2 >/dev/null 2>&1; then
-  pm2 delete "$PM2_NAME" 2>/dev/null || true
-  # Use ecosystem if present in SUDO_AI_HOME (portable)
+  # Idempotent start: reload the app in place if it already runs, start it if not.
+  # NO `pm2 delete` — that would drop the live process and its log/restart history
+  # on every re-run, which is the opposite of idempotent.
   if [ -f "$SUDO_AI_HOME/ecosystem.config.cjs" ]; then
-    pm2 start "$SUDO_AI_HOME/ecosystem.config.cjs" --only "$PM2_NAME" --update-env 2>&1 | tee -a "$LOG" || true
+    pm2 startOrReload "$SUDO_AI_HOME/ecosystem.config.cjs" --only "$PM2_NAME" --update-env 2>&1 | tee -a "$LOG" \
+      || pm2 start "$SUDO_AI_HOME/ecosystem.config.cjs" --only "$PM2_NAME" --update-env 2>&1 | tee -a "$LOG" || true
   else
-    pm2 start pnpm --name "$PM2_NAME" -- cli 2>&1 | tee -a "$LOG" || true
+    pm2 reload "$PM2_NAME" --update-env 2>&1 | tee -a "$LOG" \
+      || pm2 start pnpm --name "$PM2_NAME" -- cli 2>&1 | tee -a "$LOG" || true
   fi
   pm2 save 2>/dev/null || true
   sleep 3

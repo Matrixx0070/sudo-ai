@@ -104,6 +104,9 @@ desktop.ini
 # Agent workspace sandbox — ephemeral working area
 /workspace/
 !/src/core/workspace/
+
+# Agent runtime session logs (dated daily logs) — not source, never published
+/memory/
 # DO NOT IGNORE — these MUST be committed:
 #   config/sudo-ai.json5          (non-secret runtime config)
 #   config/sudo-ai.json5.example  (template — will be created)
