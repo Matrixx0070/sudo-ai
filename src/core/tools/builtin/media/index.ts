@@ -27,6 +27,7 @@ import { thumbnailGenerateTool } from './thumbnail-tool.js';
 import { videoEditTool, videoGenerateTool, videoToClipsTool } from './video-tools.js';
 import { shortsFactoryTool } from './factory-tools.js';
 import { chartTool } from './tools/chart.js';
+import { qrTool } from './tools/qr.js';
 
 const logger = createLogger('media-builtin');
 
@@ -43,6 +44,7 @@ const MEDIA_TOOLS: ToolDefinition[] = [
   shortsFactoryTool,
   videoToClipsTool,
   chartTool,
+  qrTool,
 ];
 
 // ---------------------------------------------------------------------------

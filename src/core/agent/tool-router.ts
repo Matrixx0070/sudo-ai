@@ -162,8 +162,9 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     keywords: [
       'image', 'video', 'thumbnail', 'generate image', 'edit image',
       'shorts', 'clips', 'render', 'animation',
+      'qr', 'qr code', 'qrcode', 'barcode',
     ],
-    patterns: [/\.(png|jpg|jpeg|gif|mp4|webm|svg)\b/i],
+    patterns: [/\.(png|jpg|jpeg|gif|mp4|webm|svg)\b/i, /\bqr\s*code\b/i],
     priority: 7,
     maxFromCategory: 4,
   },

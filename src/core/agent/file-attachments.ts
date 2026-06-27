@@ -24,6 +24,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'document.pdf-from-html', // → PDF
   'docx.create', // → Word document
   'data.chart', // → rendered chart PNG
+  'media.qr', // → rendered QR code PNG
 ]);
 
 /**
