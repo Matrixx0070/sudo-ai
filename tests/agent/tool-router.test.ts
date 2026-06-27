@@ -100,3 +100,42 @@ describe('ToolRouter — multi-word tool surfacing (name-word ranking)', () => {
     expect(names('what time is it in Tokyo')).not.toContain('media.code-image');
   });
 });
+
+describe('ToolRouter — distinctive-word relevance (description-aware ranking)', () => {
+  // Two sibling media tools that both produce an image: the ranker must pick the
+  // one the user actually describes, not the one matching the generic word "image".
+  function registryWithDesc(tools: Array<{ name: string; category: string; description: string }>) {
+    const schemas = tools.map((t) => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: {} } }));
+    return {
+      getSchemaForLLM: () => schemas,
+      listEnabled: () => tools.map((t) => ({ name: t.name, description: t.description, category: t.category, parameters: {} })),
+    };
+  }
+  const MEDIA = [
+    ...TOOLS.map((t) => ({ ...t, description: t.name })),
+    { name: 'media.image-generate', category: 'media', description: 'Generate an image from a text prompt via DALL-E / Stable Diffusion' },
+    { name: 'media.code-image', category: 'media', description: 'Render a source-code snippet as a syntax-highlighted code screenshot PNG' },
+    { name: 'media.equation', category: 'media', description: 'Render a mathematical equation or formula written in LaTeX as a PNG — fractions, integrals, Greek math notation' },
+  ];
+  const router = new ToolRouter(registryWithDesc(MEDIA) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  // With a small fixture every media tool fits the slots, so what matters is
+  // RANK: the described tool must come before its image-making sibling.
+  it('ranks media.equation ahead of code-image for an equation request', () => {
+    const n = names('render this equation as an image');
+    expect(n).toContain('media.equation');
+    expect(n.indexOf('media.equation')).toBeLessThan(n.indexOf('media.code-image'));
+  });
+
+  it('ranks media.equation ahead of code-image for "image of this math" (via description)', () => {
+    const n = names('make an image of this math expression');
+    expect(n.indexOf('media.equation')).toBeLessThan(n.indexOf('media.code-image'));
+  });
+
+  it('ranks media.code-image ahead of equation for a code screenshot', () => {
+    const n = names('make a code screenshot of this function');
+    expect(n).toContain('media.code-image');
+    expect(n.indexOf('media.code-image')).toBeLessThan(n.indexOf('media.equation'));
+  });
+});
