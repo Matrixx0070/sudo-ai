@@ -16,6 +16,7 @@
  */
 
 import http from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { SudoError } from '../shared/errors.js';
 import { RateLimiter } from './rate-limiter.js';
@@ -344,10 +345,21 @@ export class HttpServer {
   // Shared utilities
   // ---------------------------------------------------------------------------
 
+  private static readonly MAX_BODY_BYTES = 4 * 1_048_576; // 4 MiB
+
   private readJsonBody(req: http.IncomingMessage): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
-      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      let totalBytes = 0;
+      req.on('data', (chunk: Buffer) => {
+        totalBytes += chunk.byteLength;
+        if (totalBytes > HttpServer.MAX_BODY_BYTES) {
+          req.destroy();
+          reject(new SudoError('Request body too large (max 4 MiB)', 'api_body_too_large'));
+          return;
+        }
+        chunks.push(chunk);
+      });
       req.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
         if (!raw.trim()) {
@@ -368,7 +380,10 @@ export class HttpServer {
     const auth = req.headers['authorization'] ?? '';
     if (typeof auth !== 'string') return false;
     const parts = auth.split(' ');
-    return parts[0] === 'Bearer' && parts[1] === SUDO_TOKEN;
+    if (parts[0] !== 'Bearer') return false;
+    const candidate = Buffer.from(parts[1] ?? '', 'utf8');
+    const expected = Buffer.from(SUDO_TOKEN, 'utf8');
+    return candidate.length === expected.length && timingSafeEqual(candidate, expected);
   }
 
   private setCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -399,8 +414,10 @@ export class HttpServer {
   }
 
   private getClientIp(req: http.IncomingMessage): string {
-    const fwd = req.headers['x-forwarded-for'];
-    if (typeof fwd === 'string') return fwd.split(',')[0]?.trim() ?? 'unknown';
+    if (process.env['SUDO_AI_TRUSTED_PROXY'] === '1') {
+      const fwd = req.headers['x-forwarded-for'];
+      if (typeof fwd === 'string') return fwd.split(',')[0]?.trim() ?? 'unknown';
+    }
     return req.socket.remoteAddress ?? 'unknown';
   }
 
@@ -416,7 +433,25 @@ export class HttpServer {
   ): Promise<boolean> {
     if (!_sharedBrain) return false; // brain not ready yet
 
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // Auth — mirrors instance dispatch() (static path previously had no auth check)
+    if (SUDO_TOKEN) {
+      const auth = (req.headers['authorization'] ?? '') as string;
+      const parts = auth.split(' ');
+      const candidate = Buffer.from(parts[0] === 'Bearer' ? (parts[1] ?? '') : '', 'utf8');
+      const expected = Buffer.from(SUDO_TOKEN, 'utf8');
+      if (candidate.length !== expected.length || !timingSafeEqual(candidate, expected)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unauthorized', code: 401 } }));
+        return true;
+      }
+    }
+
+    // CORS — per-origin allowlist, not wildcard
+    const reqOrigin = (req.headers['origin'] ?? '') as string;
+    if (reqOrigin && ALLOWED_ORIGINS.has(reqOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+      res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
@@ -439,10 +474,20 @@ export class HttpServer {
 
     if (method === 'POST' && url === '/v1/chat/completions') {
       const chunks: Buffer[] = [];
-      await new Promise<void>((resolve) => {
-        req.on('data', (c: Buffer) => chunks.push(c));
-        req.on('end', resolve);
+      let v1TotalBytes = 0;
+      const bodyOk = await new Promise<boolean>((resolve) => {
+        req.on('data', (c: Buffer) => {
+          v1TotalBytes += c.byteLength;
+          if (v1TotalBytes > HttpServer.MAX_BODY_BYTES) { req.destroy(); resolve(false); return; }
+          chunks.push(c);
+        });
+        req.on('end', () => resolve(true));
       });
+      if (!bodyOk) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Request body too large (max 4 MiB)', code: 413 } }));
+        return true;
+      }
       let body: unknown;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Invalid JSON', code: 400 } })); return true; }
