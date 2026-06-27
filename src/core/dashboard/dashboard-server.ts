@@ -13,6 +13,7 @@
  */
 
 import { createServer, type Server } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import {
   DashboardConfig,
@@ -197,6 +198,12 @@ export function getRegisteredAuthBackend(): AuthBackend | undefined {
  *
  * Used when no other backend is registered via `registerDashboardGlobals`.
  */
+function safeTokenEq(candidate: string, expected: string): boolean {
+  const a = Buffer.from(candidate, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export function createBasicAuthBackend(authToken: string): AuthBackend {
   return {
     name: 'basic',
@@ -204,13 +211,13 @@ export function createBasicAuthBackend(authToken: string): AuthBackend {
       const authHeader = req.headers.authorization ?? '';
       if (authHeader.startsWith('Bearer ')) {
         const token = authHeader.slice(7);
-        if (token === authToken) return { ok: true, principal: 'dashboard:basic' };
+        if (safeTokenEq(token, authToken)) return { ok: true, principal: 'dashboard:basic' };
       }
       if (opts.allowQueryToken) {
         const host = req.headers.host ?? 'localhost';
         const url = new URL(req.url ?? '/', `http://${host}`);
-        const queryToken = url.searchParams.get('token');
-        if (queryToken === authToken) return { ok: true, principal: 'dashboard:basic-query' };
+        const queryToken = url.searchParams.get('token') ?? '';
+        if (safeTokenEq(queryToken, authToken)) return { ok: true, principal: 'dashboard:basic-query' };
       }
       return { ok: false, reason: 'invalid_or_missing_token' };
     },
@@ -314,7 +321,8 @@ export class DashboardServer {
       // process. `server.on('error', ...)` is for bind/socket errors only.
       const handleErr = (err: unknown): void => {
         metrics.dashboardErrors++;
-        log.error({ err: err instanceof Error ? err.message : String(err), url: req.url ?? '/' }, 'Dashboard request handler threw');
+        const safeUrl = (req.url ?? '/').replace(/([?&])token=[^&]*/g, '$1token=REDACTED');
+        log.error({ err: err instanceof Error ? err.message : String(err), url: safeUrl }, 'Dashboard request handler threw');
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'internal_error' }));
