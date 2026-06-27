@@ -83,6 +83,9 @@ check_db.py
 heartbeat-check.py
 twitter_trends_sentiment.py
 hello.py
+# ...but the PTC-python harness IS part of the codebase (loaded as a runtime
+# asset by meta/ptc-python.ts and copied into dist by esbuild).
+!src/core/tools/builtin/code/ptc-python-harness.py
 temp_heartbeat_query.js
 # Raw text/html research dumps at root
 /*.html
