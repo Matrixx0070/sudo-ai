@@ -151,6 +151,12 @@ Promise.all([
     path.join(builtinDir, 'code/ptc-worker.cjs'),
     path.join(codeDistDir, 'ptc-worker.cjs'),
   );
+  // Python PTC harness (gap #15, python variant) — loaded by meta/ptc-python.ts
+  // at __dirname/../code/ptc-python-harness.py via its python3 subprocess.
+  fs.copyFileSync(
+    path.join(builtinDir, 'code/ptc-python-harness.py'),
+    path.join(codeDistDir, 'ptc-python-harness.py'),
+  );
   console.log('Build complete: server CLI + MCP CLI + ACP CLI + builtin tools');
 }).catch((err) => {
   console.error('Build failed:', err.message);

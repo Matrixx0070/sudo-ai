@@ -3852,6 +3852,25 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 9.6b' Programmatic Tool Calling (Python) — meta.ptc-python (gap #15)
+  //      (opt-in: SUDO_PTC_PYTHON=1, default OFF. A python3 subprocess reaches
+  //      the registry only through synchronous `tool(name, args)` — same gates.
+  //      Unlike meta.ptc's sealed VM the script has full Python, so it is
+  //      requiresConfirmation + opt-in; bwrap confinement is a follow-up.)
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_PTC_PYTHON'] === '1') {
+    try {
+      const { ptcPythonTool, setPtcPythonRegistry } = await import('./core/tools/builtin/meta/ptc-python.js');
+      setPtcPythonRegistry(registry);
+      registry.register(ptcPythonTool);
+      log.info('meta.ptc-python registered (SUDO_PTC_PYTHON=1)');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'meta.ptc-python registration failed — continuing without it');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 9.6c Workflow system — meta.run-workflow (gap #24, slices 1-3)
   //      (opt-in: SUDO_WORKFLOWS=1; runs deterministic multi-step .yaml
   //      workflows. Shell steps run one argv command each; tool steps dispatch
