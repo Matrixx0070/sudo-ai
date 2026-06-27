@@ -66,7 +66,7 @@ interface CategoryRule {
 }
 
 type CategoryName =
-  | 'browser' | 'coder' | 'system' | 'content' | 'media'
+  | 'browser' | 'coder' | 'system' | 'content' | 'media' | 'document'
   | 'research' | 'comms' | 'social' | 'marketing' | 'data'
   | 'meta' | 'dev' | 'github' | 'knowledge' | 'voice' | 'business'
   | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal';
@@ -136,11 +136,27 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     keywords: [
       'write article', 'blog', 'copy', 'script', 'proofread', 'rewrite',
       'summarize', 'seo', 'content', 'email sequence', 'presentation',
-      'social post',
+      'social post', 'docx', 'word doc', 'word document',
     ],
     patterns: [/write\s+(a|an|the)\s+/i],
     priority: 7,
     maxFromCategory: 5,
+  },
+  // Generate / parse documents (PDF + DOCX). Without this the document.* tools
+  // (category 'document') were never routed, so the agent couldn't make a PDF.
+  document: {
+    keywords: [
+      'pdf', 'document', 'docx', 'word document', 'report', 'render pdf',
+      'generate pdf', 'create pdf', 'export pdf', 'make a pdf', 'to pdf',
+      'extract text', 'extract tables', 'from html',
+    ],
+    patterns: [
+      /\b(pdf|docx?)\b/i,
+      /\b(generate|create|make|export|render)\s+(a\s+)?(pdf|document|report)\b/i,
+      /\bword\s+document\b/i,
+    ],
+    priority: 7,
+    maxFromCategory: 4,
   },
   media: {
     keywords: [

@@ -30,6 +30,9 @@ const TOOLS = [
   { name: 'github.open_pr', category: 'github' },
   { name: 'github.merge_pr', category: 'github' },
   { name: 'github.pr_diff', category: 'github' },
+  // document category (PDF generation/parsing)
+  { name: 'document.markdown-to-pdf', category: 'document' },
+  { name: 'document.pdf-from-html', category: 'document' },
   // unrelated
   { name: 'content.write-article', category: 'content' },
 ];
@@ -48,5 +51,20 @@ describe('ToolRouter — github category routing', () => {
     const n = names('write an article about cats');
     expect(n).not.toContain('github.merge_pr');
     expect(n).not.toContain('github.open_pr');
+  });
+});
+
+describe('ToolRouter — document category routing', () => {
+  const router = new ToolRouter(fakeRegistry(TOOLS) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  it('surfaces document tools for a "make a PDF" prompt', () => {
+    const n = names('generate a PDF report titled Cat Facts');
+    expect(n).toContain('document.markdown-to-pdf');
+  });
+
+  it('does NOT surface document tools for an unrelated prompt', () => {
+    const n = names('what time is it in Tokyo');
+    expect(n).not.toContain('document.markdown-to-pdf');
   });
 });
