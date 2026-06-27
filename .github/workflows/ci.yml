@@ -56,6 +56,13 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # 8b. Smoke (prod runtime) — runs file-producing tools under the real tsx
+      # loader (the daemon's runtime), which catches ESM/CJS dynamic-import interop
+      # bugs that vitest masks (e.g. exceljs "Workbook is not a constructor", which
+      # shipped the whole spreadsheet subsystem broken while every unit test passed).
+      - name: Smoke (prod runtime)
+        run: pnpm smoke:prod-tools
+
       # 9. Build — verifies the compiled artefact can be produced cleanly
       - name: Build
         run: pnpm build
