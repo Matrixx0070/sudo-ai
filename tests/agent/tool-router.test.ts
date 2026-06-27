@@ -116,6 +116,7 @@ describe('ToolRouter — distinctive-word relevance (description-aware ranking)'
     { name: 'media.image-generate', category: 'media', description: 'Generate an image from a text prompt via DALL-E / Stable Diffusion' },
     { name: 'media.code-image', category: 'media', description: 'Render a source-code snippet as a syntax-highlighted code screenshot PNG' },
     { name: 'media.equation', category: 'media', description: 'Render a mathematical equation or formula written in LaTeX as a PNG — fractions, integrals, Greek math notation' },
+    { name: 'media.animation', category: 'media', description: 'Create a looping animated GIF from an ordered sequence of caption frames' },
   ];
   const router = new ToolRouter(registryWithDesc(MEDIA) as never);
   const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
@@ -137,5 +138,12 @@ describe('ToolRouter — distinctive-word relevance (description-aware ranking)'
     const n = names('make a code screenshot of this function');
     expect(n).toContain('media.code-image');
     expect(n.indexOf('media.code-image')).toBeLessThan(n.indexOf('media.equation'));
+  });
+
+  it('ranks media.animation first for an animated-gif request', () => {
+    const n = names('make an animated gif counting down');
+    expect(n).toContain('media.animation');
+    expect(n.indexOf('media.animation')).toBeLessThan(n.indexOf('media.code-image'));
+    expect(n.indexOf('media.animation')).toBeLessThan(n.indexOf('media.image-generate'));
   });
 });
