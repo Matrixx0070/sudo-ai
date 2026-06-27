@@ -4,7 +4,10 @@
  * dropping new facts). Drops the OLDEST dated entries, keeps the header + newest.
  */
 import { describe, it, expect } from 'vitest';
-import { trimMemoryToFit } from '../../../src/core/memory/auto-dream.js';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trimMemoryToFit, AutoDream } from '../../../src/core/memory/auto-dream.js';
 
 function build(n: number): string {
   let s = '# Long-Term Memory\n\n';
@@ -49,5 +52,43 @@ describe('trimMemoryToFit', () => {
     const { kept, trimmed } = trimMemoryToFit(c, 10);
     expect(trimmed).toEqual([]); // single entry is never dropped
     expect(kept).toContain(big);
+  });
+});
+
+describe('AutoDream.healMemoryFileIfOverCap', () => {
+  // heal only touches the filesystem; the brain fn + db are never used by it.
+  const makeDream = () => new AutoDream(async () => '', {} as never, undefined, undefined);
+
+  it('trims an over-cap MEMORY.md under the cap and archives the trimmed lines', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'heal-'));
+    try {
+      let body = '# Long-Term Memory\n\n';
+      for (let i = 0; body.length < 55 * 1024; i++) {
+        body += `- [2026-06-${String((i % 28) + 1).padStart(2, '0')}] fact ${i} ${'z'.repeat(60)}\n`;
+      }
+      writeFileSync(join(dir, 'MEMORY.md'), body, 'utf-8');
+
+      const trimmed = makeDream().healMemoryFileIfOverCap(dir);
+      expect(trimmed).toBeGreaterThan(0);
+
+      const after = readFileSync(join(dir, 'MEMORY.md'), 'utf-8');
+      expect(Buffer.byteLength(after, 'utf-8')).toBeLessThan(50 * 1024);
+      expect(after.startsWith('# Long-Term Memory')).toBe(true);
+      expect(existsSync(join(dir, 'MEMORY.archive.md'))).toBe(true);
+      expect(readFileSync(join(dir, 'MEMORY.archive.md'), 'utf-8')).toContain('- [2026-06');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves an under-cap MEMORY.md untouched (returns 0, no archive)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'heal-'));
+    try {
+      writeFileSync(join(dir, 'MEMORY.md'), '# Long-Term Memory\n\n- [2026-06-01] small\n', 'utf-8');
+      expect(makeDream().healMemoryFileIfOverCap(dir)).toBe(0);
+      expect(existsSync(join(dir, 'MEMORY.archive.md'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

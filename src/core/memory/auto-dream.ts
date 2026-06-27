@@ -508,6 +508,46 @@ Output ONLY the JSON array, nothing else.`;
     }
   }
 
+  /**
+   * Trim MEMORY.md back under the cap if it's currently over — independent of
+   * the dream cycle and of whether there are new facts. Call once on boot so an
+   * over-cap file is healed promptly (within a restart) instead of waiting up to
+   * a full dream interval. Reuses the same rolling-buffer trim + archive as the
+   * promote path. Best-effort; never throws. Returns the entries trimmed.
+   */
+  healMemoryFileIfOverCap(workspaceDir: string = path.resolve(PATHS.WORKSPACE)): number {
+    const memoryPath = path.join(workspaceDir, 'MEMORY.md');
+    if (!existsSync(memoryPath)) return 0;
+
+    let existing: string;
+    try {
+      existing = readFileSync(memoryPath, 'utf-8');
+    } catch (err) {
+      log.warn({ memoryPath, err: String(err) }, 'healMemoryFileIfOverCap: cannot read MEMORY.md');
+      return 0;
+    }
+    if (Buffer.byteLength(existing, 'utf-8') < MAX_MEMORY_FILE_BYTES) return 0;
+
+    const { kept, trimmed } = trimMemoryToFit(existing, Math.floor(MAX_MEMORY_FILE_BYTES * 0.8));
+    if (trimmed.length === 0) return 0;
+
+    this._archiveTrimmedMemory(workspaceDir, trimmed);
+    const tmpPath = memoryPath + '.tmp';
+    try {
+      writeFileSync(tmpPath, kept, { encoding: 'utf-8', flag: 'w' });
+      renameSync(tmpPath, memoryPath);
+      log.info(
+        { memoryPath, trimmedCount: trimmed.length, newSize: Buffer.byteLength(kept, 'utf-8') },
+        'healMemoryFileIfOverCap: MEMORY.md was over cap — trimmed oldest entries under cap',
+      );
+    } catch (err) {
+      try { if (existsSync(tmpPath)) unlinkSync(tmpPath); } catch { /* best-effort */ }
+      log.warn({ memoryPath, err: String(err) }, 'healMemoryFileIfOverCap: write failed (non-fatal)');
+      return 0;
+    }
+    return trimmed.length;
+  }
+
   // -------------------------------------------------------------------------
   // Phase 3: Prune
   // -------------------------------------------------------------------------

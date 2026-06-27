@@ -3350,6 +3350,15 @@ async function boot(): Promise<void> {
       resolveFactContradiction,
     );
 
+    // Heal an over-cap MEMORY.md on boot so a stuck file (which silently drops
+    // new learnings) is trimmed promptly instead of waiting for the next dream.
+    try {
+      const healed = autoDream.healMemoryFileIfOverCap();
+      if (healed > 0) log.info({ trimmed: healed }, 'Boot: trimmed over-cap MEMORY.md under its size limit');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'Boot MEMORY.md heal failed (non-fatal)');
+    }
+
     // Background agent executor (needs an agentRunner function)
     const _backgroundExecutor = new BackgroundAgentExecutor(
       async (sessionId: string, prompt: string) => {
