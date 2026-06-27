@@ -14,6 +14,7 @@ import { markdownToPdfTool } from './tools/markdown-to-pdf.js';
 import { pdfExtractTextTool } from './tools/pdf-extract-text.js';
 import { pdfExtractTablesTool } from './tools/pdf-extract-tables.js';
 import { slidesTool } from './tools/slides.js';
+import { webpageTool } from './tools/webpage.js';
 
 /** All document tools in stable registration order. */
 export const DOCUMENT_TOOLS = [
@@ -22,6 +23,7 @@ export const DOCUMENT_TOOLS = [
   pdfExtractTextTool,
   pdfExtractTablesTool,
   slidesTool,
+  webpageTool,
 ] as const;
 
 /**
