@@ -13,6 +13,10 @@ export function App() {
         setCurrentResponse({ type: 'thinking', text: data.text || 'Thinking...' });
       } else if (data.type === 'progress') {
         setCurrentResponse({ type: 'progress', text: data.text, progress: data.progress });
+      } else if (data.type === 'token') {
+        // Intermediate step text streamed during the turn — shown as a live
+        // preview bubble; the final `reply` frame replaces it with the canonical text.
+        setCurrentResponse({ type: 'streaming', text: data.text });
       } else if (data.type === 'user_echo') {
         addMessage({ role: 'user', content: data.text, timestamp: new Date() });
         setCurrentResponse({ type: 'thinking', text: 'Thinking...' });

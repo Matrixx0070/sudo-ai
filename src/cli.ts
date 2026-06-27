@@ -2069,7 +2069,7 @@ async function boot(): Promise<void> {
   //     Enable with: WEB_CHAT_ENABLED=true in config/.env
   // -------------------------------------------------------------------------
   if (process.env['WEB_CHAT_ENABLED'] === 'true') try {
-    const { WebAdapter } = await import('./core/channels/web.js');
+    const { WebAdapter, agentEventToWebFrame } = await import('./core/channels/web.js');
     const web = new WebAdapter();
     registerOutboundAdapter(web);
     if (chatApprovals) approvalManager.registerSender('web', web);
@@ -2100,7 +2100,19 @@ async function boot(): Promise<void> {
           const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
+          // Stream live activity (tool calls + intermediate text) to the browser so a
+          // long turn shows progress instead of a silent wait. Default-on; SUDO_WEB_STREAM=0
+          // disables. Best-effort: a failed frame never breaks the turn.
+          const webStreaming = process.env['SUDO_WEB_STREAM'] !== '0';
+          const onWebEvent: import('./core/agent/types.js').AgentEventHandler | undefined = webStreaming
+            ? (ev) => {
+                try {
+                  const frame = agentEventToWebFrame(ev);
+                  if (frame) void web.send(msg.peerId, frame).catch(() => { /* ws closed mid-stream */ });
+                } catch { /* never break the turn on a streaming frame */ }
+              }
+            : undefined;
+          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', onWebEvent, { race: true });
           if (runGenerations.isStale(convKey, runGen)) {
             log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
             return;

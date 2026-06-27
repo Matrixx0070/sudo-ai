@@ -24,6 +24,7 @@ import { ChannelError } from '../shared/errors.js';
 import { projectPath } from '../shared/paths.js';
 import { serveStaticFile, buildSpaCSPHeader } from '../gateway/static-middleware.js';
 import type { ChannelAdapter } from './adapter.js';
+import type { AgentEvent } from '../agent/types.js';
 import type {
   ChannelType,
   MediaAttachment,
@@ -78,6 +79,24 @@ export function buildMediaReplyFrame(part: { type: string; mimeType: string; fil
       dataBase64: part.dataBase64,
     }],
   });
+}
+
+/**
+ * Map an agent-loop event to a WS frame the SPA already renders, so the web
+ * chat shows live activity during a turn instead of a silent wait:
+ *   - tool-call   → a `progress` frame ("Running <tool>…") → ProgressBar
+ *   - stream-chunk→ a `token` frame (the step's text) → streaming preview bubble
+ * Returns null for events the web UI doesn't surface. Keep frame shapes in sync
+ * with the SPA's `ChatWSMessage` union (useWebSocket.ts).
+ */
+export function agentEventToWebFrame(ev: AgentEvent): string | null {
+  if (ev.type === 'tool-call') {
+    return JSON.stringify({ type: 'progress', text: `Running ${ev.name}…` });
+  }
+  if (ev.type === 'stream-chunk' && ev.chunk.trim()) {
+    return JSON.stringify({ type: 'token', text: ev.chunk });
+  }
+  return null;
 }
 
 export function parseAttachmentEnvelope(raw: string): AttachmentEnvelope | null {
