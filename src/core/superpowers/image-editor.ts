@@ -84,7 +84,6 @@ export const imageEditorTool: ToolDefinition = {
     logger.info({ session: ctx.sessionId, input, output, opCount: validOps.length }, 'Image edit started');
 
     try {
-      // @ts-expect-error sharp is an optional dependency
       const sharp = await import('sharp').catch(() => {
         throw new Error('sharp is not installed. Run: npm install sharp');
       });

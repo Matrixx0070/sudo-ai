@@ -130,6 +130,7 @@
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
     "remotion": "^4.0.440",
+    "sharp": "^0.35.2",
     "smol-toml": "^1.6.1",
     "sqlite-vec": "^0.1.7",
     "tailwindcss": "^4.2.2",
