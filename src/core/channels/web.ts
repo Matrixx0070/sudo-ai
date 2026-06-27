@@ -99,6 +99,33 @@ export function agentEventToWebFrame(ev: AgentEvent): string | null {
   return null;
 }
 
+/** Minimal shape of a sendable socket — what {@link broadcastToSockets} needs. */
+interface SendableSocket {
+  readyState: number;
+  OPEN: number;
+  send(data: string): void;
+}
+
+/**
+ * Send a payload to every OPEN socket in the set, skipping closed or throwing
+ * ones; returns how many actually received it. Pure (no logger / no map lookup)
+ * so the multi-tab fan-out is unit-testable without a real WebSocket.
+ */
+export function broadcastToSockets(sockets: Iterable<SendableSocket>, payload: string): number {
+  let sent = 0;
+  for (const ws of sockets) {
+    try {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(payload);
+        sent++;
+      }
+    } catch {
+      /* one bad socket must not stop the rest */
+    }
+  }
+  return sent;
+}
+
 export function parseAttachmentEnvelope(raw: string): AttachmentEnvelope | null {
   let obj: unknown;
   try { obj = JSON.parse(raw); } catch { return null; }
@@ -179,7 +206,8 @@ export class WebAdapter implements ChannelAdapter {
   private _isConnected = false;
   private _handler: MessageHandler | null = null;
   /** Map from peerId -> active WebSocket connection. */
-  private _clients = new Map<string, WSClient>();
+  /** peerId → every open socket for that peer (>1 means multi-tab / multi-device). */
+  private _clients = new Map<string, Set<WSClient>>();
 
   get isConnected(): boolean {
     return this._isConnected;
@@ -235,8 +263,10 @@ export class WebAdapter implements ChannelAdapter {
       const peerId = requestedPeer
         ? requestedPeer.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || `web-${randomUUID()}`
         : `web-${randomUUID()}`;
-      this._clients.set(peerId, ws);
-      log.info({ peerId, ip: (httpReq.socket as { remoteAddress?: string } | null)?.remoteAddress }, 'Web WS client connected');
+      let peerSockets = this._clients.get(peerId);
+      if (!peerSockets) { peerSockets = new Set(); this._clients.set(peerId, peerSockets); }
+      peerSockets.add(ws);
+      log.info({ peerId, sockets: peerSockets.size, ip: (httpReq.socket as { remoteAddress?: string } | null)?.remoteAddress }, 'Web WS client connected');
 
       const pingInterval = setInterval(() => {
         if (ws.readyState === ws.OPEN) {
@@ -262,14 +292,14 @@ export class WebAdapter implements ChannelAdapter {
 
       ws.on('close', () => {
         clearInterval(pingInterval);
-        this._clients.delete(peerId);
+        this._removeSocket(peerId, ws);
         log.info({ peerId }, 'Web WS client disconnected');
       });
 
       ws.on('error', (...args: unknown[]) => {
         clearInterval(pingInterval);
         log.error({ peerId, err: args[0] }, 'Web WS client error');
-        this._clients.delete(peerId);
+        this._removeSocket(peerId, ws);
       });
     });
 
@@ -355,8 +385,8 @@ export class WebAdapter implements ChannelAdapter {
 
   async stop(): Promise<void> {
     try {
-      for (const ws of this._clients.values()) {
-        ws.close();
+      for (const sockets of this._clients.values()) {
+        for (const ws of sockets) ws.close();
       }
       this._clients.clear();
     } catch (err) {
@@ -367,6 +397,21 @@ export class WebAdapter implements ChannelAdapter {
     }
   }
 
+  /** Send a raw payload to every open socket for a peer; returns the count delivered. */
+  private _broadcast(peerId: string, payload: string): number {
+    const sockets = this._clients.get(peerId);
+    if (!sockets || sockets.size === 0) return 0;
+    return broadcastToSockets(sockets, payload);
+  }
+
+  /** Drop one socket from a peer's set, removing the peer entry when it was the last. */
+  private _removeSocket(peerId: string, ws: WSClient): void {
+    const sockets = this._clients.get(peerId);
+    if (!sockets) return;
+    sockets.delete(ws);
+    if (sockets.size === 0) this._clients.delete(peerId);
+  }
+
   async send(peerId: string, text: string, _options?: SendOptions): Promise<void> {
     if (!peerId) {
       throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
@@ -375,22 +420,12 @@ export class WebAdapter implements ChannelAdapter {
       throw new ChannelError('Web adapter is not connected', 'channel_not_connected', { peerId });
     }
 
-    const ws = this._clients.get(peerId);
-    if (!ws) {
+    const sent = this._broadcast(peerId, text);
+    if (sent === 0) {
       log.warn({ peerId }, 'Web send: no active WS connection for peerId — dropped');
       return;
     }
-
-    try {
-      ws.send(text);
-      log.debug({ peerId, textLen: text.length }, 'Web WS message sent');
-    } catch (err) {
-      log.error({ peerId, err }, 'Web send failed');
-      throw new ChannelError('Failed to send Web message', 'channel_send_failed', {
-        peerId,
-        cause: String(err),
-      });
-    }
+    log.debug({ peerId, textLen: text.length, sockets: sent }, 'Web WS message sent');
   }
 
   /**
@@ -406,11 +441,6 @@ export class WebAdapter implements ChannelAdapter {
     }
     if (!this._isConnected) {
       throw new ChannelError('Web adapter is not connected', 'channel_not_connected', { peerId });
-    }
-    const ws = this._clients.get(peerId);
-    if (!ws) {
-      log.warn({ peerId }, 'Web sendMedia: no active WS connection for peerId — dropped');
-      return;
     }
     const buf = attachment.buffer;
     if (!buf || buf.length === 0) {
@@ -428,16 +458,12 @@ export class WebAdapter implements ChannelAdapter {
       ...(attachment.filename ? { filename: attachment.filename } : {}),
       dataBase64: buf.toString('base64'),
     });
-    try {
-      ws.send(frame);
-      log.info({ peerId, type: attachment.type, bytes: buf.length }, 'Web media reply sent');
-    } catch (err) {
-      log.error({ peerId, err }, 'Web sendMedia failed');
-      throw new ChannelError('Failed to send Web media', 'channel_send_failed', {
-        peerId,
-        cause: String(err),
-      });
+    const sent = this._broadcast(peerId, frame);
+    if (sent === 0) {
+      log.warn({ peerId, filename: attachment.filename }, 'Web sendMedia: no active WS connection — dropped');
+      return;
     }
+    log.info({ peerId, type: attachment.type, bytes: buf.length, sockets: sent }, 'Web media reply sent');
   }
 
   // ---------------------------------------------------------------------------
@@ -530,10 +556,7 @@ export class WebAdapter implements ChannelAdapter {
             return;
           }
           // Echo the injected user message to the browser so both sides are visible
-          const senderWs = this._clients.get(data.peerId);
-          if (senderWs) {
-            try { senderWs.send(JSON.stringify({ type: 'user_echo', text: data.text })); } catch { /* best-effort */ }
-          }
+          this._broadcast(data.peerId, JSON.stringify({ type: 'user_echo', text: data.text }));
           void this._dispatch(data.peerId, data.text, (req.socket as { remoteAddress?: string } | null)?.remoteAddress)
             .then(() => {
               if (res.headersSent || res.writableEnded) return;
@@ -570,9 +593,7 @@ export class WebAdapter implements ChannelAdapter {
    * Best-effort: silently no-ops if the peer has no open socket.
    */
   private _notifyClient(peerId: string, type: 'error', message: string): void {
-    const ws = this._clients.get(peerId);
-    if (!ws) return;
-    try { ws.send(JSON.stringify({ type, error: message })); } catch { /* best-effort */ }
+    this._broadcast(peerId, JSON.stringify({ type, error: message }));
   }
 
   /**

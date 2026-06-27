@@ -8,7 +8,7 @@
  * never get mis-routed into the upload path.
  */
 import { describe, it, expect } from 'vitest';
-import { parseAttachmentEnvelope, buildMediaReplyFrame } from '../../../src/core/channels/web.js';
+import { parseAttachmentEnvelope, buildMediaReplyFrame, broadcastToSockets } from '../../../src/core/channels/web.js';
 
 describe('parseAttachmentEnvelope', () => {
   it('accepts a well-formed envelope (with caption)', () => {
@@ -79,5 +79,38 @@ describe('buildMediaReplyFrame', () => {
   it('defaults a missing filename to "file"', () => {
     const frame = JSON.parse(buildMediaReplyFrame({ type: 'image', mimeType: 'image/png', dataBase64: 'eA==' }));
     expect(frame.media[0].filename).toBe('file');
+  });
+});
+
+describe('broadcastToSockets (multi-tab fan-out)', () => {
+  const mkSocket = () => {
+    const sent: string[] = [];
+    return { OPEN: 1, readyState: 1, send: (s: string) => sent.push(s), sent };
+  };
+
+  it('delivers to every open socket and counts them', () => {
+    const a = mkSocket();
+    const b = mkSocket();
+    expect(broadcastToSockets([a, b], 'hi')).toBe(2);
+    expect(a.sent).toEqual(['hi']);
+    expect(b.sent).toEqual(['hi']);
+  });
+
+  it('skips a non-open socket', () => {
+    const open = mkSocket();
+    const closed = { OPEN: 1, readyState: 3, send: () => { throw new Error('should not send'); } };
+    expect(broadcastToSockets([open, closed], 'x')).toBe(1);
+    expect(open.sent).toEqual(['x']);
+  });
+
+  it('continues past a throwing socket', () => {
+    const bad = { OPEN: 1, readyState: 1, send: () => { throw new Error('boom'); } };
+    const good = mkSocket();
+    expect(broadcastToSockets([bad, good], 'y')).toBe(1);
+    expect(good.sent).toEqual(['y']);
+  });
+
+  it('returns 0 for an empty set', () => {
+    expect(broadcastToSockets([], 'z')).toBe(0);
   });
 });
