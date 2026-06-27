@@ -11,66 +11,85 @@
  * "Workbook is not a constructor") and earlier turned SecurityGuard off 323×.
  *
  * This smoke actually CALLS the lightweight, pure-JS file producers and asserts
- * each writes a non-empty file. It runs in CI as a separate step after Test, so a
- * regression in the interop contract fails the build instead of reaching prod.
+ * each succeeds (and, for writers, leaves a non-empty file). It runs in CI as a
+ * separate step after Test, so a regression in the interop contract — or in the
+ * spreadsheet round-trip logic — fails the build instead of reaching prod.
  *
- * Scope: pure-JS deliverable tools only (exceljs / docx). The chromium- and
+ * Scope: pure-JS tools only (exceljs round-trip + docx). The chromium- and
  * ffmpeg-backed tools (media.*, document.webpage/slides) need heavy external
- * binaries and are intentionally out of scope here — their dynamic imports use
- * named exports / `.default` and are covered by the one-time audit recorded in
- * the memory.
+ * binaries and are intentionally out of scope here; their dynamic imports use
+ * named exports / `.default` and are covered by the one-time audit in the memory.
+ * When you add a new pure-JS file-producing tool, add a step() below.
  */
 
 import { existsSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spreadsheetCreateTool } from '../../src/core/tools/builtin/spreadsheet/tools/create.js';
+import { spreadsheetReadTool } from '../../src/core/tools/builtin/spreadsheet/tools/read.js';
+import { spreadsheetValidateTool } from '../../src/core/tools/builtin/spreadsheet/tools/validate.js';
+import { spreadsheetPivotTool } from '../../src/core/tools/builtin/spreadsheet/tools/pivot.js';
+import { spreadsheetChartTool } from '../../src/core/tools/builtin/spreadsheet/tools/chart.js';
 import { docxCreateTool } from '../../src/core/tools/builtin/docx/tools/create.js';
 
-// Minimal ToolContext — the tools only read sessionId + an optional logger here.
+// Minimal ToolContext — these tools only read sessionId + an optional logger here.
 const ctx = { sessionId: 'smoke', logger: { info() {}, warn() {}, error() {}, debug() {} } } as never;
 
-const cases = [
-  {
-    name: 'spreadsheet.create (exceljs)',
-    tool: spreadsheetCreateTool,
-    out: join(tmpdir(), 'sudo-smoke.xlsx'),
-    args: { sheets: [{ name: 'S', columns: [{ header: 'A', key: 'a' }], rows: [{ a: 1 }] }] },
-  },
-  {
-    name: 'docx.create (docx)',
-    tool: docxCreateTool,
-    out: join(tmpdir(), 'sudo-smoke.docx'),
-    args: { title: 'Smoke', sections: [{ heading: 'S', paragraphs: ['hello'] }] },
-  },
-];
+const xlsx = join(tmpdir(), 'sudo-smoke.xlsx');
+const pivotOut = join(tmpdir(), 'sudo-smoke-pivot.xlsx');
+const docx = join(tmpdir(), 'sudo-smoke.docx');
+for (const f of [xlsx, pivotOut, docx]) rmSync(f, { force: true });
 
 let failed = 0;
-for (const c of cases) {
+async function step(label: string, fn: () => Promise<{ success: boolean; output?: string }>, outFile?: string): Promise<void> {
   try {
-    rmSync(c.out, { force: true });
-    const r = await c.tool.execute({ outputPath: c.out, ...c.args }, ctx);
-    const wrote = existsSync(c.out) && statSync(c.out).size > 0;
-    if (r.success && wrote) {
-      console.log(`✓ ${c.name} → ${statSync(c.out).size} bytes`);
+    const r = await fn();
+    const wrote = outFile ? existsSync(outFile) && statSync(outFile).size > 0 : true;
+    if (r?.success && wrote) {
+      console.log(`✓ ${label}${outFile ? ` → ${statSync(outFile).size} bytes` : ''}`);
     } else {
       failed++;
-      console.error(`✗ ${c.name} — success=${r.success} wroteFile=${wrote} output=${String(r.output).slice(0, 160)}`);
+      console.error(`✗ ${label} — success=${r?.success} wroteFile=${wrote} output=${String(r?.output).slice(0, 160)}`);
     }
-    rmSync(c.out, { force: true });
   } catch (err) {
     failed++;
-    console.error(`✗ ${c.name} — THREW ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`✗ ${label} — THREW ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
+// exceljs subsystem — a full round-trip (create → read → validate → pivot → chart);
+// every one of these dynamic-imports exceljs, so this guards the interop fix end-to-end.
+await step('spreadsheet.create (exceljs)', () => spreadsheetCreateTool.execute({
+  outputPath: xlsx,
+  sheets: [{
+    name: 'Data',
+    columns: [{ header: 'Region', key: 'region' }, { header: 'Product', key: 'product' }, { header: 'Amount', key: 'amount' }],
+    rows: [{ region: 'N', product: 'A', amount: 10 }, { region: 'N', product: 'B', amount: 20 }, { region: 'S', product: 'A', amount: 5 }],
+  }],
+}, ctx), xlsx);
+await step('spreadsheet.read', () => spreadsheetReadTool.execute({ path: xlsx }, ctx));
+await step('spreadsheet.validate', () => spreadsheetValidateTool.execute({ path: xlsx }, ctx));
+await step('spreadsheet.pivot', () => spreadsheetPivotTool.execute({
+  inputPath: xlsx, outputPath: pivotOut, sourceSheet: 'Data',
+  rows: ['region'], columns: ['product'], values: [{ field: 'amount', aggregation: 'sum' }],
+}, ctx), pivotOut);
+await step('spreadsheet.chart', () => spreadsheetChartTool.execute({
+  path: xlsx, sheetName: 'Data', chartType: 'bar', dataRange: { startRow: 1, endRow: 4, startCol: 1, endCol: 3 },
+}, ctx));
+
+// docx (the docx package)
+await step('docx.create (docx)', () => docxCreateTool.execute({
+  outputPath: docx, title: 'Smoke', sections: [{ heading: 'S', paragraphs: ['hello'] }],
+}, ctx), docx);
+
+for (const f of [xlsx, pivotOut, docx]) rmSync(f, { force: true });
+
 if (failed > 0) {
   console.error(
-    `\nprod-runtime smoke FAILED: ${failed}/${cases.length}. ` +
-    `A tool that passes vitest but fails here is almost certainly an ESM/CJS dynamic-import ` +
-    `interop bug — dynamic-importing a CJS dep needs \`(await import('pkg')).default ?? mod\`. ` +
-    `See the project-esm-require-securityguard memory.`,
+    `\nprod-runtime smoke FAILED: ${failed} step(s). A tool that passes vitest but fails ` +
+    `here is almost certainly an ESM/CJS dynamic-import interop bug — dynamic-importing a CJS ` +
+    `dep needs \`(await import('pkg')).default ?? mod\`. See the project-esm-require-securityguard memory.`,
   );
   process.exit(1);
 }
-console.log(`\nprod-runtime smoke OK: ${cases.length}/${cases.length} file-producing tools work under the tsx runtime.`);
+console.log(`\nprod-runtime smoke OK: spreadsheet (×5) + docx file-producing tools work under the tsx runtime.`);
