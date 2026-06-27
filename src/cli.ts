@@ -31,7 +31,7 @@ import {
   isVectorBackfillEnabled,
   MindDBVectorStore,
 } from './core/memory/vector-backfill.js';
-import { LocalEmbeddingProvider, LOCAL_EMBED_DIM } from './core/memory/local-embeddings.js';
+import { LocalEmbeddingProvider, LOCAL_EMBED_DIM, makeLocalFirstEmbed } from './core/memory/local-embeddings.js';
 import { Brain } from './core/brain/brain.js';
 import { ToolRegistry } from './core/tools/registry.js';
 import { loadBuiltinTools } from './core/tools/loader.js';
@@ -3328,13 +3328,17 @@ async function boot(): Promise<void> {
         return false; // judge unavailable → treat as non-contradiction (fail-open)
       }
     };
+    // Contradiction narrowing embeds its own texts live + compares cosines, so it
+    // doesn't need the OpenAI 1536-dim stored index — prefer the always-up local
+    // ONNX model (free, no 429s) and only fall back to OpenAI if local is disabled.
+    const contradictionEmbed = makeLocalFirstEmbed((t: string) => chunkEmbeddings.embed(t));
     const resolveFactContradiction = async (chunkId: number): Promise<void> => {
       if (!isChunkContradictionEnabled()) return;
       const chunk = db.getChunk(chunkId);
       if (!chunk) return;
       const res = await resolveChunkContradictions(
         chunk,
-        { db, embed: (t) => chunkEmbeddings.embed(t), judge: contradictionJudge },
+        { db, embed: contradictionEmbed, judge: contradictionJudge },
         { candidateFilter: (c) => c.source === 'learning' },
       );
       // Observable per-fact so the live hook is verifiable (no-op otherwise stays silent).
