@@ -30,6 +30,7 @@ import { chartTool } from './tools/chart.js';
 import { qrTool } from './tools/qr.js';
 import { diagramTool } from './tools/diagram.js';
 import { codeImageTool } from './tools/code-image.js';
+import { mathTool } from './tools/math.js';
 
 const logger = createLogger('media-builtin');
 
@@ -49,6 +50,7 @@ const MEDIA_TOOLS: ToolDefinition[] = [
   qrTool,
   diagramTool,
   codeImageTool,
+  mathTool,
 ];
 
 // ---------------------------------------------------------------------------

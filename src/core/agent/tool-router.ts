@@ -33,6 +33,23 @@ export const BASE_TOOL_SLOTS = 10;
 export const CONTINUITY_SLOTS = 3;
 
 /**
+ * Generic words filtered out of within-category relevance ranking — structural
+ * filler plus visual/output vocabulary shared by most media tools ("image",
+ * "png", "render"…). Removing them leaves the DISTINCTIVE words (equation, code,
+ * chart, qr, diagram…) so a tool the user actually describes outranks siblings
+ * that merely also produce an image. Domain/action words (code, data, chart,
+ * generate, edit, video…) are deliberately NOT here.
+ */
+const ROUTER_GENERIC_WORDS = new Set<string>([
+  'the', 'and', 'for', 'with', 'this', 'that', 'into', 'from', 'your', 'you', 'our', 'make', 'making',
+  'nice', 'clean', 'shareable', 'please', 'want', 'need', 'show', 'give', 'create', 'creates',
+  'image', 'images', 'picture', 'pictures', 'photo', 'visual', 'graphic', 'graphics', 'png', 'jpg',
+  'jpeg', 'gif', 'svg', 'webp', 'file', 'files', 'output', 'inline', 'chat', 'render', 'rendered',
+  'renders', 'rendering', 'style', 'styled', 'theme', 'deliver', 'delivered', 'attach', 'attached',
+  'use', 'used', 'using', 'supply', 'optional', 'default', 'about', 'them', 'their',
+]);
+
+/**
  * Tools that are ALWAYS included regardless of message content.
  * These cover the most common operations the owner requests.
  * Ordered by priority (first = highest).
@@ -167,8 +184,9 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'qr', 'qr code', 'qrcode', 'barcode',
       'diagram', 'org chart', 'mind map', 'hierarchy', 'flowchart', 'tree diagram',
       'code image', 'code screenshot', 'code snippet', 'snippet image', 'carbon', 'syntax highlight',
+      'equation', 'formula', 'latex', 'math',
     ],
-    patterns: [/\.(png|jpg|jpeg|gif|mp4|webm|svg)\b/i, /\bqr\s*code\b/i, /\b(org\s*chart|mind\s*map|tree\s*diagram|flow\s*chart)\b/i, /\bcode\s*(image|screenshot|snippet)\b/i, /\bsyntax\s*highlight/i],
+    patterns: [/\.(png|jpg|jpeg|gif|mp4|webm|svg)\b/i, /\bqr\s*code\b/i, /\b(org\s*chart|mind\s*map|tree\s*diagram|flow\s*chart)\b/i, /\bcode\s*(image|screenshot|snippet)\b/i, /\bsyntax\s*highlight/i, /\b(equation|formula|latex)\b/i],
     priority: 7,
     maxFromCategory: 4,
   },
@@ -489,17 +507,31 @@ export class ToolRouter {
   }
 
   /**
-   * Count how many distinct ≥3-char words from a tool's name (namespace + action,
-   * de-hyphenated) appear in the message. Lets a multi-word tool outrank its
-   * siblings when the user names it ("code image" → media.code-image scores 2 on
-   * code+image vs 1 for media.image-generate). The shared namespace word is neutral
-   * across a category, so it never skews the within-category order.
+   * Within-category relevance: how many DISTINCTIVE words of a tool (its name plus
+   * its description) the message mentions, after filtering generic visual/filler
+   * words ({@link ROUTER_GENERIC_WORDS}). This lets a tool the user actually
+   * describes outrank a sibling that merely also makes an image — e.g. "render this
+   * equation" picks media.equation (matches "equation") over media.code-image
+   * (whose only hit would be the now-filtered "image"), while "code screenshot"
+   * still picks media.code-image (matches "code"/"screenshot"). Each distinct word
+   * counts once across name+description; description influence is capped so a long
+   * description can't dominate.
    */
-  private _nameMatchScore(name: string, normalised: string): number {
-    const words = new Set(name.split(/[.\-_]/).filter((w) => w.length >= 3));
-    let n = 0;
-    for (const w of words) if (normalised.includes(w)) n++;
-    return n;
+  private _relevanceScore(schema: ToolSchema, normalised: string): number {
+    const name = this._schemaName(schema);
+    const nameWords = name.split(/[.\-_]/).filter((w) => w.length >= 3 && !ROUTER_GENERIC_WORDS.has(w));
+    const counted = new Set<string>();
+    let score = 0;
+    for (const w of nameWords) {
+      if (!counted.has(w) && normalised.includes(w)) { counted.add(w); score += 1; }
+    }
+    const desc = (schema.function?.description ?? '').toLowerCase();
+    let descHits = 0;
+    for (const w of desc.split(/[^a-z0-9]+/)) {
+      if (w.length < 4 || ROUTER_GENERIC_WORDS.has(w) || counted.has(w)) continue;
+      if (normalised.includes(w)) { counted.add(w); descHits += 1; }
+    }
+    return score + Math.min(descHits, 3);
   }
 
   /**
@@ -549,13 +581,12 @@ export class ToolRouter {
       const remaining = MAX_ROUTED_TOOLS - result.length;
       const limit = Math.min(rule.maxFromCategory, remaining);
 
-      // Rank within the category by how many of each tool's own name words appear
-      // in the message, so multi-word tools (e.g. media.code-image) surface when the
-      // user names what they want ("code image"/"code screenshot") even though the
-      // hyphenated action segment never matches a spaced phrase. Stable for ties →
+      // Rank within the category by distinctive-word relevance (name + description,
+      // generic words filtered), so the tool the user actually describes surfaces
+      // ahead of siblings that merely share a category. Stable for ties →
       // registration order preserved.
       const sorted = [...candidates].sort(
-        (a, b) => this._nameMatchScore(this._schemaName(b), normalised) - this._nameMatchScore(this._schemaName(a), normalised),
+        (a, b) => this._relevanceScore(b, normalised) - this._relevanceScore(a, normalised),
       );
 
       let added = 0;
