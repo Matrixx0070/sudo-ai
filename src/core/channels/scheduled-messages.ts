@@ -27,6 +27,10 @@ const logger = createLogger('channels:scheduled-messages');
 export const MIN_RECURRENCE_SEC = 60;
 /** Retry ceiling: a message that fails this many times is left `failed`. */
 export const MAX_RETRIES = 3;
+/** Default number of due messages delivered concurrently per tick. */
+export const DEFAULT_CONCURRENCY = 4;
+/** Default per-message generation timeout (ms) — a hung brain call fails one message, not the tick. */
+export const DEFAULT_GENERATOR_TIMEOUT_MS = 45_000;
 
 export type ScheduledMessageStatus = 'pending' | 'sent' | 'failed' | 'cancelled';
 
@@ -218,12 +222,20 @@ export class ScheduledMessageDispatcher {
   readonly store: ScheduledMessageStore;
   private interval: ReturnType<typeof setInterval> | null = null;
 
+  private readonly concurrency: number;
+  private readonly generatorTimeoutMs: number;
+
   constructor(
     db: Database,
     private readonly sender: ChannelSender,
     private readonly generator?: ContentGenerator,
+    opts: { concurrency?: number; generatorTimeoutMs?: number } = {},
   ) {
     this.store = new ScheduledMessageStore(db);
+    const envConc = parseInt(process.env['SUDO_SCHEDULED_MSG_CONCURRENCY'] ?? '', 10);
+    this.concurrency = Math.max(1, opts.concurrency ?? (Number.isFinite(envConc) ? envConc : DEFAULT_CONCURRENCY));
+    const envTimeout = parseInt(process.env['SUDO_SCHEDULED_DIGEST_TIMEOUT_MS'] ?? '', 10);
+    this.generatorTimeoutMs = opts.generatorTimeoutMs ?? (Number.isFinite(envTimeout) ? envTimeout : DEFAULT_GENERATOR_TIMEOUT_MS);
   }
 
   start(): void {
@@ -257,39 +269,72 @@ export class ScheduledMessageDispatcher {
   private async _resolveBody(msg: ScheduledMessage): Promise<string> {
     if (msg.prompt && msg.prompt.trim()) {
       if (!this.generator) throw new Error('scheduled prompt requires a content generator (not configured)');
-      const generated = await this.generator(msg.prompt);
+      // Bound the generation: a hung brain call must fail THIS message (→ retry),
+      // never block the tick (and, with concurrency, never block siblings).
+      const generated = await this._withTimeout(
+        this.generator(msg.prompt),
+        this.generatorTimeoutMs,
+        `content generation timed out after ${this.generatorTimeoutMs}ms`,
+      );
       if (!generated || !generated.trim()) throw new Error('content generator returned empty output');
       return generated;
     }
     return msg.content;
   }
 
+  /** Reject with `message` if `p` hasn't settled within `ms` (ms<=0 disables). */
+  private _withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+    if (!(ms > 0)) return p;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), ms);
+      timer.unref?.();
+      p.then(
+        (v) => { clearTimeout(timer); resolve(v); },
+        (e) => { clearTimeout(timer); reject(e); },
+      );
+    });
+  }
+
+  /** Deliver one due message; records sent / reschedules / fails. Never throws. */
+  private async _deliverOne(msg: ScheduledMessage): Promise<void> {
+    try {
+      const body = await this._resolveBody(msg);
+      await this.sender(msg.channel, msg.peerId, body);
+      if (msg.recurrenceSec && msg.recurrenceSec >= MIN_RECURRENCE_SEC) {
+        // Reschedule forward from NOW (not scheduleTime) so a downtime gap fires
+        // once and resumes cadence rather than replaying every missed slot.
+        const next = new Date(Date.now() + msg.recurrenceSec * 1000).toISOString();
+        this.store.reschedule(msg.id, next);
+        logger.info({ id: msg.id, channel: msg.channel, next }, 'recurring message delivered — rescheduled');
+      } else {
+        this.store.markSent(msg.id);
+        logger.info({ id: msg.id, channel: msg.channel }, 'scheduled message delivered');
+      }
+    } catch (err: unknown) {
+      const emsg = err instanceof Error ? err.message : String(err);
+      logger.error({ id: msg.id, channel: msg.channel, retryCount: msg.retryCount, err: emsg }, 'scheduled message delivery failed');
+      this.store.markFailed(msg.id, emsg);
+    }
+  }
+
+  /** Bounded worker pool: at most `limit` items in flight; `fn` must not throw. */
+  private async _runBounded(items: ScheduledMessage[], limit: number, fn: (m: ScheduledMessage) => Promise<void>): Promise<void> {
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < items.length) {
+        const item = items[next++]!;
+        await fn(item);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  }
+
   async tick(): Promise<void> {
     const now = new Date().toISOString();
     const due = this.store.getDue(now);
     if (due.length === 0) { logger.debug({ now }, 'tick: no due messages'); return; }
-    logger.info({ count: due.length, now }, 'tick: delivering due messages');
-
-    for (const msg of due) {
-      try {
-        const body = await this._resolveBody(msg);
-        await this.sender(msg.channel, msg.peerId, body);
-        if (msg.recurrenceSec && msg.recurrenceSec >= MIN_RECURRENCE_SEC) {
-          // Reschedule forward from NOW (not scheduleTime) so a downtime gap
-          // fires once and resumes cadence rather than replaying every missed slot.
-          const next = new Date(Date.now() + msg.recurrenceSec * 1000).toISOString();
-          this.store.reschedule(msg.id, next);
-          logger.info({ id: msg.id, channel: msg.channel, next }, 'recurring message delivered — rescheduled');
-        } else {
-          this.store.markSent(msg.id);
-          logger.info({ id: msg.id, channel: msg.channel }, 'scheduled message delivered');
-        }
-      } catch (err: unknown) {
-        const emsg = err instanceof Error ? err.message : String(err);
-        logger.error({ id: msg.id, channel: msg.channel, retryCount: msg.retryCount, err: emsg }, 'scheduled message delivery failed');
-        this.store.markFailed(msg.id, emsg);
-      }
-    }
+    logger.info({ count: due.length, concurrency: this.concurrency, now }, 'tick: delivering due messages');
+    await this._runBounded(due, this.concurrency, (msg) => this._deliverOne(msg));
   }
 }
 
