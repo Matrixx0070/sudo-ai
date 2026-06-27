@@ -27,4 +27,12 @@ describe('system prompt — uniform tool-use discipline', () => {
     // The reverted weak-model addendum header must be gone.
     expect(prompt).not.toContain('## Reliable Operation');
   });
+
+  it('tells the agent that media/document tool output is auto-delivered to the chat', async () => {
+    const prompt = await assembleSystemPrompt({ tools: TOOLS });
+    expect(prompt).toContain('FILE DELIVERY');
+    expect(prompt).toContain('AUTOMATICALLY attached');
+    expect(prompt).toContain('document.markdown-to-pdf');
+    expect(prompt).toContain('voice.tts');
+  });
 });
