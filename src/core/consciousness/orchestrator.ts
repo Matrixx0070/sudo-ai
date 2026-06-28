@@ -928,7 +928,7 @@ export class ConsciousnessOrchestrator {
     if (!this._booted) return { isBooted: false, bodyState: null, emotionalState: null, dominantDrive: null, thoughtCount: 0, isStreaming: false, isSleeping: false, lastInteraction: null };
     const ss = this.cognitiveStream.getState();
     let dominantDrive: string | null = null;
-    try { dominantDrive = this.driveManager.getDominant().name; } catch { /* not computed yet */ }
+    try { dominantDrive = this.driveManager.getDominant().name; } catch (err) { log.debug({ err: String(err) }, 'getState: dominant drive unavailable'); }
     return {
       isBooted: this._booted,
       bodyState: this.embodiedState.getState(),
@@ -944,6 +944,9 @@ export class ConsciousnessOrchestrator {
     if (!question || typeof question !== 'string' || question.trim().length === 0) {
       throw new ConsciousnessError('introspect: question must be a non-empty string', 'consciousness_orchestrator_invalid_input', { question });
     }
+    // Cap the question to bound token cost — an unbounded string would scale the LLM
+    // call linearly and can't be cancelled mid-flight.
+    const safeQuestion = question.slice(0, 8192);
     const systemPrompt =
       'You are SUDO-AI reflecting on your own internal state. ' +
       'Answer the question based on the internal state provided. Be honest and introspective.\n\n' +
@@ -951,10 +954,10 @@ export class ConsciousnessOrchestrator {
     try {
       const result = await this.brain.call({
         source: 'consciousness',
-        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: question }],
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: safeQuestion }],
         maxTokens: 400, temperature: 0.7,
       });
-      log.debug({ questionSnippet: truncate(question, 40) }, 'introspect complete');
+      log.debug({ questionSnippet: truncate(safeQuestion, 40) }, 'introspect complete');
       return result.content;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

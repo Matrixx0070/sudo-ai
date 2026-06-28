@@ -105,6 +105,19 @@ export function recordOutcome(
     );
   }
 
+  // Idempotency guard: a prediction only resolves once. A second recordOutcome
+  // (duplicate event delivery, retry) must NOT re-increment evidence_count,
+  // re-apply the confidence delta, or flip confirmed↔violated. Return the
+  // already-resolved entry unchanged.
+  if (existing.outcome !== 'pending') {
+    log.debug(
+      { id, outcome: existing.outcome },
+      'recordOutcome: prediction already resolved — idempotent no-op',
+    );
+    const resolvedSurprise = Math.abs(existing.confidence - (existing.outcome === 'confirmed' ? 1 : 0));
+    return { entry: existing, surpriseMagnitude: resolvedSurprise };
+  }
+
   // Calculate surprise: absolute error between confidence and perfect outcome.
   const perfectOutcome = matched ? 1 : 0;
   const surpriseMagnitude = Math.abs(existing.confidence - perfectOutcome);

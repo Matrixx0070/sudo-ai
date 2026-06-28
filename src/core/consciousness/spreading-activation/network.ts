@@ -82,10 +82,22 @@ export class SpreadingActivationNetwork {
     const directlyActivated: string[] = [];
     const spreadMap = new Map<string, number>();
 
+    // Snapshot each node's in-memory state the FIRST time it is touched, so a
+    // transaction rollback can revert the cache too. Otherwise the in-memory
+    // activation stays mutated while the DB rolled back — a later decay() would
+    // read and re-decay the phantom value (cache/DB desync, double-decay).
+    const snapshots = new Map<ConceptNode, { activation: number; lastActivated: string; totalActivations: number }>();
+    const snapshot = (node: ConceptNode): void => {
+      if (!snapshots.has(node)) {
+        snapshots.set(node, { activation: node.activation, lastActivated: node.lastActivated, totalActivations: node.totalActivations });
+      }
+    };
+
     try {
       this._db.transaction(() => {
         for (const id of ids) {
           const node = this._getOrCreate(id);
+          snapshot(node);
           node.activation = clamp(node.activation + k * DIRECT_SCALE);
           node.lastActivated = nowISO();
           node.totalActivations += 1;
@@ -94,6 +106,7 @@ export class SpreadingActivationNetwork {
 
           for (const edge of this._s.edgesFrom.all(id)) {
             const nb = this._getOrCreate(edge.to_id);
+            snapshot(nb);
             nb.activation = clamp(nb.activation + k * edge.weight * SPREAD_SCALE);
             nb.lastActivated = nowISO();
             this._writeActivation(nb);
@@ -102,6 +115,12 @@ export class SpreadingActivationNetwork {
         }
       })();
     } catch (err: unknown) {
+      // Transaction rolled back — restore the in-memory state we mutated.
+      for (const [node, prev] of snapshots) {
+        node.activation = prev.activation;
+        node.lastActivated = prev.lastActivated;
+        node.totalActivations = prev.totalActivations;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       throw new ConsciousnessError(`activate failed: ${msg}`,
         'consciousness_spreading_activate_failed', { ids, cause: msg });
