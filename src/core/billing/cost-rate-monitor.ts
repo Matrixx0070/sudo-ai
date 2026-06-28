@@ -15,7 +15,10 @@
  * open. Observable-only: this NEVER blocks or throttles spend; it reports.
  */
 
+import { join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createLogger } from '../shared/logger.js';
+import { WORKSPACE_DIR } from '../shared/paths.js';
 import type { SpendRate } from './cost-tracker.js';
 
 const log = createLogger('cost-rate-monitor');
@@ -129,6 +132,14 @@ export class CostRateMonitor {
 
   start(): void {
     if (this.timer) return;
+    // Restore persisted lastAlertAt so restart doesn't reset the alert cooldown
+    try {
+      const raw = readFileSync(join(WORKSPACE_DIR, 'cost-rate-monitor-state.json'), 'utf8');
+      const state = JSON.parse(raw) as { lastAlertAt?: number };
+      if (typeof state.lastAlertAt === 'number' && Number.isFinite(state.lastAlertAt)) {
+        this.lastAlertAt = state.lastAlertAt;
+      }
+    } catch { /* first start — state file absent */ }
     this.timer = setInterval(() => { void this.check(); }, this.cfg.intervalMs);
     if (this.timer.unref) this.timer.unref();
     log.info(
@@ -165,6 +176,11 @@ export class CostRateMonitor {
     if (nowMs - this.lastAlertAt < this.cfg.cooldownMs) return null;
     this.lastAlertAt = nowMs;
     try {
+      writeFileSync(join(WORKSPACE_DIR, 'cost-rate-monitor-state.json'), JSON.stringify({ lastAlertAt: nowMs }));
+    } catch (err) {
+      log.warn({ err: String(err) }, 'CostRateMonitor: failed to persist state (non-fatal)');
+    }
+    try {
       await this.hooks.emit('cost_rate_alert', { event: 'cost_rate_alert', ...alert });
     } catch (err) {
       log.warn({ err: String(err) }, 'CostRateMonitor: cost_rate_alert emit failed (fail-open)');
@@ -181,7 +197,7 @@ export class CostRateMonitor {
    * over a deviation breach (warning) when both trip.
    */
   evaluate(rate: SpendRate): CostRateAlert | null {
-    const ceilingBreach = this.cfg.ceilingUsdPerHour > 0 && rate.usdPerHour > this.cfg.ceilingUsdPerHour;
+    const ceilingBreach = this.cfg.ceilingUsdPerHour > 0 && rate.usdPerHour >= this.cfg.ceilingUsdPerHour;
     const aboveFloor = rate.usdPerHour >= this.cfg.minUsdPerHourForDeviation;
     const deviationBreach =
       this.cfg.deviationPct > 0 &&

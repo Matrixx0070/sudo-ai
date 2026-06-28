@@ -25,7 +25,11 @@ export function dailyBudgetUsd(): number {
   const trimmed = raw.trim();
   if (DISABLE_TOKENS.has(trimmed.toLowerCase())) return Infinity;
   const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) return DEFAULT_DAILY_BUDGET_USD;
+  if (!Number.isFinite(parsed)) {
+    // Warn once so operators know their override is being ignored.
+    console.warn(`[sudo-ai] SUDO_DAILY_BUDGET_USD="${raw}" is not a valid number — using default $${DEFAULT_DAILY_BUDGET_USD}`);
+    return DEFAULT_DAILY_BUDGET_USD;
+  }
   // 0 or negative ⇒ budget disabled (unlimited). Previously these fell back to
   // the default; an explicit non-positive figure now reads as "no cap".
   if (parsed <= 0) return Infinity;

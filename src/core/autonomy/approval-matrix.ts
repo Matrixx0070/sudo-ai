@@ -17,6 +17,9 @@ import { createLogger } from '../shared/logger.js';
 
 const log = createLogger('autonomy:approval-matrix');
 
+/** Higher rank = wins tiebreak when two rules match at identical pattern length. */
+const TIER_RANK: Record<ApprovalTier, number> = { never: 4, confirm: 3, notify: 2, auto: 1 };
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -142,7 +145,10 @@ export class ApprovalMatrix {
     for (const rule of rules) {
       if (this._matches(rule.pattern, toolName, args)) {
         const specificity = rule.pattern.length;
-        if (specificity > bestSpecificity) {
+        if (
+          specificity > bestSpecificity ||
+          (specificity === bestSpecificity && best && TIER_RANK[rule.tier] > TIER_RANK[best.tier])
+        ) {
           best = rule;
           bestSpecificity = specificity;
         }
@@ -278,13 +284,8 @@ export class ApprovalMatrix {
   }
 
   private _patternToId(pattern: string): string {
-    // Simple hash for stable IDs
-    let hash = 0;
-    for (let i = 0; i < pattern.length; i++) {
-      hash = ((hash << 5) - hash) + pattern.charCodeAt(i);
-      hash |= 0;
-    }
-    return `rule_${Math.abs(hash).toString(36)}`;
+    const { createHash } = require('node:crypto') as typeof import('node:crypto');
+    return 'rule_' + createHash('sha256').update(pattern).digest('hex').slice(0, 16);
   }
 
   private _matches(pattern: string, toolName: string, args?: Record<string, unknown>): boolean {
@@ -300,8 +301,12 @@ export class ApprovalMatrix {
     // Pattern with arg constraint: "system.exec:rm -rf" or "control.exec:rm -rf"
     if (pattern.includes(':') && toolName === pattern.split(':')[0]) {
       const argConstraint = pattern.split(':').slice(1).join(':');
-      // Support cmd (control) + command (legacy); also file sub-op via toolName if caller passes 'control.file.write' style
-      const command = (args?.cmd as string | undefined) || (args?.command as string | undefined);
+      // Support cmd/command/script/input/argv arg field naming conventions across tools
+      const command = (args?.cmd as string | undefined)
+        || (args?.command as string | undefined)
+        || (args?.script as string | undefined)
+        || (args?.input as string | undefined)
+        || (args?.argv as string | undefined);
       if (command && this._commandMatchesConstraint(command, argConstraint)) return true;
     }
 

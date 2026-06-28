@@ -46,6 +46,9 @@ const AUTH_CATEGORIES = new Set<ErrorCategory>(['auth']);
  */
 const JITTER_RATIO = 0.2;
 
+/** Minimum gap between force-rescues of the same profile (thundering-herd guard). */
+const MIN_RESCUE_INTERVAL_MS = 30_000;
+
 /**
  * Hard cap on a server-provided Retry-After, so a pathological/huge value can't
  * wedge a model out of rotation indefinitely.
@@ -53,7 +56,7 @@ const JITTER_RATIO = 0.2;
 const MAX_RETRY_AFTER_MS = 3_600_000; // 1 hour
 
 /** Structured classification of an ErrorCategory for retry strategy + observability. */
-export type ErrorClass = 'transient' | 'billing' | 'permanent' | 'other';
+export type ErrorClass = 'transient' | 'billing' | 'permanent' | 'auth' | 'other';
 
 /** Optional inputs to recordError(). */
 export interface RecordErrorOptions {
@@ -61,6 +64,8 @@ export interface RecordErrorOptions {
   retryAfterMs?: number;
   /** Injectable RNG for deterministic tests. Defaults to Math.random. */
   rng?: () => number;
+  /** Per-profile salt derived from profileId hash to de-sync jitter across simultaneously-failing profiles. */
+  profileSeed?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +165,14 @@ export class ModelFailover {
     const errorCount = profile.consecutiveErrors;
     const now = Date.now();
 
+    // Derive a per-profile phase from profileId to de-sync jitter across concurrent failures
+    let _phash = 0;
+    for (let i = 0; i < profileId.length; i++) {
+      _phash = ((_phash * 31) + profileId.charCodeAt(i)) >>> 0;
+    }
+    const profileSeed = opts.profileSeed ?? _phash;
+    const saltedOpts = { ...opts, profileSeed };
+
     if (PERMANENT_CATEGORIES.has(category)) {
       profile.disabled = true;
       log.error(
@@ -170,7 +183,7 @@ export class ModelFailover {
     }
 
     if (BILLING_CATEGORIES.has(category)) {
-      const cooldownMs = this._cooldownMs(BILLING_COOLDOWN, errorCount, opts);
+      const cooldownMs = this._cooldownMs(BILLING_COOLDOWN, errorCount, saltedOpts);
       profile.cooldownUntil = now + cooldownMs;
       log.warn(
         { profileId, category, errClass: 'billing', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs, cooldownUntil: profile.cooldownUntil },
@@ -180,7 +193,7 @@ export class ModelFailover {
     }
 
     if (AUTH_CATEGORIES.has(category)) {
-      const cooldownMs = this._cooldownMs(AUTH_COOLDOWN, errorCount, opts);
+      const cooldownMs = this._cooldownMs(AUTH_COOLDOWN, errorCount, saltedOpts);
       profile.cooldownUntil = now + cooldownMs;
       log.warn(
         { profileId, category, errClass: 'auth', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
@@ -190,7 +203,7 @@ export class ModelFailover {
     }
 
     if (TRANSIENT_CATEGORIES.has(category)) {
-      const cooldownMs = this._cooldownMs(TRANSIENT_COOLDOWN, errorCount, opts);
+      const cooldownMs = this._cooldownMs(TRANSIENT_COOLDOWN, errorCount, saltedOpts);
       profile.cooldownUntil = now + cooldownMs;
       log.warn(
         { profileId, category, errClass: 'transient', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
@@ -201,7 +214,7 @@ export class ModelFailover {
 
     // format / model_not_found / session_expired / auth (non-permanent):
     // Apply a short transient cooldown (first slot) to avoid hammering.
-    const cooldownMs = this._cooldownMs(TRANSIENT_COOLDOWN, 1, opts);
+    const cooldownMs = this._cooldownMs(TRANSIENT_COOLDOWN, 1, saltedOpts);
     profile.cooldownUntil = now + cooldownMs;
     log.warn(
       { profileId, category, errClass: 'other', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
@@ -224,8 +237,11 @@ export class ModelFailover {
     const idx = Math.min(Math.max(errorCount - 1, 0), schedule.length - 1);
     const base = schedule[idx];
     const rng = opts.rng ?? Math.random;
+    const rVal = Math.max(0, Math.min(1, rng()));
+    // Only mix profileSeed phase when using the default RNG — injected RNGs (tests) control jitter exactly.
+    const phase = (!opts.rng && opts.profileSeed !== undefined) ? ((opts.profileSeed >>> 0) % 1000) / 1000 : 0;
     // Additive jitter: base .. base*(1 + JITTER_RATIO). Never below base.
-    let ms = base + base * JITTER_RATIO * Math.max(0, Math.min(1, rng()));
+    let ms = base + base * JITTER_RATIO * Math.max(0, Math.min(1, rVal + phase));
     // Respect a longer server-provided Retry-After (capped).
     if (typeof opts.retryAfterMs === 'number' && opts.retryAfterMs > ms) {
       ms = Math.min(opts.retryAfterMs, MAX_RETRY_AFTER_MS);
@@ -239,6 +255,7 @@ export class ModelFailover {
    */
   classifyCategory(category: ErrorCategory): ErrorClass {
     if (PERMANENT_CATEGORIES.has(category)) return 'permanent';
+    if (AUTH_CATEGORIES.has(category)) return 'auth';
     if (BILLING_CATEGORIES.has(category)) return 'billing';
     if (TRANSIENT_CATEGORIES.has(category)) return 'transient';
     return 'other';
@@ -300,18 +317,26 @@ export class ModelFailover {
       if (cooledDown.length > 0) {
         const rescued = cooledDown[0];
         const remainingMs = rescued.cooldownUntil - now;
+        if (!rescued.lastRescuedAt || now - rescued.lastRescuedAt >= MIN_RESCUE_INTERVAL_MS) {
+          rescued.lastRescuedAt = now;
+          log.warn(
+            { profileId: rescued.id, remainingMs, consecutiveErrors: rescued.consecutiveErrors },
+            'All profiles in cooldown — force-resetting earliest to allow retry',
+          );
+          rescued.cooldownUntil = 0;
+          // Keep consecutiveErrors so the next failure still escalates properly.
+          return rescued;
+        }
+        // Rescue rate-limited — caller must back off until cooldown expires naturally
         log.warn(
-          { profileId: rescued.id, remainingMs, consecutiveErrors: rescued.consecutiveErrors },
-          'All profiles in cooldown — force-resetting earliest to allow retry',
+          { profileId: rescued.id, remainingMs, lastRescuedAt: rescued.lastRescuedAt },
+          'All profiles in cooldown; rescue rate-limited — returning null for caller back-off',
         );
-        rescued.cooldownUntil = 0;
-        // Keep consecutiveErrors so the next failure still escalates properly.
-        return rescued;
+        return null;
       }
 
       // Truly no usable profiles — all are permanently disabled.
-      log.error('No available model profiles — all are permanently disabled');
-      return null;
+      throw new Error('All model profiles permanently disabled — no LLM available');
     }
 
     const selected = available[0];

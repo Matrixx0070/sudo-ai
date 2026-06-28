@@ -119,6 +119,8 @@ export class AuthProfileRotation {
   public static getInstance(config?: AuthRotationConfig): AuthProfileRotation {
     if (!AuthProfileRotation.instance) {
       AuthProfileRotation.instance = new AuthProfileRotation(config);
+    } else if (config) {
+      log.warn('getInstance: config ignored — singleton already initialised; call resetInstance() first to reconfigure');
     }
     return AuthProfileRotation.instance;
   }
@@ -253,8 +255,8 @@ export class AuthProfileRotation {
       return null;
     }
 
-    // Kill-switch: always return first key
-    if (this.rotationDisabled) {
+    // Kill-switch: always return first key (re-read live so kill-switch takes effect without restart)
+    if (process.env['SUDO_AUTH_ROTATION_DISABLE'] === '1') {
       const first = providerKeys[0];
       if (first.disabled) {
         log.error({ provider }, 'First key is disabled and rotation is disabled');
@@ -371,6 +373,8 @@ export class AuthProfileRotation {
         // Auth errors may indicate permanently invalid key
         if (errorCount >= 3) {
           profile.disabled = true;
+          profile.cooldownUntil = now + cooldownMs;
+          profile.state = newState;
           log.error(
             { provider, keyId, errorCount },
             'Key disabled after 3 auth_invalid errors',

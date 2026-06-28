@@ -70,7 +70,7 @@ describe('Phase B: failover backoff hardening', () => {
       expect(f.classifyCategory('timeout')).toBe('transient');
       expect(f.classifyCategory('billing')).toBe('billing');
       expect(f.classifyCategory('auth_permanent')).toBe('permanent');
-      expect(f.classifyCategory('auth')).toBe('other');
+      expect(f.classifyCategory('auth')).toBe('auth');
       expect(f.classifyCategory('format')).toBe('other');
     });
   });
@@ -134,7 +134,7 @@ describe('Phase B: failover backoff hardening', () => {
     it('AUTH-4: contrasts with auth_permanent (403), which DISABLES the profile', () => {
       const permanent = fresh();
       permanent.recordError(MODEL, 'auth_permanent');
-      expect(permanent.getNextProfile()).toBeNull(); // disabled → no usable profile
+      expect(() => permanent.getNextProfile()).toThrow('All model profiles permanently disabled'); // disabled → throws
 
       const recoverable = fresh();
       recoverable.recordError(MODEL, 'auth');
