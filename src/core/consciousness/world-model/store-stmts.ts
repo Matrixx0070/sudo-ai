@@ -51,18 +51,11 @@ export function rowToEntry(row: WorldModelRow): WorldModelEntry {
 // Cached statement factory (one set per db instance)
 // ---------------------------------------------------------------------------
 
-let _db: BetterSqlite3DB | null = null;
-let _insertStmt: AnyStmt | null = null;
-let _getAllStmt: AnyStmt | null = null;
-let _getByDomainStmt: AnyStmt | null = null;
-let _getByOutcomeStmt: AnyStmt | null = null;
-let _getByDomainOutcomeStmt: AnyStmt | null = null;
-let _getPendingStmt: AnyStmt | null = null;
-let _updateOutcomeStmt: AnyStmt | null = null;
-let _expireOldStmt: AnyStmt | null = null;
-let _avgConfidenceStmt: AnyStmt | null = null;
-let _matchRateStmt: AnyStmt | null = null;
-let _getByIdStmt: AnyStmt | null = null;
+// Per-DB statement cache. A WeakMap keyed by the db handle means each
+// ConsciousnessDB instance keeps its OWN prepared statements — constructing a
+// second instance (tests / hot-reload) no longer invalidates and rebuilds the
+// shared singleton out from under in-flight code holding the old cache.
+const _cache = new WeakMap<BetterSqlite3DB, StatementsCache>();
 
 export interface StatementsCache {
   insert: AnyStmt;
@@ -79,56 +72,57 @@ export interface StatementsCache {
 }
 
 export function getStatements(db: BetterSqlite3DB): StatementsCache {
-  if (_db !== db) {
-    _db = db;
+  const hit = _cache.get(db);
+  if (hit) return hit;
 
-    _insertStmt = db.prepare(`
+  const built: StatementsCache = {
+    insert: db.prepare(`
       INSERT INTO world_model
         (id, domain, prediction, confidence, evidence_count,
          made_at, expires_at, last_validated, outcome, actual_result)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    `),
 
-    _getAllStmt = db.prepare(`
+    getAll: db.prepare(`
       SELECT id, domain, prediction, confidence, evidence_count,
              made_at, expires_at, last_validated, outcome, actual_result
         FROM world_model
        ORDER BY made_at DESC
-    `);
+    `),
 
-    _getByDomainStmt = db.prepare(`
+    getByDomain: db.prepare(`
       SELECT id, domain, prediction, confidence, evidence_count,
              made_at, expires_at, last_validated, outcome, actual_result
         FROM world_model
        WHERE domain = ?
        ORDER BY made_at DESC
-    `);
+    `),
 
-    _getByOutcomeStmt = db.prepare(`
+    getByOutcome: db.prepare(`
       SELECT id, domain, prediction, confidence, evidence_count,
              made_at, expires_at, last_validated, outcome, actual_result
         FROM world_model
        WHERE outcome = ?
        ORDER BY made_at DESC
-    `);
+    `),
 
-    _getByDomainOutcomeStmt = db.prepare(`
+    getByDomainOutcome: db.prepare(`
       SELECT id, domain, prediction, confidence, evidence_count,
              made_at, expires_at, last_validated, outcome, actual_result
         FROM world_model
        WHERE domain = ? AND outcome = ?
        ORDER BY made_at DESC
-    `);
+    `),
 
-    _getPendingStmt = db.prepare(`
+    getPending: db.prepare(`
       SELECT id, domain, prediction, confidence, evidence_count,
              made_at, expires_at, last_validated, outcome, actual_result
         FROM world_model
        WHERE outcome = 'pending'
        ORDER BY made_at ASC
-    `);
+    `),
 
-    _updateOutcomeStmt = db.prepare(`
+    updateOutcome: db.prepare(`
       UPDATE world_model
          SET outcome = ?,
              actual_result = ?,
@@ -136,54 +130,43 @@ export function getStatements(db: BetterSqlite3DB): StatementsCache {
              last_validated = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
              evidence_count = evidence_count + 1
        WHERE id = ?
-    `);
+    `),
 
-    _expireOldStmt = db.prepare(`
+    expireOld: db.prepare(`
       UPDATE world_model
          SET outcome = 'expired'
        WHERE expires_at IS NOT NULL
          AND expires_at < strftime('%Y-%m-%dT%H:%M:%fZ','now')
          AND outcome = 'pending'
-    `);
+    `),
 
-    _avgConfidenceStmt = db.prepare(`
+    avgConfidence: db.prepare(`
       SELECT COALESCE(AVG(confidence), 0.5) AS avg_confidence
         FROM world_model
        WHERE domain = ?
          AND outcome IN ('confirmed', 'violated')
-    `);
+    `),
 
     // Empirical match rate for a domain: how often resolved predictions were
     // confirmed. `resolved` is the sample size so callers can apply a
     // cold-start floor before trusting `confirmed / resolved`.
-    _matchRateStmt = db.prepare(`
+    matchRate: db.prepare(`
       SELECT
         SUM(CASE WHEN outcome = 'confirmed' THEN 1 ELSE 0 END) AS confirmed,
         COUNT(*)                                               AS resolved
         FROM world_model
        WHERE domain = ?
          AND outcome IN ('confirmed', 'violated')
-    `);
+    `),
 
-    _getByIdStmt = db.prepare(`
+    getById: db.prepare(`
       SELECT id, domain, prediction, confidence, evidence_count,
              made_at, expires_at, last_validated, outcome, actual_result
         FROM world_model
        WHERE id = ?
-    `);
-  }
-
-  return {
-    insert: _insertStmt!,
-    getAll: _getAllStmt!,
-    getByDomain: _getByDomainStmt!,
-    getByOutcome: _getByOutcomeStmt!,
-    getByDomainOutcome: _getByDomainOutcomeStmt!,
-    getPending: _getPendingStmt!,
-    updateOutcome: _updateOutcomeStmt!,
-    expireOld: _expireOldStmt!,
-    avgConfidence: _avgConfidenceStmt!,
-    matchRate: _matchRateStmt!,
-    getById: _getByIdStmt!,
+    `),
   };
+
+  _cache.set(db, built);
+  return built;
 }

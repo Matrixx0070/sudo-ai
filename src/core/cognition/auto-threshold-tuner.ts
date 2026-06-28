@@ -104,6 +104,12 @@ export class AutoThresholdTuner {
    * Returns a non-negative number (the reduction amount).
    */
   private static _computeAdjustment(brier: number): number {
+    // A non-finite brier (e.g. NaN from sumSquaredError/0 in the tracker) fails every
+    // `<=` comparison below and would fall through to the max ADJ_CAP reduction —
+    // silently treating unknown calibration as worst-case drift and suppressing the
+    // veto. Unknown calibration must apply NO adjustment (fail-safe to base threshold).
+    if (!Number.isFinite(brier)) return 0;
+
     if (brier <= BRIER_NO_ADJUST) {
       // No adjustment — calibration is tight
       return 0;
@@ -123,6 +129,15 @@ export class AutoThresholdTuner {
 
     // Brier > 0.40 — cap at ADJ_CAP
     return ADJ_CAP;
+  }
+
+  /**
+   * Clamp a threshold into the documented [THRESHOLD_MIN, THRESHOLD_MAX] contract.
+   * A non-finite input maps to THRESHOLD_MAX — fail-safe, since a higher threshold
+   * makes the veto HARDER to trip (never accidentally disabled by NaN > comparisons).
+   */
+  private static _clampThreshold(t: number): number {
+    return Number.isFinite(t) ? Math.max(THRESHOLD_MIN, Math.min(THRESHOLD_MAX, t)) : THRESHOLD_MAX;
   }
 
   // ---------------------------------------------------------------------------
@@ -147,8 +162,8 @@ export class AutoThresholdTuner {
       totalSamples = report.totalSamples;
 
       if (totalSamples < MIN_SAMPLES) {
-        // Insufficient data — no adjustment
-        const effectiveThreshold = baseThreshold;
+        // Insufficient data — no adjustment, but still honor the [0.3, 0.95] contract.
+        const effectiveThreshold = AutoThresholdTuner._clampThreshold(baseThreshold);
         this._lastComputation = {
           baseThreshold,
           effectiveThreshold,
@@ -167,7 +182,7 @@ export class AutoThresholdTuner {
         { err: String(err), event: 'auto-threshold-tuner.tracker.error' },
         'AutoThresholdTuner: calibration tracker threw — failing open to base threshold',
       );
-      const effectiveThreshold = baseThreshold;
+      const effectiveThreshold = AutoThresholdTuner._clampThreshold(baseThreshold);
       this._lastComputation = {
         baseThreshold,
         effectiveThreshold,

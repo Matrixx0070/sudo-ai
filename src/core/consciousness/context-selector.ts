@@ -123,6 +123,10 @@ const DEFAULT_MODULES: Array<[string, string]> = [
  */
 const MODULE_FORMATTERS: Record<string, (orch: ConsciousnessOrchestrator) => string> = {
   SelfModel: (orch) => {
+    // LATENT RECURSION: this calls getConsciousnessContext(), which is the very
+    // method this selector is intended to replace. It works today only because the
+    // orchestrator routes through a different path — if the selector is ever wired as
+    // the canonical getConsciousnessContext implementation, this recurses infinitely.
     try { return orch.getConsciousnessContext(); } catch { return 'SelfModel: (unavailable)'; }
   },
   ProceduralMemory: (_orch) => 'ProceduralMemory: patterns loaded from recent tool sequences',
@@ -280,10 +284,14 @@ export class ContextSelector {
     try {
       const influence = orchestrator.getDriveInfluenceForAgent();
       if (influence.promptAddition) {
-        // Extract up to 2 drive names from the prompt addition text
+        // Extract up to 2 drive names from the prompt addition text. promptAddition
+        // is free-form and can carry user-influenced content (goal/relationship text),
+        // so each fragment is stripped of control chars/newlines and length-capped
+        // before it reaches the system prompt — a `; IGNORE ALL PREVIOUS INSTRUCTIONS ;`
+        // fragment cannot be injected verbatim as a "drive name".
         const driveNames = influence.promptAddition
           .split(/[,;]/)
-          .map((s) => s.trim())
+          .map((s) => s.replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 48))
           .filter(Boolean)
           .slice(0, 2);
         drivesLine = driveNames.length > 0

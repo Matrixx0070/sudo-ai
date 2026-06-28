@@ -1565,18 +1565,38 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     if (
       process.env['SUDO_TEXT_TOOLCALL_FALLBACK_DISABLE'] !== '1' &&
       finalToolCalls.length === 0 &&
-      finishReason !== 'tool-calls' &&
-      typeof result.text === 'string'
+      finishReason !== 'tool-calls'
     ) {
-      if (result.text.includes('<tool_call>')) {
-        finalToolCalls = this._parseTextToolCalls(result.text);
-        if (finalToolCalls.length > 0) {
-          finalContent = result.text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+      // Strip the balanced {...} object(s) containing "tool_calls" (depth-counted via
+      // findBalancedJsonObjects) instead of a greedy regex that stops at the first
+      // `}` — the regex left `]}` fragments visible or excised surrounding prose.
+      const stripJsonToolCalls = (text: string): string => {
+        let out = text;
+        for (const obj of findBalancedJsonObjects(text)) {
+          if (obj.includes('"tool_calls"')) out = out.replace(obj, '');
         }
-      } else if (result.text.includes('"tool_calls"')) {
-        finalToolCalls = this._parseJsonToolCalls(result.text);
-        if (finalToolCalls.length > 0) {
-          finalContent = result.text.replace(/\{[\s\S]*?"tool_calls"[\s\S]*?\}/g, '').trim();
+        return out.trim();
+      };
+
+      // Scan result.text first, then result.reasoningText — some reasoning models
+      // express tool intent in reasoning rather than message text, so the fallback
+      // would otherwise silently miss the call and narrate a side-effect that never ran.
+      const sources: string[] = [];
+      if (typeof result.text === 'string') sources.push(result.text);
+      if (typeof result.reasoningText === 'string') sources.push(result.reasoningText);
+
+      for (const src of sources) {
+        if (finalToolCalls.length > 0) break;
+        if (src.includes('<tool_call>')) {
+          finalToolCalls = this._parseTextToolCalls(src);
+          if (finalToolCalls.length > 0) {
+            finalContent = src.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+          }
+        } else if (src.includes('"tool_calls"')) {
+          finalToolCalls = this._parseJsonToolCalls(src);
+          if (finalToolCalls.length > 0) {
+            finalContent = stripJsonToolCalls(src);
+          }
         }
       }
 

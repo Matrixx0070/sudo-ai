@@ -75,6 +75,19 @@ export type DeepBridgeEventListener = (event: DeepBridgeEvent) => void;
 // ---------------------------------------------------------------------------
 
 /**
+ * Sanitize a free-form string before it is injected into the system prompt:
+ * strip control characters, cap length, and neutralize the most common
+ * instruction-override phrasing. Centralizes the pattern that was previously
+ * inlined inconsistently (and missing entirely on some prompt-bound paths).
+ */
+function sanitizeForPrompt(s: string, maxLen: number): string {
+  return String(s)
+    .replace(/[\u0000-\u001f]/g, ' ')
+    .slice(0, maxLen)
+    .replace(/ignore (previous|all|above|prior)/gi, '[filtered]');
+}
+
+/**
  * Format counterfactual lessons as a compact markdown section for prompt
  * injection.  Returns empty string when there are no lessons.
  */
@@ -107,7 +120,9 @@ export function formatMetacognitiveSection(reflections: MetacognitiveInsight[]):
  * Returns empty string when surprise is negligible (< 0.2).
  */
 export function formatSurpriseSection(surprise: SurpriseInsight): string {
-  if (surprise.averageSurprise < 0.2) return '';
+  // Don't suppress the section when a replan is explicitly requested, even at low
+  // surprise — otherwise the ⚠️ replan note never reaches the LLM.
+  if (surprise.averageSurprise < 0.2 && !surprise.requiresReplan) return '';
   const lines = [`### Surprise Level: ${surprise.averageSurprise.toFixed(2)}`];
   if (surprise.requiresReplan) {
     lines.push('⚠️ High surprise detected — world model may be unreliable. Consider replanning.');
@@ -152,7 +167,10 @@ export function formatAdaptationSection(adaptation: UserAdaptation | null): stri
  */
 export function formatActiveConceptsSection(concepts: string[]): string {
   if (concepts.length === 0) return '';
-  return `### Active Concepts\n${concepts.join(', ')}`;
+  // Concept labels derive from user messages / tool output — sanitize + cap each
+  // (and bound the count) before they flow into the system prompt.
+  const safe = concepts.slice(0, 20).map((c) => sanitizeForPrompt(c, 64));
+  return `### Active Concepts\n${safe.join(', ')}`;
 }
 
 /**
@@ -217,7 +235,10 @@ export class ConsciousnessDeepBridge {
 
   private emit(type: DeepBridgeEventType, data?: Record<string, unknown>): void {
     const event: DeepBridgeEvent = { type, timestamp: new Date().toISOString(), data };
-    for (const listener of this.listeners) {
+    // Iterate a snapshot — a one-shot listener may unsubscribe (this.listeners.delete)
+    // during its own call, which would mutate the live Set mid-iteration and could
+    // skip a subsequent listener.
+    for (const listener of [...this.listeners]) {
       try { listener(event); } catch (e) { log.warn({ err: String(e) }, 'Deep bridge listener threw'); }
     }
   }
@@ -381,7 +402,8 @@ export class ConsciousnessDeepBridge {
    */
   getDrivePromptAddition(): string {
     try {
-      return this.orchestrator.getDriveInfluenceForAgent().promptAddition;
+      // Flows directly into the system prompt — sanitize + cap (was unguarded).
+      return sanitizeForPrompt(this.orchestrator.getDriveInfluenceForAgent().promptAddition, 600);
     } catch { return ''; }
   }
 

@@ -20,17 +20,15 @@
  *   - Writes all findings to workspace/KAIROS_ALERTS.md
  */
 
-import { execSync, execFile as execFileCb } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT } from '../shared/paths.js';
 import type { GoalTracker } from './goal-tracker.js';
 import { triggerKAIROSRepair } from '../tools/builtin/coder/arsenal.js';
 
-const execFile = promisify(execFileCb);
 const log = createLogger('consciousness:kairos');
 
 const PROJECT_ROOT = RESOLVED_PROJECT_ROOT;
@@ -139,10 +137,11 @@ function loadErrorTrend(): ErrorTrend {
 
 function saveErrorTrend(trend: ErrorTrend): void {
   try {
-    trend.samples = trend.samples.slice(-24); // Keep last 24 samples (2h at 5min intervals)
+    // Write a copy — don't truncate the caller's samples array in place.
+    const toSave: ErrorTrend = { ...trend, samples: trend.samples.slice(-24) }; // last 24 (2h at 5min intervals)
     const dir = path.dirname(ERROR_TREND_FILE);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(ERROR_TREND_FILE, JSON.stringify(trend, null, 2), 'utf-8');
+    writeFileSync(ERROR_TREND_FILE, JSON.stringify(toSave, null, 2), 'utf-8');
   } catch { /* ignore */ }
 }
 
@@ -179,13 +178,20 @@ function writeAlert(obs: KairosObservation): void {
 
 async function notifyTelegram(message: string, botToken: string, chatId: string): Promise<void> {
   if (!botToken || !chatId) return;
-  // Let send failures (network/auth) reject so callers can avoid committing the
-  // alert cooldown for a notification that was never actually delivered.
-  await execFile('curl', [
-    '-s', '-X', 'POST',
-    `https://api.telegram.org/bot${botToken}/sendMessage`,
-    '-d', `chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`,
-  ], { timeout: 10_000 });
+  // Use fetch, not curl: the bot token must not appear in process argv (visible via
+  // `ps aux` / /proc/<pid>/cmdline). Throw on a non-2xx so callers don't commit the
+  // 6-hour alert cooldown for a message that was never delivered (curl -s without
+  // --fail exited 0 on HTTP 4xx, silently suppressing all future alerts).
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ chat_id: chatId, text: message, parse_mode: 'Markdown' }).toString(),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    throw new Error(`Telegram sendMessage failed: HTTP ${res.status}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
