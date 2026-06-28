@@ -104,7 +104,7 @@ program
   .action(async (opts: { daemon: boolean }) => {
     if (opts.daemon) {
       const { runStartDaemon } = await import('./commands/start.js');
-      runStartDaemon(INSTALL_ROOT);
+      await runStartDaemon(INSTALL_ROOT);
     } else {
       const { runStartForeground } = await import('./commands/start.js');
       await runStartForeground(INSTALL_ROOT);
@@ -209,7 +209,8 @@ program
       const { runScan } = await import('./commands/scan.js');
       const code = await runScan(PROJECT_ROOT, opts);
       process.exit(code);
-    } catch {
+    } catch (err) {
+      console.error('[sudo-ai] scan failed:', err);
       console.error('[sudo-ai] scan command not yet available (Builder 3 pending)');
       process.exit(1);
     }
@@ -228,8 +229,8 @@ program
       const { runQuickstart } = await import('./commands/quickstart.js');
       await runQuickstart(PROJECT_ROOT, { force: opts.force ?? false });
       process.exit(0);
-    } catch {
-      console.error('[sudo-ai] quickstart failed — run with DEBUG=1 for details');
+    } catch (err) {
+      console.error('[sudo-ai] quickstart failed:', err);
       process.exit(1);
     }
   });
@@ -248,9 +249,9 @@ program
       const { runInit } = await import('./commands/init.js');
       const code = await runInit(PROJECT_ROOT, opts);
       process.exit(code);
-    } catch {
+    } catch (err) {
+      console.error('[sudo-ai] init failed:', err);
       if (opts.preset) {
-        console.error('[sudo-ai] init command not yet available (Builder 3 pending)');
         process.exit(1);
       } else {
         console.log('Available presets: coding, research, chat');

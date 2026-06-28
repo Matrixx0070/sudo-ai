@@ -22,7 +22,6 @@ import { createLogger } from '../shared/logger.js';
 import { ConfigError } from '../shared/errors.js';
 import { CONFIG_RELOAD_DEBOUNCE_MS } from '../shared/constants.js';
 import { PROJECT_ROOT } from '../shared/paths.js';
-import { debounce } from '../shared/utils.js';
 import { SudoConfigSchema } from './schema.js';
 import type { SudoConfig } from './types.js';
 import type { Config5Pillar } from '../shared/wave10-types.js';
@@ -117,6 +116,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
 export class ConfigLoader extends EventEmitter {
   private config: SudoConfig | null = null;
   private watcher: fs.FSWatcher | null = null;
+  private changeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly configPath: string;
   private readonly envPath: string;
 
@@ -188,6 +188,10 @@ export class ConfigLoader extends EventEmitter {
    * Stop the file watcher and release all listeners.
    */
   close(): void {
+    if (this.changeTimer !== null) {
+      clearTimeout(this.changeTimer);
+      this.changeTimer = null;
+    }
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;
@@ -250,7 +254,7 @@ export class ConfigLoader extends EventEmitter {
         log.warn({ key }, 'Config references undefined env var');
         return '';
       }
-      return val;
+      return JSON.stringify(val).slice(1, -1);
     });
 
     // -- Parse JSON5 --
@@ -291,22 +295,32 @@ export class ConfigLoader extends EventEmitter {
    * Changes are debounced by CONFIG_RELOAD_DEBOUNCE_MS to coalesce rapid
    * editor saves.
    */
+  private _scheduleChange(): void {
+    if (this.changeTimer !== null) clearTimeout(this.changeTimer);
+    this.changeTimer = setTimeout(() => {
+      this.changeTimer = null;
+      this.handleFileChange();
+    }, CONFIG_RELOAD_DEBOUNCE_MS);
+  }
+
   private startWatcher(): void {
     if (!fs.existsSync(this.configPath)) {
       log.warn({ configPath: this.configPath }, 'Config file not found — watcher not started');
       return;
     }
 
-    const debouncedChange = debounce(() => {
-      this.handleFileChange();
-    }, CONFIG_RELOAD_DEBOUNCE_MS);
-
     try {
       this.watcher = fs.watch(this.configPath, { persistent: false }, (eventType) => {
-        if (eventType === 'change' || eventType === 'rename') {
-          log.debug({ eventType }, 'Config file change detected');
-          (debouncedChange as () => void)();
+        log.debug({ eventType }, 'Config file change detected');
+        if (eventType === 'rename') {
+          // Most editors (vim, VS Code) do an atomic rename-replace. The inode
+          // we were watching is now gone — re-arm on the new inode after a short
+          // delay to let the OS finish flushing the new file.
+          this.watcher?.close();
+          this.watcher = null;
+          setTimeout(() => this.startWatcher(), 50);
         }
+        this._scheduleChange();
       });
 
       this.watcher.on('error', (err) => {

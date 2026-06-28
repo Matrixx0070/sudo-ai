@@ -195,9 +195,16 @@ export class HttpServer {
       return;
     }
 
-    if (SUDO_TOKEN && !this.checkAuth(req)) {
-      this.sendError(res, 401, 'Unauthorized: invalid or missing Bearer token');
-      return;
+    const allowAnon = process.env['SUDO_AI_ALLOW_ANON'] === '1';
+    if (!allowAnon) {
+      if (!SUDO_TOKEN) {
+        this.sendError(res, 503, 'API token not configured — set SUDO_AI_API_TOKEN or SUDO_AI_ALLOW_ANON=1');
+        return;
+      }
+      if (!this.checkAuth(req)) {
+        this.sendError(res, 401, 'Unauthorized: invalid or missing Bearer token');
+        return;
+      }
     }
 
     try {

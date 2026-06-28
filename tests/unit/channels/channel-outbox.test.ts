@@ -50,7 +50,7 @@ describe('channel-outbox', () => {
     registerOutboundSender('web', second);
     await sendToChannelOutbox('web', 'p', 't');
     expect(first).not.toHaveBeenCalled();
-    expect(second).toHaveBeenCalledWith('p', 't');
+    expect(second).toHaveBeenCalledWith('p', 't', undefined);
   });
 
   it('clearOutbox empties the registry', () => {

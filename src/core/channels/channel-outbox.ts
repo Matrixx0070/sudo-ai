@@ -38,10 +38,23 @@ export function registeredOutboundChannels(): ChannelType[] {
 }
 
 /** Deliver text to a channel via its registered sender. Throws if none registered. */
-export async function sendToChannelOutbox(channel: ChannelType, peerId: string, text: string): Promise<void> {
+export async function sendToChannelOutbox(
+  channel: ChannelType,
+  peerId: string,
+  text: string,
+  options?: SendOptions,
+): Promise<void> {
   const send = outbox.get(channel);
   if (!send) throw new Error(`no outbound sender registered for channel "${channel}"`);
-  await send(peerId, text);
+  try {
+    await send(peerId, text, options);
+  } catch (cause) {
+    const msg = cause instanceof Error ? cause.message : String(cause);
+    throw Object.assign(
+      new Error(`channel outbox send failed (${channel}/${peerId}): ${msg}`),
+      { cause, channel, peerId },
+    );
+  }
 }
 
 /** Test/teardown helper — clears all registrations. */

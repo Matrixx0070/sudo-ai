@@ -211,9 +211,11 @@ export class LoopGuard {
     const recent = h.slice(-threshold * 2);
 
     // Check if the last N*2 entries follow a strict A→B→A→B pattern
-    // with IDENTICAL args each time (different args = legitimate exploration)
-    const a = recent[0];
-    const b = recent[1];
+    // with IDENTICAL args each time (different args = legitimate exploration).
+    // Anchor on the MOST RECENT pair to avoid a false early-return when the
+    // oldest two entries happen to be the same tool.
+    const a = recent[recent.length - 2]!;
+    const b = recent[recent.length - 1]!;
     if (a.toolName === b.toolName) return { action: 'allow' };
 
     let isPingPong = true;
@@ -324,7 +326,9 @@ export class LoopGuard {
     try {
       return contentHash(this._stableStringify(args));
     } catch {
-      return 'unhashable';
+      // Unique per-call nonce so serialisation failures never collapse distinct
+      // calls onto the same key and falsely trip the repeat threshold.
+      return `unhashable:${this.totalCalls}:${Math.random().toString(36).slice(2)}`;
     }
   }
 

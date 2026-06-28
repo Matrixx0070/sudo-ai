@@ -46,7 +46,7 @@ export function checkHealth(port: number): Promise<HealthResult> {
   return new Promise((resolve) => {
     const req = http.get(
       {
-        hostname: '127.0.0.1',
+        hostname: 'localhost',
         port,
         path: '/health',
         timeout: TIMEOUT_MS,
