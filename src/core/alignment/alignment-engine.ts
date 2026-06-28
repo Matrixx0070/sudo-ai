@@ -20,8 +20,10 @@
  * @module alignment/alignment-engine
  */
 
+import { join } from 'node:path';
 import type { BrainMessage } from '../brain/types.js';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import type { SecurityGuard } from '../security/index.js';
 import type { TaintTracker } from '../security/taint-tracker.js';
 import type { TraceStore } from '../learning/trace-store.js';
@@ -140,7 +142,7 @@ async function loadDriver(): Promise<new (path: string) => import('better-sqlite
   return DatabaseCtor;
 }
 
-const AUDIT_DB_PATH = 'data/alignment-audit.db';
+const AUDIT_DB_PATH = join(DATA_DIR, 'alignment-audit.db');
 
 const SCHEMA_AUDIT = `
 CREATE TABLE IF NOT EXISTS alignment_audit (
@@ -185,6 +187,7 @@ export class AlignmentEngine {
   /** SQLite audit DB — lazily opened on first persist. */
   private _auditDb: import('better-sqlite3').Database | null = null;
   private _auditReady = false;
+  private _initPromise: Promise<void> | null = null;
   private _stmtInsert: import('better-sqlite3').Statement | null = null;
 
   /** Rolling coherence history for smoothing. */
@@ -310,8 +313,6 @@ export class AlignmentEngine {
       return 0.7;
     }
 
-    this._lastCoherenceCheck = now;
-
     try {
       // Extract the most recent assistant messages for assessment.
       const recent = messages
@@ -319,6 +320,7 @@ export class AlignmentEngine {
         .slice(-this.config.historyWindow);
 
       if (recent.length === 0) return 0.7;
+      this._lastCoherenceCheck = now;
 
       // Build self-assessment prompt.
       const excerpt = recent.map((m) => m.content).join('\n---\n').slice(0, 2000);
@@ -433,7 +435,7 @@ export class AlignmentEngine {
     if (this.brain !== null) {
       try {
         const verificationPrompt = claims.slice(0, 5).map((c, i) =>
-          `${i + 1}. ${c.slice(0, 200)}`
+          `${i + 1}. <claim>${c.slice(0, 200).replace(/<\/claim>/g, '[/claim]')}</claim>`
         ).join('\n');
 
         const assessMessages: BrainMessage[] = [
@@ -454,7 +456,7 @@ export class AlignmentEngine {
         if (match && totalMatch) {
           const verified = parseInt(match[1], 10);
           const total = parseInt(totalMatch[1], 10);
-          if (total > 0) {
+          if (total > 0 && verified >= 0 && verified <= total) {
             return this._clamp(verified / total);
           }
         }
@@ -737,24 +739,27 @@ export class AlignmentEngine {
    */
   private async _persist(score: AlignmentScore): Promise<void> {
     try {
-      if (!this._auditReady) {
-        const Driver = await loadDriver();
-        const { mkdirSync } = await import('fs');
-        const path = await import('path');
-        const dbDir = path.dirname(AUDIT_DB_PATH);
-        mkdirSync(dbDir, { recursive: true });
+      if (!this._initPromise) {
+        this._initPromise = (async () => {
+          const Driver = await loadDriver();
+          const { mkdirSync } = await import('fs');
+          const pathMod = await import('path');
+          const dbDir = pathMod.dirname(AUDIT_DB_PATH);
+          mkdirSync(dbDir, { recursive: true });
 
-        this._auditDb = new Driver(path.resolve(AUDIT_DB_PATH));
-        this._auditDb.pragma('journal_mode = WAL');
-        this._auditDb.exec(SCHEMA_AUDIT);
+          this._auditDb = new Driver(pathMod.resolve(AUDIT_DB_PATH));
+          this._auditDb.pragma('journal_mode = WAL');
+          this._auditDb.exec(SCHEMA_AUDIT);
 
-        this._stmtInsert = this._auditDb.prepare(`
-          INSERT INTO alignment_audit (overall_score, level, signals_json, recommendation)
-          VALUES (@overallScore, @level, @signalsJson, @recommendation)
-        `);
+          this._stmtInsert = this._auditDb.prepare(`
+            INSERT INTO alignment_audit (overall_score, level, signals_json, recommendation)
+            VALUES (@overallScore, @level, @signalsJson, @recommendation)
+          `);
 
-        this._auditReady = true;
+          this._auditReady = true;
+        })();
       }
+      await this._initPromise;
 
       if (this._stmtInsert) {
         this._stmtInsert.run({

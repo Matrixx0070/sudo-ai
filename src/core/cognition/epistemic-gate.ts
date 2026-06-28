@@ -82,9 +82,10 @@ function tokenizeToolName(toolName: string): string[] {
     .map((seg) => seg.toLowerCase());
 }
 
-/** True if any token in the tool name starts with one of the given keywords. */
+/** True if any token in the tool name exactly matches one of the given keywords. */
 function matchesToolKeyword(tokens: string[], keywords: string[]): boolean {
-  return tokens.some((token) => keywords.some((kw) => token.startsWith(kw)));
+  const kwSet = new Set(keywords);
+  return tokens.some((token) => kwSet.has(token));
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +250,11 @@ export class EpistemicGate {
         response = buildUncertaintyResponse(tag, toolName);
       }
 
-      this._logDecision(tag, impact, result.decision, rationale, sessionId);
+      try {
+        this._logDecision(tag, impact, result.decision, rationale, sessionId);
+      } catch (logErr: unknown) {
+        log.warn({ err: String(logErr) }, 'EpistemicGate.evaluate: log failed (non-fatal)');
+      }
 
       return { tag, impact, result, error, response };
     } catch (err: unknown) {

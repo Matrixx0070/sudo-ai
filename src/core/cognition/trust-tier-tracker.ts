@@ -21,6 +21,8 @@ const log = createLogger('cognition:trust-tier-tracker');
 
 const MS_PER_DAY = 86_400_000;
 const WINDOW_DAYS = 7;
+const MAX_OUTCOME_WEIGHT = 10.0;
+const MAX_TIMESTAMP_FUTURE_MS = 60_000;
 const SCORE_DIVISOR = 20;
 const SCORE_MIDPOINT = 0.5;
 
@@ -209,11 +211,18 @@ export class TrustTierTracker {
         'trust-tier-tracker: invalid weight, using 1.0');
     }
 
-    const safeWeight = Number.isFinite(weight) && weight > 0 ? weight : 1.0;
+    const safeWeight = Number.isFinite(weight) && weight > 0
+      ? Math.min(weight, MAX_OUTCOME_WEIGHT)
+      : 1.0;
+
+    const nowTs = Date.now();
+    const safeTimestamp = (Number.isFinite(outcome.timestamp) && outcome.timestamp > 0)
+      ? Math.min(outcome.timestamp, nowTs + MAX_TIMESTAMP_FUTURE_MS)
+      : nowTs;
 
     try {
-      this._stmtInsert.run(id, outcome.timestamp, outcome.kind, safeWeight);
-      log.debug({ id, kind: outcome.kind, ts: outcome.timestamp, weight: safeWeight, event: 'trust.outcome.recorded' },
+      this._stmtInsert.run(id, safeTimestamp, outcome.kind, safeWeight);
+      log.debug({ id, kind: outcome.kind, ts: safeTimestamp, weight: safeWeight, event: 'trust.outcome.recorded' },
         'trust-tier-tracker: outcome recorded');
     } catch (err: unknown) {
       log.error({ err, outcome, event: 'trust.record.error' },
