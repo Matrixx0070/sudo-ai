@@ -429,8 +429,10 @@ describe('Rate Limiter — Token Bucket', () => {
     const first = await rl.check('telegram', peer);
     expect(first.burstWarned).toBe(false); // first warning
 
-    // Wait 30s — partial refill (1 token for 2/min rate).
-    vi.advanceTimersByTime(30_000);
+    // Wait 45s — refill to 1.5 tokens (= maxTokens - 0.5), crossing the
+    // burstWarned-reset threshold. A shorter refill (< 1.5) keeps burstWarned
+    // set, so no fresh warning would fire until full recovery.
+    vi.advanceTimersByTime(45_000);
 
     // Now consume that refilled token.
     const allowed = await rl.check('telegram', peer);
