@@ -200,6 +200,8 @@ export interface ModelProfile {
   consecutiveErrors: number;
   /** When true, this profile is permanently disabled (e.g. auth_permanent). */
   disabled: boolean;
+  /** Unix ms timestamp of the last force-rescue (cooldown zeroed). Guards against concurrent thundering-herd rescues. */
+  lastRescuedAt?: number;
 }
 
 // ---------------------------------------------------------------------------

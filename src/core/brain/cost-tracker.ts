@@ -64,7 +64,13 @@ export class CostTracker {
       return;
     }
 
-    const usd = estimateCost(model, inputTokens, outputTokens);
+    if (!Number.isFinite(inputTokens) || inputTokens < 0 || !Number.isFinite(outputTokens) || outputTokens < 0) {
+      log.warn({ sessionId, inputTokens, outputTokens }, 'recordCall: invalid token counts — skipping to prevent NaN poisoning');
+      return;
+    }
+
+    const rawUsd = estimateCost(model, inputTokens, outputTokens);
+    const usd = Number.isFinite(rawUsd) ? rawUsd : 0;
     const existing = this.sessions.get(sessionId) ?? {
       calls: 0,
       inputTokens: 0,
@@ -94,12 +100,8 @@ export class CostTracker {
    * Returns zeroed record if the session has no calls yet.
    */
   getSessionCost(sessionId: string): SessionCostRecord {
-    return this.sessions.get(sessionId) ?? {
-      calls: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      estimatedUsd: 0,
-    };
+    const rec = this.sessions.get(sessionId);
+    return rec ? { ...rec } : { calls: 0, inputTokens: 0, outputTokens: 0, estimatedUsd: 0 };
   }
 
   /**

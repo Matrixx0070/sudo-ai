@@ -73,7 +73,8 @@ function findToolResultIndices(messages: BrainMessage[]): Set<number> {
   for (let i = 0; i < messages.length; i++) {
     if (messages[i].role === 'assistant' && messages[i].toolCalls?.length) {
       const callIds = new Set(messages[i].toolCalls!.map((tc) => tc.id));
-      for (let j = i + 1; j < messages.length && messages[j].role === 'tool'; j++) {
+      for (let j = i + 1; j < messages.length; j++) {
+        if (messages[j].role !== 'tool') continue;
         if (messages[j].toolCallId && callIds.has(messages[j].toolCallId as string)) {
           paired.add(j);
         }
@@ -258,7 +259,7 @@ export class ContextCompressor {
     return messages.map((msg, i) =>
       protectedIdx.has(i) || i >= mid
         ? msg
-        : { role: msg.role, content: summarizeMessage(msg) },
+        : { ...msg, content: summarizeMessage(msg) },
     );
   }
 

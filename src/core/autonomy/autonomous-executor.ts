@@ -221,9 +221,10 @@ export class AutonomousExecutor {
       }
       // Refine (Codex post-remed): propagate backend failures from executeControl (was hard-coded success: true even if !res.success; now uses computed success for accurate cross-platform reporting + learner).
       return { success, action: decision.tier === 'notify' ? 'notified' : 'executed', message: decision.reason, result: res };
-    } catch (e: any) {
-      if (learner) learner.onToolResult(toolName, ca.params, false, e.message);
-      return { success: false, action: 'blocked', message: e.message };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (learner) { try { learner.onToolResult(toolName, ca.params, false, msg); } catch {} }
+      return { success: false, action: 'blocked', message: msg };
     }
   }
 
@@ -238,18 +239,17 @@ export class AutonomousExecutor {
 
     // Immediate callback if available
     if (this.notifyCallback) {
-      try {
-        void this.notifyCallback(summary);
-      } catch {
-        // callback errors are non-fatal
-      }
+      const cb = this.notifyCallback;
+      Promise.resolve()
+        .then(() => cb(summary))
+        .catch((err: unknown) => log.warn({ err: String(err) }, 'notifyCallback failed (non-fatal)'));
     }
   }
 
   /** List pending confirmation requests. */
   listPendingConfirmations(): PendingAction[] {
     const rows = this.db.prepare(
-      `SELECT * FROM pending_actions WHERE status = 'pending' ORDER BY requested_at DESC`
+      `SELECT * FROM pending_actions WHERE status = 'pending' ORDER BY requested_at DESC LIMIT 1000`
     ).all() as Array<{
       id: string; tool_name: string; args_json: string; tier: string; reason: string;
       requested_at: string; status: string; owner_response: string | null; resolved_at: string | null;
