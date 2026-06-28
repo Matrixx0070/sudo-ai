@@ -160,5 +160,16 @@
     "@huggingface/transformers": "^3.8.1",
     "electron": "^33.0.0",
     "kokoro-js": "^1.2.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@whiskeysockets/baileys",
+      "better-sqlite3",
+      "electron",
+      "esbuild",
+      "onnxruntime-node",
+      "protobufjs",
+      "sharp"
+    ]
   }
 }
