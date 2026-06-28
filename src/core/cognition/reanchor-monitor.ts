@@ -89,19 +89,21 @@ interface RawAnchorRow {
 function classifyTrigger(row: RawAnchorRow): string {
   const combined = `${row.learned ?? ''} ${row.mistake ?? ''}`.toLowerCase();
 
-  if (combined.includes('startup')) {
+  // Word-bounded so incidental mentions ("dispatch queue", "no veto required") don't
+  // mis-attribute the trigger that drives the byTrigger headline stat.
+  if (/\bstartup\b/.test(combined)) {
     return 'startup';
   }
-  if (combined.includes('explicit re-anchor') || combined.includes('manual re-anchor')) {
+  if (/\b(?:explicit|manual)\s+re-?anchor\b/.test(combined)) {
     return 'explicit';
   }
-  if (combined.includes('veto')) {
+  if (/\bveto\b/.test(combined)) {
     return 'post-veto';
   }
-  if (combined.includes('discordance')) {
+  if (/\bdiscordance\b/.test(combined)) {
     return 'post-discordance';
   }
-  if (combined.includes('dispatch')) {
+  if (/\bdispatch\b/.test(combined)) {
     return 'post-dispatch';
   }
   return 'unknown';
@@ -210,7 +212,8 @@ export class ReAnchorMonitor {
    * @param opts.windowDays - Rolling window in days (default 30).
    */
   getStats(opts?: { windowDays?: number }): ReAnchorStats {
-    const windowDays = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const rawWindow = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const windowDays = Number.isFinite(rawWindow) ? Math.max(1, Math.min(3650, Math.floor(rawWindow))) : DEFAULT_WINDOW_DAYS;
     const cutoffMs = Date.now() - windowDays * MS_PER_DAY;
     const computedAt = new Date().toISOString();
 
@@ -261,9 +264,11 @@ export class ReAnchorMonitor {
    * @param opts.limit      - Maximum rows to return; clamped to [1, 500] (default 50).
    */
   getRecent(opts?: { windowDays?: number; limit?: number }): ReAnchorEvent[] {
-    const windowDays = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const rawWindow = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const windowDays = Number.isFinite(rawWindow) ? Math.max(1, Math.min(3650, Math.floor(rawWindow))) : DEFAULT_WINDOW_DAYS;
     const rawLimit = opts?.limit ?? DEFAULT_LIMIT;
-    const limit = Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, rawLimit));
+    const nLimit = Number(rawLimit);
+    const limit = Number.isFinite(nLimit) ? Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.trunc(nLimit))) : DEFAULT_LIMIT;
     const cutoffMs = Date.now() - windowDays * MS_PER_DAY;
 
     let rows: RawAnchorRow[];

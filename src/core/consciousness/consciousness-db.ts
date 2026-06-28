@@ -386,6 +386,10 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
   `CREATE INDEX IF NOT EXISTS idx_reflections_episode ON reflections(subject_episode_id)`,
+  // One reflection per episode. UNIQUE so concurrent runBatchReflection() can't write
+  // duplicate rows (TOCTOU). On a legacy DB with existing dupes this CREATE fails and is
+  // caught+warned by the fault-tolerant apply loop above — the SELECT pre-check still guards.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_reflections_subject_unique ON reflections(subject_episode_id)`,
 
   // ==========================================================================
   // WAVE 4: internal-dialogue (debates)

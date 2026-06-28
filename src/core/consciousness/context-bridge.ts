@@ -55,6 +55,9 @@ export interface BridgeConfig {
   injectionPosition: 'after_system' | 'before_tools' | 'end';
   /** Maximum tokens the bridge may inject in a single call. */
   maxTokens: number;
+  /** Max injection-history entries retained (ring buffer; default 500). Prevents
+   *  unbounded _history growth in a long-running daemon. */
+  maxHistory?: number;
   /** Context-window occupancy (%) at which we switch from full to mild compression. */
   contextThresholdMild: number;
   /** Context-window occupancy (%) at which we switch to aggressive compression. */
@@ -68,6 +71,7 @@ export interface BridgeConfig {
 const DEFAULT_CONFIG: BridgeConfig = {
   injectionPosition: 'after_system',
   maxTokens: 2000,
+  maxHistory: 500,
   contextThresholdMild: 50,
   contextThresholdAggressive: 85,
 };
@@ -167,11 +171,20 @@ export class ConsciousnessBridge {
       injectedAt: new Date().toISOString(),
     };
 
-    // Track for history and stats
+    // Track for history and stats. Cap the history ring buffer so a long-running
+    // daemon doesn't retain full injected-context strings forever (memory leak).
     this._history.push(injection);
+    const maxHistory = this.config.maxHistory ?? 500;
+    if (this._history.length > maxHistory) {
+      this._history.splice(0, this._history.length - maxHistory);
+    }
     this._totalBridges++;
     this._totalTokensInjected += finalTokenEstimate;
-    this._byCategory[category] = (this._byCategory[category] ?? 0) + 1;
+    // category is a bounded routing label from NegativeRouter; still, defensively cap
+    // the number of distinct keys so a pathological value can't grow the map without
+    // bound — fold overflow into an 'other' bucket.
+    const catKey = (this._byCategory[category] !== undefined || Object.keys(this._byCategory).length < 64) ? category : 'other';
+    this._byCategory[catKey] = (this._byCategory[catKey] ?? 0) + 1;
 
     // Calculate tokens saved by compression vs. full-detail baseline
     const fullDetailEstimate = estimateTokens(
@@ -214,8 +227,12 @@ export class ConsciousnessBridge {
     const match = marker.exec(systemPrompt);
 
     if (match) {
-      // Insert right before the marker, preserving it
-      const insertPoint = match.index;
+      // 'after_system' must land AFTER the [SYSTEM_END] marker — the injection belongs
+      // after the system block, not spliced inside it. before_tools/end correctly
+      // insert before their marker.
+      const insertPoint = this.config.injectionPosition === 'after_system'
+        ? match.index + match[0].length
+        : match.index;
       const prefix = systemPrompt.slice(0, insertPoint);
       const suffix = systemPrompt.slice(insertPoint);
       // Blank lines around the injection for readability
@@ -405,16 +422,19 @@ export class ConsciousnessBridge {
       return context;
     }
 
-    // Rough character limit from token budget (4 chars per token)
-    const maxChars = this.config.maxTokens * 4;
-    if (context.length <= maxChars) {
+    // Reserve the suffix's token cost so the RETURNED string never exceeds maxTokens
+    // (appending the suffix after slicing at maxTokens*4 would overshoot the budget).
+    const suffix = '… [truncated]';
+    const budgetChars = Math.max(0, (this.config.maxTokens - estimateTokens(suffix)) * 4);
+    if (context.length <= budgetChars) {
       return context;
     }
 
-    // Truncate at last word boundary within budget
-    const truncated = context.slice(0, maxChars);
+    // Slice on CODE POINTS (not UTF-16 units) so emoji/CJK surrogate pairs aren't
+    // split into a malformed string that breaks strict JSON serializers / tokenizers.
+    const truncated = Array.from(context).slice(0, budgetChars).join('');
     const lastSpace = truncated.lastIndexOf(' ');
-    const cut = lastSpace > maxChars * 0.5
+    const cut = lastSpace > budgetChars * 0.5
       ? truncated.slice(0, lastSpace)
       : truncated;
 
@@ -423,6 +443,6 @@ export class ConsciousnessBridge {
       'Context truncated to fit budget',
     );
 
-    return `${cut}… [truncated]`;
+    return `${cut}${suffix}`;
   }
 }

@@ -19,10 +19,8 @@ import {
   getAllUsers,
   getInteractionHistory,
   getUserModel,
-  incrementInteraction,
   logInteraction,
   saveUserModel,
-  updateTrustLevel,
 } from './store.js';
 import {
   addUnique,
@@ -111,51 +109,55 @@ export class TheoryOfMind {
 
     log.debug({ userId, outcome: interaction.outcome }, 'Updating user model');
 
-    // 1. Get or create
-    let model: UserModel = getUserModel(this.db, userId) ?? createDefaultModel(userId);
-    if (model.interactionCount === 0 && !getUserModel(this.db, userId)) {
-      log.info({ userId }, 'New user model created');
-    }
+    // All reads + the single write run inside ONE transaction, with saveUserModel as
+    // the SOLE writer, so concurrent updates for the same userId can't lost-update each
+    // other's trust/interaction counts. The previous separate incrementInteraction()/
+    // updateTrustLevel() DB writes were redundant (saveUserModel persists both columns
+    // from the local snapshot) and were the actual clobber source.
+    const txn = this.db.transaction(() => {
+      // 1. Get or create
+      const existing = getUserModel(this.db, userId);
+      const model: UserModel = existing ?? createDefaultModel(userId);
+      if (!existing) log.info({ userId }, 'New user model created');
 
-    // 2. Log interaction
-    logInteraction(this.db, interaction);
+      // 2. Log interaction
+      logInteraction(this.db, interaction);
 
-    // 3. Increment count (DB-side); reflect in local snapshot too
-    incrementInteraction(this.db, userId);
-    model.interactionCount += 1;
-    model.lastInteraction = new Date().toISOString();
+      // 3. Increment count on the local snapshot (persisted by saveUserModel below)
+      model.interactionCount += 1;
+      model.lastInteraction = new Date().toISOString();
 
-    // 4. Trust adjustment
-    if (interaction.outcome === 'positive') {
-      updateTrustLevel(this.db, userId, TRUST_POSITIVE_DELTA);
-      model.trustLevel = Math.min(1, model.trustLevel + TRUST_POSITIVE_DELTA);
-    } else if (interaction.outcome === 'negative') {
-      updateTrustLevel(this.db, userId, TRUST_NEGATIVE_DELTA);
-      model.trustLevel = Math.max(0, model.trustLevel + TRUST_NEGATIVE_DELTA);
-    }
+      // 4. Trust adjustment (local snapshot only)
+      if (interaction.outcome === 'positive') {
+        model.trustLevel = Math.min(1, model.trustLevel + TRUST_POSITIVE_DELTA);
+      } else if (interaction.outcome === 'negative') {
+        model.trustLevel = Math.max(0, model.trustLevel + TRUST_NEGATIVE_DELTA);
+      }
 
-    // 5. Triggers and delights
-    if (detectFrustration(interaction.message)) {
-      addUnique(model.knownTriggers, 'frustration_signals');
-      log.debug({ userId }, 'Frustration signal detected — added to triggers');
-    }
-    if (detectPositiveSentiment(interaction.message)) {
-      addUnique(model.knownDelights, 'positive_acknowledgement');
-      log.debug({ userId }, 'Positive sentiment detected — added to delights');
-    }
+      // 5. Triggers and delights
+      if (detectFrustration(interaction.message)) {
+        addUnique(model.knownTriggers, 'frustration_signals');
+        log.debug({ userId }, 'Frustration signal detected — added to triggers');
+      }
+      if (detectPositiveSentiment(interaction.message)) {
+        addUnique(model.knownDelights, 'positive_acknowledgement');
+        log.debug({ userId }, 'Positive sentiment detected — added to delights');
+      }
 
-    // 6. Recalculate communication style from last 5 messages + current
-    const history = getInteractionHistory(this.db, userId, 5);
-    const recentMessages = [interaction.message, ...history.map((r) => r.message)];
-    model.communicationStyle = detectCommunicationStyle(recentMessages);
+      // 6. Recalculate communication style from last 5 messages + current
+      const history = getInteractionHistory(this.db, userId, 5);
+      const recentMessages = [interaction.message, ...history.map((r) => r.message)];
+      model.communicationStyle = detectCommunicationStyle(recentMessages);
 
-    log.debug(
-      { userId, style: model.communicationStyle, trust: model.trustLevel },
-      'User model updated',
-    );
+      log.debug(
+        { userId, style: model.communicationStyle, trust: model.trustLevel },
+        'User model updated',
+      );
 
-    // 7. Persist
-    saveUserModel(this.db, model);
+      // 7. Persist — the ONLY writer of the user_models row.
+      saveUserModel(this.db, model);
+    });
+    txn();
   }
 
   // -------------------------------------------------------------------------
@@ -233,8 +235,11 @@ export class TheoryOfMind {
           '"mood" (string), "intent" (string), "urgency" (number 0-1). ' +
           'Return only valid JSON, no markdown.';
 
+        // JSON-encode the user message so a crafted message can't break out of the
+        // quoted slot and rewrite the analysis template (prompt injection). Cap to 2 KB.
+        const safeMsg = JSON.stringify(String(currentMessage).slice(0, 2048));
         const userPrompt =
-          `${historyNote}\n\nUser message: "${currentMessage}"\n\n` +
+          `${historyNote}\n\nUser message (JSON-encoded): ${safeMsg}\n\n` +
           'Respond with JSON only: {"mood":"...","intent":"...","urgency":0.0}';
 
         const result = await this.brain.call({
@@ -247,16 +252,24 @@ export class TheoryOfMind {
           temperature: 0.2,
         });
 
-        const parsed = JSON.parse(result.content.trim()) as UserPrediction;
-
-        if (
-          typeof parsed.mood === 'string' &&
-          typeof parsed.intent === 'string' &&
-          typeof parsed.urgency === 'number'
-        ) {
-          parsed.urgency = Math.max(0, Math.min(1, parsed.urgency));
-          log.debug({ userId, mood: parsed.mood }, 'LLM mood prediction succeeded');
-          return parsed;
+        // Validate content is a string before .trim(); guard the parsed value is a
+        // non-null object (JSON null/array/string parse fine but would crash on field
+        // access); require a FINITE urgency (typeof NaN === 'number' slipped through).
+        if (typeof result?.content !== 'string') {
+          throw new Error('brain.call returned non-string content');
+        }
+        const parsedUnknown: unknown = JSON.parse(result.content.trim());
+        if (parsedUnknown !== null && typeof parsedUnknown === 'object' && !Array.isArray(parsedUnknown)) {
+          const parsed = parsedUnknown as UserPrediction;
+          if (
+            typeof parsed.mood === 'string' &&
+            typeof parsed.intent === 'string' &&
+            Number.isFinite(parsed.urgency)
+          ) {
+            parsed.urgency = Math.max(0, Math.min(1, parsed.urgency));
+            log.debug({ userId, mood: parsed.mood }, 'LLM mood prediction succeeded');
+            return parsed;
+          }
         }
 
         log.warn(

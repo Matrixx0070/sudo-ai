@@ -110,10 +110,13 @@ describe('ConsciousnessBridge', () => {
 
     const result = bridge.injectIntoPrompt(prompt, injection);
 
-    // Context should appear before [SYSTEM_END] marker
+    // 'after_system' must place the context AFTER the [SYSTEM_END] marker — after the
+    // system block, not spliced inside it (between [SYSTEM_END] and [TOOLS_BEGIN]).
     const ctxIndex = result.indexOf(injection.context);
     const markerIndex = result.indexOf('[SYSTEM_END]');
-    expect(ctxIndex).toBeLessThan(markerIndex);
+    const toolsIndex = result.indexOf('[TOOLS_BEGIN]');
+    expect(ctxIndex).toBeGreaterThan(markerIndex);
+    expect(ctxIndex).toBeLessThan(toolsIndex);
     expect(result).toContain(injection.context);
   });
 
