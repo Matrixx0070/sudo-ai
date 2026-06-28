@@ -85,7 +85,7 @@ export const webpageTool: ToolDefinition = {
     let browser: import('playwright-core').Browser | undefined;
     try {
       const { chromium } = await import('playwright-core');
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       const context = await browser.newContext({ viewport: { width: 1100, height: 720 }, deviceScaleFactor: 2 });
       const page = await context.newPage();
       await page.setContent(doc, { waitUntil: 'load', timeout: 12_000 });

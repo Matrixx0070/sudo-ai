@@ -34,7 +34,7 @@ ${Object.keys(extract).map((k) => `  ${JSON.stringify(k)}: string[];`).join('\n'
 }
 
 async function scrape(): Promise<ScrapedData> {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (compatible; SudoBot/1.0)',
   });

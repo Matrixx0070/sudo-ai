@@ -134,7 +134,7 @@ export const animationTool: ToolDefinition = {
     let browser: import('playwright-core').Browser | undefined;
     try {
       const { chromium } = await import('playwright-core');
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       const page = await browser.newPage();
       await page.setViewportSize({ width: FRAME_W, height: FRAME_H });
       for (let i = 0; i < frames.length; i++) {

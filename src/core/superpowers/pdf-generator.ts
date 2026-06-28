@@ -96,7 +96,7 @@ export const pdfGeneratorTool: ToolDefinition = {
         throw new Error('playwright-core is not installed. Run: pnpm add playwright-core && npx playwright-core install chromium');
       });
 
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       const page = await browser.newPage();
 
       await page.goto(`file://${tmpFile}`, { waitUntil: 'networkidle' });
