@@ -53,7 +53,14 @@ export const DEFAULT_REACT_CONFIG: ReACTConfig = {
 export class ReACTLoop {
   constructor(
     private readonly config: ReACTConfig = DEFAULT_REACT_CONFIG,
-  ) {}
+  ) {
+    if (config.minSteps < 1) {
+      throw new RangeError(`ReACTConfig.minSteps must be ≥ 1, got ${config.minSteps}`);
+    }
+    if (config.maxSteps < config.minSteps) {
+      throw new RangeError(`ReACTConfig.maxSteps (${config.maxSteps}) must be ≥ minSteps (${config.minSteps})`);
+    }
+  }
 
   /**
    * Returns a system-prompt addition that instructs the LLM to follow the
@@ -84,6 +91,14 @@ export class ReACTLoop {
    */
   hasMinimumSteps(stepCount: number): boolean {
     return stepCount >= this.config.minSteps;
+  }
+
+  /**
+   * Returns true when the step hard cap has been reached. The outer loop must
+   * check this and stop calling createStep to honour the maxSteps contract.
+   */
+  hasReachedMaxSteps(stepCount: number): boolean {
+    return stepCount >= this.config.maxSteps;
   }
 
   /**

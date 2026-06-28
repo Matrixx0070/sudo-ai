@@ -63,6 +63,7 @@ export interface RateLimiter {
   check(channel: string, peerId: string): Promise<RateLimitCheckResult>;
   reset(channel: string, peerId: string): void;
   setHookEmitter(emitter: HookEmitterLike): void;
+  shutdown(): Promise<void>;
 }
 
 /** Minimal hook-emission interface compatible with HookManager. */
@@ -143,6 +144,7 @@ class RateLimiterImpl implements RateLimiter {
   private _hookEmitter: HookEmitterLike | null = null;
   private _gcTimer: ReturnType<typeof setInterval> | null = null;
   private _persistTimer: ReturnType<typeof setInterval> | null = null;
+  private _flushing: Promise<void> | null = null;
   private readonly _persist: boolean;
 
   constructor() {
@@ -193,8 +195,10 @@ class RateLimiterImpl implements RateLimiter {
     bucket.lastRefill = now;
     bucket.lastAccess = now;
 
-    // If bucket refilled above 1 token, reset burstWarned so next denial triggers a fresh warning.
-    if (bucket.tokens >= 1) {
+    // Reset burstWarned only when the bucket is meaningfully recovered (near-full),
+    // not on every small refill tick — prevents spammy repeated warnings during
+    // sustained over-rate bursts.
+    if (bucket.tokens >= maxTokens - 0.5) {
       bucket.burstWarned = false;
     }
 
@@ -330,7 +334,21 @@ class RateLimiterImpl implements RateLimiter {
     }
   }
 
+  async shutdown(): Promise<void> {
+    if (this._gcTimer) { clearInterval(this._gcTimer); this._gcTimer = null; }
+    if (this._persistTimer) { clearInterval(this._persistTimer); this._persistTimer = null; }
+    if (this._persist) await this._flushPersisted();
+  }
+
   private async _flushPersisted(): Promise<void> {
+    // Coalesce concurrent flushes: if one is already in flight, wait for it
+    // instead of racing two rename() calls against each other.
+    if (this._flushing) return this._flushing;
+    this._flushing = this._doFlush().finally(() => { this._flushing = null; });
+    return this._flushing;
+  }
+
+  private async _doFlush(): Promise<void> {
     const data: PersistedBuckets = {};
     for (const [key, bucket] of this.buckets) {
       data[key] = { ...bucket };

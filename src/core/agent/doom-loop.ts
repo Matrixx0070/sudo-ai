@@ -123,6 +123,8 @@ interface CycleFingerprint {
  * ```
  */
 export class DoomLoopDetector {
+  private static readonly MAX_FINGERPRINTS = 10_000;
+
   /** Tool calls grouped by "toolName:argsSignature" for cross-turn repeat detection. */
   private cycleMap = new Map<string, { count: number; lastTurn: number; lastSeenMs: number; toolName: string }>();
 
@@ -159,8 +161,11 @@ export class DoomLoopDetector {
     const argsSignature = this._hashArgs(args);
     const key = `${toolName}:${argsSignature}`;
 
-    // Store fingerprint
+    // Store fingerprint; cap to avoid unbounded memory growth in long-running daemons.
     this.fingerprints.push({ toolName, argsSignature, turnNumber });
+    if (this.fingerprints.length > DoomLoopDetector.MAX_FINGERPRINTS) {
+      this.fingerprints.splice(0, this.fingerprints.length - DoomLoopDetector.MAX_FINGERPRINTS);
+    }
 
     // Count across turns (cross-message detection), but only while repeats stay
     // within the staleness window. A repeat that recurs long after the prior one
@@ -305,7 +310,9 @@ export class DoomLoopDetector {
       }
       return Math.abs(hash).toString(36).slice(0, 12);
     } catch {
-      return 'unhashable';
+      // Unique per-call nonce — serialisation failures must never share a key
+      // and falsely accumulate toward the abort threshold.
+      return `unhashable:${this.fingerprints.length}:${Math.random().toString(36).slice(2)}`;
     }
   }
 
