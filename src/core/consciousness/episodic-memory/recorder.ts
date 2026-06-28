@@ -168,23 +168,30 @@ export function extractTags(text: string): string[] {
     return [];
   }
 
+  // Unicode-aware split: break on whitespace, punctuation and symbols but KEEP
+  // letters of every script. The old /[\s\W]+/ (no `u` flag, \W = [^A-Za-z0-9_])
+  // stripped all non-ASCII, fragmenting "café"→"caf" and dropping CJK/Arabic.
   const tokens = text
     .toLowerCase()
-    .split(/[\s\W]+/)
+    .split(/[\s\p{P}\p{S}]+/u)
     .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
 
-  // Deduplicate while preserving order.
-  const seen = new Set<string>();
+  // Count frequency, then dedupe preserving first-seen order.
+  const freq = new Map<string, number>();
   const unique: string[] = [];
   for (const t of tokens) {
-    if (!seen.has(t)) {
-      seen.add(t);
+    const prev = freq.get(t);
+    if (prev === undefined) {
+      freq.set(t, 1);
       unique.push(t);
+    } else {
+      freq.set(t, prev + 1);
     }
   }
 
-  // Sort by length descending — longer tokens tend to be more specific.
-  unique.sort((a, b) => b.length - a.length);
+  // Rank by frequency desc (the actual topic), length desc as a tiebreak. The
+  // old length-only sort let a single rare long token outrank a word used 50×.
+  unique.sort((a, b) => (freq.get(b)! - freq.get(a)!) || (b.length - a.length));
 
   const tags = unique.slice(0, 5);
 

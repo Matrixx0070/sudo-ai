@@ -51,6 +51,30 @@ export function saveEpisode(db: Database.Database, episode: Episode): void {
     );
   }
 
+  // Coerce every remaining bound field to a value SQLite can bind (never
+  // undefined — better-sqlite3 throws on undefined, and JSON.stringify(undefined)
+  // returns the JS value `undefined`, not a string). Defaults mirror the schema
+  // column defaults and respect its CHECK constraints (surprise_level/significance
+  // in [0,1]; outcome in the enum), so a partially-constructed Episode (common on
+  // crash recovery / stream-parse) persists instead of throwing an opaque bind error.
+  const VALID_OUTCOMES = new Set(['positive', 'negative', 'neutral', 'mixed']);
+  const clamp01 = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : NaN);
+
+  const participantsJson = JSON.stringify(Array.isArray(episode.participants) ? episode.participants : []);
+  const topicStr = typeof episode.topic === 'string' ? episode.topic : '';
+  const tagsJson = JSON.stringify(Array.isArray(episode.tags) ? episode.tags : []);
+  const valenceJson = JSON.stringify(episode.emotionalValence ?? {});
+  const surpriseLevel = Number.isNaN(clamp01(episode.surpriseLevel)) ? 0 : clamp01(episode.surpriseLevel);
+  const outcomeStr = typeof episode.outcome === 'string' && VALID_OUTCOMES.has(episode.outcome) ? episode.outcome : 'neutral';
+  const significance = Number.isNaN(clamp01(episode.significance)) ? 0.5 : clamp01(episode.significance);
+  const sessionId = typeof episode.sessionId === 'string' ? episode.sessionId : null;
+  const durationMs = typeof episode.durationMs === 'number' && Number.isFinite(episode.durationMs) && episode.durationMs >= 0
+    ? Math.floor(episode.durationMs)
+    : 0;
+
+  // Idempotent upsert: a crash-then-recover or at-least-once recorder re-inserts
+  // the same id — a plain INSERT throws SQLITE_CONSTRAINT_PRIMARYKEY, which the
+  // caller cannot distinguish from real corruption. ON CONFLICT makes retry safe.
   const stmt = db.prepare<[
     string, string, string, string, string, string,
     number, string, number, string | null, string, string, number,
@@ -60,25 +84,30 @@ export function saveEpisode(db: Database.Database, episode: Episode): void {
        surprise_level, outcome, significance, session_id,
        started_at, ended_at, duration_ms)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      summary=excluded.summary,
+      significance=MAX(episodes.significance, excluded.significance),
+      ended_at=excluded.ended_at,
+      duration_ms=excluded.duration_ms
   `);
 
   try {
     stmt.run(
       episode.id,
       episode.summary,
-      JSON.stringify(episode.participants),
-      episode.topic,
-      JSON.stringify(episode.tags),
-      JSON.stringify(episode.emotionalValence),
-      episode.surpriseLevel,
-      episode.outcome,
-      episode.significance,
-      episode.sessionId,
+      participantsJson,
+      topicStr,
+      tagsJson,
+      valenceJson,
+      surpriseLevel,
+      outcomeStr,
+      significance,
+      sessionId,
       episode.startedAt,
       episode.endedAt,
-      episode.durationMs,
+      durationMs,
     );
-    log.debug({ id: episode.id, topic: episode.topic }, 'Episode saved');
+    log.debug({ id: episode.id, topic: topicStr }, 'Episode saved');
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new ConsciousnessError(
