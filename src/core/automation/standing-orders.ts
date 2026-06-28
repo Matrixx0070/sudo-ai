@@ -4,7 +4,7 @@
  * Evaluates triggers every 60 s. Builtins seeded on first boot.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
+import { readFileSync, openSync, writeSync, fsyncSync, closeSync, mkdirSync, renameSync } from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
 import { createLogger } from '../shared/logger.js';
@@ -15,7 +15,6 @@ import type { StandingOrder, StandingOrdersFile, OrderTrigger } from './types.js
 const log = createLogger('automation:standing-orders');
 
 const ORDERS_FILE = path.join(DATA_DIR, 'standing-orders.json');
-const ORDERS_BAK = path.join(DATA_DIR, 'standing-orders.json.bak');
 const EVAL_INTERVAL_MS = 60_000 as const;
 const TICK_WINDOW_MS = EVAL_INTERVAL_MS + 500;
 
@@ -32,6 +31,8 @@ export class StandingOrderManager {
   private readonly runner: OrderRunner;
   /** Tracks last evaluation time for condition triggers. */
   private conditionLastRun: Map<string, number> = new Map();
+  /** Tracks the last wall-clock ms each schedule-triggered order actually fired; prevents re-fire within the same tick window. */
+  private scheduleLastFired: Map<string, number> = new Map();
 
   constructor(runner: OrderRunner) {
     if (typeof runner !== 'function') {
@@ -106,6 +107,18 @@ export class StandingOrderManager {
     if (!order.action || typeof order.action !== 'string') {
       throw new TypeError('addOrder: order.action must be a non-empty string');
     }
+    if (!order.trigger || typeof order.trigger.kind !== 'string') {
+      throw new TypeError('addOrder: order.trigger must have a valid kind');
+    }
+    if (order.trigger.kind === 'schedule' && typeof (order.trigger as { cron?: unknown }).cron !== 'string') {
+      throw new TypeError('addOrder: schedule trigger requires a cron string');
+    }
+    if (order.trigger.kind === 'condition' && typeof (order.trigger as { intervalMs?: unknown }).intervalMs !== 'number') {
+      throw new TypeError('addOrder: condition trigger requires an intervalMs number');
+    }
+    if (order.trigger.kind === 'event' && typeof (order.trigger as { event?: unknown }).event !== 'string') {
+      throw new TypeError('addOrder: event trigger requires an event string');
+    }
     const record: StandingOrder = {
       ...order,
       id: order.id ?? genId(),
@@ -159,12 +172,8 @@ export class StandingOrderManager {
   async evaluateTriggers(): Promise<void> {
     const now = new Date();
     const enabled = [...this.orders.values()].filter((o) => o.enabled);
-
-    for (const order of enabled) {
-      if (this._isDue(order, now)) {
-        await this.executeOrder(order);
-      }
-    }
+    const due = enabled.filter((o) => this._isDue(o, now));
+    await Promise.allSettled(due.map((o) => this.executeOrder(o)));
   }
 
   /** Emit a named system event — fires all matching event-trigger orders. */
@@ -207,7 +216,13 @@ export class StandingOrderManager {
         const cron = new Cron(trigger.cron, { timezone: trigger.tz });
         const prev = cron.previousRun();
         if (!prev) return false;
-        return Math.abs(now.getTime() - prev.getTime()) < TICK_WINDOW_MS;
+        const prevMs = prev.getTime();
+        const nowMs = now.getTime();
+        if (Math.abs(nowMs - prevMs) >= TICK_WINDOW_MS) return false;
+        const lastFired = this.scheduleLastFired.get(order.id) ?? 0;
+        if (lastFired >= prevMs) return false;
+        this.scheduleLastFired.set(order.id, nowMs);
+        return true;
       } catch (err) {
         log.warn({ orderId: order.id, err }, 'Invalid cron expression in standing order');
         return false;
@@ -284,9 +299,16 @@ export class StandingOrderManager {
       orders: [...this.orders.values()],
     };
     const json = JSON.stringify(payload, null, 2);
+    const tmpPath = path.join(DATA_DIR, `standing-orders-${genId()}.tmp`);
     try {
-      writeFileSync(ORDERS_BAK, json, 'utf8');
-      renameSync(ORDERS_BAK, ORDERS_FILE);
+      const fd = openSync(tmpPath, 'w');
+      try {
+        writeSync(fd, json, 0, 'utf8');
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmpPath, ORDERS_FILE);
     } catch (err) {
       log.error({ err, file: ORDERS_FILE }, 'Failed to save standing-orders.json');
       throw err;

@@ -80,9 +80,11 @@ export function dashboardGet<T>(
 ): Promise<FetchResult<T>> {
   return new Promise((resolve) => {
     let settled = false;
+    let deadline: ReturnType<typeof setTimeout> | null = null;
     const settle = (r: FetchResult<T>): void => {
       if (settled) return;
       settled = true;
+      if (deadline !== null) { clearTimeout(deadline); deadline = null; }
       resolve(r);
     };
 
@@ -98,6 +100,12 @@ export function dashboardGet<T>(
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('error', (err) => {
+          settle({
+            ok: false,
+            error: `response stream error: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        });
         res.on('end', () => {
           const body = Buffer.concat(chunks).toString('utf8');
           const status = res.statusCode ?? 0;
@@ -132,6 +140,10 @@ export function dashboardGet<T>(
       settle({ ok: false, error: `request timed out after ${config.requestTimeoutMs}ms` });
       req.destroy();
     });
+    deadline = setTimeout(() => {
+      settle({ ok: false, error: `wall-clock deadline exceeded (${config.requestTimeoutMs}ms)` });
+      req.destroy();
+    }, config.requestTimeoutMs + 1000);
     req.end();
   });
 }

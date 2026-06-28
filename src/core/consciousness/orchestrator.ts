@@ -1,7 +1,7 @@
 /** ConsciousnessOrchestrator — boots all consciousness modules in dependency order,
  *  mediates interaction lifecycle, and formats internal state for system-prompt injection. */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { genId, truncate } from '../shared/utils.js';
@@ -128,12 +128,40 @@ export function extractTriggerConcepts(text: string, max = 3): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const word of (text || '').toLowerCase().split(/[^a-z0-9]+/)) {
-    if (word.length <= 3 || SOMATIC_STOPWORDS.has(word) || seen.has(word)) continue;
+    if (word.length <= 3 || /^\d+$/.test(word) || SOMATIC_STOPWORDS.has(word) || seen.has(word)) continue;
     seen.add(word);
     out.push(word);
     if (out.length >= max) break;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Module-level singleton listener — routes 'sudo:consciousness:control' to all
+// live ConsciousnessOrchestrator instances without accumulating per-instance
+// listeners on `process` (MaxListenersExceededWarning in tests).
+// ---------------------------------------------------------------------------
+
+const _orchestratorInstances = new Set<ConsciousnessOrchestrator>();
+
+function _globalControlHandler(payload: { module: string; action: string }): void {
+  for (const inst of _orchestratorInstances) {
+    try { inst._dispatchControl(payload); } catch { /* ignore */ }
+  }
+}
+
+function _registerOrchestratorInstance(inst: ConsciousnessOrchestrator): void {
+  _orchestratorInstances.add(inst);
+  if (_orchestratorInstances.size === 1) {
+    process.on('sudo:consciousness:control', _globalControlHandler);
+  }
+}
+
+function _unregisterOrchestratorInstance(inst: ConsciousnessOrchestrator): void {
+  _orchestratorInstances.delete(inst);
+  if (_orchestratorInstances.size === 0) {
+    process.removeListener('sudo:consciousness:control', _globalControlHandler);
+  }
 }
 
 export class ConsciousnessOrchestrator {
@@ -169,8 +197,6 @@ export class ConsciousnessOrchestrator {
   private sleepCycle: SleepCycleLike | null = null;
   private selfEvolution: SelfEvolutionLike | null = null;
   private _booted = false;
-  /** Handler bound to process 'sudo:consciousness:control'; held so shutdown() can remove it. */
-  private _controlHandler: ((payload: { module: string; action: string }) => void) | null = null;
   private _lastInteractionAt: string | null = null;
   private _zdrEnabled = false;
   /**
@@ -224,9 +250,15 @@ export class ConsciousnessOrchestrator {
     try {
       const controlFile = path.join(DATA_DIR, 'consciousness-control.json');
       if (existsSync(controlFile)) {
-        const control = JSON.parse(readFileSync(controlFile, 'utf8'));
-        if (control.cognitiveStream === false) skipStream = true;
-        if (control.embodiedState === false) skipEmbodied = true;
+        const stat = statSync(controlFile);
+        if (stat.size <= 4096) {
+          const control = JSON.parse(readFileSync(controlFile, 'utf8')) as unknown;
+          if (control !== null && typeof control === 'object') {
+            const c = control as Record<string, unknown>;
+            if (c['cognitiveStream'] === false) skipStream = true;
+            if (c['embodiedState'] === false) skipEmbodied = true;
+          }
+        }
       }
     } catch { /* ignore */ }
 
@@ -262,33 +294,8 @@ export class ConsciousnessOrchestrator {
       if (!skipEmbodied) this.embodiedState.start();
       if (!skipStream) this.cognitiveStream.start();
 
-      // Listen for runtime consciousness control signals. Hold the handler
-      // reference so shutdown() can remove it — an anonymous listener here leaks
-      // on the global `process` object on every boot (re-instantiation in prod;
-      // one per instance across many tests → MaxListenersExceededWarning).
-      if (this._controlHandler) process.removeListener('sudo:consciousness:control', this._controlHandler);
-      this._controlHandler = (payload: { module: string; action: string }) => {
-        try {
-          if (payload.module === 'cognitiveStream') {
-            if (payload.action === 'stop' && this.cognitiveStream) {
-              this.cognitiveStream.stop();
-              log.info('CognitiveStream stopped via runtime control');
-            } else if (payload.action === 'start' && this.cognitiveStream) {
-              this.cognitiveStream.start();
-              log.info('CognitiveStream started via runtime control');
-            }
-          } else if (payload.module === 'embodiedState') {
-            if (payload.action === 'stop' && this.embodiedState) {
-              this.embodiedState.stop();
-              log.info('EmbodiedState stopped via runtime control');
-            } else if (payload.action === 'start' && this.embodiedState) {
-              this.embodiedState.start();
-              log.info('EmbodiedState started via runtime control');
-            }
-          }
-        } catch (e) { swallow('consciousness control signal')(e); }
-      };
-      process.on('sudo:consciousness:control', this._controlHandler);
+      // Module-level singleton listener handles control dispatch (see _registerOrchestratorInstance).
+      _registerOrchestratorInstance(this);
 
       this._booted = true;
       log.info('Consciousness online');
@@ -300,10 +307,7 @@ export class ConsciousnessOrchestrator {
 
   async shutdown(): Promise<void> {
     this._assertBooted('shutdown');
-    if (this._controlHandler) {
-      process.removeListener('sudo:consciousness:control', this._controlHandler);
-      this._controlHandler = null;
-    }
+    _unregisterOrchestratorInstance(this);
     try { this.cognitiveStream.stop(); } catch (e) { swallow('stream stop')(e); }
     try { this.embodiedState.stop(); } catch (e) { swallow('embodied stop')(e); }
     try { this.db.close(); } catch (e) { swallow('db close')(e); }
@@ -945,6 +949,28 @@ export class ConsciousnessOrchestrator {
       if (/chat|convers|hello|how are|help me/.test(text)) return 'conversation';
     } catch { /* fall through */ }
     return 'general';
+  }
+
+  _dispatchControl(payload: { module: string; action: string }): void {
+    try {
+      if (payload.module === 'cognitiveStream') {
+        if (payload.action === 'stop' && this.cognitiveStream) {
+          this.cognitiveStream.stop();
+          log.info('CognitiveStream stopped via runtime control');
+        } else if (payload.action === 'start' && this.cognitiveStream) {
+          this.cognitiveStream.start();
+          log.info('CognitiveStream started via runtime control');
+        }
+      } else if (payload.module === 'embodiedState') {
+        if (payload.action === 'stop' && this.embodiedState) {
+          this.embodiedState.stop();
+          log.info('EmbodiedState stopped via runtime control');
+        } else if (payload.action === 'start' && this.embodiedState) {
+          this.embodiedState.start();
+          log.info('EmbodiedState started via runtime control');
+        }
+      }
+    } catch (e) { swallow('consciousness control signal')(e); }
   }
 
   private _assertBooted(caller: string): void {

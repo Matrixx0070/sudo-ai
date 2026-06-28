@@ -62,7 +62,7 @@ const MARKER_RULES: MarkerRule[] = [
   },
   {
     category: 'IGNORE_INSTRUCTION',
-    regex: /ignore\s+(previous|prior|all|above)\s+(instructions?|rules?|directives?)/gi,
+    regex: /\b(ignore|disregard|forget|override|bypass)\b[\s\S]{0,30}\b(instructions?|rules?|directives?|constraints?|prompts?)\b/gi,
     severity: 'CRITICAL',
   },
   {
@@ -109,14 +109,24 @@ const MARKER_RULES: MarkerRule[] = [
 /**
  * Count all matches of a regex in text. Regex must have the `g` flag.
  * Returns 0 on any unexpected error (fail-open).
+ *
+ * Guard: advances lastIndex on zero-width matches to prevent an infinite loop,
+ * and caps iterations at text.length+2 so a pathological regex can't spin forever.
  */
 function countMatches(regex: RegExp, text: string): number {
   try {
-    // Reset lastIndex to ensure reliable counting from the start
     regex.lastIndex = 0;
     let count = 0;
-    while (regex.exec(text) !== null) {
+    const cap = text.length + 2;
+    let prevLastIndex = -1;
+    while (count < cap) {
+      const m = regex.exec(text);
+      if (m === null) break;
       count++;
+      if (regex.lastIndex === prevLastIndex) {
+        regex.lastIndex++;
+      }
+      prevLastIndex = regex.lastIndex;
     }
     return count;
   } catch {
