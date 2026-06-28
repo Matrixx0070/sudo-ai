@@ -151,7 +151,7 @@ export const slidesTool: ToolDefinition = {
     let browser: import('playwright-core').Browser | undefined;
     try {
       const { chromium } = await import('playwright-core');
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: 'load', timeout: 20_000 });
       await page.pdf({ path: outPath, width: `${SLIDE_W}px`, height: `${SLIDE_H}px`, printBackground: true, margin: { top: '0', right: '0', bottom: '0', left: '0' } });

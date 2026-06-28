@@ -2,6 +2,7 @@
   "name": "@matrixx0070/sudo-ai",
   "version": "4.1.0",
   "description": "SUDO-AI - Autonomous AI Agent Platform",
+  "packageManager": "pnpm@10.33.0",
   "license": "MIT",
   "bin": {
     "sudo-ai": "./dist/server/cli.js"
@@ -138,7 +139,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/mailparser": "^3.4.6",
     "@types/node": "^25.5.0",
-    "@types/nodemailer": "^7.0.11",
+    "@types/nodemailer": "^8.0.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -159,5 +160,16 @@
     "@huggingface/transformers": "^3.8.1",
     "electron": "^33.0.0",
     "kokoro-js": "^1.2.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@whiskeysockets/baileys",
+      "better-sqlite3",
+      "electron",
+      "esbuild",
+      "onnxruntime-node",
+      "protobufjs",
+      "sharp"
+    ]
   }
 }

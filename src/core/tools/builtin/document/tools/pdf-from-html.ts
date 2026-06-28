@@ -149,7 +149,7 @@ export const pdfFromHtmlTool: ToolDefinition = {
     // --- Launch browser and generate PDF ---
     let browser;
     try {
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       const page = await browser.newPage();
 
       await page.setContent(html, { waitUntil: 'networkidle', timeout: 20_000 });

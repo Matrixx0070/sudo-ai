@@ -205,7 +205,7 @@ export const chartTool: ToolDefinition = {
     let browser: import('playwright-core').Browser | undefined;
     try {
       const { chromium } = await import('playwright-core');
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       const page = await browser.newPage();
       await page.setViewportSize({ width: CHART_W, height: CHART_H });
       await page.setContent(html, { waitUntil: 'load', timeout: 15_000 });

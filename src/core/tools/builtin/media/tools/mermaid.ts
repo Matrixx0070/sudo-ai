@@ -71,7 +71,7 @@ export const mermaidTool: ToolDefinition = {
     let browser: import('playwright-core').Browser | undefined;
     try {
       const { chromium } = await import('playwright-core');
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       const context = await browser.newContext({ deviceScaleFactor: 2 });
       const page = await context.newPage();
       await page.setContent(
