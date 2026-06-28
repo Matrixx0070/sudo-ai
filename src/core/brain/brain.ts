@@ -6,7 +6,7 @@
  */
 
 import { generateText, streamText, tool as aiTool, jsonSchema } from 'ai';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } from '../shared/prompt-cache-telemetry.js';
 import { LLMError } from '../shared/errors.js';
@@ -90,7 +90,12 @@ export function failoverBackoffMs(category: string, attempt: number, retryAfterM
   if (typeof retryAfterMs === 'number' && retryAfterMs > 0) {
     return Math.min(retryAfterMs, FAILOVER_BACKOFF_CAP_MS);
   }
-  return Math.min(FAILOVER_BACKOFF_CAP_MS, 250 * Math.pow(2, attempt));
+  // Guard against a NaN/undefined/huge attempt counter: Math.pow(2, NaN) = NaN,
+  // Math.min(cap, NaN) = NaN, and setTimeout(fn, NaN) fires immediately —
+  // re-creating the zero-wait thundering-herd this backoff exists to prevent.
+  const safeAttempt = Number.isFinite(attempt) ? Math.max(0, Math.floor(attempt)) : 0;
+  const exp = Math.min(safeAttempt, 20);
+  return Math.min(FAILOVER_BACKOFF_CAP_MS, 250 * Math.pow(2, exp));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -136,7 +141,7 @@ export function splitConcatenatedJsonObjects(raw: string): Record<string, unknow
   let depth = 0;
   let inString = false;
   let escapeNext = false;
-  let objectStart = 0;
+  let objectStart = -1; // sentinel: -1 = not currently inside a top-level object
 
   for (let i = 0; i < trimmed.length; i++) {
     const ch = trimmed[i];
@@ -163,8 +168,16 @@ export function splitConcatenatedJsonObjects(raw: string): Record<string, unknow
       depth++;
     } else if (ch === '}') {
       depth--;
-      if (depth === 0) {
+      if (depth < 0) {
+        // Unbalanced closing brace — input is corrupt. A stale objectStart from
+        // a prior segment would slice the wrong bytes, so abort rather than
+        // emit garbage that could drive tool dispatch with wrong arguments.
+        log.warn({ at: i }, 'splitConcatenatedJsonObjects: unbalanced closing brace — aborting parse');
+        return [];
+      }
+      if (depth === 0 && objectStart >= 0) {
         const segment = trimmed.slice(objectStart, i + 1);
+        objectStart = -1;
         try {
           const parsed = JSON.parse(segment) as Record<string, unknown>;
           if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -177,7 +190,52 @@ export function splitConcatenatedJsonObjects(raw: string): Record<string, unknow
     }
   }
 
+  if (depth !== 0) {
+    // Trailing object truncated mid-stream (depth never returned to 0). Nothing
+    // partial was pushed (we only push on depth===0), but surface it so callers
+    // can tell "no tool calls" from "tool calls truncated".
+    log.warn({ depth }, 'splitConcatenatedJsonObjects: truncated trailing object — ignored');
+  }
+
   return results;
+}
+
+/**
+ * Scan arbitrary text for ALL balanced top-level JSON objects, returning each
+ * `{...}` substring. Unlike splitConcatenatedJsonObjects this does NOT require
+ * the text to start with `{` — it locates objects embedded anywhere (e.g. an
+ * LLM that wraps a `{"tool_calls":[...]}` payload in prose). String/escape
+ * aware, O(n), no regex backtracking.
+ */
+function findBalancedJsonObjects(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  let objectStart = -1;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escapeNext) { escapeNext = false; continue; }
+    if (ch === '\\' && inString) { escapeNext = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (ch === '{') {
+      if (depth === 0) objectStart = i;
+      depth++;
+    } else if (ch === '}') {
+      if (depth === 0) continue; // stray closing brace outside any object — ignore
+      depth--;
+      if (depth === 0 && objectStart >= 0) {
+        out.push(text.slice(objectStart, i + 1));
+        objectStart = -1;
+      }
+    }
+  }
+
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +349,14 @@ function toSDKMessages(messages: BrainMessage[]): unknown[] {
       // The SDK v6 requires role='tool', content = array of ToolResultPart.
       // Never let a tool message fall through to plain string content — SDK rejects it.
       if (msg.role === 'tool') {
-        const callId = msg.toolCallId ?? `fallback_${Date.now()}`;
+        let callId = msg.toolCallId;
+        if (!callId) {
+          // A missing toolCallId from upstream is a bug worth surfacing. Use a
+          // collision-free UUID (Date.now() collides for two tool messages in
+          // the same ms, cross-wiring tool results back to the wrong call).
+          callId = `fallback_${randomUUID()}`;
+          log.warn({ toolName: msg.toolName }, 'tool message missing toolCallId — synthesised fallback id');
+        }
         return {
           role: 'tool',
           content: [{
@@ -640,7 +705,7 @@ export class Brain {
       }
 
       const args = (parsed['args'] ?? parsed['arguments'] ?? parsed['input'] ?? {}) as Record<string, unknown>;
-      const id = `text-tc-${Date.now()}-${results.length}`;
+      const id = `text-tc-${randomUUID()}`;
       log.warn({ name, id }, 'Text tool-call fallback FIRED — LLM emitted XML text instead of structured tool call');
       results.push({ id, name, arguments: args });
     }
@@ -673,26 +738,30 @@ export class Brain {
       return [];
     }
 
-    // Find JSON objects containing "tool_calls" key anywhere in the text.
+    // Find JSON objects containing "tool_calls" anywhere in the text. A greedy
+    // lazy regex (/\{[\s\S]*?"tool_calls"[\s\S]*?\}/) stops at the FIRST '}'
+    // after "tool_calls" — truncating `{"tool_calls":[{"name":"x","arguments":{...}}]}`
+    // to unbalanced JSON and silently dropping/mangling args. Use a balanced-brace
+    // scanner (O(n), string/escape aware, no backtracking) so nested args survive.
     const results: ToolCallFromLLM[] = [];
-    const jsonPattern = /\{[\s\S]*?"tool_calls"[\s\S]*?\}/g;
-    let match: RegExpExecArray | null;
 
-    while ((match = jsonPattern.exec(text)) !== null) {
+    for (const objStr of findBalancedJsonObjects(text)) {
+      if (!objStr.includes('"tool_calls"')) continue;
+
       let parsed: Record<string, unknown>;
-      const whole = tryParseJson<Record<string, unknown>>(match[0], isJsonRepairEnabled());
+      const whole = tryParseJson<Record<string, unknown>>(objStr, isJsonRepairEnabled());
       if (whole) {
         if (whole.repaired) {
-          log.warn({ raw: match[0].slice(0, 200) }, 'JSON tool-call fallback: malformed JSON repaired before parse');
+          log.warn({ raw: objStr.slice(0, 200) }, 'JSON tool-call fallback: malformed JSON repaired before parse');
         }
         parsed = whole.value;
       } else {
         // The outer JSON may be incomplete — try to extract just the tool_calls array.
-        const arrMatch = /"tool_calls"\s*:\s*(\[[\s\S]*?\])/.exec(match[0]);
+        const arrMatch = /"tool_calls"\s*:\s*(\[[\s\S]*?\])/.exec(objStr);
         if (!arrMatch) continue;
         const arr = tryParseJson<unknown[]>(arrMatch[1], isJsonRepairEnabled());
         if (!arr) {
-          log.warn({ raw: match[0].slice(0, 200) }, 'JSON tool-call fallback: parse failed (repair exhausted) — skipping');
+          log.warn({ raw: objStr.slice(0, 200) }, 'JSON tool-call fallback: parse failed (repair exhausted) — skipping');
           continue;
         }
         parsed = { tool_calls: arr.value };
@@ -715,7 +784,7 @@ export class Brain {
         }
 
         const args = (c['arguments'] ?? c['args'] ?? c['input'] ?? {}) as Record<string, unknown>;
-        const id = `json-tc-${Date.now()}-${results.length}`;
+        const id = `json-tc-${randomUUID()}`;
         log.warn({ name, id }, 'JSON tool-call fallback FIRED — LLM emitted JSON text instead of structured tool call');
         results.push({ id, name, arguments: args });
       }

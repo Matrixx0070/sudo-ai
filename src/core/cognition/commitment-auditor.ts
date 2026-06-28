@@ -18,6 +18,19 @@ const DEFAULT_WINDOW_DAYS = 3;
 const MS_PER_DAY = 86_400_000;
 const LOG_TRUNCATE_LEN = 120;
 
+/**
+ * Parse a timestamp as UTC. An ISO-8601 string with an explicit zone (Z or
+ * ±hh:mm) is parsed as-is; a zone-less form (SQLite 'YYYY-MM-DD HH:MM:SS' or
+ * bare ISO) is forced to UTC by appending 'Z', avoiding V8's local-time default.
+ */
+function normalizeToUtc(s: string): number {
+  const str = String(s).trim();
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(str)) return Date.parse(str);
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/.exec(str);
+  if (m) return Date.parse(`${m[1]}T${m[2]}Z`);
+  return Date.parse(str); // fall back; caller guards !Number.isFinite
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -38,6 +51,9 @@ export interface CommitmentAuditReport {
   total: number;
   expiringSoon: CommitmentRow[];
   alreadyExpired: CommitmentRow[];
+  /** True when the audit query failed and an empty report was returned fail-open
+   *  — lets consumers distinguish "healthy zero" from "query failed". */
+  degraded?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,13 +121,22 @@ export class CommitmentAuditor {
         continue;
       }
 
-      const createdAt = Date.parse(row.timestamp);
+      // Force UTC interpretation. SQLite CURRENT_TIMESTAMP ('YYYY-MM-DD HH:MM:SS',
+      // no zone) is otherwise parsed by V8 as LOCAL time, shifting createdAt by up
+      // to ±14h. Normalize zone-less timestamps to a Z-suffixed ISO string.
+      const createdAt = normalizeToUtc(row.timestamp);
       if (!Number.isFinite(createdAt)) {
         log.warn({ id: row.id, timestamp: row.timestamp }, 'commitment-auditor: unparseable timestamp, skipping row');
         continue;
       }
 
-      const ttlDays = meta.ttl_days;
+      // Clamp ttl_days to (0, 3650]. An unbounded TTL overflows expiresAt; a
+      // zero/negative TTL makes the row perpetually-expired, flooding alerts.
+      const rawTtl = meta.ttl_days;
+      const ttlDays = Math.max(0.0001, Math.min(rawTtl, 3650));
+      if (ttlDays !== rawTtl) {
+        log.warn({ id: row.id, ttl_days: rawTtl, clamped: ttlDays }, 'commitment-auditor: ttl_days out of range — clamped to (0, 3650]');
+      }
       const expiresAt = createdAt + ttlDays * MS_PER_DAY;
       const now = Date.now();
       const daysUntilExpiry = (expiresAt - now) / MS_PER_DAY;
@@ -171,12 +196,24 @@ export class CommitmentAuditor {
   checkAndWarn(windowDays: number = DEFAULT_WINDOW_DAYS): CommitmentAuditReport {
     const checkedAt = new Date().toISOString();
 
+    // Validate BEFORE the try so a programmer error (NaN/<=0 windowDays) throws
+    // to the caller instead of being swallowed as a deceptive "0 commitments".
+    if (!Number.isFinite(windowDays) || windowDays <= 0) {
+      throw new RangeError(`commitment-auditor.checkAndWarn: windowDays must be a positive number, got ${windowDays}`);
+    }
+
     let expiringSoon: CommitmentRow[] = [];
     let alreadyExpired: CommitmentRow[] = [];
 
     try {
-      expiringSoon = this.getExpiringCommitments(windowDays);
-      alreadyExpired = this.getExpiredCommitments();
+      // Single fetch + single `now`, then partition. Calling the two public
+      // getters separately ran _fetchAll twice with two Date.now() snapshots —
+      // a row crossing the boundary between them was double-counted or missed.
+      const rows = this._fetchAll();
+      const now = Date.now();
+      const windowEnd = now + windowDays * MS_PER_DAY;
+      expiringSoon = rows.filter((r) => r.expiresAt >= now && r.expiresAt <= windowEnd);
+      alreadyExpired = rows.filter((r) => r.expiresAt < now);
     } catch (err: unknown) {
       log.error(
         { err, event: 'commitment.audit.error' },
@@ -188,6 +225,7 @@ export class CommitmentAuditor {
         total: 0,
         expiringSoon: [],
         alreadyExpired: [],
+        degraded: true,
       };
     }
 
@@ -215,6 +253,7 @@ export class CommitmentAuditor {
       total: expiringSoon.length + alreadyExpired.length,
       expiringSoon,
       alreadyExpired,
+      degraded: false,
     };
   }
 }

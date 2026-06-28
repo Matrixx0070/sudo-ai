@@ -30,7 +30,9 @@ interface StatementLike<TParams extends unknown[], TResult> {
 }
 
 export interface DatabaseLike {
-  prepare<TResult = unknown>(sql: string): StatementLike<unknown[], TResult>;
+  // TResult stays first (existing callers use prepare<RowType>); TParams is an
+  // optional second arg so the insert can pin an explicit bind tuple.
+  prepare<TResult = unknown, TParams extends unknown[] = unknown[]>(sql: string): StatementLike<TParams, TResult>;
   exec(sql: string): void;
 }
 
@@ -124,6 +126,11 @@ const BUCKET_DEFS: readonly BucketDef[] = [
  * Boundary rule: [low, high) for all except VERY_HIGH which uses [0.8, 1.0].
  */
 function assignBucket(predicted: number): ConfidenceBucket {
+  // Bound first: a negative/NaN predicted otherwise fails every `>= def.low`
+  // test and falls through to the VERY_HIGH fallback — inverting the signal
+  // (least-confident reported as most-confident). Clamp the out-of-range ends.
+  if (!Number.isFinite(predicted) || predicted <= 0) return 'VERY_LOW';
+  if (predicted >= 1) return 'VERY_HIGH';
   for (const def of BUCKET_DEFS) {
     if (def.bucket === 'VERY_HIGH') {
       // closed upper bound: predicted >= 0.8 and <= 1.0
@@ -181,14 +188,24 @@ function computeReport(
   let sumPredicted = 0;
   let sumOutcome = 0;
   let sumSquaredError = 0;
+  let includedCount = 0;
 
   for (const row of rows) {
     const p = row.predicted;
-    const o = row.outcome as 0 | 1;
+    const o = row.outcome;
+
+    // Skip poisoned rows: an outcome outside {0,1} (legacy data, relaxed CHECK,
+    // upstream bug) yields a Brier term up to 4 — outside [0,1] — corrupting the
+    // aggregate and potentially flipping calibration error direction.
+    if (o !== 0 && o !== 1) {
+      log.warn({ outcome: o, event: 'calibration.report.poisoned-row' }, 'computeReport: skipping row with non-binary outcome');
+      continue;
+    }
 
     sumPredicted += p;
     sumOutcome += o;
     sumSquaredError += (p - o) ** 2;
+    includedCount += 1;
 
     const bucket = assignBucket(p);
     const acc = bucketAccum.get(bucket)!;
@@ -197,7 +214,12 @@ function computeReport(
     acc.count += 1;
   }
 
-  const n = rows.length;
+  // All rows poisoned → nothing to report on.
+  if (includedCount === 0) {
+    return emptyReport(windowDays);
+  }
+
+  const n = includedCount;
   const brierScore = sumSquaredError / n;
   const overallAvgPredicted = sumPredicted / n;
   const overallSuccessRate = sumOutcome / n;
@@ -245,7 +267,9 @@ function computeReport(
 // ---------------------------------------------------------------------------
 
 export class ConfidenceCalibrationTracker {
-  private readonly _stmtInsert: StatementLike<unknown[], unknown>;
+  // Explicit param tuple: a column reorder in the INSERT becomes a COMPILE error
+  // (the load-bearing insert path was previously bind-by-arity with no checking).
+  private readonly _stmtInsert: StatementLike<[string, number, 0 | 1, string | null, string | null, number], unknown>;
   private readonly _stmtListWindow: StatementLike<unknown[], RawCalibrationRow>;
   private readonly _stmtListWindowByTag: StatementLike<unknown[], RawCalibrationRow>;
   private readonly _stmtListWindowByToolName: StatementLike<unknown[], RawCalibrationRow>;
@@ -284,7 +308,7 @@ export class ConfidenceCalibrationTracker {
       // Subsequent calls will fail-open via per-method try/catch.
     }
 
-    this._stmtInsert = db.prepare(
+    this._stmtInsert = db.prepare<unknown, [string, number, 0 | 1, string | null, string | null, number]>(
       `INSERT INTO confidence_calibration (id, predicted, outcome, tag, tool_name, ts)
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
@@ -346,14 +370,28 @@ export class ConfidenceCalibrationTracker {
       return;
     }
 
+    // Validate outcome at runtime: the `0 | 1` type is erased, so a JS caller
+    // passing 2/true/NaN/"1" otherwise hits the SQLite CHECK and is silently
+    // dropped by the catch below — biasing the dataset toward buggy callers.
+    let outcomeInt: 0 | 1;
+    if (outcome === 1) outcomeInt = 1;
+    else if (outcome === 0) outcomeInt = 0;
+    else {
+      log.warn(
+        { outcome, event: 'calibration.record.invalid-outcome' },
+        'confidence-calibration-tracker: outcome must be 0 or 1 — no-op',
+      );
+      return;
+    }
+
     const clamped = Math.max(0, Math.min(1, predicted));
     const id = randomUUID();
     const ts = Date.now();
 
     try {
-      this._stmtInsert.run(id, clamped, outcome, tag ?? null, toolName ?? null, ts);
+      this._stmtInsert.run(id, clamped, outcomeInt, tag ?? null, toolName ?? null, ts);
       log.debug(
-        { id, predicted: clamped, outcome, tag, toolName, ts, event: 'calibration.recorded' },
+        { id, predicted: clamped, outcome: outcomeInt, tag, toolName, ts, event: 'calibration.recorded' },
         'confidence-calibration-tracker: entry recorded',
       );
     } catch (err: unknown) {

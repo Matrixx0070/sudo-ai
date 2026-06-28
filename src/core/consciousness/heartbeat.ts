@@ -26,7 +26,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, isAbsolute } from 'path';
 import type Database from 'better-sqlite3';
 
 const log = createLogger('consciousness:heartbeat');
@@ -192,14 +192,31 @@ export class HeartbeatEngine {
   private briefingCount = 0;
 
   constructor(config?: Partial<HeartbeatConfig>, db?: Database.Database) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    const merged = { ...DEFAULT_CONFIG, ...config };
+
+    // Contain workspaceDir against relative '..' traversal (the attack vector:
+    // a relative path like '../../etc/cron.d' would resolve outside the project
+    // and turn later HEARTBEAT.md writes into arbitrary file creation). Absolute
+    // paths are operator-trusted config and pass through unchanged.
+    const rawDir = merged.workspaceDir;
+    const resolvedDir = isAbsolute(rawDir) ? resolve(rawDir) : resolve(process.cwd(), rawDir);
+    if (!isAbsolute(rawDir)
+        && !resolvedDir.startsWith(resolve(process.cwd()) + '/')
+        && resolvedDir !== resolve(process.cwd())) {
+      throw new Error(`HeartbeatEngine: workspaceDir '${rawDir}' escapes the working directory`);
+    }
+    merged.workspaceDir = resolvedDir;
+    this.config = merged;
     this.db = db ?? null;
 
-    // Ensure workspace directory exists
+    // Ensure workspace directory exists. A failure here is non-fatal (the daemon
+    // still boots) but must carry the real reason — later writes surface a
+    // harder-to-diagnose error if the root cause is swallowed.
     try {
       mkdirSync(this.config.workspaceDir, { recursive: true });
-    } catch {
-      log.warn({ dir: this.config.workspaceDir }, 'Cannot create workspace directory');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error({ dir: this.config.workspaceDir, err: msg }, 'Cannot create workspace directory — heartbeat writes will fail');
     }
 
     log.info(
