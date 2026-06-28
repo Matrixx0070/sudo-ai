@@ -68,7 +68,10 @@ interface StatementLike<TParams extends unknown[], TResult> {
 }
 
 export interface DatabaseLike {
-  prepare<TResult = unknown>(sql: string): StatementLike<unknown[], TResult>;
+  // TResult stays first (existing callers use prepare<RowType>); TParams is an
+  // optional second generic so statements can pin an explicit bind tuple —
+  // a column reorder then becomes a compile error, not a silent wrong-column bind.
+  prepare<TResult = unknown, TParams extends unknown[] = unknown[]>(sql: string): StatementLike<TParams, TResult>;
   exec(sql: string): void;
 }
 
@@ -118,6 +121,20 @@ function normalizeMistake(text: string): string {
 
 function signatureHash(normalizedText: string): string {
   return createHash('sha256').update(normalizedText).digest('hex').slice(0, 16);
+}
+
+/**
+ * Normalize a timestamp to epoch-ms for chronological comparison. ISO strings
+ * with an explicit zone (Z or ±hh:mm) parse as-is; SQLite's space-separated
+ * 'YYYY-MM-DD HH:MM:SS' (no zone) is forced to UTC so it doesn't sort before an
+ * equivalent T…Z instant. Returns NaN for unparseable input (callers compare
+ * with <,> which are false for NaN — the row simply doesn't move the bounds).
+ */
+function toEpochMs(ts: string): number {
+  const str = String(ts).trim();
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(str)) return Date.parse(str);
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/.exec(str);
+  return m ? Date.parse(`${m[1]}T${m[2]}Z`) : Date.parse(str);
 }
 
 /**
@@ -176,7 +193,7 @@ export class MistakePatternRecognizer {
   private readonly _stmtByHash: StatementLike<[string], RawAuditRow>;
 
   constructor(private readonly db: DatabaseLike) {
-    this._stmtListRecent = this.db.prepare<RawAuditRow>(
+    this._stmtListRecent = this.db.prepare<RawAuditRow, [string]>(
       `SELECT id, timestamp, resource, metadata_json
        FROM audit_log
        WHERE action = 'commitment'
@@ -184,7 +201,8 @@ export class MistakePatternRecognizer {
          AND metadata_json IS NOT NULL`,
     );
 
-    this._stmtByHash = this.db.prepare<RawAuditRow>(
+    // NOTE: currently unused/reserved — kept for parity with _stmtListRecent.
+    this._stmtByHash = this.db.prepare<RawAuditRow, [string]>(
       `SELECT id, timestamp, resource, metadata_json
        FROM audit_log
        WHERE action = 'commitment'
@@ -255,10 +273,14 @@ export class MistakePatternRecognizer {
       const existing = map.get(row.signatureHash);
       if (existing) {
         existing.occurrences += 1;
-        if (row.timestamp < existing.firstSeenAt) {
+        // Compare on epoch-ms, not raw strings: SQLite's space-separated
+        // CURRENT_TIMESTAMP format sorts lexicographically before any T…Z
+        // string of the same instant, corrupting the bounds. Stored values
+        // stay ISO strings for output; only the comparison is normalized.
+        if (toEpochMs(row.timestamp) < toEpochMs(existing.firstSeenAt)) {
           existing.firstSeenAt = row.timestamp;
         }
-        if (row.timestamp > existing.lastSeenAt) {
+        if (toEpochMs(row.timestamp) > toEpochMs(existing.lastSeenAt)) {
           existing.lastSeenAt = row.timestamp;
         }
         // Merge unique tags
@@ -349,10 +371,6 @@ export class MistakePatternRecognizer {
 
     const queryNormalized = normalizeMistake(mistakeText);
     const queryHash = signatureHash(queryNormalized);
-    // Compare Jaccard against the same representation stored on the pattern:
-    // pattern.signature is the first SIG_TRUNCATE_LEN chars of normalized text,
-    // so truncate the query to match (otherwise long mistakes deflate the score).
-    const querySignature = queryNormalized.slice(0, SIG_TRUNCATE_LEN);
 
     let rows: ParsedMistakeRow[];
     try {
@@ -367,6 +385,14 @@ export class MistakePatternRecognizer {
 
     const grouped = this._groupByHash(rows);
 
+    // Compare Jaccard over FULL normalized text (not the 100-char display slice):
+    // a mid-word cut in pattern.signature systematically deflated scores for any
+    // mistake longer than SIG_TRUNCATE_LEN. pattern.signature stays display-only.
+    const fullTextByHash = new Map<string, string>();
+    for (const r of rows) {
+      if (!fullTextByHash.has(r.signatureHash)) fullTextByHash.set(r.signatureHash, r.normalizedText);
+    }
+
     // Score each pattern by exact hash match (score = 1.0) or Jaccard
     const scored: Array<{ pattern: MistakePattern; score: number }> = [];
 
@@ -375,7 +401,8 @@ export class MistakePatternRecognizer {
         scored.push({ pattern, score: 1.0 });
         continue;
       }
-      const j = jaccardSimilarity(querySignature, pattern.signature);
+      const patternText = fullTextByHash.get(pattern.signatureHash) ?? pattern.signature;
+      const j = jaccardSimilarity(queryNormalized, patternText);
       if (j >= JACCARD_THRESHOLD) {
         scored.push({ pattern, score: j });
       }

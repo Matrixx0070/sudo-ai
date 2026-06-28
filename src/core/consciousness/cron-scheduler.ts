@@ -16,7 +16,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, openSync, writeSync, fsyncSync, closeSync, renameSync } from 'fs';
 
 const log = createLogger('consciousness:cron-scheduler');
 
@@ -103,14 +103,14 @@ function parseCronExpression(expr: string): CronFields {
     hour: parseField(hourStr, 0, 23),
     dayOfMonth: parseField(domStr, 1, 31),
     month: parseField(monthStr, 1, 12),
-    dayOfWeek: parseField(dowStr, 0, 6),
+    dayOfWeek: parseField(dowStr, 0, 6, true),
   };
 }
 
 /**
  * Parse a single cron field into an array of matching integer values.
  */
-function parseField(field: string, min: number, max: number): number[] {
+function parseField(field: string, min: number, max: number, allowSeven = false): number[] {
   if (field === '*') {
     return range(min, max);
   }
@@ -153,8 +153,18 @@ function parseField(field: string, min: number, max: number): number[] {
     }
   }
 
+  // dayOfWeek: accept 7 as a Sunday alias (==0) before range validation.
+  const normalized = allowSeven ? values.map((v) => (v === 7 ? 0 : v)) : values;
+
+  // Reject out-of-range values: an unvalidated "99" would silently never match.
+  for (const v of normalized) {
+    if (v < min || v > max) {
+      throw new Error(`Cron field value ${v} out of range [${min},${max}]`);
+    }
+  }
+
   // Deduplicate and sort
-  return [...new Set(values)].sort((a, b) => a - b);
+  return [...new Set(normalized)].sort((a, b) => a - b);
 }
 
 /** Generate a range of integers [start..end] inclusive. */
@@ -210,9 +220,13 @@ function computeJitter(taskId: string, scheduledTime: Date, config: CronSchedule
     config.maxJitterMs,
   );
 
-  // Deterministic offset: hash % (2 * maxJitter + 1) - maxJitter
-  const range = Math.floor(2 * maxJitter + 1);
-  const offset = range > 0 ? (Math.abs(hash) % range) - Math.floor(maxJitter) : 0;
+  // One-sided (early-only) jitter via unsigned arithmetic. A positive offset
+  // would push the fire time into a later minute that can re-match the cron
+  // expression and double-fire; early-only avoids that. Unsigned (`>>> 0`)
+  // also avoids the Math.abs(INT32_MIN) === INT32_MIN overflow.
+  const maxJ = Math.floor(maxJitter);
+  const unsigned = hash >>> 0;
+  const offset = maxJ > 0 ? -(unsigned % (maxJ + 1)) : 0;
   return offset;
 }
 
@@ -519,7 +533,18 @@ export class CronScheduler {
         const { mkdirSync } = require('fs');
         mkdirSync(dir, { recursive: true });
       }
-      writeFileSync(this.config.persistencePath, JSON.stringify(durableTasks, null, 2), 'utf-8');
+      // Atomic write: a crash mid-write must not truncate the durable task file.
+      // Write to a unique temp path, fsync, then rename (atomic on POSIX). 0o600
+      // — task prompts are executed instructions, not world-readable.
+      const tmp = `${this.config.persistencePath}.tmp.${process.pid}.${Date.now()}`;
+      const fd = openSync(tmp, 'w', 0o600);
+      try {
+        writeSync(fd, JSON.stringify(durableTasks, null, 2), 0, 'utf-8');
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmp, this.config.persistencePath);
       log.debug({ count: durableTasks.length }, 'Tasks persisted to disk');
     } catch (err) {
       log.error({ path: this.config.persistencePath, err }, 'Failed to persist tasks');
@@ -544,7 +569,8 @@ export class CronScheduler {
 
     let tasks: CronTask[];
     try {
-      tasks = JSON.parse(raw) as CronTask[];
+      const parsed = JSON.parse(raw);
+      tasks = Array.isArray(parsed) ? parsed as CronTask[] : [];
     } catch {
       log.warn({ path: this.config.persistencePath }, 'Corrupt cron-tasks.json — skipping load');
       return { loaded: 0, missed: [] };
@@ -552,8 +578,23 @@ export class CronScheduler {
 
     const now = new Date();
     const missed: CronTask[] = [];
+    const VALID_KINDS = new Set<TaskKind>(['recurring', 'one-shot']);
+    const MAX_PROMPT_LEN = 8192;
 
     for (const task of tasks) {
+      // Schema validation: task.prompt is a stored instruction executed by the
+      // agent loop, so reject malformed/oversized records (stored-injection guard).
+      if (
+        !task || typeof task.id !== 'string' || task.id.length === 0 ||
+        typeof task.cron !== 'string' || task.cron.length === 0 ||
+        typeof task.prompt !== 'string' || task.prompt.length === 0 || task.prompt.length > MAX_PROMPT_LEN ||
+        !VALID_KINDS.has(task.kind) ||
+        typeof task.expiresAt !== 'string' || !Number.isFinite(new Date(task.expiresAt).getTime())
+      ) {
+        log.warn({ id: (task as Partial<CronTask>)?.id }, 'Invalid persisted cron task — skipping (schema validation)');
+        continue;
+      }
+
       // Skip expired tasks
       if (new Date(task.expiresAt).getTime() <= now.getTime()) {
         continue;

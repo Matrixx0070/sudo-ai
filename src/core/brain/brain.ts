@@ -1073,12 +1073,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           async (modelId) => {
             const profile = cloudProfiles.find(p => p.id === modelId)!;
             try {
+              const t0 = Date.now();
               const response = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
               return {
                 model: response.model,
                 content: response.content ?? '',
                 toolCalls: response.toolCalls ?? [],
-                latencyMs: 0,
+                latencyMs: Date.now() - t0,
                 usage: response.usage,
               };
             } catch (err) {

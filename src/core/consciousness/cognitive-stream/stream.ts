@@ -8,6 +8,7 @@
  * imports.
  */
 
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../shared/logger.js';
 import type { ConsciousnessDB } from '../consciousness-db.js';
 import type { ThoughtTier } from '../types.js';
@@ -179,7 +180,9 @@ export class CognitiveStream {
     const n = Math.max(1, count);
     if (this._cache.length >= n) return this._cache.slice(-n);
     try {
-      return getRecentThoughts(this._cdb, n);
+      // DB helper returns newest-first (ORDER BY created_at DESC); reverse a copy
+      // so this branch matches the cache branch's oldest→newest ordering.
+      return getRecentThoughts(this._cdb, n).slice().reverse();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn({ error: msg }, 'DB fallback failed in getRecentThoughts');
@@ -207,8 +210,10 @@ export class CognitiveStream {
    * @param message - The user's message (used only for logging).
    */
   async interrupt(userId: string, message: string): Promise<InterruptResult> {
-    if (typeof userId !== 'string' || userId.trim().length === 0) userId = 'unknown';
-    if (typeof message !== 'string') message = '';
+    const safeUserId = typeof userId === 'string' && userId.trim().length > 0
+      ? userId.trim().slice(0, 128)
+      : `anon:${randomUUID()}`;
+    const safeMessage = typeof message === 'string' ? message.slice(0, 4096) : '';
 
     const interruptedThought = this._currentThought;
     const activeConcepts = this._spreading.getTopActive(8).map((n) => n.id);
@@ -219,7 +224,7 @@ export class CognitiveStream {
       : '(no recent thoughts)';
 
     log.info(
-      { userId, msgLen: message.length, tier: interruptedThought?.tier ?? 'none' },
+      { userId: safeUserId, msgLen: safeMessage.length, tier: interruptedThought?.tier ?? 'none' },
       'CognitiveStream interrupted',
     );
 
@@ -232,10 +237,27 @@ export class CognitiveStream {
 
   /** Consecutive tick failures — used for exponential backoff. */
   private _consecutiveTickFailures = 0;
+  /** Ticks elapsed since the last failure — drives the actual call-rate backoff. */
+  private _ticksSinceFailure = 0;
   /** Max backoff multiplier (caps at ~16 minutes with 30s base). */
   private static readonly MAX_BACKOFF_MULTIPLIER = 32;
 
   private async _safeTick(): Promise<void> {
+    // Real backoff: when failing, skip whole ticks (and their LLM call) until
+    // 2^failures ticks have elapsed — not just the log line. Without this the
+    // provider is hammered every interval during an outage.
+    if (this._consecutiveTickFailures > 0) {
+      const multiplier = Math.min(
+        Math.pow(2, this._consecutiveTickFailures - 1),
+        CognitiveStream.MAX_BACKOFF_MULTIPLIER,
+      );
+      this._ticksSinceFailure++;
+      if (this._ticksSinceFailure < multiplier) {
+        return; // still backing off — skip this tick's LLM call entirely
+      }
+      this._ticksSinceFailure = 0; // cooldown elapsed — attempt one tick now
+    }
+
     try {
       await this._tick();
       // Reset backoff on success.
@@ -245,6 +267,7 @@ export class CognitiveStream {
           'CognitiveStream recovered — backoff reset',
         );
         this._consecutiveTickFailures = 0;
+        this._ticksSinceFailure = 0;
       }
     } catch (err: unknown) {
       this._consecutiveTickFailures++;
@@ -298,7 +321,7 @@ export class CognitiveStream {
 
       // Update cache.
       this._cache.push(thought);
-      if (this._cache.length > CACHE_SIZE) this._cache.shift();
+      if (this._cache.length > CACHE_SIZE) this._cache.splice(0, this._cache.length - CACHE_SIZE);
 
       // Update bookkeeping.
       this._currentThought = thought;

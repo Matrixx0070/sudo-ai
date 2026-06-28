@@ -97,12 +97,16 @@ function summarisePeerTail(
     return { peerName, eventCount: 0, error: 'empty', pulledAt };
   }
   const byEventType: Record<string, number> = {};
-  let newestTs = -Infinity;
-  let oldestTs  = Infinity;
+  // undefined (not ±Infinity) sentinels: JSON.stringify(Infinity) === 'null',
+  // which would give in-memory and persisted readers two different views.
+  let newestTs: number | undefined;
+  let oldestTs: number | undefined;
   for (const ev of events) {
     byEventType[ev.eventType] = (byEventType[ev.eventType] ?? 0) + 1;
-    if (ev.ts > newestTs) newestTs = ev.ts;
-    if (ev.ts < oldestTs) oldestTs  = ev.ts;
+    if (Number.isFinite(ev.ts)) {
+      if (newestTs === undefined || ev.ts > newestTs) newestTs = ev.ts;
+      if (oldestTs === undefined || ev.ts < oldestTs) oldestTs = ev.ts;
+    }
   }
   const firstInstanceIds = events.slice(0, 10).map(e => e.id);
   return {
@@ -131,49 +135,45 @@ async function pullAllPeerAudits(
   const sinceMs  = Date.now() - PEER_PULL_WINDOW_MS;
   const pulledAt = Date.now();
 
-  const peerPromises = peers.map(async (peerName): Promise<PeerAuditSummary> => {
-    try {
-      const events = await sync.fetchPeerTail(peerName, sinceMs, PEER_PULL_LIMIT);
-      return summarisePeerTail(peerName, events, pulledAt);
-    } catch (err: unknown) {
-      log.warn(
-        { peerName, err: String(err) },
-        'peer-audit pull failed (fail-open)',
-      );
-      return { peerName, eventCount: 0, error: 'unreachable', pulledAt };
-    }
-  });
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error('peer-pull-total-timeout')),
-      PEER_PULL_TOTAL_TIMEOUT_MS,
-    );
-  });
-
-  try {
-    const settled = await Promise.race([
-      Promise.allSettled(peerPromises),
-      timeoutPromise,
-    ]);
-    return (settled as PromiseSettledResult<PeerAuditSummary>[]).map((r, i) => {
-      if (r.status === 'fulfilled') return r.value;
-      log.warn({ peerName: peers[i], reason: String(r.reason) }, 'peer-audit settled rejected');
-      return { peerName: peers[i] ?? 'unknown', eventCount: 0, error: 'unreachable', pulledAt };
+  // Per-peer timeout: a slow peer fabricates a timeout summary for ITSELF only.
+  // The old all-or-nothing Promise.race marked every peer (incl. ones that had
+  // already succeeded) as timed-out when a total deadline fired — corrupting the
+  // audit record. fetchPeerTail has no abort signal, so each peer self-limits here.
+  const withPerPeerTimeout = (
+    p: Promise<PeerAuditSummary>,
+    peerName: string,
+  ): Promise<PeerAuditSummary> =>
+    new Promise((resolve) => {
+      let done = false;
+      const t = setTimeout(() => {
+        if (!done) { done = true; resolve({ peerName, eventCount: 0, error: 'timeout', pulledAt }); }
+      }, PEER_PULL_TOTAL_TIMEOUT_MS);
+      p.then((v) => { if (!done) { done = true; clearTimeout(t); resolve(v); } })
+       .catch(() => { if (!done) { done = true; clearTimeout(t); resolve({ peerName, eventCount: 0, error: 'unreachable', pulledAt }); } });
     });
-  } catch {
-    // Total timeout fired — mark all peers as timed out
-    log.warn({ peerCount: peers.length }, 'peer-audit: 15s total timeout reached');
-    return peers.map(peerName => ({
+
+  const peerPromises = peers.map((peerName) =>
+    withPerPeerTimeout(
+      (async (): Promise<PeerAuditSummary> => {
+        try {
+          const events = await sync.fetchPeerTail(peerName, sinceMs, PEER_PULL_LIMIT);
+          return summarisePeerTail(peerName, events, pulledAt);
+        } catch (err: unknown) {
+          log.warn({ peerName, err: String(err) }, 'peer-audit pull failed (fail-open)');
+          return { peerName, eventCount: 0, error: 'unreachable', pulledAt };
+        }
+      })(),
       peerName,
-      eventCount: 0,
-      error: 'timeout',
-      pulledAt,
-    }));
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+    ),
+  );
+
+  const results = await Promise.allSettled(peerPromises);
+  return results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    // Wrapped promises resolve rather than reject, but stay defensive.
+    log.warn({ peerName: peers[i], reason: String(r.reason) }, 'peer-audit settled rejected');
+    return { peerName: peers[i] ?? 'unknown', eventCount: 0, error: 'unreachable', pulledAt };
+  });
 }
 
 // Duck-typed SkillDiscovery interface — avoids hard dep on concrete class..
