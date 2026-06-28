@@ -252,6 +252,9 @@ export class CrossSignalDiagnostics {
     // doesn't prevent the others from being cached.
     try {
       this._stmtTrust = this._trustDb.prepare<TrustRow>(
+        // `scanned` intentionally counts ALL rows read in the window (a rows-read
+        // gauge, consistent with the epistemic/veto fetchers), so kinds are filtered
+        // in-memory for the timestamps, not in SQL. See _fetchTrustResult.
         `SELECT kind, ts FROM trust_outcomes WHERE ts >= ?`,
       );
     } catch (err: unknown) {
@@ -311,9 +314,13 @@ export class CrossSignalDiagnostics {
     try {
       const RELEVANT_KINDS = new Set(['failure', 'veto', 'conjecture-commit', 'commitment-expired']);
       const rows = this._stmtTrust.all(cutoffMs);
+      // Drop non-finite ts (a bad row would otherwise become a NaN bucket key
+      // that never merges, silently breaking spike detection). `scanned` stays
+      // rows.length — the rows-read gauge (irrelevant kinds count too, by design).
       const timestamps = rows
         .filter(r => RELEVANT_KINDS.has(r.kind))
-        .map(r => r.ts);
+        .map(r => r.ts)
+        .filter((ts): ts is number => Number.isFinite(ts));
       return { timestamps, scanned: rows.length };
     } catch (err: unknown) {
       log.warn({ err, event: 'cross-signal.fetch.trust' },
@@ -347,7 +354,9 @@ export class CrossSignalDiagnostics {
     if (!this._stmtVeto) return { timestamps: [], scanned: 0 };
     try {
       const rows = this._stmtVeto.all(cutoffMs);
-      return { timestamps: rows.map(r => r.ts), scanned: rows.length };
+      // Drop non-finite ts → no NaN bucket keys (see _fetchTrustResult).
+      const timestamps = rows.map(r => r.ts).filter((ts): ts is number => Number.isFinite(ts));
+      return { timestamps, scanned: rows.length };
     } catch (err: unknown) {
       log.warn({ err, event: 'cross-signal.fetch.veto' },
         'cross-signal-diagnostics: veto query failed (fail-open)');
@@ -432,14 +441,18 @@ export class CrossSignalDiagnostics {
       ];
 
       const allCorrelations: Correlation[] = [];
+      // Each unordered pair once (j = i+1); lead/trail by timestamp. correlateSpikes
+      // is directional (delta<=0 → skip), so this yields the same correlation set
+      // as the old full n² loop while halving iterations and structurally
+      // preventing the duplicate (A→B, B→A) pairs a relaxed window would admit.
       for (let i = 0; i < allSpikes.length; i++) {
-        for (let j = 0; j < allSpikes.length; j++) {
-          if (i === j) continue;
-          const leadSpike = allSpikes[i]!;
-          const trailSpike = allSpikes[j]!;
+        for (let j = i + 1; j < allSpikes.length; j++) {
+          const a = allSpikes[i]!;
+          const b = allSpikes[j]!;
           // Only correlate spikes from different sources
-          if (leadSpike.source === trailSpike.source) continue;
-          const correlations = correlateSpikes([leadSpike], [trailSpike], correlationWindowMs);
+          if (a.source === b.source) continue;
+          const [lead, trail] = a.ts <= b.ts ? [a, b] : [b, a];
+          const correlations = correlateSpikes([lead], [trail], correlationWindowMs);
           allCorrelations.push(...correlations);
         }
       }

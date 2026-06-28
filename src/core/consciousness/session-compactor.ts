@@ -199,7 +199,7 @@ export class SessionCompactor {
     };
 
     this.compactionCount++;
-    this.totalTokensSaved += (originalTokens - compactedTokens);
+    this.totalTokensSaved += Math.max(0, originalTokens - compactedTokens);
 
     log.info(
       {
@@ -250,8 +250,28 @@ export class SessionCompactor {
       groups.set(call.name, group);
     }
 
-    // Keep failed calls verbatim
-    result.push(...failedCalls);
+    // Keep only the last MAX_FAILED_VERBATIM failed calls, truncating their
+    // input/output (failure output often holds stack traces / paths / env vars).
+    // Older failures collapse to a single elided summary so a tool that fails
+    // thousands of times can't make the "compacted" result exceed the input.
+    const MAX_FAILED_VERBATIM = 5;
+    if (failedCalls.length > MAX_FAILED_VERBATIM) {
+      const elided = failedCalls.length - MAX_FAILED_VERBATIM;
+      result.push({
+        name: 'failed-calls',
+        input: `${elided} earlier failed call${elided === 1 ? '' : 's'} (elided)`,
+        output: '',
+        timestamp: failedCalls[0].timestamp,
+        success: false,
+      });
+    }
+    for (const call of failedCalls.slice(-MAX_FAILED_VERBATIM)) {
+      result.push({
+        ...call,
+        input: truncate(call.input, this.config.maxToolCallSummaryChars),
+        output: truncate(call.output, this.config.maxToolCallSummaryChars),
+      });
+    }
 
     // Compress each group of successful calls
     for (const [toolName, groupCalls] of groups) {
@@ -284,8 +304,10 @@ export class SessionCompactor {
       }
     }
 
-    // Sort by timestamp
-    result.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    // Sort by timestamp. Summarized groups carry a "start..end" range stamp;
+    // compare on the start component so they collate against real ISO stamps.
+    const startOf = (ts: string) => ts.split('..')[0];
+    result.sort((a, b) => startOf(a.timestamp).localeCompare(startOf(b.timestamp)));
 
     return result;
   }
