@@ -101,6 +101,15 @@ function isValidResolution(v: string): v is CommitmentResolution {
   return VALID_RESOLUTIONS.has(v as CommitmentResolution);
 }
 
+/**
+ * Validate a commitmentRef before it is stored, queried, or logged. Rejects empty strings
+ * (which would poison isResolved for every future empty caller), oversize refs (resource
+ * exhaustion), and control chars / newlines (structured-log injection).
+ */
+function isValidRef(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0 && v.length <= 256 && !/[\u0000-\u001F]/.test(v);
+}
+
 // ---------------------------------------------------------------------------
 // Zero stats (fail-open)
 // ---------------------------------------------------------------------------
@@ -168,6 +177,21 @@ export class CommitmentResolutionTracker {
       // Subsequent calls will fail-open via per-method try/catch.
     }
 
+    // Make the ref index UNIQUE so two concurrent resolve() calls can't both INSERT the
+    // same commitmentRef (TOCTOU). Separate try/catch: a legacy DB with existing duplicate
+    // refs rejects this — log + continue; the isResolved() pre-check still guards.
+    try {
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_commitment_resolutions_ref_unique
+        ON commitment_resolutions(commitment_ref)
+      `);
+    } catch (err: unknown) {
+      log.warn(
+        { err, event: 'resolution.unique-index.skipped' },
+        'commitment-resolution-tracker: UNIQUE index not created (existing duplicates?) — relying on pre-check',
+      );
+    }
+
     this._stmtInsert = db.prepare(
       `INSERT INTO commitment_resolutions (id, commitment_ref, resolution, ts, notes)
        VALUES (?, ?, ?, ?, ?)`,
@@ -221,6 +245,15 @@ export class CommitmentResolutionTracker {
     resolution: CommitmentResolution,
     notes?: string,
   ): ResolutionEntry | null {
+    // Validate the ref (empty/oversize/control-char) before anything touches the DB or logs.
+    if (!isValidRef(commitmentRef)) {
+      log.warn(
+        { refLen: String(commitmentRef).length, event: 'resolution.invalid-ref' },
+        'commitment-resolution-tracker: invalid commitmentRef — returning null',
+      );
+      return null;
+    }
+
     // Validate resolution enum
     if (!isValidResolution(resolution)) {
       log.warn(
@@ -264,6 +297,16 @@ export class CommitmentResolutionTracker {
       }
       return entry;
     } catch (err: unknown) {
+      const emsg = err instanceof Error ? err.message : String(err);
+      // UNIQUE-constraint violation = a concurrent resolve() already recorded this ref.
+      // The duplicate guard firing atomically at the DB layer — not an error.
+      if (/SQLITE_CONSTRAINT|UNIQUE constraint/i.test(emsg)) {
+        log.debug(
+          { commitmentRef, event: 'resolution.duplicate' },
+          'commitment-resolution-tracker: duplicate rejected by UNIQUE constraint — returning null',
+        );
+        return null;
+      }
       log.error(
         {
           err,
@@ -292,9 +335,11 @@ export class CommitmentResolutionTracker {
     resolution?: CommitmentResolution;
     limit?: number;
   }): ResolutionEntry[] {
-    const windowDays = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const rawWindow = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const windowDays = Number.isFinite(rawWindow) ? Math.max(1, Math.min(3650, Math.floor(rawWindow))) : DEFAULT_WINDOW_DAYS;
     const rawLimit = opts?.limit ?? DEFAULT_LIMIT;
-    const limit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, rawLimit));
+    const nLimit = Number(rawLimit);
+    const limit = Number.isFinite(nLimit) ? Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, Math.trunc(nLimit))) : DEFAULT_LIMIT;
     const cutoffTs = Date.now() - windowDays * MS_PER_DAY;
     const resolution = opts?.resolution;
 
@@ -322,7 +367,8 @@ export class CommitmentResolutionTracker {
    * Fail-open: returns zero-stats on any DB error.
    */
   getStats(opts?: { windowDays?: number }): ResolutionStats {
-    const windowDays = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const rawWindow = opts?.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const windowDays = Number.isFinite(rawWindow) ? Math.max(1, Math.min(3650, Math.floor(rawWindow))) : DEFAULT_WINDOW_DAYS;
     const cutoffTs = Date.now() - windowDays * MS_PER_DAY;
 
     try {
@@ -361,6 +407,7 @@ export class CommitmentResolutionTracker {
    * Fail-open: returns false on any DB error.
    */
   isResolved(commitmentRef: string): boolean {
+    if (!isValidRef(commitmentRef)) return false;
     try {
       const row = this._stmtIsResolved.get(commitmentRef);
       return (row?.cnt ?? 0) > 0;

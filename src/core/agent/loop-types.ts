@@ -45,6 +45,7 @@ export interface ConsciousnessLike {
     sessionId: string,
     messages: Array<{ role: string; content: string }>,
     outcome: string,
+    toolNames?: string[],
   ): Promise<void>;
   getConsciousnessContext(): string;
   getIntelligenceBriefContext?: (message: string) => {

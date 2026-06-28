@@ -198,6 +198,10 @@ export class ConsciousnessOrchestrator {
   private selfEvolution: SelfEvolutionLike | null = null;
   private _booted = false;
   private _lastInteractionAt: string | null = null;
+  /** Per-session interaction-start timestamps, keyed by sessionId. Prevents the
+   *  instance-global _lastInteractionAt from racing concurrent sessions' episode
+   *  startedAt/durationMs. 256-entry LRU, same cap as _pendingToolPredictions. */
+  private _interactionStartedAt = new Map<string, string>();
   private _zdrEnabled = false;
   /**
    * Theme 4.2: pending per-turn WorldModel predictions (tool-use forecast), keyed
@@ -340,7 +344,17 @@ export class ConsciousnessOrchestrator {
     };
     try { this.attention.submitSignal(signal); } catch (e) { swallow('attention signal')(e); }
 
-    this._lastInteractionAt = new Date().toISOString();
+    const _interactionStartIso = new Date().toISOString();
+    this._lastInteractionAt = _interactionStartIso;
+    // Per-session start time (keyed by the loop's sessionId, passed as arg 1 here
+    // despite the param name) so concurrent sessions don't corrupt each other's
+    // episode startedAt/durationMs. The instance-global _lastInteractionAt above is
+    // retained only for the global idle check.
+    if (this._interactionStartedAt.size >= 256) {
+      const oldest = this._interactionStartedAt.keys().next().value;
+      if (oldest !== undefined) this._interactionStartedAt.delete(oldest);
+    }
+    this._interactionStartedAt.set(userId, _interactionStartIso);
 
     // Theme 4.2: OPEN the WorldModel -> surprise loop — predict whether this turn
     // will require tool use, with a DIFFERENTIATING prior (not 0.5) so the
@@ -373,7 +387,7 @@ export class ConsciousnessOrchestrator {
     return interruptResult;
   }
 
-  async onInteractionEnd(sessionId: string, messages: Array<{ role: string; content: string }>, outcome: string): Promise<void> {
+  async onInteractionEnd(sessionId: string, messages: Array<{ role: string; content: string }>, outcome: string, toolNames?: string[]): Promise<void> {
     this._assertBooted('onInteractionEnd');
     if (!sessionId || !Array.isArray(messages) || messages.length === 0) return;
     log.debug({ sessionId, msgCount: messages.length, outcome }, 'Interaction end');
@@ -386,13 +400,18 @@ export class ConsciousnessOrchestrator {
         ? (outcome as Episode['outcome'])
         : 'neutral';
 
+    // Per-session start (set in onInteractionStart) — NOT the instance-global
+    // _lastInteractionAt, which a concurrent session would have overwritten.
+    const _sessionStartedAt = this._interactionStartedAt.get(sessionId);
+    this._interactionStartedAt.delete(sessionId);
+
     const episode: Episode = {
       id: genId(), summary: truncate(userMsg || 'Interaction', 120),
       participants: [userId], topic: truncate(userMsg, 60), tags: [],
       emotionalValence: this.emotionalState.getCurrentState(),
       surpriseLevel: 0, outcome: validOutcome, significance: 0.5,
-      sessionId, startedAt: this._lastInteractionAt ?? now, endedAt: now,
-      durationMs: this._lastInteractionAt ? Date.now() - new Date(this._lastInteractionAt).getTime() : 0,
+      sessionId, startedAt: _sessionStartedAt ?? now, endedAt: now,
+      durationMs: _sessionStartedAt ? Date.now() - new Date(_sessionStartedAt).getTime() : 0,
     };
 
     // ZDR gate: skip episodic recording when ZDR is active
@@ -449,8 +468,12 @@ export class ConsciousnessOrchestrator {
     try { await this.theoryOfMind.updateUserModel(userId, { userId, message: userMsg, response: '', outcome: tomOutcome }); } catch (e) { swallow('tom update')(e); }
     try { this.relationshipTracker.updateFromInteraction(userId, episode); } catch (e) { swallow('relationship update')(e); }
 
-    // Record tool sequences
-    const toolCalls = messages.filter((m) => m.role === 'assistant' && m.content.includes('tool')).map((m) => truncate(m.content, 60));
+    // Record tool sequences. Use the REAL dispatched tool names threaded from the
+    // loop — the prior `m.content.includes('tool')` substring matched any assistant
+    // message mentioning the word ("control", "protocol", "a tool I built"), poisoning
+    // tool_sequences, procedural-memory compilation, and the world-model tool-use base
+    // rate. Falls back to empty when names weren't provided (older callers).
+    const toolCalls = (toolNames && toolNames.length > 0) ? toolNames.map((n) => truncate(n, 60)) : [];
     if (toolCalls.length > 0) {
       try { this.db.getDb().prepare('INSERT INTO tool_sequences (session_id, sequence) VALUES (?, ?)').run(sessionId, JSON.stringify(toolCalls)); } catch (e) { swallow('tool seq record')(e); }
     }
@@ -504,7 +527,10 @@ export class ConsciousnessOrchestrator {
     if (this._lastInteractionAt && this.sleepCycle) {
       const idleMs = Date.now() - new Date(this._lastInteractionAt).getTime();
       const hour = new Date().getUTCHours();
-      const isQuiet = hour >= this.config.quietHoursStart && hour < this.config.quietHoursEnd;
+      const qs = this.config.quietHoursStart, qe = this.config.quietHoursEnd;
+      // Handle windows that cross midnight (e.g. {start:22, end:6}): the naive
+      // `hour >= qs && hour < qe` is impossible when qs > qe. qs === qe = never quiet.
+      const isQuiet = qs === qe ? false : (qs < qe ? (hour >= qs && hour < qe) : (hour >= qs || hour < qe));
       if (this.sleepCycle.shouldSleep(idleMs, isQuiet) && !this.sleepCycle.isAsleep()) {
         this.sleepCycle.startSleep().catch(swallow('sleep start'));
       }

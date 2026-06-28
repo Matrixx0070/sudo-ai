@@ -1484,7 +1484,13 @@ export class AgentLoop extends AgentLoopInjections {
     if (this.consciousness) {
       try {
         if (!isZDRBlocked('consciousness_recording')) {
-          await this.consciousness.onInteractionEnd(sessionId, session.messages, 'completed');
+          // Thread the REAL dispatched tool names (tool-role messages carry the
+          // structural toolName) so consciousness records actual tool use instead
+          // of substring-matching the word "tool" in assistant prose.
+          const turnToolNames = session.messages
+            .filter((m) => m.role === 'tool' && typeof m.toolName === 'string')
+            .map((m) => m.toolName as string);
+          await this.consciousness.onInteractionEnd(sessionId, session.messages, 'completed', turnToolNames);
           log.debug({ sessionId }, 'Consciousness interaction end acknowledged');
         } else {
           log.info({ sessionId }, 'ZDR: skipping consciousness recording on interaction end');

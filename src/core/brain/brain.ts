@@ -1166,10 +1166,20 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
 
-    throw new LLMError('All failover attempts failed', 'llm_all_attempts_failed', {
-      attempts: MAX_FAILOVER_ATTEMPTS,
-      lastError: String(lastError),
-    });
+    {
+      // Don't serialize the raw error (SDK errors can embed API keys / Authorization
+      // echoes / response bodies). Surface only structured status + category; attach
+      // the original as a non-enumerable cause so it stays debuggable but isn't logged.
+      const { status, body } = Brain.extractErrorDetails(lastError);
+      const lastErrorCategory = this.failover.categorizeError(status, body);
+      const allFailedErr = new LLMError('All failover attempts failed', 'llm_all_attempts_failed', {
+        attempts: MAX_FAILOVER_ATTEMPTS,
+        lastErrorStatus: status,
+        lastErrorCategory,
+      });
+      Object.defineProperty(allFailedErr, 'cause', { value: lastError instanceof Error ? lastError : undefined, enumerable: false, configurable: true });
+      throw allFailedErr;
+    }
   }
 
   /**
@@ -1283,6 +1293,14 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
                 if (usage.completionTokens > 0) {
                   log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }, 'Streaming call ended early by consumer');
                 }
+                // Bill the tokens the provider already generated for this cancelled
+                // stream — otherwise cost tracking silently under-reports exactly the
+                // longest (cancelled) sessions, drifting from the failover ledger.
+                try {
+                  this._recordBillingUsage(modelId, usage, { create: 0, read: 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+                } catch (billErr) {
+                  log.warn({ modelId, err: billErr }, 'Billing record failed for cancelled stream (non-fatal)');
+                }
               },
               () => { /* stream cancelled — usage unavailable */ },
             );
@@ -1290,33 +1308,41 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           }
         }
 
-        // result is StreamTextResult (not a Promise); usage is PromiseLike<LanguageModelUsage>.
-        // A usage rejection after a fully-delivered stream must not poison the
-        // failover record — or worse, propagate to the outer catch and retry-
-        // stream a duplicate response. The model already served the text.
-        let finalUsage: Awaited<typeof result.usage> | undefined;
-        try {
-          finalUsage = await result.usage;
-        } catch (usageErr) {
-          log.warn({ modelId, err: usageErr }, 'Usage unavailable after completed stream');
-        }
-        // Anthropic prompt-cache telemetry. providerMetadata is a PromiseLike on streamText;
-        // await defensively so a cancelled-after-completion stream can't poison the success path.
-        // Resolve it BEFORE building usage so the cost estimate can discount cached tokens.
-        let cacheTokens = { create: 0, read: 0 };
-        try {
-          const meta = await (result as { providerMetadata?: PromiseLike<unknown> }).providerMetadata;
-          cacheTokens = extractPromptCacheTokens(meta);
-          recordPromptCacheUsageFromProviderMetadata(meta);
-        } catch { /* providerMetadata may reject on cancelled streams — non-fatal */ }
-
-        const usage = finalUsage
-          ? buildTokenUsage(modelId, finalUsage, cacheTokens)
-          : undefined;
-
+        // The stream fully delivered — credit the model FIRST, before any post-stream
+        // bookkeeping, so a later throw can neither undo the success record nor fall
+        // into the outer failover catch and retry-stream a DUPLICATE response.
         this.failover.recordSuccess(profile.id);
-        this._recordBillingUsage(modelId, usage, cacheTokens, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
-        log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
+
+        // result is StreamTextResult (not a Promise); usage is PromiseLike<LanguageModelUsage>.
+        // All post-stream bookkeeping is best-effort: the response is already on the wire.
+        // Any throw here (buildTokenUsage SDK-shape change, billing, etc.) MUST NOT reach
+        // the outer failover loop — wrap the whole block so it can only log.
+        try {
+          let finalUsage: Awaited<typeof result.usage> | undefined;
+          try {
+            finalUsage = await result.usage;
+          } catch (usageErr) {
+            log.warn({ modelId, err: usageErr }, 'Usage unavailable after completed stream');
+          }
+          // Anthropic prompt-cache telemetry. providerMetadata is a PromiseLike on streamText;
+          // await defensively so a cancelled-after-completion stream can't poison the success path.
+          // Resolve it BEFORE building usage so the cost estimate can discount cached tokens.
+          let cacheTokens = { create: 0, read: 0 };
+          try {
+            const meta = await (result as { providerMetadata?: PromiseLike<unknown> }).providerMetadata;
+            cacheTokens = extractPromptCacheTokens(meta);
+            recordPromptCacheUsageFromProviderMetadata(meta);
+          } catch { /* providerMetadata may reject on cancelled streams — non-fatal */ }
+
+          const usage = finalUsage
+            ? buildTokenUsage(modelId, finalUsage, cacheTokens)
+            : undefined;
+
+          this._recordBillingUsage(modelId, usage, cacheTokens, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+          log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
+        } catch (bookkeepErr) {
+          log.warn({ modelId, err: bookkeepErr }, 'post-stream bookkeeping failed (response already delivered)');
+        }
         return;
 
       } catch (err) {
@@ -1336,10 +1362,20 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
 
-    throw new LLMError('All streaming failover attempts failed', 'llm_all_attempts_failed', {
-      attempts: MAX_FAILOVER_ATTEMPTS,
-      lastError: String(lastError),
-    });
+    {
+      // Don't serialize the raw error (SDK errors can embed API keys / Authorization
+      // echoes / response bodies). Surface only structured status + category; attach
+      // the original as a non-enumerable cause so it stays debuggable but isn't logged.
+      const { status, body } = Brain.extractErrorDetails(lastError);
+      const lastErrorCategory = this.failover.categorizeError(status, body);
+      const streamFailErr = new LLMError('All streaming failover attempts failed', 'llm_all_attempts_failed', {
+        attempts: MAX_FAILOVER_ATTEMPTS,
+        lastErrorStatus: status,
+        lastErrorCategory,
+      });
+      Object.defineProperty(streamFailErr, 'cause', { value: lastError instanceof Error ? lastError : undefined, enumerable: false, configurable: true });
+      throw streamFailErr;
+    }
   }
 
   /**
