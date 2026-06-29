@@ -109,7 +109,13 @@ export function mergeHybridResults(
 
   return Array.from(merged.values()).map(({ chunk, vecScore, bm25Score }) => ({
     chunk,
-    score: vectorWeight * vecScore + textWeight * bm25Score,
+    // Blend only when BOTH sources contributed. A single-source match uses its
+    // raw [0,1] score — otherwise a strong BM25-exclusive hit (vecScore=0) scores
+    // textWeight*bm25 ≤ 0.3, always below the default minScore 0.35, and is
+    // silently dropped even though it's an exact keyword match (RAG-1).
+    score: vecScore > 0 && bm25Score > 0
+      ? vectorWeight * vecScore + textWeight * bm25Score
+      : Math.max(vecScore, bm25Score),
     matchType: 'hybrid' as const,
   }));
 }
@@ -314,7 +320,7 @@ export async function hybridSearch(
     }
 
     if (queryVec) {
-      // sqlite-vec KNN query — cosine distance (0=identical, 2=opposite).
+      // sqlite-vec KNN query — L2 (Euclidean) distance, ascending (0=identical).
       // vecTable is a whitelisted literal, never user input.
       const vecRows = db.db.prepare<{ embedding: Buffer; k: number }, VecRow>(`
         SELECT chunk_id, distance
@@ -336,8 +342,9 @@ export async function hybridSearch(
         if (row.superseded_by != null) continue; // retired by contradiction resolution
         if (pathFilter && !row.path.startsWith(pathFilter)) continue;
 
-        // Convert cosine distance [0,2] → similarity [0,1]
-        const score = Math.max(0, 1 - vr.distance / 2);
+        // vec0 returns L2 distance; for unit vectors L2²=2(1−cos), so cosine
+        // similarity = 1 − d²/2 (RAG-2; was treating L2 as cosine → score deflation).
+        const score = Math.max(0, Math.min(1, 1 - (vr.distance * vr.distance) / 2));
         vectorResults.push({ chunk: rowToChunk(row), score, matchType: 'vector' });
       }
     }
@@ -379,13 +386,15 @@ export async function hybridSearch(
   if (vectorResults.length > 0 && bm25Results.length > 0) {
     results = mergeHybridResults(vectorResults, bm25Results, vectorWeight, textWeight);
   } else if (vectorResults.length > 0) {
-    // Vector-only fallback — scale by weight so the score scale (and thus the
-    // downstream minScore gate) matches the hybrid path's single-source scores.
-    results = vectorResults.map((r) => ({ ...r, score: vectorWeight * r.score }));
+    // Vector-only fallback — pass the raw [0,1] score through. There is no second
+    // source to blend with, so down-weighting by vectorWeight only pushes results
+    // toward (and below) the minScore gate for no reason (RAG-1).
+    results = vectorResults.map((r) => ({ ...r, score: r.score }));
   } else {
-    // BM25-only fallback — scale by weight (matches hybrid single-source scale)
-    // and normalise match type.
-    results = bm25Results.map((r) => ({ ...r, score: textWeight * r.score, matchType: 'bm25' as const }));
+    // BM25-only fallback — raw score, NOT textWeight*score. The latter caps at
+    // ≤0.3 (bm25 ≤ 1.0) which is below the default minScore 0.35, so BM25-only
+    // mode (no sqlite-vec / embeddings down) returned nothing at all (RAG-1).
+    results = bm25Results.map((r) => ({ ...r, score: r.score, matchType: 'bm25' as const }));
   }
 
   // -------------------------------------------------------------------------

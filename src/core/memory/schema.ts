@@ -548,6 +548,12 @@ export function initializeSchema(db: Database): void {
  * @param db - An open better-sqlite3 Database instance with sqlite-vec loaded.
  */
 export function initializeVecTable(db: Database): void {
+  // vec0 defaults to L2 (Euclidean) distance — empirically confirmed (a unit-vector
+  // pair with cosine 0.6 returns distance 0.8944 = √(2(1−cos))). hybrid-search converts
+  // it back to similarity with `1 − d²/2`, exact for normalized vectors and correct on
+  // EXISTING tables with no migration (RAG-2). Do NOT add distance_metric=cosine here:
+  // CREATE…IF NOT EXISTS won't alter already-created tables, so it would fix only fresh
+  // DBs while leaving prod on L2 — the conversion fix in hybrid-search covers both.
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
       chunk_id  INTEGER PRIMARY KEY,

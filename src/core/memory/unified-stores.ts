@@ -34,7 +34,9 @@ export function scoreContent(content: string, query: string): number {
 
 export function queryMindChunks(db: Database.Database, pattern: string, q: string): MemoryResult[] {
   const rows = db.prepare<{ p: string }, { text: string; path: string; source: string; created_at: string }>(
-    `SELECT text, path, source, created_at FROM chunks WHERE text LIKE :p LIMIT 30`,
+    // superseded_by IS NULL: don't resurface a fact retired by contradiction
+    // resolution (hybrid-search already excludes these; this path didn't) (RAG-4).
+    `SELECT text, path, source, created_at FROM chunks WHERE text LIKE :p AND superseded_by IS NULL LIMIT 30`,
   ).all({ p: pattern });
 
   return rows.map(row => ({

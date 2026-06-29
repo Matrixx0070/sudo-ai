@@ -269,7 +269,7 @@ export class UnifiedMemory {
             relevance: 0.5, timestamp: row.created_at, metadata: { role: row.role, session_id: row.session_id } });
         }
         for (const row of mind.prepare<{ l: number }, { text: string; source: string; created_at: string }>(
-          `SELECT text, source, created_at FROM chunks ORDER BY id DESC LIMIT :l`,
+          `SELECT text, source, created_at FROM chunks WHERE superseded_by IS NULL ORDER BY id DESC LIMIT :l`,
         ).all({ l: Math.ceil(limit / 3) })) {
           results.push({ content: row.text, source: 'mind', table: 'chunks',
             relevance: 0.4, timestamp: row.created_at, metadata: { subSource: row.source } });
