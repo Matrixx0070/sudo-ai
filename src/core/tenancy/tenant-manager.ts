@@ -93,13 +93,18 @@ export class TenantManager {
 
     const id = this._allocateId(name);
     const port = this._allocatePort();
+    // Two independent secrets: `token` is the INTERNAL instance credential (never
+    // leaves the host); `userKey` is the PUBLIC credential the user presents at the
+    // front-door. Keeping them distinct lets us rotate user access without restarting
+    // the instance, and means a leaked userKey never equals the instance token.
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
+    const userKey = randomBytes(TOKEN_BYTES).toString('base64url');
     const home = path.join(this.controlPlaneDir, id);
 
     this._provisionHome(home);
 
     const tenant: Tenant = {
-      id, name, home, port, token,
+      id, name, home, port, token, userKey,
       dailyBudgetUsd: budget,
       status: 'provisioned',
       pid: null,

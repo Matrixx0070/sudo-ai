@@ -22,8 +22,12 @@ export interface Tenant {
   home: string;
   /** Allocated GATEWAY_PORT for this instance. */
   port: number;
-  /** Per-tenant GATEWAY_TOKEN (random, secret). */
+  /** Per-tenant INTERNAL GATEWAY_TOKEN (random, secret). The instance authenticates
+   *  with this; the front-door injects it on upstream requests. NEVER given to the user. */
   token: string;
+  /** Per-tenant PUBLIC credential the user presents at the front-door (random, secret,
+   *  distinct from `token`). The front-door maps userKey → tenant, then proxies with `token`. */
+  userKey: string;
   /** Per-instance hard daily budget cap (USD). REQUIRED — public tenants must be capped. */
   dailyBudgetUsd: number;
   /** Lifecycle status. */
