@@ -52,7 +52,10 @@ export interface TArraySchema extends SchemaOptions {
 export interface TObjectSchema extends Omit<SchemaOptions, 'required'> {
   kind: 'object';
   properties: Record<string, SchemaType>;
+  /** Names of required SUB-properties (used to build this object's own `required` JSON-schema array). */
   required?: string[];
+  /** Whether THIS object parameter is mandatory in its parent schema. Distinct from `required` (sub-property list). */
+  mandatory?: boolean;
   additionalProperties?: boolean;
 }
 
@@ -138,7 +141,7 @@ export function TArray(items: SchemaType, opts?: SchemaOptions & { minItems?: nu
  */
 export function TObject(
   properties: Record<string, SchemaType>,
-  opts?: Omit<SchemaOptions, 'required'> & { required?: string[]; additionalProperties?: boolean }
+  opts?: Omit<SchemaOptions, 'required'> & { required?: string[]; mandatory?: boolean; additionalProperties?: boolean }
 ): TObjectSchema {
   const autoRequired = Object.entries(properties)
     .filter(([, schema]) => schema.required === true)
@@ -153,6 +156,7 @@ export function TObject(
     default: opts?.default,
     properties,
     required: combinedRequired.length > 0 ? combinedRequired : undefined,
+    mandatory: opts?.mandatory,
     additionalProperties: opts?.additionalProperties ?? false,
   };
 }
@@ -204,7 +208,9 @@ export function defineToolSchema(
 function schemaToParam(schema: SchemaType): import('./types.js').ToolParam {
   const base = {
     description: schema.description ?? '',
-    required: schema.kind === 'object' ? (schema as TObjectSchema).required !== undefined : (schema.required ?? false),
+    // For objects, parent-required is the explicit `mandatory` flag — NOT the
+    // presence of a sub-property `required` list (those are different concepts).
+    required: schema.kind === 'object' ? ((schema as TObjectSchema).mandatory ?? false) : (schema.required ?? false),
     default: schema.default,
   };
 
@@ -252,7 +258,7 @@ function schemaToParam(schema: SchemaType): import('./types.js').ToolParam {
       const result: import('./types.js').ToolParam = {
         type: 'object',
         description: base.description,
-        required: objSchema.required !== undefined,
+        required: objSchema.mandatory ?? false,
         properties: Object.entries(objSchema.properties).reduce(
           (acc, [key, value]) => {
             acc[key] = schemaToParam(value);

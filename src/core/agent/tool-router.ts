@@ -548,11 +548,18 @@ export class ToolRouter {
   private _rankCategories(normalised: string): Array<[CategoryName, number]> {
     const scored: Array<[CategoryName, number]> = [];
 
+    // Whole-word set for single-token keyword matching. Bare `includes` lets a
+    // 2-letter keyword like 'ad'/'ci'/'cd' fire on substrings ("re*ad*",
+    // "so*ci*al"), injecting phantom categories that crowd the routed-tool cap.
+    const words = new Set(normalised.split(/[^a-z0-9]+/i).filter(Boolean));
+
     for (const [catName, rule] of Object.entries(CATEGORY_MAP) as Array<[CategoryName, CategoryRule]>) {
       let raw = 0;
 
       for (const kw of rule.keywords) {
-        if (normalised.includes(kw)) raw += 1;
+        // Multi-word phrases keep substring matching; single tokens must match
+        // as a whole word.
+        if (kw.includes(' ') ? normalised.includes(kw) : words.has(kw)) raw += 1;
       }
 
       for (const re of rule.patterns) {
