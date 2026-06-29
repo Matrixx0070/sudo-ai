@@ -2,7 +2,7 @@
 # SUDO-AI v4 — .gitignore
 
 # Node / package manager
-node_modules/
+node_modules
 # TypeScript build output
 dist/
 *.js.map
