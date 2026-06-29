@@ -18,6 +18,8 @@ const log = createLogger('tools:mcp-sse-transport');
 const DEFAULT_RECONNECT_BASE_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 15_000;
+/** Cap the incomplete-frame buffer so a server that never emits a frame boundary can't OOM us. */
+const MAX_SSE_BUFFER_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export interface SSETransportConfig {
   /** SSE endpoint URL */
@@ -241,6 +243,12 @@ export class SSETransport extends EventEmitter<{
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
+
+        // A server that streams without a frame boundary would grow buffer unbounded
+        // → OOM. Cap it: throw to drop the stream (routed to the reconnect path).
+        if (buffer.length > MAX_SSE_BUFFER_BYTES) {
+          throw new Error('SSE buffer exceeded cap — dropping connection');
+        }
 
         for (const line of lines) {
           const trimmed = line.trim();

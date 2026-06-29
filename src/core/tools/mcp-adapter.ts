@@ -127,6 +127,8 @@ interface JsonRpcResponse {
 const CONNECT_TIMEOUT_MS = 15_000 as const;
 const CALL_TIMEOUT_MS = 30_000 as const;
 const MCP_PROTOCOL_VERSION = '2024-11-05' as const;
+/** Hard cap on the stdout line buffer — a server that never emits a newline can't OOM us. */
+const MAX_LINE_BUFFER_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export class MCPAdapter {
   private process: ChildProcess | null = null;
@@ -142,6 +144,10 @@ export class MCPAdapter {
   private lineBuffer = '';
   /** HTTP session for remote transports */
   private httpSession: { baseUrl: string; accessToken?: string } | null = null;
+  /** Access token for the SSE outbound (HTTP POST) return channel — OAuth/SSE has no httpSession. */
+  private sseAccessToken: string | null = null;
+  /** True once the initial `initialize` handshake has completed (gates re-handshake on transparent reconnect). */
+  private _initialized = false;
 
   constructor(private readonly config: MCPServerConfig) {
     // Initialize OAuth client if configured
@@ -226,6 +232,14 @@ export class MCPAdapter {
       this._handleStdoutChunk(chunk.toString());
     });
 
+    // A write to a stdin whose pipe has closed (the child exited) emits an
+    // asynchronous 'error' on the Writable. Without this handler it surfaces as
+    // an unhandled exception and crashes the daemon. Swallow it — the exit
+    // handler already nulls the process and rejects pending requests.
+    this.process.stdin?.on('error', (err: Error) => {
+      log.warn({ serverId: this.config.id, err: err.message }, 'MCP stdin error (pipe closed)');
+    });
+
     this.process.on('error', (err) => {
       log.error({ serverId: this.config.id, err: err.message }, 'MCP process error');
       this._rejectAll(err);
@@ -233,18 +247,25 @@ export class MCPAdapter {
 
     this.process.on('exit', (code, signal) => {
       log.info({ serverId: this.config.id, code, signal }, 'MCP process exited');
+      // Null the process + reset the line buffer so isConnected() flips false and a
+      // subsequent callTool() fails the connected-check instead of writing to dead stdin.
+      this.process = null;
+      this.lineBuffer = '';
+      this._initialized = false;
       this._rejectAll(new Error(`MCP server exited unexpectedly (code=${code}, signal=${signal})`));
     });
 
-    // Send initialize handshake.
-    await this._rpc('initialize', {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: 'sudo-ai', version: '5.0.0' },
-    });
-
-    // Notify the server that initialization is done.
-    this._notify('notifications/initialized', {});
+    // Send initialize handshake. If it times out / fails, kill the orphaned child
+    // and null the process so isConnected() doesn't lie and a retry connect() proceeds.
+    try {
+      await this._handshake();
+    } catch (err) {
+      this.process?.kill('SIGTERM');
+      this.process = null;
+      this.lineBuffer = '';
+      this._initialized = false;
+      throw err;
+    }
   }
 
   private async _connectHttp(): Promise<void> {
@@ -288,6 +309,8 @@ export class MCPAdapter {
     if (this.oauthClient) {
       accessToken = await this.oauthClient.getAccessToken() ?? undefined;
     }
+    // Remember the token for the outbound HTTP-POST return channel (OAuth/SSE has no httpSession).
+    this.sseAccessToken = accessToken ?? null;
 
     this.sseTransport = new SSETransport({
       url: this.config.baseUrl,
@@ -309,16 +332,19 @@ export class MCPAdapter {
       this._rejectAll(new Error('SSE transport closed'));
     });
 
-    await this.sseTransport.connect();
-
-    // Send initialize handshake over SSE
-    await this._rpc('initialize', {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: 'sudo-ai', version: '5.0.0' },
+    // The transport reconnects transparently; the new server connection has never
+    // been initialized. Re-run the handshake on every reconnect (the first 'open'
+    // fires during connect() below, before _initialized is set, so it's skipped).
+    this.sseTransport.on('open', () => {
+      if (this._initialized) {
+        void this._handshake().catch((err: unknown) =>
+          log.warn({ serverId: this.config.id, err: String(err) }, 'MCP re-initialize after SSE reconnect failed'));
+      }
     });
 
-    this._notify('notifications/initialized', {});
+    await this.sseTransport.connect();
+
+    await this._handshake();
   }
 
   private async _connectWebSocket(): Promise<void> {
@@ -357,16 +383,34 @@ export class MCPAdapter {
       this._rejectAll(new Error('WebSocket transport closed'));
     });
 
+    // Re-run the MCP handshake after a transparent reconnect (the first 'open'
+    // fires during connect() below, before _initialized is set, so it's skipped).
+    this.wsTransport.on('open', () => {
+      if (this._initialized) {
+        void this._handshake().catch((err: unknown) =>
+          log.warn({ serverId: this.config.id, err: String(err) }, 'MCP re-initialize after WS reconnect failed'));
+      }
+    });
+
     await this.wsTransport.connect();
 
-    // Send initialize handshake over WebSocket
+    await this._handshake();
+  }
+
+  /**
+   * Run the MCP `initialize` handshake (request + notifications/initialized) and
+   * mark the session initialized. Shared by every transport's first connect and
+   * re-run on a transparent SSE/WS reconnect so the new server connection is
+   * properly initialized before tool calls resume.
+   */
+  private async _handshake(): Promise<void> {
     await this._rpc('initialize', {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: { name: 'sudo-ai', version: '5.0.0' },
     });
-
     this._notify('notifications/initialized', {});
+    this._initialized = true;
   }
 
   // -------------------------------------------------------------------------
@@ -491,7 +535,7 @@ export class MCPAdapter {
   }
 
   /** HTTP JSON-RPC call for HTTP transport */
-  private async _httpRpc(method: string, params: unknown): Promise<unknown> {
+  private async _httpRpc(method: string, params: unknown, isRetry = false): Promise<unknown> {
     if (!this.httpSession) {
       throw new Error(`MCPAdapter[${this.config.id}]: HTTP session not initialized`);
     }
@@ -509,6 +553,9 @@ export class MCPAdapter {
       headers['Authorization'] = `Bearer ${this.httpSession.accessToken}`;
     }
 
+    // clearTimeout in finally (not before response.json()) so the abort timer also
+    // covers the body read — a server that stalls the body after 200 OK is aborted
+    // at CALL_TIMEOUT_MS instead of hanging the call forever.
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -522,7 +569,13 @@ export class MCPAdapter {
         signal: controller.signal,
       });
 
-      clearTimeout(timer);
+      // The token minted at connect() may have expired (refreshOAuthToken was
+      // otherwise never called). On a 401, refresh once and retry the call.
+      if (response.status === 401 && this.oauthClient && !isRetry) {
+        log.info({ serverId: this.config.id }, 'HTTP RPC 401 — refreshing OAuth token and retrying once');
+        await this.refreshOAuthToken();
+        return this._httpRpc(method, params, true);
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP RPC failed: HTTP ${response.status}`);
@@ -535,9 +588,8 @@ export class MCPAdapter {
       }
 
       return data.result;
-    } catch (err) {
+    } finally {
       clearTimeout(timer);
-      throw err;
     }
   }
 
@@ -580,6 +632,12 @@ export class MCPAdapter {
         this.httpSession = null;
         break;
     }
+
+    // Reset session state so a later reconnect on this instance re-handshakes
+    // exactly once (the 'open' re-handshake listener is gated on _initialized).
+    this._initialized = false;
+    this.sseAccessToken = null;
+    this.lineBuffer = '';
 
     this._rejectAll(new Error('MCP adapter disconnected'));
     log.info({ serverId: this.config.id }, 'MCP server disconnected');
@@ -625,6 +683,8 @@ export class MCPAdapter {
       if (this.httpSession) {
         this.httpSession.accessToken = token;
       }
+      // Outbound SSE return channel (_sendViaHttpPost) reads this field.
+      this.sseAccessToken = token;
       if (this.sseTransport) {
         this.sseTransport.setAccessToken(token);
       }
@@ -663,7 +723,15 @@ export class MCPAdapter {
       });
 
       const request: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
-      this._send(request);
+      // _send can throw synchronously (null stdin/wsTransport) — clean up the
+      // timer + pending entry so they don't linger for the full timeout window.
+      try {
+        this._send(request);
+      } catch (err) {
+        clearTimeout(timer);
+        this.pendingRequests.delete(id);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 
@@ -719,17 +787,27 @@ export class MCPAdapter {
       'Content-Type': 'application/json',
     };
 
-    if (this.config.accessToken) {
-      headers['Authorization'] = `Bearer ${this.config.accessToken}`;
-    } else if (this.httpSession?.accessToken) {
-      headers['Authorization'] = `Bearer ${this.httpSession.accessToken}`;
+    // OAuth/SSE has neither config.accessToken nor httpSession — fall back to the
+    // token captured in _connectSse so outbound frames carry an Authorization header.
+    const token = this.config.accessToken ?? this.httpSession?.accessToken ?? this.sseAccessToken ?? undefined;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
 
-    await fetch(`${this.config.baseUrl}/message`, {
-      method: 'POST',
-      headers,
-      body: data,
-    });
+    // Bound the fetch — without a timeout a /message endpoint that accepts then
+    // never responds leaks the connection (this promise is fire-and-forget).
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), CALL_TIMEOUT_MS);
+    try {
+      await fetch(`${this.config.baseUrl}/message`, {
+        method: 'POST',
+        headers,
+        body: data,
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(t);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -742,6 +820,20 @@ export class MCPAdapter {
     const lines = this.lineBuffer.split('\n');
     // Keep the last (possibly incomplete) fragment.
     this.lineBuffer = lines.pop() ?? '';
+
+    // A server that streams megabytes without ever emitting a newline would grow
+    // lineBuffer without bound → OOM. Cap the incomplete fragment: drop the
+    // connection rather than accumulate forever.
+    if (this.lineBuffer.length > MAX_LINE_BUFFER_BYTES) {
+      log.error(
+        { serverId: this.config.id, bufferLen: this.lineBuffer.length },
+        'MCP stdout line buffer exceeded cap — dropping connection',
+      );
+      this.lineBuffer = '';
+      this.process?.kill('SIGTERM');
+      this._rejectAll(new Error('MCP stdout line buffer exceeded cap'));
+      return;
+    }
 
     for (const line of lines) {
       const trimmed = line.trim();

@@ -73,6 +73,11 @@ export class WSTransport extends EventEmitter<{
   private heartbeatTimeoutTimer: NodeJS.Timeout | null = null;
   private readonly config: WSTransportConfigResolved;
   private isClosing = false;
+  /** True between a successful 'open' and the next 'close' — so only an ESTABLISHED
+   *  drop reconnects from the close handler. Initial-connect failures are scheduled
+   *  (with exponential backoff) by _connectWithRetry's catch; letting the close
+   *  handler also schedule there would overwrite that with a flat base-delay storm. */
+  private wasConnected = false;
 
   constructor(config: WSTransportConfig) {
     super();
@@ -176,6 +181,7 @@ export class WSTransport extends EventEmitter<{
       ws.on('open', () => {
         clearTimeout(timeoutId);
         this.state = 'connected';
+        this.wasConnected = true;
         this._startHeartbeat();
         this.emit('open');
         log.info({ url: this.config.url }, 'WebSocket connection established');
@@ -211,8 +217,12 @@ export class WSTransport extends EventEmitter<{
         this.state = 'disconnected';
         this.emit('close');
 
-        // Auto-reconnect unless explicitly closing
-        if (!this.isClosing) {
+        // Reconnect only after an ESTABLISHED connection dropped — a quick base-delay
+        // retry, then _connectWithRetry's catch escalates exponentially on each
+        // subsequent failure. Initial-connect failures are handled solely by that
+        // catch, so we don't schedule here (which would overwrite its backoff timer).
+        if (!this.isClosing && this.wasConnected) {
+          this.wasConnected = false;
           this._scheduleReconnect(this.config.reconnectBaseMs);
         }
       });
