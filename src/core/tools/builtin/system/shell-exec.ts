@@ -380,6 +380,12 @@ export const execTool: ToolDefinition = {
     'installing packages, compiling code, or any operation not covered by other tools. ' +
     'Supports pipes, redirects, and all bash features. Non-allowlisted commands require ' +
     'human approval (set EXEC_APPROVAL_MODE=off to disable the gate). ' +
+    'WRITE-AND-RUN CODE HERE: the sandbox /workspace is writable and PERSISTS across exec ' +
+    "calls within a session — author runnable code directly in it (e.g. `cat > app.py <<'EOF' " +
+    "… EOF`, or `mkdir -p pkg && cat > pkg/mod.py <<'EOF' … EOF` for multi-file projects) and " +
+    'run it in the same sandbox; files are reachable at /workspace/… and at their real host ' +
+    'path. Do NOT use coder.write-file / meta.self-modify for throwaway runnable code — those ' +
+    'write to the REAL repo which the sandbox cannot see; reserve them for actual repo edits. ' +
     'Set target:"repo" to run an allowlisted read/verify command (pnpm/npm test|lint|build, ' +
     'read-only git, rg) against the REAL repo instead of the sandbox — gated by SUDO_REPO_EXEC.',
   category: 'system',

@@ -34,6 +34,15 @@ describe('buildBwrapArgs', () => {
     expect(args).toContain('--unshare-net');
   });
 
+  it('test 1b: binds the workspace at BOTH /workspace and its real host path (write-here/run-there fix)', () => {
+    const policy: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, network: 'none' };
+    const joined = buildBwrapArgs('echo hi', workspaceDir, policy).join(' ');
+    // /workspace alias (existing)
+    expect(joined).toContain(`--bind ${workspaceDir} /workspace`);
+    // real host path — lets the agent run code it authored at its real path, not just the /workspace alias
+    expect(joined).toContain(`--bind ${workspaceDir} ${workspaceDir}`);
+  });
+
   it('test 2: omits --unshare-net when network=host', () => {
     const policy: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, network: 'host' };
     const args = buildBwrapArgs('echo hi', workspaceDir, policy);

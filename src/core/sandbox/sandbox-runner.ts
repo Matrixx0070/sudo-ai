@@ -204,8 +204,15 @@ export function buildBwrapArgs(
     }
   }
 
-  // Workspace: writable bind
+  // Workspace: writable bind at /workspace AND at its real host path. Binding the
+  // SAME directory at a second path exposes nothing the /workspace mount doesn't
+  // already — it just lets the agent reference files by the real path it authored
+  // them with (e.g. `python3 <workspaceDir>/x.py`) instead of only the /workspace
+  // alias, closing the write-here / run-there mismatch. Safe by construction: it is
+  // the identical provisioned per-session dir; no parent or sibling (e.g. the secret
+  // workspace/vault) is bound, and bwrap creates the intermediate path dirs empty.
   args.push('--bind', workspaceDir, '/workspace');
+  args.push('--bind', workspaceDir, workspaceDir);
 
   // Core read-only system paths
   args.push('--ro-bind', '/usr', '/usr');
