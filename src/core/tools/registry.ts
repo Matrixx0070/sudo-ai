@@ -26,6 +26,30 @@ import { NativeToolCorrection } from './native-tool-correction.js';
 
 const logger = createLogger('tool-registry');
 
+/**
+ * Coerce a tool-call `arguments` value into a plain object. The LLM/JSON
+ * boundary (and weak models that double-encode) can deliver `arguments` as a
+ * JSON *string*, an array, or null — `?? {}` only catches null/undefined, so a
+ * string would otherwise reach the tool as a string and break `params.x`
+ * access. A JSON string is parsed; anything not a plain object falls back to {}.
+ */
+function normalizeToolArgs(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* not JSON — fall through to {} */
+    }
+  }
+  return {};
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -427,10 +451,16 @@ export class ToolRegistry {
         tool = this.tools.get(suffixMatches[0]!)!;
         logger.warn({ requested: name, resolved: tool.name }, 'Ollama stripped tool prefix — resolved via suffix match');
       } else if (suffixMatches.length > 1) {
-        tool = this.tools.get(suffixMatches[0]!)!;
+        // Ambiguous: several registered tools share this suffix. Guessing the
+        // first would silently run the wrong tool against the caller's args.
         logger.warn(
-          { requested: name, resolved: tool.name, candidates: suffixMatches },
-          'Ollama stripped tool prefix — ambiguous suffix, picked first match',
+          { requested: name, candidates: suffixMatches },
+          'Ollama stripped tool prefix — ambiguous suffix, refusing to guess',
+        );
+        throw new ToolError(
+          `Ambiguous tool name "${name}" — candidates: ${suffixMatches.join(', ')}. Use the fully-qualified name.`,
+          'tool_ambiguous',
+          { name, candidates: suffixMatches },
         );
       }
     }
@@ -438,9 +468,12 @@ export class ToolRegistry {
       logger.error({ tool: name }, 'Tool not found');
       throw new ToolError(`Tool not found: ${name}`, 'tool_not_found', { name });
     }
-    if (this.disabled.has(name)) {
-      logger.warn({ tool: name }, 'Attempt to execute disabled tool');
-      throw new ToolError(`Tool is disabled: ${name}`, 'tool_disabled', { name });
+    // Check the RESOLVED canonical name, not the bare caller-supplied `name`:
+    // an Ollama-stripped "exec" resolves to "system.exec", and disabling
+    // "system.exec" must still block it.
+    if (this.disabled.has(tool.name)) {
+      logger.warn({ tool: tool.name, requested: name }, 'Attempt to execute disabled tool');
+      throw new ToolError(`Tool is disabled: ${tool.name}`, 'tool_disabled', { name: tool.name });
     }
 
     // Plan-mode gate (gap #18). When a plan is being drafted or awaiting
@@ -472,7 +505,8 @@ export class ToolRegistry {
       upstreamSignal.addEventListener('abort', onUpstreamAbort, { once: true });
     }
 
-    const timer = setTimeout(() => controller.abort(), timeout);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
     const toolCtx: ToolContext = { ...ctx, signal: controller.signal };
 
     try {
@@ -486,13 +520,20 @@ export class ToolRegistry {
       );
       return result;
     } catch (error) {
-      if (controller.signal.aborted) {
+      // Distinguish OUR timeout from an upstream-signal abort: only the timer
+      // sets `timedOut`. Reporting an upstream cancel as `tool_timeout` (with a
+      // bogus elapsed time) misleads callers that branch on the error code.
+      if (timedOut) {
         logger.error({ tool: name, timeout }, 'Tool execution timed out');
         throw new ToolError(
           `Tool timed out after ${timeout}ms: ${name}`,
           'tool_timeout',
           { name, timeout },
         );
+      }
+      if (controller.signal.aborted) {
+        logger.warn({ tool: name }, 'Tool execution aborted by upstream signal');
+        throw new ToolError(`Tool aborted: ${name}`, 'tool_aborted', { name });
       }
       logger.error({ tool: name, error }, 'Tool execution threw an error');
       throw error;
@@ -517,7 +558,7 @@ export class ToolRegistry {
       throw new ToolError('executeCall: call must have id and name', 'tool_invalid_call');
     }
     const start = Date.now();
-    const result = await this.execute(call.name, call.arguments ?? {}, ctx);
+    const result = await this.execute(call.name, normalizeToolArgs(call.arguments), ctx);
     return {
       toolCallId: call.id,
       name: call.name,

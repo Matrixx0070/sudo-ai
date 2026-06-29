@@ -86,27 +86,33 @@ export interface PatchResult {
  * Tool names included in the 'minimal' profile.
  * Basic tools sufficient for simple read/write/exec/search tasks.
  */
+// Registered tools are dot-namespaced (system.exec, browser.search, coder.*).
+// Bare names like 'exec'/'search'/'git' match nothing and would silently drop
+// the very tools the profile intends to allow.
 const PROFILE_MINIMAL: string[] = [
   'fs.read',
   'fs.write',
-  'exec',
-  'search',
+  'system.exec',
+  'browser.search',
 ];
 
 /**
  * Tool names included in the 'coding' profile.
  * Extends minimal with developer-focused tools: editing, git, npm, testing,
- * linting, and debugging.
+ * typechecking, and debugging.
  */
 const PROFILE_CODING: string[] = [
   ...PROFILE_MINIMAL,
   'fs.edit',
   'fs.multi-edit',
-  'git',
-  'npm',
-  'test',
-  'lint',
-  'debug',
+  'coder.read-file',
+  'coder.write-file',
+  'coder.smart-edit',
+  'coder.git',
+  'coder.npm',
+  'coder.test',
+  'coder.typecheck',
+  'coder.debug',
 ];
 
 /**
@@ -228,7 +234,17 @@ export class SchemaPatcher {
     const profileSet = PROFILES[context.profile];
     if (profileSet !== null) {
       const allowed = new Set(profileSet);
-      candidates = candidates.filter((n) => allowed.has(n));
+      const filtered = candidates.filter((n) => allowed.has(n));
+      // Never hand the LLM zero tools: if a profile's allowlist matches nothing
+      // (e.g. stale/misnamed profile entries), fall back to the pre-filter set.
+      if (filtered.length === 0) {
+        logger.warn(
+          { profile: context.profile, candidateCount: candidates.length },
+          'schema-patcher: profile filter matched no tools — keeping unfiltered candidates',
+        );
+      } else {
+        candidates = filtered;
+      }
     }
 
     // --- Stage 5: enforce model tool limit ---

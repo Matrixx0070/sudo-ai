@@ -31,18 +31,21 @@ describe('SchemaPatcher', () => {
 
   beforeEach(() => {
     registry = new ToolRegistry();
-    // Register tools that match profile names
+    // Register tools using the REAL dot-namespaced names the profiles reference.
     registry.register(makeTool('fs.read'));
     registry.register(makeTool('fs.write'));
-    registry.register(makeTool('exec'));
-    registry.register(makeTool('search'));
+    registry.register(makeTool('system.exec'));
+    registry.register(makeTool('browser.search'));
     registry.register(makeTool('fs.edit'));
     registry.register(makeTool('fs.multi-edit'));
-    registry.register(makeTool('git'));
-    registry.register(makeTool('npm'));
-    registry.register(makeTool('test'));
-    registry.register(makeTool('lint'));
-    registry.register(makeTool('debug'));
+    registry.register(makeTool('coder.read-file'));
+    registry.register(makeTool('coder.write-file'));
+    registry.register(makeTool('coder.smart-edit'));
+    registry.register(makeTool('coder.git'));
+    registry.register(makeTool('coder.npm'));
+    registry.register(makeTool('coder.test'));
+    registry.register(makeTool('coder.typecheck'));
+    registry.register(makeTool('coder.debug'));
     registry.register(makeTool('browser.navigate'));
     registry.register(makeTool('browser.screenshot'));
     patcher = new SchemaPatcher(registry);
@@ -66,11 +69,11 @@ describe('SchemaPatcher', () => {
   it('minimal profile keeps only core tools', () => {
     const schemas = makeSchemas(registry);
     const result = patcher.patch(schemas, { ...baseContext, profile: 'minimal' });
-    // Minimal: fs.read, fs.write, exec, search
+    // Minimal: fs.read, fs.write, system.exec, browser.search
     expect(result.kept).toContain('fs.read');
     expect(result.kept).toContain('fs.write');
-    expect(result.kept).toContain('exec');
-    expect(result.kept).toContain('search');
+    expect(result.kept).toContain('system.exec');
+    expect(result.kept).toContain('browser.search');
     expect(result.kept).not.toContain('browser.navigate');
   });
 
@@ -79,8 +82,8 @@ describe('SchemaPatcher', () => {
     const result = patcher.patch(schemas, { ...baseContext, profile: 'coding' });
     expect(result.kept).toContain('fs.read');
     expect(result.kept).toContain('fs.edit');
-    expect(result.kept).toContain('git');
-    expect(result.kept).toContain('npm');
+    expect(result.kept).toContain('coder.git');
+    expect(result.kept).toContain('coder.npm');
     expect(result.kept).not.toContain('browser.navigate');
   });
 
@@ -100,11 +103,11 @@ describe('SchemaPatcher', () => {
     const schemas = makeSchemas(registry);
     const result = patcher.patch(schemas, {
       ...baseContext,
-      disabledTools: ['exec', 'search'],
+      disabledTools: ['system.exec', 'browser.search'],
     });
-    expect(result.removed).toContain('exec');
-    expect(result.removed).toContain('search');
-    expect(result.kept).not.toContain('exec');
+    expect(result.removed).toContain('system.exec');
+    expect(result.removed).toContain('browser.search');
+    expect(result.kept).not.toContain('system.exec');
   });
 
   it('stats accumulate across patches', () => {

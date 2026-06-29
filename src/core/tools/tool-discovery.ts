@@ -72,8 +72,11 @@ export interface DiscoveryResult {
  *   2 — description (string)
  *   3 — metadata object body (optional, may be empty)
  */
+// NOTE: no `g` flag — `.exec()` is read once per file in scanFile(); a global
+// regex would persist `lastIndex` across files and silently skip decorators in
+// later/smaller files.
 const TOOL_DECORATOR_RE =
-  /@Tool\(\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)\s*,\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)\s*(?:,\s*(\{[^}]*\}))?\s*\)/gs;
+  /@Tool\(\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)\s*,\s*(?:'([^']*)'|"([^"]*)"|`([^`]*)`)\s*(?:,\s*(\{[^}]*\}))?\s*\)/s;
 
 /**
  * Match a class declaration that extends BaseTool.
@@ -415,20 +418,24 @@ export class ToolDiscovery {
       debounceTimer = setTimeout(async () => {
         debounceTimer = null;
         try {
+          // Snapshot the prior state BEFORE scan() — scan() mutates
+          // this.lastDiscovered in place, so diffing against it afterwards
+          // would always yield empty added/removed and never fire the callback.
+          const prev = new Map(this.lastDiscovered);
           const { discovered } = await this.scan();
           const currentNames = new Set(discovered.map((t) => t.toolName));
 
           // Determine newly added tools (present now, absent before).
           const added: DiscoveredTool[] = discovered.filter(
-            (t) => !this.lastDiscovered.has(t.toolName),
+            (t) => !prev.has(t.toolName),
           );
 
           // Determine removed tools (present before, absent now).
-          const removed: string[] = [...this.lastDiscovered.keys()].filter(
+          const removed: string[] = [...prev.keys()].filter(
             (name) => !currentNames.has(name),
           );
 
-          // Update the internal snapshot.
+          // scan() already refreshed this.lastDiscovered; keep it authoritative.
           this.lastDiscovered = new Map(discovered.map((t) => [t.toolName, t]));
 
           if (added.length || removed.length) {
