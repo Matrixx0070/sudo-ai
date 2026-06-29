@@ -221,6 +221,8 @@ export class ScheduledMessageStore {
 export class ScheduledMessageDispatcher {
   readonly store: ScheduledMessageStore;
   private interval: ReturnType<typeof setInterval> | null = null;
+  /** Re-entrancy guard: a tick that runs past the interval must not overlap the next. */
+  private _ticking = false;
 
   private readonly concurrency: number;
   private readonly generatorTimeoutMs: number;
@@ -313,7 +315,17 @@ export class ScheduledMessageDispatcher {
     } catch (err: unknown) {
       const emsg = err instanceof Error ? err.message : String(err);
       logger.error({ id: msg.id, channel: msg.channel, retryCount: msg.retryCount, err: emsg }, 'scheduled message delivery failed');
-      this.store.markFailed(msg.id, emsg);
+      // CH-2: a recurring message that exhausts MAX_RETRIES must NOT be permanently
+      // excluded — getDue() filters retry_count >= MAX_RETRIES and retry_count only
+      // resets on a successful reschedule. So a ~3-min outage (3 ticks) would kill
+      // the series forever. Instead skip this occurrence and re-arm forward.
+      if (msg.recurrenceSec && msg.recurrenceSec >= MIN_RECURRENCE_SEC && msg.retryCount + 1 >= MAX_RETRIES) {
+        const next = new Date(Date.now() + msg.recurrenceSec * 1000).toISOString();
+        this.store.reschedule(msg.id, next);
+        logger.warn({ id: msg.id, channel: msg.channel, next }, 'recurring message exhausted retries — occurrence skipped, rescheduled (not disabled)');
+      } else {
+        this.store.markFailed(msg.id, emsg);
+      }
     }
   }
 
@@ -330,11 +342,21 @@ export class ScheduledMessageDispatcher {
   }
 
   async tick(): Promise<void> {
-    const now = new Date().toISOString();
-    const due = this.store.getDue(now);
-    if (due.length === 0) { logger.debug({ now }, 'tick: no due messages'); return; }
-    logger.info({ count: due.length, concurrency: this.concurrency, now }, 'tick: delivering due messages');
-    await this._runBounded(due, this.concurrency, (msg) => this._deliverOne(msg));
+    // Re-entrancy guard (CH-1): getDue() selects rows that aren't marked
+    // sent/rescheduled until AFTER the async send completes, so a tick running
+    // past the 60s interval would overlap the next tick and re-deliver the same
+    // `pending` rows — duplicate proactive messages. Skip if already in flight.
+    if (this._ticking) { logger.debug('tick: previous tick still in flight — skipping'); return; }
+    this._ticking = true;
+    try {
+      const now = new Date().toISOString();
+      const due = this.store.getDue(now);
+      if (due.length === 0) { logger.debug({ now }, 'tick: no due messages'); return; }
+      logger.info({ count: due.length, concurrency: this.concurrency, now }, 'tick: delivering due messages');
+      await this._runBounded(due, this.concurrency, (msg) => this._deliverOne(msg));
+    } finally {
+      this._ticking = false;
+    }
   }
 }
 
