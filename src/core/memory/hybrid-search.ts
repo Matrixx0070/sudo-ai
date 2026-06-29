@@ -109,7 +109,13 @@ export function mergeHybridResults(
 
   return Array.from(merged.values()).map(({ chunk, vecScore, bm25Score }) => ({
     chunk,
-    score: vectorWeight * vecScore + textWeight * bm25Score,
+    // Blend only when BOTH sources contributed. A single-source match uses its
+    // raw [0,1] score — otherwise a strong BM25-exclusive hit (vecScore=0) scores
+    // textWeight*bm25 ≤ 0.3, always below the default minScore 0.35, and is
+    // silently dropped even though it's an exact keyword match (RAG-1).
+    score: vecScore > 0 && bm25Score > 0
+      ? vectorWeight * vecScore + textWeight * bm25Score
+      : Math.max(vecScore, bm25Score),
     matchType: 'hybrid' as const,
   }));
 }
@@ -379,13 +385,15 @@ export async function hybridSearch(
   if (vectorResults.length > 0 && bm25Results.length > 0) {
     results = mergeHybridResults(vectorResults, bm25Results, vectorWeight, textWeight);
   } else if (vectorResults.length > 0) {
-    // Vector-only fallback — scale by weight so the score scale (and thus the
-    // downstream minScore gate) matches the hybrid path's single-source scores.
-    results = vectorResults.map((r) => ({ ...r, score: vectorWeight * r.score }));
+    // Vector-only fallback — pass the raw [0,1] score through. There is no second
+    // source to blend with, so down-weighting by vectorWeight only pushes results
+    // toward (and below) the minScore gate for no reason (RAG-1).
+    results = vectorResults.map((r) => ({ ...r, score: r.score }));
   } else {
-    // BM25-only fallback — scale by weight (matches hybrid single-source scale)
-    // and normalise match type.
-    results = bm25Results.map((r) => ({ ...r, score: textWeight * r.score, matchType: 'bm25' as const }));
+    // BM25-only fallback — raw score, NOT textWeight*score. The latter caps at
+    // ≤0.3 (bm25 ≤ 1.0) which is below the default minScore 0.35, so BM25-only
+    // mode (no sqlite-vec / embeddings down) returned nothing at all (RAG-1).
+    results = bm25Results.map((r) => ({ ...r, score: r.score, matchType: 'bm25' as const }));
   }
 
   // -------------------------------------------------------------------------

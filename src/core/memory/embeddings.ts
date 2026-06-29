@@ -126,7 +126,11 @@ export class EmbeddingService {
 
   /** True when an API key is available and embedding calls can succeed */
   get isAvailable(): boolean {
-    return this.apiKey !== null;
+    // Also honor the quota circuit: while it's OPEN (after 429s) every embed call
+    // throws immediately, so callers gating on isAvailable would otherwise pay one
+    // wasted exception per query for the whole cooldown window (RAG-7).
+    if (this.apiKey === null) return false;
+    return !this.circuitEnabled || embedCircuit.openUntil <= Date.now();
   }
 
   // -------------------------------------------------------------------------

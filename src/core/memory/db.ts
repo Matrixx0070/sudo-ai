@@ -275,9 +275,12 @@ export class MindDB {
     const safeText = guardMemoryWrite(text, 'MindDB.storeChunk', opts.role);
     const hash = this._sha256(safeText);
 
-    // Dedup check
+    // Dedup check — only an ACTIVE row counts. If the same text was previously
+    // superseded by contradiction resolution and is now re-stored (user reverts a
+    // preference), matching the superseded row and returning it would skip the
+    // INSERT, so the reinstated fact never re-enters the active index (RAG-6).
     const existing = this.db
-      .prepare<{ hash: string }, MemoryChunkRow>('SELECT * FROM chunks WHERE hash = :hash')
+      .prepare<{ hash: string }, MemoryChunkRow>('SELECT * FROM chunks WHERE hash = :hash AND superseded_by IS NULL')
       .get({ hash });
 
     if (existing) {

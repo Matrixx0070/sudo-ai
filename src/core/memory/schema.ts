@@ -548,10 +548,15 @@ export function initializeSchema(db: Database): void {
  * @param db - An open better-sqlite3 Database instance with sqlite-vec loaded.
  */
 export function initializeVecTable(db: Database): void {
+  // distance_metric=cosine: without it vec0 defaults to L2, but hybrid-search
+  // converts the distance as if it were cosine (`1 - distance/2`), deflating every
+  // vector score (RAG-2). NOTE: a table already created as L2 is NOT recreated by
+  // CREATE…IF NOT EXISTS — existing deployments need a vec-table rebuild (re-embed)
+  // to benefit; new deployments are correct.
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
       chunk_id  INTEGER PRIMARY KEY,
-      embedding FLOAT[1536]
+      embedding FLOAT[1536] distance_metric=cosine
     )
   `);
 }
@@ -572,7 +577,7 @@ export function initializeVecTableLocal(db: Database): void {
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec_local USING vec0(
       chunk_id  INTEGER PRIMARY KEY,
-      embedding FLOAT[384]
+      embedding FLOAT[384] distance_metric=cosine
     )
   `);
 }
