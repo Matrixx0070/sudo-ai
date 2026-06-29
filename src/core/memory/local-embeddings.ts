@@ -191,8 +191,20 @@ export class LocalEmbeddingProvider {
    * @returns A {@link LOCAL_EMBED_DIM}-dimension normalised Float32Array, or null
    *          if disabled / model load / inference failed (caller degrades).
    */
+  /** Bounded per-text cache (RAG-8): contradiction detection re-embeds up to ~200
+   *  candidate texts per write when OpenAI is down — memoize the single-text path so
+   *  repeated texts skip the ~10–30ms ONNX inference. Cleared wholesale at the cap. */
+  private readonly _embedCache = new Map<string, Float32Array>();
+  private static readonly EMBED_CACHE_MAX = 2000;
+
   async embed(text: string): Promise<Float32Array | null> {
+    const cached = this._embedCache.get(text);
+    if (cached) return cached;
     const [vec] = await this.embedBatch([text]);
+    if (vec) {
+      if (this._embedCache.size >= LocalEmbeddingProvider.EMBED_CACHE_MAX) this._embedCache.clear();
+      this._embedCache.set(text, vec);
+    }
     return vec ?? null;
   }
 

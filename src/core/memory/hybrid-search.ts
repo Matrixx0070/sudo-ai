@@ -320,7 +320,7 @@ export async function hybridSearch(
     }
 
     if (queryVec) {
-      // sqlite-vec KNN query — cosine distance (0=identical, 2=opposite).
+      // sqlite-vec KNN query — L2 (Euclidean) distance, ascending (0=identical).
       // vecTable is a whitelisted literal, never user input.
       const vecRows = db.db.prepare<{ embedding: Buffer; k: number }, VecRow>(`
         SELECT chunk_id, distance
@@ -342,8 +342,9 @@ export async function hybridSearch(
         if (row.superseded_by != null) continue; // retired by contradiction resolution
         if (pathFilter && !row.path.startsWith(pathFilter)) continue;
 
-        // Convert cosine distance [0,2] → similarity [0,1]
-        const score = Math.max(0, 1 - vr.distance / 2);
+        // vec0 returns L2 distance; for unit vectors L2²=2(1−cos), so cosine
+        // similarity = 1 − d²/2 (RAG-2; was treating L2 as cosine → score deflation).
+        const score = Math.max(0, Math.min(1, 1 - (vr.distance * vr.distance) / 2));
         vectorResults.push({ chunk: rowToChunk(row), score, matchType: 'vector' });
       }
     }
