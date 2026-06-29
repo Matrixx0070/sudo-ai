@@ -72,7 +72,13 @@ function chunkText(text: string, limit: number): string[] {
   while (remaining.length > limit) {
     const slice = remaining.slice(0, limit);
     const breakAt = slice.lastIndexOf('\n');
-    const cut = breakAt > limit * 0.5 ? breakAt : limit;
+    let cut = breakAt > limit * 0.5 ? breakAt : limit;
+    // CH-5: don't split a UTF-16 surrogate pair at the boundary — that mangles an
+    // emoji into two U+FFFD replacement chars. Move the whole pair to the next chunk.
+    if (cut < remaining.length) {
+      const c = remaining.charCodeAt(cut - 1);
+      if (c >= 0xd800 && c <= 0xdbff) cut -= 1;
+    }
     chunks.push(remaining.slice(0, cut));
     remaining = remaining.slice(cut).trimStart();
   }
