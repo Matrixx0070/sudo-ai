@@ -434,6 +434,37 @@ export function collapseContent(content: string, toolName: string): string {
  * @param hooks   - Optional hook emitter for lifecycle events.
  * @returns The compaction summary string, or '' on failure.
  */
+/** Default count of recent non-system messages kept verbatim through compaction. */
+const COMPACT_TAIL_DEFAULT = 6;
+
+/**
+ * Select the trailing non-system messages to keep verbatim across a compaction.
+ *
+ * Historically `runCompaction` replaced the ENTIRE history with a single
+ * summary system message, so the current in-flight user ask and recent turns
+ * survived only as summary prose — a bad/incomplete summary could erase the
+ * request the user is waiting on. This keeps the last `k` non-system messages
+ * intact alongside the summary (OpenClaw's splitPreservedRecentTurns model).
+ *
+ * Two invariants, mirroring the LAYER-3 sliding window:
+ *  - never start the tail on an orphan `tool` result (its declaring assistant
+ *    would be gone → AI_MissingToolResultsError on the next brain.call);
+ *  - always retain the most recent `user` message, so the in-flight ask
+ *    survives even when the tail is small or orphan-trimmed.
+ */
+export function selectVerbatimTail(messages: BrainMessage[], k: number): BrainMessage[] {
+  const nonSystem = messages.filter((m) => m.role !== 'system');
+  let tail = nonSystem.slice(-Math.max(0, k));
+  let firstNonOrphan = 0;
+  while (firstNonOrphan < tail.length && tail[firstNonOrphan]!.role === 'tool') {
+    firstNonOrphan++;
+  }
+  if (firstNonOrphan > 0) tail = tail.slice(firstNonOrphan);
+  const lastUser = [...nonSystem].reverse().find((m) => m.role === 'user');
+  if (lastUser && !tail.includes(lastUser)) tail = [lastUser, ...tail];
+  return tail;
+}
+
 export async function runCompaction(
   brain: BrainLike,
   session: SessionLike,
@@ -466,12 +497,27 @@ export async function runCompaction(
     const summary = await compact(brain, session.messages);
     compactionSucceeded = true;
 
-    session.messages = [
-      { role: 'system', content: `[Context compacted]\n\n${summary}` },
-    ];
+    const summaryMsg: BrainMessage = { role: 'system', content: `[Context compacted]\n\n${summary}` };
+    // Preserve the recent conversation verbatim alongside the summary so a
+    // bad/incomplete summary can't erase the in-flight ask (default ON;
+    // SUDO_COMPACT_PRESERVE_TAIL=0 restores the legacy summary-only replace).
+    if (process.env['SUDO_COMPACT_PRESERVE_TAIL'] !== '0') {
+      const k = (() => {
+        const raw = parseInt(process.env['SUDO_COMPACT_TAIL_COUNT'] ?? '', 10);
+        return Number.isFinite(raw) && raw >= 2 && raw <= 40 ? raw : COMPACT_TAIL_DEFAULT;
+      })();
+      const tail = selectVerbatimTail(session.messages as BrainMessage[], k);
+      session.messages = [summaryMsg, ...tail];
+      log.info(
+        { sessionId: state.sessionId, summaryLen: summary.length, tailKept: tail.length },
+        'Compaction complete (verbatim tail preserved)',
+      );
+    } else {
+      session.messages = [summaryMsg];
+      log.info({ sessionId: state.sessionId, summaryLen: summary.length }, 'Compaction complete');
+    }
 
     emit({ type: 'compaction', summary });
-    log.info({ sessionId: state.sessionId, summaryLen: summary.length }, 'Compaction complete');
 
     await safeEmit(hooks, 'after_compaction', hookBase);
     await safeEmit(hooks, 'session:compact:after', hookBase);
