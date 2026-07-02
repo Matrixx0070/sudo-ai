@@ -106,7 +106,7 @@ import { ContextCompressor } from '../brain/context-compressor.js';
 import type { CompressionStage } from '../brain/context-compressor.js';
 import { existsSync } from 'node:fs';
 import { TraceStore } from '../learning/trace-store.js';
-import type { IntentCategory, RoutingTier } from '../learning/trace-store.js';
+import { deriveRoutingTrace } from '../learning/routing-trace.js';
 import { TraceDrivenPolicy } from '../learning/trace-driven-policy.js';
 import type { PolicyEvaluation } from '../learning/trace-driven-policy.js';
 import { LazinessNudge } from './laziness-nudge.js';
@@ -1935,20 +1935,24 @@ export class AgentLoop extends AgentLoopInjections {
         }
 
         // Phase 2: TraceStore — record routing decision (fail-open).
+        // Derived from the real keyword classifier so rows vary by input,
+        // rather than the previous constant 'fast'/'keyword'/0.5 (P0 #6).
         try {
           if (this._traceStore) {
-            const routingCategory: IntentCategory = 'fast'; // default fallback
-            const routingTier: RoutingTier = 'keyword'; // default fallback
+            const routeUserText =
+              session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+            const routing = deriveRoutingTrace(routeUserText);
             this._traceStore.recordRouting(
               state.sessionId,
               effectiveModel ?? model ?? 'unknown',
-              routingCategory,
-              routingTier,
-              0.5, // neutral confidence when no explicit routing data
+              routing.category,
+              routing.tier,
+              routing.confidence,
             );
           }
         } catch { /* fail-open */ }
 
+        const brainCallStartedAt = performance.now();
         const response: BrainResponse = await this.brain.call({
           messages: trimmed,
           source: 'agent',
@@ -1983,7 +1987,7 @@ export class AgentLoop extends AgentLoopInjections {
               // differ from the requested effectiveModel) so the flywheel learns true outcomes.
               response.model ?? effectiveModel ?? model ?? 'unknown',
               response.finishReason !== 'error',
-              0, // latencyMs not available from BrainResponse; placeholder
+              Math.round(performance.now() - brainCallStartedAt), // real wall-clock latency
               undefined, // tokenUsage not threaded here
               undefined, // no error object
               // Replay capture (only stored under SUDO_TRACE_CAPTURE=1): the exact
