@@ -665,19 +665,37 @@ const META_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * Legacy meta tools that DUPLICATE a wired, tested subsystem, so they're
+ * quarantined (not registered) by default to keep the agent's tool menu clean:
+ *   meta.swarm         → agents/ MultiAgentOrchestrator (system.spawn-agent)
+ *   meta.code-evolver  → self-build orchestrator
+ *   meta.auto-optimizer→ cognition tuners + brain routers
+ *   meta.forge         → self-improvement
+ * Set SUDO_ENABLE_LEGACY_META_TOOLS=1 to register them anyway.
+ */
+export const LEGACY_DUPLICATE_META_TOOLS = new Set([
+  'meta.swarm', 'meta.code-evolver', 'meta.auto-optimizer', 'meta.forge',
+]);
+
+/**
  * Register all meta/platform tools with the given registry.
  * Called automatically by the built-in tool loader.
  *
  * @param registry - The application's central {@link ToolRegistry}.
  */
 export function registerMetaTools(registry: ToolRegistry): void {
-  logger.info({ count: META_TOOLS.length }, 'Registering meta tools');
-  for (const tool of META_TOOLS) {
+  const legacyEnabled = process.env['SUDO_ENABLE_LEGACY_META_TOOLS'] === '1';
+  const tools = legacyEnabled
+    ? META_TOOLS
+    : META_TOOLS.filter((t) => !LEGACY_DUPLICATE_META_TOOLS.has(t.name));
+  const skipped = META_TOOLS.length - tools.length;
+  logger.info({ count: tools.length, skippedLegacy: skipped }, 'Registering meta tools');
+  for (const tool of tools) {
     registry.register(tool);
   }
   // Meta search, install, and synthesize tools
   registerSearchTools(registry);
   registerInstallTools(registry);
   registerSynthesizeTools(registry);
-  logger.info({ count: META_TOOLS.length }, 'Meta tools registered');
+  logger.info({ count: tools.length, skippedLegacy: skipped }, 'Meta tools registered');
 }
