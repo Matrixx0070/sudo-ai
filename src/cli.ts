@@ -1490,6 +1490,10 @@ async function boot(): Promise<void> {
     log.warn({ err: msg }, 'Command registration failed — continuing without slash commands');
   }
 
+  // Steering channel for mid-run control. Created here (before the command
+  // context factory) so /steer can signal it; wired into the loop below.
+  const steeringChannel = new InMemorySteeringChannel();
+
   // Shared CommandContext factory for every channel's directive dispatch.
   const makeCommandContext = async (msg: { channel: string; peerId: string }): Promise<CommandContext | null> => {
     try {
@@ -1506,6 +1510,7 @@ async function boot(): Promise<void> {
         config,
         db,
         peerQueue: dualSessionManager.peerQueue,
+        steeringChannel,
       };
     } catch (err) {
       log.error({ peerId: msg.peerId, err: String(err) }, 'CommandContext factory failed');
@@ -3309,7 +3314,6 @@ async function boot(): Promise<void> {
     const crossChannelMemory = new CrossChannelMemory();
     goalEngine = new GoalEngineV2();
     outcomesLedger = new OutcomesLedger();
-    const steeringChannel = new InMemorySteeringChannel();
 
     // Semantic contradiction resolution for dreamed facts (#7, opt-in via
     // SUDO_CHUNK_CONTRADICT=1). Stage 1 = embedding cosine (text-embedding-3-small,
@@ -3389,7 +3393,10 @@ async function boot(): Promise<void> {
     // Suppress unused-variable warnings for modules registered but not yet
     // exposed via their own shutdown hooks.
     void crossChannelMemory;
-    void steeringChannel;
+    // Wire the steering channel into the running loop so an in-process caller
+    // (e.g. a /steer command) can abort/inject a turn mid-run. Previously this
+    // channel was constructed and discarded (dead wiring).
+    finalAgentLoop.setSteeringChannel(steeringChannel);
 
     // Markdown skill loader — project skills/ (flat .md files plus
     // agentskills.io <skill>/SKILL.md directories) and optional extra roots
