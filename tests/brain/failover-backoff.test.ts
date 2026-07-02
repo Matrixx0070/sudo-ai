@@ -176,8 +176,12 @@ describe('Phase B: failover backoff hardening', () => {
       expect(extract({ statusCode: 429, message: 'rate limited' }).status).toBe(429);
     });
 
-    it('AUTHX-6: permission_error maps to 403', () => {
-      expect(extract({ message: 'permission_error: not allowed' }).status).toBe(403);
+    it('AUTHX-6: structured permission_error maps to 403', () => {
+      // 403 → auth_permanent → PERMANENT profile disable, so extractErrorDetails
+      // requires the structured JSON error shape (not a bare substring) before
+      // upgrading a status-less error — an incidental "permission_error" string
+      // in echoed content must not permanently kill a model (AETHER_AUDIT_10 HIGH).
+      expect(extract({ message: '{"type":"error","error":{"type":"permission_error"}}' }).status).toBe(403);
     });
   });
 });
