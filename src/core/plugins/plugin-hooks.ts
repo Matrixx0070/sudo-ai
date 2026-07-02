@@ -20,7 +20,7 @@ import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
 import { type PluginManifest, type PluginHookDecl } from './plugin-manifest.js';
 import { type HookManager, type HookEvent, type HookContext } from '../hooks/index.js';
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 
 const log = createLogger('plugin:hooks');
 
@@ -95,8 +95,68 @@ const pluginHookIds = new Map<string, Set<string>>();
 // ---------------------------------------------------------------------------
 
 /**
+ * Run a command-type hook without blocking the event loop.
+ *
+ * Uses async `spawn` (not `execSync`, which would freeze the entire Node event
+ * loop for up to `timeoutMs` on every hook fire — e.g. `before:tool-call`).
+ * Feeds the serialized context to the child's stdin, kills it after the
+ * timeout, discards stdout, and never rejects: a non-zero exit / signal / spawn
+ * error is logged and swallowed (matching the previous fire-and-forget
+ * behaviour). Exported for testing.
+ *
+ * @param label   - Original (uninterpolated) command, used only for logging.
+ * @param command - The command to execute via the shell.
+ * @param env     - Environment for the child process.
+ * @param input   - Written to the child's stdin, then closed.
+ * @param timeoutMs - Kill the child after this many milliseconds.
+ */
+export function runHookCommand(
+  label: string,
+  command: string,
+  env: Record<string, string>,
+  input: string,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
+
+    const child = spawn(command, {
+      shell: true,
+      env,
+      timeout: timeoutMs,
+      // stdin is piped for the ctx payload; stdout/stderr are discarded. Using
+      // 'ignore' (not 'pipe') matters: a shell that forks a child would leave
+      // the child holding the stdout pipe open, delaying resolution until the
+      // grandchild exits (past the timeout). We never read the output anyway.
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+
+    child.on('error', (err) => {
+      log.warn({ command: label, err }, 'Command hook execution failed');
+      done();
+    });
+    // Resolve on 'exit' (process termination) rather than 'close' (stdio EOF):
+    // we don't consume stdout, and 'close' can lag when a killed shell orphans
+    // a child that inherited a stream.
+    child.on('exit', (code, signal) => {
+      if (code !== 0 || signal) {
+        log.warn({ command: label, code, signal }, 'Command hook execution failed');
+      }
+      done();
+    });
+
+    // Feed the context to stdin; ignore EPIPE if the child exits early.
+    if (child.stdin) {
+      child.stdin.on('error', () => { /* child closed stdin — non-fatal */ });
+      child.stdin.end(input);
+    }
+  });
+}
+
+/**
  * Build a hook handler from a command-type declaration.
- * Spawns a shell command when the hook fires.
+ * Spawns a shell command asynchronously when the hook fires.
  */
 function buildCommandHandler(decl: PluginHookDecl): (ctx: HookContext) => Promise<void> {
   return async (ctx: HookContext) => {
@@ -112,17 +172,7 @@ function buildCommandHandler(decl: PluginHookDecl): (ctx: HookContext) => Promis
       SUDO_HOOK_TOOL: ctx.toolName ?? '',
     };
 
-    try {
-      execSync(command, {
-        timeout: decl.timeout ?? 30_000,
-        env,
-        input: JSON.stringify(ctx),
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      log.warn({ command: decl.command, err }, 'Command hook execution failed');
-    }
+    await runHookCommand(decl.command, command, env, JSON.stringify(ctx), decl.timeout ?? 30_000);
   };
 }
 
