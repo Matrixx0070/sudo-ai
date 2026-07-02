@@ -49,6 +49,7 @@ import { HeartbeatRunner, type HeartbeatPayloadRunner } from './core/cron/heartb
 import { maybeGuardedSend } from './core/comms/idempotency.js';
 import { CommandRegistry } from './core/commands/registry.js';
 import { tryDispatchDirective } from './core/commands/dispatch.js';
+import { makeDirectiveAuthorizer } from './core/commands/directive-authorizer.js';
 import type { CommandContext } from './core/commands/types.js';
 import { HookManager } from './core/hooks/index.js';
 import { CostTracker } from './core/brain/cost-tracker.js';
@@ -1521,6 +1522,10 @@ async function boot(): Promise<void> {
   // intercept is always on (pre-existing behaviour).
   const channelDirectives = process.env['SUDO_CHANNEL_COMMANDS'] === '1';
   if (channelDirectives) log.info('Cross-channel slash directives enabled (SUDO_CHANNEL_COMMANDS=1)');
+  // Shared directive-auth gate: state-mutating / turn-control directives
+  // (/stop, /reset, and /steer once registered) require an owner; read-only
+  // ones stay open. See SUDO_DIRECTIVE_OWNERS.
+  const directiveAuthorize = makeDirectiveAuthorizer(config);
 
   if (config.channels.telegram.enabled && process.env['SUDO_TELEGRAM_DISABLE'] !== '1') {
     const tgAllowed = (process.env['TELEGRAM_CHAT_ID'] ?? '')
@@ -1804,7 +1809,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => discord.send(msg.peerId, text),
         })) return;
 
@@ -1892,7 +1897,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => slack.send(msg.peerId, text),
         })) return;
 
@@ -1996,7 +2001,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => whatsapp.send(msg.peerId, text),
         })) return;
 
@@ -2087,7 +2092,7 @@ async function boot(): Promise<void> {
 
       // Directive short-circuit: slash commands bypass the turn queue.
       if (channelDirectives && await tryDispatchDirective({
-        registry: commandRegistry, msg, makeContext: makeCommandContext,
+        registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
         reply: (text) => web.send(msg.peerId, text),
       })) return;
 
@@ -2235,7 +2240,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => email.send(msg.peerId, text),
         })) return;
 
@@ -2321,7 +2326,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => sms.send(msg.peerId, text),
         })) return;
 
@@ -2409,7 +2414,7 @@ async function boot(): Promise<void> {
         if (approvalManager.tryConsumeApprovalReply(msg.text)) return true;
         if (channelDirectives && commandRegistry.isCommand(msg.text ?? '')) {
           void tryDispatchDirective({
-            registry: commandRegistry, msg, makeContext: makeCommandContext,
+            registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
             reply: (text) => router.sendToChannel(msg.channel, msg.peerId, text),
           }).then((handled) => {
             // Unlike the cli handlers, the message was already consumed here,
