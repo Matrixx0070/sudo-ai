@@ -323,6 +323,11 @@ const EARNING_TOOLS: ToolDefinition[] = [
  * @param registry - The application's central {@link ToolRegistry}.
  */
 export function registerEarningTools(registry: ToolRegistry): void {
+  // Persona/business tools are quarantined by default (SUDO_ENABLE_PERSONA_TOOLS=1).
+  if (process.env['SUDO_ENABLE_PERSONA_TOOLS'] !== '1') {
+    logger.info('Earning tools quarantined — set SUDO_ENABLE_PERSONA_TOOLS=1 to enable');
+    return;
+  }
   logger.info({ count: EARNING_TOOLS.length }, 'Registering earning tools');
   for (const tool of EARNING_TOOLS) {
     registry.register(tool);

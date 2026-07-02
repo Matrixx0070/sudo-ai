@@ -678,6 +678,18 @@ export const LEGACY_DUPLICATE_META_TOOLS = new Set([
 ]);
 
 /**
+ * Content-creator / business "persona" meta tools — quarantined by default so
+ * they don't clutter the agent's tool menu for operators who don't run those
+ * workflows. Set SUDO_ENABLE_PERSONA_TOOLS=1 to register them (also enables the
+ * business/earning/finance builtin tool dirs).
+ */
+export const PERSONA_META_TOOLS = new Set([
+  'meta.finance', 'meta.youtube-feedback', 'meta.comments', 'meta.thumbnail-ab',
+  'meta.sponsors', 'meta.event-daemon', 'meta.creative', 'meta.competitor',
+  'meta.localizer', 'meta.avatar',
+]);
+
+/**
  * Register all meta/platform tools with the given registry.
  * Called automatically by the built-in tool loader.
  *
@@ -685,9 +697,10 @@ export const LEGACY_DUPLICATE_META_TOOLS = new Set([
  */
 export function registerMetaTools(registry: ToolRegistry): void {
   const legacyEnabled = process.env['SUDO_ENABLE_LEGACY_META_TOOLS'] === '1';
-  const tools = legacyEnabled
-    ? META_TOOLS
-    : META_TOOLS.filter((t) => !LEGACY_DUPLICATE_META_TOOLS.has(t.name));
+  const personaEnabled = process.env['SUDO_ENABLE_PERSONA_TOOLS'] === '1';
+  const tools = META_TOOLS.filter((t) =>
+    (legacyEnabled || !LEGACY_DUPLICATE_META_TOOLS.has(t.name)) &&
+    (personaEnabled || !PERSONA_META_TOOLS.has(t.name)));
   const skipped = META_TOOLS.length - tools.length;
   logger.info({ count: tools.length, skippedLegacy: skipped }, 'Registering meta tools');
   for (const tool of tools) {

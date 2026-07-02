@@ -619,6 +619,11 @@ const BUSINESS_TOOLS: ToolDefinition[] = [
  * @param registry - The application's central {@link ToolRegistry}.
  */
 export function registerBusinessTools(registry: ToolRegistry): void {
+  // Persona/business tools are quarantined by default (SUDO_ENABLE_PERSONA_TOOLS=1).
+  if (process.env['SUDO_ENABLE_PERSONA_TOOLS'] !== '1') {
+    logger.info('Business tools quarantined — set SUDO_ENABLE_PERSONA_TOOLS=1 to enable');
+    return;
+  }
   logger.info({ count: BUSINESS_TOOLS.length }, 'Registering business tools');
   for (const tool of BUSINESS_TOOLS) {
     registry.register(tool);

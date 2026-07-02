@@ -459,6 +459,11 @@ const FINANCE_TOOLS: ToolDefinition[] = [
  * @param registry - The application's central {@link ToolRegistry}.
  */
 export function registerFinanceTools(registry: ToolRegistry): void {
+  // Persona/business tools are quarantined by default (SUDO_ENABLE_PERSONA_TOOLS=1).
+  if (process.env['SUDO_ENABLE_PERSONA_TOOLS'] !== '1') {
+    logger.info('Finance tools quarantined — set SUDO_ENABLE_PERSONA_TOOLS=1 to enable');
+    return;
+  }
   logger.info({ count: FINANCE_TOOLS.length }, 'Registering finance tools');
   for (const tool of FINANCE_TOOLS) {
     registry.register(tool);
