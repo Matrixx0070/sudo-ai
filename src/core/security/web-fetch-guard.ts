@@ -16,10 +16,15 @@
  * to SSRF targets are blocked with SSRFBlockedRedirectError.
  */
 
+import type { Dispatcher } from 'undici';
 import { createLogger } from '../shared/logger.js';
 import { validateDomain } from './domain-validator.js';
+import { getPinnedDispatcher, isDnsPinningEnabled } from './ssrf-dns-pin.js';
 
 const log = createLogger('security:web-fetch');
+
+/** `RequestInit` plus undici's non-standard `dispatcher` option (Node global fetch). */
+type UndiciRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -120,7 +125,14 @@ export async function safeFetch(url: string, options?: RequestInit): Promise<Res
 
   // Force manual redirect handling so we can inspect and re-validate
   // every Location header before following it.
-  const fetchOptions: RequestInit = { ...options, redirect: 'manual' };
+  const fetchOptions: UndiciRequestInit = { ...options, redirect: 'manual' };
+
+  // DNS-pin the socket to a validated address so a hostname that passes the
+  // string check cannot rebind to a private/metadata IP at connect time.
+  // Skipped if the caller supplied its own dispatcher or pinning is disabled.
+  if (isDnsPinningEnabled() && !(options as UndiciRequestInit | undefined)?.dispatcher) {
+    fetchOptions.dispatcher = getPinnedDispatcher();
+  }
 
   let currentUrl = url;
   let hops = 0;

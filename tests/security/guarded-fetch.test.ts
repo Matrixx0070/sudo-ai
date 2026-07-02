@@ -63,9 +63,26 @@ describe('guarded-fetch: toolFetch', () => {
     expect(out).toBe(resp);
     expect(spy).toHaveBeenCalledTimes(1);
     // safeFetch forces manual redirect handling; the caller's options survive.
-    const [, passedInit] = spy.mock.calls[0] as [string, RequestInit];
+    const [, passedInit] = spy.mock.calls[0] as [string, RequestInit & { dispatcher?: unknown }];
     expect(passedInit.method).toBe('POST');
     expect(passedInit.redirect).toBe('manual');
+    // DNS pinning is on by default → a pinned dispatcher is attached.
+    expect(passedInit.dispatcher).toBeDefined();
+  });
+
+  it('omits the pinned dispatcher when SUDO_SSRF_DNS_PIN=0', async () => {
+    const prevPin = process.env['SUDO_SSRF_DNS_PIN'];
+    process.env['SUDO_SSRF_DNS_PIN'] = '0';
+    try {
+      const spy = vi.fn(async () => new Response('ok', { status: 200 }));
+      globalThis.fetch = spy as unknown as typeof fetch;
+      await toolFetch('https://api.example.com/thing');
+      const [, passedInit] = spy.mock.calls[0] as [string, RequestInit & { dispatcher?: unknown }];
+      expect(passedInit.dispatcher).toBeUndefined();
+    } finally {
+      if (prevPin === undefined) delete process.env['SUDO_SSRF_DNS_PIN'];
+      else process.env['SUDO_SSRF_DNS_PIN'] = prevPin;
+    }
   });
 
   it('bypasses the guard when SUDO_TOOL_FETCH_GUARD_DISABLE=1', async () => {
