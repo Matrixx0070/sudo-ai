@@ -10,7 +10,7 @@
  *   2. Tool definitions are serialized in arrival order, which varies with
  *      per-message tool routing.
  *
- * When SUDO_PROMPT_CACHE=1 (default OFF, fail-open):
+ * When prompt cache is enabled (default ON; SUDO_PROMPT_CACHE=0 disables; fail-open):
  *   - assembleSystemPrompt moves the timestamp block below the boundary, and
  *     sorts the tools list deterministically.
  *   - Brain sorts tool definitions by name before serialization.
@@ -24,9 +24,10 @@
 /** Marker separating the stable system-prompt prefix from per-call dynamic content. */
 export const DYNAMIC_BOUNDARY_MARKER = '<!-- __SYSTEM_PROMPT_DYNAMIC_BOUNDARY__ -->';
 
-/** Flag check at call time (not module load) so tests can toggle the env. */
+/** Flag check at call time (not module load) so tests can toggle the env.
+ *  Default ON (matches the prod ecosystem config); SUDO_PROMPT_CACHE=0 disables. */
 export function isPromptCacheEnabled(): boolean {
-  return process.env['SUDO_PROMPT_CACHE'] === '1';
+  return process.env['SUDO_PROMPT_CACHE'] !== '0';
 }
 
 /** Explicit Anthropic cache_control breakpoints (B2), on by default under the master flag. */

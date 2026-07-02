@@ -1619,14 +1619,15 @@ export async function prepareMessages(
     }
   }
 
-  // TIER 1 — Two-tier compaction (gap #14, opt-in SUDO_TWO_TIER_COMPACT=1):
+  // TIER 1 — Two-tier compaction (gap #14, default ON; SUDO_TWO_TIER_COMPACT=0 disables):
   // zero-cost, role-aware microcompact runs BEFORE the LLM-based LAYER 1 so
   // we skip the paid round-trip when shrinking middle tool outputs is enough
-  // to fall back below shouldCompact's threshold. Default OFF, fail-open.
+  // to fall back below shouldCompact's threshold. Default ON (matches the prod
+  // ecosystem config); SUDO_TWO_TIER_COMPACT=0 disables. Fail-open.
   // LAYER 1's existing shouldCompact() check re-runs against the trimmed
   // history, so a sufficient TIER 1 pass naturally suppresses LAYER 1.
   if (
-    process.env['SUDO_TWO_TIER_COMPACT'] === '1' &&
+    process.env['SUDO_TWO_TIER_COMPACT'] !== '0' &&
     shouldCompact(session.messages as Array<{ content: string }>)
   ) {
     try {

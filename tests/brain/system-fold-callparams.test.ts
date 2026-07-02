@@ -100,7 +100,8 @@ describe('Brain callParams — system folding', () => {
 
   beforeEach(() => {
     for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
-    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-test'; // so getModel resolves; no SUDO_PROMPT_CACHE → non-cache path
+    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-test'; // so getModel resolves
+    process.env['SUDO_PROMPT_CACHE'] = '0'; // non-cache path (cache is now default-ON; unset no longer disables)
     AuthProfileRotation.resetInstance();
     generateTextMock.mockReset();
     generateTextMock.mockResolvedValue(okResult());

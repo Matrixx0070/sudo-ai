@@ -85,6 +85,9 @@ describe('Brain callParams construction under SUDO_PROMPT_CACHE', () => {
       saved[k] = process.env[k];
       delete process.env[k];
     }
+    // Prompt cache is now default-ON; "flag off" cases select the off path
+    // explicitly (unsetting no longer disables). On-path tests set '1'.
+    process.env['SUDO_PROMPT_CACHE'] = '0';
     AuthProfileRotation.resetInstance();
     generateTextMock.mockReset();
     warnSpy.mockClear();

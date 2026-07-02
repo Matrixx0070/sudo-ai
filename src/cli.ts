@@ -585,9 +585,10 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   const sessionManager = new SessionManager(db);
   const journalStore = new JournalSessionStore();
-  // gap #17 — opt-in journal-first save ordering + boot-time interrupted-turn scan.
-  // Default OFF: behaviour byte-identical to the pre-gap-#17 SQLite-first path.
-  const crashSafe = process.env['SUDO_CRASH_SAFE'] === '1';
+  // gap #17 — journal-first save ordering + boot-time interrupted-turn scan.
+  // Default ON (matches the prod ecosystem config); SUDO_CRASH_SAFE=0 restores
+  // the pre-gap-#17 SQLite-first path.
+  const crashSafe = process.env['SUDO_CRASH_SAFE'] !== '0';
   const dualSessionManager = new DualSessionManager(sessionManager, journalStore, { crashSafe });
   log.info({ crashSafe }, 'SessionManager initialized');
   if (crashSafe) {
@@ -1543,8 +1544,8 @@ async function boot(): Promise<void> {
         // sender's DM. peerId stays the session/queue/memory key below.
         const replyTo = msg.chatId ?? msg.peerId;
         // Hoisted out of the try-block so the outer catch can cancel it
-        // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=1 is unset this
-        // stays null and the byte-identical pre-PR send path runs.
+        // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=0 this stays null
+        // and the byte-identical non-streaming send path runs.
         let streamSink: { chunk(t: string): void; finalize(t: string): Promise<void>; cancel(): Promise<void> } | null = null;
         try {
           const convKey = `${msg.channel}:${msg.peerId}`;
@@ -1562,16 +1563,16 @@ async function boot(): Promise<void> {
             }
           }
 
-          // gap #19 — streamed agent loop on Telegram. Opt-in
-          // SUDO_STREAM_CHANNELS=1. Creates a placeholder message that gets
-          // edited in place as `stream-chunk` events fire, then a final
-          // edit with the canonical replyText. Fail-open: sink construction
-          // errors fall through to the normal send path.
+          // gap #19 — streamed agent loop on Telegram. Default ON (matches the
+          // prod ecosystem config); SUDO_STREAM_CHANNELS=0 disables. Creates a
+          // placeholder message that gets edited in place as `stream-chunk`
+          // events fire, then a final edit with the canonical replyText.
+          // Fail-open: sink construction errors fall through to the normal send.
           // Use the real AgentEventHandler signature — `ev.chunk` is non-
           // optional on the 'stream-chunk' variant of the discriminated
           // union and the narrow is what we filter on (verifier HIGH #1).
           let onEvent: import('./core/agent/types.js').AgentEventHandler | undefined;
-          if (process.env['SUDO_STREAM_CHANNELS'] === '1') {
+          if (process.env['SUDO_STREAM_CHANNELS'] !== '0') {
             try {
               const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
               streamSink = await createBufferedEditSink(
@@ -1716,11 +1717,12 @@ async function boot(): Promise<void> {
         }
       });
 
-    // Burst debounce/coalesce + foreground-reply fence (opt-in: SUDO_MSG_COALESCE=1;
-    // idle window via SUDO_MSG_COALESCE_MS, default 1000 ms, 0 = flush on next tick).
+    // Burst debounce/coalesce + foreground-reply fence. Default ON (matches the
+    // prod ecosystem config); SUDO_MSG_COALESCE=0 disables. Idle window via
+    // SUDO_MSG_COALESCE_MS, default 1000 ms, 0 = flush on next tick.
     // handleTelegramTurn rejections propagate so the coalescer logs real failures.
     const coalesceWindowMs = Number(process.env['SUDO_MSG_COALESCE_MS']);
-    const telegramCoalescer = process.env['SUDO_MSG_COALESCE'] === '1'
+    const telegramCoalescer = process.env['SUDO_MSG_COALESCE'] !== '0'
       ? new MessageCoalescer({
           deliver: handleTelegramTurn,
           ...(process.env['SUDO_MSG_COALESCE_MS'] !== undefined && Number.isFinite(coalesceWindowMs) && coalesceWindowMs >= 0
