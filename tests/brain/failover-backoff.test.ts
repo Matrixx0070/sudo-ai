@@ -4,7 +4,7 @@
  * plus the structured error taxonomy classifier and Brain's Retry-After parsing.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ModelFailover } from '../../src/core/brain/failover.js';
 import { Brain } from '../../src/core/brain/brain.js';
 import { TRANSIENT_COOLDOWN, AUTH_COOLDOWN } from '../../src/core/shared/constants.js';
@@ -15,6 +15,18 @@ const BASE = TRANSIENT_COOLDOWN[0]; // 5000ms
 function fresh(): ModelFailover {
   return new ModelFailover([MODEL]);
 }
+
+// Freeze the clock so cooldown math is exact: recordError stores
+// `cooldownUntil = Date.now() + cooldownMs` and getCooldownRemaining subtracts
+// Date.now() again — with real time the elapsed gap (worse under CPU load) made
+// the ±100ms window assertions flaky. Frozen time → remaining === cooldownMs.
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('Phase B: failover backoff hardening', () => {
   describe('jitter', () => {
