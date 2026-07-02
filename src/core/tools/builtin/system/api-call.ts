@@ -9,6 +9,7 @@
 
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const log = createLogger('system:api-call');
 
@@ -166,7 +167,7 @@ export const apiCallTool: ToolDefinition = {
     const startMs = Date.now();
     let response: Response;
     try {
-      response = await fetch(url, fetchOptions);
+      response = await toolFetch(url, fetchOptions);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isTimeout = msg.toLowerCase().includes('timeout') ||

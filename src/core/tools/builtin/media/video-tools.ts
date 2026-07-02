@@ -9,6 +9,7 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult, ToolArtifact } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { ensureDir, missingKey } from './helpers.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('media-video');
 const execFileAsync = promisify(execFile);
@@ -144,14 +145,14 @@ export const videoGenerateTool: ToolDefinition = {
         if (!apiKey) return missingKey('LUMA_API_KEY', 'media.video-generate');
         const body: Record<string, unknown> = { prompt, aspect_ratio: '9:16' };
         if (imageUrl) body['keyframes'] = { frame0: { type: 'image', url: imageUrl } };
-        const genRes = await fetch('https://api.lumalabs.ai/dream-machine/v1/generations', {
+        const genRes = await toolFetch('https://api.lumalabs.ai/dream-machine/v1/generations', {
           method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           signal: ctx.signal, body: JSON.stringify(body),
         });
         if (!genRes.ok) throw new Error(`Luma API error ${genRes.status}: ${(await genRes.text()).slice(0, 200)}`);
         const gen = await genRes.json() as { id: string; state?: string; assets?: { video?: string } };
         videoUrl = await pollForUrl(async () => {
-          const r = await fetch(`https://api.lumalabs.ai/dream-machine/v1/generations/${gen.id}`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: ctx.signal });
+          const r = await toolFetch(`https://api.lumalabs.ai/dream-machine/v1/generations/${gen.id}`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: ctx.signal });
           const d = await r.json() as typeof gen;
           return { done: d.state === 'completed', url: d.assets?.video, failed: d.state === 'failed' };
         }, 48, 5000, ctx.signal);
@@ -161,14 +162,14 @@ export const videoGenerateTool: ToolDefinition = {
         if (!apiKey) return missingKey('RUNWAY_API_KEY', 'media.video-generate');
         const body: Record<string, unknown> = { promptText: prompt, duration: durationSeconds, ratio: '768:1280', model: 'gen3a_turbo' };
         if (imageUrl) body['promptImage'] = imageUrl;
-        const genRes = await fetch('https://api.dev.runwayml.com/v1/image_to_video', {
+        const genRes = await toolFetch('https://api.dev.runwayml.com/v1/image_to_video', {
           method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Runway-Version': '2024-11-06' },
           signal: ctx.signal, body: JSON.stringify(body),
         });
         if (!genRes.ok) throw new Error(`Runway error ${genRes.status}: ${(await genRes.text()).slice(0, 200)}`);
         const task = await genRes.json() as { id: string; status?: string; output?: string[] };
         videoUrl = await pollForUrl(async () => {
-          const r = await fetch(`https://api.dev.runwayml.com/v1/tasks/${task.id}`, { headers: { Authorization: `Bearer ${apiKey}`, 'X-Runway-Version': '2024-11-06' }, signal: ctx.signal });
+          const r = await toolFetch(`https://api.dev.runwayml.com/v1/tasks/${task.id}`, { headers: { Authorization: `Bearer ${apiKey}`, 'X-Runway-Version': '2024-11-06' }, signal: ctx.signal });
           const d = await r.json() as typeof task;
           return { done: d.status === 'SUCCEEDED', url: d.output?.[0], failed: d.status === 'FAILED' };
         }, 48, 5000, ctx.signal);
@@ -176,7 +177,7 @@ export const videoGenerateTool: ToolDefinition = {
       } else if (provider === 'kling') {
         const apiKey = process.env['KLING_API_KEY'];
         if (!apiKey) return missingKey('KLING_API_KEY', 'media.video-generate');
-        const genRes = await fetch('https://api.klingai.com/v1/videos/text2video', {
+        const genRes = await toolFetch('https://api.klingai.com/v1/videos/text2video', {
           method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           signal: ctx.signal, body: JSON.stringify({ prompt, cfg_scale: 0.5, mode: 'std', duration: String(durationSeconds) }),
         });
@@ -185,7 +186,7 @@ export const videoGenerateTool: ToolDefinition = {
         const taskId = task.data?.task_id;
         if (!taskId) throw new Error('Kling: no task_id in response.');
         videoUrl = await pollForUrl(async () => {
-          const r = await fetch(`https://api.klingai.com/v1/videos/text2video/${taskId}`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: ctx.signal });
+          const r = await toolFetch(`https://api.klingai.com/v1/videos/text2video/${taskId}`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: ctx.signal });
           const d = await r.json() as { data?: { task_status: string; task_result?: { videos?: Array<{ url: string }> } } };
           return { done: d.data?.task_status === 'succeed', url: d.data?.task_result?.videos?.[0]?.url, failed: d.data?.task_status === 'failed' };
         }, 48, 5000, ctx.signal);
@@ -195,7 +196,7 @@ export const videoGenerateTool: ToolDefinition = {
       }
 
       ensureDir(path.dirname(outputPath));
-      const vidRes = await fetch(videoUrl, { signal: ctx.signal });
+      const vidRes = await toolFetch(videoUrl, { signal: ctx.signal });
       if (!vidRes.ok) throw new Error(`Failed to download video: ${vidRes.status}`);
       const vidBuf = Buffer.from(await vidRes.arrayBuffer());
       writeFileSync(outputPath, vidBuf);

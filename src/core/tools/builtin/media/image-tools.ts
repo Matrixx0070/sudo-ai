@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult, ToolArtifact } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { ensureDir, missingKey } from './helpers.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('media-image');
 
@@ -45,7 +46,7 @@ export const imageGenerateTool: ToolDefinition = {
       if (provider === 'dalle') {
         const apiKey = process.env['OPENAI_API_KEY'];
         if (!apiKey) return missingKey('OPENAI_API_KEY', 'media.image-generate');
-        const res = await fetch('https://api.openai.com/v1/images/generations', {
+        const res = await toolFetch('https://api.openai.com/v1/images/generations', {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           signal: ctx.signal,
@@ -61,7 +62,7 @@ export const imageGenerateTool: ToolDefinition = {
         const apiKey = process.env['STABILITY_API_KEY'];
         if (!apiKey) return missingKey('STABILITY_API_KEY', 'media.image-generate');
         const [w, h] = size.split('x').map(Number);
-        const res = await fetch('https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image', {
+        const res = await toolFetch('https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image', {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
           signal: ctx.signal,
@@ -76,7 +77,7 @@ export const imageGenerateTool: ToolDefinition = {
       } else if (provider === 'flux') {
         const apiKey = process.env['FLUX_API_KEY'];
         if (!apiKey) return missingKey('FLUX_API_KEY', 'media.image-generate');
-        const genRes = await fetch('https://api.bfl.ml/v1/flux-pro-1.1', {
+        const genRes = await toolFetch('https://api.bfl.ml/v1/flux-pro-1.1', {
           method: 'POST',
           headers: { 'x-key': apiKey, 'Content-Type': 'application/json' },
           signal: ctx.signal,
@@ -85,7 +86,7 @@ export const imageGenerateTool: ToolDefinition = {
         if (!genRes.ok) throw new Error(`Flux API error ${genRes.status}: ${(await genRes.text()).slice(0, 200)}`);
         const json = await genRes.json() as { sample?: string };
         if (!json.sample) throw new Error('Flux API returned no image URL.');
-        const imgRes = await fetch(json.sample, { signal: ctx.signal });
+        const imgRes = await toolFetch(json.sample, { signal: ctx.signal });
         imageBuffer = Buffer.from(await imgRes.arrayBuffer());
 
       } else {
@@ -173,7 +174,7 @@ export const imageEditAdvancedTool: ToolDefinition = {
           const formData = new FormData();
           formData.append('image_file', new Blob([readFileSync(currentInput)]), path.basename(currentInput));
           formData.append('size', 'auto');
-          const res = await fetch('https://api.remove.bg/v1.0/removebg', { method: 'POST', headers: { 'X-Api-Key': apiKey }, body: formData, signal: ctx.signal });
+          const res = await toolFetch('https://api.remove.bg/v1.0/removebg', { method: 'POST', headers: { 'X-Api-Key': apiKey }, body: formData, signal: ctx.signal });
           if (!res.ok) throw new Error(`remove.bg API error ${res.status}`);
           const tmpPath = output + '.nobg.png';
           writeFileSync(tmpPath, Buffer.from(await res.arrayBuffer()));

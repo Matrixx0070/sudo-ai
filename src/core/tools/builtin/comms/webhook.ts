@@ -10,6 +10,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const log = createLogger('comms:webhook');
 
@@ -49,7 +50,7 @@ async function sendWebhook(
 ): Promise<{ status: number; body: string }> {
   const isBodyMethod = method !== 'GET' && method !== 'DELETE';
 
-  const res = await fetch(url, {
+  const res = await toolFetch(url, {
     method,
     headers: {
       'Content-Type': 'application/json',

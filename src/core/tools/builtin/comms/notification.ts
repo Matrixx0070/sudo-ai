@@ -11,6 +11,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const log = createLogger('comms:notify');
 
@@ -39,7 +40,7 @@ async function dispatchSlack(
   }
 
   try {
-    const res = await fetch('https://slack.com/api/chat.postMessage', {
+    const res = await toolFetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -112,7 +113,7 @@ async function dispatchSms(
     const credentials = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
     const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
 
-    const res = await fetch(url, {
+    const res = await toolFetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Basic ${credentials}`,
@@ -144,7 +145,7 @@ async function dispatchTelegram(
   }
 
   try {
-    const res = await fetch(
+    const res = await toolFetch(
       `https://api.telegram.org/bot${token}/sendMessage`,
       {
         method: 'POST',

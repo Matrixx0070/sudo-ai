@@ -6,6 +6,7 @@ import { readFileSync, statSync } from 'node:fs';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { missingKey } from './helpers.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('social-youtube');
 
@@ -59,7 +60,7 @@ export const youtubeUploadTool: ToolDefinition = {
         status: { privacyStatus, selfDeclaredMadeForKids: madeForKids },
       };
 
-      const initRes = await fetch(
+      const initRes = await toolFetch(
         'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
         {
           method: 'POST',
@@ -84,7 +85,7 @@ export const youtubeUploadTool: ToolDefinition = {
 
       // Step 2: Upload file buffer
       const fileBuffer = readFileSync(videoPath);
-      const uploadRes = await fetch(uploadUrl, {
+      const uploadRes = await toolFetch(uploadUrl, {
         method: 'PUT',
         headers: { 'Content-Type': mimeType, 'Content-Length': String(fileSize) },
         signal: ctx.signal,
@@ -173,7 +174,7 @@ export const youtubeAnalyticsTool: ToolDefinition = {
         maxResults: String(maxResults),
       });
 
-      const res = await fetch(`https://youtubeanalytics.googleapis.com/v2/reports?${qs}`, {
+      const res = await toolFetch(`https://youtubeanalytics.googleapis.com/v2/reports?${qs}`, {
         headers: { Authorization: `Bearer ${oauthToken}`, Accept: 'application/json' },
         signal: ctx.signal,
       });

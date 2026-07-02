@@ -11,6 +11,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const DEFAULT_DOWNLOAD_DIR = 'data/downloads';
 
@@ -67,7 +68,7 @@ export const downloadTool: ToolDefinition = {
         const savePath = resolve(ctx.workingDir, rawSavePath);
         mkdirSync(dirname(savePath), { recursive: true });
 
-        const response = await fetch(url, { signal: ctx.signal });
+        const response = await toolFetch(url, { signal: ctx.signal });
         if (!response.ok) {
           return { success: false, output: `browser.download: HTTP ${response.status} for ${url}` };
         }

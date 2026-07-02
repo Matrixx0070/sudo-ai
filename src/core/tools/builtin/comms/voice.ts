@@ -11,6 +11,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const log = createLogger('comms:voice');
 
@@ -100,7 +101,7 @@ export const voiceTool: ToolDefinition = {
       log.info({ sessionId: ctx.sessionId, voice, absOut, textLength: text.length }, 'TTS request');
 
       try {
-        const res = await fetch(ttsProvider.url, {
+        const res = await toolFetch(ttsProvider.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
           body: JSON.stringify({ model: ttsProvider.model, input: text, voice }),
@@ -154,7 +155,7 @@ export const voiceTool: ToolDefinition = {
       formData.append('model', sttProvider.model);
       formData.append('file', new Blob([audioBuf], { type: 'audio/mpeg' }), path.basename(audioPath));
 
-      const res = await fetch(sttProvider.url, {
+      const res = await toolFetch(sttProvider.url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${sttApiKey}` },
         body: formData,

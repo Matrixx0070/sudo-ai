@@ -9,6 +9,7 @@
 
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('browser.fetch');
 
@@ -81,7 +82,7 @@ export const fetchUrlTool: ToolDefinition = {
     }
 
     try {
-      const response = await fetch(parsedUrl.href, {
+      const response = await toolFetch(parsedUrl.href, {
         signal: controller.signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; SUDO-AI/4.0)',

@@ -10,6 +10,7 @@ import type { ToolDefinition, ToolContext, ToolResult, ToolArtifact } from '../.
 import { createLogger } from '../../../shared/logger.js';
 import { ensureDir, missingKey } from './helpers.js';
 import { imageGenerateTool } from './image-tools.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('media-factory');
 const execFileAsync = promisify(execFile);
@@ -80,7 +81,7 @@ export const shortsFactoryTool: ToolDefinition = {
 
       // Step 2: Generate voiceover via OpenAI TTS
       const audioPath = path.join(tmpDir, `shorts_audio_${Date.now()}.mp3`);
-      const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+      const ttsRes = await toolFetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         signal: ctx.signal,

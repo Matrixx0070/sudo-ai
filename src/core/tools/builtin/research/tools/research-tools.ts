@@ -13,6 +13,7 @@ import {
   stripHtml,
   type PaperEntry,
 } from '../helpers.js';
+import { toolFetch } from '../../../../security/guarded-fetch.js';
 
 const logger = createLogger('research-builtin');
 
@@ -26,7 +27,7 @@ const logger = createLogger('research-builtin');
 async function fetchArxivAbstractById(arxivId: string): Promise<string> {
   try {
     const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}&max_results=1`;
-    const res = await fetch(url, {
+    const res = await toolFetch(url, {
       signal: AbortSignal.timeout(20_000),
       headers: { Accept: 'application/atom+xml' },
     });
@@ -352,7 +353,7 @@ const DDG_URL = 'https://html.duckduckgo.com/html/';
 
 async function searchSnippets(query: string): Promise<string[]> {
   try {
-    const res = await fetch(`${DDG_URL}?q=${encodeURIComponent(query)}&kl=us-en`, {
+    const res = await toolFetch(`${DDG_URL}?q=${encodeURIComponent(query)}&kl=us-en`, {
       signal: AbortSignal.timeout(15_000),
       headers: { 'User-Agent': 'Mozilla/5.0 SUDO-AI/4.0', Accept: 'text/html' },
     });
