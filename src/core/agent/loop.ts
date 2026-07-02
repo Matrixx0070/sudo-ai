@@ -1762,6 +1762,45 @@ export class AgentLoop extends AgentLoopInjections {
       while (state.iteration < maxIterations) {
         state.iteration++;
 
+        // Steering: honor an in-process abort/inject/reprioritize at the safe
+        // iteration boundary (before the next model call). check→act→clear.
+        if (this._steeringChannel) {
+          const sig = this._steeringChannel.checkSteering(state.sessionId);
+          if (sig) {
+            this._steeringChannel.clearSteering(state.sessionId);
+            if (sig.action === 'abort') {
+              const reason = (sig.payload ?? '').trim();
+              const abortMsg = reason
+                ? `Turn aborted by steering signal: ${reason}`
+                : 'Turn aborted by steering signal.';
+              log.info(
+                { sessionId: state.sessionId, iteration: state.iteration },
+                'Steering: abort requested — stopping cleanly at iteration boundary',
+              );
+              // Mirror the loop-guard/doom-loop abort sites: surface the stop to
+              // the caller (event + assistant text) so it's not an indistinguishable
+              // empty `done`.
+              emit({ type: 'error', error: abortMsg });
+              session.messages.push({ role: 'system', content: `[STEERING — ABORT]\n${abortMsg}` });
+              finalText = abortMsg;
+              session.messages.push({ role: 'assistant', content: finalText });
+              break;
+            }
+            const payload = (sig.payload ?? '').trim();
+            if (payload) {
+              const label = sig.action === 'reprioritize' ? 'REPRIORITIZE' : 'INJECTED CONTEXT';
+              session.messages.push({
+                role: 'system',
+                content: `[STEERING — ${label}]\n${payload}`,
+              });
+              log.info(
+                { sessionId: state.sessionId, iteration: state.iteration, action: sig.action },
+                'Steering: mid-run guidance injected',
+              );
+            }
+          }
+        }
+
         // Proactive session message trim — prevents unbounded growth in long sessions.
         trimSessionMessages(session, state);
 

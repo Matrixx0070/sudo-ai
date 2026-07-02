@@ -39,6 +39,7 @@ import type { ToolOutcomeLearner } from './tool-outcome-learner.js';
 import type { VerifyGateLike, CriticPassLike } from './loop-helpers.js';
 import type { FeedbackMemory } from '../self-improvement/feedback-memory.js';
 import type { AlignmentEngine } from '../alignment/alignment-engine.js';
+import type { SteeringChannel } from './steering.js';
 
 const log = createLogger('agent:loop:injections');
 
@@ -65,6 +66,21 @@ export abstract class AgentLoopInjections {
   protected _criticPass?: CriticPassLike;
   protected _feedbackMemory?: FeedbackMemory;
   protected _alignmentEngine?: AlignmentEngine;
+  protected _steeringChannel?: SteeringChannel;
+
+  /**
+   * Wire a steering channel so an in-process caller can abort/inject/reprioritize
+   * a running turn. The loop polls it at each iteration boundary. Fail-open if
+   * the duck-type doesn't match.
+   */
+  setSteeringChannel(c: SteeringChannel): void {
+    if (c && typeof c.checkSteering === 'function' && typeof c.clearSteering === 'function') {
+      this._steeringChannel = c;
+      log.info('AgentLoop: steering channel attached');
+    } else {
+      log.warn('AgentLoop: setSteeringChannel: invalid duck-type — ignoring');
+    }
+  }
 
   /** Wire a Predictor for opt-in anticipatory injection (SUDO_PREDICTOR_LOOP). Fail-open if duck-type mismatch. */
   setPredictor(p: PredictorLike): void {
