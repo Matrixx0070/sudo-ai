@@ -25,7 +25,10 @@ let savedKill: string | undefined;
 beforeEach(() => {
   saved = process.env[FLAG];
   savedKill = process.env[KILL_SWITCH];
-  delete process.env[FLAG];
+  // Prompt cache is now default-ON; the "flag off" cases here select the off
+  // path explicitly via '0' (unsetting no longer disables). Tests that need it
+  // on override with '1'.
+  process.env[FLAG] = '0';
   delete process.env[KILL_SWITCH];
 });
 afterEach(() => {
@@ -36,17 +39,21 @@ afterEach(() => {
 });
 
 describe('isPromptCacheEnabled', () => {
-  it('is off by default and requires exact "1"', () => {
-    expect(isPromptCacheEnabled()).toBe(false);
-    process.env[FLAG] = 'true';
-    expect(isPromptCacheEnabled()).toBe(false);
+  it('is ON by default; only SUDO_PROMPT_CACHE=0 disables', () => {
+    delete process.env[FLAG];
+    expect(isPromptCacheEnabled()).toBe(true);
     process.env[FLAG] = '1';
     expect(isPromptCacheEnabled()).toBe(true);
+    process.env[FLAG] = '0';
+    expect(isPromptCacheEnabled()).toBe(false);
   });
 });
 
 describe('isCacheBreakpointsEnabled', () => {
-  it('requires the master flag', () => {
+  it('follows the master flag (ON by default), off when master is disabled', () => {
+    delete process.env[FLAG];
+    expect(isCacheBreakpointsEnabled()).toBe(true);
+    process.env[FLAG] = '0';
     expect(isCacheBreakpointsEnabled()).toBe(false);
     process.env[FLAG] = '1';
     expect(isCacheBreakpointsEnabled()).toBe(true);
