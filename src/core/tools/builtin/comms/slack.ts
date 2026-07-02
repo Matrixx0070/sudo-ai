@@ -11,6 +11,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const log = createLogger('comms:slack');
 
@@ -28,7 +29,7 @@ async function slackPost(
   body: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${SLACK_API}/${endpoint}`, {
+  const res = await toolFetch(`${SLACK_API}/${endpoint}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -56,7 +57,7 @@ async function slackGet(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const qs = new URLSearchParams(params).toString();
-  const res = await fetch(`${SLACK_API}/${endpoint}?${qs}`, {
+  const res = await toolFetch(`${SLACK_API}/${endpoint}?${qs}`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
     signal,

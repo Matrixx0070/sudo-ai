@@ -12,6 +12,7 @@
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { execSync } from 'node:child_process';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('browser.search');
 
@@ -41,7 +42,7 @@ async function searchViaBrave(query: string, maxResults: number): Promise<Search
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const res = await fetch(url, {
+    const res = await toolFetch(url, {
       signal: controller.signal,
       headers: {
         'Accept': 'application/json',
@@ -159,7 +160,7 @@ async function searchViaDdgHtml(query: string, maxResults: number): Promise<Sear
 
   let html: string;
   try {
-    const res = await fetch(url, {
+    const res = await toolFetch(url, {
       signal: controller.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0',
