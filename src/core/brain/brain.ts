@@ -1973,10 +1973,77 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // `.lastError` (RetryError), or inside an `.errors[]` array. Walking all of
     // them means a buried 401 is recovered instead of defaulting to 500 — the
     // bug that made a dead OAuth token look like a transient "overloaded" blip.
+    const nodes = Brain._collectErrorNodes(err);
+
+    // Prefer the most specific status: a concrete non-500 code from any node
+    // wins over a missing/500 one. Pair `body` with the node whose status won
+    // (BUG-10-02): a later status-winner with no body of its own must not keep
+    // an earlier, unrelated node's body — that logs a misleading status/body mix.
+    let status: number | undefined;
+    let statusBody: string | undefined; // body from the status-winning node
+    let fallbackBody: string | undefined; // first body seen, used only when no status node exists
+    let numericStatusFound = false;
+    for (const obj of nodes) {
+      const s = (obj['statusCode'] as number | undefined) ?? (obj['status'] as number | undefined);
+      const b = (obj['responseBody'] as string | undefined) ?? (obj['message'] as string | undefined);
+      if (typeof s === 'number' && (status === undefined || (status === 500 && s !== 500))) {
+        status = s;
+        statusBody = b; // pair with the trusted node (may be undefined)
+        numericStatusFound = true;
+      }
+      if (!fallbackBody && b) fallbackBody = b;
+    }
+
+    // Signature scan for auth (401): a streamed auth failure can surface with a
+    // MISLEADING outer status (a wrapper's 400/429, or a 500) while the real
+    // cause named in the text is an auth error. Run this UNCONDITIONALLY
+    // (BUG-10-01): 401 maps to a *recoverable* AUTH cooldown in failover, so
+    // parking there behind a misleading status is the correct, reversible action.
+    const hay = nodes
+      .map((o) => `${String(o['responseBody'] ?? '')} ${String(o['message'] ?? '')}`)
+      .join(' ')
+      .toLowerCase();
+    if (/authentication_error|invalid bearer token|invalid[_ ]api[_ ]key|invalid x-api-key|invalid_grant|oauth token (?:expired|invalid)/.test(hay)) {
+      status = 401;
+    } else if (
+      // Permission (403) is DIFFERENT: it maps to auth_permanent → the failover
+      // profile is disabled PERMANENTLY, not cooled down. So we do NOT upgrade
+      // unconditionally — that would let an incidental "permission_error" string
+      // echoed in tool output permanently kill a model. Only upgrade when we
+      // have no trustworthy concrete status AND the structured JSON error shape
+      // (`"type":"permission_error"`) is present, not a bare substring.
+      (status === undefined || status === 500) &&
+      /"type"\s*:\s*"permission_error"/.test(hay)
+    ) {
+      status = 403;
+    }
+
+    // If a node carried a numeric status, its own body is authoritative — even
+    // when absent — so we never mislabel an unrelated node's body with the
+    // winning status (BUG-10-02). Only when NO numeric-status node exists (e.g.
+    // a signature-only auth match) do we fall back to the first body seen, which
+    // is the text that named the cause.
+    const body = numericStatusFound ? statusBody : fallbackBody;
+
+    return { status: status ?? 500, body, retryAfterMs: Brain._extractRetryAfter(err) };
+  }
+
+  /**
+   * Walk the SDK's error wrapping (`cause`, `lastError`, `errors[]`) and return
+   * every object node, deepest-first traversal, cycle-safe. Shared by
+   * extractErrorDetails and _extractRetryAfter so both see the same nodes —
+   * previously _extractRetryAfter skipped `.cause` and missed Retry-After
+   * headers on the streamText path (BUG-10-03). Chains deeper than the limit
+   * are logged rather than silently truncated (BUG-10-06).
+   */
+  private static _collectErrorNodes(err: unknown): Record<string, unknown>[] {
+    const MAX_DEPTH = 6;
     const nodes: Record<string, unknown>[] = [];
     const seen = new Set<unknown>();
+    let truncated = false;
     const visit = (e: unknown, depth: number): void => {
-      if (!e || typeof e !== 'object' || seen.has(e) || depth > 6) return;
+      if (!e || typeof e !== 'object' || seen.has(e)) return;
+      if (depth > MAX_DEPTH) { truncated = true; return; }
       seen.add(e);
       const obj = e as Record<string, unknown>;
       nodes.push(obj);
@@ -1986,38 +2053,10 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       if (Array.isArray(errs)) for (const inner of errs) visit(inner, depth + 1);
     };
     visit(err, 0);
-
-    // Prefer the most specific status: a concrete non-500 code from any node
-    // wins over a missing/500 one. Keep the body from the node we trust.
-    let status: number | undefined;
-    let body: string | undefined;
-    for (const obj of nodes) {
-      const s = (obj['statusCode'] as number | undefined) ?? (obj['status'] as number | undefined);
-      const b = (obj['responseBody'] as string | undefined) ?? (obj['message'] as string | undefined);
-      if (typeof s === 'number' && (status === undefined || (status === 500 && s !== 500))) {
-        status = s;
-        if (b) body = b;
-      }
-      if (!body && b) body = b;
+    if (truncated) {
+      log.debug({ nodeCount: nodes.length, maxDepth: MAX_DEPTH }, 'extractErrorDetails: error chain exceeded depth limit — deeper nodes ignored');
     }
-
-    // Signature fallback: a streamed auth failure can surface as a status-less
-    // (or 500-wrapped) error whose text still names the cause. Recover the real
-    // status so failover parks the tier on the long AUTH cooldown instead of
-    // re-hammering a dead credential every minute.
-    if (status === undefined || status === 500) {
-      const hay = nodes
-        .map((o) => `${String(o['responseBody'] ?? '')} ${String(o['message'] ?? '')}`)
-        .join(' ')
-        .toLowerCase();
-      if (/authentication_error|invalid bearer token|invalid[_ ]api[_ ]key|invalid x-api-key|invalid_grant|oauth token (?:expired|invalid)/.test(hay)) {
-        status = 401;
-      } else if (/permission_error/.test(hay)) {
-        status = 403;
-      }
-    }
-
-    return { status: status ?? 500, body, retryAfterMs: Brain._extractRetryAfter(err) };
+    return nodes;
   }
 
   /**
@@ -2026,18 +2065,10 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
    * when no usable Retry-After is present.
    */
   private static _extractRetryAfter(err: unknown): number | undefined {
-    const top = err as Record<string, unknown> | null;
-    if (!top || typeof top !== 'object') return undefined;
-
-    const candidates: Record<string, unknown>[] = [top];
-    const lastError = top['lastError'] as Record<string, unknown> | undefined;
-    if (lastError && typeof lastError === 'object') candidates.push(lastError);
-    const errors = top['errors'] as unknown[] | undefined;
-    if (Array.isArray(errors)) {
-      for (const e of errors) {
-        if (e && typeof e === 'object') candidates.push(e as Record<string, unknown>);
-      }
-    }
+    // Share the full traversal (incl. `.cause`) so a Retry-After header on the
+    // streamText path's nested cause is honored, not just top/lastError/errors[]
+    // (BUG-10-03).
+    const candidates = Brain._collectErrorNodes(err);
 
     for (const c of candidates) {
       const headers = (c['responseHeaders'] ?? c['headers']) as Record<string, unknown> | undefined;
@@ -2056,6 +2087,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         const v = headers[k];
         if (typeof v === 'string') return v;
         if (typeof v === 'number') return String(v);
+        // Node's IncomingHttpHeaders / fetch polyfills can present a value as
+        // string[] — take the first entry rather than dropping it (BUG-10-04).
+        if (Array.isArray(v) && typeof v[0] === 'string') return v[0];
         return undefined;
       }
     }
