@@ -159,3 +159,10 @@ internal/misc/json         # duplicate of the above
 
 # Playwright MCP session artifacts (snapshots, screenshots, console logs)
 .playwright-mcp/
+
+# Aether-tool audit reports (transient CLI output at repo root; regenerable).
+/AETHER_AUDIT*.md
+# Internal review/strategy docs — same LOCAL-only rationale as the working docs
+# above (this is a PUBLIC repo).
+/docs/REVIEW-*.md
+/docs/reviews/

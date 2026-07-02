@@ -61,8 +61,6 @@ import { OutcomesLedger } from './core/autonomy/outcomes.js';
 import { AuditTrail } from './core/security/audit-trail.js';
 import { AutoUpdateManager } from './core/update/update-manager.js';
 import { DEFAULT_UPDATE_CONFIG } from './core/update/update-manager-types.js';
-import { AgentWallet } from './core/economy/wallet.js';
-import { AgentIdentity } from './core/economy/did.js';
 import { AutoDream } from './core/memory/auto-dream.js';
 import { TeammateIdleDetector } from './core/agent/teammate-idle.js';
 import { BackgroundAgentExecutor } from './core/agent/background-agent.js';
@@ -3305,8 +3303,6 @@ async function boot(): Promise<void> {
     const crossChannelMemory = new CrossChannelMemory();
     goalEngine = new GoalEngineV2();
     outcomesLedger = new OutcomesLedger();
-    const agentWallet = new AgentWallet();
-    const agentIdentity = new AgentIdentity('sudo-ai-v5');
     const steeringChannel = new InMemorySteeringChannel();
 
     // Semantic contradiction resolution for dreamed facts (#7, opt-in via
@@ -3387,8 +3383,6 @@ async function boot(): Promise<void> {
     // Suppress unused-variable warnings for modules registered but not yet
     // exposed via their own shutdown hooks.
     void crossChannelMemory;
-    void agentWallet;
-    void agentIdentity;
     void steeringChannel;
 
     // Markdown skill loader — project skills/ (flat .md files plus
@@ -3413,7 +3407,7 @@ async function boot(): Promise<void> {
     registerShutdown(() => outcomesLedger?.close?.());
 
     console.log(
-      `[boot] v5 ready: goals=${goalEngine ? 'ok' : 'no'} wallet=${agentWallet ? 'ok' : 'no'} skills=${mdSkills.length} channels=cross`,
+      `[boot] v5 ready: goals=${goalEngine ? 'ok' : 'no'} skills=${mdSkills.length} channels=cross`,
     );
     log.info(
       { skillCount: mdSkills.length },
