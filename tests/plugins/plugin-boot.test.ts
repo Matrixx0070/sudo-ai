@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { bootPlugins, shutdownPlugins } from '../../src/core/plugins/boot.js';
 import { getPluginHookCount } from '../../src/core/plugins/plugin-hooks.js';
+import { listMcpServers } from '../../src/core/plugins/mcp-registry.js';
 import { PluginState, type PluginManifest } from '../../src/core/plugins/plugin-manifest.js';
 import { HookManager } from '../../src/core/hooks/index.js';
 
@@ -73,6 +74,59 @@ describe('bootPlugins', () => {
     expect(result.loaded).toBe(0);
     expect(result.enabled).toBe(0);
     expect(result.hooksRegistered).toBe(0);
+  });
+
+  it('Phase 0: bridges manifest skills/ dir onto SUDO_SKILLS_DIRS and mcpServers onto the MCP registry', async () => {
+    const id = 'ai.sudo.plugin.caps';
+    const savedSkills = process.env['SUDO_SKILLS_DIRS'];
+    try {
+      const dir = join(pluginsDir, 'caps');
+      writePlugin(dir, makeManifest({
+        id,
+        skills: [{ id: 's1', name: 'Skill One', description: 'a declared skill' }],
+        mcpServers: [{ id: 'srv', command: 'my-mcp-server', args: ['--root', '/p with space'] }],
+      }));
+      // The skill markdown lives in the plugin's own skills/ dir.
+      mkdirSync(join(dir, 'skills'), { recursive: true });
+      writeFileSync(join(dir, 'skills', 's1.md'), '# Skill One\n', 'utf-8');
+
+      const result = await bootPlugins(hooks, pluginsDir);
+
+      // Skills dir appended to the live loader's search path.
+      expect(result.skillRootsAdded).toBe(1);
+      expect((process.env['SUDO_SKILLS_DIRS'] ?? '').split(':')).toContain(join(dir, 'skills'));
+
+      // MCP server registered, namespaced, stdio, unreviewed (tracked not auto-connected).
+      expect(result.mcpServersRegistered).toBe(1);
+      const server = listMcpServers().find((s) => s.name === `${id}:srv`);
+      expect(server).toBeDefined();
+      expect(server!.transport).toBe('stdio');
+      expect(server!.trustTier).toBe('unreviewed');
+      // Launch config encoded in the url; the space-bearing arg is shell-quoted.
+      expect(server!.url).toContain('stdio:my-mcp-server');
+      expect(server!.url).toContain("'/p with space'");
+    } finally {
+      if (savedSkills === undefined) delete process.env['SUDO_SKILLS_DIRS'];
+      else process.env['SUDO_SKILLS_DIRS'] = savedSkills;
+    }
+  });
+
+  it('Phase 0: warns and skips skill wiring when the manifest declares skills but ships no skills/ dir', async () => {
+    const id = 'ai.sudo.plugin.noskilldir';
+    const savedSkills = process.env['SUDO_SKILLS_DIRS'];
+    try {
+      const dir = join(pluginsDir, 'noskilldir');
+      writePlugin(dir, makeManifest({
+        id,
+        skills: [{ id: 's1', name: 'Skill', description: 'declared but no dir' }],
+      }));
+      const result = await bootPlugins(hooks, pluginsDir);
+      expect(result.skillRootsAdded).toBe(0);
+      expect(result.enabled).toBe(1); // boot still succeeds
+    } finally {
+      if (savedSkills === undefined) delete process.env['SUDO_SKILLS_DIRS'];
+      else process.env['SUDO_SKILLS_DIRS'] = savedSkills;
+    }
   });
 
   it('loads, enables, and bridges function hooks onto the HookManager', async () => {
