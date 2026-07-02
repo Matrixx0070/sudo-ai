@@ -1491,6 +1491,10 @@ async function boot(): Promise<void> {
     log.warn({ err: msg }, 'Command registration failed — continuing without slash commands');
   }
 
+  // Steering channel for mid-run control. Created here (before the command
+  // context factory) so /steer can signal it; wired into the loop below.
+  const steeringChannel = new InMemorySteeringChannel();
+
   // Shared CommandContext factory for every channel's directive dispatch.
   const makeCommandContext = async (msg: { channel: string; peerId: string }): Promise<CommandContext | null> => {
     try {
@@ -1507,6 +1511,7 @@ async function boot(): Promise<void> {
         config,
         db,
         peerQueue: dualSessionManager.peerQueue,
+        steeringChannel,
       };
     } catch (err) {
       log.error({ peerId: msg.peerId, err: String(err) }, 'CommandContext factory failed');
@@ -3307,7 +3312,6 @@ async function boot(): Promise<void> {
     outcomesLedger = new OutcomesLedger();
     const agentWallet = new AgentWallet();
     const agentIdentity = new AgentIdentity('sudo-ai-v5');
-    const steeringChannel = new InMemorySteeringChannel();
 
     // Semantic contradiction resolution for dreamed facts (#7, opt-in via
     // SUDO_CHUNK_CONTRADICT=1). Stage 1 = embedding cosine (text-embedding-3-small,
