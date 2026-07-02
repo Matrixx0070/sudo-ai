@@ -1,0 +1,245 @@
+/**
+ * @file stable-ref.ts
+ * @description Stable element references for autonomous browser control.
+ *
+ * The problem this solves: Sudo's browser tools historically targeted elements by
+ * CSS/text selector or by re-resolving `getByRole(role, {name}).first()` at action
+ * time. On pages with duplicate accessible names ("Edit", "Open", "Add to cart")
+ * that clicks the WRONG element, and selectors the model guesses from an ARIA tree
+ * are brittle. Playwright MCP solves this with stable `aria-ref` handles; Playwright
+ * 1.58's public API does not expose that engine, so we implement an equivalent that
+ * is deterministic and version-proof.
+ *
+ * Approach: on snapshot, stamp a `data-sudo-ref="N"` attribute onto every actionable
+ * element (across all frames) in one `page.evaluate`, and hand the model a compact
+ * `[N] role "name"` listing. Actions then resolve a ref to a Locator via the attribute
+ * — an exact, unambiguous handle to the specific node, immune to duplicate names.
+ *
+ * The attributes persist in the live DOM until the next navigation/re-render, so ref
+ * resolution is stateless: we simply scan frames for `[data-sudo-ref="N"]`.
+ */
+
+import type { Page, Locator } from 'playwright-core';
+
+/** DOM attribute used to pin a stable ref onto an element. */
+export const REF_ATTR = 'data-sudo-ref';
+
+/** A single actionable element captured by a stable-ref snapshot. */
+export interface StableRef {
+  /** Sequential 1-based ref, unique within the snapshot. */
+  ref: number;
+  /** Lowercase tag name (a, button, input, …). */
+  tag: string;
+  /** ARIA role (explicit role attr, else inferred from tag/type). */
+  role: string;
+  /** Best-effort accessible name (aria-label, label, text, placeholder, …). */
+  name: string;
+  /** Current value for form controls. */
+  value?: string;
+  /** True when the control is disabled. */
+  disabled?: boolean;
+  /** input `type` attribute, when relevant. */
+  inputType?: string;
+}
+
+/** Result of a stable-ref capture. */
+export interface StableRefSnapshot {
+  /** All actionable elements, in document order across frames. */
+  refs: StableRef[];
+  /** Compact `[N] role "name"` listing for LLM targeting. */
+  render: string;
+}
+
+/**
+ * Browser-side stamping routine, serialized into the page via `evaluate`.
+ * MUST be self-contained (no closure references) — it runs in the page context.
+ *
+ * Assigns refs starting at `startAt`, stamps `attr` onto each actionable element,
+ * and returns lightweight descriptors. Returns the next free ref via `nextRef` so
+ * multiple frames share one monotonic sequence.
+ */
+function stampInPage(opts: { attr: string; startAt: number }): {
+  items: Array<Omit<StableRef, 'ref'> & { ref: number }>;
+  nextRef: number;
+} {
+  const { attr, startAt } = opts;
+  let ref = startAt;
+
+  const INTERACTIVE_ROLES = new Set([
+    'button', 'link', 'textbox', 'searchbox', 'combobox', 'listbox', 'checkbox',
+    'radio', 'switch', 'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox',
+    'menuitemradio', 'option', 'treeitem',
+  ]);
+
+  const roleForTag = (el: Element): string => {
+    const explicit = el.getAttribute('role');
+    if (explicit) return explicit.trim().toLowerCase();
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'a') return (el as HTMLAnchorElement).hasAttribute('href') ? 'link' : 'generic';
+    if (tag === 'button') return 'button';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'summary') return 'button';
+    if (tag === 'input') {
+      const t = ((el as HTMLInputElement).type || 'text').toLowerCase();
+      if (t === 'checkbox') return 'checkbox';
+      if (t === 'radio') return 'radio';
+      if (t === 'button' || t === 'submit' || t === 'reset' || t === 'image') return 'button';
+      if (t === 'range') return 'slider';
+      if (t === 'hidden') return 'hidden';
+      return 'textbox';
+    }
+    return 'generic';
+  };
+
+  const isVisible = (el: Element): boolean => {
+    // checkVisibility is the most accurate signal when available.
+    const anyEl = el as unknown as { checkVisibility?: (o?: unknown) => boolean };
+    if (typeof anyEl.checkVisibility === 'function') {
+      try {
+        if (!anyEl.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+      } catch { /* fall through to rect check */ }
+    }
+    const rect = (el as HTMLElement).getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return false;
+    const style = window.getComputedStyle(el as HTMLElement);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+    return true;
+  };
+
+  const accessibleName = (el: Element): string => {
+    const clip = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 120);
+    const aria = el.getAttribute('aria-label');
+    if (aria && aria.trim()) return clip(aria);
+    const labelledby = el.getAttribute('aria-labelledby');
+    if (labelledby) {
+      const parts = labelledby.split(/\s+/)
+        .map((id) => el.ownerDocument.getElementById(id)?.textContent ?? '')
+        .join(' ');
+      if (parts.trim()) return clip(parts);
+    }
+    // <label for=id> or wrapping <label>
+    const id = el.getAttribute('id');
+    if (id) {
+      const lbl = el.ownerDocument.querySelector(`label[for="${CSS.escape(id)}"]`);
+      if (lbl?.textContent?.trim()) return clip(lbl.textContent);
+    }
+    const closestLabel = el.closest('label');
+    if (closestLabel?.textContent?.trim()) return clip(closestLabel.textContent);
+    const text = (el as HTMLElement).textContent;
+    if (text && text.trim()) return clip(text);
+    const attrs = ['placeholder', 'alt', 'title', 'value', 'name'];
+    for (const a of attrs) {
+      const v = el.getAttribute(a);
+      if (v && v.trim()) return clip(v);
+    }
+    return '';
+  };
+
+  const SELECTOR = [
+    'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
+    '[role]', '[contenteditable=""]', '[contenteditable="true"]',
+    '[tabindex]:not([tabindex="-1"])', '[onclick]',
+  ].join(',');
+
+  const items: Array<Omit<StableRef, 'ref'> & { ref: number }> = [];
+  const seen = new Set<Element>();
+
+  for (const el of Array.from(document.querySelectorAll(SELECTOR))) {
+    if (seen.has(el)) continue;
+    seen.add(el);
+    const role = roleForTag(el);
+    if (role === 'hidden' || role === 'generic') continue;
+    // Only surface elements a user could actually act on.
+    const tag = el.tagName.toLowerCase();
+    const isFormOrLink = tag === 'a' || tag === 'button' || tag === 'input' ||
+      tag === 'select' || tag === 'textarea' || tag === 'summary';
+    if (!isFormOrLink && !INTERACTIVE_ROLES.has(role) && !el.hasAttribute('onclick') &&
+        el.getAttribute('contenteditable') === null) continue;
+    if (!isVisible(el)) continue;
+
+    const control = el as HTMLInputElement;
+    const item: Omit<StableRef, 'ref'> & { ref: number } = {
+      ref: ref++,
+      tag,
+      role,
+      name: accessibleName(el),
+    };
+    if (typeof control.value === 'string' && control.value) item.value = control.value.slice(0, 120);
+    if (control.disabled) item.disabled = true;
+    if (tag === 'input' && control.type) item.inputType = control.type.toLowerCase();
+
+    el.setAttribute(attr, String(item.ref));
+    items.push(item);
+  }
+
+  return { items, nextRef: ref };
+}
+
+/**
+ * Capture a stable-ref snapshot of the page, stamping `data-sudo-ref` onto every
+ * actionable element across all frames. Returns the refs plus a compact rendering.
+ *
+ * Cross-origin frames are handled: Playwright can `evaluate` inside each `Frame`
+ * regardless of origin, so refs cover the whole page, not just the main document.
+ */
+export async function captureStableRefs(page: Page): Promise<StableRefSnapshot> {
+  const refs: StableRef[] = [];
+  let next = 1;
+
+  for (const frame of page.frames()) {
+    try {
+      const { items, nextRef } = await frame.evaluate(stampInPage, { attr: REF_ATTR, startAt: next });
+      next = nextRef;
+      for (const it of items) refs.push(it as StableRef);
+    } catch {
+      // A frame may be detached/navigating mid-capture — skip it, keep the rest.
+    }
+  }
+
+  return { refs, render: renderStableRefs(refs) };
+}
+
+/** Render refs as compact `[N] role "name" [value=…]` lines for the model. */
+export function renderStableRefs(refs: StableRef[]): string {
+  if (refs.length === 0) return '(no actionable elements found)';
+  return refs
+    .map((r) => {
+      const parts = [`[${r.ref}]`, r.role, JSON.stringify(r.name)];
+      if (r.inputType && r.inputType !== 'text') parts.push(`type=${r.inputType}`);
+      if (r.value !== undefined) parts.push(`value=${JSON.stringify(r.value)}`);
+      if (r.disabled) parts.push('disabled');
+      return parts.join(' ');
+    })
+    .join('\n');
+}
+
+/**
+ * Resolve a stable ref to a Playwright Locator by scanning all frames for the
+ * stamped attribute. Stateless — relies on the persisted DOM attribute, so it
+ * works across tool calls as long as the page has not re-rendered that element away.
+ *
+ * @returns the Locator, or null if no element currently carries that ref.
+ */
+export async function resolveStableRef(page: Page, ref: number): Promise<Locator | null> {
+  const sel = `[${REF_ATTR}="${ref}"]`;
+  for (const frame of page.frames()) {
+    try {
+      const loc: Locator = frame.locator(sel);
+      if (await loc.count() > 0) return loc.first();
+    } catch {
+      // detached frame — keep scanning
+    }
+  }
+  return null;
+}
+
+/** Type guard: parse a `ref` tool param that may arrive as number or numeric string. */
+export function parseRefParam(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
+  if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    const n = Number(raw.trim());
+    return n > 0 ? n : null;
+  }
+  return null;
+}
