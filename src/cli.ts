@@ -1540,6 +1540,10 @@ async function boot(): Promise<void> {
     // foreground-reply fence depends on that.
     const handleTelegramTurn = (msg: UnifiedMessage): Promise<void> =>
       dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
+        // Delivery target for every reply: the originating chat (a group id in
+        // groups), NOT msg.peerId (the sender) — else group replies go to the
+        // sender's DM. peerId stays the session/queue/memory key below.
+        const replyTo = msg.chatId ?? msg.peerId;
         // Hoisted out of the try-block so the outer catch can cancel it
         // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=1 is unset this
         // stays null and the byte-identical pre-PR send path runs.
@@ -1573,8 +1577,8 @@ async function boot(): Promise<void> {
             try {
               const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
               streamSink = await createBufferedEditSink(
-                (placeholder: string) => telegram.sendForStream(msg.peerId, placeholder),
-                (id: string | number, text: string) => telegram.editText(msg.peerId, id, text),
+                (placeholder: string) => telegram.sendForStream(replyTo, placeholder),
+                (id: string | number, text: string) => telegram.editText(replyTo, id, text),
                 // maxChars clamps BEFORE same-text suppression so the sink
                 // and Telegram's 4096-char editMessageText cap agree on the
                 // wire body — preventing duplicate edits whose only delta
@@ -1641,7 +1645,7 @@ async function boot(): Promise<void> {
                   continue;
                 }
                 const buffer = readFileSync(att.path);
-                await telegram.sendMedia(msg.peerId, {
+                await telegram.sendMedia(replyTo, {
                   type: att.type,
                   mimeType: att.type === 'image' ? 'image/png'
                     : att.type === 'video' ? 'video/mp4'
@@ -1673,7 +1677,7 @@ async function boot(): Promise<void> {
                 'telegram',
               );
               try {
-                await telegram.sendWithKeyboard(msg.peerId, '⋯', keyboard);
+                await telegram.sendWithKeyboard(replyTo, '⋯', keyboard);
               } catch (kbErr) {
                 log.warn({ err: String(kbErr) }, 'gap #19: feedback keyboard follow-up failed');
               }
@@ -1684,9 +1688,9 @@ async function boot(): Promise<void> {
               (msg.text ?? replyText).slice(0, 120),
               'telegram',
             );
-            await maybeGuardedSend('telegram', msg.peerId, replyText, () => telegram.sendWithKeyboard(msg.peerId, replyText, keyboard));
+            await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.sendWithKeyboard(replyTo, replyText, keyboard));
           } else {
-            await maybeGuardedSend('telegram', msg.peerId, replyText, () => telegram.send(msg.peerId, replyText));
+            await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.send(replyTo, replyText));
           }
           log.info({ peerId: msg.peerId, streamed: streamSink !== null }, 'Reply sent to Telegram');
         } catch (err: unknown) {
@@ -1706,11 +1710,11 @@ async function boot(): Promise<void> {
               'telegram',
             );
             await telegram.sendWithKeyboard(
-              msg.peerId,
+              replyTo,
               `⚠️ Error: ${errMsg.substring(0, 200)}`,
               keyboard,
             );
-          } catch { try { await telegram.send(msg.peerId, `Error: ${errMsg.substring(0, 200)}`); } catch {} }
+          } catch { try { await telegram.send(replyTo, `Error: ${errMsg.substring(0, 200)}`); } catch {} }
         }
       });
 
