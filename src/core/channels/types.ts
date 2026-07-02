@@ -68,6 +68,14 @@ export interface UnifiedMessage {
   /** Platform-specific peer/chat identifier (user ID, JID, DM channel ID…). */
   peerId: string;
   /**
+   * Platform conversation/delivery target — where a reply must be sent. On
+   * Telegram this is the chat id (a group id for group messages), which differs
+   * from `peerId` (the sender's user id) in groups. Absent for channels that do
+   * not distinguish the sender from the conversation; callers replying should
+   * use `chatId ?? peerId`. `peerId` remains the session/identity key.
+   */
+  chatId?: string;
+  /**
    * Network address of the sender when the transport exposes one (e.g. the web
    * channel's socket remoteAddress). The web peerId is a synthetic `web-<uuid>`
    * that never reveals loopback, so this carries the real IP for the
