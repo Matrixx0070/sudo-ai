@@ -64,6 +64,7 @@ import { DEFAULT_UPDATE_CONFIG } from './core/update/update-manager-types.js';
 import { AgentWallet } from './core/economy/wallet.js';
 import { AgentIdentity } from './core/economy/did.js';
 import { AutoDream } from './core/memory/auto-dream.js';
+import { flushBeforeCompaction } from './core/memory/compaction-flush.js';
 import { TeammateIdleDetector } from './core/agent/teammate-idle.js';
 import { BackgroundAgentExecutor } from './core/agent/background-agent.js';
 import { InMemorySteeringChannel } from './core/agent/steering.js';
@@ -3359,6 +3360,27 @@ async function boot(): Promise<void> {
       undefined,
       resolveFactContradiction,
     );
+
+    // Wire the programmatic pre-compaction flush: persist salient conversation
+    // facts to memory BEFORE compact() replaces the history, so state survives
+    // regardless of whether the model acted on the flush reminder. Default ON;
+    // SUDO_PRECOMPACTION_FLUSH=0 disables. Fail-open inside runCompaction.
+    if (process.env['SUDO_PRECOMPACTION_FLUSH'] !== '0') {
+      const flushContradictionDeps = { db, embed: contradictionEmbed, judge: contradictionJudge };
+      finalAgentLoop.setPreCompactionFlush(async (messages) => {
+        const rows = messages.map((m) => ({
+          // session_id unused by flushBeforeCompaction — storeChunk is date-keyed.
+          session_id: '',
+          role: m.role,
+          content: m.content,
+          tool_name: m.toolName,
+          // For tool rows the result text lives in `content`; buildChunkText
+          // reads tool_output, so surface it there or the output is dropped.
+          tool_output: m.role === 'tool' ? m.content : undefined,
+        }));
+        await flushBeforeCompaction(db, rows, flushContradictionDeps);
+      });
+    }
 
     // Heal an over-cap MEMORY.md on boot so a stuck file (which silently drops
     // new learnings) is trimmed promptly instead of waiting for the next dream.

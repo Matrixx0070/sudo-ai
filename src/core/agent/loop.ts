@@ -1768,7 +1768,7 @@ export class AgentLoop extends AgentLoopInjections {
         // Hook: before_prompt_build — fires before the message array is prepared for the API call.
         void this.hooks?.emit('before_prompt_build', { event: 'before_prompt_build', sessionId: state.sessionId, iteration: state.iteration });
 
-        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper);
+        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
 
         // Hook: before_model_resolve — fires after messages are prepared, just before brain.call().
         void this.hooks?.emit('before_model_resolve', { event: 'before_model_resolve', sessionId: state.sessionId, modelName: model ?? '' });
@@ -2071,7 +2071,10 @@ export class AgentLoop extends AgentLoopInjections {
             }
           }
 
-          await runCompaction(this.brain, session, state, emit, hooksHelper);
+          // If LAYER 1 already compacted this iteration, this second flush runs
+          // against the summary text — benign: flushBeforeCompaction hash-dedups,
+          // so overlapping content isn't re-stored.
+          await runCompaction(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
           continue;
         }
 

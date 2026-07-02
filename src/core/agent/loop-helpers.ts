@@ -434,16 +434,48 @@ export function collapseContent(content: string, toolName: string): string {
  * @param hooks   - Optional hook emitter for lifecycle events.
  * @returns The compaction summary string, or '' on failure.
  */
+/**
+ * Persist salient facts from the conversation before it is compacted away.
+ * Injected into the loop (setPreCompactionFlush) and invoked by runCompaction.
+ * Must be fail-open — it never blocks compaction.
+ */
+export type PreCompactionFlush = (messages: BrainMessage[]) => Promise<void>;
+
 export async function runCompaction(
   brain: BrainLike,
   session: SessionLike,
   state: AgentState,
   emit: Emitter,
   hooks?: HookEmitterLike,
+  preFlush?: PreCompactionFlush,
 ): Promise<string> {
   state.isCompacting = true;
 
   log.info({ sessionId: state.sessionId, messageCount: session.messages.length }, 'Compacting context');
+
+  // PROGRAMMATIC PRE-COMPACTION FLUSH — persist salient facts to memory BEFORE
+  // compact() replaces the history, so state survives regardless of whether the
+  // model acted on the flush *reminder* below. Fail-open AND time-bounded: the
+  // flush can do embed/judge LLM calls (when SUDO_CHUNK_CONTRADICT=1) on this hot
+  // path, so a hang must degrade to a skipped flush, not a stalled turn. The
+  // flush keeps running in the background; only our wait is bounded.
+  if (preFlush) {
+    const flushTimeoutMs = (() => {
+      const raw = parseInt(process.env['SUDO_PRECOMPACTION_FLUSH_TIMEOUT_MS'] ?? '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 8_000;
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('pre-compaction flush timed out')), flushTimeoutMs);
+    });
+    try {
+      await Promise.race([preFlush(session.messages as BrainMessage[]), timeout]);
+    } catch (err) {
+      log.warn({ sessionId: state.sessionId, err: String(err) }, 'Pre-compaction flush failed/timed out — continuing');
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   // PRE-COMPACTION FLUSH (covers the finishReason === 'length' path that skips prepareMessages).
   // The flush message is appended to the history that compact() summarises, so the summary
@@ -1556,6 +1588,7 @@ export async function prepareMessages(
   state: AgentState,
   emit: Emitter,
   hooks?: HookEmitterLike,
+  preFlush?: PreCompactionFlush,
 ): Promise<BrainMessage[]> {
   // LAYER 0 — PRE-COMPACTION FLUSH REMINDER
   // At 40 % of MAX_CONTEXT_TOKENS (below the 50 % shouldCompact threshold), inject a
@@ -1612,7 +1645,7 @@ export async function prepareMessages(
   // This prevents the model from ever seeing a truncated context.
   if (shouldCompact(session.messages as Array<{ content: string }>)) {
     log.info({ sessionId: state.sessionId }, 'LAYER 1: Proactive compaction triggered');
-    await runCompaction(brain, session, state, emit, hooks);
+    await runCompaction(brain, session, state, emit, hooks, preFlush);
   }
 
   // TIER 2 / TIER 3 — compaction escalation (gap #14 deferred). Opt-in
