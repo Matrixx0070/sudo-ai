@@ -3389,7 +3389,10 @@ async function boot(): Promise<void> {
     void crossChannelMemory;
     void agentWallet;
     void agentIdentity;
-    void steeringChannel;
+    // Wire the steering channel into the running loop so an in-process caller
+    // (e.g. a /steer command) can abort/inject a turn mid-run. Previously this
+    // channel was constructed and discarded (dead wiring).
+    finalAgentLoop.setSteeringChannel(steeringChannel);
 
     // Markdown skill loader — project skills/ (flat .md files plus
     // agentskills.io <skill>/SKILL.md directories) and optional extra roots
