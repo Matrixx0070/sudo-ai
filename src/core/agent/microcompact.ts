@@ -9,7 +9,7 @@
  * trimming recovers 30-50% of the context window in the common case, and
  * TIER 2 LLM summarisation only fires when TIER 1 was not enough. This
  * module is the TIER 1 primitive; the wiring lives in loop-helpers.ts behind
- * SUDO_TWO_TIER_COMPACT=1.
+ * SUDO_TWO_TIER_COMPACT (default ON; =0 disables).
  *
  * Role-aware behaviour:
  *

@@ -385,10 +385,12 @@ module.exports = {
         // stable prefix but skips explicit breakpoints; SUDO_PROMPT_CACHE=0 disables fully.
         SUDO_PROMPT_CACHE: process.env['SUDO_PROMPT_CACHE'] || '1',
 
-        // ---- Opt-in robustness + learning enables (2026-06-25) ----
-        // Low-cost, low-risk features that were previously dark in prod. Each is
-        // default-OFF in code (read as === '1'); set here, env-overridable,
-        // kill-switch '0'. None add a per-turn LLM call.
+        // ---- Robustness + learning enables (2026-06-25) ----
+        // Low-cost, low-risk features. TWO_TIER_COMPACT and CRASH_SAFE are now
+        // default-ON in code (read as !== '0'); the entries below are redundant
+        // but kept explicit. TRACE_LEARNING (and the outcome-learner/trace-policy
+        // it feeds) remain default-OFF in code (read as === '1'). All are
+        // env-overridable, kill-switch '0'. None add a per-turn LLM call.
         //   TRACE_LEARNING     — record routing/brain/tool traces to SQLite
         //                        (storage only; prerequisite for outcome-learner
         //                        / trace-policy, which stay OFF for now).
