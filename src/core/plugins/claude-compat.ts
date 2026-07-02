@@ -185,10 +185,24 @@ function readJson(file: string, errors: string[]): unknown | null {
  * single quotes escaped as the `'\''` four-byte sequence (standard sh idiom).
  * Required so `args: ['--root', '/path with spaces']` survives a split.
  */
-function quoteShellToken(token: string): string {
+export function quoteShellToken(token: string): string {
   if (token === '') return "''";
   if (/^[A-Za-z0-9_\-./=:]+$/.test(token)) return token;
   return `'${token.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Encode a stdio MCP server's launch config into the registry's synthetic
+ * `stdio:command [args]` URL form (the registry uses URL as the primary
+ * identifier and pre-dates per-transport config). Shared by the Claude/Cursor
+ * ingester and the plugin-manifest mcpServers wiring so both produce an
+ * identical, splittable encoding.
+ */
+export function buildStdioMcpUrl(command: string, args?: readonly unknown[]): string {
+  const argTokens = Array.isArray(args) ? args.map((a) => quoteShellToken(String(a))) : [];
+  return argTokens.length > 0
+    ? `stdio:${quoteShellToken(command)} ${argTokens.join(' ')}`
+    : `stdio:${quoteShellToken(command)}`;
 }
 
 /**
@@ -254,12 +268,7 @@ export function parseMcpServersMap(
         );
       }
       const argsRaw = cfg['args'];
-      const argTokens = Array.isArray(argsRaw)
-        ? (argsRaw as unknown[]).map((a) => quoteShellToken(String(a)))
-        : [];
-      const stdioUrl = argTokens.length > 0
-        ? `stdio:${quoteShellToken(command)} ${argTokens.join(' ')}`
-        : `stdio:${quoteShellToken(command)}`;
+      const stdioUrl = buildStdioMcpUrl(command, Array.isArray(argsRaw) ? argsRaw : undefined);
       out.push({
         id,
         url: stdioUrl,
