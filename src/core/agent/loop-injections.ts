@@ -40,6 +40,7 @@ import type { VerifyGateLike, CriticPassLike } from './loop-helpers.js';
 import type { FeedbackMemory } from '../self-improvement/feedback-memory.js';
 import type { AlignmentEngine } from '../alignment/alignment-engine.js';
 import type { SteeringChannel } from './steering.js';
+import type { PreCompactionFlush } from './loop-helpers.js';
 
 const log = createLogger('agent:loop:injections');
 
@@ -67,6 +68,7 @@ export abstract class AgentLoopInjections {
   protected _feedbackMemory?: FeedbackMemory;
   protected _alignmentEngine?: AlignmentEngine;
   protected _steeringChannel?: SteeringChannel;
+  protected _preCompactionFlush?: PreCompactionFlush;
 
   /**
    * Wire a steering channel so an in-process caller can abort/inject/reprioritize
@@ -79,6 +81,20 @@ export abstract class AgentLoopInjections {
       log.info('AgentLoop: steering channel attached');
     } else {
       log.warn('AgentLoop: setSteeringChannel: invalid duck-type — ignoring');
+    }
+  }
+
+  /**
+   * Wire a pre-compaction memory flush: runCompaction calls this to persist
+   * salient facts before the history is summarised away. Fail-open (the loop
+   * swallows flush errors).
+   */
+  setPreCompactionFlush(fn: PreCompactionFlush): void {
+    if (typeof fn === 'function') {
+      this._preCompactionFlush = fn;
+      log.info('AgentLoop: pre-compaction flush attached');
+    } else {
+      log.warn('AgentLoop: setPreCompactionFlush: not a function — ignoring');
     }
   }
 
