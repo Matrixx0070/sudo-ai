@@ -112,6 +112,7 @@ import type { PolicyEvaluation } from '../learning/trace-driven-policy.js';
 import { LazinessNudge } from './laziness-nudge.js';
 import { TodoGate } from './todo-gate.js';
 import { SelfVerify } from './self-verify.js';
+import { verifyBrowserTaskCompletion, isBrowserVerifyEnabled } from './browser-verify.js';
 import { GoalClassifier } from '../autonomy/goal-pipeline.js';
 import { GoalPlanner, type BrainForPlanning } from '../autonomy/goal-planner.js';
 import { GoalStopDetector } from '../autonomy/goal-stop-detector.js';
@@ -1567,6 +1568,22 @@ export class AgentLoop extends AgentLoopInjections {
         log.info({ sessionId, summaryLen: _verificationSummary?.length }, 'SelfVerify: verification complete');
       } catch (err) {
         log.warn({ err: String(err) }, 'SelfVerify: verify threw — continuing without verification');
+      }
+    }
+
+    // BrowserVerify — task-end check for the browser dimension SelfVerify can't
+    // cover (it abstains when no files changed). If a live browser session ended
+    // on an unresolved CAPTCHA/bot-wall or error page, surface an observable note.
+    // Opt-in SUDO_BROWSER_VERIFY=1, fail-open, never alters finalResponse.
+    if (isBrowserVerifyEnabled()) {
+      try {
+        const _bv = await verifyBrowserTaskCompletion();
+        if (_bv && !_bv.ok && _bv.note) {
+          log.warn({ sessionId, note: _bv.note }, 'BrowserVerify: task ended on an unresolved blocker');
+          _verificationSummary = _verificationSummary ? `${_verificationSummary}\n${_bv.note}` : _bv.note;
+        }
+      } catch (err) {
+        log.warn({ err: String(err) }, 'BrowserVerify: threw — continuing');
       }
     }
 

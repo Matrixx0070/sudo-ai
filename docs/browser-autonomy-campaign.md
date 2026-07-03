@@ -155,3 +155,4 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
       REMOVED after salvaging its unique value into registered tools: new `browser.history`
       (back/forward/reload — previously absent entirely) + `browser.wait` gained url/loadState/function
       modes. Rest duplicated existing tools. e2e `tests/browser/history-and-wait.test.ts` 4/4.
+- [x] Task-end BROWSER verification — `agent/browser-verify.ts` flags turns ending on an unresolved CAPTCHA/error page (SUDO_BROWSER_VERIFY=1, observable-only). SelfVerify is code-only. Tests 8/8.
