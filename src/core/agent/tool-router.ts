@@ -27,7 +27,7 @@ const log = createLogger('agent:tool-router');
 export const MAX_ROUTED_TOOLS = 30;
 
 /** Slots reserved for always-on base tools. */
-export const BASE_TOOL_SLOTS = 10;
+export const BASE_TOOL_SLOTS = 11;
 
 /** Slots reserved for recently-used tools (continuity). */
 export const CONTINUITY_SLOTS = 3;
@@ -58,6 +58,7 @@ const BASE_TOOLS: readonly string[] = [
   'meta.self-modify',      // The owner's primary way to update SUDO-AI
   'system.exec',           // Run any shell command
   'browser.search',        // Search the web
+  'browser.snapshot',      // Perception primitive — the stable-ref workflow (snapshot→click/type by ref→recovery) is unreachable without it, and it otherwise loses the 22-into-8 browser-category ranking
   'meta.health-check',     // Check system status
   'coder.read-file',       // Read any file
   'coder.smart-edit',      // Edit code + typecheck
@@ -114,7 +115,11 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       /\b(google|bing|search)\b/i,
     ],
     priority: 9,
-    maxFromCategory: 8,
+    // Raised 8→14: the browser category has 22 tools, but the core browsing
+    // WORKFLOW needs several together (snapshot, click, type, wait, network,
+    // console, history, navigate). At 8 the perception/recovery tools were
+    // routinely ranked out. 14 lets the workflow travel together on browsing turns.
+    maxFromCategory: 14,
   },
   coder: {
     keywords: [
