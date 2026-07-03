@@ -41,6 +41,40 @@ export const ANTI_DETECT_ARGS: string[] = [
   '--use-mock-keychain',
 ];
 
+/**
+ * Security-weakening flags that were previously always applied. They disable core
+ * browser protections (same-origin policy, site isolation, cert validation) AND
+ * make the browser MORE fingerprintable — real Chrome never runs like this, so
+ * bot detectors flag it. Now opt-in only via SUDO_BROWSER_INSECURE=1 (e.g. for
+ * scraping a site with a broken cert you control). Default off: safer and less
+ * detectable.
+ */
+const INSECURE_ARGS: string[] = [
+  '--disable-web-security',
+  '--allow-running-insecure-content',
+  '--ignore-certificate-errors',
+  '--ignore-ssl-errors',
+  '--disable-features=IsolateOrigins,site-per-process',
+];
+
+/** True when the operator has explicitly opted into the insecure launch flags. */
+export function insecureBrowserEnabled(): boolean {
+  return process.env['SUDO_BROWSER_INSECURE'] === '1';
+}
+
+/**
+ * Build the Chromium launch args. Always includes the anti-automation-signal flags
+ * and `--no-sandbox` (required to launch as root in this container). Includes the
+ * security-weakening flags only when SUDO_BROWSER_INSECURE=1.
+ *
+ * @param extra - Additional caller-specific args (e.g. --remote-debugging-port).
+ */
+export function buildLaunchArgs(extra: string[] = []): string[] {
+  const args = ['--no-sandbox', ...ANTI_DETECT_ARGS, ...extra];
+  if (insecureBrowserEnabled()) args.push(...INSECURE_ARGS);
+  return args;
+}
+
 // ---------------------------------------------------------------------------
 // Version detection
 // ---------------------------------------------------------------------------

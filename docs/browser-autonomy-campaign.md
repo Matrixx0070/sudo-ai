@@ -125,5 +125,8 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
 - [ ] Phase 3 #6 — un-gate computer.use/auth behind ConfidenceGate (kill-switch)
 - [ ] Phase 4 #7/#8 — vision through Brain; CAPTCHA detect→handoff
 - [ ] Phase 5 #10 — TraceStore/SelfVerify wiring
-- [ ] Phase 6 #11 — gate launch flags
+- [x] Phase 6 #11 — gated launch flags. `buildLaunchArgs` in `anti-detect.ts`: security-weakening
+      flags (--disable-web-security, --allow-running-insecure-content, cert-ignore, IsolateOrigins-off)
+      now opt-in via SUDO_BROWSER_INSECURE=1; default off (safer + less fingerprintable). Wired into
+      browser-manager + cdp-manager. e2e `tests/browser/launch-args.test.ts` 3/3.
 </content>
