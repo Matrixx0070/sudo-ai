@@ -125,7 +125,10 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
 - [x] Phase 3 #6 — un-gate behind kill-switch. `autonomy.ts` `requiresConfirmationDefault()`;
       computer.use + browser.auth confirm by default, lifted under SUDO_BROWSER_UNATTENDED=1 (runtime
       ConfidenceGate/StuckDetector enforce safety instead). e2e `tests/browser/autonomy.test.ts` 3/3.
-- [ ] Phase 4 #7/#8 — vision through Brain; CAPTCHA detect→handoff
+- [~] Phase 4 #8 — CAPTCHA detect→handoff. `captcha.ts` rewritten: +Turnstile/Friendly Captcha,
+      testable `detectCaptchas()`, emits operator notification (proactive-notifier) + returns
+      structured PARKED result; never solves (non-goal honored). e2e `tests/browser/captcha.test.ts` 3/3.
+- [ ] Phase 4 #7 — route browser.vision through Brain
 - [ ] Phase 5 #10 — TraceStore/SelfVerify wiring
 - [x] Phase 6 #11 — gated launch flags. `buildLaunchArgs` in `anti-detect.ts`: security-weakening
       flags (--disable-web-security, --allow-running-insecure-content, cert-ignore, IsolateOrigins-off)
