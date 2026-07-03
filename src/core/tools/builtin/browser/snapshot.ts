@@ -11,6 +11,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 import { captureStableRefs } from './stable-ref.js';
 
 export const snapshotTool: ToolDefinition = {
@@ -67,9 +68,7 @@ export const snapshotTool: ToolDefinition = {
       };
     }
 
-    const pages = instance.context.pages();
-    const page =
-      pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     try {
       // ariaSnapshot() returns a YAML string describing the ARIA tree.

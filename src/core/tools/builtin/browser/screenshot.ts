@@ -11,6 +11,7 @@ import { resolve, dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 
 const DEFAULT_SCREENSHOT_DIR = 'data/screenshots';
 
@@ -67,8 +68,7 @@ export const screenshotTool: ToolDefinition = {
     const manager = BrowserManager.getInstance();
     const instance = await manager.getOrConnect(browserName);
 
-    const pages = instance.context.pages();
-    const page = pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     try {
       let width = 0;

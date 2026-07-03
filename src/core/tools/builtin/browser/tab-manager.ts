@@ -6,6 +6,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { setActivePage } from './active-page.js';
 
 export const tabManagerTool: ToolDefinition = {
   name: 'browser.tabs',
@@ -76,6 +77,7 @@ export const tabManagerTool: ToolDefinition = {
 
       if (op === 'open') {
         const newPage = await instance.context.newPage();
+        setActivePage(instance.context, newPage);
         const newIndex = instance.context.pages().length - 1;
         if (url) {
           await newPage.goto(url, { waitUntil: 'domcontentloaded' });
@@ -112,6 +114,7 @@ export const tabManagerTool: ToolDefinition = {
 
       // op === 'switch'
       await targetPage.bringToFront();
+      setActivePage(instance.context, targetPage);
       const title = await targetPage.title().catch(() => '');
       ctxLog.info({ tool: 'browser.tabs', op, tabIndex, url: targetPage.url() }, 'Tab switched');
       return {

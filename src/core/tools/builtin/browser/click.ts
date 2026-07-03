@@ -10,6 +10,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 import { resolveStableRef, parseRefParam } from './stable-ref.js';
 
 export const clickTool: ToolDefinition = {
@@ -103,9 +104,7 @@ export const clickTool: ToolDefinition = {
       };
     }
 
-    const pages = instance.context.pages();
-    const page =
-      pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     const target = ref !== null ? `ref=${ref}` : (selector as string);
 

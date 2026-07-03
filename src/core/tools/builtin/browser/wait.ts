@@ -12,6 +12,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 
 /** Maximum unconditional wait — 60 seconds. */
 const MAX_WAIT_SECONDS = 60;
@@ -106,9 +107,7 @@ export const waitTool: ToolDefinition = {
       };
     }
 
-    const pages = instance.context.pages();
-    const page =
-      pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     try {
       if (text !== null) {

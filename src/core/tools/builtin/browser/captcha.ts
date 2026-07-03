@@ -7,6 +7,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 
 // Known CAPTCHA selectors / URL patterns
 const CAPTCHA_SIGNATURES = [
@@ -54,8 +55,7 @@ export const captchaTool: ToolDefinition = {
     const manager = BrowserManager.getInstance();
     const instance = await manager.getOrConnect(browserName);
 
-    const pages = instance.context.pages();
-    const page = pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     try {
       const detected: Array<{ name: string; selector: string }> = [];
