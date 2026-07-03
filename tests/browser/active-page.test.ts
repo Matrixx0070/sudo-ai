@@ -6,11 +6,12 @@
  * "newest page" behaviour), and closing the active page falls back cleanly.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { browserAvailable } from './_browser-available.js';
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
 import { resolveActivePage, setActivePage } from '../../src/core/tools/builtin/browser/active-page.js';
 import type { BrowserInstance } from '../../src/core/tools/builtin/browser/browser-manager.js';
 
-describe('active-page resolver (real browser)', () => {
+describe.skipIf(!browserAvailable())('active-page resolver (real browser)', () => {
   let browser: Browser;
   let context: BrowserContext;
   const inst = () => ({ context } as unknown as BrowserInstance);

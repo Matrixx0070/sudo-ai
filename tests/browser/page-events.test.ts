@@ -5,11 +5,12 @@
  * and an image that 404s — then asserts the buffers captured all of it.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { browserAvailable } from './_browser-available.js';
 import { createServer, type Server } from 'node:http';
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
 import { ensureCapture, getNetwork, getConsole } from '../../src/core/tools/builtin/browser/page-events.js';
 
-describe('page-events capture (real browser)', () => {
+describe.skipIf(!browserAvailable())('page-events capture (real browser)', () => {
   let browser: Browser;
   let context: BrowserContext;
   let server: Server;

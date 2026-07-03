@@ -4,10 +4,11 @@
  * the tool parks/hands off and never solves.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { browserAvailable } from './_browser-available.js';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { detectCaptchas } from '../../src/core/tools/builtin/browser/captcha.js';
 
-describe('detectCaptchas (real browser)', () => {
+describe.skipIf(!browserAvailable())('detectCaptchas (real browser)', () => {
   let browser: Browser;
   let page: Page;
 

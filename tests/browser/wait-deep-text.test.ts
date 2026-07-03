@@ -4,10 +4,11 @@
  * (Phase 1 #3). Verifies the deep search finds text the old body-only check missed.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { browserAvailable } from './_browser-available.js';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { pageContainsTextDeep } from '../../src/core/tools/builtin/browser/wait.js';
 
-describe('pageContainsTextDeep (real browser)', () => {
+describe.skipIf(!browserAvailable())('pageContainsTextDeep (real browser)', () => {
   let browser: Browser;
   let page: Page;
 

@@ -3,6 +3,7 @@
  * @description Unit + real-browser e2e for the self-heal primitives.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { browserAvailable } from './_browser-available.js';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import {
   withRetry,
@@ -56,7 +57,7 @@ describe('withRetry', () => {
   });
 });
 
-describe('robustFill (real browser)', () => {
+describe.skipIf(!browserAvailable())('robustFill (real browser)', () => {
   let browser: Browser;
   let page: Page;
 

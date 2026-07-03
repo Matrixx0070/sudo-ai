@@ -6,6 +6,7 @@
  * targeting suffered), and that refs resolve across iframes.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { browserAvailable } from './_browser-available.js';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import {
   captureStableRefs,
@@ -30,7 +31,7 @@ const PAGE_HTML = `<!doctype html><html><body>
   <iframe srcdoc='&lt;button id="framed"&gt;Frame Button&lt;/button&gt;'></iframe>
 </body></html>`;
 
-describe('stable-ref (real browser)', () => {
+describe.skipIf(!browserAvailable())('stable-ref (real browser)', () => {
   let browser: Browser;
   let page: Page;
 
