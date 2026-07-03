@@ -151,3 +151,7 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
       now opt-in via SUDO_BROWSER_INSECURE=1; default off (safer + less fingerprintable). Wired into
       browser-manager + cdp-manager. e2e `tests/browser/launch-args.test.ts` 3/3.
 </content>
+- [x] ORPHAN RESOLVED — BrowserActionSuite (dead: never registered, `[aria-ref]` targets nothing)
+      REMOVED after salvaging its unique value into registered tools: new `browser.history`
+      (back/forward/reload — previously absent entirely) + `browser.wait` gained url/loadState/function
+      modes. Rest duplicated existing tools. e2e `tests/browser/history-and-wait.test.ts` 4/4.

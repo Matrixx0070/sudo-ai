@@ -23,6 +23,7 @@
  *   browser.mouse       — Coordinate-based mouse actions (click x/y, drag, scroll, keypress)
  *   browser.network     — Inspect captured network responses (status, URL, failures)
  *   browser.console     — Read captured console messages and page errors
+ *   browser.history     — Session history navigation (back, forward, reload)
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -48,6 +49,7 @@ import { waitTool } from './wait.js';
 import { mouseTool } from './mouse.js';
 import { networkTool } from './network.js';
 import { consoleTool } from './console-log.js';
+import { historyTool } from './history.js';
 import { registerComputerUseTools } from './computer-use-tool.js';
 
 /** All browser tools in stable registration order. */
@@ -74,6 +76,7 @@ export const BROWSER_TOOLS = [
   mouseTool,
   networkTool,
   consoleTool,
+  historyTool,
 ] as const;
 
 /**
@@ -95,6 +98,5 @@ export type { ScreenAction, ComputerUseResult } from './computer-use.js';
 export { CDPManager } from './cdp-manager.js';
 export { SnapshotEngine } from './snapshot-engine.js';
 export type { SnapshotStyle, SnapshotResult, SnapshotElement } from './snapshot-engine.js';
-export { BrowserActionSuite } from './action-suite.js';
 export { SSRFGuard } from './ssrf-guard.js';
 export type { SSRFResult, SSRFConfig } from './ssrf-guard.js';
