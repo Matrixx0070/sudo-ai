@@ -112,6 +112,14 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
       (param `refs`, default on); `browser.click` / `browser.type` accept `ref=N` (exact,
       duplicate-name-proof, cross-frame). e2e: `tests/browser/stable-ref.test.ts` (6/6, real
       Chromium). tsc clean. Un-committed on working tree.
-- [ ] Phase 1 #2 — unified tab-aware active-page resolver
-- [ ] Phase 1 #3 — iframe/shadow-DOM in remaining tools
+- [x] Phase 1 #2 — unified tab-aware active-page resolver (`active-page.ts`; fixes tabs-switch
+      targeting; migrated all 14 leaf tools; e2e `tests/browser/active-page.test.ts` 4/4).
+- [ ] Phase 1 #3 — iframe/shadow-DOM in remaining tools (snapshot refs already cross-frame)
+- [x] Phase 5 #9 — `browser.network` + `browser.console` (`page-events.ts` ring buffers, capture
+      starts at first interaction; MCP parity; e2e `tests/browser/page-events.test.ts` 3/3).
+- [ ] Phase 2 #4/#5 — self-heal retry + post-action verification
+- [ ] Phase 3 #6 — un-gate computer.use/auth behind ConfidenceGate (kill-switch)
+- [ ] Phase 4 #7/#8 — vision through Brain; CAPTCHA detect→handoff
+- [ ] Phase 5 #10 — TraceStore/SelfVerify wiring
+- [ ] Phase 6 #11 — gate launch flags
 </content>

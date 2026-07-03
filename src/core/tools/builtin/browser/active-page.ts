@@ -19,6 +19,7 @@
 
 import type { Page, BrowserContext } from 'playwright-core';
 import type { BrowserInstance } from './browser-manager.js';
+import { ensureCapture } from './page-events.js';
 
 /** Active page per context. WeakMap so closed contexts are GC'd automatically. */
 const activeByContext = new WeakMap<BrowserContext, Page>();
@@ -33,6 +34,9 @@ function ensureTracking(context: BrowserContext): void {
   if (trackedContexts.has(context)) return;
   trackedContexts.add(context);
   context.on('page', (page) => setActivePage(context, page));
+  // Start network/console capture alongside active-page tracking, so the buffers
+  // are live before the first navigation the agent performs.
+  ensureCapture(context);
 }
 
 /**
