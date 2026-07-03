@@ -142,6 +142,10 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
       SUDO_BROWSER_RECOVERY=0, threshold SUDO_BROWSER_RECOVERY_ESCALATE. Tests:
       browser-recovery.test 6/6 (unit) + browser-recovery-wiring.test 2/2 (real executeToolCalls);
       full agent sweep 77/77, tsc 0. This closes perceive→act→verify→self-heal→ESCALATE end-to-end.
+- [x] FOLLOW-UP VERIFY — augment path proven LIVE end-to-end. `browser-recovery-live.test.ts`:
+      real headless browser, stamp ref 1, re-render page (ref 1 stale), drive browser.click ref=1
+      through REAL executeToolCalls + REAL browser registry → recovery captures FRESH refs from the
+      live re-rendered page (Beta Button/Search box, not stale Alpha Button). 1/1 (skips w/o Chromium).
 - [x] Phase 6 #11 — gated launch flags. `buildLaunchArgs` in `anti-detect.ts`: security-weakening
       flags (--disable-web-security, --allow-running-insecure-content, cert-ignore, IsolateOrigins-off)
       now opt-in via SUDO_BROWSER_INSECURE=1; default off (safer + less fingerprintable). Wired into
