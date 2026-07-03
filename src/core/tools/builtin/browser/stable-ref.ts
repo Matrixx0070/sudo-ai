@@ -58,30 +58,41 @@ export interface StableRefSnapshot {
  * and returns lightweight descriptors. Returns the next free ref via `nextRef` so
  * multiple frames share one monotonic sequence.
  */
-function stampInPage(opts: { attr: string; startAt: number }): {
+/** Result shape returned by the in-page stamping routine. */
+interface StampResult {
   items: Array<Omit<StableRef, 'ref'> & { ref: number }>;
   nextRef: number;
-} {
-  const { attr, startAt } = opts;
-  let ref = startAt;
+}
 
-  const INTERACTIVE_ROLES = new Set([
-    'button', 'link', 'textbox', 'searchbox', 'combobox', 'listbox', 'checkbox',
-    'radio', 'switch', 'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox',
-    'menuitemradio', 'option', 'treeitem',
-  ]);
-
-  const roleForTag = (el: Element): string => {
-    const explicit = el.getAttribute('role');
+/**
+ * The in-page stamping logic, kept as a plain-JS SOURCE STRING (not a passed
+ * function). This is deliberate and load-bearing:
+ *
+ * Passing a function to frame.evaluate makes Playwright serialize it via
+ * `fn.toString()`. Under the prod runtime (`node --import tsx` → esbuild with
+ * keepNames), every named function/arrow is wrapped with `__name(...)`; the
+ * serialized body then references `__name`, which does NOT exist in the browser
+ * page context → the in-page function throws → every frame yields 0 refs. vitest's
+ * transform doesn't add that wrapper, so tests passed while prod returned nothing
+ * (the "vitest masks prod" ESM/bundler landmine). A string literal's contents are
+ * never transformed by the bundler, so evaluating a string is immune.
+ *
+ * `attr` and `startAt` are interpolated by buildStampSource (Playwright does not
+ * pass an arg when the page function is a string), so this stays self-contained.
+ */
+const STAMP_BODY = `
+  var INTERACTIVE_ROLES = new Set(['button','link','textbox','searchbox','combobox','listbox','checkbox','radio','switch','slider','spinbutton','tab','menuitem','menuitemcheckbox','menuitemradio','option','treeitem']);
+  function roleForTag(el) {
+    var explicit = el.getAttribute('role');
     if (explicit) return explicit.trim().toLowerCase();
-    const tag = el.tagName.toLowerCase();
-    if (tag === 'a') return (el as HTMLAnchorElement).hasAttribute('href') ? 'link' : 'generic';
+    var tag = el.tagName.toLowerCase();
+    if (tag === 'a') return el.hasAttribute('href') ? 'link' : 'generic';
     if (tag === 'button') return 'button';
     if (tag === 'select') return 'combobox';
     if (tag === 'textarea') return 'textbox';
     if (tag === 'summary') return 'button';
     if (tag === 'input') {
-      const t = ((el as HTMLInputElement).type || 'text').toLowerCase();
+      var t = (el.type || 'text').toLowerCase();
       if (t === 'checkbox') return 'checkbox';
       if (t === 'radio') return 'radio';
       if (t === 'button' || t === 'submit' || t === 'reset' || t === 'image') return 'button';
@@ -90,96 +101,65 @@ function stampInPage(opts: { attr: string; startAt: number }): {
       return 'textbox';
     }
     return 'generic';
-  };
-
-  const isVisible = (el: Element): boolean => {
-    // Prefer checkVisibility: it is layout-INDEPENDENT (checks CSS display /
-    // visibility / opacity / content-visibility, not element size), so it stays
-    // correct when the browser has no real viewport. A headless/CDP session with
-    // an unset viewport makes getBoundingClientRect return 0 for EVERY element;
-    // gating on rect size there filtered out the entire page (refCount 0 on real
-    // pages in prod while ariaSnapshot still saw them). So when checkVisibility is
-    // available, it is decisive.
-    const anyEl = el as unknown as { checkVisibility?: (o?: unknown) => boolean };
-    if (typeof anyEl.checkVisibility === 'function') {
-      try {
-        return anyEl.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
-      } catch { /* fall through to the layout-based check */ }
+  }
+  function isVisible(el) {
+    if (typeof el.checkVisibility === 'function') {
+      try { return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }); } catch (e) {}
     }
-    // Fallback (no checkVisibility): computed style first, then rect size.
-    const style = window.getComputedStyle(el as HTMLElement);
+    var style = window.getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
-    const rect = (el as HTMLElement).getBoundingClientRect();
+    var rect = el.getBoundingClientRect();
     return rect.width >= 1 && rect.height >= 1;
-  };
-
-  const accessibleName = (el: Element): string => {
-    const clip = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 120);
-    const aria = el.getAttribute('aria-label');
+  }
+  function clip(s) { return s.replace(/\\s+/g, ' ').trim().slice(0, 120); }
+  function accessibleName(el) {
+    var aria = el.getAttribute('aria-label');
     if (aria && aria.trim()) return clip(aria);
-    const labelledby = el.getAttribute('aria-labelledby');
+    var labelledby = el.getAttribute('aria-labelledby');
     if (labelledby) {
-      const parts = labelledby.split(/\s+/)
-        .map((id) => el.ownerDocument.getElementById(id)?.textContent ?? '')
-        .join(' ');
+      var parts = labelledby.split(/\\s+/).map(function (id) { var n = el.ownerDocument.getElementById(id); return n ? (n.textContent || '') : ''; }).join(' ');
       if (parts.trim()) return clip(parts);
     }
-    // <label for=id> or wrapping <label>
-    const id = el.getAttribute('id');
+    var id = el.getAttribute('id');
     if (id) {
-      const lbl = el.ownerDocument.querySelector(`label[for="${CSS.escape(id)}"]`);
-      if (lbl?.textContent?.trim()) return clip(lbl.textContent);
+      var lbl = el.ownerDocument.querySelector('label[for="' + CSS.escape(id) + '"]');
+      if (lbl && lbl.textContent && lbl.textContent.trim()) return clip(lbl.textContent);
     }
-    const closestLabel = el.closest('label');
-    if (closestLabel?.textContent?.trim()) return clip(closestLabel.textContent);
-    const text = (el as HTMLElement).textContent;
+    var closestLabel = el.closest('label');
+    if (closestLabel && closestLabel.textContent && closestLabel.textContent.trim()) return clip(closestLabel.textContent);
+    var text = el.textContent;
     if (text && text.trim()) return clip(text);
-    const attrs = ['placeholder', 'alt', 'title', 'value', 'name'];
-    for (const a of attrs) {
-      const v = el.getAttribute(a);
-      if (v && v.trim()) return clip(v);
-    }
+    var attrs = ['placeholder','alt','title','value','name'];
+    for (var k = 0; k < attrs.length; k++) { var v = el.getAttribute(attrs[k]); if (v && v.trim()) return clip(v); }
     return '';
-  };
-
-  const SELECTOR = [
-    'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
-    '[role]', '[contenteditable=""]', '[contenteditable="true"]',
-    '[tabindex]:not([tabindex="-1"])', '[onclick]',
-  ].join(',');
-
-  const items: Array<Omit<StableRef, 'ref'> & { ref: number }> = [];
-  const seen = new Set<Element>();
-
-  for (const el of Array.from(document.querySelectorAll(SELECTOR))) {
+  }
+  var SELECTOR = ['a[href]','button','input','select','textarea','summary','[role]','[contenteditable=""]','[contenteditable="true"]','[tabindex]:not([tabindex="-1"])','[onclick]'].join(',');
+  var items = [];
+  var seen = new Set();
+  var els = document.querySelectorAll(SELECTOR);
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
     if (seen.has(el)) continue;
     seen.add(el);
-    const role = roleForTag(el);
+    var role = roleForTag(el);
     if (role === 'hidden' || role === 'generic') continue;
-    // Only surface elements a user could actually act on.
-    const tag = el.tagName.toLowerCase();
-    const isFormOrLink = tag === 'a' || tag === 'button' || tag === 'input' ||
-      tag === 'select' || tag === 'textarea' || tag === 'summary';
-    if (!isFormOrLink && !INTERACTIVE_ROLES.has(role) && !el.hasAttribute('onclick') &&
-        el.getAttribute('contenteditable') === null) continue;
+    var tag = el.tagName.toLowerCase();
+    var isFormOrLink = tag === 'a' || tag === 'button' || tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'summary';
+    if (!isFormOrLink && !INTERACTIVE_ROLES.has(role) && !el.hasAttribute('onclick') && el.getAttribute('contenteditable') === null) continue;
     if (!isVisible(el)) continue;
-
-    const control = el as HTMLInputElement;
-    const item: Omit<StableRef, 'ref'> & { ref: number } = {
-      ref: ref++,
-      tag,
-      role,
-      name: accessibleName(el),
-    };
-    if (typeof control.value === 'string' && control.value) item.value = control.value.slice(0, 120);
-    if (control.disabled) item.disabled = true;
-    if (tag === 'input' && control.type) item.inputType = control.type.toLowerCase();
-
+    var item = { ref: ref++, tag: tag, role: role, name: accessibleName(el) };
+    if (typeof el.value === 'string' && el.value) item.value = el.value.slice(0, 120);
+    if (el.disabled) item.disabled = true;
+    if (tag === 'input' && el.type) item.inputType = el.type.toLowerCase();
     el.setAttribute(attr, String(item.ref));
     items.push(item);
   }
+  return { items: items, nextRef: ref };
+`;
 
-  return { items, nextRef: ref };
+/** Build a self-contained, arg-baked IIFE source string for frame.evaluate. */
+function buildStampSource(attr: string, startAt: number): string {
+  return `(function(){ var attr = ${JSON.stringify(attr)}; var ref = ${startAt}; ${STAMP_BODY} })()`;
 }
 
 /**
@@ -195,7 +175,9 @@ export async function captureStableRefs(page: Page): Promise<StableRefSnapshot> 
 
   for (const frame of page.frames()) {
     try {
-      const { items, nextRef } = await frame.evaluate(stampInPage, { attr: REF_ATTR, startAt: next });
+      // Evaluate a SOURCE STRING (not a passed function) — see STAMP_BODY: this
+      // is what makes stamping survive the tsx/esbuild prod runtime.
+      const { items, nextRef } = await frame.evaluate(buildStampSource(REF_ATTR, next)) as StampResult;
       next = nextRef;
       for (const it of items) refs.push(it as StableRef);
     } catch {
