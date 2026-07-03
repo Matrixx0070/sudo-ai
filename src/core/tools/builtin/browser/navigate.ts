@@ -7,6 +7,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
 import { resolveActivePage } from './active-page.js';
+import { withRetry } from './resilience.js';
 
 export const navigateTool: ToolDefinition = {
   name: 'browser.navigate',
@@ -84,14 +85,13 @@ export const navigateTool: ToolDefinition = {
     const page = await resolveActivePage(instance);
 
     try {
-      let httpStatus = 0;
-      page.on('response', (response) => {
-        if (response.url() === parsedUrl.href || response.url().startsWith(parsedUrl.origin)) {
-          httpStatus = response.status();
-        }
-      });
-
-      await page.goto(url, { waitUntil, timeout });
+      // Use goto()'s returned response for the status — the previous approach
+      // registered a 'response' listener AFTER page setup, which raced the goto
+      // promise (status was usually 0) and leaked a listener per navigation.
+      // Retry transient navigation failures (DNS blips, mid-load teardown).
+      const mainResponse = await withRetry(() => page.goto(url, { waitUntil, timeout }));
+      const httpStatus = mainResponse?.status() ?? 0;
+      void parsedUrl;
 
       // Handle Chrome security interstitials: "Your connection is not private" / "This web app may not be secured"
       // These are real HTML pages with a proceed button, not JS dialogs

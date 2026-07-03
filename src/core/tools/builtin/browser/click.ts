@@ -12,6 +12,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
 import { resolveActivePage } from './active-page.js';
 import { resolveStableRef, parseRefParam } from './stable-ref.js';
+import { withRetry } from './resilience.js';
 
 export const clickTool: ToolDefinition = {
   name: 'browser.click',
@@ -119,9 +120,9 @@ export const clickTool: ToolDefinition = {
               `since the last snapshot — call browser.snapshot again to get fresh refs.`,
           };
         }
-        await locator.click({ timeout, button, clickCount });
+        await withRetry(() => locator.click({ timeout, button, clickCount }));
       } else {
-        await page.click(selector as string, { timeout, button, clickCount });
+        await withRetry(() => page.click(selector as string, { timeout, button, clickCount }));
       }
 
       ctxLog.info(

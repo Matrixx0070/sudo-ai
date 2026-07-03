@@ -11,6 +11,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
 import { resolveActivePage } from './active-page.js';
 import { resolveStableRef, parseRefParam } from './stable-ref.js';
+import { withRetry, robustFill } from './resilience.js';
 
 export const typeTool: ToolDefinition = {
   name: 'browser.type',
@@ -100,23 +101,21 @@ export const typeTool: ToolDefinition = {
     const target = ref !== null ? `ref=${ref}` : (selector as string);
 
     try {
-      // fill() sets the value atomically and dispatches input/change events
-      if (ref !== null) {
-        const locator = await resolveStableRef(page, ref);
-        if (!locator) {
-          return {
-            success: false,
-            output:
-              `browser.type: ref=${ref} not found on the page. The page may have re-rendered ` +
-              `since the last snapshot — call browser.snapshot again to get fresh refs.`,
-          };
-        }
-        await locator.fill(text, { timeout });
-        if (submit) await locator.press('Enter');
-      } else {
-        await page.fill(selector as string, text, { timeout });
-        if (submit) await page.press(selector as string, 'Enter');
+      // robustFill fills, verifies the value stuck, and falls back to sequential
+      // key entry for contenteditable / rich editors where fill() silently no-ops.
+      const locator = ref !== null
+        ? await resolveStableRef(page, ref)
+        : page.locator(selector as string).first();
+      if (!locator) {
+        return {
+          success: false,
+          output:
+            `browser.type: ref=${ref} not found on the page. The page may have re-rendered ` +
+            `since the last snapshot — call browser.snapshot again to get fresh refs.`,
+        };
       }
+      await withRetry(() => robustFill(locator, text, { timeout }));
+      if (submit) await locator.press('Enter');
 
       ctxLog.info(
         { tool: 'browser.type', target, textLength: text.length, submit, browserName },

@@ -117,7 +117,11 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
 - [ ] Phase 1 #3 — iframe/shadow-DOM in remaining tools (snapshot refs already cross-frame)
 - [x] Phase 5 #9 — `browser.network` + `browser.console` (`page-events.ts` ring buffers, capture
       starts at first interaction; MCP parity; e2e `tests/browser/page-events.test.ts` 3/3).
-- [ ] Phase 2 #4/#5 — self-heal retry + post-action verification
+- [x] Phase 2 #4/#5 — self-heal retry + robust fill. `resilience.ts` (`withRetry` exp-backoff on
+      transient Playwright errors, kill-switch `SUDO_BROWSER_RETRY=0`; `robustFill` verifies value
+      stuck + `pressSequentially` fallback for contenteditable/React). Wired into navigate (also
+      fixed HTTP-status race via goto() return), click, type. e2e `tests/browser/resilience.test.ts`
+      7/7; full browser suite 55/55.
 - [ ] Phase 3 #6 — un-gate computer.use/auth behind ConfidenceGate (kill-switch)
 - [ ] Phase 4 #7/#8 — vision through Brain; CAPTCHA detect→handoff
 - [ ] Phase 5 #10 — TraceStore/SelfVerify wiring
