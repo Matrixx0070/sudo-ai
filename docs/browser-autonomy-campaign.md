@@ -128,7 +128,9 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
 - [~] Phase 4 #8 — CAPTCHA detect→handoff. `captcha.ts` rewritten: +Turnstile/Friendly Captcha,
       testable `detectCaptchas()`, emits operator notification (proactive-notifier) + returns
       structured PARKED result; never solves (non-goal honored). e2e `tests/browser/captcha.test.ts` 3/3.
-- [ ] Phase 4 #7 — route browser.vision through Brain
+- [x] Phase 4 #7 — browser.vision routes through the Brain first (ctx.config.brain.call with
+      BrainMessage.images, model 'auto') → shared failover/cost/Claude-vision; falls back to xAI/OpenAI
+      HTTP providers. e2e `tests/browser/vision-brain.test.ts` 2/2.
 - [ ] Phase 5 #10 — TraceStore/SelfVerify wiring
 - [x] Phase 6 #11 — gated launch flags. `buildLaunchArgs` in `anti-detect.ts`: security-weakening
       flags (--disable-web-security, --allow-running-insecure-content, cert-ignore, IsolateOrigins-off)
