@@ -136,6 +136,12 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
 - [~] Phase 5 #10 — per-tool trace recording ALREADY covers browser tools (loop.ts:1191 records
       every tool call to traces.db); task-end SelfVerify.verify() hookup is a loop-level concern, out
       of browser-tool scope — deferred.
+- [x] FOLLOW-UP — live-loop recovery WIRED. `agent/browser-recovery.ts` + `executeSingleToolCall`:
+      on a failed browser ACTION, appends a fresh stable-ref snapshot to retry with; after 3
+      consecutive failures escalates (operator notify + stop directive). Kill-switch
+      SUDO_BROWSER_RECOVERY=0, threshold SUDO_BROWSER_RECOVERY_ESCALATE. Tests:
+      browser-recovery.test 6/6 (unit) + browser-recovery-wiring.test 2/2 (real executeToolCalls);
+      full agent sweep 77/77, tsc 0. This closes perceive→act→verify→self-heal→ESCALATE end-to-end.
 - [x] Phase 6 #11 — gated launch flags. `buildLaunchArgs` in `anti-detect.ts`: security-weakening
       flags (--disable-web-security, --allow-running-insecure-content, cert-ignore, IsolateOrigins-off)
       now opt-in via SUDO_BROWSER_INSECURE=1; default off (safer + less fingerprintable). Wired into
