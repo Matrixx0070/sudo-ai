@@ -114,7 +114,9 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
       Chromium). tsc clean. Un-committed on working tree.
 - [x] Phase 1 #2 — unified tab-aware active-page resolver (`active-page.ts`; fixes tabs-switch
       targeting; migrated all 14 leaf tools; e2e `tests/browser/active-page.test.ts` 4/4).
-- [ ] Phase 1 #3 — iframe/shadow-DOM in remaining tools (snapshot refs already cross-frame)
+- [x] Phase 1 #3 — iframe/shadow-DOM. Stable-ref snapshot already cross-frame; browser.wait text
+      match now pierces iframes + open shadow roots via `pageContainsTextDeep`. e2e
+      `tests/browser/wait-deep-text.test.ts` 4/4.
 - [x] Phase 5 #9 — `browser.network` + `browser.console` (`page-events.ts` ring buffers, capture
       starts at first interaction; MCP parity; e2e `tests/browser/page-events.test.ts` 3/3).
 - [x] Phase 2 #4/#5 — self-heal retry + robust fill. `resilience.ts` (`withRetry` exp-backoff on
@@ -131,7 +133,9 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
 - [x] Phase 4 #7 — browser.vision routes through the Brain first (ctx.config.brain.call with
       BrainMessage.images, model 'auto') → shared failover/cost/Claude-vision; falls back to xAI/OpenAI
       HTTP providers. e2e `tests/browser/vision-brain.test.ts` 2/2.
-- [ ] Phase 5 #10 — TraceStore/SelfVerify wiring
+- [~] Phase 5 #10 — per-tool trace recording ALREADY covers browser tools (loop.ts:1191 records
+      every tool call to traces.db); task-end SelfVerify.verify() hookup is a loop-level concern, out
+      of browser-tool scope — deferred.
 - [x] Phase 6 #11 — gated launch flags. `buildLaunchArgs` in `anti-detect.ts`: security-weakening
       flags (--disable-web-security, --allow-running-insecure-content, cert-ignore, IsolateOrigins-off)
       now opt-in via SUDO_BROWSER_INSECURE=1; default off (safer + less fingerprintable). Wired into
