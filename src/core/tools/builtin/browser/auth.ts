@@ -10,6 +10,7 @@ import { resolve } from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
 import { resolveActivePage } from './active-page.js';
+import { requiresConfirmationDefault } from './autonomy.js';
 
 export const authTool: ToolDefinition = {
   name: 'browser.auth',
@@ -19,7 +20,9 @@ export const authTool: ToolDefinition = {
     'to a JSON file in the browser profile directory).',
   category: 'browser',
   timeout: 60_000,
-  requiresConfirmation: true,
+  // Confirm unless unattended mode (SUDO_BROWSER_UNATTENDED=1) is enabled, in
+  // which case runtime guardrails (ConfidenceGate / StuckDetector) apply instead.
+  requiresConfirmation: requiresConfirmationDefault(),
   parameters: {
     operation: {
       type: 'string',

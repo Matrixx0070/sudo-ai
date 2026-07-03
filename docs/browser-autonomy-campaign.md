@@ -122,7 +122,9 @@ test** (not just unit). Kill-switch env per slice where behavior changes.
       stuck + `pressSequentially` fallback for contenteditable/React). Wired into navigate (also
       fixed HTTP-status race via goto() return), click, type. e2e `tests/browser/resilience.test.ts`
       7/7; full browser suite 55/55.
-- [ ] Phase 3 #6 — un-gate computer.use/auth behind ConfidenceGate (kill-switch)
+- [x] Phase 3 #6 — un-gate behind kill-switch. `autonomy.ts` `requiresConfirmationDefault()`;
+      computer.use + browser.auth confirm by default, lifted under SUDO_BROWSER_UNATTENDED=1 (runtime
+      ConfidenceGate/StuckDetector enforce safety instead). e2e `tests/browser/autonomy.test.ts` 3/3.
 - [ ] Phase 4 #7/#8 — vision through Brain; CAPTCHA detect→handoff
 - [ ] Phase 5 #10 — TraceStore/SelfVerify wiring
 - [x] Phase 6 #11 — gated launch flags. `buildLaunchArgs` in `anti-detect.ts`: security-weakening
