@@ -17,6 +17,16 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+// STATIC imports (not dynamic import()) so this module shares the exact same
+// module instance / singleton as the browser tools. A dynamic import under the
+// tsx prod runtime could resolve BrowserManager to a SECOND module instance with
+// an empty `instances` map → get('default') undefined → snapshot silently null.
+// (The "vitest masks prod" ESM landmine class.) These modules do not import from
+// agent/, so static imports are cycle-safe.
+import { BrowserManager } from '../tools/builtin/browser/browser-manager.js';
+import { resolveActivePage } from '../tools/builtin/browser/active-page.js';
+import { captureStableRefs } from '../tools/builtin/browser/stable-ref.js';
+import { notify as proactiveNotify } from '../awareness/proactive-notifier.js';
 
 const log = createLogger('browser-recovery');
 
@@ -130,29 +140,28 @@ export async function computeBrowserRecovery(
 // --- default side-effects (real browser + notifier), lazily imported ---------
 
 async function defaultSnapshot(browserName: string): Promise<string | null> {
+  const mgr = BrowserManager.getInstance();
+  const inst = mgr.get(browserName) ?? mgr.get('default');
+  if (!inst) {
+    // No live browser session to snapshot. Logged (not silent) so a genuine
+    // "recovery couldn't perceive" is diagnosable instead of vanishing.
+    log.warn({ browserName }, 'recovery: no browser instance available to snapshot');
+    return null;
+  }
   try {
-    const { BrowserManager } = await import('../tools/builtin/browser/browser-manager.js');
-    const { resolveActivePage } = await import('../tools/builtin/browser/active-page.js');
-    const { captureStableRefs } = await import('../tools/builtin/browser/stable-ref.js');
-    const mgr = BrowserManager.getInstance();
-    const inst = mgr.get(browserName) ?? mgr.get('default');
-    if (!inst) return null;
     const page = await resolveActivePage(inst);
     const { render } = await captureStableRefs(page);
     return render;
-  } catch {
+  } catch (err) {
+    log.warn({ browserName, err: String(err) }, 'recovery: fresh snapshot capture failed');
     return null;
   }
 }
 
 function defaultNotify(title: string, message: string): void {
-  import('../awareness/proactive-notifier.js')
-    .then((m) => {
-      try {
-        m.notify('warning', title, message, 'high');
-      } catch {
-        /* best-effort */
-      }
-    })
-    .catch(() => {});
+  try {
+    proactiveNotify('warning', title, message, 'high');
+  } catch (err) {
+    log.warn({ err: String(err) }, 'recovery: operator notify failed');
+  }
 }
