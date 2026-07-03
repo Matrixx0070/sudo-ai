@@ -31,6 +31,8 @@ import { spreadsheetValidateTool } from '../../src/core/tools/builtin/spreadshee
 import { spreadsheetPivotTool } from '../../src/core/tools/builtin/spreadsheet/tools/pivot.js';
 import { spreadsheetChartTool } from '../../src/core/tools/builtin/spreadsheet/tools/chart.js';
 import { docxCreateTool } from '../../src/core/tools/builtin/docx/tools/create.js';
+import { chromium } from 'playwright-core';
+import { captureStableRefs } from '../../src/core/tools/builtin/browser/stable-ref.js';
 import { imageEditAdvancedTool } from '../../src/core/tools/builtin/media/image-tools.js';
 
 // Minimal ToolContext — these tools only read sessionId + an optional logger here.
@@ -96,6 +98,34 @@ await sharp({ create: { width: 120, height: 90, channels: 3, background: '#2563e
 await step('media.image-edit-advanced (sharp resize+convert)', () => imageEditAdvancedTool.execute({
   input: srcPng, output: outJpg, operations: [{ type: 'resize', width: 60 }, { type: 'convert', format: 'jpeg' }],
 }, ctx), outJpg);
+
+// browser stable-refs under the tsx runtime. captureStableRefs passes in-page
+// stamping logic to Playwright's frame.evaluate; under tsx/esbuild a bundler-wrapped
+// (__name) function throws in the browser → 0 refs (invisible to vitest, which
+// transforms differently). This guards that class. Skipped when chromium isn't
+// installed (matches the vitest browser suites in CI).
+try {
+  const chromePath = chromium.executablePath();
+  if (chromePath && existsSync(chromePath)) {
+    const b = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+    try {
+      const pg = await b.newPage();
+      await pg.setContent('<button>Alpha</button><a href="/x">Beta</a>', { waitUntil: 'load' });
+      const cap = await captureStableRefs(pg);
+      if (cap.refs.length >= 2) {
+        console.log(`✓ browser.stable-refs (captureStableRefs) → ${cap.refs.length} refs`);
+      } else {
+        failed++;
+        console.error(`✗ browser.stable-refs — refCount=${cap.refs.length} (expected ≥2 — tsx frame.evaluate serialization regression)`);
+      }
+    } finally { await b.close(); }
+  } else {
+    console.log('• browser.stable-refs — SKIP (chromium not installed)');
+  }
+} catch (err) {
+  failed++;
+  console.error(`✗ browser.stable-refs — THREW ${err instanceof Error ? err.message : String(err)}`);
+}
 
 for (const f of tmpFiles) rmSync(f, { force: true });
 
