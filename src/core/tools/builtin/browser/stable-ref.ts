@@ -93,18 +93,24 @@ function stampInPage(opts: { attr: string; startAt: number }): {
   };
 
   const isVisible = (el: Element): boolean => {
-    // checkVisibility is the most accurate signal when available.
+    // Prefer checkVisibility: it is layout-INDEPENDENT (checks CSS display /
+    // visibility / opacity / content-visibility, not element size), so it stays
+    // correct when the browser has no real viewport. A headless/CDP session with
+    // an unset viewport makes getBoundingClientRect return 0 for EVERY element;
+    // gating on rect size there filtered out the entire page (refCount 0 on real
+    // pages in prod while ariaSnapshot still saw them). So when checkVisibility is
+    // available, it is decisive.
     const anyEl = el as unknown as { checkVisibility?: (o?: unknown) => boolean };
     if (typeof anyEl.checkVisibility === 'function') {
       try {
-        if (!anyEl.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
-      } catch { /* fall through to rect check */ }
+        return anyEl.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+      } catch { /* fall through to the layout-based check */ }
     }
-    const rect = (el as HTMLElement).getBoundingClientRect();
-    if (rect.width < 1 || rect.height < 1) return false;
+    // Fallback (no checkVisibility): computed style first, then rect size.
     const style = window.getComputedStyle(el as HTMLElement);
     if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
-    return true;
+    const rect = (el as HTMLElement).getBoundingClientRect();
+    return rect.width >= 1 && rect.height >= 1;
   };
 
   const accessibleName = (el: Element): string => {
