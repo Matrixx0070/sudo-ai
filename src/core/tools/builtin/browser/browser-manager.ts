@@ -15,7 +15,7 @@ import { resolve } from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import {
-  ANTI_DETECT_ARGS,
+  buildLaunchArgs,
   detectChromiumVersion,
   buildUserAgent,
   buildClientHintsHeaders,
@@ -222,16 +222,9 @@ export class BrowserManager {
 
     const browser = await chromium.launch({
       headless,
-      args: [
-        '--ignore-certificate-errors',
-        '--ignore-ssl-errors',
-        '--disable-web-security',
-        '--allow-running-insecure-content',
-        '--no-sandbox',
-        '--disable-features=IsolateOrigins,site-per-process',
-        // Anti-detection flags — hide navigator.webdriver and other automation signals
-        ...ANTI_DETECT_ARGS,
-      ],
+      // Anti-automation-signal flags always; security-weakening flags only under
+      // SUDO_BROWSER_INSECURE=1 (safer default + less fingerprintable).
+      args: buildLaunchArgs(),
     });
     const context = await browser.newContext({
       userAgent: buildUserAgent(chromiumVersion),

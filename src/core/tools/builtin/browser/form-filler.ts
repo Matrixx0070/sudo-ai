@@ -10,6 +10,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 
 export const formFillerTool: ToolDefinition = {
   name: 'browser.fill-form',
@@ -68,8 +69,7 @@ export const formFillerTool: ToolDefinition = {
     const manager = BrowserManager.getInstance();
     const instance = await manager.getOrConnect(browserName);
 
-    const pages = instance.context.pages();
-    const page = pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     const filled: string[] = [];
     const failed: Array<{ field: string; reason: string }> = [];

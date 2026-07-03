@@ -11,6 +11,8 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
+import { captureStableRefs } from './stable-ref.js';
 
 export const snapshotTool: ToolDefinition = {
   name: 'browser.snapshot',
@@ -32,6 +34,15 @@ export const snapshotTool: ToolDefinition = {
       required: false,
       default: 10000,
       description: 'Milliseconds to wait for the page to be ready (default: 10000).',
+    },
+    refs: {
+      type: 'boolean',
+      required: false,
+      default: true,
+      description:
+        'Also stamp stable numeric refs onto actionable elements and include a ' +
+        '"[N] role name" listing. Pass these refs to browser.click / browser.type ' +
+        'via their "ref" param for exact, duplicate-name-proof targeting (default: true).',
     },
   },
 
@@ -57,9 +68,7 @@ export const snapshotTool: ToolDefinition = {
       };
     }
 
-    const pages = instance.context.pages();
-    const page =
-      pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     try {
       // ariaSnapshot() returns a YAML string describing the ARIA tree.
@@ -72,15 +81,32 @@ export const snapshotTool: ToolDefinition = {
       const title = await page.title().catch(() => '');
       const lineCount = snapshot.split('\n').length;
 
+      // Stamp stable refs so click/type can target elements exactly, even when
+      // several share the same accessible name. Non-fatal: a stamping failure
+      // still returns the ARIA tree.
+      const wantRefs = params['refs'] !== false;
+      let refBlock = '';
+      let refs: Array<Record<string, unknown>> = [];
+      if (wantRefs) {
+        try {
+          const captured = await captureStableRefs(page);
+          refs = captured.refs as unknown as Array<Record<string, unknown>>;
+          refBlock =
+            `\n\nActionable elements (pass ref= to browser.click / browser.type):\n${captured.render}`;
+        } catch (refErr) {
+          ctxLog.error({ tool: 'browser.snapshot', browserName, err: refErr }, 'Ref stamping failed');
+        }
+      }
+
       ctxLog.info(
-        { tool: 'browser.snapshot', browserName, url, lineCount },
+        { tool: 'browser.snapshot', browserName, url, lineCount, refCount: refs.length },
         'Snapshot captured',
       );
 
       return {
         success: true,
-        output: `ARIA snapshot of "${title}" (${url}):\n\n${snapshot}`,
-        data: { url, title, snapshot, lineCount },
+        output: `ARIA snapshot of "${title}" (${url}):\n\n${snapshot}${refBlock}`,
+        data: { url, title, snapshot, lineCount, refs },
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

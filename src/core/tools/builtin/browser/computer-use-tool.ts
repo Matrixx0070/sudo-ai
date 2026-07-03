@@ -16,6 +16,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { executeComputerAction } from './computer-use.js';
+import { requiresConfirmationDefault } from './autonomy.js';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext } from '../../types.js';
 import type { ToolRegistry } from '../../registry.js';
@@ -79,7 +80,9 @@ export const computerUseTool: ToolDefinition = {
   description:
     'Execute a low-level screen action (click, type, screenshot, scroll, key) using xdotool and scrot. Requires DISPLAY env to be set.',
   category: 'browser',
-  requiresConfirmation: true,
+  // Confirm unless unattended mode (SUDO_BROWSER_UNATTENDED=1) is enabled; safety
+  // stays 'destructive' so the ConfidenceGate still evaluates it when unattended.
+  requiresConfirmation: requiresConfirmationDefault(),
   safety: 'destructive',
   timeout: 15_000,
   parameters: {

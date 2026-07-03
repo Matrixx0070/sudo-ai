@@ -10,11 +10,43 @@
  * At least one of text, selector, or time must be supplied.
  */
 
+import type { Page } from 'playwright-core';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 
 /** Maximum unconditional wait — 60 seconds. */
 const MAX_WAIT_SECONDS = 60;
+
+/**
+ * True if `needle` appears anywhere on the page — light DOM, open shadow roots,
+ * OR any (same-or-cross-origin) frame. The old check only read
+ * document.body.textContent of the main frame, so text inside iframes (logins,
+ * payments) and shadow-DOM widgets was invisible.
+ */
+export async function pageContainsTextDeep(page: Page, needle: string): Promise<boolean> {
+  // Runs in each frame's context: walks light DOM + open shadow roots.
+  const deepFind = (search: string): boolean => {
+    const visit = (node: Node): boolean => {
+      if (node.nodeType === 3 /* TEXT_NODE */) {
+        return (node.textContent ?? '').includes(search);
+      }
+      const el = node as Element & { shadowRoot?: ShadowRoot | null };
+      if (el.shadowRoot) {
+        for (const c of Array.from(el.shadowRoot.childNodes)) if (visit(c)) return true;
+      }
+      for (const c of Array.from(node.childNodes)) if (visit(c)) return true;
+      return false;
+    };
+    return visit(document.documentElement);
+  };
+
+  for (const frame of page.frames()) {
+    const found = await frame.evaluate(deepFind, needle).catch(() => false);
+    if (found) return true;
+  }
+  return false;
+}
 
 export const waitTool: ToolDefinition = {
   name: 'browser.wait',
@@ -31,8 +63,8 @@ export const waitTool: ToolDefinition = {
       type: 'string',
       required: false,
       description:
-        'Wait until this text string appears anywhere in the page body. ' +
-        'Case-sensitive substring match.',
+        'Wait until this text string appears anywhere on the page, including inside ' +
+        'iframes and shadow DOM. Case-sensitive substring match.',
     },
     selector: {
       type: 'string',
@@ -106,18 +138,18 @@ export const waitTool: ToolDefinition = {
       };
     }
 
-    const pages = instance.context.pages();
-    const page =
-      pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     try {
       if (text !== null) {
-        // Wait until the text appears anywhere in the document body
-        await page.waitForFunction(
-          (needle: string) => document.body.textContent?.includes(needle) ?? false,
-          text,
-          { timeout },
-        );
+        // Poll for the text across all frames + shadow DOM until timeout.
+        const deadline = Date.now() + timeout;
+        let appeared = false;
+        while (Date.now() < deadline) {
+          if (await pageContainsTextDeep(page, text)) { appeared = true; break; }
+          await page.waitForTimeout(250);
+        }
+        if (!appeared) throw new Error(`Text "${text}" did not appear within ${timeout}ms`);
         ctxLog.info({ tool: 'browser.wait', text, browserName }, 'Text appeared');
         return {
           success: true,
