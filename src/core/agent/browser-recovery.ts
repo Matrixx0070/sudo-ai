@@ -23,6 +23,7 @@ import { createLogger } from '../shared/logger.js';
 // an empty `instances` map → get('default') undefined → snapshot silently null.
 // (The "vitest masks prod" ESM landmine class.) These modules do not import from
 // agent/, so static imports are cycle-safe.
+import type { Page } from 'playwright-core';
 import { BrowserManager } from '../tools/builtin/browser/browser-manager.js';
 import { resolveActivePage } from '../tools/builtin/browser/active-page.js';
 import { captureStableRefs } from '../tools/builtin/browser/stable-ref.js';
@@ -150,12 +151,30 @@ async function defaultSnapshot(browserName: string): Promise<string | null> {
   }
   try {
     const page = await resolveActivePage(inst);
-    const { render } = await captureStableRefs(page);
-    return render;
+    return await captureFreshSnapshot(page);
   } catch (err) {
     log.warn({ browserName, err: String(err) }, 'recovery: fresh snapshot capture failed');
     return null;
   }
+}
+
+/**
+ * Capture a fresh stable-ref snapshot for recovery, letting the page SETTLE first.
+ *
+ * A failed browser action often triggered a navigation, so at recovery time the
+ * page can be blank/transitioning — capturing then yields "(no actionable elements
+ * found)" and the fresh refs are useless. So: wait for the in-flight navigation to
+ * reach domcontentloaded (bounded), and if the first capture still finds nothing,
+ * give it a brief moment and retry once. All waits are fail-open.
+ */
+export async function captureFreshSnapshot(page: Page): Promise<string> {
+  await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
+  let captured = await captureStableRefs(page);
+  if (captured.refs.length === 0) {
+    await page.waitForTimeout(600).catch(() => {});
+    captured = await captureStableRefs(page);
+  }
+  return captured.render;
 }
 
 function defaultNotify(title: string, message: string): void {
