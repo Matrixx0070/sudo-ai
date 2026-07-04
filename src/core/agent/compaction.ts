@@ -93,8 +93,44 @@ function buildCompactionSystemPrompt(): string {
 }
 
 /** Build the user turn that contains the conversation to compact. */
+/** Minimum length for a user message to be eligible for compaction dedupe. */
+const MIN_DEDUPE_USER_CHARS = 24;
+
+/** Normalize text for duplicate detection: NFC, lowercase, whitespace-collapsed. */
+function normalizeForDedupe(s: string): string {
+  return s.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Drop LATER duplicate user turns before summarisation. A user who re-sends the
+ * same prompt (a retry, or a client that re-delivers) otherwise inflates the
+ * summariser input and biases the summary toward the repeated ask. Only long
+ * messages (>= 24 chars) are deduped — short acks ("next", "yes") are kept — and
+ * the FIRST occurrence always survives. Operates on a COPY; history is untouched.
+ * Kill-switch: SUDO_COMPACT_DEDUPE_USERS=0.
+ */
+export function dedupeUserMessagesForCompaction(messages: unknown[]): unknown[] {
+  if (process.env['SUDO_COMPACT_DEDUPE_USERS'] === '0') return messages;
+  const seen = new Set<string>();
+  const out: unknown[] = [];
+  for (const m of messages) {
+    const msg = m as Record<string, unknown>;
+    if (
+      msg['role'] === 'user' &&
+      typeof msg['content'] === 'string' &&
+      (msg['content'] as string).length >= MIN_DEDUPE_USER_CHARS
+    ) {
+      const key = normalizeForDedupe(msg['content'] as string);
+      if (seen.has(key)) continue; // later duplicate — drop from the summariser input
+      seen.add(key);
+    }
+    out.push(m);
+  }
+  return out;
+}
+
 function buildCompactionUserTurn(messages: unknown[]): string {
-  const serialised = messages
+  const serialised = dedupeUserMessagesForCompaction(messages)
     .map((m) => {
       const msg = m as Record<string, unknown>;
       const role = String(msg['role'] ?? 'unknown').toUpperCase();
