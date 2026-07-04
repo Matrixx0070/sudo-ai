@@ -12,6 +12,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import { withCommsIdempotency } from '../../../comms/idempotency.js';
 
 const log = createLogger('comms:notify');
 
@@ -252,8 +253,17 @@ export const notificationTool: ToolDefinition = {
 
     const results = await Promise.allSettled(
       validChannels.map(async (ch) => {
-        const result = await DISPATCHERS[ch](message, ctx.signal);
-        return { channel: ch, ...result } as DeliveryStatus;
+        // Guard EACH channel independently (key = notify:<channel> + message) so a
+        // re-run turn can't re-deliver to a channel that already got the notice,
+        // while a channel that genuinely failed still retries.
+        const guard = await withCommsIdempotency(
+          { channel: `notify:${ch}`, recipient: ch, body: message },
+          () => DISPATCHERS[ch](message, ctx.signal),
+        );
+        if (guard.duplicate) {
+          return { channel: ch, success: true, detail: 'duplicate suppressed (idempotency)' } as DeliveryStatus;
+        }
+        return { channel: ch, ...guard.result! } as DeliveryStatus;
       }),
     );
 

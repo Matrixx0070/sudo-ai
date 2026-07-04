@@ -232,6 +232,29 @@ export const sessionsSpawnTool: ToolDefinition = {
     // it tracks attempts per session (abuse signal), not live count.
     // ------------------------------------------------------------------
 
+    // Idempotency (opt-in): a re-dispatched turn must not spawn a SECOND sub-agent
+    // for an identical task from the same parent session. Distinct from the
+    // announce-back guard below (which dedups the RESULT message, not the run).
+    // The claim is held 'pending' for the whole sub-agent run, so a concurrent
+    // identical spawn is also suppressed. Confirmed on success, released on error.
+    const spawnIdemOn = isCommsIdempotencyEnabled();
+    let spawnClaim: { key: string; duplicate: boolean } | null = null;
+    if (spawnIdemOn) {
+      try {
+        spawnClaim = getCommsIdempotencyStore().begin({ channel: 'spawn', recipient: ctx.sessionId ?? 'root', body: task });
+      } catch (err) {
+        logger.warn({ session: ctx.sessionId, err: String(err) }, 'sessions.spawn: idempotency begin failed — spawning unguarded (fail-open)');
+      }
+      if (spawnClaim?.duplicate) {
+        logger.warn({ session: ctx.sessionId, key: spawnClaim.key }, 'sessions.spawn: duplicate spawn suppressed (idempotency)');
+        return {
+          success: true,
+          output: 'sessions.spawn: duplicate suppressed — an identical task was already spawned from this session within the idempotency window.',
+          data: { task, duplicate: true },
+        };
+      }
+    }
+
     concurrentSpawns++;
     spawnCountMap.set(ctx.sessionId, { count: currentCount + 1, lastAt: Date.now() });
 
@@ -286,12 +309,15 @@ export const sessionsSpawnTool: ToolDefinition = {
         }
       }
 
+      if (spawnClaim) { try { getCommsIdempotencyStore().confirm(spawnClaim.key, sessionId); } catch { /* confirm best-effort */ } }
       return {
         success: true,
         output: `Agent session spawned successfully. Session ID: ${sessionId}\n\nOutput:\n${result.text}`,
         data: { sessionId, task, channel: resolvedChannel, peerId: resolvedPeer, depth: childDepth },
       };
     } catch (err) {
+      // Release the idempotency claim so a genuine retry of a failed spawn proceeds.
+      if (spawnClaim) { try { getCommsIdempotencyStore().release(spawnClaim.key); } catch { /* release best-effort */ } }
       const msg = err instanceof Error ? err.message : String(err);
       logger.error({ session: ctx.sessionId, err: msg }, 'sessions.spawn error');
       return { success: false, output: `sessions.spawn error: ${msg}` };
