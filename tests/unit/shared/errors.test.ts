@@ -249,6 +249,28 @@ describe('categorizeError', () => {
     expect(categorizeError(403)).toBe('auth_permanent');
   });
 
+  // A quota/billing failure on an auth status must fail OVER (billing), not park
+  // the profile on a re-auth cooldown (401) or permanently disable it (403).
+  it('should map 401 with a billing/quota body to billing, not auth', () => {
+    expect(categorizeError(401, 'Key limit exceeded')).toBe('billing');
+    expect(categorizeError(401, '{"error":"insufficient credits"}')).toBe('billing');
+  });
+
+  it('should map 403 with a billing/quota body to billing, not auth_permanent', () => {
+    expect(categorizeError(403, 'Your account is out of credit')).toBe('billing');
+    expect(categorizeError(403, 'negative balance — payment required')).toBe('billing');
+  });
+
+  it('should still map a plain 401/403 (no billing signature) to auth/auth_permanent', () => {
+    expect(categorizeError(401, 'invalid bearer token')).toBe('auth');
+    expect(categorizeError(403, 'permission denied for this model')).toBe('auth_permanent');
+  });
+
+  it('should map 401/403 with a CJK insufficient-balance body to billing', () => {
+    expect(categorizeError(401, '余额不足')).toBe('billing');
+    expect(categorizeError(403, '账户额度不足')).toBe('billing');
+  });
+
   it('should map 408 to timeout', () => {
     expect(categorizeError(408)).toBe('timeout');
   });

@@ -165,6 +165,23 @@ export type ErrorCategory =
  * @param body   - Optional response body string for additional disambiguation.
  * @returns The matching ErrorCategory, or `'format'` as a safe default.
  */
+/**
+ * Whether an error body names a quota/billing/credit problem — i.e. the
+ * credential is valid but the account is out of budget. Used to reclassify an
+ * auth-status (401/403) or a 429 as `billing` so failover fails OVER to the next
+ * provider instead of cooling down / permanently disabling a healthy profile.
+ * Covers common English wordings plus a few CJK provider phrasings.
+ */
+export function isBillingBody(body: string): boolean {
+  return (
+    /insufficient.?(?:quota|credit|credits|balance|funds)/i.test(body) ||
+    /exceeded.*(?:quota|credit|credits|budget)/i.test(body) ||
+    /\bkey limit\b|\bcredit limit\b|\bquota (?:exceeded|exhausted)\b/i.test(body) ||
+    /\bpayment required\b|\bbilling\b|\bout of credit\b|\bnegative balance\b/i.test(body) ||
+    /余额不足|额度不足|欠费/.test(body)
+  );
+}
+
 export function categorizeError(status: number, body?: string): ErrorCategory {
   if (typeof status !== 'number') {
     return 'format';
@@ -176,14 +193,21 @@ export function categorizeError(status: number, body?: string): ErrorCategory {
     case 429:
       // OpenAI returns 429 for both rate-limits AND exhausted quota.
       // "insufficient_quota" is a billing problem, not a transient rate limit.
-      if (body && /insufficient.?quota/i.test(body)) return 'billing';
-      if (body && /exceeded.*quota/i.test(body)) return 'billing';
+      if (body && isBillingBody(body)) return 'billing';
       return 'rate_limit';
     case 503:
       return 'overloaded';
     case 401:
+      // A quota/billing failure can arrive on an AUTH status: OpenRouter sends
+      // "Key limit exceeded" / "insufficient credits" as 401/403. Left as 'auth'
+      // it would park the profile on a long re-auth cooldown (and 403 →
+      // auth_permanent PERMANENTLY DISABLES it) — when the right action is to
+      // fail OVER to the next provider on a billing cooldown, since the credential
+      // is fine, the account is just out of budget. Body billing-signature wins.
+      if (body && isBillingBody(body)) return 'billing';
       return 'auth';
     case 403:
+      if (body && isBillingBody(body)) return 'billing';
       return 'auth_permanent';
     case 408:
       return 'timeout';
