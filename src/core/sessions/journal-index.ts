@@ -6,11 +6,29 @@
  * Kept in a separate module so journal-store.ts stays under 300 lines.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { createLogger } from '../shared/logger.js';
 import type { SessionIndex, SessionIndexEntry } from './journal-types.js';
 
 const log = createLogger('sessions:journal-index');
+
+/**
+ * Preserve a corrupt sessions.json by renaming it to a timestamped backup BEFORE
+ * readIndex returns an empty index. Without this the next writeIndex would
+ * overwrite the corrupt file with `{entries:[]}`, permanently losing every
+ * session entry (and any chance of manual recovery).
+ */
+function backupCorruptIndex(indexPath: string): void {
+  try {
+    if (existsSync(indexPath)) {
+      const backup = `${indexPath}.corrupt.${Date.now()}`;
+      renameSync(indexPath, backup);
+      log.warn({ indexPath, backup }, 'sessions.json preserved as backup before reset');
+    }
+  } catch (err) {
+    log.error({ indexPath, err: String(err) }, 'failed to back up corrupt sessions.json');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Read
@@ -28,12 +46,14 @@ export function readIndex(indexPath: string): SessionIndex {
     const raw = readFileSync(indexPath, 'utf8');
     const parsed = JSON.parse(raw) as SessionIndex;
     if (!Array.isArray(parsed.entries)) {
-      log.warn({ indexPath }, 'sessions.json corrupt — resetting to empty index');
+      log.warn({ indexPath }, 'sessions.json corrupt (entries not an array) — resetting to empty index');
+      backupCorruptIndex(indexPath);
       return { version: 1, entries: [] };
     }
     return parsed;
   } catch (err) {
     log.error({ indexPath, err }, 'readIndex: failed to parse sessions.json');
+    backupCorruptIndex(indexPath);
     return { version: 1, entries: [] };
   }
 }
@@ -48,7 +68,13 @@ export function readIndex(indexPath: string): SessionIndex {
  */
 export function writeIndex(indexPath: string, index: SessionIndex): void {
   try {
-    writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf8');
+    // Atomic write: serialise to a temp file then rename over the target. rename
+    // is atomic on POSIX, so a crash / disk-full mid-write leaves either the old
+    // complete index or the temp file — NEVER a truncated sessions.json that the
+    // next readIndex would treat as corrupt and reset to empty.
+    const tmp = `${indexPath}.tmp`;
+    writeFileSync(tmp, JSON.stringify(index, null, 2), 'utf8');
+    renameSync(tmp, indexPath);
   } catch (err) {
     log.error({ indexPath, err }, 'writeIndex: failed to write sessions.json');
   }
