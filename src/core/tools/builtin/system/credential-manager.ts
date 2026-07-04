@@ -22,6 +22,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { writeFileAtomic } from '../../../shared/atomic-write.js';
 import path from 'node:path';
 import os from 'node:os';
 import { createLogger } from '../../../shared/logger.js';
@@ -80,7 +81,7 @@ function loadOrCreateSalt(): Buffer {
   // Generate 512-bit (64 byte) cryptographically random salt
   const salt = crypto.randomBytes(SALT_LEN);
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(SALT_PATH, salt.toString('hex'), { mode: 0o600 });
+  writeFileAtomic(SALT_PATH, salt.toString('hex'), { mode: 0o600 });
   logger.info('Generated new 512-bit vault salt');
   return salt;
 }
@@ -134,7 +135,7 @@ function verifyVaultIntegrity(vaultData: string, key: Buffer): boolean {
 /** Save vault HMAC after writing */
 function saveVaultHmac(vaultData: string, key: Buffer): void {
   const hmac = computeHmac(vaultData, key);
-  fs.writeFileSync(HMAC_PATH, hmac, { mode: 0o600 });
+  writeFileAtomic(HMAC_PATH, hmac, { mode: 0o600 });
 }
 
 // ---------------------------------------------------------------------------
@@ -164,8 +165,9 @@ function loadStore(key: Buffer): CredentialStore {
 function saveStore(store: CredentialStore, key: Buffer): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const encrypted = JSON.stringify(encrypt(JSON.stringify(store), key));
-  // Write vault with restricted permissions
-  fs.writeFileSync(STORE_PATH, encrypted, { mode: 0o600 });
+  // Write vault with restricted permissions (atomic: a torn write would corrupt
+  // the encrypted vault or desync it from its HMAC → all credentials unreadable).
+  writeFileAtomic(STORE_PATH, encrypted, { mode: 0o600 });
   // Write HMAC for tamper detection
   saveVaultHmac(encrypted, key);
   logger.debug('Vault saved with HMAC integrity check');
