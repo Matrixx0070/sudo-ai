@@ -45,6 +45,7 @@ export interface FlywheelVerifyOpts {
   max?: string;
   confirm?: boolean;
   json?: boolean;
+  admit?: boolean;
 }
 
 /** Registry of guidance repairs the CLI can verify, keyed by their tool cluster. */
@@ -157,5 +158,31 @@ export async function runFlywheelVerify(opts: FlywheelVerifyOpts): Promise<numbe
   };
   const result = await replayVerifyLive(inputs, repair, rewrite, { maxEpisodes });
   printReport(repair, result, true, opts.json ?? false);
+
+  // Close the loop: on an 'adopt' decision, optionally ADMIT the lesson as a canary
+  // candidate (explicit --admit only). The scanner then rolls it out behind a canary
+  // that auto-reverts on non-improvement (needs SUDO_FLYWHEEL_APPLY=1 to take effect).
+  const decision = decideLiveAdoption(result);
+  if (decision === 'adopt' && opts.admit === true) {
+    const { loadLessonStore, saveLessonStore, upsertCandidate } = await import('../../core/learning/lesson-store.js');
+    const { lessonStorePath, isApplyEnabled } = await import('../../core/learning/lesson-apply.js');
+    const now = new Date().toISOString();
+    const store = loadLessonStore(lessonStorePath());
+    const { store: next, added } = upsertCandidate(store, {
+      lessonId: repair.lessonId, tool: repair.tool, hint: repair.lesson,
+      recoveryPct: result.recoveryPct, canaryWindowMs: 24 * 60 * 60 * 1000,
+    }, now);
+    if (added) {
+      saveLessonStore(lessonStorePath(), next);
+      console.log(`\n  ADMITTED '${repair.lessonId}' as a canary candidate.`);
+      console.log(isApplyEnabled()
+        ? '  SUDO_FLYWHEEL_APPLY=1 is set — the scanner will start the canary next cycle.'
+        : '  Set SUDO_FLYWHEEL_APPLY=1 for the scanner to roll it out (auto-reverts on non-improvement).');
+    } else {
+      console.log(`\n  '${repair.lessonId}' is already tracked — not re-admitted.`);
+    }
+  } else if (decision === 'adopt') {
+    console.log('\n  decision=adopt — re-run with --admit to enter it into the canary lifecycle.');
+  }
   return 0;
 }

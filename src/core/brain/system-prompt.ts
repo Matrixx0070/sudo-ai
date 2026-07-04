@@ -14,6 +14,7 @@ import { getPersonaSystemBlock } from './personas.js';
 import { getMoodSystemBlock } from './moods.js';
 import { isPromptCacheEnabled, sortByName, DYNAMIC_BOUNDARY_MARKER } from './prompt-cache-discipline.js';
 import { getCapabilityManifestBody, isCapabilityManifestEnabled } from './capability-manifest.js';
+import { getAppliedLessonHints } from '../learning/lesson-apply.js';
 import type { SystemPromptOptions } from './types.js';
 
 const log = createLogger('brain:system-prompt');
@@ -473,6 +474,16 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   if (activeHints && activeHints.length > 0) {
     const hintsBlock = activeHints.map((h) => `- ${h}`).join('\n');
     parts.push(sectionWithHeader('Contextual Guidance', hintsBlock));
+  }
+
+  // 7.65 Learned repair hints — advisory lessons the flywheel VERIFIED and is
+  // canarying/has promoted. Gated by SUDO_FLYWHEEL_APPLY (default OFF → [] with no
+  // disk read, so the default prompt is byte-identical). Advisory text only, and a
+  // canary auto-reverts on non-improvement — see learning/lesson-apply.ts.
+  const learnedHints = getAppliedLessonHints();
+  if (learnedHints.length > 0) {
+    const learnedBlock = learnedHints.map((h) => `- ${h}`).join('\n');
+    parts.push(sectionWithHeader('Learned Repair Hints', learnedBlock));
   }
 
   // 7.6 Reasoning lens — analytical framework(s) for the matched task type.
