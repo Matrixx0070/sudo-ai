@@ -9,21 +9,32 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
+import { resolveStableRef, parseRefParam } from './stable-ref.js';
+import { withRetry, robustFill } from './resilience.js';
 
 export const typeTool: ToolDefinition = {
   name: 'browser.type',
   description:
-    'Type text into an input field or textarea on the current browser page. ' +
+    'Type text into an input field or textarea. Target it EITHER by a stable "ref" from ' +
+    'browser.snapshot (preferred — exact) OR by a CSS/Playwright selector. ' +
     'Clears any existing value first. Optionally presses Enter after typing to submit.',
   category: 'browser',
   timeout: 30_000,
   parameters: {
+    ref: {
+      type: 'number',
+      required: false,
+      description:
+        'Stable element ref from a prior browser.snapshot (e.g. 7). Preferred over selector.',
+    },
     selector: {
       type: 'string',
-      required: true,
+      required: false,
       description:
         'CSS or Playwright selector of the input element. ' +
-        'Examples: "#search-input", "[name=email]", "textarea.message".',
+        'Examples: "#search-input", "[name=email]", "textarea.message". ' +
+        'Ignored when "ref" is provided.',
     },
     text: {
       type: 'string',
@@ -56,9 +67,11 @@ export const typeTool: ToolDefinition = {
       error: (...a: unknown[]) => void;
     };
 
+    const ref = parseRefParam(params['ref']);
     const selector = params['selector'];
-    if (typeof selector !== 'string' || selector.trim() === '') {
-      return { success: false, output: 'browser.type: "selector" is required.' };
+    const hasSelector = typeof selector === 'string' && selector.trim() !== '';
+    if (ref === null && !hasSelector) {
+      return { success: false, output: 'browser.type: provide "ref" (from browser.snapshot) or "selector".' };
     }
 
     const text = params['text'];
@@ -83,33 +96,42 @@ export const typeTool: ToolDefinition = {
       };
     }
 
-    const pages = instance.context.pages();
-    const page =
-      pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
+
+    const target = ref !== null ? `ref=${ref}` : (selector as string);
 
     try {
-      // fill() sets the value atomically and dispatches input/change events
-      await page.fill(selector, text, { timeout });
-
-      if (submit) {
-        await page.press(selector, 'Enter');
+      // robustFill fills, verifies the value stuck, and falls back to sequential
+      // key entry for contenteditable / rich editors where fill() silently no-ops.
+      const locator = ref !== null
+        ? await resolveStableRef(page, ref)
+        : page.locator(selector as string).first();
+      if (!locator) {
+        return {
+          success: false,
+          output:
+            `browser.type: ref=${ref} not found on the page. The page may have re-rendered ` +
+            `since the last snapshot — call browser.snapshot again to get fresh refs.`,
+        };
       }
+      await withRetry(() => robustFill(locator, text, { timeout }));
+      if (submit) await locator.press('Enter');
 
       ctxLog.info(
-        { tool: 'browser.type', selector, textLength: text.length, submit, browserName },
+        { tool: 'browser.type', target, textLength: text.length, submit, browserName },
         'Text typed',
       );
 
       return {
         success: true,
         output:
-          `Typed ${text.length} characters into "${selector}"` +
+          `Typed ${text.length} characters into ${target}` +
           (submit ? ' and pressed Enter.' : '.'),
-        data: { selector, textLength: text.length, submit, url: page.url() },
+        data: { ref: ref ?? undefined, selector: ref === null ? selector : undefined, textLength: text.length, submit, url: page.url() },
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      ctxLog.error({ tool: 'browser.type', selector, err }, 'Type failed');
+      ctxLog.error({ tool: 'browser.type', target, err }, 'Type failed');
       return { success: false, output: `browser.type error: ${msg}` };
     }
   },

@@ -10,29 +10,79 @@
  * At least one of text, selector, or time must be supplied.
  */
 
+import type { Page } from 'playwright-core';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 
 /** Maximum unconditional wait — 60 seconds. */
 const MAX_WAIT_SECONDS = 60;
 
+/**
+ * True if `needle` appears anywhere on the page — light DOM, open shadow roots,
+ * OR any (same-or-cross-origin) frame. The old check only read
+ * document.body.textContent of the main frame, so text inside iframes (logins,
+ * payments) and shadow-DOM widgets was invisible.
+ */
+export async function pageContainsTextDeep(page: Page, needle: string): Promise<boolean> {
+  // Runs in each frame's context: walks light DOM + open shadow roots.
+  const deepFind = (search: string): boolean => {
+    const visit = (node: Node): boolean => {
+      if (node.nodeType === 3 /* TEXT_NODE */) {
+        return (node.textContent ?? '').includes(search);
+      }
+      const el = node as Element & { shadowRoot?: ShadowRoot | null };
+      if (el.shadowRoot) {
+        for (const c of Array.from(el.shadowRoot.childNodes)) if (visit(c)) return true;
+      }
+      for (const c of Array.from(node.childNodes)) if (visit(c)) return true;
+      return false;
+    };
+    return visit(document.documentElement);
+  };
+
+  for (const frame of page.frames()) {
+    const found = await frame.evaluate(deepFind, needle).catch(() => false);
+    if (found) return true;
+  }
+  return false;
+}
+
 export const waitTool: ToolDefinition = {
   name: 'browser.wait',
   description:
-    'Wait for a condition on the current browser page before continuing. ' +
-    'Supply "text" to wait until that string appears in the page, ' +
-    '"selector" to wait for an element to be present, or ' +
-    '"time" (seconds) to wait unconditionally. ' +
-    'Priority order when multiple are given: text > selector > time.',
+    'Wait for a condition on the current browser page before continuing. Supply one of: ' +
+    '"url" (wait for the URL to match a glob), "loadState" (load/domcontentloaded/networkidle), ' +
+    '"function" (a JS expression to become truthy), "text" (string appears on the page), ' +
+    '"selector" (element present), or "time" (seconds, unconditional). ' +
+    'Priority when multiple are given: url > loadState > function > text > selector > time.',
   category: 'browser',
   timeout: 120_000,
   parameters: {
+    url: {
+      type: 'string',
+      required: false,
+      description: 'Wait until the page URL matches this string or glob (e.g. "**/dashboard").',
+    },
+    loadState: {
+      type: 'string',
+      required: false,
+      enum: ['load', 'domcontentloaded', 'networkidle'],
+      description: 'Wait until the page reaches this load state.',
+    },
+    function: {
+      type: 'string',
+      required: false,
+      description:
+        'Wait until this JS expression evaluates truthy in the page context ' +
+        '(e.g. "document.querySelectorAll(\'.row\').length > 5").',
+    },
     text: {
       type: 'string',
       required: false,
       description:
-        'Wait until this text string appears anywhere in the page body. ' +
-        'Case-sensitive substring match.',
+        'Wait until this text string appears anywhere on the page, including inside ' +
+        'iframes and shadow DOM. Case-sensitive substring match.',
     },
     selector: {
       type: 'string',
@@ -68,25 +118,26 @@ export const waitTool: ToolDefinition = {
       error: (...a: unknown[]) => void;
     };
 
-    const text =
-      typeof params['text'] === 'string' && params['text'].trim() !== ''
-        ? params['text'].trim()
-        : null;
-    const selector =
-      typeof params['selector'] === 'string' && params['selector'].trim() !== ''
-        ? params['selector'].trim()
-        : null;
+    const str = (v: unknown): string | null =>
+      typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
+    const url = str(params['url']);
+    const loadState = (['load', 'domcontentloaded', 'networkidle'].includes(String(params['loadState']))
+      ? params['loadState']
+      : null) as 'load' | 'domcontentloaded' | 'networkidle' | null;
+    const waitFn = str(params['function']);
+    const text = str(params['text']);
+    const selector = str(params['selector']);
     const rawTime = params['time'];
     const time =
       typeof rawTime === 'number' && rawTime > 0
         ? Math.min(rawTime, MAX_WAIT_SECONDS)
         : null;
 
-    if (!text && !selector && time === null) {
+    if (!url && !loadState && !waitFn && !text && !selector && time === null) {
       return {
         success: false,
         output:
-          'browser.wait: at least one of "text", "selector", or "time" must be provided.',
+          'browser.wait: at least one of "url", "loadState", "function", "text", "selector", or "time" must be provided.',
       };
     }
 
@@ -106,18 +157,36 @@ export const waitTool: ToolDefinition = {
       };
     }
 
-    const pages = instance.context.pages();
-    const page =
-      pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     try {
+      if (url !== null) {
+        await page.waitForURL(url, { timeout });
+        ctxLog.info({ tool: 'browser.wait', url, browserName }, 'URL matched');
+        return { success: true, output: `URL now matches "${url}": ${page.url()}`, data: { waited: 'url', url: page.url() } };
+      }
+
+      if (loadState !== null) {
+        await page.waitForLoadState(loadState, { timeout });
+        ctxLog.info({ tool: 'browser.wait', loadState, browserName }, 'Load state reached');
+        return { success: true, output: `Page reached load state "${loadState}".`, data: { waited: 'loadState', loadState, url: page.url() } };
+      }
+
+      if (waitFn !== null) {
+        await page.waitForFunction(waitFn, { timeout });
+        ctxLog.info({ tool: 'browser.wait', browserName }, 'Function condition met');
+        return { success: true, output: `Condition met: ${waitFn}`, data: { waited: 'function', url: page.url() } };
+      }
+
       if (text !== null) {
-        // Wait until the text appears anywhere in the document body
-        await page.waitForFunction(
-          (needle: string) => document.body.textContent?.includes(needle) ?? false,
-          text,
-          { timeout },
-        );
+        // Poll for the text across all frames + shadow DOM until timeout.
+        const deadline = Date.now() + timeout;
+        let appeared = false;
+        while (Date.now() < deadline) {
+          if (await pageContainsTextDeep(page, text)) { appeared = true; break; }
+          await page.waitForTimeout(250);
+        }
+        if (!appeared) throw new Error(`Text "${text}" did not appear within ${timeout}ms`);
         ctxLog.info({ tool: 'browser.wait', text, browserName }, 'Text appeared');
         return {
           success: true,
@@ -147,7 +216,7 @@ export const waitTool: ToolDefinition = {
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      ctxLog.error({ tool: 'browser.wait', text, selector, time, err }, 'Wait failed');
+      ctxLog.error({ tool: 'browser.wait', url, loadState, waitFn, text, selector, time, err }, 'Wait failed');
       return { success: false, output: `browser.wait error: ${msg}` };
     }
   },

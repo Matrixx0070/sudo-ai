@@ -15,6 +15,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
+import { resolveActivePage } from './active-page.js';
 
 type MouseAction = 'click' | 'double_click' | 'right_click' | 'move' | 'drag' | 'scroll' | 'keypress' | 'type';
 const VALID_ACTIONS: MouseAction[] = ['click', 'double_click', 'right_click', 'move', 'drag', 'scroll', 'keypress', 'type'];
@@ -122,8 +123,7 @@ export const mouseTool: ToolDefinition = {
       };
     }
 
-    const pages = instance.context.pages();
-    const page = pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+    const page = await resolveActivePage(instance);
 
     try {
       switch (action as MouseAction) {

@@ -12,6 +12,7 @@
 import { chromium, type Browser, type BrowserContext, type Page, type Request } from 'playwright-core';
 import { createLogger } from '../../../shared/logger.js';
 import { genId } from '../../../shared/utils.js';
+import { buildLaunchArgs } from './anti-detect.js';
 
 const log = createLogger('cdp-manager');
 
@@ -264,12 +265,9 @@ export class CDPManager {
     this.browser = await chromium.launch({
       headless: this.config.headless,
       slowMo: this.config.slowMo,
-      args: [
-        `--remote-debugging-port=${this.config.cdpPort}`,
-        '--ignore-certificate-errors', '--ignore-ssl-errors',
-        '--disable-web-security', '--no-sandbox',
-        '--disable-features=IsolateOrigins,site-per-process',
-      ],
+      // Security-weakening flags gated behind SUDO_BROWSER_INSECURE=1; always
+      // exposes the CDP port and the anti-automation-signal flags.
+      args: buildLaunchArgs([`--remote-debugging-port=${this.config.cdpPort}`]),
     });
     this.context = await this.browser.newContext({
       ignoreHTTPSErrors: true, viewport: { width: 1280, height: 800 },

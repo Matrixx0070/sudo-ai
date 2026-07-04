@@ -12,6 +12,7 @@ import { Readable } from 'node:stream';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import { resolveActivePage } from './active-page.js';
 
 const DEFAULT_DOWNLOAD_DIR = 'data/downloads';
 
@@ -93,8 +94,7 @@ export const downloadTool: ToolDefinition = {
       const manager = BrowserManager.getInstance();
       const instance = await manager.getOrConnect(browserName);
 
-      const pages = instance.context.pages();
-      const page = pages.length > 0 ? pages[pages.length - 1]! : await instance.context.newPage();
+      const page = await resolveActivePage(instance);
 
       const [download] = await Promise.all([
         page.waitForEvent('download'),

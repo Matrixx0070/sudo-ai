@@ -6,6 +6,12 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import {
+  computeBrowserRecovery,
+  isBrowserActionTool,
+  isBrowserRecoveryEnabled,
+  resetBrowserRecovery,
+} from './browser-recovery.js';
 import { PipelineError, ToolError } from '../shared/errors.js';
 import { compact, microCompact, autoCompact, fullCompact, type AutoCompactFailureCounter } from './compaction.js';
 import { microCompactMessages, type MicroCompactMessage } from './microcompact.js';
@@ -766,6 +772,14 @@ interface SingleCallResult {
    * stays the raw output. Undefined on success or when hints are disabled.
    */
   errorHint?: string;
+  /**
+   * Browser live-loop recovery: on a FAILED browser ACTION, a fresh stable-ref
+   * snapshot to retry with (or, after repeated failures, an escalation/stop
+   * directive). Appended to the model-facing message like errorHint; the raw
+   * outcome/trace stay untouched. Undefined for non-browser tools / on success /
+   * when SUDO_BROWSER_RECOVERY=0.
+   */
+  recoveryHint?: string;
 }
 
 /**
@@ -1069,6 +1083,8 @@ async function executeSingleToolCall(
     guardedRecordFeedback(feedbackMemory, true, tc.name, tc.arguments ?? {}, resultContent || 'success', ctx.sessionId);
     // A tool can report failure via its authoritative `success` flag without throwing.
     if (!result.success) callError = resultContent;
+    // A successful browser action clears the recovery failure streak for this session.
+    else if (isBrowserActionTool(tc.name)) resetBrowserRecovery(ctx.sessionId);
   } catch (err) {
     if (err instanceof ToolError && err.code === 'tool_not_found') {
       log.warn({ tool: tc.name }, 'Tool not found — invoking fallback chain');
@@ -1117,12 +1133,30 @@ async function executeSingleToolCall(
     }
   }
 
+  // Browser live-loop recovery: on a failed browser ACTION, augment the model
+  // message with fresh stable refs to retry with — or, after repeated failures,
+  // escalate to the operator and tell the model to stop. Fail-open.
+  let recoveryHint: string | undefined;
+  if (callError && isBrowserActionTool(tc.name) && isBrowserRecoveryEnabled()) {
+    try {
+      const rec = await computeBrowserRecovery({
+        toolName: tc.name,
+        args: tc.arguments ?? {},
+        sessionId: ctx.sessionId,
+      });
+      if (rec.hint) recoveryHint = rec.hint;
+    } catch (err) {
+      log.warn({ tool: tc.name, err: String(err) }, 'browser recovery threw — skipping hint');
+    }
+  }
+
   return {
     tc,
     resultContent,
     ...(criticFeedback ? { criticFeedback } : {}),
     ...(preventionHint ? { preventionHint } : {}),
     ...(errorHint ? { errorHint } : {}),
+    ...(recoveryHint ? { recoveryHint } : {}),
   };
 }
 
@@ -1327,6 +1361,9 @@ export async function executeToolCalls(
     // Error hint goes at the BOTTOM (after the raw output) — closest to where the
     // model resumes, so the "how to fix" is the last thing it reads before retry.
     if (res.errorHint) stored = `${stored}\n\n${res.errorHint}`;
+    // Browser recovery (fresh refs / escalation) goes at the very bottom — the
+    // last thing the model reads before it retries the browser action.
+    if (res.recoveryHint) stored = `${stored}\n\n${res.recoveryHint}`;
     if (res.preventionHint) stored = `${res.preventionHint}\n\n${stored}`;
     if (res.criticFeedback) stored = `${res.criticFeedback}\n\n${stored}`;
     // toolCallId and toolName MUST be present for the Vercel AI SDK to

@@ -464,6 +464,11 @@ module.exports = {
         // Verification / quality:
         SUDO_SELF_VERIFY: process.env['SUDO_SELF_VERIFY'] || '1',
         SUDO_VERIFY_GATE: process.env['SUDO_VERIFY_GATE'] || '1',
+        // Browser autonomy (#561-#565): unattended browser/computer ops (safe —
+        // compensating controls SUDO_VERIFY_GATE/SUDO_STUCK_DETECTOR are on above)
+        // + task-end browser verification (observable-only). Kill-switch: set to '0'.
+        SUDO_BROWSER_UNATTENDED: process.env['SUDO_BROWSER_UNATTENDED'] || '1',
+        SUDO_BROWSER_VERIFY: process.env['SUDO_BROWSER_VERIFY'] || '1',
         SUDO_TASK_TRACKER: process.env['SUDO_TASK_TRACKER'] || '1',
         SUDO_REASONING_SUMMARY: process.env['SUDO_REASONING_SUMMARY'] || '1',
         SUDO_GOAL_PLANNER_SEMANTIC: process.env['SUDO_GOAL_PLANNER_SEMANTIC'] || '1',

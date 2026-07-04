@@ -12,8 +12,21 @@ import path from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import type { BrainMessage } from '../../../brain/types.js';
 
 const log = createLogger('browser:vision');
+
+/** Minimal shape of the Brain we need — image-capable call(). */
+interface BrainLike {
+  call(req: {
+    messages: BrainMessage[];
+    model?: string;
+    inputModalities?: Array<'text' | 'image' | 'audio'>;
+  }): Promise<{ content?: string }>;
+}
+interface ConfigLike { brain?: BrainLike }
+
+type VisionMime = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
 
 // Vision API providers — xAI first (primary), OpenAI fallback
 const VISION_PROVIDERS = [
@@ -110,7 +123,7 @@ export const visionTool: ToolDefinition = {
     },
   },
 
-  async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+  async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const imagePath = typeof params['imagePath'] === 'string' ? params['imagePath'] : '';
     const question  = typeof params['question']  === 'string' ? params['question']  : '';
 
@@ -137,7 +150,34 @@ export const visionTool: ToolDefinition = {
       return { success: false, output: `browser.vision: unsupported format "${path.extname(imagePath)}". Use PNG/JPG/GIF/WEBP.` };
     }
 
-    // Try each provider in priority order
+    // Prefer the agent's own Brain (shared model routing, failover, cost tracking,
+    // and access to Claude vision) before the standalone HTTP providers.
+    const brain = (ctx.config as ConfigLike | undefined)?.brain;
+    if (brain) {
+      try {
+        log.info({ question: question.slice(0, 60) }, 'Calling vision via Brain');
+        const res = await brain.call({
+          messages: [{
+            role: 'user',
+            content: question,
+            images: [{ type: 'base64', data: base64, mediaType: mimeType as VisionMime }],
+          }],
+          model: 'auto',
+          inputModalities: ['text', 'image'],
+        });
+        const answer = (res.content ?? '').trim();
+        if (answer) {
+          const truncated = answer.length > MAX_OUTPUT_CHARS ? answer.slice(0, MAX_OUTPUT_CHARS) + '\n[truncated]' : answer;
+          log.info({ answerLen: answer.length }, 'Vision via Brain success');
+          return { success: true, output: truncated, data: { provider: 'brain' } };
+        }
+        log.warn('Brain vision returned empty — falling back to HTTP providers');
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'Brain vision failed — falling back to HTTP providers');
+      }
+    }
+
+    // Try each standalone provider in priority order
     for (const provider of VISION_PROVIDERS) {
       const apiKey = process.env[provider.envKey];
       if (!apiKey) {
