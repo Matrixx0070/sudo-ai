@@ -17,6 +17,7 @@
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { getCronManager } from './index.js';
+import { withCommsIdempotency } from '../../../comms/idempotency.js';
 
 const logger = createLogger('meta.cron.create');
 
@@ -172,7 +173,22 @@ export const cronCreateTool: ToolDefinition = {
     }
 
     try {
-      const result = await cronManager.addJob({ expression: expression.trim(), name: name.trim(), message: message.trim() });
+      // Idempotency (opt-in): a re-dispatched turn must not create a SECOND cron
+      // job with the same name+schedule+message. Keyed on all three so editing any
+      // of them is a genuinely new job, not a suppressed duplicate.
+      const guard = await withCommsIdempotency(
+        { channel: 'cron', recipient: name.trim(), body: `${expression.trim()}\n${message.trim()}` },
+        () => cronManager.addJob({ expression: expression.trim(), name: name.trim(), message: message.trim() }),
+        (r) => r.jobId,
+      );
+      if (guard.duplicate) {
+        return {
+          success: true,
+          output: `cron.create: duplicate suppressed — a cron job "${name.trim()}" with the same schedule and message was already created within the idempotency window.${guard.messageId ? ` Prior job ID: ${guard.messageId}.` : ''}`,
+          data: { name: name.trim(), duplicate: true, jobId: guard.messageId },
+        };
+      }
+      const result = guard.result!;
       logger.info({ session: ctx.sessionId, name: name.trim(), expression: expression.trim(), jobId: result.jobId }, 'Cron job created');
 
       const nextNote = result.nextRun ? `\nNext run: ${result.nextRun}` : '';

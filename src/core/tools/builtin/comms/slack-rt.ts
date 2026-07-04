@@ -10,6 +10,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { slackPostMessage } from '../../../channels/slack-real-connector.js';
 import { createLogger } from '../../../shared/logger.js';
+import { withCommsIdempotency } from '../../../comms/idempotency.js';
 
 const log = createLogger('tool:comms.slack-rt');
 
@@ -48,7 +49,19 @@ export const slackRtTool: ToolDefinition = {
     }
 
     log.info({ sessionId: ctx.sessionId, channelId }, 'Slack-rt postMessage');
-    const result = await slackPostMessage(channelId, text, ctx.signal);
+    const guard = await withCommsIdempotency(
+      { channel: 'slack-rt', recipient: channelId, body: text },
+      () => slackPostMessage(channelId, text, ctx.signal),
+      (r) => r.ts ?? undefined,
+    );
+    if (guard.duplicate) {
+      return {
+        success: true,
+        output: `comms.slack-rt: duplicate suppressed — an identical message to ${channelId} was already posted within the idempotency window.${guard.messageId ? ` Prior ts: ${guard.messageId}.` : ''}`,
+        data: { channel: channelId, duplicate: true, ts: guard.messageId },
+      };
+    }
+    const result = guard.result!;
 
     return {
       success: result.success,
