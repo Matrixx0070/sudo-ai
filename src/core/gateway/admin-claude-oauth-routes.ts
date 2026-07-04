@@ -40,6 +40,15 @@ function isAuthorised(req: IncomingMessage, tokenBuf: Buffer | null): boolean {
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  // This router is one of several 'request' listeners on the shared gateway
+  // server. If another listener already wrote a response, a second writeHead
+  // throws ERR_HTTP_HEADERS_SENT, which escalates to uncaughtException and
+  // takes the whole daemon down (observed live 2026-07-04 on a
+  // /v1/admin/claude-oauth/status dashboard poll).
+  if (res.headersSent || res.writableEnded) {
+    log.warn({ status }, 'sendJson skipped — response already written by another listener');
+    return;
+  }
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json',
