@@ -538,6 +538,27 @@ export function sanitizeToolPairing(messages: BrainMessage[]): BrainMessage[] {
  */
 export type PreCompactionFlush = (messages: BrainMessage[]) => Promise<void>;
 
+/**
+ * Whether the history holds any REAL conversation turn (a non-empty user,
+ * assistant, or tool message) — as opposed to only system scaffolding (briefs,
+ * routing, flush reminders). Compacting a scaffolding-only history burns a
+ * high-stakes summariser call and destroys what little structure exists into a
+ * lossy stub, so runCompaction skips it.
+ */
+function hasRealConversation(messages: BrainMessage[]): boolean {
+  return messages.some(
+    (m) =>
+      (m.role === 'user' || m.role === 'assistant' || m.role === 'tool') &&
+      typeof m.content === 'string' &&
+      m.content.trim().length > 0,
+  );
+}
+
+/** Approx char size of a message array — a cheap proxy for context size. */
+function approxContextChars(messages: BrainMessage[]): number {
+  return messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : 0), 0);
+}
+
 export async function runCompaction(
   brain: BrainLike,
   session: SessionLike,
@@ -549,6 +570,18 @@ export async function runCompaction(
   state.isCompacting = true;
 
   log.info({ sessionId: state.sessionId, messageCount: session.messages.length }, 'Compacting context');
+
+  // SKIP GUARD — nothing worth a high-stakes summariser call: a history of only
+  // system scaffolding with no real user/assistant/tool turn. Bail cleanly rather
+  // than pay for an LLM call that would replace structured context with a stub.
+  if (!hasRealConversation(session.messages as BrainMessage[])) {
+    log.info(
+      { sessionId: state.sessionId, messageCount: session.messages.length },
+      'Compaction skipped — no real conversation messages to compact',
+    );
+    state.isCompacting = false;
+    return '';
+  }
 
   // PROGRAMMATIC PRE-COMPACTION FLUSH — persist salient facts to memory BEFORE
   // compact() replaces the history, so state survives regardless of whether the
@@ -590,9 +623,29 @@ export async function runCompaction(
   await safeEmit(hooks, 'before_compaction', hookBase);
   await safeEmit(hooks, 'session:compact:before', hookBase);
 
+  const beforeChars = approxContextChars(session.messages as BrainMessage[]);
   let compactionSucceeded = false;
   try {
-    const summary = await compact(brain, session.messages);
+    // SAFETY TIMEOUT — the summariser is one brain.call to a possibly-slow/hung
+    // provider on the hot turn path. Bound it so a stall degrades to "continue
+    // without compaction" (the catch below) instead of freezing the whole turn.
+    const compactTimeoutMs = (() => {
+      const raw = parseInt(process.env['SUDO_COMPACTION_TIMEOUT_MS'] ?? '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 180_000;
+    })();
+    let cTimer: ReturnType<typeof setTimeout> | undefined;
+    const cTimeout = new Promise<never>((_, reject) => {
+      cTimer = setTimeout(
+        () => reject(new Error(`compaction summariser timed out after ${compactTimeoutMs}ms`)),
+        compactTimeoutMs,
+      );
+    });
+    let summary: string;
+    try {
+      summary = await Promise.race([compact(brain, session.messages), cTimeout]);
+    } finally {
+      if (cTimer) clearTimeout(cTimer);
+    }
     compactionSucceeded = true;
 
     const summaryMsg: BrainMessage = { role: 'system', content: `[Context compacted]\n\n${summary}` };
@@ -617,6 +670,18 @@ export async function runCompaction(
     } else {
       session.messages = [summaryMsg];
       log.info({ sessionId: state.sessionId, summaryLen: summary.length }, 'Compaction complete');
+    }
+
+    // TOKEN-AFTER SANITY — flag the false-success case where the summary+tail is
+    // NOT smaller than what it replaced (a pathologically long summary). Left
+    // undetected, the loop believes it freed context and can re-enter compaction
+    // at the same fill. Observability-only; the reduction still applies.
+    const afterChars = approxContextChars(session.messages as BrainMessage[]);
+    if (afterChars >= beforeChars) {
+      log.warn(
+        { sessionId: state.sessionId, beforeChars, afterChars },
+        'Compaction did not reduce context size (summary+tail >= original) — check summariser output',
+      );
     }
 
     emit({ type: 'compaction', summary });
