@@ -252,8 +252,9 @@ describe('tool.search-mcp-catalog', () => {
       ],
     };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok:   true,
-      json: vi.fn().mockResolvedValue(mockBody),
+      ok:     true,
+      status: 200,
+      json:   vi.fn().mockResolvedValue(mockBody),
     }));
 
     const result = await searchMcpCatalogTool.execute({ query: 'filesystem' }, makeCtx());
@@ -297,8 +298,9 @@ describe('tool.search-npm', () => {
       ],
     };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok:   true,
-      json: vi.fn().mockResolvedValue(mockBody),
+      ok:     true,
+      status: 200,
+      json:   vi.fn().mockResolvedValue(mockBody),
     }));
 
     const result = await searchNpmTool.execute({ query: 'http framework' }, makeCtx());

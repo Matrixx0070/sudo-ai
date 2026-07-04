@@ -14,6 +14,7 @@ import type { ToolRegistry } from '../../registry.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { DATA_DIR } from '../../../shared/paths.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('finance-builtin');
 
@@ -363,7 +364,7 @@ const paymentProcessorTool: ToolDefinition = {
 
     async function stripePost(endpoint: string, body: Record<string, string | number | boolean>): Promise<Record<string, unknown>> {
       const formBody = Object.entries(body).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&');
-      const resp = await fetch(`${stripeBase}${endpoint}`, {
+      const resp = await toolFetch(`${stripeBase}${endpoint}`, {
         method: 'POST',
         headers: { 'Authorization': authHeader, 'Content-Type': 'application/x-www-form-urlencoded' },
         body: formBody,
@@ -375,7 +376,7 @@ const paymentProcessorTool: ToolDefinition = {
 
     async function stripeGet(endpoint: string, query?: Record<string, string>): Promise<Record<string, unknown>> {
       const qs = query ? '?' + new URLSearchParams(query).toString() : '';
-      const resp = await fetch(`${stripeBase}${endpoint}${qs}`, {
+      const resp = await toolFetch(`${stripeBase}${endpoint}${qs}`, {
         headers: { 'Authorization': authHeader },
       });
       const json = await resp.json() as Record<string, unknown>;
@@ -459,6 +460,11 @@ const FINANCE_TOOLS: ToolDefinition[] = [
  * @param registry - The application's central {@link ToolRegistry}.
  */
 export function registerFinanceTools(registry: ToolRegistry): void {
+  // Persona/business tools are quarantined by default (SUDO_ENABLE_PERSONA_TOOLS=1).
+  if (process.env['SUDO_ENABLE_PERSONA_TOOLS'] !== '1') {
+    logger.info('Finance tools quarantined — set SUDO_ENABLE_PERSONA_TOOLS=1 to enable');
+    return;
+  }
   logger.info({ count: FINANCE_TOOLS.length }, 'Registering finance tools');
   for (const tool of FINANCE_TOOLS) {
     registry.register(tool);

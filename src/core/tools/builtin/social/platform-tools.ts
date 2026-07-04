@@ -7,6 +7,7 @@ import { createLogger } from '../../../shared/logger.js';
 import { genId } from '../../../shared/utils.js';
 import { postToMastodon, MastodonError } from './mastodon.js';
 import { getDispatcherInstance } from '../../../social/schedule-dispatcher.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('social-platform');
 
@@ -76,7 +77,7 @@ export const multiPostTool: ToolDefinition = {
             results[platform] = { success: false, error: 'TWITTER_OAUTH2_TOKEN not configured.' };
             errors.push('twitter: missing credentials'); continue;
           }
-          const res = await fetch('https://api.twitter.com/2/tweets', {
+          const res = await toolFetch('https://api.twitter.com/2/tweets', {
             method: 'POST',
             headers: { Authorization: `Bearer ${oauthToken}`, 'Content-Type': 'application/json' },
             signal: ctx.signal,

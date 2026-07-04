@@ -19,9 +19,9 @@
  *      finds these and lets the operator either replay or accept the
  *      divergence — Codex study point #9 "SQLite never leads JSONL".
  *
- * Both guarantees are opt-in via SUDO_CRASH_SAFE=1 in cli.ts — the existing
- * SQLite-first ordering stays the default to keep behaviour byte-identical
- * for callers that have not asked for the invariant.
+ * Both guarantees are default ON via SUDO_CRASH_SAFE in cli.ts; set
+ * SUDO_CRASH_SAFE=0 to restore the pre-gap-#17 SQLite-first ordering
+ * (byte-identical to the legacy path).
  */
 
 import { closeSync, fsyncSync, openSync, readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';

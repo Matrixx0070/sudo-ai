@@ -4,7 +4,7 @@
  * plus the structured error taxonomy classifier and Brain's Retry-After parsing.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ModelFailover } from '../../src/core/brain/failover.js';
 import { Brain } from '../../src/core/brain/brain.js';
 import { TRANSIENT_COOLDOWN, AUTH_COOLDOWN } from '../../src/core/shared/constants.js';
@@ -15,6 +15,18 @@ const BASE = TRANSIENT_COOLDOWN[0]; // 5000ms
 function fresh(): ModelFailover {
   return new ModelFailover([MODEL]);
 }
+
+// Freeze the clock so cooldown math is exact: recordError stores
+// `cooldownUntil = Date.now() + cooldownMs` and getCooldownRemaining subtracts
+// Date.now() again — with real time the elapsed gap (worse under CPU load) made
+// the ±100ms window assertions flaky. Frozen time → remaining === cooldownMs.
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('Phase B: failover backoff hardening', () => {
   describe('jitter', () => {
@@ -176,8 +188,12 @@ describe('Phase B: failover backoff hardening', () => {
       expect(extract({ statusCode: 429, message: 'rate limited' }).status).toBe(429);
     });
 
-    it('AUTHX-6: permission_error maps to 403', () => {
-      expect(extract({ message: 'permission_error: not allowed' }).status).toBe(403);
+    it('AUTHX-6: structured permission_error maps to 403', () => {
+      // 403 → auth_permanent → PERMANENT profile disable, so extractErrorDetails
+      // requires the structured JSON error shape (not a bare substring) before
+      // upgrading a status-less error — an incidental "permission_error" string
+      // in echoed content must not permanently kill a model (AETHER_AUDIT_10 HIGH).
+      expect(extract({ message: '{"type":"error","error":{"type":"permission_error"}}' }).status).toBe(403);
     });
   });
 });

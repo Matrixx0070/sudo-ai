@@ -11,6 +11,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 import type { BrainMessage } from '../../../brain/types.js';
 
 const log = createLogger('browser:vision');
@@ -79,7 +80,7 @@ async function callVisionApi(
   };
 
   const controller = AbortSignal.timeout(60_000);
-  const res = await fetch(apiUrl, {
+  const res = await toolFetch(apiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

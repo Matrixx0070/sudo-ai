@@ -440,16 +440,78 @@ export function collapseContent(content: string, toolName: string): string {
  * @param hooks   - Optional hook emitter for lifecycle events.
  * @returns The compaction summary string, or '' on failure.
  */
+/** Default count of recent non-system messages kept verbatim through compaction. */
+const COMPACT_TAIL_DEFAULT = 6;
+
+/**
+ * Select the trailing non-system messages to keep verbatim across a compaction.
+ *
+ * Historically `runCompaction` replaced the ENTIRE history with a single
+ * summary system message, so the current in-flight user ask and recent turns
+ * survived only as summary prose — a bad/incomplete summary could erase the
+ * request the user is waiting on. This keeps the last `k` non-system messages
+ * intact alongside the summary (OpenClaw's splitPreservedRecentTurns model).
+ *
+ * Two invariants, mirroring the LAYER-3 sliding window:
+ *  - never start the tail on an orphan `tool` result (its declaring assistant
+ *    would be gone → AI_MissingToolResultsError on the next brain.call);
+ *  - always retain the most recent `user` message, so the in-flight ask
+ *    survives even when the tail is small or orphan-trimmed.
+ */
+export function selectVerbatimTail(messages: BrainMessage[], k: number): BrainMessage[] {
+  const nonSystem = messages.filter((m) => m.role !== 'system');
+  let tail = nonSystem.slice(-Math.max(0, k));
+  let firstNonOrphan = 0;
+  while (firstNonOrphan < tail.length && tail[firstNonOrphan]!.role === 'tool') {
+    firstNonOrphan++;
+  }
+  if (firstNonOrphan > 0) tail = tail.slice(firstNonOrphan);
+  const lastUser = [...nonSystem].reverse().find((m) => m.role === 'user');
+  if (lastUser && !tail.includes(lastUser)) tail = [lastUser, ...tail];
+  return tail;
+}
+/**
+ * Persist salient facts from the conversation before it is compacted away.
+ * Injected into the loop (setPreCompactionFlush) and invoked by runCompaction.
+ * Must be fail-open — it never blocks compaction.
+ */
+export type PreCompactionFlush = (messages: BrainMessage[]) => Promise<void>;
+
 export async function runCompaction(
   brain: BrainLike,
   session: SessionLike,
   state: AgentState,
   emit: Emitter,
   hooks?: HookEmitterLike,
+  preFlush?: PreCompactionFlush,
 ): Promise<string> {
   state.isCompacting = true;
 
   log.info({ sessionId: state.sessionId, messageCount: session.messages.length }, 'Compacting context');
+
+  // PROGRAMMATIC PRE-COMPACTION FLUSH — persist salient facts to memory BEFORE
+  // compact() replaces the history, so state survives regardless of whether the
+  // model acted on the flush *reminder* below. Fail-open AND time-bounded: the
+  // flush can do embed/judge LLM calls (when SUDO_CHUNK_CONTRADICT=1) on this hot
+  // path, so a hang must degrade to a skipped flush, not a stalled turn. The
+  // flush keeps running in the background; only our wait is bounded.
+  if (preFlush) {
+    const flushTimeoutMs = (() => {
+      const raw = parseInt(process.env['SUDO_PRECOMPACTION_FLUSH_TIMEOUT_MS'] ?? '', 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : 8_000;
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('pre-compaction flush timed out')), flushTimeoutMs);
+    });
+    try {
+      await Promise.race([preFlush(session.messages as BrainMessage[]), timeout]);
+    } catch (err) {
+      log.warn({ sessionId: state.sessionId, err: String(err) }, 'Pre-compaction flush failed/timed out — continuing');
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   // PRE-COMPACTION FLUSH (covers the finishReason === 'length' path that skips prepareMessages).
   // The flush message is appended to the history that compact() summarises, so the summary
@@ -472,12 +534,27 @@ export async function runCompaction(
     const summary = await compact(brain, session.messages);
     compactionSucceeded = true;
 
-    session.messages = [
-      { role: 'system', content: `[Context compacted]\n\n${summary}` },
-    ];
+    const summaryMsg: BrainMessage = { role: 'system', content: `[Context compacted]\n\n${summary}` };
+    // Preserve the recent conversation verbatim alongside the summary so a
+    // bad/incomplete summary can't erase the in-flight ask (default ON;
+    // SUDO_COMPACT_PRESERVE_TAIL=0 restores the legacy summary-only replace).
+    if (process.env['SUDO_COMPACT_PRESERVE_TAIL'] !== '0') {
+      const k = (() => {
+        const raw = parseInt(process.env['SUDO_COMPACT_TAIL_COUNT'] ?? '', 10);
+        return Number.isFinite(raw) && raw >= 2 && raw <= 40 ? raw : COMPACT_TAIL_DEFAULT;
+      })();
+      const tail = selectVerbatimTail(session.messages as BrainMessage[], k);
+      session.messages = [summaryMsg, ...tail];
+      log.info(
+        { sessionId: state.sessionId, summaryLen: summary.length, tailKept: tail.length },
+        'Compaction complete (verbatim tail preserved)',
+      );
+    } else {
+      session.messages = [summaryMsg];
+      log.info({ sessionId: state.sessionId, summaryLen: summary.length }, 'Compaction complete');
+    }
 
     emit({ type: 'compaction', summary });
-    log.info({ sessionId: state.sessionId, summaryLen: summary.length }, 'Compaction complete');
 
     await safeEmit(hooks, 'after_compaction', hookBase);
     await safeEmit(hooks, 'session:compact:after', hookBase);
@@ -1593,6 +1670,7 @@ export async function prepareMessages(
   state: AgentState,
   emit: Emitter,
   hooks?: HookEmitterLike,
+  preFlush?: PreCompactionFlush,
 ): Promise<BrainMessage[]> {
   // LAYER 0 — PRE-COMPACTION FLUSH REMINDER
   // At 40 % of MAX_CONTEXT_TOKENS (below the 50 % shouldCompact threshold), inject a
@@ -1610,14 +1688,15 @@ export async function prepareMessages(
     }
   }
 
-  // TIER 1 — Two-tier compaction (gap #14, opt-in SUDO_TWO_TIER_COMPACT=1):
+  // TIER 1 — Two-tier compaction (gap #14, default ON; SUDO_TWO_TIER_COMPACT=0 disables):
   // zero-cost, role-aware microcompact runs BEFORE the LLM-based LAYER 1 so
   // we skip the paid round-trip when shrinking middle tool outputs is enough
-  // to fall back below shouldCompact's threshold. Default OFF, fail-open.
+  // to fall back below shouldCompact's threshold. Default ON (matches the prod
+  // ecosystem config); SUDO_TWO_TIER_COMPACT=0 disables. Fail-open.
   // LAYER 1's existing shouldCompact() check re-runs against the trimmed
   // history, so a sufficient TIER 1 pass naturally suppresses LAYER 1.
   if (
-    process.env['SUDO_TWO_TIER_COMPACT'] === '1' &&
+    process.env['SUDO_TWO_TIER_COMPACT'] !== '0' &&
     shouldCompact(session.messages as Array<{ content: string }>)
   ) {
     try {
@@ -1649,7 +1728,7 @@ export async function prepareMessages(
   // This prevents the model from ever seeing a truncated context.
   if (shouldCompact(session.messages as Array<{ content: string }>)) {
     log.info({ sessionId: state.sessionId }, 'LAYER 1: Proactive compaction triggered');
-    await runCompaction(brain, session, state, emit, hooks);
+    await runCompaction(brain, session, state, emit, hooks, preFlush);
   }
 
   // TIER 2 / TIER 3 — compaction escalation (gap #14 deferred). Opt-in

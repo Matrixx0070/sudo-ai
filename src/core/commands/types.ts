@@ -55,4 +55,15 @@ export interface CommandContext {
   db: unknown;
   /** Per-peer turn queue (KeyedAsyncQueue) for /queue inspection. Optional. */
   peerQueue?: unknown;
+  /**
+   * Steering channel for mid-run control (/steer): signals the running turn for
+   * this session to abort/inject/reprioritize. Optional — absent when steering
+   * isn't wired.
+   */
+  steeringChannel?: {
+    signal(
+      sessionId: string,
+      sig: { action: 'abort' | 'inject' | 'reprioritize'; payload?: string },
+    ): void;
+  };
 }

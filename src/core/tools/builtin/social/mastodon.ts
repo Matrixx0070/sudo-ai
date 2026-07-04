@@ -8,6 +8,7 @@
  */
 
 import { createLogger } from '../../../shared/logger.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('social:mastodon');
 
@@ -178,7 +179,7 @@ export async function postToMastodon(opts: MastodonPostOptions): Promise<Mastodo
   logger.info({ instance, visibility: body['visibility'] }, 'Posting status to Mastodon');
 
   // --- First attempt ----------------------------------------------------------
-  const response = await fetch(endpoint, {
+  const response = await toolFetch(endpoint, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -201,7 +202,7 @@ export async function postToMastodon(opts: MastodonPostOptions): Promise<Mastodo
     }
 
     // --- Single retry ----------------------------------------------------------
-    const retryResponse = await fetch(endpoint, {
+    const retryResponse = await toolFetch(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),

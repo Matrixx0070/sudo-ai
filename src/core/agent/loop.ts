@@ -106,7 +106,7 @@ import { ContextCompressor } from '../brain/context-compressor.js';
 import type { CompressionStage } from '../brain/context-compressor.js';
 import { existsSync } from 'node:fs';
 import { TraceStore } from '../learning/trace-store.js';
-import type { IntentCategory, RoutingTier } from '../learning/trace-store.js';
+import { deriveRoutingTrace } from '../learning/routing-trace.js';
 import { TraceDrivenPolicy } from '../learning/trace-driven-policy.js';
 import type { PolicyEvaluation } from '../learning/trace-driven-policy.js';
 import { LazinessNudge } from './laziness-nudge.js';
@@ -1779,13 +1779,52 @@ export class AgentLoop extends AgentLoopInjections {
       while (state.iteration < maxIterations) {
         state.iteration++;
 
+        // Steering: honor an in-process abort/inject/reprioritize at the safe
+        // iteration boundary (before the next model call). check→act→clear.
+        if (this._steeringChannel) {
+          const sig = this._steeringChannel.checkSteering(state.sessionId);
+          if (sig) {
+            this._steeringChannel.clearSteering(state.sessionId);
+            if (sig.action === 'abort') {
+              const reason = (sig.payload ?? '').trim();
+              const abortMsg = reason
+                ? `Turn aborted by steering signal: ${reason}`
+                : 'Turn aborted by steering signal.';
+              log.info(
+                { sessionId: state.sessionId, iteration: state.iteration },
+                'Steering: abort requested — stopping cleanly at iteration boundary',
+              );
+              // Mirror the loop-guard/doom-loop abort sites: surface the stop to
+              // the caller (event + assistant text) so it's not an indistinguishable
+              // empty `done`.
+              emit({ type: 'error', error: abortMsg });
+              session.messages.push({ role: 'system', content: `[STEERING — ABORT]\n${abortMsg}` });
+              finalText = abortMsg;
+              session.messages.push({ role: 'assistant', content: finalText });
+              break;
+            }
+            const payload = (sig.payload ?? '').trim();
+            if (payload) {
+              const label = sig.action === 'reprioritize' ? 'REPRIORITIZE' : 'INJECTED CONTEXT';
+              session.messages.push({
+                role: 'system',
+                content: `[STEERING — ${label}]\n${payload}`,
+              });
+              log.info(
+                { sessionId: state.sessionId, iteration: state.iteration, action: sig.action },
+                'Steering: mid-run guidance injected',
+              );
+            }
+          }
+        }
+
         // Proactive session message trim — prevents unbounded growth in long sessions.
         trimSessionMessages(session, state);
 
         // Hook: before_prompt_build — fires before the message array is prepared for the API call.
         void this.hooks?.emit('before_prompt_build', { event: 'before_prompt_build', sessionId: state.sessionId, iteration: state.iteration });
 
-        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper);
+        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
 
         // Hook: before_model_resolve — fires after messages are prepared, just before brain.call().
         void this.hooks?.emit('before_model_resolve', { event: 'before_model_resolve', sessionId: state.sessionId, modelName: model ?? '' });
@@ -1952,20 +1991,24 @@ export class AgentLoop extends AgentLoopInjections {
         }
 
         // Phase 2: TraceStore — record routing decision (fail-open).
+        // Derived from the real keyword classifier so rows vary by input,
+        // rather than the previous constant 'fast'/'keyword'/0.5 (P0 #6).
         try {
           if (this._traceStore) {
-            const routingCategory: IntentCategory = 'fast'; // default fallback
-            const routingTier: RoutingTier = 'keyword'; // default fallback
+            const routeUserText =
+              session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+            const routing = deriveRoutingTrace(routeUserText);
             this._traceStore.recordRouting(
               state.sessionId,
               effectiveModel ?? model ?? 'unknown',
-              routingCategory,
-              routingTier,
-              0.5, // neutral confidence when no explicit routing data
+              routing.category,
+              routing.tier,
+              routing.confidence,
             );
           }
         } catch { /* fail-open */ }
 
+        const brainCallStartedAt = performance.now();
         const response: BrainResponse = await this.brain.call({
           messages: trimmed,
           source: 'agent',
@@ -2000,7 +2043,7 @@ export class AgentLoop extends AgentLoopInjections {
               // differ from the requested effectiveModel) so the flywheel learns true outcomes.
               response.model ?? effectiveModel ?? model ?? 'unknown',
               response.finishReason !== 'error',
-              0, // latencyMs not available from BrainResponse; placeholder
+              Math.round(performance.now() - brainCallStartedAt), // real wall-clock latency
               undefined, // tokenUsage not threaded here
               undefined, // no error object
               // Replay capture (only stored under SUDO_TRACE_CAPTURE=1): the exact
@@ -2088,7 +2131,10 @@ export class AgentLoop extends AgentLoopInjections {
             }
           }
 
-          await runCompaction(this.brain, session, state, emit, hooksHelper);
+          // If LAYER 1 already compacted this iteration, this second flush runs
+          // against the summary text — benign: flushBeforeCompaction hash-dedups,
+          // so overlapping content isn't re-stored.
+          await runCompaction(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
           continue;
         }
 

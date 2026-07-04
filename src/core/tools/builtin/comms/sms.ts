@@ -12,6 +12,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { isCommsIdempotencyEnabled, getCommsIdempotencyStore } from '../../../comms/idempotency.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const log = createLogger('comms:sms');
 
@@ -39,7 +40,7 @@ async function twilioSend(
 
   const formBody = new URLSearchParams({ From: from, To: to, Body: body });
 
-  const res = await fetch(url, {
+  const res = await toolFetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${credentials}`,

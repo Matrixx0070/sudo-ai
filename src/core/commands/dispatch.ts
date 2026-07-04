@@ -28,6 +28,20 @@ export interface DirectiveDispatchOptions {
   makeContext: (msg: DirectiveMessage) => Promise<CommandContext | null>;
   /** Sends the command response back on the originating channel. */
   reply: (text: string) => Promise<void>;
+  /**
+   * Authorization gate for the shared directive path. Called with the message
+   * and the parsed command name (lower-case, no leading slash) once the text is
+   * known to be a command. Return `false` to DENY: the directive is NOT
+   * executed and the message is consumed silently (it does not become an agent
+   * turn), so a non-owner cannot /stop or /reset (or /steer) another peer's
+   * session or running turn. Omitted → all directives allowed (prior behaviour).
+   */
+  authorize?: (msg: DirectiveMessage, command: string) => boolean | Promise<boolean>;
+}
+
+/** Parse the command name from directive text: "/Steer abort" → "steer". */
+function directiveCommandName(text: string): string {
+  return text.trimStart().replace(/^\//, '').split(/\s+/)[0]?.toLowerCase() ?? '';
 }
 
 /**
@@ -42,6 +56,25 @@ export interface DirectiveDispatchOptions {
 export async function tryDispatchDirective(opts: DirectiveDispatchOptions): Promise<boolean> {
   const text = opts.msg.text ?? '';
   if (!opts.registry.isCommand(text)) return false;
+
+  // Authorization gate (shared directive-auth layer). Deny → consume silently:
+  // the directive does not run and the message is NOT enqueued as an agent turn,
+  // so a non-owner can't steer/stop another peer's session.
+  if (opts.authorize) {
+    const command = directiveCommandName(text);
+    let allowed: boolean;
+    try {
+      allowed = await opts.authorize(opts.msg, command);
+    } catch (err) {
+      // Fail CLOSED for a control surface: an authorizer that throws denies.
+      log.error({ channel: opts.msg.channel, peerId: opts.msg.peerId, command, err: String(err) }, 'Directive authorize threw — denying');
+      allowed = false;
+    }
+    if (!allowed) {
+      log.warn({ channel: opts.msg.channel, peerId: opts.msg.peerId, command }, 'Directive denied — sender not authorized');
+      return true; // consumed: not executed, not an agent turn
+    }
+  }
 
   let ctx: CommandContext | null = null;
   try {

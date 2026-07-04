@@ -861,7 +861,11 @@ export class TelegramAdapter implements ChannelAdapter {
     bot.on('message:voice', async (ctx) => {
       const voice = ctx.message.voice;
       const token = process.env[this.tokenEnvKey] ?? '';
-      const peerId = String(ctx.from?.id ?? ctx.chat.id);
+      // The "listening" ack and the eventual voice reply must target the chat
+      // (group id in groups), not the sender's user id — otherwise deleteMessage
+      // hits the wrong chat and the voice-reply flag (consumed by send() keyed on
+      // the delivery target) never fires in groups.
+      const chatId = this._replyTargetOf(ctx);
 
       // Send a "listening..." indicator while transcribing
       let processingMsgId: number | undefined;
@@ -894,14 +898,14 @@ export class TelegramAdapter implements ChannelAdapter {
 
         // Delete the "listening..." message
         if (processingMsgId) {
-          try { await bot.api.deleteMessage(peerId, processingMsgId); } catch { /* ignore */ }
+          try { await bot.api.deleteMessage(chatId, processingMsgId); } catch { /* ignore */ }
         }
 
-        log.info({ peerId, text: result.text, lang: result.language }, 'Voice message transcribed');
+        log.info({ chatId, text: result.text, lang: result.language }, 'Voice message transcribed');
 
         // Auto voice-out: mark this peer so the agent's reply is sent back as a
         // Kokoro TTS voice note (consumed by send()). Disable: SUDO_TELEGRAM_VOICE_REPLY=0.
-        this._markVoiceReply(peerId);
+        this._markVoiceReply(chatId);
 
         // Pass the transcribed text through the normal message pipeline
         // Append a hint so the brain knows it came from voice (for voice reply logic)
@@ -911,7 +915,7 @@ export class TelegramAdapter implements ChannelAdapter {
       } catch (err) {
         log.error({ err: String(err) }, 'Voice message processing failed');
         if (processingMsgId) {
-          try { await bot.api.deleteMessage(peerId, processingMsgId); } catch { /* ignore */ }
+          try { await bot.api.deleteMessage(chatId, processingMsgId); } catch { /* ignore */ }
         }
         await ctx.reply('❌ Voice processing failed. Please try again or send a text message.');
       }
@@ -934,7 +938,7 @@ export class TelegramAdapter implements ChannelAdapter {
           try { if (existsSync(downloaded.path)) unlinkSync(downloaded.path); } catch { /* ignore */ }
           if (result.text.trim()) {
             // Auto voice-out for audio notes too (consumed by send()).
-            this._markVoiceReply(String(ctx.from?.id ?? ctx.chat.id));
+            this._markVoiceReply(this._replyTargetOf(ctx));
             const text = caption
               ? `${caption}\n[Audio transcription: ${result.text.trim()}]`
               : result.text.trim();
@@ -956,6 +960,17 @@ export class TelegramAdapter implements ChannelAdapter {
     bot.catch((err) => {
       log.error({ err: err.error }, 'Grammy uncaught error');
     });
+  }
+
+  /**
+   * The reply/delivery target for an inbound update: the chat id (a group id in
+   * groups), falling back to the sender id. This is the single source of truth
+   * for "where does a reply go" — the voice/audio handlers key the voice-reply
+   * marker on it, and `_handleInbound` sets `UnifiedMessage.chatId` from it, so
+   * they never drift (a group must not reply into the sender's DM).
+   */
+  private _replyTargetOf(ctx: Context): string {
+    return String(ctx.chat?.id ?? ctx.from?.id ?? 'unknown');
   }
 
   private _isAllowed(userId: string): boolean {
@@ -1027,10 +1042,15 @@ export class TelegramAdapter implements ChannelAdapter {
         : '[empty message]';
 
     const chatType: ChatType = ctx.chat?.type === 'private' ? 'dm' : 'group';
+    // Delivery target: the chat the message came from. In a group this is the
+    // group id (≠ userId); in a DM it equals userId. Replies MUST go here, not
+    // to peerId (the sender), or group replies land in the sender's DM.
+    const chatId = this._replyTargetOf(ctx);
     const msg: UnifiedMessage = {
       id: String(ctx.message?.message_id ?? Date.now()),
       channel: 'telegram',
       peerId: userId,
+      chatId,
       peerName: [from?.first_name, from?.last_name].filter(Boolean).join(' ') || from?.username || userId,
       chatType,
       text: safeText,
@@ -1041,9 +1061,7 @@ export class TelegramAdapter implements ChannelAdapter {
       timestamp: new Date((ctx.message?.date ?? 0) * 1000),
     };
 
-    log.debug({ peerId: userId, textLen: text.length, chatType }, 'inbound Telegram message');
-
-    const chatId = String(ctx.chat?.id ?? userId);
+    log.debug({ peerId: userId, chatId, textLen: text.length, chatType }, 'inbound Telegram message');
 
     // Session ID ties this Telegram message to gateway progress events.
     // Use message ID so concurrent conversations are tracked independently.
@@ -1112,7 +1130,7 @@ export class TelegramAdapter implements ChannelAdapter {
           stopTyping();
           unsubProgress();
           log.info({ peerId: userId, command: text.split(' ')[0] }, 'Slash command dispatched');
-          await this.send(userId, response, { parseMode: 'plain' });
+          await this.send(chatId, response, { parseMode: 'plain' });
           return;
         }
       } catch (err) {
@@ -1120,7 +1138,7 @@ export class TelegramAdapter implements ChannelAdapter {
         unsubProgress();
         log.error({ userId, text, err }, 'Slash command dispatch error');
         try {
-          await this.send(userId, `Error executing command: ${String(err)}`, { parseMode: 'plain' });
+          await this.send(chatId, `Error executing command: ${String(err)}`, { parseMode: 'plain' });
         } catch { /* swallow — best effort */ }
         return;
       }

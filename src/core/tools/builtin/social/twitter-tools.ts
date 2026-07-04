@@ -5,6 +5,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { missingKey } from './helpers.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('social-twitter');
 
@@ -40,7 +41,7 @@ export const twitterManagerTool: ToolDefinition = {
         case 'tweet': {
           const text = params['text'] as string | undefined;
           if (!text?.trim()) return { success: false, output: 'text is required.' };
-          const res = await fetch('https://api.twitter.com/2/tweets', { method: 'POST', headers: authHeaders, signal: ctx.signal, body: JSON.stringify({ text }) });
+          const res = await toolFetch('https://api.twitter.com/2/tweets', { method: 'POST', headers: authHeaders, signal: ctx.signal, body: JSON.stringify({ text }) });
           const data = await res.json() as { data?: { id: string }; errors?: Array<{ message: string }> };
           if (!res.ok || data.errors) throw new Error(data.errors?.[0]?.message ?? `HTTP ${res.status}`);
           return { success: true, output: `Tweeted (id: ${data.data?.id})`, data: data.data };
@@ -51,7 +52,7 @@ export const twitterManagerTool: ToolDefinition = {
           const tweetId = params['tweetId'] as string | undefined;
           if (!text?.trim()) return { success: false, output: 'text is required.' };
           if (!tweetId?.trim()) return { success: false, output: 'tweetId is required.' };
-          const res = await fetch('https://api.twitter.com/2/tweets', {
+          const res = await toolFetch('https://api.twitter.com/2/tweets', {
             method: 'POST', headers: authHeaders, signal: ctx.signal,
             body: JSON.stringify({ text, reply: { in_reply_to_tweet_id: tweetId } }),
           });
@@ -68,7 +69,7 @@ export const twitterManagerTool: ToolDefinition = {
           for (const text of messages) {
             const body: Record<string, unknown> = { text };
             if (prevId) body['reply'] = { in_reply_to_tweet_id: prevId };
-            const res = await fetch('https://api.twitter.com/2/tweets', { method: 'POST', headers: authHeaders, signal: ctx.signal, body: JSON.stringify(body) });
+            const res = await toolFetch('https://api.twitter.com/2/tweets', { method: 'POST', headers: authHeaders, signal: ctx.signal, body: JSON.stringify(body) });
             const data = await res.json() as { data?: { id: string }; errors?: Array<{ message: string }> };
             if (!res.ok || data.errors) throw new Error(data.errors?.[0]?.message ?? `HTTP ${res.status}`);
             prevId = data.data?.id;
@@ -82,7 +83,7 @@ export const twitterManagerTool: ToolDefinition = {
           const text = params['text'] as string | undefined;
           if (!userId?.trim()) return { success: false, output: 'userId is required.' };
           if (!text?.trim()) return { success: false, output: 'text is required.' };
-          const res = await fetch(`https://api.twitter.com/2/dm_conversations/with/${userId}/messages`, { method: 'POST', headers: authHeaders, signal: ctx.signal, body: JSON.stringify({ text }) });
+          const res = await toolFetch(`https://api.twitter.com/2/dm_conversations/with/${userId}/messages`, { method: 'POST', headers: authHeaders, signal: ctx.signal, body: JSON.stringify({ text }) });
           const data = await res.json() as { data?: { dm_conversation_id: string }; errors?: Array<{ message: string }> };
           if (!res.ok || data.errors) throw new Error(data.errors?.[0]?.message ?? `HTTP ${res.status}`);
           return { success: true, output: `DM sent to user ${userId}.`, data: data.data };
@@ -93,7 +94,7 @@ export const twitterManagerTool: ToolDefinition = {
           if (!query?.trim()) return { success: false, output: 'query is required.' };
           const maxResults = Math.max(10, Math.min((params['maxResults'] as number | undefined) ?? 10, 100));
           const qs = new URLSearchParams({ query, max_results: String(maxResults), 'tweet.fields': 'created_at,public_metrics' });
-          const res = await fetch(`https://api.twitter.com/2/tweets/search/recent?${qs}`, { headers: { Authorization: `Bearer ${oauthToken}` }, signal: ctx.signal });
+          const res = await toolFetch(`https://api.twitter.com/2/tweets/search/recent?${qs}`, { headers: { Authorization: `Bearer ${oauthToken}` }, signal: ctx.signal });
           const data = await res.json() as { data?: Array<{ id: string; text: string }>; meta?: { result_count: number } };
           if (!res.ok) throw new Error(`Search error HTTP ${res.status}`);
           return { success: true, output: `Found ${data.meta?.result_count ?? 0} tweet(s) for: ${query}`, data: data.data ?? [] };
@@ -101,7 +102,7 @@ export const twitterManagerTool: ToolDefinition = {
 
         case 'timeline': {
           const maxResults = Math.max(5, Math.min((params['maxResults'] as number | undefined) ?? 10, 100));
-          const res = await fetch(`https://api.twitter.com/2/users/me/timelines/reverse_chronological?max_results=${maxResults}&tweet.fields=created_at`, { headers: { Authorization: `Bearer ${oauthToken}` }, signal: ctx.signal });
+          const res = await toolFetch(`https://api.twitter.com/2/users/me/timelines/reverse_chronological?max_results=${maxResults}&tweet.fields=created_at`, { headers: { Authorization: `Bearer ${oauthToken}` }, signal: ctx.signal });
           const data = await res.json() as { data?: Array<{ id: string; text: string }> };
           if (!res.ok) throw new Error(`Timeline error HTTP ${res.status}`);
           return { success: true, output: `Timeline: ${(data.data ?? []).length} tweet(s).`, data: data.data ?? [] };
@@ -111,12 +112,12 @@ export const twitterManagerTool: ToolDefinition = {
         case 'retweet': {
           const tweetId = params['tweetId'] as string | undefined;
           if (!tweetId?.trim()) return { success: false, output: `tweetId is required for ${action}.` };
-          const meRes = await fetch('https://api.twitter.com/2/users/me', { headers: { Authorization: `Bearer ${oauthToken}` }, signal: ctx.signal });
+          const meRes = await toolFetch('https://api.twitter.com/2/users/me', { headers: { Authorization: `Bearer ${oauthToken}` }, signal: ctx.signal });
           const me = await meRes.json() as { data?: { id: string } };
           const myId = me.data?.id;
           if (!myId) throw new Error('Could not get authenticated user ID.');
           const endpoint = action === 'like' ? `users/${myId}/likes` : `users/${myId}/retweets`;
-          const res = await fetch(`https://api.twitter.com/2/${endpoint}`, { method: 'POST', headers: authHeaders, signal: ctx.signal, body: JSON.stringify({ tweet_id: tweetId }) });
+          const res = await toolFetch(`https://api.twitter.com/2/${endpoint}`, { method: 'POST', headers: authHeaders, signal: ctx.signal, body: JSON.stringify({ tweet_id: tweetId }) });
           if (!res.ok) throw new Error(`${action} error HTTP ${res.status}`);
           return { success: true, output: `${action === 'like' ? 'Liked' : 'Retweeted'} tweet ${tweetId}.` };
         }
@@ -162,7 +163,7 @@ export const trendScannerTool: ToolDefinition = {
     const fetchSafe = async (url: string, opts: RequestInit = {}): Promise<Response> => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 12_000);
-      try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
+      try { return await toolFetch(url, { ...opts, signal: ctrl.signal }); }
       finally { clearTimeout(timer); }
     };
 

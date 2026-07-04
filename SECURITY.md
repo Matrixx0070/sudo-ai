@@ -37,7 +37,9 @@ SUDO-AI implements defense-in-depth across multiple layers:
 
 1. **Prompt Injection Detection** — Score-based pattern scanning on user and tool inputs. Triggers replan or blocks execution when confidence exceeds threshold.
 
-2. **Sandboxed Execution** — Untrusted code runs inside bubblewrap with UID/GID drop, seccomp BPF allowlists, and an optional LD_PRELOAD execve seal.
+2. **Sandboxed Execution** — Two bubblewrap-based isolation profiles:
+   - **General command execution** (`system.exec`): runs in bubblewrap with PID/IPC/UTS namespace isolation (network optionally unshared), read-only bind mounts of system directories, a private `/proc`, `/dev`, and `/tmp`, resource caps via hard `ulimit`s (CPU/file-size/process/memory), a path bind-mount denylist, and an environment scrubbed to an allowlist with secret-named variables denied.
+   - **Synthesized / untrusted tool code** (`tool.synthesize`): the hardened profile — additionally drops all Linux capabilities (`--cap-drop ALL`), applies a seccomp-BPF syscall allowlist, drops to an unprivileged UID (65534), forces the network off, and optionally seals `execve` via an `LD_PRELOAD` shim.
 
 3. **Tool Gate** — Dangerous operations (destructive exec, cloud metadata endpoints, private-IP SSRF) are blocked at the tool-router layer before reaching the OS.
 

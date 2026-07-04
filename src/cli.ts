@@ -49,6 +49,7 @@ import { HeartbeatRunner, type HeartbeatPayloadRunner } from './core/cron/heartb
 import { maybeGuardedSend } from './core/comms/idempotency.js';
 import { CommandRegistry } from './core/commands/registry.js';
 import { tryDispatchDirective } from './core/commands/dispatch.js';
+import { makeDirectiveAuthorizer } from './core/commands/directive-authorizer.js';
 import type { CommandContext } from './core/commands/types.js';
 import { HookManager } from './core/hooks/index.js';
 import { CostTracker } from './core/brain/cost-tracker.js';
@@ -61,9 +62,8 @@ import { OutcomesLedger } from './core/autonomy/outcomes.js';
 import { AuditTrail } from './core/security/audit-trail.js';
 import { AutoUpdateManager } from './core/update/update-manager.js';
 import { DEFAULT_UPDATE_CONFIG } from './core/update/update-manager-types.js';
-import { AgentWallet } from './core/economy/wallet.js';
-import { AgentIdentity } from './core/economy/did.js';
 import { AutoDream } from './core/memory/auto-dream.js';
+import { flushBeforeCompaction } from './core/memory/compaction-flush.js';
 import { TeammateIdleDetector } from './core/agent/teammate-idle.js';
 import { BackgroundAgentExecutor } from './core/agent/background-agent.js';
 import { InMemorySteeringChannel } from './core/agent/steering.js';
@@ -587,9 +587,10 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   const sessionManager = new SessionManager(db);
   const journalStore = new JournalSessionStore();
-  // gap #17 — opt-in journal-first save ordering + boot-time interrupted-turn scan.
-  // Default OFF: behaviour byte-identical to the pre-gap-#17 SQLite-first path.
-  const crashSafe = process.env['SUDO_CRASH_SAFE'] === '1';
+  // gap #17 — journal-first save ordering + boot-time interrupted-turn scan.
+  // Default ON (matches the prod ecosystem config); SUDO_CRASH_SAFE=0 restores
+  // the pre-gap-#17 SQLite-first path.
+  const crashSafe = process.env['SUDO_CRASH_SAFE'] !== '0';
   const dualSessionManager = new DualSessionManager(sessionManager, journalStore, { crashSafe });
   log.info({ crashSafe }, 'SessionManager initialized');
   if (crashSafe) {
@@ -1491,6 +1492,10 @@ async function boot(): Promise<void> {
     log.warn({ err: msg }, 'Command registration failed — continuing without slash commands');
   }
 
+  // Steering channel for mid-run control. Created here (before the command
+  // context factory) so /steer can signal it; wired into the loop below.
+  const steeringChannel = new InMemorySteeringChannel();
+
   // Shared CommandContext factory for every channel's directive dispatch.
   const makeCommandContext = async (msg: { channel: string; peerId: string }): Promise<CommandContext | null> => {
     try {
@@ -1507,6 +1512,7 @@ async function boot(): Promise<void> {
         config,
         db,
         peerQueue: dualSessionManager.peerQueue,
+        steeringChannel,
       };
     } catch (err) {
       log.error({ peerId: msg.peerId, err: String(err) }, 'CommandContext factory failed');
@@ -1521,6 +1527,10 @@ async function boot(): Promise<void> {
   // intercept is always on (pre-existing behaviour).
   const channelDirectives = process.env['SUDO_CHANNEL_COMMANDS'] === '1';
   if (channelDirectives) log.info('Cross-channel slash directives enabled (SUDO_CHANNEL_COMMANDS=1)');
+  // Shared directive-auth gate: state-mutating / turn-control directives
+  // (/stop, /reset, and /steer once registered) require an owner; read-only
+  // ones stay open. See SUDO_DIRECTIVE_OWNERS.
+  const directiveAuthorize = makeDirectiveAuthorizer(config);
 
   if (config.channels.telegram.enabled && process.env['SUDO_TELEGRAM_DISABLE'] !== '1') {
     const tgAllowed = (process.env['TELEGRAM_CHAT_ID'] ?? '')
@@ -1540,9 +1550,13 @@ async function boot(): Promise<void> {
     // foreground-reply fence depends on that.
     const handleTelegramTurn = (msg: UnifiedMessage): Promise<void> =>
       dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
+        // Delivery target for every reply: the originating chat (a group id in
+        // groups), NOT msg.peerId (the sender) — else group replies go to the
+        // sender's DM. peerId stays the session/queue/memory key below.
+        const replyTo = msg.chatId ?? msg.peerId;
         // Hoisted out of the try-block so the outer catch can cancel it
-        // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=1 is unset this
-        // stays null and the byte-identical pre-PR send path runs.
+        // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=0 this stays null
+        // and the byte-identical non-streaming send path runs.
         let streamSink: { chunk(t: string): void; finalize(t: string): Promise<void>; cancel(): Promise<void> } | null = null;
         try {
           const convKey = `${msg.channel}:${msg.peerId}`;
@@ -1560,21 +1574,21 @@ async function boot(): Promise<void> {
             }
           }
 
-          // gap #19 — streamed agent loop on Telegram. Opt-in
-          // SUDO_STREAM_CHANNELS=1. Creates a placeholder message that gets
-          // edited in place as `stream-chunk` events fire, then a final
-          // edit with the canonical replyText. Fail-open: sink construction
-          // errors fall through to the normal send path.
+          // gap #19 — streamed agent loop on Telegram. Default ON (matches the
+          // prod ecosystem config); SUDO_STREAM_CHANNELS=0 disables. Creates a
+          // placeholder message that gets edited in place as `stream-chunk`
+          // events fire, then a final edit with the canonical replyText.
+          // Fail-open: sink construction errors fall through to the normal send.
           // Use the real AgentEventHandler signature — `ev.chunk` is non-
           // optional on the 'stream-chunk' variant of the discriminated
           // union and the narrow is what we filter on (verifier HIGH #1).
           let onEvent: import('./core/agent/types.js').AgentEventHandler | undefined;
-          if (process.env['SUDO_STREAM_CHANNELS'] === '1') {
+          if (process.env['SUDO_STREAM_CHANNELS'] !== '0') {
             try {
               const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
               streamSink = await createBufferedEditSink(
-                (placeholder: string) => telegram.sendForStream(msg.peerId, placeholder),
-                (id: string | number, text: string) => telegram.editText(msg.peerId, id, text),
+                (placeholder: string) => telegram.sendForStream(replyTo, placeholder),
+                (id: string | number, text: string) => telegram.editText(replyTo, id, text),
                 // maxChars clamps BEFORE same-text suppression so the sink
                 // and Telegram's 4096-char editMessageText cap agree on the
                 // wire body — preventing duplicate edits whose only delta
@@ -1641,7 +1655,7 @@ async function boot(): Promise<void> {
                   continue;
                 }
                 const buffer = readFileSync(att.path);
-                await telegram.sendMedia(msg.peerId, {
+                await telegram.sendMedia(replyTo, {
                   type: att.type,
                   mimeType: att.type === 'image' ? 'image/png'
                     : att.type === 'video' ? 'video/mp4'
@@ -1673,7 +1687,7 @@ async function boot(): Promise<void> {
                 'telegram',
               );
               try {
-                await telegram.sendWithKeyboard(msg.peerId, '⋯', keyboard);
+                await telegram.sendWithKeyboard(replyTo, '⋯', keyboard);
               } catch (kbErr) {
                 log.warn({ err: String(kbErr) }, 'gap #19: feedback keyboard follow-up failed');
               }
@@ -1684,9 +1698,9 @@ async function boot(): Promise<void> {
               (msg.text ?? replyText).slice(0, 120),
               'telegram',
             );
-            await maybeGuardedSend('telegram', msg.peerId, replyText, () => telegram.sendWithKeyboard(msg.peerId, replyText, keyboard));
+            await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.sendWithKeyboard(replyTo, replyText, keyboard));
           } else {
-            await maybeGuardedSend('telegram', msg.peerId, replyText, () => telegram.send(msg.peerId, replyText));
+            await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.send(replyTo, replyText));
           }
           log.info({ peerId: msg.peerId, streamed: streamSink !== null }, 'Reply sent to Telegram');
         } catch (err: unknown) {
@@ -1706,19 +1720,20 @@ async function boot(): Promise<void> {
               'telegram',
             );
             await telegram.sendWithKeyboard(
-              msg.peerId,
+              replyTo,
               `⚠️ Error: ${errMsg.substring(0, 200)}`,
               keyboard,
             );
-          } catch { try { await telegram.send(msg.peerId, `Error: ${errMsg.substring(0, 200)}`); } catch {} }
+          } catch { try { await telegram.send(replyTo, `Error: ${errMsg.substring(0, 200)}`); } catch {} }
         }
       });
 
-    // Burst debounce/coalesce + foreground-reply fence (opt-in: SUDO_MSG_COALESCE=1;
-    // idle window via SUDO_MSG_COALESCE_MS, default 1000 ms, 0 = flush on next tick).
+    // Burst debounce/coalesce + foreground-reply fence. Default ON (matches the
+    // prod ecosystem config); SUDO_MSG_COALESCE=0 disables. Idle window via
+    // SUDO_MSG_COALESCE_MS, default 1000 ms, 0 = flush on next tick.
     // handleTelegramTurn rejections propagate so the coalescer logs real failures.
     const coalesceWindowMs = Number(process.env['SUDO_MSG_COALESCE_MS']);
-    const telegramCoalescer = process.env['SUDO_MSG_COALESCE'] === '1'
+    const telegramCoalescer = process.env['SUDO_MSG_COALESCE'] !== '0'
       ? new MessageCoalescer({
           deliver: handleTelegramTurn,
           ...(process.env['SUDO_MSG_COALESCE_MS'] !== undefined && Number.isFinite(coalesceWindowMs) && coalesceWindowMs >= 0
@@ -1804,7 +1819,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => discord.send(msg.peerId, text),
         })) return;
 
@@ -1892,7 +1907,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => slack.send(msg.peerId, text),
         })) return;
 
@@ -1996,7 +2011,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => whatsapp.send(msg.peerId, text),
         })) return;
 
@@ -2087,7 +2102,7 @@ async function boot(): Promise<void> {
 
       // Directive short-circuit: slash commands bypass the turn queue.
       if (channelDirectives && await tryDispatchDirective({
-        registry: commandRegistry, msg, makeContext: makeCommandContext,
+        registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
         reply: (text) => web.send(msg.peerId, text),
       })) return;
 
@@ -2235,7 +2250,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => email.send(msg.peerId, text),
         })) return;
 
@@ -2321,7 +2336,7 @@ async function boot(): Promise<void> {
 
         // Directive short-circuit: slash commands bypass the turn queue.
         if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext,
+          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
           reply: (text) => sms.send(msg.peerId, text),
         })) return;
 
@@ -2409,7 +2424,7 @@ async function boot(): Promise<void> {
         if (approvalManager.tryConsumeApprovalReply(msg.text)) return true;
         if (channelDirectives && commandRegistry.isCommand(msg.text ?? '')) {
           void tryDispatchDirective({
-            registry: commandRegistry, msg, makeContext: makeCommandContext,
+            registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
             reply: (text) => router.sendToChannel(msg.channel, msg.peerId, text),
           }).then((handled) => {
             // Unlike the cli handlers, the message was already consumed here,
@@ -3305,9 +3320,6 @@ async function boot(): Promise<void> {
     const crossChannelMemory = new CrossChannelMemory();
     goalEngine = new GoalEngineV2();
     outcomesLedger = new OutcomesLedger();
-    const agentWallet = new AgentWallet();
-    const agentIdentity = new AgentIdentity('sudo-ai-v5');
-    const steeringChannel = new InMemorySteeringChannel();
 
     // Semantic contradiction resolution for dreamed facts (#7, opt-in via
     // SUDO_CHUNK_CONTRADICT=1). Stage 1 = embedding cosine (text-embedding-3-small,
@@ -3360,6 +3372,27 @@ async function boot(): Promise<void> {
       resolveFactContradiction,
     );
 
+    // Wire the programmatic pre-compaction flush: persist salient conversation
+    // facts to memory BEFORE compact() replaces the history, so state survives
+    // regardless of whether the model acted on the flush reminder. Default ON;
+    // SUDO_PRECOMPACTION_FLUSH=0 disables. Fail-open inside runCompaction.
+    if (process.env['SUDO_PRECOMPACTION_FLUSH'] !== '0') {
+      const flushContradictionDeps = { db, embed: contradictionEmbed, judge: contradictionJudge };
+      finalAgentLoop.setPreCompactionFlush(async (messages) => {
+        const rows = messages.map((m) => ({
+          // session_id unused by flushBeforeCompaction — storeChunk is date-keyed.
+          session_id: '',
+          role: m.role,
+          content: m.content,
+          tool_name: m.toolName,
+          // For tool rows the result text lives in `content`; buildChunkText
+          // reads tool_output, so surface it there or the output is dropped.
+          tool_output: m.role === 'tool' ? m.content : undefined,
+        }));
+        await flushBeforeCompaction(db, rows, flushContradictionDeps);
+      });
+    }
+
     // Heal an over-cap MEMORY.md on boot so a stuck file (which silently drops
     // new learnings) is trimmed promptly instead of waiting for the next dream.
     try {
@@ -3387,9 +3420,10 @@ async function boot(): Promise<void> {
     // Suppress unused-variable warnings for modules registered but not yet
     // exposed via their own shutdown hooks.
     void crossChannelMemory;
-    void agentWallet;
-    void agentIdentity;
-    void steeringChannel;
+    // Wire the steering channel into the running loop so an in-process caller
+    // (e.g. a /steer command) can abort/inject a turn mid-run. Previously this
+    // channel was constructed and discarded (dead wiring).
+    finalAgentLoop.setSteeringChannel(steeringChannel);
 
     // Markdown skill loader — project skills/ (flat .md files plus
     // agentskills.io <skill>/SKILL.md directories) and optional extra roots
@@ -3413,7 +3447,7 @@ async function boot(): Promise<void> {
     registerShutdown(() => outcomesLedger?.close?.());
 
     console.log(
-      `[boot] v5 ready: goals=${goalEngine ? 'ok' : 'no'} wallet=${agentWallet ? 'ok' : 'no'} skills=${mdSkills.length} channels=cross`,
+      `[boot] v5 ready: goals=${goalEngine ? 'ok' : 'no'} skills=${mdSkills.length} channels=cross`,
     );
     log.info(
       { skillCount: mdSkills.length },

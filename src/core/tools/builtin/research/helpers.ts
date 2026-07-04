@@ -10,6 +10,7 @@
  */
 
 import { createLogger } from '../../../shared/logger.js';
+import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const log = createLogger('research-helpers');
 
@@ -54,7 +55,7 @@ async function timedFetch(url: string, options?: RequestInit): Promise<Response>
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await toolFetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
