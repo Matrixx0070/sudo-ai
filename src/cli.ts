@@ -15,6 +15,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from './core/shared/logger.js';
+import { sanitizeUserFacingError } from './core/shared/sanitize-error.js';
 import { registerShutdown, runShutdown } from './core/cli/shutdown.js';
 import { PROJECT_ROOT, DATA_DIR, WORKSPACE_DIR, projectPath } from './core/shared/paths.js';
 import { ConfigLoader } from './core/config/loader.js';
@@ -1721,10 +1722,10 @@ async function boot(): Promise<void> {
             );
             await telegram.sendWithKeyboard(
               replyTo,
-              `⚠️ Error: ${errMsg.substring(0, 200)}`,
+              `⚠️ ${sanitizeUserFacingError(err)}`,
               keyboard,
             );
-          } catch { try { await telegram.send(replyTo, `Error: ${errMsg.substring(0, 200)}`); } catch {} }
+          } catch { try { await telegram.send(replyTo, sanitizeUserFacingError(err)); } catch {} }
         }
       });
 
@@ -2200,13 +2201,13 @@ async function boot(): Promise<void> {
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
           log.error({ err: errMsg, peerId: msg.peerId }, 'Web agent turn failed');
-          try { await web.send(msg.peerId, `Error: ${errMsg.substring(0, 200)}`); } catch {}
+          try { await web.send(msg.peerId, sanitizeUserFacingError(err)); } catch {}
           // Also notify Telegram on long-running task failure
           const durationMs = Date.now() - taskStartMs;
           if (durationMs > 60_000 && telegramNotifier) {
             const tgChatId = (process.env['TELEGRAM_CHAT_ID'] ?? '').split(',')[0]?.trim();
             if (tgChatId) {
-              try { await telegramNotifier.send(tgChatId, `❌ Web task failed after ${Math.round(durationMs / 60_000)}m:\n${errMsg.slice(0, 200)}`); } catch { /* non-fatal */ }
+              try { await telegramNotifier.send(tgChatId, `❌ Web task failed after ${Math.round(durationMs / 60_000)}m:\n${sanitizeUserFacingError(err)}`); } catch { /* non-fatal */ }
             }
           }
         }
