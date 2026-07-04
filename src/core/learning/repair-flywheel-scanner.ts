@@ -15,7 +15,9 @@
  */
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
+import { PROJECT_ROOT } from '../shared/paths.js';
 import { mineFailureClusters, measureCoverage, type FailureRow } from './repair-flywheel.js';
+import { runShadowVerification, makeReadFilePathRepair, type DeterministicRepair } from './repair-flywheel-verify.js';
 
 const log = createLogger('learning:repair-flywheel');
 
@@ -70,14 +72,29 @@ export class RepairFlywheelScanner {
     try {
       db = new Database(this.dbPath, { readonly: true, fileMustExist: true });
       const rows = db
-        .prepare("SELECT tool_name, COALESCE(error_message,'') AS error_message FROM traces WHERE success=0 AND tool_name IS NOT NULL")
-        .all() as FailureRow[];
+        .prepare("SELECT tool_name, COALESCE(error_message,'') AS error_message, args_raw FROM traces WHERE success=0 AND tool_name IS NOT NULL")
+        .all() as Array<FailureRow & { args_raw?: string | null }>;
       const report = buildFlywheelReport(rows);
       log.info({ ...report }, 'RepairFlywheel scan: addressable-failure report');
       if (report.systemBugsFlagged > 0) {
         log.warn(
           { systemBugsFlagged: report.systemBugsFlagged, byLesson: report.byLesson },
           'RepairFlywheel: system-bug failure signatures detected — a HARNESS bug, not agent error (investigate)',
+        );
+      }
+
+      // SHADOW verify → adopt decision (log-only; NEVER applies to the live agent).
+      // Replays captured failing inputs through registered deterministic repairs and
+      // reports adopt/reject/insufficient. Inert until the args-capture corpus fills.
+      const repairs: DeterministicRepair[] = [makeReadFilePathRepair(PROJECT_ROOT)];
+      const decisions = runShadowVerification(rows, repairs);
+      const withData = decisions.filter((d) => d.decision !== 'insufficient-data');
+      if (withData.length > 0) {
+        log.info({ decisions: withData }, 'RepairFlywheel SHADOW verify → adopt decision (log-only, not applied)');
+      } else {
+        log.info(
+          { verifiableInputs: rows.filter((r) => r.args_raw).length },
+          'RepairFlywheel SHADOW verify: no deterministic repair had enough captured inputs yet (corpus building)',
         );
       }
       return report;
