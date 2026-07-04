@@ -12,7 +12,8 @@
  * Persistence: append-only JSONL (rewind_points.jsonl), max 4.5 MB per session.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { writeFileAtomic } from '../shared/atomic-write.js';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
 import { createLogger } from '../shared/logger.js';
@@ -310,7 +311,7 @@ export class SessionRewindManager {
     const content = lines.join('\n') + (lines.length > 0 ? '\n' : '');
 
     try {
-      writeFileSync(filePath, content, 'utf8');
+      writeFileAtomic(filePath, content);
       log.debug({ sessionDir, pointCount: this.rewindPoints.length, filePath }, 'Rewind points persisted');
     } catch (err) {
       log.error({ sessionDir, filePath, err }, 'persist: failed to write JSONL file');

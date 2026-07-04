@@ -15,6 +15,7 @@
  */
 
 import fs from 'fs';
+import { writeFileAtomic } from '../shared/atomic-write.js';
 import path from 'path';
 import { createLogger } from '../shared/logger.js';
 import { ConfigError } from '../shared/errors.js';
@@ -368,7 +369,7 @@ export class SettingsManager {
 
     try {
       const toml = serializeSettingsFile(file);
-      fs.writeFileSync(filePath, toml, 'utf8');
+      writeFileAtomic(filePath, toml); // atomic: a torn write would corrupt settings
       log.debug({ path: filePath, scope }, 'Settings saved');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

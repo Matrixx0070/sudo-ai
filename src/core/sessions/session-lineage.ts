@@ -19,7 +19,8 @@ import { createLogger } from '../shared/logger.js';
 import { contentHash } from '../shared/utils.js';
 import type { SessionManager } from './manager.js';
 import type { Database } from 'better-sqlite3';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs';
+import { writeFileAtomic } from '../shared/atomic-write.js';
 import { join } from 'path';
 
 const log = createLogger('sessions:lineage');
@@ -285,7 +286,7 @@ export class SessionLineageTracker {
     // Persist snapshot to disk as immutable JSON
     const snapshotPath = join(this.config.snapshotDir, `${sessionId}.json`);
     try {
-      writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf-8');
+      writeFileAtomic(snapshotPath, JSON.stringify(snapshot, null, 2));
       log.info({ sessionId, fileCount: files.length, path: snapshotPath }, 'Frozen snapshot created');
     } catch (err) {
       log.error({ sessionId, path: snapshotPath, err }, 'Failed to write snapshot file');
