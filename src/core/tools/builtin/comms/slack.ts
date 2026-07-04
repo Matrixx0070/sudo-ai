@@ -12,6 +12,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import { withCommsIdempotency } from '../../../comms/idempotency.js';
 
 const log = createLogger('comms:slack');
 
@@ -144,14 +145,19 @@ export const slackTool: ToolDefinition = {
           return { success: false, output: 'comms.slack: "message" is required for send.' };
         }
 
-        const data = await slackPost(
-          'chat.postMessage',
-          token,
-          { channel, text: message },
-          ctx.signal,
+        const guard = await withCommsIdempotency(
+          { channel: 'slack', recipient: channel, body: message },
+          () => slackPost('chat.postMessage', token, { channel, text: message }, ctx.signal),
+          (d) => String(d['ts'] ?? '') || undefined,
         );
-
-        const ts = String(data['ts'] ?? '');
+        if (guard.duplicate) {
+          return {
+            success: true,
+            output: `comms.slack: duplicate suppressed — an identical message to ${channel} was already posted within the idempotency window.${guard.messageId ? ` Prior ts: ${guard.messageId}.` : ''}`,
+            data: { channel, duplicate: true, ts: guard.messageId },
+          };
+        }
+        const ts = String(guard.result!['ts'] ?? '');
         log.info({ sessionId: ctx.sessionId, channel, ts }, 'Slack message sent');
 
         return {

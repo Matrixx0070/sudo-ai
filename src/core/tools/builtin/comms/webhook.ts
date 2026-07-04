@@ -11,6 +11,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import { withCommsIdempotency } from '../../../comms/idempotency.js';
 
 const log = createLogger('comms:webhook');
 
@@ -206,7 +207,21 @@ export const webhookTool: ToolDefinition = {
     const method = ALLOWED_METHODS.has(rawMethod) ? rawMethod : 'POST';
 
     try {
-      const { status, body } = await sendWebhook(rawUrl, payload, headers, method, ctx.signal);
+      // Idempotency key spans method+url+payload so a re-run turn can't double-POST
+      // the same webhook. (Gated by SUDO_COMMS_IDEMPOTENCY; operators who
+      // intentionally repeat identical webhooks within the window leave it off.)
+      const guard = await withCommsIdempotency(
+        { channel: 'webhook', recipient: `${method} ${rawUrl}`, body: JSON.stringify(payload) },
+        () => sendWebhook(rawUrl, payload, headers, method, ctx.signal),
+      );
+      if (guard.duplicate) {
+        return {
+          success: true,
+          output: `comms.webhook: duplicate suppressed — an identical ${method} to ${rawUrl} was already sent within the idempotency window.`,
+          data: { url: rawUrl, method, duplicate: true },
+        };
+      }
+      const { status, body } = guard.result!;
 
       const success = status >= 200 && status < 300;
       log.info(

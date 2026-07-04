@@ -210,6 +210,57 @@ export function isCommsAdapterIdempotencyEnabled(): boolean {
  * @returns true if the send was performed (or the flag is off), false if it was
  *          suppressed as a duplicate.
  */
+/** Outcome of a {@link withCommsIdempotency}-wrapped send. */
+export interface GuardedToolSend<T> {
+  /** True when an identical send was already in-flight/confirmed in the window. */
+  duplicate: boolean;
+  /** Prior provider message id, when the duplicate was already confirmed. */
+  messageId?: string;
+  /** The send()'s own result, present only when the send was actually performed. */
+  result?: T;
+}
+
+/**
+ * Tool-level idempotency guard, gated by the SAME flag as message.send/email/sms
+ * (`SUDO_COMMS_IDEMPOTENCY`) so one switch governs all builtin outbound tools.
+ * Mirrors message.send's begin/confirm/release, made reusable so every comms tool
+ * that produces an external side effect (Slack post, email, webhook POST, calendar
+ * event) is replay-safe when a turn is re-run (consensus / best-of-N / task retry).
+ *
+ * Fail-open: any idempotency-machinery error sends unguarded rather than blocking
+ * a live outbound. When the flag is off, `send` runs unchanged.
+ *
+ * @returns `{duplicate:true, messageId?}` if suppressed, else `{duplicate:false, result}`.
+ */
+export async function withCommsIdempotency<T>(
+  id: SendIdentity,
+  send: () => Promise<T>,
+  extractMessageId?: (result: T) => string | undefined,
+): Promise<GuardedToolSend<T>> {
+  if (!isCommsIdempotencyEnabled()) {
+    return { duplicate: false, result: await send() };
+  }
+  let claim: BeginResult | null = null;
+  try {
+    claim = getCommsIdempotencyStore().begin(id);
+  } catch (err) {
+    log.warn({ channel: id.channel, err: String(err) }, 'tool send: idempotency begin failed — sending unguarded (fail-open)');
+    return { duplicate: false, result: await send() };
+  }
+  if (claim.duplicate) {
+    log.warn({ channel: id.channel, key: claim.key }, 'tool send: duplicate suppressed (idempotency)');
+    return { duplicate: true, messageId: claim.messageId };
+  }
+  try {
+    const result = await send();
+    try { getCommsIdempotencyStore().confirm(claim.key, extractMessageId?.(result)); } catch { /* confirm best-effort */ }
+    return { duplicate: false, result };
+  } catch (err) {
+    try { getCommsIdempotencyStore().release(claim.key); } catch { /* release best-effort */ }
+    throw err;
+  }
+}
+
 export async function maybeGuardedSend(
   channel: string,
   recipient: string,
