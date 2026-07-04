@@ -12,6 +12,7 @@ import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } 
 import { LLMError } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
+import { BrainIdleBreaker } from './idle-breaker.js';
 import {
   type BrainStrategy,
   type BrainCallOpts,
@@ -419,6 +420,12 @@ type BrainCompletion = {
 /** Core LLM interface with failover, persona, and mood management. */
 export class Brain {
   private readonly failover: ModelFailover;
+  /**
+   * Cross-call breaker against runaway paid fan-out to a wedged provider.
+   * Instance-scoped so consecutive idle-timeouts across separate brain calls
+   * (the agent loop calls the brain once per iteration) are counted together.
+   */
+  private readonly idleBreaker = new BrainIdleBreaker();
   private currentPersona: PersonaType = 'assistant';
   private currentMood: MoodType = 'focused';
   /**
@@ -893,6 +900,13 @@ export class Brain {
       throw new LLMError('BrainRequest.messages must be non-empty', 'llm_invalid_request');
     }
 
+    // Cross-call idle breaker (same guard as stream()): don't fan out another
+    // paid call while a provider is wedged. Half-opens after the cooldown.
+    if (this.idleBreaker.shouldBlock()) {
+      log.warn(this.idleBreaker.snapshot(), 'call: brain idle circuit open — short-circuiting');
+      throw new LLMError(this.idleBreaker.reason(), 'llm_idle_circuit_open', this.idleBreaker.snapshot());
+    }
+
     // Strategy router: resolve the effective strategy from configured +
     // opts (fast tier always short-circuits to single), then route to the
     // matching orchestrator. `single` flows down into the existing
@@ -1140,6 +1154,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
       try {
         const result = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+        this.idleBreaker.recordDurableProgress();
         return {
           ...result,
           routing: this._trace({
@@ -1156,6 +1171,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         const category = this.failover.categorizeError(status, body);
         log.warn({ attempt, profileId: profile.id, status, category, retryAfterMs }, 'LLM call failed — trying next profile');
         this.failover.recordError(profile.id, category, { retryAfterMs });
+        // Non-streaming timeout = no output produced → count toward the breaker.
+        if (category === 'timeout') {
+          const n = this.idleBreaker.recordIdleTimeout();
+          log.warn({ attempt, profileId: profile.id, consecutiveIdle: n }, 'Idle-timeout recorded for brain idle breaker');
+        }
         if (attempt < MAX_FAILOVER_ATTEMPTS - 1) {
           const waitMs = failoverBackoffMs(category, attempt, retryAfterMs);
           if (waitMs > 0) {
@@ -1199,6 +1219,14 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     const maxTokens = this.resolveMaxTokens(request);
     let lastError: unknown;
 
+    // Cross-call idle breaker: refuse to open yet another paid stream while a
+    // provider is wedged (N consecutive idle-timeouts, no output). Half-opens
+    // after the cooldown so a transient outage recovers without a restart.
+    if (this.idleBreaker.shouldBlock()) {
+      log.warn(this.idleBreaker.snapshot(), 'stream: brain idle circuit open — short-circuiting');
+      throw new LLMError(this.idleBreaker.reason(), 'llm_idle_circuit_open', this.idleBreaker.snapshot());
+    }
+
     for (let attempt = 0; attempt < MAX_FAILOVER_ATTEMPTS; attempt++) {
       const profile = this.failover.getNextProfile();
 
@@ -1208,6 +1236,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
       const modelId = profile.id;
       const _streamStartedAt = Date.now();
+      // Track whether THIS attempt produced any output — a pure idle stall (no
+      // chunk) counts toward the breaker; partial-then-stall does not reset it.
+      let yieldedAny = false;
       log.info({ attempt, modelId }, 'Streaming LLM call starting');
 
       try {
@@ -1273,6 +1304,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         let streamErrored = false;
         try {
           for await (const chunk of result.textStream) {
+            yieldedAny = true;
             yield chunk;
           }
           if (streamError) throw streamError;
@@ -1305,6 +1337,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
               () => { /* stream cancelled — usage unavailable */ },
             );
             this.failover.recordSuccess(profile.id);
+            this.idleBreaker.recordDurableProgress();
           }
         }
 
@@ -1312,6 +1345,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         // bookkeeping, so a later throw can neither undo the success record nor fall
         // into the outer failover catch and retry-stream a DUPLICATE response.
         this.failover.recordSuccess(profile.id);
+        this.idleBreaker.recordDurableProgress();
 
         // result is StreamTextResult (not a Promise); usage is PromiseLike<LanguageModelUsage>.
         // All post-stream bookkeeping is best-effort: the response is already on the wire.
@@ -1352,6 +1386,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
 
         log.warn({ attempt, modelId, status, category, retryAfterMs, err }, 'Streaming LLM call failed — trying next profile');
         this.failover.recordError(profile.id, category, { retryAfterMs });
+        // A timeout with zero output is a pure idle stall — count it toward the
+        // cross-call breaker. Any output this attempt means real progress.
+        if (category === 'timeout' && !yieldedAny) {
+          const n = this.idleBreaker.recordIdleTimeout();
+          log.warn({ attempt, modelId, consecutiveIdle: n }, 'Streaming idle-timeout recorded for brain idle breaker');
+        }
         if (attempt < MAX_FAILOVER_ATTEMPTS - 1) {
           const waitMs = failoverBackoffMs(category, attempt, retryAfterMs);
           if (waitMs > 0) {
