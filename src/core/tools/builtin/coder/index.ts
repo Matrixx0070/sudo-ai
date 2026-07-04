@@ -24,6 +24,7 @@
  *   coder.apply-patch  — Freeform find-and-replace patches across one or more files
  *   coder.multi-edit   — Multiple exact-string edits across one or more files in one call
  *   coder.notebook-edit — Edit or insert cells in Jupyter .ipynb notebooks
+ *   coder.todo         — Session-scoped plan/todo checklist (TodoWrite/TodoRead equivalent)
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -50,6 +51,7 @@ import { cacheTool } from './cache.js';
 import { applyPatchTool } from './apply-patch.js';
 import { multiEditTool } from './multi-edit.js';
 import { notebookEditTool } from './notebook-edit.js';
+import { todoTool } from './todo.js';
 
 /** All coder tools in a stable order. */
 export const CODER_TOOLS = [
@@ -76,6 +78,7 @@ export const CODER_TOOLS = [
   applyPatchTool,
   multiEditTool,
   notebookEditTool,
+  todoTool,
 ] as const;
 
 /**
@@ -112,4 +115,5 @@ export {
   applyPatchTool,
   multiEditTool,
   notebookEditTool,
+  todoTool,
 };
