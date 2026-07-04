@@ -9,6 +9,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { listGmailMessages, sendGmailMessage } from '../../../channels/gmail-connector.js';
 import { createLogger } from '../../../shared/logger.js';
+import { withCommsIdempotency } from '../../../comms/idempotency.js';
 
 const log = createLogger('tool:comms.gmail');
 
@@ -85,7 +86,19 @@ export const gmailTool: ToolDefinition = {
     if (!body) return { success: false, output: 'comms.gmail: "body" is required for send.' };
 
     log.info({ sessionId: ctx.sessionId, to, subject: subject.slice(0, 50) }, 'Gmail send operation');
-    const result = await sendGmailMessage(to, subject, body, ctx.signal);
+    const guard = await withCommsIdempotency(
+      { channel: 'gmail', recipient: to, body: `${subject}\n${body}` },
+      () => sendGmailMessage(to, subject, body, ctx.signal),
+      (r) => r.messageId,
+    );
+    if (guard.duplicate) {
+      return {
+        success: true,
+        output: `comms.gmail: duplicate suppressed — an identical email to ${to} was already sent within the idempotency window.${guard.messageId ? ` Prior message id: ${guard.messageId}.` : ''}`,
+        data: { duplicate: true, messageId: guard.messageId },
+      };
+    }
+    const result = guard.result!;
     return {
       success: result.success,
       output: result.output,

@@ -9,6 +9,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { listCalendarEvents, createCalendarEvent } from '../../../channels/gcalendar-connector.js';
 import { createLogger } from '../../../shared/logger.js';
+import { withCommsIdempotency } from '../../../comms/idempotency.js';
 
 const log = createLogger('tool:comms.gcalendar');
 
@@ -98,7 +99,7 @@ export const gcalendarTool: ToolDefinition = {
     if (!endTime) return { success: false, output: 'comms.gcalendar: "end_time" is required for create.' };
 
     log.info({ sessionId: ctx.sessionId, summary, dryRun }, 'Calendar create operation');
-    const result = await createCalendarEvent(
+    const doCreate = () => createCalendarEvent(
       {
         summary,
         start: { dateTime: startTime },
@@ -109,6 +110,30 @@ export const gcalendarTool: ToolDefinition = {
       ctx.signal,
     );
 
+    // A dry run has no side effect, so it is never deduped; a real create is
+    // guarded so a re-run turn can't create the same event twice.
+    if (dryRun) {
+      const result = await doCreate();
+      return {
+        success: result.success,
+        output: result.output,
+        data: result.eventId ? { eventId: result.eventId, htmlLink: result.htmlLink, dryRun: result.dryRun } : undefined,
+      };
+    }
+
+    const guard = await withCommsIdempotency(
+      { channel: 'gcalendar', recipient: 'primary', body: `${summary}\n${startTime}\n${endTime}` },
+      doCreate,
+      (r) => r.eventId ?? undefined,
+    );
+    if (guard.duplicate) {
+      return {
+        success: true,
+        output: `comms.gcalendar: duplicate suppressed — an identical event "${summary}" (${startTime}) was already created within the idempotency window.${guard.messageId ? ` Prior event id: ${guard.messageId}.` : ''}`,
+        data: { duplicate: true, eventId: guard.messageId },
+      };
+    }
+    const result = guard.result!;
     return {
       success: result.success,
       output: result.output,
