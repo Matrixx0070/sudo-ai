@@ -208,9 +208,45 @@ export class WebAdapter implements ChannelAdapter {
   /** Map from peerId -> active WebSocket connection. */
   /** peerId → every open socket for that peer (>1 means multi-tab / multi-device). */
   private _clients = new Map<string, Set<WSClient>>();
+  /**
+   * peerId → replies that dropped because no socket was open at send time. A
+   * reconnecting client with the same peerId (the ?peer= / persisted-peerId case)
+   * gets them flushed instead of silently losing the agent's response. Bounded by
+   * count/peers and a TTL so it can't grow unboundedly. Kill-switch:
+   * SUDO_WEB_REPLY_BUFFER=0.
+   */
+  private _pendingReplies = new Map<string, Array<{ text: string; ts: number }>>();
+  private static readonly REPLY_BUFFER_MAX_PER_PEER = 20;
+  private static readonly REPLY_BUFFER_MAX_PEERS = 500;
+  private static readonly REPLY_BUFFER_TTL_MS = 5 * 60_000;
 
   get isConnected(): boolean {
     return this._isConnected;
+  }
+
+  /** Buffer a reply that couldn't be delivered (no open socket), for reconnect. */
+  private _bufferReply(peerId: string, text: string): void {
+    if (!this._pendingReplies.has(peerId) && this._pendingReplies.size >= WebAdapter.REPLY_BUFFER_MAX_PEERS) {
+      const oldest = this._pendingReplies.keys().next().value; // insertion order
+      if (oldest !== undefined) this._pendingReplies.delete(oldest);
+    }
+    const arr = this._pendingReplies.get(peerId) ?? [];
+    arr.push({ text, ts: Date.now() });
+    while (arr.length > WebAdapter.REPLY_BUFFER_MAX_PER_PEER) arr.shift();
+    this._pendingReplies.set(peerId, arr);
+  }
+
+  /** Flush any fresh buffered replies to a newly-connected socket for this peer. */
+  private _flushPendingReplies(peerId: string, ws: WSClient): void {
+    if (process.env['SUDO_WEB_REPLY_BUFFER'] === '0') return;
+    const arr = this._pendingReplies.get(peerId);
+    if (!arr || arr.length === 0) return;
+    this._pendingReplies.delete(peerId);
+    const now = Date.now();
+    const fresh = arr.filter((r) => now - r.ts <= WebAdapter.REPLY_BUFFER_TTL_MS);
+    if (fresh.length === 0) return;
+    for (const r of fresh) broadcastToSockets(new Set([ws]), r.text);
+    log.info({ peerId, flushed: fresh.length }, 'Web: flushed buffered replies to reconnected client');
   }
 
   onMessage(handler: MessageHandler): void {
@@ -267,6 +303,8 @@ export class WebAdapter implements ChannelAdapter {
       if (!peerSockets) { peerSockets = new Set(); this._clients.set(peerId, peerSockets); }
       peerSockets.add(ws);
       log.info({ peerId, sockets: peerSockets.size, ip: (httpReq.socket as { remoteAddress?: string } | null)?.remoteAddress }, 'Web WS client connected');
+      // Deliver any replies that dropped while this peer had no open socket.
+      this._flushPendingReplies(peerId, ws);
 
       const pingInterval = setInterval(() => {
         if (ws.readyState === ws.OPEN) {
@@ -422,7 +460,12 @@ export class WebAdapter implements ChannelAdapter {
 
     const sent = this._broadcast(peerId, text);
     if (sent === 0) {
-      log.warn({ peerId }, 'Web send: no active WS connection for peerId — dropped');
+      if (process.env['SUDO_WEB_REPLY_BUFFER'] !== '0') {
+        this._bufferReply(peerId, text);
+        log.warn({ peerId }, 'Web send: no active WS connection — buffered for reconnect');
+      } else {
+        log.warn({ peerId }, 'Web send: no active WS connection for peerId — dropped');
+      }
       return;
     }
     log.debug({ peerId, textLen: text.length, sockets: sent }, 'Web WS message sent');
