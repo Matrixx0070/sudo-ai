@@ -144,7 +144,8 @@ export type ErrorCategory =
   | 'timeout'
   | 'format'
   | 'model_not_found'
-  | 'session_expired';
+  | 'session_expired'
+  | 'context_overflow';
 
 /**
  * Map an HTTP status code (and optional response body) to an ErrorCategory.
@@ -199,6 +200,36 @@ export function isTransientHtmlBlockBody(body: string): boolean {
   );
 }
 
+/**
+ * Whether an error body reports that the prompt exceeded the model's context
+ * window (input too large), as opposed to an output-length cap or a TPM rate
+ * limit (which also mention "tokens" and must NOT be treated as overflow — they
+ * need backoff, not compaction). An overflow persists across a same-family
+ * failover, so classifying it distinctly lets the loop compact instead of blindly
+ * re-sending the same oversized prompt to every profile.
+ */
+export function isContextOverflowBody(body: string): boolean {
+  if (/tokens?[ _-]?per[ _-]?min|per[ _-]minute|\btpm\b|requests? per/i.test(body)) return false;
+  return (
+    /prompt is too long|maximum context length|context[_ ]?length[_ ]?exceeded/i.test(body) ||
+    /input length and max_tokens exceed context/i.test(body) ||
+    /reduce the (?:length|number) of|context window (?:is )?exceeded/i.test(body) ||
+    /\b\d{3,}\s*tokens?\s*>\s*\d{3,}/i.test(body)
+  );
+}
+
+/**
+ * Best-effort parse of the observed prompt token count from an overflow error,
+ * so a caller can size compaction. Handles "N tokens > M" and "A + B > L" forms.
+ */
+export function extractOverflowTokenCount(body: string): number | undefined {
+  const gt = /(\d{3,})\s*tokens?\s*>\s*\d{3,}/i.exec(body);
+  if (gt) return parseInt(gt[1]!, 10);
+  const sum = /(\d{3,})\s*\+\s*(\d{3,})\s*>\s*\d{3,}/.exec(body);
+  if (sum) return parseInt(sum[1]!, 10) + parseInt(sum[2]!, 10);
+  return undefined;
+}
+
 export function categorizeError(status: number, body?: string): ErrorCategory {
   if (typeof status !== 'number') {
     return 'format';
@@ -235,11 +266,18 @@ export function categorizeError(status: number, body?: string): ErrorCategory {
       return 'auth_permanent';
     case 408:
       return 'timeout';
+    case 413:
+      // Payload Too Large: context overflow if the body says so, else a TPM/size
+      // limit → back off rather than compact.
+      if (body && isContextOverflowBody(body)) return 'context_overflow';
+      return 'rate_limit';
     case 400:
       // Some providers return 400 for session-expired or model issues;
       // inspect body for disambiguation when available.
       if (body && /session.?expired/i.test(body)) return 'session_expired';
       if (body && /model.?not.?found/i.test(body)) return 'model_not_found';
+      // Anthropic returns 400 "prompt is too long: N tokens > M" for overflow.
+      if (body && isContextOverflowBody(body)) return 'context_overflow';
       return 'format';
     case 404:
       return 'model_not_found';
