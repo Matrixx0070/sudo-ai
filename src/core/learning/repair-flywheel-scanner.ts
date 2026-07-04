@@ -18,6 +18,7 @@ import { createLogger } from '../shared/logger.js';
 import { PROJECT_ROOT } from '../shared/paths.js';
 import { mineFailureClusters, measureCoverage, type FailureRow } from './repair-flywheel.js';
 import { runShadowVerification, makeReadFilePathRepair, type DeterministicRepair } from './repair-flywheel-verify.js';
+import { runLessonLifecycle, isApplyEnabled } from './lesson-apply.js';
 
 const log = createLogger('learning:repair-flywheel');
 
@@ -97,6 +98,25 @@ export class RepairFlywheelScanner {
           'RepairFlywheel SHADOW verify: no deterministic repair had enough captured inputs yet (corpus building)',
         );
       }
+      // Canary lifecycle for ADOPTED lessons — advances candidate→canary→promoted/
+      // reverted from REAL measured failure rates. Gated by SUDO_FLYWHEEL_APPLY
+      // (default OFF → no-op). Measures a tool's failure rate over the canary window
+      // from the same open DB. This is the ONLY step that mutates live behavior, and
+      // it only ever promotes on a verified improvement (else auto-reverts).
+      if (isApplyEnabled()) {
+        const localDb = db;
+        const measureFailRate = (tool: string, sinceISO?: string): number => {
+          let sql = 'SELECT AVG(CASE WHEN success=0 THEN 1.0 ELSE 0 END) AS r FROM traces WHERE tool_name=?';
+          const params: unknown[] = [tool];
+          if (sinceISO) { sql += ' AND created_at >= ?'; params.push(sinceISO.slice(0, 19).replace('T', ' ')); }
+          const row = localDb.prepare(sql).get(...params) as { r: number | null } | undefined;
+          return row?.r ?? 0;
+        };
+        const now = new Date();
+        const actions = runLessonLifecycle({ measureFailRate, nowMs: now.getTime(), nowISO: now.toISOString() });
+        if (actions.length > 0) log.warn({ actions }, 'RepairFlywheel APPLY: canary lifecycle advanced (live behavior changed)');
+      }
+
       return report;
     } catch (err) {
       log.warn({ err: String(err) }, 'RepairFlywheel scan failed (non-fatal)');

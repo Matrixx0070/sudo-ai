@@ -206,8 +206,9 @@ program
   .option('--tool <name>', 'Tool cluster to verify', 'system.exec')
   .option('--max <n>',     'Max live rewrites to spend (cost ceiling)', '20')
   .option('--confirm',     'Actually spend tokens and run the live A/B', false)
+  .option('--admit',       'On an adopt decision, enter the lesson into the canary lifecycle', false)
   .option('--json',        'Emit the result as JSON', false)
-  .action(async (opts: { tool?: string; max?: string; confirm?: boolean; json?: boolean }) => {
+  .action(async (opts: { tool?: string; max?: string; confirm?: boolean; admit?: boolean; json?: boolean }) => {
     const { runFlywheelVerify } = await import('./commands/flywheel-verify.js');
     const code = await runFlywheelVerify(opts);
     process.exit(code);
