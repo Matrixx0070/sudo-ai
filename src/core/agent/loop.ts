@@ -2889,6 +2889,15 @@ export class AgentLoop extends AgentLoopInjections {
         // finishReason === 'stop'
         state.consecutiveToolIterations = 0; // reset on text response
         finalText = response.content;
+        // Guard a DEGENERATE empty/whitespace 'stop' (a zero-content final turn —
+        // a provider hiccup or a reasoning-only stop): delivering it hands the user
+        // a blank reply AND persists an empty assistant turn that poisons the next
+        // replay. Substitute the same fallback the tool-malformed / loop-fallback
+        // branches use. Kill-switch: SUDO_EMPTY_STOP_GUARD=0.
+        if (process.env['SUDO_EMPTY_STOP_GUARD'] !== '0' && (!finalText || !finalText.trim())) {
+          finalText = buildLoopFallbackReply(session.messages);
+          log.warn({ sessionId: state.sessionId }, 'Empty stop response — substituted fallback reply');
+        }
         session.messages.push({ role: 'assistant', content: finalText });
         emit({ type: 'message', content: finalText });
 
