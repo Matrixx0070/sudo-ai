@@ -18,7 +18,8 @@
  * the refresh grant are byte-identical to the existing ClaudeTokenManager.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileAtomic } from '../shared/atomic-write.js';
 import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { dataPath } from '../shared/paths.js';
@@ -240,7 +241,9 @@ export class ClaudeOAuthManager {
     if (!this.credentials) return;
     try {
       mkdirSync(dirname(this.storePath), { recursive: true });
-      writeFileSync(this.storePath, JSON.stringify(this.credentials, null, 2), { mode: 0o600 });
+      // Atomic + 0o600: a torn write would corrupt the OAuth store and break the
+      // provider (the 401-storm mode); the temp inherits the secret file's perms.
+      writeFileAtomic(this.storePath, JSON.stringify(this.credentials, null, 2), { mode: 0o600 });
       log.debug({ path: this.storePath }, 'Claude OAuth credentials persisted');
     } catch (err) {
       log.error({ err: String(err) }, 'Failed to persist Claude OAuth credentials');
@@ -648,7 +651,7 @@ export class ClaudeOAuthManager {
     this.stopAutoRefresh();
     try {
       if (existsSync(this.storePath)) {
-        writeFileSync(this.storePath, '{}', { mode: 0o600 });
+        writeFileAtomic(this.storePath, '{}', { mode: 0o600 });
       }
     } catch (err) {
       log.error({ err: String(err) }, 'Failed to wipe Claude OAuth store on disconnect');
