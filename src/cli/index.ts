@@ -197,6 +197,23 @@ program
   });
 
 // ---------------------------------------------------------------------------
+// flywheel-verify (implemented in commands/flywheel-verify.ts)
+// ---------------------------------------------------------------------------
+
+program
+  .command('flywheel-verify')
+  .description('Run the repair-flywheel LIVE A/B on captured failures (dry by default; --confirm spends tokens)')
+  .option('--tool <name>', 'Tool cluster to verify', 'system.exec')
+  .option('--max <n>',     'Max live rewrites to spend (cost ceiling)', '20')
+  .option('--confirm',     'Actually spend tokens and run the live A/B', false)
+  .option('--json',        'Emit the result as JSON', false)
+  .action(async (opts: { tool?: string; max?: string; confirm?: boolean; json?: boolean }) => {
+    const { runFlywheelVerify } = await import('./commands/flywheel-verify.js');
+    const code = await runFlywheelVerify(opts);
+    process.exit(code);
+  });
+
+// ---------------------------------------------------------------------------
 // scan (implemented in commands/scan.ts)
 // ---------------------------------------------------------------------------
 
