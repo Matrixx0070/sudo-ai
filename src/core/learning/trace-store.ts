@@ -16,6 +16,7 @@ import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { contentHash, genId } from '../shared/utils.js';
 import { DATA_DIR } from '../shared/paths.js';
+import { redactDeep } from '../shared/redact.js';
 
 const log = createLogger('learning:trace-store');
 
@@ -367,9 +368,12 @@ export class TraceStore {
       argsHash: args != null ? contentHash(JSON.stringify(args)) : undefined,
       resultHash: result != null ? contentHash(JSON.stringify(result)) : undefined,
       // Raw args/result captured only under SUDO_TRACE_CAPTURE=1 (size-capped) —
-      // turns the trace from "fact-of-call" into something replay-capable.
-      argsRaw: capture ? capCaptured(safeStringify(args)) : undefined,
-      resultRaw: capture ? capCaptured(safeStringify(result)) : undefined,
+      // turns the trace from "fact-of-call" into something replay-capable (the
+      // input the repair flywheel needs for an input-level counterfactual).
+      // Deep-redacted: secret-keyed values (token/password/…) are stripped, since
+      // the flywheel needs the input's SHAPE, never the secret in it.
+      argsRaw: capture ? capCaptured(safeStringify(redactDeep(args))) : undefined,
+      resultRaw: capture ? capCaptured(safeStringify(redactDeep(result))) : undefined,
     });
   }
 
