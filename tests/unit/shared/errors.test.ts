@@ -271,6 +271,26 @@ describe('categorizeError', () => {
     expect(categorizeError(403, '账户额度不足')).toBe('billing');
   });
 
+  // A Cloudflare/proxy HTML challenge is transient infra, not a real auth denial.
+  // Left as auth_permanent (403) it would PERMANENTLY DISABLE the profile.
+  it('should map a 403 Cloudflare/HTML challenge body to overloaded, not auth_permanent', () => {
+    expect(categorizeError(403, '<!DOCTYPE html><html><head><title>Attention Required! | Cloudflare</title>')).toBe('overloaded');
+    expect(categorizeError(403, 'error 1020 ... cf-ray: 8ab...')).toBe('overloaded');
+    expect(categorizeError(403, '<html><body>Checking your browser before accessing</body></html>')).toBe('overloaded');
+  });
+
+  it('should map a 401 HTML/proxy block body to overloaded, not auth', () => {
+    expect(categorizeError(401, '<html><head><title>502 Bad Gateway</title></head></html>')).toBe('overloaded');
+  });
+
+  it('should STILL map a real JSON permission_error 403 to auth_permanent (not HTML)', () => {
+    expect(categorizeError(403, '{"type":"permission_error","message":"access denied for this model"}')).toBe('auth_permanent');
+  });
+
+  it('should STILL map a real invalid-token 401 (no HTML) to auth', () => {
+    expect(categorizeError(401, '{"error":{"type":"authentication_error","message":"invalid x-api-key"}}')).toBe('auth');
+  });
+
   it('should map 408 to timeout', () => {
     expect(categorizeError(408)).toBe('timeout');
   });
