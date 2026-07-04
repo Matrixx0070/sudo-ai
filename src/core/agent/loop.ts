@@ -866,7 +866,7 @@ export class AgentLoop extends AgentLoopInjections {
         // Phase 2: TraceStore — record tool call (fail-open).
         try {
           if (this._traceStore && event.type === 'tool-result') {
-            const _tr = event as { type: string; name: string; result: unknown; success?: boolean };
+            const _tr = event as { type: string; name: string; result: unknown; success?: boolean; args?: unknown };
             const _isSuccess = resolveToolSuccess(_tr);
             const _errMsg = !_isSuccess ? (typeof _tr.result === 'string' ? _tr.result : JSON.stringify(_tr.result)) : undefined;
             this._traceStore.recordToolCall(
@@ -875,8 +875,10 @@ export class AgentLoop extends AgentLoopInjections {
               _isSuccess,
               0, // latencyMs not available in emit; placeholder
               _errMsg ? { type: 'tool_error', message: _errMsg.slice(0, 500) } : undefined,
-              undefined,    // args not in scope on the tool-result event
-              _tr.result,   // captured raw (size-capped) only under SUDO_TRACE_CAPTURE=1
+              _tr.args,     // the tool INPUT — the tool-result event carries it (was
+                            // wrongly dropped as "not in scope"); captured raw + redacted
+                            // under SUDO_TRACE_CAPTURE=1 so the flywheel can replay it.
+              _tr.result,
             );
           }
         } catch { /* fail-open */ }
