@@ -84,8 +84,12 @@ export const readFileTool: ToolDefinition = {
     // - Relative paths are resolved against ctx.workingDir (workspace session dir)
     const filePath = rawPath.startsWith('/') ? rawPath : resolve(ctx.workingDir, rawPath);
 
-    // Path traversal guard: only block if trying to escape project root
-    const projectRoot = resolve(__dirname, '../../../../');
+    // Path traversal guard: only block if trying to escape project root.
+    // `../../../../../` = up 5 from src/core/tools/builtin/coder/ to the project
+    // root (matches edit-file/write-file). The previous `../../../../` was up 4,
+    // resolving to <root>/src — which wrongly blocked every in-repo file OUTSIDE
+    // src/ (package.json, tests/, docs/). Surfaced by the trace-failure flywheel.
+    const projectRoot = resolve(__dirname, '../../../../../');
     if (!filePath.startsWith(projectRoot)) {
       return { success: false, output: `Path traversal blocked: ${rawPath} resolves outside project root` };
     }
