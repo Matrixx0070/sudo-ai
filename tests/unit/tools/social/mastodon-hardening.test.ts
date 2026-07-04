@@ -265,7 +265,9 @@ describe('ITEM 8 — normalizeInstance non-http(s) scheme rejection', () => {
   });
 
   it('accepts http:// scheme (non-TLS instance, happy path)', async () => {
-    process.env['MASTODON_INSTANCE'] = 'http://local.mastodon.internal';
+    // *.internal hostnames are blocked by the SSRF guard toolFetch routes
+    // through; this test only asserts the http scheme is accepted.
+    process.env['MASTODON_INSTANCE'] = 'http://mastodon-dev.example.com';
     const mockFetch = vi.fn().mockResolvedValue(makeSuccessResponse());
     vi.stubGlobal('fetch', mockFetch);
 
