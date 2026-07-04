@@ -470,6 +470,67 @@ export function selectVerbatimTail(messages: BrainMessage[], k: number): BrainMe
   if (lastUser && !tail.includes(lastUser)) tail = [lastUser, ...tail];
   return tail;
 }
+/** Placeholder inserted for a tool call whose result was truncated away. */
+export const TRUNCATED_TOOL_RESULT_PLACEHOLDER =
+  '[tool result unavailable — dropped by context truncation]';
+
+/**
+ * Enforce tool_use/tool_result pairing by ID after any history truncation.
+ *
+ * The sliding window and the compaction tail keep the message array valid with
+ * POSITIONAL heuristics (trim a leading `role:'tool'` orphan). That assumes tool
+ * results always sit contiguously right after their declaring assistant — true
+ * today, but fragile: an interior orphan, a reordering nudge, or a parallel/async
+ * tool whose result never landed would still ship an unpaired array, and the
+ * provider throws mid-turn (Vercel AI SDK `AI_MissingToolResultsError`; Anthropic
+ * "tool_use ids were found without tool_result blocks"). This is the ID-based
+ * final pass OpenClaw runs after truncation — it catches BOTH directions:
+ *
+ *  - orphan tool_result (no earlier assistant declared its `toolCallId`) → dropped;
+ *  - orphan tool_use (an assistant `toolCalls[].id` with no matching result kept
+ *    anywhere in the window) → a synthetic placeholder result is inserted right
+ *    after the assistant so every declared call is answered exactly once.
+ *
+ * Pure and order-preserving; never throws. Cheap enough to run every turn.
+ */
+export function sanitizeToolPairing(messages: BrainMessage[]): BrainMessage[] {
+  // Ids that have a result somewhere in the input — so we only synthesize a
+  // placeholder for calls whose result is genuinely absent, not merely later.
+  const resultIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === 'tool' && m.toolCallId) resultIds.add(m.toolCallId);
+  }
+
+  const out: BrainMessage[] = [];
+  const declaredIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === 'tool') {
+      // Drop a tool result whose declaring assistant is not in the kept window.
+      if (m.toolCallId && declaredIds.has(m.toolCallId)) out.push(m);
+      continue;
+    }
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      out.push(m);
+      for (const tc of m.toolCalls) {
+        declaredIds.add(tc.id);
+        if (!resultIds.has(tc.id)) {
+          out.push({
+            role: 'tool',
+            toolCallId: tc.id,
+            toolName: tc.name,
+            content: TRUNCATED_TOOL_RESULT_PLACEHOLDER,
+          });
+          // Guard against a second synthetic if the same id is declared again.
+          resultIds.add(tc.id);
+        }
+      }
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
 /**
  * Persist salient facts from the conversation before it is compacted away.
  * Injected into the loop (setPreCompactionFlush) and invoked by runCompaction.
@@ -544,7 +605,11 @@ export async function runCompaction(
         return Number.isFinite(raw) && raw >= 2 && raw <= 40 ? raw : COMPACT_TAIL_DEFAULT;
       })();
       const tail = selectVerbatimTail(session.messages as BrainMessage[], k);
-      session.messages = [summaryMsg, ...tail];
+      // ID-based pairing repair on the summary+tail: the verbatim tail can keep an
+      // assistant tool_call whose result fell outside the tail window (or drop a
+      // result whose declaring assistant did), which the positional trim in
+      // selectVerbatimTail cannot fully catch. Guarantees a provider-valid array.
+      session.messages = sanitizeToolPairing([summaryMsg, ...tail]);
       log.info(
         { sessionId: state.sessionId, summaryLen: summary.length, tailKept: tail.length },
         'Compaction complete (verbatim tail preserved)',
@@ -1848,7 +1913,10 @@ export async function prepareMessages(
 
   // LAYER 4 — CONTEXT COLLAPSE: intelligently compress verbose tool results
   // Instead of dumb truncation, identify high-noise patterns and summarise them.
-  return collapseToolResults(windowed) as BrainMessage[];
+  // LAYER 5 — TOOL PAIRING: authoritative ID-based repair after all truncation,
+  // so no orphaned tool_use/tool_result can reach the provider (belt-and-suspenders
+  // over the positional trim above).
+  return sanitizeToolPairing(collapseToolResults(windowed) as BrainMessage[]);
 }
 
 // ---------------------------------------------------------------------------
