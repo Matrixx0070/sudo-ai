@@ -118,4 +118,12 @@ export interface AgentRunResult {
    * SUDO_COMPLETION_VERIFY=1. Observable-only — never alters the response.
    */
   completionVerification?: { passed: boolean; confidence: number; failedChecks: string[] };
+  /**
+   * True when this run performed an external, user-visible side effect (sent a
+   * message, posted to a channel, spawned a sub-agent, created a cron job). A
+   * caller that re-runs turns (the task executor's auto-retry) must NOT blindly
+   * re-dispatch a run that committed outbound — it would re-fire the side effect.
+   * See {@link markCommittedOutbound} / TaskQueue.markCommittedOutbound.
+   */
+  committedOutbound?: boolean;
 }

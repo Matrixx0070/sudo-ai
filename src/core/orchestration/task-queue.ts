@@ -139,6 +139,18 @@ export class TaskQueue {
   }
 
   /**
+   * Mark that a task's run performed an external outbound side effect. Auto-retry
+   * ({@link fail} requeue, {@link retryFailed}) is gated on this so a re-dispatch
+   * cannot re-fire the send/spawn/cron. Set by the executor from the run result's
+   * `committedOutbound` flag.
+   */
+  markCommittedOutbound(id: string): void {
+    this._assertId(id);
+    const info = this.db.prepare('UPDATE task_queue SET committed_outbound = 1 WHERE id = :id').run({ id });
+    if (info.changes > 0) logger.info({ id }, 'Task marked committed-outbound (auto-retry gated off)');
+  }
+
+  /**
    * Mark a task as failed. If retries remain, re-queues it; otherwise keeps as failed.
    */
   fail(id: string, error: string): void {
@@ -146,9 +158,18 @@ export class TaskQueue {
     const task = this.getTask(id);
     if (!task) { logger.warn({ id }, 'fail: task not found'); return; }
 
+    // A task that already committed an outbound side effect must NOT be
+    // auto-requeued — re-running it would re-fire the send/spawn/cron. Force a
+    // terminal fail regardless of remaining retries (explicit re-dispatch only).
+    const committedOutbound =
+      (this.db.prepare('SELECT committed_outbound AS c FROM task_queue WHERE id = :id').get({ id }) as { c?: number } | undefined)?.c === 1;
+
     const nextRetry = task.retries + 1;
-    const exhausted = nextRetry >= task.maxRetries;
+    const exhausted = committedOutbound || nextRetry >= task.maxRetries;
     const newStatus: TaskStatus = exhausted ? 'failed' : 'queued';
+    if (committedOutbound && nextRetry < task.maxRetries) {
+      logger.warn({ id, retries: nextRetry, maxRetries: task.maxRetries }, 'Task failed AFTER an outbound side effect — auto-retry suppressed to avoid re-sending');
+    }
 
     this.db.prepare(`
       UPDATE task_queue
@@ -262,10 +283,12 @@ export class TaskQueue {
   }
 
   retryFailed(): number {
+    // Never auto-requeue a task that already committed an outbound side effect —
+    // a re-run would re-fire it. Such tasks stay 'failed' until explicitly re-dispatched.
     const info = this.db.prepare(
-      "UPDATE task_queue SET status = 'queued', error = NULL WHERE status = 'failed' AND retries < max_retries"
+      "UPDATE task_queue SET status = 'queued', error = NULL WHERE status = 'failed' AND retries < max_retries AND committed_outbound = 0"
     ).run();
-    logger.info({ requeued: info.changes }, 'retryFailed: tasks re-queued');
+    logger.info({ requeued: info.changes }, 'retryFailed: tasks re-queued (committed-outbound tasks skipped)');
     return info.changes;
   }
 

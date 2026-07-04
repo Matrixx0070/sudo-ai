@@ -14,6 +14,7 @@ import { createLogger } from '../shared/logger.js';
 import { isToolResultSuccess, resolveToolSuccess } from './tool-result-classifier.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError, LLMError } from '../shared/errors.js';
+import { clearCommittedOutbound, hasCommittedOutbound } from './committed-outbound.js';
 import {
   EPISTEMIC_TAG_CONFIDENCE_MAP,
   MAX_PLAN_STEPS,
@@ -770,6 +771,10 @@ export class AgentLoop extends AgentLoopInjections {
     if (!message || typeof message !== 'string') {
       throw new PipelineError('AgentLoop.run: message must be a non-empty string', 'pipeline_invalid_args');
     }
+
+    // Reset outbound-side-effect evidence for this run: it must reflect ONLY
+    // what this turn does, not a prior turn on the same session.
+    clearCommittedOutbound(sessionId);
 
     let session = await this.sessionManager.get(sessionId);
     if (!session) {
@@ -1690,7 +1695,7 @@ export class AgentLoop extends AgentLoopInjections {
       }
     }
 
-    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress, completionVerification: _completionVerification };
+    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress, completionVerification: _completionVerification, committedOutbound: hasCommittedOutbound(sessionId) };
   }
 
   /** Return the resolved config for this loop instance. */

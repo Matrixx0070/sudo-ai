@@ -16,6 +16,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { TaskQueue, type Task } from './task-queue.js';
+import { hasCommittedOutbound } from '../agent/committed-outbound.js';
 
 const logger = createLogger('task-executor');
 
@@ -166,6 +167,8 @@ export class TaskExecutor {
         controller.abort();
         const msg = `Task timed out after ${task.timeoutMs}ms`;
         logger.warn({ id: task.id, name: task.name, timeoutMs: task.timeoutMs }, msg);
+        // A run that sent before timing out must not be auto-requeued.
+        if (hasCommittedOutbound(task.id)) this.queue.markCommittedOutbound(task.id);
         this.queue.fail(task.id, msg);
         this.running.delete(task.id);
 
@@ -189,6 +192,11 @@ export class TaskExecutor {
       }
 
       const durationMs = Date.now() - startMs;
+      // Stamp outbound evidence (from the run result, or the session registry keyed
+      // by task.id) so any later manual retry / retryFailed is gated.
+      if ((result as { committedOutbound?: boolean } | null)?.committedOutbound || hasCommittedOutbound(task.id)) {
+        this.queue.markCommittedOutbound(task.id);
+      }
       this.queue.complete(task.id, result);
       this.running.delete(task.id);
 
@@ -203,6 +211,9 @@ export class TaskExecutor {
       const msg = err instanceof Error ? err.message : String(err);
       const durationMs = Date.now() - startMs;
 
+      // If the run sent/spawned before throwing, mark it FIRST so fail() suppresses
+      // the auto-requeue rather than re-firing the side effect on retry.
+      if (hasCommittedOutbound(task.id)) this.queue.markCommittedOutbound(task.id);
       logger.error({ id: task.id, name: task.name, durationMs, err: msg }, 'Task execution failed');
       this.queue.fail(task.id, msg);
       this.running.delete(task.id);

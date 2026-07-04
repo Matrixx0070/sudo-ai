@@ -12,6 +12,7 @@ import {
   isBrowserRecoveryEnabled,
   resetBrowserRecovery,
 } from './browser-recovery.js';
+import { isOutboundToolName, markCommittedOutbound } from './committed-outbound.js';
 import { PipelineError, ToolError } from '../shared/errors.js';
 import { compact, microCompact, autoCompact, fullCompact, type AutoCompactFailureCounter } from './compaction.js';
 import { microCompactMessages, type MicroCompactMessage } from './microcompact.js';
@@ -1213,8 +1214,13 @@ async function executeSingleToolCall(
     guardedRecordFeedback(feedbackMemory, true, tc.name, tc.arguments ?? {}, resultContent || 'success', ctx.sessionId);
     // A tool can report failure via its authoritative `success` flag without throwing.
     if (!result.success) callError = resultContent;
-    // A successful browser action clears the recovery failure streak for this session.
-    else if (isBrowserActionTool(tc.name)) resetBrowserRecovery(ctx.sessionId);
+    else {
+      // A successful browser action clears the recovery failure streak.
+      if (isBrowserActionTool(tc.name)) resetBrowserRecovery(ctx.sessionId);
+      // Run-level outbound evidence: a successful send/post/spawn/cron makes this
+      // turn unsafe to blindly re-run (a retry would re-fire the side effect).
+      if (isOutboundToolName(tc.name)) markCommittedOutbound(ctx.sessionId);
+    }
   } catch (err) {
     if (err instanceof ToolError && err.code === 'tool_not_found') {
       log.warn({ tool: tc.name }, 'Tool not found — invoking fallback chain');

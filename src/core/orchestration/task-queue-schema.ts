@@ -92,12 +92,23 @@ export function initTaskQueueSchema(db: Database): void {
       created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       started_at   TEXT,
       completed_at TEXT,
-      created_by   TEXT NOT NULL DEFAULT 'system'
+      created_by   TEXT NOT NULL DEFAULT 'system',
+      -- 1 when the task's run performed an external side effect (sent a message,
+      -- spawned a sub-agent, created a cron job). Auto-retry is gated on this so a
+      -- re-dispatch cannot re-fire the side effect.
+      committed_outbound INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_tq_status   ON task_queue(status);
     CREATE INDEX IF NOT EXISTS idx_tq_priority ON task_queue(priority);
     CREATE INDEX IF NOT EXISTS idx_tq_created  ON task_queue(created_at);
   `);
+
+  // Migration for databases created before committed_outbound existed. SQLite has
+  // no ADD COLUMN IF NOT EXISTS, so probe the column list and add it only if absent.
+  const cols = db.prepare("PRAGMA table_info(task_queue)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'committed_outbound')) {
+    db.exec("ALTER TABLE task_queue ADD COLUMN committed_outbound INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 // ---------------------------------------------------------------------------
