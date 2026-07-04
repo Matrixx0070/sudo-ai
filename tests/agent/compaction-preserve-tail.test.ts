@@ -147,3 +147,46 @@ describe('runCompaction verbatim-tail preservation (P0 #4)', () => {
     expect(sess.messages.some((m) => m.content === 'IN-FLIGHT ASK')).toBe(true);
   });
 });
+
+// A brain whose call() never resolves — to exercise the summariser safety timeout.
+class HangingBrain implements BrainLike {
+  async call(_req: BrainRequest): Promise<BrainResponse> {
+    return new Promise<BrainResponse>(() => { /* never resolves */ });
+  }
+}
+// A brain that must never be called — to prove the skip guard short-circuits.
+class ThrowIfCalledBrain implements BrainLike {
+  async call(_req: BrainRequest): Promise<BrainResponse> {
+    throw new Error('brain.call must not be reached');
+  }
+}
+
+describe('runCompaction summariser bounds', () => {
+  afterEach(() => { delete process.env['SUDO_COMPACTION_TIMEOUT_MS']; });
+
+  it('skip guard: no brain call and history untouched when there is no real conversation', async () => {
+    const sess = session([
+      { role: 'system', content: 'seed header' },
+      { role: 'system', content: '[intelligence brief] nothing real here' },
+    ]);
+    const before = sess.messages.map((m) => ({ ...m }));
+    const summary = await runCompaction(new ThrowIfCalledBrain(), sess, makeState(), noopEmit);
+    expect(summary).toBe('');
+    expect(sess.messages).toEqual(before); // untouched — no flush, no summary, no call
+  });
+
+  it('safety timeout: degrades to no-compaction (history preserved) when the summariser hangs', async () => {
+    process.env['SUDO_COMPACTION_TIMEOUT_MS'] = '50';
+    const original: BrainMessage[] = [
+      { role: 'system', content: 'seed' },
+      { role: 'user', content: 'IN-FLIGHT ASK' },
+      { role: 'assistant', content: 'partial answer' },
+    ];
+    const sess = session([...original]);
+    const summary = await runCompaction(new HangingBrain(), sess, makeState(), noopEmit);
+    expect(summary).toBe('');
+    for (const m of original) {
+      expect(sess.messages.some((x) => x.role === m.role && x.content === m.content)).toBe(true);
+    }
+  });
+});
