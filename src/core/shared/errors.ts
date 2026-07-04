@@ -182,6 +182,23 @@ export function isBillingBody(body: string): boolean {
   );
 }
 
+/**
+ * Whether an error body is a transient infrastructure block — an HTML error page
+ * or a Cloudflare/proxy challenge — rather than a real decision from the LLM
+ * provider. These arrive with auth-ish statuses (401/403) but the credential is
+ * fine; a CDN/gateway is in the way. Left as `auth`/`auth_permanent` a Cloudflare
+ * 403 would PERMANENTLY DISABLE the profile (see failover.ts), so we reclassify
+ * to `overloaded` (transient cooldown, retryable). Gated strictly on HTML/challenge
+ * markers so a real JSON `permission_error` body still maps to auth_permanent.
+ */
+export function isTransientHtmlBlockBody(body: string): boolean {
+  return (
+    /<!doctype html|<html[\s>]|<\/html>/i.test(body) ||
+    /\bcf-ray\b|cloudflare|attention required|just a moment|checking your browser|ddos protection/i.test(body) ||
+    /\b(?:bad gateway|gateway time-?out)\b|\b50[234]\b\s*(?:bad gateway|gateway|unavailable)/i.test(body)
+  );
+}
+
 export function categorizeError(status: number, body?: string): ErrorCategory {
   if (typeof status !== 'number') {
     return 'format';
@@ -205,9 +222,16 @@ export function categorizeError(status: number, body?: string): ErrorCategory {
       // fail OVER to the next provider on a billing cooldown, since the credential
       // is fine, the account is just out of budget. Body billing-signature wins.
       if (body && isBillingBody(body)) return 'billing';
+      // A CDN/proxy challenge page (Cloudflare, gateway 5xx-as-HTML) can surface
+      // as 401 — the credential is fine, infra is in the way. Retry, don't cooldown.
+      if (body && isTransientHtmlBlockBody(body)) return 'overloaded';
       return 'auth';
     case 403:
       if (body && isBillingBody(body)) return 'billing';
+      // Same for 403 — and here it matters more: auth_permanent PERMANENTLY
+      // DISABLES the profile, so a transient Cloudflare 403 would kill it until
+      // process restart. Reclassify an HTML/challenge body to a transient state.
+      if (body && isTransientHtmlBlockBody(body)) return 'overloaded';
       return 'auth_permanent';
     case 408:
       return 'timeout';
