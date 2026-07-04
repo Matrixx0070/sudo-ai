@@ -170,3 +170,38 @@ describe('ToolRouter — distinctive-word relevance (description-aware ranking)'
     expect(n.indexOf('media.diagram')).toBeLessThan(n.indexOf('media.mermaid'));
   });
 });
+
+describe('ToolRouter — comms discovery (send a Telegram message)', () => {
+  // Regression: the live agent asked to "Send a Telegram message to chat <id>"
+  // got ZERO comms tools (only base tools) and fell back to system.exec+curl,
+  // which the sandbox rightly blocks. 'telegram' was not a comms keyword,
+  // 'send message' missed the "send a telegram message" shape, and
+  // message.send was hidden under category 'meta'.
+  const COMMS_TOOLS = [
+    ...TOOLS,
+    { name: 'message.send', category: 'comms' },
+    { name: 'comms.notify', category: 'comms' },
+    { name: 'comms.schedule-message', category: 'comms' },
+    { name: 'comms.email', category: 'comms' },
+  ];
+  const router = new ToolRouter(fakeRegistry(COMMS_TOOLS) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  it('surfaces message.send for the live-incident prompt', () => {
+    const n = names('Send a Telegram message to chat 8087386717 right now saying: "deploy verified." Then confirm delivery.');
+    expect(n).toContain('message.send');
+    expect(n).toContain('comms.notify');
+  });
+
+  it('surfaces comms tools for other channel-name phrasings', () => {
+    for (const q of ['message me on whatsapp when done', 'send my discord a summary', 'notify me on telegram']) {
+      expect(names(q)).toContain('comms.notify');
+    }
+  });
+
+  it('does NOT surface comms tools for an unrelated prompt', () => {
+    const n = names('refactor the parser and run the tests');
+    expect(n).not.toContain('comms.notify');
+    expect(n).not.toContain('message.send');
+  });
+});

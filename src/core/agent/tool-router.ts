@@ -215,10 +215,16 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     keywords: [
       'email', 'send message', 'slack', 'sms', 'notify', 'notification',
       'webhook', 'meeting', 'transcribe',
+      // Channel names — "send a Telegram message to chat X" must surface
+      // comms tools, not leave the agent with only base tools (system.exec).
+      'telegram', 'whatsapp', 'discord', 'signal', 'message me', 'text me',
+      'remind me',
     ],
-    patterns: [],
+    // "send a telegram message" / "send him a quick message" — catches the
+    // send…message shape the plain 'send message' keyword misses.
+    patterns: [/\bsend\b[^.!?\n]{0,40}\bmessage\b/i],
     priority: 6,
-    maxFromCategory: 4,
+    maxFromCategory: 6,
   },
   social: {
     keywords: [
