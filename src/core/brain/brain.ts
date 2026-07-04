@@ -9,7 +9,7 @@ import { generateText, streamText, tool as aiTool, jsonSchema } from 'ai';
 import { createHash, randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } from '../shared/prompt-cache-telemetry.js';
-import { LLMError } from '../shared/errors.js';
+import { LLMError, extractOverflowTokenCount } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
 import { BrainIdleBreaker } from './idle-breaker.js';
@@ -1169,6 +1169,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         lastError = err;
         const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
         const category = this.failover.categorizeError(status, body);
+        // Context overflow persists across every same-family profile — retrying
+        // the identical oversized prompt is pure waste. Break out immediately with
+        // a distinct error the agent loop catches to compact + retry.
+        if (category === 'context_overflow') {
+          throw new LLMError('Context window exceeded — prompt too long for the model', 'llm_context_overflow', { observedTokens: extractOverflowTokenCount(body ?? '') });
+        }
         log.warn({ attempt, profileId: profile.id, status, category, retryAfterMs }, 'LLM call failed — trying next profile');
         this.failover.recordError(profile.id, category, { retryAfterMs });
         // Non-streaming timeout = no output produced → count toward the breaker.
@@ -1384,6 +1390,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
         const category = this.failover.categorizeError(status, body);
 
+        if (category === 'context_overflow') {
+          throw new LLMError('Context window exceeded — prompt too long for the model', 'llm_context_overflow', { observedTokens: extractOverflowTokenCount(body ?? '') });
+        }
         log.warn({ attempt, modelId, status, category, retryAfterMs, err }, 'Streaming LLM call failed — trying next profile');
         this.failover.recordError(profile.id, category, { retryAfterMs });
         // A timeout with zero output is a pure idle stall — count it toward the

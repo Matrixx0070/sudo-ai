@@ -13,7 +13,7 @@
 import { createLogger } from '../shared/logger.js';
 import { isToolResultSuccess, resolveToolSuccess } from './tool-result-classifier.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
-import { PipelineError } from '../shared/errors.js';
+import { PipelineError, LLMError } from '../shared/errors.js';
 import {
   EPISTEMIC_TAG_CONFIDENCE_MAP,
   MAX_PLAN_STEPS,
@@ -1759,6 +1759,10 @@ export class AgentLoop extends AgentLoopInjections {
 
     // P0: track total tool calls across inner loop iterations for LazinessNudge.
     let _innerLoopToolCallCount = 0;
+    // Per-turn cap on context-overflow → compact → retry cycles, so a prompt that
+    // stays oversized even after compaction can't spin the loop forever.
+    let overflowRecoveries = 0;
+    const MAX_OVERFLOW_RECOVERIES = 3;
     // P0: bound how many times GoalStopDetector may force continuation, so a
     // persistent 'incomplete' verdict can never produce an unbounded loop
     // (mirrors TodoGate's retry cap; TodoGate still applies after this gate).
@@ -2009,19 +2013,46 @@ export class AgentLoop extends AgentLoopInjections {
         } catch { /* fail-open */ }
 
         const brainCallStartedAt = performance.now();
-        const response: BrainResponse = await this.brain.call({
-          messages: trimmed,
-          source: 'agent',
-          model: effectiveModel,
-          tools: this.toolRouter.route(
-            session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '',
-            session.messages
-              .filter((m): m is typeof m & { toolName: string } => m.role === 'tool' && typeof m.toolName === 'string')
-              .slice(-3)
-              .map(m => m.toolName),
-          ),
-          race: opts?.race,
-        }, swarmRescueCallOpts(swarmRescueActive));
+        let response: BrainResponse;
+        try {
+          response = await this.brain.call({
+            messages: trimmed,
+            source: 'agent',
+            model: effectiveModel,
+            tools: this.toolRouter.route(
+              session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '',
+              session.messages
+                .filter((m): m is typeof m & { toolName: string } => m.role === 'tool' && typeof m.toolName === 'string')
+                .slice(-3)
+                .map(m => m.toolName),
+            ),
+            race: opts?.race,
+          }, swarmRescueCallOpts(swarmRescueActive));
+        } catch (brainErr) {
+          // Context overflow: the prompt is too long for the model and every
+          // same-family failover profile would reject it identically (brain
+          // short-circuits with llm_context_overflow instead of burning attempts).
+          // Recover by compacting and retrying the turn, bounded per turn so an
+          // irreducible prompt can't loop forever.
+          if (
+            brainErr instanceof LLMError &&
+            brainErr.code === 'llm_context_overflow' &&
+            overflowRecoveries < MAX_OVERFLOW_RECOVERIES
+          ) {
+            overflowRecoveries += 1;
+            log.warn(
+              {
+                sessionId: state.sessionId,
+                attempt: overflowRecoveries,
+                observedTokens: (brainErr.details as { observedTokens?: number } | undefined)?.observedTokens,
+              },
+              'Context overflow — compacting and retrying the turn',
+            );
+            await runCompaction(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
+            continue;
+          }
+          throw brainErr;
+        }
 
         log.info(
           {

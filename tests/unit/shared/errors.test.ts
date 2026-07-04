@@ -291,6 +291,23 @@ describe('categorizeError', () => {
     expect(categorizeError(401, '{"error":{"type":"authentication_error","message":"invalid x-api-key"}}')).toBe('auth');
   });
 
+  // Context overflow: distinct from format so the loop compacts instead of
+  // blindly re-sending the oversized prompt to every profile.
+  it('should map a 400 "prompt is too long" body to context_overflow', () => {
+    expect(categorizeError(400, 'prompt is too long: 210000 tokens > 200000 maximum')).toBe('context_overflow');
+    expect(categorizeError(400, 'This model maximum context length is 200000 tokens')).toBe('context_overflow');
+  });
+
+  it('should map a 413 overflow body to context_overflow but a TPM 413 to rate_limit', () => {
+    expect(categorizeError(413, 'input length and max_tokens exceed context limit')).toBe('context_overflow');
+    expect(categorizeError(413, 'rate limit: tokens per minute exceeded')).toBe('rate_limit');
+  });
+
+  it('should NOT treat a plain 400 or a TPM-token rate limit as context_overflow', () => {
+    expect(categorizeError(400, 'invalid request: bad field')).toBe('format');
+    expect(categorizeError(429, 'too many tokens per min for your tier')).toBe('rate_limit');
+  });
+
   it('should map 408 to timeout', () => {
     expect(categorizeError(408)).toBe('timeout');
   });
