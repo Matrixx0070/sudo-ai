@@ -5,7 +5,8 @@
  * Never throws on missing/malformed credentials.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { writeFileAtomic } from '../shared/atomic-write.js';
 import { createLogger } from '../shared/logger.js';
 
 const log = createLogger('brain:claude-token');
@@ -130,7 +131,9 @@ export class ClaudeTokenManager {
         : {};
 
       raw.claudeAiOauth = this.credentials;
-      writeFileSync(CREDENTIALS_PATH, JSON.stringify(raw, null, 2), 'utf8');
+      // Atomic: a torn write here would corrupt the shared Claude credentials and
+      // break auth (the 401-storm failure mode).
+      writeFileAtomic(CREDENTIALS_PATH, JSON.stringify(raw, null, 2));
       log.debug({ path: CREDENTIALS_PATH }, 'Claude credentials saved to disk');
     } catch (err) {
       log.error({ err: String(err) }, 'Failed to save Claude credentials — token still active in memory');
