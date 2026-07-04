@@ -1421,6 +1421,22 @@ async function boot(): Promise<void> {
         if (tracePruneTimer.unref) tracePruneTimer.unref();
         registerShutdown(() => clearInterval(tracePruneTimer));
 
+        // Repair flywheel (REPORT-ONLY, Phase A): periodically mine trace failures
+        // for addressable/learnable clusters and flag system-bug failure signatures
+        // (e.g. the read-file guard depth bug it surfaced). No behavior change — it
+        // surfaces actionable insight in the logs. Kill-switch SUDO_REPAIR_FLYWHEEL=0.
+        if (process.env['SUDO_REPAIR_FLYWHEEL'] !== '0') {
+          try {
+            const { RepairFlywheelScanner } = await import('./core/learning/repair-flywheel-scanner.js');
+            const flywheelScanner = new RepairFlywheelScanner(path.join(traceDataDir, 'traces.db'));
+            flywheelScanner.start();
+            registerShutdown(() => flywheelScanner.stop());
+            log.info('Repair flywheel scanner started (report-only; SUDO_REPAIR_FLYWHEEL=0 to disable)');
+          } catch (err) {
+            log.warn({ err: String(err) }, 'Repair flywheel scanner wiring failed — continuing');
+          }
+        }
+
         // Theme 1 slice 2: TraceDrivenPolicy — learned ROUTING INFLUENCE.
         // Strictly opt-in BEYOND recording (SUDO_TRACE_POLICY=1) and honoring the
         // module kill-switch (SUDO_POLICY_DISABLE=1). Conservative by construction
