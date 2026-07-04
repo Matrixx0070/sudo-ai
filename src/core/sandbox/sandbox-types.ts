@@ -15,9 +15,21 @@ export interface SandboxPolicy {
   network: 'none' | 'host';
   /** CPU time limit in seconds (ulimit -t). Default: 30. */
   cpuSeconds?: number;
-  /** Memory limit in MB (ulimit -v in KB). Default: 512. */
+  /**
+   * Virtual-memory limit in MB (ulimit -v, applied in KB). Default: 4096.
+   * NOTE: this caps VIRTUAL address space, not resident memory. Modern Node/V8
+   * reserves a ~4 GB virtual "pointer-compression cage" at startup, so any value
+   * below ~4096 makes `node` (and thus npm/npx/claude) fail to boot with
+   * "Failed to reserve virtual memory for CodeRange" / fatal OOM — even though
+   * actual resident use is tiny. Do not lower below 4096 unless the sandbox will
+   * never run a Node process.
+   */
   memoryMB?: number;
-  /** Max file size in MB (ulimit -f in 512-byte blocks). Default: 100. */
+  /**
+   * Max file size in MB (ulimit -f, applied in 512-byte blocks). Default: 1024.
+   * Too low a value makes large package installs (e.g. bundled CLIs) die with
+   * SIGXFSZ while unpacking. 1 GB comfortably covers npm/pip artifacts.
+   */
   maxFileMB?: number;
   /** Additional read-only bind mounts inside bwrap. e.g. ['/opt/python'] */
   extraReadOnlyBinds?: string[];
@@ -48,8 +60,11 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
   enabled: true,
   network: 'none',
   cpuSeconds: 30,
-  memoryMB: 512,
-  maxFileMB: 100,
+  // 4 GB virtual (not resident) — the minimum that lets Node/V8 reserve its
+  // pointer-compression cage and boot. Below this every node/npm/claude call OOMs.
+  memoryMB: 4096,
+  // 1 GB max file size — large enough to unpack bundled CLIs without SIGXFSZ.
+  maxFileMB: 1024,
 };
 
 /**
