@@ -21,7 +21,8 @@
  * ```
  */
 
-import { mkdirSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, existsSync } from 'fs';
+import { writeFileAtomic } from '../shared/atomic-write.js';
 import { join } from 'path';
 
 // ---------------------------------------------------------------------------
@@ -391,5 +392,5 @@ export function persistSignals(
     mkdirSync(dir, { recursive: true });
   }
   const filePath = join(dir, `${sessionId}.json`);
-  writeFileSync(filePath, JSON.stringify(signals, null, 2), 'utf-8');
+  writeFileAtomic(filePath, JSON.stringify(signals, null, 2));
 }
