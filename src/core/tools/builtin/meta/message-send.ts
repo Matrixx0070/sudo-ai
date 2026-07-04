@@ -35,7 +35,9 @@ export const messageSendTool: ToolDefinition = {
   description:
     'Send a text message to a specific peer on a named delivery channel (e.g. Telegram, Slack, API). ' +
     'Use to proactively reach out to users, send notifications, or reply outside of the current conversation.',
-  category: 'meta',
+  // 'comms', not 'meta': the router surfaces this tool for send-a-message
+  // prompts via the comms category; under 'meta' it was never exposed.
+  category: 'comms',
   timeout: 30_000,
   parameters: {
     channel: {

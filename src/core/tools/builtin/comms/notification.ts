@@ -138,7 +138,9 @@ async function dispatchTelegram(
   signal?: AbortSignal,
 ): Promise<{ success: boolean; detail: string }> {
   const token = process.env['TELEGRAM_BOT_TOKEN'];
-  const chatId = process.env['TELEGRAM_NOTIFY_CHAT_ID'];
+  // Fall back to the operator's main chat id — prod sets TELEGRAM_CHAT_ID but
+  // not TELEGRAM_NOTIFY_CHAT_ID, which left telegram notify dead.
+  const chatId = process.env['TELEGRAM_NOTIFY_CHAT_ID'] ?? process.env['TELEGRAM_CHAT_ID'];
 
   if (!token || !chatId) {
     return { success: false, detail: 'TELEGRAM_BOT_TOKEN or TELEGRAM_NOTIFY_CHAT_ID not set' };
