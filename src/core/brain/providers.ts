@@ -661,6 +661,33 @@ function resolveEnvValue(spec: BuiltinProviderSpec): string | undefined {
   return primary;
 }
 
+// Per-envKey cache for vault lookups: a null-returning provider is re-resolved
+// on later calls, and vault.get does file I/O + writes an audit row each time.
+const vaultKeyCache = new Map<string, string | undefined>();
+
+/**
+ * Opt-in (SUDO_VAULT_PROVIDER_KEYS=1) fallback for provider API keys: when the
+ * env var is absent, try the encrypted vault (namespace 'providers', key = the
+ * env var name, e.g. `vault.set('providers', 'OPENAI_API_KEY', ...)`). Env
+ * always wins; every failure (no master key, key not found, expired) resolves
+ * to undefined so provider availability degrades exactly as with a missing env
+ * var. Exported for unit testing.
+ */
+export async function resolveVaultProviderKey(envKey: string): Promise<string | undefined> {
+  if (vaultKeyCache.has(envKey)) return vaultKeyCache.get(envKey);
+  let value: string | undefined;
+  try {
+    const { vault } = await import('../security/vault.js');
+    const result = await vault.get('providers', envKey, 'brain:providers');
+    value = result?.value || undefined;
+  } catch (err) {
+    log.debug({ envKey, err: err instanceof Error ? err.message : String(err) }, 'Vault provider-key lookup failed — treating as unset');
+    value = undefined;
+  }
+  vaultKeyCache.set(envKey, value);
+  return value;
+}
+
 /**
  * Turn a built-in provider instance into a LanguageModel handle: OpenAI-compatible
  * providers (ollama, mistral, deepseek, together, groq) use `.chat(id)`; native
@@ -685,7 +712,11 @@ const providerCache = new Map<ProviderName, AnyProvider>();
  */
 async function instantiateProvider(name: ProviderName, explicitKey?: string): Promise<AnyProvider | null> {
   const spec = BUILTIN_PROVIDERS[name];
-  const envValue = explicitKey ?? (spec ? resolveEnvValue(spec) : undefined);
+  let envValue = explicitKey ?? (spec ? resolveEnvValue(spec) : undefined);
+  if (!envValue && spec && !spec.keyOptional && process.env['SUDO_VAULT_PROVIDER_KEYS'] === '1') {
+    envValue = await resolveVaultProviderKey(spec.envKey)
+      ?? (spec.fallbackEnvKey ? await resolveVaultProviderKey(spec.fallbackEnvKey) : undefined);
+  }
 
   // The key-presence gate runs BEFORE the unknown-provider throw — intentionally,
   // to stay byte-identical to the original switch, whose
