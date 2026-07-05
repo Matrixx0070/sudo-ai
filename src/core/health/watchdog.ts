@@ -16,7 +16,10 @@
  * No service restarts are performed — in-process recovery only.
  */
 
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { DATA_DIR } from '../shared/paths.js';
 import {
   checkBrain,
   checkDatabases,
@@ -29,6 +32,7 @@ import {
 } from './checks.js';
 import { fixLogRotation, fixDiskSpace, fixMemory } from './fixes.js';
 import { ErrorReporter, ErrorSeverity } from './error-reporter.js';
+import { HealthAlertPolicy } from './alert-policy.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,11 +46,45 @@ export interface HealthCheck {
   autoFix?: string;
 }
 
+export type AlertSink = (
+  severity: 'high' | 'critical',
+  check: HealthCheck,
+  kind: 'failure' | 'recovery',
+) => void;
+
+/** Liveness heartbeat file — mtime goes stale when the event loop is blocked. */
+export const LIVENESS_FILE = path.join(DATA_DIR, 'watchdog-liveness.json');
+
+/**
+ * Feed one round of check results through the alert policy and invoke the
+ * sink for every alert/recovery decision. Extracted for direct unit testing.
+ */
+export function dispatchAlerts(
+  checks: HealthCheck[],
+  policy: HealthAlertPolicy,
+  sink: AlertSink,
+  nowMs: number = Date.now(),
+): void {
+  for (const check of checks) {
+    const decision = policy.onCheckResult(check.name, check.status, nowMs);
+    if (decision.action === 'alert') {
+      sink(decision.severity, check, 'failure');
+    } else if (decision.action === 'recovered') {
+      sink('high', check, 'recovery');
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
 
 const log = createLogger('health:watchdog');
+
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  const n = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 // ---------------------------------------------------------------------------
 // Watchdog
@@ -58,6 +96,11 @@ export class Watchdog {
   private lastConsciousnessThoughts = 0;
   private consecutiveFailures: Map<string, number> = new Map();
   private errorReporter: ErrorReporter | null = null;
+  private alertSink: AlertSink | null = null;
+  private alertPolicy = new HealthAlertPolicy({
+    cooldownMs: parsePositiveInt(process.env['SUDO_HEALTH_ALERT_COOLDOWN_MS'], 2_700_000),
+    degradedConsecutiveThreshold: 3,
+  });
 
   /**
    * Start the watchdog loop.
@@ -114,6 +157,16 @@ export class Watchdog {
     log.info('ErrorReporter attached to Watchdog');
   }
 
+  /**
+   * Attach a sink that receives alert/recovery decisions (cooldown- and
+   * threshold-filtered by HealthAlertPolicy). Used to push health alerts to
+   * the operator channels via the proactive notifier.
+   */
+  setAlertSink(sink: AlertSink): void {
+    this.alertSink = sink;
+    log.info('Alert sink attached to Watchdog');
+  }
+
   // -------------------------------------------------------------------------
   // Internal — run all checks
   // -------------------------------------------------------------------------
@@ -132,6 +185,13 @@ export class Watchdog {
 
     const settled = await Promise.allSettled(runners.map((fn) => fn()));
 
+    // Dead-man's heartbeat: refreshed every tick, so a blocked event loop
+    // (hung-but-alive process) leaves a stale mtime that the host cron
+    // keepalive can act on. Best-effort — never let it break the checks.
+    try {
+      writeFileSync(LIVENESS_FILE, JSON.stringify({ ts: new Date().toISOString(), pid: process.pid }), 'utf-8');
+    } catch { /* ignore */ }
+
     this.checks = settled.map((r, i) => {
       if (r.status === 'fulfilled') return r.value;
 
@@ -149,6 +209,25 @@ export class Watchdog {
         lastCheck: new Date().toISOString(),
       };
     });
+
+    // Verification aid: force one named check to critical so the alert path
+    // can be exercised end-to-end without breaking anything real.
+    const forceFail = process.env['SUDO_HEALTH_FORCE_FAIL'];
+    if (forceFail) {
+      this.checks = this.checks.map((c) =>
+        c.name === forceFail
+          ? { ...c, status: 'critical' as const, message: `FORCED critical via SUDO_HEALTH_FORCE_FAIL (${c.message})` }
+          : c,
+      );
+    }
+
+    if (this.alertSink && process.env['SUDO_HEALTH_ALERT_DISABLE'] !== '1') {
+      try {
+        dispatchAlerts(this.checks, this.alertPolicy, this.alertSink);
+      } catch (err) {
+        log.error({ err: String(err) }, 'Alert sink threw');
+      }
+    }
 
     this._logSummary();
   }
