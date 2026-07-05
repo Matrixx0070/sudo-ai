@@ -1,14 +1,16 @@
 /**
- * meta.service-control — SUDO-AI systemd service management tool.
+ * meta.service-control — SUDO-AI service lifecycle management tool.
  *
- * Allows the brain to inspect and control its own systemd service lifecycle.
+ * Allows the brain to inspect and control its own service lifecycle. The live
+ * deployment runs under pm2 (`sudo-ai-v5`); systemctl is the fallback for
+ * deployments without pm2.
  *
  * Actions:
- *   status        — Parse `systemctl status sudo-ai` (active state, uptime, memory, CPU)
- *   restart       — Graceful restart via `systemctl restart sudo-ai`
+ *   status        — Service state (pm2 when available, else systemctl)
+ *   restart       — Detached restart via restart-helper (pm2/systemctl/SUDO_RESTART_CMD)
  *   stop          — Stop the service (logs warning — may be needed for updates)
- *   start         — Start the service via `systemctl start sudo-ai`
- *   logs          — Fetch recent journal entries for the service
+ *   start         — Start the service (pm2 ecosystem form when available)
+ *   logs          — Fetch recent log entries for the service
  *   reload-config — Emit process event to hot-reload configuration
  */
 
@@ -18,9 +20,11 @@ import { execSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from '../../../shared/paths.js';
+import { hasPm2, scheduleDetachedRestart } from './restart-helper.js';
 
 const logger = createLogger('meta.service-control');
 const SERVICE_NAME = 'sudo-ai';
+const PM2_APP = 'sudo-ai-v5';
 const EVENTS_LOG = path.join(DATA_DIR, 'service-events.log');
 const RESTART_MARKER = path.join(DATA_DIR, 'restart-scheduled.marker');
 
@@ -92,6 +96,33 @@ function parseStatus(raw: string): ServiceStatus {
 
 async function handleStatus(): Promise<ToolResult> {
   try {
+    if (hasPm2()) {
+      const raw = runCmd(`pm2 jlist`, 15_000);
+      const apps = JSON.parse(raw) as Array<{
+        name: string;
+        pid: number;
+        pm2_env: { status: string; pm_uptime: number; restart_time: number };
+        monit?: { memory: number; cpu: number };
+      }>;
+      const app = apps.find(a => a.name === PM2_APP);
+      logEvent('status');
+      if (!app) {
+        return { success: true, output: `pm2 app ${PM2_APP} not found (registered apps: ${apps.map(a => a.name).join(', ') || 'none'})`, data: { pm2: true, found: false } };
+      }
+      const uptimeMin = Math.round((Date.now() - app.pm2_env.pm_uptime) / 60_000);
+      return {
+        success: true,
+        output: [
+          `Service: ${PM2_APP} (pm2)`,
+          `State: ${app.pm2_env.status}`,
+          `PID: ${app.pid}`,
+          `Uptime: ${uptimeMin}m`,
+          `Restarts: ${app.pm2_env.restart_time}`,
+          app.monit ? `Memory: ${Math.round(app.monit.memory / 1024 / 1024)}MB, CPU: ${app.monit.cpu}%` : '',
+        ].filter(Boolean).join('\n'),
+        data: { pm2: true, status: app.pm2_env.status, pid: app.pid, restarts: app.pm2_env.restart_time },
+      };
+    }
     const raw = runCmd(`systemctl status ${SERVICE_NAME} 2>&1 || true`);
     const status = parseStatus(raw);
     logEvent('status');
@@ -130,12 +161,21 @@ async function handleRestart(reason?: string): Promise<ToolResult> {
       reason: reason ?? 'no reason provided',
     }), 'utf-8');
 
-    runCmd(`systemctl restart ${SERVICE_NAME}`, 30_000);
+    // The restart must outlive this process (a synchronous restart of our own
+    // service would kill us mid-command), so it is scheduled detached.
+    const result = scheduleDetachedRestart(reason ?? 'meta.service-control restart');
+    if (!result.scheduled) {
+      return {
+        success: false,
+        output: `Failed to schedule restart: ${result.error}`,
+        data: { action: 'restart', reason, cmd: result.cmd },
+      };
+    }
 
     return {
       success: true,
-      output: `Service ${SERVICE_NAME} restart initiated.${reason ? ` Reason: ${reason}` : ''}`,
-      data: { action: 'restart', reason },
+      output: `Restart scheduled via \`${result.cmd}\` (in ~3s).${reason ? ` Reason: ${reason}` : ''} SUDO-AI will go offline briefly and reconnect on the new process.`,
+      data: { action: 'restart', reason, cmd: result.cmd, scheduled: true },
       artifacts: [
         { path: RESTART_MARKER, action: 'created' },
         { path: EVENTS_LOG, action: 'modified' },
@@ -155,7 +195,7 @@ async function handleStop(reason?: string): Promise<ToolResult> {
   try {
     logEvent('stop', reason ?? 'no reason provided');
 
-    runCmd(`systemctl stop ${SERVICE_NAME}`, 30_000);
+    runCmd(hasPm2() ? `pm2 stop ${PM2_APP}` : `systemctl stop ${SERVICE_NAME}`, 30_000);
 
     return {
       success: true,
@@ -175,7 +215,12 @@ async function handleStart(reason?: string): Promise<ToolResult> {
   try {
     logEvent('start', reason ?? 'manual start');
 
-    runCmd(`systemctl start ${SERVICE_NAME}`, 30_000);
+    runCmd(
+      hasPm2()
+        ? `pm2 start ecosystem.config.cjs --only ${PM2_APP} --update-env`
+        : `systemctl start ${SERVICE_NAME}`,
+      30_000,
+    );
 
     return {
       success: true,
@@ -194,7 +239,9 @@ async function handleStart(reason?: string): Promise<ToolResult> {
 async function handleLogs(lines: number): Promise<ToolResult> {
   try {
     logEvent('logs');
-    const output = runCmd(`journalctl -u ${SERVICE_NAME} --no-pager -n ${lines}`, 10_000);
+    const output = hasPm2()
+      ? runCmd(`sh -c 'tail -n ${Math.max(1, Math.min(lines, 1000))} "${path.join(DATA_DIR, 'logs')}"/${PM2_APP}-out-*.log 2>/dev/null || true'`, 10_000)
+      : runCmd(`journalctl -u ${SERVICE_NAME} --no-pager -n ${lines}`, 10_000);
 
     return {
       success: true,

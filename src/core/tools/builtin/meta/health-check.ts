@@ -140,21 +140,34 @@ function checkApiKeys(): CheckResult {
   return { status, summary: parts.join(', '), details: { missingCount } };
 }
 
-function checkPort(port: number, label: string, timeoutMs: number = 3000): Promise<{ port: number; label: string; ok: boolean }> {
+function probePortOnce(port: number, timeoutMs: number): Promise<boolean> {
   return new Promise(resolve => {
-    const req = http.get(`http://localhost:${port}/`, { timeout: timeoutMs }, res => {
+    // 127.0.0.1 explicitly: the gateway binds IPv4-only, so a `localhost`
+    // probe can resolve to ::1 first and fail against a healthy daemon.
+    // Any HTTP response (including 404) proves the port is served.
+    const req = http.get(`http://127.0.0.1:${port}/health`, { timeout: timeoutMs }, res => {
       res.resume(); // drain
-      resolve({ port, label, ok: true });
+      resolve(true);
     });
-    req.on('error', () => resolve({ port, label, ok: false }));
+    req.on('error', () => resolve(false));
     req.on('timeout', () => {
       req.destroy();
-      resolve({ port, label, ok: false });
+      resolve(false);
     });
   });
 }
 
-async function checkServices(): Promise<CheckResult> {
+export async function checkPort(port: number, label: string, timeoutMs: number = 5000): Promise<{ port: number; label: string; ok: boolean }> {
+  let ok = await probePortOnce(port, timeoutMs);
+  if (!ok) {
+    // One retry after a short pause \u2014 a busy event loop can miss a single probe.
+    await new Promise(r => setTimeout(r, 500));
+    ok = await probePortOnce(port, timeoutMs);
+  }
+  return { port, label, ok };
+}
+
+export async function checkServices(): Promise<CheckResult> {
   const portDefs: Array<{ port: number; label: string }> = [];
   const gatewayPort = validatePort(process.env['GATEWAY_PORT'], 18900);
   portDefs.push({ port: gatewayPort, label: 'SUDO-AI (gateway)' });
@@ -163,7 +176,10 @@ async function checkServices(): Promise<CheckResult> {
   const parts = results.map(r => `:${r.port} ${r.ok ? '\u2713' : '\u2717'} ${r.label}`);
   const downCount = results.filter(r => !r.ok).length;
 
-  const status: Status = downCount === results.length ? 'CRITICAL' : downCount > 0 ? 'WARN' : 'OK';
+  // Never CRITICAL from this probe alone: it runs inside the very process
+  // that serves the port, so a failed probe means a slow/misresolved probe
+  // far more often than a dead service.
+  const status: Status = downCount > 0 ? 'WARN' : 'OK';
   return { status, summary: parts.join(', '), details: { downCount } };
 }
 

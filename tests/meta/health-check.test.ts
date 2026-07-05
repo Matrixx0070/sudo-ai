@@ -61,3 +61,48 @@ describe('meta.health-check', () => {
     expect(Object.prototype.hasOwnProperty.call(result.data, 'pid')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// checkPort / checkServices — false-CRITICAL regression (gateway binds
+// 127.0.0.1 IPv4-only; probe must target 127.0.0.1 and a down port must be
+// WARN, not CRITICAL)
+// ---------------------------------------------------------------------------
+
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { checkPort, checkServices } from '../../src/core/tools/builtin/meta/health-check.js';
+
+describe('checkPort / checkServices', () => {
+  it('probe succeeds against a 127.0.0.1-only listener (any HTTP response)', async () => {
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 404; // non-200 must still count as "port served"
+      res.end('nope');
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const result = await checkPort(port, 'test-listener', 2000);
+      expect(result.ok).toBe(true);
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
+  it('a down gateway port yields WARN, never CRITICAL', async () => {
+    const server = http.createServer((_req, res) => res.end('x'));
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const freePort = (server.address() as AddressInfo).port;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+
+    const saved = process.env['GATEWAY_PORT'];
+    process.env['GATEWAY_PORT'] = String(freePort); // nothing listens here now
+    try {
+      const result = await checkServices();
+      expect(result.status).toBe('WARN');
+    } finally {
+      if (saved === undefined) delete process.env['GATEWAY_PORT'];
+      else process.env['GATEWAY_PORT'] = saved;
+    }
+  });
+});
