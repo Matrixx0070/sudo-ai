@@ -20,6 +20,7 @@ import { mineFailureClusters, measureCoverage, type FailureRow } from './repair-
 import { runShadowVerification, makeReadFilePathRepair, type DeterministicRepair } from './repair-flywheel-verify.js';
 import { runLessonLifecycle, isApplyEnabled } from './lesson-apply.js';
 import { verifyWorkflowOrder, decideWorkflowAdoption, WORKFLOW_REPAIRS, workflowScanBounds, type ToolEvent } from './workflow-order.js';
+import { verifyRetryPolicy, decideRetryPolicyAdoption, RETRY_POLICIES } from './retry-policy.js';
 
 const log = createLogger('learning:repair-flywheel');
 
@@ -105,38 +106,64 @@ export class RepairFlywheelScanner {
       // fixes. Log-only — decides adopt/reject/insufficient, never applies.
       const bounds = workflowScanBounds();
       const sinceExpr = `datetime('now','-${bounds.lookbackDays} days')`;
+      const localDbSeq = db;
+      // Shared bounded loader: the recent failing sessions for (tool, errorPattern) and
+      // all their events, as ToolEvents. Returns null when there are no failing sessions.
+      const loadSessionEvents = (id: string, tool: string, errorPattern: string): { events: ToolEvent[]; sessionCapHit: boolean } | null => {
+        const sessRows = localDbSeq
+          .prepare(`SELECT session_id FROM traces WHERE tool_name=? AND success=0 AND error_message LIKE ? AND session_id IS NOT NULL AND created_at >= ${sinceExpr} GROUP BY session_id ORDER BY MAX(created_at) DESC LIMIT ?`)
+          .all(tool, `%${errorPattern}%`, bounds.maxSessions) as Array<{ session_id: string }>;
+        if (sessRows.length === 0) return null;
+        const ids = sessRows.map((r) => r.session_id);
+        const placeholders = ids.map(() => '?').join(',');
+        const eventRows = localDbSeq
+          .prepare(`SELECT session_id, tool_name, success, COALESCE(error_message,'') AS em, created_at, args_raw FROM traces WHERE tool_name IS NOT NULL AND session_id IN (${placeholders}) AND created_at >= ${sinceExpr} ORDER BY created_at LIMIT ?`)
+          .all(...ids, bounds.maxEvents + 1) as Array<{ session_id: string; tool_name: string; success: number; em: string; created_at: string; args_raw: string | null }>;
+        if (eventRows.length > bounds.maxEvents) {
+          log.warn({ id, cap: bounds.maxEvents, sessions: ids.length }, 'RepairFlywheel sequence verify: event cap hit — analysis truncated (raise SUDO_FLYWHEEL_WORKFLOW_MAX_EVENTS or narrow the window)');
+          eventRows.length = bounds.maxEvents;
+        }
+        const events: ToolEvent[] = eventRows.map((r) => ({
+          sessionId: r.session_id,
+          tool: r.tool_name,
+          success: r.success === 1,
+          errorMessage: r.em,
+          createdAtMs: Date.parse(`${r.created_at.replace(' ', 'T')}Z`),
+          argsRaw: r.args_raw,
+        }));
+        return { events, sessionCapHit: ids.length >= bounds.maxSessions };
+      };
+
       for (const wf of WORKFLOW_REPAIRS) {
         try {
-          // Most-recent failing sessions within the age window, capped.
-          const sessRows = db
-            .prepare(`SELECT session_id FROM traces WHERE tool_name=? AND success=0 AND error_message LIKE ? AND session_id IS NOT NULL AND created_at >= ${sinceExpr} GROUP BY session_id ORDER BY MAX(created_at) DESC LIMIT ?`)
-            .all(wf.tool, `%${wf.errorPattern}%`, bounds.maxSessions) as Array<{ session_id: string }>;
-          if (sessRows.length === 0) continue;
-          const ids = sessRows.map((r) => r.session_id);
-          const placeholders = ids.map(() => '?').join(',');
-          // Events for those sessions, within the window, hard-capped as a backstop.
-          const eventRows = db
-            .prepare(`SELECT session_id, tool_name, success, COALESCE(error_message,'') AS em, created_at, args_raw FROM traces WHERE tool_name IS NOT NULL AND session_id IN (${placeholders}) AND created_at >= ${sinceExpr} ORDER BY created_at LIMIT ?`)
-            .all(...ids, bounds.maxEvents + 1) as Array<{ session_id: string; tool_name: string; success: number; em: string; created_at: string; args_raw: string | null }>;
-          if (eventRows.length > bounds.maxEvents) {
-            log.warn({ lessonId: wf.lessonId, cap: bounds.maxEvents, sessions: ids.length }, 'RepairFlywheel workflow-order: event cap hit — analysis truncated (raise SUDO_FLYWHEEL_WORKFLOW_MAX_EVENTS or narrow the window)');
-            eventRows.length = bounds.maxEvents;
-          }
-          const events: ToolEvent[] = eventRows.map((r) => ({
-            sessionId: r.session_id,
-            tool: r.tool_name,
-            success: r.success === 1,
-            errorMessage: r.em,
-            createdAtMs: Date.parse(`${r.created_at.replace(' ', 'T')}Z`),
-            argsRaw: r.args_raw,
-          }));
-          const result = verifyWorkflowOrder(events, wf);
+          const loaded = loadSessionEvents(wf.lessonId, wf.tool, wf.errorPattern);
+          if (!loaded) continue;
+          const result = verifyWorkflowOrder(loaded.events, wf);
           log.info(
-            { lessonId: wf.lessonId, ...result, decision: decideWorkflowAdoption(result), sessionCapHit: ids.length >= bounds.maxSessions },
+            { lessonId: wf.lessonId, ...result, decision: decideWorkflowAdoption(result), sessionCapHit: loaded.sessionCapHit },
             'RepairFlywheel SHADOW workflow-order verify (log-only, not applied)',
           );
         } catch (e) {
           log.warn({ lessonId: wf.lessonId, err: String(e) }, 'RepairFlywheel workflow-order verify failed (non-fatal)');
+        }
+      }
+
+      // SHADOW retry-POLICY verification (deterministic, free). Looks FORWARD after each
+      // failure for a recovery action + successful retry, measuring the policy's observed
+      // efficacy. Log-only RECOMMENDATION — a retry-policy is a CODE change and is NEVER
+      // auto-applied (unlike an advisory lesson); a high recoveryPct flags it for a
+      // human-reviewed implementation (e.g. auto-re-snapshot in click.ts).
+      for (const rp of RETRY_POLICIES) {
+        try {
+          const loaded = loadSessionEvents(rp.policyId, rp.tool, rp.errorPattern);
+          if (!loaded) continue;
+          const result = verifyRetryPolicy(loaded.events, rp);
+          log.info(
+            { policyId: rp.policyId, ...result, decision: decideRetryPolicyAdoption(result), sessionCapHit: loaded.sessionCapHit },
+            'RepairFlywheel SHADOW retry-policy verify (recommendation — code change, never auto-applied)',
+          );
+        } catch (e) {
+          log.warn({ policyId: rp.policyId, err: String(e) }, 'RepairFlywheel retry-policy verify failed (non-fatal)');
         }
       }
 
