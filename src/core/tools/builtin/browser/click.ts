@@ -11,8 +11,34 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
 import { resolveActivePage } from './active-page.js';
-import { resolveStableRef, parseRefParam } from './stable-ref.js';
+import { resolveStableRef, parseRefParam, captureStableRefs } from './stable-ref.js';
 import { withRetry } from './resilience.js';
+
+/**
+ * On a ref-not-found, AUTO re-snapshot and return the fresh actionable elements inline,
+ * so the agent can immediately retry with a correct ref (the error message already tells
+ * it to snapshot again — this does it, saving a round-trip).
+ *
+ * Why not auto-CLICK the re-resolved ref? Refs are SEQUENTIAL DOM stamps, renumbered on
+ * every capture — so `ref=N` after a fresh snapshot may point at a DIFFERENT element.
+ * Blindly re-clicking N would risk clicking the wrong thing. Returning fresh refs is the
+ * safe half of the recovery: no wrong-element click, agent retries with a valid ref.
+ *
+ * Guarded by SUDO_BROWSER_REF_AUTOSNAPSHOT (default ON; set 0 for the old static hint).
+ * Fail-open: any capture error falls back to the plain "snapshot again" guidance.
+ */
+export async function refNotFoundOutput(page: Parameters<typeof captureStableRefs>[0], ref: number): Promise<string> {
+  const base = `browser.click: ref=${ref} not found on the page. The page may have re-rendered since the last snapshot`;
+  if (process.env['SUDO_BROWSER_REF_AUTOSNAPSHOT'] === '0') {
+    return `${base} — call browser.snapshot again to get fresh refs.`;
+  }
+  try {
+    const snap = await captureStableRefs(page);
+    return `${base}. Fresh snapshot taken — retry browser.click with one of these refs (numbers changed):\n${snap.render}`;
+  } catch {
+    return `${base} — call browser.snapshot again to get fresh refs.`;
+  }
+}
 
 export const clickTool: ToolDefinition = {
   name: 'browser.click',
@@ -113,12 +139,7 @@ export const clickTool: ToolDefinition = {
       if (ref !== null) {
         const locator = await resolveStableRef(page, ref);
         if (!locator) {
-          return {
-            success: false,
-            output:
-              `browser.click: ref=${ref} not found on the page. The page may have re-rendered ` +
-              `since the last snapshot — call browser.snapshot again to get fresh refs.`,
-          };
+          return { success: false, output: await refNotFoundOutput(page, ref) };
         }
         await withRetry(() => locator.click({ timeout, button, clickCount }));
       } else {
