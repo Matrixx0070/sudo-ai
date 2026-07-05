@@ -10,7 +10,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
 import { resolveActivePage } from './active-page.js';
-import { resolveStableRef, parseRefParam } from './stable-ref.js';
+import { resolveStableRef, parseRefParam, refNotFoundOutput } from './stable-ref.js';
 import { withRetry, robustFill } from './resilience.js';
 
 export const typeTool: ToolDefinition = {
@@ -107,11 +107,13 @@ export const typeTool: ToolDefinition = {
         ? await resolveStableRef(page, ref)
         : page.locator(selector as string).first();
       if (!locator) {
+        // !locator only occurs on the ref path (the selector path yields a Locator), so
+        // ref is non-null here — auto re-snapshot and return fresh refs.
         return {
           success: false,
-          output:
-            `browser.type: ref=${ref} not found on the page. The page may have re-rendered ` +
-            `since the last snapshot — call browser.snapshot again to get fresh refs.`,
+          output: ref !== null
+            ? await refNotFoundOutput(page, ref, 'browser.type')
+            : 'browser.type: element not found.',
         };
       }
       await withRetry(() => robustFill(locator, text, { timeout }));
