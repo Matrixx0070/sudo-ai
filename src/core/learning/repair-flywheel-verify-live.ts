@@ -210,10 +210,11 @@ export function decideLiveAdoption(
  * only picks up system.exec invocations that targeted the repo sandbox (target:"repo")
  * — the only ones the guard governs — so the recovery metric stays honest.
  */
-export function makeExecRepoRepair(lesson: string = EXEC_REPO_GUIDANCE_LESSON): GuidanceRepair {
+export function makeExecRepoRepair(lesson: string = EXEC_REPO_GUIDANCE_LESSON, tool: string = 'system.exec'): GuidanceRepair {
   return {
-    lessonId: 'exec-repo-readonly-metachars',
-    tool: 'system.exec',
+    // Same guidance, distinct per tool so each canary is tracked independently.
+    lessonId: tool === 'system.exec' ? 'exec-repo-readonly-metachars' : `exec-repo-readonly-metachars:${tool}`,
+    tool,
     lesson,
     extract: (input) => {
       const cmd = input['command'];
@@ -229,4 +230,36 @@ export function makeExecRepoRepair(lesson: string = EXEC_REPO_GUIDANCE_LESSON): 
     // canary tracks exactly the cluster this lesson addresses.
     errorPattern: 'Refused:',
   };
+}
+
+/**
+ * The registered guidance repairs the flywheel knows how to verify live. Add a
+ * GuidanceRepair here (with a TRUE-TO-PROD `check`) and it is immediately available
+ * to `sudo-ai flywheel-verify --tool <name>` and the canary lifecycle.
+ *
+ * Both exec tool names share the identical repo-exec guard (checkRepoCommand), so the
+ * one lesson is registered for each. Other observed failure clusters were EVALUATED
+ * and deliberately NOT registered — registering a repair that cannot recover anything
+ * would only add noise:
+ *  - meta.cost-tracker `dailyLimit`: resolveDailyLimit already accepts numeric strings
+ *    — the failures are stale (pre-fix), not addressable now.
+ *  - document.slides / spreadsheet.create / coder.multi-read: each already coerces a
+ *    JSON-string arg, so the remaining failures are genuinely-empty calls a rewrite
+ *    cannot recover without inventing content.
+ *  - browser.click/interact (timeouts), github.commit (staging order), browser.search
+ *    (backend down): no deterministic true-to-prod check from the input alone.
+ */
+export const REPAIR_REGISTRY: GuidanceRepair[] = [
+  makeExecRepoRepair(EXEC_REPO_GUIDANCE_LESSON, 'system.exec'),
+  makeExecRepoRepair(EXEC_REPO_GUIDANCE_LESSON, 'exec'),
+];
+
+/** All guidance repairs registered for a given tool (may be empty). */
+export function getRepairsForTool(tool: string): GuidanceRepair[] {
+  return REPAIR_REGISTRY.filter((r) => r.tool === tool);
+}
+
+/** Tool names that have at least one registered guidance repair. */
+export function registeredRepairTools(): string[] {
+  return [...new Set(REPAIR_REGISTRY.map((r) => r.tool))];
 }
