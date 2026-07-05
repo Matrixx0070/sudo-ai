@@ -19,13 +19,13 @@ import { execSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT, DATA_DIR as RESOLVED_DATA_DIR } from '../../../shared/paths.js';
+import { scheduleDetachedRestart } from './restart-helper.js';
 
 const logger = createLogger('meta.self-update');
 
 const PROJECT_ROOT = RESOLVED_PROJECT_ROOT;
 const DATA_DIR = RESOLVED_DATA_DIR;
 const UPDATE_LOG = path.join(DATA_DIR, 'self-update.log');
-const SERVICE_NAME = 'sudo-ai';
 const MAX_OUTPUT = 2000;
 
 // ---------------------------------------------------------------------------
@@ -226,22 +226,17 @@ async function handleFullUpdate(confirm: boolean): Promise<ToolResult> {
     };
   }
 
-  // Step 4: Restart service
-  try {
-    execSync(`systemctl restart ${SERVICE_NAME}`, {
-      encoding: 'utf-8',
-      timeout: 30_000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    logUpdate('full-update', 'SUCCESS — pull + install + build + restart complete');
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logUpdate('full-update', `restart FAILED: ${msg}`);
+  // Step 4: Restart service — scheduled detached, since restarting our own
+  // service synchronously would kill this process mid-command.
+  const restart = scheduleDetachedRestart('meta.self-update full-update');
+  if (!restart.scheduled) {
+    logUpdate('full-update', `restart FAILED to schedule: ${restart.error}`);
     return {
       success: false,
-      output: `Build succeeded but service restart failed: ${msg}\n\nBuild was successful — restart manually if needed.`,
+      output: `Build succeeded but service restart could not be scheduled: ${restart.error}\n\nBuild was successful — restart manually if needed.`,
     };
   }
+  logUpdate('full-update', `SUCCESS — pull + install + build complete, restart scheduled via ${restart.cmd}`);
 
   const summary = [
     'full-update COMPLETE',
@@ -252,7 +247,7 @@ async function handleFullUpdate(confirm: boolean): Promise<ToolResult> {
     '',
     `=== Build ===\n${buildResult.output}`,
     '',
-    `=== Restart ===\nService ${SERVICE_NAME} restarted successfully.`,
+    `=== Restart ===\nRestart scheduled via \`${restart.cmd}\` (in ~3s) — the service will come back on the new code.`,
   ].join('\n');
 
   return {

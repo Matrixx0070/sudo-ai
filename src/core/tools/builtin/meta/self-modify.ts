@@ -27,7 +27,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
-import { execSync, execFileSync, spawn } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
   appendFileSync, copyFileSync, realpathSync,
@@ -35,6 +35,7 @@ import {
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { isProtectedPath, PROTECTED_PATHS } from '../../../self-build/protected-paths.js';
+import { scheduleDetachedRestart } from './restart-helper.js';
 import { PROJECT_ROOT, DATA_DIR } from '../../../shared/paths.js';
 const _require = createRequire(import.meta.url);
 
@@ -359,50 +360,21 @@ function doBuild(): ToolResult {
   };
 }
 
-/**
- * The command that restarts the live SUDO-AI service. Defaults to the pm2
- * ecosystem-file form — correct for this deployment (the daemon runs as
- * `sudo-ai-v5` under pm2; `sudo-ai.service` is masked) AND it reloads the
- * ecosystem env, so a restart can't silently drop keys like
- * SUDO_DAILY_BUDGET_USD via a stale pm2 dump. Override with SUDO_RESTART_CMD
- * for other deployments. Exported for unit testing.
- */
-export function restartCommand(): string {
-  const override = process.env['SUDO_RESTART_CMD'];
-  if (override && override.trim()) return override.trim();
-  return 'pm2 restart ecosystem.config.cjs --only sudo-ai-v5 --update-env';
-}
+export { restartCommand } from './restart-helper.js';
 
 function doRestart(): ToolResult {
   if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
     return { success: false, output: 'meta.self-modify restart is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
-  const cmd = restartCommand();
-  logger.info({ cmd }, 'Scheduling self-restart');
-  logMod('restart', `scheduled: ${cmd}`);
-
-  // A self-restart kills THIS process, so the restart must outlive us: spawn a
-  // DETACHED child that waits a few seconds (letting this tool's result flush to
-  // the user) then restarts the service. We cannot synchronously confirm success
-  // — by the time pm2 bounces us, this process is gone.
-  try {
-    const child = spawn('sh', ['-c', `sleep 3; ${cmd}`], {
-      detached: true,
-      stdio: 'ignore',
-      cwd: PROJECT_ROOT,
-      env: process.env,
-    });
-    child.unref();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logMod('restart', `FAILED to schedule: ${msg}`);
-    return { success: false, output: `Failed to schedule restart: ${msg}`, data: { cmd } };
+  const result = scheduleDetachedRestart('meta.self-modify restart', PROJECT_ROOT);
+  logMod('restart', result.scheduled ? `scheduled: ${result.cmd}` : `FAILED to schedule: ${result.error}`);
+  if (!result.scheduled) {
+    return { success: false, output: `Failed to schedule restart: ${result.error}`, data: { cmd: result.cmd } };
   }
-
   return {
     success: true,
-    output: `Restart scheduled via \`${cmd}\` (in ~3s). SUDO-AI will go offline briefly and come back on the new code — reconnect after a few seconds.`,
-    data: { scheduled: true, cmd },
+    output: `Restart scheduled via \`${result.cmd}\` (in ~3s). SUDO-AI will go offline briefly and come back on the new code — reconnect after a few seconds.`,
+    data: { scheduled: true, cmd: result.cmd },
   };
 }
 
