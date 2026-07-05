@@ -11,6 +11,7 @@ vi.mock('dns/promises', () => ({
       'internal.local': '10.0.0.1',
       'localhost': '127.0.0.1',
     };
+    if (hostname === 'nulladdr.test') return Promise.resolve({ address: null, family: 4 }); // odd resolver
     if (hostname in records) return Promise.resolve({ address: records[hostname], family: 4 });
     return Promise.reject(new Error(`ENOTFOUND ${hostname}`));
   }),
@@ -78,6 +79,21 @@ describe('SSRFGuard', () => {
     const result = guard.checkIp('8.8.8.8');
     expect(result.allowed).toBe(true);
     expect(result.category).toBe('allowed');
+  });
+
+  // -- Regression: null-split crash (browser.navigate TypeError, flywheel-surfaced) --
+
+  it('a URL with no host (file:///, about:blank) fails closed without throwing', async () => {
+    for (const url of ['file:///etc/passwd', 'about:blank']) {
+      const result = await guard.checkUrl(url);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toMatch(/no host/i);
+    }
+  });
+
+  it('a resolver returning a null address fails closed (no null.split crash)', async () => {
+    const result = await guard.checkUrl('https://nulladdr.test');
+    expect(result.allowed).toBe(false); // fail closed, not a thrown TypeError
   });
 
   it('allows hostname google.com via checkUrl', async () => {
