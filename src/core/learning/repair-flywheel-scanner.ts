@@ -21,6 +21,7 @@ import { runShadowVerification, makeReadFilePathRepair, type DeterministicRepair
 import { runLessonLifecycle, isApplyEnabled } from './lesson-apply.js';
 import { verifyWorkflowOrder, decideWorkflowAdoption, WORKFLOW_REPAIRS, workflowScanBounds, type ToolEvent } from './workflow-order.js';
 import { verifyRetryPolicy, decideRetryPolicyAdoption, RETRY_POLICIES } from './retry-policy.js';
+import { mineHarnessBugs, HARNESS_CRASH_LIKE_FRAGMENTS, type HarnessBugRow } from './harness-bug-scan.js';
 
 const log = createLogger('learning:repair-flywheel');
 
@@ -165,6 +166,24 @@ export class RepairFlywheelScanner {
         } catch (e) {
           log.warn({ policyId: rp.policyId, err: String(e) }, 'RepairFlywheel retry-policy verify failed (non-fatal)');
         }
+      }
+
+      // HARNESS-BUG scan — surface uncaught runtime crashes inside tools (TypeError,
+      // ReferenceError, null property reads) as CODE bugs to fix, distinct from agent
+      // errors. Cheap SQL pre-filter (LIKE) then precise classification. Log-only WARN;
+      // never auto-applied. Systematizes the #607-class find (browser.navigate crash).
+      try {
+        const likeClause = HARNESS_CRASH_LIKE_FRAGMENTS.map(() => 'error_message LIKE ?').join(' OR ');
+        const likeParams = HARNESS_CRASH_LIKE_FRAGMENTS.map((f) => `%${f}%`);
+        const crashRows = db
+          .prepare(`SELECT tool_name, COALESCE(error_message,'') AS error_message, created_at FROM traces WHERE success=0 AND tool_name IS NOT NULL AND created_at >= ${sinceExpr} AND (${likeClause}) LIMIT ?`)
+          .all(...likeParams, bounds.maxEvents) as HarnessBugRow[];
+        const bugs = mineHarnessBugs(crashRows).slice(0, 10);
+        if (bugs.length > 0) {
+          log.warn({ harnessBugCount: bugs.length, bugs }, 'RepairFlywheel HARNESS-BUG scan: uncaught tool crashes detected — CODE bugs to fix (not agent error, never auto-applied)');
+        }
+      } catch (e) {
+        log.warn({ err: String(e) }, 'RepairFlywheel harness-bug scan failed (non-fatal)');
       }
 
       // Canary lifecycle for ADOPTED lessons — advances candidate→canary→promoted/
