@@ -55,6 +55,7 @@
     "cli": "tsx src/cli.ts",
     "test": "vitest run",
     "smoke:prod-tools": "tsx scripts/smoke/prod-runtime-tools.mts",
+    "check:contracts": "tsx scripts/check-brain-contract.mts",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "verify": "pnpm lint && pnpm test && pnpm build",

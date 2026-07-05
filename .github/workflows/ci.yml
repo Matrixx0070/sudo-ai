@@ -53,6 +53,13 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # 7b. Contract guards — fail if a site re-declares chat() as Promise<{ content }>.
+      # Brain.chat resolves to a STRING; the wrong type silently killed whole tool suites
+      # (marketing/finance/translate, #610–#612). Guarding the declaration is enough: with
+      # the correct Promise<string>, tsc itself rejects any `.content` read.
+      - name: Contract guards
+        run: pnpm check:contracts
+
       # 8. Test — full suite must pass (vitest exits non-zero on any failure)
       - name: Test
         run: pnpm test
