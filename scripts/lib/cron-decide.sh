@@ -53,6 +53,36 @@ write_counter() {
   echo "$2" > "$1" 2>/dev/null || true
 }
 
+# file_age_s <file> <now_epoch> — echo the file's age in seconds relative to
+# <now_epoch>, or -1 when the file is missing/unreadable (never errors under
+# `set -e`). -1 is the explicit "no liveness signal" sentinel: callers MUST
+# treat it as "do not restart" (fresh boot / feature not deployed yet).
+file_age_s() {
+  local mtime
+  mtime=$(stat -c %Y "$1" 2>/dev/null) || { echo -1; return 0; }
+  case "$mtime" in ''|*[!0-9]*) echo -1; return 0 ;; esac
+  echo $(( ${2:-0} - mtime ))
+}
+
+# decide_hang_restart <liveness_age_s> <stale_threshold_s> <consec_count>
+#                     <consec_threshold> <daemon_age_s> <min_daemon_age_s>
+#
+# Hang gate for a HUNG-BUT-ALIVE daemon: the port is bound (so the down-gate
+# never fires) but the in-process watchdog stopped refreshing the liveness
+# file — a blocked event loop. Echoes exactly one of:
+#   reset   — liveness fresh, file missing (-1), or daemon too young: clear the
+#             consecutive-stale counter (fail-safe: missing signal ≠ hang)
+#   count   — liveness stale but not yet observed for enough cycles: increment
+#   restart — stale for >= threshold consecutive cycles on a mature daemon
+# The caller persists the counter; this function only decides.
+decide_hang_restart() {
+  local age="${1:--1}" stale="${2:-600}" count="${3:-0}" threshold="${4:-2}"
+  local daemon_age="${5:-0}" min_daemon_age="${6:-900}"
+  if [ "$age" -lt 0 ] || [ "$age" -lt "$stale" ]; then echo reset; return 0; fi
+  if [ "$daemon_age" -lt "$min_daemon_age" ]; then echo reset; return 0; fi
+  if [ "$count" -ge "$threshold" ]; then echo restart; else echo count; fi
+}
+
 # =============================================================================
 # Anchored app-process matching + duplicate-daemon kill-selection.
 #
