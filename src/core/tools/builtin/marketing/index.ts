@@ -24,23 +24,33 @@ const logger = createLogger('marketing-builtin');
 // ---------------------------------------------------------------------------
 
 interface BrainLike {
-  chat(messages: Array<{ role: string; content: string }>): Promise<{ content: string }>;
+  // The real Brain.chat() resolves to a plain STRING. This was previously typed
+  // `Promise<{ content: string }>`, so `response.content` was undefined at runtime and
+  // every marketing tool crashed on `.trim()` ("Cannot read properties of undefined").
+  // The wrong annotation hid it from tsc. Surfaced by the harness-bug scan.
+  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
 }
 
 interface ConfigLike {
   brain?: BrainLike;
 }
 
-async function askBrain(ctx: ToolContext, system: string, user: string): Promise<string> {
+export async function askBrain(ctx: ToolContext, system: string, user: string): Promise<string> {
   const config = ctx.config as ConfigLike | undefined;
   if (!config?.brain) {
     throw new Error('Brain (LLM) is not available. Ensure the brain module is configured.');
   }
-  const response = await config.brain.chat([
+  const raw: unknown = await config.brain.chat([
     { role: 'system', content: system },
     { role: 'user', content: user },
   ]);
-  return response.content.trim();
+  // Brain.chat resolves to a string; tolerate a legacy { content } shape defensively.
+  const text = typeof raw === 'string'
+    ? raw
+    : (raw && typeof raw === 'object' && typeof (raw as { content?: unknown }).content === 'string'
+        ? (raw as { content: string }).content
+        : '');
+  return text.trim();
 }
 
 // ---------------------------------------------------------------------------
