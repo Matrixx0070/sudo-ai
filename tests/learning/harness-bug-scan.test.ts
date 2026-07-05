@@ -71,4 +71,20 @@ describe('mineHarnessBugs', () => {
     const rows = [row('a', 'TypeError: x', '2026-07-01')];
     expect(mineHarnessBugs(rows, 2)).toHaveLength(0);
   });
+
+  it('tags active vs stale against a cutoff (stale = likely already-fixed)', () => {
+    const rows = [
+      row('fresh.tool', 'TypeError: still happening', '2026-07-04 10:00:00'),   // after cutoff
+      row('old.tool', 'ReferenceError: __dirname is not defined', '2026-06-17 01:17:02'), // before cutoff
+    ];
+    const bugs = mineHarnessBugs(rows, 1, '2026-06-28 00:00:00');
+    const fresh = bugs.find((b) => b.tool === 'fresh.tool')!;
+    const old = bugs.find((b) => b.tool === 'old.tool')!;
+    expect(fresh.active).toBe(true);
+    expect(old.active).toBe(false); // stale — its traces just haven't aged out (fixed #223)
+  });
+
+  it('active is undefined when no cutoff is supplied (opt-in tagging)', () => {
+    expect(mineHarnessBugs([row('a', 'TypeError: x', '2026-07-01')])[0]!.active).toBeUndefined();
+  });
 });
