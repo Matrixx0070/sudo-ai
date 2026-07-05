@@ -196,10 +196,44 @@ sys.exit(1)
 " 2>/dev/null
 }
 
-# ---- Step 2: If port is open, app is running. Trust the port. ----
+# ---- Step 2: If port is open, app is running. Trust the port... unless the
+# liveness heartbeat says the process is HUNG (bound socket, blocked event
+# loop). The in-process watchdog refreshes data/watchdog-liveness.json every
+# ~60s; when that file goes stale for >= SUDO_CRON_HANG_STALE_S on a mature
+# daemon for >= 2 consecutive cron cycles, restart it. Fail-safe: a missing
+# file (fresh boot / older code) NEVER restarts. Kill-switch:
+# SUDO_CRON_HANG_GATE=0 restores the pure trust-the-port behavior. ----
 if ss -lnt 2>/dev/null | grep -qE '(^|[[:space:]])(0\.0\.0\.0|127\.0\.0\.1):18900([[:space:]]|$)'; then
   # App is up — clear the consecutive-down counter (down-gate reset point).
   if command -v write_counter >/dev/null 2>&1; then write_counter "$DOWN_COUNT_FILE" 0; fi
+
+  if [ "${SUDO_CRON_HANG_GATE:-1}" != "0" ] \
+     && command -v decide_hang_restart >/dev/null 2>&1 \
+     && command -v file_age_s >/dev/null 2>&1; then
+    HANG_COUNT_FILE="${SUDO_CRON_HANG_COUNT_FILE:-/tmp/sudo-ai-hang-count}"
+    HANG_STALE_S="${SUDO_CRON_HANG_STALE_S:-600}"
+    LIVENESS_FILE="${SUDO_CRON_LIVENESS_FILE:-$SUDO_HOME/data/watchdog-liveness.json}"
+    LIVENESS_AGE=$(file_age_s "$LIVENESS_FILE" "$(date +%s)")
+    HANG_COUNT=$(( $(read_counter "$HANG_COUNT_FILE") + 1 ))
+    HANG_VERDICT=$(decide_hang_restart "$LIVENESS_AGE" "$HANG_STALE_S" "$HANG_COUNT" 2 "$(daemon_age)" "${SUDO_CRON_HANG_MIN_DAEMON_AGE_S:-900}")
+    case "$HANG_VERDICT" in
+      reset)
+        write_counter "$HANG_COUNT_FILE" 0
+        ;;
+      count)
+        write_counter "$HANG_COUNT_FILE" "$HANG_COUNT"
+        echo "[$(date -u +%FT%TZ)] HANG-PATH: port bound but liveness stale ${LIVENESS_AGE}s (>=${HANG_STALE_S}s), cycle ${HANG_COUNT}/2 -- deferring" >> "$LOG"
+        ;;
+      restart)
+        write_counter "$HANG_COUNT_FILE" 0
+        echo "[$(date -u +%FT%TZ)] HANG-PATH: liveness stale ${LIVENESS_AGE}s for ${HANG_COUNT} consecutive cycles -- daemon hung with port bound, restarting" >> "$LOG"
+        cd "$SUDO_HOME"
+        pm2 restart ecosystem.config.cjs --only sudo-ai-v5 --update-env >> "$LOG" 2>&1 || true
+        pm2 save --force >> "$LOG" 2>&1 || true
+        echo "[$(date -u +%FT%TZ)] HANG-PATH restart issued" >> "$LOG"
+        ;;
+    esac
+  fi
   exit 0
 fi
 

@@ -109,3 +109,20 @@ done
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME FAILED"; exit 1; fi
+
+# ---- file_age_s + decide_hang_restart: the hang-gate truth table ----
+TMPF=$(mktemp)
+touch "$TMPF"
+NOW=$(date +%s)
+AGE=$(file_age_s "$TMPF" "$NOW")
+[ "$AGE" -ge 0 ] && [ "$AGE" -le 2 ] && ok "file_age_s: fresh file age ~0" || { echo "FAIL: file_age_s fresh (got $AGE)"; fail=1; }
+eq "-1" "$(file_age_s /nonexistent/liveness.json "$NOW")" "file_age_s: missing file => -1"
+rm -f "$TMPF"
+
+# decide_hang_restart <age> <stale> <count> <threshold> <daemon_age> <min_daemon_age>
+eq reset   "$(decide_hang_restart 30   600 1 2 5000 900)" "hang: fresh liveness => reset"
+eq reset   "$(decide_hang_restart -1   600 1 2 5000 900)" "hang: missing file (-1) => reset (fail-safe)"
+eq reset   "$(decide_hang_restart 9999 600 1 2 300  900)" "hang: stale but daemon young => reset (boot grace)"
+eq count   "$(decide_hang_restart 9999 600 1 2 5000 900)" "hang: stale cycle 1/2 => count"
+eq restart "$(decide_hang_restart 9999 600 2 2 5000 900)" "hang: stale cycle 2/2 => restart"
+eq restart "$(decide_hang_restart 601  600 3 2 5000 900)" "hang: just-over-threshold stale, cycle 3 => restart"
