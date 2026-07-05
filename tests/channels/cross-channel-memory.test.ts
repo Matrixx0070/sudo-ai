@@ -10,7 +10,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
-import { unlinkSync, existsSync } from 'node:fs';
+import { unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { CrossChannelMemory } from '../../src/core/channels/cross-channel-memory.js';
 import { MemoryInjectionError } from '../../src/core/memory/injection-scanner.js';
@@ -19,7 +20,11 @@ import { MemoryInjectionError } from '../../src/core/memory/injection-scanner.js
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TMP_DIR = process.env['TMPDIR'] ?? '/tmp/claude-0';
+// Use the OS temp dir (self-sufficient in any environment) — the old hardcoded
+// '/tmp/claude-0' fallback only existed if a workflow pre-created it, which failed
+// the release pipeline (better-sqlite3 won't create a missing parent dir).
+const TMP_DIR = process.env['TMPDIR'] ?? tmpdir();
+mkdirSync(TMP_DIR, { recursive: true });
 const originalMode = process.env['SUDO_MEMORY_SCAN_MODE'];
 
 function makeTmpDb(): string {
