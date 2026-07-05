@@ -2,9 +2,11 @@
  * @file vision.ts
  * @description browser.vision — analyze screenshots/images using vision AI.
  *
- * Provider priority (first available key wins):
- *   1. xAI   (XAI_API_KEY)    — grok-2-vision-1212, primary
- *   2. OpenAI (OPENAI_API_KEY) — gpt-4o, fallback
+ * Provider priority:
+ *   1. The agent's own Brain (ctx.config.brain) — the main LLM (Claude via
+ *      claude-oauth in prod) is vision-capable, so this needs NO extra keys.
+ *   2. xAI   (XAI_API_KEY)    — standalone HTTP fallback
+ *   3. OpenAI (OPENAI_API_KEY) — standalone HTTP fallback
  */
 
 import fs from 'node:fs/promises';
@@ -106,8 +108,10 @@ async function callVisionApi(
 export const visionTool: ToolDefinition = {
   name: 'browser.vision',
   description:
-    'Analyze a screenshot or image file using AI vision (xAI grok-2-vision / GPT-4o fallback). ' +
-    'Pass an image path and a specific question. Returns a text answer describing visual content.',
+    'SEE any image: analyze a screenshot, photo, or image file with AI vision. Uses the main ' +
+    'brain model (Claude vision) directly — ALWAYS available, no extra API keys needed ' +
+    '(xAI/OpenAI HTTP are only fallbacks). Use this whenever a user shares an image ' +
+    '("[Image attached: ...]"). Pass the image path and a specific question; returns a text answer.',
   category: 'browser',
   timeout: 90_000,
   parameters: {
@@ -196,6 +200,12 @@ export const visionTool: ToolDefinition = {
       }
     }
 
-    return { success: false, output: 'browser.vision: all vision providers failed. Set XAI_API_KEY or OPENAI_API_KEY.' };
+    return {
+      success: false,
+      output:
+        'browser.vision: all vision providers failed (Brain vision call errored and no working ' +
+        'XAI_API_KEY/OPENAI_API_KEY fallback). This is transient provider failure, not a missing ' +
+        'capability — retry once before reporting vision as unavailable.',
+    };
   },
 };
