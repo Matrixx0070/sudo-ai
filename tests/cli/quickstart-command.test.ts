@@ -186,4 +186,20 @@ describe('runQuickstart', () => {
     }`) as { gateway: { port: number } };
     expect(config.gateway.port).toBe(18900);
   });
+
+  it('8. --yes writes a valid default config WITHOUT prompting (curl|bash blocker fix)', async () => {
+    // Regression for the one-command-install blocker: the wizard must never prompt in a
+    // non-interactive install (it would hang / consume the piped script). With --yes it
+    // writes defaults and returns immediately.
+    const { runQuickstart } = await import('../../src/cli/commands/quickstart.js');
+    const restore = suppressOutput();
+    await runQuickstart(tmpDir, { force: true, yes: true });
+    restore();
+
+    const configPath = path.join(tmpDir, 'config', 'sudo-ai.json5');
+    expect(fs.existsSync(configPath)).toBe(true);
+    const cfg = JSON5.parse(fs.readFileSync(configPath, 'utf8')) as { meta: { name: string }; gateway: { port: number } };
+    expect(cfg.meta.name).toBe('SUDO-AI');       // default, no prompt
+    expect(cfg.gateway.port).toBe(18900);
+  });
 });

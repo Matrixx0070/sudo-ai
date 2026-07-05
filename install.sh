@@ -36,6 +36,11 @@ PM2_NAME="sudo-ai-v5"
 BIN_NAME="sudo-ai"
 PKG_NAME="@matrixx0070/sudo-ai"
 
+# Privilege helper: empty when already root, `sudo` when available, else empty (the
+# service step is best-effort and `|| true`-guarded, so a non-root/no-sudo box degrades
+# gracefully instead of erroring with "sudo: command not found").
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; elif command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi
+
 # Idempotency: if bin in PATH and healthy, skip heavy work
 if command -v "$BIN_NAME" >/dev/null 2>&1; then
   if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1 && curl -fsS --max-time 5 "$HEALTH_URL" | grep -q '"status":"ok"\|200'; then
@@ -98,6 +103,12 @@ fi
 command -v pnpm >/dev/null 2>&1 || { echo "[install] pnpm required (install failed)."; exit 1; }
 echo "[install] pnpm $(pnpm --version) OK." | tee -a "$LOG"
 
+# --- Ensure git (the source-build fallback clones the repo; minimal images lack it) ---
+if ! command -v git >/dev/null 2>&1; then
+  echo "[install] Installing git..." | tee -a "$LOG"
+  command -v apt-get >/dev/null 2>&1 && apt-get install -y -qq git 2>&1 | tail -2 | tee -a "$LOG" || true
+fi
+
 # --- Global bin install (preferred published path) ---
 DID_GLOBAL=0
 echo "[install] Attempting npm i -g $PKG_NAME (primary for users; pulls prebuilt dist/server/cli.js for bin)..." | tee -a "$LOG"
@@ -110,26 +121,47 @@ fi
 
 # --- Fallback: source build + npm i -g . (for dev/pre-publish/local) ---
 if [ "$DID_GLOBAL" -eq 0 ]; then
-  echo "[install] npm global not sufficient or not published; using source bootstrap fallback (clone + build:cli + npm i -g .)..." | tee -a "$LOG"
-  TMPD=/tmp/sudo-ai-bootstrap-$$
-  mkdir -p "$TMPD"
-  git clone --depth 1 "$REPO_URL" "$TMPD" 2>&1 | tee -a "$LOG" || {
-    echo "[install] git clone failed; falling back to local if in tree..." | tee -a "$LOG"
-    if [ -f "$SUDO_AI_HOME/package.json" ]; then
-      TMPD="$SUDO_AI_HOME"
+  echo "[install] npm global not sufficient or not published; using source bootstrap fallback (build:cli + npm i -g .)..." | tee -a "$LOG"
+  CLONED=0
+  # Prefer an EXISTING local source tree. Building in a persistent dir is the reliable
+  # path: a /tmp clone is rm -rf'd after install, and `npm i -g .` links the bin to the
+  # built dist — if that dir is deleted (or the build didn't produce dist), the global
+  # bin dangles. Only clone when there is genuinely no local source (a bare curl|bash).
+  if [ -f "./package.json" ] && [ -d "./src" ]; then
+    TMPD="$PWD"
+    echo "[install] Using local source tree at $TMPD (no clone)." | tee -a "$LOG"
+  elif [ -f "$SUDO_AI_HOME/package.json" ] && [ -d "$SUDO_AI_HOME/src" ]; then
+    TMPD="$SUDO_AI_HOME"
+    echo "[install] Using existing source at $SUDO_AI_HOME (no clone)." | tee -a "$LOG"
+  else
+    TMPD=/tmp/sudo-ai-bootstrap-$$
+    mkdir -p "$TMPD"
+    echo "[install] Cloning source to $TMPD..." | tee -a "$LOG"
+    if git clone --depth 1 "$REPO_URL" "$TMPD" 2>&1 | tee -a "$LOG"; then
+      CLONED=1
     else
-      echo "[install] No source. Manual: git clone + pnpm i + pnpm build:cli + npm i -g ."; exit 1
+      echo "[install] No source (clone failed, no local tree). Manual: git clone + pnpm i + pnpm build:cli + npm i -g ." | tee -a "$LOG"
+      exit 1
     fi
-  }
+  fi
   pushd "$TMPD" >/dev/null
   echo "[install] pnpm install (in $TMPD)..." | tee -a "$LOG"
   pnpm install --prefer-offline 2>&1 | tail -5 | tee -a "$LOG" || true
-  echo "[install] pnpm build:cli (ensures dist/server/cli.js for global bin)..." | tee -a "$LOG"
+  echo "[install] pnpm build:cli (produces dist/server/cli.js for the global bin)..." | tee -a "$LOG"
   pnpm build:cli 2>&1 | tail -3 | tee -a "$LOG" || npm run build:cli 2>&1 | tail -3 | tee -a "$LOG" || true
+  # Verify the bin target actually built BEFORE installing — otherwise the global bin is
+  # a dangling symlink (the failure this validation surfaced). Fail loud, don't ship broken.
+  if [ ! -f "dist/server/cli.js" ]; then
+    echo "[install] ERROR: build did not produce dist/server/cli.js (check pnpm install / esbuild above)." | tee -a "$LOG"
+    popd >/dev/null
+    [ "$CLONED" -eq 1 ] && rm -rf "$TMPD" || true
+    exit 1
+  fi
   echo "[install] npm install -g . (registers sudo-ai bin globally)..." | tee -a "$LOG"
   npm install -g . 2>&1 | tee -a "$LOG" || true
   popd >/dev/null
-  [ "$TMPD" != "$SUDO_AI_HOME" ] && rm -rf "$TMPD" || true
+  # Only remove what WE cloned — never delete the user's local/source tree.
+  [ "$CLONED" -eq 1 ] && rm -rf "$TMPD" || true
   command -v "$BIN_NAME" >/dev/null 2>&1 && DID_GLOBAL=1
 fi
 
@@ -154,7 +186,8 @@ if [ -f "$SUDO_AI_HOME/config/.env" ] || [ -f "config/.env" ]; then
   echo "[install] Existing config detected — skipping setup wizard (run 'sudo-ai setup' to reconfigure)." | tee -a "$LOG"
 else
   echo "[install] Running first-time setup wizard (sudo-ai quickstart or sudo-ai setup)..." | tee -a "$LOG"
-  "$BIN_NAME" quickstart --force 2>&1 | tail -8 | tee -a "$LOG" || "$BIN_NAME" setup 2>&1 | tail -5 | tee -a "$LOG" || true
+  # --yes → fully non-interactive (curl | bash has no TTY; a prompt would hang/eat the pipe).
+  "$BIN_NAME" quickstart --force --yes 2>&1 | tail -8 | tee -a "$LOG" || true
 fi
 
 # --- Start healthy (pm2 preferred; service optional) ---
@@ -177,9 +210,9 @@ else
   if [ -f "$SUDO_AI_HOME/scripts/sudo-ai-v5.service" ]; then
     # systemd does not expand ${VAR:-default}; substitute the real path on install.
     sed "s|__SUDO_AI_HOME__|$SUDO_AI_HOME|g" "$SUDO_AI_HOME/scripts/sudo-ai-v5.service" \
-      | sudo tee /etc/systemd/system/sudo-ai-v5.service >/dev/null || true
-    sudo systemctl daemon-reload || true
-    sudo systemctl enable --now sudo-ai-v5 2>&1 | tee -a "$LOG" || true
+      | $SUDO tee /etc/systemd/system/sudo-ai-v5.service >/dev/null || true
+    $SUDO systemctl daemon-reload || true
+    $SUDO systemctl enable --now sudo-ai-v5 2>&1 | tee -a "$LOG" || true
   fi
 fi
 
