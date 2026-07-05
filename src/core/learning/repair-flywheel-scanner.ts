@@ -105,15 +105,23 @@ export class RepairFlywheelScanner {
       // it only ever promotes on a verified improvement (else auto-reverts).
       if (isApplyEnabled()) {
         const localDb = db;
-        const measureFailRate = (tool: string, sinceISO?: string): number => {
-          let sql = 'SELECT AVG(CASE WHEN success=0 THEN 1.0 ELSE 0 END) AS r FROM traces WHERE tool_name=?';
-          const params: unknown[] = [tool];
+        // Per-CLUSTER rate: numerator = failures whose error_message matches the
+        // lesson's errorPattern; denominator = the tool's TOTAL calls (also the
+        // sample-guard size). Placeholders bind in SQL-text order: LIKE (SELECT),
+        // then tool (WHERE), then since.
+        const measureClusterRate = (tool: string, errorPattern?: string, sinceISO?: string): { rate: number; calls: number } => {
+          const failExpr = errorPattern ? 'success=0 AND error_message LIKE ?' : 'success=0';
+          let sql = `SELECT COUNT(*) AS calls, SUM(CASE WHEN ${failExpr} THEN 1 ELSE 0 END) AS fails FROM traces WHERE tool_name=?`;
+          const params: unknown[] = [];
+          if (errorPattern) params.push(`%${errorPattern}%`);
+          params.push(tool);
           if (sinceISO) { sql += ' AND created_at >= ?'; params.push(sinceISO.slice(0, 19).replace('T', ' ')); }
-          const row = localDb.prepare(sql).get(...params) as { r: number | null } | undefined;
-          return row?.r ?? 0;
+          const row = localDb.prepare(sql).get(...params) as { calls: number | null; fails: number | null } | undefined;
+          const calls = row?.calls ?? 0;
+          return { rate: calls > 0 ? (row?.fails ?? 0) / calls : 0, calls };
         };
         const now = new Date();
-        const actions = runLessonLifecycle({ measureFailRate, nowMs: now.getTime(), nowISO: now.toISOString() });
+        const actions = runLessonLifecycle({ measureClusterRate, nowMs: now.getTime(), nowISO: now.toISOString() });
         if (actions.length > 0) log.warn({ actions }, 'RepairFlywheel APPLY: canary lifecycle advanced (live behavior changed)');
       }
 

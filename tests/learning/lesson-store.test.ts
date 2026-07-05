@@ -26,14 +26,16 @@ describe('pure lifecycle ops', () => {
   it('candidate → canary records baseline; only canary/promoted are active hints', () => {
     const s0 = upsertCandidate(emptyStore(), base, 'T0').store;
     expect(activeLessonHints(s0)).toEqual([]); // candidate not injected
-    const s1 = startCanary(s0, 'L1', 0.4, 'T1');
+    const s1 = startCanary(s0, 'L1', { rate: 0.4, calls: 100 }, 'T1');
     expect(s1.lessons[0]!.state).toBe('canary');
     expect(s1.lessons[0]!.baselineFailRate).toBe(0.4);
+    expect(s1.lessons[0]!.baselineCalls).toBe(100);
     expect(activeLessonHints(s1)).toEqual(['do not use pipes']); // canary IS injected
-    const promoted = resolveCanary(s1, 'L1', 0.1, true, 'T2', 'improved');
+    const promoted = resolveCanary(s1, 'L1', { rate: 0.1, calls: 80 }, true, 'T2', 'improved');
     expect(promoted.lessons[0]!.state).toBe('promoted');
+    expect(promoted.lessons[0]!.canaryCalls).toBe(80);
     expect(activeLessonHints(promoted)).toEqual(['do not use pipes']);
-    const reverted = resolveCanary(s1, 'L1', 0.5, false, 'T2', 'regressed');
+    const reverted = resolveCanary(s1, 'L1', { rate: 0.5, calls: 80 }, false, 'T2', 'regressed');
     expect(reverted.lessons[0]!.state).toBe('reverted');
     expect(activeLessonHints(reverted)).toEqual([]); // reverted NOT injected
   });
@@ -43,7 +45,7 @@ describe('persistence', () => {
   it('round-trips atomically; a corrupt file loads as empty (fail-open)', () => {
     const p = path.join(mkdir(), 'lessons.json');
     expect(loadLessonStore(p)).toEqual(emptyStore()); // missing → empty
-    const s = startCanary(upsertCandidate(emptyStore(), base, 'T0').store, 'L1', 0.3, 'T1');
+    const s = startCanary(upsertCandidate(emptyStore(), base, 'T0').store, 'L1', { rate: 0.3, calls: 50 }, 'T1');
     saveLessonStore(p, s);
     expect(loadLessonStore(p).lessons[0]!.state).toBe('canary');
     writeFileSync(p, '{ not json');

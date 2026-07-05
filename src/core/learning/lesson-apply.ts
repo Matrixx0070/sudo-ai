@@ -33,7 +33,13 @@ import {
   resolveCanary,
   activeLessonHints,
   type LessonStore,
+  type RateSample,
 } from './lesson-store.js';
+
+/** Default sample guard: don't judge a canary on fewer than this many tool calls. */
+export const DEFAULT_MIN_CANARY_CALLS = 20;
+/** Default hard stop: if the sample guard is never met, revert at this age (7 days). */
+export const DEFAULT_MAX_CANARY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** True only when the operator has explicitly opted into live apply. */
 export function isApplyEnabled(): boolean {
@@ -97,15 +103,20 @@ export function canaryVerdict(baseline: number, canary: number, opts: CanaryVerd
 // --- lifecycle driver (pure given injected measurer) ------------------------
 
 export interface LifecycleDeps {
-  /** Target-metric failure rate for a lesson's tool over [sinceISO, now]; whole-corpus if sinceISO omitted. */
-  measureFailRate: (tool: string, sinceISO?: string) => number;
+  /**
+   * Target-CLUSTER failure rate + sample size for a tool over [sinceISO, now]
+   * (whole-corpus if sinceISO omitted). `errorPattern` narrows the numerator to the
+   * lesson's specific failure cluster; the denominator is the tool's total calls, so
+   * `calls` also drives the min-sample guard.
+   */
+  measureClusterRate: (tool: string, errorPattern?: string, sinceISO?: string) => RateSample;
   nowMs: number;
   nowISO: string;
 }
 
 export interface LifecycleAction {
   lessonId: string;
-  action: 'started-canary' | 'promoted' | 'reverted';
+  action: 'started-canary' | 'promoted' | 'reverted' | 'waiting';
   reason: string;
 }
 
@@ -121,21 +132,38 @@ export function advanceLessonLifecycle(store: LessonStore, deps: LifecycleDeps, 
 
   for (const lesson of store.lessons) {
     if (lesson.state === 'candidate') {
-      const baseline = deps.measureFailRate(lesson.tool);
+      const baseline = deps.measureClusterRate(lesson.tool, lesson.errorPattern);
       next = startCanary(next, lesson.lessonId, baseline, deps.nowISO);
-      actions.push({ lessonId: lesson.lessonId, action: 'started-canary', reason: `baseline failRate=${baseline.toFixed(3)}` });
+      actions.push({ lessonId: lesson.lessonId, action: 'started-canary', reason: `baseline rate=${baseline.rate.toFixed(3)} over ${baseline.calls} calls` });
       continue;
     }
     if (lesson.state === 'canary' && lesson.canaryStartedAt) {
       const elapsed = deps.nowMs - Date.parse(lesson.canaryStartedAt);
       if (elapsed < lesson.canaryWindowMs) continue; // window not up yet
-      const canaryRate = deps.measureFailRate(lesson.tool, lesson.canaryStartedAt);
-      const v = canaryVerdict(lesson.baselineFailRate ?? 0, canaryRate, opts);
-      next = resolveCanary(next, lesson.lessonId, canaryRate, v.promote, deps.nowISO, v.reason);
-      actions.push({ lessonId: lesson.lessonId, action: v.promote ? 'promoted' : 'reverted', reason: v.reason });
+      const canary = deps.measureClusterRate(lesson.tool, lesson.errorPattern, lesson.canaryStartedAt);
+      const minCalls = lesson.minCanaryCalls ?? DEFAULT_MIN_CANARY_CALLS;
+      const maxWindow = lesson.maxCanaryWindowMs ?? DEFAULT_MAX_CANARY_WINDOW_MS;
+
+      // Sample guard: don't judge on thin canary traffic. Keep waiting until the
+      // hard stop, then revert (an unverifiable lesson must not linger applied).
+      if (canary.calls < minCalls) {
+        if (elapsed >= maxWindow) {
+          next = resolveCanary(next, lesson.lessonId, canary, false, deps.nowISO, `insufficient canary traffic (${canary.calls}<${minCalls}) by max window — reverting unverified`);
+          actions.push({ lessonId: lesson.lessonId, action: 'reverted', reason: `unverifiable: only ${canary.calls} calls in window` });
+        } else {
+          actions.push({ lessonId: lesson.lessonId, action: 'waiting', reason: `canary traffic ${canary.calls}<${minCalls} — waiting for samples` });
+        }
+        continue;
+      }
+
+      const v = canaryVerdict(lesson.baselineFailRate ?? 0, canary.rate, opts);
+      next = resolveCanary(next, lesson.lessonId, canary, v.promote, deps.nowISO, v.reason);
+      actions.push({ lessonId: lesson.lessonId, action: v.promote ? 'promoted' : 'reverted', reason: `${v.reason} over ${canary.calls} calls` });
     }
   }
-  return { store: next, changed: actions.length > 0, actions };
+  // 'waiting' is informational, not a store mutation — only real transitions persist.
+  const mutated = actions.some((a) => a.action !== 'waiting');
+  return { store: next, changed: mutated, actions };
 }
 
 /**

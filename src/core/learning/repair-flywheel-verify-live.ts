@@ -58,6 +58,12 @@ export interface GuidanceRepair {
   extract: (input: Record<string, unknown>) => string | null;
   /** True-to-prod precondition check. `ok` = would be accepted; `reason` = why not. */
   check: (value: string) => { ok: boolean; reason?: string };
+  /**
+   * SQL LIKE fragment identifying this lesson's TARGET failure cluster in
+   * error_message — used by the canary to measure the specific rate the lesson
+   * should move (not the tool's whole failure rate).
+   */
+  errorPattern: string;
 }
 
 /**
@@ -218,5 +224,9 @@ export function makeExecRepoRepair(lesson: string = EXEC_REPO_GUIDANCE_LESSON): 
       const m = checkRepoCommand(value);
       return { ok: m.allowed, reason: m.reason };
     },
+    // All repo-exec guard refusals are formatted 'Refused: …'; runtime exec failures
+    // ('Command exited …', '(no output)', '[SecurityGuard] …') are excluded — so the
+    // canary tracks exactly the cluster this lesson addresses.
+    errorPattern: 'Refused:',
   };
 }
