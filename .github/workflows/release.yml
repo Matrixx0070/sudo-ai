@@ -87,7 +87,13 @@ jobs:
       # 12. Publish to npm WITH provenance — a signed SLSA attestation linking the
       #     tarball to this workflow run and commit, verifiable by consumers.
       #     --no-git-checks skips the working-tree-clean guard (detached tag HEAD).
+      #     Dist-tag is prerelease-aware: a version with a '-' (e.g. 4.1.0-beta.0)
+      #     publishes under `next`, NOT `latest` — so a pre-release never becomes the
+      #     default `npm i`. Stable versions publish under `latest`.
       - name: Publish
-        run: pnpm publish --no-git-checks --provenance
+        run: |
+          DIST_TAG=$(node -p "require('./package.json').version.includes('-') ? 'next' : 'latest'")
+          echo "Publishing $(node -p "require('./package.json').version") under dist-tag: $DIST_TAG"
+          pnpm publish --no-git-checks --provenance --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}  # set in repo Settings → Secrets
