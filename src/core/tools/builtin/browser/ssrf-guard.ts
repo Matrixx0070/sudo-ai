@@ -59,7 +59,8 @@ const DEFAULT_CONFIG: SSRFConfig = {
 // ---------------------------------------------------------------------------
 
 /** Convert dotted-quad IPv4 string to a 32-bit unsigned integer, or null. */
-function ipv4ToUint32(ip: string): number | null {
+function ipv4ToUint32(ip: string | null | undefined): number | null {
+  if (typeof ip !== 'string') return null; // defensive: never .split a null resolved IP
   const octets = ip.split('.');
   if (octets.length !== 4) return null;
   let result = 0;
@@ -134,6 +135,16 @@ export class SSRFGuard {
 
     const hostname = parsed.hostname;
 
+    // Empty hostname (e.g. file:///…, about:blank, data: URLs) — not navigable and
+    // not resolvable. Fail closed here: dns.lookup('') can return address:null, which
+    // then crashed checkIp with "Cannot read properties of null (reading 'split')".
+    if (!hostname) {
+      const reason = `URL has no host to resolve: ${url}`;
+      log.warn({ url }, reason);
+      this.stats.blocked++;
+      return { allowed: false, reason };
+    }
+
     // Allowlist bypass — explicitly allowed hosts skip all checks.
     if (this.allowedHostsSet.has(hostname)) {
       this.stats.allowed++;
@@ -148,6 +159,11 @@ export class SSRFGuard {
     try {
       const { lookup } = await import('dns/promises');
       const result = await lookup(hostname);
+      // Defensive: a falsy/non-string address (seen for odd hostnames) must fail
+      // closed, not fall through to checkIp and crash on null.split.
+      if (!result.address || typeof result.address !== 'string') {
+        throw new Error('empty resolved address');
+      }
       resolvedIp = result.address;
     } catch {
       // Fail closed — if we cannot resolve, we cannot guarantee safety.
