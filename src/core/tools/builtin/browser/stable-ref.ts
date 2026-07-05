@@ -222,6 +222,32 @@ export async function resolveStableRef(page: Page, ref: number): Promise<Locator
   return null;
 }
 
+/**
+ * Build the output for a ref-not-found failure shared by browser.click / browser.type.
+ * On a stale ref, AUTO re-snapshot and return the fresh actionable elements inline, so
+ * the agent can retry with a correct ref without a round-trip.
+ *
+ * It never auto-performs the action on the re-resolved ref: refs are SEQUENTIAL stamps,
+ * renumbered on every capture, so `ref=N` after a fresh snapshot may be a DIFFERENT
+ * element — blindly re-acting on N could hit the wrong one. Returning fresh refs is the
+ * safe half of the recovery.
+ *
+ * Guarded by SUDO_BROWSER_REF_AUTOSNAPSHOT (default ON; set 0 for the old static hint).
+ * Fail-open: any capture error falls back to the plain "snapshot again" guidance.
+ */
+export async function refNotFoundOutput(page: Page, ref: number, toolName: string): Promise<string> {
+  const base = `${toolName}: ref=${ref} not found on the page. The page may have re-rendered since the last snapshot`;
+  if (process.env['SUDO_BROWSER_REF_AUTOSNAPSHOT'] === '0') {
+    return `${base} — call browser.snapshot again to get fresh refs.`;
+  }
+  try {
+    const snap = await captureStableRefs(page);
+    return `${base}. Fresh snapshot taken — retry ${toolName} with one of these refs (numbers changed):\n${snap.render}`;
+  } catch {
+    return `${base} — call browser.snapshot again to get fresh refs.`;
+  }
+}
+
 /** Type guard: parse a `ref` tool param that may arrive as number or numeric string. */
 export function parseRefParam(raw: unknown): number | null {
   if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
