@@ -25,6 +25,8 @@
   "files": [
     "dist/",
     "!dist/**/*.map",
+    "!dist/**/*.test.js",
+    "!dist/**/__tests__/**",
     "config/sudo-ai.json5",
     "config/.env.example",
     "README.md",
@@ -32,6 +34,7 @@
     "CONTRIBUTING.md",
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
