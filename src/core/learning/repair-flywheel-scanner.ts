@@ -178,9 +178,20 @@ export class RepairFlywheelScanner {
         const crashRows = db
           .prepare(`SELECT tool_name, COALESCE(error_message,'') AS error_message, created_at FROM traces WHERE success=0 AND tool_name IS NOT NULL AND created_at >= ${sinceExpr} AND (${likeClause}) LIMIT ?`)
           .all(...likeParams, bounds.maxEvents) as HarnessBugRow[];
-        const bugs = mineHarnessBugs(crashRows).slice(0, 10);
-        if (bugs.length > 0) {
-          log.warn({ harnessBugCount: bugs.length, bugs }, 'RepairFlywheel HARNESS-BUG scan: uncaught tool crashes detected — CODE bugs to fix (not agent error, never auto-applied)');
+        // A crash whose last occurrence predates the active window is likely ALREADY
+        // FIXED (its traces just haven't aged out) — suppress it from the WARN so the
+        // scan surfaces only STILL-RECURRING bugs. (The read-file __dirname crash, fixed
+        // #223 weeks ago, was exactly this stale false alarm.) Tunable via env.
+        const activeDays = Math.max(1, Number.parseInt(process.env['SUDO_FLYWHEEL_HARNESS_ACTIVE_DAYS'] ?? '7', 10) || 7);
+        const cutoffMs = Date.now() - activeDays * 24 * 60 * 60 * 1000;
+        const cutoffISO = new Date(cutoffMs).toISOString().slice(0, 19).replace('T', ' ');
+        const all = mineHarnessBugs(crashRows, 1, cutoffISO);
+        const active = all.filter((b) => b.active).slice(0, 10);
+        const staleSuppressed = all.length - all.filter((b) => b.active).length;
+        if (active.length > 0) {
+          log.warn({ harnessBugCount: active.length, staleSuppressed, bugs: active }, 'RepairFlywheel HARNESS-BUG scan: STILL-RECURRING tool crashes — CODE bugs to fix (not agent error, never auto-applied)');
+        } else if (all.length > 0) {
+          log.info({ staleSuppressed }, 'RepairFlywheel HARNESS-BUG scan: only stale (likely-fixed) crashes remain — none active');
         }
       } catch (e) {
         log.warn({ err: String(e) }, 'RepairFlywheel harness-bug scan failed (non-fatal)');
