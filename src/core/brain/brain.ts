@@ -308,7 +308,7 @@ export function buildFoldedSystemMessages(
   return folded.length > 0 ? [{ role: 'system', content: folded }] : [];
 }
 
-function toSDKMessages(messages: BrainMessage[]): unknown[] {
+export function toSDKMessages(messages: BrainMessage[]): unknown[] {
   return messages
     .filter((msg) => {
       // System messages are handled via the 'system' param of generateText.
@@ -367,6 +367,24 @@ function toSDKMessages(messages: BrainMessage[]): unknown[] {
             output: { type: 'text', value: typeof msg.content === 'string' ? msg.content : String(msg.content ?? '') },
           }],
         };
+      }
+
+      // User message with image attachments: convert to multi-part content so
+      // vision-capable models actually receive the pixels. Without this the
+      // images field was silently dropped and the model saw text only — the
+      // vision-via-Brain path answered "no image attached" on every real call.
+      if (msg.role === 'user' && msg.images && msg.images.length > 0) {
+        const parts: unknown[] = [];
+        const text = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
+        if (text) parts.push({ type: 'text', text });
+        for (const img of msg.images) {
+          parts.push({
+            type: 'image',
+            image: img.type === 'url' ? new URL(img.data) : img.data,
+            ...(img.mediaType ? { mediaType: img.mediaType } : {}),
+          });
+        }
+        return { role: 'user', content: parts };
       }
 
       // Plain assistant and user messages pass through as-is.
