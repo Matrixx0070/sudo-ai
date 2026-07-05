@@ -37,13 +37,34 @@ export interface AppliedLesson {
   canaryStartedAt?: string;
   /** Canary window length; the driver waits this long before judging. */
   canaryWindowMs: number;
-  /** Target-metric failure rate at canary start (the bar to beat). */
+  /**
+   * SQL LIKE fragment matching this lesson's TARGET failure cluster in
+   * error_message (e.g. 'Refused:' for the repo-exec guard). Sharpens the metric to
+   * the specific failure the lesson addresses instead of the tool's overall rate.
+   * Omitted → the tool's whole failure rate (blunt fallback).
+   */
+  errorPattern?: string;
+  /** Min tool calls in the canary window before the verdict is trusted (sample guard). */
+  minCanaryCalls?: number;
+  /** Hard stop: revert if the sample guard is never met by this age. */
+  maxCanaryWindowMs?: number;
+  /** Target-cluster failure rate at canary start (the bar to beat). */
   baselineFailRate?: number;
-  /** Target-metric failure rate measured over the canary window. */
+  /** Tool calls observed when the baseline was taken (provenance). */
+  baselineCalls?: number;
+  /** Target-cluster failure rate measured over the canary window. */
   canaryFailRate?: number;
+  /** Tool calls observed in the canary window (the sample-guard denominator). */
+  canaryCalls?: number;
   /** ISO — promoted or reverted. */
   decidedAt?: string;
   note?: string;
+}
+
+/** A measured cluster rate and its sample size. */
+export interface RateSample {
+  rate: number;
+  calls: number;
 }
 
 export interface LessonStore {
@@ -81,17 +102,17 @@ export function upsertCandidate(store: LessonStore, lesson: Omit<AppliedLesson, 
   return { store: { version: 1, lessons: [...store.lessons, next] }, added: true };
 }
 
-/** Move a candidate into canary, recording the baseline it must beat. Pure. */
-export function startCanary(store: LessonStore, lessonId: string, baselineFailRate: number, nowISO: string): LessonStore {
+/** Move a candidate into canary, recording the baseline cluster rate it must beat. Pure. */
+export function startCanary(store: LessonStore, lessonId: string, baseline: RateSample, nowISO: string): LessonStore {
   return mapLesson(store, lessonId, (l) =>
-    l.state === 'candidate' ? { ...l, state: 'canary', canaryStartedAt: nowISO, baselineFailRate } : l,
+    l.state === 'candidate' ? { ...l, state: 'canary', canaryStartedAt: nowISO, baselineFailRate: baseline.rate, baselineCalls: baseline.calls } : l,
   );
 }
 
-/** Resolve a canary to promoted or reverted with its measured rate. Pure. */
-export function resolveCanary(store: LessonStore, lessonId: string, canaryFailRate: number, promote: boolean, nowISO: string, note?: string): LessonStore {
+/** Resolve a canary to promoted or reverted with its measured rate + sample size. Pure. */
+export function resolveCanary(store: LessonStore, lessonId: string, canary: RateSample, promote: boolean, nowISO: string, note?: string): LessonStore {
   return mapLesson(store, lessonId, (l) =>
-    l.state === 'canary' ? { ...l, state: promote ? 'promoted' : 'reverted', canaryFailRate, decidedAt: nowISO, note } : l,
+    l.state === 'canary' ? { ...l, state: promote ? 'promoted' : 'reverted', canaryFailRate: canary.rate, canaryCalls: canary.calls, decidedAt: nowISO, note } : l,
   );
 }
 

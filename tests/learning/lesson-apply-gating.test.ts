@@ -49,7 +49,7 @@ describe('getAppliedLessonHints gating', () => {
 
   it('runLessonLifecycle is a no-op when apply is disabled', () => {
     delete process.env['SUDO_FLYWHEEL_APPLY'];
-    const actions = mod.runLessonLifecycle({ measureFailRate: () => 0.1, nowMs: 1000, nowISO: 'T' });
+    const actions = mod.runLessonLifecycle({ measureClusterRate: () => ({ rate: 0.1, calls: 100 }), nowMs: 1000, nowISO: 'T' });
     expect(actions).toEqual([]);
   });
 });

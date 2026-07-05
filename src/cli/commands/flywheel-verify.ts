@@ -171,6 +171,7 @@ export async function runFlywheelVerify(opts: FlywheelVerifyOpts): Promise<numbe
     const { store: next, added } = upsertCandidate(store, {
       lessonId: repair.lessonId, tool: repair.tool, hint: repair.lesson,
       recoveryPct: result.recoveryPct, canaryWindowMs: 24 * 60 * 60 * 1000,
+      errorPattern: repair.errorPattern, minCanaryCalls: 20, maxCanaryWindowMs: 7 * 24 * 60 * 60 * 1000,
     }, now);
     if (added) {
       saveLessonStore(lessonStorePath(), next);
