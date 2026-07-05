@@ -15,7 +15,8 @@ const logger = createLogger('meta.competitor');
 // ---------------------------------------------------------------------------
 
 interface BrainLike {
-  chat(messages: Array<{ role: string; content: string }>): Promise<{ content: string }>;
+  // Brain.chat() resolves to a STRING; must match CompetitorMonitor's BrainLike (was { content }).
+  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
 }
 
 interface ConfigLike {

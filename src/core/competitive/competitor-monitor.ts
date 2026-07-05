@@ -10,6 +10,7 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
+import { normalizeBrainText } from '../brain/brain-text.js';
 import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('competitor-monitor');
@@ -57,7 +58,8 @@ interface AlertRow {
 }
 
 interface BrainLike {
-  chat(messages: Array<{ role: string; content: string }>): Promise<{ content: string }>;
+  // Brain.chat() resolves to a STRING (not { content }) — normalizeBrainText below.
+  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +180,7 @@ export class CompetitorMonitor {
 
         let parsed: Array<{ type: string; description: string }> = [];
         try {
-          const raw = res.content.trim();
+          const raw = normalizeBrainText(res).trim();
           const m = raw.match(/\[[\s\S]*\]/);
           parsed = JSON.parse(m ? m[0] : raw) as typeof parsed;
         } catch {
