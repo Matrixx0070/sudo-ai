@@ -49,6 +49,14 @@ export interface WorkflowOrderRepair {
   lookbackMs: number;
   /** The failing call's own args already satisfy the precondition (e.g. single-call write). */
   selfSatisfies?: (argsRaw: string | null | undefined) => boolean;
+  /**
+   * When true, ONLY the single immediately-preceding event (within lookback) counts —
+   * the precondition must hold *right before* the failing call, not merely somewhere
+   * earlier. Fits "freshness" lessons (e.g. snapshot immediately before click) where an
+   * intervening action staleness the precondition; the default (any predecessor in the
+   * window) fits "presence" lessons (e.g. an edit exists before commit).
+   */
+  immediatePredecessorOnly?: boolean;
 }
 
 export interface WorkflowOrderResult {
@@ -87,12 +95,18 @@ export function verifyWorkflowOrder(events: ToolEvent[], repair: WorkflowOrderRe
       failures += 1;
 
       if (repair.selfSatisfies?.(ev.argsRaw)) continue; // covered by its own args
-      // Look back within the window for a SUCCESSFUL qualifying predecessor.
       let covered = false;
-      for (let j = i - 1; j >= 0; j--) {
-        const prev = sessionEvents[j]!;
-        if (ev.createdAtMs - prev.createdAtMs > repair.lookbackMs) break; // out of window
-        if (prev.success && repair.precondition(prev.tool)) { covered = true; break; }
+      if (repair.immediatePredecessorOnly) {
+        // Only the single nearest prior event within the window counts (freshness).
+        const prev = i > 0 ? sessionEvents[i - 1]! : undefined;
+        covered = !!prev && ev.createdAtMs - prev.createdAtMs <= repair.lookbackMs && prev.success && repair.precondition(prev.tool);
+      } else {
+        // Any SUCCESSFUL qualifying predecessor within the window (presence).
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = sessionEvents[j]!;
+          if (ev.createdAtMs - prev.createdAtMs > repair.lookbackMs) break; // out of window
+          if (prev.success && repair.precondition(prev.tool)) { covered = true; break; }
+        }
       }
       if (!covered) attributable += 1;
     }
@@ -156,8 +170,41 @@ export function makeGithubCommitOrderRepair(): WorkflowOrderRepair {
   };
 }
 
+/** The distilled freshness lesson for browser.click — single source of truth. */
+export const BROWSER_SNAPSHOT_ORDER_LESSON = [
+  'Take a FRESH browser.snapshot immediately before every browser.click. Element refs',
+  'come from a snapshot and go stale the moment the page changes — after a navigation,',
+  'a previous click, or a dynamic re-render — so a ref from an earlier snapshot may no',
+  'longer exist ("ref=N not found on the page"). Always: browser.snapshot → read the',
+  'ref you need → browser.click, with nothing in between. If a click reports the ref is',
+  'not found, snapshot again and retry with the new ref.',
+].join(' ');
+
+/**
+ * The browser click-before-snapshot ordering repair. Uses IMMEDIATE-predecessor
+ * semantics: a click is covered only if the call right before it was a successful
+ * browser.snapshot. NOTE (grounded in real traces): many "ref not found" failures
+ * occur DESPITE an immediate snapshot (the page re-rendered on its own), so this lesson
+ * is expected to show LOW attributability — the verifier should therefore NOT adopt it,
+ * correctly distinguishing a weak ordering lesson from a strong one (github.commit).
+ */
+export function makeBrowserSnapshotOrderRepair(): WorkflowOrderRepair {
+  return {
+    lessonId: 'browser-click-before-snapshot',
+    tool: 'browser.click',
+    lesson: BROWSER_SNAPSHOT_ORDER_LESSON,
+    errorPattern: 'not found on the page', // the stale-ref cluster, not timeouts
+    precondition: (tool) => tool === 'browser.snapshot',
+    lookbackMs: 2 * 60 * 1000, // a snapshot older than ~2 min is stale context
+    immediatePredecessorOnly: true,
+  };
+}
+
 /** Registered workflow-order repairs the flywheel verifies from trace sequences. */
-export const WORKFLOW_REPAIRS: WorkflowOrderRepair[] = [makeGithubCommitOrderRepair()];
+export const WORKFLOW_REPAIRS: WorkflowOrderRepair[] = [
+  makeGithubCommitOrderRepair(),
+  makeBrowserSnapshotOrderRepair(),
+];
 
 /** Loader bounds for the (potentially large) session-event scan. */
 export interface WorkflowScanBounds {
