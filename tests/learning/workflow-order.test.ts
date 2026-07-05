@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   verifyWorkflowOrder, decideWorkflowAdoption, makeGithubCommitOrderRepair,
-  REPO_EDIT_TOOLS, WORKFLOW_REPAIRS, type ToolEvent,
+  REPO_EDIT_TOOLS, WORKFLOW_REPAIRS, workflowScanBounds, DEFAULT_WORKFLOW_SCAN_BOUNDS, type ToolEvent,
 } from '../../src/core/learning/workflow-order.js';
 
 const repair = makeGithubCommitOrderRepair();
@@ -94,5 +94,19 @@ describe('decideWorkflowAdoption (reuses the shared gate)', () => {
   });
   it('registers the github.commit ordering repair', () => {
     expect(WORKFLOW_REPAIRS.map((r) => r.lessonId)).toContain('github-commit-before-edit');
+  });
+});
+
+describe('workflowScanBounds (loader caps)', () => {
+  it('defaults when env is unset', () => {
+    expect(workflowScanBounds({})).toEqual(DEFAULT_WORKFLOW_SCAN_BOUNDS);
+  });
+  it('honors env overrides', () => {
+    const b = workflowScanBounds({ SUDO_FLYWHEEL_WORKFLOW_DAYS: '7', SUDO_FLYWHEEL_WORKFLOW_MAX_SESSIONS: '50', SUDO_FLYWHEEL_WORKFLOW_MAX_EVENTS: '1000' });
+    expect(b).toEqual({ lookbackDays: 7, maxSessions: 50, maxEvents: 1000 });
+  });
+  it('rejects non-positive / garbage values, falling back to defaults', () => {
+    const b = workflowScanBounds({ SUDO_FLYWHEEL_WORKFLOW_DAYS: '0', SUDO_FLYWHEEL_WORKFLOW_MAX_SESSIONS: '-5', SUDO_FLYWHEEL_WORKFLOW_MAX_EVENTS: 'abc' });
+    expect(b).toEqual(DEFAULT_WORKFLOW_SCAN_BOUNDS);
   });
 });

@@ -158,3 +158,28 @@ export function makeGithubCommitOrderRepair(): WorkflowOrderRepair {
 
 /** Registered workflow-order repairs the flywheel verifies from trace sequences. */
 export const WORKFLOW_REPAIRS: WorkflowOrderRepair[] = [makeGithubCommitOrderRepair()];
+
+/** Loader bounds for the (potentially large) session-event scan. */
+export interface WorkflowScanBounds {
+  /** Only consider failures/events within this many days (matches trace retention). */
+  lookbackDays: number;
+  /** Most-recent failing sessions to analyse per repair (also caps the SQL IN-list). */
+  maxSessions: number;
+  /** Hard backstop on total events loaded per repair; excess is truncated + logged. */
+  maxEvents: number;
+}
+
+export const DEFAULT_WORKFLOW_SCAN_BOUNDS: WorkflowScanBounds = { lookbackDays: 30, maxSessions: 200, maxEvents: 50_000 };
+
+/** Resolve scan bounds from env (SUDO_FLYWHEEL_WORKFLOW_*), clamped to sane positives. */
+export function workflowScanBounds(env: NodeJS.ProcessEnv = process.env): WorkflowScanBounds {
+  const pos = (raw: string | undefined, dflt: number): number => {
+    const n = Number.parseInt(raw ?? '', 10);
+    return Number.isFinite(n) && n > 0 ? n : dflt;
+  };
+  return {
+    lookbackDays: pos(env['SUDO_FLYWHEEL_WORKFLOW_DAYS'], DEFAULT_WORKFLOW_SCAN_BOUNDS.lookbackDays),
+    maxSessions: pos(env['SUDO_FLYWHEEL_WORKFLOW_MAX_SESSIONS'], DEFAULT_WORKFLOW_SCAN_BOUNDS.maxSessions),
+    maxEvents: pos(env['SUDO_FLYWHEEL_WORKFLOW_MAX_EVENTS'], DEFAULT_WORKFLOW_SCAN_BOUNDS.maxEvents),
+  };
+}

@@ -19,7 +19,7 @@ import { PROJECT_ROOT } from '../shared/paths.js';
 import { mineFailureClusters, measureCoverage, type FailureRow } from './repair-flywheel.js';
 import { runShadowVerification, makeReadFilePathRepair, type DeterministicRepair } from './repair-flywheel-verify.js';
 import { runLessonLifecycle, isApplyEnabled } from './lesson-apply.js';
-import { verifyWorkflowOrder, decideWorkflowAdoption, WORKFLOW_REPAIRS, type ToolEvent } from './workflow-order.js';
+import { verifyWorkflowOrder, decideWorkflowAdoption, WORKFLOW_REPAIRS, workflowScanBounds, type ToolEvent } from './workflow-order.js';
 
 const log = createLogger('learning:repair-flywheel');
 
@@ -103,17 +103,25 @@ export class RepairFlywheelScanner {
       // registered ordering repair, reconstruct the sessions that hit its failure and
       // measure how many are ATTRIBUTABLE to the missing-predecessor pattern the lesson
       // fixes. Log-only — decides adopt/reject/insufficient, never applies.
+      const bounds = workflowScanBounds();
+      const sinceExpr = `datetime('now','-${bounds.lookbackDays} days')`;
       for (const wf of WORKFLOW_REPAIRS) {
         try {
+          // Most-recent failing sessions within the age window, capped.
           const sessRows = db
-            .prepare('SELECT DISTINCT session_id FROM traces WHERE tool_name=? AND success=0 AND error_message LIKE ? AND session_id IS NOT NULL')
-            .all(wf.tool, `%${wf.errorPattern}%`) as Array<{ session_id: string }>;
+            .prepare(`SELECT session_id FROM traces WHERE tool_name=? AND success=0 AND error_message LIKE ? AND session_id IS NOT NULL AND created_at >= ${sinceExpr} GROUP BY session_id ORDER BY MAX(created_at) DESC LIMIT ?`)
+            .all(wf.tool, `%${wf.errorPattern}%`, bounds.maxSessions) as Array<{ session_id: string }>;
           if (sessRows.length === 0) continue;
           const ids = sessRows.map((r) => r.session_id);
           const placeholders = ids.map(() => '?').join(',');
+          // Events for those sessions, within the window, hard-capped as a backstop.
           const eventRows = db
-            .prepare(`SELECT session_id, tool_name, success, COALESCE(error_message,'') AS em, created_at, args_raw FROM traces WHERE tool_name IS NOT NULL AND session_id IN (${placeholders})`)
-            .all(...ids) as Array<{ session_id: string; tool_name: string; success: number; em: string; created_at: string; args_raw: string | null }>;
+            .prepare(`SELECT session_id, tool_name, success, COALESCE(error_message,'') AS em, created_at, args_raw FROM traces WHERE tool_name IS NOT NULL AND session_id IN (${placeholders}) AND created_at >= ${sinceExpr} ORDER BY created_at LIMIT ?`)
+            .all(...ids, bounds.maxEvents + 1) as Array<{ session_id: string; tool_name: string; success: number; em: string; created_at: string; args_raw: string | null }>;
+          if (eventRows.length > bounds.maxEvents) {
+            log.warn({ lessonId: wf.lessonId, cap: bounds.maxEvents, sessions: ids.length }, 'RepairFlywheel workflow-order: event cap hit — analysis truncated (raise SUDO_FLYWHEEL_WORKFLOW_MAX_EVENTS or narrow the window)');
+            eventRows.length = bounds.maxEvents;
+          }
           const events: ToolEvent[] = eventRows.map((r) => ({
             sessionId: r.session_id,
             tool: r.tool_name,
@@ -124,7 +132,7 @@ export class RepairFlywheelScanner {
           }));
           const result = verifyWorkflowOrder(events, wf);
           log.info(
-            { lessonId: wf.lessonId, ...result, decision: decideWorkflowAdoption(result) },
+            { lessonId: wf.lessonId, ...result, decision: decideWorkflowAdoption(result), sessionCapHit: ids.length >= bounds.maxSessions },
             'RepairFlywheel SHADOW workflow-order verify (log-only, not applied)',
           );
         } catch (e) {
