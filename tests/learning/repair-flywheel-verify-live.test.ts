@@ -11,6 +11,9 @@ import {
   makeExecRepoRepair,
   buildRewritePrompt,
   parseRewriteReply,
+  REPAIR_REGISTRY,
+  getRepairsForTool,
+  registeredRepairTools,
   type LlmRewrite,
 } from '../../src/core/learning/repair-flywheel-verify-live.js';
 
@@ -22,6 +25,28 @@ const fakeRewrite: LlmRewrite = async ({ original }) => {
   if (original === 'cat package.json') return 'ls package.json';
   return null; // pm2 restart, bash -lc, multi-step — correctly unrewritable
 };
+
+describe('REPAIR_REGISTRY', () => {
+  it('registers the repo-exec guidance repair for both exec tool names', () => {
+    expect(registeredRepairTools().sort()).toEqual(['exec', 'system.exec']);
+    expect(getRepairsForTool('system.exec')).toHaveLength(1);
+    expect(getRepairsForTool('exec')).toHaveLength(1);
+    expect(getRepairsForTool('does.not.exist')).toEqual([]);
+  });
+  it('every registered repair carries a true-to-prod check + errorPattern (no inert entries)', () => {
+    for (const r of REPAIR_REGISTRY) {
+      expect(typeof r.check).toBe('function');
+      expect(r.errorPattern.length).toBeGreaterThan(0);
+    }
+  });
+  it('the exec-tool variant shares the guard but has a distinct lessonId (independent canary)', () => {
+    const alias = makeExecRepoRepair(undefined, 'exec');
+    expect(alias.tool).toBe('exec');
+    expect(alias.lessonId).not.toBe(makeExecRepoRepair().lessonId);
+    expect(alias.check('grep foo | cat').ok).toBe(false); // same true-to-prod guard
+    expect(alias.check('rg foo').ok).toBe(true);
+  });
+});
 
 describe('makeExecRepoRepair — true-to-prod guard predicate', () => {
   it('extracts only repo-targeted exec commands', () => {

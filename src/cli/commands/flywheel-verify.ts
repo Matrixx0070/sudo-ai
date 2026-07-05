@@ -30,7 +30,8 @@ import { DATA_DIR } from '../../core/shared/paths.js';
 import {
   replayVerifyLive,
   decideLiveAdoption,
-  makeExecRepoRepair,
+  getRepairsForTool,
+  registeredRepairTools,
   buildRewritePrompt,
   parseRewriteReply,
   type GuidanceRepair,
@@ -48,14 +49,9 @@ export interface FlywheelVerifyOpts {
   admit?: boolean;
 }
 
-/** Registry of guidance repairs the CLI can verify, keyed by their tool cluster. */
+/** First registered guidance repair for a tool, or null. Backed by REPAIR_REGISTRY. */
 function resolveRepair(tool: string): GuidanceRepair | null {
-  switch (tool) {
-    case 'system.exec':
-      return makeExecRepoRepair();
-    default:
-      return null;
-  }
+  return getRepairsForTool(tool)[0] ?? null;
 }
 
 /** Read the captured FAILING inputs for a tool from traces.db (read-only). */
@@ -117,7 +113,7 @@ export async function runFlywheelVerify(opts: FlywheelVerifyOpts): Promise<numbe
   const maxEpisodes = Math.max(1, Number.parseInt(opts.max ?? '20', 10) || 20);
   const repair = resolveRepair(tool);
   if (!repair) {
-    console.error(`[flywheel-verify] no guidance repair registered for tool '${tool}' (known: system.exec)`);
+    console.error(`[flywheel-verify] no guidance repair registered for tool '${tool}' (known: ${registeredRepairTools().join(', ')})`);
     return 2;
   }
 
