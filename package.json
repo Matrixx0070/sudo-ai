@@ -2,6 +2,22 @@
   "name": "@matrixx0070/sudo-ai",
   "version": "4.1.0",
   "description": "SUDO-AI - Autonomous AI Agent Platform",
+  "author": "Matrixx0070",
+  "keywords": [
+    "ai",
+    "agent",
+    "autonomous",
+    "llm",
+    "cli",
+    "assistant",
+    "self-hosted",
+    "anthropic",
+    "openai",
+    "mcp"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "packageManager": "pnpm@10.33.0",
   "license": "MIT",
   "bin": {
