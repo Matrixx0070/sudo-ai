@@ -129,6 +129,7 @@ import { registerSearchTools } from './tool-search.js';
 import { registerInstallTools } from './tool-install.js';
 import { registerSynthesizeTools } from './tool-synthesize.js';
 import { DATA_DIR, PROJECT_ROOT } from '../../../shared/paths.js';
+import type { ToolBrain } from '../../../brain/brain-text.js';
 
 const logger = createLogger('meta-builtin');
 
@@ -140,11 +141,9 @@ const ACTIVE_RECORDING_FILE = path.join(DATA_DIR, 'meta-recording.json');
 // Shared LLM helper
 // ---------------------------------------------------------------------------
 
-interface BrainLike {
-  chat(messages: Array<{ role: string; content: string }>): Promise<{ content: string }>;
-}
-
-interface ConfigLike { brain?: BrainLike; }
+// This tool reaches the brain via call() (below), which returns { content }; the shared
+// ToolBrain (chat → string) types the config slot without re-declaring a wrong shape.
+interface ConfigLike { brain?: ToolBrain; }
 
 async function askBrain(ctx: ToolContext, system: string, user: string): Promise<string> {
   const config = ctx.config as ConfigLike | undefined;
