@@ -15,6 +15,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { DATA_DIR } from '../../../shared/paths.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import { normalizeBrainText } from '../../../brain/brain-text.js';
 
 const logger = createLogger('finance-builtin');
 
@@ -25,7 +26,9 @@ const LEDGER_FILE = path.join(DATA_DIR, 'finance-ledger.json');
 // ---------------------------------------------------------------------------
 
 interface BrainLike {
-  chat(messages: Array<{ role: string; content: string }>): Promise<{ content: string }>;
+  // Brain.chat() resolves to a STRING (not { content }). The old annotation crashed
+  // every call on `.content.trim()`; normalizeBrainText handles it null-safely.
+  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
 }
 
 interface ConfigLike { brain?: BrainLike; }
@@ -37,7 +40,7 @@ async function askBrain(ctx: ToolContext, system: string, user: string): Promise
     { role: 'system', content: system },
     { role: 'user', content: user },
   ]);
-  return response.content.trim();
+  return normalizeBrainText(response).trim();
 }
 
 // ---------------------------------------------------------------------------

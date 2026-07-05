@@ -10,6 +10,7 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
+import { normalizeBrainText } from '../brain/brain-text.js';
 import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('localizer');
@@ -73,7 +74,8 @@ interface JobRow {
 }
 
 interface BrainLike {
-  chat(messages: Array<{ role: string; content: string }>): Promise<{ content: string }>;
+  // Brain.chat() resolves to a STRING (not { content }) — normalizeBrainText below.
+  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
 }
 
 function rowToJob(row: JobRow): LocalizationJob {
@@ -172,7 +174,7 @@ Rules: preserve formatting and paragraph breaks; maintain tone and energy; keep 
           },
           { role: 'user', content: sourceScript },
         ]);
-        translated = res.content.trim();
+        translated = normalizeBrainText(res).trim();
       } else {
         log.warn({ jobId }, 'Brain unavailable — stub translation returned');
         translated = `[TRANSLATION STUB — ${langName}]\n${sourceScript}`;

@@ -16,6 +16,7 @@
 import type { ToolRegistry } from '../../registry.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import { normalizeBrainText } from '../../../brain/brain-text.js';
 
 const logger = createLogger('marketing-builtin');
 
@@ -44,13 +45,7 @@ export async function askBrain(ctx: ToolContext, system: string, user: string): 
     { role: 'system', content: system },
     { role: 'user', content: user },
   ]);
-  // Brain.chat resolves to a string; tolerate a legacy { content } shape defensively.
-  const text = typeof raw === 'string'
-    ? raw
-    : (raw && typeof raw === 'object' && typeof (raw as { content?: unknown }).content === 'string'
-        ? (raw as { content: string }).content
-        : '');
-  return text.trim();
+  return normalizeBrainText(raw).trim();
 }
 
 // ---------------------------------------------------------------------------

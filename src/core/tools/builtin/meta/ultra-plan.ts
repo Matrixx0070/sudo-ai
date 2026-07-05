@@ -15,6 +15,7 @@
  */
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
+import { normalizeBrainText } from '../../../brain/brain-text.js';
 import { createLogger } from '../../../shared/logger.js';
 import {
   appendFileSync,
@@ -186,7 +187,9 @@ async function executePlan(
   const planningPrompt = buildPlanningPrompt(task, context);
   let planContent: string;
 
-  interface ConfigLike { brain?: { chat(msgs: Array<{ role: string; content: string }>): Promise<{ content: string }> } }
+  // Brain.chat() resolves to a STRING; the old { content } type crashed the deep-plan
+  // path (caught → silently fell back to the template, so brain plans never applied).
+  interface ConfigLike { brain?: { chat(msgs: Array<{ role: string; content: string }>): Promise<string> } }
 
   const config = ctx.config as ConfigLike | undefined;
   if (config?.brain) {
@@ -196,7 +199,7 @@ async function executePlan(
         { role: 'system', content: 'You are a meticulous AI planning engine. Produce structured, thorough execution plans. Think step by step. Be exhaustive.' },
         { role: 'user', content: planningPrompt },
       ]);
-      planContent = response.content.trim();
+      planContent = normalizeBrainText(response).trim();
     } catch (err) {
       logger.warn({ err: String(err) }, 'ultra-plan: brain call failed, using template');
       planContent = `${planningPrompt}\n\n---\n*Note: Brain unavailable — this is the planning template. Fill in each section before executing.*`;

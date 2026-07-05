@@ -13,6 +13,7 @@ import type { ToolRegistry } from '../../registry.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { DATA_DIR } from '../../../shared/paths.js';
+import { normalizeBrainText } from '../../../brain/brain-text.js';
 
 const logger = createLogger('pm-builtin');
 
@@ -24,7 +25,9 @@ const TIME_LOG_FILE = path.join(DATA_DIR, 'pm-timelog.json');
 // ---------------------------------------------------------------------------
 
 interface BrainLike {
-  chat(messages: Array<{ role: string; content: string }>): Promise<{ content: string }>;
+  // Brain.chat() resolves to a STRING (not { content }). normalizeBrainText handles it
+  // null-safely — the old `.content.trim()` crashed every call.
+  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
 }
 
 interface ConfigLike { brain?: BrainLike; }
@@ -36,7 +39,7 @@ async function askBrain(ctx: ToolContext, system: string, user: string): Promise
     { role: 'system', content: system },
     { role: 'user', content: user },
   ]);
-  return response.content.trim();
+  return normalizeBrainText(response).trim();
 }
 
 // ---------------------------------------------------------------------------
