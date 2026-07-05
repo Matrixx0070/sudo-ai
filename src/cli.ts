@@ -2723,6 +2723,14 @@ async function boot(): Promise<void> {
             }
           }
         }
+      } else if (payload.event === 'selftest:run') {
+        try {
+          const { runCapabilitySelfTest } = await import('./core/health/self-test.js');
+          const res = await runCapabilitySelfTest(registry);
+          log.info({ jobId: job.id, passed: res.passed, total: res.total, failed: res.failed.length }, 'Capability self-test run complete');
+        } catch (stErr) {
+          log.warn({ err: String(stErr) }, 'Capability self-test failed to run');
+        }
       } else {
         log.info({ event: payload.event, jobId: job.id }, 'System event dispatched');
       }
@@ -2880,6 +2888,35 @@ async function boot(): Promise<void> {
     log.info({ intervalMs: dreamMs, rescheduled: needsUpsert }, 'AutoDream scheduled');
   } catch (err) {
     log.warn({ err: String(err) }, 'AutoDream scheduling failed');
+  }
+
+  // Nightly capability self-test — executes a curated slice of the builtin
+  // tool surface against real runtime deps and pushes the summary through the
+  // proactive notifier (failures always reach Telegram; green summaries are
+  // low-priority). Expression/timezone are env-tunable and re-upserted on
+  // change, mirroring the AutoDream pattern above.
+  try {
+    const selftestJobId = 'nightly-capability-selftest';
+    const selftestExpr = process.env['SUDO_SELFTEST_CRON'] ?? '30 3 * * *';
+    const selftestTz = process.env['SUDO_SCHEDULER_TZ'] ?? 'Asia/Kolkata';
+    const existingSelftest = cronStore.get(selftestJobId);
+    const cur = existingSelftest?.schedule;
+    const selftestNeedsUpsert =
+      !existingSelftest || cur?.kind !== 'cron' || cur.expr !== selftestExpr || cur.tz !== selftestTz;
+    if (selftestNeedsUpsert) {
+      cronStore.upsert({
+        id: selftestJobId,
+        name: 'Nightly Capability Self-Test',
+        enabled: true,
+        schedule: { kind: 'cron', expr: selftestExpr, tz: selftestTz },
+        payload: { kind: 'systemEvent', event: 'selftest:run' },
+        sessionTarget: 'isolated',
+        consecutiveErrors: 0,
+      });
+    }
+    log.info({ expr: selftestExpr, tz: selftestTz, rescheduled: selftestNeedsUpsert }, 'Capability self-test scheduled');
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Capability self-test scheduling failed');
   }
 
   // -------------------------------------------------------------------------

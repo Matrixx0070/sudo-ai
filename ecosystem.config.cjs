@@ -75,6 +75,13 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
 
+        // ---- Nightly capability self-test (src/core/health/self-test.ts) ----
+        // Runs at 03:30 (SUDO_SCHEDULER_TZ) by default; result summary pushes
+        // through the proactive notifier (failures → Telegram, priority high).
+        // Tune with SUDO_SELFTEST_CRON='30 3 * * *'; disable with
+        // SUDO_SELFTEST_DISABLE=1; skip the chromium probe with
+        // SUDO_SELFTEST_BROWSER=0.
+
         // ---- Cost budget guardrails: DISABLED by operator request ----
         // `off` ⇒ Infinity (see src/core/billing/daily-budget.ts and
         // src/core/self-build/orchestrator.ts). This turns off, in one place:
