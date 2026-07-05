@@ -7,6 +7,7 @@
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
+import type { ToolBrain } from '../../../brain/brain-text.js';
 
 const logger = createLogger('meta.localizer');
 
@@ -14,16 +15,11 @@ const logger = createLogger('meta.localizer');
 // Brain helper — mirror the pattern used in meta/index.ts
 // ---------------------------------------------------------------------------
 
-interface BrainLike {
-  // Brain.chat() resolves to a STRING; must match Localizer's BrainLike (was { content }).
-  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
-}
-
 interface ConfigLike {
-  brain?: BrainLike;
+  brain?: ToolBrain;
 }
 
-function extractBrain(ctx: ToolContext): BrainLike | undefined {
+function extractBrain(ctx: ToolContext): ToolBrain | undefined {
   return (ctx.config as ConfigLike | undefined)?.brain;
 }
 

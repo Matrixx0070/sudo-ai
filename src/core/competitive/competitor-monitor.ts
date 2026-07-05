@@ -10,7 +10,7 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
-import { normalizeBrainText } from '../brain/brain-text.js';
+import { normalizeBrainText, type ToolBrain } from '../brain/brain-text.js';
 import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('competitor-monitor');
@@ -57,11 +57,6 @@ interface AlertRow {
   description: string; detected_at: string; acknowledged: number;
 }
 
-interface BrainLike {
-  // Brain.chat() resolves to a STRING (not { content }) — normalizeBrainText below.
-  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -89,9 +84,9 @@ function rowToAlert(r: AlertRow): CompetitorAlert {
 
 export class CompetitorMonitor {
   private readonly db: Database.Database;
-  private brain?: BrainLike;
+  private brain?: ToolBrain;
 
-  constructor(dbPath: string = DEFAULT_DB_PATH, brain?: BrainLike) {
+  constructor(dbPath: string = DEFAULT_DB_PATH, brain?: ToolBrain) {
     mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');

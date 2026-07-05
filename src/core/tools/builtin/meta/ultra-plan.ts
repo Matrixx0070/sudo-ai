@@ -15,7 +15,7 @@
  */
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
-import { normalizeBrainText } from '../../../brain/brain-text.js';
+import { normalizeBrainText, type ToolBrain } from '../../../brain/brain-text.js';
 import { createLogger } from '../../../shared/logger.js';
 import {
   appendFileSync,
@@ -187,9 +187,7 @@ async function executePlan(
   const planningPrompt = buildPlanningPrompt(task, context);
   let planContent: string;
 
-  // Brain.chat() resolves to a STRING; the old { content } type crashed the deep-plan
-  // path (caught → silently fell back to the template, so brain plans never applied).
-  interface ConfigLike { brain?: { chat(msgs: Array<{ role: string; content: string }>): Promise<string> } }
+  interface ConfigLike { brain?: ToolBrain }
 
   const config = ctx.config as ConfigLike | undefined;
   if (config?.brain) {

@@ -14,7 +14,7 @@ import type { ToolRegistry } from '../../registry.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { DATA_DIR } from '../../../shared/paths.js';
-import { normalizeBrainText } from '../../../brain/brain-text.js';
+import { normalizeBrainText, type ToolBrain } from '../../../brain/brain-text.js';
 
 const logger = createLogger('personal-builtin');
 
@@ -25,13 +25,7 @@ const REMINDERS_FILE = path.join(DATA_DIR, 'personal-reminders.json');
 // Shared LLM helper
 // ---------------------------------------------------------------------------
 
-interface BrainLike {
-  // Brain.chat() resolves to a STRING (not { content }). normalizeBrainText handles it
-  // null-safely — the old `.content.trim()` crashed every call.
-  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
-}
-
-interface ConfigLike { brain?: BrainLike; }
+interface ConfigLike { brain?: ToolBrain; }
 
 async function askBrain(ctx: ToolContext, system: string, user: string): Promise<string> {
   const config = ctx.config as ConfigLike | undefined;

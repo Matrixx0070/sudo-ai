@@ -15,7 +15,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { DATA_DIR } from '../../../shared/paths.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
-import { normalizeBrainText } from '../../../brain/brain-text.js';
+import { normalizeBrainText, type ToolBrain } from '../../../brain/brain-text.js';
 
 const logger = createLogger('finance-builtin');
 
@@ -25,13 +25,7 @@ const LEDGER_FILE = path.join(DATA_DIR, 'finance-ledger.json');
 // Shared LLM helper
 // ---------------------------------------------------------------------------
 
-interface BrainLike {
-  // Brain.chat() resolves to a STRING (not { content }). The old annotation crashed
-  // every call on `.content.trim()`; normalizeBrainText handles it null-safely.
-  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
-}
-
-interface ConfigLike { brain?: BrainLike; }
+interface ConfigLike { brain?: ToolBrain; }
 
 async function askBrain(ctx: ToolContext, system: string, user: string): Promise<string> {
   const config = ctx.config as ConfigLike | undefined;

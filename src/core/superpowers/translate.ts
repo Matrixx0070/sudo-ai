@@ -7,6 +7,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../tools/types.js';
+import { normalizeBrainText, type ToolBrain } from '../brain/brain-text.js';
 
 const logger = createLogger('super.translate');
 
@@ -14,12 +15,8 @@ const logger = createLogger('super.translate');
 // Types
 // ---------------------------------------------------------------------------
 
-interface BrainLike {
-  chat(messages: Array<{ role: string; content: string }>): Promise<{ content: string }>;
-}
-
 interface ConfigLike {
-  brain?: BrainLike;
+  brain?: ToolBrain;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +88,7 @@ ${sanitized}`;
     { role: 'user', content: prompt },
   ]);
 
-  const translated = response.content.trim();
+  const translated = normalizeBrainText(response).trim();
   return preserveFormatting ? restoreBlocks(translated, blocks) : translated;
 }
 

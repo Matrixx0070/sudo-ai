@@ -16,7 +16,7 @@
 import type { ToolRegistry } from '../../registry.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
-import { normalizeBrainText } from '../../../brain/brain-text.js';
+import { normalizeBrainText, type ToolBrain } from '../../../brain/brain-text.js';
 
 const logger = createLogger('marketing-builtin');
 
@@ -24,16 +24,8 @@ const logger = createLogger('marketing-builtin');
 // Shared LLM helper
 // ---------------------------------------------------------------------------
 
-interface BrainLike {
-  // The real Brain.chat() resolves to a plain STRING. This was previously typed
-  // `Promise<{ content: string }>`, so `response.content` was undefined at runtime and
-  // every marketing tool crashed on `.trim()` ("Cannot read properties of undefined").
-  // The wrong annotation hid it from tsc. Surfaced by the harness-bug scan.
-  chat(messages: Array<{ role: string; content: string }>): Promise<string>;
-}
-
 interface ConfigLike {
-  brain?: BrainLike;
+  brain?: ToolBrain;
 }
 
 export async function askBrain(ctx: ToolContext, system: string, user: string): Promise<string> {
