@@ -4072,9 +4072,20 @@ async function boot(): Promise<void> {
   try {
     const { Watchdog } = await import('./core/health/watchdog.js');
     const watchdog = new Watchdog();
+    // Health degradations push to the operator channels (Telegram/WhatsApp)
+    // through the proactive notifier; HealthAlertPolicy inside the watchdog
+    // handles cooldown/threshold so this never spams per 60s tick.
+    watchdog.setAlertSink((severity, check, kind) => {
+      proactiveNotifier.notify(
+        'alert',
+        kind === 'recovery' ? `HEALTH RECOVERED: ${check.name}` : `HEALTH ${severity.toUpperCase()}: ${check.name}`,
+        check.message,
+        kind === 'recovery' ? 'medium' : severity === 'critical' ? 'critical' : 'high',
+      );
+    });
     watchdog.start();
     registerShutdown(() => watchdog.stop());
-    log.info('Health watchdog started');
+    log.info('Health watchdog started (alert sink → proactive notifier)');
   } catch (err) {
     log.warn({ err: String(err) }, 'Health watchdog failed to start — running without');
   }
