@@ -172,7 +172,17 @@ function buildConfigJson5(answers: WizardAnswers): string {
 
 export interface QuickstartOptions {
   force?: boolean;
+  /** Skip all prompts and accept defaults (also auto-enabled when stdin is not a TTY). */
+  yes?: boolean;
 }
+
+/** Defaults used in non-interactive mode — must stay a valid, runnable config. */
+const DEFAULT_ANSWERS: WizardAnswers = {
+  agentName: 'SUDO-AI',
+  defaultModel: AVAILABLE_MODELS[0]!.id,
+  enableTelegram: false,
+  preset: 'chat',
+};
 
 /**
  * Run the interactive quickstart wizard.
@@ -195,6 +205,19 @@ export async function runQuickstart(
   if (fs.existsSync(configPath) && !opts.force) {
     console.log(`\n  Existing config found at: ${configPath}`);
     console.log('  Use --force to overwrite it.\n');
+    return;
+  }
+
+  // Non-interactive mode: a piped install (curl | bash → stdin is not a TTY) or an
+  // explicit --yes must NEVER prompt, or it hangs / consumes the piped script. Write
+  // the config from defaults and return. (This closed the one-command-install blocker.)
+  const nonInteractive = opts.yes === true || !process.stdin.isTTY;
+  if (nonInteractive) {
+    if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(configPath, buildConfigJson5(DEFAULT_ANSWERS), 'utf8');
+    console.log(`\n  Non-interactive setup — wrote default config to: ${configPath}`);
+    console.log(`  Agent: ${DEFAULT_ANSWERS.agentName} | model: ${DEFAULT_ANSWERS.defaultModel} | preset: ${DEFAULT_ANSWERS.preset}`);
+    console.log('  Next: add API keys to config/.env, then `sudo-ai setup` (full TUI) or `sudo-ai start`.\n');
     return;
   }
 

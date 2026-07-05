@@ -240,12 +240,13 @@ program
 
 program
   .command('quickstart')
-  .description('Interactive 5-step setup wizard')
+  .description('Interactive 5-step setup wizard (non-interactive with --yes or when piped)')
   .option('--force', 'Overwrite existing config without prompting', false)
-  .action(async (opts: { force?: boolean }) => {
+  .option('--yes', 'Non-interactive: accept all defaults (auto-on when stdin is not a TTY)', false)
+  .action(async (opts: { force?: boolean; yes?: boolean }) => {
     try {
       const { runQuickstart } = await import('./commands/quickstart.js');
-      await runQuickstart(PROJECT_ROOT, { force: opts.force ?? false });
+      await runQuickstart(PROJECT_ROOT, { force: opts.force ?? false, yes: opts.yes ?? false });
       process.exit(0);
     } catch (err) {
       console.error('[sudo-ai] quickstart failed:', err);
