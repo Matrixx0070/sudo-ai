@@ -13,6 +13,7 @@
 import { createLogger } from '../shared/logger.js';
 import { isToolResultSuccess, resolveToolSuccess } from './tool-result-classifier.js';
 import { extractChangedFiles } from './changed-files.js';
+import { runLoopExitGuardChain, fromAllowWarnAbortCheck } from './loop-exit-guard.js';
 import { codeTreeSearchEnabled, shouldUseCodeTreeSearch, buildCodeTreeSearchVerifier } from './code-tree-search-gate.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError, LLMError } from '../shared/errors.js';
@@ -1637,6 +1638,44 @@ export class AgentLoop extends AgentLoopInjections {
             log.info({ sessionId, confidence: _cv.confidence }, 'CompletionVerify: final-response check passed');
           } else {
             log.warn({ sessionId, confidence: _cv.confidence, failedChecks: _failed }, 'CompletionVerify: possible phantom completion');
+            // Opt-in single bounded re-ask (SUDO_COMPLETION_VERIFY_RETRY=1):
+            // hand the verifier's retry strategy to one fast single-strategy
+            // brain call and adopt the result ONLY if it then verifies clean.
+            if (process.env['SUDO_COMPLETION_VERIFY_RETRY'] === '1') {
+              const retried = await this._completionVerifier.verifyWithRetry(finalResponse, message, async (strategy) => {
+                log.info({ sessionId, approach: strategy.approach }, 'CompletionVerify: retrying final response');
+                const retryResp = await this.brain.call({
+                  messages: [{
+                    role: 'user',
+                    content: [
+                      'Your previous reply to the request below failed a completion check.',
+                      `Problem: ${strategy.reason}`,
+                      strategy.suggestedPrompt ? `Guidance: ${strategy.suggestedPrompt}` : '',
+                      '',
+                      '--- ORIGINAL REQUEST ---',
+                      message,
+                      '',
+                      '--- YOUR PREVIOUS REPLY ---',
+                      finalResponse.slice(0, 4000),
+                      '',
+                      'Provide the complete, concrete answer now (no placeholders, no "I will…").',
+                    ].filter(Boolean).join('\n'),
+                  }],
+                  source: 'agent',
+                }, { tier: 'fast', strategy: 'single' });
+                return retryResp.content ?? '';
+              });
+              if (retried && retried.verification.passed && retried.output.trim() !== '' && retried.output !== finalResponse) {
+                log.info({ sessionId, confidence: retried.verification.confidence }, 'CompletionVerify: retry produced a verified response — adopting it');
+                finalResponse = retried.output;
+                session.messages.push({ role: 'assistant', content: finalResponse });
+                _completionVerification = {
+                  passed: true,
+                  confidence: retried.verification.confidence,
+                  failedChecks: [],
+                };
+              }
+            }
           }
         } catch (err) {
           log.warn({ sessionId, err: String(err) }, 'CompletionVerify: verify threw — continuing');
@@ -2874,8 +2913,12 @@ export class AgentLoop extends AgentLoopInjections {
           // key on tool+args BEFORE execution), this inspects the results that
           // just came back and breaks no-progress retry streaks.
           if (this.stuckDetector.enabled) {
-            let stuckAborted = false;
-            try {
+            // StuckDetector runs through the exit-guard chain; the side
+            // effects (warn injection, swarm-rescue latch, abort text) stay
+            // here, keyed off the chain verdict. The chain treats a throwing
+            // guard as continue (fail-open), replacing the old try/catch.
+            const stuckGuard = fromAllowWarnAbortCheck('stuck-detector', () => {
+              let firstWarn: string | undefined;
               for (let _si = _stuckPreCount; _si < session.messages.length; _si++) {
                 const _sm = session.messages[_si] as { role: string; content: unknown; toolName?: string } | undefined;
                 if (!_sm || _sm.role !== 'tool') continue;
@@ -2888,37 +2931,44 @@ export class AgentLoop extends AgentLoopInjections {
                 // never builds. The OR keeps the signal a strict superset.
                 const _isErr = !isToolResultSuccess(_sm.content) || looksLikeToolError(_content);
                 const stuckResult = this.stuckDetector.recordResult(_toolName, _content, _isErr);
-                if (stuckResult.action === 'warn') {
-                  const stuckWarn = `[StuckDetector] ${stuckResult.reason ?? 'Repeated identical tool errors detected'}`;
-                  session.messages.push({ role: 'system', content: stuckWarn });
-                  emit({ type: 'error', error: stuckWarn });
-                  log.warn({ tool: _toolName, sessionId: state.sessionId }, 'StuckDetector warning injected');
-                  // Mythos Tier C — swarm-rescue: the approach is failing (same
-                  // tool error repeating). Latch on so subsequent brain calls in
-                  // this turn escalate to a stronger strategy. Once per turn.
-                  if (swarmRescueEnabled && !swarmRescueActive) {
-                    swarmRescueActive = true;
-                    log.warn(
-                      { sessionId: state.sessionId, strategy: swarmRescueStrategy },
-                      'SwarmRescue: stuck signal — escalating brain strategy for the rest of this turn',
-                    );
-                    emit({ type: 'error', error: `[SwarmRescue] Stuck detected — escalating to ${swarmRescueStrategy} strategy to break the loop` });
-                  }
-                } else if (stuckResult.action === 'abort') {
-                  const stuckAbort = `[StuckDetector] Stuck loop terminated — breaking: ${stuckResult.reason ?? ''}`;
-                  emit({ type: 'error', error: stuckAbort });
-                  log.error({ tool: _toolName, sessionId: state.sessionId }, 'StuckDetector abort triggered');
-                  session.messages.push({ role: 'system', content: stuckAbort });
-                  finalText = `I stopped because I kept hitting the same tool error: ${stuckResult.reason ?? 'repeated identical errors'}`;
-                  session.messages.push({ role: 'assistant', content: finalText });
-                  stuckAborted = true;
-                  break;
+                if (stuckResult.action === 'abort') {
+                  return { action: 'abort' as const, reason: stuckResult.reason ?? '' };
+                }
+                if (stuckResult.action === 'warn' && firstWarn === undefined) {
+                  firstWarn = stuckResult.reason ?? 'Repeated identical tool errors detected';
                 }
               }
-            } catch (stuckErr) {
-              log.warn({ err: String(stuckErr) }, 'StuckDetector threw — continuing (fail-open)');
+              return firstWarn !== undefined
+                ? { action: 'warn' as const, reason: firstWarn }
+                : { action: 'allow' as const };
+            });
+
+            const guardVerdict = await runLoopExitGuardChain([stuckGuard], {});
+            if (guardVerdict.action === 'warn') {
+              const stuckWarn = `[StuckDetector] ${guardVerdict.warnings[0]?.reason || 'Repeated identical tool errors detected'}`;
+              session.messages.push({ role: 'system', content: stuckWarn });
+              emit({ type: 'error', error: stuckWarn });
+              log.warn({ sessionId: state.sessionId }, 'StuckDetector warning injected');
+              // Mythos Tier C — swarm-rescue: the approach is failing (same
+              // tool error repeating). Latch on so subsequent brain calls in
+              // this turn escalate to a stronger strategy. Once per turn.
+              if (swarmRescueEnabled && !swarmRescueActive) {
+                swarmRescueActive = true;
+                log.warn(
+                  { sessionId: state.sessionId, strategy: swarmRescueStrategy },
+                  'SwarmRescue: stuck signal — escalating brain strategy for the rest of this turn',
+                );
+                emit({ type: 'error', error: `[SwarmRescue] Stuck detected — escalating to ${swarmRescueStrategy} strategy to break the loop` });
+              }
+            } else if (guardVerdict.action === 'exit') {
+              const stuckAbort = `[StuckDetector] Stuck loop terminated — breaking: ${guardVerdict.reason ?? ''}`;
+              emit({ type: 'error', error: stuckAbort });
+              log.error({ sessionId: state.sessionId }, 'StuckDetector abort triggered');
+              session.messages.push({ role: 'system', content: stuckAbort });
+              finalText = `I stopped because I kept hitting the same tool error: ${guardVerdict.reason || 'repeated identical errors'}`;
+              session.messages.push({ role: 'assistant', content: finalText });
+              break;
             }
-            if (stuckAborted) break;
           }
 
           continue;
