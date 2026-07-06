@@ -28,6 +28,20 @@ const MAX_FACT_LENGTH = 500;
 const MAX_MEMORY_FILE_BYTES = 50 * 1024; // 50 KB
 
 /**
+ * Headroom margin for the pre-append trim check. Trimming only at >= cap left
+ * a deadband [cap - lineSize, cap): the file was under the cap (never
+ * trimmed) yet every append would exceed it (append loop breaks) — promotion
+ * silently stuck at 0 once the file drifted into that band. Trimming whenever
+ * the file is within one append-batch of the cap removes the deadband.
+ */
+const APPEND_HEADROOM_BYTES = 4096;
+
+/** True when MEMORY.md must be trimmed BEFORE appending. Exported for tests. */
+export function needsPreAppendTrim(existingBytes: number, cap: number = MAX_MEMORY_FILE_BYTES): boolean {
+  return existingBytes + APPEND_HEADROOM_BYTES >= cap;
+}
+
+/**
  * Trim a MEMORY.md body to fit under `targetBytes` by dropping the OLDEST dated
  * entries (lines starting with "- ["), keeping the header and the newest entries.
  * Append-only growth means the oldest entries are at the top, so this is a rolling
@@ -82,7 +96,6 @@ interface ChunkRow {
   text: string;
   hash: string;
   created_at: string;
-  is_active?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -433,10 +446,14 @@ Output ONLY the JSON array, nothing else.`;
       existing = '# Long-Term Memory\n\n';
     }
 
-    // At cap: self-heal instead of silently dropping new learnings. Trim the
-    // oldest dated entries down to 80% of the cap (rolling buffer), archiving the
-    // trimmed lines so nothing is permanently lost, then continue appending.
-    if (Buffer.byteLength(existing, 'utf-8') >= MAX_MEMORY_FILE_BYTES) {
+    // Near/at cap: self-heal instead of silently dropping new learnings. Trim
+    // the oldest dated entries down to 80% of the cap (rolling buffer),
+    // archiving the trimmed lines so nothing is permanently lost, then continue
+    // appending. The trigger includes a headroom margin: trimming only at
+    // >= cap left a deadband [cap - lineSize, cap) where the file was under the
+    // cap (never trimmed) but every append would exceed it (loop break below) —
+    // promotion sat at 0 indefinitely once the file drifted into that band.
+    if (needsPreAppendTrim(Buffer.byteLength(existing, 'utf-8'))) {
       const { kept, trimmed } = trimMemoryToFit(existing, Math.floor(MAX_MEMORY_FILE_BYTES * 0.8));
       if (trimmed.length > 0) {
         this._archiveTrimmedMemory(workspaceDir, trimmed);
@@ -552,31 +569,33 @@ Output ONLY the JSON array, nothing else.`;
   // Phase 3: Prune
   // -------------------------------------------------------------------------
 
+  /**
+   * Sentinel for `superseded_by` on age-pruned chunks: no successor chunk
+   * exists, but the row must be retired from recall. 0 never collides with a
+   * real chunk id (AUTOINCREMENT starts at 1), and every reader already
+   * filters on `superseded_by IS NULL`, so pruned rows drop out of
+   * hybrid-search and contradiction candidates exactly like superseded ones.
+   * Rows are kept for audit, matching the contradiction-resolution convention.
+   */
+  static readonly PRUNED_BY_AGE_SENTINEL = 0;
+
   private _prune(): number {
     const cutoff = new Date(Date.now() - PRUNE_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
     try {
-      // Check if is_active column exists (may not in older schemas)
-      const tableInfo = this.db
-        .prepare("PRAGMA table_info(chunks)")
-        .all() as Array<{ name: string }>;
-
-      const hasIsActive = tableInfo.some(col => col.name === 'is_active');
-
-      if (!hasIsActive) {
-        log.info('Phase 3: chunks table has no is_active column — skipping prune');
-        return 0;
-      }
-
-      // Soft-delete old non-evergreen learning chunks that are older than PRUNE_DAYS
+      // Retire old non-evergreen learning chunks via the live soft-delete
+      // convention (superseded_by/superseded_at). The previous implementation
+      // targeted an `is_active` column that exists in no deployed schema and,
+      // even if added, no reader consults — it skipped on every run.
       const result = this.db.prepare(`
         UPDATE chunks
-        SET is_active = 0
+        SET superseded_by = :sentinel,
+            superseded_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE is_evergreen = 0
           AND source = 'learning'
           AND created_at < :cutoff
-          AND (is_active IS NULL OR is_active = 1)
-      `).run({ cutoff });
+          AND superseded_by IS NULL
+      `).run({ cutoff, sentinel: AutoDream.PRUNED_BY_AGE_SENTINEL });
 
       return result.changes;
     } catch (err) {
