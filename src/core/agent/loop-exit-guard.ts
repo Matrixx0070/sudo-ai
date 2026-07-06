@@ -2,28 +2,16 @@
  * @file loop-exit-guard.ts
  * @description Composable exit-guard pipeline for the agent's outer loop.
  *
- * Problem this solves (bot's architectural audit, fix #3):
- *   loop.ts is 2,888 lines. Its own header explicitly admits the debt:
- *   "to keep this file under 300 lines — Phase 3 note: debt remains at
- *   1551L". Every outer-loop exit gate (TodoGate, GoalStopDetector,
- *   StuckDetector, SelfVerify) is invoked inline through hand-rolled
- *   if/else, then each new gate that ships in the future grows the file
- *   further.
+ * A "guard" is an object with a name and a synchronous or async `check(ctx)`
+ * that returns a decision. The runner walks the list in order and returns the
+ * first non-`continue` verdict; the loop honours it.
  *
- * Approach:
- *   Introduce a minimal pipeline abstraction the existing gates can plug
- *   into without rewriting them. A "guard" is just an object with a name
- *   and a synchronous or async `check(ctx)` that returns a decision. The
- *   runner walks the list in order and returns the first non-`continue`
- *   verdict; the loop honours it and breaks.
- *
- * Scope of this PR:
- *   - The pipeline + tests only. No loop.ts edit; that ripple needs its
- *     own PR with the live traffic baked in. Once this lands, follow-ups
- *     can migrate each existing gate (todo-gate.ts, goal-stop-detector.ts,
- *     stuck-detector.ts, self-verify.ts) to expose a check() conformant
- *     with `LoopExitGuardCheck`, then loop.ts collapses N inline calls
- *     into a single `runLoopExitGuardChain` invocation.
+ * Live wiring: loop.ts runs the StuckDetector post-tool scan through this
+ * chain (fromAllowWarnAbortCheck adapter) — the warn/abort side effects
+ * (system-message injection, swarm-rescue latch, abort text) stay in the
+ * loop, keyed off the returned verdict. Further gates (TodoGate,
+ * GoalStopDetector, SelfVerify) can migrate onto the same chain
+ * incrementally.
  *
  * Verdict semantics:
  *   'continue' — let the loop keep going.
