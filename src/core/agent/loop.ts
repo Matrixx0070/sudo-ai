@@ -12,6 +12,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { isToolResultSuccess, resolveToolSuccess } from './tool-result-classifier.js';
+import { extractChangedFiles } from './changed-files.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError, LLMError } from '../shared/errors.js';
 import { clearCommittedOutbound, hasCommittedOutbound } from './committed-outbound.js';
@@ -797,6 +798,10 @@ export class AgentLoop extends AgentLoopInjections {
     // Collect file attachments produced during this turn (screenshots, images, etc.).
     const attachments: AgentRunResult['attachments'] = [];
 
+    // Files mutated by successful tool calls this run — feeds SelfVerify so it
+    // checks the real change set instead of abstaining on an empty list.
+    const _filesChangedThisRun = new Set<string>();
+
     // Per-run accumulators for SkillDiscovery and AgentConfigEvolver feeds
     let _w10bToolCallCount = 0;
     let _w10bToolSuccessCount = 0;
@@ -850,6 +855,17 @@ export class AgentLoop extends AgentLoopInjections {
           success: resolveToolSuccess({ success: (event as { success?: boolean }).success, result }),
           meta: _taintIdForHook ? { taintId: _taintIdForHook } : undefined,
         });
+        // Track file-mutating tool calls (fail-open)
+        try {
+          if (event.type === 'tool-result') {
+            const _fc = event as { type: string; name: string; success?: boolean; result?: unknown; args?: unknown };
+            if (resolveToolSuccess({ success: _fc.success, result: _fc.result })) {
+              for (const p of extractChangedFiles(_fc.name, (_fc.args ?? {}) as Record<string, unknown>)) {
+                _filesChangedThisRun.add(p);
+              }
+            }
+          }
+        } catch { /* fail-open */ }
         // Feed SkillDiscovery (fail-open)
         try {
           if (this._skillDiscovery && event.type === 'tool-result') {
@@ -1568,7 +1584,7 @@ export class AgentLoop extends AgentLoopInjections {
       try {
         const _verifyResult = await this._selfVerify.verify(
           message,
-          [],   // filesChanged: populated by file-tracking in future wave
+          Array.from(_filesChangedThisRun),
           this.sandboxManager.getWorkspaceDir(sessionId),
         );
         _verificationSummary = _verifyResult.summary;
