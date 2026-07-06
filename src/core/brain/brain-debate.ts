@@ -45,9 +45,25 @@ import type { BrainMessage, BrainRequest, BrainResponse, TokenUsage } from './ty
 
 const log = createLogger('brain-debate');
 
-/** Default Ollama-cloud models for the two debate roles. Override via opts. */
+/** Default Ollama-cloud models for the two debate roles. Override via opts
+ * or env (SUDO_BRAIN_DEBATE_BLUE / SUDO_BRAIN_DEBATE_RED). */
 export const DEFAULT_BLUE_MODEL = 'ollama/kimi-k2.7-code:cloud';
 export const DEFAULT_RED_MODEL = 'ollama/glm-5.2:cloud';
+
+function envModel(key: string): string | undefined {
+  const v = process.env[key];
+  return v && v.trim() ? v.trim() : undefined;
+}
+
+/**
+ * Wall-clock budget for a whole debate (all rounds), ms. 0 = uncapped.
+ * Checked BETWEEN rounds only — an in-flight provider call is never aborted,
+ * so the cap bounds "do we start another round", not stream duration.
+ */
+export function debateMaxMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env['SUDO_BRAIN_DEBATE_MAX_MS']);
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
 
 /** Options passed to the debate orchestrator. */
 export interface DebateOpts {
@@ -166,8 +182,9 @@ export async function runDebate(
   request: BrainRequest,
   opts: DebateOpts = {},
 ): Promise<BrainResponse> {
-  const blueModel = opts.blueModel ?? DEFAULT_BLUE_MODEL;
-  const redModel = opts.redModel ?? DEFAULT_RED_MODEL;
+  const blueModel = opts.blueModel ?? envModel('SUDO_BRAIN_DEBATE_BLUE') ?? DEFAULT_BLUE_MODEL;
+  const redModel = opts.redModel ?? envModel('SUDO_BRAIN_DEBATE_RED') ?? DEFAULT_RED_MODEL;
+  const maxMs = debateMaxMs();
   const userText = lastUserText(request.messages);
   const t0 = Date.now();
 
@@ -193,6 +210,11 @@ export async function runDebate(
     return { ...blueResp, usage: totalUsage };
   }
 
+  if (maxMs > 0 && Date.now() - t0 >= maxMs) {
+    log.warn({ ms: Date.now() - t0, maxMs }, 'Debate: wall-clock cap hit after Round 1 — returning best-so-far');
+    return { ...blueResp, usage: totalUsage };
+  }
+
   // --- Round 2: Red (critic, NO tools — pure critique) ----------------------
   // Stripping tools from the critique call keeps Red focused on the answer
   // text and avoids accidental side-effecting tool runs from the critic
@@ -214,6 +236,11 @@ export async function runDebate(
   // usage. No point spending a third round to re-confirm.
   if (redCritique === '' || /^NO_FAULTS\b/i.test(redCritique)) {
     log.info({ ms: Date.now() - t0, reason: 'no-faults' }, 'Debate: Red found no faults, returning Blue');
+    return { ...blueResp, usage: totalUsage };
+  }
+
+  if (maxMs > 0 && Date.now() - t0 >= maxMs) {
+    log.warn({ ms: Date.now() - t0, maxMs }, 'Debate: wall-clock cap hit after Round 2 — returning best-so-far');
     return { ...blueResp, usage: totalUsage };
   }
 

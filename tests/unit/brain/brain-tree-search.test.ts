@@ -8,8 +8,8 @@
  * this layer in its own suite.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { runTreeSearch, defaultVerifier } from '../../../src/core/brain/brain-tree-search.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { runTreeSearch, defaultVerifier, treeBreadthDefault, DEFAULT_TREE_BREADTH } from '../../../src/core/brain/brain-tree-search.js';
 import type { Brain } from '../../../src/core/brain/brain.js';
 import type { BrainRequest, BrainResponse } from '../../../src/core/brain/types.js';
 
@@ -146,5 +146,55 @@ describe('defaultVerifier', () => {
   });
   it('scores plausible answers at 1.0', () => {
     expect(defaultVerifier(mkResp('Here is a perfectly reasonable answer with enough text.')).score).toBe(1.0);
+  });
+});
+
+describe('tree-search — env breadth and wall-clock cap', () => {
+  const savedBreadth = process.env['SUDO_BRAIN_TREE_BREADTH'];
+  const savedCap = process.env['SUDO_BRAIN_TREE_MAX_MS'];
+
+  afterEach(() => {
+    if (savedBreadth === undefined) delete process.env['SUDO_BRAIN_TREE_BREADTH'];
+    else process.env['SUDO_BRAIN_TREE_BREADTH'] = savedBreadth;
+    if (savedCap === undefined) delete process.env['SUDO_BRAIN_TREE_MAX_MS'];
+    else process.env['SUDO_BRAIN_TREE_MAX_MS'] = savedCap;
+  });
+
+  it('treeBreadthDefault honors the env with NaN/range guard', () => {
+    process.env['SUDO_BRAIN_TREE_BREADTH'] = '5';
+    expect(treeBreadthDefault()).toBe(5);
+    process.env['SUDO_BRAIN_TREE_BREADTH'] = 'garbage';
+    expect(treeBreadthDefault()).toBe(DEFAULT_TREE_BREADTH);
+    process.env['SUDO_BRAIN_TREE_BREADTH'] = '0';
+    expect(treeBreadthDefault()).toBe(DEFAULT_TREE_BREADTH);
+    process.env['SUDO_BRAIN_TREE_BREADTH'] = '99';
+    expect(treeBreadthDefault()).toBe(DEFAULT_TREE_BREADTH);
+    delete process.env['SUDO_BRAIN_TREE_BREADTH'];
+    expect(treeBreadthDefault()).toBe(DEFAULT_TREE_BREADTH);
+  });
+
+  it('wall-clock cap keeps best-so-far instead of generating full breadth', async () => {
+    process.env['SUDO_BRAIN_TREE_MAX_MS'] = '1';
+    const call = vi.fn().mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      return {
+        content: 'a perfectly reasonable long answer to the request',
+        toolCalls: [],
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2, estimatedCost: 0 },
+        model: 'm',
+        finishReason: 'stop',
+      };
+    });
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runTreeSearch(brain, { messages: [{ role: 'user', content: 'q' }] }, {
+      breadth: 3,
+      skipCritique: true,
+    });
+
+    // Candidate 1 generated (10ms > 1ms cap), then the loop breaks: only one
+    // debate ran instead of three.
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(resp.content).toContain('reasonable');
   });
 });
