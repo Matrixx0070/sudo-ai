@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { runDebate, DEFAULT_BLUE_MODEL, DEFAULT_RED_MODEL } from '../../../src/core/brain/brain-debate.js';
+import { runDebate, parseRedVerdict, DEFAULT_BLUE_MODEL, DEFAULT_RED_MODEL } from '../../../src/core/brain/brain-debate.js';
 import type { Brain } from '../../../src/core/brain/brain.js';
 import type { BrainRequest, BrainResponse } from '../../../src/core/brain/types.js';
 
@@ -240,5 +240,118 @@ describe('runDebate — env model overrides and wall-clock cap', () => {
     const resp = await runDebate(brain, baseRequest());
     expect(call).toHaveBeenCalledTimes(3);
     expect(resp.content).toBe('blue final');
+  });
+});
+
+describe('runDebate — structured Red verdict (parseRedVerdict)', () => {
+  it('parses a clean JSON verdict', () => {
+    expect(parseRedVerdict('{"mark":"✗","diagnosis":"off by one","counterexample":"n=0","reachability":"call f(0)"}')).toEqual({
+      mark: '✗', diagnosis: 'off by one', counterexample: 'n=0', reachability: 'call f(0)',
+    });
+  });
+
+  it('parses a fenced JSON verdict and ignores surrounding prose', () => {
+    expect(parseRedVerdict('```json\n{"mark":"✓"}\n```')).toEqual({ mark: '✓' });
+    expect(parseRedVerdict('Here is my verdict: {"mark":"??","diagnosis":"cannot verify"} thanks')).toEqual({
+      mark: '??', diagnosis: 'cannot verify',
+    });
+  });
+
+  it('returns null on garbage, wrong mark, arrays, and empty', () => {
+    expect(parseRedVerdict('1. the loop is wrong')).toBeNull();
+    expect(parseRedVerdict('{"mark":"maybe"}')).toBeNull();
+    expect(parseRedVerdict('[]')).toBeNull();
+    expect(parseRedVerdict('')).toBeNull();
+    expect(parseRedVerdict('NO_FAULTS')).toBeNull();
+  });
+
+  it('mark ✓ short-circuits Round 3 (returns Blue)', async () => {
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('{"mark":"✓"}', DEFAULT_RED_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest());
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(resp.content).toBe('blue v1');
+  });
+
+  it('mark ✗ routes the structured critique into Revise', async () => {
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('{"mark":"✗","diagnosis":"misses empty input","counterexample":"[]"}', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(mkResp('blue final', DEFAULT_BLUE_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest());
+
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(resp.content).toBe('blue final');
+    const revisePrompt = ((call.mock.calls[2]?.[0] as BrainRequest).messages.at(-1)?.content) ?? '';
+    expect(revisePrompt).toContain('Diagnosis: misses empty input');
+    expect(revisePrompt).toContain('Counterexample: []');
+  });
+
+  it('non-JSON critique falls back to the legacy sentinel path unchanged', async () => {
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('NO_FAULTS', DEFAULT_RED_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest());
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(resp.content).toBe('blue v1');
+  });
+});
+
+describe('runDebate — verifier on the winner', () => {
+  const savedMode = process.env['SUDO_BRAIN_DEBATE_VERIFIER'];
+  afterEach(() => {
+    if (savedMode === undefined) delete process.env['SUDO_BRAIN_DEBATE_VERIFIER'];
+    else process.env['SUDO_BRAIN_DEBATE_VERIFIER'] = savedMode;
+  });
+
+  it('log-only mode scores the winner without changing the result', async () => {
+    delete process.env['SUDO_BRAIN_DEBATE_VERIFIER'];
+    const verifier = vi.fn().mockResolvedValue({ score: 0.1, reason: 'bad' });
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('{"mark":"✗","diagnosis":"d"}', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(mkResp('blue final', DEFAULT_BLUE_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest(), { verifier });
+
+    expect(verifier).toHaveBeenCalledTimes(1); // winner only, no fallback compare
+    expect(resp.content).toBe('blue final');
+  });
+
+  it('fallback mode returns Blue when Revise scores < 0.5 and Blue >= 0.5', async () => {
+    process.env['SUDO_BRAIN_DEBATE_VERIFIER'] = 'fallback';
+    const verifier = vi.fn()
+      .mockResolvedValueOnce({ score: 0.2, reason: 'revise bad' })
+      .mockResolvedValueOnce({ score: 0.9, reason: 'blue fine' });
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('{"mark":"✗","diagnosis":"d"}', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(mkResp('blue final', DEFAULT_BLUE_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest(), { verifier });
+
+    expect(verifier).toHaveBeenCalledTimes(2);
+    expect(resp.content).toBe('blue v1');
+  });
+
+  it('a throwing verifier is fail-open', async () => {
+    const verifier = vi.fn().mockRejectedValue(new Error('boom'));
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('{"mark":"✓"}', DEFAULT_RED_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest(), { verifier });
+    expect(resp.content).toBe('blue v1');
   });
 });
