@@ -20,6 +20,19 @@ const log = createLogger('agent:compaction');
 const MAX_COMPACTION_RETRIES = 3 as const;
 
 /**
+ * Tier for compaction brain calls. Compaction has its own retry loop
+ * (MAX_COMPACTION_RETRIES) as the malformed-summary guard, so the multi-round
+ * strategy upgrade is opt-in: with the ambient high-stakes strategy set to
+ * debate, tagging every compaction 'high-stakes' ran a 3-round Blue/Red/Revise
+ * per context fill (~3x tokens, +15-30s) for a summarization task. Set
+ * SUDO_COMPACTION_HIGH_STAKES=1 to restore that behavior.
+ */
+function compactionTier(): 'routine' | 'high-stakes' {
+  return process.env['SUDO_COMPACTION_HIGH_STAKES'] === '1' ? 'high-stakes' : 'routine';
+}
+
+
+/**
  * The five required section headers that a valid compaction summary must
  * contain. The quality guard validates all five are present before accepting.
  */
@@ -197,9 +210,6 @@ export async function compact(brain: unknown, messages: unknown[]): Promise<stri
     log.debug({ attempt, maxRetries: MAX_COMPACTION_RETRIES }, 'Compaction attempt');
 
     try {
-      // tier: 'high-stakes' — context compaction is one-shot per fill, and a
-      // malformed summary loses state every subsequent turn depends on. Opts
-      // into the env-driven strategy upgrade from PR #242.
       const response = await brainLike.call(
         {
           messages: [
@@ -209,7 +219,7 @@ export async function compact(brain: unknown, messages: unknown[]): Promise<stri
           temperature: 0.2,
           maxTokens: 4_096,
         },
-        { tier: 'high-stakes' },
+        { tier: compactionTier() },
       );
 
       const summary = response.content?.trim() ?? '';
@@ -350,7 +360,7 @@ export async function autoCompact(
         ],
         maxTokens: maxSummaryTokens,
       },
-      { tier: 'high-stakes' },
+      { tier: compactionTier() },
     );
 
     counter.count = 0;
@@ -389,7 +399,7 @@ export async function fullCompact(
       messages: [{ role: 'user', content: `Create a dense summary of this entire conversation, capturing all decisions, context, state, and important details:\n\n${allText}` }],
       maxTokens: 16000,
     },
-    { tier: 'high-stakes' },
+    { tier: compactionTier() },
   );
 
   const fileContext = workspaceFiles

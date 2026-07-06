@@ -43,8 +43,24 @@ import type { BrainMessage, BrainRequest, BrainResponse, TokenUsage } from './ty
 
 const log = createLogger('brain-tree-search');
 
-/** Default fan-out for tree-search candidates. Tunable via opts. */
+/** Default fan-out for tree-search candidates. Tunable via opts or
+ * SUDO_BRAIN_TREE_BREADTH. */
 export const DEFAULT_TREE_BREADTH = 3;
+
+/** Env-tunable breadth with NaN/range guard; falls back to the constant. */
+export function treeBreadthDefault(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env['SUDO_BRAIN_TREE_BREADTH']);
+  return Number.isFinite(raw) && raw >= 1 && raw <= 10 ? Math.floor(raw) : DEFAULT_TREE_BREADTH;
+}
+
+/**
+ * Wall-clock budget for the whole tree search, ms. 0 = uncapped. Checked
+ * before starting each candidate — never aborts an in-flight debate.
+ */
+export function treeMaxMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env['SUDO_BRAIN_TREE_MAX_MS']);
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
 
 /** Options passed to the tree-search orchestrator. */
 export interface TreeSearchOpts extends DebateOpts {
@@ -129,7 +145,8 @@ export async function runTreeSearch(
   request: BrainRequest,
   opts: TreeSearchOpts = {},
 ): Promise<BrainResponse> {
-  const breadth = Math.max(1, opts.breadth ?? DEFAULT_TREE_BREADTH);
+  const breadth = Math.max(1, opts.breadth ?? treeBreadthDefault());
+  const maxMs = treeMaxMs();
   const verifier = opts.verifier ?? defaultVerifier;
   const failureLog: string[] = [];
   const candidates: Array<{ resp: BrainResponse; score: number; idx: number }> = [];
@@ -139,6 +156,11 @@ export async function runTreeSearch(
   log.info({ breadth }, 'Tree-search: starting candidate generation');
 
   for (let i = 0; i < breadth; i++) {
+    if (maxMs > 0 && Date.now() - t0 >= maxMs && candidates.length > 0) {
+      log.warn({ ms: Date.now() - t0, maxMs, generated: candidates.length, breadth },
+        'Tree-search: wall-clock cap hit — keeping best-so-far');
+      break;
+    }
     const candidateReq = injectFailureLog(request, failureLog);
     // Pull out the debate-specific opts. TS infers correctly via spread
     // but the explicit pluck keeps the call narrow.

@@ -5,7 +5,7 @@
  * three-round flow without touching providers or the failover chain.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { runDebate, DEFAULT_BLUE_MODEL, DEFAULT_RED_MODEL } from '../../../src/core/brain/brain-debate.js';
 import type { Brain } from '../../../src/core/brain/brain.js';
 import type { BrainRequest, BrainResponse } from '../../../src/core/brain/types.js';
@@ -168,5 +168,77 @@ describe('runDebate — Blue/Red/Revise', () => {
     const resp = await runDebate(brain, baseRequest());
 
     expect(resp.content).toBe('blue draft');
+  });
+});
+
+describe('runDebate — env model overrides and wall-clock cap', () => {
+  const savedBlue = process.env['SUDO_BRAIN_DEBATE_BLUE'];
+  const savedRed = process.env['SUDO_BRAIN_DEBATE_RED'];
+  const savedCap = process.env['SUDO_BRAIN_DEBATE_MAX_MS'];
+
+  afterEach(() => {
+    for (const [k, v] of [
+      ['SUDO_BRAIN_DEBATE_BLUE', savedBlue],
+      ['SUDO_BRAIN_DEBATE_RED', savedRed],
+      ['SUDO_BRAIN_DEBATE_MAX_MS', savedCap],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('SUDO_BRAIN_DEBATE_BLUE/RED override the default models', async () => {
+    process.env['SUDO_BRAIN_DEBATE_BLUE'] = 'test/blue-cheap';
+    process.env['SUDO_BRAIN_DEBATE_RED'] = 'test/red-cheap';
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', 'test/blue-cheap'))
+      .mockResolvedValueOnce(mkResp('NO_FAULTS', 'test/red-cheap'));
+    const brain = { call } as unknown as Brain;
+
+    await runDebate(brain, baseRequest());
+
+    expect((call.mock.calls[0]?.[0] as BrainRequest).model).toBe('test/blue-cheap');
+    expect((call.mock.calls[1]?.[0] as BrainRequest).model).toBe('test/red-cheap');
+  });
+
+  it('explicit opts win over env overrides', async () => {
+    process.env['SUDO_BRAIN_DEBATE_BLUE'] = 'test/blue-env';
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', 'test/blue-opt'))
+      .mockResolvedValueOnce(mkResp('NO_FAULTS', DEFAULT_RED_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    await runDebate(brain, baseRequest(), { blueModel: 'test/blue-opt' });
+
+    expect((call.mock.calls[0]?.[0] as BrainRequest).model).toBe('test/blue-opt');
+  });
+
+  it('wall-clock cap stops before Round 2 and returns Blue', async () => {
+    process.env['SUDO_BRAIN_DEBATE_MAX_MS'] = '1';
+    const call = vi.fn<Brain['call']>().mockImplementation(
+      async () => {
+        await new Promise((r) => setTimeout(r, 10));
+        return mkResp('blue v1', DEFAULT_BLUE_MODEL);
+      },
+    );
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest());
+
+    expect(call).toHaveBeenCalledTimes(1); // Red never ran
+    expect(resp.content).toBe('blue v1');
+  });
+
+  it('cap unset/0 means uncapped (all rounds run)', async () => {
+    delete process.env['SUDO_BRAIN_DEBATE_MAX_MS'];
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(mkResp('blue v1', DEFAULT_BLUE_MODEL))
+      .mockResolvedValueOnce(mkResp('1. bug', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(mkResp('blue final', DEFAULT_BLUE_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, baseRequest());
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(resp.content).toBe('blue final');
   });
 });

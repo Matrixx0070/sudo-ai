@@ -248,6 +248,18 @@ module.exports = {
         // paths; do NOT set for hot inner loops.
         SUDO_BRAIN_HIGH_STAKES_STRATEGY: 'debate',
 
+        // Debate/tree-search tuning. Blue/Red models are overridable via
+        // SUDO_BRAIN_DEBATE_BLUE / SUDO_BRAIN_DEBATE_RED (unset = kimi/glm
+        // defaults in brain-debate.ts). Wall-clock caps bound the WORST case
+        // of a stalled multi-round strategy — checked between rounds, never
+        // aborting an in-flight call; 0/unset = uncapped.
+        SUDO_BRAIN_TREE_BREADTH: '3',
+        SUDO_BRAIN_DEBATE_MAX_MS: '180000',
+        SUDO_BRAIN_TREE_MAX_MS: '420000',
+        // SUDO_COMPACTION_HIGH_STAKES intentionally unset: compaction brain
+        // calls run tier 'routine' (its own retry loop guards malformed
+        // summaries). Set '1' to route compaction through debate again.
+
         // Auto-plan: invokes task-decomposer on complex user requests
         // (5+ tool calls expected) and injects the parsed steps as a
         // SYSTEM message before the agent loop runs. Opt-in because the
