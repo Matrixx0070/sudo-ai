@@ -16,6 +16,8 @@ import { EmbeddingService } from '../../src/core/memory/embeddings.js';
 import { hybridSearch } from '../../src/core/memory/hybrid-search.js';
 import {
   resolveChunkContradictions,
+  resolveMaxJudged,
+  isExplicitNegation,
   isChunkContradictionEnabled,
   resolveSimThreshold,
   cosineSimilarity,
@@ -278,5 +280,45 @@ describe('recall exclusion (BM25 hybrid-search path)', () => {
     const after = await hybridSearch(db, embeddings, { query: 'deployment runs', minScore: 0 });
     expect(after.map((r) => r.chunk.id)).not.toContain(a.id); // retired chunk excluded
     expect(after.map((r) => r.chunk.id)).toContain(b.id);      // active chunk still found
+  });
+});
+
+describe('judge-shortlist recall (maxJudged + explicit-negation widening)', () => {
+  it('W-1: resolveMaxJudged — default, env override with clamp, option wins', () => {
+    delete process.env['SUDO_CHUNK_CONTRADICT_MAX_JUDGED'];
+    expect(resolveMaxJudged()).toBe(5);
+    process.env['SUDO_CHUNK_CONTRADICT_MAX_JUDGED'] = '8';
+    expect(resolveMaxJudged()).toBe(8);
+    process.env['SUDO_CHUNK_CONTRADICT_MAX_JUDGED'] = '999';
+    expect(resolveMaxJudged()).toBe(5); // out of clamp range → default
+    process.env['SUDO_CHUNK_CONTRADICT_MAX_JUDGED'] = 'garbage';
+    expect(resolveMaxJudged()).toBe(5);
+    expect(resolveMaxJudged(3)).toBe(3); // explicit option wins over env
+    delete process.env['SUDO_CHUNK_CONTRADICT_MAX_JUDGED'];
+  });
+
+  it('W-2: isExplicitNegation — corrections match, ordinary facts do not', () => {
+    expect(isExplicitNegation('earlier claims about PR #594 were FALSE — verified against live repo')).toBe(true);
+    expect(isExplicitNegation('the coder.todo tool never shipped')).toBe(true);
+    expect(isExplicitNegation('that fact was hallucinated by the agent')).toBe(true);
+    expect(isExplicitNegation('editor prefers tabs over spaces')).toBe(false);
+    expect(isExplicitNegation('deployed the new gateway successfully')).toBe(false);
+  });
+
+  it('W-3: explicit negation widens the judge shortlist past the default 5', async () => {
+    process.env['SUDO_CHUNK_CONTRADICT'] = '1';
+    // 8 same-subject candidates — with the default cap only 5 reach the judge.
+    for (let i = 0; i < 8; i++) {
+      db.storeChunk(`topic:pr594 sibling fact number ${i}`, 'p', 'conversation');
+    }
+    let judgedPlain = 0;
+    const plainIncoming = db.storeChunk('topic:pr594 one more ordinary detail', 'p', 'conversation');
+    await resolveChunkContradictions(plainIncoming, deps(fakeEmbedder(), async () => { judgedPlain++; return false; }));
+    expect(judgedPlain).toBe(5); // default cap
+
+    let judgedNegation = 0;
+    const negIncoming = db.storeChunk('topic:pr594 the earlier claims were false and never shipped', 'p', 'conversation');
+    await resolveChunkContradictions(negIncoming, deps(fakeEmbedder(), async () => { judgedNegation++; return false; }));
+    expect(judgedNegation).toBeGreaterThan(5); // widened shortlist reaches the crowd-out zone
   });
 });

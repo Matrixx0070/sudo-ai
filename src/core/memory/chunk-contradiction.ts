@@ -100,6 +100,29 @@ const DEFAULTS: Required<Omit<ContradictionOptions, 'candidateFilter'>> = {
 };
 
 /**
+ * Resolve maxJudged: explicit option > SUDO_CHUNK_CONTRADICT_MAX_JUDGED env
+ * (clamped to [1, 20]) > default 5. Exported for tests.
+ */
+export function resolveMaxJudged(option?: number, env: NodeJS.ProcessEnv = process.env): number {
+  if (option !== undefined && Number.isFinite(option) && option >= 1) return Math.floor(option);
+  const raw = Number(env['SUDO_CHUNK_CONTRADICT_MAX_JUDGED']);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 20) return Math.floor(raw);
+  return DEFAULTS.maxJudged;
+}
+
+/**
+ * Incoming facts that EXPLICITLY negate a prior claim ("X was FALSE",
+ * "never shipped", "refuted") are exactly the corrections whose targets must
+ * not be crowded out of the judge shortlist by sibling correction chunks —
+ * the observed miss mode: a stored correction failed to supersede the false
+ * claim it named because same-day corrections outranked it on cosine and
+ * consumed all judge slots. Exported for tests.
+ */
+export function isExplicitNegation(text: string): boolean {
+  return /\b(?:was|were|is|are)\s+(?:false|wrong|incorrect|untrue)\b|\bnever\s+(?:existed|happened|shipped|merged|ran)\b|\brefuted\b|\bhallucinat/i.test(text);
+}
+
+/**
  * Resolve the stage-1 cosine threshold: explicit option > SUDO_CHUNK_CONTRADICT_SIM
  * env (clamped to [0,1]) > DEFAULT_SIM_THRESHOLD. A malformed/out-of-range env
  * value falls back to the default rather than silently disabling detection.
@@ -158,7 +181,14 @@ export async function resolveChunkContradictions(
     ...DEFAULTS,
     ...options,
     simThreshold: resolveSimThreshold(options.simThreshold),
+    maxJudged: resolveMaxJudged(options.maxJudged),
   };
+  // Widen the judge shortlist for explicit corrections so the negated claim
+  // itself cannot be crowded out by high-similarity sibling corrections.
+  if (isExplicitNegation(incoming.text)) {
+    opts.maxJudged = Math.min(20, opts.maxJudged * 2);
+    log.debug({ maxJudged: opts.maxJudged }, 'contradiction: explicit negation — widened judge shortlist');
+  }
 
   try {
     const incomingVec = await deps.embed(incoming.text);
