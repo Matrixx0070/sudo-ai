@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { runDebate, parseRedVerdict, DEFAULT_BLUE_MODEL, DEFAULT_RED_MODEL } from '../../../src/core/brain/brain-debate.js';
+import { runDebate, parseRedVerdict, formatToolPlan, DEFAULT_BLUE_MODEL, DEFAULT_RED_MODEL } from '../../../src/core/brain/brain-debate.js';
 import type { Brain } from '../../../src/core/brain/brain.js';
 import type { BrainRequest, BrainResponse } from '../../../src/core/brain/types.js';
 
@@ -353,5 +353,110 @@ describe('runDebate — verifier on the winner', () => {
 
     const resp = await runDebate(brain, baseRequest(), { verifier });
     expect(resp.content).toBe('blue v1');
+  });
+});
+
+describe('runDebate — tool-plan debate (SUDO_BRAIN_DEBATE_TOOLPLAN)', () => {
+  const savedFlag = process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'];
+  afterEach(() => {
+    if (savedFlag === undefined) delete process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'];
+    else process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'] = savedFlag;
+  });
+
+  function toolResp(names: string[]): BrainResponse {
+    return {
+      content: '',
+      toolCalls: names.map((n, i) => ({ id: `t${i}`, name: n, arguments: { path: '/x' } })),
+      usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30, estimatedCost: 0.001 },
+      model: DEFAULT_BLUE_MODEL,
+      finishReason: 'tool_calls',
+    };
+  }
+
+  function requestWithToolHistory(): BrainRequest {
+    return {
+      messages: [
+        { role: 'user', content: 'Fix the file' },
+        { role: 'tool', toolName: 'system.exec', toolCallId: 'p1', content: 'Error: cat: /nope: No such file' },
+      ],
+    };
+  }
+
+  it('flag off keeps the legacy empty-blue short-circuit', async () => {
+    delete process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'];
+    const call = vi.fn<Brain['call']>().mockResolvedValueOnce(toolResp(['system.exec']));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, requestWithToolHistory());
+
+    expect(call).toHaveBeenCalledTimes(1); // Red never ran
+    expect(resp.toolCalls).toHaveLength(1);
+  });
+
+  it('flag on: Red critiques the serialized plan with recent tool results in the prompt', async () => {
+    process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'] = '1';
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(toolResp(['system.exec']))
+      .mockResolvedValueOnce(mkResp('{"mark":"✗","diagnosis":"repeats the failed cat"}', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(mkResp('I will read the directory listing instead.', DEFAULT_BLUE_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, requestWithToolHistory());
+
+    expect(call).toHaveBeenCalledTimes(3);
+    const redPrompt = ((call.mock.calls[1]?.[0] as BrainRequest).messages.at(-1)?.content) ?? '';
+    expect(redPrompt).toContain('TOOL PLAN');
+    expect(redPrompt).toContain('system.exec');
+    expect(redPrompt).toContain('No such file'); // failure streak visible to Red
+    expect((call.mock.calls[1]?.[0] as BrainRequest).tools).toEqual([]); // Red tool-less
+    expect(resp.content).toContain('directory listing');
+  });
+
+  it('flag on: ✓ verdict executes the original plan untouched', async () => {
+    process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'] = '1';
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(toolResp(['coder.read-file']))
+      .mockResolvedValueOnce(mkResp('{"mark":"✓"}', DEFAULT_RED_MODEL));
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, requestWithToolHistory());
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(resp.toolCalls?.[0]?.name).toBe('coder.read-file');
+  });
+
+  it('flag on: revised TOOL CALLS are returned intact', async () => {
+    process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'] = '1';
+    const revised = toolResp(['coder.glob']);
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(toolResp(['system.exec']))
+      .mockResolvedValueOnce(mkResp('{"mark":"✗","diagnosis":"wrong tool"}', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(revised);
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, requestWithToolHistory());
+
+    expect(resp.toolCalls?.[0]?.name).toBe('coder.glob');
+  });
+
+  it('flag on: fully empty Revise falls back to the original plan', async () => {
+    process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'] = '1';
+    const empty: BrainResponse = { ...toolResp([]), content: '', toolCalls: [] };
+    const call = vi.fn<Brain['call']>()
+      .mockResolvedValueOnce(toolResp(['system.exec']))
+      .mockResolvedValueOnce(mkResp('{"mark":"✗","diagnosis":"d"}', DEFAULT_RED_MODEL))
+      .mockResolvedValueOnce(empty);
+    const brain = { call } as unknown as Brain;
+
+    const resp = await runDebate(brain, requestWithToolHistory());
+    expect(resp.toolCalls?.[0]?.name).toBe('system.exec');
+  });
+
+  it('formatToolPlan truncates oversized args', () => {
+    const resp = toolResp(['coder.write-file']);
+    resp.toolCalls![0]!.arguments = { content: 'x'.repeat(2000) };
+    const plan = formatToolPlan(resp);
+    expect(plan.length).toBeLessThan(700);
+    expect(plan).toContain('…');
   });
 });

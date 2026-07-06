@@ -254,6 +254,12 @@ module.exports = {
         // of a stalled multi-round strategy — checked between rounds, never
         // aborting an in-flight call; 0/unset = uncapped.
         SUDO_BRAIN_TREE_BREADTH: '3',
+        // Tool-plan debate: on agentic turns where Blue answers with tool
+        // calls (the swarm-rescue escalation case), Red critiques the tool
+        // PLAN instead of short-circuiting the debate. Debate is only
+        // reachable on high-stakes/rescue paths already priced for 3x cost;
+        // SUDO_BRAIN_DEBATE_MAX_MS bounds the worst case. Kill-switch: '0'.
+        SUDO_BRAIN_DEBATE_TOOLPLAN: '1',
         SUDO_BRAIN_DEBATE_MAX_MS: '180000',
         SUDO_BRAIN_TREE_MAX_MS: '420000',
         // SUDO_COMPACTION_HIGH_STAKES intentionally unset: compaction brain
