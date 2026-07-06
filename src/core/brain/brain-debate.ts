@@ -257,6 +257,150 @@ async function finishDebate(
   return winner;
 }
 
+/** Serialize Blue's tool plan for the Red critique. */
+export function formatToolPlan(resp: BrainResponse): string {
+  const lines: string[] = [];
+  if ((resp.content ?? '').trim()) lines.push(resp.content ?? '');
+  (resp.toolCalls ?? []).forEach((tc, i) => {
+    let args = '{}';
+    try { args = JSON.stringify(tc.arguments ?? {}); } catch { /* unserializable args */ }
+    if (args.length > 500) args = `${args.slice(0, 500)}…`;
+    lines.push(`${i + 1}. ${tc.name}(${args})`);
+  });
+  return lines.join('\n');
+}
+
+/** Last few tool results — the failure streak Red needs to see on rescue turns. */
+function recentToolResults(messages: BrainMessage[], limit = 3): string {
+  const out: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && out.length < limit; i--) {
+    const m = messages[i];
+    if (m && m.role === 'tool') {
+      const text = (m.content ?? '').slice(0, 400);
+      out.unshift(`[${m.toolName ?? 'tool'}] ${text}`);
+    }
+  }
+  return out.join('\n');
+}
+
+function buildToolPlanCritiquePrompt(originalUserText: string, toolPlan: string, recentResults: string): string {
+  return [
+    'You are the RED critic in a Blue/Red debate. BLUE responded with the',
+    'following TOOL PLAN (calls it intends to execute next). Critique the',
+    'PLAN: wrong tool for the job, wrong or malformed arguments, missing',
+    'precondition, or repeating a call that already failed (see recent tool',
+    'results below). A plan that retries a previously failed call with',
+    'identical arguments is a fault.',
+    '',
+    'Reply with ONLY a JSON object in this exact shape:',
+    '{"mark": "✓" | "✗" | "??", "counterexample": "...", "reachability": "...", "diagnosis": "..."}',
+    '  mark "✓"  = the plan is sound — execute it as-is',
+    '  mark "✗"  = concrete fault in the plan (fill diagnosis; use counterexample for the failing call)',
+    '  mark "??" = cannot judge the plan (fill diagnosis)',
+    '',
+    '--- ORIGINAL REQUEST ---',
+    originalUserText,
+    '',
+    '--- RECENT TOOL RESULTS ---',
+    recentResults || '(none)',
+    '',
+    '--- BLUE TOOL PLAN ---',
+    toolPlan,
+    '',
+    '--- YOUR VERDICT (JSON only) ---',
+  ].join('\n');
+}
+
+function buildToolPlanRevisePrompt(originalUserText: string, toolPlan: string, redCritique: string): string {
+  return [
+    'You are BLUE on the REVISE round. Your previous TOOL PLAN is shown below',
+    'with the RED critic\'s findings. Produce your next action now:',
+    '• If the critique is correct, take a DIFFERENT approach — call the right',
+    '  tool with corrected arguments, or answer directly if no tool can work.',
+    '• If the critique is wrong, proceed with the original plan.',
+    '• Do NOT mention the debate or BLUE/RED roles.',
+    '',
+    '--- ORIGINAL REQUEST ---',
+    originalUserText,
+    '',
+    '--- YOUR PREVIOUS TOOL PLAN ---',
+    toolPlan,
+    '',
+    '--- RED CRITIQUE ---',
+    redCritique,
+    '',
+    '--- YOUR NEXT ACTION ---',
+  ].join('\n');
+}
+
+/**
+ * Debate variant for TOOL turns: Red critiques Blue's tool plan; on faults,
+ * Revise re-plans with tools. The returned response may carry toolCalls
+ * (executed by the loop as usual) or prose.
+ */
+async function runToolPlanDebate(
+  brain: Brain,
+  request: BrainRequest,
+  blueResp: BrainResponse,
+  usageSoFar: TokenUsage,
+  ctx: { blueModel: string; redModel: string; opts: DebateOpts; userText: string; t0: number },
+): Promise<BrainResponse> {
+  const { blueModel, redModel, opts, userText, t0 } = ctx;
+  let totalUsage = usageSoFar;
+  const toolPlan = formatToolPlan(blueResp);
+  const recentResults = recentToolResults(request.messages);
+  log.info({ toolCalls: blueResp.toolCalls?.length ?? 0 }, 'Debate: tool-plan critique');
+
+  const redResp = await brain.call(
+    {
+      ...request,
+      model: redModel,
+      tools: [],
+      messages: [
+        ...request.messages,
+        { role: 'user', content: buildToolPlanCritiquePrompt(userText, toolPlan, recentResults) },
+      ],
+    },
+    { strategy: 'single' },
+  );
+  totalUsage = addUsage(totalUsage, redResp.usage);
+  const redText = (redResp.content ?? '').trim();
+  const verdict = parseRedVerdict(redText);
+
+  if ((verdict && verdict.mark === '✓') || (!verdict && (redText === '' || /^NO_FAULTS\b/i.test(redText)))) {
+    log.info({ ms: Date.now() - t0, reason: 'plan-sound' }, 'Debate: tool plan approved, executing as-is');
+    return { ...blueResp, usage: totalUsage };
+  }
+
+  const critique = verdict ? verdictToCritique(verdict) || redText : redText;
+  const reviseResp = await brain.call(
+    {
+      ...request,
+      model: blueModel,
+      messages: [
+        ...request.messages,
+        { role: 'assistant', content: `Planned tool calls:\n${toolPlan}` },
+        { role: 'user', content: buildToolPlanRevisePrompt(userText, toolPlan, critique) },
+      ],
+    },
+    { strategy: 'single' },
+  );
+  totalUsage = addUsage(totalUsage, reviseResp.usage);
+
+  // The revised action is valid if it carries EITHER tool calls or prose;
+  // only a fully empty response falls back to the original plan.
+  const hasAction = (reviseResp.content ?? '').trim() !== '' || (reviseResp.toolCalls?.length ?? 0) > 0;
+  if (!hasAction) {
+    log.warn({ ms: Date.now() - t0 }, 'Debate: tool-plan Revise returned nothing — executing original plan');
+    return { ...blueResp, usage: totalUsage };
+  }
+  log.info(
+    { ms: Date.now() - t0, revisedToolCalls: reviseResp.toolCalls?.length ?? 0 },
+    'Debate: tool-plan revise complete',
+  );
+  return { ...reviseResp, usage: totalUsage };
+}
+
 /**
  * Last user message text — used to anchor the critique and revise prompts
  * on the actual question the user asked, not the synthesised debate
@@ -308,9 +452,25 @@ export async function runDebate(
   // Defensive short-circuit: tier=fast resolved to single upstream, but if
   // a caller bypassed that resolution and called runDebate directly with
   // skipCritique, honour it and stop at round 1.
-  if (opts.skipCritique || blueAnswer.trim() === '') {
-    log.info({ ms: Date.now() - t0, reason: opts.skipCritique ? 'skipCritique' : 'empty-blue' },
-      'Debate: short-circuited after Round 1');
+  if (opts.skipCritique) {
+    log.info({ ms: Date.now() - t0, reason: 'skipCritique' }, 'Debate: short-circuited after Round 1');
+    return { ...blueResp, usage: totalUsage };
+  }
+
+  // Blue answered with a TOOL PLAN (tool calls, no prose). On agentic turns —
+  // exactly the swarm-rescue escalation case — the old behavior short-circuited
+  // here, silently degrading the debate to a single call. With
+  // SUDO_BRAIN_DEBATE_TOOLPLAN=1, Red critiques the tool plan instead
+  // (wrong tool, wrong args, repeating a failed call), and Revise re-plans
+  // with tools. Off/unset keeps the short-circuit.
+  if (blueAnswer.trim() === '' && (blueResp.toolCalls?.length ?? 0) > 0
+      && process.env['SUDO_BRAIN_DEBATE_TOOLPLAN'] === '1'
+      && !(maxMs > 0 && Date.now() - t0 >= maxMs)) {
+    return runToolPlanDebate(brain, request, blueResp, totalUsage, { blueModel, redModel, opts, userText, t0 });
+  }
+
+  if (blueAnswer.trim() === '') {
+    log.info({ ms: Date.now() - t0, reason: 'empty-blue' }, 'Debate: short-circuited after Round 1');
     return { ...blueResp, usage: totalUsage };
   }
 
