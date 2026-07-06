@@ -15,7 +15,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 
 const log = createLogger('agent:self-verify');
 
@@ -137,18 +137,20 @@ export class SelfVerify {
         : 'No files were modified',
     });
 
-    // Check 2: Get diff summary
+    // Check 2: Diff summary readable. Passing is "git diff --stat ran"; the
+    // stat text is evidence, not something to grep — filenames legitimately
+    // contain words like "error".
     let diffSummary = '';
     try {
       diffSummary = this._getDiffSummary(cwd);
       checks.push({
-        description: 'Changes are syntactically valid (no obvious syntax errors)',
-        passed: !diffSummary.includes('error') && !diffSummary.includes('SyntaxError'),
+        description: 'Change diff captured',
+        passed: true,
         evidence: diffSummary.slice(0, 500) || 'No changes detected',
       });
     } catch {
       checks.push({
-        description: 'Changes are syntactically valid',
+        description: 'Change diff captured',
         passed: true, // assume valid if we can't check
         evidence: 'Could not run diff check',
       });
@@ -159,12 +161,12 @@ export class SelfVerify {
     const hasTests = this._hasTestFiles(filesChanged, cwd);
     if (hasTests) {
       try {
-        testOutput = this._runTests(cwd);
-        const testsPass = !testOutput.includes('FAIL') && !testOutput.includes('failed');
+        const testRun = this._runTests(cwd);
+        testOutput = testRun.output;
         checks.push({
           description: 'Tests pass after changes',
-          passed: testsPass,
-          evidence: testOutput.slice(0, 500),
+          passed: testRun.exitCode === 0,
+          evidence: `exit ${testRun.exitCode}: ${testRun.output.slice(0, 500)}`,
         });
       } catch (err) {
         checks.push({
@@ -260,18 +262,24 @@ export class SelfVerify {
     return filesChanged.some(f => testPatterns.some(p => f.includes(p)));
   }
 
-  private _runTests(cwd: string): string {
-    try {
-      return execSync('npx vitest run --reporter=verbose 2>&1 | tail -50', {
-        cwd,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 120000,
-      }).trim();
-    } catch (err: unknown) {
-      const errObj = err as { stdout?: string; stderr?: string };
-      return (errObj.stdout ?? '') + (errObj.stderr ?? '');
-    }
+  /**
+   * Run the workspace test suite and report the REAL exit code. The old
+   * shell form (`… | tail -50`) reported tail's exit code, so failures were
+   * invisible and pass/fail fell back to fragile string matching.
+   */
+  private _runTests(cwd: string): { output: string; exitCode: number } {
+    const res = spawnSync('npx', ['vitest', 'run', '--reporter=dot'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 120000,
+    });
+    const raw = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+    const lines = raw.split('\n');
+    const output = lines.slice(-50).join('\n');
+    // status is null when the process was killed (timeout) — treat as failure.
+    const exitCode = typeof res.status === 'number' ? res.status : 124;
+    return { output, exitCode };
   }
 
   private async _checkGoalAlignment(
