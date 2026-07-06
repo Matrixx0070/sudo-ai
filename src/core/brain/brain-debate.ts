@@ -42,6 +42,9 @@
 import { createLogger } from '../shared/logger.js';
 import type { Brain } from './brain.js';
 import type { BrainMessage, BrainRequest, BrainResponse, TokenUsage } from './types.js';
+// Type-only: erased at compile time, so no runtime cycle with brain-tree-search
+// (which imports runDebate).
+import type { VerifierResult } from './brain-tree-search.js';
 
 const log = createLogger('brain-debate');
 
@@ -79,6 +82,66 @@ export interface DebateOpts {
    * we get here), but harden defensively.
    */
   skipCritique?: boolean;
+  /**
+   * Score the debate winner. Mode via SUDO_BRAIN_DEBATE_VERIFIER:
+   * unset/'log' = score is logged only (current-safe); 'fallback' = when the
+   * Revise answer scores < 0.5 and Blue's original scores >= 0.5, return
+   * Blue instead.
+   */
+  verifier?: (candidate: BrainResponse, request: BrainRequest) => Promise<VerifierResult> | VerifierResult;
+}
+
+/** Structured verdict Red is prompted to return. */
+export interface RedVerdict {
+  mark: '✓' | '✗' | '??';
+  counterexample?: string;
+  reachability?: string;
+  diagnosis?: string;
+}
+
+/**
+ * Parse Red's reply as a structured verdict. Accepts raw JSON or a
+ * fenced ```json block; returns null on anything that doesn't parse to a
+ * valid mark — callers then fall back to the legacy NO_FAULTS sentinel
+ * path, byte-identical to the pre-verdict behavior. Exported for tests.
+ */
+export function parseRedVerdict(text: string): RedVerdict | null {
+  const trimmed = text.trim();
+  if (trimmed === '') return null;
+  const unfenced = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const start = unfenced.indexOf('{');
+  const end = unfenced.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(unfenced.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  const mark = obj['mark'];
+  if (mark !== '✓' && mark !== '✗' && mark !== '??') return null;
+  const pick = (k: string): string | undefined =>
+    typeof obj[k] === 'string' && (obj[k] as string).trim() !== '' ? (obj[k] as string) : undefined;
+  const verdict: RedVerdict = { mark };
+  const counterexample = pick('counterexample');
+  const reachability = pick('reachability');
+  const diagnosis = pick('diagnosis');
+  if (counterexample !== undefined) verdict.counterexample = counterexample;
+  if (reachability !== undefined) verdict.reachability = reachability;
+  if (diagnosis !== undefined) verdict.diagnosis = diagnosis;
+  return verdict;
+}
+
+/** Render a structured verdict back into critique text for the Revise round. */
+function verdictToCritique(v: RedVerdict): string {
+  const parts: string[] = [];
+  if (v.diagnosis) parts.push(`Diagnosis: ${v.diagnosis}`);
+  if (v.counterexample) parts.push(`Counterexample: ${v.counterexample}`);
+  if (v.reachability) parts.push(`Reachability: ${v.reachability}`);
+  if (v.mark === '??') parts.push('Verdict: UNCERTAIN — the critic could not confirm the answer is sound.');
+  return parts.join('\n');
 }
 
 /**
@@ -105,10 +168,17 @@ function addUsage(a: TokenUsage, b: TokenUsage | undefined): TokenUsage {
 function buildCritiquePrompt(originalUserText: string, blueAnswer: string): string {
   return [
     'You are the RED critic in a Blue/Red debate. Your job is to find errors,',
-    'omissions, and edge cases in the BLUE proposer\'s answer below. Be specific:',
-    'cite the failing case, the wrong assumption, the missing tool call. Do not',
-    'rewrite the answer — just list concrete falsifications, one per line,',
-    'numbered. If the answer is genuinely sound, write exactly: NO_FAULTS.',
+    'omissions, and edge cases in the BLUE proposer\'s answer below.',
+    'Construct the WORST case first, then test its reachability: any',
+    'counterexample must be REACHABLE from the stated inputs/environment —',
+    'an unreachable counterexample is not a counterexample.',
+    '',
+    'Reply with ONLY a JSON object in this exact shape:',
+    '{"mark": "✓" | "✗" | "??", "counterexample": "...", "reachability": "...", "diagnosis": "..."}',
+    '  mark "✓"  = the answer is genuinely sound (omit the other fields)',
+    '  mark "✗"  = you found a concrete, reachable fault (fill diagnosis +',
+    '              counterexample + how it is reached)',
+    '  mark "??" = you cannot confirm soundness (fill diagnosis with what is unverifiable)',
     '',
     '--- ORIGINAL REQUEST ---',
     originalUserText,
@@ -116,7 +186,7 @@ function buildCritiquePrompt(originalUserText: string, blueAnswer: string): stri
     '--- BLUE PROPOSER ANSWER ---',
     blueAnswer,
     '',
-    '--- YOUR CRITIQUE ---',
+    '--- YOUR VERDICT (JSON only) ---',
   ].join('\n');
 }
 
@@ -151,6 +221,40 @@ function buildRevisePrompt(
     '',
     '--- YOUR FINAL ANSWER ---',
   ].join('\n');
+}
+
+/**
+ * Score the debate winner with the caller-supplied verifier (fail-open).
+ * Mode SUDO_BRAIN_DEBATE_VERIFIER: unset/'log' = log the score only;
+ * 'fallback' = on the revise path, if the revised answer scores < 0.5 and
+ * Blue's original scores >= 0.5, return Blue (with the full summed usage).
+ */
+async function finishDebate(
+  brain: Brain,
+  request: BrainRequest,
+  winner: BrainResponse,
+  opts: DebateOpts,
+  path: 'blue-no-faults' | 'revise' | 'blue-fallback',
+  blueAlternative?: BrainResponse,
+): Promise<BrainResponse> {
+  if (!opts.verifier) return winner;
+  try {
+    const result = await opts.verifier(winner, request);
+    log.info({ score: result.score, reason: result.reason, path }, 'Debate: verifier scored winner');
+    const mode = process.env['SUDO_BRAIN_DEBATE_VERIFIER'];
+    if (mode === 'fallback' && path === 'revise' && blueAlternative && result.score < 0.5) {
+      const blueScore = await opts.verifier(blueAlternative, request);
+      log.info({ blueScore: blueScore.score, reviseScore: result.score }, 'Debate: verifier fallback comparison');
+      if (blueScore.score >= 0.5) {
+        log.warn({ reviseScore: result.score, blueScore: blueScore.score },
+          'Debate: revised answer scored below Blue — returning Blue (verifier fallback)');
+        return { ...blueAlternative, usage: winner.usage };
+      }
+    }
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Debate: verifier threw — ignoring score');
+  }
+  return winner;
 }
 
 /**
@@ -230,13 +334,26 @@ export async function runDebate(
   };
   const redResp = await brain.call(critiqueRequest, { strategy: 'single' });
   totalUsage = addUsage(totalUsage, redResp.usage);
-  const redCritique = (redResp.content ?? '').trim();
+  let redCritique = (redResp.content ?? '').trim();
 
-  // If Red found nothing actionable, return Blue's answer with summed
-  // usage. No point spending a third round to re-confirm.
-  if (redCritique === '' || /^NO_FAULTS\b/i.test(redCritique)) {
-    log.info({ ms: Date.now() - t0, reason: 'no-faults' }, 'Debate: Red found no faults, returning Blue');
-    return { ...blueResp, usage: totalUsage };
+  // Prefer the structured verdict; on any parse failure fall back to the
+  // legacy sentinel semantics so a rambling critic degrades gracefully.
+  const verdict = parseRedVerdict(redCritique);
+  if (verdict) {
+    log.info({ mark: verdict.mark, hasCounterexample: !!verdict.counterexample }, 'Debate: Red verdict parsed');
+    if (verdict.mark === '✓') {
+      log.info({ ms: Date.now() - t0, reason: 'no-faults' }, 'Debate: Red found no faults, returning Blue');
+      return finishDebate(brain, request, { ...blueResp, usage: totalUsage }, opts, 'blue-no-faults');
+    }
+    redCritique = verdictToCritique(verdict) || redCritique;
+  } else {
+    log.debug({ len: redCritique.length }, 'Debate: Red reply not a structured verdict — sentinel fallback');
+    // If Red found nothing actionable, return Blue's answer with summed
+    // usage. No point spending a third round to re-confirm.
+    if (redCritique === '' || /^NO_FAULTS\b/i.test(redCritique)) {
+      log.info({ ms: Date.now() - t0, reason: 'no-faults' }, 'Debate: Red found no faults, returning Blue');
+      return finishDebate(brain, request, { ...blueResp, usage: totalUsage }, opts, 'blue-no-faults');
+    }
   }
 
   if (maxMs > 0 && Date.now() - t0 >= maxMs) {
@@ -274,7 +391,7 @@ export async function runDebate(
       { ms: Date.now() - t0, critiqueLen: redCritique.length, blueLen: blueAnswer.length },
       'Debate: Revise returned empty content — falling back to Blue',
     );
-    return { ...blueResp, usage: totalUsage };
+    return finishDebate(brain, request, { ...blueResp, usage: totalUsage }, opts, 'blue-fallback');
   }
 
   log.info(
@@ -282,5 +399,5 @@ export async function runDebate(
     'Debate: complete',
   );
 
-  return { ...reviseResp, usage: totalUsage };
+  return finishDebate(brain, request, { ...reviseResp, usage: totalUsage }, opts, 'revise', blueResp);
 }

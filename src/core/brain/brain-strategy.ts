@@ -72,10 +72,11 @@ export interface BrainCallOpts {
   /**
    * Custom verifier passed to tree-search. Lets a call site that knows
    * its expected output shape (JSON plan, code patch, classifier
-   * verdict) hand in a `make…Verifier()` factory result so tree-search
-   * can reroll on rejection with Reflexion feedback. Ignored when the
-   * effective strategy isn't `tree-search`. Use the factories in
-   * `brain-verifier-{exec,schema,compose}.ts`.
+   * verdict) hand in a `make…Verifier()` factory result. Tree-search
+   * rerolls on rejection with Reflexion feedback; debate scores its
+   * winner (log-only by default, SUDO_BRAIN_DEBATE_VERIFIER=fallback to
+   * prefer Blue when Revise scores worse). Ignored on `single`. Use the
+   * factories in `brain-verifier-{exec,schema,compose}.ts`.
    */
   verifier?: BrainCallVerifier;
 

@@ -936,12 +936,15 @@ export class Brain {
     // forcing of `strategy: 'single'`.
     const effectiveStrategy = resolveEffectiveStrategy(this.brainStrategy, opts);
     if (effectiveStrategy === 'debate') {
-      return runDebate(this, request);
+      // Forward the verifier so debate scores its winner (log-only by
+      // default; SUDO_BRAIN_DEBATE_VERIFIER=fallback enables Blue fallback).
+      const debateOpts: Parameters<typeof runDebate>[2] = {};
+      if (opts?.verifier !== undefined) debateOpts.verifier = opts.verifier;
+      return runDebate(this, request, debateOpts);
     }
     if (effectiveStrategy === 'tree-search') {
       // Forward only the tree-search-relevant opts. The verifier opt is
-      // ignored on `single` and `debate` by design — debate doesn't
-      // candidate-score, and single has nothing to reroll against.
+      // ignored on `single` by design — it has nothing to reroll against.
       const treeOpts: Parameters<typeof runTreeSearch>[2] = {};
       if (opts?.verifier !== undefined) treeOpts.verifier = opts.verifier;
       // Guard breadth: tree-search clamps with Math.max(1, n) which
