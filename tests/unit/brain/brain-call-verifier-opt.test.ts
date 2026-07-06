@@ -4,7 +4,8 @@
  * Covers the BrainCallOpts extension (PR — this commit):
  *   - `verifier` and `breadth` reach `runTreeSearch` when strategy
  *     resolves to 'tree-search'.
- *   - They are ignored on 'single' and 'debate' (no escape paths).
+ *   - Verifier forwards to debate (winner scoring) and tree-search; both are
+ *     ignored on 'single' (no escape paths).
  *
  * The brain.ts call() body does a lot of setup we don't need here, so
  * the test drives `runTreeSearch` mock through a vi.mock indirect.
@@ -83,7 +84,7 @@ describe('Brain.call → tree-search opts piping', () => {
     expect(passedOpts).toEqual({});
   });
 
-  it('routes to debate when strategy is debate AND ignores verifier opt', async () => {
+  it('routes to debate when strategy is debate AND forwards the verifier opt', async () => {
     const brain = mkBrain();
     brain.setStrategy('debate');
     const verifier = vi.fn().mockResolvedValue({ score: 1 });
@@ -95,10 +96,10 @@ describe('Brain.call → tree-search opts piping', () => {
 
     expect(runDebateMock).toHaveBeenCalledTimes(1);
     expect(runTreeSearchMock).not.toHaveBeenCalled();
-    // Debate signature is (brain, request) — no opts param exposed; verify
-    // it wasn't called with a third arg the contract doesn't promise.
+    // Debate receives opts with the caller's verifier (scored on the winner,
+    // log-only by default); breadth stays tree-search-only.
     const debateArgs = runDebateMock.mock.calls[0];
-    expect(debateArgs?.length).toBe(2);
+    expect(debateArgs?.[2]).toEqual({ verifier });
   });
 
   it('falls through to single (no debate/tree-search) when strategy is single', async () => {
