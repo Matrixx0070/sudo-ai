@@ -14,6 +14,7 @@ import { createLogger } from '../shared/logger.js';
 import { isToolResultSuccess, resolveToolSuccess } from './tool-result-classifier.js';
 import { extractChangedFiles } from './changed-files.js';
 import { runLoopExitGuardChain, fromAllowWarnAbortCheck } from './loop-exit-guard.js';
+import { codeTreeSearchEnabled, shouldUseCodeTreeSearch, buildCodeTreeSearchVerifier } from './code-tree-search-gate.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError, LLMError } from '../shared/errors.js';
 import { clearCommittedOutbound, hasCommittedOutbound } from './committed-outbound.js';
@@ -2074,6 +2075,25 @@ export class AgentLoop extends AgentLoopInjections {
           }
         } catch { /* fail-open */ }
 
+        // Code-authoring turns can opt into tree-search with a real sandboxed
+        // syntax verifier (SUDO_BRAIN_CODE_TREE_SEARCH=1, default off — it
+        // multiplies cost/latency on matched turns). Swarm-rescue opts win.
+        let _codeTreeOpts: { strategy: 'tree-search'; verifier: ReturnType<typeof buildCodeTreeSearchVerifier> } | undefined;
+        try {
+          if (!swarmRescueActive && codeTreeSearchEnabled()) {
+            const _lastUser = session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '';
+            const { scoreComplexity } = await import('./complexity-scorer.js');
+            const _cx = scoreComplexity({ prompt: _lastUser });
+            if (shouldUseCodeTreeSearch(_lastUser, _cx.score)) {
+              _codeTreeOpts = { strategy: 'tree-search', verifier: buildCodeTreeSearchVerifier() };
+              log.info({ sessionId: state.sessionId, complexity: _cx.score },
+                'Code tree-search gate matched — routing turn through tree-search');
+            }
+          }
+        } catch (gateErr) {
+          log.warn({ err: String(gateErr) }, 'Code tree-search gate threw — using default strategy');
+        }
+
         const brainCallStartedAt = performance.now();
         let response: BrainResponse;
         try {
@@ -2089,7 +2109,7 @@ export class AgentLoop extends AgentLoopInjections {
                 .map(m => m.toolName),
             ),
             race: opts?.race,
-          }, swarmRescueCallOpts(swarmRescueActive));
+          }, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts);
         } catch (brainErr) {
           // Context overflow: the prompt is too long for the model and every
           // same-family failover profile would reject it identically (brain

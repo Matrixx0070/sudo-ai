@@ -254,11 +254,28 @@ module.exports = {
         // of a stalled multi-round strategy — checked between rounds, never
         // aborting an in-flight call; 0/unset = uncapped.
         SUDO_BRAIN_TREE_BREADTH: '3',
+        // Tool-plan debate: on agentic turns where Blue answers with tool
+        // calls (the swarm-rescue escalation case), Red critiques the tool
+        // PLAN instead of short-circuiting the debate. Debate is only
+        // reachable on high-stakes/rescue paths already priced for 3x cost;
+        // SUDO_BRAIN_DEBATE_MAX_MS bounds the worst case. Kill-switch: '0'.
+        SUDO_BRAIN_DEBATE_TOOLPLAN: '1',
         SUDO_BRAIN_DEBATE_MAX_MS: '180000',
         SUDO_BRAIN_TREE_MAX_MS: '420000',
         // SUDO_COMPACTION_HIGH_STAKES intentionally unset: compaction brain
         // calls run tier 'routine' (its own retry loop guards malformed
         // summaries). Set '1' to route compaction through debate again.
+        //
+        // Tree-search wirings (default conservative):
+        // SUDO_BRAIN_TEAM_STRATEGY ('debate'|'tree-search') pins the
+        // intelligence-team planning strategy so its schema verifier
+        // candidate-scores; unset = ambient high-stakes strategy.
+        // SUDO_BRAIN_CODE_TREE_SEARCH='1' routes code-authoring user turns
+        // through tree-search with a REAL bwrap-sandboxed `node --check`
+        // verifier (src/core/agent/code-tree-search-gate.ts) — 3-9x tokens
+        // and +1-3min on matched turns; enable deliberately. Threshold:
+        // SUDO_BRAIN_CODE_TS_MIN_COMPLEXITY (default 0.5).
+        // SUDO_BRAIN_CODE_TREE_SEARCH: '1',
 
         // Auto-plan: invokes task-decomposer on complex user requests
         // (5+ tool calls expected) and injects the parsed steps as a

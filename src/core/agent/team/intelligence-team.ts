@@ -149,6 +149,7 @@ export interface Brain {
       tier?: 'fast' | 'routine' | 'high-stakes';
       verifier?: BrainCallVerifier;
       breadth?: number;
+      strategy?: 'single' | 'debate' | 'tree-search';
     },
   ): Promise<{ content: string }>;
 }
@@ -243,15 +244,18 @@ export class IntelligenceTeam {
     try {
       // tier: 'high-stakes' — team planning is one-shot per IntelligenceTeam
       // spawn; a wrong agent-role decomposition derails every worker spawned
-      // below. Opts into the env-driven strategy upgrade from PR #242.
-      // The verifier scores each tree-search candidate; tree-search rerolls
-      // up to `breadth` times with Reflexion feedback when the plan is
-      // malformed. Only consulted when the effective strategy is
-      // `tree-search` (debate/single ignore it).
+      // below. Opts into the env-driven strategy upgrade. The verifier scores
+      // candidates: tree-search rerolls with Reflexion feedback; debate scores
+      // its winner (log-only by default). SUDO_BRAIN_TEAM_STRATEGY overrides
+      // the ambient high-stakes strategy for team planning specifically
+      // ('debate' | 'tree-search'; unset = ambient).
       const verifier = buildTeamPlanVerifier();
+      const teamStrategy = process.env['SUDO_BRAIN_TEAM_STRATEGY'];
       const response = await brain.call(
         { messages: planningMessages, source: 'agent' },
-        { tier: 'high-stakes', verifier },
+        teamStrategy === 'debate' || teamStrategy === 'tree-search'
+          ? { tier: 'high-stakes', verifier, strategy: teamStrategy }
+          : { tier: 'high-stakes', verifier },
       );
       const trimmed = (response && response.content) ? response.content.trim() : '';
       // Attempt to parse the LLM response as JSON. Guard against trailing
