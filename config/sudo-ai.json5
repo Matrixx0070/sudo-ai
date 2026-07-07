@@ -42,6 +42,18 @@
         maxOutputTokens: 8192,
         temperature: 0.7,
       },
+      // TEMP 2026-07-07: working API-key tier while claude-oauth is down (token
+      // expired 2026-07-06, refresh rejected invalid_grant — needs re-login).
+      // The two OAuth tiers above share ONE account, so both fail together;
+      // this xAI tier is the only currently-live provider (grok-4-1-fast key
+      // verified). Keep it AFTER the OAuth tiers so a re-authed OAuth reclaims
+      // primary automatically. Remove (or demote) once OAuth is back.
+      {
+        id: 'xai/grok-4-1-fast-reasoning',
+        contextWindow: 2000000,
+        maxOutputTokens: 8192,
+        temperature: 0.7,
+      },
     ],
     // TEMP 2026-06-23: swapped kimi-k2.7-code → glm-5.2 while the claude-oauth
     // weekly cap is active (anthropic-ratelimit-unified rejected, resets
