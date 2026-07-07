@@ -10,6 +10,7 @@
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import { evaluateJsonQuery } from './json-query.js';
 
 const logger = createLogger('browser.fetch');
 
@@ -48,7 +49,9 @@ export const fetchUrlTool: ToolDefinition = {
   name: 'browser.fetch',
   description:
     'Fetch the content of a URL and return as text. Simple HTTP GET — no browser needed. ' +
-    'Good for APIs, raw pages, JSON endpoints. Does not execute JavaScript.',
+    'Good for APIs, raw pages, JSON endpoints. Does not execute JavaScript. For a large ' +
+    'JSON response, pass jsonQuery to extract just what you need server-side instead of ' +
+    'reasoning over a truncated blob — e.g. jsonQuery="select(.lts) | first | .version".',
   category: 'browser',
   timeout: DEFAULT_TIMEOUT_MS + 2_000,
   parameters: {
@@ -61,6 +64,14 @@ export const fetchUrlTool: ToolDefinition = {
       type: 'number',
       required: false,
       description: `Maximum characters to return (default: ${DEFAULT_MAX_LENGTH}).`,
+    },
+    jsonQuery: {
+      type: 'string',
+      required: false,
+      description:
+        'Optional jq-style query applied to a JSON response, returning only the extracted ' +
+        'result (avoids truncation). Pipe stages: path (.a.b[0]), select(.k) / select(.k == "v"), ' +
+        'map(.k), first, last, length, keys. Example: "select(.lts) | first | .version".',
     },
   },
 
@@ -123,6 +134,41 @@ export const fetchUrlTool: ToolDefinition = {
       }
 
       const rawText = await response.text();
+
+      // Structured extraction: when a jsonQuery is supplied and the body parses
+      // as JSON, return ONLY the queried result — small, exact, un-truncated —
+      // so the model never reasons over a giant blob.
+      const jsonQuery = typeof params['jsonQuery'] === 'string' ? (params['jsonQuery'] as string).trim() : '';
+      if (jsonQuery && response.ok) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(rawText);
+        } catch {
+          return {
+            success: false,
+            output: `browser.fetch: jsonQuery was given but the response from ${parsedUrl.href} is not valid JSON (${rawText.length} chars). Omit jsonQuery to get the raw text.`,
+            data: { status, contentType, length: rawText.length, jsonQuery },
+          };
+        }
+        try {
+          const result = evaluateJsonQuery(parsed, jsonQuery);
+          const out = JSON.stringify(result, null, 2);
+          logger.info({ session: ctx.sessionId, url: parsedUrl.href, status, jsonQuery, resultLen: out.length }, 'URL fetched + jsonQuery applied');
+          return {
+            success: true,
+            output: applyFetchTruncation(out, maxLength),
+            data: { status, contentType, length: rawText.length, jsonQuery, queried: true },
+          };
+        } catch (qErr) {
+          const msg = qErr instanceof Error ? qErr.message : String(qErr);
+          return {
+            success: false,
+            output: `browser.fetch: jsonQuery "${jsonQuery}" failed — ${msg}. The response WAS valid JSON (${rawText.length} chars); fix the query or omit it for raw text.`,
+            data: { status, contentType, length: rawText.length, jsonQuery },
+          };
+        }
+      }
+
       const truncated = rawText.length > maxLength;
       const text = applyFetchTruncation(rawText, maxLength);
 
