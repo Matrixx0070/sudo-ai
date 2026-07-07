@@ -97,6 +97,7 @@ export class Watchdog {
   private consecutiveFailures: Map<string, number> = new Map();
   private errorReporter: ErrorReporter | null = null;
   private alertSink: AlertSink | null = null;
+  private brainLivenessCheck: (() => Promise<HealthCheck>) | null = null;
   private alertPolicy = new HealthAlertPolicy({
     cooldownMs: parsePositiveInt(process.env['SUDO_HEALTH_ALERT_COOLDOWN_MS'], 2_700_000),
     degradedConsecutiveThreshold: 3,
@@ -162,6 +163,16 @@ export class Watchdog {
    * threshold-filtered by HealthAlertPolicy). Used to push health alerts to
    * the operator channels via the proactive notifier.
    */
+  /**
+   * Attach a real brain-liveness check (a throttled probe that drives an
+   * actual brain call). When set, it runs alongside the other checks and its
+   * critical verdict flows through the alert policy → operator channels.
+   */
+  setBrainLivenessCheck(check: () => Promise<HealthCheck>): void {
+    this.brainLivenessCheck = check;
+    log.info('Brain-liveness check attached to Watchdog');
+  }
+
   setAlertSink(sink: AlertSink): void {
     this.alertSink = sink;
     log.info('Alert sink attached to Watchdog');
@@ -172,18 +183,24 @@ export class Watchdog {
   // -------------------------------------------------------------------------
 
   private async _runAllChecks(): Promise<void> {
-    const runners: Array<() => Promise<HealthCheck>> = [
-      () => checkBrain(),
-      () => checkDatabases(),
-      () => checkDiskSpace(fixDiskSpace),
-      () => checkMemory(fixMemory),
-      () => checkApiKeys(),
-      () => checkTelegram(),
-      () => checkLogs(fixLogRotation),
-      () => this._runConsciousnessCheck(),
+    const runners: Array<{ name: string; run: () => Promise<HealthCheck> }> = [
+      { name: 'brain', run: () => checkBrain() },
+      { name: 'databases', run: () => checkDatabases() },
+      { name: 'disk_space', run: () => checkDiskSpace(fixDiskSpace) },
+      { name: 'memory', run: () => checkMemory(fixMemory) },
+      { name: 'api_keys', run: () => checkApiKeys() },
+      { name: 'telegram_polling', run: () => checkTelegram() },
+      { name: 'log_file', run: () => checkLogs(fixLogRotation) },
+      { name: 'consciousness_stream', run: () => this._runConsciousnessCheck() },
     ];
+    // Real brain-liveness probe (actually drives a call) — only when a probe
+    // was attached. checkBrain() above only sees key PRESENCE; this catches an
+    // invalid key / dead-provider outage that presence checks miss.
+    if (this.brainLivenessCheck) {
+      runners.push({ name: 'brain_liveness', run: this.brainLivenessCheck });
+    }
 
-    const settled = await Promise.allSettled(runners.map((fn) => fn()));
+    const settled = await Promise.allSettled(runners.map((r) => r.run()));
 
     // Dead-man's heartbeat: refreshed every tick, so a blocked event loop
     // (hung-but-alive process) leaves a stale mtime that the host cron
@@ -195,10 +212,7 @@ export class Watchdog {
     this.checks = settled.map((r, i) => {
       if (r.status === 'fulfilled') return r.value;
 
-      const name = [
-        'brain', 'databases', 'disk_space', 'memory',
-        'api_keys', 'telegram_polling', 'log_file', 'consciousness_stream',
-      ][i] ?? `check_${i}`;
+      const name = runners[i]?.name ?? `check_${i}`;
 
       log.error({ err: String(r.reason) }, `Health check threw: ${name}`);
 

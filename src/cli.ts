@@ -4120,6 +4120,22 @@ async function boot(): Promise<void> {
         kind === 'recovery' ? 'medium' : severity === 'critical' ? 'critical' : 'high',
       );
     });
+    // Real brain-liveness probe: actually drive a trivial fast-tier call and
+    // assert a reply, so an invalid-key / all-providers-dead outage (which the
+    // env-presence checkBrain misses) alerts to the operator. Throttled to one
+    // probe per interval. Kill-switch SUDO_BRAIN_LIVENESS=0.
+    if (process.env['SUDO_BRAIN_LIVENESS'] !== '0') {
+      const { createBrainLivenessCheck } = await import('./core/health/checks.js');
+      const rawInterval = Number(process.env['SUDO_BRAIN_LIVENESS_INTERVAL_MS']);
+      const intervalMs = Number.isFinite(rawInterval) && rawInterval >= 60_000 ? rawInterval : 15 * 60_000;
+      watchdog.setBrainLivenessCheck(createBrainLivenessCheck(async () => {
+        const resp = await brain.call(
+          { messages: [{ role: 'user', content: 'ping' }], source: 'health' },
+          { tier: 'fast', strategy: 'single' },
+        );
+        return resp.content ?? '';
+      }, { intervalMs }));
+    }
     watchdog.start();
     registerShutdown(() => watchdog.stop());
     log.info('Health watchdog started (alert sink → proactive notifier)');
