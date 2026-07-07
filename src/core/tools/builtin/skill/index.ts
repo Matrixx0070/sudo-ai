@@ -19,6 +19,8 @@ import { refineTool } from './tools/refine.js';
 import { federateTool } from './tools/federate.js';
 import { composeTool } from './tools/compose.js';
 import { explainTool } from './tools/explain.js';
+import { applyTool } from './tools/apply.js';
+import { rollbackTool } from './tools/rollback.js';
 
 const logger = createLogger('skill-builtin');
 
@@ -28,6 +30,8 @@ const SKILL_TOOLS = [
   federateTool,
   composeTool,
   explainTool,
+  applyTool,
+  rollbackTool,
 ];
 
 /**
