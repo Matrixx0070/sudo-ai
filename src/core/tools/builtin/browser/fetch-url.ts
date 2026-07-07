@@ -13,8 +13,32 @@ import { toolFetch } from '../../../security/guarded-fetch.js';
 
 const logger = createLogger('browser.fetch');
 
-const DEFAULT_MAX_LENGTH = 8_000;
+// Kept under the agent loop's 24K tool-output clamp so the fetch's own
+// truncation warning survives to the model. 8K was far too small for data
+// endpoints — a newest-first list truncated at 8K silently dropped the very
+// entries a "find the latest X" query needs, and the model then confabulated
+// a plausible value instead of reporting the response was incomplete.
+const DEFAULT_MAX_LENGTH = 20_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
+
+/**
+ * Truncate a fetched body to `maxLength`, with a loud, instructive warning at
+ * the TOP (so it survives any downstream head-clamp) plus a tail marker. An
+ * incomplete response must not be answered from as if it were complete —
+ * entries past the cutoff are unseen, not absent. Exported for tests.
+ */
+export function applyFetchTruncation(rawText: string, maxLength: number): string {
+  if (rawText.length <= maxLength) return rawText;
+  const omitted = rawText.length - maxLength;
+  return (
+    `⚠️ TRUNCATED RESPONSE — showing the first ${maxLength} of ${rawText.length} characters ` +
+    `(${omitted} omitted). The content below is INCOMPLETE: entries past the cutoff are NOT shown — ` +
+    `do NOT treat them as missing or answer "latest/newest/last" from this partial data. ` +
+    `Re-fetch with a larger maxLength or a more specific URL/endpoint first.\n\n` +
+    rawText.slice(0, maxLength) +
+    `\n\n...[truncated — ${rawText.length} total chars, ${omitted} omitted; response is INCOMPLETE]`
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Tool definition
@@ -100,9 +124,7 @@ export const fetchUrlTool: ToolDefinition = {
 
       const rawText = await response.text();
       const truncated = rawText.length > maxLength;
-      const text = truncated
-        ? rawText.slice(0, maxLength) + `\n...[truncated — ${rawText.length} total chars]`
-        : rawText;
+      const text = applyFetchTruncation(rawText, maxLength);
 
       logger.info(
         { session: ctx.sessionId, url: parsedUrl.href, status, length: rawText.length, truncated },
