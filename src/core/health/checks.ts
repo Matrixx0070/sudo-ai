@@ -69,6 +69,61 @@ export async function checkBrain(): Promise<HealthCheck> {
   return { name, status: 'healthy', message: `${providers.length} provider(s) configured: ${providers.join(', ')}`, lastCheck: ts };
 }
 
+/**
+ * A minimal brain call that returns the reply text. Injected by the Watchdog
+ * so this module stays dependency-free.
+ */
+export type BrainLivenessProbe = () => Promise<string>;
+
+export interface BrainLivenessOptions {
+  /** How often to actually spend a probe call; the verdict is cached between. */
+  intervalMs?: number;
+  /** Abort a probe that hangs longer than this. */
+  timeoutMs?: number;
+}
+
+/**
+ * Build a brain-LIVENESS check that actually drives a real (cheap) brain call
+ * and asserts a non-empty reply — unlike checkBrain(), which only verifies
+ * keys are *present* in the environment and therefore reported healthy right
+ * through a ~30h outage where the present key was invalid.
+ *
+ * Throttled: it spends at most one probe call per `intervalMs` (default 15min)
+ * and returns the cached verdict on the watchdog's intervening 60s ticks, so
+ * the safety net costs ~one trivial call per interval, not one per tick.
+ */
+export function createBrainLivenessCheck(
+  probe: BrainLivenessProbe,
+  opts: BrainLivenessOptions = {},
+): () => Promise<HealthCheck> {
+  const intervalMs = opts.intervalMs ?? 15 * 60_000;
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const name = 'brain_liveness';
+  let lastProbeAt = 0;
+  let cached: HealthCheck | null = null;
+
+  return async function checkBrainLiveness(): Promise<HealthCheck> {
+    const now = Date.now();
+    if (cached && now - lastProbeAt < intervalMs) {
+      return { ...cached, lastCheck: new Date().toISOString() };
+    }
+    lastProbeAt = now;
+    const ts = new Date().toISOString();
+    try {
+      const reply = await Promise.race([
+        probe(),
+        new Promise<string>((_, reject) => setTimeout(() => reject(new Error(`liveness probe timed out after ${timeoutMs}ms`)), timeoutMs)),
+      ]);
+      cached = (typeof reply === 'string' && reply.trim().length > 0)
+        ? { name, status: 'healthy', message: 'brain answered a live probe', lastCheck: ts }
+        : { name, status: 'critical', message: 'brain probe returned an empty reply — no provider is answering', lastCheck: ts };
+    } catch (err) {
+      cached = { name, status: 'critical', message: `brain probe failed — no provider answering: ${String(err instanceof Error ? err.message : err).slice(0, 140)}`, lastCheck: ts };
+    }
+    return cached;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 2. Database integrity
 // ---------------------------------------------------------------------------

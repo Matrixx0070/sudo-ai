@@ -6,6 +6,7 @@
  */
 
 import { generateText, streamText, tool as aiTool, jsonSchema } from 'ai';
+import { sanitizeToolSchemaForProvider } from './tool-schema-compat.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } from '../shared/prompt-cache-telemetry.js';
@@ -1302,7 +1303,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           const toolEntries = request.tools.map((t): [string, object] => {
             const name = t.function?.name ?? '';
             const desc = t.function?.description ?? '';
-            const params = t.function?.parameters ?? {};
+            const params = sanitizeToolSchemaForProvider(t.function?.parameters ?? {}, modelId);
             return [name, aiTool({
               description: desc,
               inputSchema: jsonSchema(params),
@@ -1539,7 +1540,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       const toolEntries = request.tools.map((t: any): [string, object] => {
         const name = t.function?.name ?? t.name;
         const desc = t.function?.description ?? t.description;
-        const params = t.function?.parameters ?? t.parameters;
+        const params = sanitizeToolSchemaForProvider(t.function?.parameters ?? t.parameters, modelId);
         return [name, aiTool({
           description: desc,
           inputSchema: jsonSchema(params),
@@ -2094,6 +2095,10 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // a signature-only auth match) do we fall back to the first body seen, which
     // is the text that named the cause.
     const body = numericStatusFound ? statusBody : fallbackBody;
+
+    if (process.env['SUDO_DEBUG_ERR_BODY'] === '1' && typeof status === 'number' && status >= 400 && status < 500) {
+      log.warn({ status, body: String(body ?? '').slice(0, 800) }, 'DEBUG: provider 4xx error body');
+    }
 
     return { status: status ?? 500, body, retryAfterMs: Brain._extractRetryAfter(err) };
   }
