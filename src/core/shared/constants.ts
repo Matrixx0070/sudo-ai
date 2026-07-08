@@ -11,7 +11,7 @@ import { projectPath, dataPath, DATA_DIR } from './paths.js';
 // ---------------------------------------------------------------------------
 
 export const APP_NAME = 'SUDO-AI' as const;
-export const APP_VERSION = '4.1.0' as const;
+export const APP_VERSION = '4.1.4' as const;
 
 // ---------------------------------------------------------------------------
 // Models

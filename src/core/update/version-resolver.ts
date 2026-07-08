@@ -13,6 +13,7 @@
 import { execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
 import type { AutoUpdateConfig, UpdateChannel, VersionCheckResult, RemoteVersionInfo } from './update-manager-types.js';
@@ -171,11 +172,18 @@ export class VersionResolver {
    * Get the current git HEAD SHA.
    */
   getCurrentGitSha(): string {
+    // npm installs have no .git — skip quietly instead of letting git print
+    // "fatal: not a git repository" (execSync inherits stderr by default).
+    if (!fs.existsSync(path.join(this.config.projectRoot, '.git'))) {
+      log.debug({ projectRoot: this.config.projectRoot }, 'Not a git checkout — skipping git SHA');
+      return '';
+    }
     try {
       return execSync('git rev-parse HEAD', {
         cwd: this.config.projectRoot,
         encoding: 'utf-8',
         timeout: 10_000,
+        stdio: ['ignore', 'pipe', 'pipe'],  // keep git's stderr off the console
       }).trim();
     } catch (err: unknown) {
       log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Failed to get current git SHA');

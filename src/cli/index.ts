@@ -362,6 +362,13 @@ program
   .action(async (opts: { check?: boolean; channel?: string; rollback?: boolean; status?: boolean }) => {
     const { runUpdate } = await import('./commands/update.js');
     const code = await runUpdate(INSTALL_ROOT, opts);
+    // Close the pino worker transport before exiting — otherwise its process
+    // 'exit' flush hook throws "_flushSync took too long (10s)" (see
+    // core/shared/logger.ts closeLogger).
+    try {
+      const { closeLogger } = await import('../core/shared/logger.js');
+      await closeLogger();
+    } catch { /* logger unavailable — nothing to tear down */ }
     process.exit(code);
   });
 

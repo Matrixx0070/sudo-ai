@@ -426,6 +426,7 @@ export class AutoUpdateManager extends EventEmitter {
         cwd: this.config.projectRoot,
         encoding: 'utf-8',
         timeout: 5_000,
+        stdio: ['ignore', 'pipe', 'pipe'],  // npm installs have no .git — keep git's "fatal:" off the console
       }).trim();
       return status.length > 0;
     } catch {
