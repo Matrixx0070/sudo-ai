@@ -1433,6 +1433,17 @@ export class AgentLoop extends AgentLoopInjections {
       // channel that survives the sliding window). The emit below carries the
       // original `current` so telemetry/UI show the user's actual message.
       session.messages.push({ role: 'user', content: _planProgressNote ? `${_planProgressNote}\n\n${current}` : current });
+      // Durably persist the incoming user message NOW, before any brain call.
+      // The end-of-run save below is skipped when the run throws (e.g. all
+      // model profiles exhausted), which used to lose the user's message
+      // entirely. save() is incremental (persistedMessageCount), so this
+      // never duplicates rows on the later save. Fail-open: a persist error
+      // must not abort the turn.
+      try {
+        if (!isZDRBlocked('session_persistence')) await this.sessionManager.save(session);
+      } catch (persistErr) {
+        log.warn({ sessionId, err: String(persistErr) }, 'Early user-message persist failed — continuing turn');
+      }
       emit({ type: 'message', content: current });
       const _shipMsgBefore = session.messages.length;
       finalResponse = await this._innerLoop(session, state, emit, opts);

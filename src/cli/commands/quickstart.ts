@@ -22,6 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import { randomBytes } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -166,6 +167,40 @@ function buildConfigJson5(answers: WizardAnswers): string {
 `;
 }
 
+/**
+ * Ensure config/.env exists and carries the env keys a fresh install needs for
+ * a working message pipeline. Without WEB_CHAT_ENABLED=true the daemon never
+ * attaches the web adapter, so POST /api/message (the only out-of-the-box turn
+ * entry point) has no handler. Appends only missing keys — never rewrites
+ * values the user already set. Returns the keys that were added.
+ */
+export function ensureEnvDefaults(configDir: string): string[] {
+  const envPath = path.join(configDir, '.env');
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const hasKey = (key: string): boolean =>
+    new RegExp(`^\\s*${key}\\s*=`, 'm').test(existing);
+
+  const additions: Array<{ key: string; line: string }> = [];
+  if (!hasKey('WEB_CHAT_ENABLED')) {
+    additions.push({
+      key: 'WEB_CHAT_ENABLED',
+      line: '# Web chat channel (serves /chat + POST /api/message on the gateway port)\nWEB_CHAT_ENABLED=true',
+    });
+  }
+  if (!hasKey('WEB_CHAT_TOKEN')) {
+    additions.push({
+      key: 'WEB_CHAT_TOKEN',
+      line: `# Bearer/query token guarding /chat, /chat/ws and POST /api/message\nWEB_CHAT_TOKEN=${randomBytes(24).toString('hex')}`,
+    });
+  }
+  if (additions.length === 0) return [];
+
+  if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+  fs.appendFileSync(envPath, `${prefix}${additions.map((a) => a.line).join('\n')}\n`, 'utf8');
+  return additions.map((a) => a.key);
+}
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -215,6 +250,8 @@ export async function runQuickstart(
   if (nonInteractive) {
     if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(configPath, buildConfigJson5(DEFAULT_ANSWERS), 'utf8');
+    const added = ensureEnvDefaults(configDir);
+    if (added.length > 0) console.log(`  Wrote env defaults to config/.env: ${added.join(', ')}`);
     console.log(`\n  Non-interactive setup — wrote default config to: ${configPath}`);
     console.log(`  Agent: ${DEFAULT_ANSWERS.agentName} | model: ${DEFAULT_ANSWERS.defaultModel} | preset: ${DEFAULT_ANSWERS.preset}`);
     console.log('  Next: add API keys to config/.env, then re-run `sudo-ai quickstart` interactively or `sudo-ai start`.\n');
@@ -270,6 +307,8 @@ export async function runQuickstart(
     const answers: WizardAnswers = { agentName, defaultModel, enableTelegram, preset };
     const configContent = buildConfigJson5(answers);
     fs.writeFileSync(configPath, configContent, 'utf8');
+    const addedEnvKeys = ensureEnvDefaults(configDir);
+    if (addedEnvKeys.length > 0) console.log(`  Wrote env defaults to config/.env: ${addedEnvKeys.join(', ')}`);
 
     console.log(`\n  Config written to: ${configPath}`);
     console.log(`  Preset selected: ${preset} (run 'sudo-ai init --preset ${preset}' to apply)`);
