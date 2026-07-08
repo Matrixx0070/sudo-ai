@@ -521,7 +521,7 @@ async function boot(): Promise<void> {
   // a new category cannot slip past. Each gap is warned exactly once, tagged
   // with the phase that first found it.
   const flaggedRoutingGaps = new Set<string>();
-  const checkToolRoutingCoverage = async (phase: 'boot' | 'post-plugin' | 'final'): Promise<void> => {
+  const checkToolRoutingCoverage = async (phase: 'boot' | 'post-plugin' | 'final' | 'runtime'): Promise<void> => {
     try {
       const { findUnroutableCategories } = await import('./core/agent/tool-router.js');
       const unroutable = findUnroutableCategories(registry.listEnabled());
@@ -538,6 +538,34 @@ async function boot(): Promise<void> {
       log.warn({ err: msg, phase }, 'Category coverage guard failed — continuing');
     }
   };
+
+  // Runtime backstop for the three point-in-time passes above/below: a tool
+  // registered AFTER boot completes (post-"online" banner, lazily-invoked
+  // callback, first-request path, ToolRegistry.setGlobal() self-registration)
+  // is validated the moment register() stores it. Per-tool check only — no
+  // registry re-scan — sharing flaggedRoutingGaps so a gap the startup passes
+  // already warned about never double-warns, and a runtime-introduced gap
+  // warns exactly once, tagged '(runtime)'. The observer is try/catch-isolated
+  // inside register(), and this whole wiring is non-fatal.
+  // Kill-switch: SUDO_ROUTING_GUARD_RUNTIME=0 (default ON — warn is cheap).
+  if (process.env['SUDO_ROUTING_GUARD_RUNTIME'] !== '0') {
+    try {
+      const { unroutableCategoryOf } = await import('./core/agent/tool-router.js');
+      registry.onRegister((tool) => {
+        const category = unroutableCategoryOf(tool);
+        if (category === null || flaggedRoutingGaps.has(category)) return;
+        flaggedRoutingGaps.add(category);
+        log.warn(
+          { category, phase: 'runtime', toolCount: 1, tools: tool.name },
+          `TOOL ROUTING GAP (runtime): category "${category}" has 1 registered tool(s) but no CATEGORY_MAP entry — these tools are INVISIBLE to the model (reachable only via tool.search). Fix: add a CATEGORY_MAP entry in src/core/agent/tool-router.ts.`,
+        );
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'Runtime routing-coverage observer failed to wire — continuing');
+    }
+  }
+
   await checkToolRoutingCoverage('boot');
 
   // -------------------------------------------------------------------------
