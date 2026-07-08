@@ -46,6 +46,30 @@ const ADMIN_API_ON: boolean = process.env['SUDO_ADMIN_API'] === '1';
  */
 export let gatewayServer: import('node:http').Server | null = null;
 
+/**
+ * Route owners that registered a sibling `server.on('request')` listener.
+ * handleRequest's fall-through allowlist consults this before leaving a
+ * request unanswered: if the owner never attached (e.g. web chat disabled or
+ * its boot failed), falling through would leave the socket open forever —
+ * curl reports 000, the message is silently dropped, and nothing persists.
+ */
+const attachedRouteOwners = new Set<string>();
+
+/** Called by a sibling route listener (e.g. WebAdapter.attach) once attached. */
+export function markGatewayRouteOwnerAttached(owner: string): void {
+  attachedRouteOwners.add(owner);
+}
+
+/** Called on detach (e.g. WebAdapter.stop) so the guard fails fast again. */
+export function markGatewayRouteOwnerDetached(owner: string): void {
+  attachedRouteOwners.delete(owner);
+}
+
+/** True once the named route owner has attached its request listener. */
+export function isGatewayRouteOwnerAttached(owner: string): boolean {
+  return attachedRouteOwners.has(owner);
+}
+
 const startTime = Date.now();
 const stats = {
   totalRequests: 0,
@@ -132,6 +156,31 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // (registered via server.on('request')).
   // Fall through to those listeners.
   const pathname = url.split('?')[0] ?? '/';
+
+  // WebAdapter routes: GET /chat (+SPA assets) and POST /api/message are served
+  // by a sibling 'request' listener that only exists when the web channel is
+  // attached (WEB_CHAT_ENABLED=true in config/.env). Without this guard, a
+  // request to these paths on a daemon whose web adapter never attached fell
+  // through to... nothing: no listener ever wrote a response, the socket hung
+  // until client timeout (curl: 000), and the message was silently dropped
+  // (no session, no persisted user message). Answer with an actionable 503
+  // instead so a fresh `sudo-ai quickstart` install fails loudly, not silently.
+  if (
+    pathname === '/chat' || pathname.startsWith('/chat/') ||
+    pathname === '/api/message' || pathname.startsWith('/assets/')
+  ) {
+    if (isGatewayRouteOwnerAttached('web')) return; // WebAdapter listener responds
+    log.warn({ requestId, url }, 'Web route requested but web adapter is not attached (WEB_CHAT_ENABLED != true)');
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: {
+        message: 'Web chat is not enabled on this daemon. Set WEB_CHAT_ENABLED=true (and WEB_CHAT_TOKEN) in config/.env, then restart with `sudo-ai restart`.',
+        type: 'gateway_error',
+      },
+    }));
+    return;
+  }
+
   if (
     pathname.startsWith('/v1/admin') ||
     pathname.startsWith('/v1/sessions') ||
@@ -144,10 +193,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     pathname.startsWith('/v1/federation/') ||   // Federation routes (registered via server.on('request'))
     pathname.startsWith('/.well-known') ||   // agentskills.io discovery (public no-auth)
     pathname === '/v1/models' ||
-    pathname === '/v1/chat/completions' ||    // Handled by http-api.ts via Brain's direct provider connections
-    (pathname === '/chat' || pathname.startsWith('/chat/')) ||   // WebAdapter: GET /chat (HTML) and WS upgrade /chat/ws
-    pathname.startsWith('/assets/') ||    // Vite built assets in dist/renderer/assets/
-    pathname === '/api/message'        // WebAdapter: POST /api/message (REST inject)
+    pathname === '/v1/chat/completions'    // Handled by http-api.ts via Brain's direct provider connections
   ) {
     return;
   }

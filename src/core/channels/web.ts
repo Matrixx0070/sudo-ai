@@ -23,6 +23,7 @@ import { createLogger } from '../shared/logger.js';
 import { ChannelError } from '../shared/errors.js';
 import { projectPath } from '../shared/paths.js';
 import { serveStaticFile, buildSpaCSPHeader } from '../gateway/static-middleware.js';
+import { markGatewayRouteOwnerAttached, markGatewayRouteOwnerDetached } from '../gateway/server.js';
 import type { ChannelAdapter } from './adapter.js';
 import type { AgentEvent } from '../agent/types.js';
 import type {
@@ -409,6 +410,10 @@ export class WebAdapter implements ChannelAdapter {
     });
 
     this._isConnected = true;
+    // Tell the gateway's fall-through allowlist that /chat, /assets/* and
+    // /api/message now have a live listener — until this is set, the gateway
+    // answers those routes with a 503 instead of leaving the socket hanging.
+    markGatewayRouteOwnerAttached('web');
     log.info({ chatPath: '/chat', wsPath: '/chat/ws' }, 'Web adapter attached to gateway server');
   }
 
@@ -431,6 +436,7 @@ export class WebAdapter implements ChannelAdapter {
       log.error({ err }, 'Error stopping Web adapter');
     } finally {
       this._isConnected = false;
+      markGatewayRouteOwnerDetached('web');
       log.info('Web adapter stopped');
     }
   }

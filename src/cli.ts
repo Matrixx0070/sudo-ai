@@ -12,8 +12,26 @@
  */
 
 import path from 'node:path';
+import dns from 'node:dns';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
+
+// Prefer IPv4 for hostname resolution (fetch/undici included). On networks
+// with advertised-but-broken IPv6, Node's default 'verbatim' order makes
+// undici dial the AAAA address first and fail with
+// AggregateError(ETIMEDOUT | EHOSTUNREACH) — previously worked around with
+// NODE_OPTIONS=--dns-result-order=ipv4first. Respect an explicit CLI flag /
+// NODE_OPTIONS if the operator set one; override with SUDO_DNS_RESULT_ORDER
+// (ipv4first | ipv6first | verbatim).
+{
+  const cliSetsDnsOrder =
+    process.execArgv.some((a) => a.includes('--dns-result-order')) ||
+    (process.env['NODE_OPTIONS'] ?? '').includes('--dns-result-order');
+  const order = process.env['SUDO_DNS_RESULT_ORDER'] ?? (cliSetsDnsOrder ? '' : 'ipv4first');
+  if (order === 'ipv4first' || order === 'ipv6first' || order === 'verbatim') {
+    dns.setDefaultResultOrder(order);
+  }
+}
 import { createLogger } from './core/shared/logger.js';
 import { sanitizeUserFacingError } from './core/shared/sanitize-error.js';
 import { registerShutdown, runShutdown } from './core/cli/shutdown.js';
