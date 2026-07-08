@@ -169,10 +169,10 @@ function ensureDataDir(): void {
 // meta.skill-creator
 // ---------------------------------------------------------------------------
 
-const skillCreatorTool: ToolDefinition = {
+export const skillCreatorTool: ToolDefinition = {
   name: 'meta.skill-creator',
   description:
-    'Create a new SUDO-AI tool/skill from a natural language description. The AI generates a TypeScript ToolDefinition, compiles it, and registers it LIVE in the current session — no restart needed. Set saveOnly:true to only save the file without activating.',
+    'Create a new executable TOOL (code) from a natural language description: the AI generates a TypeScript ToolDefinition (parameters + execute function), compiles it, and registers it LIVE in the current session — no restart needed. This produces CODE that runs, not behavioral guidance. To author a behavioral SKILL (persona/workflow/writing instructions saved as a SKILL.md), use skill.apply instead, NOT this tool. Set saveOnly:true to only save the file without activating.',
   category: 'meta',
   timeout: 120_000,
   parameters: {
