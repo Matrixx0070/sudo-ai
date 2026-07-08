@@ -44,7 +44,16 @@ async function compileTs(srcPath: string, outPath: string): Promise<{ ok: boolea
     await esbuild.build({
       entryPoints: [srcPath],
       outfile: outPath,
-      bundle: false,
+      // Bundle project-relative imports (e.g. '../../../shared/logger.js' →
+      // src/core/shared/logger.ts) into the output. The runtime runs from src/
+      // via tsx, so dist/ contains ONLY hot-deployed custom tools — a compiled
+      // relative import like dist/core/shared/logger.js does not exist and
+      // fails at import time ("Cannot find module .../dist/core/shared/logger.js").
+      bundle: true,
+      // Keep bare package imports (pino, better-sqlite3, ...) external: Node
+      // resolves them from the project's node_modules by walking up from the
+      // outfile directory, and bundling native/CJS deps into an ESM file breaks.
+      packages: 'external',
       platform: 'node',
       format: 'esm',
       target: 'node18',
@@ -81,10 +90,11 @@ function findToolExport(mod: Record<string, unknown>): ToolDefinition | null {
 export const hotDeployTool: ToolDefinition = {
   name: 'meta.hot-deploy',
   description:
-    'Compile a TypeScript skill and register it into the LIVE tool registry — no restart needed. ' +
-    'Give it a skill name and TypeScript source code. It compiles with esbuild, imports the module, ' +
-    'and registers the tool immediately. The new skill is available in the SAME session. ' +
-    'Use after meta.skill-creator generates code to make it instantly active.',
+    'Compile a TypeScript code TOOL and register it into the LIVE tool registry — no restart needed. ' +
+    'Give it a tool name and TypeScript source code. It compiles with esbuild, imports the module, ' +
+    'and registers the tool immediately. The new tool is available in the SAME session. ' +
+    'Use after meta.skill-creator generates code to make it instantly active. ' +
+    '(For a behavioral SKILL.md, use skill.apply — not this.)',
   category: 'meta',
   timeout: 60_000,
   parameters: {

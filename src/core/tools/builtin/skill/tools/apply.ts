@@ -15,10 +15,13 @@ const logger = createLogger('skill.apply');
 export const applyTool: ToolDefinition = {
   name: 'skill.apply',
   description:
-    'Author or revise one of your OWN skills: writes a versioned SKILL.md after a security gate ' +
-    '(injection scan + capability policy + protected-path check). dryRun=true (default) runs the ' +
-    'gate and reports the verdict WITHOUT writing; dryRun=false applies. Applied skills take effect ' +
-    'on the next restart. Requires SUDO_SKILL_WORKSHOP=1.',
+    'Create/author/build one of your OWN skills — writes a versioned SKILL.md of behavioral/persona/' +
+    'workflow instructions (like a Claude-Code skill). Use THIS whenever asked to "build/create/author ' +
+    'a skill" that shapes how you behave, write, or work. Runs a security gate (injection scan + ' +
+    'capability policy + protected-path check) before writing. dryRun=true (default) runs the gate and ' +
+    'reports the verdict WITHOUT writing; dryRun=false applies. Applied skills take effect on the next ' +
+    'restart. Requires SUDO_SKILL_WORKSHOP=1. (To create an executable code TOOL with parameters and an ' +
+    'execute() function, use meta.tool-creator instead — NOT this.)',
   category: 'skill' as import('../../../types.js').ToolCategory,
   timeout: 15_000,
   parameters: {

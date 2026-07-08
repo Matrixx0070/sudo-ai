@@ -667,9 +667,10 @@ function testTool(toolName: string | undefined, testParams: Record<string, unkno
 export const toolCreatorTool: ToolDefinition = {
   name: 'meta.tool-creator',
   description:
-    'Template-based tool creator — instantly generate new tools from pre-built templates without LLM calls. ' +
+    'Template-based executable code TOOL creator — instantly generate new tools from pre-built templates without LLM calls. ' +
     'Creates file, API, shell, database, or composite tools with safety guards. ' +
-    'Faster and cheaper than meta.skill-creator for common tool patterns.',
+    'Faster and cheaper than meta.skill-creator for common tool patterns. ' +
+    '(To author a behavioral SKILL — persona/workflow instructions as a SKILL.md — use skill.apply, not this.)',
   category: 'meta',
   timeout: 30_000,
   parameters: {
