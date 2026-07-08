@@ -37,10 +37,30 @@ export function restartCommand(): string {
   return PM2_RESTART;
 }
 
-export function resolveRestartCmd(): { cmd: string; via: 'override' | 'pm2' | 'systemctl' } {
+/**
+ * Message returned when no restart mechanism exists on macOS (no pm2 on PATH,
+ * no systemctl on darwin, no SUDO_RESTART_CMD). Exported for unit tests.
+ */
+export const DARWIN_NO_RESTART_MSG =
+  'No self-restart mechanism available on macOS: install pm2, or set SUDO_RESTART_CMD ' +
+  '(e.g. a launchd `launchctl kickstart -k` target, or a `sudo-ai stop && sudo-ai start -d` ' +
+  'wrapper script). Until then, restart manually: sudo-ai stop && sudo-ai start -d';
+
+/**
+ * Resolve the restart command. Linux behavior is unchanged: override → pm2 →
+ * systemctl. On darwin there is no systemctl, so with neither an override nor
+ * pm2 the result is via:'manual' — callers surface a clear "restart manually /
+ * set SUDO_RESTART_CMD" message instead of running a Linux command that errors.
+ *
+ * @param platform - injectable for unit tests; defaults to process.platform.
+ */
+export function resolveRestartCmd(
+  platform: NodeJS.Platform = process.platform,
+): { cmd: string; via: 'override' | 'pm2' | 'systemctl' | 'manual' } {
   const override = process.env['SUDO_RESTART_CMD'];
   if (override && override.trim()) return { cmd: override.trim(), via: 'override' };
   if (hasPm2()) return { cmd: PM2_RESTART, via: 'pm2' };
+  if (platform === 'darwin') return { cmd: '', via: 'manual' };
   return { cmd: SYSTEMCTL_RESTART, via: 'systemctl' };
 }
 
@@ -58,6 +78,10 @@ export interface ScheduledRestart {
  */
 export function scheduleDetachedRestart(reason: string, cwd: string = PROJECT_ROOT): ScheduledRestart {
   const { cmd, via } = resolveRestartCmd();
+  if (via === 'manual') {
+    logger.warn({ reason }, 'Self-restart unavailable on this platform (no pm2, no systemctl, no SUDO_RESTART_CMD)');
+    return { scheduled: false, cmd: '', error: DARWIN_NO_RESTART_MSG };
+  }
   logger.info({ cmd, via, reason }, 'Scheduling detached service restart');
   try {
     const child = spawn('sh', ['-c', `sleep 3; ${cmd}`], {

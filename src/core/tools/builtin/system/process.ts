@@ -1,6 +1,7 @@
 /**
- * system.process — List, inspect, and kill Linux processes.
- * Uses /proc filesystem for detailed info; ps for listing.
+ * system.process — List, inspect, and kill processes.
+ * Linux: /proc filesystem for detailed info, GNU ps for listing (unchanged).
+ * darwin/other: BSD ps invocations (no --no-headers; header skipped in code).
  */
 
 import { readFile } from 'node:fs/promises';
@@ -36,6 +37,46 @@ interface ProcessInfo extends ProcessEntry {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Build the `ps` argv for a full process listing.
+ *
+ * Linux (GNU ps): `ps aux --no-headers` — unchanged from the original code.
+ * darwin/other (BSD ps): `--no-headers` is not supported, so plain `ps aux`
+ * is used and the header line is skipped in code. BSD `ps aux` emits the same
+ * 11-column layout (USER PID %CPU %MEM VSZ RSS TT STAT STARTED TIME COMMAND),
+ * so parsePsLine works for both.
+ *
+ * @param platform - injectable for unit tests; defaults to process.platform.
+ */
+export function buildPsListArgs(
+  platform: NodeJS.Platform = process.platform,
+): { args: string[]; skipHeader: boolean } {
+  if (platform === 'linux') {
+    return { args: ['aux', '--no-headers'], skipHeader: false };
+  }
+  return { args: ['aux'], skipHeader: true };
+}
+
+/**
+ * Build the `ps` argv for inspecting a single PID.
+ *
+ * Linux: `ps aux --no-headers -p <pid>` — unchanged.
+ * darwin/other: explicit BSD `-o` column list reproducing the `aux` layout
+ * (BSD ps does not reliably combine `aux` with `-p`), header skipped in code.
+ */
+export function buildPsInfoArgs(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+): { args: string[]; skipHeader: boolean } {
+  if (platform === 'linux') {
+    return { args: ['aux', '--no-headers', '-p', String(pid)], skipHeader: false };
+  }
+  return {
+    args: ['-ww', '-o', 'user,pid,%cpu,%mem,vsz,rss,tt,stat,start,time,command', '-p', String(pid)],
+    skipHeader: true,
+  };
+}
 
 function parsePsLine(line: string): ProcessEntry | null {
   // ps aux columns: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
@@ -80,15 +121,44 @@ async function buildProcessInfo(entry: ProcessEntry): Promise<ProcessInfo> {
   };
 }
 
+/**
+ * Platform dispatch for the detail lookup: Linux keeps the /proc reads
+ * (unchanged); darwin/other has no /proc, so ppid comes from `ps -o ppid=`
+ * and cmdline from the ps COMMAND column. Thread count has no cheap portable
+ * source outside /proc and is left undefined (unavailable) off Linux.
+ */
+async function buildProcessInfoForPlatform(
+  entry: ProcessEntry,
+  ctx: ToolContext,
+  platform: NodeJS.Platform = process.platform,
+): Promise<ProcessInfo> {
+  if (platform === 'linux') {
+    return buildProcessInfo(entry);
+  }
+  let ppid: number | undefined;
+  try {
+    const { stdout } = await runCmd('ps', ['-p', String(entry.pid), '-o', 'ppid='], {
+      signal: ctx.signal,
+      allowFailure: true,
+    });
+    const parsed = parseInt(stdout.trim(), 10);
+    if (!isNaN(parsed)) ppid = parsed;
+  } catch {
+    // ppid stays undefined — unavailable
+  }
+  return { ...entry, ppid, threads: undefined, cmdline: entry.command };
+}
+
 // ---------------------------------------------------------------------------
 // Operations
 // ---------------------------------------------------------------------------
 
 async function listProcesses(ctx: ToolContext): Promise<ToolResult> {
   logger.info({ session: ctx.sessionId }, 'Listing processes');
-  const { stdout } = await runCmd('ps', ['aux', '--no-headers'], { signal: ctx.signal });
-  const processes = stdout
-    .split('\n')
+  const { args, skipHeader } = buildPsListArgs();
+  const { stdout } = await runCmd('ps', args, { signal: ctx.signal });
+  const lines = stdout.split('\n');
+  const processes = (skipHeader ? lines.slice(1) : lines)
     .map(parsePsLine)
     .filter((p): p is ProcessEntry => p !== null);
 
@@ -101,19 +171,18 @@ async function listProcesses(ctx: ToolContext): Promise<ToolResult> {
 
 async function getProcessInfo(pid: number, ctx: ToolContext): Promise<ToolResult> {
   logger.info({ session: ctx.sessionId, pid }, 'Getting process info');
-  const { stdout } = await runCmd(
-    'ps',
-    ['aux', '--no-headers', '-p', String(pid)],
-    { signal: ctx.signal, allowFailure: true },
-  );
-  if (!stdout) {
+  const { args, skipHeader } = buildPsInfoArgs(pid);
+  const { stdout } = await runCmd('ps', args, { signal: ctx.signal, allowFailure: true });
+  const lines = stdout.split('\n');
+  const dataLines = skipHeader ? lines.slice(1) : lines;
+  if (!dataLines[0]) {
     return { success: false, output: `No process found with PID ${pid}`, data: {} };
   }
-  const entry = parsePsLine(stdout.split('\n')[0] ?? '');
+  const entry = parsePsLine(dataLines[0]);
   if (!entry) {
     return { success: false, output: `Cannot parse process info for PID ${pid}`, data: {} };
   }
-  const info = await buildProcessInfo(entry);
+  const info = await buildProcessInfoForPlatform(entry, ctx);
   return {
     success: true,
     output: `Process ${pid}: ${info.command} (CPU: ${info.cpu}%, MEM: ${info.mem}%)`,
