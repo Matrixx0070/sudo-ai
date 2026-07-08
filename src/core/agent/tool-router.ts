@@ -472,6 +472,27 @@ export function categoryFromToolName(name: string): string {
 }
 
 /**
+ * Single-tool variant of {@link findUnroutableCategories}: return the
+ * unroutable effective category of ONE tool, or null when the tool is
+ * routable (or has no category at all to key a CATEGORY_MAP entry on).
+ *
+ * Used by the runtime registry-observer coverage guard in cli.ts so a tool
+ * registered at ANY time after boot (lazy callback, plugin, self-registration
+ * via ToolRegistry.getGlobal()) is validated without re-scanning the whole
+ * registry.
+ *
+ * @param tool - A single registered tool (name + optional declared category).
+ * @returns The uncovered category name, or null when covered/uncategorised.
+ */
+export function unroutableCategoryOf(
+  tool: { name: string; category?: string | null },
+): string | null {
+  const effective = tool.category ?? categoryFromToolName(tool.name);
+  if (!effective) return null; // no category at all — nothing to key a CATEGORY_MAP entry on
+  return ROUTABLE_CATEGORIES.has(effective) ? null : effective;
+}
+
+/**
  * Find tool categories that are GENUINELY unroutable by this router.
  *
  * Mirrors `_groupByCategory` exactly: a tool's effective category is its
@@ -490,12 +511,11 @@ export function findUnroutableCategories(
 ): Map<string, string[]> {
   const unroutable = new Map<string, string[]>();
   for (const tool of tools) {
-    const effective = tool.category ?? categoryFromToolName(tool.name);
-    if (!effective) continue; // no category at all — nothing to key a CATEGORY_MAP entry on
-    if (ROUTABLE_CATEGORIES.has(effective)) continue;
-    const existing = unroutable.get(effective);
+    const gap = unroutableCategoryOf(tool);
+    if (gap === null) continue;
+    const existing = unroutable.get(gap);
     if (existing) existing.push(tool.name);
-    else unroutable.set(effective, [tool.name]);
+    else unroutable.set(gap, [tool.name]);
   }
   return unroutable;
 }

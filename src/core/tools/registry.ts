@@ -105,6 +105,33 @@ export class ToolRegistry {
   /** Lazily-built native-tool fallback (gap #7), used only when SUDO_NATIVE_TOOL_CORRECTION_FALLBACK=1. */
   private _nativeCorrection: NativeToolCorrection | null = null;
 
+  /**
+   * Register-time observers, invoked AFTER a tool is stored (see register()).
+   * Deliberately generic — the registry knows nothing about tool routing; the
+   * caller (cli.ts) owns any coverage logic, keeping registry → agent imports
+   * out of this module.
+   */
+  private readonly _registerObservers: Array<
+    (tool: { name: string; category?: string | null }) => void
+  > = [];
+
+  /**
+   * Subscribe to tool registrations. The callback fires after every successful
+   * `register()` (including last-wins re-registers of a divergent definition;
+   * NOT for same-reference no-op re-registers), at ANY time in the process
+   * lifetime — boot, post-boot, lazy callbacks, plugin activate(), runtime
+   * self-registration via the global singleton.
+   *
+   * A throwing observer can never break registration: each callback is
+   * try/catch-isolated inside register().
+   *
+   * @param cb - Called with the registered tool's name and declared category.
+   */
+  onRegister(cb: (tool: { name: string; category?: string | null }) => void): void {
+    if (typeof cb !== 'function') return;
+    this._registerObservers.push(cb);
+  }
+
   // -------------------------------------------------------------------------
   // Global singleton — allows tools to self-register at runtime
   // -------------------------------------------------------------------------
@@ -160,6 +187,17 @@ export class ToolRegistry {
     }
     this.tools.set(tool.name, tool);
     logger.info({ tool: tool.name, category: tool.category }, 'Tool registered');
+
+    // Notify observers AFTER the tool is stored. Isolated per-callback: an
+    // observer throwing must never break (or roll back) a registration.
+    for (const cb of this._registerObservers) {
+      try {
+        cb({ name: tool.name, category: tool.category });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.debug({ tool: tool.name, err: msg }, 'register observer threw — ignored');
+      }
+    }
   }
 
   /**
