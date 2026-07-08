@@ -88,7 +88,7 @@ type CategoryName =
   | 'research' | 'comms' | 'social' | 'marketing' | 'data'
   | 'meta' | 'dev' | 'github' | 'knowledge' | 'voice' | 'business'
   | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal'
-  | 'skill';
+  | 'skill' | 'superpowers';
 
 /**
  * Full category → routing rule map.
@@ -280,6 +280,48 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     // back the skill" turn surfaced compose/explain/federate/refine/usage-stats
     // but NOT rollback). 7 fits the whole small category, well within the cap.
     maxFromCategory: 7,
+  },
+  // The 12 super.* power tools (category 'superpowers': translate, archive,
+  // ffmpeg, edit-image, profile, security-scan, deploy, auto-fix, analyze-data,
+  // build-api, build-scraper, generate-pdf). Without this entry the whole
+  // superpowers toolset never groups into a routed category — same invisibility
+  // bug that hid the skill tools — so it was reachable only via tool.search.
+  superpowers: {
+    keywords: [
+      // super.translate
+      'translate', 'translation', 'translate to', 'in spanish', 'in french',
+      // super.archive
+      'zip', 'unzip', 'archive', 'compress', 'decompress', 'extract the archive',
+      // super.ffmpeg
+      'ffmpeg', 'trim video', 'convert video', 'convert the video',
+      'extract audio', 'compress video', 'merge videos',
+      // super.edit-image
+      'resize', 'crop', 'rotate', 'watermark', 'resize image',
+      // super.profile
+      'load test', 'benchmark', 'profile', 'response time', 'memory usage',
+      // super.security-scan
+      'security scan', 'vulnerability', 'vulnerabilities', 'scan for secrets',
+      'npm audit', 'open ports',
+      // super.deploy
+      'deploy', 'deployment', 'rsync',
+      // super.auto-fix / super.analyze-data
+      'diagnose', 'error log', 'analyze csv', 'csv stats',
+      // super.build-api / super.build-scraper
+      'rest api', 'crud', 'api scaffold', 'scraper', 'build a scraper',
+    ],
+    patterns: [
+      /\bsuper\.[a-z-]+\b/i,               // direct tool-name mention
+      /\b(zip|unzip)\b|\btar\.(gz|bz2)\b/i,
+      /\bload[- ]?test\b|\bp95\b/i,
+      /\bsecurity\s+(scan|audit)\b|\bvulnerab/i,
+      /\bauto[- ]fix\b/i,
+      /\btranslate\s+(this|the|it|to)\b/i,
+    ],
+    priority: 6,
+    // 12 tools, but each turn typically needs ONE (they are independent
+    // capabilities, not a workflow) — the within-category relevance ranker
+    // surfaces the described tool. 6 gives ample headroom over ranking ties.
+    maxFromCategory: 6,
   },
   meta: {
     keywords: [

@@ -113,6 +113,57 @@ describe('ToolRouter — skill category routing', () => {
   });
 });
 
+describe('ToolRouter — superpowers category routing', () => {
+  // Regression: category:'superpowers' tools (the 12 registered super.* tools)
+  // had no entry in CATEGORY_MAP, so they never grouped into a routed category
+  // and were reachable only via tool.search — same invisibility bug that hid
+  // the skill toolset.
+  const SUPER_TOOLS = [
+    ...TOOLS,
+    { name: 'super.build-api', category: 'superpowers' },
+    { name: 'super.deploy', category: 'superpowers' },
+    { name: 'super.generate-pdf', category: 'superpowers' },
+    { name: 'super.translate', category: 'superpowers' },
+    { name: 'super.archive', category: 'superpowers' },
+    { name: 'super.auto-fix', category: 'superpowers' },
+    { name: 'super.analyze-data', category: 'superpowers' },
+    { name: 'super.ffmpeg', category: 'superpowers' },
+    { name: 'super.edit-image', category: 'superpowers' },
+    { name: 'super.profile', category: 'superpowers' },
+    { name: 'super.security-scan', category: 'superpowers' },
+    { name: 'super.build-scraper', category: 'superpowers' },
+  ];
+  const router = new ToolRouter(fakeRegistry(SUPER_TOOLS) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  it('surfaces super.translate for a translation prompt', () => {
+    expect(names('translate this text to spanish for me')).toContain('super.translate');
+  });
+
+  it('surfaces super.archive for an unzip/archive prompt', () => {
+    expect(names('unzip the release archive and list what is inside')).toContain('super.archive');
+  });
+
+  it('surfaces super.security-scan for a vulnerability-scan prompt', () => {
+    expect(names('run a security scan for vulnerabilities in the npm dependencies')).toContain('super.security-scan');
+  });
+
+  it('surfaces super.ffmpeg for a video-manipulation prompt', () => {
+    expect(names('use ffmpeg to trim the intro off this video')).toContain('super.ffmpeg');
+  });
+
+  it('surfaces super.profile for a load-test prompt', () => {
+    expect(names('profile the memory usage of this command and benchmark it')).toContain('super.profile');
+  });
+
+  it('does NOT surface superpowers tools for an unrelated prompt', () => {
+    const n = names('what time is it in Tokyo');
+    expect(n).not.toContain('super.translate');
+    expect(n).not.toContain('super.archive');
+    expect(n).not.toContain('super.security-scan');
+  });
+});
+
 describe('ToolRouter — multi-word tool surfacing (name-word ranking)', () => {
   // media.code-image is registered LAST of many media tools; with maxFromCategory
   // it only surfaces if name-word overlap ranks it above its siblings for a
