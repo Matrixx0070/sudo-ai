@@ -1,9 +1,11 @@
 /**
  * @file sandbox/sandbox-runner.ts
- * @description bwrap process isolation runner.
+ * @description bwrap (Linux) / Seatbelt (macOS) process isolation runner.
  *
- * runInSandbox: spawns a command inside bubblewrap.
- *   Falls back to raw execFile when SUDO_SANDBOX_DISABLE=1.
+ * runInSandbox: spawns a command inside bubblewrap (Linux hosts) or
+ *   sandbox-exec/Seatbelt (macOS hosts).
+ *   Falls back to raw execFile when SUDO_SANDBOX_DISABLE=1 (all platforms)
+ *   or SUDO_SANDBOX_ALLOW_UNCONFINED=1 (macOS Seatbelt path only).
  *   On every fallback call logs a loud warning — not just at startup.
  *
  * buildBwrapArgs: exported for unit testing.
@@ -32,6 +34,9 @@ const log = createLogger('sandbox:runner');
 const execFileAsync = promisify(execFile);
 
 export const BWRAP_BIN = '/usr/bin/bwrap';
+
+/** macOS Seatbelt runner binary (ships with every macOS install). */
+export const SANDBOX_EXEC_BIN = '/usr/bin/sandbox-exec';
 
 /**
  * Read-only host paths bound into the sandbox ONLY when policy.network === 'host'.
@@ -130,17 +135,26 @@ export function buildSandboxEnv(policy: SandboxPolicy): NodeJS.ProcessEnv {
  * memory (MB * 1024). Shared by the bwrap runner and alternate exec backends so
  * the resource caps stay identical across execution environments.
  */
-export function buildUlimitWrappedCommand(command: string, policy: SandboxPolicy): string {
+export function buildUlimitWrappedCommand(
+  command: string,
+  policy: SandboxPolicy,
+  targetPlatform: 'linux' | 'mac' = 'linux',
+): string {
   const cpuSeconds = policy.cpuSeconds ?? 30;
   const maxFileMB = policy.maxFileMB ?? 100;
   const memoryMB = policy.memoryMB ?? 512;
   const fileBlocks = maxFileMB * 2048;
   const kb = memoryMB * 1024;
+  // macOS does not support RLIMIT_AS (`ulimit -v` fails with "invalid argument"
+  // on darwin bash/zsh), so the virtual-memory cap is omitted there. All other
+  // limits (-t/-f/-u) behave the same on BSD userland. Default 'linux' keeps
+  // the Linux command string byte-for-byte identical.
+  const vLimit = targetPlatform === 'mac' ? '' : `ulimit -SHv ${kb}; `;
   return (
     `ulimit -SHt ${cpuSeconds}; ` +
     `ulimit -SHf ${fileBlocks}; ` +
     `ulimit -SHu 64; ` +
-    `ulimit -SHv ${kb}; ` +
+    vLimit +
     command
   );
 }
@@ -281,6 +295,226 @@ export function buildBwrapArgs(
 }
 
 // ---------------------------------------------------------------------------
+// Platform resolution
+// ---------------------------------------------------------------------------
+
+export type SandboxTargetPlatform = 'linux' | 'win' | 'mac';
+
+/**
+ * Resolve the effective sandbox target platform.
+ *
+ * Precedence: explicit call option → policy.platform → host detection.
+ * 'auto' (and any unknown value) falls through to host detection — on a Linux
+ * host that resolves to 'linux' → bwrap, i.e. the fail-safe direction (never
+ * silently unsandboxed).
+ *
+ * On a Linux host with no explicit platform (the production case) this returns
+ * 'linux', exactly like the previous `platform || policy.platform || 'linux'`
+ * default — the bwrap path is unchanged.
+ *
+ * @param hostPlatform - injectable for unit tests; defaults to process.platform.
+ */
+export function resolveSandboxPlatform(
+  explicit?: string,
+  policyPlatform?: string,
+  hostPlatform: NodeJS.Platform = process.platform,
+): SandboxTargetPlatform {
+  const pick = (v?: string): SandboxTargetPlatform | undefined =>
+    v === 'linux' || v === 'win' || v === 'mac' ? v : undefined;
+  const fromExplicit = pick(explicit);
+  if (fromExplicit) return fromExplicit;
+  const fromPolicy = pick(policyPlatform);
+  if (fromPolicy) return fromPolicy;
+  if (hostPlatform === 'darwin') return 'mac';
+  if (hostPlatform === 'win32') return 'win';
+  return 'linux';
+}
+
+// ---------------------------------------------------------------------------
+// macOS Seatbelt (sandbox-exec) profile
+// ---------------------------------------------------------------------------
+
+/** Escape a filesystem path for embedding in a Seatbelt profile string literal. */
+function seatbeltQuote(p: string): string {
+  return `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Build a macOS Seatbelt (.sb) profile that translates the bwrap policy:
+ *
+ *   - deny-default, like bwrap's empty mount namespace.
+ *   - file-read limited to system paths (macOS needs /System + /Library +
+ *     dyld caches where Linux needs /usr,/bin,/lib) + the workspace +
+ *     policy.extraReadOnlyBinds — NOT the whole filesystem, so host secrets
+ *     (config/.env, ~/.ssh) stay unreadable, matching bwrap's bind set.
+ *   - file-write limited to the workspace (+ /private/tmp as the /tmp tmpfs
+ *     analogue) + policy.extraWritableBinds.
+ *   - network allowed only when policy.network === 'host', mirroring
+ *     --unshare-net.
+ *
+ * Extra binds get the same symlink-resolution + validateBindPath treatment as
+ * buildBwrapArgs (throws SandboxPolicyError on unsafe/missing paths).
+ *
+ * NOTE: resource limits are NOT expressed here — they come from the same
+ * ulimit wrapper the bwrap path uses (see buildUlimitWrappedCommand).
+ */
+export function buildSeatbeltProfile(
+  workspaceDir: string,
+  policy: SandboxPolicy,
+  _realpathSync?: (p: string) => string,
+): string {
+  const resolveRealpath = _realpathSync ?? realpathSync;
+
+  const resolveValidatedBinds = (binds: string[] | undefined, label: string): string[] =>
+    (binds ?? []).map((bind) => {
+      let resolved: string;
+      try {
+        resolved = resolveRealpath(bind);
+      } catch {
+        throw new SandboxPolicyError(
+          `buildSeatbeltProfile: ${label} bind path does not exist: ${JSON.stringify(bind)}`,
+        );
+      }
+      if (!validateBindPath(resolved)) {
+        throw new SandboxPolicyError(
+          `buildSeatbeltProfile: resolved ${label} bind path unsafe: ${JSON.stringify(resolved)}`,
+        );
+      }
+      return resolved;
+    });
+
+  const roBinds = resolveValidatedBinds(policy.extraReadOnlyBinds, 'read-only');
+  const rwBinds = resolveValidatedBinds(policy.extraWritableBinds, 'writable');
+
+  // System paths a darwin process needs to load dyld/frameworks and run
+  // /bin/bash + common tools — the macOS analogue of bwrap's /usr,/bin,/lib
+  // ro-binds. /etc,/tmp,/var are symlinks into /private on macOS; Seatbelt
+  // matches on resolved paths, hence the /private forms.
+  const readPaths = [
+    '/usr',
+    '/bin',
+    '/sbin',
+    '/System',
+    '/Library',
+    '/private/etc',
+    '/private/var/db',
+    '/private/var/select',
+    '/opt/homebrew',
+    '/dev',
+    workspaceDir,
+    ...roBinds,
+    ...rwBinds,
+  ];
+  const writePaths = [workspaceDir, '/private/tmp', ...rwBinds];
+
+  const lines = [
+    '(version 1)',
+    '(deny default)',
+    '(allow process-fork)',
+    '(allow process-exec*)',
+    '(allow signal (target same-sandbox))',
+    '(allow process-info* (target same-sandbox))',
+    '(allow sysctl-read)',
+    '(allow mach-lookup)',
+    // Path metadata (existence/stat) must be broadly readable for path
+    // resolution through symlinks like /etc → /private/etc.
+    '(allow file-read-metadata)',
+    `(allow file-read* ${readPaths.map((p) => `(subpath ${seatbeltQuote(p)})`).join(' ')})`,
+    `(allow file-write* ${writePaths.map((p) => `(subpath ${seatbeltQuote(p)})`).join(' ')})`,
+    '(allow file-write-data (literal "/dev/null") (literal "/dev/dtracehelper") (regex #"^/dev/tty"))',
+    '(allow file-ioctl (literal "/dev/null") (regex #"^/dev/tty"))',
+    policy.network === 'host' ? '(allow network*)' : '(deny network*)',
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * Build the argv array for sandbox-exec (does NOT include the binary itself).
+ * Mirrors the bwrap contract: /bin/bash -c '<ulimit-wrapped command>'.
+ */
+export function buildSeatbeltArgs(
+  command: string,
+  workspaceDir: string,
+  policy: SandboxPolicy,
+  _realpathSync?: (p: string) => string,
+): string[] {
+  return [
+    '-p',
+    buildSeatbeltProfile(workspaceDir, policy, _realpathSync),
+    '/bin/bash',
+    '-c',
+    buildUlimitWrappedCommand(command, policy, 'mac'),
+  ];
+}
+
+/**
+ * Run a shell command under macOS Seatbelt via sandbox-exec.
+ * Same {stdout, stderr, exitCode} contract and timeout/maxBuffer/abort
+ * handling as the bwrap path.
+ *
+ * Escape hatch: SUDO_SANDBOX_ALLOW_UNCONFINED=1 runs unsandboxed on darwin
+ * with a loud per-call warning (for workloads the Seatbelt profile breaks),
+ * mirroring the global SUDO_SANDBOX_DISABLE=1 kill-switch but scoped to macOS.
+ */
+async function runInSeatbelt(
+  command: string,
+  workspaceDir: string,
+  policy: SandboxPolicy,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<SandboxRunResult> {
+  if (process.env['SUDO_SANDBOX_ALLOW_UNCONFINED'] === '1') {
+    log.warn(
+      'SUDO_SANDBOX_ALLOW_UNCONFINED=1 — macOS Seatbelt sandbox bypassed, running ' +
+        'unsandboxed on host. This is a security risk. Do not use in production.',
+    );
+    return runUnsandboxed(command, workspaceDir, policy, timeoutMs, signal);
+  }
+
+  const args = buildSeatbeltArgs(command, workspaceDir, policy);
+  const env = buildSandboxEnv(policy);
+
+  try {
+    const result = await execFileAsync(SANDBOX_EXEC_BIN, args, {
+      env,
+      timeout: timeoutMs,
+      maxBuffer: 10 * 1024 * 1024, // 10 MB
+      signal,
+    });
+    const stdout = typeof result.stdout === 'string' ? result.stdout : String(result.stdout);
+    const stderr = typeof result.stderr === 'string' ? result.stderr : String(result.stderr);
+    return { stdout, stderr, exitCode: 0 };
+  } catch (err: unknown) {
+    const error = err as NodeJS.ErrnoException & {
+      stdout?: string | Buffer;
+      stderr?: string | Buffer;
+      code?: string | number;
+      status?: number;
+    };
+    const outRaw = error.stdout;
+    const errRaw = error.stderr;
+    const stdout = typeof outRaw === 'string' ? outRaw : outRaw ? String(outRaw) : '';
+    const stderr = typeof errRaw === 'string' ? errRaw : errRaw ? String(errRaw) : '';
+
+    if (error.code === 'ABORT_ERR' || error.code === 'ERR_ABORT' || signal?.aborted) {
+      return { stdout, stderr: stderr || 'Process aborted', exitCode: 130 };
+    }
+
+    if (error.code === 'ENOENT') {
+      return {
+        stdout: '',
+        stderr:
+          `sandbox error: sandbox-exec not found at ${SANDBOX_EXEC_BIN} (it ships with macOS). ` +
+          'Set SUDO_SANDBOX_ALLOW_UNCONFINED=1 (or SUDO_SANDBOX_DISABLE=1) to run without a sandbox — unsafe.',
+        exitCode: 127,
+      };
+    }
+
+    return { stdout, stderr, exitCode: exitCodeFromError(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // runInSandbox
 // ---------------------------------------------------------------------------
 
@@ -322,8 +556,12 @@ export async function runInSandbox(
     );
   }
 
-  const effectivePlatform = platform || policy.platform || 'linux';
+  const effectivePlatform = resolveSandboxPlatform(platform, policy.platform);
   if (effectivePlatform !== 'linux') {
+    // Real sandbox on macOS hosts: Seatbelt via sandbox-exec.
+    if (effectivePlatform === 'mac' && process.platform === 'darwin') {
+      return runInSeatbelt(command, workspaceDir, policy, timeoutMs, signal);
+    }
     // Hardened cross-platform shim: always scrub via buildSandboxEnv; non-linux = host exec (full power per SOUL but logged); route control.file/gui via denylist in backends
     log.warn({ platform: effectivePlatform }, 'cross-platform sandbox shim (non-linux) - native with FULL env/policy scrub; file/gui/desktop control have separate denylists');
     return runUnsandboxed(command, workspaceDir, policy, timeoutMs, signal);
@@ -364,6 +602,20 @@ export async function runInSandbox(
       signal?.aborted
     ) {
       return { stdout, stderr: stderr || 'Process aborted', exitCode: 130 };
+    }
+
+    // Missing sandbox binary: previously surfaced as a confusing nonzero exit
+    // with empty output. Make it actionable instead.
+    if (error.code === 'ENOENT') {
+      log.error({ bin: BWRAP_BIN }, 'bwrap binary not found — sandboxed exec unavailable');
+      return {
+        stdout: '',
+        stderr:
+          `sandbox error: bwrap not found at ${BWRAP_BIN}. Install bubblewrap ` +
+          '(e.g. `apt install bubblewrap`) or set SUDO_SANDBOX_DISABLE=1 to run ' +
+          'commands unsandboxed — unsafe.',
+        exitCode: 127,
+      };
     }
 
     // Numeric exit code from the child process (execFile puts it on .code)

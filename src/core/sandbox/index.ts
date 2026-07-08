@@ -25,9 +25,13 @@ export {
 export {
   type RunInSandboxOptions,
   type SandboxRunResult,
+  type SandboxTargetPlatform,
   buildBwrapArgs,
   buildSandboxEnv,
+  buildSeatbeltArgs,
+  buildSeatbeltProfile,
   buildUlimitWrappedCommand,
+  resolveSandboxPlatform,
   runInSandbox,
 } from './sandbox-runner.js';
 

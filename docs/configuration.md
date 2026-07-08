@@ -11,7 +11,7 @@ Configuration lives in two files:
 
 `config/.env` is never validated — missing keys cause the relevant feature to be skipped or fall back gracefully. The agent logs a warning for each missing optional key.
 
-**Setup wizard note:** The TUI wizard (launched by `sudo-ai setup` or on first run of `sudo-ai`) populates cross-platform fields (computer-use enable, tool-outcome learner, self-repair, kill-switches such as `SUDO_CROSS_CONTROL_DISABLE`, and persona/system-prompt options) interactively. See the README "Setup Wizard" section for details. Manual edits to the config files are also supported, and many settings hot-reload.
+**Setup wizard note:** The TUI wizard (launched by `sudo-ai quickstart` or on first run of `sudo-ai`) populates cross-platform fields (computer-use enable, tool-outcome learner, self-repair, kill-switches such as `SUDO_CROSS_CONTROL_DISABLE`, and persona/system-prompt options) interactively. See the README "Setup Wizard" section for details. Manual edits to the config files are also supported, and many settings hot-reload.
 
 ---
 
@@ -26,9 +26,9 @@ curl -fsSL https://raw.githubusercontent.com/sudo-ai/sudo-ai/main/install.sh | b
 npm i -g @matrixx0070/sudo-ai
 ```
 - Leaves `sudo-ai` in PATH and running (pm2 or service; `/health` returns 200).
-- Then run `sudo-ai` (triggers the wizard if no config exists) or `sudo-ai setup`.
+- Then run `sudo-ai` (triggers the wizard if no config exists) or `sudo-ai quickstart`.
 
-**First-time setup wizard (auto on first run, or `sudo-ai setup`):**
+**First-time setup wizard (auto on first run, or `sudo-ai quickstart`):**
 An Ink-based interactive TUI covers:
 - Name / instance metadata
 - Primary model + xAI/Grok key (or other providers)
@@ -42,7 +42,7 @@ An Ink-based interactive TUI covers:
 The wizard prompts sequentially (or form-style), shows a preview, then confirms and saves; an optional doctor run follows.
 
 **Ongoing setup / edit:**
-`sudo-ai setup` or `sudo-ai config --edit` re-launches the wizard (pre-filled from current config) so you can update settings without a full reinstall. Many `sudo-ai.json5` changes hot-reload.
+`sudo-ai quickstart` or `sudo-ai config --edit` re-launches the wizard (pre-filled from current config) so you can update settings without a full reinstall. Many `sudo-ai.json5` changes hot-reload.
 
 **Direct chat for validation:**
 After the wizard, `sudo-ai chat` (or the default `sudo-ai`) launches the Ink TUI for live chat. You can talk to the agent directly to verify your setup, for example:
@@ -621,7 +621,7 @@ overrides placed there arrive too late to take effect.
 |---|---|---|
 | `SUDO_AI_HOME` | `process.cwd()` | Project root for all derived paths (`config/`, `workspace/`, `skills/`, and the default data dir). Set it when running the CLI from outside the install directory. |
 | `DATA_DIR` | `<root>/data` | Data directory (SQLite databases, sessions, logs, cache). Absolute, or relative to the working directory. `ecosystem.config.cjs` uses it to isolate staging (`data-staging`) from prod. |
-| `SUDO_NO_WIZARD` | unset | Set to `1` to suppress the auto-launched first-run setup wizard when no config file exists (useful for scripted/headless installs). Explicit `sudo-ai setup` still runs. |
+| `SUDO_NO_WIZARD` | unset | Set to `1` to suppress the auto-launched first-run setup wizard when no config file exists (useful for scripted/headless installs). Explicit `sudo-ai quickstart` still runs. |
 | `SUDO_DEFAULT_MODEL` | `ollama/deepseek-v4-pro:cloud` | Overrides the built-in default model ID. |
 | `SUDO_FALLBACK_MODEL` | `ollama/qwen3.5:latest` | Overrides the built-in fallback model ID. |
 | `SUDO_PLUGIN_ROOT` | empty string | Substituted for `${SUDO_PLUGIN_ROOT}` (and the Claude-compat `${CLAUDE_PLUGIN_ROOT}`) placeholders in plugin/hook commands. |

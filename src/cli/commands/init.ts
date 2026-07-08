@@ -149,7 +149,7 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
   }
 
   console.log('\n  Restart SUDO-AI to apply changes: sudo-ai stop && sudo-ai start\n');
-  console.log('  For the full setup wizard (providers, profiles, service, and ongoing edits): sudo-ai setup or sudo-ai config --setup\n');
+  console.log('  For the full setup wizard (providers, channels, and ongoing edits): sudo-ai quickstart\n');
   return 0;
 }
 

@@ -19,10 +19,18 @@ vi.mock('node:child_process', async importOriginal => {
 });
 
 import {
+  DARWIN_NO_RESTART_MSG,
   restartCommand,
   resolveRestartCmd,
   scheduleDetachedRestart,
 } from '../../src/core/tools/builtin/meta/restart-helper.js';
+
+/** Temporarily override process.platform; returns a restore fn. */
+function stubPlatform(value: NodeJS.Platform): () => void {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { value, configurable: true });
+  return () => Object.defineProperty(process, 'platform', original);
+}
 
 const PM2_DEFAULT = 'pm2 restart ecosystem.config.cjs --only sudo-ai-v5 --update-env';
 
@@ -109,6 +117,76 @@ describe('restart-helper', () => {
 
       expect(result.scheduled).toBe(false);
       expect(result.error).toContain('EPERM');
+    });
+  });
+
+  describe('platform branches', () => {
+    it('linux without pm2 still falls back to systemctl (unchanged)', () => {
+      execSyncMock.mockImplementation(() => {
+        throw new Error('not found');
+      });
+      expect(resolveRestartCmd('linux')).toEqual({
+        cmd: 'systemctl restart sudo-ai',
+        via: 'systemctl',
+      });
+    });
+
+    it('darwin without pm2 and without override resolves to manual', () => {
+      execSyncMock.mockImplementation(() => {
+        throw new Error('not found');
+      });
+      expect(resolveRestartCmd('darwin')).toEqual({ cmd: '', via: 'manual' });
+    });
+
+    it('darwin with pm2 on PATH still uses pm2 (pm2 works on macOS)', () => {
+      execSyncMock.mockReturnValue('/opt/homebrew/bin/pm2');
+      expect(resolveRestartCmd('darwin')).toEqual({ cmd: PM2_DEFAULT, via: 'pm2' });
+    });
+
+    it('darwin honors SUDO_RESTART_CMD override', () => {
+      process.env['SUDO_RESTART_CMD'] = 'launchctl kickstart -k gui/501/com.sudo-ai';
+      expect(resolveRestartCmd('darwin')).toEqual({
+        cmd: 'launchctl kickstart -k gui/501/com.sudo-ai',
+        via: 'override',
+      });
+    });
+
+    it('scheduleDetachedRestart on darwin (no mechanism) returns a clear manual-restart message and spawns nothing', () => {
+      const restore = stubPlatform('darwin');
+      try {
+        execSyncMock.mockImplementation(() => {
+          throw new Error('not found');
+        });
+        const result = scheduleDetachedRestart('unit-test', '/tmp');
+        expect(result.scheduled).toBe(false);
+        expect(result.error).toBe(DARWIN_NO_RESTART_MSG);
+        expect(result.error).toContain('SUDO_RESTART_CMD');
+        expect(result.error).toContain('sudo-ai stop && sudo-ai start -d');
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it('scheduleDetachedRestart on linux still spawns the systemctl fallback (unchanged)', () => {
+      const restore = stubPlatform('linux');
+      try {
+        execSyncMock.mockImplementation(() => {
+          throw new Error('not found');
+        });
+        const unref = vi.fn();
+        spawnMock.mockReturnValue({ unref });
+        const result = scheduleDetachedRestart('unit-test', '/tmp');
+        expect(result.scheduled).toBe(true);
+        expect(result.cmd).toBe('systemctl restart sudo-ai');
+        expect(spawnMock).toHaveBeenCalledWith(
+          'sh',
+          ['-c', 'sleep 3; systemctl restart sudo-ai'],
+          expect.objectContaining({ detached: true }),
+        );
+      } finally {
+        restore();
+      }
     });
   });
 });
