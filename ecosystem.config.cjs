@@ -88,7 +88,7 @@ module.exports = {
         // policy pinned to the workspace tier + protected-path guard) with a
         // versioned prior kept for rollback. Applied skills take effect on the
         // next restart. Purge an applied skill by removing skills/<name>/.
-        // SUDO_SKILL_WORKSHOP: '1',
+        SUDO_SKILL_WORKSHOP: '1',
 
         // ---- Cost budget guardrails: DISABLED by operator request ----
         // `off` ⇒ Infinity (see src/core/billing/daily-budget.ts and
@@ -105,7 +105,7 @@ module.exports = {
         // cron job. Bounded: confidence floor, <=SUDO_COMMITMENTS_MAX_HORIZON_DAYS
         // (7) out, <=SUDO_COMMITMENTS_MAX_JOBS (10) pending, deduped. Purge stale
         // ones by removing commitment:* from data/cron/jobs.json.
-        // SUDO_COMMITMENTS: '1',
+        SUDO_COMMITMENTS: '1',
 
         SUDO_DAILY_BUDGET_USD: 'off',
         SUDO_DAILY_LLM_BUDGET_USD: 'off',
