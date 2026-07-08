@@ -17,6 +17,7 @@ import {
   ROUTABLE_CATEGORIES,
 } from '../../src/core/agent/tool-router.js';
 import { ToolRegistry } from '../../src/core/tools/registry.js';
+import type { ToolCategory } from '../../src/core/tools/types.js';
 import { loadBuiltinTools } from '../../src/core/tools/loader.js';
 import { registerSuperpowers } from '../../src/core/superpowers/index.js';
 
@@ -104,5 +105,44 @@ describe('CATEGORY_MAP covers every category in real use', () => {
       unroutable.size,
       `Tool categories missing from CATEGORY_MAP in src/core/agent/tool-router.ts — these tools are invisible to the model (only reachable via tool.search):\n${gaps}`,
     ).toBe(0);
+  });
+
+  // Mirrors the cli.ts post-plugin re-check: enabled plugins run host code in
+  // activate() and can self-register tools via ToolRegistry.getGlobal(). A
+  // plugin-introduced category that CATEGORY_MAP doesn't cover must be caught
+  // by re-running findUnroutableCategories on the post-plugin tool set, and it
+  // must be NEW relative to the boot pass (that diff is what dedupes warnings).
+  it('post-plugin re-check flags a plugin-registered tool with a brand-new category', () => {
+    const bootGaps = new Set(findUnroutableCategories(registry.listEnabled()).keys());
+    // Real registry surface is clean at boot (asserted above).
+    expect(bootGaps.has('pluginzap')).toBe(false);
+
+    // Simulate a plugin's activate() self-registering a tool at runtime with a
+    // category the compile-time ToolCategory union (and CATEGORY_MAP) doesn't
+    // know about — exactly what out-of-tree plugin JS can do.
+    registry.register({
+      name: 'pluginzap.do-thing',
+      description: 'plugin-added tool with an uncovered category',
+      category: 'pluginzap' as ToolCategory,
+      parameters: {},
+      execute: async () => ({ success: true, output: 'ok' }),
+    });
+    try {
+      const postGaps = findUnroutableCategories(registry.listEnabled());
+      expect(postGaps.get('pluginzap')).toEqual(['pluginzap.do-thing']);
+      // The gap is new vs. boot — the post-plugin phase (not dedupe) reports it.
+      expect(bootGaps.has('pluginzap')).toBe(false);
+      // And no previously-clean category regressed as a side effect.
+      for (const cat of postGaps.keys()) {
+        if (cat !== 'pluginzap') expect(bootGaps.has(cat)).toBe(true);
+      }
+    } finally {
+      // Leave the shared registry as the other tests loaded it.
+      registry.unregister('pluginzap.do-thing');
+    }
+  });
+
+  it('registry is clean again after the simulated plugin tool is removed', () => {
+    expect(findUnroutableCategories(registry.listEnabled()).size).toBe(0);
   });
 });
