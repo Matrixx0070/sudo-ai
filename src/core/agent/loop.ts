@@ -46,6 +46,7 @@ import { ToolRouter } from './tool-router.js';
 import { classifyIntent, formatIntentHint } from './intent-classifier.js';
 import { getPredictor } from '../tools/builtin/meta/predictor.js';
 import { CompletionVerifier } from '../tools/completion-verifier.js';
+import { runUniversalNegativeGuard } from './universal-negative-guard.js';
 import type { Prediction } from '../prediction/predictor.js';
 import type {
   BrainLike,
@@ -1702,6 +1703,34 @@ export class AgentLoop extends AgentLoopInjections {
           log.warn({ sessionId, err: String(err) }, 'CompletionVerify: verify threw — continuing');
         }
       }
+    }
+
+    // Universal-negative guard — structural backstop for research turns whose
+    // final answer asserts an unqualified universal negative ("no other X
+    // exists", "no name collisions") from finite web searches. Scoped to turns
+    // that actually used web/browser tools; hedged and local (file/rows/…)
+    // negatives never trip it. Default ON (SUDO_UNIVERSAL_NEGATIVE_GUARD=0
+    // disables), fail-open, at most ONE corrective brain call per turn.
+    try {
+      const _ung = await runUniversalNegativeGuard({
+        answer: finalResponse,
+        toolNamesUsed: _w10bToolSequence,
+        originalRequest: message,
+        revise: async (prompt) => {
+          const resp = await this.brain.call(
+            { messages: [{ role: 'user', content: prompt }], source: 'agent' },
+            { tier: 'fast', strategy: 'single' },
+          );
+          return resp.content ?? '';
+        },
+      });
+      if (_ung.action === 'revised' || _ung.action === 'caveat-appended') {
+        log.info({ sessionId, action: _ung.action, flaggedCount: _ung.flagged.length }, 'UniversalNegativeGuard: final answer rescoped');
+        finalResponse = _ung.answer;
+        session.messages.push({ role: 'assistant', content: finalResponse });
+      }
+    } catch (err) {
+      log.warn({ sessionId, err: String(err) }, 'UniversalNegativeGuard: threw — continuing with original answer');
     }
 
     // Commitments — if the agent promised a future follow-up this turn, extract
