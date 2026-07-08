@@ -43,6 +43,16 @@ describe('system prompt — Mythos Behavioral Layer', () => {
     expect(prompt).toContain('do not ask permission first');
   });
 
+  it('forbids universal-negative claims from narrow search coverage', async () => {
+    const prompt = await assembleSystemPrompt({});
+    expect(prompt).toContain('NEVER ASSERT ABSENCE FROM A NARROW SEARCH');
+    // Absence claims must be scoped to the search actually performed.
+    expect(prompt).toContain('absence of evidence in a handful of queries is not proof of absence');
+    expect(prompt).toContain('I didn\'t find any X in my searches');
+    // Ruling something out requires broad, varied coverage first.
+    expect(prompt).toContain('several BROAD, differently-phrased searches');
+  });
+
   it('requires calibrated, prose-first replies and no bullets when declining', async () => {
     const prompt = await assembleSystemPrompt({});
     expect(prompt).toContain('CALIBRATING THE REPLY');
