@@ -512,13 +512,16 @@ async function boot(): Promise<void> {
   // (reachable only via tool.search) — the exact bug class fixed by hand for
   // 'skill' and 'superpowers'. Non-fatal: a routing gap must never block boot.
   //
-  // Runs twice: once here ('boot', after builtins + superpowers) and again
-  // after plugin activation ('post-plugin') — enabled plugins run host code
-  // in activate() and can self-register tools via ToolRegistry.getGlobal(),
-  // introducing categories the boot pass never saw. Each gap is warned exactly
-  // once, tagged with the phase that first found it.
+  // Runs three times: here ('boot', after builtins + superpowers), again after
+  // plugin activation ('post-plugin') — enabled plugins run host code in
+  // activate() and can self-register tools via ToolRegistry.getGlobal(),
+  // introducing categories the boot pass never saw — and once more at the end
+  // of boot() ('final'), after every env-conditional registry.register() call
+  // (multi-agent, plan-mode, ptc, workflows, …) so a late-registered tool with
+  // a new category cannot slip past. Each gap is warned exactly once, tagged
+  // with the phase that first found it.
   const flaggedRoutingGaps = new Set<string>();
-  const checkToolRoutingCoverage = async (phase: 'boot' | 'post-plugin'): Promise<void> => {
+  const checkToolRoutingCoverage = async (phase: 'boot' | 'post-plugin' | 'final'): Promise<void> => {
     try {
       const { findUnroutableCategories } = await import('./core/agent/tool-router.js');
       const unroutable = findUnroutableCategories(registry.listEnabled());
@@ -4228,6 +4231,15 @@ async function boot(): Promise<void> {
   } else {
     log.info('IDE Bridge disabled (SUDO_IDE_BRIDGE_DISABLE=1)');
   }
+
+  // Final routing-coverage pass: every startup-time registry.register() call —
+  // including the env-conditional ones far below the 'boot' check (multi-agent,
+  // plan-mode, memory-consolidate, classify-bash, search-tools,
+  // schedule-message, ptc, ptc-python, run-workflow, enqueue-workflow) — has
+  // executed by this point, so this catches a late-registered tool whose
+  // category the earlier passes never saw. Dedupe via flaggedRoutingGaps means
+  // only genuinely-new gaps warn here, tagged '(final)'. Non-fatal by design.
+  await checkToolRoutingCoverage('final');
 
   // -------------------------------------------------------------------------
   // Done
