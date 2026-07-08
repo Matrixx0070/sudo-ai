@@ -146,6 +146,15 @@ export interface BrainRequest {
    * 'llm' when unset. Purely observational — does not affect routing.
    */
   source?: string;
+  /**
+   * System-prompt mode. 'slim-heartbeat' replaces the full assembled system
+   * prompt with the minimal heartbeat health-check prompt (identity line +
+   * protocol; see assembleSlimHeartbeatPrompt) and skips RAG/lens injection.
+   * Set ONLY by the agent loop for system.heartbeat cron ticks (gated by
+   * SUDO_SLIM_HEARTBEAT, default ON). Fail-open: any error building the slim
+   * prompt falls back to the full prompt. Unset → full prompt (default).
+   */
+  promptMode?: 'slim-heartbeat';
 }
 
 /** Token usage and estimated cost for a single LLM call. */

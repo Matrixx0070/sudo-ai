@@ -766,7 +766,17 @@ export class AgentLoop extends AgentLoopInjections {
     sessionId: string,
     message: string,
     onEvent?: AgentEventHandler,
-    opts?: { race?: boolean },
+    opts?: {
+      race?: boolean;
+      /**
+       * Slim heartbeat context: the caller (cron dispatch, system.heartbeat
+       * job ONLY — see cron/slim-heartbeat.ts) asks for the minimal
+       * health-check system prompt + the slim tool allowlist instead of the
+       * full ~29k-token loadout. Fail-open: if the allowlist resolves no
+       * tools, the turn runs with the normal prompt and routing.
+       */
+      slimHeartbeat?: boolean;
+    },
   ): Promise<AgentRunResult> {
     if (!sessionId || typeof sessionId !== 'string') {
       throw new PipelineError('AgentLoop.run: sessionId must be a non-empty string', 'pipeline_invalid_args');
@@ -1813,7 +1823,7 @@ export class AgentLoop extends AgentLoopInjections {
     session: SessionLike,
     state: AgentState,
     emit: Emitter,
-    opts?: { race?: boolean },
+    opts?: { race?: boolean; slimHeartbeat?: boolean },
   ): Promise<string> {
     const { maxIterations, model } = this.config;
     let finalText = '';
@@ -2103,6 +2113,36 @@ export class AgentLoop extends AgentLoopInjections {
           log.warn({ err: String(gateErr) }, 'Code tree-search gate threw — using default strategy');
         }
 
+        // Slim heartbeat: health-tick turns get the fixed tool allowlist +
+        // the minimal system prompt (promptMode below). Fail-open — an empty
+        // or throwing allowlist resolution falls back to full routing.
+        let _slimHeartbeatActive = false;
+        let _routedTools: ReturnType<ToolRouter['route']> | undefined;
+        if (opts?.slimHeartbeat) {
+          try {
+            const { SLIM_HEARTBEAT_TOOLS } = await import('../cron/slim-heartbeat.js');
+            const slimTools = this.toolRouter.routeAllowlist(SLIM_HEARTBEAT_TOOLS);
+            if (slimTools.length > 0) {
+              _routedTools = slimTools;
+              _slimHeartbeatActive = true;
+              log.info({ sessionId: state.sessionId, toolCount: slimTools.length }, 'Slim heartbeat context active — minimal prompt + tool allowlist');
+            } else {
+              log.warn({ sessionId: state.sessionId }, 'Slim heartbeat allowlist resolved 0 tools — falling back to full routing');
+            }
+          } catch (slimErr) {
+            log.warn({ sessionId: state.sessionId, err: String(slimErr) }, 'Slim heartbeat routing failed — falling back to full routing');
+          }
+        }
+        if (!_routedTools) {
+          _routedTools = this.toolRouter.route(
+            session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '',
+            session.messages
+              .filter((m): m is typeof m & { toolName: string } => m.role === 'tool' && typeof m.toolName === 'string')
+              .slice(-3)
+              .map(m => m.toolName),
+          );
+        }
+
         const brainCallStartedAt = performance.now();
         let response: BrainResponse;
         try {
@@ -2110,13 +2150,8 @@ export class AgentLoop extends AgentLoopInjections {
             messages: trimmed,
             source: 'agent',
             model: effectiveModel,
-            tools: this.toolRouter.route(
-              session.messages.filter(m => m.role === 'user').at(-1)?.content ?? '',
-              session.messages
-                .filter((m): m is typeof m & { toolName: string } => m.role === 'tool' && typeof m.toolName === 'string')
-                .slice(-3)
-                .map(m => m.toolName),
-            ),
+            tools: _routedTools,
+            ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),
             race: opts?.race,
           }, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts);
         } catch (brainErr) {

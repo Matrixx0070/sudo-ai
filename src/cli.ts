@@ -2666,10 +2666,11 @@ async function boot(): Promise<void> {
   const executeAgentTurn = async (
     payload: Extract<CronPayload, { kind: 'agentTurn' }>,
     job: CronJob,
+    runOpts?: { slimHeartbeat?: boolean },
   ): Promise<string> => {
     const sessionTarget = job.sessionTarget === 'isolated' ? `cron:isolated:${job.id}` : `cron:main`;
     const session = await dualSessionManager.getOrCreate('web', sessionTarget);
-    const cronResult = await finalAgentLoop.run(session.id, payload.message);
+    const cronResult = await finalAgentLoop.run(session.id, payload.message, undefined, runOpts);
     try {
       const cronTurnSummary = `**Cron (${job.name}):** ${payload.message.slice(0, 200)}\n**Agent:** ${(cronResult?.text ?? '').slice(0, 500)}`;
       await dailyLog.append(cronTurnSummary);
@@ -2694,7 +2695,12 @@ async function boot(): Promise<void> {
         return;
       }
     }
-    return executeAgentTurn(payload, job);
+    // Slim context for the health tick ONLY (gated on the literal
+    // system.heartbeat job name + SUDO_SLIM_HEARTBEAT kill-switch, default ON).
+    // Commitment follow-ups and other cron agent turns dispatch through
+    // executeAgentTurn directly with the full prompt/tools.
+    const { shouldSlimHeartbeatTurn } = await import('./core/cron/slim-heartbeat.js');
+    return executeAgentTurn(payload, job, shouldSlimHeartbeatTurn(job.name) ? { slimHeartbeat: true } : undefined);
   };
 
   // Assigned once the HeartbeatRunner is constructed (it owns wrapRunner). The
