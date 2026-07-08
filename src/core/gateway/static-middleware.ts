@@ -14,9 +14,11 @@ import { createReadStream, existsSync, statSync, readFileSync } from 'node:fs';
 import { join, resolve, extname, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { projectPath } from '../shared/paths.js';
+import { packagePath } from '../shared/paths.js';
 
-const DIST_DIR = projectPath('dist', 'renderer');
+// Shipped asset: the built SPA lives inside the PACKAGE (dist/renderer),
+// which differs from cwd/PROJECT_ROOT when installed via npm.
+const DIST_DIR = packagePath('dist', 'renderer');
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
