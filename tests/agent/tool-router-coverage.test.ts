@@ -70,12 +70,15 @@ describe('findUnroutableCategories (pure helper)', () => {
 describe('CATEGORY_MAP covers every category in real use', () => {
   let registry: ToolRegistry;
 
+  // Loading the full builtin surface (~240 tool modules + transform) routinely
+  // exceeds vitest's default 10s hook timeout on a cold cache / in CI — give it
+  // headroom so the coverage assertion actually runs instead of timing out.
   beforeAll(async () => {
     registry = new ToolRegistry();
     const toolsDir = new URL('../../src/core/tools/builtin', import.meta.url).pathname;
     await loadBuiltinTools(registry, toolsDir);
     registerSuperpowers(registry);
-  });
+  }, 120_000);
 
   it('loads a substantial real tool surface (guards against silent loader failure)', () => {
     // If module loading silently failed, missing categories would vanish from
