@@ -306,11 +306,16 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
               }
 
               // ---- 1b. Strip `temperature` for models that deprecated it.
-              // Opus 4.8 (and later opus-4-x) return 400 invalid_request_error
+              // Opus 4.8 (and later opus-4-x) and the whole Claude 5 family
+              // (fable-5, sonnet-5, …) return 400 invalid_request_error
               // "`temperature` is deprecated for this model." All older models
               // (sonnet 4.5/4.6, opus 4.7, haiku 4.5) still accept it. Keep
-              // the param for them; surgically drop it only for opus-4-8+.
-              if (typeof parsed['model'] === 'string' && /^claude-opus-4-(8|9|[1-9][0-9]+)/.test(parsed['model'])) {
+              // the param for them; surgically drop it for opus-4-8+ and 5.x.
+              if (
+                typeof parsed['model'] === 'string' &&
+                (/^claude-opus-4-(8|9|[1-9][0-9]+)/.test(parsed['model']) ||
+                  /^claude-[a-z]+-5\b/.test(parsed['model']))
+              ) {
                 delete (parsed as Record<string, unknown>)['temperature'];
               }
 
