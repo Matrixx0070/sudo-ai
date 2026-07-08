@@ -69,6 +69,17 @@ export abstract class AgentLoopInjections {
   protected _alignmentEngine?: AlignmentEngine;
   protected _steeringChannel?: SteeringChannel;
   protected _preCompactionFlush?: PreCompactionFlush;
+  protected _commitmentExtractor?: { onTurnEnd(sessionId: string, userMessage: string, finalResponse: string): Promise<void> };
+
+  /** Attach the commitment extractor (schedules inferred follow-ups). */
+  setCommitmentExtractor(ce: { onTurnEnd(sessionId: string, userMessage: string, finalResponse: string): Promise<void> }): void {
+    if (ce && typeof ce.onTurnEnd === 'function') {
+      this._commitmentExtractor = ce;
+      log.info('AgentLoop: CommitmentExtractor attached');
+    } else {
+      log.warn('AgentLoop: setCommitmentExtractor: invalid duck-type — ignoring');
+    }
+  }
 
   /**
    * Wire a steering channel so an in-process caller can abort/inject/reprioritize
