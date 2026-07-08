@@ -82,6 +82,14 @@ module.exports = {
         // SUDO_SELFTEST_DISABLE=1; skip the chromium probe with
         // SUDO_SELFTEST_BROWSER=0.
 
+        // ---- Skill Workshop (self-authoring) — opt-in, default OFF ----
+        // Enables skill.apply / skill.rollback: the agent writes/revises its
+        // OWN skills through a security gate (injection scan + capability
+        // policy pinned to the workspace tier + protected-path guard) with a
+        // versioned prior kept for rollback. Applied skills take effect on the
+        // next restart. Purge an applied skill by removing skills/<name>/.
+        // SUDO_SKILL_WORKSHOP: '1',
+
         // ---- Cost budget guardrails: DISABLED by operator request ----
         // `off` ⇒ Infinity (see src/core/billing/daily-budget.ts and
         // src/core/self-build/orchestrator.ts). This turns off, in one place:
