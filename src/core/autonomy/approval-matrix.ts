@@ -12,6 +12,7 @@
  * Owner preferences are persisted in SQLite and can be updated at runtime.
  */
 
+import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 
@@ -284,7 +285,8 @@ export class ApprovalMatrix {
   }
 
   private _patternToId(pattern: string): string {
-    const { createHash } = require('node:crypto') as typeof import('node:crypto');
+    // Static node:crypto import — a bare `require()` here survives esbuild's
+    // per-file ESM transpile and crashes plain node ('require is not defined').
     return 'rule_' + createHash('sha256').update(pattern).digest('hex').slice(0, 16);
   }
 
