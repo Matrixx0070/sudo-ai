@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { DATA_DIR } from '../../core/shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,24 +88,93 @@ function checkEnvFile(projectRoot: string): CheckResult {
   return { name, level: 'warn', message: 'Not found — copy config/.env.example and fill in values' };
 }
 
-function checkLlmKeys(): CheckResult {
-  const name = 'LLM API key (XAI or OpenAI)';
-  const hasXai = !!process.env['XAI_API_KEY'];
-  const hasOpenAi = !!process.env['OPENAI_API_KEY'];
-  const hasAnthropic = !!process.env['ANTHROPIC_API_KEY'] || !!process.env['ANTHROPIC_AUTH_TOKEN'];
+/** Injectable inputs for {@link detectLlmProvider} — pure and unit-testable. */
+export interface LlmProviderProbe {
+  /** Environment map to inspect (defaults to process.env at the call site). */
+  env: Record<string, string | undefined>;
+  /** Absolute path to the Claude subscription OAuth store (data/claude-oauth.json). */
+  oauthStorePath: string;
+  /** Absolute path to config/sudo-ai.json5 (used only for a hint when no provider is found). */
+  configPath: string;
+  /** Clock for token-expiry checks (ms epoch). Defaults to Date.now(). */
+  now?: number;
+}
 
-  if (hasXai || hasOpenAi || hasAnthropic) {
-    const found: string[] = [];
-    if (hasXai) found.push('XAI_API_KEY');
-    if (hasOpenAi) found.push('OPENAI_API_KEY');
-    if (hasAnthropic) found.push('ANTHROPIC key');
+/**
+ * Detect whether ANY usable LLM provider is available:
+ *  - API-key providers via env (XAI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY/AUTH_TOKEN)
+ *  - Claude subscription OAuth via data/claude-oauth.json (unexpired access
+ *    token, or a refresh token the daemon can redeem at boot)
+ *  - Local ollama via OLLAMA_URL
+ *
+ * Returns { level: 'ok' } with the providers found, or { level: 'error' }
+ * when nothing is usable. Kept a REAL check: a claude-oauth/* model chain in
+ * config without a stored token still fails (with a login hint).
+ */
+export function detectLlmProvider(probe: LlmProviderProbe): CheckResult {
+  const name = 'LLM provider available';
+  const { env, oauthStorePath, configPath } = probe;
+  const now = probe.now ?? Date.now();
+  const found: string[] = [];
+
+  if (env['XAI_API_KEY']) found.push('XAI_API_KEY');
+  if (env['OPENAI_API_KEY']) found.push('OPENAI_API_KEY');
+  if (env['ANTHROPIC_API_KEY'] || env['ANTHROPIC_AUTH_TOKEN']) found.push('ANTHROPIC key');
+
+  // Claude subscription OAuth: token store written by `sudo-ai claude-oauth login`.
+  // Usable when the access token is unexpired OR a refresh token is present
+  // (the ClaudeOAuthManager refreshes expired access tokens at boot).
+  if (fs.existsSync(oauthStorePath)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(oauthStorePath, 'utf8')) as {
+        accessToken?: unknown; refreshToken?: unknown; expiresAt?: unknown;
+      };
+      const accessValid =
+        typeof raw.accessToken === 'string' && raw.accessToken.length > 0 &&
+        typeof raw.expiresAt === 'number' && raw.expiresAt > now;
+      const refreshable = typeof raw.refreshToken === 'string' && raw.refreshToken.length > 0;
+      if (accessValid || refreshable) {
+        found.push(accessValid ? 'claude-oauth (token valid)' : 'claude-oauth (refresh token)');
+      }
+    } catch {
+      // Corrupt store — not usable; fall through to other providers.
+    }
+  }
+
+  // Local ollama endpoint.
+  if (env['OLLAMA_URL']) found.push(`ollama (${env['OLLAMA_URL']})`);
+
+  if (found.length > 0) {
     return { name, level: 'ok', message: found.join(', ') };
+  }
+
+  // Nothing usable — tailor the message when config points at claude-oauth
+  // but no token store exists (the most actionable case).
+  let oauthConfigured = false;
+  try {
+    oauthConfigured = fs.readFileSync(configPath, 'utf8').includes('claude-oauth/');
+  } catch { /* config missing/unreadable — generic message below */ }
+
+  if (oauthConfigured) {
+    return {
+      name,
+      level: 'error',
+      message: 'Config uses claude-oauth/* but no token stored — run: sudo-ai claude-oauth login',
+    };
   }
   return {
     name,
     level: 'error',
-    message: 'Neither XAI_API_KEY nor OPENAI_API_KEY is set',
+    message: 'No LLM provider: set XAI_API_KEY/OPENAI_API_KEY/ANTHROPIC_API_KEY, OLLAMA_URL, or run sudo-ai claude-oauth login',
   };
+}
+
+function checkLlmProvider(projectRoot: string): CheckResult {
+  return detectLlmProvider({
+    env: process.env,
+    oauthStorePath: path.join(DATA_DIR, 'claude-oauth.json'),
+    configPath: path.join(projectRoot, 'config', 'sudo-ai.json5'),
+  });
 }
 
 function checkTelegramToken(): CheckResult {
@@ -194,15 +264,39 @@ function checkPlaywright(): CheckResult {
 async function checkSqliteVec(): Promise<CheckResult> {
   const name = 'sqlite-vec loadable (optional)';
   try {
-    const { default: Database } = await import('better-sqlite3');
-    const { default: sqliteVec } = await import('sqlite-vec');
+    // CJS/ESM interop: under the esbuild CLI bundle (and plain node ESM),
+    // these CJS packages surface named exports with NO `default` — so
+    // `mod.default.load` was a TypeError ("Cannot read properties of
+    // undefined"), not a real "extension unavailable". Use `default ?? mod`.
+    const dbMod = await import('better-sqlite3');
+    const Database = (dbMod.default ?? dbMod) as unknown as new (path: string) => {
+      close(): void;
+    };
+    const vecMod = await import('sqlite-vec');
+    const sqliteVec = ((vecMod as { default?: unknown }).default ?? vecMod) as {
+      load?: (db: unknown) => void;
+    };
+    if (typeof sqliteVec.load !== 'function') {
+      return {
+        name,
+        level: 'warn',
+        message: 'sqlite-vec module missing load() — optional vector search disabled (BM25 fallback)',
+      };
+    }
     const db = new Database(':memory:');
-    sqliteVec.load(db);
-    db.close();
+    try {
+      sqliteVec.load(db);
+    } finally {
+      db.close();
+    }
     return { name, level: 'ok', message: 'sqlite-vec loaded successfully' };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { name, level: 'warn', message: `Not loadable: ${msg.substring(0, 60)}` };
+    return {
+      name,
+      level: 'warn',
+      message: `Not loadable (optional, BM25 fallback): ${msg.substring(0, 60)}`,
+    };
   }
 }
 
@@ -381,7 +475,7 @@ export async function runDoctor(projectRoot: string, opts: DoctorOptions = {}): 
   results.push(checkNodeVersion());
   results.push(await checkConfig(projectRoot));
   results.push(checkEnvFile(projectRoot));
-  results.push(checkLlmKeys());
+  results.push(checkLlmProvider(projectRoot));
   results.push(checkTelegramToken());
   results.push(checkDataDir(projectRoot, fix));
   results.push(checkPnpm());
@@ -393,6 +487,20 @@ export async function runDoctor(projectRoot: string, opts: DoctorOptions = {}): 
   results.push(checkMemory());
 
   printTable(results);
+
+  // Close the shared pino transport before the CLI exits. checkConfig()'s
+  // ConfigLoader import transitively initialises the logger, whose
+  // thread-stream worker registers a process 'exit' hook that flushSync()s;
+  // with the event loop already stopping, that hook spins its 10s deadline
+  // and throws "_flushSync took too long (10s)" out of process.exit().
+  // Ending the transport fires its 'close' handler, which unregisters the
+  // exit hook — so the process exits cleanly. Bounded: never hangs doctor.
+  try {
+    const { closeLogger } = await import('../../core/shared/logger.js');
+    await closeLogger();
+  } catch {
+    // Logger module unavailable — nothing to tear down.
+  }
 
   const hasCritical = results.some((r) => r.level === 'error');
   return hasCritical ? 1 : 0;

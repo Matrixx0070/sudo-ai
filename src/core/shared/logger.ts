@@ -88,9 +88,56 @@ const baseOptions: pino.LoggerOptions = {
  * worker, no exit handler). Production imports this module once, so the daemon registers exactly
  * one handler and is unaffected.
  */
-export const logger: Logger = isTest
+const transportStream: pino.DestinationStream | null = isTest
+  ? null
+  : pino.transport(buildTransport());
+
+export const logger: Logger = transportStream === null
   ? pino(baseOptions)
-  : pino(baseOptions, pino.transport(buildTransport()));
+  : pino(baseOptions, transportStream);
+
+let closePromise: Promise<void> | null = null;
+
+/**
+ * Flush and close the worker-thread transport so a one-shot CLI command can
+ * exit cleanly.
+ *
+ * pino.transport() registers a process 'exit' hook that calls the
+ * thread-stream's flushSync(); when a CLI command calls process.exit() the
+ * event loop is already stopping, the worker can no longer acknowledge the
+ * flush, and after 10s the hook throws "_flushSync took too long (10s)" out
+ * of the process.exit() call site. Ending the stream emits 'close', which
+ * pino uses to UNREGISTER that exit hook — so exit becomes clean.
+ *
+ * Bounded by `timeoutMs` (unref'd) so a wedged worker can never hang the CLI.
+ * Idempotent: repeated calls return the same promise. No-op under vitest
+ * (no worker transport is created there).
+ */
+export function closeLogger(timeoutMs = 5_000): Promise<void> {
+  if (transportStream === null) return Promise.resolve();
+  if (closePromise) return closePromise;
+
+  closePromise = new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    timer.unref();
+    const stream = transportStream as unknown as {
+      once?: (ev: string, fn: () => void) => void;
+      end?: () => void;
+    };
+    try {
+      stream.once?.('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      logger.flush();
+      stream.end?.();
+    } catch {
+      clearTimeout(timer);
+      resolve();
+    }
+  });
+  return closePromise;
+}
 
 /**
  * Create a child logger scoped to a named module.
