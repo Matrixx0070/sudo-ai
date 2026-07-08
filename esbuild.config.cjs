@@ -38,7 +38,64 @@ const allTsFiles = findAllTsFiles(builtinDir, builtinDir);
 // Filter to only entry points (index.ts files) and their dependencies
 const entryPoints = allTsFiles.filter(f => f.endsWith('index.ts'));
 
+// Daemon runtime graph — transpiled (NOT bundled) so an installed npm package
+// runs the exact same module graph as the tsx dev path (`node dist/cli.js` ==
+// `tsx src/cli.ts`). Bundling the daemon was tried and rejected: the bundle
+// duplicates core singletons (channel-outbox, approval manager, config) that
+// the runtime-scanned dist/core/tools/builtin modules import from the
+// transpiled tree, split-braining shared state. Transpile-preserve-structure
+// keeps one graph, resolves every npm dep from node_modules (no __dirname/
+// createRequire bundling hazards), and lets `new URL(...)`-relative asset
+// reads keep working. Tests are excluded; non-TS runtime assets (sql
+// migrations, SKILL.md, workers, json/yaml) are copied after the build.
+// The graph is emitted under dist/src/** and dist/shared-types/** (outbase '.')
+// so the source imports of '../../../shared-types/*.js' from src/core/ide/*
+// keep the same relative depth after transpilation. The daemon entry is
+// therefore dist/src/cli.js (see src/cli/commands/start.ts resolveDaemonEntry).
+const daemonSrcDirs = ['src/core', 'src/gateway', 'src/cli', 'shared-types'];
+const isTestFile = (f) =>
+  f.endsWith('.test.ts') || f.endsWith('.spec.ts') ||
+  f.includes(`${path.sep}__tests__${path.sep}`) || f.includes(`${path.sep}test-fixtures${path.sep}`);
+const daemonEntryPoints = [
+  path.join(projectRoot, 'src/cli.ts'),
+  ...daemonSrcDirs.flatMap((d) => {
+    const abs = path.join(projectRoot, d);
+    return fs.existsSync(abs) ? findAllTsFiles(abs, abs) : [];
+  }),
+].filter((f) => !isTestFile(f));
+
+// Copy non-TS runtime assets from <dir> into dist/<dir>, preserving paths.
+function copyRuntimeAssets() {
+  for (const d of daemonSrcDirs) {
+    const absSrc = path.join(projectRoot, d);
+    if (!fs.existsSync(absSrc)) continue;
+    fs.cpSync(absSrc, path.join(projectRoot, 'dist', d), {
+      recursive: true,
+      filter: (srcPath) => {
+        if (fs.statSync(srcPath).isDirectory()) return !srcPath.includes('__tests__');
+        return !srcPath.endsWith('.ts') && !srcPath.endsWith('.tsx') && !isTestFile(srcPath);
+      },
+    });
+  }
+}
+
 Promise.all([
+  // Daemon graph transpile (usage: node dist/cli.js — what `sudo-ai start`
+  // launches from an installed npm package, where src/ and tsx don't ship).
+  esbuild.build({
+    entryPoints: daemonEntryPoints,
+    bundle: false,
+    platform: 'node',
+    target: 'node22',
+    format: 'esm',
+    outdir: 'dist',
+    outbase: '.',
+    define: {
+      'process.env.NODE_ENV': production ? '"production"' : '"development"',
+    },
+    sourcemap: !production,
+    keepNames: true,
+  }),
   // Server CLI bundle
   esbuild.build({
     entryPoints: ['src/cli/index.ts'],
@@ -114,26 +171,16 @@ Promise.all([
     minify: production,
     keepNames: true,
   }),
-  // Builtin tools - transpile all files preserving structure
-  esbuild.build({
-    entryPoints: allTsFiles,
-    bundle: false,
-    platform: 'node',
-    target: 'node22',
-    format: 'esm',
-    outdir: 'dist/core/tools/builtin',
-    define: {
-      'process.env.NODE_ENV': production ? '"production"' : '"development"',
-    },
-    sourcemap: !production,
-    keepNames: true,
-  }),
+  // NOTE: the former builtin-tools-only transpile step is subsumed by the
+  // daemon graph transpile above (src/core includes src/core/tools/builtin).
 ]).then(() => {
+  // Ship non-TS runtime assets next to the transpiled daemon graph.
+  copyRuntimeAssets();
   // Runtime asset, not transpiled: tool-synthesize resolves this next to its
   // own __dirname at runtime, so it must ship inside dist as well.
   fs.copyFileSync(
     path.join(builtinDir, 'meta/synth-bwrap-entry.cjs'),
-    path.join(projectRoot, 'dist/core/tools/builtin/meta/synth-bwrap-entry.cjs'),
+    path.join(projectRoot, 'dist/src/core/tools/builtin/meta/synth-bwrap-entry.cjs'),
   );
   // Same pattern for the code-execution sandbox workers (gap #15 +
   // pre-existing js-exec). Both are loaded at __dirname/<name>.cjs by their
@@ -141,7 +188,7 @@ Promise.all([
   // mkdirSync(recursive) is defensive — the esbuild step creates code/ when
   // it transpiles code/index.ts, but if entry-points filtering ever changes
   // we still want the copy to succeed.
-  const codeDistDir = path.join(projectRoot, 'dist/core/tools/builtin/code');
+  const codeDistDir = path.join(projectRoot, 'dist/src/core/tools/builtin/code');
   fs.mkdirSync(codeDistDir, { recursive: true });
   fs.copyFileSync(
     path.join(builtinDir, 'code/js-worker.cjs'),
@@ -157,7 +204,7 @@ Promise.all([
     path.join(builtinDir, 'code/ptc-python-harness.py'),
     path.join(codeDistDir, 'ptc-python-harness.py'),
   );
-  console.log('Build complete: server CLI + MCP CLI + ACP CLI + builtin tools');
+  console.log('Build complete: daemon entry + server CLI + MCP CLI + ACP CLI + builtin tools');
 }).catch((err) => {
   console.error('Build failed:', err.message);
   process.exit(1);
