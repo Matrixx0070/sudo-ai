@@ -87,7 +87,8 @@ type CategoryName =
   | 'browser' | 'coder' | 'system' | 'content' | 'media' | 'document'
   | 'research' | 'comms' | 'social' | 'marketing' | 'data'
   | 'meta' | 'dev' | 'github' | 'knowledge' | 'voice' | 'business'
-  | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal';
+  | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal'
+  | 'skill';
 
 /**
  * Full category → routing rule map.
@@ -252,6 +253,28 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     patterns: [/\.(csv|xlsx|sql)\b/i, /\b(excel|spreadsheet|workbook|pivot\s*table)\b/i],
     priority: 5,
     maxFromCategory: 3,
+  },
+  // Self-authoring of the agent's OWN skills (category 'skill': skill.apply,
+  // skill.rollback, skill.refine, skill.compose, skill.explain, ...). Without
+  // this entry the whole skill toolset never groups into a routed category, so
+  // it was reachable only via tool.search — the agent kept failing to find
+  // skill.apply when asked to author a skill.
+  skill: {
+    keywords: [
+      'skill', 'author a skill', 'create a skill', 'write a skill',
+      'revise a skill', 'update a skill', 'edit a skill', 'new skill',
+      'rollback skill', 'roll back skill', 'skill.apply', 'skill.rollback',
+      'refine skill', 'compose skill', 'my skills', 'own skill', 'self-author',
+      'skill.md', 'skill file',
+    ],
+    patterns: [
+      /\bskill[.-](apply|rollback|refine|compose|explain|federate)\b/i,
+      /\b(author|create|write|revise|update|edit|build)\s+(a\s+)?(new\s+)?skill\b/i,
+      /\broll\s*back\s+(a\s+)?skill\b/i,
+      /\bskill\.md\b/i,
+    ],
+    priority: 8,
+    maxFromCategory: 5,
   },
   meta: {
     keywords: [

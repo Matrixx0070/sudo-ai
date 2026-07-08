@@ -69,6 +69,36 @@ describe('ToolRouter — document category routing', () => {
   });
 });
 
+describe('ToolRouter — skill category routing', () => {
+  // Regression: category:'skill' tools (skill.apply/rollback/...) had no entry in
+  // CATEGORY_MAP, so they never grouped into a routed category and were reachable
+  // only via tool.search — the agent kept failing to find skill.apply when asked
+  // to author a skill.
+  const SKILL_TOOLS = [
+    ...TOOLS,
+    { name: 'skill.apply', category: 'skill' },
+    { name: 'skill.rollback', category: 'skill' },
+    { name: 'skill.refine', category: 'skill' },
+  ];
+  const router = new ToolRouter(fakeRegistry(SKILL_TOOLS) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  it('surfaces skill.apply for an "author a skill" prompt', () => {
+    const n = names('author a new skill that greets the operator warmly');
+    expect(n).toContain('skill.apply');
+  });
+
+  it('surfaces skill.rollback for a "roll back a skill" prompt', () => {
+    expect(names('roll back the greeting skill to the previous version')).toContain('skill.rollback');
+  });
+
+  it('does NOT surface skill tools for an unrelated prompt', () => {
+    const n = names('what time is it in Tokyo');
+    expect(n).not.toContain('skill.apply');
+    expect(n).not.toContain('skill.rollback');
+  });
+});
+
 describe('ToolRouter — multi-word tool surfacing (name-word ranking)', () => {
   // media.code-image is registered LAST of many media tools; with maxFromCategory
   // it only surfaces if name-word overlap ranks it above its siblings for a
