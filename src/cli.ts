@@ -511,19 +511,31 @@ async function boot(): Promise<void> {
   // ToolRouter's CATEGORY_MAP, otherwise the tool is invisible to the model
   // (reachable only via tool.search) — the exact bug class fixed by hand for
   // 'skill' and 'superpowers'. Non-fatal: a routing gap must never block boot.
-  try {
-    const { findUnroutableCategories } = await import('./core/agent/tool-router.js');
-    const unroutable = findUnroutableCategories(registry.listEnabled());
-    for (const [category, toolNames] of unroutable) {
-      log.warn(
-        { category, toolCount: toolNames.length, tools: toolNames.join(', ') },
-        `TOOL ROUTING GAP: category "${category}" has ${toolNames.length} registered tool(s) but no CATEGORY_MAP entry — these tools are INVISIBLE to the model (reachable only via tool.search). Fix: add a CATEGORY_MAP entry in src/core/agent/tool-router.ts.`,
-      );
+  //
+  // Runs twice: once here ('boot', after builtins + superpowers) and again
+  // after plugin activation ('post-plugin') — enabled plugins run host code
+  // in activate() and can self-register tools via ToolRegistry.getGlobal(),
+  // introducing categories the boot pass never saw. Each gap is warned exactly
+  // once, tagged with the phase that first found it.
+  const flaggedRoutingGaps = new Set<string>();
+  const checkToolRoutingCoverage = async (phase: 'boot' | 'post-plugin'): Promise<void> => {
+    try {
+      const { findUnroutableCategories } = await import('./core/agent/tool-router.js');
+      const unroutable = findUnroutableCategories(registry.listEnabled());
+      for (const [category, toolNames] of unroutable) {
+        if (flaggedRoutingGaps.has(category)) continue;
+        flaggedRoutingGaps.add(category);
+        log.warn(
+          { category, phase, toolCount: toolNames.length, tools: toolNames.join(', ') },
+          `TOOL ROUTING GAP (${phase}): category "${category}" has ${toolNames.length} registered tool(s) but no CATEGORY_MAP entry — these tools are INVISIBLE to the model (reachable only via tool.search). Fix: add a CATEGORY_MAP entry in src/core/agent/tool-router.ts.`,
+        );
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg, phase }, 'Category coverage guard failed — continuing');
     }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn({ err: msg }, 'Category coverage guard failed — continuing');
-  }
+  };
+  await checkToolRoutingCoverage('boot');
 
   // -------------------------------------------------------------------------
   // 4.5 Plugin SDK — manifest-first plugins from DATA_DIR/plugins
@@ -537,6 +549,13 @@ async function boot(): Promise<void> {
         { loaded: pluginBoot.loaded, enabled: pluginBoot.enabled, hooksRegistered: pluginBoot.hooksRegistered },
         'Plugin SDK initialized',
       );
+      // Enabled plugins ran activate(), which can self-register tools via
+      // ToolRegistry.getGlobal() — re-check routing coverage on the now-complete
+      // tool set. Skipped when nothing enabled: no plugin code ran, so the tool
+      // surface cannot have changed since the 'boot' pass.
+      if (pluginBoot.enabled > 0) {
+        await checkToolRoutingCoverage('post-plugin');
+      }
       registerShutdown(async () => {
         try {
           await shutdownPlugins(pluginBoot.loader, hooks);
