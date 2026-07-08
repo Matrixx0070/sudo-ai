@@ -1,0 +1,6 @@
+name: memory-recall
+peerId: e2e-memory
+message: "Remember this fact: my favorite color is teal. Just acknowledge."
+message2: "What is my favorite color? One word."
+expect_reply2_regex: teal
+timeout_ms: 120000

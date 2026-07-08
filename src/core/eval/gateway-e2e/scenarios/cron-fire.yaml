@@ -1,0 +1,5 @@
+name: cron-schedule
+peerId: e2e-cron
+message: "Schedule a reminder 30 seconds from now that says PINGE2E. Use a cron/schedule tool."
+expect_cron_job_regex: PINGE2E
+timeout_ms: 120000

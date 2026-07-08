@@ -82,7 +82,8 @@
     "test:fuzz": "vitest run tests/fuzz/",
     "test:soak": "node scripts/soak.ts",
     "build:seal": "bash scripts/build-synth-seal.sh",
-    "postinstall": "node -e \"const fs=require('fs'),cp=require('child_process');if(!(fs.existsSync('esbuild.config.cjs')&&fs.existsSync('scripts/build-synth-seal.sh')))process.exit(0);if(!fs.existsSync('dist/server/cli.js')){try{cp.execSync('node esbuild.config.cjs',{stdio:'inherit'})}catch(e){}}try{cp.execSync('bash scripts/build-synth-seal.sh',{stdio:'inherit'})}catch(e){}\""
+    "postinstall": "node -e \"const fs=require('fs'),cp=require('child_process');if(!(fs.existsSync('esbuild.config.cjs')&&fs.existsSync('scripts/build-synth-seal.sh')))process.exit(0);if(!fs.existsSync('dist/server/cli.js')){try{cp.execSync('node esbuild.config.cjs',{stdio:'inherit'})}catch(e){}}try{cp.execSync('bash scripts/build-synth-seal.sh',{stdio:'inherit'})}catch(e){}\"",
+    "e2e:gateway": "SUDO_E2E=1 tsx scripts/e2e/gateway.mts"
   },
   "type": "module",
   "dependencies": {
