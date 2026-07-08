@@ -76,9 +76,15 @@ describe('ToolRouter — skill category routing', () => {
   // to author a skill.
   const SKILL_TOOLS = [
     ...TOOLS,
+    // Full 7-tool skill category — the write path (apply/rollback) must always
+    // surface even though it is registered alongside 5 read/compose siblings.
     { name: 'skill.apply', category: 'skill' },
     { name: 'skill.rollback', category: 'skill' },
     { name: 'skill.refine', category: 'skill' },
+    { name: 'skill.compose', category: 'skill' },
+    { name: 'skill.explain', category: 'skill' },
+    { name: 'skill.federate', category: 'skill' },
+    { name: 'skill.usage-stats', category: 'skill' },
   ];
   const router = new ToolRouter(fakeRegistry(SKILL_TOOLS) as never);
   const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
@@ -90,6 +96,14 @@ describe('ToolRouter — skill category routing', () => {
 
   it('surfaces skill.rollback for a "roll back a skill" prompt', () => {
     expect(names('roll back the greeting skill to the previous version')).toContain('skill.rollback');
+  });
+
+  it('surfaces BOTH write-path tools (apply+rollback) despite 5 sibling skill tools', () => {
+    // Regression: maxFromCategory=5 dropped apply/rollback for the full 7-tool
+    // category. The write path must always travel on a skill turn.
+    const n = names('roll back the greeting-flair skill using skill.rollback');
+    expect(n).toContain('skill.rollback');
+    expect(n).toContain('skill.apply');
   });
 
   it('does NOT surface skill tools for an unrelated prompt', () => {
