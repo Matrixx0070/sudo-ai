@@ -451,6 +451,56 @@ const FALLBACK_CATEGORIES: CategoryName[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Category coverage guard
+// ---------------------------------------------------------------------------
+
+/**
+ * The set of category names the router can actually route to.
+ * A registered tool whose effective category is NOT in this set is invisible
+ * to the model (reachable only via tool.search).
+ */
+export const ROUTABLE_CATEGORIES: ReadonlySet<string> = new Set(Object.keys(CATEGORY_MAP));
+
+/**
+ * Extract the category prefix from a dot-namespaced tool name.
+ * e.g. "coder.read-file" → "coder". Mirrors ToolRouter's internal fallback.
+ */
+export function categoryFromToolName(name: string): string {
+  if (!name || typeof name !== 'string') return '';
+  const dotIndex = name.indexOf('.');
+  return dotIndex > 0 ? name.slice(0, dotIndex) : '';
+}
+
+/**
+ * Find tool categories that are GENUINELY unroutable by this router.
+ *
+ * Mirrors `_groupByCategory` exactly: a tool's effective category is its
+ * declared `category` when present, otherwise the name prefix
+ * ({@link categoryFromToolName}). Note a tool with a *declared* category that
+ * is missing from CATEGORY_MAP is NOT rescued by its name prefix — grouping
+ * keys it under the declared category, which `_fillFromCategories` never
+ * visits — so it is reported here.
+ *
+ * @param tools - Registered/enabled tools (e.g. `registry.listEnabled()`).
+ * @returns Map of unroutable category → tool names hidden by it. Empty when
+ *          every category in use is covered by CATEGORY_MAP.
+ */
+export function findUnroutableCategories(
+  tools: ReadonlyArray<{ name: string; category?: string | null }>,
+): Map<string, string[]> {
+  const unroutable = new Map<string, string[]>();
+  for (const tool of tools) {
+    const effective = tool.category ?? categoryFromToolName(tool.name);
+    if (!effective) continue; // no category at all — nothing to key a CATEGORY_MAP entry on
+    if (ROUTABLE_CATEGORIES.has(effective)) continue;
+    const existing = unroutable.get(effective);
+    if (existing) existing.push(tool.name);
+    else unroutable.set(effective, [tool.name]);
+  }
+  return unroutable;
+}
+
+// ---------------------------------------------------------------------------
 // Slim tool descriptor (mirrors ToolDefinition shape from the registry)
 // ---------------------------------------------------------------------------
 
@@ -783,8 +833,6 @@ export class ToolRouter {
    * e.g. "coder.read-file" → "coder"
    */
   private _categoryFromName(name: string): string {
-    if (!name || typeof name !== 'string') return '';
-    const dotIndex = name.indexOf('.');
-    return dotIndex > 0 ? name.slice(0, dotIndex) : '';
+    return categoryFromToolName(name);
   }
 }

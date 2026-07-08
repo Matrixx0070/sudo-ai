@@ -507,6 +507,24 @@ async function boot(): Promise<void> {
     }
   }
 
+  // Category coverage guard: every enabled tool's category must be routable by
+  // ToolRouter's CATEGORY_MAP, otherwise the tool is invisible to the model
+  // (reachable only via tool.search) — the exact bug class fixed by hand for
+  // 'skill' and 'superpowers'. Non-fatal: a routing gap must never block boot.
+  try {
+    const { findUnroutableCategories } = await import('./core/agent/tool-router.js');
+    const unroutable = findUnroutableCategories(registry.listEnabled());
+    for (const [category, toolNames] of unroutable) {
+      log.warn(
+        { category, toolCount: toolNames.length, tools: toolNames.join(', ') },
+        `TOOL ROUTING GAP: category "${category}" has ${toolNames.length} registered tool(s) but no CATEGORY_MAP entry — these tools are INVISIBLE to the model (reachable only via tool.search). Fix: add a CATEGORY_MAP entry in src/core/agent/tool-router.ts.`,
+      );
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn({ err: msg }, 'Category coverage guard failed — continuing');
+  }
+
   // -------------------------------------------------------------------------
   // 4.5 Plugin SDK — manifest-first plugins from DATA_DIR/plugins
   //     (opt-in: SUDO_PLUGINS=1; plugins run host code, so off by default)
