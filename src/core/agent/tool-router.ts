@@ -274,7 +274,12 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       /\bskill\.md\b/i,
     ],
     priority: 8,
-    maxFromCategory: 5,
+    // The skill category has exactly 7 tools and the two most important — the
+    // write path skill.apply/skill.rollback — must ALWAYS travel together on a
+    // skill turn. At 5 the within-category ranker dropped them (e.g. a "roll
+    // back the skill" turn surfaced compose/explain/federate/refine/usage-stats
+    // but NOT rollback). 7 fits the whole small category, well within the cap.
+    maxFromCategory: 7,
   },
   meta: {
     keywords: [
