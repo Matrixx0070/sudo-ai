@@ -217,7 +217,7 @@ export async function runQuickstart(
     fs.writeFileSync(configPath, buildConfigJson5(DEFAULT_ANSWERS), 'utf8');
     console.log(`\n  Non-interactive setup — wrote default config to: ${configPath}`);
     console.log(`  Agent: ${DEFAULT_ANSWERS.agentName} | model: ${DEFAULT_ANSWERS.defaultModel} | preset: ${DEFAULT_ANSWERS.preset}`);
-    console.log('  Next: add API keys to config/.env, then `sudo-ai setup` (full TUI) or `sudo-ai start`.\n');
+    console.log('  Next: add API keys to config/.env, then re-run `sudo-ai quickstart` interactively or `sudo-ai start`.\n');
     return;
   }
 
@@ -275,7 +275,7 @@ export async function runQuickstart(
     console.log(`  Preset selected: ${preset} (run 'sudo-ai init --preset ${preset}' to apply)`);
     console.log('  Next steps:');
     console.log('    1. Edit config/.env with your API keys (or re-run with full TUI)');
-    console.log('    2. For the full setup wizard (providers, profiles, service): run `sudo-ai setup`');
+    console.log('    2. Re-run `sudo-ai quickstart` anytime to update these settings');
     console.log('    3. Run: sudo-ai doctor');
     console.log('    4. Run: sudo-ai start\n');
 

@@ -35,11 +35,11 @@ It is built for power users who want a capable, owner-operated agent on their ow
 
 ```bash
 npm i -g @matrixx0070/sudo-ai
-sudo-ai setup     # interactive first-run wizard (providers, channels, options)
+sudo-ai quickstart  # interactive first-run wizard (providers, channels, options)
 sudo-ai chat      # talk to the agent in a terminal UI
 ```
 
-The CLI is installed as `sudo-ai`. Check health with:
+The CLI is installed as `sudo-ai`. On macOS, see [docs/INSTALL-macos.md](docs/INSTALL-macos.md) for the Mac-specific install path and sandbox notes. Check health with:
 
 ```bash
 curl http://127.0.0.1:18900/health   # expect 200 OK
@@ -217,7 +217,7 @@ See [docs/configuration.md](docs/configuration.md) for the full reference and th
 |---|---|
 | `sudo-ai` | Start (runs the setup wizard on first run, otherwise the TUI) |
 | `sudo-ai chat` | Launch the real-time terminal UI |
-| `sudo-ai setup` | First-time / ongoing configuration wizard |
+| `sudo-ai quickstart` | First-time / ongoing configuration wizard |
 | `sudo-ai status` / `doctor` / `init` / `config` | Service health, environment checks, init, edit |
 | `sudo-ai start` / `stop` | Manage the background service |
 | `pnpm cli` | Headless run from source (dev) |

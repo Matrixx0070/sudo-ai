@@ -16,13 +16,13 @@ curl -fsSL https://raw.githubusercontent.com/Matrixx0070/sudo-ai/main/install.sh
 npm i -g @matrixx0070/sudo-ai
 ```
 
-Then `sudo-ai setup` (add API keys), `sudo-ai chat`, or `curl http://127.0.0.1:18900/health`.
+Then `sudo-ai quickstart` (add API keys), `sudo-ai chat`, or `curl http://127.0.0.1:18900/health`.
 The installer is non-interactive when piped, prefers a prebuilt bin, and builds from
 source as a fallback.
 
 ### Highlights
 
-- **One-command install** → global `sudo-ai` CLI (`chat`, `setup`, `doctor`, `start`,
+- **One-command install** → global `sudo-ai` CLI (`chat`, `quickstart`, `doctor`, `start`,
   `status`, …) plus an optional pm2/systemd service, validated end-to-end on a clean
   Linux box.
 - **Multi-model brain** with configurable provider failover (Anthropic / OpenAI / xAI /
@@ -48,7 +48,7 @@ documentation and configuration.
 ### Notes
 
 - Linux is the primary target for this release; macOS/Windows are best-effort.
-- Bring your own model API keys (or run a local model) — configure via `sudo-ai setup`
+- Bring your own model API keys (or run a local model) — configure via `sudo-ai quickstart`
   or `config/.env`.
 
 [4.1.0]: https://github.com/Matrixx0070/sudo-ai/releases/tag/v4.1.0

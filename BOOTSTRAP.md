@@ -97,7 +97,7 @@ Telegram is the easiest channel to test with. It works on any device and does no
 ## Step 3 — Run the Setup Wizard
 
 ```bash
-sudo-ai setup
+sudo-ai quickstart
 # or simply:
 sudo-ai          # launches the wizard automatically when no config exists
 ```
@@ -114,7 +114,7 @@ If there is no config yet, this launches an interactive Ink-based TUI wizard tha
 
 The wizard writes `config/sudo-ai.json5` and `config/.env`, validates the config, and can optionally run a health check.
 
-**To edit later:** re-run `sudo-ai setup` (or `sudo-ai config --edit`). The wizard pre-fills your current values so you can update individual fields. Many `sudo-ai.json5` changes hot-reload without a restart.
+**To edit later:** re-run `sudo-ai quickstart` (or `sudo-ai config --edit`). The wizard pre-fills your current values so you can update individual fields. Many `sudo-ai.json5` changes hot-reload without a restart.
 
 See [docs/configuration.md](docs/configuration.md) for the full field reference, including the available kill-switches and approval-tier settings.
 
@@ -198,7 +198,7 @@ curl -X POST http://127.0.0.1:18900/v1/chat/completions \
 
 | Command | What it does |
 |---|---|
-| `sudo-ai setup` | Run the setup wizard (first-time or edit) |
+| `sudo-ai quickstart` | Run the setup wizard (first-time or edit) |
 | `sudo-ai config --edit` | Re-open the wizard pre-filled with current config |
 | `sudo-ai chat` | Launch the interactive TUI chat |
 | `sudo-ai` | Run headless (or launch the wizard if no config exists) |
