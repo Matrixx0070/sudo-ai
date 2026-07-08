@@ -3398,7 +3398,7 @@ async function boot(): Promise<void> {
       try {
         const pkg = JSON.parse(
           (await import('node:fs')).readFileSync(
-            (await import('node:path')).resolve(PROJECT_ROOT, 'package.json'),
+            (await import('./core/shared/paths.js')).packagePath('package.json'),
             'utf8',
           ),
         ) as { version?: string };
