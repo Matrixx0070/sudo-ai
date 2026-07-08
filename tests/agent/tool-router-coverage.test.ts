@@ -107,6 +107,24 @@ describe('CATEGORY_MAP covers every category in real use', () => {
     ).toBe(0);
   });
 
+  // Slim-heartbeat allowlist: every name must resolve on the REAL tool surface.
+  // A renamed/removed tool would silently shrink the heartbeat toolset (the
+  // route falls back to full routing only at 0 tools) — fail loudly here instead.
+  it('SLIM_HEARTBEAT_TOOLS all resolve in the real registry via routeAllowlist', async () => {
+    const { SLIM_HEARTBEAT_TOOLS } = await import('../../src/core/cron/slim-heartbeat.js');
+    const { ToolRouter } = await import('../../src/core/agent/tool-router.js');
+    // meta.search-tools is registered by cli.ts at boot (not by the builtin
+    // loader) — mirror that registration so the surface matches the daemon's.
+    const { searchToolsTool } = await import('../../src/core/tools/builtin/meta/search-tools.js');
+    if (!registry.get(searchToolsTool.name)) registry.register(searchToolsTool);
+    const router = new ToolRouter(registry);
+    const schemas = router.routeAllowlist(SLIM_HEARTBEAT_TOOLS);
+    const resolved = schemas.map((s) => s.function?.name);
+    for (const name of SLIM_HEARTBEAT_TOOLS) {
+      expect(resolved, `slim heartbeat tool "${name}" is not registered — update SLIM_HEARTBEAT_TOOLS`).toContain(name);
+    }
+  });
+
   // Mirrors the cli.ts post-plugin re-check: enabled plugins run host code in
   // activate() and can self-register tools via ToolRegistry.getGlobal(). A
   // plugin-introduced category that CATEGORY_MAP doesn't cover must be caught

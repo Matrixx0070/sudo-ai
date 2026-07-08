@@ -15,6 +15,7 @@ import { getMoodSystemBlock } from './moods.js';
 import { isPromptCacheEnabled, sortByName, DYNAMIC_BOUNDARY_MARKER } from './prompt-cache-discipline.js';
 import { getCapabilityManifestBody, isCapabilityManifestEnabled } from './capability-manifest.js';
 import { getAppliedLessonHints } from '../learning/lesson-apply.js';
+import { truncateForInjection, injectCap, MAX_INJECT_CHARS, DAILY_INJECT_CHARS } from '../workspace/injector.js';
 import type { SystemPromptOptions } from './types.js';
 
 const log = createLogger('brain:system-prompt');
@@ -184,8 +185,22 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // gate on the same predicate.
   const shouldIncludeMemory = peerId === undefined || peerId === mainPeerId;
 
-  // Read daily memory log (separate path).
-  const dailyMemory = memoryContext ?? (await readTodayMemoryLog());
+  // Read daily memory log (separate path). Capped: the Recent Memory section
+  // is injected on EVERY brain call and the daily log grows all day
+  // (historically 7-22KB by evening). Tail-kept — newest entries survive.
+  // SUDO_INJECT_RECENT_MAX overrides for this section specifically;
+  // SUDO_INJECT_TODAY_MAX is the shared daily-log cap (see workspace/injector.ts).
+  const dailyMemoryRaw = memoryContext ?? (await readTodayMemoryLog());
+  const dailyMemory = dailyMemoryRaw
+    ? truncateForInjection(dailyMemoryRaw, injectCap('SUDO_INJECT_RECENT_MAX', injectCap('SUDO_INJECT_TODAY_MAX', DAILY_INJECT_CHARS)))
+    : dailyMemoryRaw;
+
+  // Long-term MEMORY.md cap (SUDO_INJECT_MEMORY_MAX, default 10KB). MEMORY.md
+  // is compacted/pruned by auto-dream at 25KB, but it is injected per-call, so
+  // an unbounded stretch between prunes must not inflate every request.
+  const longTermMemoryCapped = longTermMemoryContent
+    ? truncateForInjection(longTermMemoryContent, injectCap('SUDO_INJECT_MEMORY_MAX', MAX_INJECT_CHARS))
+    : longTermMemoryContent;
 
   // Build current timestamp block.
   const now = new Date();
@@ -429,8 +444,8 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     if (isCapabilityManifestEnabled()) {
       parts.push(sectionWithHeader('Tool Capability Manifest', getCapabilityManifestBody()));
     }
-    if (shouldIncludeMemory && longTermMemoryContent) {
-      parts.push(sectionWithHeader('Long-Term Memory', longTermMemoryContent));
+    if (shouldIncludeMemory && longTermMemoryCapped) {
+      parts.push(sectionWithHeader('Long-Term Memory', longTermMemoryCapped));
     }
   }
 
@@ -529,8 +544,8 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   //     This mirrors the scoping logic in injector.ts line 157.
   //     Lifted above the boundary when SUDO_PROMPT_CACHE=1; the file is read
   //     in the parallel Promise.all at the top of this function either way.
-  if (!promptCacheStable && shouldIncludeMemory && longTermMemoryContent) {
-    parts.push(sectionWithHeader('Long-Term Memory', longTermMemoryContent));
+  if (!promptCacheStable && shouldIncludeMemory && longTermMemoryCapped) {
+    parts.push(sectionWithHeader('Long-Term Memory', longTermMemoryCapped));
   }
 
   // 13. Learnings — autonomous self-improvement rules
@@ -592,4 +607,50 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
 
   log.debug({ chars: assembled.length }, 'System prompt assembled');
   return assembled;
+}
+
+// ---------------------------------------------------------------------------
+// Slim heartbeat prompt
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal system prompt for the system.heartbeat health tick (see
+ * cron/slim-heartbeat.ts for the gating). Replaces the full ~28-29k-token
+ * assembled prompt with an identity line + the health-check protocol —
+ * heartbeat turns run scripted checks and reply HEARTBEAT_OK; they do not
+ * need playbooks, memory, personas, or workspace context.
+ *
+ * The stable text sits above the DYNAMIC_BOUNDARY_MARKER and the volatile
+ * timestamp below it, mirroring assembleSystemPrompt, so heartbeat calls keep
+ * their (small) prefix cacheable too.
+ *
+ * Synchronous and dependency-free by design: the caller (brain.call) treats
+ * any throw/empty return as a signal to fall back to the full prompt.
+ */
+export function assembleSlimHeartbeatPrompt(): string {
+  const now = new Date();
+  const stable = [
+    'You are SUDO, an autonomous personal AI agent. This is an automated HEARTBEAT health-check turn, not a user conversation.',
+    '',
+    '## Heartbeat Protocol',
+    '- Act ONLY on the sections named in the "Due tasks this tick:" line of the heartbeat message. If a section is not listed, skip it.',
+    '- Run the checks those sections instruct, using the available tools. Apply only the safe remediations the section explicitly allows.',
+    '- If every due check passes and nothing needs attention, reply with exactly `HEARTBEAT_OK` and nothing else.',
+    '- If something IS wrong, report it tersely: what failed, what you did about it, what still needs attention. No preamble.',
+    '- Never fabricate a check result — report only what a tool actually returned. If a tool errors, say so.',
+    '',
+    '## Tool Rules',
+    '- Call ONE tool at a time with valid JSON arguments, using tool names exactly as listed.',
+    '- If a tool call fails, change exactly one thing and retry; after 3 failed attempts, report the failure instead of retrying.',
+    '- If a needed tool is not in your list, call meta.search-tools to find it.',
+  ].join('\n');
+  const dynamic = [
+    DYNAMIC_BOUNDARY_MARKER,
+    '',
+    '## Current Date & Time',
+    '',
+    `Current date: ${now.toISOString().slice(0, 10)}`,
+    `Current time (UTC): ${now.toISOString().slice(11, 19)}`,
+  ].join('\n');
+  return `${stable}\n\n${dynamic}`;
 }

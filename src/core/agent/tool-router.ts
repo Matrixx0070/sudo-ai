@@ -641,6 +641,26 @@ export class ToolRouter {
     return result;
   }
 
+  /**
+   * Resolve an explicit allowlist of tool names to their schemas, preserving
+   * the allowlist order. Names missing from the registry are skipped (logged
+   * at debug). Used by the slim-heartbeat path — callers must treat an empty
+   * result as "allowlist unusable" and fall back to route().
+   */
+  routeAllowlist(names: readonly string[]): ToolSchema[] {
+    const schemasByName = this._indexByName(this._getAllSchemas());
+    const result: ToolSchema[] = [];
+    for (const name of names) {
+      const schema = schemasByName.get(name);
+      if (schema) {
+        result.push(schema);
+      } else {
+        log.debug({ tool: name }, 'routeAllowlist: tool not found in registry — skipping');
+      }
+    }
+    return result;
+  }
+
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------

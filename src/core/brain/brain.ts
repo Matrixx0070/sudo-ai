@@ -25,7 +25,7 @@ import { runTreeSearch } from './brain-tree-search.js';
 import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { clampMaxTokensToModel } from './thinking-inject.js';
 import { isCustomProvider } from './custom-providers.js';
-import { assembleSystemPrompt } from './system-prompt.js';
+import { assembleSystemPrompt, assembleSlimHeartbeatPrompt } from './system-prompt.js';
 import { sortToolEntries, isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages, markLastToolForCache } from './prompt-cache-discipline.js';
 import { warnOnDuplicateToolNames } from './tool-name-collision.js';
 import { getPersonaTemperature } from './personas.js';
@@ -965,10 +965,14 @@ export class Brain {
       description: t.function?.description ?? '',
     })).filter((s) => s.name);
 
+    // Slim heartbeat mode (SUDO_SLIM_HEARTBEAT, set by the agent loop for the
+    // system.heartbeat tick only): minimal system prompt, no RAG, no lens.
+    const slimHeartbeat = request.promptMode === 'slim-heartbeat';
+
     // RAG: retrieve relevant memory context from the last user message.
     // Failures are fully swallowed — never let RAG break the main call path.
     let ragMemoryContext: string | undefined;
-    if (this.ragEngine) {
+    if (this.ragEngine && !slimHeartbeat) {
       try {
         const lastUserMsg = [...request.messages]
           .reverse()
@@ -990,23 +994,42 @@ export class Brain {
     // keyword, capped, and kill-switchable (SUDO_REASONING_LENS_DISABLE=1) — inert
     // for plain turns. See reasoning-lens.ts.
     const lensUserText = [...request.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
-    const lens = selectLenses(lensUserText);
+    const lens = slimHeartbeat ? null : selectLenses(lensUserText);
     if (lens) {
       log.debug({ lensIds: lens.ids }, 'Reasoning lenses injected into system prompt');
     }
 
-    let systemPrompt = await this.getSystemPrompt({
-      heartbeat: false,
-      tools: toolSummaries.length > 0 ? toolSummaries : undefined,
-      ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
-      ...(lens ? { reasoningLens: lens.text } : {}),
-    });
+    // Slim heartbeat path: minimal prompt (identity + health-check protocol).
+    // Fail-open — any throw or empty result falls through to the full prompt.
+    let slimPromptApplied = false;
+    let systemPrompt = '';
+    if (slimHeartbeat) {
+      try {
+        const slim = assembleSlimHeartbeatPrompt();
+        if (slim.trim().length > 0) {
+          systemPrompt = slim;
+          slimPromptApplied = true;
+          log.info({ chars: slim.length }, 'Slim heartbeat system prompt in use');
+        }
+      } catch (slimErr) {
+        log.warn({ err: String(slimErr) }, 'Slim heartbeat prompt failed — falling back to full system prompt');
+      }
+    }
+    if (!slimPromptApplied) {
+      systemPrompt = await this.getSystemPrompt({
+        heartbeat: false,
+        tools: toolSummaries.length > 0 ? toolSummaries : undefined,
+        ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
+        ...(lens ? { reasoningLens: lens.text } : {}),
+      });
+    }
 
     // v5: Tool-use instruction — softened for Ollama models which tend to
     // return tool_calls for conversational queries when the instruction is
     // too aggressive. We still encourage tool use for actions but allow
-    // direct text responses for conversation.
-    if (toolSummaries.length > 0) {
+    // direct text responses for conversation. (The slim heartbeat prompt
+    // carries its own terse tool rules — skip the generic block there.)
+    if (toolSummaries.length > 0 && !slimPromptApplied) {
       systemPrompt += `\n\n## TOOL-USE INSTRUCTION
 You have ${toolSummaries.length} tools available. When the user asks you to DO something concrete (check, search, navigate, read, write, screenshot, execute, etc.), call the appropriate tool. For casual conversation, greetings, opinions, or general questions, respond with normal text — do NOT call tools.`;
     }
