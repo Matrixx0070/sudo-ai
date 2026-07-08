@@ -142,6 +142,40 @@ describe('CATEGORY_MAP covers every category in real use', () => {
     }
   });
 
+  // Mirrors the cli.ts 'final' phase check: ~14 tools register late in boot()
+  // (multi-agent, plan-mode, memory-consolidate, classify-bash, search-tools,
+  // schedule-message, ptc, ptc-python, run-workflow, enqueue-workflow), AFTER
+  // both the 'boot' and 'post-plugin' passes. Today they all use covered
+  // categories (system/meta/comms) — this proves the final-pass mechanism
+  // catches a FUTURE late registration that introduces an uncovered category.
+  it('final re-check flags a late-boot()-registered tool with a brand-new category', () => {
+    const earlierGaps = new Set(findUnroutableCategories(registry.listEnabled()).keys());
+    expect(earlierGaps.has('lateplugin')).toBe(false);
+
+    // Simulate an env-conditional registry.register() late in boot() using a
+    // category CATEGORY_MAP doesn't know about.
+    registry.register({
+      name: 'lateplugin.x',
+      description: 'late-registered tool with an uncovered category',
+      category: 'lateplugin' as ToolCategory,
+      parameters: {},
+      execute: async () => ({ success: true, output: 'ok' }),
+    });
+    try {
+      const finalGaps = findUnroutableCategories(registry.listEnabled());
+      expect(finalGaps.get('lateplugin')).toEqual(['lateplugin.x']);
+      // The gap is new vs. earlier passes — the 'final' phase (dedupe set)
+      // would report it exactly once, tagged '(final)'.
+      expect(earlierGaps.has('lateplugin')).toBe(false);
+      // No previously-clean category regressed as a side effect.
+      for (const cat of finalGaps.keys()) {
+        if (cat !== 'lateplugin') expect(earlierGaps.has(cat)).toBe(true);
+      }
+    } finally {
+      registry.unregister('lateplugin.x');
+    }
+  });
+
   it('registry is clean again after the simulated plugin tool is removed', () => {
     expect(findUnroutableCategories(registry.listEnabled()).size).toBe(0);
   });
