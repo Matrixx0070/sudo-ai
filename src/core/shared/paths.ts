@@ -91,9 +91,11 @@ function resolvePackageRoot(): string {
     }
     // Pass 2: nearest ancestor with package.json + dist/ (renamed forks).
     for (let dir = start; ; ) {
-      if (fs.existsSync(path.join(dir, 'package.json')) && fs.existsSync(path.join(dir, 'dist'))) {
-        return dir;
-      }
+      try {
+        if (fs.existsSync(path.join(dir, 'package.json')) && fs.existsSync(path.join(dir, 'dist'))) {
+          return dir;
+        }
+      } catch { /* fs mocked/unavailable (e.g. in unit tests) — fall through */ }
       const parent = path.dirname(dir);
       if (parent === dir) break;
       dir = parent;
