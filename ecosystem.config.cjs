@@ -99,6 +99,14 @@ module.exports = {
         //   - the self-build loop's daily LLM spend gate.
         // None of these ever *capped* spend — they only reported/aborted on it.
         // Re-enable by setting a positive dollar figure (e.g. '5' / '20').
+        // ---- Commitments — opt-in, default OFF ----
+        // When SUDO_COMMITMENTS=1, a post-turn hook detects a promised future
+        // follow-up ("I'll remind you tomorrow") and schedules it as a one-shot
+        // cron job. Bounded: confidence floor, <=SUDO_COMMITMENTS_MAX_HORIZON_DAYS
+        // (7) out, <=SUDO_COMMITMENTS_MAX_JOBS (10) pending, deduped. Purge stale
+        // ones by removing commitment:* from data/cron/jobs.json.
+        // SUDO_COMMITMENTS: '1',
+
         SUDO_DAILY_BUDGET_USD: 'off',
         SUDO_DAILY_LLM_BUDGET_USD: 'off',
 

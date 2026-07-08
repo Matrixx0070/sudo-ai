@@ -2814,6 +2814,16 @@ async function boot(): Promise<void> {
   registerShutdown(() => heartbeat.stop());
   log.info('HeartbeatRunner started (wrapRunner wired)');
 
+  // Commitment extractor — schedules inferred future follow-ups via the cron
+  // store (fired by the scheduler above). Active only when SUDO_COMMITMENTS=1.
+  try {
+    const { CommitmentExtractor } = await import('./core/cron/commitment-extractor.js');
+    finalAgentLoop.setCommitmentExtractor(new CommitmentExtractor(brain, cronStore));
+    log.info('CommitmentExtractor wired (active only when SUDO_COMMITMENTS=1)');
+  } catch (err) {
+    log.warn({ err: String(err) }, 'CommitmentExtractor wiring failed — disabled');
+  }
+
   // Cost-rate watchdog (opt-in, default OFF). Samples $/hour from the
   // api_call_log on a timer and emits a `cost_rate_alert` hook event when spend
   // crosses an absolute ceiling or deviates sharply above the rolling baseline —

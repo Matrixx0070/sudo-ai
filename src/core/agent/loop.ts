@@ -1683,6 +1683,15 @@ export class AgentLoop extends AgentLoopInjections {
       }
     }
 
+    // Commitments — if the agent promised a future follow-up this turn, extract
+    // and schedule it (opt-in SUDO_COMMITMENTS=1). Non-blocking, fail-open,
+    // skips ephemeral autonomy peers so heartbeats never self-schedule.
+    if (process.env['SUDO_COMMITMENTS'] === '1' && this._commitmentExtractor
+        && !isEphemeralPeer(session.channel ?? '', session.peerId ?? '')) {
+      void this._commitmentExtractor.onTurnEnd(sessionId, message, finalResponse)
+        .catch((err) => log.warn({ sessionId, err: String(err) }, 'CommitmentExtractor failed — continuing'));
+    }
+
     // Theme 2.2: reasoning-summary — surface a transparent recap of what the
     // agent did this turn (approach, recent steps, confidence). Opt-in
     // (SUDO_REASONING_SUMMARY=1), additive (attached to the result + logged),
