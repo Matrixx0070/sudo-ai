@@ -59,6 +59,30 @@ function normalizeToolArgs(raw: unknown): Record<string, unknown> {
  * Nested `items` and `properties` are intentionally left as-is for now;
  * full recursive expansion can be added when nested schemas are needed.
  */
+/**
+ * Coerce string-typed boolean arguments to real booleans per the tool's own
+ * parameter declarations. Only the exact strings "true"/"false" on a declared
+ * type:'boolean' parameter are converted; every other value passes through
+ * untouched. Returns the original object when nothing needs coercion. Tools
+ * carrying a raw JSON `inputSchema` instead of `parameters` (MCP-style) are
+ * left alone.
+ */
+export function coerceDeclaredBooleans(
+  tool: Pick<ToolDefinition, 'parameters'>,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  let out: Record<string, unknown> | null = null;
+  for (const [key, spec] of Object.entries(tool.parameters ?? {})) {
+    if (spec?.type !== 'boolean') continue;
+    const v = params[key];
+    if (v === 'true' || v === 'false') {
+      out ??= { ...params };
+      out[key] = v === 'true';
+    }
+  }
+  return out ?? params;
+}
+
 function paramToJsonSchema(param: ToolDefinition['parameters'][string]): Record<string, unknown> {
   const schema: Record<string, unknown> = {
     type: param.type,
@@ -529,6 +553,13 @@ export class ToolRegistry {
         );
       }
     }
+
+    // Models sometimes emit declared-boolean arguments as the STRINGS
+    // "true"/"false"; raw "false" then leaks into tools whose checks
+    // (`params['dryRun'] !== false`) treat any string as truthy — live-observed:
+    // skill.install ran four times, every call forced into dryRun mode. Coerce
+    // exactly those two strings on declared type:'boolean' params, nothing else.
+    params = coerceDeclaredBooleans(tool, params);
 
     const timeout = tool.timeout ?? 30_000;
     const controller = new AbortController();
