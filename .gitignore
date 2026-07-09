@@ -166,3 +166,6 @@ internal/misc/json         # duplicate of the above
 # above (this is a PUBLIC repo).
 /docs/REVIEW-*.md
 /docs/reviews/
+
+# npm pack artifacts (local publish testing)
+*.tgz
