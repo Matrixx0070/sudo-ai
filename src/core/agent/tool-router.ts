@@ -266,20 +266,27 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'rollback skill', 'roll back skill', 'skill.apply', 'skill.rollback',
       'refine skill', 'compose skill', 'my skills', 'own skill', 'self-author',
       'skill.md', 'skill file',
+      'install skill', 'install a skill', 'skill registry', 'registry skill',
+      'browse skills', 'search skills', 'find skills', 'available skills',
+      'skill store', 'sudoapi.shop',
     ],
     patterns: [
-      /\bskill[.-](apply|rollback|refine|compose|explain|federate)\b/i,
+      /\bskill[.-](apply|rollback|refine|compose|explain|federate|install|search)\b/i,
+      /\b(install|download|get|add)\s+(a\s+|the\s+)?(new\s+)?skill\b/i,
+      /\bskill\s+(registry|store|marketplace)\b/i,
       /\b(author|create|write|revise|update|edit|build)\s+(a\s+)?(new\s+)?skill\b/i,
       /\broll\s*back\s+(a\s+)?skill\b/i,
       /\bskill\.md\b/i,
     ],
     priority: 8,
-    // The skill category has exactly 7 tools and the two most important — the
-    // write path skill.apply/skill.rollback — must ALWAYS travel together on a
-    // skill turn. At 5 the within-category ranker dropped them (e.g. a "roll
-    // back the skill" turn surfaced compose/explain/federate/refine/usage-stats
-    // but NOT rollback). 7 fits the whole small category, well within the cap.
-    maxFromCategory: 7,
+    // The skill category has exactly 9 tools and the write/install paths
+    // (skill.apply/skill.rollback/skill.install/skill.search) must ALWAYS
+    // travel together on a skill turn. At 5 the within-category ranker dropped
+    // some (e.g. a "roll back the skill" turn surfaced compose/explain/
+    // federate/refine/usage-stats but NOT rollback); the cap must track the
+    // category size whenever a skill.* tool is added, else the new tool is
+    // registered-but-unroutable. 9 fits the whole small category.
+    maxFromCategory: 9,
   },
   // The 12 super.* power tools (category 'superpowers': translate, archive,
   // ffmpeg, edit-image, profile, security-scan, deploy, auto-fix, analyze-data,

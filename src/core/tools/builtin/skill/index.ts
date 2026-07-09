@@ -10,6 +10,8 @@
  *   skill.federate    — Publish/fetch skill refinement events via federation layer
  *   skill.compose     — Propose a tool chain to achieve a goal (keyword matching)
  *   skill.explain     — Emit a rich markdown explanation for any registered tool
+ *   skill.search      — Browse the public skill registry (sudoapi.shop)
+ *   skill.install     — Install a registry skill through the Workshop gate
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -21,6 +23,8 @@ import { composeTool } from './tools/compose.js';
 import { explainTool } from './tools/explain.js';
 import { applyTool } from './tools/apply.js';
 import { rollbackTool } from './tools/rollback.js';
+import { searchTool } from './tools/search.js';
+import { installTool } from './tools/install.js';
 
 const logger = createLogger('skill-builtin');
 
@@ -32,6 +36,8 @@ const SKILL_TOOLS = [
   explainTool,
   applyTool,
   rollbackTool,
+  searchTool,
+  installTool,
 ];
 
 /**
