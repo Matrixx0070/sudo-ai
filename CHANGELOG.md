@@ -3,6 +3,38 @@
 All notable changes to this project are documented here. Versioning follows the
 `version` field in `package.json`; entries are newest-first.
 
+## [4.1.6] — 2026-07-09
+
+### Fixed
+- Agent loop: corrected final answers now persist. CompletionVerify retry adoptions and
+  the universal-negative guard's corrective revisions are appended after the end-of-run
+  session save; the delivered (revised) answer is now re-saved, so restarts and hydrates
+  no longer resurrect the pre-revision text. (#659)
+
+### Added
+- `email-polish` workshop-authored skill tracked under `skills/`; npm pack tarballs
+  gitignored. (#660)
+
+## [4.1.2 – 4.1.5] — 2026-07-08 — combined fix train
+
+### Fixed
+- `sudo-ai start` boots from a clean npm install (#652); quickstart enables web chat so
+  `/api/message` responds and persists (#653); shipped SPA served from the package
+  install dir instead of cwd (#654); `resolvePackageRoot` no longer throws under mocked
+  fs (#655); `doctor` gained provider-awareness, clean exit, sqlite-vec interop, and
+  quieter git noise (#656); deprecated `temperature` param stripped for Claude 5 family
+  models (#649).
+
+### Added
+- macOS support: Seatbelt exec sandbox, BSD ps/os metrics, restart guidance, install
+  docs (#651).
+- Universal-negative guard for research turns: a final answer asserting an unverifiable
+  universal negative ("no other X exists", "no name collisions") from finite web
+  searches gets one bounded corrective rescope; kill-switch
+  `SUDO_UNIVERSAL_NEGATIVE_GUARD=0` (#657, #658).
+- Skill Workshop self-authoring (`skill.apply` / `skill.rollback`) reachable via tool
+  routing (#641–#648); slim heartbeat context + memory-injection caps (#650).
+
 ## [4.1.0] — 2026-07-05 — Initial public release
 
 First public release of **SUDO-AI**, a self-hosted, owner-operated autonomous AI agent
