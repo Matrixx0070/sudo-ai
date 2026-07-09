@@ -47,6 +47,7 @@ import { classifyIntent, formatIntentHint } from './intent-classifier.js';
 import { getPredictor } from '../tools/builtin/meta/predictor.js';
 import { CompletionVerifier } from '../tools/completion-verifier.js';
 import { runUniversalNegativeGuard } from './universal-negative-guard.js';
+import { persistPostRunAppends } from './post-run-persist.js';
 import type { Prediction } from '../prediction/predictor.js';
 import type {
   BrainLike,
@@ -1515,6 +1516,10 @@ export class AgentLoop extends AgentLoopInjections {
     } catch (err) {
       log.error({ sessionId, err }, 'Failed to save session after agent run');
     }
+    // Everything at or below this index is persisted (or deliberately skipped by
+    // ZDR / a failed save). Post-run blocks below (CompletionVerify retry,
+    // universal-negative guard) may append past it.
+    const _persistedThrough = session.messages.length;
 
     // FeedbackTierManager: assess tier and store adjustment on session (fail-open).
     try {
@@ -1811,6 +1816,18 @@ export class AgentLoop extends AgentLoopInjections {
         log.warn({ sessionId, err: String(err) }, 'Plan tracking failed — continuing');
       }
     }
+
+    // Post-run blocks may have appended a corrected assistant message AFTER the
+    // end-of-run save. Persist the delta so the stored conversation ends on the
+    // answer the user actually received — a hydrate would otherwise resurrect
+    // the pre-revision text.
+    await persistPostRunAppends({
+      sessionId,
+      persistedThrough: _persistedThrough,
+      currentLength: session.messages.length,
+      zdrBlocked: isZDRBlocked('session_persistence'),
+      save: () => this.sessionManager.save(session),
+    });
 
     return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress, completionVerification: _completionVerification, committedOutbound: hasCommittedOutbound(sessionId) };
   }
