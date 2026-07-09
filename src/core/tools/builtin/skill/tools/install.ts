@@ -70,7 +70,8 @@ export const installTool: ToolDefinition = {
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const name = typeof params['name'] === 'string' ? params['name'].trim() : '';
     const version = typeof params['version'] === 'string' && params['version'].trim() ? params['version'].trim() : undefined;
-    const dryRun = params['dryRun'] !== false;
+    const rawDryRun = params['dryRun'];
+    const dryRun = !(rawDryRun === false || rawDryRun === 'false');
 
     if (!name) return { success: false, output: 'name is required (see skill.search for available skills).' };
     if (!isSkillRegistryEnabled()) {
