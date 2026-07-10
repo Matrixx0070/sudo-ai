@@ -102,6 +102,132 @@ describe('coerceDeclaredPrimitives — numbers (unit)', () => {
   });
 });
 
+describe('coerceDeclaredPrimitives — nested members (unit)', () => {
+  const tool = {
+    parameters: {
+      operations: {
+        type: 'array' as const,
+        description: '',
+        items: {
+          type: 'object' as const,
+          description: '',
+          properties: {
+            width: { type: 'number' as const, description: '' },
+            label: { type: 'string' as const, description: '' },
+            enabled: { type: 'boolean' as const, description: '' },
+          },
+        },
+      },
+    },
+  };
+
+  it('coerces number/boolean strings inside array-of-object members', () => {
+    const out = coerceDeclaredPrimitives(tool, {
+      operations: [{ width: '300', label: '300', enabled: 'true' }, { width: 200 }],
+    });
+    const ops = out['operations'] as Array<Record<string, unknown>>;
+    expect(ops[0]).toEqual({ width: 300, label: '300', enabled: true }); // declared string untouched
+    expect(ops[1]).toEqual({ width: 200 });
+  });
+
+  it('leaves undeclared members and non-parseable strings alone', () => {
+    const out = coerceDeclaredPrimitives(tool, {
+      operations: [{ width: '5px', extra: '7' }],
+    });
+    expect((out['operations'] as Array<Record<string, unknown>>)[0]).toEqual({ width: '5px', extra: '7' });
+  });
+
+  it('no-copy fast path: untouched nested structures keep identity', () => {
+    const input = { operations: [{ width: 300, label: 'x' }] };
+    const out = coerceDeclaredPrimitives(tool, input);
+    expect(out).toBe(input);
+    expect(out['operations']).toBe(input.operations);
+  });
+
+  it('does not mutate the original nested objects when coercing', () => {
+    const inner = { width: '300' };
+    const input = { operations: [inner] };
+    const out = coerceDeclaredPrimitives(tool, input);
+    expect(inner.width).toBe('300'); // original untouched
+    expect((out['operations'] as Array<Record<string, unknown>>)[0]!['width']).toBe(300);
+  });
+
+  it('coerces arrays of bare number items', () => {
+    const t = { parameters: { sizes: { type: 'array' as const, description: '', items: { type: 'number' as const, description: '' } } } };
+    expect(coerceDeclaredPrimitives(t, { sizes: ['1', 2, '3.5'] })['sizes']).toEqual([1, 2, 3.5]);
+  });
+
+  it('coerces top-level objects with declared primitive properties (margins shape)', () => {
+    const t = {
+      parameters: {
+        margins: {
+          type: 'object' as const, description: '',
+          properties: {
+            top: { type: 'number' as const, description: '' },
+            bottom: { type: 'number' as const, description: '' },
+          },
+        },
+      },
+    };
+    expect(coerceDeclaredPrimitives(t, { margins: { top: '10', bottom: 20 } })['margins'])
+      .toEqual({ top: 10, bottom: 20 });
+  });
+
+  it('junk elements inside a declared items:object array pass through untouched', () => {
+    const out = coerceDeclaredPrimitives(tool, { operations: [null, 'x', 5, { width: '300' }] });
+    expect(out['operations']).toEqual([null, 'x', 5, { width: 300 }]);
+  });
+
+  it('coerces the deepest real builtin shape — github files[].edits[].all at depth 4', () => {
+    // Mirrors github.ts files[].edits[].all; consumer checks `e?.all === true`,
+    // so a string "true" silently degraded to replace-first-occurrence.
+    const gh = {
+      parameters: {
+        files: {
+          type: 'array' as const, description: '',
+          items: {
+            type: 'object' as const, description: '',
+            properties: {
+              edits: {
+                type: 'array' as const, description: '',
+                items: {
+                  type: 'object' as const, description: '',
+                  properties: { all: { type: 'boolean' as const, description: '' } },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const out = coerceDeclaredPrimitives(gh, { files: [{ edits: [{ all: 'true' }] }] });
+    expect((out['files'] as Array<{ edits: Array<{ all: unknown }> }>)[0]!.edits[0]!.all).toBe(true);
+  });
+
+  it('stops at the depth cap instead of recursing forever', () => {
+    // leaf at recursion depth 6 (== MAX_COERCE_DEPTH): blocked; depth 5 coerces.
+    const leafAt = (levels: number): { params: Record<string, never>; spec: Record<string, unknown> } => {
+      let spec: Record<string, unknown> = { type: 'number', description: '' };
+      let value: unknown = '5';
+      for (let i = 0; i < levels; i++) {
+        spec = { type: 'object', description: '', properties: { k: spec } };
+        value = { k: value };
+      }
+      return { spec: { parameters: { root: spec } }, params: { root: value } as never };
+    };
+    const dig = (v: unknown, levels: number): unknown => {
+      for (let i = 0; i < levels; i++) v = (v as { k: unknown }).k;
+      return v;
+    };
+    const blocked = leafAt(6); // root visited at depth 0, leaf at depth 6
+    const outBlocked = coerceDeclaredPrimitives(blocked.spec as never, blocked.params);
+    expect(dig(outBlocked['root'], 6)).toBe('5');
+    const allowed = leafAt(5);
+    const outAllowed = coerceDeclaredPrimitives(allowed.spec as never, allowed.params);
+    expect(dig(outAllowed['root'], 5)).toBe(5);
+  });
+});
+
 describe('registry.execute applies primitive coercion', () => {
   it('tool receives real primitives when the model sent strings', async () => {
     const received: { params?: Record<string, unknown> } = {};

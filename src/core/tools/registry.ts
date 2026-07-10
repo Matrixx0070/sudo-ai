@@ -55,42 +55,84 @@ function normalizeToolArgs(raw: unknown): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a minimal JSON Schema `properties` entry from a {@link ToolParam}.
- * Nested `items` and `properties` are intentionally left as-is for now;
- * full recursive expansion can be added when nested schemas are needed.
- */
-/**
  * Coerce string-typed primitive arguments to their declared types per the
- * tool's own parameter declarations. Booleans: only the exact strings
- * "true"/"false" on a declared type:'boolean' parameter convert. Numbers:
- * only a trimmed string that parses to a FINITE number on a declared
- * type:'number' parameter converts ("500", "-1.5", "2e3"); anything else
- * ("", "5px", "NaN", "Infinity") passes through untouched for the tool's
- * own validation to reject. Returns the original object when nothing needs
- * coercion. Tools carrying a raw JSON `inputSchema` instead of `parameters`
- * (MCP-style) are left alone, as are nested object/array members.
+ * tool's own parameter declarations, RECURSIVELY through declared `items`
+ * (arrays) and `properties` (objects) — a model emitting
+ * operations:[{width:"300"}] is the same defect one level down (live
+ * victim: media.image-edit-advanced, sharp rejects string widths).
+ * Booleans: only the exact strings "true"/"false" on a declared
+ * type:'boolean' member convert. Numbers: only a trimmed string that parses
+ * to a FINITE number on a declared type:'number' member converts ("500",
+ * "-1.5", "2e3"); anything else ("", "5px", "NaN", "Infinity") passes
+ * through untouched for the tool's own validation to reject. Undeclared
+ * members are never touched. Returns the original object (and reuses
+ * original nested arrays/objects) when nothing needs coercion. Tools
+ * carrying a raw JSON `inputSchema` instead of `parameters` (MCP-style)
+ * are left alone.
+ *
+ * The depth cap bounds schema-driven recursion (defensive vs cyclic specs
+ * or values from internal callers). Deepest declared leaf across builtins
+ * today is depth 4 (github files[].edits[].all, spreadsheet
+ * sheets[].columns[].width) — the cap leaves headroom above that; a leaf
+ * AT the cap is blocked.
  */
+const MAX_COERCE_DEPTH = 6;
+
+type ParamSpec = ToolDefinition['parameters'][string];
+
+function coerceValue(spec: ParamSpec, v: unknown, depth: number): { changed: boolean; value: unknown } {
+  if (depth >= MAX_COERCE_DEPTH) return { changed: false, value: v };
+  if (typeof v === 'string') {
+    if (spec.type === 'boolean' && (v === 'true' || v === 'false')) {
+      return { changed: true, value: v === 'true' };
+    }
+    if (spec.type === 'number') {
+      const trimmed = v.trim();
+      if (trimmed !== '') {
+        const n = Number(trimmed);
+        if (Number.isFinite(n)) return { changed: true, value: n };
+      }
+    }
+    return { changed: false, value: v };
+  }
+  if (spec.type === 'array' && spec.items && Array.isArray(v)) {
+    let out: unknown[] | null = null;
+    for (let i = 0; i < v.length; i++) {
+      const r = coerceValue(spec.items, v[i], depth + 1);
+      if (r.changed) {
+        out ??= v.slice();
+        out[i] = r.value;
+      }
+    }
+    return out ? { changed: true, value: out } : { changed: false, value: v };
+  }
+  if (spec.type === 'object' && spec.properties && v !== null && typeof v === 'object' && !Array.isArray(v)) {
+    const rec = v as Record<string, unknown>;
+    let out: Record<string, unknown> | null = null;
+    for (const [k, propSpec] of Object.entries(spec.properties)) {
+      if (!Object.hasOwn(rec, k)) continue;
+      const r = coerceValue(propSpec, rec[k], depth + 1);
+      if (r.changed) {
+        out ??= { ...rec };
+        out[k] = r.value;
+      }
+    }
+    return out ? { changed: true, value: out } : { changed: false, value: v };
+  }
+  return { changed: false, value: v };
+}
+
 export function coerceDeclaredPrimitives(
   tool: Pick<ToolDefinition, 'parameters'>,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   let out: Record<string, unknown> | null = null;
   for (const [key, spec] of Object.entries(tool.parameters ?? {})) {
-    const v = params[key];
-    if (typeof v !== 'string') continue;
-    if (spec?.type === 'boolean') {
-      if (v === 'true' || v === 'false') {
-        out ??= { ...params };
-        out[key] = v === 'true';
-      }
-    } else if (spec?.type === 'number') {
-      const trimmed = v.trim();
-      if (trimmed === '') continue;
-      const n = Number(trimmed);
-      if (Number.isFinite(n)) {
-        out ??= { ...params };
-        out[key] = n;
-      }
+    if (!spec || !(key in params)) continue;
+    const r = coerceValue(spec, params[key], 0);
+    if (r.changed) {
+      out ??= { ...params };
+      out[key] = r.value;
     }
   }
   return out ?? params;
