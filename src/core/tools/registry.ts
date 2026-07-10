@@ -60,24 +60,37 @@ function normalizeToolArgs(raw: unknown): Record<string, unknown> {
  * full recursive expansion can be added when nested schemas are needed.
  */
 /**
- * Coerce string-typed boolean arguments to real booleans per the tool's own
- * parameter declarations. Only the exact strings "true"/"false" on a declared
- * type:'boolean' parameter are converted; every other value passes through
- * untouched. Returns the original object when nothing needs coercion. Tools
- * carrying a raw JSON `inputSchema` instead of `parameters` (MCP-style) are
- * left alone.
+ * Coerce string-typed primitive arguments to their declared types per the
+ * tool's own parameter declarations. Booleans: only the exact strings
+ * "true"/"false" on a declared type:'boolean' parameter convert. Numbers:
+ * only a trimmed string that parses to a FINITE number on a declared
+ * type:'number' parameter converts ("500", "-1.5", "2e3"); anything else
+ * ("", "5px", "NaN", "Infinity") passes through untouched for the tool's
+ * own validation to reject. Returns the original object when nothing needs
+ * coercion. Tools carrying a raw JSON `inputSchema` instead of `parameters`
+ * (MCP-style) are left alone, as are nested object/array members.
  */
-export function coerceDeclaredBooleans(
+export function coerceDeclaredPrimitives(
   tool: Pick<ToolDefinition, 'parameters'>,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   let out: Record<string, unknown> | null = null;
   for (const [key, spec] of Object.entries(tool.parameters ?? {})) {
-    if (spec?.type !== 'boolean') continue;
     const v = params[key];
-    if (v === 'true' || v === 'false') {
-      out ??= { ...params };
-      out[key] = v === 'true';
+    if (typeof v !== 'string') continue;
+    if (spec?.type === 'boolean') {
+      if (v === 'true' || v === 'false') {
+        out ??= { ...params };
+        out[key] = v === 'true';
+      }
+    } else if (spec?.type === 'number') {
+      const trimmed = v.trim();
+      if (trimmed === '') continue;
+      const n = Number(trimmed);
+      if (Number.isFinite(n)) {
+        out ??= { ...params };
+        out[key] = n;
+      }
     }
   }
   return out ?? params;
@@ -554,12 +567,13 @@ export class ToolRegistry {
       }
     }
 
-    // Models sometimes emit declared-boolean arguments as the STRINGS
-    // "true"/"false"; raw "false" then leaks into tools whose checks
-    // (`params['dryRun'] !== false`) treat any string as truthy — live-observed:
-    // skill.install ran four times, every call forced into dryRun mode. Coerce
-    // exactly those two strings on declared type:'boolean' params, nothing else.
-    params = coerceDeclaredBooleans(tool, params);
+    // Models sometimes emit declared-primitive arguments as STRINGS. Observed
+    // twice: "false" on a declared boolean forced skill.install into dryRun
+    // (string is truthy), and "500" on a declared number passed finance
+    // validation ("500" <= 0 coerces) then persisted into the ledger, breaking
+    // every later balance call (`"0500".toFixed` throws). Coerce strictly
+    // parseable strings on declared boolean/number params, nothing else.
+    params = coerceDeclaredPrimitives(tool, params);
 
     const timeout = tool.timeout ?? 30_000;
     const controller = new AbortController();
