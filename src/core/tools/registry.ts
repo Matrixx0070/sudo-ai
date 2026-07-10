@@ -431,6 +431,48 @@ export class ToolRegistry {
   }
 
   /**
+   * Remove an MCP adapter and every tool it contributed.
+   * Inverse of {@link registerMCPSource}; unknown serverIds are a no-op.
+   *
+   * @param serverId - Identifier the adapter was registered under.
+   * @returns Number of tools removed.
+   */
+  removeMCPSource(serverId: string): number {
+    if (!serverId || !this.mcpAdapters.has(serverId)) return 0;
+    const adapter = this.mcpAdapters.get(serverId)!;
+    this.mcpAdapters.delete(serverId);
+    // Tear the transport down (kills stdio child processes, releases HTTP
+    // sessions) — dropping the reference alone would orphan spawned servers.
+    void Promise.resolve(adapter.disconnect()).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ serverId, err: msg }, 'MCP adapter disconnect failed during removal');
+    });
+    let removed = 0;
+    for (const [name, def] of this.mcpTools) {
+      if (def.serverId === serverId) {
+        this.mcpTools.delete(name);
+        removed++;
+      }
+    }
+    logger.info({ serverId, toolCount: removed }, 'MCP source removed');
+    return removed;
+  }
+
+  /** Registered MCP sources with their tool counts (for mcp.list). */
+  listMCPSources(): Array<{ serverId: string; toolCount: number; toolNames: string[] }> {
+    const byServer = new Map<string, string[]>();
+    for (const [name, def] of this.mcpTools) {
+      const list = byServer.get(def.serverId) ?? [];
+      list.push(name);
+      byServer.set(def.serverId, list);
+    }
+    return [...this.mcpAdapters.keys()].map((serverId) => {
+      const toolNames = byServer.get(serverId) ?? [];
+      return { serverId, toolCount: toolNames.length, toolNames };
+    });
+  }
+
+  /**
    * Remove a tool from the registry entirely.
    * Also clears any disabled state for the tool.
    *

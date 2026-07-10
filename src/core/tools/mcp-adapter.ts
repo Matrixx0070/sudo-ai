@@ -1182,3 +1182,294 @@ export class HTTPMCPAdapter {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// StreamableHTTPMCPAdapter — spec-compliant remote MCP transport
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract JSON-RPC messages from a `text/event-stream` body.
+ *
+ * Streamable HTTP servers may frame the JSON-RPC response for a POST as one
+ * or more SSE events (`event: message` / `data: {...}`). Events are split on
+ * blank lines; multi-`data:`-line events are joined with newlines per the SSE
+ * spec; anything that fails to parse as JSON is skipped (comments,
+ * keep-alives). Exported for tests.
+ */
+export function parseSSEMessages(body: string): unknown[] {
+  const messages: unknown[] = [];
+  for (const event of body.split(/\r?\n\r?\n/)) {
+    const dataLines = event
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith('data:'))
+      .map((l) => l.slice(5).replace(/^ /, ''));
+    if (dataLines.length === 0) continue;
+    try {
+      messages.push(JSON.parse(dataLines.join('\n')));
+    } catch {
+      /* keep-alive / non-JSON data — skip */
+    }
+  }
+  return messages;
+}
+
+/** Configuration for {@link StreamableHTTPMCPAdapter}. */
+export interface StreamableHTTPMCPConfig {
+  /** Server identifier — becomes the `mcp__<id>__` tool-name prefix. */
+  id: string;
+  /** Full MCP endpoint URL (the POST target itself, e.g. https://api.githubcopilot.com/mcp/). */
+  url: string;
+  /** Bearer token sent as `Authorization: Bearer <token>`. */
+  accessToken?: string;
+  /** Per-tool enable/disable filtering (raw tool names). */
+  toolFilter?: Record<string, boolean>;
+}
+
+/** MCP protocol revision the Streamable HTTP client offers during initialize. */
+const STREAMABLE_HTTP_PROTOCOL_VERSION = '2025-06-18';
+
+/** Bound on tools/list cursor pagination — defensive vs a looping server. */
+const MAX_TOOL_PAGES = 20;
+
+/**
+ * MCP **Streamable HTTP** transport (spec rev 2025-03-26+), the protocol real
+ * remote MCP servers speak — GitHub's `https://api.githubcopilot.com/mcp/`
+ * included. Differences from the legacy {@link HTTPMCPAdapter} (a homegrown
+ * `POST ${baseUrl}/rpc` convention, kept for backward compatibility):
+ *
+ *   - JSON-RPC POSTs go to the endpoint URL itself, with
+ *     `Accept: application/json, text/event-stream`.
+ *   - `initialize` handshake + `notifications/initialized` before use; the
+ *     negotiated protocol version is echoed on every subsequent request.
+ *   - `Mcp-Session-Id` response header is captured and replayed; disconnect
+ *     issues a best-effort HTTP DELETE for the session.
+ *   - Responses may arrive SSE-framed; both framings are handled. The body is
+ *     read to completion (the spec directs servers to close the stream after
+ *     the response message; the request timeout bounds a server that does
+ *     not).
+ *
+ * Duck-type compatible with {@link MCPAdapterLike} so it can be passed to
+ * `ToolRegistry.registerMCPSource`. Reuses the module's SSRF guard: non-http(s)
+ * protocols and private/loopback hosts are rejected unless
+ * SUDO_MCP_ALLOW_PRIVATE_HOSTS=1.
+ */
+export class StreamableHTTPMCPAdapter {
+  private tools: MCPToolDef[] = [];
+  private sessionId: string | null = null;
+  private negotiatedVersion: string | null = null;
+  private connected = false;
+  private nextId = 1;
+
+  constructor(private readonly config: StreamableHTTPMCPConfig) {
+    if (!config.id || typeof config.id !== 'string') {
+      throw new Error('StreamableHTTPMCPAdapter: config.id must be a non-empty string');
+    }
+    if (!config.url || typeof config.url !== 'string') {
+      throw new Error('StreamableHTTPMCPAdapter: config.url must be a non-empty string');
+    }
+    const parsed = new URL(config.url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(
+        `StreamableHTTPMCPAdapter: unsupported protocol ${parsed.protocol} (must be http or https)`,
+      );
+    }
+    const allowPrivate = process.env['SUDO_MCP_ALLOW_PRIVATE_HOSTS'] === '1';
+    const host = parsed.hostname.toLowerCase().replace(/^\[(.+)\]$/, '$1');
+    if (!allowPrivate && (host === 'localhost' || PRIVATE_IP_RE.test(host))) {
+      throw new Error(
+        'StreamableHTTPMCPAdapter: private/loopback url rejected (SSRF protection). Set SUDO_MCP_ALLOW_PRIVATE_HOSTS=1 for dev.',
+      );
+    }
+  }
+
+  get serverId(): string {
+    return this.config.id;
+  }
+
+  getCachedTools(): MCPToolDef[] {
+    return [...this.tools];
+  }
+
+  private _headers(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    };
+    if (this.config.accessToken) headers['Authorization'] = `Bearer ${this.config.accessToken}`;
+    if (this.sessionId) headers['Mcp-Session-Id'] = this.sessionId;
+    if (this.negotiatedVersion) headers['MCP-Protocol-Version'] = this.negotiatedVersion;
+    return headers;
+  }
+
+  /**
+   * POST one JSON-RPC request and return its result. Handles both plain-JSON
+   * and SSE-framed response bodies; captures `Mcp-Session-Id`. A notification
+   * (no `id`) resolves to null on 2xx without reading a response message.
+   */
+  private async _rpc(
+    method: string,
+    params: Record<string, unknown>,
+    opts: { timeoutMs: number; notification?: boolean },
+  ): Promise<unknown> {
+    const id = opts.notification ? undefined : this.nextId++;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+    try {
+      const response = await fetch(this.config.url, {
+        method: 'POST',
+        headers: this._headers(),
+        body: JSON.stringify({ jsonrpc: '2.0', ...(id !== undefined ? { id } : {}), method, params }),
+        signal: controller.signal,
+        // A redirect to a private host would bypass the constructor-time SSRF
+        // check — refuse redirects outright.
+        redirect: 'error',
+      });
+
+      const session = response.headers.get('mcp-session-id');
+      if (session) this.sessionId = session;
+
+      if (!response.ok) {
+        // Surface the body head — remote servers put the useful error there.
+        let detail = '';
+        try {
+          detail = (await readBodyCapped(response, 4096)).slice(0, 300);
+        } catch { /* body unreadable — status alone */ }
+        throw new Error(
+          `StreamableHTTPMCPAdapter[${this.config.id}]: HTTP ${response.status} from ${method}${detail ? ` — ${detail}` : ''}`,
+        );
+      }
+
+      if (opts.notification || response.status === 202) return null;
+
+      const bodyText = await readBodyCapped(response, MAX_BODY_BYTES);
+      const contentType = response.headers.get('content-type') ?? '';
+      const messages = contentType.includes('text/event-stream')
+        ? parseSSEMessages(bodyText)
+        : [JSON.parse(bodyText)];
+
+      // Find the response to OUR request; the stream may interleave
+      // server-initiated notifications.
+      const reply = messages.find(
+        (m): m is { id: unknown; result?: unknown; error?: { code: number; message: string } } =>
+          typeof m === 'object' && m !== null && (m as { id?: unknown }).id === id,
+      );
+      if (!reply) {
+        throw new Error(
+          `StreamableHTTPMCPAdapter[${this.config.id}]: no response for ${method} (id ${id}) in ${messages.length} message(s)`,
+        );
+      }
+      if (reply.error) {
+        throw new Error(`MCP RPC error [${reply.error.code}]: ${reply.error.message}`);
+      }
+      return reply.result;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Perform the initialize handshake; idempotent once connected. */
+  async connect(): Promise<void> {
+    if (this.connected) return;
+    const result = (await this._rpc(
+      'initialize',
+      {
+        protocolVersion: STREAMABLE_HTTP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'sudo-ai', version: '1.0' },
+      },
+      { timeoutMs: 15_000 },
+    )) as { protocolVersion?: string } | null;
+    this.negotiatedVersion = result?.protocolVersion ?? STREAMABLE_HTTP_PROTOCOL_VERSION;
+    await this._rpc('notifications/initialized', {}, { timeoutMs: 15_000, notification: true });
+    this.connected = true;
+    log.info(
+      { serverId: this.config.id, protocolVersion: this.negotiatedVersion, session: !!this.sessionId },
+      'StreamableHTTPMCPAdapter: connected',
+    );
+  }
+
+  /** Best-effort session teardown (HTTP DELETE); never throws. */
+  async disconnect(): Promise<void> {
+    this.connected = false;
+    if (!this.sessionId) return;
+    try {
+      await fetch(this.config.url, {
+        method: 'DELETE',
+        headers: this._headers(),
+        signal: AbortSignal.timeout(5_000),
+        redirect: 'error',
+      });
+    } catch {
+      /* servers without session support answer 405 or drop — fine */
+    }
+    this.sessionId = null;
+  }
+
+  private _assertConnected(): void {
+    if (!this.connected) {
+      throw new Error(`StreamableHTTPMCPAdapter[${this.config.id}]: not connected — call connect() first`);
+    }
+  }
+
+  /** List tools, following cursor pagination (bounded). */
+  async listTools(): Promise<MCPToolDef[]> {
+    this._assertConnected();
+    const raw: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_TOOL_PAGES; page++) {
+      const result = (await this._rpc(
+        'tools/list',
+        cursor ? { cursor } : {},
+        { timeoutMs: 15_000 },
+      )) as { tools?: typeof raw; nextCursor?: string } | null;
+      raw.push(...(Array.isArray(result?.tools) ? result.tools : []));
+      cursor = typeof result?.nextCursor === 'string' && result.nextCursor !== '' ? result.nextCursor : undefined;
+      if (!cursor) break;
+    }
+
+    this.tools = raw.map((t) => ({
+      name: `mcp__${this.config.id}__${t.name}`,
+      description: t.description ?? `MCP tool from ${this.config.id}`,
+      inputSchema: t.inputSchema ?? {},
+      serverId: this.config.id,
+      enabled: this.config.toolFilter ? (this.config.toolFilter[t.name] ?? true) : true,
+    }));
+
+    log.info(
+      { serverId: this.config.id, toolCount: this.tools.length },
+      'StreamableHTTPMCPAdapter: tools discovered',
+    );
+    return this.tools;
+  }
+
+  /** Invoke a tool; accepts prefixed or raw names. Content normalization matches the other adapters. */
+  async callTool(name: string, args: Record<string, unknown>): Promise<{ content: string }> {
+    this._assertConnected();
+    const prefix = `mcp__${this.config.id}__`;
+    const rawName = name.startsWith(prefix) ? name.slice(prefix.length) : name;
+
+    const result = (await this._rpc(
+      'tools/call',
+      { name: rawName, arguments: args },
+      { timeoutMs: 30_000 },
+    )) as { content?: Array<{ type: string; text?: string }> | string; isError?: boolean } | null;
+
+    let content = '';
+    const resultContent = result?.content;
+    if (typeof resultContent === 'string') {
+      content = resultContent;
+    } else if (Array.isArray(resultContent)) {
+      content = resultContent
+        .map((c) => (typeof c.text === 'string' ? c.text : JSON.stringify(c)))
+        .join('\n');
+    } else if (result !== undefined && result !== null) {
+      content = JSON.stringify(result);
+    }
+    // Spec: tool-level failures come back as result.isError=true, not JSON-RPC
+    // errors. Surface them as throws so ToolResult.success is false upstream.
+    if (result?.isError === true) {
+      throw new Error(content || `MCP tool ${rawName} reported an error`);
+    }
+    return { content };
+  }
+}
