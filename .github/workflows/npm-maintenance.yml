@@ -1,0 +1,61 @@
+# npm registry maintenance — manually dispatched, reuses the same NPM_TOKEN
+# automation secret as release.yml (interactive npm writes require an OTP the
+# operator cannot relay reliably; the automation token bypasses 2FA by design).
+# Scope is deliberately narrow: deprecate a version of THIS package, or remove
+# a dist-tag from THIS package. Both operations are reversible from any
+# maintainer login (`npm deprecate <pkg>@<v> ""` / `npm dist-tag add`).
+name: npm-maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Operation to perform
+        required: true
+        type: choice
+        options: [deprecate, dist-tag-rm]
+      version:
+        description: Version to deprecate (deprecate only), e.g. 4.1.0-beta.0
+        required: false
+        type: string
+      message:
+        description: Deprecation message (deprecate only)
+        required: false
+        type: string
+        default: Superseded — install latest.
+      tag:
+        description: Dist-tag to remove (dist-tag-rm only), e.g. next
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Run maintenance operation
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          case "${{ inputs.action }}" in
+            deprecate)
+              test -n "${{ inputs.version }}" || { echo "version input is required for deprecate"; exit 1; }
+              echo "Deprecating $PKG@${{ inputs.version }}"
+              npm deprecate "$PKG@${{ inputs.version }}" "${{ inputs.message }}"
+              ;;
+            dist-tag-rm)
+              test -n "${{ inputs.tag }}" || { echo "tag input is required for dist-tag-rm"; exit 1; }
+              echo "Removing dist-tag ${{ inputs.tag }} from $PKG"
+              npm dist-tag rm "$PKG" "${{ inputs.tag }}"
+              ;;
+          esac
+          echo "Resulting dist-tags:"
+          npm view "$PKG" dist-tags
