@@ -68,7 +68,8 @@ function normalizeToolArgs(raw: unknown): Record<string, unknown> {
  * members are never touched. Returns the original object (and reuses
  * original nested arrays/objects) when nothing needs coercion. Tools
  * carrying a raw JSON `inputSchema` instead of `parameters` (MCP-style)
- * are left alone.
+ * are handled by the sibling {@link coerceJsonSchemaPrimitives} on the
+ * MCP routing path.
  *
  * The depth cap bounds schema-driven recursion (defensive vs cyclic specs
  * or values from internal callers). Deepest declared leaf across builtins
@@ -130,6 +131,108 @@ export function coerceDeclaredPrimitives(
   for (const [key, spec] of Object.entries(tool.parameters ?? {})) {
     if (!spec || !(key in params)) continue;
     const r = coerceValue(spec, params[key], 0);
+    if (r.changed) {
+      out ??= { ...params };
+      out[key] = r.value;
+    }
+  }
+  return out ?? params;
+}
+
+/** Declared type(s) of a JSON-Schema node, normalized to a string list. */
+function jsonSchemaTypes(schema: Record<string, unknown>): string[] {
+  const t = schema['type'];
+  if (typeof t === 'string') return [t];
+  if (Array.isArray(t)) return t.filter((x): x is string => typeof x === 'string');
+  return [];
+}
+
+function coerceJsonValue(schema: unknown, v: unknown, depth: number): { changed: boolean; value: unknown } {
+  if (depth >= MAX_COERCE_DEPTH) return { changed: false, value: v };
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return { changed: false, value: v };
+  const s = schema as Record<string, unknown>;
+  const types = jsonSchemaTypes(s);
+  if (typeof v === 'string') {
+    // A type union that admits string means the string may be the intended
+    // value — hands off. Coercion needs an explicit declared primitive type.
+    if (types.includes('string')) return { changed: false, value: v };
+    if (types.includes('boolean') && (v === 'true' || v === 'false')) {
+      return { changed: true, value: v === 'true' };
+    }
+    if (types.includes('number') || types.includes('integer')) {
+      const trimmed = v.trim();
+      if (trimmed !== '') {
+        const n = Number(trimmed);
+        if (Number.isFinite(n) && (types.includes('number') || Number.isInteger(n))) {
+          return { changed: true, value: n };
+        }
+      }
+    }
+    return { changed: false, value: v };
+  }
+  // Structural recursion tolerates a missing declared type (lax real-world
+  // schemas carry properties/items without type) but never a contradicting
+  // one. Tuple-form `items` (an array of schemas) is skipped.
+  const items = s['items'];
+  if (Array.isArray(v) && items && typeof items === 'object' && !Array.isArray(items)
+      && (types.length === 0 || types.includes('array'))) {
+    let out: unknown[] | null = null;
+    for (let i = 0; i < v.length; i++) {
+      const r = coerceJsonValue(items, v[i], depth + 1);
+      if (r.changed) {
+        out ??= v.slice();
+        out[i] = r.value;
+      }
+    }
+    return out ? { changed: true, value: out } : { changed: false, value: v };
+  }
+  const props = s['properties'];
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)
+      && props && typeof props === 'object' && !Array.isArray(props)
+      && (types.length === 0 || types.includes('object'))) {
+    const rec = v as Record<string, unknown>;
+    let out: Record<string, unknown> | null = null;
+    for (const [k, propSchema] of Object.entries(props as Record<string, unknown>)) {
+      if (!Object.hasOwn(rec, k)) continue;
+      const r = coerceJsonValue(propSchema, rec[k], depth + 1);
+      if (r.changed) {
+        out ??= { ...rec };
+        out[k] = r.value;
+      }
+    }
+    return out ? { changed: true, value: out } : { changed: false, value: v };
+  }
+  return { changed: false, value: v };
+}
+
+/**
+ * JSON-Schema sibling of {@link coerceDeclaredPrimitives} for MCP tools,
+ * which carry a raw JSON `inputSchema` instead of the registry's ParamSpec
+ * map. Same contract: only parseable strings (per Number(), which also
+ * admits hex/binary forms — parity with the ParamSpec walker) on explicitly
+ * declared boolean/number/integer members convert; integer members
+ * additionally require an integral value; a declared type union that admits
+ * `string` disables coercion for that member; undeclared members and
+ * tuple-form items are never touched, and combinator/$ref members
+ * (anyOf/oneOf/allOf) are never interpreted — though declared
+ * properties/items sitting alongside one on the same node still recurse.
+ * Returns the original object (reusing untouched nested structures) when
+ * nothing needs coercion. Shares MAX_COERCE_DEPTH with the ParamSpec walker.
+ */
+export function coerceJsonSchemaPrimitives(
+  schema: unknown,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return params;
+  const s = schema as Record<string, unknown>;
+  const types = jsonSchemaTypes(s);
+  if (types.length > 0 && !types.includes('object')) return params;
+  const props = s['properties'];
+  if (!props || typeof props !== 'object' || Array.isArray(props)) return params;
+  let out: Record<string, unknown> | null = null;
+  for (const [key, propSchema] of Object.entries(props as Record<string, unknown>)) {
+    if (!propSchema || !Object.hasOwn(params, key)) continue;
+    const r = coerceJsonValue(propSchema, params[key], 0);
     if (r.changed) {
       out ??= { ...params };
       out[key] = r.value;
@@ -743,6 +846,16 @@ export class ToolRegistry {
     }
 
     logger.debug({ tool: name, serverId: mcpDef.serverId }, 'Routing to MCP adapter');
+
+    // Same stringly-typed-argument defect as native tools (see execute()),
+    // one door over: this path short-circuits BEFORE the native coercion
+    // call, so declared numbers/booleans in the tool's JSON inputSchema
+    // reached the MCP server as strings. Unlike native schemas, inputSchema
+    // is authored by the (third-party) server — SUDO_MCP_SCHEMA_COERCE=0 is
+    // the escape hatch for a server whose schema misdeclares its real types.
+    if (process.env['SUDO_MCP_SCHEMA_COERCE'] !== '0') {
+      args = coerceJsonSchemaPrimitives(mcpDef.inputSchema, args);
+    }
 
     try {
       const start = Date.now();
