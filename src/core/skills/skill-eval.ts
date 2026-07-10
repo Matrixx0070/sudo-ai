@@ -14,7 +14,12 @@
  * recommendation, giving skill.apply / skill.install an objective "does this
  * skill actually help" signal instead of adopting on vibes. Costs are
  * bounded: K prompts (default 3) means 2K generation + 2K judge calls on the
- * fast tier, run sequentially.
+ * fast tier. Independent (prompt × run) units execute concurrently under a
+ * bounded cap (SUDO_SKILL_EVAL_CONCURRENCY, default 3 units, 1 = strictly
+ * sequential); within a unit the two generation arms run as a pair, then the
+ * two judge passes (plus assertion graders on run 0) as a second pair — the
+ * only real data dependency. Aggregation is computed from an indexed grid
+ * after all units land, so the report is identical at any concurrency.
  *
  * Honest limitations (v1): generation is single-turn brain calls, so skills
  * whose value shows only in multi-step tool use are under-measured; cost is
@@ -220,6 +225,41 @@ export interface RunSkillEvalOptions {
   runs?: number;
   /** Format/outcome contracts checked against BOTH arms' outputs (grader mode). */
   assertions?: string[];
+  /**
+   * Max concurrent eval units (a unit = one prompt × run pass; each unit has
+   * ≤2 brain calls in flight, ≤4 with assertions on run 0). Default from
+   * SUDO_SKILL_EVAL_CONCURRENCY, else 3; clamped 1..8; 1 = sequential.
+   */
+  concurrency?: number;
+}
+
+/** Resolve the unit-concurrency cap: explicit option > env > default 3, clamped 1..8. */
+export function resolveEvalConcurrency(explicit?: number): number {
+  const env = Number(process.env['SUDO_SKILL_EVAL_CONCURRENCY'] ?? '');
+  const raw = explicit ?? (Number.isFinite(env) && env > 0 ? env : 3);
+  return Math.min(Math.max(Math.floor(raw), 1), 8);
+}
+
+/**
+ * Bounded-concurrency map that DISPATCHES in item order (index-ordered worker
+ * pool) and returns results by index. limit=1 reproduces a plain sequential
+ * loop exactly, including call order — that is the eval's kill-switch path.
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, idx: number) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const width = Math.max(1, Math.min(limit, items.length));
+  const workers = Array.from({ length: width }, async () => {
+    for (let i = next++; i < items.length; i = next++) {
+      out[i] = await fn(items[i]!, i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 /** Sample standard deviation (n-1); undefined below 2 samples. */
@@ -314,54 +354,95 @@ export async function runSkillEval(opts: RunSkillEvalOptions): Promise<SkillEval
 
   const runs = Math.min(Math.max(opts.runs ?? 1, 1), 3);
   const assertions = (opts.assertions ?? []).filter((a) => a.trim() !== '').slice(0, 10);
+  const concurrency = resolveEvalConcurrency(opts.concurrency);
+
+  // One unit = one (prompt × run) pass. Units are mutually independent; the
+  // only data dependency is WITHIN a unit (judges need both arms). Stage 1
+  // dispatches the two generation arms as a pair, stage 2 the two order-swapped
+  // judge passes (plus both assertion graders on run 0 — cost control: an
+  // assertion behaving identically on both arms cannot measure the skill).
+  interface UnitOutcome {
+    winner: PromptResult['winner'];
+    reason: string;
+    withText: string; withoutText: string;
+    withMs: number; withoutMs: number;
+    withScores: number[]; withoutScores: number[];
+    withA?: Array<{ passed: boolean; evidence: string }>;
+    withoutA?: Array<{ passed: boolean; evidence: string }>;
+  }
+
+  // At concurrency 1 every call runs strictly one-at-a-time in the legacy
+  // order (with, without, j1, j2, assertions) — the honest kill-switch path;
+  // otherwise the two independent calls of a stage run as a pair.
+  const gather2 = async <A, B>(a: () => Promise<A>, b: () => Promise<B>): Promise<[A, B]> =>
+    concurrency === 1 ? [await a(), await b()] : Promise.all([a(), b()]);
+
+  const evalUnit = async (prompt: string, run: number): Promise<UnitOutcome> => {
+    const [withSkill, withoutSkill] = await gather2(
+      () => timedCall(brain, [
+        { role: 'system', content: `Follow this skill's instructions where applicable:\n\n${markdown}` },
+        { role: 'user', content: prompt },
+      ], tier),
+      () => timedCall(brain, [{ role: 'user', content: prompt }], tier),
+    );
+
+    // Pass 1: WITH is A. Pass 2: WITH is B (order swapped).
+    const [j1, j2] = await gather2(
+      () => timedCall(brain, [{ role: 'user', content: judgePrompt(prompt, withSkill.text, withoutSkill.text) }], tier),
+      () => timedCall(brain, [{ role: 'user', content: judgePrompt(prompt, withoutSkill.text, withSkill.text) }], tier),
+    );
+    const grade = run === 0 && assertions.length > 0;
+    const [withA, withoutA] = grade
+      ? await gather2(
+          () => evalAssertions(brain, tier, prompt, withSkill.text, assertions),
+          () => evalAssertions(brain, tier, prompt, withoutSkill.text, assertions),
+        )
+      : [undefined, undefined];
+
+    const winner = debias(parseVerdict(j1.text), parseVerdict(j2.text));
+    // Rubric scores (orientation: pass1 A=with; pass2 A=without).
+    const s1 = parseScores(j1.text); const s2 = parseScores(j2.text);
+    const withScores: number[] = []; const withoutScores: number[] = [];
+    if (s1) { withScores.push(s1.a); withoutScores.push(s1.b); }
+    if (s2) { withScores.push(s2.b); withoutScores.push(s2.a); }
+    return {
+      winner,
+      reason: (j1.text.split('\n')[0] ?? '').slice(0, 200),
+      withText: withSkill.text, withoutText: withoutSkill.text,
+      withMs: withSkill.ms, withoutMs: withoutSkill.ms,
+      withScores, withoutScores,
+      withA, withoutA,
+    };
+  };
+
+  // Fan out prompt-major / run-minor (legacy iteration order), then rebuild an
+  // indexed grid so every aggregate below is computed in deterministic prompt/
+  // run order regardless of unit completion order.
+  const units = prompts.flatMap((prompt, promptIdx) =>
+    Array.from({ length: runs }, (_, run) => ({ prompt, promptIdx, run })));
+  const outcomes = await mapWithConcurrency(units, concurrency, (u) => evalUnit(u.prompt, u.run));
+  const grid: UnitOutcome[][] = prompts.map(() => []);
+  units.forEach((u, i) => { grid[u.promptIdx]![u.run] = outcomes[i]!; });
 
   const results: PromptResult[] = [];
   // Winners per run index (column) across prompts, for per-run win rates.
   const winnersByRun: PromptResult['winner'][][] = Array.from({ length: runs }, () => []);
   const assertionAgg = assertions.map((text) => ({ text, withPass: 0, withoutPass: 0, evidence: '' }));
 
-  for (const prompt of prompts) {
-    const runWinners: PromptResult['winner'][] = [];
-    let reason = '';
-    let withChars = 0; let withoutChars = 0; let withMs = 0; let withoutMs = 0;
-    const withScores: number[] = []; const withoutScores: number[] = [];
+  prompts.forEach((prompt, promptIdx) => {
+    const unitRow = grid[promptIdx]!;
+    const runWinners = unitRow.map((o) => o.winner);
+    runWinners.forEach((w, run) => winnersByRun[run]!.push(w));
+    const first = unitRow[0]!;
+    const withScores = unitRow.flatMap((o) => o.withScores);
+    const withoutScores = unitRow.flatMap((o) => o.withoutScores);
 
-    for (let run = 0; run < runs; run++) {
-      const withSkill = await timedCall(brain, [
-        { role: 'system', content: `Follow this skill's instructions where applicable:\n\n${markdown}` },
-        { role: 'user', content: prompt },
-      ], tier);
-      const withoutSkill = await timedCall(brain, [{ role: 'user', content: prompt }], tier);
-
-      // Pass 1: WITH is A. Pass 2: WITH is B (order swapped).
-      const j1 = await timedCall(brain, [{ role: 'user', content: judgePrompt(prompt, withSkill.text, withoutSkill.text) }], tier);
-      const j2 = await timedCall(brain, [{ role: 'user', content: judgePrompt(prompt, withoutSkill.text, withSkill.text) }], tier);
-      const winner = debias(parseVerdict(j1.text), parseVerdict(j2.text));
-      runWinners.push(winner);
-      winnersByRun[run]!.push(winner);
-
-      // Rubric scores (orientation: pass1 A=with; pass2 A=without).
-      const s1 = parseScores(j1.text); const s2 = parseScores(j2.text);
-      if (s1) { withScores.push(s1.a); withoutScores.push(s1.b); }
-      if (s2) { withScores.push(s2.b); withoutScores.push(s2.a); }
-
-      if (run === 0) {
-        reason = (j1.text.split('\n')[0] ?? '').slice(0, 200);
-        withChars = withSkill.text.length; withoutChars = withoutSkill.text.length;
-        withMs = withSkill.ms; withoutMs = withoutSkill.ms;
-        // Grader mode: check the contracts against BOTH arms (first run only,
-        // cost control). An assertion behaving identically on both arms cannot
-        // measure the skill — flagged non-discriminating below.
-        if (assertions.length > 0) {
-          const withA = await evalAssertions(brain, tier, prompt, withSkill.text, assertions);
-          const withoutA = await evalAssertions(brain, tier, prompt, withoutSkill.text, assertions);
-          assertions.forEach((_, i) => {
-            if (withA[i]!.passed) assertionAgg[i]!.withPass++;
-            if (withoutA[i]!.passed) assertionAgg[i]!.withoutPass++;
-            if (!assertionAgg[i]!.evidence && withA[i]!.evidence) assertionAgg[i]!.evidence = withA[i]!.evidence;
-          });
-        }
-      }
+    if (first.withA && first.withoutA) {
+      assertions.forEach((_, i) => {
+        if (first.withA![i]!.passed) assertionAgg[i]!.withPass++;
+        if (first.withoutA![i]!.passed) assertionAgg[i]!.withoutPass++;
+        if (!assertionAgg[i]!.evidence && first.withA![i]!.evidence) assertionAgg[i]!.evidence = first.withA![i]!.evidence;
+      });
     }
 
     const winner = majorityWinner(runWinners);
@@ -370,17 +451,17 @@ export async function runSkillEval(opts: RunSkillEvalOptions): Promise<SkillEval
     results.push({
       prompt,
       winner,
-      reason,
-      withChars,
-      withoutChars,
-      withMs,
-      withoutMs,
+      reason: first.reason,
+      withChars: first.withText.length,
+      withoutChars: first.withoutText.length,
+      withMs: first.withMs,
+      withoutMs: first.withoutMs,
       withScore: avg(withScores),
       withoutScore: avg(withoutScores),
       runWinners: runs > 1 ? runWinners : undefined,
     });
     log.info({ skillName, winner, runs, prompt: prompt.slice(0, 80) }, 'skill-eval: prompt judged');
-  }
+  });
 
   const report = aggregate(skillName, results, threshold);
   report.runsPerPrompt = runs;
