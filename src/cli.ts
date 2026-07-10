@@ -3597,6 +3597,8 @@ async function boot(): Promise<void> {
     }
     // Build skill→tool reverse index and wire into ToolRegistry (fail-open)
     registry.setSkillIndex(buildSkillToolIndex(mdSkills));
+    // Wire skills into the agent loop so trigger phrases activate at turn start.
+    finalAgentLoop.setMarkdownSkills(mdSkills);
 
     // Register shutdown handlers for closeable v5 modules
     registerShutdown(() => goalEngine?.close?.());

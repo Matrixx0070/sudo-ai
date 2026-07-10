@@ -27,6 +27,8 @@ export interface MarkdownSkill {
   name: string;
   description: string;
   trigger?: string;
+  /** Plural trigger phrases from block- or flow-style YAML lists. */
+  triggers?: string[];
   allowedTools?: string[];
   content: string;
   filePath: string;
@@ -67,17 +69,38 @@ function parseFrontmatter(raw: string): { meta: Record<string, string | string[]
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) return { meta: {}, body: raw };
   const meta: Record<string, string | string[]> = {};
+  // Key whose value was empty and may be continued by a YAML block list
+  // (`key:` followed by indented `- item` lines). Cleared by the first
+  // indented line that is NOT a list item, so nested maps under e.g.
+  // `inputs:` (`- name: x` then deeper `required: true`) contribute only
+  // their `- ` lines and nothing deeper.
+  let pendingListKey: string | null = null;
   for (const line of match[1].split('\n')) {
-    // Skip indented continuation lines: agentskills.io allows nested maps
-    // (e.g. a `metadata:` block) whose inner `key: value` lines would
-    // otherwise leak into the top-level meta and clobber real keys.
-    if (/^\s/.test(line)) continue;
+    // Indented continuation lines: block-list items attach to the pending
+    // key; everything else (nested maps such as a `metadata:` block) is
+    // skipped so inner `key: value` lines never clobber top-level keys.
+    if (/^\s/.test(line)) {
+      const item = /^\s+-\s*(.+)$/.exec(line);
+      if (item && pendingListKey) {
+        const existing = meta[pendingListKey];
+        const arr = Array.isArray(existing) ? existing : [];
+        arr.push(item[1]!.trim().replace(/^['"]|['"]$/g, ''));
+        meta[pendingListKey] = arr;
+      } else {
+        pendingListKey = null;
+      }
+      continue;
+    }
+    pendingListKey = null;
     const idx = line.indexOf(':');
     if (idx === -1) continue;
     const key = line.slice(0, idx).trim();
     let val = line.slice(idx + 1).trim();
     if (val.startsWith('[') && val.endsWith(']')) {
       meta[key] = val.slice(1, -1).split(',').map(s => s.trim().replace(/['"]/g, ''));
+    } else if (val === '') {
+      pendingListKey = key;
+      meta[key] = meta[key] ?? '';
     } else {
       meta[key] = val.replace(/['"]/g, '');
     }
@@ -98,7 +121,7 @@ function parseBool(raw: string | string[] | undefined): boolean | undefined {
   return undefined;
 }
 
-function parseSkillFile(raw: string, filePath: string, fallbackName: string): MarkdownSkill {
+export function parseSkillFile(raw: string, filePath: string, fallbackName: string): MarkdownSkill {
   const { meta, body } = parseFrontmatter(raw);
   // Parse agentskills.io canonical fields (optional, backward-compatible)
   const trustTierRaw = meta['trust_tier'] as string | undefined;
@@ -131,7 +154,10 @@ function parseSkillFile(raw: string, filePath: string, fallbackName: string): Ma
   return {
     name: (meta.name as string) || fallbackName,
     description: (meta.description as string) || '',
-    trigger: meta.trigger as string | undefined,
+    trigger: typeof meta.trigger === 'string' && meta.trigger ? meta.trigger : undefined,
+    triggers: Array.isArray(meta['triggers'])
+      ? (meta['triggers'] as string[]).filter((t) => typeof t === 'string' && t.trim() !== '')
+      : undefined,
     allowedTools: Array.isArray(meta['allowed-tools']) ? meta['allowed-tools'] : undefined,
     content: body.trim(),
     filePath,

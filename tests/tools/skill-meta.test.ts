@@ -504,10 +504,10 @@ describe('skill.explain', () => {
 // ---------------------------------------------------------------------------
 
 describe('registerSkillTools', () => {
-  it('registers exactly 10 skill tools', () => {
+  it('registers exactly 11 skill tools', () => {
     const registry = new ToolRegistry();
     registerSkillTools(registry);
-    expect(registry.size).toBe(10);
+    expect(registry.size).toBe(11);
   });
 
   it('registers all expected tool names', () => {
@@ -523,6 +523,7 @@ describe('registerSkillTools', () => {
     expect(registry.get('skill.search')).toBeDefined();
     expect(registry.get('skill.install')).toBeDefined();
     expect(registry.get('skill.eval')).toBeDefined();
+    expect(registry.get('skill.trigger-eval')).toBeDefined();
   });
 
   it('all registered tools have execute function', () => {
