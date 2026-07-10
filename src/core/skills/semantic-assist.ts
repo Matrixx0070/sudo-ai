@@ -9,7 +9,8 @@
  * "summarize" token). This module runs ONLY when the deterministic matcher
  * found nothing: it embeds the message with the local MiniLM (zero API cost,
  * shared ONNX pipeline with memory search) and compares against cached
- * per-skill anchor vectors (trigger phrases + description).
+ * per-skill anchor vectors (trigger phrases; see {@link anchorTexts} for why
+ * descriptions are deliberately NOT anchors).
  *
  * Calibration against the real model (2026-07-10): summarization-intent
  * near-misses score 0.38-0.44 cosine vs true negatives at 0.05-0.20, so the
@@ -64,6 +65,16 @@ export function semanticBudgetMs(env: NodeJS.ProcessEnv = process.env): number {
 /** Retry cooldown after a failed query embed (model load broken). */
 const EMBED_FAIL_COOLDOWN_MS = 300_000;
 
+/**
+ * Semantic intent inference is for HUMAN traffic. Internal scheduled-run
+ * peers (`cron:*`, the crash-safe.ts convention) send agent-generated task
+ * prompts where persona-skill injection is pure overhead — they were 580 of
+ * the 654 would-fires in the 2026-07-10 real-traffic measurement.
+ */
+export function semanticAllowedForPeer(peerId: string | undefined | null): boolean {
+  return !(typeof peerId === 'string' && peerId.startsWith('cron:'));
+}
+
 // ---------------------------------------------------------------------------
 // Embedder surface (structural — LocalEmbeddingProvider satisfies it)
 // ---------------------------------------------------------------------------
@@ -102,13 +113,17 @@ export function __resetSemanticAssist(): void {
 // Anchor cache
 // ---------------------------------------------------------------------------
 
-/** Anchor texts a skill is matched against: its trigger phrases + description. */
+/**
+ * Anchor texts a skill is matched against: its trigger phrases ONLY.
+ * Descriptions were anchors in the first cut and turned out to be the junk
+ * source — measured on 895 real deterministic-miss messages (2026-07-10):
+ * description embeddings (long prose) sat at 0.35-0.45 cosine against most
+ * paragraph-length messages, would-firing 654/895 (580 of them internal cron
+ * prompts); trigger-only anchors fire 63/895 with the labeled genuine-intent
+ * recall set fully preserved (8/8). Sharp phrases in, broad prose out.
+ */
 export function anchorTexts(skill: ActivatableSkill): string[] {
-  const out = effectiveTriggers(skill);
-  if (typeof skill.description === 'string' && skill.description.trim()) {
-    out.push(skill.description.trim());
-  }
-  return out;
+  return effectiveTriggers(skill);
 }
 
 interface AnchorEntry {

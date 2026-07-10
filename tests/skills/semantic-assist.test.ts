@@ -82,9 +82,21 @@ describe('env gates', () => {
 });
 
 describe('anchorTexts', () => {
-  it('is triggers plus description, skipping blanks', () => {
-    expect(anchorTexts(tldr)).toEqual(['tldr', 'summarize this', 'Summarize long content into a compact TLDR']);
-    expect(anchorTexts({ name: 'x', content: '' })).toEqual([]);
+  it('is trigger phrases ONLY — descriptions measured as the junk source on real traffic', () => {
+    expect(anchorTexts(tldr)).toEqual(['tldr', 'summarize this']);
+    expect(anchorTexts({ name: 'x', content: '', description: 'prose that must NOT anchor' })).toEqual([]);
+  });
+});
+
+describe('semanticAllowedForPeer', () => {
+  it('blocks internal cron peers, allows humans and unknowns', async () => {
+    const { semanticAllowedForPeer } = await import('../../src/core/skills/semantic-assist.js');
+    expect(semanticAllowedForPeer('cron:isolated:abc')).toBe(false);
+    expect(semanticAllowedForPeer('cron:x')).toBe(false);
+    expect(semanticAllowedForPeer('telegram:8087386717')).toBe(true);
+    expect(semanticAllowedForPeer('web-user-1')).toBe(true);
+    expect(semanticAllowedForPeer(undefined)).toBe(true);
+    expect(semanticAllowedForPeer(null)).toBe(true);
   });
 });
 
