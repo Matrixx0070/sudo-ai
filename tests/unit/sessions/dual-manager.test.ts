@@ -203,9 +203,9 @@ describe('DualSessionManager', () => {
       expect(primary.getOrCreate).toHaveBeenCalledWith('telegram', 'user-gc');
     });
 
-    it('also calls journal.getOrCreate() to mirror', async () => {
+    it('also calls journal.getOrCreate() to mirror, passing the primary id for adoption', async () => {
       await dual.getOrCreate('telegram', 'user-gc');
-      expect(journal.getOrCreate).toHaveBeenCalledWith('telegram', 'user-gc');
+      expect(journal.getOrCreate).toHaveBeenCalledWith('telegram', 'user-gc', 'sess-001');
     });
 
     it('does NOT throw when journal getOrCreate fails (non-fatal)', async () => {
@@ -441,5 +441,61 @@ describe('DualSessionManager', () => {
     it('cacheSize returns primary.cacheSize', () => {
       expect(dual.cacheSize).toBe(3);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ID adoption — the invariant moves into construction (measured 2026-07-10:
+// the "legacy shim" alias path fired on 100% of NEW sessions because the
+// journal minted its own nanoid instead of adopting the primary's).
+// ---------------------------------------------------------------------------
+
+describe('journal ID adoption (real JournalSessionStore)', () => {
+  let dir: string;
+  let store: JournalSessionStore;
+
+  beforeEach(() => {
+    dir = path.join(os.tmpdir(), `dual-adopt-${nanoid(8)}`);
+    mkdirSync(dir, { recursive: true });
+    store = new JournalSessionStore(dir);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const readIdx = (): SessionIndex =>
+    JSON.parse(readFileSync(path.join(dir, 'sessions.json'), 'utf8')) as SessionIndex;
+
+  it('a FRESH session adopts the primary id — one id by construction, no alias', async () => {
+    const primary = makePrimaryMock();
+    const dual = new DualSessionManager(primary as never, store as never);
+    const session = await dual.getOrCreate('telegram', 'user-adopt');
+    expect(session.id).toBe('sess-001');
+    const entry = readIdx().entries.find((e) => e.peerId === 'user-adopt');
+    expect(entry?.id).toBe('sess-001');           // journal shares the primary id
+    expect(entry?.aliases ?? []).toEqual([]);      // nothing to reconcile
+  });
+
+  it('a genuine LEGACY entry (different id) still reconciles via alias', async () => {
+    // Pre-seed the journal the way pre-dual-wiring data exists: own nanoid.
+    const legacy = await store.getOrCreate('telegram', 'user-legacy');
+    expect(legacy.id).not.toBe('sess-001');
+
+    const primary = makePrimaryMock();
+    const dual = new DualSessionManager(primary as never, store as never);
+    const session = await dual.getOrCreate('telegram', 'user-legacy');
+    expect(session.id).toBe('sess-001');           // primary stays authoritative
+    const entry = readIdx().entries.find((e) => e.peerId === 'user-legacy');
+    expect(entry?.id).toBe(legacy.id);             // journal file/id preserved
+    expect(entry?.aliases).toContain('sess-001');  // shim does its documented job
+  });
+
+  it('journal-store getOrCreate honors preferredId only for fresh creates', async () => {
+    const fresh = await store.getOrCreate('web', 'peer-a', 'preferred-123');
+    expect(fresh.id).toBe('preferred-123');
+    const again = await store.getOrCreate('web', 'peer-a', 'other-456');
+    expect(again.id).toBe('preferred-123');        // existing entry wins
+    const minted = await store.getOrCreate('web', 'peer-b');
+    expect(minted.id).toMatch(/^[A-Za-z0-9_-]{21}$/); // no preferredId → nanoid
   });
 });

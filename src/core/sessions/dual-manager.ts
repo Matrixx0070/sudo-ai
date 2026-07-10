@@ -191,9 +191,13 @@ export class DualSessionManager {
     // Primary is authoritative for read + create
     const session = await this.primary.getOrCreate(channel, peerId);
 
-    // Mirror creation to journal — non-fatal
+    // Mirror creation to journal — non-fatal. A FRESH journal session adopts
+    // the primary's ID (one ID by construction); the alias path below now
+    // only fires for genuine legacy entries created before the dual-store
+    // wiring — its documented purpose. Pre-fix it fired on 100% of new
+    // sessions (measured 2026-07-10: every created pair drifted).
     try {
-      const journalSession = await this.journal.getOrCreate(channel, peerId);
+      const journalSession = await this.journal.getOrCreate(channel, peerId, session.id);
       if (journalSession.id !== session.id) {
         this._aliasPrimaryId(channel, peerId, journalSession.id, session.id);
       }

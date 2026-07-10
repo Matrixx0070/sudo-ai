@@ -119,7 +119,16 @@ export class JournalSessionStore {
     log.info({ sessionId }, 'session archived');
   }
 
-  async getOrCreate(channel: ChannelType, peerId: string): Promise<Session> {
+  /**
+   * `preferredId` lets the caller (DualSessionManager) make a FRESH journal
+   * session adopt the primary store's ID instead of minting its own — the
+   * two stores then share one ID by construction. Without it every logical
+   * session was born with two IDs and healed via aliases[]: measured on
+   * 2026-07-10 prod logs, the "drift reconciled" repair (documented as a
+   * legacy-data shim) fired on 100% of NEW sessions. Existing active
+   * entries are returned as-is regardless of preferredId.
+   */
+  async getOrCreate(channel: ChannelType, peerId: string, preferredId?: string): Promise<Session> {
     if (!channel) throw new TypeError('channel must not be empty');
     if (!peerId) throw new TypeError('peerId must not be empty');
 
@@ -132,7 +141,7 @@ export class JournalSessionStore {
       log.warn({ sessionId: existing.id }, 'getOrCreate: JSONL missing, creating new session');
     }
 
-    const sessionId = nanoid();
+    const sessionId = preferredId?.trim() ? preferredId : nanoid();
     const now = nowIso();
     const relFile = `${agentId}/${sessionId}.jsonl`;
     const absFile = path.join(this.baseDir, agentId, `${sessionId}.jsonl`);
