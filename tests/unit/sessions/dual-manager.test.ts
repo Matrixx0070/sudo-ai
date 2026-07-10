@@ -203,9 +203,9 @@ describe('DualSessionManager', () => {
       expect(primary.getOrCreate).toHaveBeenCalledWith('telegram', 'user-gc');
     });
 
-    it('also calls journal.getOrCreate() to mirror', async () => {
+    it('also calls journal.getOrCreate() to mirror, passing the primary id for adoption', async () => {
       await dual.getOrCreate('telegram', 'user-gc');
-      expect(journal.getOrCreate).toHaveBeenCalledWith('telegram', 'user-gc');
+      expect(journal.getOrCreate).toHaveBeenCalledWith('telegram', 'user-gc', 'sess-001');
     });
 
     it('does NOT throw when journal getOrCreate fails (non-fatal)', async () => {
@@ -441,5 +441,120 @@ describe('DualSessionManager', () => {
     it('cacheSize returns primary.cacheSize', () => {
       expect(dual.cacheSize).toBe(3);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ID adoption — the invariant moves into construction (measured 2026-07-10:
+// the "legacy shim" alias path fired on 100% of NEW sessions because the
+// journal minted its own nanoid instead of adopting the primary's).
+// ---------------------------------------------------------------------------
+
+describe('journal ID adoption (real JournalSessionStore)', () => {
+  let dir: string;
+  let store: JournalSessionStore;
+
+  beforeEach(() => {
+    dir = path.join(os.tmpdir(), `dual-adopt-${nanoid(8)}`);
+    mkdirSync(dir, { recursive: true });
+    store = new JournalSessionStore(dir);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const readIdx = (): SessionIndex =>
+    JSON.parse(readFileSync(path.join(dir, 'sessions.json'), 'utf8')) as SessionIndex;
+
+  it('a FRESH session adopts the primary id — one id by construction, no alias', async () => {
+    const primary = makePrimaryMock();
+    const dual = new DualSessionManager(primary as never, store as never);
+    const session = await dual.getOrCreate('telegram', 'user-adopt');
+    expect(session.id).toBe('sess-001');
+    const entry = readIdx().entries.find((e) => e.peerId === 'user-adopt');
+    expect(entry?.id).toBe('sess-001');           // journal shares the primary id
+    expect(entry?.aliases ?? []).toEqual([]);      // nothing to reconcile
+  });
+
+  it('a genuine LEGACY entry (different id) still reconciles via alias', async () => {
+    // Pre-seed the journal the way pre-dual-wiring data exists: own nanoid.
+    const legacy = await store.getOrCreate('telegram', 'user-legacy');
+    expect(legacy.id).not.toBe('sess-001');
+
+    const primary = makePrimaryMock();
+    const dual = new DualSessionManager(primary as never, store as never);
+    const session = await dual.getOrCreate('telegram', 'user-legacy');
+    expect(session.id).toBe('sess-001');           // primary stays authoritative
+    const entry = readIdx().entries.find((e) => e.peerId === 'user-legacy');
+    expect(entry?.id).toBe(legacy.id);             // journal file/id preserved
+    expect(entry?.aliases).toContain('sess-001');  // shim does its documented job
+  });
+
+  it('journal-store getOrCreate honors preferredId only for fresh creates', async () => {
+    const fresh = await store.getOrCreate('web', 'peer-a', 'preferred-123');
+    expect(fresh.id).toBe('preferred-123');
+    const again = await store.getOrCreate('web', 'peer-a', 'other-456');
+    expect(again.id).toBe('preferred-123');        // existing entry wins
+    const minted = await store.getOrCreate('web', 'peer-b');
+    expect(minted.id).toMatch(/^[A-Za-z0-9_-]{21}$/); // no preferredId → nanoid
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Adoption vetting — adversarial cases (verifier blockers): the id becomes a
+// filename, so adoption must reject traversal shapes, index collisions, and
+// on-disk collisions rather than truncate or escape.
+// ---------------------------------------------------------------------------
+
+describe('journal preferredId vetting (real JournalSessionStore)', () => {
+  let dir: string;
+  let store: JournalSessionStore;
+
+  beforeEach(() => {
+    dir = path.join(os.tmpdir(), `dual-vet-${nanoid(8)}`);
+    mkdirSync(dir, { recursive: true });
+    store = new JournalSessionStore(dir);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const readIdx = (): SessionIndex =>
+    JSON.parse(readFileSync(path.join(dir, 'sessions.json'), 'utf8')) as SessionIndex;
+
+  it('rejects a path-traversal preferredId — mints a nanoid, writes only inside baseDir', async () => {
+    const evilOutside = path.join(dir, '..', `evil-${nanoid(6)}.jsonl`);
+    const s = await store.getOrCreate('web', 'peer-t', '../../evil');
+    expect(s.id).toMatch(/^[A-Za-z0-9_-]{21}$/);
+    const entry = readIdx().entries.find((e) => e.peerId === 'peer-t');
+    expect(entry?.id).toBe(s.id);
+    expect(readFileSync(path.join(dir, entry!.file), 'utf8')).toContain('"type":"session"');
+    expect(() => readFileSync(evilOutside)).toThrow(); // nothing escaped baseDir
+  });
+
+  it('never truncates an existing session: reused id (archived entry) is rejected', async () => {
+    const first = await store.getOrCreate('web', 'peer-r', 'reused-id-001');
+    expect(first.id).toBe('reused-id-001');
+    await store.appendEvent('reused-id-001', { ts: new Date().toISOString(), sessionId: 'reused-id-001', type: 'message', role: 'user', content: 'precious history' } as never);
+    await store.archive('reused-id-001');
+    const fileBefore = readFileSync(path.join(dir, readIdx().entries[0]!.file), 'utf8');
+
+    // No active entry now — fresh-create path runs with the SAME preferredId
+    // (the crashSafe archive-desync shape). Must mint a new id, not truncate.
+    const second = await store.getOrCreate('web', 'peer-r', 'reused-id-001');
+    expect(second.id).not.toBe('reused-id-001');
+    const fileAfter = readFileSync(path.join(dir, readIdx().entries[0]!.file), 'utf8');
+    expect(fileAfter).toBe(fileBefore);                 // history intact
+    expect(fileAfter).toContain('precious history');
+  });
+
+  it('missing-JSONL recreate archives the stale entry — exactly one ACTIVE per peer', async () => {
+    const first = await store.getOrCreate('web', 'peer-m', 'gone-file-001');
+    rmSync(path.join(dir, readIdx().entries[0]!.file));  // simulate lost JSONL
+    const second = await store.getOrCreate('web', 'peer-m', 'fresh-id-002');
+    expect(second.id).toBe('fresh-id-002');
+    const entries = readIdx().entries.filter((e) => e.peerId === 'peer-m');
+    expect(entries.filter((e) => e.state === 'active')).toHaveLength(1);
+    expect(entries.find((e) => e.id === first.id)?.state).toBe('archived');
   });
 });

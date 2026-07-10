@@ -184,8 +184,9 @@ export interface ScanOptions {
   filterEphemeral?: boolean;
   /**
    * Resolve the CANONICAL persisted message count for a (channel, peerId) — the
-   * total across every SQLite session row titled `<channel>:<peerId>`. Journal
-   * sessions use non-canonical forked ids, so the per-id mirror often reads 0
+   * total across every SQLite session row titled `<channel>:<peerId>`. LEGACY
+   * journal sessions used non-canonical forked ids (new sessions adopt the
+   * primary id at creation since the adoption fix), so the per-id mirror often reads 0
    * even though the messages live under the canonical title (id-namespace
    * mismatch, not loss). When this returns a count ≥ the journal's, the session
    * is NOT drift. Returns null when there is no canonical row.
@@ -331,8 +332,9 @@ export interface ReconcileOptions {
   filterEphemeral?: boolean;
   /**
    * Resolve the CANONICAL persisted message count for a (channel, peerId) — the
-   * total across every SQLite session row titled `<channel>:<peerId>`. Journal
-   * sessions use non-canonical forked ids, so the per-id mirror often reads 0
+   * total across every SQLite session row titled `<channel>:<peerId>`. LEGACY
+   * journal sessions used non-canonical forked ids (new sessions adopt the
+   * primary id at creation since the adoption fix), so the per-id mirror often reads 0
    * even though the messages live under the canonical title (id-namespace
    * mismatch, not loss). When the canonical count ≥ the journal's, the session
    * is NOT drift. When it leads but the canonical still trails, the residual is

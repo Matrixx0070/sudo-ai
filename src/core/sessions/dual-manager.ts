@@ -175,14 +175,14 @@ export class DualSessionManager {
    * Creates/loads on primary first (throws on failure), then mirrors to journal
    * (logs warning on failure — never throws).
    *
-   * Drift reconciliation: SQLite primary and the journal-store allocate IDs
-   * independently. Older journals (created before the dual-store wiring) carry
-   * a different nanoid than the SQLite primary for the same (channel, peerId)
-   * pair, which silently breaks every subsequent save/appendEvent keyed off
-   * the primary id. After both stores resolve, if the journal's active entry
-   * has a different id, the primary id is recorded under journal.aliases[]
-   * so future lookups via findEntry resolve correctly. No JSONL files are
-   * renamed; the existing 122-msg history under the original id is preserved.
+   * Drift reconciliation: a FRESH journal session adopts the primary's ID
+   * (passed as preferredId), so new sessions share one ID by construction.
+   * Drift now only occurs for genuine legacy entries (pre-dual-wiring
+   * journals with their own nanoid) or when adoption is vetoed (id shape /
+   * collision — see JournalSessionStore's adoption vetting). In those cases
+   * the primary id is recorded under journal.aliases[] so future lookups via
+   * findEntry resolve correctly. No JSONL files are renamed; existing
+   * history under the original id is preserved.
    */
   async getOrCreate(channel: ChannelType, peerId: string): Promise<Session> {
     if (!channel) throw new TypeError('channel must not be empty');
@@ -191,9 +191,13 @@ export class DualSessionManager {
     // Primary is authoritative for read + create
     const session = await this.primary.getOrCreate(channel, peerId);
 
-    // Mirror creation to journal — non-fatal
+    // Mirror creation to journal — non-fatal. A FRESH journal session adopts
+    // the primary's ID (one ID by construction); the alias path below now
+    // only fires for genuine legacy entries created before the dual-store
+    // wiring — its documented purpose. Pre-fix it fired on 100% of new
+    // sessions (measured 2026-07-10: every created pair drifted).
     try {
-      const journalSession = await this.journal.getOrCreate(channel, peerId);
+      const journalSession = await this.journal.getOrCreate(channel, peerId, session.id);
       if (journalSession.id !== session.id) {
         this._aliasPrimaryId(channel, peerId, journalSession.id, session.id);
       }

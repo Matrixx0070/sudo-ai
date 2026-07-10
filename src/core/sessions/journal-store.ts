@@ -119,7 +119,24 @@ export class JournalSessionStore {
     log.info({ sessionId }, 'session archived');
   }
 
-  async getOrCreate(channel: ChannelType, peerId: string): Promise<Session> {
+  /**
+   * `preferredId` lets the caller (DualSessionManager) make a FRESH journal
+   * session adopt the primary store's ID instead of minting its own — the
+   * two stores then share one ID by construction. Without it every logical
+   * session was born with two IDs and healed via aliases[]: measured on
+   * 2026-07-10 prod logs, the "drift reconciled" repair (documented as a
+   * legacy-data shim) fired on 100% of NEW sessions. Existing active
+   * entries are returned as-is regardless of preferredId.
+   *
+   * Adoption is REJECTED (fresh nanoid minted, caller reconciles via the
+   * alias path) unless the id is nanoid-alphabet-shaped AND unused: the id
+   * becomes a filename, so a free-form string would be a path-traversal
+   * write, and a reused id would writeFileSync-TRUNCATE that session's
+   * existing JSONL history (reachable via the crashSafe archive-desync:
+   * journal archived, primary archive throws, next getOrCreate re-creates
+   * with the still-active primary id).
+   */
+  async getOrCreate(channel: ChannelType, peerId: string, preferredId?: string): Promise<Session> {
     if (!channel) throw new TypeError('channel must not be empty');
     if (!peerId) throw new TypeError('peerId must not be empty');
 
@@ -130,9 +147,14 @@ export class JournalSessionStore {
       const session = this._hydrate(existing);
       if (session) return session;
       log.warn({ sessionId: existing.id }, 'getOrCreate: JSONL missing, creating new session');
+      // Retire the stale entry NOW so the index never holds two ACTIVE
+      // entries for one (channel, peerId) — findActiveEntry returns the
+      // first match, which would otherwise be this broken one forever.
+      existing.state = 'archived';
+      existing.updatedAt = nowIso();
     }
 
-    const sessionId = nanoid();
+    const sessionId = this._adoptableId(index, agentId, preferredId) ?? nanoid();
     const now = nowIso();
     const relFile = `${agentId}/${sessionId}.jsonl`;
     const absFile = path.join(this.baseDir, agentId, `${sessionId}.jsonl`);
@@ -205,6 +227,35 @@ export class JournalSessionStore {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /** nanoid alphabet, bounded — the id becomes a filename component. */
+  private static readonly ADOPTABLE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+  /**
+   * Vet a caller-supplied id for adoption on the fresh-create path. Returns
+   * the trimmed id when it is filename-safe, absent from the index (any
+   * state — an archived entry's JSONL must never be truncated), and has no
+   * orphan JSONL on disk; otherwise null (caller mints a nanoid and the
+   * dual-manager alias path reconciles).
+   */
+  private _adoptableId(index: SessionIndex, agentId: string, preferredId?: string): string | null {
+    const wanted = preferredId?.trim();
+    if (!wanted) return null;
+    if (!JournalSessionStore.ADOPTABLE_ID_RE.test(wanted)) {
+      log.warn({ preferredId: wanted.slice(0, 80) }, 'getOrCreate: preferredId rejected (not filename-safe) — minting fresh id');
+      return null;
+    }
+    if (findEntry(index, wanted)) {
+      log.warn({ preferredId: wanted }, 'getOrCreate: preferredId rejected (id already in index) — minting fresh id');
+      return null;
+    }
+    const absFile = path.join(this.baseDir, agentId, `${wanted}.jsonl`);
+    if (existsSync(absFile)) {
+      log.warn({ preferredId: wanted }, 'getOrCreate: preferredId rejected (JSONL already on disk) — minting fresh id');
+      return null;
+    }
+    return wanted;
+  }
 
   /**
    * Synchronously append one JSONL line; updates entry.updatedAt in-place.
