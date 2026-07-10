@@ -15,6 +15,7 @@ import { PATHS } from '../shared/index.js';
 import type { MindDB } from '../memory/db.js';
 import type { ChannelType } from '../channels/types.js';
 import { KeyedAsyncQueue } from './queue.js';
+import { attachWriteThrough } from './write-through.js';
 import type { BrainMessage, Session, SessionState } from './types.js';
 
 const log = createLogger('sessions:manager');
@@ -169,6 +170,11 @@ export class SessionManager {
       this.cache.set(key, { session, persistedMessageCount: this.db.countMessages?.(session.id) ?? 0 });
       this._evictIfOverLimit();
     }
+
+    // Windowing/compaction/fork REASSIGN session.messages to fresh arrays,
+    // shedding the write-through wrapper; re-attach on every save so appends
+    // after this point persist immediately again. Idempotent per array.
+    attachWriteThrough(session, this.db);
 
     this._persistToDb(session);
 
@@ -566,7 +572,7 @@ export class SessionManager {
 
   private _createSession(channel: ChannelType, peerId: string): Session {
     const now = new Date();
-    return {
+    const session: Session = {
       id: genId(),
       channel,
       peerId,
@@ -575,6 +581,10 @@ export class SessionManager {
       createdAt: now,
       updatedAt: now,
     };
+    // Appends persist immediately from birth; the save() scan stays as the
+    // safety net for array reassignments (see write-through.ts).
+    attachWriteThrough(session, this.db);
+    return session;
   }
 
   private _hydrateSession(meta: {
@@ -599,7 +609,7 @@ export class SessionManager {
     // not re-insert the whole history as duplicates on the next save.
     for (const m of messages) (m as BrainMessage & { _persisted?: boolean })._persisted = true;
 
-    return {
+    const session: Session = {
       id: meta.id,
       channel: meta.channel as ChannelType,
       peerId: meta.peerId,
@@ -609,6 +619,9 @@ export class SessionManager {
       createdAt: new Date(meta.createdAt),
       updatedAt: new Date(meta.updatedAt),
     };
+    // Hydrated rows are pre-marked above, so attaching cannot re-insert them.
+    attachWriteThrough(session, this.db);
+    return session;
   }
 
   private _peerKey(channel: ChannelType, peerId: string): string {
