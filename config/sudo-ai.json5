@@ -30,6 +30,23 @@
     // cheap + premium pinned to primary so _smartRoute's cheap branch and
     // reasoning-tier branch stay no-ops.
     primary: [
+      // 2026-07-08 (operator): Fable 5 pinned as DEFAULT model. NB: on the
+      // daemon's OAuth token claude-fable-5 currently returns rate_limit_error
+      // (verified 3x direct probe) — failover parks it and serves Haiku below;
+      // the moment Anthropic enables it on this account it takes over
+      // automatically. Haiku 4.5 second = cheap working tier (token saving).
+      {
+        id: 'claude-oauth/claude-fable-5',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+        temperature: 0.7,
+      },
+      {
+        id: 'claude-oauth/claude-haiku-4-5-20251001',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+        temperature: 0.7,
+      },
       {
         id: 'claude-oauth/claude-opus-4-8',
         contextWindow: 200000,
@@ -72,8 +89,8 @@
       maxOutputTokens: 8192,
       temperature: 0.7,
     },
-    cheap: 'claude-oauth/claude-opus-4-8',
-    premium: 'claude-oauth/claude-opus-4-8',
+    cheap: 'claude-oauth/claude-fable-5',
+    premium: 'claude-oauth/claude-fable-5',
     embedding: { id: 'openai/text-embedding-3-small', dims: 1536 },
   },
   auth: {

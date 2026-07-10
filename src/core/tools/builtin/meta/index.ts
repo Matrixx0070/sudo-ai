@@ -127,6 +127,7 @@ import { cronCreateTool } from './cron-create.js';
 import { cronDeleteTool } from './cron-delete.js';
 import { registerSearchTools } from './tool-search.js';
 import { registerInstallTools } from './tool-install.js';
+import { registerMcpConnectorTools } from './mcp-connector.js';
 import { registerSynthesizeTools } from './tool-synthesize.js';
 import { DATA_DIR, PROJECT_ROOT } from '../../../shared/paths.js';
 import type { ToolBrain } from '../../../brain/brain-text.js';
@@ -708,6 +709,7 @@ export function registerMetaTools(registry: ToolRegistry): void {
   // Meta search, install, and synthesize tools
   registerSearchTools(registry);
   registerInstallTools(registry);
+  registerMcpConnectorTools(registry);
   registerSynthesizeTools(registry);
   logger.info({ count: tools.length, skippedLegacy: skipped }, 'Meta tools registered');
 }

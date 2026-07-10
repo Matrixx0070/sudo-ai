@@ -514,6 +514,7 @@ async function boot(): Promise<void> {
 
   log.info({ toolCount: registry.listAll().length }, 'ToolRegistry initialized with all tools');
 
+
   // Disable tools listed in config.
   for (const toolName of config.tools.disabled) {
     try {
@@ -524,6 +525,28 @@ async function boot(): Promise<void> {
       log.warn({ toolName, err: msg }, 'Failed to disable tool — skipping');
     }
   }
+
+  // Replay persisted MCP connectors (mcp.connect with persist=true) — after
+  // the config disable pass so it can't sneak past it. Fire-and-forget so a
+  // slow or dead remote endpoint can never stall boot; tools appear as each
+  // server connects (an early first turn may race registration — acceptable:
+  // the model just sees the tools a moment later). SUDO_MCP_CONNECTORS=0
+  // disables replay entirely.
+  void (async () => {
+    try {
+      const { replayPersistedConnectors } = await import('./core/tools/builtin/meta/mcp-connector.js');
+      const outcomes = await replayPersistedConnectors(registry);
+      if (outcomes.length > 0) {
+        log.info(
+          { connectors: outcomes.length, ok: outcomes.filter((o) => o.ok).length, outcomes },
+          'Persisted MCP connectors replayed',
+        );
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn({ err: msg }, 'MCP connector replay failed — continuing without persisted connectors');
+    }
+  })();
 
   // Category coverage guard: every enabled tool's category must be routable by
   // ToolRouter's CATEGORY_MAP, otherwise the tool is invisible to the model
