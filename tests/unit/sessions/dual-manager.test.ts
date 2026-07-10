@@ -499,3 +499,62 @@ describe('journal ID adoption (real JournalSessionStore)', () => {
     expect(minted.id).toMatch(/^[A-Za-z0-9_-]{21}$/); // no preferredId → nanoid
   });
 });
+
+// ---------------------------------------------------------------------------
+// Adoption vetting — adversarial cases (verifier blockers): the id becomes a
+// filename, so adoption must reject traversal shapes, index collisions, and
+// on-disk collisions rather than truncate or escape.
+// ---------------------------------------------------------------------------
+
+describe('journal preferredId vetting (real JournalSessionStore)', () => {
+  let dir: string;
+  let store: JournalSessionStore;
+
+  beforeEach(() => {
+    dir = path.join(os.tmpdir(), `dual-vet-${nanoid(8)}`);
+    mkdirSync(dir, { recursive: true });
+    store = new JournalSessionStore(dir);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const readIdx = (): SessionIndex =>
+    JSON.parse(readFileSync(path.join(dir, 'sessions.json'), 'utf8')) as SessionIndex;
+
+  it('rejects a path-traversal preferredId — mints a nanoid, writes only inside baseDir', async () => {
+    const evilOutside = path.join(dir, '..', `evil-${nanoid(6)}.jsonl`);
+    const s = await store.getOrCreate('web', 'peer-t', '../../evil');
+    expect(s.id).toMatch(/^[A-Za-z0-9_-]{21}$/);
+    const entry = readIdx().entries.find((e) => e.peerId === 'peer-t');
+    expect(entry?.id).toBe(s.id);
+    expect(readFileSync(path.join(dir, entry!.file), 'utf8')).toContain('"type":"session"');
+    expect(() => readFileSync(evilOutside)).toThrow(); // nothing escaped baseDir
+  });
+
+  it('never truncates an existing session: reused id (archived entry) is rejected', async () => {
+    const first = await store.getOrCreate('web', 'peer-r', 'reused-id-001');
+    expect(first.id).toBe('reused-id-001');
+    await store.appendEvent('reused-id-001', { ts: new Date().toISOString(), sessionId: 'reused-id-001', type: 'message', role: 'user', content: 'precious history' } as never);
+    await store.archive('reused-id-001');
+    const fileBefore = readFileSync(path.join(dir, readIdx().entries[0]!.file), 'utf8');
+
+    // No active entry now — fresh-create path runs with the SAME preferredId
+    // (the crashSafe archive-desync shape). Must mint a new id, not truncate.
+    const second = await store.getOrCreate('web', 'peer-r', 'reused-id-001');
+    expect(second.id).not.toBe('reused-id-001');
+    const fileAfter = readFileSync(path.join(dir, readIdx().entries[0]!.file), 'utf8');
+    expect(fileAfter).toBe(fileBefore);                 // history intact
+    expect(fileAfter).toContain('precious history');
+  });
+
+  it('missing-JSONL recreate archives the stale entry — exactly one ACTIVE per peer', async () => {
+    const first = await store.getOrCreate('web', 'peer-m', 'gone-file-001');
+    rmSync(path.join(dir, readIdx().entries[0]!.file));  // simulate lost JSONL
+    const second = await store.getOrCreate('web', 'peer-m', 'fresh-id-002');
+    expect(second.id).toBe('fresh-id-002');
+    const entries = readIdx().entries.filter((e) => e.peerId === 'peer-m');
+    expect(entries.filter((e) => e.state === 'active')).toHaveLength(1);
+    expect(entries.find((e) => e.id === first.id)?.state).toBe('archived');
+  });
+});
