@@ -173,7 +173,7 @@ describe('v2: rubric scores, variance, majority, assertions', () => {
       'w1', 'wo1', 'r\nSCORES: A=18/20 B=10/20\nWINNER: A', 'r\nSCORES: A=10/20 B=18/20\nWINNER: B',
       'w2', 'wo2', 'r\nSCORES: A=16/20 B=12/20\nWINNER: A', 'r\nSCORES: A=12/20 B=16/20\nWINNER: B',
     ]);
-    const report = await runSkillEval({ skillName: 't', markdown: SKILL_MD, brain, prompts: ['p'], runs: 2 });
+    const report = await runSkillEval({ skillName: 't', markdown: SKILL_MD, brain, prompts: ['p'], runs: 2, concurrency: 1 }); // order-scripted brain needs legacy call order
     expect(report.runsPerPrompt).toBe(2);
     expect(report.results[0]!.winner).toBe('with');
     expect(report.results[0]!.runWinners).toEqual(['with', 'with']);
@@ -215,5 +215,166 @@ describe('v2: rubric scores, variance, majority, assertions', () => {
     expect(report.perRunWinRates).toBeUndefined();
     expect(report.assertions).toBeUndefined();
     expect(report.recommendation).toBe('adopt');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrency: the sequential-latency defect class + the bounded fan-out fix
+// ---------------------------------------------------------------------------
+
+/**
+ * Content-routed brain: replies derive ONLY from the request content (never
+ * call order), so reports must be identical at any concurrency. Latency per
+ * call varies by call index to scramble completion order.
+ */
+function contentBrain(latency: (call: number) => number): EvalBrain & { calls: number; maxInFlight: number } {
+  const state = {
+    calls: 0,
+    maxInFlight: 0,
+    inFlight: 0,
+    async call(req: { messages: Array<{ role: string; content: string }> }) {
+      const idx = state.calls++;
+      state.inFlight++;
+      state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+      await new Promise((r) => setTimeout(r, latency(idx)));
+      state.inFlight--;
+      const user = req.messages[req.messages.length - 1]!.content;
+      const hasSystem = req.messages.some((m) => m.role === 'system');
+      if (user.includes('Grade each assertion')) {
+        const passed = /--- RESPONSE ---\nWITH::/.test(user);
+        return { content: `[{"passed":${passed},"evidence":"e1"},{"passed":${passed},"evidence":"e2"}]` };
+      }
+      if (user.includes('judging which of two responses')) {
+        if (!user.includes('pwin')) return { content: 'even\nSCORES: A=3/5 B=3/5\nWINNER: TIE' };
+        const aIsWith = /--- RESPONSE A ---\nWITH::/.test(user);
+        return {
+          content: aIsWith
+            ? 'with better\nSCORES: A=4/5 B=2/5\nWINNER: A'
+            : 'with better\nSCORES: A=2/5 B=4/5\nWINNER: B',
+        };
+      }
+      return { content: `${hasSystem ? 'WITH' : 'BASE'}::${user}` };
+    },
+  };
+  return state;
+}
+
+/** Strip wall-clock fields so reports compare on substance only. */
+function stripMs(report: Awaited<ReturnType<typeof runSkillEval>>): unknown {
+  return { ...report, results: report.results.map((r) => ({ ...r, withMs: 0, withoutMs: 0 })) };
+}
+
+describe('THE DEFECT CLASS — sequential eval latency scales with call count', () => {
+  it('concurrency 1 (legacy shape): 12 independent calls take ~12x per-call latency', async () => {
+    const brain = contentBrain(() => 25);
+    const start = Date.now();
+    await runSkillEval({ skillName: 't', markdown: SKILL_MD, brain, prompts: ['pwin a', 'pwin b', 'pwin c'], concurrency: 1 });
+    const ms = Date.now() - start;
+    expect(brain.calls).toBe(12);
+    expect(brain.maxInFlight).toBe(1);
+    expect(ms).toBeGreaterThanOrEqual(280); // ~12 x 25ms, linear
+  }, 15_000);
+
+  it('bounded fan-out cuts wall-clock to ~stage depth, results identical', async () => {
+    const seq = contentBrain(() => 25);
+    const par = contentBrain(() => 25);
+    const opts = { skillName: 't', markdown: SKILL_MD, prompts: ['pwin a', 'pwin b', 'pwin c'] };
+    const t0 = Date.now();
+    const seqReport = await runSkillEval({ ...opts, brain: seq, concurrency: 1 });
+    const seqMs = Date.now() - t0;
+    const t1 = Date.now();
+    const parReport = await runSkillEval({ ...opts, brain: par, concurrency: 3 });
+    const parMs = Date.now() - t1;
+    expect(parMs).toBeLessThan(seqMs / 1.8); // >=1.8x speedup with generous CI margin
+    expect(stripMs(parReport)).toEqual(stripMs(seqReport));
+  }, 15_000);
+});
+
+describe('concurrent eval determinism and bounds', () => {
+  it('report is identical at concurrency 1 vs 4 with scrambled completion order (runs=2 + assertions)', async () => {
+    const mk = (): Parameters<typeof runSkillEval>[0] => ({
+      skillName: 't',
+      markdown: SKILL_MD,
+      brain: contentBrain((i) => (i * 7) % 13),
+      prompts: ['pwin one', 'plain two', 'pwin three'],
+      runs: 2,
+      assertions: ['a1', 'a2'],
+    });
+    const sequential = await runSkillEval({ ...mk(), concurrency: 1 });
+    const parallel = await runSkillEval({ ...mk(), concurrency: 4 });
+    expect(stripMs(parallel)).toEqual(stripMs(sequential));
+    expect(parallel.wins).toBe(2);
+    expect(parallel.perRunWinRates).toEqual(sequential.perRunWinRates);
+    expect(parallel.assertions).toEqual(sequential.assertions);
+  });
+
+  it('unit cap bounds in-flight calls (2 units x 2-call stages -> <=4, >=2)', async () => {
+    const brain = contentBrain(() => 10);
+    await runSkillEval({ skillName: 't', markdown: SKILL_MD, brain, prompts: ['p1', 'p2', 'p3'], concurrency: 2 });
+    expect(brain.maxInFlight).toBeLessThanOrEqual(4);
+    expect(brain.maxInFlight).toBeGreaterThanOrEqual(2);
+  });
+
+  it('SUDO_SKILL_EVAL_CONCURRENCY=1 forces sequential when no option given', async () => {
+    const saved = process.env['SUDO_SKILL_EVAL_CONCURRENCY'];
+    process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = '1';
+    try {
+      const brain = contentBrain(() => 5);
+      await runSkillEval({ skillName: 't', markdown: SKILL_MD, brain, prompts: ['p1', 'p2'] });
+      expect(brain.maxInFlight).toBe(1);
+    } finally {
+      if (saved === undefined) delete process.env['SUDO_SKILL_EVAL_CONCURRENCY'];
+      else process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = saved;
+    }
+  });
+
+  it('resolveEvalConcurrency clamps and prioritizes option > env > default', async () => {
+    const { resolveEvalConcurrency } = await import('../../src/core/skills/skill-eval.js');
+    const saved = process.env['SUDO_SKILL_EVAL_CONCURRENCY'];
+    try {
+      delete process.env['SUDO_SKILL_EVAL_CONCURRENCY'];
+      expect(resolveEvalConcurrency()).toBe(3);
+      expect(resolveEvalConcurrency(99)).toBe(8);
+      expect(resolveEvalConcurrency(0)).toBe(1);
+      expect(resolveEvalConcurrency(Number.NaN)).toBe(3); // non-finite option falls through, never NaN out
+      process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = '6';
+      expect(resolveEvalConcurrency()).toBe(6);
+      expect(resolveEvalConcurrency(2)).toBe(2);
+      process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = '0'; // throttle intent → sequential, never the default
+      expect(resolveEvalConcurrency()).toBe(1);
+      process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = '-4';
+      expect(resolveEvalConcurrency()).toBe(1);
+      process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = 'garbage';
+      expect(resolveEvalConcurrency()).toBe(3);
+    } finally {
+      if (saved === undefined) delete process.env['SUDO_SKILL_EVAL_CONCURRENCY'];
+      else process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = saved;
+    }
+  });
+
+  it('a failing unit rejects the eval and stops claiming further units', async () => {
+    let calls = 0;
+    const brain: EvalBrain = {
+      async call(req: { messages: Array<{ role: string; content: string }> }) {
+        const n = ++calls;
+        await new Promise((r) => setTimeout(r, 5));
+        if (n === 1) throw new Error('provider down');
+        const user = req.messages[req.messages.length - 1]!.content;
+        if (user.includes('judging which of two responses')) return { content: 'r\nWINNER: TIE' };
+        return { content: 'x' };
+      },
+    };
+    await expect(runSkillEval({
+      skillName: 't', markdown: SKILL_MD, brain,
+      prompts: ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'], maxPrompts: 6, concurrency: 2,
+    })).rejects.toThrow('provider down');
+    await new Promise((r) => setTimeout(r, 100)); // let in-flight peers drain
+    const settled = calls;
+    // Without the abort flag the pool would run all 6 units to completion
+    // (24 calls); with it, only the failing unit + the peer's current unit
+    // dispatch (≤ ~8). The orphaned-fan-out regression is the defect here.
+    expect(settled).toBeLessThanOrEqual(12);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(calls).toBe(settled); // nothing keeps dispatching after drain
   });
 });

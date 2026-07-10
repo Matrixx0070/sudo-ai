@@ -69,6 +69,10 @@ export const evalTool: ToolDefinition = {
       type: 'array',
       description: 'Format/outcome contracts (strings) graded against BOTH arms with evidence; assertions behaving identically on both arms are flagged non-discriminating.',
     },
+    concurrency: {
+      type: 'number',
+      description: 'Max concurrent eval units (prompt × run passes). Default 3 (or SUDO_SKILL_EVAL_CONCURRENCY), max 8, 1 = sequential.',
+    },
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -88,6 +92,7 @@ export const evalTool: ToolDefinition = {
     const assertions = Array.isArray(params['assertions'])
       ? (params['assertions'] as unknown[]).filter((a): a is string => typeof a === 'string')
       : undefined;
+    const concurrency = typeof params['concurrency'] === 'number' ? params['concurrency'] : undefined;
 
     let skillName = name || 'inline-skill';
     let markdown = inlineMd;
@@ -115,7 +120,7 @@ export const evalTool: ToolDefinition = {
       }
 
       logger.info({ session: ctx.sessionId, skillName, source, maxPrompts, runs }, 'skill.eval invoked');
-      const report = await runSkillEval({ skillName, markdown, brain, prompts, maxPrompts, threshold, runs, assertions });
+      const report = await runSkillEval({ skillName, markdown, brain, prompts, maxPrompts, threshold, runs, assertions, concurrency });
 
       const lines = report.results.map((r) => {
         const score = r.withScore !== undefined && r.withoutScore !== undefined
