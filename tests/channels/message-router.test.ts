@@ -294,3 +294,45 @@ describe('MessageRouter', () => {
     });
   });
 });
+
+  describe('directive interceptor gate (the cli.ts closure contract)', () => {
+    // Mirrors the cli.ts pre-dispatch interceptor: it consumes SYNCHRONOUSLY
+    // (return true) and fire-and-forgets tryDispatchDirective — so its gate
+    // MUST be isRegisteredCommand. With the syntactic isCommand, unregistered
+    // slash text would be consumed here and silently dropped (live-proven
+    // 2026-07-10: '/summarize …' died as a directive before the agent saw it).
+    it('registered commands are consumed and dispatched; unregistered slash text reaches the handler', async () => {
+      const { CommandRegistry } = await import('../../src/core/commands/registry.js');
+      const { tryDispatchDirective } = await import('../../src/core/commands/dispatch.js');
+      const registry = new CommandRegistry();
+      registry.register({ name: 'ping', description: 't', usage: '/ping', execute: async () => 'pong' });
+
+      const router = new MessageRouter();
+      const irc = new FakeAdapter('irc');
+      router.registerAdapter(irc);
+
+      const replies: string[] = [];
+      const handled: string[] = [];
+      router.setHandler(async (m) => { handled.push(m.text); });
+      let dispatched: Promise<boolean> | null = null;
+      router.setPreDispatchInterceptor((m) => {
+        if (registry.isRegisteredCommand(m.text ?? '')) {
+          dispatched = tryDispatchDirective({
+            registry,
+            msg: { channel: m.channel, peerId: m.peerId, text: m.text },
+            makeContext: async () => ({ channel: m.channel, peerId: m.peerId, sessionId: 's', agentLoop: null, toolRegistry: null, config: null, db: null }),
+            reply: async (t) => { replies.push(t); },
+          });
+          return true;
+        }
+        return false;
+      });
+
+      await irc.emit(msg('irc', 'nick1', '/ping'));
+      await dispatched;
+      await irc.emit(msg('irc', 'nick1', '/summarize the meeting notes'));
+
+      expect(replies).toEqual(['pong']);                       // registered: dispatched
+      expect(handled).toEqual(['/summarize the meeting notes']); // unregistered: agent turn, not dropped
+    });
+  });

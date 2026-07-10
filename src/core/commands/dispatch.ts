@@ -55,7 +55,10 @@ function directiveCommandName(text: string): string {
  */
 export async function tryDispatchDirective(opts: DirectiveDispatchOptions): Promise<boolean> {
   const text = opts.msg.text ?? '';
-  if (!opts.registry.isCommand(text)) return false;
+  // Registered commands only: an unregistered slash-shaped message falls
+  // through to the agent turn (skill activation can anchor-match it there)
+  // instead of dying as an "Unknown command" reply.
+  if (!opts.registry.isRegisteredCommand(text)) return false;
 
   // Authorization gate (shared directive-auth layer). Deny → consume silently:
   // the directive does not run and the message is NOT enqueued as an agent turn,

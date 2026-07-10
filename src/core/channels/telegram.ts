@@ -313,6 +313,37 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /**
+   * Decide whether inbound text should dispatch to the CommandRegistry, and
+   * with what text. Returns the (possibly normalized) command text, or null
+   * to fall through to the regular agent handler.
+   *
+   * - Telegram group chats address commands as "/cmd@BotName"; when the
+   *   mention is OUR authenticated bot username it is stripped so the
+   *   registered name matches ("/help@SudoBot args" → "/help args"). A
+   *   mention of a DIFFERENT bot is left as-is (never registered → falls
+   *   through like any other text; group chatter is governed by the
+   *   mention-gating layer, not here).
+   * - REGISTERED commands only — an unregistered slash-shaped message falls
+   *   through so the agent (and anchored skill triggers) can handle it. A
+   *   duck-typed registry that predates isRegisteredCommand falls back to
+   *   the syntactic check, i.e. exactly the legacy consume-all behavior.
+   */
+  private _resolveCommandText(text: string): string | null {
+    const registry = this._commandRegistry;
+    if (!registry) return null;
+    let candidate = text;
+    const botName = this.botUsername;
+    if (botName) {
+      const m = text.trimStart().match(/^(\/[A-Za-z0-9_]+)@([A-Za-z0-9_]+)([\s][\s\S]*)?$/);
+      if (m && m[2]!.toLowerCase() === botName.toLowerCase()) {
+        candidate = m[1]! + (m[3] ?? '');
+      }
+    }
+    const dispatchable = registry.isRegisteredCommand?.(candidate) ?? registry.isCommand(candidate);
+    return dispatchable ? candidate : null;
+  }
+
+  /**
    * Attach a CommandRegistry and context factory to this adapter.
    * When set, any inbound message starting with '/' is dispatched to the
    * registry before (and instead of) the regular message handler.
@@ -1121,12 +1152,18 @@ export class TelegramAdapter implements ChannelAdapter {
       }
     });
 
-    // Slash command intercept — dispatch to CommandRegistry when text starts with '/'.
-    if (this._commandRegistry?.isCommand(text) && this._commandContextFactory) {
+    // Slash command intercept — REGISTERED commands only. An unregistered
+    // slash-shaped message ("/summarize this thread") falls through to the
+    // agent turn where skill activation can anchor-match it, instead of an
+    // "Unknown command" dead end. Telegram's group form "/cmd@OurBot" is
+    // normalized before the check (see _resolveCommandText).
+    const commandRegistry = this._commandRegistry;
+    const commandText = this._resolveCommandText(text);
+    if (commandRegistry && commandText !== null && this._commandContextFactory) {
       try {
         const cmdCtx = await this._commandContextFactory(msg);
         if (cmdCtx) {
-          const response = await this._commandRegistry.execute(text, cmdCtx);
+          const response = await commandRegistry.execute(commandText, cmdCtx);
           stopTyping();
           unsubProgress();
           log.info({ peerId: userId, command: text.split(' ')[0] }, 'Slash command dispatched');

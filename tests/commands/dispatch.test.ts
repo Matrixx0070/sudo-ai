@@ -61,16 +61,30 @@ describe('tryDispatchDirective', () => {
     expect(reply).toHaveBeenCalledWith('pong now');
   });
 
-  it('replies with the unknown-command message instead of falling through to the agent', async () => {
+  it('UNREGISTERED slash text falls through to the agent (skill triggers can anchor-match it)', async () => {
+    // Was: consumed with an "Unknown command" reply. Live-proven wrong
+    // 2026-07-10 — the dispatcher ate '/summarize …' so the anchored skill
+    // trigger (and the agent itself) never saw the message.
+    const makeContext = vi.fn(async () => makeCtx());
     const reply = vi.fn(async () => undefined);
     const handled = await tryDispatchDirective({
       registry: makeRegistry(),
-      msg: { channel: 'sms', peerId: 'peer-1', text: '/nosuchcmd' },
-      makeContext: async () => makeCtx(),
+      msg: { channel: 'sms', peerId: 'peer-1', text: '/nosuchcmd do things' },
+      makeContext,
       reply,
     });
-    expect(handled).toBe(true);
-    expect(String(reply.mock.calls[0]?.[0])).toContain('Unknown command');
+    expect(handled).toBe(false);
+    expect(makeContext).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  it('isRegisteredCommand: registered names only, case-insensitive, non-slash false', () => {
+    const registry = makeRegistry();
+    expect(registry.isRegisteredCommand('/ping now')).toBe(true);
+    expect(registry.isRegisteredCommand('  /PING')).toBe(true);
+    expect(registry.isRegisteredCommand('/summarize this report')).toBe(false);
+    expect(registry.isRegisteredCommand('ping')).toBe(false);
+    expect(registry.isRegisteredCommand('')).toBe(false);
   });
 
   it('falls through (false) when the context factory returns null', async () => {
