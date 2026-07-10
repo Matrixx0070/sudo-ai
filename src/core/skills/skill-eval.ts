@@ -55,6 +55,7 @@ export interface PromptResult {
   reason: string;
   withChars: number;
   withoutChars: number;
+  /** Advisory latencies; at concurrency > 1 they measure CONTENDED calls and read higher than sequential numbers. */
   withMs: number;
   withoutMs: number;
   /** Normalized judge rubric scores (0..1), averaged over passes/runs when present. */
@@ -227,23 +228,34 @@ export interface RunSkillEvalOptions {
   assertions?: string[];
   /**
    * Max concurrent eval units (a unit = one prompt × run pass; each unit has
-   * ≤2 brain calls in flight, ≤4 with assertions on run 0). Default from
-   * SUDO_SKILL_EVAL_CONCURRENCY, else 3; clamped 1..8; 1 = sequential.
+   * ≤2 brain calls in flight, so total in-flight ≤ 2 × concurrency). Default
+   * from SUDO_SKILL_EVAL_CONCURRENCY, else 3; clamped 1..8; 1 = sequential.
    */
   concurrency?: number;
 }
 
-/** Resolve the unit-concurrency cap: explicit option > env > default 3, clamped 1..8. */
+/**
+ * Resolve the unit-concurrency cap: finite explicit option > finite env >
+ * default 3, each clamped 1..8 (so 0/negative mean "sequential", never
+ * "default" — a throttle request must not raise concurrency).
+ */
 export function resolveEvalConcurrency(explicit?: number): number {
-  const env = Number(process.env['SUDO_SKILL_EVAL_CONCURRENCY'] ?? '');
-  const raw = explicit ?? (Number.isFinite(env) && env > 0 ? env : 3);
-  return Math.min(Math.max(Math.floor(raw), 1), 8);
+  const clamp = (n: number): number => Math.min(Math.max(Math.floor(n), 1), 8);
+  if (explicit !== undefined && Number.isFinite(explicit)) return clamp(explicit);
+  const envRaw = process.env['SUDO_SKILL_EVAL_CONCURRENCY'];
+  if (envRaw !== undefined && envRaw.trim() !== '') {
+    const env = Number(envRaw);
+    if (Number.isFinite(env)) return clamp(env);
+  }
+  return 3;
 }
 
 /**
  * Bounded-concurrency map that DISPATCHES in item order (index-ordered worker
  * pool) and returns results by index. limit=1 reproduces a plain sequential
  * loop exactly, including call order — that is the eval's kill-switch path.
+ * On the first item rejection no further items are claimed (in-flight peers
+ * finish their current item, then stop) and the rejection propagates.
  */
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
@@ -252,10 +264,16 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
+  let aborted = false;
   const width = Math.max(1, Math.min(limit, items.length));
   const workers = Array.from({ length: width }, async () => {
-    for (let i = next++; i < items.length; i = next++) {
-      out[i] = await fn(items[i]!, i);
+    for (let i = next++; i < items.length && !aborted; i = next++) {
+      try {
+        out[i] = await fn(items[i]!, i);
+      } catch (err) {
+        aborted = true;
+        throw err;
+      }
     }
   });
   await Promise.all(workers);

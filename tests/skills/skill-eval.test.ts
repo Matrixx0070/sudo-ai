@@ -336,14 +336,45 @@ describe('concurrent eval determinism and bounds', () => {
       expect(resolveEvalConcurrency()).toBe(3);
       expect(resolveEvalConcurrency(99)).toBe(8);
       expect(resolveEvalConcurrency(0)).toBe(1);
+      expect(resolveEvalConcurrency(Number.NaN)).toBe(3); // non-finite option falls through, never NaN out
       process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = '6';
       expect(resolveEvalConcurrency()).toBe(6);
       expect(resolveEvalConcurrency(2)).toBe(2);
+      process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = '0'; // throttle intent → sequential, never the default
+      expect(resolveEvalConcurrency()).toBe(1);
+      process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = '-4';
+      expect(resolveEvalConcurrency()).toBe(1);
       process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = 'garbage';
       expect(resolveEvalConcurrency()).toBe(3);
     } finally {
       if (saved === undefined) delete process.env['SUDO_SKILL_EVAL_CONCURRENCY'];
       else process.env['SUDO_SKILL_EVAL_CONCURRENCY'] = saved;
     }
+  });
+
+  it('a failing unit rejects the eval and stops claiming further units', async () => {
+    let calls = 0;
+    const brain: EvalBrain = {
+      async call(req: { messages: Array<{ role: string; content: string }> }) {
+        const n = ++calls;
+        await new Promise((r) => setTimeout(r, 5));
+        if (n === 1) throw new Error('provider down');
+        const user = req.messages[req.messages.length - 1]!.content;
+        if (user.includes('judging which of two responses')) return { content: 'r\nWINNER: TIE' };
+        return { content: 'x' };
+      },
+    };
+    await expect(runSkillEval({
+      skillName: 't', markdown: SKILL_MD, brain,
+      prompts: ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'], maxPrompts: 6, concurrency: 2,
+    })).rejects.toThrow('provider down');
+    await new Promise((r) => setTimeout(r, 100)); // let in-flight peers drain
+    const settled = calls;
+    // Without the abort flag the pool would run all 6 units to completion
+    // (24 calls); with it, only the failing unit + the peer's current unit
+    // dispatch (≤ ~8). The orphaned-fan-out regression is the defect here.
+    expect(settled).toBeLessThanOrEqual(12);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(calls).toBe(settled); // nothing keeps dispatching after drain
   });
 });
