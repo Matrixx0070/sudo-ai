@@ -38,10 +38,14 @@ export interface ActivatableSkill {
 
 export interface SkillActivation {
   skill: ActivatableSkill;
-  /** The trigger phrase that matched. */
+  /** The trigger phrase (or, for semantic matches, the anchor text) that matched. */
   phrase: string;
-  /** Higher = more specific match (more words, longer phrase). */
+  /** Higher = more specific match (more words, longer phrase); cosine × 1000 for semantic. */
   score: number;
+  /** True when the recall assist matched by embedding similarity, not by phrase. */
+  semantic?: boolean;
+  /** Cosine similarity for semantic matches (0..1). */
+  similarity?: number;
 }
 
 /** Per-skill body cap in the injected system message. */
@@ -137,28 +141,47 @@ export function formatSkillInjection(activations: readonly SkillActivation[]): s
     const body = a.skill.content.length > MAX_INJECTED_BODY_CHARS
       ? `${a.skill.content.slice(0, MAX_INJECTED_BODY_CHARS)}\n…(truncated)`
       : a.skill.content;
-    parts.push('', `## Skill: ${a.skill.name} (matched trigger: "${a.phrase}")`, body);
+    const label = a.semantic
+      ? `semantic match: "${a.phrase}", similarity ${(a.similarity ?? 0).toFixed(2)}`
+      : `matched trigger: "${a.phrase}"`;
+    parts.push('', `## Skill: ${a.skill.name} (${label})`, body);
   }
   return parts.join('\n');
 }
 
 /**
  * One-call convenience for the agent loop: select + format + log.
- * Returns null when activation is disabled or nothing matched.
+ * Deterministic phrase matching decides first (precision path); ONLY when it
+ * finds nothing does the semantic recall assist run (skills/semantic-assist.ts,
+ * local embeddings, at most one skill). Returns null when activation is
+ * disabled or nothing matched.
  */
-export function activateSkillsForMessage(
+export async function activateSkillsForMessage(
   message: string,
   skills: readonly ActivatableSkill[] | null | undefined,
   sessionId: string,
-): { content: string; names: string[] } | null {
+): Promise<{ content: string; names: string[] } | null> {
   try {
     if (!isSkillActivationEnabled()) return null;
     if (!skills || skills.length === 0) return null;
-    const activations = selectSkills(message, skills);
+    let activations = selectSkills(message, skills);
+    if (activations.length === 0) {
+      const { isSemanticAssistEnabled, selectSemanticSkill } = await import('./semantic-assist.js');
+      if (isSemanticAssistEnabled()) {
+        const semantic = await selectSemanticSkill(message, skills);
+        if (semantic) activations = [semantic];
+      }
+    }
     if (activations.length === 0) return null;
     const names = activations.map((a) => a.skill.name);
     log.info(
-      { sessionId, skills: names, phrases: activations.map((a) => a.phrase) },
+      {
+        sessionId,
+        skills: names,
+        phrases: activations.map((a) => a.phrase),
+        semantic: activations.some((a) => a.semantic === true) || undefined,
+        similarity: activations.find((a) => a.semantic)?.similarity,
+      },
       'Markdown skills activated for turn',
     );
     return { content: formatSkillInjection(activations), names };

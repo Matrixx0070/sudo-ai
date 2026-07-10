@@ -87,25 +87,33 @@ describe('formatSkillInjection', () => {
 
 describe('activateSkillsForMessage + kill-switch', () => {
   const saved = process.env['SUDO_SKILL_ACTIVATION'];
-  beforeEach(() => { delete process.env['SUDO_SKILL_ACTIVATION']; });
+  const savedAssist = process.env['SUDO_SKILL_SEMANTIC_ASSIST'];
+  beforeEach(() => {
+    delete process.env['SUDO_SKILL_ACTIVATION'];
+    // These tests must never load the real ONNX embedder; the semantic path
+    // has its own suite with an injected fake (semantic-assist.test.ts).
+    process.env['SUDO_SKILL_SEMANTIC_ASSIST'] = '0';
+  });
   afterEach(() => {
     if (saved === undefined) delete process.env['SUDO_SKILL_ACTIVATION'];
     else process.env['SUDO_SKILL_ACTIVATION'] = saved;
+    if (savedAssist === undefined) delete process.env['SUDO_SKILL_SEMANTIC_ASSIST'];
+    else process.env['SUDO_SKILL_SEMANTIC_ASSIST'] = savedAssist;
   });
 
-  it('activates and formats on match', () => {
-    const r = activateSkillsForMessage('tldr this article for me', [tldr, eli5], 's1');
+  it('activates and formats on match', async () => {
+    const r = await activateSkillsForMessage('tldr this article for me', [tldr, eli5], 's1');
     expect(r).not.toBeNull();
     expect(r!.names).toEqual(['tldr']);
     expect(r!.content).toContain('# ACTIVE SKILLS');
   });
 
-  it('returns null on no match / empty skills / disabled', () => {
-    expect(activateSkillsForMessage('hello there', [tldr], 's1')).toBeNull();
-    expect(activateSkillsForMessage('tldr this', [], 's1')).toBeNull();
+  it('returns null on no match / empty skills / disabled', async () => {
+    expect(await activateSkillsForMessage('hello there', [tldr], 's1')).toBeNull();
+    expect(await activateSkillsForMessage('tldr this', [], 's1')).toBeNull();
     process.env['SUDO_SKILL_ACTIVATION'] = '0';
     expect(isSkillActivationEnabled()).toBe(false);
-    expect(activateSkillsForMessage('tldr this', [tldr], 's1')).toBeNull();
+    expect(await activateSkillsForMessage('tldr this', [tldr], 's1')).toBeNull();
   });
 
   it('normalize wraps with spaces for boundary-safe matching', () => {
