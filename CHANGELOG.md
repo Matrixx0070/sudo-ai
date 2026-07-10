@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. Versioning follows the
 `version` field in `package.json`; entries are newest-first.
 
+## [4.1.7] — 2026-07-10
+
+### Fixed
+- Skill frontmatter parses YAML-first (js-yaml) — the hand-rolled parser's global
+  quote-strip corrupted quoted content ("Don't" → "Dont", live victim: email-polish's
+  description every boot); nested-key no-leak preserved, legacy fallback fail-open. (#667)
+- Session persistence is write-through: `session.messages.push` persists immediately,
+  closing the lost-message class behind four bug campaigns (#437, #445-447, #450/#451,
+  #659). Kill-switch `SUDO_WRITE_THROUGH_PERSIST=0`. (#668, #670)
+- Declared-primitive tool arguments coerce at the registry boundary — string `"500"` on
+  a `type:'number'` param passed validation and poisoned the finance ledger (every later
+  balance crashed); now strict finite-parse coercion for numbers alongside the #663
+  boolean rule, recursing through declared nested schemas (array `items` / object
+  `properties`, depth-capped) — `operations:[{width:"300"}]` no longer breaks image
+  editing, github batch edits, or spreadsheet column widths. (#671, #674)
+
+### Added
+- `skill.eval` runs its independent (prompt × run) units concurrently under a bounded
+  worker pool — a 12-call eval dropped 1211ms → 218ms mocked and 236s → 49s live;
+  `SUDO_SKILL_EVAL_CONCURRENCY` (default 3, `1` = exact legacy sequencing), fan-out
+  stops on first unit failure. (#672)
+- Semantic recall assist for skill activation: when no trigger phrase matches, the
+  message is embedded with the local MiniLM and matched against per-skill anchors —
+  50% → 83% accuracy on a labeled intent set, first live semantic activation at
+  similarity 0.51 on a keyword-free request. Recall-only (never vetoes a phrase match),
+  400ms turn budget, failure cooldown; `SUDO_SKILL_SEMANTIC_ASSIST=0` disables;
+  `skill.trigger-eval semantic=true` reports the combined matrix. (#673)
+
 ## [4.1.6] — 2026-07-09
 
 ### Fixed
