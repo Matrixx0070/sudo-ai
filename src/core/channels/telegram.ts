@@ -1121,12 +1121,20 @@ export class TelegramAdapter implements ChannelAdapter {
       }
     });
 
-    // Slash command intercept — dispatch to CommandRegistry when text starts with '/'.
-    if (this._commandRegistry?.isCommand(text) && this._commandContextFactory) {
+    // Slash command intercept — REGISTERED commands only. An unregistered
+    // slash-shaped message ("/summarize this thread") falls through to the
+    // agent turn where skill activation can anchor-match it, instead of an
+    // "Unknown command" dead end. Falls back to the syntactic check for
+    // duck-typed registries that predate isRegisteredCommand.
+    const commandRegistry = this._commandRegistry;
+    const isDispatchable = commandRegistry
+      ? (commandRegistry.isRegisteredCommand?.(text) ?? commandRegistry.isCommand(text))
+      : false;
+    if (commandRegistry && isDispatchable && this._commandContextFactory) {
       try {
         const cmdCtx = await this._commandContextFactory(msg);
         if (cmdCtx) {
-          const response = await this._commandRegistry.execute(text, cmdCtx);
+          const response = await commandRegistry.execute(text, cmdCtx);
           stopTyping();
           unsubProgress();
           log.info({ peerId: userId, command: text.split(' ')[0] }, 'Slash command dispatched');

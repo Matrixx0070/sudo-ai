@@ -101,6 +101,19 @@ export class CommandRegistry {
   }
 
   /**
+   * True only when the text is a slash command whose name is REGISTERED.
+   * Channel intercepts must gate on this, not {@link isCommand}: a merely
+   * slash-shaped message ("/summarize this report") that matches no command
+   * belongs to the agent turn (where skill activation can anchor-match it),
+   * not to an "Unknown command" reply — live-proven 2026-07-10 when the
+   * dispatcher consumed '/summarize …' before the agent ever saw it.
+   */
+  isRegisteredCommand(text: string): boolean {
+    if (!this.isCommand(text)) return false;
+    return this.commands.has(this.parse(text).name);
+  }
+
+  /**
    * Parse a slash command string into its name and arguments.
    * E.g. '/produce AI ethics' → { name: 'produce', args: 'AI ethics' }
    *
