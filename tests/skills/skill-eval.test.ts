@@ -143,3 +143,77 @@ describe('skill.eval tool', () => {
     expect(res.output).toContain('Provide a skill');
   });
 });
+
+describe('v2: rubric scores, variance, majority, assertions', () => {
+  it('parseScores parses the SCORES line leniently and normalizes', async () => {
+    const { parseScores } = await import('../../src/core/skills/skill-eval.js');
+    expect(parseScores('rationale\nSCORES: A=17/20 B=14/20\nWINNER: A')).toEqual({ a: 0.85, b: 0.7 });
+    expect(parseScores('scores: a = 3/5 b = 4/5')).toEqual({ a: 0.6, b: 0.8 });
+    expect(parseScores('no scores here')).toBeNull();
+    expect(parseScores('SCORES: A=1/0 B=1/1')).toBeNull();
+  });
+
+  it('sampleStddev computes n-1 stddev', async () => {
+    const { sampleStddev } = await import('../../src/core/skills/skill-eval.js');
+    expect(sampleStddev([1, 1, 1])).toBe(0);
+    expect(sampleStddev([0, 1])).toBeCloseTo(Math.SQRT1_2, 5);
+    expect(sampleStddev([1])).toBeUndefined();
+  });
+
+  it('majorityWinner needs a strict plurality', async () => {
+    const { majorityWinner } = await import('../../src/core/skills/skill-eval.js');
+    expect(majorityWinner(['with', 'with', 'without'])).toBe('with');
+    expect(majorityWinner(['with', 'without'])).toBe('tie');
+    expect(majorityWinner(['inconsistent', 'inconsistent', 'tie'])).toBe('inconsistent');
+  });
+
+  it('runs=2 produces per-run win rates, stddev, and averaged rubric scores', async () => {
+    // Per run: with-gen, without-gen, j1, j2. Two runs, one prompt.
+    const brain = scriptedBrain([
+      'w1', 'wo1', 'r\nSCORES: A=18/20 B=10/20\nWINNER: A', 'r\nSCORES: A=10/20 B=18/20\nWINNER: B',
+      'w2', 'wo2', 'r\nSCORES: A=16/20 B=12/20\nWINNER: A', 'r\nSCORES: A=12/20 B=16/20\nWINNER: B',
+    ]);
+    const report = await runSkillEval({ skillName: 't', markdown: SKILL_MD, brain, prompts: ['p'], runs: 2 });
+    expect(report.runsPerPrompt).toBe(2);
+    expect(report.results[0]!.winner).toBe('with');
+    expect(report.results[0]!.runWinners).toEqual(['with', 'with']);
+    expect(report.perRunWinRates).toEqual([1, 1]);
+    expect(report.winRateStddev).toBe(0);
+    expect(report.results[0]!.withScore).toBeCloseTo(0.85, 5);
+    expect(report.results[0]!.withoutScore).toBeCloseTo(0.55, 5);
+  });
+
+  it('assertions grade both arms and flag non-discriminating ones', async () => {
+    // Order: with-gen, without-gen, j1, j2, assertions-vs-with, assertions-vs-without.
+    const brain = scriptedBrain([
+      'with', 'without', 'WINNER: A', 'WINNER: B',
+      '[{"passed":true,"evidence":"bold line present"},{"passed":true,"evidence":"exists"}]',
+      '[{"passed":false,"evidence":""},{"passed":true,"evidence":"also exists"}]',
+    ]);
+    const report = await runSkillEval({
+      skillName: 't', markdown: SKILL_MD, brain, prompts: ['p'],
+      assertions: ['has a bolded takeaway', 'mentions the topic'],
+    });
+    expect(report.assertions).toHaveLength(2);
+    expect(report.assertions![0]).toMatchObject({ withPassed: true, withoutPassed: false, discriminating: true });
+    expect(report.assertions![1]).toMatchObject({ withPassed: true, withoutPassed: true, discriminating: false });
+    expect(report.nonDiscriminatingAssertions).toEqual(['mentions the topic']);
+  });
+
+  it('evalAssertions fails closed on unparseable grader replies', async () => {
+    const { evalAssertions } = await import('../../src/core/skills/skill-eval.js');
+    const brain = scriptedBrain(['not json']);
+    const res = await evalAssertions(brain, 'fast', 'task', 'output', ['a1']);
+    expect(res[0]!.passed).toBe(false);
+    expect(res[0]!.evidence).toContain('failed closed');
+  });
+
+  it('v1-shaped calls are unchanged (runs default 1, no extras)', async () => {
+    const brain = scriptedBrain(['with', 'without', 'r\nWINNER: A', 'r\nWINNER: B']);
+    const report = await runSkillEval({ skillName: 't', markdown: SKILL_MD, brain, prompts: ['p'] });
+    expect(report.runsPerPrompt).toBe(1);
+    expect(report.perRunWinRates).toBeUndefined();
+    expect(report.assertions).toBeUndefined();
+    expect(report.recommendation).toBe('adopt');
+  });
+});

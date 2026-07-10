@@ -44,7 +44,7 @@ export interface EvalBrain {
 
 export interface PromptResult {
   prompt: string;
-  /** Judge verdict after debiasing: which arm won this prompt. */
+  /** Judge verdict after debiasing: which arm won this prompt (majority across runs). */
   winner: 'with' | 'without' | 'tie' | 'inconsistent';
   /** One-line judge rationale from the first pass (advisory). */
   reason: string;
@@ -52,6 +52,21 @@ export interface PromptResult {
   withoutChars: number;
   withMs: number;
   withoutMs: number;
+  /** Normalized judge rubric scores (0..1), averaged over passes/runs when present. */
+  withScore?: number;
+  withoutScore?: number;
+  /** Per-run winners when runs > 1. */
+  runWinners?: Array<'with' | 'without' | 'tie' | 'inconsistent'>;
+}
+
+export interface AssertionResult {
+  text: string;
+  withPassed: boolean;
+  withoutPassed: boolean;
+  /** Evidence cited for the with-skill verdict. */
+  evidence: string;
+  /** False when the assertion passes (or fails) on BOTH arms — it cannot tell the arms apart. */
+  discriminating: boolean;
 }
 
 export interface SkillEvalReport {
@@ -66,6 +81,16 @@ export interface SkillEvalReport {
   threshold: number;
   recommendation: 'adopt' | 'reject' | 'inconclusive';
   results: PromptResult[];
+  /** Runs per prompt (1 = v1 behavior). */
+  runsPerPrompt: number;
+  /** Win-rate per complete run pass, when runs > 1 (variance signal). */
+  perRunWinRates?: Array<number | null>;
+  /** Sample stddev (n-1) of perRunWinRates, when computable. */
+  winRateStddev?: number;
+  /** Assertion matrix across both arms, when assertions were provided. */
+  assertions?: AssertionResult[];
+  /** Assertions that cannot distinguish the arms (same outcome on both). */
+  nonDiscriminatingAssertions?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +142,7 @@ export function aggregate(
       : (winRate ?? 0) >= threshold
         ? 'adopt'
         : 'reject';
-  return { skillName, prompts: results.length, wins, losses, ties, inconsistent, winRate, threshold, recommendation, results };
+  return { skillName, prompts: results.length, wins, losses, ties, inconsistent, winRate, threshold, recommendation, results, runsPerPrompt: 1 };
 }
 
 /** Extract the first JSON array of strings found in a model reply. */
@@ -140,17 +165,28 @@ export function parsePromptList(reply: string, max: number): string[] {
 
 function judgePrompt(userTask: string, a: string, b: string): string {
   return [
-    'You are judging which of two responses better serves a user request. Judge on:',
-    'usefulness to the stated request, correctness, clarity, and appropriate length.',
+    'You are judging which of two responses better serves a user request.',
+    'First derive 3-4 criteria that matter for THIS specific request (e.g. correctness,',
+    'completeness, clarity, fit-to-request) and score each response 1-5 on each criterion.',
     'Ignore superficial style differences that do not affect the user.',
     '',
     `--- USER REQUEST ---\n${userTask}`,
     `--- RESPONSE A ---\n${a}`,
     `--- RESPONSE B ---\n${b}`,
     '',
-    'Reply with ONE line of rationale, then on the final line exactly:',
+    'Reply with ONE line of rationale, then on the last two lines exactly:',
+    'SCORES: A=<total>/<max> B=<total>/<max>',
     'WINNER: A   or   WINNER: B   or   WINNER: TIE',
   ].join('\n');
+}
+
+/** Parse the optional "SCORES: A=17/20 B=14/20" judge line (lenient; null when absent). */
+export function parseScores(reply: string): { a: number; b: number } | null {
+  const m = /SCORES:\s*A\s*=\s*(\d+)\s*\/\s*(\d+)\s*B\s*=\s*(\d+)\s*\/\s*(\d+)/i.exec(reply ?? '');
+  if (!m) return null;
+  const maxA = Number(m[2]); const maxB = Number(m[4]);
+  if (maxA <= 0 || maxB <= 0) return null;
+  return { a: Number(m[1]) / maxA, b: Number(m[3]) / maxB };
 }
 
 function genPromptsPrompt(skillName: string, markdown: string, k: number): string {
@@ -180,6 +216,70 @@ export interface RunSkillEvalOptions {
   /** Win-rate needed for an 'adopt' recommendation. Default 0.6. */
   threshold?: number;
   tier?: string;
+  /** Complete passes per prompt for variance (default 1, max 3; cost scales linearly). */
+  runs?: number;
+  /** Format/outcome contracts checked against BOTH arms' outputs (grader mode). */
+  assertions?: string[];
+}
+
+/** Sample standard deviation (n-1); undefined below 2 samples. */
+export function sampleStddev(values: readonly number[]): number | undefined {
+  if (values.length < 2) return undefined;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / (values.length - 1);
+  return Math.sqrt(variance);
+}
+
+/** Majority vote across run winners; decisive only on a strict plurality of with/without. */
+export function majorityWinner(runWinners: readonly PromptResult['winner'][]): PromptResult['winner'] {
+  const count = (w: PromptResult['winner']): number => runWinners.filter((x) => x === w).length;
+  const withN = count('with'); const withoutN = count('without');
+  if (withN > withoutN) return 'with';
+  if (withoutN > withN) return 'without';
+  return count('inconsistent') > count('tie') ? 'inconsistent' : 'tie';
+}
+
+function assertionPrompt(userTask: string, output: string, assertions: readonly string[]): string {
+  return [
+    'Grade each assertion against the response below. PASS only when the response gives',
+    'clear evidence the assertion holds — the burden of proof is ON the assertion; when',
+    'uncertain or the evidence is superficial, FAIL it. Cite the evidence.',
+    '',
+    `--- USER REQUEST ---\n${userTask}`,
+    `--- RESPONSE ---\n${output}`,
+    '',
+    'Assertions:',
+    ...assertions.map((a, i) => `${i + 1}. ${a}`),
+    '',
+    'Return ONLY a JSON array, one entry per assertion in order:',
+    '[{"passed": true|false, "evidence": "short quote or reason"}, ...]',
+  ].join('\n');
+}
+
+/** Evaluate assertions against one output; fail-closed per assertion on parse trouble. */
+export async function evalAssertions(
+  brain: EvalBrain,
+  tier: string,
+  userTask: string,
+  output: string,
+  assertions: readonly string[],
+): Promise<Array<{ passed: boolean; evidence: string }>> {
+  const resp = await brain.call(
+    { messages: [{ role: 'user', content: assertionPrompt(userTask, output, assertions) }], source: 'skill-eval' },
+    { tier, strategy: 'single' },
+  );
+  const text = resp.content ?? '';
+  try {
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    const arr = JSON.parse(text.slice(start, end + 1)) as Array<{ passed?: unknown; evidence?: unknown }>;
+    return assertions.map((_, i) => ({
+      passed: arr[i]?.passed === true,
+      evidence: typeof arr[i]?.evidence === 'string' ? (arr[i]!.evidence as string).slice(0, 200) : '',
+    }));
+  } catch {
+    return assertions.map(() => ({ passed: false, evidence: 'grader reply unparseable — failed closed' }));
+  }
 }
 
 async function timedCall(
@@ -212,34 +312,98 @@ export async function runSkillEval(opts: RunSkillEvalOptions): Promise<SkillEval
     log.info({ skillName, generated: prompts.length }, 'skill-eval: test prompts auto-generated');
   }
 
+  const runs = Math.min(Math.max(opts.runs ?? 1, 1), 3);
+  const assertions = (opts.assertions ?? []).filter((a) => a.trim() !== '').slice(0, 10);
+
   const results: PromptResult[] = [];
+  // Winners per run index (column) across prompts, for per-run win rates.
+  const winnersByRun: PromptResult['winner'][][] = Array.from({ length: runs }, () => []);
+  const assertionAgg = assertions.map((text) => ({ text, withPass: 0, withoutPass: 0, evidence: '' }));
+
   for (const prompt of prompts) {
-    const withSkill = await timedCall(brain, [
-      { role: 'system', content: `Follow this skill's instructions where applicable:\n\n${markdown}` },
-      { role: 'user', content: prompt },
-    ], tier);
-    const withoutSkill = await timedCall(brain, [{ role: 'user', content: prompt }], tier);
+    const runWinners: PromptResult['winner'][] = [];
+    let reason = '';
+    let withChars = 0; let withoutChars = 0; let withMs = 0; let withoutMs = 0;
+    const withScores: number[] = []; const withoutScores: number[] = [];
 
-    // Pass 1: WITH is A. Pass 2: WITH is B (order swapped).
-    const j1 = await timedCall(brain, [{ role: 'user', content: judgePrompt(prompt, withSkill.text, withoutSkill.text) }], tier);
-    const j2 = await timedCall(brain, [{ role: 'user', content: judgePrompt(prompt, withoutSkill.text, withSkill.text) }], tier);
-    const winner = debias(parseVerdict(j1.text), parseVerdict(j2.text));
+    for (let run = 0; run < runs; run++) {
+      const withSkill = await timedCall(brain, [
+        { role: 'system', content: `Follow this skill's instructions where applicable:\n\n${markdown}` },
+        { role: 'user', content: prompt },
+      ], tier);
+      const withoutSkill = await timedCall(brain, [{ role: 'user', content: prompt }], tier);
 
+      // Pass 1: WITH is A. Pass 2: WITH is B (order swapped).
+      const j1 = await timedCall(brain, [{ role: 'user', content: judgePrompt(prompt, withSkill.text, withoutSkill.text) }], tier);
+      const j2 = await timedCall(brain, [{ role: 'user', content: judgePrompt(prompt, withoutSkill.text, withSkill.text) }], tier);
+      const winner = debias(parseVerdict(j1.text), parseVerdict(j2.text));
+      runWinners.push(winner);
+      winnersByRun[run]!.push(winner);
+
+      // Rubric scores (orientation: pass1 A=with; pass2 A=without).
+      const s1 = parseScores(j1.text); const s2 = parseScores(j2.text);
+      if (s1) { withScores.push(s1.a); withoutScores.push(s1.b); }
+      if (s2) { withScores.push(s2.b); withoutScores.push(s2.a); }
+
+      if (run === 0) {
+        reason = (j1.text.split('\n')[0] ?? '').slice(0, 200);
+        withChars = withSkill.text.length; withoutChars = withoutSkill.text.length;
+        withMs = withSkill.ms; withoutMs = withoutSkill.ms;
+        // Grader mode: check the contracts against BOTH arms (first run only,
+        // cost control). An assertion behaving identically on both arms cannot
+        // measure the skill — flagged non-discriminating below.
+        if (assertions.length > 0) {
+          const withA = await evalAssertions(brain, tier, prompt, withSkill.text, assertions);
+          const withoutA = await evalAssertions(brain, tier, prompt, withoutSkill.text, assertions);
+          assertions.forEach((_, i) => {
+            if (withA[i]!.passed) assertionAgg[i]!.withPass++;
+            if (withoutA[i]!.passed) assertionAgg[i]!.withoutPass++;
+            if (!assertionAgg[i]!.evidence && withA[i]!.evidence) assertionAgg[i]!.evidence = withA[i]!.evidence;
+          });
+        }
+      }
+    }
+
+    const winner = majorityWinner(runWinners);
+    const avg = (xs: number[]): number | undefined =>
+      xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined;
     results.push({
       prompt,
       winner,
-      reason: (j1.text.split('\n')[0] ?? '').slice(0, 200),
-      withChars: withSkill.text.length,
-      withoutChars: withoutSkill.text.length,
-      withMs: withSkill.ms,
-      withoutMs: withoutSkill.ms,
+      reason,
+      withChars,
+      withoutChars,
+      withMs,
+      withoutMs,
+      withScore: avg(withScores),
+      withoutScore: avg(withoutScores),
+      runWinners: runs > 1 ? runWinners : undefined,
     });
-    log.info({ skillName, winner, prompt: prompt.slice(0, 80) }, 'skill-eval: prompt judged');
+    log.info({ skillName, winner, runs, prompt: prompt.slice(0, 80) }, 'skill-eval: prompt judged');
   }
 
   const report = aggregate(skillName, results, threshold);
+  report.runsPerPrompt = runs;
+  if (runs > 1) {
+    const perRun = winnersByRun.map((col) => {
+      const w = col.filter((x) => x === 'with').length;
+      const l = col.filter((x) => x === 'without').length;
+      return w + l > 0 ? w / (w + l) : null;
+    });
+    report.perRunWinRates = perRun;
+    report.winRateStddev = sampleStddev(perRun.filter((x): x is number => x !== null));
+  }
+  if (assertions.length > 0) {
+    const half = prompts.length / 2;
+    report.assertions = assertionAgg.map((a) => {
+      const withPassed = a.withPass > half;
+      const withoutPassed = a.withoutPass > half;
+      return { text: a.text, withPassed, withoutPassed, evidence: a.evidence, discriminating: withPassed !== withoutPassed };
+    });
+    report.nonDiscriminatingAssertions = report.assertions.filter((a) => !a.discriminating).map((a) => a.text);
+  }
   log.info(
-    { skillName, winRate: report.winRate, recommendation: report.recommendation, wins: report.wins, losses: report.losses, ties: report.ties, inconsistent: report.inconsistent },
+    { skillName, winRate: report.winRate, recommendation: report.recommendation, wins: report.wins, losses: report.losses, ties: report.ties, inconsistent: report.inconsistent, runs, stddev: report.winRateStddev },
     'skill-eval: report complete',
   );
   return report;

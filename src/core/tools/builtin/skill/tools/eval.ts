@@ -60,6 +60,15 @@ export const evalTool: ToolDefinition = {
       description: 'Win-rate required for an "adopt" recommendation (default 0.6).',
       default: 0.6,
     },
+    runs: {
+      type: 'number',
+      description: 'Complete passes per prompt for variance (mean ± stddev). Default 1, max 3; cost scales linearly.',
+      default: 1,
+    },
+    assertions: {
+      type: 'array',
+      description: 'Format/outcome contracts (strings) graded against BOTH arms with evidence; assertions behaving identically on both arms are flagged non-discriminating.',
+    },
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -75,6 +84,10 @@ export const evalTool: ToolDefinition = {
       : undefined;
     const maxPrompts = typeof params['maxPrompts'] === 'number' ? params['maxPrompts'] : 3;
     const threshold = typeof params['threshold'] === 'number' ? params['threshold'] : 0.6;
+    const runs = typeof params['runs'] === 'number' ? params['runs'] : 1;
+    const assertions = Array.isArray(params['assertions'])
+      ? (params['assertions'] as unknown[]).filter((a): a is string => typeof a === 'string')
+      : undefined;
 
     let skillName = name || 'inline-skill';
     let markdown = inlineMd;
@@ -101,19 +114,33 @@ export const evalTool: ToolDefinition = {
         if (!markdown) return { success: false, output: `Skill "${name}" not found in the registry or locally.` };
       }
 
-      logger.info({ session: ctx.sessionId, skillName, source, maxPrompts }, 'skill.eval invoked');
-      const report = await runSkillEval({ skillName, markdown, brain, prompts, maxPrompts, threshold });
+      logger.info({ session: ctx.sessionId, skillName, source, maxPrompts, runs }, 'skill.eval invoked');
+      const report = await runSkillEval({ skillName, markdown, brain, prompts, maxPrompts, threshold, runs, assertions });
 
-      const lines = report.results.map((r) =>
-        `- [${r.winner.toUpperCase()}] ${r.prompt.slice(0, 90)}${r.prompt.length > 90 ? '…' : ''}\n  judge: ${r.reason}`,
-      );
+      const lines = report.results.map((r) => {
+        const score = r.withScore !== undefined && r.withoutScore !== undefined
+          ? ` (rubric with ${Math.round(r.withScore * 100)} vs without ${Math.round(r.withoutScore * 100)})` : '';
+        return `- [${r.winner.toUpperCase()}]${score} ${r.prompt.slice(0, 90)}${r.prompt.length > 90 ? '…' : ''}\n  judge: ${r.reason}`;
+      });
       const rate = report.winRate === null ? 'n/a' : `${Math.round(report.winRate * 100)}%`;
+      const variance = report.winRateStddev !== undefined
+        ? ` (±${Math.round(report.winRateStddev * 100)}pp over ${report.runsPerPrompt} runs)` : '';
+      let assertionBlock = '';
+      if (report.assertions && report.assertions.length > 0) {
+        assertionBlock = '\nAssertions (with | without | discriminating):\n' + report.assertions
+          .map((a) => `- ${a.withPassed ? '✓' : '✗'} | ${a.withoutPassed ? '✓' : '✗'} | ${a.discriminating ? 'yes' : 'NO'} — ${a.text}\n  evidence: ${a.evidence}`)
+          .join('\n') + '\n';
+        if ((report.nonDiscriminatingAssertions ?? []).length > 0) {
+          assertionBlock += `Non-discriminating (same outcome on both arms — cannot measure the skill): ${report.nonDiscriminatingAssertions!.length}\n`;
+        }
+      }
       return {
         success: true,
         output:
-          `Skill eval for "${skillName}" (${source}) — ${report.prompts} prompt(s), with-vs-without baseline:\n`
+          `Skill eval for "${skillName}" (${source}) — ${report.prompts} prompt(s) × ${report.runsPerPrompt} run(s), with-vs-without baseline:\n`
           + `wins ${report.wins} / losses ${report.losses} / ties ${report.ties} / inconsistent-judge ${report.inconsistent}\n`
-          + `win-rate ${rate} vs threshold ${Math.round(report.threshold * 100)}% → **${report.recommendation.toUpperCase()}**\n\n`
+          + `win-rate ${rate}${variance} vs threshold ${Math.round(report.threshold * 100)}% → **${report.recommendation.toUpperCase()}**\n`
+          + assertionBlock + '\n'
           + `${lines.join('\n')}\n\n`
           + (report.recommendation === 'adopt'
             ? 'Recommendation: adopt — follow up with skill.install/skill.apply.'
