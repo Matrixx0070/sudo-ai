@@ -102,6 +102,81 @@ describe('coerceDeclaredPrimitives — numbers (unit)', () => {
   });
 });
 
+describe('coerceDeclaredPrimitives — nested members (unit)', () => {
+  const tool = {
+    parameters: {
+      operations: {
+        type: 'array' as const,
+        description: '',
+        items: {
+          type: 'object' as const,
+          description: '',
+          properties: {
+            width: { type: 'number' as const, description: '' },
+            label: { type: 'string' as const, description: '' },
+            enabled: { type: 'boolean' as const, description: '' },
+          },
+        },
+      },
+    },
+  };
+
+  it('coerces number/boolean strings inside array-of-object members', () => {
+    const out = coerceDeclaredPrimitives(tool, {
+      operations: [{ width: '300', label: '300', enabled: 'true' }, { width: 200 }],
+    });
+    const ops = out['operations'] as Array<Record<string, unknown>>;
+    expect(ops[0]).toEqual({ width: 300, label: '300', enabled: true }); // declared string untouched
+    expect(ops[1]).toEqual({ width: 200 });
+  });
+
+  it('leaves undeclared members and non-parseable strings alone', () => {
+    const out = coerceDeclaredPrimitives(tool, {
+      operations: [{ width: '5px', extra: '7' }],
+    });
+    expect((out['operations'] as Array<Record<string, unknown>>)[0]).toEqual({ width: '5px', extra: '7' });
+  });
+
+  it('no-copy fast path: untouched nested structures keep identity', () => {
+    const input = { operations: [{ width: 300, label: 'x' }] };
+    const out = coerceDeclaredPrimitives(tool, input);
+    expect(out).toBe(input);
+    expect(out['operations']).toBe(input.operations);
+  });
+
+  it('does not mutate the original nested objects when coercing', () => {
+    const inner = { width: '300' };
+    const input = { operations: [inner] };
+    const out = coerceDeclaredPrimitives(tool, input);
+    expect(inner.width).toBe('300'); // original untouched
+    expect((out['operations'] as Array<Record<string, unknown>>)[0]!['width']).toBe(300);
+  });
+
+  it('coerces arrays of bare number items', () => {
+    const t = { parameters: { sizes: { type: 'array' as const, description: '', items: { type: 'number' as const, description: '' } } } };
+    expect(coerceDeclaredPrimitives(t, { sizes: ['1', 2, '3.5'] })['sizes']).toEqual([1, 2, 3.5]);
+  });
+
+  it('stops at the depth cap instead of recursing forever', () => {
+    // number declared 5 levels down (beyond MAX_COERCE_DEPTH 4): untouched.
+    const deep = {
+      parameters: {
+        a: { type: 'object' as const, description: '', properties: {
+          b: { type: 'object' as const, description: '', properties: {
+            c: { type: 'object' as const, description: '', properties: {
+              d: { type: 'object' as const, description: '', properties: {
+                e: { type: 'number' as const, description: '' },
+              } },
+            } },
+          } },
+        } },
+      },
+    };
+    const out = coerceDeclaredPrimitives(deep, { a: { b: { c: { d: { e: '5' } } } } });
+    expect((out['a'] as never as { b: { c: { d: { e: unknown } } } }).b.c.d.e).toBe('5');
+  });
+});
+
 describe('registry.execute applies primitive coercion', () => {
   it('tool receives real primitives when the model sent strings', async () => {
     const received: { params?: Record<string, unknown> } = {};
