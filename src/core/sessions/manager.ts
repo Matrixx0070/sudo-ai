@@ -159,6 +159,12 @@ export class SessionManager {
     this._validateSession(session);
     session.updatedAt = new Date();
 
+    // Windowing/compaction/fork REASSIGN session.messages to a fresh array,
+    // shedding the write-through wrapper; re-attach here (idempotent) so the
+    // wrapper gap never outlives one save. Messages appended during the gap
+    // are caught by the identity scan below.
+    attachWriteThrough(session, this.db);
+
     // Ensure session is in cache before _persistToDb so message tracking works.
     // Seed persistedMessageCount from the DB, NOT 0: this session may have been
     // EVICTED from the cache (the cache is size-limited) while still holding its
@@ -170,11 +176,6 @@ export class SessionManager {
       this.cache.set(key, { session, persistedMessageCount: this.db.countMessages?.(session.id) ?? 0 });
       this._evictIfOverLimit();
     }
-
-    // Windowing/compaction/fork REASSIGN session.messages to fresh arrays,
-    // shedding the write-through wrapper; re-attach on every save so appends
-    // after this point persist immediately again. Idempotent per array.
-    attachWriteThrough(session, this.db);
 
     this._persistToDb(session);
 
@@ -581,8 +582,7 @@ export class SessionManager {
       createdAt: now,
       updatedAt: now,
     };
-    // Appends persist immediately from birth; the save() scan stays as the
-    // safety net for array reassignments (see write-through.ts).
+    // Appends persist immediately from birth; the save() scan stays as the net.
     attachWriteThrough(session, this.db);
     return session;
   }
@@ -619,7 +619,7 @@ export class SessionManager {
       createdAt: new Date(meta.createdAt),
       updatedAt: new Date(meta.updatedAt),
     };
-    // Hydrated rows are pre-marked above, so attaching cannot re-insert them.
+    // Hydrated rows are pre-marked above, so attaching cannot re-persist them.
     attachWriteThrough(session, this.db);
     return session;
   }
