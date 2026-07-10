@@ -1,6 +1,12 @@
 ---
 name: regex-craft
 description: Build, explain, and test regular expressions for any language or use case
+triggers:
+  - write a regex
+  - regular expression
+  - regex for
+  - regex pattern
+  - craft a regex
 ---
 
 # Regex Craft

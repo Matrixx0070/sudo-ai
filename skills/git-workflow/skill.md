@@ -1,6 +1,12 @@
 ---
 name: git-workflow
 description: Branch, commit, merge, and release using Git best practices including conventional commits and rebase workflow
+triggers:
+  - git workflow
+  - branching strategy
+  - git branching
+  - rebase or merge
+  - merge strategy
 ---
 
 # Git Workflow

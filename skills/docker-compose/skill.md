@@ -1,6 +1,12 @@
 ---
 name: docker-compose
 description: Scaffold docker-compose.yml files for common application stacks with volumes, networks, and health checks
+triggers:
+  - docker compose
+  - docker-compose
+  - compose file
+  - compose.yml
+  - compose.yaml
 ---
 
 # Docker Compose

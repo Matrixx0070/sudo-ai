@@ -1,6 +1,11 @@
 ---
 name: test-writer
 description: Write unit and integration tests using Jest, Vitest, or pytest with proper mocking and coverage
+triggers:
+  - write tests for
+  - unit tests for
+  - add test coverage
+  - test cases for
 ---
 
 # Test Writer

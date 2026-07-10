@@ -88,15 +88,20 @@ describe('anchorTexts', () => {
   });
 });
 
-describe('semanticAllowedForPeer', () => {
-  it('blocks internal cron peers, allows humans and unknowns', async () => {
-    const { semanticAllowedForPeer } = await import('../../src/core/skills/semantic-assist.js');
-    expect(semanticAllowedForPeer('cron:isolated:abc')).toBe(false);
-    expect(semanticAllowedForPeer('cron:x')).toBe(false);
-    expect(semanticAllowedForPeer('telegram:8087386717')).toBe(true);
-    expect(semanticAllowedForPeer('web-user-1')).toBe(true);
-    expect(semanticAllowedForPeer(undefined)).toBe(true);
-    expect(semanticAllowedForPeer(null)).toBe(true);
+describe('internal-turn gate wiring in activateSkillsForMessage', () => {
+  it('internal:true skips the semantic assist entirely (no module/ONNX load)', async () => {
+    // Assist env deliberately ENABLED: if the gate were removed, this miss
+    // would import semantic-assist and attempt a real embedder load in CI.
+    delete process.env['SUDO_SKILL_SEMANTIC_ASSIST'];
+    const r = await activateSkillsForMessage('give me the gist of this thread', [tldr], 's1', { internal: true });
+    expect(r).toBeNull();
+  });
+
+  it('internal:true still allows deterministic dispatch', async () => {
+    delete process.env['SUDO_SKILL_SEMANTIC_ASSIST'];
+    const r = await activateSkillsForMessage('tldr this article', [tldr], 's1', { internal: true });
+    expect(r).not.toBeNull();
+    expect(r!.names).toEqual(['tldr']);
   });
 });
 

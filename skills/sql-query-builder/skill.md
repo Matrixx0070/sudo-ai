@@ -1,6 +1,12 @@
 ---
 name: sql-query-builder
 description: Write safe, performant SQL queries with parameterization, joins, and indexing guidance
+triggers:
+  - sql query
+  - write sql
+  - select statement
+  - sql join
+  - query the table
 ---
 
 # SQL Query Builder

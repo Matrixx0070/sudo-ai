@@ -1,6 +1,11 @@
 ---
 name: markdown-formatter
 description: Clean up and standardize markdown files — fix headings, lists, code blocks, and spacing
+triggers:
+  - format markdown
+  - markdown table
+  - fix markdown
+  - markdown formatting
 ---
 
 # Markdown Formatter

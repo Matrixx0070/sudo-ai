@@ -1,6 +1,11 @@
 ---
 name: meeting-notes
 description: Convert meeting transcripts or raw notes into structured summaries with decisions and action items
+triggers:
+  - meeting notes
+  - meeting minutes
+  - action items from meeting
+  - summarize the meeting
 ---
 
 # Meeting Notes

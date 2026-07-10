@@ -65,16 +65,6 @@ export function semanticBudgetMs(env: NodeJS.ProcessEnv = process.env): number {
 /** Retry cooldown after a failed query embed (model load broken). */
 const EMBED_FAIL_COOLDOWN_MS = 300_000;
 
-/**
- * Semantic intent inference is for HUMAN traffic. Internal scheduled-run
- * peers (`cron:*`, the crash-safe.ts convention) send agent-generated task
- * prompts where persona-skill injection is pure overhead — they were 580 of
- * the 654 would-fires in the 2026-07-10 real-traffic measurement.
- */
-export function semanticAllowedForPeer(peerId: string | undefined | null): boolean {
-  return !(typeof peerId === 'string' && peerId.startsWith('cron:'));
-}
-
 // ---------------------------------------------------------------------------
 // Embedder surface (structural — LocalEmbeddingProvider satisfies it)
 // ---------------------------------------------------------------------------
@@ -107,6 +97,7 @@ export function __resetSemanticAssist(): void {
   _defaultEmbedder = null;
   _embedFailUntil = 0;
   anchorCache.clear();
+  warnedNoAnchors.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -134,10 +125,20 @@ interface AnchorEntry {
 }
 
 const anchorCache = new Map<string, AnchorEntry>();
+const warnedNoAnchors = new Set<string>();
 
 async function anchorsFor(skill: ActivatableSkill, embedder: AssistEmbedder): Promise<AnchorEntry | null> {
   const texts = anchorTexts(skill);
-  if (texts.length === 0) return null;
+  if (texts.length === 0) {
+    // A skill with no trigger phrases is unreachable BOTH deterministically
+    // and semantically — surface it once so trigger authoring gets filed
+    // instead of the skill silently never activating.
+    if (!warnedNoAnchors.has(skill.name)) {
+      warnedNoAnchors.add(skill.name);
+      log.warn({ skill: skill.name }, 'Skill has no trigger phrases — unreachable by activation; author `triggers:`');
+    }
+    return null;
+  }
   const key = texts.join('\u0000');
   const cached = anchorCache.get(skill.name);
   if (cached && cached.key === key) return cached;

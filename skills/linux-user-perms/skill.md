@@ -1,6 +1,12 @@
 ---
 name: linux-user-perms
 description: Manage Linux users, groups, sudo access, file permissions, and ownership
+triggers:
+  - file permissions
+  - linux permissions
+  - chmod
+  - chown
+  - permission denied
 ---
 
 # Linux User and Permissions Management

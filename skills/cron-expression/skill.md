@@ -1,6 +1,12 @@
 ---
 name: cron-expression
 description: Translate human-readable schedules into cron expressions and explain existing cron syntax
+triggers:
+  - cron expression
+  - cron schedule
+  - crontab entry
+  - cron syntax
+  - schedule with cron
 ---
 
 # Cron Expression

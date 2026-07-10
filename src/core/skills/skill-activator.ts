@@ -81,7 +81,9 @@ export function normalize(text: string): string {
  * ("/gmail, send email, read email, …") — stored as one string it could never
  * match anything (the whole comma sequence would have to appear verbatim), so
  * it is split here. Measured on real traffic 2026-07-10: 20+ skills carried
- * comma-list triggers whose activation had never fired.
+ * comma-list triggers whose activation had never fired. Consequence: a single
+ * phrase cannot itself contain a comma — author such phrasing as separate
+ * trigger entries.
  */
 export function effectiveTriggers(skill: ActivatableSkill): string[] {
   const out: string[] = [];
@@ -126,7 +128,11 @@ export function matchTriggers(query: string, skill: ActivatableSkill): SkillActi
       const p = phrase.toLowerCase();
       if (!q.startsWith(p)) continue;
       const after = q.charAt(p.length);
-      if (after !== '' && /[a-z0-9]/.test(after)) continue; // "/summarizer" ≠ "/summarize"
+      // "/summarizer" ≠ "/summarize"; '-'/'_' count as boundaries so a
+      // shorter command can prefix-match a longer one ("/pdf" vs
+      // "/pdf-export") — no such pair exists today, and if one appears the
+      // longer phrase outranks it in scoring below.
+      if (after !== '' && /[a-z0-9]/.test(after)) continue;
     } else if (!nq.includes(np)) {
       continue;
     }
@@ -192,20 +198,24 @@ export async function activateSkillsForMessage(
   message: string,
   skills: readonly ActivatableSkill[] | null | undefined,
   sessionId: string,
-  opts: { peerId?: string } = {},
+  opts: { internal?: boolean } = {},
 ): Promise<{ content: string; names: string[] } | null> {
   try {
     if (!isSkillActivationEnabled()) return null;
     if (!skills || skills.length === 0) return null;
     let activations = selectSkills(message, skills);
-    // Kill-switch mirrors isSemanticAssistEnabled — checked inline so the
-    // assist module (and transitively the embedder) is never imported when off.
-    if (activations.length === 0 && process.env['SUDO_SKILL_SEMANTIC_ASSIST'] !== '0') {
-      const { selectSemanticSkill, semanticAllowedForPeer } = await import('./semantic-assist.js');
-      if (semanticAllowedForPeer(opts.peerId)) {
-        const semantic = await selectSemanticSkill(message, skills);
-        if (semantic) activations = [semantic];
-      }
+    // Semantic intent inference is for HUMAN traffic: `internal` marks
+    // agent-generated turns (cron/subagent/goal peers — the caller decides
+    // via sessions/crash-safe.ts isEphemeralPeer), which were 580 of the 654
+    // would-fires in the 2026-07-10 real-traffic measurement. Deterministic
+    // phrase dispatch above still applies to them. The kill-switch check
+    // mirrors isSemanticAssistEnabled and both gates sit BEFORE the dynamic
+    // import so the assist module (and transitively the embedder) is never
+    // loaded when it cannot run.
+    if (activations.length === 0 && !opts.internal && process.env['SUDO_SKILL_SEMANTIC_ASSIST'] !== '0') {
+      const { selectSemanticSkill } = await import('./semantic-assist.js');
+      const semantic = await selectSemanticSkill(message, skills);
+      if (semantic) activations = [semantic];
     }
     if (activations.length === 0) return null;
     const names = activations.map((a) => a.skill.name);
