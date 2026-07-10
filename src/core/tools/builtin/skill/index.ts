@@ -12,6 +12,7 @@
  *   skill.explain     — Emit a rich markdown explanation for any registered tool
  *   skill.search      — Browse the public skill registry (sudoapi.shop)
  *   skill.install     — Install a registry skill through the Workshop gate
+ *   skill.eval        — Prove a skill helps: with/without baseline + blind judge
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -25,6 +26,7 @@ import { applyTool } from './tools/apply.js';
 import { rollbackTool } from './tools/rollback.js';
 import { searchTool } from './tools/search.js';
 import { installTool } from './tools/install.js';
+import { evalTool } from './tools/eval.js';
 
 const logger = createLogger('skill-builtin');
 
@@ -38,6 +40,7 @@ const SKILL_TOOLS = [
   rollbackTool,
   searchTool,
   installTool,
+  evalTool,
 ];
 
 /**
