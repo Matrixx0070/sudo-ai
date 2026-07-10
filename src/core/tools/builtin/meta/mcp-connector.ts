@@ -150,7 +150,7 @@ export async function replayPersistedConnectors(
 
 export const mcpConnectTool: ToolDefinition = {
   name: 'mcp.connect',
-  category: 'meta',
+  category: 'mcp',
   requiresConfirmation: true,
   safety: 'destructive',
   description:
@@ -253,7 +253,7 @@ export const mcpConnectTool: ToolDefinition = {
 
 export const mcpListTool: ToolDefinition = {
   name: 'mcp.list',
-  category: 'meta',
+  category: 'mcp',
   description: 'List connector-managed MCP servers (mcp.connect / tool.install-mcp) with their tool counts, plus persisted connectors configured to reconnect at boot. Servers ingested from .mcp.json at boot are managed separately and not shown here.',
   timeout: 10_000,
   safety: 'readonly',
@@ -284,7 +284,7 @@ export const mcpListTool: ToolDefinition = {
 
 export const mcpDisconnectTool: ToolDefinition = {
   name: 'mcp.disconnect',
-  category: 'meta',
+  category: 'mcp',
   description: 'Disconnect an MCP server, remove its tools, and (by default) forget its persisted connector so it stays gone after restart.',
   timeout: 15_000,
   parameters: {

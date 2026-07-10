@@ -300,3 +300,31 @@ describe('ToolRouter — comms discovery (send a Telegram message)', () => {
     expect(n).not.toContain('message.send');
   });
 });
+
+describe('ToolRouter — mcp category routing', () => {
+  const tools = [
+    ...TOOLS,
+    { name: 'mcp.connect', category: 'mcp' },
+    { name: 'mcp.list', category: 'mcp' },
+    { name: 'mcp.disconnect', category: 'mcp' },
+  ];
+  const router = new ToolRouter(fakeRegistry(tools) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  it('surfaces all three mcp connector tools for an MCP prompt', () => {
+    const n = names('connect the GitHub MCP server at https://api.githubcopilot.com/mcp/');
+    expect(n).toContain('mcp.connect');
+    expect(n).toContain('mcp.list');
+    expect(n).toContain('mcp.disconnect');
+  });
+
+  it('surfaces mcp tools when the tool is named directly', () => {
+    const n = names('use your mcp.connect tool with serverId github');
+    expect(n).toContain('mcp.connect');
+  });
+
+  it('does NOT surface mcp tools for an unrelated prompt', () => {
+    const n = names('write an article about cats');
+    expect(n).not.toContain('mcp.connect');
+  });
+});
