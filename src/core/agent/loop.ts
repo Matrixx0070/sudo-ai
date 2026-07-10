@@ -1108,10 +1108,14 @@ export class AgentLoop extends AgentLoopInjections {
     // skills' trigger phrases (deterministic, skills/skill-activator.ts),
     // falling back to the local-embedding recall assist when no phrase fires
     // (skills/semantic-assist.ts, SUDO_SKILL_SEMANTIC_ASSIST=0 disables), and
-    // inject the winners as ephemeral system context. Kill-switch
+    // inject the winners as ephemeral system context. Ephemeral peers
+    // (cron/subagent/goal — agent-generated prompts, not human intent) skip
+    // the semantic assist; deterministic dispatch still applies. Kill-switch
     // SUDO_SKILL_ACTIVATION=0; cap SUDO_SKILL_ACTIVATION_MAX (default 2).
     {
-      const activation = await activateSkillsForMessage(message, this._markdownSkills, sessionId);
+      const activation = await activateSkillsForMessage(message, this._markdownSkills, sessionId, {
+        internal: isEphemeralPeer(session.channel ?? '', session.peerId ?? ''),
+      });
       if (activation) {
         session.messages.push({ role: 'system', content: activation.content, _ephemeral: true });
       }

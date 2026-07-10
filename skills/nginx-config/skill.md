@@ -1,6 +1,11 @@
 ---
 name: nginx-config
 description: Write nginx server blocks for reverse proxies, static sites, HTTPS termination, and security hardening
+triggers:
+  - nginx config
+  - nginx configuration
+  - server block
+  - reverse proxy config
 ---
 
 # Nginx Config

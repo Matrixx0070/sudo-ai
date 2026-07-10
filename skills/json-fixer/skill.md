@@ -1,6 +1,12 @@
 ---
 name: json-fixer
 description: Repair malformed JSON — trailing commas, unquoted keys, comments, encoding issues, and structural errors
+triggers:
+  - fix this json
+  - invalid json
+  - malformed json
+  - json parse error
+  - json syntax error
 ---
 
 # JSON Fixer

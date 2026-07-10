@@ -1,6 +1,12 @@
 ---
 name: ssh-tunnel
 description: Set up SSH tunnels for local port forwarding, remote forwarding, and key-based authentication
+triggers:
+  - ssh tunnel
+  - port forward
+  - port forwarding
+  - ssh -L
+  - remote port
 ---
 
 # SSH Tunnel

@@ -1,6 +1,12 @@
 ---
 name: debug-stacktrace
 description: Parse stack traces and error messages to identify root cause and suggest fixes
+triggers:
+  - stack trace
+  - stacktrace
+  - traceback
+  - exception trace
+  - parse this error trace
 ---
 
 # Debug Stacktrace

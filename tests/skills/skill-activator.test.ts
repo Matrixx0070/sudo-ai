@@ -120,3 +120,40 @@ describe('activateSkillsForMessage + kill-switch', () => {
     expect(normalize('TL;DR!')).toBe(' tl dr ');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Trigger semantics measured on real traffic (2026-07-10): slash commands are
+// anchored dispatch, comma-joined legacy trigger strings are phrase lists.
+// ---------------------------------------------------------------------------
+
+describe('slash-command triggers are anchored at message start', () => {
+  const summarize: ActivatableSkill = { name: 'summarize', content: '# S', trigger: '/summarize' };
+
+  it('fires on real dispatch', () => {
+    expect(matchTriggers('/summarize docs/report.md', summarize)?.phrase).toBe('/summarize');
+    expect(matchTriggers('  /summarize the thread', summarize)).not.toBeNull();
+    expect(matchTriggers('/SUMMARIZE this', summarize)).not.toBeNull();
+    expect(matchTriggers('/summarize', summarize)).not.toBeNull();
+  });
+
+  it('does NOT fire on incidental mentions (the 65%-of-cron-traffic defect)', () => {
+    expect(matchTriggers('After any remediation, summarize what was changed', summarize)).toBeNull();
+    expect(matchTriggers('Summarize what was changed', summarize)).toBeNull(); // bare word, prose not dispatch
+    expect(matchTriggers('please run /summarize later', summarize)).toBeNull(); // not at start
+    expect(matchTriggers('/summarizer test', summarize)).toBeNull(); // boundary respected
+  });
+});
+
+describe('comma-joined legacy trigger strings are phrase lists', () => {
+  const gmail: ActivatableSkill = {
+    name: 'gmail', content: '# G',
+    trigger: '/gmail, send email, read email, check inbox',
+  };
+
+  it('splits into working phrases (was dead wiring — the whole string never matched)', () => {
+    expect(effectiveTriggers(gmail)).toEqual(['/gmail', 'send email', 'read email', 'check inbox']);
+    expect(matchTriggers('can you send email to bob about the invoice', gmail)?.phrase).toBe('send email');
+    expect(matchTriggers('/gmail unread', gmail)?.phrase).toBe('/gmail');
+    expect(matchTriggers('completely unrelated message', gmail)).toBeNull();
+  });
+});

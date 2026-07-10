@@ -1,6 +1,13 @@
 ---
 name: tls-certbot
 description: Obtain and renew TLS certificates with Certbot and Let's Encrypt for nginx or standalone servers
+triggers:
+  - certbot
+  - lets encrypt
+  - letsencrypt
+  - tls certificate
+  - ssl certificate
+  - renew certificate
 ---
 
 # TLS with Certbot and Let's Encrypt

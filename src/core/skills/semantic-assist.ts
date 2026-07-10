@@ -9,7 +9,8 @@
  * "summarize" token). This module runs ONLY when the deterministic matcher
  * found nothing: it embeds the message with the local MiniLM (zero API cost,
  * shared ONNX pipeline with memory search) and compares against cached
- * per-skill anchor vectors (trigger phrases + description).
+ * per-skill anchor vectors (trigger phrases; see {@link anchorTexts} for why
+ * descriptions are deliberately NOT anchors).
  *
  * Calibration against the real model (2026-07-10): summarization-intent
  * near-misses score 0.38-0.44 cosine vs true negatives at 0.05-0.20, so the
@@ -96,19 +97,24 @@ export function __resetSemanticAssist(): void {
   _defaultEmbedder = null;
   _embedFailUntil = 0;
   anchorCache.clear();
+  warnedNoAnchors.clear();
 }
 
 // ---------------------------------------------------------------------------
 // Anchor cache
 // ---------------------------------------------------------------------------
 
-/** Anchor texts a skill is matched against: its trigger phrases + description. */
+/**
+ * Anchor texts a skill is matched against: its trigger phrases ONLY.
+ * Descriptions were anchors in the first cut and turned out to be the junk
+ * source — measured on 895 real deterministic-miss messages (2026-07-10):
+ * description embeddings (long prose) sat at 0.35-0.45 cosine against most
+ * paragraph-length messages, would-firing 654/895 (580 of them internal cron
+ * prompts); trigger-only anchors fire 63/895 with the labeled genuine-intent
+ * recall set fully preserved (8/8). Sharp phrases in, broad prose out.
+ */
 export function anchorTexts(skill: ActivatableSkill): string[] {
-  const out = effectiveTriggers(skill);
-  if (typeof skill.description === 'string' && skill.description.trim()) {
-    out.push(skill.description.trim());
-  }
-  return out;
+  return effectiveTriggers(skill);
 }
 
 interface AnchorEntry {
@@ -119,10 +125,20 @@ interface AnchorEntry {
 }
 
 const anchorCache = new Map<string, AnchorEntry>();
+const warnedNoAnchors = new Set<string>();
 
 async function anchorsFor(skill: ActivatableSkill, embedder: AssistEmbedder): Promise<AnchorEntry | null> {
   const texts = anchorTexts(skill);
-  if (texts.length === 0) return null;
+  if (texts.length === 0) {
+    // A skill with no trigger phrases is unreachable BOTH deterministically
+    // and semantically — surface it once so trigger authoring gets filed
+    // instead of the skill silently never activating.
+    if (!warnedNoAnchors.has(skill.name)) {
+      warnedNoAnchors.add(skill.name);
+      log.warn({ skill: skill.name }, 'Skill has no trigger phrases — unreachable by activation; author `triggers:`');
+    }
+    return null;
+  }
   const key = texts.join('\u0000');
   const cached = anchorCache.get(skill.name);
   if (cached && cached.key === key) return cached;

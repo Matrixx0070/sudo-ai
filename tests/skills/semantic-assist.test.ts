@@ -82,9 +82,26 @@ describe('env gates', () => {
 });
 
 describe('anchorTexts', () => {
-  it('is triggers plus description, skipping blanks', () => {
-    expect(anchorTexts(tldr)).toEqual(['tldr', 'summarize this', 'Summarize long content into a compact TLDR']);
-    expect(anchorTexts({ name: 'x', content: '' })).toEqual([]);
+  it('is trigger phrases ONLY — descriptions measured as the junk source on real traffic', () => {
+    expect(anchorTexts(tldr)).toEqual(['tldr', 'summarize this']);
+    expect(anchorTexts({ name: 'x', content: '', description: 'prose that must NOT anchor' })).toEqual([]);
+  });
+});
+
+describe('internal-turn gate wiring in activateSkillsForMessage', () => {
+  it('internal:true skips the semantic assist entirely (no module/ONNX load)', async () => {
+    // Assist env deliberately ENABLED: if the gate were removed, this miss
+    // would import semantic-assist and attempt a real embedder load in CI.
+    delete process.env['SUDO_SKILL_SEMANTIC_ASSIST'];
+    const r = await activateSkillsForMessage('give me the gist of this thread', [tldr], 's1', { internal: true });
+    expect(r).toBeNull();
+  });
+
+  it('internal:true still allows deterministic dispatch', async () => {
+    delete process.env['SUDO_SKILL_SEMANTIC_ASSIST'];
+    const r = await activateSkillsForMessage('tldr this article', [tldr], 's1', { internal: true });
+    expect(r).not.toBeNull();
+    expect(r!.names).toEqual(['tldr']);
   });
 });
 

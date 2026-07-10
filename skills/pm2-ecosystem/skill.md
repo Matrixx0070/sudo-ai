@@ -1,6 +1,12 @@
 ---
 name: pm2-ecosystem
 description: Write pm2 ecosystem config files for Node.js process management with clustering, env vars, and log rotation
+triggers:
+  - pm2 ecosystem
+  - ecosystem.config
+  - pm2 config
+  - pm2 startup
+  - pm2 process file
 ---
 
 # PM2 Ecosystem

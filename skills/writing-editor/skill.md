@@ -1,6 +1,12 @@
 ---
 name: writing-editor
 description: Improve clarity, concision, and flow of any prose — technical docs, blog posts, or business writing
+triggers:
+  - edit this text
+  - proofread
+  - improve this writing
+  - copyedit
+  - tighten this paragraph
 ---
 
 # Writing Editor

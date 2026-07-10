@@ -1,6 +1,12 @@
 ---
 name: systemd-service
 description: Write systemd unit files to manage long-running services with proper sandboxing, restarts, and logging
+triggers:
+  - systemd service
+  - systemd unit
+  - unit file
+  - systemctl
+  - service file
 ---
 
 # Systemd Service

@@ -75,21 +75,42 @@ export function normalize(text: string): string {
   return ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
 }
 
-/** All trigger phrases for a skill (plural preferred, legacy merged, deduped). */
+/**
+ * All trigger phrases for a skill (plural preferred, legacy merged, deduped).
+ * A legacy `trigger:` string containing commas is an authored phrase LIST
+ * ("/gmail, send email, read email, …") — stored as one string it could never
+ * match anything (the whole comma sequence would have to appear verbatim), so
+ * it is split here. Measured on real traffic 2026-07-10: 20+ skills carried
+ * comma-list triggers whose activation had never fired. Consequence: a single
+ * phrase cannot itself contain a comma — author such phrasing as separate
+ * trigger entries.
+ */
 export function effectiveTriggers(skill: ActivatableSkill): string[] {
   const out: string[] = [];
   for (const t of skill.triggers ?? []) {
     if (typeof t === 'string' && t.trim()) out.push(t.trim());
   }
-  if (typeof skill.trigger === 'string' && skill.trigger.trim()) out.push(skill.trigger.trim());
+  if (typeof skill.trigger === 'string' && skill.trigger.trim()) {
+    for (const part of skill.trigger.split(',')) {
+      if (part.trim()) out.push(part.trim());
+    }
+  }
   return [...new Set(out)];
 }
 
 /**
  * Match a user message against one skill's trigger phrases.
- * A phrase matches when it appears as a whole-word sequence in the message
- * (punctuation/case-insensitive): "tldr" matches "tldr this thread" but not
- * "xtldr". Returns the strongest match or null.
+ *
+ * Two phrase kinds, matching their authored intent:
+ * - Slash commands ("/summarize"): match ONLY at the start of the message,
+ *   as a command dispatch. Treating them as inclusion phrases let normalize()
+ *   strip the slash and fire the bare word on incidental mentions — measured
+ *   on real traffic 2026-07-10: "/summarize" fired on 65% of cron prompts
+ *   ("…summarize what was changed"), injecting the skill body every turn.
+ * - Plain phrases ("tldr", "summarize this"): whole-word sequence anywhere in
+ *   the message (punctuation/case-insensitive) — "tldr" matches "tldr this
+ *   thread" but not "xtldr".
+ * Returns the strongest match or null.
  */
 export function matchTriggers(query: string, skill: ActivatableSkill): SkillActivation | null {
   const nq = normalize(query);
@@ -97,7 +118,24 @@ export function matchTriggers(query: string, skill: ActivatableSkill): SkillActi
   for (const phrase of effectiveTriggers(skill)) {
     const np = normalize(phrase);
     if (np.trim() === '') continue;
-    if (!nq.includes(np)) continue;
+    if (phrase.startsWith('/')) {
+      // Anchored command: the RAW message must begin with the slash command
+      // itself ("/summarize doc.md"), followed by a boundary — a message that
+      // merely starts with the bare word ("Summarize what changed") is prose,
+      // not dispatch, and natural-phrase activation is the job of `triggers:`
+      // lists and the semantic assist.
+      const q = query.trimStart().toLowerCase();
+      const p = phrase.toLowerCase();
+      if (!q.startsWith(p)) continue;
+      const after = q.charAt(p.length);
+      // "/summarizer" ≠ "/summarize"; '-'/'_' count as boundaries so a
+      // shorter command can prefix-match a longer one ("/pdf" vs
+      // "/pdf-export") — no such pair exists today, and if one appears the
+      // longer phrase outranks it in scoring below.
+      if (after !== '' && /[a-z0-9]/.test(after)) continue;
+    } else if (!nq.includes(np)) {
+      continue;
+    }
     const words = np.trim().split(' ').length;
     const score = words * 100 + np.length;
     if (!best || score > best.score) best = { skill, phrase, score };
@@ -160,14 +198,21 @@ export async function activateSkillsForMessage(
   message: string,
   skills: readonly ActivatableSkill[] | null | undefined,
   sessionId: string,
+  opts: { internal?: boolean } = {},
 ): Promise<{ content: string; names: string[] } | null> {
   try {
     if (!isSkillActivationEnabled()) return null;
     if (!skills || skills.length === 0) return null;
     let activations = selectSkills(message, skills);
-    // Kill-switch mirrors isSemanticAssistEnabled — checked inline so the
-    // assist module (and transitively the embedder) is never imported when off.
-    if (activations.length === 0 && process.env['SUDO_SKILL_SEMANTIC_ASSIST'] !== '0') {
+    // Semantic intent inference is for HUMAN traffic: `internal` marks
+    // agent-generated turns (cron/subagent/goal peers — the caller decides
+    // via sessions/crash-safe.ts isEphemeralPeer), which were 580 of the 654
+    // would-fires in the 2026-07-10 real-traffic measurement. Deterministic
+    // phrase dispatch above still applies to them. The kill-switch check
+    // mirrors isSemanticAssistEnabled and both gates sit BEFORE the dynamic
+    // import so the assist module (and transitively the embedder) is never
+    // loaded when it cannot run.
+    if (activations.length === 0 && !opts.internal && process.env['SUDO_SKILL_SEMANTIC_ASSIST'] !== '0') {
       const { selectSemanticSkill } = await import('./semantic-assist.js');
       const semantic = await selectSemanticSkill(message, skills);
       if (semantic) activations = [semantic];

@@ -1,6 +1,11 @@
 ---
 name: email-composer
 description: Draft professional emails — requests, follow-ups, declines, announcements, and escalations
+triggers:
+  - compose an email
+  - write an email
+  - draft an email
+  - email to send
 ---
 
 # Email Composer
