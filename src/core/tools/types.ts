@@ -19,6 +19,7 @@
 export type ToolCategory =
   | 'coder'
   | 'system'
+  | 'mcp'
   | 'browser'
   | 'knowledge'
   | 'business'

@@ -84,7 +84,7 @@ interface CategoryRule {
 }
 
 type CategoryName =
-  | 'browser' | 'coder' | 'system' | 'content' | 'media' | 'document'
+  | 'browser' | 'coder' | 'system' | 'content' | 'media' | 'document' | 'mcp'
   | 'research' | 'comms' | 'social' | 'marketing' | 'data'
   | 'meta' | 'dev' | 'github' | 'knowledge' | 'voice' | 'business'
   | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal'
@@ -95,6 +95,17 @@ type CategoryName =
  * Keyword arrays and patterns are taken directly from the architect spec.
  */
 const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
+  mcp: {
+    // MCP connector management (mcp.connect / mcp.list / mcp.disconnect).
+    // Only 3 tools, so the cap admits all of them whenever the category fires.
+    keywords: [
+      'mcp', 'mcp server', 'model context protocol', 'connector',
+      'connect server', 'external tools', 'tool server',
+    ],
+    patterns: [/\bmcp\b/i, /mcp[._]\w+/i, /mcp__\w+/i],
+    priority: 6,
+    maxFromCategory: 3,
+  },
   browser: {
     keywords: [
       'navigate', 'browse', 'chrome', 'chromium', 'webpage', 'website',
