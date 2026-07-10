@@ -128,6 +128,44 @@ describe('selectSemanticSkill', () => {
     await selectSemanticSkill('q', [mutable], { embedder });
     expect(embedder.batchCalls).toBe(2);
   });
+
+  it('budget expiry returns null fast instead of blocking the turn', async () => {
+    const slow: AssistEmbedder = {
+      embed: () => new Promise((r) => setTimeout(() => r(Float32Array.from([1, 0, 0])), 300)),
+      embedBatch: async (texts) => texts.map(() => Float32Array.from([1, 0, 0])),
+    };
+    const t0 = Date.now();
+    const hit = await selectSemanticSkill('query', [tldr], { embedder: slow, budgetMs: 50 });
+    expect(hit).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(250); // returned on budget, not on the 300ms embed
+  });
+
+  it('budgetMs 0 disables the budget (exact eval mode)', async () => {
+    const slow: AssistEmbedder = {
+      embed: (text) => new Promise((r) => setTimeout(() => r(Float32Array.from(text === 'query' ? [1, 0, 0] : [0, 0, 1])), 60)),
+      embedBatch: async (texts) => texts.map((t) => Float32Array.from(t === 'summarize this' ? [1, 0, 0] : [0, 0, 1])),
+    };
+    const hit = await selectSemanticSkill('query', [tldr], { embedder: slow, budgetMs: 0, threshold: 0.9 });
+    expect(hit).not.toBeNull();
+    expect(hit!.skill.name).toBe('tldr');
+  });
+
+  it('a failed query embed opens a cooldown — no re-attempt on the next miss turn', async () => {
+    const failing = fakeEmbedder({});
+    failing.embed = async (text: string) => { failing.embedCalls.push(text); return null; };
+    expect(await selectSemanticSkill('q1', [tldr], { embedder: failing })).toBeNull();
+    expect(await selectSemanticSkill('q2', [tldr], { embedder: failing })).toBeNull();
+    expect(failing.embedCalls).toEqual(['q1']); // q2 short-circuited by cooldown
+  });
+
+  it('semanticBudgetMs: default 400, clamped, junk-safe', async () => {
+    const { semanticBudgetMs } = await import('../../src/core/skills/semantic-assist.js');
+    expect(semanticBudgetMs({} as NodeJS.ProcessEnv)).toBe(400);
+    expect(semanticBudgetMs({ SUDO_SKILL_SEMANTIC_BUDGET_MS: '0' } as unknown as NodeJS.ProcessEnv)).toBe(0);
+    expect(semanticBudgetMs({ SUDO_SKILL_SEMANTIC_BUDGET_MS: '99999' } as unknown as NodeJS.ProcessEnv)).toBe(10_000);
+    expect(semanticBudgetMs({ SUDO_SKILL_SEMANTIC_BUDGET_MS: '-5' } as unknown as NodeJS.ProcessEnv)).toBe(400);
+    expect(semanticBudgetMs({ SUDO_SKILL_SEMANTIC_BUDGET_MS: 'junk' } as unknown as NodeJS.ProcessEnv)).toBe(400);
+  });
 });
 
 describe('activateSkillsForMessage integration (recall-only invariant)', () => {

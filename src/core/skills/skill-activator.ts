@@ -165,12 +165,12 @@ export async function activateSkillsForMessage(
     if (!isSkillActivationEnabled()) return null;
     if (!skills || skills.length === 0) return null;
     let activations = selectSkills(message, skills);
-    if (activations.length === 0) {
-      const { isSemanticAssistEnabled, selectSemanticSkill } = await import('./semantic-assist.js');
-      if (isSemanticAssistEnabled()) {
-        const semantic = await selectSemanticSkill(message, skills);
-        if (semantic) activations = [semantic];
-      }
+    // Kill-switch mirrors isSemanticAssistEnabled — checked inline so the
+    // assist module (and transitively the embedder) is never imported when off.
+    if (activations.length === 0 && process.env['SUDO_SKILL_SEMANTIC_ASSIST'] !== '0') {
+      const { selectSemanticSkill } = await import('./semantic-assist.js');
+      const semantic = await selectSemanticSkill(message, skills);
+      if (semantic) activations = [semantic];
     }
     if (activations.length === 0) return null;
     const names = activations.map((a) => a.skill.name);
