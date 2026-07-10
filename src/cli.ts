@@ -2525,7 +2525,12 @@ async function boot(): Promise<void> {
       // fire-and-forget; tryDispatchDirective contains its own errors.
       router.setPreDispatchInterceptor((msg) => {
         if (approvalManager.tryConsumeApprovalReply(msg.text)) return true;
-        if (channelDirectives && commandRegistry.isCommand(msg.text ?? '')) {
+        // Registered commands only — this interceptor consumes SYNCHRONOUSLY
+        // (return true) before the async dispatch resolves, so gating on the
+        // syntactic isCommand would silently drop unregistered slash text
+        // here instead of falling through to the agent like every other
+        // channel path.
+        if (channelDirectives && commandRegistry.isRegisteredCommand(msg.text ?? '')) {
           void tryDispatchDirective({
             registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
             reply: (text) => router.sendToChannel(msg.channel, msg.peerId, text),
