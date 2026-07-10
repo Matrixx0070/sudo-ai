@@ -1105,12 +1105,13 @@ export class AgentLoop extends AgentLoopInjections {
     }
 
     // Markdown skill activation: match the user's message against installed
-    // skills' trigger phrases (deterministic, skills/skill-activator.ts) and
-    // inject the winners as ephemeral system context. Before this, loaded
-    // skills were never consulted at turn time. Kill-switch
+    // skills' trigger phrases (deterministic, skills/skill-activator.ts),
+    // falling back to the local-embedding recall assist when no phrase fires
+    // (skills/semantic-assist.ts, SUDO_SKILL_SEMANTIC_ASSIST=0 disables), and
+    // inject the winners as ephemeral system context. Kill-switch
     // SUDO_SKILL_ACTIVATION=0; cap SUDO_SKILL_ACTIVATION_MAX (default 2).
     {
-      const activation = activateSkillsForMessage(message, this._markdownSkills, sessionId);
+      const activation = await activateSkillsForMessage(message, this._markdownSkills, sessionId);
       if (activation) {
         session.messages.push({ role: 'system', content: activation.content, _ephemeral: true });
       }

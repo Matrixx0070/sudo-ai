@@ -16,6 +16,7 @@ import { parseSkillFile } from '../../../../skills/markdown-loader.js';
 import { effectiveTriggers } from '../../../../skills/skill-activator.js';
 import {
   runTriggerEval,
+  runTriggerEvalCombined,
   optimizeTriggers,
   generateTriggerEvalSet,
   type TriggerBrain,
@@ -61,6 +62,11 @@ export const triggerEvalTool: ToolDefinition = {
       type: 'number',
       description: 'Optimization iterations (default 5, max 10). Scoring is free; each iteration costs 1 brain call.',
       default: 5,
+    },
+    semantic: {
+      type: 'boolean',
+      description: 'Also measure the COMBINED activator (deterministic + semantic recall assist, the real turn path) and report both matrices side by side (default false; local embeddings, no API cost).',
+      default: false,
     },
   },
 
@@ -134,6 +140,26 @@ export const triggerEvalTool: ToolDefinition = {
         lines.push('', 'All queries classified correctly.');
       }
 
+      // semantic=true: measure the COMBINED path (what the agent loop actually
+      // runs) with the budget disabled so results are exact, and report both
+      // matrices. Fail-open: an unavailable embedder just reports as such.
+      let combinedReport = null;
+      if (params['semantic'] === true) {
+        const { selectSemanticSkill } = await import('../../../../skills/semantic-assist.js');
+        const probeSkill = { name: skillName, description: parsed.description, content: '', triggers };
+        combinedReport = await runTriggerEvalCombined(skillName, triggers, cases, async (q) => {
+          const hit = await selectSemanticSkill(q, [probeSkill], { budgetMs: 0 });
+          return hit ? { phrase: hit.phrase } : null;
+        });
+        const cm = combinedReport.matrix;
+        const semanticHits = combinedReport.results.filter((r) => r.matchedPhrase?.startsWith('~')).length;
+        lines.push(
+          '',
+          `COMBINED activator (deterministic + semantic recall, the real turn path; ${semanticHits} semantic hit(s)):`,
+          `accuracy ${fmtPct(cm.accuracy)} | precision ${fmtPct(cm.precision)} | recall ${fmtPct(cm.recall)} (tp ${cm.tp} / fp ${cm.fp} / tn ${cm.tn} / fn ${cm.fn})`,
+        );
+      }
+
       let optReport = null;
       if (optimize && failures.length > 0) {
         if (!brain || typeof brain.call !== 'function') {
@@ -158,7 +184,7 @@ export const triggerEvalTool: ToolDefinition = {
         }
       }
 
-      return { success: true, output: lines.join('\n'), data: { report, optimize: optReport, source } };
+      return { success: true, output: lines.join('\n'), data: { report, combined: combinedReport, optimize: optReport, source } };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ session: ctx.sessionId, skillName, err: msg }, 'skill.trigger-eval failed');

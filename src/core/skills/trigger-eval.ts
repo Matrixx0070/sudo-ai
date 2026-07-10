@@ -162,6 +162,35 @@ export function runTriggerEval(
   return { skillName, triggers: [...triggers], results, matrix: confusionMatrix(results) };
 }
 
+/**
+ * Async variant measuring the COMBINED activator exactly as the agent loop
+ * runs it: deterministic phrase match first, semantic recall assist only on
+ * misses. `semanticProbe` returns the matched anchor (or null) for a query —
+ * pass a closure over skills/semantic-assist.ts selectSemanticSkill so this
+ * measures the REAL production path, not a reimplementation. Semantic hits
+ * carry a `~` prefix on matchedPhrase to keep the match kinds distinguishable.
+ */
+export async function runTriggerEvalCombined(
+  skillName: string,
+  triggers: readonly string[],
+  cases: readonly TriggerEvalCase[],
+  semanticProbe: (query: string) => Promise<{ phrase: string } | null>,
+): Promise<TriggerEvalReport> {
+  const probe: ActivatableSkill = { name: skillName, content: '', triggers: [...triggers] };
+  const results: TriggerCaseResult[] = [];
+  for (const c of cases) {
+    const m = matchTriggers(c.query, probe);
+    let triggered = m !== null;
+    let matchedPhrase = m?.phrase;
+    if (!triggered) {
+      const s = await semanticProbe(c.query);
+      if (s) { triggered = true; matchedPhrase = `~${s.phrase}`; }
+    }
+    results.push({ ...c, triggered, matchedPhrase, pass: triggered === c.shouldTrigger });
+  }
+  return { skillName, triggers: [...triggers], results, matrix: confusionMatrix(results) };
+}
+
 // ---------------------------------------------------------------------------
 // Parsing helpers (exported for tests)
 // ---------------------------------------------------------------------------

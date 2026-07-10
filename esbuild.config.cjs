@@ -29,6 +29,11 @@ const sharedExternals = [
   'playwright',
   'puppeteer',
   'chromium-bidi',
+  // ONNX stack: transformers lazily loads onnxruntime-node's native .node
+  // binding, which esbuild cannot bundle. Reached by the bundled CLIs via
+  // skill-activator → semantic-assist → local-embeddings.
+  '@huggingface/transformers',
+  'onnxruntime-node',
 ];
 
 // Build all entry points for builtin tools
