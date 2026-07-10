@@ -14,6 +14,7 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import { createLogger } from '../shared/logger.js';
 import type { SkillTrustTier, ToolTranslatorEntry } from '../shared/wave10-types.js';
 
@@ -68,6 +69,44 @@ export interface MarkdownSkill {
 function parseFrontmatter(raw: string): { meta: Record<string, string | string[]>; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) return { meta: {}, body: raw };
+  // Real YAML first: the hand-rolled loop below stripped EVERY quote character
+  // anywhere in a value ("Don't" → "Dont", user data silently corrupted — see
+  // markdown-loader-triggers tests). js-yaml preserves quoting/escapes; the
+  // legacy loop remains only as a fail-open fallback for frontmatter that
+  // strict YAML rejects, so no previously-loading skill ever stops loading.
+  const yamlMeta = yamlParseMeta(match[1]);
+  if (yamlMeta) return { meta: yamlMeta, body: match[2] };
+  return { meta: legacyParseMeta(match[1]), body: match[2] };
+}
+
+/** Strict-YAML parse of the frontmatter block; null → caller falls back to legacy. */
+function yamlParseMeta(src: string): Record<string, string | string[]> | null {
+  try {
+    const doc = yaml.load(src);
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+    const meta: Record<string, string | string[]> = {};
+    for (const [key, value] of Object.entries(doc as Record<string, unknown>)) {
+      if (typeof value === 'string') {
+        meta[key] = value;
+      } else if (typeof value === 'number' || typeof value === 'boolean') {
+        meta[key] = String(value);
+      } else if (Array.isArray(value)) {
+        // Scalar items only — arrays of maps (e.g. an `inputs:` block)
+        // contribute nothing, and nested objects are skipped entirely below,
+        // preserving the posture that inner keys never leak to the top level.
+        meta[key] = value
+          .filter((x): x is string | number | boolean =>
+            typeof x === 'string' || typeof x === 'number' || typeof x === 'boolean')
+          .map(String);
+      }
+    }
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
+function legacyParseMeta(fmText: string): Record<string, string | string[]> {
   const meta: Record<string, string | string[]> = {};
   // Key whose value was empty and may be continued by a YAML block list
   // (`key:` followed by indented `- item` lines). Cleared by the first
@@ -75,7 +114,7 @@ function parseFrontmatter(raw: string): { meta: Record<string, string | string[]
   // `inputs:` (`- name: x` then deeper `required: true`) contribute only
   // their `- ` lines and nothing deeper.
   let pendingListKey: string | null = null;
-  for (const line of match[1].split('\n')) {
+  for (const line of fmText.split('\n')) {
     // Indented continuation lines: block-list items attach to the pending
     // key; everything else (nested maps such as a `metadata:` block) is
     // skipped so inner `key: value` lines never clobber top-level keys.
@@ -105,7 +144,7 @@ function parseFrontmatter(raw: string): { meta: Record<string, string | string[]
       meta[key] = val.replace(/['"]/g, '');
     }
   }
-  return { meta, body: match[2] };
+  return meta;
 }
 
 /**

@@ -61,3 +61,39 @@ describe('parseSkillFile triggers parsing', () => {
     expect(s.description).toBe('d');
   });
 });
+
+describe('quote preservation (YAML-first parse)', () => {
+  it('no longer corrupts apostrophes and quoted words in descriptions', () => {
+    const s = parseSkillFile(`---
+name: proof
+description: Don't touch the user's data; it's "sacred" — rewrite drafts only.
+triggers:
+  - polish my boss's email
+---
+body`, '/x', 'f');
+    expect(s.description).toBe(`Don't touch the user's data; it's "sacred" — rewrite drafts only.`);
+    expect(s.triggers).toEqual(["polish my boss's email"]);
+  });
+
+  it('preserves quotes in flow-style lists', () => {
+    const s = parseSkillFile(`---\nname: t\ntriggers: ["boss's email", 'it''s fine']\n---\nbody`, '/x', 'f');
+    expect(s.triggers).toEqual(["boss's email", "it's fine"]);
+  });
+
+  it('falls back to the legacy parser on strict-YAML-invalid frontmatter', () => {
+    const s = parseSkillFile(`---\nname: t\ndescription: ok\nbroken: [unclosed\n---\nbody`, '/x', 'f');
+    expect(s.name).toBe('t');
+    expect(s.description).toBe('ok');
+  });
+
+  it('YAML path still blocks nested-map key leaks', () => {
+    const s = parseSkillFile(`---\nname: outer\nmetadata:\n  name: inner\n---\nbody`, '/x', 'f');
+    expect(s.name).toBe('outer');
+  });
+
+  it('scalar coercion keeps booleans/numbers usable', () => {
+    const s = parseSkillFile(`---\nname: t\nversion: 1.0.0\nisReadOnly: true\n---\nbody`, '/x', 'f');
+    expect(s.version).toBe('1.0.0');
+    expect(s.isReadOnly).toBe(true);
+  });
+});
