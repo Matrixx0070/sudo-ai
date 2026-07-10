@@ -75,6 +75,11 @@ describe('coerceDeclaredPrimitives — numbers (unit)', () => {
     expect(coerceDeclaredPrimitives(tool, { amount: '0' })['amount']).toBe(0);
   });
 
+  it('pins Number() edge forms as DELIBERATELY accepted (same as existing per-tool Number() calls)', () => {
+    expect(coerceDeclaredPrimitives(tool, { amount: '0x10' })['amount']).toBe(16);
+    expect(coerceDeclaredPrimitives(tool, { amount: '+5' })['amount']).toBe(5);
+  });
+
   it('leaves non-parseable strings for the tool\'s own validation', () => {
     expect(coerceDeclaredPrimitives(tool, { amount: '' })['amount']).toBe('');
     expect(coerceDeclaredPrimitives(tool, { amount: '  ' })['amount']).toBe('  ');
