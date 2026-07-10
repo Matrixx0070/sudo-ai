@@ -48,6 +48,7 @@ import { getPredictor } from '../tools/builtin/meta/predictor.js';
 import { CompletionVerifier } from '../tools/completion-verifier.js';
 import { runUniversalNegativeGuard } from './universal-negative-guard.js';
 import { persistPostRunAppends } from './post-run-persist.js';
+import { activateSkillsForMessage, type ActivatableSkill } from '../skills/skill-activator.js';
 import type { Prediction } from '../prediction/predictor.js';
 import type {
   BrainLike,
@@ -651,6 +652,17 @@ export class AgentLoop extends AgentLoopInjections {
     return this._injectionDetector;
   }
 
+  /** Markdown skills loaded at boot — matched against each user message for turn-start injection. */
+  private _markdownSkills: ActivatableSkill[] | null = null;
+
+  /** Wire the boot-loaded markdown skills so triggers activate at turn start. */
+  setMarkdownSkills(skills: ActivatableSkill[]): void {
+    if (Array.isArray(skills)) {
+      this._markdownSkills = skills;
+      log.info({ count: skills.length }, 'AgentLoop: markdown skills attached for trigger activation');
+    }
+  }
+
   /** Wire SkillDiscovery after construction. Fail-open if duck-type mismatch. */
   setSkillDiscovery(sd: { recordToolCall(sessionId: string, toolName: string, success: boolean): void }): void {
     if (sd && typeof sd.recordToolCall === 'function') {
@@ -1089,6 +1101,18 @@ export class AgentLoop extends AgentLoopInjections {
         }
       } catch (err) {
         log.warn({ err: String(err) }, 'Recovery protocol commitment injection failed — continuing');
+      }
+    }
+
+    // Markdown skill activation: match the user's message against installed
+    // skills' trigger phrases (deterministic, skills/skill-activator.ts) and
+    // inject the winners as ephemeral system context. Before this, loaded
+    // skills were never consulted at turn time. Kill-switch
+    // SUDO_SKILL_ACTIVATION=0; cap SUDO_SKILL_ACTIVATION_MAX (default 2).
+    {
+      const activation = activateSkillsForMessage(message, this._markdownSkills, sessionId);
+      if (activation) {
+        session.messages.push({ role: 'system', content: activation.content, _ephemeral: true });
       }
     }
 

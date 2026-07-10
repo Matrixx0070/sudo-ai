@@ -271,23 +271,25 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'skill store', 'sudoapi.shop',
     ],
     patterns: [
-      /\bskill[.-](apply|rollback|refine|compose|explain|federate|install|search|eval)\b/i,
+      /\bskill[.-](apply|rollback|refine|compose|explain|federate|install|search|eval|trigger-eval)\b/i,
       /\b(install|download|get|add)\s+(a\s+|the\s+)?(new\s+)?skill\b/i,
       /\bskill\s+(registry|store|marketplace)\b/i,
       /\b(test|evaluate|eval|benchmark|measure)\s+(a\s+|the\s+|this\s+)?skill\b/i,
+      /\bskill\s+trigger|trigger\s+(phrases?|eval)\b/i,
+      /\bwhy\s+did(n'?t)?\s+(the\s+)?skill\s+(not\s+)?(activate|trigger|fire)\b/i,
       /\b(author|create|write|revise|update|edit|build)\s+(a\s+)?(new\s+)?skill\b/i,
       /\broll\s*back\s+(a\s+)?skill\b/i,
       /\bskill\.md\b/i,
     ],
     priority: 8,
-    // The skill category has exactly 10 tools and the write/install/eval paths
-    // (skill.apply/skill.rollback/skill.install/skill.search/skill.eval) must
-    // ALWAYS travel together on a skill turn. At 5 the within-category ranker
-    // dropped some (e.g. a "roll back the skill" turn surfaced compose/explain/
+    // The skill category has exactly 11 tools and the write/install/eval paths
+    // (skill.apply/rollback/install/search/eval/trigger-eval) must ALWAYS
+    // travel together on a skill turn. At 5 the within-category ranker dropped
+    // some (e.g. a "roll back the skill" turn surfaced compose/explain/
     // federate/refine/usage-stats but NOT rollback); the cap must track the
     // category size whenever a skill.* tool is added, else the new tool is
-    // registered-but-unroutable. 10 fits the whole small category.
-    maxFromCategory: 10,
+    // registered-but-unroutable. 11 fits the whole small category.
+    maxFromCategory: 11,
   },
   // The 12 super.* power tools (category 'superpowers': translate, archive,
   // ffmpeg, edit-image, profile, security-scan, deploy, auto-fix, analyze-data,

@@ -13,6 +13,7 @@
  *   skill.search      — Browse the public skill registry (sudoapi.shop)
  *   skill.install     — Install a registry skill through the Workshop gate
  *   skill.eval        — Prove a skill helps: with/without baseline + blind judge
+ *   skill.trigger-eval — Measure/optimize trigger phrases vs the real matcher
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -27,6 +28,7 @@ import { rollbackTool } from './tools/rollback.js';
 import { searchTool } from './tools/search.js';
 import { installTool } from './tools/install.js';
 import { evalTool } from './tools/eval.js';
+import { triggerEvalTool } from './tools/trigger-eval.js';
 
 const logger = createLogger('skill-builtin');
 
@@ -41,6 +43,7 @@ const SKILL_TOOLS = [
   searchTool,
   installTool,
   evalTool,
+  triggerEvalTool,
 ];
 
 /**
