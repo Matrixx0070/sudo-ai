@@ -55,17 +55,12 @@ function normalizeToolArgs(raw: unknown): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a minimal JSON Schema `properties` entry from a {@link ToolParam}.
- * Nested `items` and `properties` are intentionally left as-is for now;
- * full recursive expansion can be added when nested schemas are needed.
- */
-/**
  * Coerce string-typed primitive arguments to their declared types per the
  * tool's own parameter declarations, RECURSIVELY through declared `items`
- * (arrays) and `properties` (objects) up to {@link MAX_COERCE_DEPTH} — a
- * model emitting operations:[{width:"300"}] is the same defect one level
- * down (live victim: media.image-edit-advanced, sharp rejects string
- * widths). Booleans: only the exact strings "true"/"false" on a declared
+ * (arrays) and `properties` (objects) — a model emitting
+ * operations:[{width:"300"}] is the same defect one level down (live
+ * victim: media.image-edit-advanced, sharp rejects string widths).
+ * Booleans: only the exact strings "true"/"false" on a declared
  * type:'boolean' member convert. Numbers: only a trimmed string that parses
  * to a FINITE number on a declared type:'number' member converts ("500",
  * "-1.5", "2e3"); anything else ("", "5px", "NaN", "Infinity") passes
@@ -74,8 +69,14 @@ function normalizeToolArgs(raw: unknown): Record<string, unknown> {
  * original nested arrays/objects) when nothing needs coercion. Tools
  * carrying a raw JSON `inputSchema` instead of `parameters` (MCP-style)
  * are left alone.
+ *
+ * The depth cap bounds schema-driven recursion (defensive vs cyclic specs
+ * or values from internal callers). Deepest declared leaf across builtins
+ * today is depth 4 (github files[].edits[].all, spreadsheet
+ * sheets[].columns[].width) — the cap leaves headroom above that; a leaf
+ * AT the cap is blocked.
  */
-const MAX_COERCE_DEPTH = 4;
+const MAX_COERCE_DEPTH = 6;
 
 type ParamSpec = ToolDefinition['parameters'][string];
 
@@ -95,19 +96,21 @@ function coerceValue(spec: ParamSpec, v: unknown, depth: number): { changed: boo
     return { changed: false, value: v };
   }
   if (spec.type === 'array' && spec.items && Array.isArray(v)) {
-    let changed = false;
-    const mapped = v.map((el) => {
-      const r = coerceValue(spec.items!, el, depth + 1);
-      changed = changed || r.changed;
-      return r.value;
-    });
-    return changed ? { changed: true, value: mapped } : { changed: false, value: v };
+    let out: unknown[] | null = null;
+    for (let i = 0; i < v.length; i++) {
+      const r = coerceValue(spec.items, v[i], depth + 1);
+      if (r.changed) {
+        out ??= v.slice();
+        out[i] = r.value;
+      }
+    }
+    return out ? { changed: true, value: out } : { changed: false, value: v };
   }
   if (spec.type === 'object' && spec.properties && v !== null && typeof v === 'object' && !Array.isArray(v)) {
     const rec = v as Record<string, unknown>;
     let out: Record<string, unknown> | null = null;
     for (const [k, propSpec] of Object.entries(spec.properties)) {
-      if (!(k in rec)) continue;
+      if (!Object.hasOwn(rec, k)) continue;
       const r = coerceValue(propSpec, rec[k], depth + 1);
       if (r.changed) {
         out ??= { ...rec };

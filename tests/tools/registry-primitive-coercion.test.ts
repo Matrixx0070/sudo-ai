@@ -157,23 +157,74 @@ describe('coerceDeclaredPrimitives — nested members (unit)', () => {
     expect(coerceDeclaredPrimitives(t, { sizes: ['1', 2, '3.5'] })['sizes']).toEqual([1, 2, 3.5]);
   });
 
-  it('stops at the depth cap instead of recursing forever', () => {
-    // number declared 5 levels down (beyond MAX_COERCE_DEPTH 4): untouched.
-    const deep = {
+  it('coerces top-level objects with declared primitive properties (margins shape)', () => {
+    const t = {
       parameters: {
-        a: { type: 'object' as const, description: '', properties: {
-          b: { type: 'object' as const, description: '', properties: {
-            c: { type: 'object' as const, description: '', properties: {
-              d: { type: 'object' as const, description: '', properties: {
-                e: { type: 'number' as const, description: '' },
-              } },
-            } },
-          } },
-        } },
+        margins: {
+          type: 'object' as const, description: '',
+          properties: {
+            top: { type: 'number' as const, description: '' },
+            bottom: { type: 'number' as const, description: '' },
+          },
+        },
       },
     };
-    const out = coerceDeclaredPrimitives(deep, { a: { b: { c: { d: { e: '5' } } } } });
-    expect((out['a'] as never as { b: { c: { d: { e: unknown } } } }).b.c.d.e).toBe('5');
+    expect(coerceDeclaredPrimitives(t, { margins: { top: '10', bottom: 20 } })['margins'])
+      .toEqual({ top: 10, bottom: 20 });
+  });
+
+  it('junk elements inside a declared items:object array pass through untouched', () => {
+    const out = coerceDeclaredPrimitives(tool, { operations: [null, 'x', 5, { width: '300' }] });
+    expect(out['operations']).toEqual([null, 'x', 5, { width: 300 }]);
+  });
+
+  it('coerces the deepest real builtin shape — github files[].edits[].all at depth 4', () => {
+    // Mirrors github.ts files[].edits[].all; consumer checks `e?.all === true`,
+    // so a string "true" silently degraded to replace-first-occurrence.
+    const gh = {
+      parameters: {
+        files: {
+          type: 'array' as const, description: '',
+          items: {
+            type: 'object' as const, description: '',
+            properties: {
+              edits: {
+                type: 'array' as const, description: '',
+                items: {
+                  type: 'object' as const, description: '',
+                  properties: { all: { type: 'boolean' as const, description: '' } },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const out = coerceDeclaredPrimitives(gh, { files: [{ edits: [{ all: 'true' }] }] });
+    expect((out['files'] as Array<{ edits: Array<{ all: unknown }> }>)[0]!.edits[0]!.all).toBe(true);
+  });
+
+  it('stops at the depth cap instead of recursing forever', () => {
+    // leaf at recursion depth 6 (== MAX_COERCE_DEPTH): blocked; depth 5 coerces.
+    const leafAt = (levels: number): { params: Record<string, never>; spec: Record<string, unknown> } => {
+      let spec: Record<string, unknown> = { type: 'number', description: '' };
+      let value: unknown = '5';
+      for (let i = 0; i < levels; i++) {
+        spec = { type: 'object', description: '', properties: { k: spec } };
+        value = { k: value };
+      }
+      return { spec: { parameters: { root: spec } }, params: { root: value } as never };
+    };
+    const dig = (v: unknown, levels: number): unknown => {
+      for (let i = 0; i < levels; i++) v = (v as { k: unknown }).k;
+      return v;
+    };
+    const blocked = leafAt(6); // root visited at depth 0, leaf at depth 6
+    const outBlocked = coerceDeclaredPrimitives(blocked.spec as never, blocked.params);
+    expect(dig(outBlocked['root'], 6)).toBe('5');
+    const allowed = leafAt(5);
+    const outAllowed = coerceDeclaredPrimitives(allowed.spec as never, allowed.params);
+    expect(dig(outAllowed['root'], 5)).toBe(5);
   });
 });
 
