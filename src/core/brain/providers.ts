@@ -19,6 +19,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { LLMError } from '../shared/errors.js';
 import { createLogger } from '../shared/logger.js';
 import { resolveThinkingBudget } from './thinking-inject.js';
+import { sanitizeOAuthToolName } from './tool-schema-compat.js';
 import {
   registerCustomProvidersFromEnv,
   isCustomProvider,
@@ -356,11 +357,23 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
               }
 
               // ---- 2. Tool-name sanitisation --------------------------
+              // Anthropic's OAuth (Claude Code) endpoint restricts tool names
+              // to ^[a-zA-Z0-9_-]{1,128}$ AND reserves the lowercase single-
+              // underscore `mcp_` prefix for its own managed MCP tools. A client
+              // tool named `mcp_*` is rejected with a MISLEADING 400
+              // "You're out of extra usage" billing message (not a validation
+              // error) — proven by isolating it to the exact prefix via replay
+              // (mcp__/MCP_/mcpconnect/x_mcp_ all pass; only ^mcp_ fails).
+              // sudo-ai's dotted `mcp.connect`/`mcp.list`/`mcp.disconnect`
+              // sanitise the dot to `_`, landing on exactly `mcp_connect` etc.,
+              // so we additionally lift a reserved leading `mcp_` to `mcp__`
+              // (double underscore is accepted) and reverse it in the SSE body
+              // alongside the other name rewrites.
               if (Array.isArray(parsed.tools)) {
                 for (const tool of parsed.tools as Array<Record<string, unknown>>) {
                   const original = tool['name'];
                   if (typeof original === 'string') {
-                    const sanitized = original.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+                    const sanitized = sanitizeOAuthToolName(original);
                     if (sanitized !== original) {
                       toolNameMap.set(sanitized, original);
                       tool['name'] = sanitized;
@@ -522,7 +535,31 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
             try {
               const clone = res.clone();
               const errBody = (await clone.text()).slice(0, 600);
-              log.warn({ status: res.status, model: outgoingModel, errBody }, 'claude-oauth: non-2xx from Anthropic');
+              // Shape summary of what WE sent (never content/tokens): enough
+              // to reproduce a rejected request out-of-band.
+              let reqShape: Record<string, unknown> | undefined;
+              if (typeof body === 'string') {
+                try {
+                  const p = JSON.parse(body) as Record<string, unknown>;
+                  const sys = p.system as Array<{ text?: string; cache_control?: unknown }> | undefined;
+                  reqShape = {
+                    bodyBytes: body.length,
+                    max_tokens: p.max_tokens,
+                    stream: p.stream,
+                    thinking: p.thinking,
+                    temperature: p.temperature,
+                    top_p: p.top_p,
+                    metadata: p.metadata,
+                    toolCount: Array.isArray(p.tools) ? (p.tools as unknown[]).length : undefined,
+                    tool_choice: p.tool_choice,
+                    messageCount: Array.isArray(p.messages) ? (p.messages as unknown[]).length : undefined,
+                    systemBlocks: Array.isArray(sys) ? sys.length : typeof p.system,
+                    systemCacheControls: Array.isArray(sys) ? sys.filter((b) => b?.cache_control).length : undefined,
+                    otherKeys: Object.keys(p).filter((k) => !['model', 'max_tokens', 'stream', 'thinking', 'temperature', 'top_p', 'metadata', 'tools', 'tool_choice', 'messages', 'system'].includes(k)),
+                  };
+                } catch { /* body not JSON — skip shape */ }
+              }
+              log.warn({ status: res.status, model: outgoingModel, errBody, reqShape, beta: headers.get('anthropic-beta') }, 'claude-oauth: non-2xx from Anthropic');
             } catch { /* ignore */ }
             return res;
           }

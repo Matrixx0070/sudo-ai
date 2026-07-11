@@ -8,6 +8,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   stripUnsupportedSchemaKeywords,
   sanitizeToolSchemaForProvider,
+  sanitizeOAuthToolName,
   XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from '../../src/core/brain/tool-schema-compat.js';
 
@@ -92,5 +93,42 @@ describe('sanitizeToolSchemaForProvider', () => {
     process.env['SUDO_TOOL_SCHEMA_COMPAT'] = '0';
     const out = sanitizeToolSchemaForProvider(schema, 'xai/grok-4-fast-non-reasoning');
     expect(out).toBe(schema);
+  });
+});
+
+describe('sanitizeOAuthToolName', () => {
+  it('collapses disallowed characters to underscore', () => {
+    expect(sanitizeOAuthToolName('meta.self-modify')).toBe('meta_self-modify');
+    expect(sanitizeOAuthToolName('system.exec')).toBe('system_exec');
+  });
+
+  it('lifts the reserved single-underscore mcp_ prefix to mcp__', () => {
+    // Anthropic OAuth reserves ^mcp_ and rejects it with a misleading
+    // "out of extra usage" 400; the dotted mcp.* tools sanitise onto it.
+    expect(sanitizeOAuthToolName('mcp.connect')).toBe('mcp__connect');
+    expect(sanitizeOAuthToolName('mcp.disconnect')).toBe('mcp__disconnect');
+    expect(sanitizeOAuthToolName('mcp.list')).toBe('mcp__list');
+  });
+
+  it('rewrites a literal mcp_ name even when no other char changes', () => {
+    expect(sanitizeOAuthToolName('mcp_connect')).toBe('mcp__connect');
+  });
+
+  it('leaves an already-doubled mcp__ prefix untouched', () => {
+    expect(sanitizeOAuthToolName('mcp__connect')).toBe('mcp__connect');
+  });
+
+  it('does not touch names that merely contain mcp elsewhere', () => {
+    expect(sanitizeOAuthToolName('list_mcp')).toBe('list_mcp');
+    expect(sanitizeOAuthToolName('browser_mcp_probe')).toBe('browser_mcp_probe');
+    expect(sanitizeOAuthToolName('mcpconnect')).toBe('mcpconnect');
+  });
+
+  it('returns already-valid names unchanged', () => {
+    expect(sanitizeOAuthToolName('github_list_prs')).toBe('github_list_prs');
+  });
+
+  it('caps length at 128 characters', () => {
+    expect(sanitizeOAuthToolName('a'.repeat(200)).length).toBe(128);
   });
 });
