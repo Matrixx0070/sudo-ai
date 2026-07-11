@@ -96,15 +96,18 @@ type CategoryName =
  */
 const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
   mcp: {
-    // MCP connector management (mcp.connect / mcp.list / mcp.disconnect).
-    // Only 3 tools, so the cap admits all of them whenever the category fires.
+    // MCP connector management (mcp.connect / mcp.list / mcp.disconnect) plus
+    // the connector-catalog Directory tools (connector.search / connector.install).
+    // Cap admits all 5 whenever the category fires.
     keywords: [
       'mcp', 'mcp server', 'model context protocol', 'connector',
       'connect server', 'external tools', 'tool server',
+      'install connector', 'add connector', 'browse connectors', 'connector catalog',
+      'directory', 'add integration',
     ],
-    patterns: [/\bmcp\b/i, /mcp[._]\w+/i, /mcp__\w+/i],
+    patterns: [/\bmcp\b/i, /mcp[._]\w+/i, /mcp__\w+/i, /\bconnector[._]\w+/i],
     priority: 6,
-    maxFromCategory: 3,
+    maxFromCategory: 6,
   },
   browser: {
     keywords: [
@@ -280,8 +283,12 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'install skill', 'install a skill', 'skill registry', 'registry skill',
       'browse skills', 'search skills', 'find skills', 'available skills',
       'skill store', 'sudoapi.shop',
+      'plugin', 'install plugin', 'install a plugin', 'add plugin', 'role bundle',
+      'browse plugins', 'plugin catalog', 'plugin registry',
     ],
     patterns: [
+      /\bplugin[.-](search|install)\b/i,
+      /\b(install|add|browse|search|find)\s+(a\s+|the\s+)?plugin\b/i,
       /\bskill[.-](apply|rollback|refine|compose|explain|federate|install|search|eval|trigger-eval)\b/i,
       /\b(install|download|get|add)\s+(a\s+|the\s+)?(new\s+)?skill\b/i,
       /\bskill\s+(registry|store|marketplace)\b/i,
@@ -299,8 +306,9 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     // some (e.g. a "roll back the skill" turn surfaced compose/explain/
     // federate/refine/usage-stats but NOT rollback); the cap must track the
     // category size whenever a skill.* tool is added, else the new tool is
-    // registered-but-unroutable. 11 fits the whole small category.
-    maxFromCategory: 11,
+    // registered-but-unroutable. 11 fits the whole small category — plus the 2
+    // Directory plugin.* tools (plugin.search/plugin.install) = 13.
+    maxFromCategory: 13,
   },
   // The 12 super.* power tools (category 'superpowers': translate, archive,
   // ffmpeg, edit-image, profile, security-scan, deploy, auto-fix, analyze-data,

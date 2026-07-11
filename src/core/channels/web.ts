@@ -25,6 +25,7 @@ import { projectPath } from '../shared/paths.js';
 import { serveStaticFile, buildSpaCSPHeader } from '../gateway/static-middleware.js';
 import { markGatewayRouteOwnerAttached, markGatewayRouteOwnerDetached } from '../gateway/server.js';
 import type { ChannelAdapter } from './adapter.js';
+import { isDirectoryPath, handleDirectoryRequest } from './directory-api.js';
 import type { AgentEvent } from '../agent/types.js';
 import type {
   ChannelType,
@@ -525,7 +526,7 @@ export class WebAdapter implements ChannelAdapter {
     const url = rawUrl.split('?')[0] ?? '/';
 
     // Only handle paths this adapter owns; leave everything else to other listeners.
-    if (url !== '/chat' && url !== '/api/message') {
+    if (url !== '/chat' && url !== '/api/message' && !isDirectoryPath(url)) {
       return;
     }
 
@@ -551,6 +552,15 @@ export class WebAdapter implements ChannelAdapter {
         res.end('Unauthorized. Provide Authorization: Bearer <token> header or ?token=YOUR_TOKEN in the URL.');
         return;
       }
+    }
+
+    // -----------------------------------------------------------------------
+    // Directory API: GET /api/directory, POST /api/directory/install
+    // (same WEB_CHAT_TOKEN auth as the rest of this adapter, enforced above).
+    // -----------------------------------------------------------------------
+    if (isDirectoryPath(url)) {
+      await handleDirectoryRequest(req, res, method, url);
+      return;
     }
 
     // -----------------------------------------------------------------------

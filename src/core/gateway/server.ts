@@ -167,7 +167,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // instead so a fresh `sudo-ai quickstart` install fails loudly, not silently.
   if (
     pathname === '/chat' || pathname.startsWith('/chat/') ||
-    pathname === '/api/message' || pathname.startsWith('/assets/')
+    pathname === '/api/message' || pathname.startsWith('/assets/') ||
+    pathname === '/api/directory' || pathname.startsWith('/api/directory/')
   ) {
     if (isGatewayRouteOwnerAttached('web')) return; // WebAdapter listener responds
     log.warn({ requestId, url }, 'Web route requested but web adapter is not attached (WEB_CHAT_ENABLED != true)');
