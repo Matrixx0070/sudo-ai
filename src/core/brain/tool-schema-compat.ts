@@ -87,3 +87,30 @@ export function sanitizeToolSchemaForProvider<T>(parameters: T, modelId: string)
   }
   return parameters;
 }
+
+/**
+ * Sanitise a tool name for Anthropic's OAuth (Claude Code) inference endpoint.
+ *
+ * Two constraints, both enforced server-side:
+ *  1. Names must match ^[a-zA-Z0-9_-]{1,128}$ — sudo-ai's dotted names
+ *     (`meta.self-modify`) are rejected outright, so every disallowed char
+ *     collapses to `_`.
+ *  2. The lowercase single-underscore `mcp_` prefix is RESERVED for the
+ *     endpoint's own managed MCP tools. A client tool named `mcp_*` is refused
+ *     with a MISLEADING `400 "You're out of extra usage"` billing message (not
+ *     a validation error). Verified by replay: `mcp__`, `MCP_`, `mcpconnect`,
+ *     `x_mcp_` all pass; only `^mcp_` (one underscore) fails. sudo-ai's
+ *     `mcp.connect`/`mcp.list`/`mcp.disconnect` sanitise straight onto that
+ *     prefix, so a reserved leading `mcp_` is lifted to `mcp__`.
+ *
+ * Returns the possibly-rewritten name; identical to the input when no change
+ * was needed. Callers that need to reverse the mapping (to resolve the model's
+ * tool_use back to the original dotted name) should compare the result to the
+ * input and record `sanitized -> original` when they differ.
+ */
+export function sanitizeOAuthToolName(name: string): string {
+  let sanitized = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  // `mcp_connect` -> `mcp__connect`; leave an already-doubled `mcp__` alone.
+  sanitized = sanitized.replace(/^mcp_(?!_)/, 'mcp__');
+  return sanitized.slice(0, 128);
+}
