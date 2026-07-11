@@ -96,15 +96,18 @@ type CategoryName =
  */
 const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
   mcp: {
-    // MCP connector management (mcp.connect / mcp.list / mcp.disconnect).
-    // Only 3 tools, so the cap admits all of them whenever the category fires.
+    // MCP connector management (mcp.connect / mcp.list / mcp.disconnect) plus
+    // the connector-catalog Directory tools (connector.search / connector.install).
+    // Cap admits all 5 whenever the category fires.
     keywords: [
       'mcp', 'mcp server', 'model context protocol', 'connector',
       'connect server', 'external tools', 'tool server',
+      'install connector', 'add connector', 'browse connectors', 'connector catalog',
+      'directory', 'add integration',
     ],
-    patterns: [/\bmcp\b/i, /mcp[._]\w+/i, /mcp__\w+/i],
+    patterns: [/\bmcp\b/i, /mcp[._]\w+/i, /mcp__\w+/i, /\bconnector[._]\w+/i],
     priority: 6,
-    maxFromCategory: 3,
+    maxFromCategory: 6,
   },
   browser: {
     keywords: [
