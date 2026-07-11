@@ -179,6 +179,7 @@ export function isBillingBody(body: string): boolean {
     /exceeded.*(?:quota|credit|credits|budget)/i.test(body) ||
     /\bkey limit\b|\bcredit limit\b|\bquota (?:exceeded|exhausted)\b/i.test(body) ||
     /\bpayment required\b|\bbilling\b|\bout of credit\b|\bnegative balance\b/i.test(body) ||
+    /\bout of (?:extra )?usage\b|\busage limit (?:reached|exceeded)\b/i.test(body) ||
     /余额不足|额度不足|欠费/.test(body)
   );
 }
@@ -272,6 +273,11 @@ export function categorizeError(status: number, body?: string): ErrorCategory {
       if (body && isContextOverflowBody(body)) return 'context_overflow';
       return 'rate_limit';
     case 400:
+      // Anthropic OAuth reports exhausted subscription usage as a plain 400
+      // invalid_request_error ("You're out of extra usage…"). Left as 'format'
+      // it gets a short retryable cooldown and the failover loop hammers a
+      // dead account; billing parks it long and fails over immediately.
+      if (body && isBillingBody(body)) return 'billing';
       // Some providers return 400 for session-expired or model issues;
       // inspect body for disambiguation when available.
       if (body && /session.?expired/i.test(body)) return 'session_expired';

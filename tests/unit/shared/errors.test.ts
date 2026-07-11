@@ -298,6 +298,23 @@ describe('categorizeError', () => {
     expect(categorizeError(400, 'This model maximum context length is 200000 tokens')).toBe('context_overflow');
   });
 
+  // Anthropic OAuth reports exhausted subscription usage as a plain 400
+  // invalid_request_error; as 'format' the failover loop hammers the dead
+  // account on short cooldowns instead of parking it on a billing cooldown.
+  it('should map a 400 Anthropic "out of extra usage" body to billing, not format', () => {
+    expect(
+      categorizeError(
+        400,
+        '{"type":"error","error":{"type":"invalid_request_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."},"request_id":"req_011CcvTECydYyxtnrCfb5Tza"}',
+      ),
+    ).toBe('billing');
+  });
+
+  it('should map "usage limit reached/exceeded" bodies to billing on 400 and 429', () => {
+    expect(categorizeError(400, 'usage limit reached for this billing cycle')).toBe('billing');
+    expect(categorizeError(429, 'Usage limit exceeded')).toBe('billing');
+  });
+
   it('should map a 413 overflow body to context_overflow but a TPM 413 to rate_limit', () => {
     expect(categorizeError(413, 'input length and max_tokens exceed context limit')).toBe('context_overflow');
     expect(categorizeError(413, 'rate limit: tokens per minute exceeded')).toBe('rate_limit');
