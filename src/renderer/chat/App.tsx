@@ -4,9 +4,11 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { ChatWindow } from './components/ChatWindow';
 import { InputArea } from './components/InputArea';
+import { Directory } from './components/Directory';
 import { resetChatPeerId } from './peer';
 
 export function App() {
+  const [directoryOpen, setDirectoryOpen] = React.useState(false);
   const { messages, currentResponse, error, addMessage, clearMessages, setCurrentResponse, setError } = useChatSession();
   const { connected, sendMessage, sendAttachment } = useWebSocket({
     onMessage: (data) => {
@@ -95,6 +97,13 @@ export function App() {
         <div className="ml-auto flex items-center gap-3">
           <ConnectionStatus connected={connected} />
           <button
+            onClick={() => setDirectoryOpen(true)}
+            title="Directory — browse and add Skills, Connectors, and Plugins"
+            className="text-xs text-gray-400 hover:text-gray-100 border border-gray-700 hover:border-gray-500 rounded-lg px-2.5 py-1 transition-colors"
+          >
+            Directory
+          </button>
+          <button
             onClick={handleNewChat}
             title="New chat — clears this conversation and starts a fresh session"
             className="text-xs text-gray-400 hover:text-gray-100 border border-gray-700 hover:border-gray-500 rounded-lg px-2.5 py-1 transition-colors"
@@ -109,6 +118,8 @@ export function App() {
       <div className="p-4 border-t border-gray-700">
         <InputArea onSend={handleSend} onSendAttachment={handleSendAttachment} disabled={!connected} />
       </div>
+
+      {directoryOpen && <Directory onClose={() => setDirectoryOpen(false)} />}
     </div>
   );
 }
