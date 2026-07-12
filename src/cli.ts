@@ -2560,6 +2560,18 @@ async function boot(): Promise<void> {
       const { MessageRouter } = await import('./core/channels/router.js');
       const router = new MessageRouter();
 
+      // Feature 1 — install the gateway access policy (owner allowlist). Loaded
+      // from config/channels.json5; when absent, a permissive no-op policy keeps
+      // current behaviour. Closes the "router channels answer anyone" hole.
+      try {
+        const { loadChannelsConfig } = await import('./core/channels/channels-config.js');
+        const { ChannelAccessPolicy } = await import('./core/channels/access-policy.js');
+        const chCfg = loadChannelsConfig();
+        router.setAccessPolicy(chCfg ? new ChannelAccessPolicy(chCfg) : ChannelAccessPolicy.permissive());
+      } catch (err) {
+        log.warn({ err: String(err) }, 'channel access policy load failed — router runs without allowlist');
+      }
+
       // Admission guard: approval replies and slash directives bypass the
       // router's per-peer queue (queued behind the blocked turn, an approval
       // reply would deadlock and a /stop could never cancel the turn it

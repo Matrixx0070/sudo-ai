@@ -1,0 +1,38 @@
+{
+  // ─── Multi-Channel Gateway access policy (Feature 1) ────────────────────────
+  // Non-secret runtime config. SECRETS (tokens) live in config/.env — blocks here
+  // only reference env KEY NAMES via `tokenEnv`.
+  //
+  // Admission model (enforced in the gateway before a message reaches the agent):
+  //   • owners:      [ids]  → full trust (isOwner=true)
+  //   • allowedPeers:[ids]  → admitted, not owner
+  //   • open: true          → admit everyone on this channel
+  //   • '*' in a list       → wildcard (everyone)
+  // A channel that HAS a block is DENY-BY-DEFAULT: only owners/allowedPeers/open
+  // are admitted; everyone else is silently dropped + audit-logged. A channel with
+  // NO block falls through to `defaultDeny` (see below) and, if that is false,
+  // keeps its own adapter-level gate. `open: false` = locked (deny all).
+  //
+  // NOTE: today the gateway policy is enforced for router-wired channels
+  // (signal/matrix/irc). Telegram/Discord/Slack/WhatsApp still run their own
+  // adapter-level allowlists until they are migrated onto the router.
+
+  // Lock everything not explicitly allowed? Leave false so adding one block never
+  // silently locks out a channel that relies on its own gate.
+  defaultDeny: false,
+
+  channels: {
+    // Previously UNGATED (answered anyone). Locked until you add owners. They sit
+    // behind their own env gates and are off by default, so this is safe.
+    signal: { enabled: false, open: false },   // add owners: ["+15551234567"] to enable
+    matrix: { enabled: false, open: false },   // add owners: ["@you:server"] to enable
+    irc:    { enabled: false, open: false },    // add owners: ["yournick"] to enable
+
+    // Templates for channels with their own adapter-level gate today. Fill owners
+    // and (future) migrate the adapter onto the router to enforce here too.
+    // telegram: { enabled: true, tokenEnv: "TELEGRAM_BOT_TOKEN", owners: ["<your-tg-id>"] },
+    // discord:  { enabled: true, tokenEnv: "DISCORD_TOKEN",       owners: ["<your-discord-id>"] },
+    // slack:    { enabled: false, tokenEnv: "SLACK_BOT_TOKEN",    owners: ["<your-slack-id>"] },
+    // whatsapp: { enabled: false, tokenEnv: "WHATSAPP_TOKEN",     owners: ["<your-jid>"] },
+  },
+}
