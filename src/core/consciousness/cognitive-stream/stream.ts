@@ -43,6 +43,38 @@ const DEFAULT_CONFIG: ThoughtConfig = {
   maxDeepTokens: 1_500,
 };
 
+/**
+ * Env-tunable overrides for the thought cadence — the background rate-pressure
+ * knobs. Unset → DEFAULT_CONFIG (byte-stable). Raising the micro interval or the
+ * everyN counts cuts how often the stream calls the brain, which relieves the
+ * primary provider (all tiers count ticks, so a larger micro interval throttles
+ * medium/deep proportionally too).
+ *   SUDO_COGNITIVE_MICRO_INTERVAL_MS  base tick period (min 5000)
+ *   SUDO_COGNITIVE_MEDIUM_EVERY_N     ticks per medium thought (min 1)
+ *   SUDO_COGNITIVE_DEEP_EVERY_N       ticks per deep thought (min 1)
+ *   SUDO_COGNITIVE_MICRO_TOKENS / _MEDIUM_TOKENS / _DEEP_TOKENS  per-tier caps (min 1)
+ */
+function envThoughtOverrides(): Partial<ThoughtConfig> {
+  const out: Partial<ThoughtConfig> = {};
+  const intInRange = (raw: string | undefined, min: number): number | undefined => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= min ? Math.floor(n) : undefined;
+  };
+  const micro = intInRange(process.env['SUDO_COGNITIVE_MICRO_INTERVAL_MS'], 5_000);
+  if (micro !== undefined) out.microIntervalMs = micro;
+  const medN = intInRange(process.env['SUDO_COGNITIVE_MEDIUM_EVERY_N'], 1);
+  if (medN !== undefined) out.mediumEveryN = medN;
+  const deepN = intInRange(process.env['SUDO_COGNITIVE_DEEP_EVERY_N'], 1);
+  if (deepN !== undefined) out.deepEveryN = deepN;
+  const microTok = intInRange(process.env['SUDO_COGNITIVE_MICRO_TOKENS'], 1);
+  if (microTok !== undefined) out.maxMicroTokens = microTok;
+  const medTok = intInRange(process.env['SUDO_COGNITIVE_MEDIUM_TOKENS'], 1);
+  if (medTok !== undefined) out.maxMediumTokens = medTok;
+  const deepTok = intInRange(process.env['SUDO_COGNITIVE_DEEP_TOKENS'], 1);
+  if (deepTok !== undefined) out.maxDeepTokens = deepTok;
+  return out;
+}
+
 /** Thoughts kept in the hot in-memory cache. */
 const CACHE_SIZE = 20;
 /** Thoughts shown by getCurrentContext(). */
@@ -115,7 +147,12 @@ export class CognitiveStream {
     this._embodied = embodiedState;
     this._spreading = spreadingActivation;
     this._emotional = emotionalState;
-    this._config = { ...DEFAULT_CONFIG, ...config };
+    // Precedence: defaults < env cadence overrides < explicit caller config.
+    this._config = { ...DEFAULT_CONFIG, ...envThoughtOverrides(), ...config };
+    log.info(
+      { microIntervalMs: this._config.microIntervalMs, mediumEveryN: this._config.mediumEveryN, deepEveryN: this._config.deepEveryN },
+      'CognitiveStream cadence resolved',
+    );
 
     // Warm cache from DB (newest-first from DB → reverse for newest-at-end).
     try {
