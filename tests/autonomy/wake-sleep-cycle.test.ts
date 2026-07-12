@@ -233,4 +233,36 @@ describe('WakeSleepCycle', () => {
     expect(cycle.getStatus()).toBe('idle');
     expect(cycle.isPaused()).toBe(false);
   });
+
+  it('wake() dispatches immediately without waiting for the tick interval (gap #2)', async () => {
+    const engine = makeEngine();
+    const worked: string[] = [];
+    const cycle = track(new WakeSleepCycle(engine, null, async (goal: GoalV2) => {
+      worked.push(goal.id);
+      engine.completeGoal(goal.id);
+    }, { tickIntervalMs: 3_600_000 })); // 1h interval — only wake() can drive it
+    cycle.start();
+    await sleep(30); // consume the immediate start() tick (no goals yet)
+    expect(worked).toHaveLength(0);
+
+    const goal = engine.setGoal({ title: 'urgent goal' });
+    cycle.wake('test-event');
+    await sleep(30);
+    expect(worked).toEqual([goal.id]); // worked WELL before the 1h tick
+  });
+
+  it('wake() is debounced and a no-op while paused', async () => {
+    const engine = makeEngine();
+    let dispatches = 0;
+    const cycle = track(new WakeSleepCycle(engine, null, async (goal: GoalV2) => {
+      dispatches++; engine.completeGoal(goal.id);
+    }, { tickIntervalMs: 3_600_000 }));
+    cycle.start();
+    await sleep(30);
+    cycle.pause();
+    engine.setGoal({ title: 'while paused' });
+    cycle.wake('e'); // paused → ignored
+    await sleep(30);
+    expect(dispatches).toBe(0);
+  });
 });

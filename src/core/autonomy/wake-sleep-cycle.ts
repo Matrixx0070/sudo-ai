@@ -82,6 +82,13 @@ export class WakeSleepCycle {
    */
   private paused = false;
 
+  /** Re-entrancy guard so timer + event-driven wake() ticks never overlap (gap #2). */
+  private _ticking = false;
+  /** Last event-driven wake timestamp for debouncing bursts (gap #2). */
+  private _lastWakeAt = 0;
+  /** Minimum gap between event-driven wakes — collapses event storms to one tick. */
+  private readonly _minWakeIntervalMs = 5_000;
+
   /**
    * @param goalEngine    - GoalEngineV2 instance that persists goals.
    * @param hookManager   - Optional HookManager for emitting lifecycle events.
@@ -165,31 +172,60 @@ export class WakeSleepCycle {
       this.state = 'paused';
       return;
     }
-
-    let readyGoals: GoalV2[];
+    // Re-entrancy guard (gap #2): the timer AND event-driven wake() can both
+    // fire a tick; skip if one is already dispatching so an event storm can't
+    // stack overlapping dispatch batches.
+    if (this._ticking) {
+      log.debug({}, 'tick already in flight — skipping overlapping tick');
+      return;
+    }
+    this._ticking = true;
     try {
-      readyGoals = this.goalEngine.getGoalsReadyToWork();
-    } catch (err) {
-      log.error({ err: String(err) }, 'getGoalsReadyToWork() threw — skipping tick');
+      let readyGoals: GoalV2[];
+      try {
+        readyGoals = this.goalEngine.getGoalsReadyToWork();
+      } catch (err) {
+        log.error({ err: String(err) }, 'getGoalsReadyToWork() threw — skipping tick');
+        return;
+      }
+
+      if (readyGoals.length === 0) {
+        log.debug({}, 'No goals ready to work — sleeping until next tick');
+        this.state = 'sleeping';
+        return;
+      }
+
+      this.state = 'working';
+      log.info({ goalCount: readyGoals.length }, 'Dispatching ready goals');
+
+      // Cap to maxConcurrentGoals.
+      const batch = readyGoals.slice(0, this.maxConcurrentGoals);
+
+      const dispatches = batch.map((goal) => this.dispatchGoal(goal));
+      await Promise.allSettled(dispatches);
+
+      if (this.intervalId !== null) this.state = 'awake';
+    } finally {
+      this._ticking = false;
+    }
+  }
+
+  /**
+   * Event-driven wake (gap #2): run a tick NOW instead of waiting for the next
+   * timer interval — e.g. when a goal is just created or the WorldStateMonitor
+   * detects a surprise. Debounced so a burst of events collapses to one tick;
+   * fire-and-forget (tick is idle/pause/re-entrancy guarded).
+   */
+  wake(reason = 'event'): void {
+    if (this.state === 'idle' || this.paused) return;
+    const now = Date.now();
+    if (now - this._lastWakeAt < this._minWakeIntervalMs) {
+      log.debug({ reason }, 'wake() debounced');
       return;
     }
-
-    if (readyGoals.length === 0) {
-      log.debug({}, 'No goals ready to work — sleeping until next tick');
-      this.state = 'sleeping';
-      return;
-    }
-
-    this.state = 'working';
-    log.info({ goalCount: readyGoals.length }, 'Dispatching ready goals');
-
-    // Cap to maxConcurrentGoals.
-    const batch = readyGoals.slice(0, this.maxConcurrentGoals);
-
-    const dispatches = batch.map((goal) => this.dispatchGoal(goal));
-    await Promise.allSettled(dispatches);
-
-    if (this.intervalId !== null) this.state = 'awake';
+    this._lastWakeAt = now;
+    log.info({ reason }, 'WakeSleepCycle: event-driven wake');
+    void this.tick();
   }
 
   // -------------------------------------------------------------------------

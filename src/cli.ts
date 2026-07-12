@@ -3719,6 +3719,57 @@ async function boot(): Promise<void> {
       wakeSleep.start();
       registerShutdown(() => wakeSleep.stop());
 
+      // gap #2 — event-driven attention: wake the cycle the moment a relevant
+      // event fires instead of waiting up to a full tick interval. tick() is
+      // idle/pause/re-entrancy guarded and wake() debounces bursts, so ad-hoc
+      // wakes are safe. Default ON; SUDO_EVENT_ATTENTION=0 disables.
+      if (process.env['SUDO_EVENT_ATTENTION'] !== '0') {
+        const wakeEvents = ['goal:created', 'message:received', 'tool:denied', 'file:changed'] as const;
+        for (const ev of wakeEvents) {
+          try { hooks.register(ev, async () => { wakeSleep.wake(ev); }); } catch { /* fail-open */ }
+        }
+        log.info({ events: wakeEvents }, 'Event-driven attention wired (gap #2) — events wake the autonomy cycle immediately');
+      }
+
+      // gap #3 — prediction-error goal synthesis. Snapshot measurable system
+      // signals, hold an EMA prediction per signal, and on a surprise synthesise
+      // a goal (which emits goal:created → immediate wake via #2). Detection runs
+      // by default; LIVE goal creation requires SUDO_WORLD_STATE_GOALS=1 (spawns
+      // autonomous work). SUDO_WORLD_STATE_MONITOR=0 disables the monitor.
+      if (process.env['SUDO_WORLD_STATE_MONITOR'] !== '0') {
+        try {
+          const { WorldStateMonitor } = await import('./core/autonomy/world-state-monitor.js');
+          const mdb = db.db;
+          const monitor = new WorldStateMonitor({
+            liveGoals: process.env['SUDO_WORLD_STATE_GOALS'] === '1',
+            createGoal: (title, description, priority) => { wakeSleep.createGoal({ title, description, priority }); },
+            readSignals: () => {
+              const readings: Array<{ key: string; label: string; value: number; higherIsWorse: boolean; floor: number; priority?: 'critical' | 'high' | 'normal' | 'low' }> = [];
+              try {
+                const t = mdb.prepare('SELECT AVG(ema) a, COUNT(*) c FROM tool_outcome_stats WHERE n >= 5').get() as { a: number | null; c: number } | undefined;
+                if (t && t.c > 0 && typeof t.a === 'number') readings.push({ key: 'tool_fail_rate', label: 'tool failure rate', value: 1 - t.a, higherIsWorse: true, floor: 0.4, priority: 'high' });
+              } catch { /* signal unavailable */ }
+              try {
+                const q = mdb.prepare("SELECT COUNT(*) n FROM task_queue WHERE status = 'queued'").get() as { n: number } | undefined;
+                if (q) readings.push({ key: 'queue_depth', label: 'task queue depth', value: q.n, higherIsWorse: true, floor: 20 });
+              } catch { /* signal unavailable */ }
+              try {
+                const cost = mdb.prepare("SELECT COALESCE(SUM(estimated_cost_usd),0) s FROM api_call_log WHERE called_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hour')").get() as { s: number } | undefined;
+                if (cost) readings.push({ key: 'hourly_cost', label: 'hourly API cost (USD)', value: cost.s, higherIsWorse: true, floor: 10, priority: 'high' });
+              } catch { /* signal unavailable */ }
+              readings.push({ key: 'rss_mb', label: 'process memory (MB)', value: process.memoryUsage().rss / 1e6, higherIsWorse: true, floor: 1500 });
+              return readings;
+            },
+          });
+          const monitorTimer = setInterval(() => { try { monitor.tick(); } catch { /* fail-open */ } }, 120_000);
+          monitorTimer.unref?.();
+          registerShutdown(() => clearInterval(monitorTimer));
+          log.info({ liveGoals: process.env['SUDO_WORLD_STATE_GOALS'] === '1' }, 'WorldStateMonitor wired (gap #3; SUDO_WORLD_STATE_GOALS=1 for live goal synthesis)');
+        } catch (err: unknown) {
+          log.warn({ err: String(err) }, 'WorldStateMonitor wiring failed');
+        }
+      }
+
       // Gap #28d slice 1 — late-bind the autonomy adapter onto the fleet
       // executor (if §8.6b opted into fleet mode). The executor was started
       // earlier in boot when the cycle did not yet exist; this setter is the
