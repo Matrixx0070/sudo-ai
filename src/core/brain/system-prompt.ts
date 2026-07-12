@@ -15,6 +15,7 @@ import { getMoodSystemBlock } from './moods.js';
 import { isPromptCacheEnabled, sortByName, DYNAMIC_BOUNDARY_MARKER } from './prompt-cache-discipline.js';
 import { getCapabilityManifestBody, isCapabilityManifestEnabled } from './capability-manifest.js';
 import { getAppliedLessonHints } from '../learning/lesson-apply.js';
+import { getAdoptedDirectives } from '../eval/self-eval.js';
 import { truncateForInjection, injectCap, MAX_INJECT_CHARS, DAILY_INJECT_CHARS } from '../workspace/injector.js';
 import type { SystemPromptOptions } from './types.js';
 
@@ -500,6 +501,16 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   if (learnedHints.length > 0) {
     const learnedBlock = learnedHints.map((h) => `- ${h}`).join('\n');
     parts.push(sectionWithHeader('Learned Repair Hints', learnedBlock));
+  }
+
+  // 7.66 Learned behaviour directives — candidate prompt additions that the
+  // self-eval loop (gap #4) A/B-measured as an improvement and that were
+  // explicitly adopted. Gated by SUDO_SELF_EVAL_ADOPT (default OFF → [] with no
+  // disk read, so the default prompt is byte-identical). See eval/self-eval.ts.
+  const adoptedDirectives = getAdoptedDirectives();
+  if (adoptedDirectives.length > 0) {
+    const directiveBlock = adoptedDirectives.map((d) => `- ${d}`).join('\n');
+    parts.push(sectionWithHeader('Learned Behaviour Directives', directiveBlock));
   }
 
   // 7.6 Reasoning lens — analytical framework(s) for the matched task type.
