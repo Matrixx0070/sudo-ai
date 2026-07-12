@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
 import { DATA_DIR } from '../../../shared/paths.js';
 import { dailyBudgetUsd } from '../../../billing/daily-budget.js';
+import { getGlobalMessageRouter } from '../../../channels/router.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../tools/types.js';
 import type { ToolRegistry } from '../../../tools/registry.js';
 
@@ -43,6 +44,28 @@ export interface DiagnosticCheck {
   status: 'pass' | 'warn' | 'fail';
   value: string;
   detail?: string;
+}
+
+/**
+ * Gateway channel health (Feature 1). Reads the live MessageRouter; pass when no
+ * gateway router is wired (only bespoke channels like Telegram) or all adapters
+ * are connected, warn when any gateway adapter is down. Fail-open.
+ */
+function checkChannels(): DiagnosticCheck {
+  try {
+    const router = getGlobalMessageRouter();
+    if (!router) return { name: 'channels', status: 'pass', value: 'no gateway router (bespoke channels only)' };
+    const health = router.health();
+    if (health.length === 0) return { name: 'channels', status: 'pass', value: 'no adapters registered' };
+    const down = health.filter((h) => !h.connected);
+    const restarts = health.reduce((n, h) => n + h.restarts, 0);
+    if (down.length > 0) {
+      return { name: 'channels', status: 'warn', value: `${down.length}/${health.length} channel(s) down`, detail: down.map((h) => `${h.channel}${h.lastError ? `: ${h.lastError.slice(0, 40)}` : ''}`).join(', ') };
+    }
+    return { name: 'channels', status: 'pass', value: `${health.length} connected`, detail: restarts > 0 ? `${restarts} supervisor restart(s)` : undefined };
+  } catch (err) {
+    return { name: 'channels', status: 'pass', value: 'unavailable', detail: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export interface SelfDiagnosticOutput {
@@ -225,6 +248,7 @@ function runDiagnostics(ctx: ToolContext): SelfDiagnosticOutput {
     checkDiskUsage(),
     checkLogs(),
     checkMemory(),
+    checkChannels(),
   ];
 
   const issues = checks
