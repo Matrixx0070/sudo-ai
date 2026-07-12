@@ -9,6 +9,7 @@
 import { createLogger } from '../../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { SkillWorkshop } from '../../../../skills/workshop.js';
+import { reloadSkillsLive } from '../../../../skills/live-reload.js';
 
 const logger = createLogger('skill.apply');
 
@@ -19,8 +20,8 @@ export const applyTool: ToolDefinition = {
     'workflow instructions (like a Claude-Code skill). Use THIS whenever asked to "build/create/author ' +
     'a skill" that shapes how you behave, write, or work. Runs a security gate (injection scan + ' +
     'capability policy + protected-path check) before writing. dryRun=true (default) runs the gate and ' +
-    'reports the verdict WITHOUT writing; dryRun=false applies. Applied skills take effect on the next ' +
-    'restart. Requires SUDO_SKILL_WORKSHOP=1. (To create an executable code TOOL with parameters and an ' +
+    'reports the verdict WITHOUT writing; dryRun=false applies. Applied skills are activated immediately ' +
+    '(live reload, no restart). Requires SUDO_SKILL_WORKSHOP=1. (To create an executable code TOOL with parameters and an ' +
     'execute() function, use meta.tool-creator instead — NOT this.)',
   category: 'skill' as import('../../../types.js').ToolCategory,
   timeout: 15_000,
@@ -87,10 +88,14 @@ export const applyTool: ToolDefinition = {
         data: { skillName, result },
       };
     }
+    const reload = await reloadSkillsLive();
     return {
       success: true,
-      output: `Applied skill "${skillName}" v${version} (version id ${result.versionId}) at ${result.skillPath}. It takes effect on the next restart. Use skill.rollback to undo.`,
-      data: { skillName, version, result },
+      output: `Applied skill "${skillName}" v${version} (version id ${result.versionId}) at ${result.skillPath}. `
+        + (reload.reloaded
+          ? `It is active now — no restart needed (${reload.count} skills live). Use skill.rollback to undo.`
+          : 'It takes effect on the next restart. Use skill.rollback to undo.'),
+      data: { skillName, version, result, reloaded: reload.reloaded },
     };
   },
 };

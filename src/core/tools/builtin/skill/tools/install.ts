@@ -20,6 +20,7 @@
 import { createLogger } from '../../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { SkillWorkshop, type WorkshopProposal } from '../../../../skills/workshop.js';
+import { reloadSkillsLive } from '../../../../skills/live-reload.js';
 import {
   SkillRegistryClient,
   isSkillRegistryEnabled,
@@ -45,7 +46,7 @@ export const installTool: ToolDefinition = {
     + 'Fetches the skill, verifies its SHA-256 pin from the registry index, then runs the same '
     + 'security gate as skill.apply (injection scan + capability policy + protected paths) before '
     + 'writing. dryRun=true (default) reports the gate verdict WITHOUT installing; set '
-    + 'dryRun=false to install. Installed skills take effect on the next restart and can be '
+    + 'dryRun=false to install. Installed skills are activated immediately (live reload, no restart) and can be '
     + 'removed with skill.rollback. Use skill.search first to discover names. '
     + 'Requires SUDO_SKILL_WORKSHOP=1.',
   category: 'skill' as import('../../../types.js').ToolCategory,
@@ -115,13 +116,16 @@ export const installTool: ToolDefinition = {
         data: { skill: fetched.entry, sourceUrl: fetched.sourceUrl, result },
       };
     }
+    const reload = await reloadSkillsLive();
     return {
       success: true,
       output:
         `Installed registry skill "${proposal.skillName}" v${proposal.version} `
         + `(version id ${result.versionId}) at ${result.skillPath} — sha256 verified against the registry pin. `
-        + 'It takes effect on the next restart. Use skill.rollback to undo.',
-      data: { skill: fetched.entry, sourceUrl: fetched.sourceUrl, result },
+        + (reload.reloaded
+          ? `It is active now — no restart needed (${reload.count} skills live). Use skill.rollback to undo.`
+          : 'It takes effect on the next restart. Use skill.rollback to undo.'),
+      data: { skill: fetched.entry, sourceUrl: fetched.sourceUrl, result, reloaded: reload.reloaded },
     };
   },
 };

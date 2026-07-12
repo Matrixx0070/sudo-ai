@@ -19,6 +19,7 @@ import {
 } from '../../../skills/plugin-registry-client.js';
 import { installTool as skillInstallTool } from '../skill/tools/install.js';
 import { connectorInstallTool } from './connector-registry.js';
+import { reloadSkillsLive } from '../../../skills/live-reload.js';
 
 const logger = createLogger('plugin.registry');
 
@@ -71,7 +72,7 @@ export const pluginInstallTool: ToolDefinition = {
     'Install a role bundle from the SUDO plugin catalog by name — fans out to skill.install (for '
     + 'each skill) and connector.install (for each connector) in the bundle. dryRun=true (default) '
     + 'lists what would be installed without installing; set dryRun=false to install everything. '
-    + 'Installed skills take effect on the next restart; connectors connect immediately. Use '
+    + 'Installed skills are activated immediately (live reload, no restart); connectors connect immediately. Use '
     + 'plugin.search first to discover bundle names. Requires SUDO_PLUGIN_REGISTRY != 0 (and, to '
     + 'actually write skills, SUDO_SKILL_WORKSHOP=1).',
   category: 'skill' as ToolCategory,
@@ -112,7 +113,7 @@ export const pluginInstallTool: ToolDefinition = {
           `Would install bundle "${entry.name}":\n`
           + `  skills (via skill.install): ${skills.join(', ') || '—'}\n`
           + `  connectors (via connector.install): ${connectors.join(', ') || '—'}\n`
-          + 'Re-run with dryRun=false to install. Skills take effect on next restart; connectors connect immediately.',
+          + 'Re-run with dryRun=false to install. Skills are activated immediately (live reload, no restart); connectors connect immediately.',
         data: { plugin: entry, sourceUrl, dryRun: true },
       };
     }
@@ -137,12 +138,15 @@ export const pluginInstallTool: ToolDefinition = {
 
     const okCount = results.filter((r) => r.ok).length;
     const lines = results.map((r) => `  ${r.ok ? '✅' : '❌'} ${r.kind} ${r.name}: ${r.detail}`);
+    const reload = await reloadSkillsLive();
     return {
       success: okCount > 0,
       output:
         `Installed plugin "${entry.name}" — ${okCount}/${results.length} member(s) succeeded:\n${lines.join('\n')}\n`
-        + 'Newly installed skills take effect on the next restart.',
-      data: { plugin: entry, sourceUrl, results, installed: okCount, total: results.length },
+        + (reload.reloaded
+          ? `Newly installed skills are active now — no restart needed (${reload.count} skills live).`
+          : 'Newly installed skills take effect on the next restart.'),
+      data: { plugin: entry, sourceUrl, results, installed: okCount, total: results.length, reloaded: reload.reloaded },
     };
   },
 };

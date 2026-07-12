@@ -8,6 +8,7 @@
 import { createLogger } from '../../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { SkillWorkshop } from '../../../../skills/workshop.js';
+import { reloadSkillsLive } from '../../../../skills/live-reload.js';
 
 const logger = createLogger('skill.rollback');
 
@@ -15,7 +16,7 @@ export const rollbackTool: ToolDefinition = {
   name: 'skill.rollback',
   description:
     'Undo the last change to one of your own skills, restoring the previous version (or removing the ' +
-    'skill if it had no prior version). Takes effect on the next restart. Requires SUDO_SKILL_WORKSHOP=1.',
+    'skill if it had no prior version). Takes effect immediately (live reload, no restart). Requires SUDO_SKILL_WORKSHOP=1.',
   category: 'skill' as import('../../../types.js').ToolCategory,
   timeout: 15_000,
   parameters: {
@@ -44,10 +45,12 @@ export const rollbackTool: ToolDefinition = {
     if (!r.restored) {
       return { success: false, output: `skill.rollback failed for "${skillName}": ${r.reason ?? 'unknown'}`, data: { skillName, r } };
     }
+    const reload = await reloadSkillsLive();
     return {
       success: true,
-      output: `Rolled back "${skillName}" to ${r.version}. Takes effect on the next restart.`,
-      data: { skillName, restoredTo: r.version },
+      output: `Rolled back "${skillName}" to ${r.version}. `
+        + (reload.reloaded ? `Active now — no restart needed (${reload.count} skills live).` : 'Takes effect on the next restart.'),
+      data: { skillName, restoredTo: r.version, reloaded: reload.reloaded },
     };
   },
 };
