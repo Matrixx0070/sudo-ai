@@ -2554,8 +2554,11 @@ async function boot(): Promise<void> {
     irc: Boolean(process.env['IRC_SERVER'] && process.env['IRC_NICK']),
     matrix: Boolean(process.env['MATRIX_HOMESERVER'] && process.env['MATRIX_ACCESS_TOKEN']),
     signal: Boolean(process.env['SIGNAL_PHONE_NUMBER']),
+    // iMessage is macOS-only + polls chat.db (Full Disk Access); opt-in so it
+    // never auto-starts on the wrong host. The adapter self-no-ops off-macOS.
+    imessage: process.env['SUDO_IMESSAGE_ENABLE'] === '1',
   };
-  if (extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal) {
+  if (extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal || extraChannelEnv.imessage) {
     try {
       const { MessageRouter } = await import('./core/channels/router.js');
       const router = new MessageRouter();
@@ -2612,6 +2615,10 @@ async function boot(): Promise<void> {
       if (extraChannelEnv.signal) {
         const { SignalAdapter } = await import('./core/channels/signal.js');
         router.registerAdapter(new SignalAdapter());
+      }
+      if (extraChannelEnv.imessage) {
+        const { IMessageAdapter } = await import('./core/channels/imessage-adapter.js');
+        router.registerAdapter(new IMessageAdapter());
       }
 
       if (chatApprovals) {

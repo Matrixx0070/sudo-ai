@@ -17,6 +17,7 @@ export type ChannelType =
   | 'discord'
   | 'slack'
   | 'signal'
+  | 'imessage'
   | 'matrix'
   | 'irc'
   | 'web'

@@ -18,8 +18,11 @@ import {
   type WASocket,
   type proto,
 } from '@whiskeysockets/baileys';
-// @ts-expect-error @hapi/boom is an optional peer dependency of baileys
-import { Boom } from '@hapi/boom';
+// Baileys surfaces disconnect errors as @hapi/boom instances, but boom is only an
+// OPTIONAL peer dep of baileys and isn't installed here — importing it crashed the
+// WhatsApp adapter at load. We only read `.output.statusCode`, so a local
+// structural type covers it with no dependency.
+type BoomLike = { output?: { statusCode?: number } };
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/index.js';
@@ -227,7 +230,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
       if (connection === 'close') {
         this._isConnected = false;
-        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+        const statusCode = (lastDisconnect?.error as BoomLike)?.output?.statusCode;
         const shouldLogout = statusCode === DisconnectReason.loggedOut;
 
         log.warn({ statusCode, shouldLogout }, 'WhatsApp connection closed');
