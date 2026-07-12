@@ -574,11 +574,34 @@ interface SlimTool {
 export class ToolRouter {
   private readonly registry: ToolRegistryLike;
 
+  /**
+   * Optional outcome-derived bias (gap #1). When set, bias(toolName) returns a
+   * bounded additive term folded into the within-category relevance sort so
+   * chronically-failing tools sink below reliable siblings (and past the routed
+   * cap) while a strongly keyword-matched tool still wins. null = static router.
+   */
+  private outcomeBias: ((toolName: string) => number) | null = null;
+
   constructor(registry: ToolRegistryLike) {
     if (!registry || typeof registry.getSchemaForLLM !== 'function') {
       throw new TypeError('ToolRouter: registry must implement ToolRegistryLike');
     }
     this.registry = registry;
+  }
+
+  /** Wire an outcome-bias function after construction. Pass null to disable. */
+  setOutcomeBias(fn: ((toolName: string) => number) | null): void {
+    this.outcomeBias = fn;
+    log.info({ enabled: fn !== null }, 'ToolRouter: outcome bias ' + (fn ? 'attached' : 'cleared'));
+  }
+
+  /** Bounded outcome bias for a schema (0 when disabled or unknown). Fail-open. */
+  private _outcomeBias(schema: ToolSchema): number {
+    if (!this.outcomeBias) return 0;
+    try {
+      const b = this.outcomeBias(this._schemaName(schema));
+      return Number.isFinite(b) ? b : 0;
+    } catch { return 0; }
   }
 
   // -------------------------------------------------------------------------
@@ -799,8 +822,13 @@ export class ToolRouter {
       // generic words filtered), so the tool the user actually describes surfaces
       // ahead of siblings that merely share a category. Stable for ties →
       // registration order preserved.
+      // Fold outcome bias (gap #1) into the keyword-relevance sort: reliable
+      // tools rise, chronic failers sink past the per-category limit. Bias is
+      // bounded so a strong keyword match still dominates a poor track record.
       const sorted = [...candidates].sort(
-        (a, b) => this._relevanceScore(b, normalised) - this._relevanceScore(a, normalised),
+        (a, b) =>
+          (this._relevanceScore(b, normalised) + this._outcomeBias(b)) -
+          (this._relevanceScore(a, normalised) + this._outcomeBias(a)),
       );
 
       let added = 0;
