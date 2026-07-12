@@ -21,6 +21,7 @@ export { DiscordAdapter } from './discord.js';
 
 export { SlackAdapter } from './slack.js';
 export { SignalAdapter } from './signal.js';
+export { IMessageAdapter } from './imessage-adapter.js';
 export { MatrixAdapter } from './matrix.js';
 export { IRCAdapter } from './irc.js';
 export { WebAdapter } from './web.js';
