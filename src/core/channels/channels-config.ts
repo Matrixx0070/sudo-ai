@@ -62,7 +62,10 @@ export function loadChannelsConfig(path: string = CONFIG_PATH): ChannelAccessCon
     const allowed = toStringArray(block.allowedPeers);
     if (owners) policy.owners = owners;
     if (allowed) policy.allowedPeers = allowed;
-    if (block.open === true) policy.open = true;
+    // Capture `open` as a boolean — `open:false` is meaningful (locks a channel:
+    // deny-by-default with no owners). Only capturing `=== true` silently dropped
+    // locked blocks, leaving those channels admitting everyone.
+    if (typeof block.open === 'boolean') policy.open = block.open;
     // Only register a policy block if it actually constrains/decides admission.
     if (policy.owners || policy.allowedPeers || policy.open !== undefined) {
       channels[key as ChannelType] = policy;

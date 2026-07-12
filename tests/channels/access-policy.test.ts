@@ -3,8 +3,12 @@
  * resolution, and the router admission gate (denied senders never reach the
  * handler; admitted senders arrive with isOwner set).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ChannelAccessPolicy } from '../../src/core/channels/access-policy.js';
+import { loadChannelsConfig } from '../../src/core/channels/channels-config.js';
 import { MessageRouter } from '../../src/core/channels/router.js';
 import type { ChannelAdapter } from '../../src/core/channels/adapter.js';
 import type { ChannelType, MessageHandler, UnifiedMessage } from '../../src/core/channels/types.js';
@@ -50,6 +54,32 @@ describe('ChannelAccessPolicy.resolve', () => {
 
   it('active is true once any channel is gated', () => {
     expect(new ChannelAccessPolicy({ channels: { signal: { open: false } } }).active).toBe(true);
+  });
+});
+
+describe('loadChannelsConfig', () => {
+  const dirs: string[] = [];
+  afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+  function writeCfg(body: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'chcfg-')); dirs.push(dir);
+    const p = join(dir, 'channels.json5'); writeFileSync(p, body); return p;
+  }
+
+  it('captures open:false as a LOCK (regression: was silently dropped)', () => {
+    const cfg = loadChannelsConfig(writeCfg('{ channels: { signal: { enabled: false, open: false } } }'));
+    expect(cfg?.channels?.signal).toEqual({ open: false });
+    const p = new ChannelAccessPolicy(cfg ?? {});
+    expect(p.resolve('signal', 'stranger').admit).toBe(false);
+  });
+
+  it('parses owners + open:true and ignores non-policy fields (tokenEnv/enabled)', () => {
+    const cfg = loadChannelsConfig(writeCfg('{ channels: { discord: { enabled: true, tokenEnv: "DISCORD_TOKEN", owners: ["me"] }, web: { open: true } } }'));
+    expect(cfg?.channels?.discord).toEqual({ owners: ['me'] });
+    expect(cfg?.channels?.web).toEqual({ open: true });
+  });
+
+  it('returns null for a missing file (permissive fallback)', () => {
+    expect(loadChannelsConfig(join(tmpdir(), 'does-not-exist-channels.json5'))).toBeNull();
   });
 });
 
