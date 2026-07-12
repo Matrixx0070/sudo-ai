@@ -2206,7 +2206,18 @@ async function boot(): Promise<void> {
     if (!gatewayServer) throw new Error('gatewayServer not ready — cannot attach WebAdapter');
     web.attach(gatewayServer);
     registerShutdown(() => web.stop());
-    log.info({ gateway: '18900', chatPath: '/chat', wsPath: '/chat/ws' }, 'WebAdapter attached to gateway');
+    // Feature 1 — fold Web onto the gateway HEALTH-ONLY (manageInbound:false).
+    // Web streams tokens over WebSocket and authenticates by bearer token with
+    // ephemeral web-<uuid> peers, so its inbound must NOT be rerouted through the
+    // generic handler (would drop streaming) and the owner-allowlist doesn't
+    // apply — but it still shows in channel.health + self-diagnostics.
+    {
+      const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
+      const gw = getGlobalMessageRouter() ?? new MessageRouter();
+      setGlobalMessageRouter(gw);
+      gw.registerAdapter(web, { manageInbound: false });
+    }
+    log.info({ gateway: '18900', chatPath: '/chat', wsPath: '/chat/ws' }, 'WebAdapter attached to gateway (health-only fold)');
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn({ err: msg }, 'Web adapter failed to start — running without web chat');
@@ -2224,75 +2235,15 @@ async function boot(): Promise<void> {
       registerOutboundAdapter(email);
       email.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('email', email);
 
-      email.onMessage(async (msg) => {
-        log.info(
-          { channel: msg.channel, peerId: msg.peerId, text: msg.text?.slice(0, 80) },
-          'Email incoming message',
-        );
-
-        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
-          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
-          return;
-        }
-
-        // Directive short-circuit: slash commands bypass the turn queue.
-        if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
-          reply: (text) => email.send(msg.peerId, text),
-        })) return;
-
-        dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
-          try {
-            const convKey = `${msg.channel}:${msg.peerId}`;
-            const runGen = runGenerations.current(convKey);
-            const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-            log.info({ sessionId: String(session.id) }, 'Email session resolved');
-
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
-            if (runGenerations.isStale(convKey, runGen)) {
-              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
-              return;
-            }
-            const replyText = result?.text ?? 'No response generated.';
-
-            try {
-              const turnSummary = `**User (email):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
-              await dailyLog.append(turnSummary);
-            } catch { /* daily log write is non-fatal */ }
-
-            try {
-              const nowTs = new Date().toISOString();
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'user',
-                content: msg.text ?? '',
-              });
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'assistant',
-                content: replyText,
-              });
-            } catch { /* journal append is non-fatal */ }
-
-            await email.send(msg.peerId, replyText);
-            log.info({ peerId: msg.peerId }, 'Reply sent via Email');
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log.error({ err: errMsg, peerId: msg.peerId }, 'Email agent turn failed');
-            try { await email.send(msg.peerId, 'Something went wrong. Please try again.'); } catch {}
-          }
-        }).catch((err: unknown) => {
-          log.error({ err: String(err), peerId: msg.peerId }, 'Queued Email agent turn failed');
-        });
-      });
-
-      await email.start();
-      registerShutdown(() => email.stop());
-      log.info('Email channel active');
+      // Feature 1 — register Email FULLY on the shared gateway router (async,
+      // no streaming — fits the ONE handler cleanly). Started at gateway finalize.
+      {
+        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
+        const gw = getGlobalMessageRouter() ?? new MessageRouter();
+        setGlobalMessageRouter(gw);
+        gw.registerAdapter(email);
+      }
+      log.info('Email registered on gateway router (started at gateway finalize)');
     } catch (err) {
       log.warn({ err: String(err) }, 'Email adapter failed to start (non-fatal)');
     }
@@ -2310,74 +2261,15 @@ async function boot(): Promise<void> {
       registerOutboundAdapter(sms);
       sms.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('sms', sms);
 
-      sms.onMessage(async (msg) => {
-        log.info(
-          { channel: msg.channel, peerId: msg.peerId, text: msg.text?.slice(0, 80) },
-          'SMS incoming message',
-        );
-
-        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
-          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
-          return;
-        }
-
-        // Directive short-circuit: slash commands bypass the turn queue.
-        if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
-          reply: (text) => sms.send(msg.peerId, text),
-        })) return;
-
-        dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
-          try {
-            const convKey = `${msg.channel}:${msg.peerId}`;
-            const runGen = runGenerations.current(convKey);
-            const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-            log.info({ sessionId: String(session.id) }, 'SMS session resolved');
-
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
-            if (runGenerations.isStale(convKey, runGen)) {
-              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
-              return;
-            }
-            const replyText = result?.text ?? 'No response generated.';
-
-            try {
-              const turnSummary = `**User (sms):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
-              await dailyLog.append(turnSummary);
-            } catch { /* daily log write is non-fatal */ }
-
-            try {
-              const nowTs = new Date().toISOString();
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'user',
-                content: msg.text ?? '',
-              });
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'assistant',
-                content: replyText,
-              });
-            } catch { /* journal append is non-fatal */ }
-
-            await sms.send(msg.peerId, replyText);
-            log.info({ peerId: msg.peerId }, 'Reply sent via SMS');
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log.error({ err: errMsg, peerId: msg.peerId }, 'SMS agent turn failed');
-          }
-        }).catch((err: unknown) => {
-          log.error({ err: String(err), peerId: msg.peerId }, 'Queued SMS agent turn failed');
-        });
-      });
-
-      await sms.start();
-      registerShutdown(() => sms.stop());
-      log.info('SMS channel active');
+      // Feature 1 — register SMS FULLY on the shared gateway router (async, no
+      // streaming). Started at gateway finalize.
+      {
+        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
+        const gw = getGlobalMessageRouter() ?? new MessageRouter();
+        setGlobalMessageRouter(gw);
+        gw.registerAdapter(sms);
+      }
+      log.info('SMS registered on gateway router (started at gateway finalize)');
     } catch (err) {
       log.warn({ err: String(err) }, 'SMS adapter failed to start (non-fatal)');
     }
@@ -2405,7 +2297,8 @@ async function boot(): Promise<void> {
   const gatewayFinalize =
     extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal || extraChannelEnv.imessage ||
     Boolean(process.env['DISCORD_TOKEN']) || Boolean(process.env['SLACK_BOT_TOKEN']) ||
-    (process.env['SUDO_WHATSAPP_ENABLE'] === '1' && Boolean(process.env['WHATSAPP_TOKEN']));
+    (process.env['SUDO_WHATSAPP_ENABLE'] === '1' && Boolean(process.env['WHATSAPP_TOKEN'])) ||
+    Boolean(process.env['EMAIL_IMAP_USER']) || Boolean(process.env['TWILIO_ACCOUNT_SID']);
   if (gatewayFinalize) {
     try {
       const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
