@@ -1934,6 +1934,24 @@ async function boot(): Promise<void> {
     await telegram.start();
     registerShutdown(() => telegram.stop());
     log.info('TelegramAdapter started');
+
+    // Feature 1 — optional Telegram fold onto the gateway. Default OFF: Telegram
+    // keeps its bespoke handler (coalescer/streaming/media/voice) + own allowlist
+    // + reconnect loop, unchanged. When SUDO_TELEGRAM_VIA_GATEWAY=1 it registers
+    // for HEALTH ONLY (manageInbound:false — no inbound rewire, no start, no
+    // restart), so it shows up in channel.health + self-diagnostics alongside the
+    // other channels without any change to its live message path. Fail-open.
+    if (process.env['SUDO_TELEGRAM_VIA_GATEWAY'] === '1') {
+      try {
+        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
+        const gw = getGlobalMessageRouter() ?? new MessageRouter();
+        setGlobalMessageRouter(gw);
+        gw.registerAdapter(telegram, { manageInbound: false });
+        log.info('Telegram folded into gateway for health/observability (SUDO_TELEGRAM_VIA_GATEWAY=1; bespoke handler unchanged)');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'Telegram gateway fold failed — Telegram runs normally without gateway health');
+      }
+    }
   } else {
     log.info('Telegram channel disabled in config — skipping');
   }
@@ -2417,8 +2435,10 @@ async function boot(): Promise<void> {
   };
   if (extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal || extraChannelEnv.imessage) {
     try {
-      const { MessageRouter, setGlobalMessageRouter } = await import('./core/channels/router.js');
-      const router = new MessageRouter();
+      const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
+      // Reuse a router the Telegram-via-gateway block may already have created,
+      // so there is exactly one shared gateway router.
+      const router = getGlobalMessageRouter() ?? new MessageRouter();
       setGlobalMessageRouter(router); // expose to the channel.health tool + diagnostics
       registerShutdown(() => setGlobalMessageRouter(null));
 
