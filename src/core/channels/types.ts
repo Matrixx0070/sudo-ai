@@ -94,6 +94,12 @@ export interface UnifiedMessage {
   replyToId?: string;
   /** Wall-clock time when the message was created on the platform. */
   timestamp: Date;
+  /**
+   * Resolved by the gateway's ChannelAccessPolicy before the handler runs: true
+   * when the sender is a configured owner of this channel. Undefined when no
+   * access policy is active. Handlers/tools may use this for owner-gated actions.
+   */
+  isOwner?: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import { KeyedAsyncQueue } from '../sessions/queue.js';
 import type { ChannelAdapter } from './adapter.js';
 import type { ChannelType, MessageHandler, SendOptions, UnifiedMessage } from './types.js';
 import { CrossChannelMemory } from './cross-channel-memory.js';
+import type { ChannelAccessPolicy } from './access-policy.js';
 
 const log = createLogger('channels:router');
 
@@ -60,6 +61,15 @@ export class MessageRouter {
   private readonly crossChannelMemory: CrossChannelMemory | null;
 
   /**
+   * Optional gateway access policy (Feature 1). When set, every inbound message
+   * is admission-checked BEFORE it reaches the interceptor, the per-peer queue,
+   * or the handler: non-allowlisted senders are silently dropped and audit-
+   * logged (never a reply — don't reveal the bot is alive), and admitted
+   * messages get `isOwner` resolved onto them.
+   */
+  private accessPolicy: ChannelAccessPolicy | null = null;
+
+  /**
    * @param crossChannelMemory - Optional memory store.  When omitted the
    *   router behaves exactly as before: no persistence, no history injection.
    */
@@ -101,6 +111,14 @@ export class MessageRouter {
     }
     this.handler = handler;
     log.debug('global message handler registered');
+  }
+
+  /**
+   * Install the gateway access policy (owner allowlist). See {@link accessPolicy}.
+   */
+  setAccessPolicy(policy: ChannelAccessPolicy): void {
+    this.accessPolicy = policy;
+    log.info({ active: policy.active }, 'channel access policy installed');
   }
 
   /**
@@ -271,6 +289,30 @@ export class MessageRouter {
    *     UnifiedMessage as `crossChannelContext` before the handler is called.
    */
   private _dispatch(msg: UnifiedMessage): Promise<void> {
+    // Gateway admission gate (Feature 1): deny-by-default owner allowlist,
+    // resolved BEFORE anything else. Non-allowlisted senders are silently
+    // dropped (no reply — never reveal the bot is alive) and audit-logged.
+    if (this.accessPolicy && this.accessPolicy.active) {
+      let decision;
+      try {
+        decision = this.accessPolicy.resolve(msg.channel, msg.peerId);
+      } catch (err) {
+        // Fail OPEN on policy bugs would defeat the security purpose; fail CLOSED
+        // but audit loudly so a broken policy is noticed, not silently bypassed.
+        log.error({ channel: msg.channel, peerId: msg.peerId, err }, 'access policy threw — denying (fail closed)');
+        return Promise.resolve();
+      }
+      if (!decision.admit) {
+        log.warn(
+          { audit: 'channel-admission-denied', channel: msg.channel, peerId: msg.peerId, peerName: msg.peerName, reason: decision.reason },
+          'AUDIT: channel admission DENIED — message dropped',
+        );
+        return Promise.resolve();
+      }
+      // Stamp the resolved owner flag for downstream owner-gated behaviour.
+      (msg as UnifiedMessage).isOwner = decision.isOwner;
+    }
+
     if (this.preDispatchInterceptor) {
       try {
         if (this.preDispatchInterceptor(msg)) {
