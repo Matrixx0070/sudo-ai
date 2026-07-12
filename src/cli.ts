@@ -1970,29 +1970,18 @@ async function boot(): Promise<void> {
       registerOutboundAdapter(discord);
       discord.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('discord', discord);
 
-      // Feature 1, Step 4 — same ONE turn handler as every other channel,
-      // configured for Discord: serialize on the peerQueue, approval-consume +
-      // slash-directive short-circuits, reply via discord.send. Behaviour-
-      // equivalent to the previous inline block.
+      // Feature 1 — register Discord FULLY on the shared gateway router: inbound
+      // flows through the router's ONE handler + preDispatchInterceptor
+      // (approval-consume + slash-directive) + access policy, and it gets the
+      // crash-supervisor + channel.health. The gateway-finalize block below sets
+      // the handler/policy and calls startAll() (which starts this adapter).
       {
-        const { createGatewayTurnHandler } = await import('./core/channels/gateway-turn-handler.js');
-        discord.onMessage(createGatewayTurnHandler({
-          sessionManager: dualSessionManager,
-          agentLoop: finalAgentLoop,
-          runGenerations,
-          send: (m, text) => discord.send(m.peerId, text),
-          serialize: true,
-          dailyLog,
-          approvalConsume: (text) => approvalManager.tryConsumeApprovalReply(text),
-          directiveDispatch: channelDirectives
-            ? (m, reply) => tryDispatchDirective({ registry: commandRegistry, msg: m, makeContext: makeCommandContext, authorize: directiveAuthorize, reply })
-            : undefined,
-        }));
+        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
+        const gw = getGlobalMessageRouter() ?? new MessageRouter();
+        setGlobalMessageRouter(gw);
+        gw.registerAdapter(discord);
       }
-
-      await discord.start();
-      registerShutdown(() => discord.stop());
-      log.info('Discord channel active');
+      log.info('Discord registered on gateway router (started at gateway finalize)');
     } catch (err) {
       log.warn({ err: String(err) }, 'Discord adapter failed to start (non-fatal)');
     }
@@ -2012,26 +2001,14 @@ async function boot(): Promise<void> {
       registerOutboundAdapter(slack);
       if (chatApprovals) approvalManager.registerSender('slack', slack);
 
-      // Feature 1, Step 4 — the ONE turn handler, configured for Slack.
+      // Feature 1 — register Slack FULLY on the shared gateway router (see Discord).
       {
-        const { createGatewayTurnHandler } = await import('./core/channels/gateway-turn-handler.js');
-        slack.onMessage(createGatewayTurnHandler({
-          sessionManager: dualSessionManager,
-          agentLoop: finalAgentLoop,
-          runGenerations,
-          send: (m, text) => slack.send(m.peerId, text),
-          serialize: true,
-          dailyLog,
-          approvalConsume: (text) => approvalManager.tryConsumeApprovalReply(text),
-          directiveDispatch: channelDirectives
-            ? (m, reply) => tryDispatchDirective({ registry: commandRegistry, msg: m, makeContext: makeCommandContext, authorize: directiveAuthorize, reply })
-            : undefined,
-        }));
+        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
+        const gw = getGlobalMessageRouter() ?? new MessageRouter();
+        setGlobalMessageRouter(gw);
+        gw.registerAdapter(slack);
       }
-
-      await slack.start();
-      registerShutdown(() => slack.stop());
-      log.info('Slack channel active');
+      log.info('Slack registered on gateway router (started at gateway finalize)');
     } catch (err) {
       log.warn({ err: String(err) }, 'Slack adapter failed to start (non-fatal)');
     }
@@ -2067,27 +2044,16 @@ async function boot(): Promise<void> {
       whatsAppAdapter = whatsapp;
       if (chatApprovals) approvalManager.registerSender('whatsapp', whatsapp);
 
-      // Feature 1, Step 4 — the ONE turn handler, configured for WhatsApp. Reply
-      // goes through maybeGuardedSend (WhatsApp's outbound guard), preserved.
+      // Feature 1 — register WhatsApp FULLY on the shared gateway router (see
+      // Discord). Its outbound guard (maybeGuardedSend) is preserved by the
+      // gateway-finalize handler's per-channel send branch below.
       {
-        const { createGatewayTurnHandler } = await import('./core/channels/gateway-turn-handler.js');
-        whatsapp.onMessage(createGatewayTurnHandler({
-          sessionManager: dualSessionManager,
-          agentLoop: finalAgentLoop,
-          runGenerations,
-          send: async (m, text) => { await maybeGuardedSend('whatsapp', m.peerId, text, () => whatsapp.send(m.peerId, text)); },
-          serialize: true,
-          dailyLog,
-          approvalConsume: (text) => approvalManager.tryConsumeApprovalReply(text),
-          directiveDispatch: channelDirectives
-            ? (m, reply) => tryDispatchDirective({ registry: commandRegistry, msg: m, makeContext: makeCommandContext, authorize: directiveAuthorize, reply })
-            : undefined,
-        }));
+        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
+        const gw = getGlobalMessageRouter() ?? new MessageRouter();
+        setGlobalMessageRouter(gw);
+        gw.registerAdapter(whatsapp);
       }
-
-      await whatsapp.start();
-      registerShutdown(() => whatsapp.stop());
-      log.info('WhatsApp channel active');
+      log.info('WhatsApp registered on gateway router (started at gateway finalize)');
     } catch (err) {
       log.warn({ err: String(err) }, 'WhatsApp adapter failed to start (non-fatal)');
     }
@@ -2433,7 +2399,14 @@ async function boot(): Promise<void> {
     // never auto-starts on the wrong host. The adapter self-no-ops off-macOS.
     imessage: process.env['SUDO_IMESSAGE_ENABLE'] === '1',
   };
-  if (extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal || extraChannelEnv.imessage) {
+  // Gateway finalize — runs when ANY gateway-managed channel is enabled: the
+  // extra channels (irc/matrix/signal/imessage) OR Discord/Slack/WhatsApp, which
+  // registered themselves on the shared router above and are started here.
+  const gatewayFinalize =
+    extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal || extraChannelEnv.imessage ||
+    Boolean(process.env['DISCORD_TOKEN']) || Boolean(process.env['SLACK_BOT_TOKEN']) ||
+    (process.env['SUDO_WHATSAPP_ENABLE'] === '1' && Boolean(process.env['WHATSAPP_TOKEN']));
+  if (gatewayFinalize) {
     try {
       const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
       // Reuse a router the Telegram-via-gateway block may already have created,
@@ -2524,7 +2497,15 @@ async function boot(): Promise<void> {
           sessionManager: dualSessionManager,
           agentLoop: finalAgentLoop,
           runGenerations,
-          send: (m, text) => router.sendToChannel(m.channel, m.peerId, text),
+          // WhatsApp keeps its outbound guard (maybeGuardedSend); all others reply
+          // straight through the router.
+          send: async (m, text) => {
+            if (m.channel === 'whatsapp') {
+              await maybeGuardedSend('whatsapp', m.peerId, text, () => router.sendToChannel(m.channel, m.peerId, text));
+            } else {
+              await router.sendToChannel(m.channel, m.peerId, text);
+            }
+          },
           serialize: false,
           dailyLog,
           shouldSkipDailyLog: shouldSkipDailyLogForMessage,
