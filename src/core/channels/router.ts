@@ -21,6 +21,46 @@ import type { ChannelAccessPolicy } from './access-policy.js';
 
 const log = createLogger('channels:router');
 
+/** Per-channel health snapshot (Feature 1 — channel.health / self-diagnostics). */
+export interface ChannelHealth {
+  channel: ChannelType;
+  connected: boolean;
+  /** Times the supervisor has restarted this adapter since boot. */
+  restarts: number;
+  /** Last start/restart error message, if any. */
+  lastError?: string;
+  /** Epoch ms of the last inbound message admitted on this channel. */
+  lastMessageAt?: number;
+  /** Epoch ms of the last restart attempt. */
+  lastRestartAt?: number;
+}
+
+/** Tuning for the crash-isolation supervisor. */
+export interface SupervisorOptions {
+  /** How often to check adapters for a crashed/disconnected state. Default 15s. */
+  intervalMs?: number;
+  /** First backoff after a failure. Default 2s. */
+  baseBackoffMs?: number;
+  /** Backoff ceiling. Default 5min. */
+  maxBackoffMs?: number;
+}
+
+export interface RouterOptions {
+  supervisor?: SupervisorOptions;
+}
+
+interface AdapterStat {
+  restarts: number;
+  lastError?: string;
+  lastMessageAt?: number;
+  lastRestartAt?: number;
+  backoffMs: number;
+  /** Epoch ms before which no restart is attempted. */
+  nextRetryAt: number;
+  /** Whether the adapter has ever successfully started (distinguishes crash vs never-up). */
+  everStarted: boolean;
+}
+
 /**
  * Central hub that connects channel adapters to the brain pipeline.
  *
@@ -69,12 +109,23 @@ export class MessageRouter {
    */
   private accessPolicy: ChannelAccessPolicy | null = null;
 
+  /** Crash-isolation supervisor state (Feature 1). */
+  private readonly stats = new Map<ChannelType, AdapterStat>();
+  private supervisorTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly supIntervalMs: number;
+  private readonly baseBackoffMs: number;
+  private readonly maxBackoffMs: number;
+
   /**
    * @param crossChannelMemory - Optional memory store.  When omitted the
    *   router behaves exactly as before: no persistence, no history injection.
+   * @param opts - Optional supervisor tuning.
    */
-  constructor(crossChannelMemory?: CrossChannelMemory) {
+  constructor(crossChannelMemory?: CrossChannelMemory | null, opts?: RouterOptions) {
     this.crossChannelMemory = crossChannelMemory ?? null;
+    this.supIntervalMs = opts?.supervisor?.intervalMs ?? 15_000;
+    this.baseBackoffMs = opts?.supervisor?.baseBackoffMs ?? 2_000;
+    this.maxBackoffMs = opts?.supervisor?.maxBackoffMs ?? 300_000;
   }
 
   // ---------------------------------------------------------------------------
@@ -96,6 +147,7 @@ export class MessageRouter {
 
     adapter.onMessage((msg) => this._dispatch(msg));
     this.adapters.set(adapter.channel, adapter);
+    this.stats.set(adapter.channel, { restarts: 0, backoffMs: this.baseBackoffMs, nextRetryAt: 0, everStarted: false });
     log.info({ channel: adapter.channel }, 'adapter registered');
   }
 
@@ -146,22 +198,25 @@ export class MessageRouter {
     const entries = [...this.adapters.entries()];
     log.info({ count: entries.length }, 'starting all channel adapters');
 
-    await Promise.allSettled(
-      entries.map(async ([channel, adapter]) => {
-        try {
-          await adapter.start();
-          log.info({ channel }, 'adapter started');
-        } catch (err) {
-          log.error({ channel, err }, 'adapter failed to start');
-        }
-      }),
-    );
+    // Crash-isolation: each start is independent (one failure never blocks
+    // another), and failures schedule a supervised backoff retry rather than
+    // being logged-and-forgotten.
+    await Promise.allSettled(entries.map(([channel, adapter]) => this._startAdapter(channel, adapter)));
+
+    // Supervisor: periodically restart any adapter that failed to start or
+    // dropped after connecting, with per-adapter exponential backoff.
+    if (!this.supervisorTimer && this.supIntervalMs > 0) {
+      this.supervisorTimer = setInterval(() => void this.runSupervisorTick(), this.supIntervalMs);
+      if (typeof this.supervisorTimer.unref === 'function') this.supervisorTimer.unref();
+      log.info({ intervalMs: this.supIntervalMs }, 'channel supervisor started');
+    }
   }
 
   /**
-   * Stop all registered adapters concurrently.
+   * Stop the supervisor and all registered adapters concurrently.
    */
   async stopAll(): Promise<void> {
+    if (this.supervisorTimer) { clearInterval(this.supervisorTimer); this.supervisorTimer = null; }
     const entries = [...this.adapters.entries()];
     log.info({ count: entries.length }, 'stopping all channel adapters');
 
@@ -175,6 +230,62 @@ export class MessageRouter {
         }
       }),
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Crash-isolation supervisor (Feature 1)
+  // ---------------------------------------------------------------------------
+
+  /** Start one adapter, recording success/failure + scheduling backoff on error. */
+  private async _startAdapter(channel: ChannelType, adapter: ChannelAdapter): Promise<void> {
+    const stat = this.stats.get(channel);
+    try {
+      await adapter.start();
+      if (stat) { stat.backoffMs = this.baseBackoffMs; stat.nextRetryAt = 0; stat.everStarted = true; delete stat.lastError; }
+      log.info({ channel }, 'adapter started');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (stat) { stat.lastError = msg; stat.nextRetryAt = this._nowMs() + stat.backoffMs; stat.backoffMs = Math.min(stat.backoffMs * 2, this.maxBackoffMs); }
+      log.error({ channel, err: msg, retryInMs: stat?.backoffMs }, 'adapter failed to start — backoff retry scheduled');
+    }
+  }
+
+  /**
+   * One supervisor pass: for each adapter that is not connected and past its
+   * backoff window, attempt a restart. A crash in one adapter never touches the
+   * others (each is independent + errors are contained).
+   */
+  async runSupervisorTick(nowMs: number = this._nowMs()): Promise<void> {
+    for (const [channel, adapter] of this.adapters.entries()) {
+      if (adapter.isConnected) continue;
+      const stat = this.stats.get(channel);
+      if (!stat || nowMs < stat.nextRetryAt) continue;
+      stat.restarts += 1;
+      stat.lastRestartAt = nowMs;
+      log.warn({ channel, restarts: stat.restarts }, 'supervisor: adapter down — restarting');
+      try { await adapter.stop(); } catch { /* stop must not throw; ignore */ }
+      await this._startAdapter(channel, adapter);
+    }
+  }
+
+  /** Overridable clock for deterministic tests. */
+  protected _nowMs(): number {
+    return Date.now();
+  }
+
+  /** Per-channel health snapshot (Feature 1 — channel.health / self-diagnostics). */
+  health(): ChannelHealth[] {
+    return [...this.adapters.entries()].map(([channel, adapter]) => {
+      const s = this.stats.get(channel);
+      return {
+        channel,
+        connected: adapter.isConnected,
+        restarts: s?.restarts ?? 0,
+        ...(s?.lastError ? { lastError: s.lastError } : {}),
+        ...(s?.lastMessageAt ? { lastMessageAt: s.lastMessageAt } : {}),
+        ...(s?.lastRestartAt ? { lastRestartAt: s.lastRestartAt } : {}),
+      };
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -313,6 +424,10 @@ export class MessageRouter {
       (msg as UnifiedMessage).isOwner = decision.isOwner;
     }
 
+    // Health: record last inbound activity for channel.health / diagnostics.
+    const stat = this.stats.get(msg.channel);
+    if (stat) stat.lastMessageAt = this._nowMs();
+
     if (this.preDispatchInterceptor) {
       try {
         if (this.preDispatchInterceptor(msg)) {
@@ -371,4 +486,21 @@ export class MessageRouter {
       }
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Module singleton — boot registers the live gateway router so tools (e.g.
+// channel.health) and self-diagnostics can read channel health without threading
+// the instance through every call site. Null until an extra-channel gateway is
+// wired (e.g. prod with only Telegram, which runs its own bespoke path).
+// ---------------------------------------------------------------------------
+
+let _globalMessageRouter: MessageRouter | null = null;
+
+export function setGlobalMessageRouter(router: MessageRouter | null): void {
+  _globalMessageRouter = router;
+}
+
+export function getGlobalMessageRouter(): MessageRouter | null {
+  return _globalMessageRouter;
 }

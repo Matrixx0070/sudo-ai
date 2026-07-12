@@ -2417,8 +2417,10 @@ async function boot(): Promise<void> {
   };
   if (extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal || extraChannelEnv.imessage) {
     try {
-      const { MessageRouter } = await import('./core/channels/router.js');
+      const { MessageRouter, setGlobalMessageRouter } = await import('./core/channels/router.js');
       const router = new MessageRouter();
+      setGlobalMessageRouter(router); // expose to the channel.health tool + diagnostics
+      registerShutdown(() => setGlobalMessageRouter(null));
 
       // Feature 1 — install the gateway access policy (owner allowlist). Loaded
       // from config/channels.json5; when absent, a permissive no-op policy keeps
