@@ -1431,6 +1431,25 @@ async function boot(): Promise<void> {
     }
   }
 
+  // gap #1 — outcome-gated tool routing. Persists per-tool recency-weighted
+  // success rates (mind.db) and biases the ToolRouter so measured outcomes
+  // re-rank tool selection at decision time, compounding across restarts. This
+  // is the piece that makes learning change behaviour instead of just logging.
+  // Default ON; kill-switch SUDO_OUTCOME_GATING=0. Fail-open (static router).
+  if (process.env['SUDO_OUTCOME_GATING'] !== '0') {
+    try {
+      const { ToolSuccessStore } = await import('./core/agent/tool-success-store.js');
+      const toolSuccessStore = new ToolSuccessStore(db.db);
+      finalAgentLoop.setToolSuccessStore(toolSuccessStore);
+      const flushTimer = setInterval(() => { try { toolSuccessStore.flush(); } catch { /* fail-open */ } }, 60_000);
+      flushTimer.unref?.();
+      registerShutdown(() => { try { toolSuccessStore.flush(); } catch { /* fail-open */ } });
+      log.info({ tools: toolSuccessStore.count() }, 'Outcome-gated routing active (gap #1; SUDO_OUTCOME_GATING=0 to disable)');
+    } catch (err: unknown) {
+      log.warn({ err: String(err) }, 'Outcome-gating wiring failed — router runs static');
+    }
+  }
+
   // gap #18 — plan mode write-gate. Opt-in via SUDO_PLAN_MODE=1. Wires the
   // latent PlanModeStateMachine (loop.ts already constructs one but its
   // tools were schema-only — no executors, no gate). When the flag is set:

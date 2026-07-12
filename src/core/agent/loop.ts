@@ -43,6 +43,7 @@ import {
   classifyShipEditSignals,
 } from './loop-helpers.js';
 import { ToolRouter } from './tool-router.js';
+import type { ToolSuccessStore } from './tool-success-store.js';
 import { classifyIntent, formatIntentHint } from './intent-classifier.js';
 import { getPredictor } from '../tools/builtin/meta/predictor.js';
 import { CompletionVerifier } from '../tools/completion-verifier.js';
@@ -160,6 +161,8 @@ export class AgentLoop extends AgentLoopInjections {
   private readonly consciousness: ConsciousnessLike | null;
   private readonly security: SecurityGuardLike | null;
   private readonly toolRouter: ToolRouter;
+  /** Outcome-gating store (gap #1): records tool results + biases routing. */
+  private _toolSuccessStore: ToolSuccessStore | null = null;
   private unifiedMemory: UnifiedMemoryLike | null = null;
   private readonly workspaceInjector: ((session: any) => Promise<void>) | undefined;
   private readonly hooks?: HookEmitterLike;
@@ -663,6 +666,21 @@ export class AgentLoop extends AgentLoopInjections {
     }
   }
 
+  /**
+   * Wire the outcome-gating store (gap #1). Records every tool result and,
+   * critically, installs the store's bias into the ToolRouter so measured
+   * outcomes re-rank tool selection at decision time. Fail-open.
+   */
+  setToolSuccessStore(store: ToolSuccessStore): void {
+    if (!store || typeof store.bias !== 'function' || typeof store.record !== 'function') {
+      log.warn('AgentLoop: setToolSuccessStore: invalid duck-type — ignoring');
+      return;
+    }
+    this._toolSuccessStore = store;
+    this.toolRouter.setOutcomeBias((name) => store.bias(name));
+    log.info('AgentLoop: ToolSuccessStore attached — outcome-gated routing active');
+  }
+
   /** Wire SkillDiscovery after construction. Fail-open if duck-type mismatch. */
   setSkillDiscovery(sd: { recordToolCall(sessionId: string, toolName: string, success: boolean): void }): void {
     if (sd && typeof sd.recordToolCall === 'function') {
@@ -935,6 +953,15 @@ export class AgentLoop extends AgentLoopInjections {
             // producer's prevention rule captures the working arguments instead
             // of an empty object. Falls back to {} for legacy/pre-execution emits.
             this._toolOutcomeLearner.onToolResult(_tr.name, _tr.args ?? {}, _isSuccess, _error, sessionId);
+          }
+        } catch { /* fail-open */ }
+        // Outcome-gating store (gap #1): record success/failure independently of
+        // the ToolOutcomeLearner flag so routing can learn even when the fuller
+        // failure-learning stack is off. Fail-open.
+        try {
+          if (this._toolSuccessStore && event.type === 'tool-result') {
+            const _tr2 = event as { name: string; success?: boolean; result: unknown };
+            this._toolSuccessStore.record(_tr2.name, resolveToolSuccess(_tr2));
           }
         } catch { /* fail-open */ }
       }
