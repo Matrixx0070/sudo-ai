@@ -114,3 +114,29 @@ export function sanitizeOAuthToolName(name: string): string {
   sanitized = sanitized.replace(/^mcp_(?!_)/, 'mcp__');
   return sanitized.slice(0, 128);
 }
+
+/**
+ * Whether a provider's function-calling API rejects tool names that contain '.'
+ * or '-'. OpenAI/xAI require ^[a-zA-Z0-9_-]{1,64}$ (no dots); Google/Gemini
+ * require ^[a-zA-Z_][a-zA-Z0-9_]* (no dots or dashes). SUDO's tools use dotted
+ * names (mcp.connect, skill.install, github.list_prs) so those providers 400 on
+ * the agent payload — the reason only claude-oauth (which has its own fetch-
+ * interceptor sanitizer) could serve tool-using turns. claude-oauth/anthropic are
+ * excluded here; their path handles names separately.
+ */
+export function providerNeedsToolNameSanitize(modelId: string): boolean {
+  const p = (modelId.split('/')[0] || '').toLowerCase();
+  return p === 'google' || p === 'openai' || p === 'xai';
+}
+
+/**
+ * Cross-provider-safe tool name: letters/digits/underscore only, must start with
+ * a letter or underscore, capped at 64 chars. Deterministic; pair with a
+ * per-call {sanitized -> original} map to reverse the model's tool_call names
+ * back to the dotted originals the dispatcher expects.
+ */
+export function sanitizeToolNameForProvider(name: string): string {
+  let s = name.replace(/[^a-zA-Z0-9_]/g, '_');
+  if (!/^[a-zA-Z_]/.test(s)) s = '_' + s;
+  return s.slice(0, 64);
+}
