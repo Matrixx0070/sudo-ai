@@ -59,6 +59,22 @@ interface AdapterStat {
   nextRetryAt: number;
   /** Whether the adapter has ever successfully started (distinguishes crash vs never-up). */
   everStarted: boolean;
+  /**
+   * When false, the router observes this adapter for health only — it does NOT
+   * wire its inbound, start it, or restart it. Used for externally-managed
+   * adapters (e.g. Telegram via SUDO_TELEGRAM_VIA_GATEWAY, which keeps its own
+   * bespoke handler, allowlist and reconnect loop).
+   */
+  managed: boolean;
+}
+
+/** Options for {@link MessageRouter.registerAdapter}. */
+export interface RegisterOptions {
+  /**
+   * false = observe for health only (don't wire inbound / start / restart).
+   * Default true = full gateway management (inbound → shared handler, supervised).
+   */
+  manageInbound?: boolean;
 }
 
 /**
@@ -140,15 +156,16 @@ export class MessageRouter {
    *
    * @param adapter - Initialized (but not yet started) adapter instance.
    */
-  registerAdapter(adapter: ChannelAdapter): void {
+  registerAdapter(adapter: ChannelAdapter, opts?: RegisterOptions): void {
     if (!adapter || typeof adapter.channel !== 'string') {
       throw new TypeError('registerAdapter: adapter must implement ChannelAdapter');
     }
 
-    adapter.onMessage((msg) => this._dispatch(msg));
+    const manageInbound = opts?.manageInbound !== false;
+    if (manageInbound) adapter.onMessage((msg) => this._dispatch(msg));
     this.adapters.set(adapter.channel, adapter);
-    this.stats.set(adapter.channel, { restarts: 0, backoffMs: this.baseBackoffMs, nextRetryAt: 0, everStarted: false });
-    log.info({ channel: adapter.channel }, 'adapter registered');
+    this.stats.set(adapter.channel, { restarts: 0, backoffMs: this.baseBackoffMs, nextRetryAt: 0, everStarted: false, managed: manageInbound });
+    log.info({ channel: adapter.channel, manageInbound }, 'adapter registered');
   }
 
   /**
@@ -200,8 +217,13 @@ export class MessageRouter {
 
     // Crash-isolation: each start is independent (one failure never blocks
     // another), and failures schedule a supervised backoff retry rather than
-    // being logged-and-forgotten.
-    await Promise.allSettled(entries.map(([channel, adapter]) => this._startAdapter(channel, adapter)));
+    // being logged-and-forgotten. Health-only (unmanaged) adapters are started
+    // and reconnected by their own code — the router just observes them.
+    await Promise.allSettled(
+      entries
+        .filter(([channel]) => this.stats.get(channel)?.managed !== false)
+        .map(([channel, adapter]) => this._startAdapter(channel, adapter)),
+    );
 
     // Supervisor: periodically restart any adapter that failed to start or
     // dropped after connecting, with per-adapter exponential backoff.
@@ -259,7 +281,7 @@ export class MessageRouter {
     for (const [channel, adapter] of this.adapters.entries()) {
       if (adapter.isConnected) continue;
       const stat = this.stats.get(channel);
-      if (!stat || nowMs < stat.nextRetryAt) continue;
+      if (!stat || !stat.managed || nowMs < stat.nextRetryAt) continue; // health-only adapters self-manage restart
       stat.restarts += 1;
       stat.lastRestartAt = nowMs;
       log.warn({ channel, restarts: stat.restarts }, 'supervisor: adapter down — restarting');

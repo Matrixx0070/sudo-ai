@@ -85,6 +85,22 @@ describe('MessageRouter supervisor', () => {
     expect(healthy.startCalls).toBe(healthyStarts); // NOT re-started
   });
 
+  it('manageInbound:false observes for health but never starts/restarts/routes it', async () => {
+    const r = mkRouter();
+    const ext = new FlakyAdapter('telegram');
+    // Externally-managed: simulate that Telegram already started itself.
+    ext.isConnected = true;
+    r.registerAdapter(ext, { manageInbound: false });
+    await r.startAll();
+    expect(ext.startCalls).toBe(0);                 // router did NOT start it
+    expect(r.health().find((h) => h.channel === 'telegram')?.connected).toBe(true); // but health sees it
+
+    ext.crash();
+    await r.runSupervisorTick(999_999);
+    expect(ext.startCalls).toBe(0);                 // supervisor did NOT restart it (self-managed)
+    expect(r.health().find((h) => h.channel === 'telegram')?.restarts).toBe(0);
+  });
+
   it('health() reflects connected + restart counts', async () => {
     const r = mkRouter();
     const a = new FlakyAdapter('matrix');
