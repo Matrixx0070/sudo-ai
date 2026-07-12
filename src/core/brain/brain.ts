@@ -6,7 +6,7 @@
  */
 
 import { generateText, streamText, tool as aiTool, jsonSchema } from 'ai';
-import { sanitizeToolSchemaForProvider } from './tool-schema-compat.js';
+import { sanitizeToolSchemaForProvider, providerNeedsToolNameSanitize, sanitizeToolNameForProvider } from './tool-schema-compat.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } from '../shared/prompt-cache-telemetry.js';
@@ -682,7 +682,7 @@ export class Brain {
    *   - Logs WARN on every synthetic call produced (visibility into LLM regression).
    *   - Never fires when finishReason === 'tool_calls'.
    */
-  private _parseTextToolCalls(text: string): ToolCallFromLLM[] {
+  private _parseTextToolCalls(text: string, reverseMap?: Map<string, string>): ToolCallFromLLM[] {
     let knownToolNames: Set<string>;
     try {
       // ToolRegistry is imported statically at top of brain.ts.
@@ -718,11 +718,14 @@ export class Brain {
       }
       const parsed = parsedRes.value;
 
-      const name = typeof parsed['name'] === 'string' ? parsed['name'] : '';
-      if (!name) {
+      const rawName = typeof parsed['name'] === 'string' ? parsed['name'] : '';
+      if (!rawName) {
         log.warn({ parsed }, 'Text tool-call fallback: missing "name" field — skipping');
         continue;
       }
+      // Reverse a provider-sanitized name (mcp_connect -> mcp.connect) BEFORE the
+      // registry guard, which only knows the original dotted names.
+      const name = reverseMap?.get(rawName) ?? rawName;
 
       // SECURITY: tool name must be in live registry — rejects injection from external content.
       if (!knownToolNames.has(name)) {
@@ -748,7 +751,7 @@ export class Brain {
    *   - Logs WARN on every synthetic call produced.
    *   - Only runs when finishReason !== 'tool-calls' (no structured calls present).
    */
-  private _parseJsonToolCalls(text: string): ToolCallFromLLM[] {
+  private _parseJsonToolCalls(text: string, reverseMap?: Map<string, string>): ToolCallFromLLM[] {
     let knownToolNames: Set<string>;
     try {
       const global = ToolRegistry.getGlobal();
@@ -797,11 +800,13 @@ export class Brain {
       for (const call of calls) {
         if (!call || typeof call !== 'object') continue;
         const c = call as Record<string, unknown>;
-        const name = typeof c['name'] === 'string' ? c['name'] : '';
-        if (!name) {
+        const rawName = typeof c['name'] === 'string' ? c['name'] : '';
+        if (!rawName) {
           log.warn({ call }, 'JSON tool-call fallback: missing "name" field — skipping');
           continue;
         }
+        // Reverse a provider-sanitized name before the registry guard.
+        const name = reverseMap?.get(rawName) ?? rawName;
 
         // SECURITY: name must be in live registry.
         if (!knownToolNames.has(name)) {
@@ -1323,8 +1328,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         }
 
         if (request.tools && request.tools.length > 0) {
+          // Forward-sanitize names so google/openai/xai don't 400 on dotted tool
+          // names. This streaming path returns text only (it does not extract
+          // tool_calls), so no reverse map is needed here.
+          const streamSanitizeNames = providerNeedsToolNameSanitize(modelId);
           const toolEntries = request.tools.map((t): [string, object] => {
-            const name = t.function?.name ?? '';
+            const original = t.function?.name ?? '';
+            const name = streamSanitizeNames ? sanitizeToolNameForProvider(original) : original;
             const desc = t.function?.description ?? '';
             const params = sanitizeToolSchemaForProvider(t.function?.parameters ?? {}, modelId);
             return [name, aiTool({
@@ -1546,6 +1556,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
 
+    // Per-call {sanitized tool name -> original dotted name}, populated when the
+    // provider needs name sanitization; used to reverse returned tool_call names.
+    const toolNameReverseMap = new Map<string, string>();
     const callParams: Record<string, unknown> = {
       messages: cacheBreakpoints
         ? [...buildCachedSystemMessages(systemPrompt), ...buildFoldedSystemMessages(request.messages), ...toSDKMessages(request.messages)]
@@ -1559,9 +1572,25 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     if (!cacheBreakpoints) {
       callParams.system = effectiveSystem;
     }
+    // Providers other than claude-oauth (google/openai/xai) reject dotted tool
+    // names (mcp.connect, skill.install). Sanitize the name for those providers
+    // and record {sanitized -> original} so the returned tool_call names can be
+    // reversed back to the dotted originals the dispatcher expects. claude-oauth
+    // is untouched here — its fetch interceptor owns name sanitization.
+    const sanitizeNames = providerNeedsToolNameSanitize(modelId);
     if (request.tools && request.tools.length > 0) {
       const toolEntries = request.tools.map((t: any): [string, object] => {
-        const name = t.function?.name ?? t.name;
+        const original = t.function?.name ?? t.name;
+        let name = original;
+        if (sanitizeNames) {
+          name = sanitizeToolNameForProvider(original);
+          if (name !== original) {
+            if (toolNameReverseMap.has(name) && toolNameReverseMap.get(name) !== original) {
+              log.warn({ original, collidesWith: toolNameReverseMap.get(name), sanitized: name }, 'Tool-name sanitization collision');
+            }
+            toolNameReverseMap.set(name, original);
+          }
+        }
         const desc = t.function?.description ?? t.description;
         const params = sanitizeToolSchemaForProvider(t.function?.parameters ?? t.parameters, modelId);
         return [name, aiTool({
@@ -1682,12 +1711,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       for (const src of sources) {
         if (finalToolCalls.length > 0) break;
         if (src.includes('<tool_call>')) {
-          finalToolCalls = this._parseTextToolCalls(src);
+          finalToolCalls = this._parseTextToolCalls(src, toolNameReverseMap);
           if (finalToolCalls.length > 0) {
             finalContent = src.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
           }
         } else if (src.includes('"tool_calls"')) {
-          finalToolCalls = this._parseJsonToolCalls(src);
+          finalToolCalls = this._parseJsonToolCalls(src, toolNameReverseMap);
           if (finalToolCalls.length > 0) {
             finalContent = stripJsonToolCalls(src);
           }
@@ -1700,6 +1729,17 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           { modelId, count: finalToolCalls.length, via: finalContent !== result.text ? 'json' : 'xml' },
           'Text tool-call fallback ACTIVATED — finishReason flipped to tool-calls',
         );
+      }
+    }
+
+    // Reverse provider-sanitized tool names back to the dotted originals so the
+    // agent dispatcher resolves the real tool (mcp_connect -> mcp.connect). Covers
+    // both structured tool_calls and the text/JSON fallback parsers, since the
+    // model only ever saw the sanitized names.
+    if (toolNameReverseMap.size > 0) {
+      for (const c of finalToolCalls) {
+        const original = toolNameReverseMap.get(c.name);
+        if (original) c.name = original;
       }
     }
 
