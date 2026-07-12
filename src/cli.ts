@@ -1952,71 +1952,25 @@ async function boot(): Promise<void> {
       registerOutboundAdapter(discord);
       discord.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('discord', discord);
 
-      discord.onMessage(async (msg) => {
-        log.info(
-          { channel: msg.channel, peerId: msg.peerId, text: msg.text?.slice(0, 80) },
-          'Discord incoming message',
-        );
-
-        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
-          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
-          return;
-        }
-
-        // Directive short-circuit: slash commands bypass the turn queue.
-        if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
-          reply: (text) => discord.send(msg.peerId, text),
-        })) return;
-
-        dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
-          try {
-            const convKey = `${msg.channel}:${msg.peerId}`;
-            const runGen = runGenerations.current(convKey);
-            const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-            log.info({ sessionId: String(session.id) }, 'Discord session resolved');
-
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
-            if (runGenerations.isStale(convKey, runGen)) {
-              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
-              return;
-            }
-            const replyText = result?.text ?? 'No response generated.';
-
-            try {
-              const turnSummary = `**User (discord):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
-              await dailyLog.append(turnSummary);
-            } catch { /* daily log write is non-fatal */ }
-
-            try {
-              const nowTs = new Date().toISOString();
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'user',
-                content: msg.text ?? '',
-              });
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'assistant',
-                content: replyText,
-              });
-            } catch { /* journal append is non-fatal */ }
-
-            await discord.send(msg.peerId, replyText);
-            log.info({ peerId: msg.peerId }, 'Reply sent to Discord');
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log.error({ err: errMsg, peerId: msg.peerId }, 'Discord agent turn failed');
-            try { await discord.send(msg.peerId, 'Something went wrong. Please try again.'); } catch {}
-          }
-        }).catch((err: unknown) => {
-          log.error({ err: String(err), peerId: msg.peerId }, 'Queued Discord agent turn failed');
-        });
-      });
+      // Feature 1, Step 4 — same ONE turn handler as every other channel,
+      // configured for Discord: serialize on the peerQueue, approval-consume +
+      // slash-directive short-circuits, reply via discord.send. Behaviour-
+      // equivalent to the previous inline block.
+      {
+        const { createGatewayTurnHandler } = await import('./core/channels/gateway-turn-handler.js');
+        discord.onMessage(createGatewayTurnHandler({
+          sessionManager: dualSessionManager,
+          agentLoop: finalAgentLoop,
+          runGenerations,
+          send: (m, text) => discord.send(m.peerId, text),
+          serialize: true,
+          dailyLog,
+          approvalConsume: (text) => approvalManager.tryConsumeApprovalReply(text),
+          directiveDispatch: channelDirectives
+            ? (m, reply) => tryDispatchDirective({ registry: commandRegistry, msg: m, makeContext: makeCommandContext, authorize: directiveAuthorize, reply })
+            : undefined,
+        }));
+      }
 
       await discord.start();
       registerShutdown(() => discord.stop());
@@ -2040,71 +1994,22 @@ async function boot(): Promise<void> {
       registerOutboundAdapter(slack);
       if (chatApprovals) approvalManager.registerSender('slack', slack);
 
-      slack.onMessage(async (msg) => {
-        log.info(
-          { channel: msg.channel, peerId: msg.peerId, text: msg.text?.slice(0, 80) },
-          'Slack incoming message',
-        );
-
-        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
-          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
-          return;
-        }
-
-        // Directive short-circuit: slash commands bypass the turn queue.
-        if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
-          reply: (text) => slack.send(msg.peerId, text),
-        })) return;
-
-        dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
-          try {
-            const convKey = `${msg.channel}:${msg.peerId}`;
-            const runGen = runGenerations.current(convKey);
-            const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-            log.info({ sessionId: String(session.id) }, 'Slack session resolved');
-
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
-            if (runGenerations.isStale(convKey, runGen)) {
-              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
-              return;
-            }
-            const replyText = result?.text ?? 'No response generated.';
-
-            try {
-              const turnSummary = `**User (slack):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
-              await dailyLog.append(turnSummary);
-            } catch { /* daily log write is non-fatal */ }
-
-            try {
-              const nowTs = new Date().toISOString();
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'user',
-                content: msg.text ?? '',
-              });
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'assistant',
-                content: replyText,
-              });
-            } catch { /* journal append is non-fatal */ }
-
-            await slack.send(msg.peerId, replyText);
-            log.info({ peerId: msg.peerId }, 'Reply sent to Slack');
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log.error({ err: errMsg, peerId: msg.peerId }, 'Slack agent turn failed');
-            try { await slack.send(msg.peerId, 'Something went wrong. Please try again.'); } catch {}
-          }
-        }).catch((err: unknown) => {
-          log.error({ err: String(err), peerId: msg.peerId }, 'Queued Slack agent turn failed');
-        });
-      });
+      // Feature 1, Step 4 — the ONE turn handler, configured for Slack.
+      {
+        const { createGatewayTurnHandler } = await import('./core/channels/gateway-turn-handler.js');
+        slack.onMessage(createGatewayTurnHandler({
+          sessionManager: dualSessionManager,
+          agentLoop: finalAgentLoop,
+          runGenerations,
+          send: (m, text) => slack.send(m.peerId, text),
+          serialize: true,
+          dailyLog,
+          approvalConsume: (text) => approvalManager.tryConsumeApprovalReply(text),
+          directiveDispatch: channelDirectives
+            ? (m, reply) => tryDispatchDirective({ registry: commandRegistry, msg: m, makeContext: makeCommandContext, authorize: directiveAuthorize, reply })
+            : undefined,
+        }));
+      }
 
       await slack.start();
       registerShutdown(() => slack.stop());
@@ -2144,71 +2049,23 @@ async function boot(): Promise<void> {
       whatsAppAdapter = whatsapp;
       if (chatApprovals) approvalManager.registerSender('whatsapp', whatsapp);
 
-      whatsapp.onMessage(async (msg) => {
-        log.info(
-          { channel: msg.channel, peerId: msg.peerId, text: msg.text?.slice(0, 80) },
-          'WhatsApp incoming message',
-        );
-
-        if (approvalManager.tryConsumeApprovalReply(msg.text)) {
-          log.info({ peerId: msg.peerId }, 'Approval reply consumed — not queued as a turn');
-          return;
-        }
-
-        // Directive short-circuit: slash commands bypass the turn queue.
-        if (channelDirectives && await tryDispatchDirective({
-          registry: commandRegistry, msg, makeContext: makeCommandContext, authorize: directiveAuthorize,
-          reply: (text) => whatsapp.send(msg.peerId, text),
-        })) return;
-
-        dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
-          try {
-            const convKey = `${msg.channel}:${msg.peerId}`;
-            const runGen = runGenerations.current(convKey);
-            const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-            log.info({ sessionId: String(session.id) }, 'WhatsApp session resolved');
-
-            const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
-            if (runGenerations.isStale(convKey, runGen)) {
-              log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
-              return;
-            }
-            const replyText = result?.text ?? 'No response generated.';
-
-            try {
-              const turnSummary = `**User (whatsapp):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
-              await dailyLog.append(turnSummary);
-            } catch { /* daily log write is non-fatal */ }
-
-            try {
-              const nowTs = new Date().toISOString();
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'user',
-                content: msg.text ?? '',
-              });
-              await dualSessionManager.appendEvent(String(session.id), {
-                ts: nowTs,
-                sessionId: String(session.id),
-                type: 'message',
-                role: 'assistant',
-                content: replyText,
-              });
-            } catch { /* journal append is non-fatal */ }
-
-            await maybeGuardedSend('whatsapp', msg.peerId, replyText, () => whatsapp.send(msg.peerId, replyText));
-            log.info({ peerId: msg.peerId }, 'Reply sent to WhatsApp');
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log.error({ err: errMsg, peerId: msg.peerId }, 'WhatsApp agent turn failed');
-            try { await whatsapp.send(msg.peerId, 'Something went wrong. Please try again.'); } catch {}
-          }
-        }).catch((err: unknown) => {
-          log.error({ err: String(err), peerId: msg.peerId }, 'Queued WhatsApp agent turn failed');
-        });
-      });
+      // Feature 1, Step 4 — the ONE turn handler, configured for WhatsApp. Reply
+      // goes through maybeGuardedSend (WhatsApp's outbound guard), preserved.
+      {
+        const { createGatewayTurnHandler } = await import('./core/channels/gateway-turn-handler.js');
+        whatsapp.onMessage(createGatewayTurnHandler({
+          sessionManager: dualSessionManager,
+          agentLoop: finalAgentLoop,
+          runGenerations,
+          send: async (m, text) => { await maybeGuardedSend('whatsapp', m.peerId, text, () => whatsapp.send(m.peerId, text)); },
+          serialize: true,
+          dailyLog,
+          approvalConsume: (text) => approvalManager.tryConsumeApprovalReply(text),
+          directiveDispatch: channelDirectives
+            ? (m, reply) => tryDispatchDirective({ registry: commandRegistry, msg: m, makeContext: makeCommandContext, authorize: directiveAuthorize, reply })
+            : undefined,
+        }));
+      }
 
       await whatsapp.start();
       registerShutdown(() => whatsapp.stop());
@@ -2635,63 +2492,23 @@ async function boot(): Promise<void> {
         log.warn('SUDO_GROUP_MENTION_ONLY=1 but no bot names known (set SUDO_BOT_NAME) — group gating fails open on routed channels');
       }
 
-      router.setHandler(async (msg) => {
-        log.info(
-          { channel: msg.channel, peerId: msg.peerId, chatType: msg.chatType, text: msg.text?.slice(0, 80) },
-          'Routed channel incoming message',
-        );
-
-        if (routedMentionOnly && !isAddressedToBot(msg, routedBotNames)) {
-          log.debug({ channel: msg.channel, peerId: msg.peerId }, 'Group message not addressed to bot — ignored');
-          return;
-        }
-
-        try {
-          const convKey = `${msg.channel}:${msg.peerId}`;
-          const runGen = runGenerations.current(convKey);
-          const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
-          if (runGenerations.isStale(convKey, runGen)) {
-            log.info({ channel: msg.channel, peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
-            return;
-          }
-          const replyText = result?.text ?? 'No response generated.';
-
-          if (shouldSkipDailyLogForMessage(msg.peerId, msg.peerIp)) {
-            log.debug({ channel: msg.channel, peerId: msg.peerId }, 'daily-log: skipped diagnostic/loopback turn');
-          } else {
-            try {
-              const turnSummary = `**User (${msg.channel}):** ${(msg.text ?? '').slice(0, 200)}\n**Agent:** ${replyText.slice(0, 500)}`;
-              await dailyLog.append(turnSummary);
-            } catch { /* daily log write is non-fatal */ }
-          }
-
-          try {
-            const nowTs = new Date().toISOString();
-            await dualSessionManager.appendEvent(String(session.id), {
-              ts: nowTs,
-              sessionId: String(session.id),
-              type: 'message',
-              role: 'user',
-              content: msg.text ?? '',
-            });
-            await dualSessionManager.appendEvent(String(session.id), {
-              ts: nowTs,
-              sessionId: String(session.id),
-              type: 'message',
-              role: 'assistant',
-              content: replyText,
-            });
-          } catch { /* journal append is non-fatal */ }
-
-          await router.sendToChannel(msg.channel, msg.peerId, replyText);
-          log.info({ channel: msg.channel, peerId: msg.peerId }, 'Reply sent via router');
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          log.error({ err: errMsg, channel: msg.channel, peerId: msg.peerId }, 'Routed channel agent turn failed');
-          try { await router.sendToChannel(msg.channel, msg.peerId, 'Something went wrong. Please try again.'); } catch { /* best effort */ }
-        }
-      });
+      // Feature 1, Step 4 — the ONE turn handler (createGatewayTurnHandler),
+      // configured for router channels: the router already serialized per-peer
+      // (serialize:false), reply via sendToChannel, mention-gate + daily-log-skip
+      // preserved. Byte-equivalent to the previous inline handler.
+      {
+        const { createGatewayTurnHandler } = await import('./core/channels/gateway-turn-handler.js');
+        router.setHandler(createGatewayTurnHandler({
+          sessionManager: dualSessionManager,
+          agentLoop: finalAgentLoop,
+          runGenerations,
+          send: (m, text) => router.sendToChannel(m.channel, m.peerId, text),
+          serialize: false,
+          dailyLog,
+          shouldSkipDailyLog: shouldSkipDailyLogForMessage,
+          mentionGate: routedMentionOnly ? (m) => isAddressedToBot(m, routedBotNames) : undefined,
+        }));
+      }
 
       await router.startAll();
       registerShutdown(() => router.stopAll());
