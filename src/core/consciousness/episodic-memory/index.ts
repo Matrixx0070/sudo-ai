@@ -407,4 +407,41 @@ export class EpisodicMemory {
     log.debug({ text, found: results.length }, 'Episode search complete');
     return results;
   }
+
+  /**
+   * Decision-time recall (gap #5). search() is a single literal LIKE, so a
+   * free-form user message never matches. recall() tokenises the message into
+   * salient words, LIKE-searches each, then ranks episodes by how many distinct
+   * query words they hit (significance breaks ties). This is what turns episodic
+   * memory from write-only into a signal the turn-start prompt can use.
+   */
+  recall(message: string, limit = 3): Episode[] {
+    if (typeof message !== 'string' || !message.trim()) return [];
+    const words = Array.from(new Set(
+      message.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !RECALL_STOPWORDS.has(w)),
+    )).slice(0, 8);
+    if (words.length === 0) return [];
+    const byId = new Map<string, { ep: Episode; hits: number }>();
+    for (const w of words) {
+      let found: Episode[] = [];
+      try { found = searchEpisodes(this.cdb.getDb(), w, limit * 4); } catch { found = []; }
+      for (const e of found) {
+        const cur = byId.get(e.id);
+        if (cur) cur.hits += 1;
+        else byId.set(e.id, { ep: e, hits: 1 });
+      }
+    }
+    return [...byId.values()]
+      .sort((a, b) => b.hits - a.hits || b.ep.significance - a.ep.significance)
+      .slice(0, limit)
+      .map((x) => x.ep);
+  }
 }
+
+/** Low-signal words dropped before token recall so common verbs don't match everything. */
+const RECALL_STOPWORDS = new Set([
+  'this', 'that', 'with', 'from', 'have', 'what', 'when', 'where', 'which', 'about',
+  'your', 'you', 'the', 'and', 'for', 'are', 'was', 'were', 'can', 'could', 'would',
+  'should', 'please', 'need', 'want', 'like', 'just', 'then', 'them', 'they', 'will',
+  'into', 'over', 'some', 'more', 'much', 'very', 'here', 'there', 'been', 'does',
+]);
