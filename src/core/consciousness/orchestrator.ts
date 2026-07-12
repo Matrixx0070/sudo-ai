@@ -198,6 +198,8 @@ export class ConsciousnessOrchestrator {
   private selfEvolution: SelfEvolutionLike | null = null;
   private _booted = false;
   private _lastInteractionAt: string | null = null;
+  /** Last user message text — used to recall relevant past episodes at turn start (gap #5). */
+  private _lastInteractionMessage = '';
   /** Per-session interaction-start timestamps, keyed by sessionId. Prevents the
    *  instance-global _lastInteractionAt from racing concurrent sessions' episode
    *  startedAt/durationMs. 256-entry LRU, same cap as _pendingToolPredictions. */
@@ -346,6 +348,7 @@ export class ConsciousnessOrchestrator {
 
     const _interactionStartIso = new Date().toISOString();
     this._lastInteractionAt = _interactionStartIso;
+    this._lastInteractionMessage = typeof message === 'string' ? message : '';
     // Per-session start time (keyed by the loop's sessionId, passed as arg 1 here
     // despite the param name) so concurrent sessions don't corrupt each other's
     // episode startedAt/durationMs. The instance-global _lastInteractionAt above is
@@ -537,9 +540,32 @@ export class ConsciousnessOrchestrator {
     }
   }
 
+  /**
+   * Recall past episodes relevant to the current message and how they turned out
+   * (gap #5 — episodic memory queried at DECISION time, not just written). Gated
+   * by SUDO_EPISODIC_RECALL (default ON); '' when disabled, ZDR, no message, or
+   * no hits. Fail-open.
+   */
+  private _episodicRecallBlock(): string {
+    if (process.env['SUDO_EPISODIC_RECALL'] === '0' || this._zdrEnabled) return '';
+    const msg = this._lastInteractionMessage.trim();
+    if (!msg) return '';
+    try {
+      const hits = this.episodicMemory.recall(msg, 3);
+      if (!hits.length) return '';
+      const lines = hits.map((e) => `- ${truncate(e.summary, 100)} (${e.outcome})`);
+      return '\n\n## Relevant Past Episodes\n' + lines.join('\n');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'episodic recall failed');
+      return '';
+    }
+  }
+
   getConsciousnessContext(): string {
     if (!this._booted) return '## Internal State\n(not booted)';
     if (this._zdrEnabled) return '## Internal State\n(ZDR active — data retention disabled)';
+
+    const episodic = this._episodicRecallBlock();
 
     // Phase 3 consciousness bridge: if bridge is configured, delegate to it for
     // intent-aware module selection and budget-adaptive context injection.
@@ -549,7 +575,7 @@ export class ConsciousnessOrchestrator {
         const intent = this._lastInteractionAt ?? 'general';
         // Use 0% context pressure as conservative default (full detail tier)
         const injection: BridgeInjection = this.consciousnessBridge.bridge(category, intent, 0);
-        if (injection.context) return injection.context;
+        if (injection.context) return injection.context + episodic;
       } catch (err) {
         log.warn({ err: String(err) }, 'ConsciousnessBridge failed — falling back to legacy summary');
       }
@@ -590,7 +616,7 @@ export class ConsciousnessOrchestrator {
       `Thinking about: ${thoughts}`,
       `Intentions: ${intentionLine}`,
       `Self: ${selfLine}`,
-    ].join('\n');
+    ].join('\n') + episodic;
   }
 
   getIntelligenceBriefContext(message: string): {
