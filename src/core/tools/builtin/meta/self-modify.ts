@@ -37,7 +37,23 @@ import { createRequire } from 'node:module';
 import { isProtectedPath, PROTECTED_PATHS } from '../../../self-build/protected-paths.js';
 import { scheduleDetachedRestart } from './restart-helper.js';
 import { PROJECT_ROOT, DATA_DIR } from '../../../shared/paths.js';
+import { reloadSkillsLive } from '../../../skills/live-reload.js';
 const _require = createRequire(import.meta.url);
+
+/**
+ * When self-modify writes/edits a file under skills/, hot-reload the skill set so
+ * SUDO's own skill authoring (its real workflow is write-file to a SKILL.md, not
+ * skill.apply) goes live without a restart — closing the self-restart churn.
+ * Returns a note to append to the tool output, or '' when not a skill write.
+ */
+async function maybeLiveReloadSkill(abs: string): Promise<string> {
+  const rel = path.relative(PROJECT_ROOT, abs);
+  if (rel.startsWith('skills' + path.sep) && /SKILL\.md$/i.test(rel)) {
+    const r = await reloadSkillsLive();
+    if (r.reloaded) return ` Skill is active now — no restart needed (${r.count} skills live).`;
+  }
+  return '';
+}
 
 const logger = createLogger('meta.self-modify');
 
@@ -236,7 +252,7 @@ function doSearchCode(searchText: string, filePattern: string = '*.ts'): ToolRes
   };
 }
 
-function doEditFile(rawPath: string, oldText: string, newText: string, replaceAll = false): ToolResult {
+async function doEditFile(rawPath: string, oldText: string, newText: string, replaceAll = false): Promise<ToolResult> {
   const abs = resolveProjectPath(rawPath);
   if (!abs) return { success: false, output: `Path traversal blocked: ${rawPath}` };
   if (!existsSync(abs)) return { success: false, output: `File not found: ${abs}` };
@@ -269,14 +285,15 @@ function doEditFile(rawPath: string, oldText: string, newText: string, replaceAl
   writeFileSync(abs, content, 'utf-8');
   logMod('edit-file', `${path.relative(PROJECT_ROOT, abs)} (${count} replacement(s))`);
 
+  const reloadNote = await maybeLiveReloadSkill(abs);
   return {
     success: true,
-    output: `Edited ${path.relative(PROJECT_ROOT, abs)}: replaced ${count} occurrence(s).\nBackup: ${path.relative(PROJECT_ROOT, backupPath)}`,
+    output: `Edited ${path.relative(PROJECT_ROOT, abs)}: replaced ${count} occurrence(s).\nBackup: ${path.relative(PROJECT_ROOT, backupPath)}${reloadNote}`,
     data: { path: abs, replacements: count, backup: backupPath },
   };
 }
 
-function doWriteFile(rawPath: string, content: string): ToolResult {
+async function doWriteFile(rawPath: string, content: string): Promise<ToolResult> {
   const abs = resolveProjectPath(rawPath);
   if (!abs) return { success: false, output: `Path traversal blocked: ${rawPath}` };
 
@@ -299,9 +316,10 @@ function doWriteFile(rawPath: string, content: string): ToolResult {
   writeFileSync(abs, content, 'utf-8');
   logMod('write-file', `${path.relative(PROJECT_ROOT, abs)} (${content.split('\n').length} lines)`);
 
+  const reloadNote = await maybeLiveReloadSkill(abs);
   return {
     success: true,
-    output: `Written ${path.relative(PROJECT_ROOT, abs)} (${content.split('\n').length} lines).${backupPath ? `\nBackup: ${path.relative(PROJECT_ROOT, backupPath)}` : ''}`,
+    output: `Written ${path.relative(PROJECT_ROOT, abs)} (${content.split('\n').length} lines).${backupPath ? `\nBackup: ${path.relative(PROJECT_ROOT, backupPath)}` : ''}${reloadNote}`,
     data: { path: abs, lines: content.split('\n').length },
   };
 }
@@ -383,7 +401,7 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
     return { success: false, output: 'meta.self-modify full-cycle is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
   // Step 1: Edit
-  const editResult = doEditFile(rawPath, oldText, newText, replaceAll);
+  const editResult = await doEditFile(rawPath, oldText, newText, replaceAll);
   if (!editResult.success) return editResult;
 
   // Step 2: Build
@@ -546,7 +564,7 @@ export const selfModifyTool: ToolDefinition = {
           );
 
         case 'edit-file':
-          return doEditFile(
+          return await doEditFile(
             (params['path'] as string | undefined) ?? '',
             (params['oldText'] as string | undefined) ?? '',
             (params['newText'] as string | undefined) ?? '',
@@ -554,7 +572,7 @@ export const selfModifyTool: ToolDefinition = {
           );
 
         case 'write-file':
-          return doWriteFile(
+          return await doWriteFile(
             (params['path'] as string | undefined) ?? '',
             (params['content'] as string | undefined) ?? '',
           );
