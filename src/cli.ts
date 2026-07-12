@@ -139,6 +139,7 @@ import { AgentConfigEvolver } from './core/learning/agent-config-evolver.js';
 import { SkillOptimizer } from './core/skills/skill-optimizer.js';
 import { SkillOptimizationStore } from './core/skills/skill-optimization-store.js';
 import { buildSkillToolIndex } from './core/skills/skill-tool-index.js';
+import { registerSkillReloader } from './core/skills/live-reload.js';
 import * as proactiveNotifier from './core/awareness/proactive-notifier.js';
 import { taintTracker } from './core/security/taint-tracker.js';
 import { artifactSigner } from './core/security/signer.js';
@@ -3613,30 +3614,39 @@ async function boot(): Promise<void> {
     // agentskills.io <skill>/SKILL.md directories) and optional extra roots
     // (SUDO_SKILLS_DIRS, colon-separated; e.g. ~/.claude/skills to ingest
     // Claude Code / agentskills.io skill trees). First-seen name wins.
-    const mdSkills = await loadMarkdownSkills(projectPath('skills'));
-    const extraSkillRoots = parseSkillRoots(process.env['SUDO_SKILLS_DIRS']);
-    const seenSkillNames = new Set(mdSkills.map((s) => s.name));
-    for (const root of extraSkillRoots) {
-      for (const skill of await loadMarkdownSkills(root)) {
-        if (seenSkillNames.has(skill.name)) continue;
-        mdSkills.push(skill);
-        seenSkillNames.add(skill.name);
+    // Load + wire markdown skills. Extracted into a closure so skill.install /
+    // skill.apply / skill.rollback / plugin.install can re-run it to activate a
+    // freshly-written SKILL.md live (no restart) via reloadSkillsLive().
+    const loadAndWireSkills = async (): Promise<{ count: number }> => {
+      const skills = await loadMarkdownSkills(projectPath('skills'));
+      const roots = parseSkillRoots(process.env['SUDO_SKILLS_DIRS']);
+      const seen = new Set(skills.map((s) => s.name));
+      for (const root of roots) {
+        for (const skill of await loadMarkdownSkills(root)) {
+          if (seen.has(skill.name)) continue;
+          skills.push(skill);
+          seen.add(skill.name);
+        }
       }
-    }
-    // Build skill→tool reverse index and wire into ToolRegistry (fail-open)
-    registry.setSkillIndex(buildSkillToolIndex(mdSkills));
-    // Wire skills into the agent loop so trigger phrases activate at turn start.
-    finalAgentLoop.setMarkdownSkills(mdSkills);
+      // Build skill→tool reverse index and wire into ToolRegistry (fail-open)
+      registry.setSkillIndex(buildSkillToolIndex(skills));
+      // Wire skills into the agent loop so trigger phrases activate at turn start.
+      finalAgentLoop.setMarkdownSkills(skills);
+      return { count: skills.length };
+    };
+    const { count: mdSkillCount } = await loadAndWireSkills();
+    // Expose the reloader so newly-installed skills go live without a restart.
+    registerSkillReloader(loadAndWireSkills);
 
     // Register shutdown handlers for closeable v5 modules
     registerShutdown(() => goalEngine?.close?.());
     registerShutdown(() => outcomesLedger?.close?.());
 
     console.log(
-      `[boot] v5 ready: goals=${goalEngine ? 'ok' : 'no'} skills=${mdSkills.length} channels=cross`,
+      `[boot] v5 ready: goals=${goalEngine ? 'ok' : 'no'} skills=${mdSkillCount} channels=cross`,
     );
     log.info(
-      { skillCount: mdSkills.length },
+      { skillCount: mdSkillCount },
       'SUDO-AI v5 modules initialized',
     );
   } catch (err: unknown) {

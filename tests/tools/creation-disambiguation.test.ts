@@ -37,12 +37,13 @@ describe('skill.apply — owns behavioral skill authoring', () => {
     expect(d).toMatch(/build\/create\/author\s+.?a skill/i);
   });
 
-  it('keeps gate/dryRun/restart semantics accurate', () => {
+  it('keeps gate/dryRun/activation semantics accurate', () => {
     const d = applyTool.description;
     expect(d).toMatch(/dryRun=true \(default\)/);
     expect(d).toMatch(/security gate/i);
     expect(d).toContain('SUDO_SKILL_WORKSHOP=1');
-    expect(d).toMatch(/next\s+restart/i);
+    // Skills now activate live (no restart) — the description must say so.
+    expect(d).toMatch(/live reload|no restart|immediately/i);
   });
 
   it('points executable-code requests at meta.tool-creator', () => {
