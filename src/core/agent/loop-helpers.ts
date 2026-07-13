@@ -471,6 +471,24 @@ export function selectVerbatimTail(messages: BrainMessage[], k: number): BrainMe
   if (lastUser && !tail.includes(lastUser)) tail = [lastUser, ...tail];
   return tail;
 }
+
+/** Max chars of the pinned goal (keep it small — it's kept verbatim forever). */
+const PINNED_GOAL_MAX_CHARS = 2000;
+
+/**
+ * Pin the FIRST user message (the original goal) verbatim across compaction
+ * (Spec 7 acceptance #2 — "first user task still reflected"). Returns it as a
+ * pinned system message so a bad/incomplete summary can NEVER erase the goal —
+ * the compacted history becomes [pinnedGoal, summary, …recentTail]. Returns []
+ * when there's no user message, or when the first user message is already in the
+ * verbatim tail (short session — avoid duplicating it).
+ */
+export function selectPinnedGoal(messages: BrainMessage[], tail: BrainMessage[]): BrainMessage[] {
+  const firstUser = messages.find((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim().length > 0);
+  if (!firstUser || tail.includes(firstUser)) return [];
+  const goal = String(firstUser.content).slice(0, PINNED_GOAL_MAX_CHARS);
+  return [{ role: 'system', content: `[Pinned goal — original user request]\n${goal}` }];
+}
 /** Placeholder inserted for a tool call whose result was truncated away. */
 export const TRUNCATED_TOOL_RESULT_PLACEHOLDER =
   '[tool result unavailable — dropped by context truncation]';
@@ -659,16 +677,19 @@ export async function runCompaction(
         return Number.isFinite(raw) && raw >= 2 && raw <= 40 ? raw : COMPACT_TAIL_DEFAULT;
       })();
       const tail = selectVerbatimTail(session.messages as BrainMessage[], k);
+      // Pin the original user goal verbatim so a bad summary can't drop it.
+      const pinned = selectPinnedGoal(session.messages as BrainMessage[], tail);
       // ID-based pairing repair on the summary+tail: the verbatim tail can keep an
       // assistant tool_call whose result fell outside the tail window (or drop a
       // result whose declaring assistant did), which the positional trim in
       // selectVerbatimTail cannot fully catch. Guarantees a provider-valid array.
-      session.messages = sanitizeToolPairing([summaryMsg, ...tail]);
+      session.messages = sanitizeToolPairing([...pinned, summaryMsg, ...tail]);
       log.info(
-        { sessionId: state.sessionId, summaryLen: summary.length, tailKept: tail.length },
+        { sessionId: state.sessionId, summaryLen: summary.length, tailKept: tail.length, goalPinned: pinned.length > 0 },
         'Compaction complete (verbatim tail preserved)',
       );
     } else {
+      // Legacy summary-only mode (kill-switch) stays literally summary-only.
       session.messages = [summaryMsg];
       log.info({ sessionId: state.sessionId, summaryLen: summary.length }, 'Compaction complete');
     }
