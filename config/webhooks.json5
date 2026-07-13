@@ -3,6 +3,12 @@
   // Master kill-switch: set WEBHOOKS_ENABLED=1 in the env to enable ingress
   // (absent/0 → every hook returns 503). Secrets NEVER live here — each hook
   // names an env var that holds its secret (secretEnv).
+  //
+  // SECURITY: the raw payload is interpolated into the prompt ({{body}}). Only a
+  // holder of the hook secret can trigger a hook, but if that secret leaks a
+  // signed payload could carry prompt-injection text. Keep `tools` MINIMAL —
+  // grant broad/dangerous tools (system.exec, meta.*) only when truly needed,
+  // and prefer read-only tools. self-modify is denied unless allowSelfModify:true.
 
   hooks: {
     // Example: GitHub CI / push events → agent investigates a failure.
@@ -17,7 +23,9 @@
       // (delivery id), {{body}} (raw JSON, truncated), {{header.NAME}}.
       prompt: "A GitHub webhook fired (event: {{event}}, delivery: {{delivery}}).\nPayload:\n{{body}}\n\nIf this is a failed CI run or a push that broke the build, investigate and summarize the likely cause. Otherwise note it and stop.",
       // Tools the agent may use for this hook (globs allowed). Enforced.
-      tools: ['github.*', 'coder.read-file', 'coder.multi-read', 'system.exec'],
+      // Read-only investigation set. Add 'system.exec' explicitly if this hook
+      // must run commands (broadens the injection surface — see SECURITY note).
+      tools: ['github.*', 'coder.read-file', 'coder.multi-read'],
       // 'sync' → respond { ok, reply } when the turn finishes; 'async' → 202
       // immediately and (optionally) POST the result to callbackUrl.
       mode: 'async',
@@ -30,7 +38,7 @@
       signature: 'stripe',
       secretEnv: 'HOOK_STRIPE_SECRET',
       prompt: "A Stripe event arrived (type: {{event}}). Payload:\n{{body}}\n\nLog it and, if it needs attention (failed payment, dispute), say so.",
-      tools: ['finance.*', 'system.exec'],
+      tools: ['finance.*'],
       mode: 'async',
       rateLimitPerMin: 60,
     },
@@ -41,7 +49,7 @@
       signature: 'bearer',
       secretEnv: 'HOOK_FORM_SECRET',
       prompt: "A form was submitted. Data:\n{{body}}\n\nProcess it per the usual intake flow.",
-      tools: ['coder.read-file', 'system.exec'],
+      tools: ['coder.read-file'],
       mode: 'sync',
       rateLimitPerMin: 20,
     },

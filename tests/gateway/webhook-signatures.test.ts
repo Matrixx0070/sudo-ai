@@ -3,7 +3,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { verifySignature, deliveryId } from '../../src/core/gateway/webhook-signatures.js';
+import { verifySignature, deliveryId, bodyEventId } from '../../src/core/gateway/webhook-signatures.js';
 import type { WebhookHook } from '../../src/core/gateway/webhook-config.js';
 
 const base = { id: 'h', prompt: 'p', tools: [], mode: 'sync' as const, rateLimitPerMin: 60 };
@@ -42,17 +42,28 @@ describe('verifySignature', () => {
     expect(verifySignature(hook('github'), S, BODY, {}).ok).toBe(false);
   });
 
-  it('stripe: t=…,v1=… over `t.body`', () => {
-    const t = '1700000000';
+  it('stripe: t=…,v1=… over `t.body` (fresh timestamp)', () => {
+    const t = String(Math.floor(Date.now() / 1000));
     const v1 = hmac(S, `${t}.${BODY}`);
     expect(verifySignature(hook('stripe'), S, BODY, { 'stripe-signature': `t=${t},v1=${v1}` }).ok).toBe(true);
     expect(verifySignature(hook('stripe'), S, BODY, { 'stripe-signature': `t=${t},v1=deadbeef` }).ok).toBe(false);
     expect(verifySignature(hook('stripe'), S, BODY, { 'stripe-signature': 'garbage' }).ok).toBe(false);
   });
 
-  it('deliveryId prefers common headers', () => {
+  it('stripe: rejects a stale timestamp even with a valid v1 (replay protection)', () => {
+    const t = '1700000000'; // Nov 2023 — far outside the 300s tolerance
+    const v1 = hmac(S, `${t}.${BODY}`);
+    const r = verifySignature(hook('stripe'), S, BODY, { 'stripe-signature': `t=${t},v1=${v1}` });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/tolerance|replay/i);
+  });
+
+  it('deliveryId prefers common headers; bodyEventId reads the body id (Stripe)', () => {
     expect(deliveryId({ 'x-github-delivery': 'abc' })).toBe('abc');
     expect(deliveryId({ 'idempotency-key': 'k1' })).toBe('k1');
     expect(deliveryId({})).toBeNull();
+    expect(bodyEventId('{"id":"evt_123","type":"charge.succeeded"}')).toBe('evt_123');
+    expect(bodyEventId('not json')).toBeNull();
+    expect(bodyEventId('{"no":"id"}')).toBeNull();
   });
 });
