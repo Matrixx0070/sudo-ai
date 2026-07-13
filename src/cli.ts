@@ -1687,6 +1687,7 @@ async function boot(): Promise<void> {
           race: true,
           caller: { isOwner: false, channel: 'hook', peerId: hookId },
           ...(opts.toolAllowlist && opts.toolAllowlist.length ? { toolAllowlist: opts.toolAllowlist } : {}),
+          ...(opts.toolDeny && opts.toolDeny.length ? { toolDeny: opts.toolDeny } : {}),
         });
         return { reply: result?.text ?? '', sessionId: String(session.id) };
       },

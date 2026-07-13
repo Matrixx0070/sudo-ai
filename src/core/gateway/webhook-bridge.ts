@@ -12,6 +12,7 @@ const log = createLogger('gateway:webhook-bridge');
 
 export interface WebhookRunOpts {
   toolAllowlist?: string[];
+  toolDeny?: string[];
   timeoutMs?: number;
 }
 export interface WebhookRunResult { ok: boolean; reply: string; sessionId?: string; reason?: string }

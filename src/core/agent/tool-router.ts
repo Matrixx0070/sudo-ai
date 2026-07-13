@@ -726,16 +726,17 @@ export class ToolRouter {
    * provider-sanitized name. Capped at MAX_ROUTED_TOOLS. Used by the webhook
    * sandbox (Spec 4) — an empty result means "no match", caller falls back.
    */
-  routeAllowlistGlob(patterns: readonly string[]): ToolSchema[] {
+  routeAllowlistGlob(patterns: readonly string[], deny: readonly string[] = []): ToolSchema[] {
     const norm = (s: string): string => s.replace(/[_.]/g, '.').toLowerCase();
     const pats = patterns.map(norm);
-    const matches = (name: string): boolean => {
-      const n = norm(name);
-      return pats.some((p) => (p.endsWith('*') ? n.startsWith(p.slice(0, -1)) : n === p));
-    };
+    const denies = deny.map(norm);
+    const globMatch = (list: string[], n: string): boolean =>
+      list.some((p) => (p.endsWith('*') ? n.startsWith(p.slice(0, -1)) : n === p));
     const result: ToolSchema[] = [];
     for (const schema of this._getAllSchemas()) {
-      if (matches(this._schemaName(schema)) && result.length < MAX_ROUTED_TOOLS) result.push(schema);
+      const n = norm(this._schemaName(schema));
+      // Allowed by a pattern AND not denied. Deny wins (e.g. self-modify).
+      if (globMatch(pats, n) && !globMatch(denies, n) && result.length < MAX_ROUTED_TOOLS) result.push(schema);
     }
     return result;
   }
