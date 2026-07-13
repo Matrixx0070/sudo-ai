@@ -1902,6 +1902,15 @@ export function registerAdminRoutes(
       return;
     }
 
+    // Canvas monitor has its OWN listener (canvas-admin-routes) with its own
+    // auth. Defer BEFORE this auth gate — otherwise an unauthenticated request
+    // is answered 401 here AND again by that listener (headers-already-sent
+    // crash). Authenticated requests would fall through to the bottom defer
+    // list, but unauthenticated ones never reach it. Handled like /dashboard.
+    if (pathname === '/v1/admin/canvas') {
+      return;
+    }
+
     // Auth check for all other admin routes
     if (!isAuthorised(req, tokenBuf)) {
       sendError(res, 401, 'Unauthorized: invalid or missing bearer token');
@@ -2101,8 +2110,8 @@ export function registerAdminRoutes(
       pathname.startsWith('/v1/admin/bench') ||
       pathname.startsWith('/v1/admin/learning') ||
       pathname.startsWith('/v1/admin/compare') ||
-      pathname === '/v1/admin/synth-probe' ||
-      pathname === '/v1/admin/canvas'
+      pathname === '/v1/admin/synth-probe'
+      // NOTE: /v1/admin/canvas is deferred earlier (before the auth gate above).
     ) {
       return;
     }
