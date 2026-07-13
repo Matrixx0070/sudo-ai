@@ -34,7 +34,26 @@ export interface CallerLike {
   egress?: CallerEgress;
 }
 
-/** The two isolation tiers we route between today. */
+/**
+ * The two isolation tiers we route between. Deliberately TWO, not the spec's
+ * three — DESIGN DECISION 2026-07-13, do not "complete" this to a third tier:
+ *
+ * The spec's `verified` tier means "HOST backend + tool allowlist" — i.e. it
+ * runs a NON-OWNER caller on the host (reachable network, host namespaces),
+ * gated only by which tools are exposed. That is an isolation DOWNGRADE and
+ * inverts the whole point of Spec 8: a tool allowlist is a weaker boundary than
+ * filesystem/network isolation (one over-broad tool — system.exec target:repo,
+ * a browser tool — and it's moot), and prompt-injection inside a "verified"
+ * peer's message would then execute on the host. There is also no producer:
+ * nothing emits a "verified" trust signal, so the tier would be dead code.
+ *
+ * INVARIANT: host backend = owner ONLY. The genuine middle ground ("more than
+ * locked-down-untrusted, less than full owner") already exists as the ENFORCED
+ * network:'allowlist' mode (egress-proxy.ts, #738) — a non-owner gets graduated
+ * NETWORK access WITHOUT leaving the container. If a real verified-caller source
+ * ever appears, add `verified` as CONTAINER + allowlist + a broader tool set —
+ * never host execution for a non-owner.
+ */
 export type TrustTier = 'owner' | 'untrusted';
 
 /** The exec backend an untrusted tier is routed to. */
