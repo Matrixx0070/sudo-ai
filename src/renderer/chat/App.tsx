@@ -61,8 +61,9 @@ export function App() {
         setCurrentResponse(null);
       } else if ((data as { type: string }).type === 'canvas') {
         // A2UI: agent pushed an interactive component tree — render it in place.
-        const cv = data as unknown as { title?: string; components: Record<string, unknown>[] };
-        setCanvas({ title: cv.title, components: Array.isArray(cv.components) ? cv.components : [] });
+        // `version` is forwarded so CanvasPanel can refuse a payload it can't render.
+        const cv = data as unknown as { version?: number; title?: string; components: Record<string, unknown>[] };
+        setCanvas({ version: cv.version, title: cv.title, components: Array.isArray(cv.components) ? cv.components : [] });
       }
     },
     onDisconnect: () => {
