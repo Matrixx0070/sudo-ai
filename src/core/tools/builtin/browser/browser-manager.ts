@@ -580,7 +580,7 @@ export const browserManagerTool: ToolDefinition = {
         // Safety rail: owner-only profiles (e.g. personal) are refused for a
         // known non-owner session. Audited either way.
         const entry = getProfileEntry(name);
-        const gate = checkOwnerAllowed(entry, ctx.sessionId);
+        const gate = checkOwnerAllowed(entry, ctx.isOwner, ctx.sessionId);
         if (!gate.allowed) {
           ctxLog.error({ tool: 'browser.launch', name }, 'owner-only profile denied');
           return { success: false, output: `browser.launch: ${gate.reason}.` };

@@ -2149,9 +2149,9 @@ async function boot(): Promise<void> {
           // the owner. Record that so owner-only browser profiles (e.g. personal)
           // are launchable here (and denied for known non-owner sessions elsewhere).
           try {
-            const { setSessionOwner } = await import('./core/tools/builtin/browser/safety.js');
-            setSessionOwner(String(session.id), true);
-          } catch { /* safety module optional */ }
+            const { setTurnIdentity } = await import('./core/agent/turn-identity.js');
+            setTurnIdentity(String(session.id), { isOwner: true, channel: 'web', peerId: msg.peerId });
+          } catch { /* identity registry optional */ }
           // Stream live activity (tool calls + intermediate text) to the browser so a
           // long turn shows progress instead of a silent wait. Default-on; SUDO_WEB_STREAM=0
           // disables. Best-effort: a failed frame never breaks the turn.

@@ -137,6 +137,17 @@ export interface ToolDefinition {
 export interface ToolContext {
   /** Unique identifier of the owning agent session. */
   sessionId: string;
+  /**
+   * Caller identity for the turn that invoked this tool, resolved from the
+   * channel access policy (Feature 1). `isOwner` is undefined when the turn's
+   * identity wasn't recorded (e.g. an internal/autonomous turn). Tools that
+   * gate owner-only capabilities read this instead of a side registry.
+   */
+  isOwner?: boolean;
+  /** Channel the turn originated on (e.g. 'web', 'telegram'), when known. */
+  channel?: string;
+  /** Platform peer id of the caller, when known. */
+  peerId?: string;
   /** Absolute path that file-system tools treat as the current directory. */
   workingDir: string;
   /** Full application configuration (cast to `SudoConfig` inside the tool). */

@@ -1,38 +1,32 @@
 /**
  * Browser safety rails (Spec 3 step 5) — owner-only gating + domain allowlist.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
-  setSessionOwner, sessionIsOwner, checkOwnerAllowed, domainAllowed, __resetSessionOwnersForTests,
+  checkOwnerAllowed, domainAllowed,
 } from '../../src/core/tools/builtin/browser/safety.js';
 import type { BrowserProfileEntry } from '../../src/core/tools/builtin/browser/profile-registry.js';
 
 const personal: BrowserProfileEntry = { name: 'personal', trust: 'high', ownerOnly: true, ephemeral: false, domainAllowlist: [] };
 const work: BrowserProfileEntry = { name: 'work', trust: 'medium', ownerOnly: false, ephemeral: false, domainAllowlist: ['example.com'] };
 
-beforeEach(() => __resetSessionOwnersForTests());
-
-describe('owner-only gating', () => {
-  it('DENIES an owner-only profile for a known non-owner session', () => {
-    setSessionOwner('s1', false);
-    const r = checkOwnerAllowed(personal, 's1');
+describe('owner-only gating (from resolved ctx.isOwner)', () => {
+  it('DENIES an owner-only profile for a known non-owner (isOwner=false)', () => {
+    const r = checkOwnerAllowed(personal, false, 's1');
     expect(r.allowed).toBe(false);
     expect(r.reason).toMatch(/owner-only/);
   });
 
-  it('ALLOWS an owner-only profile for a known owner session', () => {
-    setSessionOwner('s2', true);
-    expect(checkOwnerAllowed(personal, 's2').allowed).toBe(true);
+  it('ALLOWS an owner-only profile for a known owner (isOwner=true)', () => {
+    expect(checkOwnerAllowed(personal, true, 's2').allowed).toBe(true);
   });
 
-  it('ALLOWS (with audit) when identity is unknown', () => {
-    expect(sessionIsOwner('s-unknown')).toBeUndefined();
-    expect(checkOwnerAllowed(personal, 's-unknown').allowed).toBe(true);
+  it('ALLOWS (with audit) when identity is unknown (internal/autonomous turn)', () => {
+    expect(checkOwnerAllowed(personal, undefined, 's3').allowed).toBe(true);
   });
 
-  it('never blocks a non-owner-only profile', () => {
-    setSessionOwner('s3', false);
-    expect(checkOwnerAllowed(work, 's3').allowed).toBe(true);
+  it('never blocks a non-owner-only profile even for a non-owner', () => {
+    expect(checkOwnerAllowed(work, false, 's4').allowed).toBe(true);
   });
 });
 
