@@ -28,7 +28,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // ---------------------------------------------------------------------------
 
 const mocks = vi.hoisted(() => {
-  const mockSendMail = vi.fn().mockResolvedValue({ messageId: 'test-id' });
+  const mockSendMail = vi.fn().mockResolvedValue({ messageId: 'test-id', message: Buffer.from('raw-mime') });
   const mockClose = vi.fn();
   const mockCreateTransport = vi.fn().mockReturnValue({
     sendMail: mockSendMail,
@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => {
   const mockMailboxOpen = vi.fn().mockResolvedValue(undefined);
   const mockFetch = vi.fn().mockReturnValue((async function* () {})());
   const mockOn = vi.fn();
+  const mockAppend = vi.fn().mockResolvedValue(undefined);
 
   const mockImapFlowInstance = {
     connect: mockConnect,
@@ -49,6 +50,7 @@ const mocks = vi.hoisted(() => {
     mailboxOpen: mockMailboxOpen,
     fetch: mockFetch,
     on: mockOn,
+    append: mockAppend,
   };
 
   const ImapFlowConstructor = vi.fn().mockImplementation(function () {
@@ -71,6 +73,7 @@ const mocks = vi.hoisted(() => {
     mockMailboxOpen,
     mockFetch,
     mockOn,
+    mockAppend,
     mockImapFlowInstance,
     ImapFlowConstructor,
     mockRateLimiterCheck,
@@ -157,7 +160,7 @@ describe('EmailAdapter', () => {
       sendMail: mocks.mockSendMail,
       close: mocks.mockClose,
     });
-    mocks.mockSendMail.mockResolvedValue({ messageId: 'test-id' });
+    mocks.mockSendMail.mockResolvedValue({ messageId: 'test-id', message: Buffer.from('raw-mime') });
     mocks.mockRateLimiterCheck.mockResolvedValue({
       allowed: true,
       remaining: 19,
@@ -259,19 +262,38 @@ describe('EmailAdapter', () => {
     expect(received.text).toBe('Test message body');
   });
 
-  // 9. Outbound send: nodemailer sendMail called with correct params
-  it('calls sendMail with correct from/to/text on send()', async () => {
+  // 9. Outbound REAL send (draft-default overridden): sendMail called with from/to/text.
+  //    Requires EMAIL_ALLOW_SEND=1 + recipient allowlisted (Spec 5 draft-default policy).
+  it('calls sendMail with correct from/to/text on a real send()', async () => {
     setValidEmailEnv();
+    process.env['EMAIL_ALLOW_SEND'] = '1';
+    process.env['EMAIL_ALLOWED_RECIPIENTS'] = 'recipient@example.com';
     const adapter = new EmailAdapter();
     await adapter.start();
 
     await adapter.send('recipient@example.com', 'Hello from bot');
 
-    expect(mocks.mockSendMail).toHaveBeenCalledWith({
-      from: 'bot@example.com',
-      to: 'recipient@example.com',
-      text: 'Hello from bot',
-    });
+    expect(mocks.mockSendMail).toHaveBeenCalledWith(
+      expect.objectContaining({ from: 'bot@example.com', to: 'recipient@example.com', text: 'Hello from bot' }),
+    );
+    delete process.env['EMAIL_ALLOW_SEND'];
+    delete process.env['EMAIL_ALLOWED_RECIPIENTS'];
+    await adapter.stop();
+  });
+
+  // 9b. Draft-default: without EMAIL_ALLOW_SEND, send() APPENDs to Drafts, no transmit.
+  it('draft-default: appends to Drafts and does not transmit', async () => {
+    setValidEmailEnv();
+    delete process.env['EMAIL_ALLOW_SEND'];        // ensure draft-default
+    delete process.env['EMAIL_ALLOWED_RECIPIENTS'];
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    mocks.mockSendMail.mockClear();
+    mocks.mockAppend.mockClear();
+
+    await adapter.send('recipient@example.com', 'draft me');
+
+    expect(mocks.mockAppend).toHaveBeenCalledWith('Drafts', expect.anything(), ['\\Draft']);
     await adapter.stop();
   });
 
