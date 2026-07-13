@@ -47,6 +47,16 @@ export interface SandboxPolicy {
    */
   execBackend?: string;
 
+  /**
+   * When true, the selected `execBackend` is MANDATORY — a required isolation
+   * boundary for an untrusted turn (Feature 8 trust-tier routing). If that
+   * backend cannot be resolved/loaded (e.g. Docker is down), runInSandbox must
+   * FAIL CLOSED: refuse to run and surface an error, NEVER silently downgrade to
+   * the host bwrap path. Owner/internal turns leave this unset and keep the
+   * existing fail-safe fallback. Set programmatically per turn, not from config.
+   */
+  requireIsolatedBackend?: boolean;
+
   // Cross-platform expansion (compat for Win/Mac shims + policy)
   platform?: 'linux' | 'win' | 'mac' | 'auto';
   enableCrossPlatform?: boolean;

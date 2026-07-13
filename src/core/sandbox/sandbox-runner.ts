@@ -550,6 +550,25 @@ export async function runInSandbox(
     if (backend) {
       return backend.run(opts);
     }
+    // FAIL CLOSED (Feature 8): when the policy marks this backend as a REQUIRED
+    // isolation boundary (an untrusted turn), a backend that cannot be resolved
+    // must NOT downgrade to the host bwrap path — that would run untrusted code
+    // on the host. Refuse and surface an error instead. (The Docker-daemon-down
+    // case surfaces separately as a nonzero exit from backend.run, which also
+    // never touches the host.)
+    if (policy.requireIsolatedBackend) {
+      log.error(
+        { backend: backendName },
+        'Required isolated exec backend unavailable — refusing to run untrusted command on host (fail-closed)',
+      );
+      return {
+        stdout: '',
+        stderr:
+          `sandbox: required isolation backend '${backendName}' is unavailable ` +
+          `(is Docker installed and running?) — refusing to execute an untrusted command on the host.`,
+        exitCode: 126,
+      };
+    }
     log.warn(
       { backend: backendName },
       `SUDO_EXEC_BACKEND='${backendName}' could not be loaded or resolved — falling back to bwrap`,

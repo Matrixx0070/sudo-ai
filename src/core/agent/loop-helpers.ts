@@ -33,6 +33,7 @@ import {
   renderCriticBlockMessage,
 } from './verify-gate-critic.js';
 import { isGroundingBlockEnabled } from './verify-gate-grounding.js';
+import { classifyTrustTier, isTierRoutingEnabled, UNTRUSTED_EXEC_BACKEND } from '../sandbox/trust-tier.js';
 
 const log = createLogger('agent:loop');
 
@@ -1460,6 +1461,29 @@ export async function executeToolCalls(
   // run() start by the dispatch layer — turn-scoped, so ctx carries the RIGHT
   // caller with no shared-registry race. Undefined for internal/autonomous turns.
   const caller = state.caller;
+
+  // TRUST-TIER EXEC ISOLATION (Feature 8): an untrusted turn (an explicit
+  // non-owner caller — hook/email/community) is routed to the throwaway
+  // container backend and MUST fail closed if that backend is unavailable, while
+  // the owner's own turns keep the host backend. getPolicyFor returns a fresh
+  // copy per call, so mutating it here is turn-scoped (no shared-default bleed).
+  // Undefined caller = internal/autonomous turn → host-tier, untouched.
+  if (
+    policyFromSandbox &&
+    isTierRoutingEnabled() &&
+    classifyTrustTier(caller) === 'untrusted'
+  ) {
+    policyFromSandbox.execBackend = UNTRUSTED_EXEC_BACKEND;
+    policyFromSandbox.requireIsolatedBackend = true;
+    // Untrusted turns get no host network by default (defense in depth alongside
+    // the container's own --network none); an operator allowlist is a later step.
+    policyFromSandbox.network = 'none';
+    log.info(
+      { sessionId: state.sessionId, channel: caller?.channel, backend: UNTRUSTED_EXEC_BACKEND },
+      'Trust-tier routing: untrusted turn → isolated container backend (fail-closed)',
+    );
+  }
+
   const ctx: ToolContext = {
     sessionId: state.sessionId,
     workingDir: workspaceDir,
