@@ -27,6 +27,7 @@ import type { FederationErrorRoutesDeps } from './federation-error-types.js';
 import { registerBenchRoutes } from './bench-routes.js';
 import type { BenchRoutesDeps } from './bench-routes.js';
 import { registerLearningRoutes } from './learning-routes.js';
+import { registerCanvasRoutes } from './canvas-routes.js';
 import type { LearningRoutesDeps } from './learning-routes.js';
 import { registerSavingsRoutes } from './savings-routes.js';
 import type { CostTrackerLike } from './savings-routes.js';
@@ -509,6 +510,8 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   if (deps.learning) {
     registerLearningRoutes(server, deps.learning, tokenBuf);
   }
+  // A2UI canvas event route (Spec 2). No deps — uses the global canvas bridge.
+  registerCanvasRoutes(server, tokenBuf);
   // Savings + compare routes
   if (deps.savings) {
     registerSavingsRoutes(server, deps.savings);

@@ -190,6 +190,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     pathname.startsWith('/v1/skills') ||
     pathname.startsWith('/v1/vaults') ||
     pathname.startsWith('/v1/registry') ||
+    pathname.startsWith('/v1/canvas') ||   // A2UI canvas event route (registered via server.on('request'))
     (ADMIN_API_ON && pathname.startsWith('/api/admin')) ||   // opt-in admin REST API (SUDO_ADMIN_API=1), token-gated by api/admin/register.ts
     pathname.startsWith('/v1/federation/') ||   // Federation routes (registered via server.on('request'))
     pathname.startsWith('/.well-known') ||   // agentskills.io discovery (public no-auth)

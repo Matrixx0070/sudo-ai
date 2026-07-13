@@ -1642,6 +1642,37 @@ async function boot(): Promise<void> {
   // context factory) so /steer can signal it; wired into the loop below.
   const steeringChannel = new InMemorySteeringChannel();
 
+  // A2UI canvas bridge (Spec 2): wire the singleton the canvas.render tool +
+  // /v1/canvas/event route reach. Resolves session↔peer, pushes frames over the
+  // web socket (channel-outbox), and injects client events via the steering
+  // channel. Fail-open — a wiring error just leaves canvas.render reporting
+  // "bridge not available".
+  try {
+    const { registerCanvasBridge } = await import('./core/canvas/canvas-bridge.js');
+    const { CanvasStateStore } = await import('./core/canvas/canvas-store.js');
+    const canvasStore = new CanvasStateStore(db.db);
+    registerCanvasBridge({
+      resolveSessionPeer: async (sessionId: string) => {
+        const s = await dualSessionManager.get(sessionId);
+        return s ? { channel: s.channel, peerId: s.peerId } : null;
+      },
+      resolveWebSession: async (peerId: string) => {
+        const s = await dualSessionManager.getOrCreate('web', peerId);
+        return String(s.id);
+      },
+      push: (channel: string, peerId: string, frameJson: string) => {
+        void sendToChannelOutbox(channel as import('./core/channels/types.js').ChannelType, peerId, frameJson);
+      },
+      inject: (sessionId: string, payload: string) => {
+        steeringChannel.signal(sessionId, { action: 'inject', payload });
+      },
+      persist: (sessionId: string, payload) => canvasStore.save(sessionId, payload),
+    });
+    log.info('A2UI canvas bridge wired (Spec 2)');
+  } catch (err) {
+    log.warn({ err: String(err) }, 'canvas bridge wiring failed — canvas.render disabled');
+  }
+
   // Shared CommandContext factory for every channel's directive dispatch.
   const makeCommandContext = async (msg: { channel: string; peerId: string }): Promise<CommandContext | null> => {
     try {

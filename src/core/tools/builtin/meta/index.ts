@@ -88,6 +88,7 @@ import { smartSchedulerTool } from './smart-scheduler.js';
 import { selfTestTool } from './self-test.js';
 import { selfEvalTool } from './self-eval.js';
 import { channelHealthTool } from './channel-health.js';
+import { canvasRenderTool } from './canvas-render.js';
 import { trendRadarTool } from './trend-radar.js';
 import { swarmTool } from './swarm.js';
 import { codeEvolverTool } from './code-evolver.js';
@@ -628,6 +629,7 @@ const META_TOOLS: ToolDefinition[] = [
   selfTestTool,
   selfEvalTool,
   channelHealthTool,
+  canvasRenderTool,
   trendRadarTool,
   swarmTool,
   codeEvolverTool,
