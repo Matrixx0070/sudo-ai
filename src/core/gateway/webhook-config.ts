@@ -28,6 +28,10 @@ export interface WebhookHook {
   tools: string[];
   mode: HookMode;
   rateLimitPerMin: number;
+  /** Operator-set URL to POST the async result to (SSRF-guarded). */
+  callbackUrl?: string;
+  /** Allow self-modify tools (meta.self-modify/self-update). Default false. */
+  allowSelfModify: boolean;
 }
 
 export interface WebhooksConfig { hooks: Record<string, WebhookHook> }
@@ -63,6 +67,8 @@ function normalizeHook(id: string, raw: unknown): WebhookHook | null {
     tools: toStringArray(o['tools']),
     mode,
     rateLimitPerMin: Number.isFinite(rlRaw) && rlRaw > 0 ? Math.floor(rlRaw) : 60,
+    ...(typeof o['callbackUrl'] === 'string' && /^https?:\/\//i.test(o['callbackUrl']) ? { callbackUrl: o['callbackUrl'] } : {}),
+    allowSelfModify: o['allowSelfModify'] === true,
   };
 }
 

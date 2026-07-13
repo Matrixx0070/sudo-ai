@@ -14,9 +14,23 @@ import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node
 import { createLogger } from '../shared/logger.js';
 import { webhooksEnabled, getHook, hookSecret, type WebhookHook } from './webhook-config.js';
 import { verifySignature, deliveryId } from './webhook-signatures.js';
-import { runWebhookTurn } from './webhook-bridge.js';
+import { runWebhookTurn, type WebhookRunResult } from './webhook-bridge.js';
+import { toolFetch } from '../security/guarded-fetch.js';
 
 const log = createLogger('gateway:webhook-routes');
+/** Self-modify tools a webhook may NOT use unless it opts in (allowSelfModify). */
+const SELF_MODIFY_DENY = ['meta.self-modify', 'meta.self-update'];
+
+/** POST an async hook result to the operator-configured callbackUrl (SSRF-guarded). */
+async function fireCallback(url: string, hookId: string, delivery: string, r: WebhookRunResult): Promise<void> {
+  try {
+    const body = JSON.stringify({ hookId, delivery, ok: r.ok, reply: r.reply, ...(r.reason ? { error: r.reason } : {}) });
+    const res = await toolFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    log.info({ hookId, url, status: res.status }, 'webhook callback delivered');
+  } catch (err) {
+    log.warn({ hookId, url, err: String(err) }, 'webhook callback failed');
+  }
+}
 const MAX_BODY = 1_048_576; // 1 MB
 const BODY_IN_PROMPT_CAP = 8_000;
 const DEDUPE_TTL_MS = 10 * 60_000;
@@ -121,13 +135,20 @@ export function registerWebhookRoutes(server: HttpServer): void {
       }
 
       const prompt = renderPrompt(hook, req, raw, delivery);
-      const runOpts = { ...(hook.tools.length ? { toolAllowlist: hook.tools } : {}), timeoutMs: 120_000 };
+      const runOpts = {
+        ...(hook.tools.length ? { toolAllowlist: hook.tools } : {}),
+        // Safety: a webhook cannot self-modify unless the hook explicitly opts in.
+        ...(hook.allowSelfModify ? {} : { toolDeny: SELF_MODIFY_DENY }),
+        timeoutMs: 120_000,
+      };
       log.info({ hookId, event: eventName(req, raw), mode: hook.mode, delivery }, 'webhook accepted → dispatching');
 
-      // 4. Async → 202 now, run in background. Sync → await the reply.
+      // 4. Async → 202 now, run in background (+ optional callback). Sync → await.
       if (hook.mode === 'async') {
-        sendJson(res, 202, { ok: true, accepted: true, hookId });
-        void runWebhookTurn(hookId, prompt, runOpts).catch((e) => log.warn({ hookId, err: String(e) }, 'async hook turn error'));
+        sendJson(res, 202, { ok: true, accepted: true, hookId, ...(hook.callbackUrl ? { callback: true } : {}) });
+        void runWebhookTurn(hookId, prompt, runOpts)
+          .then((r) => { if (hook.callbackUrl) return fireCallback(hook.callbackUrl, hookId, delivery, r); })
+          .catch((e) => log.warn({ hookId, err: String(e) }, 'async hook turn error'));
         return;
       }
       const r = await runWebhookTurn(hookId, prompt, runOpts);

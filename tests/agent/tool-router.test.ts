@@ -56,6 +56,34 @@ describe('ToolRouter — github category routing', () => {
   });
 });
 
+describe('ToolRouter — routeAllowlistGlob (webhook sandbox)', () => {
+  const router = new ToolRouter(fakeRegistry(TOOLS) as never);
+  const names = (patterns: string[], deny?: string[]): string[] =>
+    router.routeAllowlistGlob(patterns, deny).map((s) => s.function.name);
+
+  it('expands a glob to matching tools only', () => {
+    const n = names(['github.*']);
+    expect(n).toContain('github.commit');
+    expect(n).toContain('github.merge_pr');
+    expect(n).not.toContain('content.write-article');
+    expect(n).not.toContain('system.exec');
+  });
+
+  it('exact patterns match one tool', () => {
+    expect(names(['coder.read-file'])).toEqual(['coder.read-file']);
+  });
+
+  it('deny wins over allow (self-modify excluded)', () => {
+    const n = names(['meta.*'], ['meta.self-modify']);
+    expect(n).toContain('meta.health-check');
+    expect(n).not.toContain('meta.self-modify');
+  });
+
+  it('. and _ are treated as equivalent (provider-sanitized names)', () => {
+    expect(names(['github_*'])).toContain('github.commit');
+  });
+});
+
 describe('ToolRouter — canvas.render is always reachable (A2UI base tool)', () => {
   const router = new ToolRouter(fakeRegistry(TOOLS) as never);
   const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);

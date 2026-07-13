@@ -821,6 +821,9 @@ export class AgentLoop extends AgentLoopInjections {
        * its configured tools. Empty resolution falls back to full routing.
        */
       toolAllowlist?: string[];
+      /** Tool names/globs to EXCLUDE from the allowlist (e.g. self-modify for
+       *  webhooks). Applied on top of toolAllowlist. */
+      toolDeny?: string[];
     },
   ): Promise<AgentRunResult> {
     if (!sessionId || typeof sessionId !== 'string') {
@@ -1950,7 +1953,7 @@ export class AgentLoop extends AgentLoopInjections {
     session: SessionLike,
     state: AgentState,
     emit: Emitter,
-    opts?: { race?: boolean; slimHeartbeat?: boolean; toolAllowlist?: string[] },
+    opts?: { race?: boolean; slimHeartbeat?: boolean; toolAllowlist?: string[]; toolDeny?: string[] },
   ): Promise<string> {
     const { maxIterations, model } = this.config;
     let finalText = '';
@@ -2264,7 +2267,7 @@ export class AgentLoop extends AgentLoopInjections {
         // (glob-aware). Fail-open — an empty resolution falls back to full routing.
         if (!_routedTools && opts?.toolAllowlist && opts.toolAllowlist.length > 0) {
           try {
-            const allowed = this.toolRouter.routeAllowlistGlob(opts.toolAllowlist);
+            const allowed = this.toolRouter.routeAllowlistGlob(opts.toolAllowlist, opts.toolDeny);
             if (allowed.length > 0) {
               _routedTools = allowed;
               log.info({ sessionId: state.sessionId, toolCount: allowed.length, patterns: opts.toolAllowlist }, 'Webhook tool allowlist active');
