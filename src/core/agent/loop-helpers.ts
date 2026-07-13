@@ -475,19 +475,36 @@ export function selectVerbatimTail(messages: BrainMessage[], k: number): BrainMe
 /** Max chars of the pinned goal (keep it small — it's kept verbatim forever). */
 const PINNED_GOAL_MAX_CHARS = 2000;
 
+/** Marker for the pinned-goal system message so it survives repeated folds. */
+export const PINNED_GOAL_PREFIX = '[Pinned goal — original user request]';
+
 /**
  * Pin the FIRST user message (the original goal) verbatim across compaction
  * (Spec 7 acceptance #2 — "first user task still reflected"). Returns it as a
  * pinned system message so a bad/incomplete summary can NEVER erase the goal —
- * the compacted history becomes [pinnedGoal, summary, …recentTail]. Returns []
- * when there's no user message, or when the first user message is already in the
- * verbatim tail (short session — avoid duplicating it).
+ * the compacted history becomes [pinnedGoal, summary, …recentTail].
+ *
+ * MULTI-COMPACT: after the first fold the original user turn is gone — only the
+ * pinned-goal SYSTEM message remains. On every subsequent compaction we carry
+ * that existing pin FORWARD (rather than re-searching for a user turn, which
+ * would latch onto a recent tail message), so the verbatim guarantee holds
+ * across the repeated folds of acceptance #5, not just the first one.
+ *
+ * Returns [] when there's no user message, or when the first user message is
+ * already in the verbatim tail (short session — avoid duplicating it).
  */
 export function selectPinnedGoal(messages: BrainMessage[], tail: BrainMessage[]): BrainMessage[] {
+  // Carry an already-pinned goal forward (system messages never appear in the
+  // non-system tail, so this can't duplicate).
+  const existing = messages.find(
+    (m) => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith(PINNED_GOAL_PREFIX),
+  );
+  if (existing) return [existing];
+
   const firstUser = messages.find((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim().length > 0);
   if (!firstUser || tail.includes(firstUser)) return [];
   const goal = String(firstUser.content).slice(0, PINNED_GOAL_MAX_CHARS);
-  return [{ role: 'system', content: `[Pinned goal — original user request]\n${goal}` }];
+  return [{ role: 'system', content: `${PINNED_GOAL_PREFIX}\n${goal}` }];
 }
 /** Placeholder inserted for a tool call whose result was truncated away. */
 export const TRUNCATED_TOOL_RESULT_PLACEHOLDER =
