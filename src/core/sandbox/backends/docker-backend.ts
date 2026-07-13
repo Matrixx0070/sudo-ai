@@ -24,7 +24,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { createLogger } from '../../shared/logger.js';
 import { buildSandboxEnv, buildUlimitWrappedCommand, exitCodeFromError } from '../sandbox-runner.js';
 import type { RunInSandboxOptions, SandboxRunResult } from '../sandbox-runner.js';
@@ -78,12 +78,40 @@ export interface DockerBackendConfig {
   user?: string;
 }
 
+/**
+ * Default sandbox image: the non-root node+python image built from
+ * docker/Dockerfile.sandbox (see that file). Override with SUDO_DOCKER_IMAGE.
+ * If the image is absent, an untrusted `docker run` fails with a nonzero exit —
+ * fail-closed by construction (the command never runs on the host).
+ */
+export const DEFAULT_SANDBOX_IMAGE = 'sudo-ai-sandbox:latest';
+
 export function resolveDockerConfig(): DockerBackendConfig {
   return {
     bin: process.env['SUDO_DOCKER_BIN'] || 'docker',
-    image: process.env['SUDO_DOCKER_IMAGE'] || 'ubuntu:24.04',
+    image: process.env['SUDO_DOCKER_IMAGE'] || DEFAULT_SANDBOX_IMAGE,
     user: process.env['SUDO_DOCKER_USER'] || undefined,
   };
+}
+
+/**
+ * Check whether the configured sandbox image is present locally. Called at boot
+ * so operators get an early, actionable warning (with the build command) instead
+ * of every untrusted turn silently failing closed. Never throws.
+ */
+export async function checkSandboxImageAvailable(
+  config: DockerBackendConfig = resolveDockerConfig(),
+): Promise<{ available: boolean; reason?: string }> {
+  try {
+    await execFileAsync(config.bin, ['image', 'inspect', config.image], {
+      timeout: 10_000,
+    });
+    return { available: true };
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return { available: false, reason: 'docker binary not found' };
+    return { available: false, reason: `image '${config.image}' not present locally` };
+  }
 }
 
 /**
@@ -103,7 +131,25 @@ export function buildDockerArgs(
 
   const args: string[] = ['run', '--rm', '--init'];
 
+  // --- Container hardening (Feature 8) ---------------------------------------
+  // Drop ALL Linux capabilities and forbid privilege escalation (setuid/setgid
+  // binaries, file capabilities). An untrusted turn keeps none of root's powers
+  // even if the image runs as root. --privileged is never passed.
+  args.push('--cap-drop', 'ALL');
+  args.push('--security-opt', 'no-new-privileges');
+  // Read-only root filesystem with a small writable tmpfs for /tmp. The
+  // workspace bind (below) stays writable and HOME=/workspace, so real work has
+  // a place to write while the rest of the container FS is immutable. Opt out
+  // with SUDO_DOCKER_READONLY=0 for images that need a writable rootfs.
+  if (process.env['SUDO_DOCKER_READONLY'] !== '0') {
+    args.push('--read-only');
+    args.push('--tmpfs', '/tmp:rw,nosuid,nodev,size=64m');
+  }
+
   // Network isolation mirrors bwrap: policy.network 'none' → --network none.
+  // With --network none there is NO interface at all, so the cloud metadata
+  // endpoint (169.254.169.254) and every other host are unreachable by
+  // construction — untrusted turns are pinned to 'none' by the routing layer.
   args.push('--network', policy.network === 'host' ? 'host' : 'none');
 
   // Workspace bind + working directory. A ':' in the host path would corrupt the
@@ -113,7 +159,12 @@ export function buildDockerArgs(
   args.push('-w', '/workspace');
 
   // Container-level resource caps (defense in depth alongside the ulimit wrapper).
-  args.push('--memory', `${policy.memoryMB ?? 512}m`);
+  // --memory-swap == --memory disables swap, so the memory cap is actually
+  // enforced (without it a 600MB alloc under a 512m cap just swaps and survives —
+  // verified). --pids-limit caps a fork bomb.
+  const memMB = policy.memoryMB ?? 512;
+  args.push('--memory', `${memMB}m`);
+  args.push('--memory-swap', `${memMB}m`);
   args.push('--pids-limit', '64');
 
   if (config.user) args.push('--user', config.user);
@@ -147,6 +198,22 @@ export const dockerBackend: ExecBackend = {
 
   async run(opts: RunInSandboxOptions): Promise<SandboxRunResult> {
     const config = resolveDockerConfig();
+
+    // Default the container user to the workspace OWNER (uid:gid) so the
+    // bind-mounted /workspace is readable + writable. Without this, the image's
+    // non-root user (uid 999) cannot touch a root-owned session dir and every
+    // untrusted turn fails on its own workspace. cap-drop ALL + no-new-privileges
+    // + read-only rootfs + no network keep the turn contained even at uid 0.
+    // An explicit SUDO_DOCKER_USER always wins.
+    if (!config.user) {
+      try {
+        const st = statSync(opts.workspaceDir);
+        config.user = `${st.uid}:${st.gid}`;
+      } catch {
+        /* stat failed — leave the image default USER */
+      }
+    }
+
     const env = buildSandboxEnv(opts.policy);
     const args = buildDockerArgs(opts, env, config);
 

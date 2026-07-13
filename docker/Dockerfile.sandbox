@@ -1,0 +1,40 @@
+# =============================================================================
+# sudo-ai-sandbox  —  throwaway exec image for UNTRUSTED trust-tier turns
+# =============================================================================
+# Feature 8 (trust-tiered sandboxing). Community/hook/email (non-owner) turns run
+# their shell commands inside a `docker run --rm` of THIS image, with:
+#   --cap-drop ALL --security-opt no-new-privileges --read-only --network none
+#   --memory <policy> --pids-limit 64   (set by the docker exec backend)
+# so the container is small, non-root, and has node + python available for the
+# kinds of code community skills run.
+#
+# Build (host):   docker build -f docker/Dockerfile.sandbox -t sudo-ai-sandbox:latest .
+# The daemon warns at boot if this image is missing (checkSandboxImageAvailable).
+# =============================================================================
+
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+
+# python3 for skills that run Python; ca-certs for the optional allowlisted-
+# network mode. Child reaping is handled by the exec backend's `docker run
+# --init`, so no in-image init is needed. --no-install-recommends keeps it lean.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3 \
+      python3-venv \
+      ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Dedicated non-root user. The exec backend bind-mounts the session workspace at
+# /workspace and sets HOME=/workspace, so this user writes only there (+ tmpfs
+# /tmp). Nothing else on the rootfs is writable (--read-only).
+RUN groupadd -r sandbox && useradd -r -g sandbox -m -d /home/sandbox sandbox && \
+    mkdir -p /workspace && chown sandbox:sandbox /workspace
+
+WORKDIR /workspace
+USER sandbox
+
+# No ENTRYPOINT — the backend invokes `/bin/bash -c "<cmd>"` per turn under
+# `docker run --init` (which reaps children). Setting a tini ENTRYPOINT here would
+# collide with --init and print a "not PID 1" warning into every command's
+# stderr. The default CMD is a no-op shell so a bare `docker run` is harmless.
+CMD ["/bin/bash", "-lc", "true"]

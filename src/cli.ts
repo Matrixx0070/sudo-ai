@@ -812,6 +812,32 @@ async function boot(): Promise<void> {
     defaultPolicy: { ...DEFAULT_SANDBOX_POLICY, network: agentNetworkMode },
   });
   registerShutdown(async () => sandboxManager.teardownAll());
+  // Trust-tier routing (Feature 8): untrusted turns fail closed if the sandbox
+  // image is missing. Warn early + actionably at boot rather than let every such
+  // turn fail silently later. Non-blocking, best-effort.
+  if (process.env['SUDO_SANDBOX_TIER_ROUTING'] !== '0') {
+    void (async () => {
+      try {
+        const { checkSandboxImageAvailable, resolveDockerConfig } = await import(
+          './core/sandbox/backends/docker-backend.js'
+        );
+        const { available, reason } = await checkSandboxImageAvailable();
+        if (!available) {
+          const { image } = resolveDockerConfig();
+          log.warn(
+            { image, reason },
+            `Trust-tier sandbox image '${image}' unavailable — untrusted turns will FAIL CLOSED. ` +
+              `Build it: docker build -f docker/Dockerfile.sandbox -t ${image} . ` +
+              `(or disable routing with SUDO_SANDBOX_TIER_ROUTING=0)`,
+          );
+        } else {
+          log.info('Trust-tier sandbox image present — untrusted turns will run isolated');
+        }
+      } catch {
+        /* best-effort boot diagnostic */
+      }
+    })();
+  }
   // Background shells (gap #10): kill all on daemon shutdown so none orphan.
   // Dynamic import keeps the bg-shell graph unloaded when the flag is off.
   if (process.env['SUDO_BG_SHELL'] === '1') {

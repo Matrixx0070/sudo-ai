@@ -30,7 +30,16 @@ describe('buildDockerArgs', () => {
     expect(args[args.indexOf('-v') + 1]).toBe('/tmp/ws:/workspace');
     expect(args[args.indexOf('-w') + 1]).toBe('/workspace');
     expect(args[args.indexOf('--memory') + 1]).toBe('512m');
+    // --memory-swap == --memory disables swap so the cap is actually enforced.
+    expect(args[args.indexOf('--memory-swap') + 1]).toBe('512m');
     expect(args).toContain('--pids-limit');
+
+    // Hardening (Feature 8): drop all caps, forbid privilege escalation,
+    // read-only rootfs + writable /tmp tmpfs.
+    expect(args[args.indexOf('--cap-drop') + 1]).toBe('ALL');
+    expect(args[args.indexOf('--security-opt') + 1]).toBe('no-new-privileges');
+    expect(args).toContain('--read-only');
+    expect(args[args.indexOf('--tmpfs') + 1]).toMatch(/^\/tmp:/);
 
     // image then `/bin/bash -c <ulimit-wrapped command>`
     const imgIdx = args.indexOf('ubuntu:24.04');
@@ -62,6 +71,19 @@ describe('buildDockerArgs', () => {
   it('adds --user when configured (root-drop)', () => {
     const args = buildDockerArgs({ command: 'x', workspaceDir: '/w', policy }, env, { ...config, user: '1000:1000' });
     expect(args[args.indexOf('--user') + 1]).toBe('1000:1000');
+  });
+
+  it('omits --read-only when SUDO_DOCKER_READONLY=0', () => {
+    process.env['SUDO_DOCKER_READONLY'] = '0';
+    try {
+      const args = buildDockerArgs({ command: 'x', workspaceDir: '/w', policy }, env, config);
+      expect(args).not.toContain('--read-only');
+      // caps + no-new-privileges are NOT opt-out — still present.
+      expect(args).toContain('--cap-drop');
+      expect(args[args.indexOf('--security-opt') + 1]).toBe('no-new-privileges');
+    } finally {
+      delete process.env['SUDO_DOCKER_READONLY'];
+    }
   });
 
   it('rejects a workspaceDir containing ":" (would corrupt the -v mount spec)', () => {
@@ -106,10 +128,10 @@ describe('resolveDockerConfig', () => {
     delete process.env['SUDO_DOCKER_USER'];
   });
 
-  it('defaults to docker + ubuntu:24.04, no user', () => {
+  it('defaults to docker + the non-root sudo-ai-sandbox image, no user', () => {
     const c = resolveDockerConfig();
     expect(c.bin).toBe('docker');
-    expect(c.image).toBe('ubuntu:24.04');
+    expect(c.image).toBe('sudo-ai-sandbox:latest');
     expect(c.user).toBeUndefined();
   });
 
