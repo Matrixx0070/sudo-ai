@@ -432,7 +432,7 @@ function summariseComp(c){
   if(t==='chart'){
     var s = (c.series && c.series.length) ? c.series : [];
     var pts = s.map(function(p){ return esc(p.label) + '=' + esc(p.value); }).join(', ');
-    return 'chart' + (c.title ? ' "' + esc(c.title) + '"' : '') + ': ' + pts;
+    return 'chart[' + esc(c.chartType || 'bar') + ']' + (c.title ? ' "' + esc(c.title) + '"' : '') + ': ' + pts;
   }
   if(t==='table'){
     var rows = (c.rows && c.rows.length) ? c.rows.length : 0;
