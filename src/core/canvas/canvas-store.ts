@@ -48,4 +48,24 @@ export class CanvasStateStore {
   clear(sessionId: string): void {
     try { this.db.prepare('DELETE FROM canvas_state WHERE session_id = ?').run(sessionId); } catch { /* fail-open */ }
   }
+
+  /**
+   * Most-recently-updated canvases across sessions, newest first — powers the
+   * read-only /admin monitoring panel. Rows with unparseable payloads are
+   * skipped. Fail-open: returns [] on any error.
+   */
+  list(limit = 20): Array<{ sessionId: string; updatedAt: string; payload: CanvasPayload }> {
+    try {
+      const cap = Math.max(1, Math.min(100, Math.floor(limit)));
+      const rows = this.db.prepare(
+        'SELECT session_id, payload, updated_at FROM canvas_state ORDER BY updated_at DESC LIMIT ?',
+      ).all(cap) as Array<{ session_id: string; payload: string; updated_at: string }>;
+      const out: Array<{ sessionId: string; updatedAt: string; payload: CanvasPayload }> = [];
+      for (const r of rows) {
+        try { out.push({ sessionId: r.session_id, updatedAt: r.updated_at, payload: JSON.parse(r.payload) as CanvasPayload }); }
+        catch { /* skip corrupt row */ }
+      }
+      return out;
+    } catch { return []; }
+  }
 }

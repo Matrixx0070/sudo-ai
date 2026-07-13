@@ -49,6 +49,8 @@ export interface CanvasBridgeDeps {
   inject: (sessionId: string, payload: string) => void;
   /** Persist the latest payload for a session (reconnect replay / audit). */
   persist?: (sessionId: string, payload: CanvasPayload) => void;
+  /** Recent canvases across sessions, newest first — powers the /admin panel. */
+  listStates?: (limit: number) => Array<{ sessionId: string; updatedAt: string; payload: CanvasPayload }>;
 }
 
 let _deps: CanvasBridgeDeps | null = null;
@@ -104,6 +106,18 @@ export async function deliverCanvasEvent(peerId: string, event: CanvasEvent): Pr
   } catch (err) {
     log.warn({ peerId, err: String(err) }, 'canvas event delivery failed');
     return { ok: false, reason: 'delivery failed' };
+  }
+}
+
+/**
+ * Recent canvases across sessions (read-only monitoring, /admin). Returns []
+ * when the bridge is unwired or the host provided no listStates capability.
+ */
+export function listCanvasStates(limit = 20): Array<{ sessionId: string; updatedAt: string; payload: CanvasPayload }> {
+  if (!_deps?.listStates) return [];
+  try { return _deps.listStates(limit); } catch (err) {
+    log.warn({ err: String(err) }, 'listCanvasStates failed');
+    return [];
   }
 }
 

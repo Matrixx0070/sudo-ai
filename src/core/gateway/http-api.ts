@@ -28,6 +28,7 @@ import { registerBenchRoutes } from './bench-routes.js';
 import type { BenchRoutesDeps } from './bench-routes.js';
 import { registerLearningRoutes } from './learning-routes.js';
 import { registerCanvasRoutes } from './canvas-routes.js';
+import { registerCanvasAdminRoutes } from './canvas-admin-routes.js';
 import type { LearningRoutesDeps } from './learning-routes.js';
 import { registerSavingsRoutes } from './savings-routes.js';
 import type { CostTrackerLike } from './savings-routes.js';
@@ -513,6 +514,8 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   // A2UI canvas event route (Spec 2). No deps — uses the global canvas bridge.
   // Gated by WEB_CHAT_TOKEN internally (the web SPA's credential), not GATEWAY_TOKEN.
   registerCanvasRoutes(server);
+  // A2UI read-only monitoring for /admin. GATEWAY_TOKEN auth (admin credential).
+  registerCanvasAdminRoutes(server, tokenBuf);
   // Savings + compare routes
   if (deps.savings) {
     registerSavingsRoutes(server, deps.savings);

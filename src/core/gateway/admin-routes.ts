@@ -2101,7 +2101,8 @@ export function registerAdminRoutes(
       pathname.startsWith('/v1/admin/bench') ||
       pathname.startsWith('/v1/admin/learning') ||
       pathname.startsWith('/v1/admin/compare') ||
-      pathname === '/v1/admin/synth-probe'
+      pathname === '/v1/admin/synth-probe' ||
+      pathname === '/v1/admin/canvas'
     ) {
       return;
     }

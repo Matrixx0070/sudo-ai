@@ -1667,6 +1667,7 @@ async function boot(): Promise<void> {
         steeringChannel.signal(sessionId, { action: 'inject', payload });
       },
       persist: (sessionId: string, payload) => canvasStore.save(sessionId, payload),
+      listStates: (limit: number) => canvasStore.list(limit),
     });
     log.info('A2UI canvas bridge wired (Spec 2)');
   } catch (err) {
