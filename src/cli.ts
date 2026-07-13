@@ -1675,6 +1675,27 @@ async function boot(): Promise<void> {
     log.warn({ err: String(err) }, 'canvas bridge wiring failed — canvas.render disabled');
   }
 
+  // Inbound-webhook bridge (Spec 4): a POST /v1/hooks/:id becomes an agent turn
+  // on session hook:<id>. isOwner:false so a webhook can never drive owner-only
+  // capabilities (browser personal profile, etc.); toolAllowlist sandboxes it.
+  try {
+    const { registerWebhookBridge } = await import('./core/gateway/webhook-bridge.js');
+    registerWebhookBridge({
+      run: async (hookId: string, prompt: string, opts) => {
+        const session = await dualSessionManager.getOrCreate('hook', hookId);
+        const result = await finalAgentLoop.run(String(session.id), prompt, undefined, {
+          race: true,
+          caller: { isOwner: false, channel: 'hook', peerId: hookId },
+          ...(opts.toolAllowlist && opts.toolAllowlist.length ? { toolAllowlist: opts.toolAllowlist } : {}),
+        });
+        return { reply: result?.text ?? '', sessionId: String(session.id) };
+      },
+    });
+    log.info('Inbound-webhook bridge wired (Spec 4)');
+  } catch (err) {
+    log.warn({ err: String(err) }, 'webhook bridge wiring failed — inbound hooks disabled');
+  }
+
   // Shared CommandContext factory for every channel's directive dispatch.
   const makeCommandContext = async (msg: { channel: string; peerId: string }): Promise<CommandContext | null> => {
     try {

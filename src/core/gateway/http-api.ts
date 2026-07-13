@@ -30,6 +30,7 @@ import { registerLearningRoutes } from './learning-routes.js';
 import { registerCanvasRoutes } from './canvas-routes.js';
 import { registerCanvasAdminRoutes } from './canvas-admin-routes.js';
 import { registerBrowserAdminRoutes } from './browser-admin-routes.js';
+import { registerWebhookRoutes } from './webhook-routes.js';
 import type { LearningRoutesDeps } from './learning-routes.js';
 import { registerSavingsRoutes } from './savings-routes.js';
 import type { CostTrackerLike } from './savings-routes.js';
@@ -519,6 +520,8 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   registerCanvasAdminRoutes(server, tokenBuf);
   // Durable-browser watch/takeover for /admin (Spec 3). GATEWAY_TOKEN auth.
   registerBrowserAdminRoutes(server, tokenBuf);
+  // Inbound webhooks (Spec 4). Per-hook secret auth (no GATEWAY_TOKEN).
+  registerWebhookRoutes(server);
   // Savings + compare routes
   if (deps.savings) {
     registerSavingsRoutes(server, deps.savings);
@@ -553,6 +556,9 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
         pathname.startsWith('/v1/vaults') ||
         pathname.startsWith('/v1/federation') ||
         pathname.startsWith('/v1/savings') ||
+        // Inbound webhooks (Spec 4) authenticate with a per-hook secret, not
+        // GATEWAY_TOKEN — defer to their own listener or this guard 401s them.
+        pathname.startsWith('/v1/hooks') ||
         // Canvas (A2UI) has its OWN listener with WEB_CHAT_TOKEN auth (the web
         // client's credential, not GATEWAY_TOKEN). Without deferring here, this
         // generic guard rejects the browser's WEB_CHAT_TOKEN bearer with 401

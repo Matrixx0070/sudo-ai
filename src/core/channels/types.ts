@@ -25,7 +25,9 @@ export type ChannelType =
   | 'sms'
   | 'ide'
   /** Internal channel for autonomous background goal-work sessions (no adapter). */
-  | 'autonomy';
+  | 'autonomy'
+  /** Inbound-webhook-triggered agent turns (Spec 4 — POST /v1/hooks/:hookId). */
+  | 'hook';
 
 /** Whether the conversation is a direct message or a group/guild channel. */
 export type ChatType = 'dm' | 'group';
