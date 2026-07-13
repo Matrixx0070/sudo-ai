@@ -46,6 +46,8 @@ export interface RegistrySkillEntry {
   sha256: string;
   capabilities?: string[];
   tags?: string[];
+  /** One-line summary of what changed in this version (shown by skill.update). */
+  changelog?: string;
 }
 
 export interface RegistryIndex {

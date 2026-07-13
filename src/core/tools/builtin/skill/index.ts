@@ -14,6 +14,11 @@
  *   skill.install     — Install a registry skill through the Workshop gate
  *   skill.eval        — Prove a skill helps: with/without baseline + blind judge
  *   skill.trigger-eval — Measure/optimize trigger phrases vs the real matcher
+ *   skill.init        — Scaffold a versioned skill package (SKILL.md + manifest.json)
+ *   skill.pack        — Validate + pack a skill into a .tgz with a SHA-256 pin
+ *   skill.publish     — Publish a packed skill into a registry working copy
+ *   skill.update      — Check/apply newer registry versions (transactional per skill)
+ *   skill.changelog   — Version history: lockfile pin, registry latest, local rows
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -29,6 +34,11 @@ import { searchTool } from './tools/search.js';
 import { installTool } from './tools/install.js';
 import { evalTool } from './tools/eval.js';
 import { triggerEvalTool } from './tools/trigger-eval.js';
+import { initTool } from './tools/init.js';
+import { packTool } from './tools/pack.js';
+import { publishTool } from './tools/publish.js';
+import { updateTool } from './tools/update.js';
+import { changelogTool } from './tools/changelog.js';
 
 const logger = createLogger('skill-builtin');
 
@@ -44,6 +54,11 @@ const SKILL_TOOLS = [
   installTool,
   evalTool,
   triggerEvalTool,
+  initTool,
+  packTool,
+  publishTool,
+  updateTool,
+  changelogTool,
 ];
 
 /**

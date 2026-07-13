@@ -9,6 +9,8 @@ import { createLogger } from '../../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { SkillWorkshop } from '../../../../skills/workshop.js';
 import { reloadSkillsLive } from '../../../../skills/live-reload.js';
+import { latestSnapshot, restoreSnapshot } from '../../../../skills/packaging/versions-store.js';
+import { updateLockEntry, removeLockEntry } from '../../../../skills/packaging/lockfile.js';
 
 const logger = createLogger('skill.rollback');
 
@@ -41,6 +43,37 @@ export const rollbackTool: ToolDefinition = {
     if (!skillName.trim()) return { success: false, output: 'skillName is required.' };
 
     logger.info({ session: ctx.sessionId, skillName, versionId }, 'skill.rollback invoked');
+
+    // Packaged skills (Spec 9): restore the last on-disk snapshot — a whole-
+    // directory copy (manifest + extra files) taken before the last
+    // install/update — and re-pin the lockfile to it. Explicit versionId keeps
+    // the legacy SQLite path below.
+    if (versionId === undefined) {
+      let snap;
+      try {
+        snap = latestSnapshot(skillName);
+      } catch {
+        snap = undefined; // unsafe name — legacy path rejects it with its own message
+      }
+      if (snap) {
+        try {
+          const meta = restoreSnapshot(skillName, snap);
+          if (meta.sha256 === '' && meta.version === '0.0.0') removeLockEntry(skillName);
+          else updateLockEntry(skillName, { version: meta.version, sha256: meta.sha256, source: meta.source, trustTier: meta.trustTier, updatedAt: new Date().toISOString() });
+          const reloadSnap = await reloadSkillsLive();
+          return {
+            success: true,
+            output: `Rolled back "${skillName}" to v${meta.version} (restored from skills/.versions snapshot). `
+              + (reloadSnap.reloaded ? `Active now — no restart needed (${reloadSnap.count} skills live).` : 'Takes effect on the next restart.'),
+            data: { skillName, restoredTo: meta.version, fromSnapshot: true, reloaded: reloadSnap.reloaded },
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { success: false, output: `skill.rollback snapshot restore failed for "${skillName}": ${msg}` };
+        }
+      }
+    }
+
     const r = workshop.rollback(skillName, versionId);
     if (!r.restored) {
       return { success: false, output: `skill.rollback failed for "${skillName}": ${r.reason ?? 'unknown'}`, data: { skillName, r } };
