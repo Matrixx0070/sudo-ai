@@ -40,4 +40,23 @@ describe('selectPinnedGoal', () => {
     const pinned = selectPinnedGoal([m('user', big)], []);
     expect(pinned[0]!.content.length).toBeLessThan(2100);
   });
+
+  it('carries an existing pinned goal FORWARD across a second compaction (multi-compact)', () => {
+    // After the first fold the original user turn is gone — only the pinned
+    // SYSTEM message remains, alongside the prior summary and a fresh tail.
+    const firstFold: BrainMessage[] = [
+      m('system', '[Pinned goal — original user request]\nORIGINAL GOAL: build the thing'),
+      m('system', '[Context compacted]\n\n## Decisions ...'),
+      ...Array.from({ length: 20 }, (_, i) => m(i % 2 ? 'assistant' : 'user', `later turn ${i}`)),
+    ];
+    const tail = selectVerbatimTail(firstFold, 6);
+    const pinned = selectPinnedGoal(firstFold, tail);
+    // The ORIGINAL goal is re-pinned — NOT a recent tail user message.
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0]!.role).toBe('system');
+    expect(pinned[0]!.content).toContain('ORIGINAL GOAL: build the thing');
+    // And it is never duplicated: exactly one pinned-goal marker survives.
+    const rewrite = [...pinned, ...tail];
+    expect(rewrite.filter((mm) => String(mm.content).startsWith('[Pinned goal')).length).toBe(1);
+  });
 });
