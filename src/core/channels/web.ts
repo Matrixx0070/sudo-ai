@@ -21,6 +21,7 @@ import { join, basename } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '../shared/logger.js';
 import { ChannelError } from '../shared/errors.js';
+import { rehydrateCanvasForPeer } from '../canvas/canvas-bridge.js';
 import { projectPath } from '../shared/paths.js';
 import { serveStaticFile, buildSpaCSPHeader } from '../gateway/static-middleware.js';
 import { markGatewayRouteOwnerAttached, markGatewayRouteOwnerDetached } from '../gateway/server.js';
@@ -307,6 +308,9 @@ export class WebAdapter implements ChannelAdapter {
       log.info({ peerId, sockets: peerSockets.size, ip: (httpReq.socket as { remoteAddress?: string } | null)?.remoteAddress }, 'Web WS client connected');
       // Deliver any replies that dropped while this peer had no open socket.
       this._flushPendingReplies(peerId, ws);
+      // A2UI (Spec 2): re-push the last canvas so a reload/reconnect re-hydrates
+      // the panel in place. Fail-open — no bridge / no stored canvas = no-op.
+      void rehydrateCanvasForPeer(peerId).catch(() => { /* best effort */ });
 
       const pingInterval = setInterval(() => {
         if (ws.readyState === ws.OPEN) {

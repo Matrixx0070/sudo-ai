@@ -51,6 +51,8 @@ export interface CanvasBridgeDeps {
   persist?: (sessionId: string, payload: CanvasPayload) => void;
   /** Recent canvases across sessions, newest first — powers the /admin panel. */
   listStates?: (limit: number) => Array<{ sessionId: string; updatedAt: string; payload: CanvasPayload }>;
+  /** Latest persisted payload for a session, or null — powers reconnect replay. */
+  getState?: (sessionId: string) => CanvasPayload | null;
 }
 
 let _deps: CanvasBridgeDeps | null = null;
@@ -106,6 +108,27 @@ export async function deliverCanvasEvent(peerId: string, event: CanvasEvent): Pr
   } catch (err) {
     log.warn({ peerId, err: String(err) }, 'canvas event delivery failed');
     return { ok: false, reason: 'delivery failed' };
+  }
+}
+
+/**
+ * Re-push the last persisted canvas to a (re)connecting web peer so a page
+ * reload or dropped socket re-hydrates the panel in place. No-op (returns
+ * ok:false) when the bridge is unwired, no state capability is provided, or the
+ * peer has no stored canvas. Best-effort — never throws to the caller.
+ */
+export async function rehydrateCanvasForPeer(peerId: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!_deps?.getState) return { ok: false, reason: 'no state capability' };
+  try {
+    const sessionId = await _deps.resolveWebSession(peerId);
+    const payload = _deps.getState(sessionId);
+    if (!payload) return { ok: false, reason: 'no stored canvas' };
+    _deps.push('web', peerId, JSON.stringify(buildCanvasFrame(payload)));
+    log.info({ peerId, sessionId, components: payload.components.length }, 'canvas re-hydrated to reconnected peer');
+    return { ok: true };
+  } catch (err) {
+    log.warn({ peerId, err: String(err) }, 'canvas rehydrate failed');
+    return { ok: false, reason: 'rehydrate failed' };
   }
 }
 

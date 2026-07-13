@@ -1668,6 +1668,7 @@ async function boot(): Promise<void> {
       },
       persist: (sessionId: string, payload) => canvasStore.save(sessionId, payload),
       listStates: (limit: number) => canvasStore.list(limit),
+      getState: (sessionId: string) => canvasStore.get(sessionId),
     });
     log.info('A2UI canvas bridge wired (Spec 2)');
   } catch (err) {

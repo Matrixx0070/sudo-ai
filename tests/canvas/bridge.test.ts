@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   registerCanvasBridge, pushCanvasToSession, deliverCanvasEvent, buildCanvasFrame,
-  __resetCanvasBridgeForTests, isCanvasBridgeReady,
+  __resetCanvasBridgeForTests, isCanvasBridgeReady, rehydrateCanvasForPeer,
 } from '../../src/core/canvas/canvas-bridge.js';
 import type { CanvasPayload } from '../../src/core/canvas/schema.js';
 
@@ -50,6 +50,36 @@ describe('pushCanvasToSession', () => {
   it('fails when the session is unknown', async () => {
     registerCanvasBridge({ resolveSessionPeer: async () => null, resolveWebSession: async () => 's', push: vi.fn(), inject: vi.fn() });
     expect(await pushCanvasToSession('nope', payload)).toMatchObject({ ok: false, reason: /not found/ });
+  });
+});
+
+describe('rehydrateCanvasForPeer', () => {
+  it('re-pushes the last persisted canvas to a reconnecting web peer', async () => {
+    const push = vi.fn();
+    registerCanvasBridge({
+      resolveSessionPeer: async () => ({ channel: 'web', peerId: 'web-1' }),
+      resolveWebSession: async (peerId) => `sess-for-${peerId}`,
+      push, inject: vi.fn(),
+      getState: (sid) => (sid === 'sess-for-web-1' ? payload : null),
+    });
+    const r = await rehydrateCanvasForPeer('web-1');
+    expect(r.ok).toBe(true);
+    expect(push).toHaveBeenCalledWith('web', 'web-1', expect.stringContaining('"type":"canvas"'));
+  });
+
+  it('no-ops when the peer has no stored canvas', async () => {
+    const push = vi.fn();
+    registerCanvasBridge({
+      resolveSessionPeer: async () => null, resolveWebSession: async () => 's', push, inject: vi.fn(),
+      getState: () => null,
+    });
+    expect(await rehydrateCanvasForPeer('web-x')).toMatchObject({ ok: false, reason: /no stored canvas/ });
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when no state capability is wired', async () => {
+    registerCanvasBridge({ resolveSessionPeer: async () => null, resolveWebSession: async () => 's', push: vi.fn(), inject: vi.fn() });
+    expect(await rehydrateCanvasForPeer('web-x')).toMatchObject({ ok: false, reason: /no state capability/ });
   });
 });
 
