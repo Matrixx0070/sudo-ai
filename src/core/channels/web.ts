@@ -716,6 +716,15 @@ export class WebAdapter implements ChannelAdapter {
     void this._dispatch(peerId, textWithHint, peerIp, media);
   }
 
+  /**
+   * Route a server-originated message through the normal inbound pipeline (turn
+   * queue → agent loop → reply/stream). Used by the A2UI bridge to WAKE a turn
+   * on a canvas button/form event. peerIp is left undefined (server-synthetic).
+   */
+  dispatchSynthetic(peerId: string, text: string): void {
+    void this._dispatch(peerId, text);
+  }
+
   private async _dispatch(peerId: string, text: string, peerIp?: string, media?: MediaAttachment[]): Promise<void> {
     if (!this._handler) {
       log.warn({ peerId }, 'No handler — Web message dropped');
