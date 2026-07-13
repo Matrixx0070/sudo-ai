@@ -135,6 +135,7 @@ token = getToken();
 // -------------------------------------------------------------------------
 var lastDigest = null;
 var lastVeto = null;
+var lastCanvas = null;
 var pollTimer = null;
 var countdownTimer = null;
 var countdownSec = 30;
@@ -170,7 +171,7 @@ function refresh(){
   var errors = [];
   function checkDone(){
     done++;
-    if(done===2){
+    if(done===3){
       if(errors.length){
         setStatus('error', errors.join('; '), 'dot-red');
       } else {
@@ -185,6 +186,11 @@ function refresh(){
   });
   apiFetch('/v1/admin/veto/threshold', function(err, data){
     if(err){ errors.push('veto: ' + err.message); } else { lastVeto = data; }
+    checkDone();
+  });
+  // A2UI canvases (Spec 2) — non-fatal: a failure must not degrade dashboard status.
+  apiFetch('/v1/admin/canvas?limit=20', function(err, data){
+    if(!err){ lastCanvas = data; }
     checkDone();
   });
   document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
@@ -415,6 +421,57 @@ function renderInjection(d){
 }
 
 // -------------------------------------------------------------------------
+// A2UI canvases (Spec 2) — read-only monitor of the interactive UI the agent
+// is rendering to sessions. Every dynamic value goes through esc() before it
+// touches innerHTML (canvas titles/labels are agent/user-authored).
+// -------------------------------------------------------------------------
+function summariseComp(c){
+  var t = (c && c.type) ? String(c.type) : '?';
+  if(t==='text') return 'text: ' + esc(c.text);
+  if(t==='metric') return 'metric: ' + esc(c.label) + ' = ' + esc(c.value);
+  if(t==='chart'){
+    var s = (c.series && c.series.length) ? c.series : [];
+    var pts = s.map(function(p){ return esc(p.label) + '=' + esc(p.value); }).join(', ');
+    return 'chart' + (c.title ? ' "' + esc(c.title) + '"' : '') + ': ' + pts;
+  }
+  if(t==='table'){
+    var rows = (c.rows && c.rows.length) ? c.rows.length : 0;
+    var cols = (c.columns && c.columns.length) ? c.columns.length : 0;
+    return 'table: ' + cols + ' cols × ' + rows + ' rows';
+  }
+  if(t==='form'){
+    var f = (c.fields && c.fields.length) ? c.fields.length : 0;
+    return 'form' + (c.title ? ' "' + esc(c.title) + '"' : '') + ': ' + f + ' field(s) → ' + esc(c.submitActionId);
+  }
+  if(t==='button') return 'button: "' + esc(c.label) + '" → ' + esc(c.actionId);
+  if(t==='progress') return 'progress: ' + esc(c.label) + ' ' + esc(c.value) + '%';
+  if(t==='list'){ var n = (c.items && c.items.length) ? c.items.length : 0; return 'list: ' + n + ' item(s)'; }
+  return esc(t);
+}
+function renderCanvas(){
+  var states = (lastCanvas && lastCanvas.data) ? lastCanvas.data : [];
+  var body;
+  if(!states.length){
+    body = '<div class="null-val">No canvases rendered yet.</div>';
+  } else {
+    body = states.map(function(s){
+      var comps = (s.components || []).map(function(c){
+        return '<li>' + summariseComp(c) + '</li>';
+      }).join('');
+      return '<div style="border:1px solid #30363d;border-radius:6px;padding:10px;margin-bottom:10px">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px">' +
+          '<span style="color:#e6edf3">' + (s.title ? esc(s.title) : '<span class="null-val">(untitled)</span>') + '</span>' +
+          '<span class="panel-sub">' + (s.componentCount != null ? s.componentCount : 0) + ' comp · ' + esc(s.updatedAt) + '</span>' +
+        '</div>' +
+        '<div class="panel-sub" style="margin:4px 0 6px">session ' + esc(s.sessionId) + '</div>' +
+        '<ul style="padding-left:16px;color:#c9d1d9">' + comps + '</ul>' +
+      '</div>';
+    }).join('');
+  }
+  return '<div class="wide-panel"><div class="panel-title">A2UI Canvases (live)</div>' + body + '</div>';
+}
+
+// -------------------------------------------------------------------------
 // Main render
 // -------------------------------------------------------------------------
 function render(){
@@ -448,6 +505,9 @@ function render(){
       '</table>' +
     '</div>';
   }
+
+  html += '<div class="section-head">Generative UI (A2UI)</div>';
+  html += renderCanvas();
 
   document.getElementById('dashboard').innerHTML = html;
 }
