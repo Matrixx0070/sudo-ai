@@ -86,6 +86,19 @@ const startTool: ToolDefinition = {
       return { success: false, output: `system.shell.start: background shell limit reached (${registry.MAX_CONCURRENT} running). Kill one with system.shell.kill or wait.`, data: {} };
     }
     try {
+      // FAIL-CLOSED (Feature 8): background shells spawn on the HOST (raw or
+      // bwrap) and ignore the docker exec backend. An untrusted turn (trust-tier
+      // routing set requireIsolatedBackend) must not start one.
+      if (ctx.sandboxPolicy?.requireIsolatedBackend) {
+        return {
+          success: false,
+          output:
+            'system.shell.start is unavailable for untrusted sessions (host-spawned background shell). ' +
+            'Use system.exec, which runs in an isolated container.',
+          data: { error: 'untrusted_tier_refused' },
+        };
+      }
+
       const g = await gate(command, ctx.sessionId);
       if (!g.ok) return g.result;
 

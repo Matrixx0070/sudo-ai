@@ -527,11 +527,28 @@ export async function runInSandbox(
 ): Promise<SandboxRunResult> {
   const { command, workspaceDir, policy, timeoutMs, signal, platform } = opts;
 
+  // FAIL-CLOSED PRECEDENCE (Feature 8): a required isolation boundary for an
+  // UNTRUSTED turn outranks even the operator kill-switch. SUDO_SANDBOX_DISABLE
+  // is a debugging convenience for the owner's own commands — letting it also
+  // route a hook/community turn to unsandboxed host exec would turn a lingering
+  // env var into a full isolation bypass. Refuse instead.
+  if (policy.requireIsolatedBackend && process.env['SUDO_SANDBOX_DISABLE'] === '1') {
+    log.error(
+      'SUDO_SANDBOX_DISABLE=1 set but this policy REQUIRES an isolated backend (untrusted turn) — refusing host exec (fail-closed)',
+    );
+    return {
+      stdout: '',
+      stderr:
+        'sandbox: this command requires container isolation (untrusted trust tier) and cannot run with SUDO_SANDBOX_DISABLE=1.',
+      exitCode: 126,
+    };
+  }
+
   // Kill-switch precedence: an explicit SUDO_SANDBOX_DISABLE=1 means "no sandbox,
   // host exec" and MUST win over backend selection — otherwise a lingering
   // SUDO_EXEC_BACKEND would silently override the operator's decision to disable
   // sandboxing. Checked before backend dispatch and before platform gating so the
-  // kill-switch is authoritative.
+  // kill-switch is authoritative. (Exception above: required-isolation policies.)
   if (process.env['SUDO_SANDBOX_DISABLE'] === '1') {
     log.warn(
       'SUDO_SANDBOX_DISABLE=1 — sandbox disabled, running unsandboxed on host. ' +
