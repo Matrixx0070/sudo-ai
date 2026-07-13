@@ -123,6 +123,7 @@ import { forgeTool } from './forge.js';
 import { feedbackTool } from './feedback.js';
 import { selfImproveTool } from './self-improve.js';
 import { sessionsSpawnTool } from './sessions-spawn.js';
+import { sessionsSendTool } from './sessions-send.js';
 import { memorySearchTool } from './memory-search.js';
 import { memoryGetTool } from './memory-get.js';
 import { messageSendTool } from './message-send.js';
@@ -665,6 +666,7 @@ const META_TOOLS: ToolDefinition[] = [
   selfImproveTool,
   // Dependency-injected meta tools
   sessionsSpawnTool,
+  sessionsSendTool,
   memorySearchTool,
   memoryGetTool,
   messageSendTool,
