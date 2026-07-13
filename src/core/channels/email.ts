@@ -15,10 +15,14 @@ import { ImapFlow } from 'imapflow';
 import type { ParsedMail } from 'mailparser';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, basename } from 'node:path';
 import { createLogger } from '../shared/index.js';
 import { ChannelError } from '../shared/index.js';
+import { dataPath } from '../shared/paths.js';
 import { vault } from '../security/vault.js';
 import { rateLimiter } from './rate-limit.js';
+import { matchEmailRule, loadEmailRules, type EmailRule } from './email-rules.js';
 import type { ChannelAdapter } from './adapter.js';
 import type {
   ChannelType,
@@ -74,6 +78,61 @@ function normalizeEmail(addr: string): string {
   const parts = addr.toLowerCase().split('@');
   if (parts.length !== 2) return addr.toLowerCase();
   return `${parts[0].split('+')[0]}@${parts[1]}`;
+}
+
+/** Max saved attachment size (per file). Larger ones are rejected + logged. */
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/** Strip < > and unsafe chars from a Message-ID/thread id → a path-safe key. */
+function sanitizeThreadId(raw: string): string {
+  return raw.replace(/[<>]/g, '').replace(/[^a-zA-Z0-9._@-]/g, '_').slice(0, 120) || `t-${Date.now()}`;
+}
+
+/**
+ * Per-thread reply context, keyed by threadId. Populated on inbound so outbound
+ * reply/send (PR2) can route to the right address + thread the reply. Bounded.
+ */
+export interface ThreadContext { replyTo: string; subject: string; messageId: string; references: string }
+const THREAD_MAX = 5000;
+const _threadCtx = new Map<string, ThreadContext>();
+export function setThreadContext(threadId: string, ctx: ThreadContext): void {
+  if (_threadCtx.size >= THREAD_MAX) _threadCtx.clear();
+  _threadCtx.set(threadId, ctx);
+}
+export function getThreadContext(threadId: string): ThreadContext | undefined {
+  return _threadCtx.get(threadId);
+}
+export function __resetThreadContextForTests(): void { _threadCtx.clear(); }
+
+/** Derive a stable thread id from mail headers (References → In-Reply-To → Message-ID). */
+export function deriveThreadId(parsed: ParsedMail, fallbackUid: string): string {
+  const refs = parsed.references;
+  const firstRef = Array.isArray(refs) ? refs[0] : refs;
+  const raw = firstRef || parsed.inReplyTo || parsed.messageId || `uid-${fallbackUid}`;
+  return sanitizeThreadId(String(raw));
+}
+
+/**
+ * Save an inbound mail's attachments under data/email/<threadKey>/, skipping any
+ * over the size cap. Returns saved file paths. Best-effort — never throws.
+ */
+export function saveAttachments(parsed: ParsedMail, key: string): string[] {
+  const atts = parsed.attachments ?? [];
+  if (atts.length === 0) return [];
+  const dir = dataPath('email', sanitizeThreadId(key));
+  const saved: string[] = [];
+  try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { return []; }
+  for (const a of atts) {
+    const size = a.size ?? (a.content ? a.content.length : 0);
+    const name = basename(a.filename ?? `attachment-${saved.length + 1}`).replace(/[^a-zA-Z0-9._-]/g, '_') || `attachment-${saved.length + 1}`;
+    if (size > MAX_ATTACHMENT_BYTES) {
+      log.warn({ name, size, cap: MAX_ATTACHMENT_BYTES }, 'attachment over size cap — rejected');
+      continue;
+    }
+    try { writeFileSync(join(dir, name), a.content); saved.push(join(dir, name)); }
+    catch (err) { log.warn({ name, err: String(err) }, 'attachment save failed'); }
+  }
+  return saved;
 }
 
 // ---------------------------------------------------------------------------
@@ -319,21 +378,48 @@ export class EmailAdapter implements ChannelAdapter {
               continue;
             }
 
+            // Rule filter: an inbound mail must match a rule to become a turn.
+            // Non-matching mail is IGNORED (opt-in triggering).
+            const subject = parsed.subject ?? '';
+            const toAddrs = (parsed.to ? (Array.isArray(parsed.to) ? parsed.to : [parsed.to]) : [])
+              .flatMap((a) => a.value.map((v) => v.address ?? '')).filter(Boolean);
+            const rule: EmailRule | null = matchEmailRule({ from: peerId, to: toAddrs, subject, labels: [] });
+            if (!rule) {
+              if (loadEmailRules().defaultIgnore) { log.debug({ peerId, subject }, 'Email matched no rule — ignored'); continue; }
+              log.debug({ peerId, subject }, 'Email matched no rule but defaultIgnore=false — dispatching');
+            }
+
+            // Thread-scoped session (email:<threadId>) + reply context for outbound.
+            const threadId = deriveThreadId(parsed, String(msg.uid ?? Date.now()));
+            setThreadContext(threadId, {
+              replyTo: peerId,
+              subject,
+              messageId: parsed.messageId ?? '',
+              references: [parsed.references, parsed.inReplyTo].flat().filter(Boolean).join(' '),
+            });
+
+            // Attachments → data/email/<threadId>/ (size-capped). PLAINTEXT body only
+            // to the model (parsed.text, never the HTML part) — injection hygiene.
+            const savedAtts = saveAttachments(parsed, threadId);
+            const rulePrefix = rule?.prompt ? `${rule.prompt}\n\n` : '';
+            const attNote = savedAtts.length ? `\n\n[${savedAtts.length} attachment(s) saved under data/email/${threadId}/]` : '';
+            const body = `[Email] from ${peerId} · subject: ${subject}${rule ? ` · rule: ${rule.name}` : ''}\n\n${rulePrefix}${parsed.text ?? ''}${attNote}`;
+
             const unified: UnifiedMessage = {
               id: String(msg.uid ?? Date.now()),
               channel: 'email',
-              peerId,
+              peerId: threadId, // session key = email:<threadId>
               peerName: parsed.from?.value?.[0]?.name ?? peerId,
               chatType: 'dm',
-              text: parsed.text ?? '',
+              text: body,
               timestamp: parsed.date ?? new Date(),
             };
 
-            log.debug({ peerId, subject: parsed.subject }, 'Inbound email received');
+            log.info({ from: peerId, threadId, subject, rule: rule?.name, attachments: savedAtts.length }, 'Inbound email → agent turn');
 
             void this._safeEmit('message:received', {
               channel: 'email',
-              meta: { peerId },
+              meta: { peerId, threadId, rule: rule?.name },
             });
 
             await this._dispatch(unified);

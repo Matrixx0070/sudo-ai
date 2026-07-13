@@ -1,0 +1,37 @@
+{
+  // Inbound email rules (Spec 5). An inbound mail must match a rule to become an
+  // agent turn — non-matching mail is IGNORED (defaultIgnore). First match wins.
+  //
+  // Filters (all optional, AND-combined). A value is a substring match by
+  // default, OR a /regex/flags literal:
+  //   from     — sender address/name           (e.g. "@work.com" or "/boss|cfo/i")
+  //   to       — any recipient (To/Cc)         (route by the address it was sent to)
+  //   subject  — subject line
+  //   label    — IMAP/Gmail label/folder on the message
+  //
+  // Per rule:
+  //   prompt   — prepended to the email body when dispatched (context for the agent)
+  //   autoReply— may the agent SEND a reply for this rule? (still needs
+  //              EMAIL_ALLOW_SEND=1 + recipient allowlist; default false = draft-only)
+  //   tools    — optional tool allowlist for this rule's turn (globs)
+
+  defaultIgnore: true,
+
+  rules: [
+    {
+      name: 'ci-failures',
+      from: '/github|ci|builds/i',
+      subject: '/fail|broke|error/i',
+      prompt: 'A CI/build notification email matched. Summarize the failure and likely cause. Draft a short status note (do not send).',
+      autoReply: false,
+      tools: ['email.read', 'coder.read-file'],
+    },
+    {
+      name: 'important-people',
+      from: '@example.com',
+      prompt: 'An email from a tracked contact arrived. Summarize it and draft a reply for review.',
+      autoReply: false,
+      tools: ['email.read', 'email.reply'],
+    },
+  ],
+}
