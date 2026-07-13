@@ -19,6 +19,7 @@ type ChatWSMessage =
   | { type: 'token'; text: string }
   | { type: 'user_echo'; text: string }
   | { type: 'reply'; content: string; text?: string; media?: ChatWSMedia[] }
+  | { type: 'canvas'; version: number; title?: string; components: Record<string, unknown>[] }
   | { type: 'error'; error: string };
 
 type UseWebSocketOptions = {
