@@ -20,7 +20,6 @@
 
 import { createLogger } from '../shared/logger.js';
 import type { MessageHandler, UnifiedMessage } from './types.js';
-import { setTurnIdentity } from '../agent/turn-identity.js';
 import type { JournalEvent } from '../sessions/journal-types.js';
 
 const log = createLogger('channels:gateway-turn');
@@ -33,7 +32,7 @@ export interface GatewayTurnDeps {
     peerQueue: { enqueue(key: string, fn: () => Promise<void>): Promise<void> };
   };
   /** The agent loop. */
-  agentLoop: { run(sessionId: string, text: string, onEvent: undefined, opts: { race: boolean }): Promise<{ text?: string } | null> };
+  agentLoop: { run(sessionId: string, text: string, onEvent: undefined, opts: { race: boolean; caller?: { isOwner?: boolean; channel?: string; peerId?: string } }): Promise<{ text?: string } | null> };
   /** Run-generation guard so a reply after /reset is dropped. */
   runGenerations: { current(key: string): number; isStale(key: string, gen: number): boolean };
   /** Deliver the reply (and error text) to the channel. */
@@ -69,15 +68,13 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
       const convKey = `${msg.channel}:${msg.peerId}`;
       const runGen = deps.runGenerations.current(convKey);
       const session = await deps.sessionManager.getOrCreate(msg.channel, msg.peerId);
-      // Thread the Feature 1 caller identity onto the session so ToolContext
-      // (built inside the loop) carries isOwner for owner-only tool gating —
-      // covers every router channel (telegram/signal/slack/…), not just web.
-      setTurnIdentity(String(session.id), {
-        isOwner: (msg as UnifiedMessage & { isOwner?: boolean }).isOwner === true,
-        channel: msg.channel,
-        peerId: msg.peerId,
+      // Bind the Feature 1 caller identity to THIS turn so ToolContext carries
+      // isOwner for owner-only tool gating — covers every router channel
+      // (telegram/signal/slack/…), not just web. Turn-scoped (no shared registry).
+      const result = await deps.agentLoop.run(String(session.id), msg.text ?? '', undefined, {
+        race: true,
+        caller: { isOwner: msg.isOwner === true, channel: msg.channel, peerId: msg.peerId },
       });
-      const result = await deps.agentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
       if (deps.runGenerations.isStale(convKey, runGen)) {
         log.info({ channel: msg.channel, peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
         return;

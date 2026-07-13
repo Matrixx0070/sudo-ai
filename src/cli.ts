@@ -2145,13 +2145,6 @@ async function boot(): Promise<void> {
           const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
-          // Spec 3 safety: the web chat is gated by WEB_CHAT_TOKEN — its driver is
-          // the owner. Record that so owner-only browser profiles (e.g. personal)
-          // are launchable here (and denied for known non-owner sessions elsewhere).
-          try {
-            const { setTurnIdentity } = await import('./core/agent/turn-identity.js');
-            setTurnIdentity(String(session.id), { isOwner: true, channel: 'web', peerId: msg.peerId });
-          } catch { /* identity registry optional */ }
           // Stream live activity (tool calls + intermediate text) to the browser so a
           // long turn shows progress instead of a silent wait. Default-on; SUDO_WEB_STREAM=0
           // disables. Best-effort: a failed frame never breaks the turn.
@@ -2164,7 +2157,10 @@ async function boot(): Promise<void> {
                 } catch { /* never break the turn on a streaming frame */ }
               }
             : undefined;
-          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', onWebEvent, { race: true });
+          // Web chat is gated by WEB_CHAT_TOKEN — its driver is the owner. Bind
+          // that to the turn so owner-only browser profiles (e.g. personal) are
+          // launchable here. Turn-scoped via AgentState (no shared registry).
+          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', onWebEvent, { race: true, caller: { isOwner: true, channel: 'web', peerId: msg.peerId } });
           if (runGenerations.isStale(convKey, runGen)) {
             log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
             return;

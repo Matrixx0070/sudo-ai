@@ -29,8 +29,21 @@ describe('createGatewayTurnHandler', () => {
   it('runs a turn and sends the reply', async () => {
     const d = baseDeps();
     await createGatewayTurnHandler(d)(msg());
-    expect(d.agentLoop.run).toHaveBeenCalledWith('sess-1', 'hello', undefined, { race: true });
+    // caller identity is bound to the turn (isOwner false — msg has no isOwner).
+    expect(d.agentLoop.run).toHaveBeenCalledWith('sess-1', 'hello', undefined, {
+      race: true,
+      caller: { isOwner: false, channel: 'discord', peerId: 'p1' },
+    });
     expect(d.send).toHaveBeenCalledWith(expect.objectContaining({ peerId: 'p1' }), 'the reply');
+  });
+
+  it('threads isOwner=true when the message is from the owner', async () => {
+    const d = baseDeps();
+    await createGatewayTurnHandler(d)({ ...msg(), isOwner: true });
+    expect(d.agentLoop.run).toHaveBeenCalledWith('sess-1', 'hello', undefined, {
+      race: true,
+      caller: { isOwner: true, channel: 'discord', peerId: 'p1' },
+    });
   });
 
   it('drops a stale reply after a mid-turn /reset', async () => {

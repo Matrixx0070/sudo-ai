@@ -13,7 +13,6 @@ import {
   resetBrowserRecovery,
 } from './browser-recovery.js';
 import { isOutboundToolName, markCommittedOutbound } from './committed-outbound.js';
-import { getTurnIdentity } from './turn-identity.js';
 import { PipelineError, ToolError } from '../shared/errors.js';
 import { compact, microCompact, autoCompact, fullCompact, type AutoCompactFailureCounter } from './compaction.js';
 import { microCompactMessages, type MicroCompactMessage } from './microcompact.js';
@@ -1419,10 +1418,10 @@ export async function executeToolCalls(
       workspaceDir = process.cwd();
     }
   }
-  // Caller identity (Feature 1 isOwner + channel/peer), recorded by the dispatch
-  // layer keyed by sessionId — threaded onto ctx so owner-only tools can gate
-  // directly on every channel. Undefined for internal/autonomous turns.
-  const turnId = getTurnIdentity(state.sessionId);
+  // Caller identity (Feature 1 isOwner + channel/peer) is bound to AgentState at
+  // run() start by the dispatch layer — turn-scoped, so ctx carries the RIGHT
+  // caller with no shared-registry race. Undefined for internal/autonomous turns.
+  const caller = state.caller;
   const ctx: ToolContext = {
     sessionId: state.sessionId,
     workingDir: workspaceDir,
@@ -1430,7 +1429,7 @@ export async function executeToolCalls(
     sandboxPolicy: policyFromSandbox,
     config: brain ? { brain } : null,
     logger: log,
-    ...(turnId ? { isOwner: turnId.isOwner, ...(turnId.channel ? { channel: turnId.channel } : {}), ...(turnId.peerId ? { peerId: turnId.peerId } : {}) } : {}),
+    ...(caller ? { isOwner: caller.isOwner, ...(caller.channel ? { channel: caller.channel } : {}), ...(caller.peerId ? { peerId: caller.peerId } : {}) } : {}),
   };
 
   // Defense-in-depth: if the environment declares sandbox is required but no
