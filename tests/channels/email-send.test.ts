@@ -65,11 +65,22 @@ describe('EmailAdapter.send — draft-default', () => {
     process.env['EMAIL_ALLOWED_RECIPIENTS'] = 'sender@ext.com';
     const adapter = new EmailAdapter();
     const { sendMail } = wire(adapter);
-    setThreadContext('thread-1', { replyTo: 'sender@ext.com', subject: 'Question', messageId: '<m1@x>', references: '<m1@x>' });
+    setThreadContext('thread-1', { replyTo: 'sender@ext.com', subject: 'Question', messageId: '<m1@x>', references: '<m1@x>', autoReply: true });
     await adapter.send('thread-1', 'my reply');
     const arg = sendMail.mock.calls[0]![0] as { to: string; subject: string; headers: Record<string, string> };
     expect(arg.to).toBe('sender@ext.com');
     expect(arg.subject).toBe('Re: Question');
     expect(arg.headers['In-Reply-To']).toBe('<m1@x>');
+  });
+
+  it('forces DRAFT for a thread reply whose rule did NOT opt in (autoReply=false), even with allow-send', async () => {
+    process.env['EMAIL_ALLOW_SEND'] = '1';
+    process.env['EMAIL_ALLOWED_RECIPIENTS'] = 'sender@ext.com';
+    const adapter = new EmailAdapter();
+    const { sendMail, append } = wire(adapter);
+    setThreadContext('thread-2', { replyTo: 'sender@ext.com', subject: 'Q', messageId: '<m2@x>', references: '<m2@x>', autoReply: false });
+    await adapter.send('thread-2', 'reply');
+    expect(append).toHaveBeenCalledTimes(1); // drafted, not sent
+    expect(sendMail).not.toHaveBeenCalled();
   });
 });

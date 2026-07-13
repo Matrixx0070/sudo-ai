@@ -64,7 +64,7 @@ describe('thread + attachment helpers', () => {
   });
 
   it('thread context round-trips', () => {
-    setThreadContext('t1', { replyTo: 'a@b.com', subject: 'S', messageId: '<m>', references: '' });
+    setThreadContext('t1', { replyTo: 'a@b.com', subject: 'S', messageId: '<m>', references: '', autoReply: false });
     expect(getThreadContext('t1')?.replyTo).toBe('a@b.com');
     expect(getThreadContext('missing')).toBeUndefined();
   });
