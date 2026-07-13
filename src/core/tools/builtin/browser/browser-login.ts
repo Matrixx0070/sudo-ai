@@ -43,7 +43,8 @@ export const browserLoginTool: ToolDefinition = {
 
     try {
       const manager = BrowserManager.getInstance();
-      const instance = await manager.launch(profile, true); // durable persistent context
+      // Gated path (owner check passed above) → authorized to open owner-only.
+      const instance = await manager.launch(profile, true, false, true); // durable persistent context
       const page = await resolveActivePage(instance);
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => { /* partial load ok — owner drives */ });
       await screencastManager.start(profile, { fps: 3 });

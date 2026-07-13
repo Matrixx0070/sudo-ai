@@ -238,8 +238,14 @@ export class BrowserManager {
    *
    * @param autoRestart when true, an unexpected context close (crash / killed
    *        Chromium) triggers a bounded auto-relaunch of the same profile.
+   * @param allowOwnerOnly gate for owner-only profiles. Default false so a COLD
+   *        open via getOrConnect (navigate/click/screenshot/…) can NOT bring up
+   *        an owner-only profile (e.g. personal); only the identity-checked
+   *        tool paths (browser.launch / browser.login) pass true. A cached
+   *        instance is returned regardless — it was already authorized at
+   *        creation — so downstream tools keep working once launched.
    */
-  async launch(name: string, headless = true, autoRestart = false): Promise<BrowserInstance> {
+  async launch(name: string, headless = true, autoRestart = false, allowOwnerOnly = false): Promise<BrowserInstance> {
     const existing = this.instances.get(name);
     if (existing) {
       log.info({ name }, 'Returning cached browser instance');
@@ -247,6 +253,13 @@ export class BrowserManager {
     }
 
     const entry = getProfileEntry(name);
+    // Owner-only chokepoint: refuse a cold open unless it came through a gated
+    // tool. Closes the bypass where any getOrConnect-based tool could open a
+    // profile the browser.launch owner check would have blocked.
+    if (entry.ownerOnly && !allowOwnerOnly) {
+      browserAudit('owner-only-coldopen-refused', { profile: name });
+      throw new Error(`browser profile "${name}" is owner-only — open it via browser.launch or browser.login first`);
+    }
     // Ephemeral profiles start clean every session: wipe any stale dir first.
     if (entry.ephemeral) {
       const stale = resolveProfileDir(name, this.profilesRoot);
@@ -312,8 +325,16 @@ export class BrowserManager {
     state.restartCount += 1;
     this.launchState.set(name, state);
     try {
-      await this.launch(name, state.headless, true);
+      // Recovery re-opens an ALREADY-authorized profile → allowOwnerOnly=true.
+      await this.launch(name, state.headless, true, true);
       log.info({ name, attempt: state.restartCount }, 'Browser auto-relaunched after crash');
+      // GAP 2: if this profile was being watched, re-attach the screencast to
+      // the fresh context (the old CDP session died with the crashed browser).
+      // Dynamic import avoids a static circular dep with screencast-manager.
+      try {
+        const { screencastManager } = await import('./screencast-manager.js');
+        await screencastManager.reattachAfterRelaunch(name);
+      } catch (e) { log.warn({ name, err: String(e) }, 'screencast re-attach after relaunch failed'); }
     } catch (err) {
       log.error({ name, err: String(err) }, 'Browser auto-relaunch failed');
     }
@@ -564,7 +585,8 @@ export const browserManagerTool: ToolDefinition = {
           ctxLog.error({ tool: 'browser.launch', name }, 'owner-only profile denied');
           return { success: false, output: `browser.launch: ${gate.reason}.` };
         }
-        const instance = await manager.launch(name, headless, autoRestart);
+        // Gated path: identity check passed → authorized to open owner-only.
+        const instance = await manager.launch(name, headless, autoRestart, true);
         browserAudit('launch', { profile: name, trust: instance.trust, ephemeral: instance.ephemeral, ownerOnly: instance.ownerOnly, sessionId: ctx.sessionId });
         ctxLog.info({ tool: 'browser.launch', name, autoRestart }, 'Browser launched');
         const persist = instance.ephemeral ? 'ephemeral (wiped on close)' : 'durable (persists across restarts)';
