@@ -12,6 +12,7 @@
 import { chromium, type BrowserContext, type Browser } from 'playwright-core';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { dataPath } from '../../../shared/paths.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import {
@@ -97,7 +98,7 @@ export class BrowserManager {
   /** Phase 6: SSRF guard for navigation safety. */
   private ssrfGuard: SSRFGuard;
 
-  private constructor(profilesRoot = 'data/browser-profiles') {
+  private constructor(profilesRoot = dataPath('browser-profiles')) {
     this.profilesRoot = resolve(profilesRoot);
     if (!existsSync(this.profilesRoot)) {
       mkdirSync(this.profilesRoot, { recursive: true });

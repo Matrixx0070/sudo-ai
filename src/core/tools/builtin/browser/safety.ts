@@ -13,12 +13,14 @@
  */
 
 import { appendFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { dirname } from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
+import { dataPath } from '../../../shared/paths.js';
 import type { BrowserProfileEntry } from './profile-registry.js';
 
 const log = createLogger('browser:safety');
-const AUDIT_PATH = resolve('data/browser-audit.jsonl');
+// Honors the DATA_DIR env override (prod/staging isolation) — never cwd-relative.
+const AUDIT_PATH = dataPath('browser-audit.jsonl');
 const MAX_IDENTITIES = 2000;
 
 // --- session → owner identity ------------------------------------------------
