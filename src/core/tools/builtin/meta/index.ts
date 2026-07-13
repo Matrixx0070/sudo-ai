@@ -124,6 +124,7 @@ import { feedbackTool } from './feedback.js';
 import { selfImproveTool } from './self-improve.js';
 import { sessionsSpawnTool } from './sessions-spawn.js';
 import { sessionsSendTool } from './sessions-send.js';
+import { sessionsPipelineTool } from './sessions-pipeline.js';
 import { memorySearchTool } from './memory-search.js';
 import { memoryGetTool } from './memory-get.js';
 import { messageSendTool } from './message-send.js';
@@ -667,6 +668,7 @@ const META_TOOLS: ToolDefinition[] = [
   // Dependency-injected meta tools
   sessionsSpawnTool,
   sessionsSendTool,
+  sessionsPipelineTool,
   memorySearchTool,
   memoryGetTool,
   messageSendTool,

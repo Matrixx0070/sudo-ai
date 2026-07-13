@@ -18,6 +18,7 @@ import { codeTreeSearchEnabled, shouldUseCodeTreeSearch, buildCodeTreeSearchVeri
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError, LLMError } from '../shared/errors.js';
 import { clearCommittedOutbound, hasCommittedOutbound } from './committed-outbound.js';
+import { drainQueueForSession } from '../agents/session-bus.js';
 import {
   EPISTEMIC_TAG_CONFIDENCE_MAP,
   MAX_PLAN_STEPS,
@@ -836,6 +837,17 @@ export class AgentLoop extends AgentLoopInjections {
     // Reset outbound-side-effect evidence for this run: it must reflect ONLY
     // what this turn does, not a prior turn on the same session.
     clearCommittedOutbound(sessionId);
+
+    // Spec 6: deliver any queued inter-agent messages for this session (offline
+    // handoffs from sessions.send deliverMode:'queue') by prepending their
+    // envelopes to this turn. Best-effort — never blocks the turn.
+    try {
+      const queued = drainQueueForSession(sessionId);
+      if (queued.length > 0) {
+        message = `${queued.map((q) => q.envelope).join('\n\n')}\n\n${message}`;
+        log.info({ sessionId, drained: queued.length }, 'sessions.send: delivered queued messages at run start');
+      }
+    } catch { /* queue is best-effort */ }
 
     let session = await this.sessionManager.get(sessionId);
     if (!session) {

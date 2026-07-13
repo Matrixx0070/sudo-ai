@@ -14,7 +14,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getSessionManager, getAgentLoop } from './index.js';
-import { checkAndAdvance, setSendChain, buildEnvelope, auditSend } from '../../../agents/session-bus.js';
+import { checkAndAdvance, setSendChain, buildEnvelope, auditSend, enqueueForTarget } from '../../../agents/session-bus.js';
 
 const logger = createLogger('meta.sessions.send');
 const MAX_MESSAGE_BYTES = 32 * 1024;
@@ -43,6 +43,7 @@ export const sessionsSendTool: ToolDefinition = {
     message: { type: 'string', required: true, description: 'The message/handoff content for the target session.' },
     waitForReply: { type: 'boolean', required: false, description: "Await the target's reply (default false = fire-and-forget)." },
     timeoutMs: { type: 'number', required: false, description: 'Reply timeout in ms when waitForReply (default 120000).' },
+    deliverMode: { type: 'string', required: false, enum: ['now', 'queue'], description: '"now" (default) runs the target immediately; "queue" persists the message for the target to pick up on its NEXT run (offline handoff).' },
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -87,6 +88,14 @@ export const sessionsSendTool: ToolDefinition = {
     setSendChain(targetSessionId, gate.next!);
 
     const envelope = buildEnvelope(ctx.sessionId, ctx.channel, message);
+
+    // Offline handoff: persist for the target's next run instead of running now.
+    if (params['deliverMode'] === 'queue') {
+      enqueueForTarget(targetSessionId, ctx.sessionId, envelope);
+      auditSend({ event: 'queued', from: ctx.sessionId, target: targetSessionId, depth: gate.next!.depth });
+      return { success: true, output: `Queued for session ${targetSessionId} — delivered on its next run.`, data: { targetSessionId, queued: true, depth: gate.next!.depth } };
+    }
+
     // The delivered turn inherits the origin's owner tier (same-owner pipeline).
     const runOpts = { race: true, caller: { isOwner: ctx.isOwner, channel: 'session', peerId: ctx.sessionId } };
     auditSend({ event: 'deliver', from: ctx.sessionId, target: targetSessionId, waitForReply, depth: gate.next!.depth });
