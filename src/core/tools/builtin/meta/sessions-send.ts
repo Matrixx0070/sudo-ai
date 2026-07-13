@@ -14,7 +14,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getSessionManager, getAgentLoop } from './index.js';
-import { checkAndAdvance, setSendChain, buildEnvelope, auditSend, enqueueForTarget } from '../../../agents/session-bus.js';
+import { checkAndAdvance, setSendChain, clearSendChain, buildEnvelope, auditSend, enqueueForTarget, isInflight, markInflight, clearInflight } from '../../../agents/session-bus.js';
 
 const logger = createLogger('meta.sessions.send');
 const MAX_MESSAGE_BYTES = 32 * 1024;
@@ -89,11 +89,19 @@ export const sessionsSendTool: ToolDefinition = {
 
     const envelope = buildEnvelope(ctx.sessionId, ctx.channel, message);
 
-    // Offline handoff: persist for the target's next run instead of running now.
-    if (params['deliverMode'] === 'queue') {
+    // Offline handoff OR target already running: persist for the target's next
+    // run instead of starting a CONCURRENT turn (which would corrupt its state).
+    const targetBusy = isInflight(targetSessionId);
+    if (params['deliverMode'] === 'queue' || targetBusy) {
       enqueueForTarget(targetSessionId, ctx.sessionId, envelope);
-      auditSend({ event: 'queued', from: ctx.sessionId, target: targetSessionId, depth: gate.next!.depth });
-      return { success: true, output: `Queued for session ${targetSessionId} — delivered on its next run.`, data: { targetSessionId, queued: true, depth: gate.next!.depth } };
+      auditSend({ event: 'queued', from: ctx.sessionId, target: targetSessionId, depth: gate.next!.depth, reason: targetBusy ? 'busy' : 'requested' });
+      return {
+        success: true,
+        output: targetBusy
+          ? `Session ${targetSessionId} is busy — queued; delivered on its next run.`
+          : `Queued for session ${targetSessionId} — delivered on its next run.`,
+        data: { targetSessionId, queued: true, busy: targetBusy, depth: gate.next!.depth },
+      };
     }
 
     // The delivered turn inherits the origin's owner tier (same-owner pipeline).
@@ -101,23 +109,28 @@ export const sessionsSendTool: ToolDefinition = {
     auditSend({ event: 'deliver', from: ctx.sessionId, target: targetSessionId, waitForReply, depth: gate.next!.depth });
     logger.info({ from: ctx.sessionId, target: targetSessionId, waitForReply, depth: gate.next!.depth }, 'sessions.send delivering');
 
+    // The chain is stamped on the target ONLY for the duration of this delivery
+    // (so its onward sends are gated), then cleared — never left to poison later.
+    markInflight(targetSessionId);
+    setSendChain(targetSessionId, gate.next!);
+    const runP = loop.run(targetSessionId, envelope, undefined, runOpts)
+      .finally(() => { clearInflight(targetSessionId); clearSendChain(targetSessionId); });
+
     if (!waitForReply) {
-      // Fire-and-forget: the target runs its turn in the background.
-      void loop.run(targetSessionId, envelope, undefined, runOpts).catch((err) =>
-        logger.warn({ target: targetSessionId, err: String(err) }, 'sessions.send background turn failed'),
-      );
+      void runP.catch((err) => logger.warn({ target: targetSessionId, err: String(err) }, 'sessions.send background turn failed'));
       return { success: true, output: `Delivered to session ${targetSessionId} (fire-and-forget).`, data: { targetSessionId, delivered: true, depth: gate.next!.depth } };
     }
 
     // waitForReply: race the target's turn against the timeout (acceptance 2).
     try {
       const raced = await Promise.race([
-        loop.run(targetSessionId, envelope, undefined, runOpts),
+        runP,
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error('reply timeout')), timeoutMs)),
       ]);
       return { success: true, output: `Reply from ${targetSessionId}:\n${raced.text}`, data: { targetSessionId, reply: raced.text, depth: gate.next!.depth } };
     } catch (err) {
       const timedOut = err instanceof Error && err.message === 'reply timeout';
+      if (!timedOut) void runP.catch(() => {}); // swallow late rejection (finally already cleared state)
       return {
         success: !timedOut ? false : true,
         output: timedOut
