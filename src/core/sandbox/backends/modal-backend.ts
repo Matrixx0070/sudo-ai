@@ -150,8 +150,10 @@ export function buildModalDriverEnv(
     SUDO_MODAL_APP: config.app,
     SUDO_MODAL_MEMORY_MB: String(policy.memoryMB ?? 512),
     SUDO_MODAL_TIMEOUT_S: String(Math.max(1, Math.ceil((timeoutMs ?? 60000) / 1000))),
-    // policy.network 'none' → request Modal block_network (driver maps it, best-effort).
-    SUDO_MODAL_BLOCK_NETWORK: policy.network === 'none' ? '1' : '',
+    // policy.network 'none' → request Modal block_network (driver maps it,
+    // best-effort). 'allowlist' also blocks: Modal has no egress-proxy path
+    // (docker backend only), so the fail-closed reading is no network.
+    SUDO_MODAL_BLOCK_NETWORK: policy.network !== 'host' ? '1' : '',
   };
 }
 

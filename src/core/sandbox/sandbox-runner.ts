@@ -205,7 +205,11 @@ export function buildBwrapArgs(
     '--new-session',
   ];
 
-  if (policy.network === 'none') {
+  if (policy.network !== 'host') {
+    // 'none' — and also 'allowlist': bwrap has no egress-proxy path (that is
+    // the docker backend's enforced mode, see egress-proxy.ts), so the only
+    // fail-CLOSED reading of 'allowlist' here is no network at all. Sharing
+    // the host network instead would turn an allowlist grant into full egress.
     args.push('--unshare-net');
   } else {
     // network === 'host': share the host network namespace AND bind the DNS +

@@ -30,7 +30,9 @@ import { buildSandboxEnv, buildUlimitWrappedCommand, exitCodeFromError } from '.
 import type { RunInSandboxOptions, SandboxRunResult } from '../sandbox-runner.js';
 import type { ExecBackend } from '../exec-backend.js';
 import { validateBindPath } from '../sandbox-policy.js';
-import { SandboxPolicyError } from '../sandbox-types.js';
+import { SandboxPolicyError, resolveEgressAllowlist } from '../sandbox-types.js';
+import { startEgressProxy } from '../egress-proxy.js';
+import type { EgressProxyHandle } from '../egress-proxy.js';
 
 const log = createLogger('sandbox:docker');
 const execFileAsync = promisify(execFile);
@@ -85,6 +87,58 @@ export interface DockerBackendConfig {
  * fail-closed by construction (the command never runs on the host).
  */
 export const DEFAULT_SANDBOX_IMAGE = 'sudo-ai-sandbox:latest';
+
+/**
+ * Internal docker network for network:'allowlist' runs. `--internal` means no
+ * NAT, no default route, and (Docker 26+) no external DNS — all verified live
+ * on this host — so the ONLY reachable endpoint is the gateway IP on the host
+ * bridge, where the per-run egress-proxy listens. Created lazily, idempotent.
+ * Override the name with SUDO_DOCKER_EGRESS_NETWORK.
+ */
+export const DEFAULT_EGRESS_NETWORK = 'sudo-sandbox-egress';
+
+export function resolveEgressNetworkName(): string {
+  return process.env['SUDO_DOCKER_EGRESS_NETWORK'] || DEFAULT_EGRESS_NETWORK;
+}
+
+/**
+ * Ensure the internal egress network exists and return its gateway IP (the
+ * host-side address the proxy must bind). Throws on any failure — callers
+ * treat that as fail-closed for the run.
+ */
+export async function ensureEgressNetwork(bin: string, name: string): Promise<{ gatewayIp: string }> {
+  const inspect = async (): Promise<string> => {
+    const { stdout } = await execFileAsync(
+      bin,
+      ['network', 'inspect', name, '--format', '{{(index .IPAM.Config 0).Gateway}} {{.Internal}}'],
+      { timeout: 10_000 },
+    );
+    const [gateway, internal] = String(stdout).trim().split(/\s+/);
+    if (internal !== 'true') {
+      // A pre-existing NON-internal network under this name would silently give
+      // the container a real route out — refuse instead of running open.
+      throw new SandboxPolicyError(
+        `docker egress network '${name}' exists but is not internal — refusing allowlist run`,
+      );
+    }
+    if (!gateway) throw new SandboxPolicyError(`docker egress network '${name}' has no gateway IP`);
+    return gateway;
+  };
+
+  try {
+    return { gatewayIp: await inspect() };
+  } catch (err) {
+    if (err instanceof SandboxPolicyError) throw err;
+    await execFileAsync(bin, ['network', 'create', '--internal', name], { timeout: 15_000 }).catch(
+      (createErr: unknown) => {
+        // Lost a create race → fine, inspect below settles it. Anything else
+        // (docker down, permission) also surfaces via the inspect re-throw.
+        void createErr;
+      },
+    );
+    return { gatewayIp: await inspect() };
+  }
+}
 
 export function resolveDockerConfig(): DockerBackendConfig {
   return {
@@ -150,7 +204,17 @@ export function buildDockerArgs(
   // With --network none there is NO interface at all, so the cloud metadata
   // endpoint (169.254.169.254) and every other host are unreachable by
   // construction — untrusted turns are pinned to 'none' by the routing layer.
-  args.push('--network', policy.network === 'host' ? 'host' : 'none');
+  // 'allowlist' → the internal egress network: no NAT/route/DNS, only the
+  // gateway-bound egress proxy is reachable (run() starts it and exports
+  // HTTP(S)_PROXY into the scrubbed env before this builder is called).
+  args.push(
+    '--network',
+    policy.network === 'host'
+      ? 'host'
+      : policy.network === 'allowlist'
+        ? resolveEgressNetworkName()
+        : 'none',
+  );
 
   // Workspace bind + working directory. A ':' in the host path would corrupt the
   // -v spec, so reject it up front (bwrap passes it as a separate token).
@@ -215,7 +279,40 @@ export const dockerBackend: ExecBackend = {
     }
 
     const env = buildSandboxEnv(opts.policy);
-    const args = buildDockerArgs(opts, env, config);
+
+    // network:'allowlist' — bring up the enforced egress path BEFORE building
+    // argv (the proxy env vars must be in `env` so the `-e KEY` loop forwards
+    // them). Any setup failure refuses the run (exit 126) — the sandbox never
+    // silently runs with a more open network than the policy asked for.
+    let egressProxy: EgressProxyHandle | undefined;
+    if (opts.policy.network === 'allowlist') {
+      try {
+        const networkName = resolveEgressNetworkName();
+        const { gatewayIp } = await ensureEgressNetwork(config.bin, networkName);
+        egressProxy = await startEgressProxy({
+          bindHost: gatewayIp,
+          allowedHosts: resolveEgressAllowlist(opts.policy),
+        });
+        for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) {
+          env[key] = egressProxy.url;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          stdout: '',
+          stderr: `docker exec backend: egress allowlist setup failed (refusing to run — fail closed): ${message}`,
+          exitCode: 126,
+        };
+      }
+    }
+
+    let args: string[];
+    try {
+      args = buildDockerArgs(opts, env, config);
+    } catch (err) {
+      await egressProxy?.close();
+      throw err;
+    }
 
     log.info(
       { image: config.image, network: opts.policy.network, bin: config.bin },
@@ -260,6 +357,8 @@ export const dockerBackend: ExecBackend = {
       // docker run exits with the container's exit code; execFile puts it on .code
       const exitCode = exitCodeFromError(error);
       return { stdout, stderr, exitCode };
+    } finally {
+      await egressProxy?.close();
     }
   },
 };

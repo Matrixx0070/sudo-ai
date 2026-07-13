@@ -204,6 +204,15 @@ export function mergePolicy(
         : base.allowedEnvVars
         ? [...base.allowedEnvVars].slice(0, 32)
         : undefined,
+    // Egress hosts for network:'allowlist' — same override-wins-else-base +
+    // bounded-copy shape as allowedEnvVars. Dropping this on merge would
+    // silently widen an allowlist run to the DEFAULT_EGRESS_ALLOWLIST.
+    allowedEgressHosts:
+      override.allowedEgressHosts !== undefined
+        ? [...override.allowedEgressHosts].slice(0, 64)
+        : base.allowedEgressHosts
+        ? [...base.allowedEgressHosts].slice(0, 64)
+        : undefined,
     // Carry execBackend through (override-wins-else-base) — gap #27 per-policy
     // selection. Must be explicit or a merge silently drops it. execBackend
     // cannot reduce isolation (unknown/malformed fail-safes to bwrap at dispatch).
