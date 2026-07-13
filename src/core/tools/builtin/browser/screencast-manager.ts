@@ -34,6 +34,10 @@ interface Cast {
   /** page dimensions from the last frame metadata (for input coord scaling). */
   deviceWidth: number;
   deviceHeight: number;
+  /** screencast params kept so a crash re-attach uses the same settings. */
+  quality: number;
+  maxWidth: number;
+  maxHeight: number;
 }
 
 export interface WatchOptions { fps?: number; quality?: number; maxWidth?: number; maxHeight?: number }
@@ -62,15 +66,25 @@ class ScreencastManager {
     const inst = BrowserManager.getInstance().get(name);
     if (!inst) throw new Error(`browser profile "${name}" is not running — launch it first`);
     const page = await resolveActivePage(inst);
-    const session = await page.context().newCDPSession(page);
-
     const fps = Math.max(1, Math.min(10, opts.fps ?? DEFAULT_FPS));
     const cast: Cast = {
-      name, page, session, latest: null, subscribers: new Set(),
+      name, page, session: undefined as unknown as CDPSession, latest: null, subscribers: new Set(),
       takeover: false, minIntervalMs: Math.floor(1000 / fps), lastSentMs: 0,
       deviceWidth: 0, deviceHeight: 0,
+      quality: Math.max(20, Math.min(90, opts.quality ?? 55)),
+      maxWidth: opts.maxWidth ?? 1280, maxHeight: opts.maxHeight ?? 800,
     };
+    this.casts.set(name, cast);
+    await this._attach(cast, page);
+    log.info({ name, fps }, 'Screencast started');
+  }
 
+  /** Wire a CDP screencast onto `page` for this cast (shared by start + re-attach). */
+  private async _attach(cast: Cast, page: Page): Promise<void> {
+    const session = await page.context().newCDPSession(page);
+    cast.page = page;
+    cast.session = session;
+    cast.lastSentMs = 0;
     session.on('Page.screencastFrame', (ev: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
       // Ack every frame promptly (else Chromium stops sending), but only
       // store/broadcast at the target fps.
@@ -85,16 +99,27 @@ class ScreencastManager {
         this._broadcast(cast, buf);
       } catch { /* bad frame — skip */ }
     });
-
     await session.send('Page.startScreencast', {
-      format: 'jpeg',
-      quality: Math.max(20, Math.min(90, opts.quality ?? 55)),
-      maxWidth: opts.maxWidth ?? 1280,
-      maxHeight: opts.maxHeight ?? 800,
-      everyNthFrame: 1,
+      format: 'jpeg', quality: cast.quality, maxWidth: cast.maxWidth, maxHeight: cast.maxHeight, everyNthFrame: 1,
     });
-    this.casts.set(name, cast);
-    log.info({ name, fps }, 'Screencast started');
+  }
+
+  /**
+   * GAP 2: after a crash auto-relaunch the old CDP session is dead. If this
+   * profile was being watched, re-attach the screencast to the fresh context's
+   * active page — KEEPING existing MJPEG subscribers + the takeover flag so the
+   * owner's live view resumes without reconnecting. No-op if not watched.
+   */
+  async reattachAfterRelaunch(name: string): Promise<boolean> {
+    const cast = this.casts.get(name);
+    if (!cast) return false;
+    const inst = BrowserManager.getInstance().get(name);
+    if (!inst) return false;
+    try { await cast.session.detach(); } catch { /* already dead */ }
+    const page = await resolveActivePage(inst);
+    await this._attach(cast, page);
+    log.info({ name, viewers: cast.subscribers.size }, 'Screencast re-attached after crash-relaunch');
+    return true;
   }
 
   async stop(name: string): Promise<boolean> {
