@@ -2109,6 +2109,16 @@ async function boot(): Promise<void> {
     registerOutboundAdapter(web);
     if (chatApprovals) approvalManager.registerSender('web', web);
 
+    // A2UI (Spec 2): now that the web adapter exists, wire the canvas bridge's
+    // dispatch so a canvas button/form event WAKES an agent turn (immediate
+    // reply) via the per-peer turn queue instead of only feeding an active loop.
+    try {
+      const { setCanvasDispatch } = await import('./core/canvas/canvas-bridge.js');
+      setCanvasDispatch((peerId: string, text: string) => web.dispatchSynthetic(peerId, text));
+    } catch (err) {
+      log.warn({ err: String(err) }, 'canvas dispatch wiring failed — events fall back to steering inject');
+    }
+
     web.onMessage(async (msg) => {
       log.info(
         { channel: msg.channel, peerId: msg.peerId, text: msg.text?.slice(0, 80) },

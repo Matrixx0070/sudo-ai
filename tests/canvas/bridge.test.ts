@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   registerCanvasBridge, pushCanvasToSession, deliverCanvasEvent, buildCanvasFrame,
-  __resetCanvasBridgeForTests, isCanvasBridgeReady, rehydrateCanvasForPeer,
+  __resetCanvasBridgeForTests, isCanvasBridgeReady, rehydrateCanvasForPeer, setCanvasDispatch,
 } from '../../src/core/canvas/canvas-bridge.js';
 import type { CanvasPayload } from '../../src/core/canvas/schema.js';
 
@@ -97,5 +97,34 @@ describe('deliverCanvasEvent', () => {
     expect(injected).toContain('[CANVAS EVENT]');
     expect(injected).toContain('"actionId":"save"');
     expect(injected).toContain('a@b.c');
+  });
+
+  it('PREFERS dispatch (wake a turn) over inject when dispatch is wired', async () => {
+    const inject = vi.fn(); const dispatch = vi.fn();
+    registerCanvasBridge({
+      resolveSessionPeer: async () => ({ channel: 'web', peerId: 'web-1' }),
+      resolveWebSession: async (peerId) => `sess-for-${peerId}`,
+      push: vi.fn(), inject, dispatch,
+    });
+    const r = await deliverCanvasEvent('web-1', { kind: 'button', actionId: 'go' });
+    expect(r).toMatchObject({ ok: true, sessionId: 'sess-for-web-1' });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(inject).not.toHaveBeenCalled();
+    const [peerId, text] = dispatch.mock.calls[0]!;
+    expect(peerId).toBe('web-1');
+    expect(text).toContain('[CANVAS EVENT]');
+    expect(text).toContain('"actionId":"go"');
+  });
+
+  it('setCanvasDispatch late-binds dispatch so a later event wakes a turn', async () => {
+    const inject = vi.fn(); const dispatch = vi.fn();
+    registerCanvasBridge({
+      resolveSessionPeer: async () => ({ channel: 'web', peerId: 'web-1' }),
+      resolveWebSession: async () => 's1', push: vi.fn(), inject,
+    });
+    setCanvasDispatch(dispatch); // wired after registration (mirrors boot order)
+    await deliverCanvasEvent('web-1', { kind: 'button', actionId: 'go' });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(inject).not.toHaveBeenCalled();
   });
 });

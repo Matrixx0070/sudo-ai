@@ -45,8 +45,13 @@ export interface CanvasBridgeDeps {
   resolveWebSession: (peerId: string) => Promise<string>;
   /** Push a serialized frame to a channel peer (channel-outbox). */
   push: (channel: string, peerId: string, frameJson: string) => void;
-  /** Inject a typed event into the session (steering channel). */
+  /** Inject a typed event into the session (steering channel) — feeds an
+   *  ACTIVE loop mid-turn; queues silently when idle. Fallback path. */
   inject: (sessionId: string, payload: string) => void;
+  /** Dispatch a typed event as an inbound web message so it WAKES a turn (and
+   *  gets an immediate reply) when idle, and serializes behind an active turn
+   *  when busy. Preferred over inject when wired. */
+  dispatch?: (peerId: string, text: string) => void;
   /** Persist the latest payload for a session (reconnect replay / audit). */
   persist?: (sessionId: string, payload: CanvasPayload) => void;
   /** Recent canvases across sessions, newest first — powers the /admin panel. */
@@ -64,6 +69,18 @@ export function registerCanvasBridge(deps: CanvasBridgeDeps): void {
 
 export function isCanvasBridgeReady(): boolean {
   return _deps !== null;
+}
+
+/**
+ * Late-bind the dispatch capability (wake-a-turn) after the web adapter exists.
+ * The bridge is registered at boot before the WebAdapter is constructed, so the
+ * dispatch fn is attached here once available. No-op if the bridge isn't wired.
+ */
+export function setCanvasDispatch(dispatch: (peerId: string, text: string) => void): void {
+  if (_deps) {
+    _deps.dispatch = dispatch;
+    log.info('canvas dispatch wired (events wake a turn)');
+  }
 }
 
 export interface PushResult { ok: boolean; reason?: string }
@@ -102,8 +119,17 @@ export async function deliverCanvasEvent(peerId: string, event: CanvasEvent): Pr
   try {
     const sessionId = await _deps.resolveWebSession(peerId);
     const payload = JSON.stringify({ kind: 'canvas-event', actionId: event.actionId, formKind: event.kind, values: event.values ?? {} });
-    _deps.inject(sessionId, `[CANVAS EVENT] The user interacted with a rendered UI component. Structured event: ${payload}`);
-    log.info({ peerId, sessionId, actionId: event.actionId }, 'canvas event injected into session');
+    const text = `[CANVAS EVENT] The user interacted with a rendered UI component. Structured event: ${payload}`;
+    // Prefer dispatch: it WAKES a turn (immediate reply) when idle and serializes
+    // behind an active turn when busy (per-peer queue). Fall back to steering
+    // inject (mid-turn only; queues silently when idle) if dispatch isn't wired.
+    if (_deps.dispatch) {
+      _deps.dispatch(peerId, text);
+      log.info({ peerId, sessionId, actionId: event.actionId, path: 'dispatch' }, 'canvas event dispatched as turn');
+    } else {
+      _deps.inject(sessionId, text);
+      log.info({ peerId, sessionId, actionId: event.actionId, path: 'inject' }, 'canvas event injected into session');
+    }
     return { ok: true, sessionId };
   } catch (err) {
     log.warn({ peerId, err: String(err) }, 'canvas event delivery failed');
