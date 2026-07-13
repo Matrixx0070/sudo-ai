@@ -33,6 +33,8 @@ const TOOLS = [
   // document category (PDF generation/parsing)
   { name: 'document.markdown-to-pdf', category: 'document' },
   { name: 'document.pdf-from-html', category: 'document' },
+  // generative UI (A2UI) primitive — always-on base tool
+  { name: 'canvas.render', category: 'meta' },
   // unrelated
   { name: 'content.write-article', category: 'content' },
 ];
@@ -51,6 +53,23 @@ describe('ToolRouter — github category routing', () => {
     const n = names('write an article about cats');
     expect(n).not.toContain('github.merge_pr');
     expect(n).not.toContain('github.open_pr');
+  });
+});
+
+describe('ToolRouter — canvas.render is always reachable (A2UI base tool)', () => {
+  const router = new ToolRouter(fakeRegistry(TOOLS) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  // Its natural triggers ("chart", "form", "render") route to browser/media/data
+  // or are filtered as generic words, so it must be always-on or the model can't
+  // find it. Assert across prompts that would otherwise route elsewhere.
+  it.each([
+    'show me a bar chart of weekly sales',
+    'render an interactive form to collect feedback',
+    'write an article about cats',
+    'what time is it in Tokyo',
+  ])('routes canvas.render for: %s', (msg) => {
+    expect(names(msg)).toContain('canvas.render');
   });
 });
 
