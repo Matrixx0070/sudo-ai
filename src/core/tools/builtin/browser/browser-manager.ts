@@ -28,6 +28,7 @@ import {
   profileDir as resolveProfileDir,
   type ProfileTrust,
 } from './profile-registry.js';
+import { checkOwnerAllowed, browserAudit } from './safety.js';
 
 const log = createLogger('browser-manager');
 
@@ -554,7 +555,16 @@ export const browserManagerTool: ToolDefinition = {
       }
 
       if (op === 'launch') {
+        // Safety rail: owner-only profiles (e.g. personal) are refused for a
+        // known non-owner session. Audited either way.
+        const entry = getProfileEntry(name);
+        const gate = checkOwnerAllowed(entry, ctx.sessionId);
+        if (!gate.allowed) {
+          ctxLog.error({ tool: 'browser.launch', name }, 'owner-only profile denied');
+          return { success: false, output: `browser.launch: ${gate.reason}.` };
+        }
         const instance = await manager.launch(name, headless, autoRestart);
+        browserAudit('launch', { profile: name, trust: instance.trust, ephemeral: instance.ephemeral, ownerOnly: instance.ownerOnly, sessionId: ctx.sessionId });
         ctxLog.info({ tool: 'browser.launch', name, autoRestart }, 'Browser launched');
         const persist = instance.ephemeral ? 'ephemeral (wiped on close)' : 'durable (persists across restarts)';
         return {
