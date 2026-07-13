@@ -720,6 +720,26 @@ export class ToolRouter {
     return result;
   }
 
+  /**
+   * Resolve a GLOB allowlist (e.g. "github.*", "coder.read-file") to schemas.
+   * '.' and '_' are treated as equivalent so a dotted pattern matches a
+   * provider-sanitized name. Capped at MAX_ROUTED_TOOLS. Used by the webhook
+   * sandbox (Spec 4) — an empty result means "no match", caller falls back.
+   */
+  routeAllowlistGlob(patterns: readonly string[]): ToolSchema[] {
+    const norm = (s: string): string => s.replace(/[_.]/g, '.').toLowerCase();
+    const pats = patterns.map(norm);
+    const matches = (name: string): boolean => {
+      const n = norm(name);
+      return pats.some((p) => (p.endsWith('*') ? n.startsWith(p.slice(0, -1)) : n === p));
+    };
+    const result: ToolSchema[] = [];
+    for (const schema of this._getAllSchemas()) {
+      if (matches(this._schemaName(schema)) && result.length < MAX_ROUTED_TOOLS) result.push(schema);
+    }
+    return result;
+  }
+
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------

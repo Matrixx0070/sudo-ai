@@ -815,6 +815,12 @@ export class AgentLoop extends AgentLoopInjections {
        * internal/autonomous turns (→ identity unknown → allowed + audited).
        */
       caller?: { isOwner?: boolean; channel?: string; peerId?: string };
+      /**
+       * Restrict tool routing to this allowlist (glob patterns like "github.*"
+       * allowed). Used by inbound webhooks (Spec 4) to sandbox a hook's turn to
+       * its configured tools. Empty resolution falls back to full routing.
+       */
+      toolAllowlist?: string[];
     },
   ): Promise<AgentRunResult> {
     if (!sessionId || typeof sessionId !== 'string') {
@@ -1944,7 +1950,7 @@ export class AgentLoop extends AgentLoopInjections {
     session: SessionLike,
     state: AgentState,
     emit: Emitter,
-    opts?: { race?: boolean; slimHeartbeat?: boolean },
+    opts?: { race?: boolean; slimHeartbeat?: boolean; toolAllowlist?: string[] },
   ): Promise<string> {
     const { maxIterations, model } = this.config;
     let finalText = '';
@@ -2252,6 +2258,21 @@ export class AgentLoop extends AgentLoopInjections {
             }
           } catch (slimErr) {
             log.warn({ sessionId: state.sessionId, err: String(slimErr) }, 'Slim heartbeat routing failed — falling back to full routing');
+          }
+        }
+        // Webhook (Spec 4) sandbox: restrict routing to the hook's allowlist
+        // (glob-aware). Fail-open — an empty resolution falls back to full routing.
+        if (!_routedTools && opts?.toolAllowlist && opts.toolAllowlist.length > 0) {
+          try {
+            const allowed = this.toolRouter.routeAllowlistGlob(opts.toolAllowlist);
+            if (allowed.length > 0) {
+              _routedTools = allowed;
+              log.info({ sessionId: state.sessionId, toolCount: allowed.length, patterns: opts.toolAllowlist }, 'Webhook tool allowlist active');
+            } else {
+              log.warn({ sessionId: state.sessionId, patterns: opts.toolAllowlist }, 'Webhook allowlist resolved 0 tools — falling back to full routing');
+            }
+          } catch (alErr) {
+            log.warn({ sessionId: state.sessionId, err: String(alErr) }, 'Webhook allowlist routing failed — falling back to full routing');
           }
         }
         if (!_routedTools) {

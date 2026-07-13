@@ -1,0 +1,49 @@
+{
+  // Inbound webhooks → agent turns (Spec 4). POST /v1/hooks/:hookId.
+  // Master kill-switch: set WEBHOOKS_ENABLED=1 in the env to enable ingress
+  // (absent/0 → every hook returns 503). Secrets NEVER live here — each hook
+  // names an env var that holds its secret (secretEnv).
+
+  hooks: {
+    // Example: GitHub CI / push events → agent investigates a failure.
+    'github-ci': {
+      description: 'GitHub webhook — investigate CI failures',
+      // Signature scheme: 'github' (X-Hub-Signature-256 HMAC), 'stripe'
+      // (Stripe-Signature), 'hmac' (X-Hook-Signature hex HMAC-SHA256), 'bearer'
+      // (X-Hook-Secret / Authorization equals the secret), or 'none'.
+      signature: 'github',
+      secretEnv: 'HOOK_GITHUB_CI_SECRET',
+      // Prompt template. Placeholders: {{event}} (X-*-Event header), {{delivery}}
+      // (delivery id), {{body}} (raw JSON, truncated), {{header.NAME}}.
+      prompt: "A GitHub webhook fired (event: {{event}}, delivery: {{delivery}}).\nPayload:\n{{body}}\n\nIf this is a failed CI run or a push that broke the build, investigate and summarize the likely cause. Otherwise note it and stop.",
+      // Tools the agent may use for this hook (globs allowed). Enforced.
+      tools: ['github.*', 'coder.read-file', 'coder.multi-read', 'system.exec'],
+      // 'sync' → respond { ok, reply } when the turn finishes; 'async' → 202
+      // immediately and (optionally) POST the result to callbackUrl.
+      mode: 'async',
+      rateLimitPerMin: 30,
+    },
+
+    // Example: Stripe events → log/notify.
+    'stripe-events': {
+      description: 'Stripe webhook — log payment events',
+      signature: 'stripe',
+      secretEnv: 'HOOK_STRIPE_SECRET',
+      prompt: "A Stripe event arrived (type: {{event}}). Payload:\n{{body}}\n\nLog it and, if it needs attention (failed payment, dispute), say so.",
+      tools: ['finance.*', 'system.exec'],
+      mode: 'async',
+      rateLimitPerMin: 60,
+    },
+
+    // Example: a generic form/automation POST with a shared bearer secret.
+    'form-intake': {
+      description: 'Generic form submission → process',
+      signature: 'bearer',
+      secretEnv: 'HOOK_FORM_SECRET',
+      prompt: "A form was submitted. Data:\n{{body}}\n\nProcess it per the usual intake flow.",
+      tools: ['coder.read-file', 'system.exec'],
+      mode: 'sync',
+      rateLimitPerMin: 20,
+    },
+  },
+}
