@@ -808,6 +808,13 @@ export class AgentLoop extends AgentLoopInjections {
        * tools, the turn runs with the normal prompt and routing.
        */
       slimHeartbeat?: boolean;
+      /**
+       * Caller identity for this turn (Feature 1 isOwner + channel/peer),
+       * supplied by the dispatch layer. Bound to AgentState so ToolContext
+       * carries it — owner-only tools gate on ctx.isOwner. Omitted for
+       * internal/autonomous turns (→ identity unknown → allowed + audited).
+       */
+      caller?: { isOwner?: boolean; channel?: string; peerId?: string };
     },
   ): Promise<AgentRunResult> {
     if (!sessionId || typeof sessionId !== 'string') {
@@ -989,6 +996,7 @@ export class AgentLoop extends AgentLoopInjections {
       followUpMessages: [message],
       consecutiveReplans: 0,
       consecutiveToolIterations: 0,
+      ...(opts?.caller ? { caller: opts.caller } : {}),
     };
 
     log.info({ sessionId, messageLen: message.length }, 'Agent loop started');

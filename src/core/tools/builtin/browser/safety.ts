@@ -4,10 +4,11 @@
  *   - an append-only audit log (data/browser-audit.jsonl, mode 0600);
  *   - owner-only + domain-allowlist decision helpers.
  *
- * Owner identity now comes from ctx.isOwner (threaded onto ToolContext from the
- * canonical turn-identity registry), so checkOwnerAllowed takes the resolved
- * isOwner directly — no browser-local side table. The AUTHORITATIVE per-caller
- * gate remains the channel access policy (Feature 1); this is defense-in-depth.
+ * Owner identity comes from ctx.isOwner (bound to the turn's AgentState by the
+ * dispatch layer and threaded onto ToolContext), so checkOwnerAllowed takes the
+ * resolved isOwner directly — no side table, no cross-turn staleness. The
+ * AUTHORITATIVE per-caller gate remains the channel access policy (Feature 1);
+ * this is defense-in-depth.
  */
 
 import { appendFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';

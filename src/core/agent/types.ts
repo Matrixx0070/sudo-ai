@@ -40,6 +40,12 @@ export interface AgentState {
   /** Consecutive iterations where the model returned tool-calls instead of text.
    *  Reset when a text response is produced. Used to break runaway tool loops. */
   consecutiveToolIterations: number;
+  /**
+   * Caller identity for THIS turn (Feature 1 isOwner + channel/peer), bound at
+   * run() start so ToolContext carries it for owner-only tool gating. Turn-
+   * scoped — never shared across sessions/turns. Undefined for internal turns.
+   */
+  caller?: { isOwner?: boolean; channel?: string; peerId?: string };
 }
 
 // ---------------------------------------------------------------------------
