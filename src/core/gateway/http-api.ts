@@ -546,7 +546,13 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
         pathname.startsWith('/v1/skills') ||
         pathname.startsWith('/v1/vaults') ||
         pathname.startsWith('/v1/federation') ||
-        pathname.startsWith('/v1/savings')
+        pathname.startsWith('/v1/savings') ||
+        // Canvas (A2UI) has its OWN listener with WEB_CHAT_TOKEN auth (the web
+        // client's credential, not GATEWAY_TOKEN). Without deferring here, this
+        // generic guard rejects the browser's WEB_CHAT_TOKEN bearer with 401
+        // while canvas-routes still injects the event — a two-responder race
+        // that masks success as a 401 and risks headers-already-sent.
+        pathname.startsWith('/v1/canvas')
       ) {
         return;
       }
