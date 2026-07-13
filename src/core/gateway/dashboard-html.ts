@@ -88,6 +88,14 @@ button:active{background:#3d444d}
   <!-- rendered by JS -->
 </div>
 
+<!-- Browser watch/takeover (Spec 3). Kept OUTSIDE #dashboard so the 30s
+     poll re-render never tears down the live <img> or takeover controls. -->
+<div class="section-head" style="margin-top:20px">Browser (watch / take over)</div>
+<div id="browser-panel" class="wide-panel">
+  <div id="browser-list" class="panel-sub">Loading browser profiles&hellip;</div>
+  <div id="browser-live" style="margin-top:10px"></div>
+</div>
+
 <script>
 (function(){
 'use strict';
@@ -526,6 +534,106 @@ if(!token){
 } else {
   refresh();
   if(pollTimer) clearInterval(pollTimer);
+}
+
+// -------------------------------------------------------------------------
+// Browser watch / take over (Spec 3). Independent of the dashboard poll so
+// the live <img> + controls are never torn down by render().
+// -------------------------------------------------------------------------
+var liveProfile = null; // profile currently shown in the live pane
+
+function apiPost(path, body, cb){
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', path, true);
+  xhr.setRequestHeader('Content-Type','application/json');
+  if(token) xhr.setRequestHeader('Authorization','Bearer ' + token);
+  xhr.onload = function(){ try { cb(null, JSON.parse(xhr.responseText||'{}')); } catch(e){ cb(e); } };
+  xhr.onerror = function(){ cb(new Error('network')); };
+  xhr.send(JSON.stringify(body||{}));
+}
+
+function browserBtn(label, onclick, danger){
+  var b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = 'margin-right:6px;background:'+(danger?'#f85149':'#21262d')+';color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer';
+  b.onclick = onclick;
+  return b;
+}
+
+function refreshBrowser(){
+  if(!token) return;
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/v1/admin/browser/status', true);
+  xhr.setRequestHeader('Authorization','Bearer ' + token);
+  xhr.onload = function(){
+    var data; try { data = JSON.parse(xhr.responseText).data; } catch(e){ return; }
+    renderBrowserList(data);
+  };
+  xhr.send();
+}
+
+function renderBrowserList(data){
+  var running = (data && data.running) || [];
+  var casts = (data && data.casts) || [];
+  var castByName = {}; casts.forEach(function(c){ castByName[c.name] = c; });
+  var list = document.getElementById('browser-list');
+  list.innerHTML = '';
+  if(!running.length){ list.textContent = 'No browser profiles are running. Launch one (browser.launch) to watch.'; return; }
+  running.forEach(function(inst){
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px';
+    var name = document.createElement('span');
+    name.style.cssText='color:#e6edf3;min-width:120px';
+    name.textContent = inst.name;
+    row.appendChild(name);
+    var cast = castByName[inst.name];
+    if(cast){
+      row.appendChild(browserBtn('View live', function(){ showLive(inst.name); }));
+      row.appendChild(browserBtn('Stop watch', function(){ apiPost('/v1/admin/browser/watch',{profile:inst.name,action:'stop'},function(){ if(liveProfile===inst.name){ document.getElementById('browser-live').innerHTML=''; liveProfile=null; } refreshBrowser(); }); }));
+      var st = document.createElement('span'); st.className='panel-sub';
+      st.textContent = cast.viewers + ' viewer(s)' + (cast.takeover ? ' — OWNER IN CONTROL' : '');
+      row.appendChild(st);
+    } else {
+      row.appendChild(browserBtn('Watch', function(){ apiPost('/v1/admin/browser/watch',{profile:inst.name,action:'start'},function(){ setTimeout(function(){ showLive(inst.name); refreshBrowser(); }, 400); }); }));
+    }
+    list.appendChild(row);
+  });
+}
+
+function showLive(profile){
+  liveProfile = profile;
+  var box = document.getElementById('browser-live');
+  box.innerHTML = '';
+  var controls = document.createElement('div');
+  controls.style.cssText='margin-bottom:6px';
+  var takeBtn = browserBtn('Take over', function(){ apiPost('/v1/admin/browser/takeover',{profile:profile,action:'take'},function(){ refreshBrowser(); showLive(profile); }); });
+  var handBtn = browserBtn('Hand back', function(){ apiPost('/v1/admin/browser/takeover',{profile:profile,action:'hand-back'},function(){ refreshBrowser(); showLive(profile); }); });
+  controls.appendChild(takeBtn); controls.appendChild(handBtn);
+  box.appendChild(controls);
+
+  var img = document.createElement('img');
+  img.src = '/v1/admin/browser/live?profile=' + encodeURIComponent(profile) + '&token=' + encodeURIComponent(token) + '&t=' + Date.now();
+  img.style.cssText = 'max-width:100%;border:1px solid #30363d;border-radius:6px;display:block;cursor:crosshair';
+  // Click-to-inject (server rejects unless taken over). Coords normalized to the frame.
+  img.onclick = function(e){
+    var r = img.getBoundingClientRect();
+    var x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    apiPost('/v1/admin/browser/input', { profile: profile, kind: 'click', x: x, y: y }, function(){});
+  };
+  box.appendChild(img);
+
+  var kb = document.createElement('div'); kb.style.cssText='margin-top:6px';
+  var tf = document.createElement('input'); tf.type='text'; tf.placeholder='type into page (e.g. 2FA code)…';
+  tf.style.cssText='background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font:inherit;font-size:12px;width:240px;margin-right:6px';
+  kb.appendChild(tf);
+  kb.appendChild(browserBtn('Type', function(){ apiPost('/v1/admin/browser/input',{profile:profile,kind:'text',text:tf.value},function(){ tf.value=''; }); }));
+  kb.appendChild(browserBtn('Enter', function(){ apiPost('/v1/admin/browser/input',{profile:profile,kind:'key',key:'Enter'},function(){}); }));
+  box.appendChild(kb);
+}
+
+if(token){
+  refreshBrowser();
+  setInterval(refreshBrowser, 5000);
 }
 
 })();

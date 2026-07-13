@@ -1907,7 +1907,7 @@ export function registerAdminRoutes(
     // is answered 401 here AND again by that listener (headers-already-sent
     // crash). Authenticated requests would fall through to the bottom defer
     // list, but unauthenticated ones never reach it. Handled like /dashboard.
-    if (pathname === '/v1/admin/canvas') {
+    if (pathname === '/v1/admin/canvas' || pathname.startsWith('/v1/admin/browser')) {
       return;
     }
 

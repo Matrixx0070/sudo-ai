@@ -29,6 +29,7 @@ import type { BenchRoutesDeps } from './bench-routes.js';
 import { registerLearningRoutes } from './learning-routes.js';
 import { registerCanvasRoutes } from './canvas-routes.js';
 import { registerCanvasAdminRoutes } from './canvas-admin-routes.js';
+import { registerBrowserAdminRoutes } from './browser-admin-routes.js';
 import type { LearningRoutesDeps } from './learning-routes.js';
 import { registerSavingsRoutes } from './savings-routes.js';
 import type { CostTrackerLike } from './savings-routes.js';
@@ -516,6 +517,8 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   registerCanvasRoutes(server);
   // A2UI read-only monitoring for /admin. GATEWAY_TOKEN auth (admin credential).
   registerCanvasAdminRoutes(server, tokenBuf);
+  // Durable-browser watch/takeover for /admin (Spec 3). GATEWAY_TOKEN auth.
+  registerBrowserAdminRoutes(server, tokenBuf);
   // Savings + compare routes
   if (deps.savings) {
     registerSavingsRoutes(server, deps.savings);
