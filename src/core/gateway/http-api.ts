@@ -511,7 +511,8 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
     registerLearningRoutes(server, deps.learning, tokenBuf);
   }
   // A2UI canvas event route (Spec 2). No deps — uses the global canvas bridge.
-  registerCanvasRoutes(server, tokenBuf);
+  // Gated by WEB_CHAT_TOKEN internally (the web SPA's credential), not GATEWAY_TOKEN.
+  registerCanvasRoutes(server);
   // Savings + compare routes
   if (deps.savings) {
     registerSavingsRoutes(server, deps.savings);

@@ -5,10 +5,23 @@ import { ConnectionStatus } from './components/ConnectionStatus';
 import { ChatWindow } from './components/ChatWindow';
 import { InputArea } from './components/InputArea';
 import { Directory } from './components/Directory';
-import { resetChatPeerId } from './peer';
+import { CanvasPanel, type CanvasData, type CanvasEventOut } from './components/CanvasPanel';
+import { resetChatPeerId, getChatPeerId } from './peer';
+
+// POST a canvas click/submit back to the agent session (same-origin, carrying
+// the web-chat ?token= the SPA already has).
+async function postCanvasEvent(e: CanvasEventOut): Promise<void> {
+  const token = new URLSearchParams(window.location.search).get('token');
+  await fetch(`/v1/canvas/event${token ? `?token=${encodeURIComponent(token)}` : ''}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ peerId: getChatPeerId(), kind: e.kind, actionId: e.actionId, values: e.values }),
+  }).catch(() => { /* best effort */ });
+}
 
 export function App() {
   const [directoryOpen, setDirectoryOpen] = React.useState(false);
+  const [canvas, setCanvas] = React.useState<CanvasData | null>(null);
   const { messages, currentResponse, error, addMessage, clearMessages, setCurrentResponse, setError } = useChatSession();
   const { connected, sendMessage, sendAttachment } = useWebSocket({
     onMessage: (data) => {
@@ -46,6 +59,10 @@ export function App() {
       } else if (data.type === 'error') {
         setError(data.error);
         setCurrentResponse(null);
+      } else if ((data as { type: string }).type === 'canvas') {
+        // A2UI: agent pushed an interactive component tree — render it in place.
+        const cv = data as unknown as { title?: string; components: Record<string, unknown>[] };
+        setCanvas({ title: cv.title, components: Array.isArray(cv.components) ? cv.components : [] });
       }
     },
     onDisconnect: () => {
@@ -114,6 +131,12 @@ export function App() {
       </header>
 
       <ChatWindow messages={messages} currentResponse={currentResponse} error={error} />
+
+      {canvas && (
+        <div className="px-4">
+          <CanvasPanel data={canvas} onEvent={(e) => { void postCanvasEvent(e); }} />
+        </div>
+      )}
 
       <div className="p-4 border-t border-gray-700">
         <InputArea onSend={handleSend} onSendAttachment={handleSendAttachment} disabled={!connected} />
