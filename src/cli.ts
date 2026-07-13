@@ -1711,7 +1711,14 @@ async function boot(): Promise<void> {
         const session = await dualSessionManager.getOrCreate('hook', hookId);
         const result = await finalAgentLoop.run(String(session.id), prompt, undefined, {
           race: true,
-          caller: { isOwner: false, channel: 'hook', peerId: hookId },
+          caller: {
+            isOwner: false,
+            channel: 'hook',
+            peerId: hookId,
+            // Operator-config egress opt-in (Spec 8): trust-tier routing maps it
+            // to the ENFORCED allowlist network; peers cannot influence this.
+            ...(opts.egress ? { egress: opts.egress } : {}),
+          },
           ...(opts.toolAllowlist && opts.toolAllowlist.length ? { toolAllowlist: opts.toolAllowlist } : {}),
           ...(opts.toolDeny && opts.toolDeny.length ? { toolDeny: opts.toolDeny } : {}),
         });

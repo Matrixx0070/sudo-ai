@@ -815,7 +815,13 @@ export class AgentLoop extends AgentLoopInjections {
        * carries it — owner-only tools gate on ctx.isOwner. Omitted for
        * internal/autonomous turns (→ identity unknown → allowed + audited).
        */
-      caller?: { isOwner?: boolean; channel?: string; peerId?: string };
+      caller?: {
+        isOwner?: boolean;
+        channel?: string;
+        peerId?: string;
+        /** Channel-boundary egress opt-in for untrusted turns (see sandbox/trust-tier.ts). */
+        egress?: { mode: 'allowlist'; hosts?: string[] };
+      };
       /**
        * Restrict tool routing to this allowlist (glob patterns like "github.*"
        * allowed). Used by inbound webhooks (Spec 4) to sandbox a hook's turn to

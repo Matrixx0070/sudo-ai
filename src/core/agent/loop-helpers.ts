@@ -33,7 +33,7 @@ import {
   renderCriticBlockMessage,
 } from './verify-gate-critic.js';
 import { isGroundingBlockEnabled } from './verify-gate-grounding.js';
-import { classifyTrustTier, isTierRoutingEnabled, UNTRUSTED_EXEC_BACKEND } from '../sandbox/trust-tier.js';
+import { classifyTrustTier, isTierRoutingEnabled, resolveUntrustedNetwork, UNTRUSTED_EXEC_BACKEND } from '../sandbox/trust-tier.js';
 
 const log = createLogger('agent:loop');
 
@@ -1476,10 +1476,22 @@ export async function executeToolCalls(
     policyFromSandbox.execBackend = UNTRUSTED_EXEC_BACKEND;
     policyFromSandbox.requireIsolatedBackend = true;
     // Untrusted turns get no host network by default (defense in depth alongside
-    // the container's own --network none); an operator allowlist is a later step.
-    policyFromSandbox.network = 'none';
+    // the container's own --network none). A caller-carried egress opt-in (set
+    // by the channel boundary from operator config, e.g. a hook's `network:
+    // 'allowlist'` in webhooks.json5) upgrades to the ENFORCED allowlist mode —
+    // never to 'host', and still behind requireIsolatedBackend.
+    const egress = resolveUntrustedNetwork(caller);
+    policyFromSandbox.network = egress.network;
+    if (egress.network === 'allowlist' && egress.hosts) {
+      policyFromSandbox.allowedEgressHosts = egress.hosts;
+    }
     log.info(
-      { sessionId: state.sessionId, channel: caller?.channel, backend: UNTRUSTED_EXEC_BACKEND },
+      {
+        sessionId: state.sessionId,
+        channel: caller?.channel,
+        backend: UNTRUSTED_EXEC_BACKEND,
+        network: egress.network,
+      },
       'Trust-tier routing: untrusted turn → isolated container backend (fail-closed)',
     );
   }

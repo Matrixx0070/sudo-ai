@@ -32,6 +32,14 @@ export interface WebhookHook {
   callbackUrl?: string;
   /** Allow self-modify tools (meta.self-modify/self-update). Default false. */
   allowSelfModify: boolean;
+  /**
+   * Egress opt-in (Spec 8): 'allowlist' gives this hook's turns the ENFORCED
+   * egress-proxy network instead of the default no-network container. The ONLY
+   * accepted value — 'host'/anything else is ignored (turns stay network-less).
+   */
+  network?: 'allowlist';
+  /** Hostnames for allowlist mode (`*.sub.example` ok). Omitted → DEFAULT_EGRESS_ALLOWLIST. */
+  egressHosts?: string[];
 }
 
 export interface WebhooksConfig { hooks: Record<string, WebhookHook> }
@@ -58,6 +66,14 @@ function normalizeHook(id: string, raw: unknown): WebhookHook | null {
   if (!prompt) { log.warn({ id }, 'webhook has no prompt — skipped'); return null; }
   const mode: HookMode = o['mode'] === 'async' ? 'async' : 'sync';
   const rlRaw = Number(o['rateLimitPerMin']);
+  // Egress: only the literal 'allowlist' opts in; any other non-empty value is
+  // an operator mistake worth a warning (e.g. hoping for 'host' — never granted).
+  const netRaw = o['network'];
+  const network = netRaw === 'allowlist' ? ('allowlist' as const) : undefined;
+  if (netRaw !== undefined && network === undefined) {
+    log.warn({ id, network: String(netRaw) }, "webhook 'network' must be 'allowlist' — ignored (turns run network-less)");
+  }
+  const egressHosts = toStringArray(o['egressHosts']).slice(0, 64);
   return {
     id,
     ...(typeof o['description'] === 'string' ? { description: o['description'] } : {}),
@@ -69,6 +85,8 @@ function normalizeHook(id: string, raw: unknown): WebhookHook | null {
     rateLimitPerMin: Number.isFinite(rlRaw) && rlRaw > 0 ? Math.floor(rlRaw) : 60,
     ...(typeof o['callbackUrl'] === 'string' && /^https?:\/\//i.test(o['callbackUrl']) ? { callbackUrl: o['callbackUrl'] } : {}),
     allowSelfModify: o['allowSelfModify'] === true,
+    ...(network ? { network } : {}),
+    ...(network && egressHosts.length ? { egressHosts } : {}),
   };
 }
 
