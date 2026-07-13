@@ -74,6 +74,13 @@ export function verifySignature(
       const t = parts.find((p) => p.startsWith('t='))?.slice(2) ?? '';
       const v1s = parts.filter((p) => p.startsWith('v1=')).map((p) => p.slice(3));
       if (!t || v1s.length === 0) return { ok: false, reason: 'malformed Stripe-Signature' };
+      // Replay protection: reject a timestamp outside tolerance (default 300s;
+      // SUDO_WEBHOOK_STRIPE_TOLERANCE_S, <=0 disables). Without this a captured
+      // signature replays forever — and Stripe dedupe (body id) is best-effort.
+      const tol = Number(process.env['SUDO_WEBHOOK_STRIPE_TOLERANCE_S'] ?? '300');
+      const ts = Number(t);
+      if (!Number.isFinite(ts)) return { ok: false, reason: 'bad Stripe timestamp' };
+      if (tol > 0 && Math.abs(Date.now() / 1000 - ts) > tol) return { ok: false, reason: 'Stripe timestamp outside tolerance (replay?)' };
       const expected = hmacHex(secret, `${t}.${rawBody}`);
       return v1s.some((v) => eqHex(v, expected)) ? { ok: true } : { ok: false, reason: 'bad signature' };
     }
@@ -91,4 +98,16 @@ export function deliveryId(headers: Record<string, string | string[] | undefined
     header(headers, 'x-request-id') ||
     null
   ) || null;
+}
+
+/**
+ * Fallback delivery id from the body's top-level `id` — covers providers whose
+ * event id is in the payload not a header (Stripe `evt_…`, and generic JSON).
+ * Returns null when the body isn't JSON with a string id.
+ */
+export function bodyEventId(rawBody: string): string | null {
+  try {
+    const j = JSON.parse(rawBody) as { id?: unknown };
+    return typeof j.id === 'string' && j.id.length > 0 ? j.id : null;
+  } catch { return null; }
 }

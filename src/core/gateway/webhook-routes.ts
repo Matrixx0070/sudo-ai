@@ -13,7 +13,7 @@
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 import { webhooksEnabled, getHook, hookSecret, type WebhookHook } from './webhook-config.js';
-import { verifySignature, deliveryId } from './webhook-signatures.js';
+import { verifySignature, deliveryId, bodyEventId } from './webhook-signatures.js';
 import { runWebhookTurn, type WebhookRunResult } from './webhook-bridge.js';
 import { toolFetch } from '../security/guarded-fetch.js';
 
@@ -126,8 +126,10 @@ export function registerWebhookRoutes(server: HttpServer): void {
       const rl = rateLimited(hookId, hook.rateLimitPerMin);
       if (rl.limited) { sendJson(res, 429, { error: { message: 'rate limited', code: 429 } }, { 'Retry-After': String(rl.retryAfterS) }); return; }
 
-      // 3. Dedupe by delivery id → { ok, deduped:true }.
-      const delivery = deliveryId(req.headers) ?? '';
+      // 3. Dedupe by delivery id → { ok, deduped:true }. Header id first, then
+      //    the body's top-level id (Stripe evt_… + generic JSON) — else Stripe
+      //    events (id is in the body, not a header) would never dedupe.
+      const delivery = deliveryId(req.headers) ?? bodyEventId(raw) ?? '';
       if (delivery && isDuplicate(`${hookId}:${delivery}`)) {
         log.info({ hookId, delivery }, 'webhook duplicate delivery — skipped');
         sendJson(res, 200, { ok: true, deduped: true });
