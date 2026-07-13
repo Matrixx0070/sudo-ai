@@ -203,6 +203,20 @@ export const jsExecTool: ToolDefinition = {
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    // FAIL-CLOSED (Feature 8): the Worker+vm sandbox is in-process on the HOST —
+    // vm is not a hard security boundary. An untrusted turn (trust-tier routing
+    // set requireIsolatedBackend) must not run JS here; it gets container-backed
+    // system.exec / code.python-exec instead.
+    if (ctx.sandboxPolicy?.requireIsolatedBackend) {
+      return {
+        success: false,
+        output:
+          'code.js-exec is unavailable for untrusted sessions (host-process sandbox). ' +
+          'Use system.exec or code.python-exec, which run in an isolated container.',
+        data: { error: 'untrusted_tier_refused' },
+      };
+    }
+
     const startMs = Date.now();
     let code: string;
 
