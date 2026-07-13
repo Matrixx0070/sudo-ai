@@ -818,20 +818,30 @@ async function boot(): Promise<void> {
   if (process.env['SUDO_SANDBOX_TIER_ROUTING'] !== '0') {
     void (async () => {
       try {
-        const { checkSandboxImageAvailable, resolveDockerConfig } = await import(
+        const { checkSandboxImageAvailable, resolveDockerConfig, buildSandboxImage } = await import(
           './core/sandbox/backends/docker-backend.js'
         );
         const { available, reason } = await checkSandboxImageAvailable();
-        if (!available) {
+        if (available) {
+          log.info('Trust-tier sandbox image present — untrusted turns will run isolated');
+        } else if (process.env['SUDO_SANDBOX_AUTOBUILD'] === '1') {
+          // Opt-in self-heal (spec step 1 "pre-pull on boot", reinterpreted as a
+          // BUILD since the image is local, not registry-hosted). Backgrounded
+          // above via the enclosing void IIFE, so a multi-minute build never
+          // blocks boot; until it finishes, untrusted turns still fail closed.
+          const { image } = resolveDockerConfig();
+          log.warn({ image, reason }, `Trust-tier sandbox image missing — SUDO_SANDBOX_AUTOBUILD=1, building from ${'docker/Dockerfile.sandbox'} (untrusted turns fail closed until it completes)`);
+          const built = await buildSandboxImage(process.cwd());
+          if (built.ok) log.info({ image }, 'Trust-tier sandbox image built — untrusted turns will run isolated');
+          else log.error({ image, reason: built.reason }, 'Trust-tier sandbox image auto-build FAILED — untrusted turns stay fail-closed');
+        } else {
           const { image } = resolveDockerConfig();
           log.warn(
             { image, reason },
             `Trust-tier sandbox image '${image}' unavailable — untrusted turns will FAIL CLOSED. ` +
               `Build it: docker build -f docker/Dockerfile.sandbox -t ${image} . ` +
-              `(or disable routing with SUDO_SANDBOX_TIER_ROUTING=0)`,
+              `(or set SUDO_SANDBOX_AUTOBUILD=1 to build on boot, or disable routing with SUDO_SANDBOX_TIER_ROUTING=0)`,
           );
-        } else {
-          log.info('Trust-tier sandbox image present — untrusted turns will run isolated');
         }
       } catch {
         /* best-effort boot diagnostic */

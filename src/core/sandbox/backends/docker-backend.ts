@@ -169,6 +169,39 @@ export async function checkSandboxImageAvailable(
 }
 
 /**
+ * Repo-relative Dockerfile for the sandbox image. `docker build` needs the repo
+ * root as its context (the image copies nothing from it today, but the context
+ * arg is required), so callers pass an absolute repo root.
+ */
+export const SANDBOX_DOCKERFILE = 'docker/Dockerfile.sandbox';
+
+/**
+ * Build the sandbox image from docker/Dockerfile.sandbox. The spec's "pre-pull
+ * on boot" step: our image is LOCALLY built (no registry to pull from), so the
+ * correct self-heal is a build. Opt-in + backgrounded by the caller so a slow
+ * build never blocks boot. Returns {ok} rather than throwing; the build can take
+ * minutes, hence the generous timeout. Never runs during a turn — boot only.
+ */
+export async function buildSandboxImage(
+  repoRoot: string,
+  config: DockerBackendConfig = resolveDockerConfig(),
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    await execFileAsync(
+      config.bin,
+      ['build', '-f', SANDBOX_DOCKERFILE, '-t', config.image, '.'],
+      { cwd: repoRoot, timeout: 600_000, maxBuffer: 16 * 1024 * 1024 },
+    );
+    return { ok: true };
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException & { stderr?: string | Buffer };
+    if (e.code === 'ENOENT') return { ok: false, reason: 'docker binary not found' };
+    const stderr = e.stderr ? String(e.stderr).trim().split('\n').slice(-3).join(' | ') : String(e.message ?? e);
+    return { ok: false, reason: stderr };
+  }
+}
+
+/**
  * Build the `docker` argv (excluding the docker binary). Deterministic; the only
  * filesystem access is resolving + validating extra bind mounts (the
  * `_realpathSync` override exists for unit testing, mirroring buildBwrapArgs).
