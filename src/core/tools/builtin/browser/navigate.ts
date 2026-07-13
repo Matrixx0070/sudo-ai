@@ -8,6 +8,8 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { BrowserManager } from './browser-manager.js';
 import { resolveActivePage } from './active-page.js';
 import { withRetry } from './resilience.js';
+import { getProfileEntry } from './profile-registry.js';
+import { domainAllowed, browserAudit } from './safety.js';
 
 export const navigateTool: ToolDefinition = {
   name: 'browser.navigate',
@@ -72,6 +74,16 @@ export const navigateTool: ToolDefinition = {
     }
 
     const browserName = typeof params['browser'] === 'string' ? params['browser'] : 'default';
+
+    // Spec 3 safety: enforce the profile's per-profile domain allowlist (empty =
+    // no restriction). Keeps a scoped profile (e.g. banking) from wandering off.
+    const profileEntry = getProfileEntry(browserName);
+    if (!domainAllowed(profileEntry, url)) {
+      browserAudit('navigate-blocked-allowlist', { profile: browserName, url });
+      ctxLog.info({ tool: 'browser.navigate', url, profile: browserName }, 'navigation blocked by profile domain allowlist');
+      return { success: false, output: `browser.navigate: ${parsedUrl.hostname} is not in profile "${browserName}"'s domain allowlist.` };
+    }
+
     const waitUntil = (['load', 'domcontentloaded', 'networkidle', 'commit'].includes(
       String(params['waitUntil']),
     )

@@ -40,6 +40,7 @@ import { tabManagerTool } from './tab-manager.js';
 import { profilesTool } from './profiles.js';
 import { profileStatusTool } from './profile-status.js';
 import { browserWatchTool } from './browser-watch.js';
+import { browserLoginTool } from './browser-login.js';
 import { visionTool } from './vision.js';
 import { searchTool } from './search.js';
 import { fetchUrlTool } from './fetch-url.js';
@@ -69,6 +70,7 @@ export const BROWSER_TOOLS = [
   profilesTool,
   profileStatusTool,
   browserWatchTool,
+  browserLoginTool,
   visionTool,
   searchTool,
   fetchUrlTool,

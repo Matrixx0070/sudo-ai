@@ -2145,6 +2145,13 @@ async function boot(): Promise<void> {
           const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
+          // Spec 3 safety: the web chat is gated by WEB_CHAT_TOKEN — its driver is
+          // the owner. Record that so owner-only browser profiles (e.g. personal)
+          // are launchable here (and denied for known non-owner sessions elsewhere).
+          try {
+            const { setSessionOwner } = await import('./core/tools/builtin/browser/safety.js');
+            setSessionOwner(String(session.id), true);
+          } catch { /* safety module optional */ }
           // Stream live activity (tool calls + intermediate text) to the browser so a
           // long turn shows progress instead of a silent wait. Default-on; SUDO_WEB_STREAM=0
           // disables. Best-effort: a failed frame never breaks the turn.

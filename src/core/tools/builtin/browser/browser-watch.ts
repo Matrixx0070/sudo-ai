@@ -9,6 +9,8 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { screencastManager } from './screencast-manager.js';
 import { BrowserManager } from './browser-manager.js';
+import { getProfileEntry } from './profile-registry.js';
+import { checkOwnerAllowed, browserAudit } from './safety.js';
 
 const VALID = ['start', 'stop', 'status'] as const;
 
@@ -52,9 +54,14 @@ export const browserWatchTool: ToolDefinition = {
     }
 
     // start
+    const gate = checkOwnerAllowed(getProfileEntry(profile), ctx.sessionId);
+    if (!gate.allowed) {
+      return { success: false, output: `browser.watch: ${gate.reason}.` };
+    }
     if (!BrowserManager.getInstance().get(profile)) {
       return { success: false, output: `browser.watch: profile "${profile}" is not running — launch it first with browser.launch.` };
     }
+    browserAudit('watch-start', { profile, sessionId: ctx.sessionId });
     try {
       await screencastManager.start(profile, { fps: typeof params['fps'] === 'number' ? params['fps'] : undefined });
       ctxLog.info({ tool: 'browser.watch', profile }, 'watch started');

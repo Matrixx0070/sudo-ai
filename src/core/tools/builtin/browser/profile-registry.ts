@@ -15,7 +15,7 @@
 import { readFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 import JSON5 from 'json5';
-import { projectPath } from '../../../shared/paths.js';
+import { projectPath, dataPath } from '../../../shared/paths.js';
 import { createLogger } from '../../../shared/logger.js';
 
 const log = createLogger('browser:profile-registry');
@@ -39,7 +39,8 @@ export interface BrowserProfilesConfig {
   profiles: Record<string, BrowserProfileEntry>;
 }
 
-const PROFILES_ROOT = 'data/browser-profiles';
+// Honors the DATA_DIR env override — matches BrowserManager's profiles root.
+const PROFILES_ROOT = dataPath('browser-profiles');
 const CONFIG_PATH = projectPath('config', 'browser-profiles.json5');
 
 /** Canonical fallback used when the config file is missing/unparseable. */
