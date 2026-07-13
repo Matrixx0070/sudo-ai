@@ -29,6 +29,10 @@ function isAuthorised(req: IncomingMessage, tokenBuf: Buffer | null): boolean {
   return candidate.length === tokenBuf.length && timingSafeEqual(candidate, tokenBuf);
 }
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  // Defensive: never write headers twice if another listener already answered
+  // this request (see admin-routes defer). Prevents an ERR_HTTP_HEADERS_SENT
+  // crash from taking down the daemon.
+  if (res.headersSent || res.writableEnded) return;
   const payload = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) });
   res.end(payload);
