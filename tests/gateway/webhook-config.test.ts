@@ -50,3 +50,36 @@ describe('webhook-config', () => {
     expect(webhooksEnabled()).toBe(true);
   });
 });
+
+describe('webhook egress opt-in (Spec 8 network allowlist)', () => {
+  it("network: 'allowlist' + egressHosts parse through", () => {
+    const p = cfg(`{ hooks: { a: {
+      signature: 'hmac', secretEnv: 'MY_SECRET', prompt: 'p', tools: ['system.exec'],
+      network: 'allowlist', egressHosts: ['api.example.com', '*.trusted.io', ' ', 42],
+    } } }`);
+    const w = loadWebhooks(p, true);
+    expect(w.hooks['a']?.network).toBe('allowlist');
+    expect(w.hooks['a']?.egressHosts).toEqual(['api.example.com', '*.trusted.io']);
+  });
+
+  it("network: 'host' (or anything else) is refused — field dropped", () => {
+    const p = cfg(`{ hooks: {
+      a: { prompt: 'p', network: 'host' },
+      b: { prompt: 'p', network: true },
+    } }`);
+    const w = loadWebhooks(p, true);
+    expect(w.hooks['a']?.network).toBeUndefined();
+    expect(w.hooks['b']?.network).toBeUndefined();
+  });
+
+  it('egressHosts without network: allowlist is dropped (no dormant grants)', () => {
+    const p = cfg(`{ hooks: { a: { prompt: 'p', egressHosts: ['api.example.com'] } } }`);
+    const w = loadWebhooks(p, true);
+    expect(w.hooks['a']?.egressHosts).toBeUndefined();
+  });
+
+  it('default: no network field → undefined (turns stay network-less)', () => {
+    const p = cfg(`{ hooks: { a: { prompt: 'p' } } }`);
+    expect(loadWebhooks(p, true).hooks['a']?.network).toBeUndefined();
+  });
+});

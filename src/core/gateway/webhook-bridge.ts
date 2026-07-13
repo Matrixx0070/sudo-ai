@@ -14,6 +14,8 @@ export interface WebhookRunOpts {
   toolAllowlist?: string[];
   toolDeny?: string[];
   timeoutMs?: number;
+  /** Hook-config egress opt-in — forwarded as caller.egress (see sandbox/trust-tier.ts). */
+  egress?: { mode: 'allowlist'; hosts?: string[] };
 }
 export interface WebhookRunResult { ok: boolean; reply: string; sessionId?: string; reason?: string }
 

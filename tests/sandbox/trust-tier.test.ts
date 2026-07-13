@@ -5,6 +5,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   classifyTrustTier,
   isTierRoutingEnabled,
+  resolveUntrustedNetwork,
   UNTRUSTED_EXEC_BACKEND,
 } from '../../src/core/sandbox/trust-tier.js';
 
@@ -48,5 +49,31 @@ describe('isTierRoutingEnabled', () => {
   it('any other value keeps it ON', () => {
     process.env['SUDO_SANDBOX_TIER_ROUTING'] = '1';
     expect(isTierRoutingEnabled()).toBe(true);
+  });
+});
+
+describe('resolveUntrustedNetwork (per-hook egress opt-in)', () => {
+  it('no caller / no egress → none', () => {
+    expect(resolveUntrustedNetwork(undefined)).toEqual({ network: 'none' });
+    expect(resolveUntrustedNetwork({ isOwner: false, channel: 'hook' })).toEqual({ network: 'none' });
+  });
+
+  it('allowlist opt-in with hosts', () => {
+    expect(
+      resolveUntrustedNetwork({ isOwner: false, egress: { mode: 'allowlist', hosts: ['api.example.com', ''] } }),
+    ).toEqual({ network: 'allowlist', hosts: ['api.example.com'] });
+  });
+
+  it('allowlist opt-in without hosts → allowlist with defaults (no hosts key)', () => {
+    expect(resolveUntrustedNetwork({ isOwner: false, egress: { mode: 'allowlist' } })).toEqual({
+      network: 'allowlist',
+    });
+  });
+
+  it("malformed egress can never widen — 'host'/junk modes → none", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(resolveUntrustedNetwork({ isOwner: false, egress: { mode: 'host' } as any })).toEqual({ network: 'none' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(resolveUntrustedNetwork({ isOwner: false, egress: 'allowlist' as any })).toEqual({ network: 'none' });
   });
 });

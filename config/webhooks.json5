@@ -9,6 +9,14 @@
   // signed payload could carry prompt-injection text. Keep `tools` MINIMAL —
   // grant broad/dangerous tools (system.exec, meta.*) only when truly needed,
   // and prefer read-only tools. self-modify is denied unless allowSelfModify:true.
+  //
+  // NETWORK: hook turns run in the Docker sandbox with NO network. A hook that
+  // must reach the outside can opt in with `network: 'allowlist'` (the only
+  // accepted value — never 'host'): its commands then run on an internal
+  // container network whose sole egress is an enforcing proxy that admits only
+  // `egressHosts` (exact hostnames or '*.sub.example'; omitted → the built-in
+  // package/API registry set) on ports 80/443, with private/metadata ranges
+  // always refused. Keep egressHosts as narrow as the hook's job allows.
 
   hooks: {
     // Example: GitHub CI / push events → agent investigates a failure.

@@ -14,11 +14,24 @@
  * the routing (every session keeps whatever backend the policy/env already set).
  */
 
+/**
+ * Egress opt-in riding on the caller: the channel boundary (e.g. a hook's
+ * webhooks.json5 entry) may grant an untrusted turn the ENFORCED
+ * network:'allowlist' mode instead of the pinned 'none'. 'allowlist' is the
+ * only expressible mode — a caller can never ask for 'host'.
+ */
+export interface CallerEgress {
+  mode: 'allowlist';
+  /** Hostnames to admit; omitted → DEFAULT_EGRESS_ALLOWLIST. */
+  hosts?: string[];
+}
+
 /** Minimal caller shape — mirrors AgentState.caller / ToolContext caller fields. */
 export interface CallerLike {
   isOwner?: boolean;
   channel?: string;
   peerId?: string;
+  egress?: CallerEgress;
 }
 
 /** The two isolation tiers we route between today. */
@@ -51,4 +64,25 @@ export function isTierRoutingEnabled(): boolean {
 export function classifyTrustTier(caller?: CallerLike): TrustTier {
   if (caller && caller.isOwner === false) return 'untrusted';
   return 'owner';
+}
+
+/**
+ * Network mode for an UNTRUSTED turn. Default 'none'; a caller-carried
+ * `egress: { mode: 'allowlist' }` (set only by the channel boundary from
+ * operator config, never by the peer) upgrades to the ENFORCED allowlist —
+ * still strictly narrower than 'host', still docker-only, still fail-closed
+ * (backends that cannot enforce it run with no network, see egress-proxy.ts).
+ * Any other/malformed egress value stays 'none'.
+ */
+export function resolveUntrustedNetwork(
+  caller?: CallerLike,
+): { network: 'none' } | { network: 'allowlist'; hosts?: string[] } {
+  const egress = caller?.egress;
+  if (egress && egress.mode === 'allowlist') {
+    const hosts = Array.isArray(egress.hosts)
+      ? egress.hosts.filter((h): h is string => typeof h === 'string' && h.trim().length > 0)
+      : [];
+    return hosts.length > 0 ? { network: 'allowlist', hosts } : { network: 'allowlist' };
+  }
+  return { network: 'none' };
 }

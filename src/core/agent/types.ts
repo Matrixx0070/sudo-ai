@@ -45,7 +45,13 @@ export interface AgentState {
    * run() start so ToolContext carries it for owner-only tool gating. Turn-
    * scoped — never shared across sessions/turns. Undefined for internal turns.
    */
-  caller?: { isOwner?: boolean; channel?: string; peerId?: string };
+  caller?: {
+    isOwner?: boolean;
+    channel?: string;
+    peerId?: string;
+    /** Channel-boundary egress opt-in for untrusted turns (see sandbox/trust-tier.ts). */
+    egress?: { mode: 'allowlist'; hosts?: string[] };
+  };
 }
 
 // ---------------------------------------------------------------------------

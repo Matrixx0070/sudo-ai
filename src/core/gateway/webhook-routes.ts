@@ -151,6 +151,11 @@ export function registerWebhookRoutes(server: HttpServer): void {
         ...(hook.tools.length ? { toolAllowlist: hook.tools } : {}),
         // Safety: a webhook cannot self-modify unless the hook explicitly opts in.
         ...(hook.allowSelfModify ? {} : { toolDeny: SELF_MODIFY_DENY }),
+        // Egress opt-in (Spec 8): rides to the agent loop as caller.egress, where
+        // trust-tier routing turns it into the ENFORCED allowlist network mode.
+        ...(hook.network === 'allowlist'
+          ? { egress: { mode: 'allowlist' as const, ...(hook.egressHosts?.length ? { hosts: hook.egressHosts } : {}) } }
+          : {}),
         timeoutMs: 120_000,
       };
       log.info({ hookId, event: eventName(req, raw), mode: hook.mode, delivery }, 'webhook accepted → dispatching');
