@@ -15,7 +15,7 @@ import { ImapFlow } from 'imapflow';
 import type { ParsedMail } from 'mailparser';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { createLogger } from '../shared/index.js';
 import { ChannelError } from '../shared/index.js';
@@ -93,17 +93,51 @@ function sanitizeThreadId(raw: string): string {
  * Per-thread reply context, keyed by threadId. Populated on inbound so outbound
  * reply/send (PR2) can route to the right address + thread the reply. Bounded.
  */
-export interface ThreadContext { replyTo: string; subject: string; messageId: string; references: string }
+export interface ThreadContext {
+  replyTo: string;
+  subject: string;
+  messageId: string;
+  references: string;
+  /** Did the triggering rule opt into auto-reply? A real reply-send requires this. */
+  autoReply: boolean;
+}
 const THREAD_MAX = 5000;
+const THREADS_FILE = dataPath('email', '_threads.json');
 const _threadCtx = new Map<string, ThreadContext>();
+let _threadsLoaded = false;
+let _skipPersist = false; // set by tests to stay hermetic
+
+/** Lazy-load persisted thread context so reply routing survives a restart. */
+function _loadThreads(): void {
+  if (_threadsLoaded) return;
+  _threadsLoaded = true;
+  if (_skipPersist) return;
+  try {
+    if (existsSync(THREADS_FILE)) {
+      const obj = JSON.parse(readFileSync(THREADS_FILE, 'utf8')) as Record<string, ThreadContext>;
+      for (const [k, v] of Object.entries(obj)) _threadCtx.set(k, v);
+    }
+  } catch (err) { log.warn({ err: String(err) }, 'thread-context load failed'); }
+}
+function _persistThreads(): void {
+  if (_skipPersist) return;
+  try {
+    const dir = dataPath('email');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(THREADS_FILE, JSON.stringify(Object.fromEntries(_threadCtx)), { mode: 0o600 });
+  } catch (err) { log.warn({ err: String(err) }, 'thread-context persist failed'); }
+}
 export function setThreadContext(threadId: string, ctx: ThreadContext): void {
+  _loadThreads();
   if (_threadCtx.size >= THREAD_MAX) _threadCtx.clear();
   _threadCtx.set(threadId, ctx);
+  _persistThreads();
 }
 export function getThreadContext(threadId: string): ThreadContext | undefined {
+  _loadThreads();
   return _threadCtx.get(threadId);
 }
-export function __resetThreadContextForTests(): void { _threadCtx.clear(); }
+export function __resetThreadContextForTests(): void { _threadCtx.clear(); _threadsLoaded = true; _skipPersist = true; }
 
 /** Derive a stable thread id from mail headers (References → In-Reply-To → Message-ID). */
 export function deriveThreadId(parsed: ParsedMail, fallbackUid: string): string {
@@ -336,11 +370,16 @@ export class EmailAdapter implements ChannelAdapter {
     if (refs) headers['References'] = refs;
 
     const allowSend = process.env['EMAIL_ALLOW_SEND'] === '1';
+    // A reply INTO a matched thread may only transmit if that rule opted in
+    // (autoReply). "never auto-send without rule flag autoReply:true."
+    const replyNeedsOptIn = Boolean(ctx) && !ctx?.autoReply;
 
-    // DRAFT-ONLY default: compose + APPEND to Drafts, never transmit.
-    if (!allowSend) {
+    // DRAFT default: compose + APPEND to Drafts, never transmit — when send is
+    // globally off OR the thread's rule didn't grant autoReply.
+    if (!allowSend || replyNeedsOptIn) {
       await this._createDraft(from, recipient, subject, text, headers);
-      log.info({ recipient, subject }, 'Email draft created (EMAIL_ALLOW_SEND!=1 → draft-only)');
+      const reason = !allowSend ? 'EMAIL_ALLOW_SEND!=1' : 'rule autoReply=false';
+      log.info({ recipient, subject, reason }, 'Email draft created (not sent)');
       void this._safeEmit('message:sent', { channel: 'email', meta: { peerId: recipient, draft: true } });
       return;
     }
@@ -426,8 +465,9 @@ export class EmailAdapter implements ChannelAdapter {
             // Rule filter: an inbound mail must match a rule to become a turn.
             // Non-matching mail is IGNORED (opt-in triggering).
             const subject = parsed.subject ?? '';
-            const toAddrs = (parsed.to ? (Array.isArray(parsed.to) ? parsed.to : [parsed.to]) : [])
-              .flatMap((a) => a.value.map((v) => v.address ?? '')).filter(Boolean);
+            // Match on any recipient — To AND Cc (spec: "to: any recipient To/Cc").
+            const recipObjs = [parsed.to, parsed.cc].flatMap((x) => (x ? (Array.isArray(x) ? x : [x]) : []));
+            const toAddrs = recipObjs.flatMap((a) => a.value.map((v) => v.address ?? '')).filter(Boolean);
             const rule: EmailRule | null = matchEmailRule({ from: peerId, to: toAddrs, subject, labels: [] });
             if (!rule) {
               if (loadEmailRules().defaultIgnore) { log.debug({ peerId, subject }, 'Email matched no rule — ignored'); continue; }
@@ -441,6 +481,8 @@ export class EmailAdapter implements ChannelAdapter {
               subject,
               messageId: parsed.messageId ?? '',
               references: [parsed.references, parsed.inReplyTo].flat().filter(Boolean).join(' '),
+              // Auto-reply is allowed for this thread ONLY if the matched rule opted in.
+              autoReply: rule?.autoReply === true,
             });
 
             // Attachments → data/email/<threadId>/ (size-capped). PLAINTEXT body only
@@ -478,6 +520,14 @@ export class EmailAdapter implements ChannelAdapter {
             await this._dispatch(unified);
           } catch (err) {
             log.error({ err: String(err) }, 'Error processing email message');
+          } finally {
+            // Mark seen on EVERY path (dispatched / ignored / rate-limited /
+            // errored) so the next IDLE cycle never re-fetches + re-triggers the
+            // same mail. Without this a single email loops as duplicate turns.
+            if (msg.uid != null) {
+              try { await imap.messageFlagsAdd(String(msg.uid), ['\\Seen'], { uid: true }); }
+              catch (e) { log.warn({ uid: msg.uid, err: String(e) }, 'failed to mark email seen'); }
+            }
           }
         }
       }
