@@ -15,6 +15,8 @@ import { InjectionPanel } from './components/InjectionPanel';
 import { ReanchorPanel } from './components/ReanchorPanel';
 import { ResolutionsPanel } from './components/ResolutionsPanel';
 import { FleetPanel } from './components/FleetPanel';
+import { CanvasStatePanel } from './components/CanvasStatePanel';
+import { useCanvasStates } from './hooks/useCanvasStates';
 
 type StatusType = 'ok' | 'loading' | 'error' | 'degraded';
 
@@ -22,6 +24,7 @@ export const Dashboard: React.FC = () => {
   const token = useAuthToken();
   const { data: digestData, loading: digestLoading, error: digestError, refresh: refreshDigest } = useDigest(token);
   const { data: vetoData, loading: vetoLoading, error: vetoError, refresh: refreshVeto } = useVetoThreshold(token);
+  const { data: canvasStates, refresh: refreshCanvas } = useCanvasStates(token);
 
   const [status, setStatus] = useState<StatusType>('loading');
   const [statusText, setStatusText] = useState<string>('Loading…');
@@ -56,6 +59,9 @@ export const Dashboard: React.FC = () => {
     } catch (e) {
       errorsList.push(`veto: ${e instanceof Error ? e.message : 'Unknown error'}`);
     }
+    // A2UI canvas states — non-fatal (a failure here must not degrade the
+    // dashboard status), so its errors are not pushed to errorsList.
+    try { await refreshCanvas(); } catch { /* best effort */ }
 
     if (errorsList.length > 0) {
       setStatus('error');
@@ -216,6 +222,13 @@ export const Dashboard: React.FC = () => {
       </div>
 
       <FleetPanel token={token} />
+
+      {/* Section header — Generative UI (A2UI / Spec 2) */}
+      <div className="text-[#8b949e] text-[11px] uppercase tracking-wider my-[20px] border-b border-[#21262d] pb-[4px]">
+        Generative UI (A2UI)
+      </div>
+
+      <CanvasStatePanel states={canvasStates} />
     </div>
   );
 };
