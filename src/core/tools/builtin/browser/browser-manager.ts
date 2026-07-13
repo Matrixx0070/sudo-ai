@@ -10,7 +10,7 @@
  */
 
 import { chromium, type BrowserContext, type Browser } from 'playwright-core';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
@@ -22,6 +22,12 @@ import {
 } from './anti-detect.js';
 import { CDPManager, type CDPConfig } from './cdp-manager.js';
 import { SSRFGuard } from './ssrf-guard.js';
+import {
+  getProfileEntry,
+  ensureProfileDir,
+  profileDir as resolveProfileDir,
+  type ProfileTrust,
+} from './profile-registry.js';
 
 const log = createLogger('browser-manager');
 
@@ -48,9 +54,28 @@ export interface BrowserInstance {
   name: string;
   profileDir: string;
   context: BrowserContext;
-  browser: Browser;
+  /** null for persistent contexts (Playwright doesn't expose a Browser then). */
+  browser: Browser | null;
   launchedAt: Date;
+  /** Spec 3 identity metadata (from the profile registry). */
+  trust?: ProfileTrust;
+  ownerOnly?: boolean;
+  ephemeral?: boolean;
+  /** Whether this instance is CDP-connected (external browser we must not wipe/kill). */
+  cdp?: boolean;
 }
+
+/** Per-instance launch state for crash recovery + ephemeral wipe (not exposed on BrowserInstance). */
+interface LaunchState {
+  headless: boolean;
+  ephemeral: boolean;
+  autoRestart: boolean;
+  restartCount: number;
+  /** Set true while WE are intentionally closing, so the 'close' handler skips recovery. */
+  closing: boolean;
+}
+
+const MAX_AUTO_RESTARTS = 3;
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -63,6 +88,7 @@ export interface BrowserInstance {
 export class BrowserManager {
   private static _instance: BrowserManager | null = null;
   private readonly instances = new Map<string, BrowserInstance>();
+  private readonly launchState = new Map<string, LaunchState>();
   private readonly profilesRoot: string;
 
   /** Phase 6: CDPManager for first-class CDP browser control. */
@@ -154,6 +180,7 @@ export class BrowserManager {
             context,
             browser: client,
             launchedAt: new Date(),
+            cdp: true,
           };
           this.instances.set(name, instance);
           log.info({ name, cdpEndpoint: configuredEndpoint }, 'Auto-connected via CDPManager');
@@ -183,6 +210,7 @@ export class BrowserManager {
         context,
         browser,
         launchedAt: new Date(),
+        cdp: true,
       };
       this.instances.set(name, instance);
       log.info({ name, cdpEndpoint }, 'Auto-connected to CDP browser');
@@ -200,39 +228,44 @@ export class BrowserManager {
   // -------------------------------------------------------------------------
 
   /**
-   * Launch (or return cached) a named browser context backed by a persistent
-   * profile directory at data/browser-profiles/{name}/.
+   * Launch (or return cached) a named browser backed by a DURABLE persistent
+   * profile at data/browser-profiles/{name}/ (userDataDir, mode 0700). Uses
+   * launchPersistentContext so cookies + localStorage survive restarts — the
+   * previous implementation launched a throwaway context and never wrote the
+   * profile dir, so "logins persist" silently failed.
+   *
+   * @param autoRestart when true, an unexpected context close (crash / killed
+   *        Chromium) triggers a bounded auto-relaunch of the same profile.
    */
-  async launch(name: string, headless = true): Promise<BrowserInstance> {
+  async launch(name: string, headless = true, autoRestart = false): Promise<BrowserInstance> {
     const existing = this.instances.get(name);
     if (existing) {
       log.info({ name }, 'Returning cached browser instance');
       return existing;
     }
 
-    const profileDir = resolve(this.profilesRoot, name);
-    if (!existsSync(profileDir)) {
-      mkdirSync(profileDir, { recursive: true });
+    const entry = getProfileEntry(name);
+    // Ephemeral profiles start clean every session: wipe any stale dir first.
+    if (entry.ephemeral) {
+      const stale = resolveProfileDir(name, this.profilesRoot);
+      if (existsSync(stale)) { try { rmSync(stale, { recursive: true, force: true }); } catch { /* best-effort */ } }
     }
+    const userDataDir = ensureProfileDir(name, this.profilesRoot); // 0700
 
-    log.info({ name, profileDir, headless }, 'Launching browser');
+    log.info({ name, userDataDir, headless, ephemeral: entry.ephemeral, trust: entry.trust }, 'Launching persistent browser profile');
 
     // Detect Chromium version once for UA/CH-header accuracy
     const chromiumVersion = await getCachedChromiumVersion();
 
-    const browser = await chromium.launch({
+    // Persistent context: userDataDir is the profile. Launch + context options
+    // are merged here (Playwright API). This is what makes logins durable.
+    const context = await chromium.launchPersistentContext(userDataDir, {
       headless,
-      // Anti-automation-signal flags always; security-weakening flags only under
-      // SUDO_BROWSER_INSECURE=1 (safer default + less fingerprintable).
       args: buildLaunchArgs(),
-    });
-    const context = await browser.newContext({
       userAgent: buildUserAgent(chromiumVersion),
       extraHTTPHeaders: buildClientHintsHeaders(chromiumVersion),
       viewport: { width: 1280, height: 800 },
       ignoreHTTPSErrors: true,
-      // Auto-dismiss JavaScript dialogs (alert/confirm/prompt) without blocking
-      // Chrome's "This web app may not be secured" interstitial is handled via ignoreHTTPSErrors
     });
 
     // Auto-dismiss any browser dialogs so they never block automation
@@ -243,33 +276,82 @@ export class BrowserManager {
 
     const instance: BrowserInstance = {
       name,
-      profileDir,
+      profileDir: userDataDir,
       context,
-      browser,
+      browser: context.browser(), // null for persistent contexts — expected
       launchedAt: new Date(),
+      trust: entry.trust,
+      ownerOnly: entry.ownerOnly,
+      ephemeral: entry.ephemeral,
     };
 
     this.instances.set(name, instance);
-    log.info({ name }, 'Browser launched');
+    this.launchState.set(name, { headless, ephemeral: entry.ephemeral, autoRestart, restartCount: 0, closing: false });
+
+    // Crash recovery: an unexpected close (owner killed Chromium, renderer
+    // crash) removes the instance; auto-relaunch the SAME profile if requested.
+    context.on('close', () => { void this._onContextClosed(name); });
+
+    log.info({ name }, 'Browser launched (persistent)');
     return instance;
   }
 
+  /** Handle an unexpected context close: clean state + bounded auto-relaunch. */
+  private async _onContextClosed(name: string): Promise<void> {
+    const state = this.launchState.get(name);
+    this.instances.delete(name);
+    if (!state || state.closing) return; // intentional close — nothing to recover
+    log.warn({ name, restartCount: state.restartCount }, 'Browser context closed unexpectedly (crash/kill)');
+    if (!state.autoRestart || state.restartCount >= MAX_AUTO_RESTARTS) {
+      this.launchState.delete(name);
+      if (state.autoRestart) log.error({ name }, 'Browser auto-restart limit reached — giving up');
+      return;
+    }
+    state.restartCount += 1;
+    this.launchState.set(name, state);
+    try {
+      await this.launch(name, state.headless, true);
+      log.info({ name, attempt: state.restartCount }, 'Browser auto-relaunched after crash');
+    } catch (err) {
+      log.error({ name, err: String(err) }, 'Browser auto-relaunch failed');
+    }
+  }
+
   /**
-   * Close a named browser instance and remove it from the registry.
+   * Close a named browser instance and remove it from the registry. For an
+   * EPHEMERAL profile the userDataDir is wiped so the next launch starts clean.
    * Returns false if the instance was not found.
    */
   async close(name: string): Promise<boolean> {
     const instance = this.instances.get(name);
     if (!instance) return false;
 
+    const state = this.launchState.get(name);
+    if (state) state.closing = true; // suppress crash-recovery for this close
+
     await instance.context.close().catch((e: unknown) =>
       log.error({ name, err: e }, 'Error closing context'),
     );
-    await instance.browser.close().catch((e: unknown) =>
-      log.error({ name, err: e }, 'Error closing browser'),
-    );
+    // Persistent contexts have no separate Browser; close it only if present (CDP).
+    if (instance.browser && !instance.cdp) {
+      await instance.browser.close().catch((e: unknown) =>
+        log.error({ name, err: e }, 'Error closing browser'),
+      );
+    }
 
     this.instances.delete(name);
+    this.launchState.delete(name);
+
+    // Ephemeral: wipe the profile dir on close (never for CDP/external browsers).
+    if (instance.ephemeral && !instance.cdp) {
+      try {
+        rmSync(instance.profileDir, { recursive: true, force: true });
+        log.info({ name, profileDir: instance.profileDir }, 'Ephemeral profile wiped on close');
+      } catch (err) {
+        log.warn({ name, err: String(err) }, 'Ephemeral wipe failed');
+      }
+    }
+
     log.info({ name }, 'Browser closed');
     return true;
   }
@@ -366,6 +448,7 @@ export class BrowserManager {
       context,
       browser,
       launchedAt: new Date(),
+      cdp: true,
     };
 
     this.instances.set(name, instance);
@@ -384,8 +467,10 @@ type BrowserOp = (typeof VALID_OPS)[number];
 export const browserManagerTool: ToolDefinition = {
   name: 'browser.launch',
   description:
-    'Launch or connect to a named Chromium browser instance backed by a persistent ' +
-    'profile. Operations: launch, close, list, connect (CDP).',
+    'Launch or connect to a named Chromium browser backed by a DURABLE persistent ' +
+    'profile (cookies + logins survive restarts). Operations: launch, close, list, connect (CDP). ' +
+    'Use `profile` to select a named identity from config/browser-profiles.json5 ' +
+    '(e.g. personal/work/ephemeral); ephemeral profiles are wiped on close.',
   category: 'browser',
   timeout: 30_000,
   parameters: {
@@ -395,17 +480,30 @@ export const browserManagerTool: ToolDefinition = {
       enum: [...VALID_OPS],
       description: 'Operation to perform on browser instances.',
     },
+    profile: {
+      type: 'string',
+      required: false,
+      description:
+        'Named durable identity from config/browser-profiles.json5 (personal/work/ephemeral or any name). ' +
+        'Takes precedence over `name`. Defaults to the registry default profile.',
+    },
     name: {
       type: 'string',
       required: false,
       default: 'default',
-      description: 'Named browser instance to target (default: "default").',
+      description: 'Legacy alias for the instance/profile name (use `profile`).',
     },
     headless: {
       type: 'boolean',
       required: false,
       default: true,
       description: 'Whether to launch headless (default: true). Only used by "launch".',
+    },
+    autoRestart: {
+      type: 'boolean',
+      required: false,
+      default: false,
+      description: 'Auto-relaunch the same profile if Chromium crashes/is killed (launch only).',
     },
     cdpEndpoint: {
       type: 'string',
@@ -429,8 +527,14 @@ export const browserManagerTool: ToolDefinition = {
     }
 
     const manager = BrowserManager.getInstance();
-    const name = typeof params['name'] === 'string' ? params['name'] : 'default';
+    // `profile` (named durable identity) wins over the legacy `name`. For non-
+    // launch ops we keep 'default' so existing callers/instances still resolve.
+    const rawName = typeof params['profile'] === 'string' && params['profile'].trim()
+      ? params['profile'].trim()
+      : (typeof params['name'] === 'string' ? params['name'] : 'default');
+    const name = rawName;
     const headless = params['headless'] !== false;
+    const autoRestart = params['autoRestart'] === true;
     const cdpEndpoint =
       typeof params['cdpEndpoint'] === 'string' && params['cdpEndpoint'].trim() !== ''
         ? params['cdpEndpoint'].trim()
@@ -450,12 +554,18 @@ export const browserManagerTool: ToolDefinition = {
       }
 
       if (op === 'launch') {
-        const instance = await manager.launch(name, headless);
-        ctxLog.info({ tool: 'browser.launch', name }, 'Browser launched');
+        const instance = await manager.launch(name, headless, autoRestart);
+        ctxLog.info({ tool: 'browser.launch', name, autoRestart }, 'Browser launched');
+        const persist = instance.ephemeral ? 'ephemeral (wiped on close)' : 'durable (persists across restarts)';
         return {
           success: true,
-          output: `Browser "${name}" launched (headless=${headless}). Profile: ${instance.profileDir}`,
-          data: { name, profileDir: instance.profileDir, headless },
+          output:
+            `Browser profile "${name}" launched (headless=${headless}, ${persist}, trust=${instance.trust ?? 'low'})` +
+            `${autoRestart ? ', auto-restart on' : ''}. userDataDir: ${instance.profileDir}`,
+          data: {
+            name, profileDir: instance.profileDir, headless, autoRestart,
+            trust: instance.trust, ownerOnly: instance.ownerOnly, ephemeral: instance.ephemeral,
+          },
         };
       }
 

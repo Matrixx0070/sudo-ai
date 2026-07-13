@@ -1,0 +1,38 @@
+{
+  // Named, durable browser identities (Spec 3 — durable browser profiles).
+  // Each profile maps to a userDataDir at data/browser-profiles/<name>/
+  // (created mode 0700). Cookies + localStorage persist across restarts
+  // UNLESS `ephemeral: true`, in which case the dir is wiped on close.
+  //
+  // No secrets live here — only identity metadata. Real credentials live
+  // inside the Chromium userDataDir on disk, gated by dir perms + ownerOnly.
+
+  // Profile used when a caller does not name one.
+  defaultProfile: 'ephemeral',
+
+  profiles: {
+    personal: {
+      description: "Frank's logins — Gmail, X, dashboards",
+      trust: 'high',
+      ownerOnly: true,   // only the owner may launch/drive this profile
+      ephemeral: false,  // persists across restarts
+      // Optional per-profile navigation allowlist (hostnames or suffixes).
+      // Empty/absent = no extra restriction beyond the global SSRF guard.
+      domainAllowlist: [],
+    },
+    work: {
+      description: 'Work accounts',
+      trust: 'medium',
+      ownerOnly: false,
+      ephemeral: false,
+      domainAllowlist: [],
+    },
+    ephemeral: {
+      description: 'Throwaway browsing — wiped on close (default)',
+      trust: 'low',
+      ownerOnly: false,
+      ephemeral: true,
+      domainAllowlist: [],
+    },
+  },
+}
