@@ -213,6 +213,12 @@ export function mergePolicy(
     // sandbox. Preserving them safely needs consumer hardening; out of scope for
     // this slice, so merge continues to drop them as before.
     execBackend: override.execBackend !== undefined ? override.execBackend : base.execBackend,
+    // Carry the fail-closed isolation flag (Feature 8). Override wins; a merge
+    // must not silently drop a required-isolation marker.
+    requireIsolatedBackend:
+      override.requireIsolatedBackend !== undefined
+        ? override.requireIsolatedBackend
+        : base.requireIsolatedBackend,
   };
 }
 
