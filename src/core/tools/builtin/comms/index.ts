@@ -30,6 +30,7 @@ import { gcalendarTool } from './gcalendar.js';
 import { githubNotifyTool } from './github-notify.js';
 import { slackRtTool } from './slack-rt.js';
 import { imessageTool } from './imessage.js';
+import { emailSearchTool, emailReadTool, emailReplyTool } from './email-inbox.js';
 
 /** All comms tools in a stable order. */
 export const COMMS_TOOLS = [
@@ -45,6 +46,10 @@ export const COMMS_TOOLS = [
   githubNotifyTool,
   slackRtTool,
   imessageTool,
+  // Email inbox (Spec 5) — IMAP search/read + draft-default reply
+  emailSearchTool,
+  emailReadTool,
+  emailReplyTool,
 ] as const;
 
 /**
@@ -60,4 +65,5 @@ export function registerCommsTools(registry: ToolRegistry): void {
 export {
   emailTool, slackTool, smsTool, webhookTool, notificationTool, voiceTool,
   gmailTool, gcalendarTool, githubNotifyTool, slackRtTool, imessageTool,
+  emailSearchTool, emailReadTool, emailReplyTool,
 };
