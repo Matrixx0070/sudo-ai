@@ -27,7 +27,7 @@ const log = createLogger('agent:tool-router');
 export const MAX_ROUTED_TOOLS = 30;
 
 /** Slots reserved for always-on base tools. */
-export const BASE_TOOL_SLOTS = 11;
+export const BASE_TOOL_SLOTS = 12;
 
 /** Slots reserved for recently-used tools (continuity). */
 export const CONTINUITY_SLOTS = 3;
@@ -66,6 +66,13 @@ const BASE_TOOLS: readonly string[] = [
   'meta.task-manager',     // Manage tasks
   'coder.multi-read',      // Read multiple files
   'meta.self-update',      // Git pull + build
+  // Generative UI (A2UI / Spec 2) primitive. Like browser.snapshot, it's a
+  // capability whose natural-language triggers ("chart", "form", "render",
+  // "dashboard") route to OTHER categories (browser/media/data) or are filtered
+  // as generic words — so category routing never surfaces it and the model,
+  // not seeing it, wrongly reports it "doesn't exist". Always-on so an
+  // interactive-UI request can always be satisfied on the web client.
+  'canvas.render',
 ] as const;
 
 // ---------------------------------------------------------------------------
