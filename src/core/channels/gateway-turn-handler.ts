@@ -20,6 +20,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import type { MessageHandler, UnifiedMessage } from './types.js';
+import { setTurnIdentity } from '../agent/turn-identity.js';
 import type { JournalEvent } from '../sessions/journal-types.js';
 
 const log = createLogger('channels:gateway-turn');
@@ -68,6 +69,14 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
       const convKey = `${msg.channel}:${msg.peerId}`;
       const runGen = deps.runGenerations.current(convKey);
       const session = await deps.sessionManager.getOrCreate(msg.channel, msg.peerId);
+      // Thread the Feature 1 caller identity onto the session so ToolContext
+      // (built inside the loop) carries isOwner for owner-only tool gating —
+      // covers every router channel (telegram/signal/slack/…), not just web.
+      setTurnIdentity(String(session.id), {
+        isOwner: (msg as UnifiedMessage & { isOwner?: boolean }).isOwner === true,
+        channel: msg.channel,
+        peerId: msg.peerId,
+      });
       const result = await deps.agentLoop.run(String(session.id), msg.text ?? '', undefined, { race: true });
       if (deps.runGenerations.isStale(convKey, runGen)) {
         log.info({ channel: msg.channel, peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');

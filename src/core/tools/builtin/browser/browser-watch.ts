@@ -54,7 +54,7 @@ export const browserWatchTool: ToolDefinition = {
     }
 
     // start
-    const gate = checkOwnerAllowed(getProfileEntry(profile), ctx.sessionId);
+    const gate = checkOwnerAllowed(getProfileEntry(profile), ctx.isOwner, ctx.sessionId);
     if (!gate.allowed) {
       return { success: false, output: `browser.watch: ${gate.reason}.` };
     }

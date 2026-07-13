@@ -35,7 +35,7 @@ export const browserLoginTool: ToolDefinition = {
     if (!/^https?:\/\//i.test(url)) return { success: false, output: 'browser.login: url must be http(s).' };
 
     const entry = getProfileEntry(profile);
-    const gate = checkOwnerAllowed(entry, ctx.sessionId);
+    const gate = checkOwnerAllowed(entry, ctx.isOwner, ctx.sessionId);
     if (!gate.allowed) return { success: false, output: `browser.login: ${gate.reason}.` };
     if (!domainAllowed(entry, url)) {
       return { success: false, output: `browser.login: ${url} is not in profile "${profile}"'s domain allowlist.` };

@@ -1,15 +1,13 @@
 /**
  * @file safety.ts
  * @description Safety rails for durable browser profiles (Spec 3, step 5):
- *   - session→owner registry (populated by the channel dispatch layer where
- *     Feature 1's isOwner is known) so tools can gate owner-only profiles;
  *   - an append-only audit log (data/browser-audit.jsonl, mode 0600);
  *   - owner-only + domain-allowlist decision helpers.
  *
- * The AUTHORITATIVE per-caller gate is still the channel access policy
- * (Feature 1) — non-owners never reach the agent. This is defense-in-depth:
- * a known non-owner session is denied owner-only profiles; an unknown identity
- * is allowed but audited (single-owner deployments where identity wasn't wired).
+ * Owner identity now comes from ctx.isOwner (threaded onto ToolContext from the
+ * canonical turn-identity registry), so checkOwnerAllowed takes the resolved
+ * isOwner directly — no browser-local side table. The AUTHORITATIVE per-caller
+ * gate remains the channel access policy (Feature 1); this is defense-in-depth.
  */
 
 import { appendFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
@@ -21,22 +19,6 @@ import type { BrowserProfileEntry } from './profile-registry.js';
 const log = createLogger('browser:safety');
 // Honors the DATA_DIR env override (prod/staging isolation) — never cwd-relative.
 const AUDIT_PATH = dataPath('browser-audit.jsonl');
-const MAX_IDENTITIES = 2000;
-
-// --- session → owner identity ------------------------------------------------
-const identities = new Map<string, boolean>();
-
-/** Record whether the session's driver is the owner (called by dispatch layer). */
-export function setSessionOwner(sessionId: string, isOwner: boolean): void {
-  if (!sessionId) return;
-  if (identities.size >= MAX_IDENTITIES) identities.clear(); // crude bound; identities are cheap to relearn
-  identities.set(sessionId, isOwner === true);
-}
-/** true / false when known, undefined when the session's identity wasn't recorded. */
-export function sessionIsOwner(sessionId: string): boolean | undefined {
-  return identities.get(sessionId);
-}
-export function __resetSessionOwnersForTests(): void { identities.clear(); }
 
 // --- audit -------------------------------------------------------------------
 export function browserAudit(event: string, detail: Record<string, unknown>): void {
@@ -54,17 +36,17 @@ export function browserAudit(event: string, detail: Record<string, unknown>): vo
 // --- decisions ---------------------------------------------------------------
 
 /**
- * Gate an owner-only profile. Known non-owner → denied. Unknown identity →
- * allowed (single-owner default) but audited so the gap is visible.
+ * Gate an owner-only profile from the resolved caller identity (ctx.isOwner).
+ * Known non-owner → denied. Unknown identity (internal/autonomous turn) →
+ * allowed (channel policy is the authoritative gate) but audited.
  */
-export function checkOwnerAllowed(entry: BrowserProfileEntry, sessionId: string): { allowed: boolean; reason?: string } {
+export function checkOwnerAllowed(entry: BrowserProfileEntry, isOwner: boolean | undefined, sessionId?: string): { allowed: boolean; reason?: string } {
   if (!entry.ownerOnly) return { allowed: true };
-  const owner = sessionIsOwner(sessionId);
-  if (owner === false) {
+  if (isOwner === false) {
     browserAudit('owner-only-deny', { profile: entry.name, sessionId });
     return { allowed: false, reason: `profile "${entry.name}" is owner-only and this session is not the owner` };
   }
-  if (owner === undefined) {
+  if (isOwner === undefined) {
     browserAudit('owner-only-unknown-identity', { profile: entry.name, sessionId });
   }
   return { allowed: true };
