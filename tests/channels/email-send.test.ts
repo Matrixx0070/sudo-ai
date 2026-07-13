@@ -73,6 +73,17 @@ describe('EmailAdapter.send — draft-default', () => {
     expect(arg.headers['In-Reply-To']).toBe('<m1@x>');
   });
 
+  it('forces DRAFT for a QUARANTINED thread even with allow-send + autoReply (injection cannot auto-send)', async () => {
+    process.env['EMAIL_ALLOW_SEND'] = '1';
+    process.env['EMAIL_ALLOWED_RECIPIENTS'] = 'sender@ext.com';
+    const adapter = new EmailAdapter();
+    const { sendMail, append } = wire(adapter);
+    setThreadContext('tq', { replyTo: 'sender@ext.com', subject: 'Q', messageId: '<mq@x>', references: '', autoReply: true, quarantined: true });
+    await adapter.send('tq', 'reply');
+    expect(append).toHaveBeenCalledTimes(1); // drafted, not sent
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
   it('forces DRAFT for a thread reply whose rule did NOT opt in (autoReply=false), even with allow-send', async () => {
     process.env['EMAIL_ALLOW_SEND'] = '1';
     process.env['EMAIL_ALLOWED_RECIPIENTS'] = 'sender@ext.com';
