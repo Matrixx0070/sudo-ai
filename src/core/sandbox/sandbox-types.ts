@@ -11,8 +11,18 @@
 export interface SandboxPolicy {
   /** Whether sandboxing is active. Default: true. */
   enabled: boolean;
-  /** Network isolation mode. Default: 'none'. */
-  network: 'none' | 'host';
+  /**
+   * Network isolation mode. Default: 'none'.
+   *  - 'none'      — no interface at all.
+   *  - 'host'      — full host network (owner-tier only).
+   *  - 'allowlist' — ENFORCED egress allowlist (Spec 8 step 4): the docker
+   *    backend runs the container on an internal (no-NAT, no-DNS, no-route)
+   *    network whose only reachable endpoint is a host-side proxy that admits
+   *    just `allowedEgressHosts` on ports 80/443 and refuses targets resolving
+   *    to private/link-local/metadata ranges. Backends that cannot enforce it
+   *    (bwrap/host) treat it as 'none' — fail closed, never open.
+   */
+  network: 'none' | 'host' | 'allowlist';
   /** CPU time limit in seconds (ulimit -t). Default: 30. */
   cpuSeconds?: number;
   /**
@@ -37,6 +47,13 @@ export interface SandboxPolicy {
   extraWritableBinds?: string[];
   /** Additional env var names allowed beyond ENV_ALLOWLIST_BASE. */
   allowedEnvVars?: string[];
+
+  /**
+   * Hostnames reachable in network:'allowlist' mode (`*.example.com` entries
+   * match subdomains). Unset → SUDO_SANDBOX_EGRESS_ALLOWLIST env override or
+   * DEFAULT_EGRESS_ALLOWLIST. Ignored in 'none'/'host' modes.
+   */
+  allowedEgressHosts?: string[];
 
   /**
    * Per-policy exec backend selector (gap #27). When set, takes precedence over
@@ -83,8 +100,9 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
  * packages, GitHub assets, external LLM APIs).
  *
  * IMPORTANT: in network:'host' mode this is NOT enforced — the sandbox shares
- * the full host network and can reach any host. It is logged at startup as the
- * declared trusted set and is the seed for a future per-host allowlist mode.
+ * the full host network and can reach any host. In network:'allowlist' mode it
+ * IS enforced (egress-proxy.ts) as the default host set when the policy does
+ * not name its own `allowedEgressHosts`.
  * Override with SUDO_SANDBOX_EGRESS_ALLOWLIST (comma-separated hostnames).
  */
 export const DEFAULT_EGRESS_ALLOWLIST: ReadonlyArray<string> = [
@@ -107,6 +125,23 @@ export const DEFAULT_EGRESS_ALLOWLIST: ReadonlyArray<string> = [
   'api.x.ai',
   'api.deepseek.com',
 ];
+
+/**
+ * The host set enforced for a policy in network:'allowlist' mode: the policy's
+ * own list wins, then the SUDO_SANDBOX_EGRESS_ALLOWLIST env override, then
+ * DEFAULT_EGRESS_ALLOWLIST.
+ */
+export function resolveEgressAllowlist(policy: Pick<SandboxPolicy, 'allowedEgressHosts'>): string[] {
+  if (policy.allowedEgressHosts && policy.allowedEgressHosts.length > 0) {
+    return [...policy.allowedEgressHosts];
+  }
+  const envList = (process.env['SUDO_SANDBOX_EGRESS_ALLOWLIST'] ?? '')
+    .split(',')
+    .map((h) => h.trim())
+    .filter(Boolean);
+  if (envList.length > 0) return envList;
+  return [...DEFAULT_EGRESS_ALLOWLIST];
+}
 
 /**
  * Base set of environment variable names passed through to the sandbox.
