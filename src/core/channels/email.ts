@@ -24,6 +24,7 @@ import { vault } from '../security/vault.js';
 import { rateLimiter } from './rate-limit.js';
 import { matchEmailRule, loadEmailRules, type EmailRule } from './email-rules.js';
 import { detectInjection } from '../security/injection-detector.js';
+import { registerEmailBridge, clearEmailBridge, type EmailSearchHit, type EmailMessage } from './email-bridge.js';
 import type { ChannelAdapter } from './adapter.js';
 import type {
   ChannelType,
@@ -311,12 +312,16 @@ export class EmailAdapter implements ChannelAdapter {
     this._isConnected = true;
     log.info({ imapHost, imapUser }, 'EmailAdapter connected');
 
+    // Expose IMAP-backed search/read/reply to the email.* tools via the bridge.
+    this._registerBridge();
+
     // Start listening in background — not awaited.
     void this._listenIdle(smtpFrom);
   }
 
   async stop(): Promise<void> {
     this._isConnected = false;
+    clearEmailBridge();
     if (this._imap) {
       try {
         await this._imap.logout();
@@ -418,6 +423,75 @@ export class EmailAdapter implements ChannelAdapter {
     const built = await builder.sendMail({ from, to, subject, text, headers }) as unknown as { message: Buffer };
     const mailbox = process.env['EMAIL_DRAFTS_MAILBOX'] ?? 'Drafts';
     await this._imap.append(mailbox, built.message, ['\\Draft']);
+  }
+
+  // ---------------------------------------------------------------------------
+  // email.* tool bridge (search / read / reply over the live IMAP client)
+  // ---------------------------------------------------------------------------
+
+  private _registerBridge(): void {
+    registerEmailBridge({
+      search: (c) => this._searchMailbox(c),
+      read: (uid) => this._readMessage(uid),
+      reply: async (to, text) => {
+        // Routes through draft-default send() (rules/allowlist/cap still apply).
+        await this.send(to, text);
+        return { ok: true, drafted: process.env['EMAIL_ALLOW_SEND'] !== '1' };
+      },
+    });
+  }
+
+  /** IMAP search over INBOX (mailbox-locked so it coexists with the IDLE loop). */
+  private async _searchMailbox(c: { from?: string; subject?: string; unseen?: boolean; limit?: number }): Promise<EmailSearchHit[]> {
+    if (!this._imap) throw new ChannelError('IMAP not connected', 'channel_not_connected', {});
+    const criteria: Record<string, unknown> = {};
+    if (c.from) criteria['from'] = c.from;
+    if (c.subject) criteria['subject'] = c.subject;
+    if (c.unseen) criteria['seen'] = false;
+    if (Object.keys(criteria).length === 0) criteria['all'] = true;
+    const lock = await this._imap.getMailboxLock('INBOX');
+    try {
+      const uids = (await this._imap.search(criteria, { uid: true })) || [];
+      const limit = Math.max(1, Math.min(c.limit ?? 20, 50));
+      const recent = (uids as number[]).slice(-limit).reverse(); // newest first
+      const hits: EmailSearchHit[] = [];
+      for await (const m of this._imap.fetch(recent, { uid: true, source: true }, { uid: true })) {
+        if (!m.source) continue;
+        const p: ParsedMail = await simpleParser(m.source as Buffer);
+        hits.push({
+          uid: m.uid,
+          from: p.from?.text ?? '',
+          subject: p.subject ?? '',
+          date: (p.date ?? new Date()).toISOString(),
+          snippet: (p.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 200),
+        });
+      }
+      return hits;
+    } finally { lock.release(); }
+  }
+
+  /** Read one message by UID → plaintext body + saved attachment paths. */
+  private async _readMessage(uid: number): Promise<EmailMessage | null> {
+    if (!this._imap) throw new ChannelError('IMAP not connected', 'channel_not_connected', {});
+    const lock = await this._imap.getMailboxLock('INBOX');
+    try {
+      for await (const m of this._imap.fetch(String(uid), { uid: true, source: true }, { uid: true })) {
+        if (!m.source) continue;
+        const p: ParsedMail = await simpleParser(m.source as Buffer);
+        const threadId = deriveThreadId(p, String(uid));
+        const toText = (Array.isArray(p.to) ? p.to : p.to ? [p.to] : []).map((a) => a.text).join(', ');
+        return {
+          uid,
+          from: p.from?.text ?? '',
+          to: toText,
+          subject: p.subject ?? '',
+          date: (p.date ?? new Date()).toISOString(),
+          text: p.text ?? '', // plaintext only
+          attachments: saveAttachments(p, threadId),
+        };
+      }
+      return null;
+    } finally { lock.release(); }
   }
 
   // ---------------------------------------------------------------------------

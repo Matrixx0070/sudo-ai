@@ -3,7 +3,8 @@
  * Asserts that deleted tools are gone and retained tools are present
  * with the correct enum values.
  *
- * Updated Wave 10: COMMS_TOOLS now contains 11 entries (6 original + 5 Wave 10 connectors).
+ * Updated Wave 10: 11 entries (6 original + 5 connectors).
+ * Updated Spec 5: 14 entries (+ email.search / email.read / email.reply).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -15,8 +16,15 @@ import { twitterManagerTool } from '../../../../src/core/tools/builtin/social/tw
 // the full dispatcher singleton (schedulePostTool.execute would fail without it).
 
 describe('comms/index.ts — COMMS_TOOLS registry', () => {
-  it('COMMS_TOOLS has exactly 11 entries (6 original + 5 Wave 10 connectors)', () => {
-    expect(COMMS_TOOLS).toHaveLength(11);
+  it('COMMS_TOOLS has exactly 14 entries (6 original + 5 connectors + 3 email-inbox)', () => {
+    expect(COMMS_TOOLS).toHaveLength(14);
+  });
+
+  it('COMMS_TOOLS contains the Spec 5 email-inbox tools', () => {
+    const names = COMMS_TOOLS.map((t) => t.name);
+    expect(names).toContain('email.search');
+    expect(names).toContain('email.read');
+    expect(names).toContain('email.reply');
   });
 
   it('COMMS_TOOLS contains all 6 original tools', () => {
