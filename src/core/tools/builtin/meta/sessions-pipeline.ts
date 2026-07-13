@@ -10,7 +10,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { getSessionManager, getAgentLoop } from './index.js';
-import { buildEnvelope, auditSend } from '../../../agents/session-bus.js';
+import { buildEnvelope, auditSend, isInflight, markInflight, clearInflight } from '../../../agents/session-bus.js';
 
 const logger = createLogger('meta.sessions.pipeline');
 const MAX_STEPS = 8;
@@ -63,14 +63,25 @@ export const sessionsPipelineTool: ToolDefinition = {
     const results: StepResult[] = [];
     let carry = input;
     for (const step of steps) {
+      // Never run the orchestrator's own session (re-entrant self-run) …
+      if (step.sessionId === ctx.sessionId) {
+        results.push({ sessionId: step.sessionId, ok: false, output: 'cannot pipeline into the orchestrating session (self)' });
+        if (stopOnError) break; else continue;
+      }
       const target = await sm.get(step.sessionId).catch(() => undefined);
       if (!target) {
         results.push({ sessionId: step.sessionId, ok: false, output: 'unknown session' });
         if (stopOnError) break; else continue;
       }
+      // … nor a session already running (concurrent turn would corrupt it).
+      if (isInflight(step.sessionId)) {
+        results.push({ sessionId: step.sessionId, ok: false, output: 'session busy (already running)' });
+        if (stopOnError) break; else continue;
+      }
       const body = (step.prompt ? `${step.prompt}\n\n` : '') + carry;
       const envelope = buildEnvelope(ctx.sessionId, ctx.channel, body);
       auditSend({ event: 'pipeline-step', from: ctx.sessionId, target: step.sessionId });
+      markInflight(step.sessionId);
       try {
         const raced = await Promise.race([
           loop.run(step.sessionId, envelope, undefined, { race: true, caller: { isOwner: ctx.isOwner, channel: 'session', peerId: ctx.sessionId } }),
@@ -81,6 +92,8 @@ export const sessionsPipelineTool: ToolDefinition = {
       } catch (err) {
         results.push({ sessionId: step.sessionId, ok: false, output: err instanceof Error ? err.message : String(err) });
         if (stopOnError) break;
+      } finally {
+        clearInflight(step.sessionId);
       }
     }
 

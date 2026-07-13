@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { sessionsSendTool } from '../../src/core/tools/builtin/meta/sessions-send.js';
 import { injectMetaToolDeps } from '../../src/core/tools/builtin/meta/index.js';
-import { setSendChain, __resetSessionBusForTests, MAX_HOP_DEPTH } from '../../src/core/agents/session-bus.js';
+import { setSendChain, getSendChain, markInflight, __resetSessionBusForTests, __resetQueueForTests, MAX_HOP_DEPTH } from '../../src/core/agents/session-bus.js';
 import type { ToolContext } from '../../src/core/tools/types.js';
 
 const ctx = (over: Partial<ToolContext> = {}): ToolContext =>
@@ -13,6 +13,7 @@ const ctx = (over: Partial<ToolContext> = {}): ToolContext =>
 let run: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   __resetSessionBusForTests();
+  __resetQueueForTests();
   run = vi.fn(async () => ({ text: 'reply from B' }));
   injectMetaToolDeps({
     sessionManager: { get: async (id: string) => (id === 'B' ? { id: 'B' } : undefined) },
@@ -64,6 +65,21 @@ describe('sessions.send', () => {
     const r = await sessionsSendTool.execute({ targetSessionId: 'B', message: 'hi' }, ctx());
     expect(r.success).toBe(false);
     expect(r.output).toMatch(/hop-depth/i);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('GAP A: clears the target chain after the delivered turn (no stale poisoning)', async () => {
+    await sessionsSendTool.execute({ targetSessionId: 'B', message: 'hi', waitForReply: true }, ctx());
+    // After delivery completes, B must be back to a root chain, not {depth:1,[A,B]}.
+    expect(getSendChain('B')).toEqual({ depth: 0, chain: ['B'] });
+  });
+
+  it('GAP B: a BUSY target is queued, not run concurrently', async () => {
+    markInflight('B'); // simulate B already running
+    const r = await sessionsSendTool.execute({ targetSessionId: 'B', message: 'hi' }, ctx());
+    expect(r.success).toBe(true);
+    expect(r.output).toMatch(/busy/i);
+    expect(r.data).toMatchObject({ queued: true, busy: true });
     expect(run).not.toHaveBeenCalled();
   });
 });

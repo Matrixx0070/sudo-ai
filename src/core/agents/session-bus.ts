@@ -40,7 +40,19 @@ export function setSendChain(sessionId: string, chain: SendChain): void {
   if (_chains.size >= REGISTRY_MAX) _chains.clear();
   _chains.set(sessionId, chain);
 }
-export function __resetSessionBusForTests(): void { _chains.clear(); }
+/** Clear a target's chain once its delivered turn ends — the chain is scoped to
+ *  that delivery, NOT to the session forever (else it poisons later sends). */
+export function clearSendChain(sessionId: string): void { _chains.delete(sessionId); }
+
+// In-flight guard: sessions currently running a delivered turn. sessions.send
+// must not start a CONCURRENT run() on a session that's already running (a
+// second run corrupts shared session state) — deliver via the queue instead.
+const _inflight = new Set<string>();
+export function isInflight(sessionId: string): boolean { return _inflight.has(sessionId); }
+export function markInflight(sessionId: string): void { _inflight.add(sessionId); }
+export function clearInflight(sessionId: string): void { _inflight.delete(sessionId); }
+
+export function __resetSessionBusForTests(): void { _chains.clear(); _inflight.clear(); }
 
 /**
  * Decide whether `from` may deliver to `target`, given the chain that reached
