@@ -88,3 +88,12 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
 - **A14**: jsonrepair@3.15.0 added (spec-mandated); zod direct dep added in Phase 2.
 - **A15**: Anthropic `thinking` response blocks are DROPPED by parseAnthropicResponse (no IR block type in v1) — revisit if a consumer needs them; OpenAI `developer` role folds into system; ingress alias defaults to body.model else 'sudo/mid'.
 - 45 new adapter/stream golden tests (63 total in tests/llm).
+
+## PHASE 4 — error taxonomy + policy (and Phase 5 storage module)
+
+- src/llm/errors.ts: 11-class LLMErrorClass layered on the existing categorizeError/body-sniffers (no duplicated regexes); new isContentFilterBody; provider-lies (200+garbage → provider_bug) via adapter extra.provider_bug; classifyThrown for network/timeout/context.
+- src/llm/policy.ts: runWithPolicy — retry max3/backoff+jitter PRE-FIRST-TOKEN ONLY (ctx.markFirstToken), per-route breaker 5-in-60s → 30s open → half-open probe (user passes through OPEN — never blocked; background skipped = fail-closed), hand-rolled priority lanes (user preempts; caps swarm≤3, cognitive-stream≤1, SUDO_LLM_LANE_CAPS), asymmetric budgets (SUDO_LLM_BUDGETS per-caller; user → degradeAlias one tier frontier→mid→cheap→local; background → skipped; SUDO_LLM_GLOBAL_BUDGET_USD halts all but agent-loop incl. user-priority; SUDO_LLM_BACKGROUND_HALT emergency lever). Fail-open on policy-internal bugs. Kill-switches per spec.
+- **A16**: spend tracking in-memory day-keyed only (historical getCostBySource needs a DB handle — deferred to Phase 5 wiring); caller capped by prefix before ':'.
+- **A17**: attempt receives AttemptContext {markFirstToken, budgetDecision, signal}; runWithPolicy returns {value, budgetDecision}.
+- src/llm/logging.ts (Phase 5 storage, wiring later): GatewayCallLog on data/gateway.db (WAL, busy_timeout, additive-migration guard), llm_calls table per spec (trace_id PK, INSERT OR REPLACE pinned), record() never throws (warn+return), markOutcome, sha256Hex, redactDeep + redactSecrets string-leaf walker before persist, retention SUDO_GATEWAY_LOG_RETENTION_DAYS=30 throttled prune.
+- 62 new tests (52 errors/policy + 10 logging).
