@@ -17,6 +17,9 @@ import { runLoopExitGuardChain, fromAllowWarnAbortCheck } from './loop-exit-guar
 import { codeTreeSearchEnabled, shouldUseCodeTreeSearch, buildCodeTreeSearchVerifier } from './code-tree-search-gate.js';
 import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError, LLMError } from '../shared/errors.js';
+// gw-refactor Phase 5: outcome signals onto the session's last gateway trace.
+// Both helpers are fail-open (never throw) and gated by SUDO_GATEWAY_LOG=0.
+import { markOutcomeForSession, isLikelyRephrase } from '../../llm/logging.js';
 import { clearCommittedOutbound, hasCommittedOutbound } from './committed-outbound.js';
 import { drainQueueForSession } from '../agents/session-bus.js';
 import {
@@ -1522,6 +1525,30 @@ export class AgentLoop extends AgentLoopInjections {
         }
       }
 
+      // gw-refactor Phase 5: "user rephrased within 1 turn" outcome signal.
+      // Conservative + cheap: previous user message exists, an assistant reply
+      // followed it (i.e. last turn actually answered), both messages are
+      // non-trivial, and the new message shares >0.6 word-set Jaccard with the
+      // previous one — see isLikelyRephrase. Fail-open; SUDO_GATEWAY_LOG=0 off.
+      if (process.env['SUDO_GATEWAY_LOG'] !== '0') {
+        try {
+          let _lastUserIdx = -1;
+          for (let i = session.messages.length - 1; i >= 0; i--) {
+            if (session.messages[i]?.role === 'user') { _lastUserIdx = i; break; }
+          }
+          if (_lastUserIdx >= 0) {
+            const prevUser = String(session.messages[_lastUserIdx]?.content ?? '');
+            const assistantReplied = session.messages
+              .slice(_lastUserIdx + 1)
+              .some((m) => m.role === 'assistant');
+            if (assistantReplied && isLikelyRephrase(prevUser, current)) {
+              markOutcomeForSession(state.sessionId, 'user_rephrased');
+              log.info({ sessionId: state.sessionId }, 'Phase 5: user rephrase detected — outcome stamped on last trace');
+            }
+          }
+        } catch { /* fail-open — outcome telemetry never blocks the turn */ }
+      }
+
       // TaskTracker: prepend prior-turn progress to the stored user message (the
       // channel that survives the sliding window). The emit below carries the
       // original `current` so telemetry/UI show the user's actual message.
@@ -1868,6 +1895,11 @@ export class AgentLoop extends AgentLoopInjections {
     // turn's tool actions. Token-overlap (bidirectional) — NOT substring-on-tool-
     // name — and surfaced only as a soft "unaddressed steps" signal, never a hard
     // "step done" claim. Present only when a plan was injected; fail-open.
+    //
+    // Phase 5 note: a 'tool_not_in_plan' gateway-log outcome is deliberately NOT
+    // wired here. This coverage check is token-overlap-approximate over free-text
+    // plan steps — no exact planned-tool set exists to compare dispatched tool
+    // names against, so any such outcome signal would be noise, not measurement.
     let _planProgress: { totalSteps: number; addressedCount: number; unaddressed: string[] } | undefined;
     if (_lastPlanSteps.length > 0) {
       try {
@@ -2084,6 +2116,7 @@ export class AgentLoop extends AgentLoopInjections {
               if (force) {
                 const { escalateCompaction } = await import('./loop-helpers.js');
                 await escalateCompaction(this.brain, session, state);
+                markOutcomeForSession(state.sessionId, 'escalation_fired'); // Phase 5 (fail-open)
               }
               trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
             }
@@ -2602,6 +2635,7 @@ export class AgentLoop extends AgentLoopInjections {
                     );
                     state.consecutiveReplans = 0; // reset after escalation to avoid spam
                     log.warn({ tool: tc.name, sessionId: state.sessionId }, 'EPISTEMIC_ESCALATION fired after 3 consecutive REPLANs');
+                    markOutcomeForSession(state.sessionId, 'escalation_fired'); // Phase 5 (fail-open)
                   }
                   // Record epistemic-block or conjecture-commit outcome (fail-open).
                   try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: eg.error ? 'conjecture-commit' : 'epistemic-block' }); } catch {}

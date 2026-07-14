@@ -23,11 +23,38 @@
  */
 
 import { generateText } from 'ai';
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '../core/shared/logger.js';
 import { resolveAlias } from './aliases.js';
+import { classifyThrown } from './errors.js';
+import { getGatewayCallLog, sha256Hex, type LLMCallRecord } from './logging.js';
 import { OPENAI_EMBEDDINGS_URL, PROVIDER_BASE_URLS, PROVIDER_HOSTNAMES } from './endpoints.js';
 
 const log = createLogger('llm-client');
+
+// ---------------------------------------------------------------------------
+// Gateway call-log wiring (Phase 5) — FAIL-OPEN by contract
+// ---------------------------------------------------------------------------
+
+let _gatewayLogWarned = false;
+
+/**
+ * Fire-and-forget GatewayCallLog row. Gated by SUDO_GATEWAY_LOG (default ON,
+ * '0' disables) and fully try/caught: a logging bug can never break a call.
+ * Skipped under vitest unless SUDO_GATEWAY_LOG_TEST=1 (no test-DB pollution).
+ */
+function recordGatewayCall(entry: LLMCallRecord): void {
+  try {
+    if (process.env['SUDO_GATEWAY_LOG'] === '0') return;
+    if (process.env['VITEST'] && process.env['SUDO_GATEWAY_LOG_TEST'] !== '1') return;
+    getGatewayCallLog().record(entry);
+  } catch (err) {
+    if (!_gatewayLogWarned) {
+      _gatewayLogWarned = true;
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Gateway call-log record failed (fail-open, warn once)');
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Config
@@ -148,29 +175,53 @@ export async function embed(
   const key = gw ? gatewayKey() : getProviderApiKey('openai');
   if (!key) throw new Error('[llm-client] embed: no API key configured');
 
-  log.debug({ caller: m.caller, purpose: m.purpose, count: texts.length, model }, 'embed');
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, input: texts, encoding_format: 'float' }),
-  });
+  // Phase 5 gateway log. ir_request stores {input_count, model} ONLY —
+  // embedding inputs are bulky and private, never persisted.
+  const traceId = randomUUID();
+  const startedAt = Date.now();
+  const baseRecord: LLMCallRecord = {
+    traceId,
+    caller: m.caller,
+    purpose: m.purpose || 'embed',
+    alias: opts.model ?? 'sudo/embed',
+    route: gw ? 'gateway:embeddings' : 'openai:embeddings',
+    irRequest: { input_count: texts.length, model },
+  };
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    const err = new Error(
-      `[llm-client] embed failed: ${response.status} ${body.slice(0, 300)}`,
-    ) as Error & { status: number };
-    err.status = response.status;
+  log.debug({ caller: m.caller, purpose: m.purpose, count: texts.length, model }, 'embed');
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model, input: texts, encoding_format: 'float' }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      const err = new Error(
+        `[llm-client] embed failed: ${response.status} ${body.slice(0, 300)}`,
+      ) as Error & { status: number };
+      err.status = response.status;
+      throw err;
+    }
+
+    const json = (await response.json()) as {
+      data: Array<{ index: number; embedding: number[] }>;
+      model?: string;
+      usage?: { prompt_tokens?: number; total_tokens?: number };
+    };
+    const sorted = [...json.data].sort((a, b) => a.index - b.index);
+    recordGatewayCall({
+      ...baseRecord,
+      irResponse: { embedding_count: sorted.length, model: json.model ?? model },
+      latencyMs: Date.now() - startedAt,
+      ...(json.usage?.prompt_tokens !== undefined ? { tokensIn: json.usage.prompt_tokens } : {}),
+    });
+    return { embeddings: sorted.map((d) => d.embedding), model: json.model ?? model, usage: json.usage };
+  } catch (err) {
+    recordGatewayCall({ ...baseRecord, errorClass: classifyThrown(err), latencyMs: Date.now() - startedAt });
     throw err;
   }
-
-  const json = (await response.json()) as {
-    data: Array<{ index: number; embedding: number[] }>;
-    model?: string;
-    usage?: { prompt_tokens?: number; total_tokens?: number };
-  };
-  const sorted = [...json.data].sort((a, b) => a.index - b.index);
-  return { embeddings: sorted.map((d) => d.embedding), model: json.model ?? model, usage: json.usage };
 }
 
 // ---------------------------------------------------------------------------
@@ -210,74 +261,132 @@ export async function chatIR(req: ChatIRRequestLite): Promise<ChatIRResponseLite
   const model = resolveAlias(req.alias);
   const gw = gatewayBaseUrl();
 
+  // Phase 5 gateway log. ChatIRRequestLite IS the IR-shaped request — store it
+  // whole (logging.ts redacts before persist); the response summary is stored
+  // whole too. wire_payload_sha256 is set only on the gateway route, where the
+  // exact final wire body is constructed here.
+  const traceId = req.trace_id ?? randomUUID();
+  const startedAt = Date.now();
+  const baseRecord: LLMCallRecord = {
+    traceId,
+    caller: m.caller,
+    purpose: m.purpose || 'chatIR',
+    alias: req.alias,
+    ...(req.priority !== undefined ? { priority: req.priority } : {}),
+    irRequest: req,
+  };
+
   if (gw && !directFallbackEnabled()) {
     const key = gatewayKey();
-    const response = await fetch(`${gw}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(key ? { Authorization: `Bearer ${key}` } : {}),
-        'x-sudo-caller': m.caller,
-        'x-sudo-purpose': m.purpose.slice(0, 200),
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          ...(req.system ? [{ role: 'system', content: req.system }] : []),
-          ...req.messages,
-        ],
-        ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
-        ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-      }),
+    const wireBody = JSON.stringify({
+      model,
+      messages: [
+        ...(req.system ? [{ role: 'system', content: req.system }] : []),
+        ...req.messages,
+      ],
+      ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     });
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      throw new Error(`[llm-client] gateway chat failed: ${response.status} ${body.slice(0, 300)}`);
+    try {
+      const response = await fetch(`${gw}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(key ? { Authorization: `Bearer ${key}` } : {}),
+          'x-sudo-caller': m.caller,
+          'x-sudo-purpose': m.purpose.slice(0, 200),
+        },
+        body: wireBody,
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`[llm-client] gateway chat failed: ${response.status} ${body.slice(0, 300)}`);
+      }
+      const json = (await response.json()) as {
+        choices: Array<{ message?: { content?: string }; finish_reason?: string }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      const choice = json.choices?.[0];
+      const out: ChatIRResponseLite = {
+        text: choice?.message?.content ?? '',
+        stop_reason: choice?.finish_reason === 'length' ? 'max_tokens' : 'end_turn',
+        usage: {
+          in: json.usage?.prompt_tokens ?? 0,
+          out: json.usage?.completion_tokens ?? 0,
+          cached_in: 0,
+        },
+        trace_id: traceId,
+      };
+      recordGatewayCall({
+        ...baseRecord,
+        route: 'gateway:chat/completions',
+        irResponse: out,
+        wirePayloadSha256: sha256Hex(wireBody),
+        latencyMs: Date.now() - startedAt,
+        tokensIn: out.usage.in,
+        tokensOut: out.usage.out,
+        tokensCached: out.usage.cached_in,
+      });
+      return out;
+    } catch (err) {
+      recordGatewayCall({
+        ...baseRecord,
+        route: 'gateway:chat/completions',
+        wirePayloadSha256: sha256Hex(wireBody),
+        errorClass: classifyThrown(err),
+        latencyMs: Date.now() - startedAt,
+      });
+      throw err;
     }
-    const json = (await response.json()) as {
-      choices: Array<{ message?: { content?: string }; finish_reason?: string }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
-    };
-    const choice = json.choices?.[0];
-    return {
-      text: choice?.message?.content ?? '',
-      stop_reason: choice?.finish_reason === 'length' ? 'max_tokens' : 'end_turn',
-      usage: {
-        in: json.usage?.prompt_tokens ?? 0,
-        out: json.usage?.completion_tokens ?? 0,
-        cached_in: 0,
-      },
-      trace_id: req.trace_id,
-    };
   }
 
   // Legacy direct path (default during migration) — same provider layer as before.
   const { getModel } = await import('./legacy/providers.js');
   log.debug({ caller: m.caller, purpose: m.purpose, model }, 'chatIR (direct fallback)');
-  const result = await generateText({
-    model: getModel(model) as Parameters<typeof generateText>[0]['model'],
-    ...(req.system ? { system: req.system } : {}),
-    messages: req.messages as NonNullable<Parameters<typeof generateText>[0]['messages']>,
-    ...(req.maxTokens !== undefined ? { maxOutputTokens: req.maxTokens } : {}),
-    ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-  });
-  return {
-    text: result.text,
-    stop_reason:
-      result.finishReason === 'length'
-        ? 'max_tokens'
-        : result.finishReason === 'tool-calls'
-          ? 'tool_use'
-          : result.finishReason === 'error'
-            ? 'error'
-            : 'end_turn',
-    usage: {
-      in: result.usage?.inputTokens ?? 0,
-      out: result.usage?.outputTokens ?? 0,
-      cached_in: result.usage?.cachedInputTokens ?? 0,
-    },
-    trace_id: req.trace_id,
-  };
+  try {
+    const result = await generateText({
+      model: getModel(model) as Parameters<typeof generateText>[0]['model'],
+      ...(req.system ? { system: req.system } : {}),
+      messages: req.messages as NonNullable<Parameters<typeof generateText>[0]['messages']>,
+      ...(req.maxTokens !== undefined ? { maxOutputTokens: req.maxTokens } : {}),
+      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+    });
+    const out: ChatIRResponseLite = {
+      text: result.text,
+      stop_reason:
+        result.finishReason === 'length'
+          ? 'max_tokens'
+          : result.finishReason === 'tool-calls'
+            ? 'tool_use'
+            : result.finishReason === 'error'
+              ? 'error'
+              : 'end_turn',
+      usage: {
+        in: result.usage?.inputTokens ?? 0,
+        out: result.usage?.outputTokens ?? 0,
+        cached_in: result.usage?.cachedInputTokens ?? 0,
+      },
+      trace_id: traceId,
+    };
+    recordGatewayCall({
+      ...baseRecord,
+      route: `legacy:${model.split('/')[0] ?? 'unknown'}`,
+      irResponse: out,
+      latencyMs: Date.now() - startedAt,
+      tokensIn: out.usage.in,
+      tokensOut: out.usage.out,
+      tokensCached: out.usage.cached_in,
+    });
+    return out;
+  } catch (err) {
+    recordGatewayCall({
+      ...baseRecord,
+      route: `legacy:${model.split('/')[0] ?? 'unknown'}`,
+      errorClass: classifyThrown(err),
+      latencyMs: Date.now() - startedAt,
+    });
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,22 +446,49 @@ export async function visionIR(req: VisionIRRequestLite): Promise<{ text: string
 
   log.debug({ caller: m.caller, purpose: m.purpose }, 'visionIR');
 
+  // Phase 5 gateway log. ir_request stores {prompt_chars, model} ONLY —
+  // image data (data: URLs can be megabytes) is NEVER persisted.
+  const traceId = randomUUID();
+  const startedAt = Date.now();
+  const baseRecord: LLMCallRecord = {
+    traceId,
+    caller: m.caller,
+    purpose: m.purpose || 'visionIR',
+    alias: req.alias ?? 'sudo/vision',
+    irRequest: { prompt_chars: req.prompt.length, model: resolveAlias(req.alias ?? 'sudo/vision') },
+  };
+  const recordVisionSuccess = (route: string, text: string): void => {
+    recordGatewayCall({
+      ...baseRecord,
+      route,
+      irResponse: { text_chars: text.length },
+      latencyMs: Date.now() - startedAt,
+    });
+  };
+
   if (gw && !directFallbackEnabled()) {
     const model = resolveAlias(req.alias ?? 'sudo/vision');
-    return { text: await attempt(`${gw}/chat/completions`, gatewayKey() ?? '', model) };
+    try {
+      const text = await attempt(`${gw}/chat/completions`, gatewayKey() ?? '', model);
+      recordVisionSuccess('gateway:chat/completions', text);
+      return { text };
+    } catch (err) {
+      recordGatewayCall({ ...baseRecord, route: 'gateway:chat/completions', errorClass: classifyThrown(err), latencyMs: Date.now() - startedAt });
+      throw err;
+    }
   }
 
   const errors: string[] = [];
   const xaiKey = getProviderApiKey('xai');
   if (xaiKey) {
     try {
-      return {
-        text: await attempt(
-          `${PROVIDER_BASE_URLS.xai}/chat/completions`,
-          xaiKey,
-          resolveAlias(req.alias ?? 'sudo/vision').replace(/^xai\//, ''),
-        ),
-      };
+      const text = await attempt(
+        `${PROVIDER_BASE_URLS.xai}/chat/completions`,
+        xaiKey,
+        resolveAlias(req.alias ?? 'sudo/vision').replace(/^xai\//, ''),
+      );
+      recordVisionSuccess('legacy:xai', text);
+      return { text };
     } catch (err) {
       errors.push(String(err));
     }
@@ -360,12 +496,14 @@ export async function visionIR(req: VisionIRRequestLite): Promise<{ text: string
   const openaiKey = getProviderApiKey('openai');
   if (openaiKey) {
     try {
-      return {
-        text: await attempt(`${PROVIDER_BASE_URLS.openai}/chat/completions`, openaiKey, 'gpt-4o'),
-      };
+      const text = await attempt(`${PROVIDER_BASE_URLS.openai}/chat/completions`, openaiKey, 'gpt-4o');
+      recordVisionSuccess('legacy:openai', text);
+      return { text };
     } catch (err) {
       errors.push(String(err));
     }
   }
-  throw new Error(`[llm-client] visionIR: all routes failed: ${errors.join(' | ') || 'no API keys configured'}`);
+  const allFailed = new Error(`[llm-client] visionIR: all routes failed: ${errors.join(' | ') || 'no API keys configured'}`);
+  recordGatewayCall({ ...baseRecord, route: 'legacy:vision-fallback', errorClass: classifyThrown(allFailed), latencyMs: Date.now() - startedAt });
+  throw allFailed;
 }

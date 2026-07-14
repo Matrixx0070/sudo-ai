@@ -97,3 +97,11 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
 - **A17**: attempt receives AttemptContext {markFirstToken, budgetDecision, signal}; runWithPolicy returns {value, budgetDecision}.
 - src/llm/logging.ts (Phase 5 storage, wiring later): GatewayCallLog on data/gateway.db (WAL, busy_timeout, additive-migration guard), llm_calls table per spec (trace_id PK, INSERT OR REPLACE pinned), record() never throws (warn+return), markOutcome, sha256Hex, redactDeep + redactSecrets string-leaf walker before persist, retention SUDO_GATEWAY_LOG_RETENTION_DAYS=30 throttled prune.
 - 62 new tests (52 errors/policy + 10 logging).
+
+## PHASE 5 — wiring + LIVE DoD PROOF
+
+- record() wired: brain.ts non-streaming (~L1885), streaming w/ ttft_ms (~L1506), terminal-failure rows at both llm_all_attempts_failed sites; client.ts chatIR (full IR + wire_payload_sha256 on gateway route) / embed ({input_count,model} only) / visionIR ({prompt_chars,model} — image data never persisted). All fail-open, kill-switch SUDO_GATEWAY_LOG=0, vitest-dormant unless SUDO_GATEWAY_LOG_TEST=1.
+- markOutcome wired: escalation_fired (loop.ts context-budget escalate + EPISTEMIC_ESCALATION), verifier_rejected (critic hard-block), user_rephrased (jaccard>0.6 word-set heuristic, conservative). tool_not_in_plan SKIPPED (no exact planned-tool set exists — commented at plan-coverage block).
+- **A18**: legacy-path rows store summary ir_request {legacy:true, model, messageCount, system_chars} — full IR arrives at cutover. BrainRequest has no sessionId → noteTraceForSession dormant on legacy path until IR transport (outcome sites live but no-op until then).
+- **LIVE DoD PROOF (2026-07-14)**: OPENAI key quota-dead (429, known operator item) → proof ran via xai/grok-4-fast-non-reasoning through chatIR direct-fallback with DATA_DIR=/tmp scratch: 3 calls → 3 rows (caller/purpose/alias/route/latency/tokens all sane), tokens_cached 128 → 128 → 3456 on a 3,511-token identical prefix — cache plumbing proven end-to-end. Harness not committed (throwaway).
+- Improvement noted for cutover: chatIR record leaves priority null (ChatIRRequestLite.priority optional) — set it when the IR transport lands.

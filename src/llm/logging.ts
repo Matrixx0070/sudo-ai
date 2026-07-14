@@ -184,6 +184,95 @@ export function sha256Hex(payload: string | Uint8Array): string {
 }
 
 // ---------------------------------------------------------------------------
+// Session → trace correlation (Phase 5 wiring)
+// ---------------------------------------------------------------------------
+
+/** Kill-switch for all gateway-log wiring. Default ON; disable with SUDO_GATEWAY_LOG=0. */
+function gatewayLogEnabled(): boolean {
+  return process.env['SUDO_GATEWAY_LOG'] !== '0';
+}
+
+/** Bounded session→last-trace map. LRU-ish: re-noting a session refreshes recency. */
+const SESSION_TRACE_CAP = 500;
+const _sessionTraces = new Map<string, string>();
+
+/**
+ * Remember the most recent gateway trace_id for a session so downstream
+ * outcome signals (escalation fired, verifier rejected, user rephrased) can be
+ * stamped onto the right llm_calls row later via {@link markOutcomeForSession}.
+ * Fail-open: never throws; capped at {@link SESSION_TRACE_CAP} sessions
+ * (oldest-noted evicted first).
+ */
+export function noteTraceForSession(sessionId: string, traceId: string): void {
+  try {
+    if (!gatewayLogEnabled()) return;
+    if (!sessionId || !traceId) return;
+    // Refresh recency: Map preserves insertion order, so delete+set moves the
+    // session to the back and eviction takes the least-recently-noted first.
+    if (_sessionTraces.has(sessionId)) _sessionTraces.delete(sessionId);
+    _sessionTraces.set(sessionId, traceId);
+    if (_sessionTraces.size > SESSION_TRACE_CAP) {
+      const oldest = _sessionTraces.keys().next().value;
+      if (oldest !== undefined) _sessionTraces.delete(oldest);
+    }
+  } catch {
+    /* fail-open — correlation is telemetry, never breaks a call */
+  }
+}
+
+/**
+ * Stamp an outcome onto the LAST gateway trace noted for this session.
+ * Silent no-op when the session has no noted trace (e.g. wiring not yet live
+ * on this path, or the session was evicted from the bounded map). Fail-open.
+ */
+export function markOutcomeForSession(sessionId: string, outcome: string): void {
+  try {
+    if (!gatewayLogEnabled()) return;
+    const traceId = _sessionTraces.get(sessionId);
+    if (!traceId) return;
+    getGatewayCallLog().markOutcome(traceId, outcome);
+  } catch (err) {
+    logger.warn(
+      { sessionId, outcome, err: err instanceof Error ? err.message : String(err) },
+      'markOutcomeForSession failed',
+    );
+  }
+}
+
+/** Test hook: clear the session→trace correlation map. */
+export function __resetSessionTraces(): void {
+  _sessionTraces.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Rephrase heuristic (Phase 5 outcome signal)
+// ---------------------------------------------------------------------------
+
+/** Jaccard similarity of the lowercase word sets of two strings (0–1). */
+export function jaccardWordSimilarity(a: string, b: string): number {
+  const ta = new Set(a.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  const tb = new Set(b.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  const union = ta.size + tb.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+/**
+ * Conservative, dependency-free "user rephrased the same ask" heuristic:
+ * both messages must be non-trivial (>10 chars trimmed) and share >0.6 of
+ * their word vocabulary (Jaccard on word sets). Deliberately cheap — runs on
+ * the message-intake hot path. A distinct follow-up question shares far less
+ * vocabulary; short acks ("ok", "thanks") are excluded by the length guard.
+ */
+export function isLikelyRephrase(prev: string, next: string): boolean {
+  if (typeof prev !== 'string' || typeof next !== 'string') return false;
+  if (prev.trim().length <= 10 || next.trim().length <= 10) return false;
+  return jaccardWordSimilarity(prev, next) > 0.6;
+}
+
+// ---------------------------------------------------------------------------
 // GatewayCallLog
 // ---------------------------------------------------------------------------
 

@@ -14,6 +14,8 @@ import {
 } from './browser-recovery.js';
 import { isOutboundToolName, markCommittedOutbound } from './committed-outbound.js';
 import { PipelineError, ToolError } from '../shared/errors.js';
+// gw-refactor Phase 5: fail-open outcome stamp onto the session's last gateway trace.
+import { markOutcomeForSession } from '../../llm/logging.js';
 import { compact, microCompact, autoCompact, fullCompact, type AutoCompactFailureCounter } from './compaction.js';
 import { microCompactMessages, type MicroCompactMessage } from './microcompact.js';
 import { shouldCompact, estimateContextSize, MAX_CONTEXT_TOKENS } from './context.js';
@@ -1164,6 +1166,7 @@ async function executeSingleToolCall(
               { tool: tc.name, sessionId: ctx.sessionId, rationale: criticResult.rationale },
               'verify-gate slice 5: critic reject — hard block',
             );
+            markOutcomeForSession(ctx.sessionId, 'verifier_rejected'); // Phase 5 (fail-open, SUDO_GATEWAY_LOG=0 off)
             // Slice 6 — dedicated `verify_gate_critic_blocked` correlator event.
             // Slice 5 only stored the structured `[VerifyGate] Tool call
             // blocked` message in session history; alert routers had to
