@@ -160,6 +160,72 @@ describe('ToolRouter — skill category routing', () => {
   });
 });
 
+describe('ToolRouter — Spec 9 packaging tools routing (skill.init/pack/publish/update/changelog)', () => {
+  // Regression (2026-07-14 probe): the skill category grew to 16 skill.* + 2
+  // plugin.* tools but maxFromCategory stayed 13, silently dropping 5 tools
+  // per skill turn (a "pack my skill" turn lost skill.publish/skill.update).
+  // Separately, single-token keywords match whole words only and the category
+  // had 'skill' but not 'skills' — a plural-only prompt ("check my installed
+  // skills for updates") matched NO category and surfaced nothing.
+  const FULL_SKILL_TOOLS = [
+    ...TOOLS,
+    { name: 'skill.usage-stats', category: 'skill' },
+    { name: 'skill.refine', category: 'skill' },
+    { name: 'skill.federate', category: 'skill' },
+    { name: 'skill.compose', category: 'skill' },
+    { name: 'skill.explain', category: 'skill' },
+    { name: 'skill.apply', category: 'skill' },
+    { name: 'skill.rollback', category: 'skill' },
+    { name: 'skill.search', category: 'skill' },
+    { name: 'skill.install', category: 'skill' },
+    { name: 'skill.eval', category: 'skill' },
+    { name: 'skill.trigger-eval', category: 'skill' },
+    { name: 'skill.init', category: 'skill' },
+    { name: 'skill.pack', category: 'skill' },
+    { name: 'skill.publish', category: 'skill' },
+    { name: 'skill.update', category: 'skill' },
+    { name: 'skill.changelog', category: 'skill' },
+    { name: 'plugin.search', category: 'skill' },
+    { name: 'plugin.install', category: 'skill' },
+  ];
+  const router = new ToolRouter(fakeRegistry(FULL_SKILL_TOOLS) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  it('surfaces skill.update for a plural-only "check my skills for updates" prompt', () => {
+    const n = names('check my installed skills for updates and apply them');
+    expect(n).toContain('skill.update');
+  });
+
+  it('surfaces skill.publish for a publish prompt', () => {
+    expect(names('publish my eng-debug skill to the skill registry')).toContain('skill.publish');
+  });
+
+  it('surfaces skill.pack for a pack prompt', () => {
+    expect(names('pack my new skill into a tarball package')).toContain('skill.pack');
+  });
+
+  it('surfaces skill.init for a scaffold prompt', () => {
+    expect(names('scaffold a new skill package called demo-helper')).toContain('skill.init');
+  });
+
+  it('surfaces skill.changelog for a changelog prompt', () => {
+    expect(names('show the changelog for the eli5 skill')).toContain('skill.changelog');
+  });
+
+  it('the WHOLE 18-tool category travels on a skill turn (cap tracks category size)', () => {
+    const n = names('update my skills to the latest versions from the registry');
+    for (const t of FULL_SKILL_TOOLS.filter((t) => t.category === 'skill')) {
+      expect(n).toContain(t.name);
+    }
+  });
+
+  it('does NOT surface packaging tools for an unrelated prompt', () => {
+    const n = names('what time is it in Tokyo');
+    expect(n).not.toContain('skill.update');
+    expect(n).not.toContain('skill.publish');
+  });
+});
+
 describe('ToolRouter — superpowers category routing', () => {
   // Regression: category:'superpowers' tools (the 12 registered super.* tools)
   // had no entry in CATEGORY_MAP, so they never grouped into a routed category
