@@ -227,6 +227,52 @@ describe('parseAnthropicResponse', () => {
     }
   });
 
+  it('thinking blocks are mapped into the IR (A15 — previously dropped); redacted_thinking still dropped', () => {
+    const res = parseAnthropicResponse(
+      {
+        content: [
+          { type: 'thinking', thinking: 'step by step…', signature: 'sig-abc' },
+          { type: 'redacted_thinking', data: 'opaque' },
+          { type: 'text', text: 'Answer.' },
+        ],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 5, output_tokens: 9 },
+      },
+      't',
+    );
+    expect(res.blocks).toEqual([
+      { type: 'thinking', thinking: 'step by step…', signature: 'sig-abc' },
+      { type: 'text', text: 'Answer.' },
+    ]);
+    expect(res.stop_reason).toBe('end_turn');
+    expect(res.extra?.['provider_bug']).toBeUndefined();
+  });
+
+  it('thinking blocks in request history egress back to the wire verbatim (signature preserved)', () => {
+    const body = egressAnthropic(
+      baseIR({
+        max_tokens: 10,
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'Q' }] },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'thinking', thinking: 'chain', signature: 'sig-1' },
+              { type: 'thinking', thinking: 'no-sig' },
+              { type: 'text', text: 'A' },
+            ],
+          },
+        ],
+      }),
+    );
+    const msgs = body['messages'] as Array<{ content: unknown[] }>;
+    expect(msgs[1]!.content).toEqual([
+      { type: 'thinking', thinking: 'chain', signature: 'sig-1' },
+      { type: 'thinking', thinking: 'no-sig' },
+      { type: 'text', text: 'A' },
+    ]);
+  });
+
   it('reverse stop-reason map is total and inverts the forward map', () => {
     expect(irStopReasonToAnthropic('end_turn')).toBe('end_turn');
     expect(irStopReasonToAnthropic('tool_use')).toBe('tool_use');

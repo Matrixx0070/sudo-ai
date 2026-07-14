@@ -1,0 +1,63 @@
+{
+  "ir_response": {
+    "blocks": [
+      {
+        "text": "Checking.",
+        "type": "text"
+      },
+      {
+        "id": "tu_1",
+        "input": {
+          "city": "Oslo"
+        },
+        "name": "get_weather",
+        "type": "tool_use"
+      }
+    ],
+    "stop_reason": "tool_use",
+    "trace_id": "trace-conformance-0001",
+    "usage": {
+      "cached_in": 0,
+      "in": 30,
+      "out": 18
+    }
+  },
+  "wire_request": {
+    "body": {
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Weather in Oslo?",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "conformance-model-1",
+      "tools": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "description": "Look up current weather for a city.",
+          "input_schema": {
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "type": "object"
+          },
+          "name": "get_weather"
+        }
+      ]
+    },
+    "url": "https://api.anthropic.com/v1/messages"
+  }
+}

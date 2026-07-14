@@ -38,8 +38,8 @@ import {
 for (const [adapter, cases] of Object.entries(ADAPTER_MATRIX)) {
   describe(`conformance: ${adapter}`, () => {
     for (const c of cases) {
-      it(`golden: ${c.name}`, () => {
-        const output = c.produce();
+      it(`golden: ${c.name}`, async () => {
+        const output = await c.produce();
         const rendered = renderGolden(output);
 
         if (UPDATE_MODE) {

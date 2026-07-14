@@ -42,8 +42,9 @@ let _gatewayLogWarned = false;
  * Fire-and-forget GatewayCallLog row. Gated by SUDO_GATEWAY_LOG (default ON,
  * '0' disables) and fully try/caught: a logging bug can never break a call.
  * Skipped under vitest unless SUDO_GATEWAY_LOG_TEST=1 (no test-DB pollution).
+ * Exported so transport.ts shares the exact same kill-switch idiom.
  */
-function recordGatewayCall(entry: LLMCallRecord): void {
+export function recordGatewayCall(entry: LLMCallRecord): void {
   try {
     if (process.env['SUDO_GATEWAY_LOG'] === '0') return;
     if (process.env['VITEST'] && process.env['SUDO_GATEWAY_LOG_TEST'] !== '1') return;

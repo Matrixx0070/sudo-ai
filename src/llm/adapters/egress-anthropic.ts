@@ -130,6 +130,14 @@ function blockOut(block: IRContentBlock): Rec {
     }
     case 'image':
       return imageBlockOut(block);
+    case 'thinking': {
+      // Passthrough (A15): thinking blocks in request history go back to the
+      // Anthropic wire verbatim — signature included, or the API rejects the
+      // replayed block on multi-turn tool use.
+      const out: Rec = { type: 'thinking', thinking: block.thinking };
+      if (block.signature !== undefined) out['signature'] = block.signature;
+      return out;
+    }
   }
 }
 
@@ -225,9 +233,15 @@ export function parseAnthropicResponse(json: unknown, trace_id: string): IRRespo
         name: typeof raw['name'] === 'string' ? raw['name'] : '',
         input,
       });
+    } else if (raw['type'] === 'thinking' && typeof raw['thinking'] === 'string') {
+      // A15: thinking blocks are mapped into the IR (previously dropped) so
+      // opus/fable extended thinking is never silently lost.
+      const tb: IRContentBlock = { type: 'thinking', thinking: raw['thinking'] };
+      if (typeof raw['signature'] === 'string') tb.signature = raw['signature'];
+      blocks.push(tb);
     }
-    // thinking/redacted_thinking and unknown block types are dropped from the
-    // typed surface (vendor-specific; nothing downstream consumes them yet).
+    // redacted_thinking and unknown block types are dropped from the typed
+    // surface (vendor-specific; nothing downstream consumes them yet).
   }
 
   const extra: Record<string, unknown> = {};

@@ -11,6 +11,9 @@
  * - tool_result blocks → role:'tool' messages; OpenAI has no error flag, so
  *   is_error is noted with a `[tool error] ` content prefix.
  * - image blocks → content-part image_url (base64 sources become data: URLs).
+ * - thinking blocks are SKIPPED (documented): the Chat Completions wire has no
+ *   equivalent block and Anthropic reasoning must not leak into the text
+ *   channel of another provider.
  * - Response parsing funnels tool arguments through parseToolArguments
  *   (JSON.parse → jsonrepair → {} + extra.parse_error).
  */
@@ -108,7 +111,10 @@ function blocksToContent(blocks: IRContentBlock[]): string | Rec[] {
 function convertMessage(msg: IRMessage, out: Rec[]): void {
   if (msg.role === 'assistant') {
     const toolCalls = msg.content.filter((b): b is IRToolUseBlock => b.type === 'tool_use');
-    const rest = msg.content.filter((b) => b.type !== 'tool_use' && b.type !== 'tool_result');
+    // thinking blocks are deliberately skipped on this wire (see file header).
+    const rest = msg.content.filter(
+      (b) => b.type !== 'tool_use' && b.type !== 'tool_result' && b.type !== 'thinking',
+    );
     const text = rest
       .map((b) => (b.type === 'text' ? b.text : ''))
       .join('');
@@ -131,7 +137,9 @@ function convertMessage(msg: IRMessage, out: Rec[]): void {
   for (const tr of toolResults) {
     out.push({ role: 'tool', tool_call_id: tr.tool_use_id, content: toolResultToString(tr) });
   }
-  const rest = msg.content.filter((b) => b.type !== 'tool_result' && b.type !== 'tool_use');
+  const rest = msg.content.filter(
+    (b) => b.type !== 'tool_result' && b.type !== 'tool_use' && b.type !== 'thinking',
+  );
   if (rest.length > 0) {
     out.push({ role: 'user', content: blocksToContent(rest) });
   }

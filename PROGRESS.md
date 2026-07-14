@@ -137,3 +137,16 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
   - Shadow: 38/38 live shadow_match; SHADOW_REPORT.md regenerated — PASS 0.000% over 341 (303 replay + 38 live).
   - NOT MEASURABLE here: cache-hit >50% on agent-loop (staging is xai-only; anthropic cache_control traffic exists only on prod claude-oauth) — flagged for post-merge observation; LLM_DIRECT_FALLBACK=0 flip deferred pending the in-process IR transport decision (operator discussion logged — recommendation: src/llm IS the gateway, no external LLM_BASE_URL).
 - Staging soak stays running for continued burn-in until the PR is reviewed.
+
+# GW-CUTOVER (successor mission — specs/gw-cutover-spec.md)
+
+## PHASE 0 — IR transport core (non-streaming)
+
+- src/llm/transport.ts callIR: alias → route (per-provider breaker keys, e.g. claude-oauth:messages separate from anthropic:messages), egress adapters, authed fetch, parse+classify (200-garbage/refusal returned as stop_reason 'error', never thrown), runWithPolicy wrap, full-fidelity llm_calls row + wire sha256, injectable fetch/sleep/rng.
+- claude-oauth contract REUSED from legacy (single-flight refresh via getClaudeOAuthManager; headers verbatim incl. anthropic-beta oauth-2025-04-20; Claude Code attestation prepend; sanitizeOAuthToolName + reverse map on response tool_use).
+- IR v1 + adapters: thinking block added (A15 paid); anthropic parse/egress passthrough w/ signature; openai egress skips thinking (documented); redacted_thinking still dropped.
+- Temperature-deprecation strip ported verbatim from legacy (opus-4-8+/claude-*-5 400 class) + 2 pin tests — the builder's flagged weakest point, closed same session.
+- custom-providers: getCustomProviderWireConfig() added (registry previously exposed only SDK instances).
+- **A22**: legacy-only body repairs (orphan tool_result strip, empty-text strip, thinking-budget injection) deliberately NOT ported — quarantined with the legacy path; revisit at Phase 2 brain wiring if live traffic needs them.
+- **A23**: google provider → invalid_request in transport (not OpenAI-compat at its base); reachable only via legacy until someone needs it.
+- Tests: 19 transport + thinking/adapters additions; conformance +6 goldens (transport family + thinking) with zero modifications to existing goldens. UNVERIFIED: live provider acceptance (mocked fetch only — Phase 3 soak covers).

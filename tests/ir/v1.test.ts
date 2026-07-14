@@ -154,6 +154,23 @@ describe('IR v1 schemas', () => {
     expect(tr).toMatchObject({ type: 'tool_result', is_error: true });
   });
 
+  it('accepts thinking blocks (gw-cutover Phase 0, additive) with optional signature', () => {
+    const req = validRequest();
+    req.messages[1]!.content.unshift({ type: 'thinking', thinking: 'chain of thought' });
+    expect(() => parseIRRequest(req)).not.toThrow();
+
+    const res = validResponse();
+    res.blocks.unshift({ type: 'thinking', thinking: 'reasoning…', signature: 'sig-1' });
+    const parsed = parseIRResponse(res);
+    expect(parsed.blocks[0]).toEqual({ type: 'thinking', thinking: 'reasoning…', signature: 'sig-1' });
+  });
+
+  it('rejects a thinking block whose thinking field is not a string', () => {
+    const res = validResponse();
+    res.blocks.push({ type: 'thinking', thinking: 42 } as unknown as IRResponse['blocks'][number]);
+    expect(safeParseIRResponse(res).success).toBe(false);
+  });
+
   it('rejects unknown content-block types', () => {
     const req = validRequest();
     (req.messages[0]!.content as unknown[]).push({ type: 'video', url: 'x' });

@@ -227,6 +227,9 @@ function blockTokens(block: IRContentBlock): number {
     case 'image':
       t += IMAGE_TOKENS;
       break;
+    case 'thinking':
+      t += textTokens(block.thinking);
+      break;
   }
   return t;
 }

@@ -1,0 +1,18 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": "Q",
+      "role": "user"
+    },
+    {
+      "content": "A",
+      "role": "assistant"
+    },
+    {
+      "content": "go on",
+      "role": "user"
+    }
+  ],
+  "model": "testprov/conformance-model-1"
+}
