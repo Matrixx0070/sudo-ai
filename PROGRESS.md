@@ -1,0 +1,66 @@
+# gw-refactor PROGRESS
+
+## INTAKE
+
+- **MISSION**: Every outbound LLM-family call (chat, embeddings, vision, moderation) flows through one choke point (`src/llm/`) speaking an internal Anthropic-shaped IR, with adapters, error taxonomy, priority lanes, budgets, IR logging, conformance suite, and a shadow-verified cutover — zero user-visible behavior change until Final Acceptance.
+- **DONE MEANS**:
+  1. `grep -rE 'api.openai.com|api.x.ai|api.anthropic.com|...'` matches only inside `src/llm/` (plus embeddings + vision confirmed routed).
+  2. `pnpm build && pnpm test && pnpm lint` green at every commit; conformance suite green for both egress adapters in CI.
+  3. `data/gateway.db` `llm_calls` rows written per call, `tokens_cached > 0` on second identical-prefix call.
+  4. SHADOW_REPORT.md committed with pass verdict (<1% material divergence over ≥200 requests/48h).
+  5. 24h staging soak on `gw-refactor` with `LLM_DIRECT_FALLBACK=0`, then PR to main (never auto-merged).
+- **NON-GOALS**: acting on QUL labels (Phase 8 logs only); restarting or touching the production pm2 process; merging to main; deleting legacy path before the one-week post-cutover window.
+
+## ASSUMPTIONS (running log)
+
+- **A1 (worktree isolation)**: `/root/sudo-ai-v4` is prod's live checkout (pm2 `sudo-ai-v5` runs from it) and is dirty on main (uncommitted content-filter diagnostics in `brain.ts`/`goal-planner.ts` + untracked test — in-progress work, not mine). All mission work happens in a separate git worktree `/root/sudo-ai-gw` on branch `gw-refactor`, so prod's checkout, its dirty files, and any pm2 restart stay on main. Staging soak (Final Acceptance) will run a separate pm2 process from this worktree.
+- **A2 (.env.example merge)**: root `.env.example` and `config/.env.example` were two fully divergent templates (root newer: GATEWAY_TOKEN, workflows, trace-capture; config had integrations/WhatsApp/models blocks the root lacked). Canonical `config/.env.example` is now the union (root content as base + config-only sections appended). Root is a 4-line pointer.
+- **A3 (run-self-test.mjs)**: no in-repo reference invokes it (checked package.json scripts, CI, docs, cjs). The nightly self-test on prod is triggered outside the repo tree (system cron or daemon scheduler). Moved to `tests/manual/`; at merge time the external invoker path must be updated by the operator. Flagged for the final PR description.
+- **A4 (scene01 glob)**: "scene01-*.mjs" = 4 files (grok-video, grok, pipeline, sora-test); duplicates already existed under `internal/temp-scripts/` — left untouched (out of scope).
+- **A5 (remotion.config.ts)**: only reference is a comment in `src/remotion/Root.tsx`; remotion CLI is invoked ad-hoc (no package.json script), so moving the config to `experiments/video-pipeline/` is safe; anyone rendering runs remotion from that directory.
+
+## PHASE 0 — repo hygiene
+
+- Moved to `experiments/video-pipeline/`: scene01-grok-video.mjs, scene01-grok.mjs, scene01-pipeline.mjs, scene01-sora-test.mjs, sora-scene01.mjs, produce-kitchen.mjs, generate-all-scenes.mjs, props.json, remotion.config.ts.
+- Moved to `specs/`: spec-wave10-phase1.md, wave2.2c-spec.md.
+- Moved to `tests/manual/`: test-admin-e2e.mjs, test-pages.mjs, test-tools-load.ts, run-self-test.mjs.
+- Reference sweep: no package.json script, CI workflow, or source import referenced any moved file (only self-references among the moved files and pre-existing copies in `internal/temp-scripts/`). vitest include is `tests/**/*.test.ts` so `tests/manual/` is not collected; tsconfig includes only `src/` + `shared-types/`; npm `files` already pointed at `config/.env.example`.
+- `.env.example`: canonical = `config/.env.example` (union, see A2); root = pointer.
+- DoD gate: build+test+lint — RUNNING (result to be recorded before commit).
+
+## PHASE 1 — outbound LLM call inventory (pre-migration, required)
+
+### Central path (already exists, chat only)
+- `src/core/brain/brain.ts:920` `Brain.call()` → `generateText`/`streamText` (ai pkg, brain.ts:1359/1944/1954); models via `src/core/brain/providers.ts getModel()` — ALL builtin SDK construction lives there (createXai:216, createOpenAI:202/223/648/660/672, createAnthropic:233/235/257, createGoogleGenerativeAI:627, createGroq:635, Mistral:644, DeepSeek:656, Together:668, Ollama:194). `src/core/brain/custom-providers.ts` builds user-configured clients.
+- ~25+ modules consume brain.call (agent-loop, swarm-rescue, task-decomposer, intelligence-team, api handlers, domain tools, cli).
+
+### Bypasses
+(a) getModel + raw streamText (skip brain failover/telemetry): coder/arsenal.ts:1003, coder/swarm.ts:197, coder/analyze.ts:357, coder/arsenal-v2/index.ts:135, custom/codex.ts:151.
+(b) fully raw fetch/SDK:
+- chat: forge/xai-ensemble.ts:98 (api.x.ai, XAI_API_KEY; callers forge-orchestrator/parallel-builder/evolution-engine); cli/commands/chat/provider.ts:129/139/149/159 (new Anthropic/OpenAI, interactive CLI chat).
+- vision: tools/builtin/browser/vision.ts:35/36/85 (x.ai grok-4-fast + openai gpt-4o fallbacks; primary path already uses brain).
+- embeddings (RAG, 1536-dim): memory/embeddings.ts:238 raw fetch api.openai.com/v1/embeddings (OPENAI_API_KEY); consumers rag-engine, hybrid-search:300, vector-backfill, semantic-compactor, chunk-contradiction, cli. local-embeddings.ts = MiniLM 384-dim on-device (NOT network — out of scope).
+- image GENERATION (LLM-adjacent): media/image-tools.ts:49 (dall-e-3); :65 stability, :80 flux, :177 remove.bg (non-LLM vendors — endpoint-constant move only).
+- TTS: voice/tts.ts:178 (api.x.ai audio/speech, XAI_VOICE_API_KEY), :224 (openai); voice/elevenlabs.ts:19; comms/voice.ts:20/21/104; media/factory-tools.ts:84. kokoro local.
+- STT: voice/stt.ts:20/21/22/322 (groq whisper, openai, elevenlabs); comms/voice.ts:24/158. whisper-local local.
+- other: persistence/survival-probe.ts:47-49 (/v1/models liveness), brain/claude-oauth-manager.ts:39/52/56 (OAuth + models), api/admin/models.handler.ts:32-35 (key-test), sandbox/sandbox-types.ts:122 (egress allowlist constants, no call), cli/commands/doctor.test.ts fixtures.
+- kimi/glm/moonshot/bigmodel: via Ollama Cloud model strings only. openrouter: doc example only.
+
+### Migration plan (assumptions)
+- **A6**: `src/llm/client.ts` exposes `chatIR()`, `embed()`, `visionIR()` per spec, plus `llmFetch(endpointKey, init, {caller, purpose})` — a guarded raw-HTTP escape hatch for LLM-adjacent modalities (TTS/STT/image-gen/liveness probes) so EVERY provider URL constant lives in `src/llm/endpoints.ts` and the Phase-1 grep DoD ("provider URLs only inside src/llm/") is achievable without redesigning voice/media in this phase.
+- **A7**: sandbox-types.ts egress-allowlist strings and doctor.test.ts fixtures are not calls; they import from `src/llm/endpoints.ts` (or stay as-is if test-only) — will note final choice at commit.
+- **A8**: claude-oauth-manager OAuth-token endpoints are auth infrastructure, not LLM calls; their URLs move to endpoints.ts but the flow stays.
+
+## INCIDENT — shared-.git worktree stolen by prod auto-fix automation (2026-07-14)
+
+During the first Phase 0 gate run, the production daemon's auto-fix automation executed
+`git checkout auto-fix/123-feat-acp-agent-client-protocol` + `git reset` INSIDE the mission
+worktree `/root/sudo-ai-gw` (shared .git with prod's checkout), swapping the tree to an older
+commit mid-vitest-run (9 test files failed to load — artifact, not real failures) and unstaging
+the Phase 0 moves. No data was lost (staged renames + untracked src/llm/ + PROGRESS.md survived).
+This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session").
+
+- **A9 (clone isolation)**: mission moved to a fully independent clone `/root/sudo-ai-gw2`
+  (own .git, origin = github.com/Matrixx0070/sudo-ai). The shared worktree and its
+  gw-refactor branch in prod's repo were deleted. Prod's automation cannot reach this clone.
+  The first gate run's results are VOID; gate re-run in the clone before the Phase 0 commit.

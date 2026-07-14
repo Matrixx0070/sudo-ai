@@ -152,7 +152,7 @@ internal/misc/json         # duplicate of the above
 /CLAUDE.md
 /DECISIONS.md
 /FEATURES.md
-/PROGRESS.md
+# /PROGRESS.md — tracked on gw-refactor: mission progress log (deliverable)
 /RESUME.md
 /TOOLS.md
 # graphify knowledge-graph output — ~145MB of generated, regenerable artifacts
