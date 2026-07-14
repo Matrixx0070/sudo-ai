@@ -49,7 +49,32 @@ function hasShellMetachars(command: string): boolean {
 const SAFE_SINGLE_COMMANDS = new Set([
   'ls', 'pwd', 'cd', 'du',
   'ps', 'uptime', 'df', 'free', 'whoami', 'date', 'uname',
+  // Spec 10 (textproc): read-only text-processing tools. Safe to run without
+  // approval as a SINGLE command — any pipeline containing them has shell
+  // metachars and is already rejected at Step 1, so this only auto-approves
+  // one plain invocation (e.g. `rg pattern file`, `jq . data.json`).
+  // Tools that can WRITE (sed -i, awk -i inplace, sponge, tee, sd) are handled
+  // by TEXT_TOOLS_WITH_WRITE below with a flag scan — NOT listed here.
+  'rg', 'ugrep', 'jq', 'gron', 'yq', 'dasel', 'xq', 'mlr', 'qsv',
+  'csvlook', 'csvstat', 'csvcut', 'csvgrep', 'in2csv', 'datamash',
+  'cut', 'sort', 'uniq', 'wc', 'nl', 'tac', 'rev', 'comm', 'paste',
+  'join', 'fold', 'fmt', 'column', 'choose', 'htmlq', 'hxselect',
+  'jless', 'fx', 'difft', 'delta', 'colordiff', 'sdiff', 'batcat', 'bat',
+  'fd', 'fdfind', 'strings', 'file',
 ]);
+
+/**
+ * Text tools whose canonical form is read-only but which have an in-place /
+ * write mode behind a flag. Auto-approved as a single command ONLY when the
+ * write flag is absent; otherwise they fall through to the approval gate.
+ */
+const TEXT_TOOLS_WITH_WRITE = new Set(['sed', 'awk', 'gawk', 'perl']);
+
+/**
+ * Flags that turn a read tool into a writer. Matched against the whole
+ * (metachar-free) command string. `sed -i`, `gawk -i inplace`, `perl -i`.
+ */
+const INPLACE_WRITE_RE = /(^|\s)-[a-zA-Z]*i(\s|=|\[|$)|(^|\s)--in-place\b|(^|\s)-i\s+inplace\b|inplace/i;
 
 /**
  * Two-token pairs (cmd, firstArg) that are safe together.
@@ -285,6 +310,12 @@ export function isAllowlisted(command: string): boolean {
 
   // Step 3: Single-token check
   if (SAFE_SINGLE_COMMANDS.has(baseName)) return true;
+
+  // Step 3b: text tools that are read-only UNLESS an in-place write flag is
+  // present. Auto-approve only the read form; a write flag defers to approval.
+  if (TEXT_TOOLS_WITH_WRITE.has(baseName)) {
+    return !INPLACE_WRITE_RE.test(command);
+  }
 
   // Step 4: curl special handling (strict SSRF + exfil guard)
   if (baseName === 'curl') return isCurlExfilSafe(command);

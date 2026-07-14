@@ -370,6 +370,33 @@ export function clearManifestCache(): void {
   cached = null;
 }
 
+/**
+ * Synchronous, probe-free summary line for prompt assembly. Reads the
+ * in-memory cache (warmed at boot by registerTextprocTools) or the on-disk
+ * manifest — NEVER probes the PATH. Returns null when no manifest exists yet
+ * (the model simply doesn't get the line that turn). Safe to call in the hot
+ * system-prompt path.
+ */
+export function getCachedSummaryLine(): string | null {
+  if (process.env['SUDO_TEXTPROC'] === '0') return null;
+  let manifest = cached;
+  if (!manifest) {
+    try {
+      if (existsSync(MANIFEST_PATH)) {
+        manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf-8')) as TextprocManifest;
+      }
+    } catch {
+      return null;
+    }
+  }
+  if (!manifest?.tools) return null;
+  try {
+    return summaryLine(manifest);
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Role resolution: native → alias → alt → python → none
 // ---------------------------------------------------------------------------

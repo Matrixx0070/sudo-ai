@@ -19,6 +19,8 @@
  *   Default: on.
  */
 
+import { getCachedSummaryLine } from '../tools/builtin/textproc/capabilities.js';
+
 const MANIFEST_BODY = `These tool boundaries are real — don't burn turns retrying the wrong one:
 
 - **\`system.exec\`** runs inside a hardened sandbox. It has no access to the host filesystem, the sudo-ai-v4 repo, host secrets, or host processes. Use it for shell-style work that operates on its own sandboxed view only.
@@ -33,9 +35,26 @@ Heuristic when a path lookup or read silently returns nothing:
 - If the path is inside the workspace project, use \`coder.*\`.
 - A \`system.exec\` "no such file" on a host repo path is the sandbox refusing — switch tools, don't retry.`;
 
+const TEXTPROC_PREFIX = `Text-processing capabilities (Spec 10) — you have first-class tools plus a rich CLI toolchain via \`system.exec\`:
+- **\`textproc.capabilities\`** lists every installed text tool and the best provider per role (call it, or read the one-line summary below).
+- **\`textproc.extract\`** slices exact line/byte ranges or fields from multi-GB files WITHOUT loading them.
+- **\`textproc.replace\`** does safe find-and-replace: dry-run diff preview first, timestamped backups on apply.
+- **\`textproc.analyze\`** runs streaming CSV/TSV/JSONL stats/groupby/freq (Miller or a python fallback).
+For anything else, compose the installed CLIs through \`system.exec\` (rg, jq, mlr, sd, yq, gron, datamash, htmlq, awk, sed …).`;
+
 /** Returns the manifest body with no surrounding header. */
 export function getCapabilityManifestBody(): string {
-  return MANIFEST_BODY;
+  // Spec 10: prepend a concise textproc section + the cached one-line coverage
+  // summary. getCachedSummaryLine is synchronous and probe-free (reads the
+  // boot-warmed manifest), so the hot prompt path stays cheap.
+  let textproc = '';
+  try {
+    const summary = getCachedSummaryLine();
+    textproc = `${TEXTPROC_PREFIX}${summary ? `\nInstalled here: ${summary}` : ''}\n\n`;
+  } catch {
+    textproc = `${TEXTPROC_PREFIX}\n\n`;
+  }
+  return textproc + MANIFEST_BODY;
 }
 
 /**
