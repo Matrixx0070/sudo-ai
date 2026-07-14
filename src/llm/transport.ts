@@ -1,8 +1,12 @@
 /**
  * @file transport.ts
- * @description In-process IR transport (gw-cutover Phase 0, non-streaming):
+ * @description In-process IR transport (gw-cutover Phase 0 + Phase 1):
  * `callIR(ir)` = resolveAlias → provider family → egress adapter → authed
  * fetch → parse → IRResponse, the whole attempt wrapped in `runWithPolicy`.
+ * `streamIR(ir)` = the same request preparation plus `stream: true`, parsing
+ * the SSE byte stream through the single-use adapters/stream.ts machines and
+ * yielding IRStreamEvents (RULE 4: retry only before the first machine event;
+ * afterwards failures surface as stream_error + terminal message_end 'error').
  *
  * Families:
  * - `anthropic/` and `claude-oauth/` model prefixes → Anthropic Messages API
@@ -43,7 +47,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { IRRequest, IRResponse } from '../../shared-types/ir/v1.js';
+import type { IRRequest, IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
 import { resolveAlias } from './aliases.js';
 import { PROVIDER_BASE_URLS } from './endpoints.js';
 import { getProviderApiKey, recordGatewayCall, type ProviderKeyName } from './client.js';
@@ -58,6 +62,11 @@ import {
   type LLMErrorClass,
 } from './errors.js';
 import { runWithPolicy } from './policy.js';
+import {
+  streamIR as createSSEMachine,
+  type IRStreamEvent,
+  type IRStreamMachine,
+} from './adapters/stream.js';
 import { sha256Hex, type LLMCallRecord } from './logging.js';
 import { sanitizeOAuthToolName } from '../core/brain/tool-schema-compat.js';
 import { getCustomProviderWireConfig } from './legacy/custom-providers.js';
@@ -312,6 +321,63 @@ function reverseToolNames(res: IRResponse, nameMap: Map<string, string>): IRResp
 }
 
 // ---------------------------------------------------------------------------
+// Shared request preparation (callIR + streamIR)
+// ---------------------------------------------------------------------------
+
+interface PreparedCall {
+  r: ResolvedRoute;
+  /** Exact serialized wire body (sha256'd into the llm_calls row). */
+  wireBody: string;
+  /** claude-oauth sanitized→original tool-name map (empty otherwise). */
+  nameMap: Map<string, string>;
+}
+
+/**
+ * Resolve route + build the exact wire body for one IR call. Shared verbatim
+ * between callIR (stream=false) and streamIR (stream=true — the ONLY body
+ * difference is the `stream: true` field, both families). Throws
+ * invalid_request LLMPolicyError on unroutable/unbuildable input.
+ */
+function prepareWireCall(ir: IRRequest, stream: boolean): PreparedCall {
+  const r = resolveRoute(ir.alias);
+  let nameMap = new Map<string, string>();
+  let body: Record<string, unknown>;
+  if (r.family === 'anthropic') {
+    // egressAnthropic already emits the bare model id for anthropic/
+    // claude-oauth prefixes; custom anthropic-shaped providers need the
+    // strip applied here (their prefix is not known to the adapter).
+    body = egressAnthropic(ir);
+    body['model'] = r.modelId;
+    // Strip `temperature` for models that deprecated it (ported verbatim
+    // from legacy providers.ts): opus-4-8+ and the Claude 5 family 400 with
+    // "`temperature` is deprecated for this model"; older models keep it.
+    if (
+      /^claude-opus-4-(8|9|[1-9][0-9]+)/.test(r.modelId) ||
+      /^claude-[a-z]+-5\b/.test(r.modelId)
+    ) {
+      delete body['temperature'];
+    }
+    if (stream) body['stream'] = true;
+    if (r.provider === 'claude-oauth') nameMap = applyOAuthBodyContract(body);
+  } else {
+    // egressOpenAI keeps the full provider/model string (verified) — the
+    // wire wants the bare id, so strip the prefix HERE, exactly once.
+    body = egressOpenAI(ir);
+    body['model'] = r.modelId;
+    if (stream) {
+      body['stream'] = true;
+      // Without this, OpenAI-compat streams omit usage entirely and every
+      // streamed llm_calls row would log zero tokens — blinding budget/cost
+      // accounting. Standard OpenAI spec field; xai/groq/deepseek/ollama
+      // accept or ignore it. The trailing usage chunk arrives after
+      // finish_reason and is consumed via machine.end() at [DONE].
+      body['stream_options'] = { include_usage: true };
+    }
+  }
+  return { r, wireBody: JSON.stringify(body), nameMap };
+}
+
+// ---------------------------------------------------------------------------
 // callIR
 // ---------------------------------------------------------------------------
 
@@ -329,33 +395,9 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
   // (one row per callIR, success or failure).
   let r: ResolvedRoute;
   let wireBody: string;
-  let nameMap = new Map<string, string>();
+  let nameMap: Map<string, string>;
   try {
-    r = resolveRoute(ir.alias);
-    if (r.family === 'anthropic') {
-      // egressAnthropic already emits the bare model id for anthropic/
-      // claude-oauth prefixes; custom anthropic-shaped providers need the
-      // strip applied here (their prefix is not known to the adapter).
-      const body = egressAnthropic(ir);
-      body['model'] = r.modelId;
-      // Strip `temperature` for models that deprecated it (ported verbatim
-      // from legacy providers.ts): opus-4-8+ and the Claude 5 family 400 with
-      // "`temperature` is deprecated for this model"; older models keep it.
-      if (
-        /^claude-opus-4-(8|9|[1-9][0-9]+)/.test(r.modelId) ||
-        /^claude-[a-z]+-5\b/.test(r.modelId)
-      ) {
-        delete body['temperature'];
-      }
-      if (r.provider === 'claude-oauth') nameMap = applyOAuthBodyContract(body);
-      wireBody = JSON.stringify(body);
-    } else {
-      // egressOpenAI keeps the full provider/model string (verified) — the
-      // wire wants the bare id, so strip the prefix HERE, exactly once.
-      const body = egressOpenAI(ir);
-      body['model'] = r.modelId;
-      wireBody = JSON.stringify(body);
-    }
+    ({ r, wireBody, nameMap } = prepareWireCall(ir, false));
   } catch (err) {
     recordCall({
       traceId,
@@ -466,5 +508,388 @@ function recordCall(entry: LLMCallRecord): void {
     recordGatewayCall(entry);
   } catch (err) {
     log.warn({ err: err instanceof Error ? err.message : String(err) }, 'llm_calls record failed (fail-open)');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// streamIR — SSE byte-stream transport (gw-cutover Phase 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Incremental SSE frame parser: bytes → `data:` payload strings.
+ * - Frames are separated by a blank line; \r\n, \n and \r line ends accepted.
+ * - Comment lines (`: keepalive`) and non-data fields (`event:`, `id:`,
+ *   `retry:`) are ignored — Anthropic repeats the event type inside the data
+ *   JSON, so the `event:` field carries no extra information.
+ * - Multiple `data:` lines in one frame are joined with '\n' (SSE spec).
+ * - A trailing '\r' at the end of a chunk is held back until the next chunk
+ *   so a \r\n split across chunk boundaries never yields a phantom line.
+ */
+function createSSEParser(): { feed(chunk: Uint8Array): string[] } {
+  const decoder = new TextDecoder();
+  let buf = '';
+  let dataLines: string[] = [];
+
+  function handleLine(line: string, out: string[]): void {
+    if (line === '') {
+      // Blank line = end of frame; dispatch accumulated data (if any).
+      if (dataLines.length > 0) {
+        out.push(dataLines.join('\n'));
+        dataLines = [];
+      }
+      return;
+    }
+    if (line.startsWith(':')) return; // comment / keepalive
+    const colon = line.indexOf(':');
+    const field = colon === -1 ? line : line.slice(0, colon);
+    if (field !== 'data') return; // event:/id:/retry: ignored
+    let value = colon === -1 ? '' : line.slice(colon + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    dataLines.push(value);
+  }
+
+  return {
+    feed(chunk: Uint8Array): string[] {
+      buf += decoder.decode(chunk, { stream: true });
+      const out: string[] = [];
+      let start = 0;
+      while (start < buf.length) {
+        const nl = buf.indexOf('\n', start);
+        const cr = buf.indexOf('\r', start);
+        let end: number;
+        let next: number;
+        if (cr !== -1 && (nl === -1 || cr < nl)) {
+          if (cr === buf.length - 1) break; // might be half of a \r\n — wait
+          end = cr;
+          next = buf[cr + 1] === '\n' ? cr + 2 : cr + 1;
+        } else if (nl !== -1) {
+          end = nl;
+          next = nl + 1;
+        } else {
+          break; // no complete line yet
+        }
+        handleLine(buf.slice(start, end), out);
+        start = next;
+      }
+      buf = buf.slice(start);
+      return out;
+    },
+  };
+}
+
+/** claude-oauth reverse map applied to yielded tool events (mirrors callIR). */
+function reverseEventToolName(ev: IRStreamEvent, nameMap: Map<string, string>): IRStreamEvent {
+  if (nameMap.size === 0) return ev;
+  if ((ev.type === 'tool_use_start' || ev.type === 'tool_use_end') && nameMap.has(ev.name)) {
+    return { ...ev, name: nameMap.get(ev.name)! };
+  }
+  return ev;
+}
+
+/**
+ * Rebuild an IRResponse from the yielded event stream so the llm_calls row
+ * stores the same full ir_response callIR would have (observability parity).
+ */
+function createResponseAccumulator(traceId: string): {
+  add(ev: IRStreamEvent): void;
+  terminal: { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null;
+  toIRResponse(): IRResponse;
+} {
+  const blocks: IRResponse['blocks'] = [];
+  const acc = {
+    terminal: null as { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null,
+    add(ev: IRStreamEvent): void {
+      if (ev.type === 'text_delta') {
+        const last = blocks[blocks.length - 1];
+        if (last !== undefined && last.type === 'text') last.text += ev.text;
+        else blocks.push({ type: 'text', text: ev.text });
+      } else if (ev.type === 'tool_use_end') {
+        blocks.push({ type: 'tool_use', id: ev.id, name: ev.name, input: ev.input });
+      } else if (ev.type === 'message_end') {
+        acc.terminal = { stop_reason: ev.stop_reason, usage: ev.usage };
+      }
+    },
+    toIRResponse(): IRResponse {
+      return {
+        blocks,
+        // Consumer abandoned the stream before the terminal event →
+        // stop_reason 'error' on the partial (mirror brain's partial-usage
+        // billing philosophy: record what is known, never invent success).
+        stop_reason: acc.terminal?.stop_reason ?? 'error',
+        usage: acc.terminal?.usage ?? { in: 0, out: 0, cached_in: 0 },
+        trace_id: traceId,
+      };
+    },
+  };
+  return acc;
+}
+
+/** Live state handed from the policy-wrapped attempt to the yield loop. */
+interface LiveStream {
+  reader: ReadableStreamDefaultReader<Uint8Array>;
+  machine: IRStreamMachine;
+  parser: ReturnType<typeof createSSEParser>;
+  /** Events emitted during the attempt (first batch, possibly terminal). */
+  buffered: IRStreamEvent[];
+  /** Reader exhausted during the attempt. */
+  readerDone: boolean;
+  /** In-band terminal seen ([DONE] / anthropic message_stop / error event). */
+  cleanTerminal: boolean;
+  /** The terminal message_end came from a truncation flush (RULE 4 audit). */
+  truncated: boolean;
+}
+
+/** Feed one byte chunk through parser+machine. Mutates `live` bookkeeping. */
+function feedChunk(live: LiveStream, chunk: Uint8Array, family: Family): IRStreamEvent[] {
+  const out: IRStreamEvent[] = [];
+  for (const payload of live.parser.feed(chunk)) {
+    if (live.machine.terminated) break; // single-use: never push past terminal
+    if (family === 'openai' && payload.trim() === '[DONE]') {
+      // OpenAI trailing-usage contract: the transport calls machine.end() at
+      // [DONE]; a trailing usage chunk after finish_reason has already
+      // emitted the terminal message_end, in which case end() is a no-op.
+      live.cleanTerminal = true;
+      out.push(...live.machine.end());
+      continue;
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(payload);
+    } catch {
+      continue; // non-JSON data payload — ignore (defensive)
+    }
+    out.push(...live.machine.push(json));
+    if (live.machine.terminated) live.cleanTerminal = true; // in-band terminal
+  }
+  return out;
+}
+
+/**
+ * One STREAMING IR call: same route/auth/body construction as callIR plus
+ * `stream: true`, yielding typed IRStreamEvents as they arrive.
+ *
+ * - RULE 4: runWithPolicy may retry ONLY before the first machine event
+ *   (ctx.markFirstToken fires at the first emission; each attempt gets a
+ *   fresh machine). After the first token, any transport/stream failure is
+ *   surfaced through the machine's fail() path — stream_error followed by a
+ *   terminal message_end {stop_reason:'error'} — never a re-request.
+ * - Truncation (socket ends without [DONE]/message_stop) drives the machine's
+ *   documented terminal flush via end(); the llm_calls row gets error_class
+ *   'provider_bug'.
+ * - Exactly ONE llm_calls row per call (fail-open), written at the terminal
+ *   event — or, if the consumer breaks out early, from the generator's
+ *   finally with whatever is known (the underlying fetch is aborted).
+ */
+export async function* streamIR(
+  ir: IRRequest,
+  opts: CallIROptions = {},
+): AsyncGenerator<IRStreamEvent, void, undefined> {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  const startedAt = Date.now();
+  const traceId = ir.trace_id !== '' ? ir.trace_id : randomUUID();
+
+  let r: ResolvedRoute;
+  let wireBody: string;
+  let nameMap: Map<string, string>;
+  try {
+    ({ r, wireBody, nameMap } = prepareWireCall(ir, true));
+  } catch (err) {
+    recordCall({
+      traceId,
+      caller: ir.caller,
+      purpose: ir.purpose || 'streamIR',
+      alias: ir.alias,
+      priority: ir.priority,
+      irRequest: ir,
+      errorClass: err instanceof LLMPolicyError ? err.class : 'invalid_request',
+      latencyMs: Date.now() - startedAt,
+    });
+    throw err;
+  }
+
+  const baseRecord: LLMCallRecord = {
+    traceId,
+    caller: ir.caller,
+    purpose: ir.purpose || 'streamIR',
+    alias: ir.alias,
+    route: r.route,
+    priority: ir.priority,
+    irRequest: ir,
+    wirePayloadSha256: sha256Hex(wireBody),
+  };
+
+  let recorded = false;
+  let ttftMs: number | undefined;
+  const acc = createResponseAccumulator(traceId);
+  const writeRow = (fields: Partial<LLMCallRecord>): void => {
+    if (recorded) return;
+    recorded = true;
+    recordCall({
+      ...baseRecord,
+      latencyMs: Date.now() - startedAt,
+      ...(ttftMs !== undefined ? { ttftMs } : {}),
+      ...fields,
+    });
+  };
+
+  // Aborts the underlying fetch when the consumer breaks out early.
+  const controller = new AbortController();
+
+  let live: LiveStream;
+  try {
+    ({ value: live } = await runWithPolicy<LiveStream>({
+      route: r.route,
+      caller: ir.caller,
+      priority: ir.priority,
+      ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+      ...(opts.rng !== undefined ? { rng: opts.rng } : {}),
+      attempt: async (ctx) => {
+        // Fresh single-use machine + parser per attempt (RULE 4: a retried
+        // attempt must never see a machine that already consumed events).
+        const st: LiveStream = {
+          reader: undefined as unknown as ReadableStreamDefaultReader<Uint8Array>,
+          machine: createSSEMachine(r.family),
+          parser: createSSEParser(),
+          buffered: [],
+          readerDone: false,
+          cleanTerminal: false,
+          truncated: false,
+        };
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          ...(await authHeaders(r)),
+        };
+        const signal =
+          ctx.signal !== undefined ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
+        const response = await fetchImpl(r.url, {
+          method: 'POST',
+          headers,
+          body: wireBody,
+          signal,
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          const cls = classifyHttpError(response.status, text);
+          throw new LLMPolicyError(
+            `[llm-transport] ${r.route} HTTP ${response.status}: ${text.slice(0, 300)}`,
+            { class: cls, status: response.status, route: r.route },
+          );
+        }
+        if (response.body === null) {
+          throw new LLMPolicyError(`[llm-transport] ${r.route}: 200 response with no body stream`, {
+            class: 'provider_bug',
+            route: r.route,
+            retryable: false,
+          });
+        }
+        st.reader = response.body.getReader();
+
+        // Read until the machine emits its FIRST event(s) — errors thrown in
+        // this window are pre-first-token and therefore policy-retryable.
+        while (st.buffered.length === 0) {
+          const { done, value } = await st.reader.read();
+          if (done) {
+            st.readerDone = true;
+            if (!st.machine.terminated) {
+              // Stream closed without a single event or terminal — truncation
+              // flush per machine contract.
+              st.truncated = !st.cleanTerminal;
+              st.buffered.push(...st.machine.end());
+            }
+            break;
+          }
+          st.buffered.push(...feedChunk(st, value, r.family));
+          if (st.machine.terminated) break;
+        }
+        if (st.buffered.length > 0) {
+          ctx.markFirstToken(); // RULE 4: no retries past this point
+          ttftMs = Date.now() - startedAt;
+        }
+        return st;
+      },
+    }));
+  } catch (err) {
+    // Pre-first-token failure with retries exhausted — mirror callIR.
+    writeRow({ errorClass: err instanceof LLMPolicyError ? err.class : classifyThrownSafe(err) });
+    throw err;
+  }
+
+  let failure: unknown;
+  let streamErrorMsg: string | undefined;
+
+  const finalize = (ev: IRStreamEvent): IRStreamEvent => {
+    const out = reverseEventToolName(ev, nameMap);
+    if (out.type === 'stream_error') streamErrorMsg = out.error;
+    acc.add(out);
+    return out;
+  };
+
+  try {
+    for (const ev of live.buffered) yield finalize(ev);
+
+    while (!live.machine.terminated && !live.readerDone) {
+      let events: IRStreamEvent[];
+      try {
+        const { done, value } = await live.reader.read();
+        if (done) {
+          live.readerDone = true;
+          if (live.machine.terminated) break;
+          // Abrupt end without a terminal event → truncation flush.
+          live.truncated = !live.cleanTerminal;
+          events = live.machine.end();
+        } else {
+          events = feedChunk(live, value, r.family);
+        }
+      } catch (err) {
+        // Post-first-token transport error: NEVER re-request, never hang —
+        // surface via the machine's fail() path and stop (RULE 4).
+        failure = err;
+        events = live.machine.terminated
+          ? []
+          : live.machine.fail(err instanceof Error ? err.message : String(err));
+      }
+      for (const ev of events) yield finalize(ev);
+    }
+
+    // Terminal reached (or stream exhausted) — write the ONE llm_calls row.
+    const terminal = acc.terminal;
+    let errorClass: LLMErrorClass | undefined;
+    if (terminal !== null && terminal.stop_reason === 'error') {
+      errorClass =
+        failure !== undefined
+          ? classifyThrownSafe(failure)
+          : classifyThrownSafe(new Error(streamErrorMsg ?? 'stream terminated with error'));
+    } else if (live.truncated) {
+      // Provider closed its SSE stream without the documented terminal event.
+      errorClass = 'provider_bug';
+    }
+    writeRow({
+      irResponse: acc.toIRResponse(),
+      ...(errorClass !== undefined ? { errorClass } : {}),
+      ...(terminal !== null
+        ? {
+            tokensIn: terminal.usage.in,
+            tokensOut: terminal.usage.out,
+            tokensCached: terminal.usage.cached_in,
+          }
+        : {}),
+    });
+  } finally {
+    // Consumer break / early return: abort the underlying fetch and still
+    // write the row with what's known. NEVER throw from this path.
+    try {
+      controller.abort();
+    } catch {
+      /* abort must never mask the consumer's control flow */
+    }
+    try {
+      live.reader.cancel().catch(() => {
+        /* underlying stream already errored/aborted — fine */
+      });
+    } catch {
+      /* reader already released */
+    }
+    writeRow({ irResponse: acc.toIRResponse() });
   }
 }

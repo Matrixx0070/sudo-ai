@@ -825,6 +825,88 @@ export async function runTransportCase(
 }
 
 // ---------------------------------------------------------------------------
+// Stream-transport fixtures (gw-cutover Phase 1) — streamIR against a fetch
+// stub whose Response body is a ReadableStream of scripted SSE BYTES. Goldens
+// pin the FULL yielded IRStreamEvent array for one scripted session per
+// family (framing → machine → transport, end to end, fully deterministic).
+// ---------------------------------------------------------------------------
+
+import { streamIR as streamIRTransport } from '../../src/llm/transport.js';
+
+export interface StreamTransportCase {
+  name: string;
+  /** Model alias — picks the family/route exactly like the transport cases. */
+  alias: string;
+  /** Scripted SSE wire chunks (byte boundaries are part of the fixture). */
+  chunks: string[];
+}
+
+const SSE_OPENAI_SESSION: string[] = [
+  'data: {"choices":[{"delta":{"role":"assistant","content":"Let me "}}]}\n\n',
+  ': keepalive\n\n',
+  'data: {"choices":[{"delta":{"content":"check."}}]}\n\ndata: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_weather","arguments":"{\\"city\\":"}}]}}]}\n\n',
+  'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"Oslo\\"}"}}]}}]}\n\n',
+  'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+  'data: {"choices":[],"usage":{"prompt_tokens":25,"completion_tokens":17,"prompt_tokens_details":{"cached_tokens":10}}}\n\n',
+  'data: [DONE]\n\n',
+];
+
+const SSE_ANTHROPIC_SESSION: string[] = [
+  'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":25,"cache_read_input_tokens":10,"output_tokens":1}}}\n\n',
+  'event: ping\ndata: {"type":"ping"}\n\n',
+  'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me "}}\n\n',
+  // Event split across a chunk boundary — framing reassembly is pinned.
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_del',
+  'ta","text":"check."}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+  'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"get_weather","input":{}}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":"}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\\"Oslo\\"}"}}\n\n',
+  'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":17}}\n\n',
+  'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+];
+
+export const STREAM_TRANSPORT_CASES: StreamTransportCase[] = [
+  { name: 'session-openai-family', alias: 'xai/conformance-model-1', chunks: SSE_OPENAI_SESSION },
+  { name: 'session-anthropic-family', alias: 'anthropic/conformance-model-1', chunks: SSE_ANTHROPIC_SESSION },
+];
+
+/** Run one stream-transport case; returns every yielded IRStreamEvent. */
+export async function runStreamTransportCase(c: StreamTransportCase): Promise<IRStreamEvent[]> {
+  const savedXai = process.env['XAI_API_KEY'];
+  const savedAnthropic = process.env['ANTHROPIC_API_KEY'];
+  process.env['XAI_API_KEY'] = 'conformance-test-key';
+  process.env['ANTHROPIC_API_KEY'] = 'conformance-test-key';
+  try {
+    const encoder = new TextEncoder();
+    const fetchImpl = (async () => {
+      let i = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (i < c.chunks.length) controller.enqueue(encoder.encode(c.chunks[i++]!));
+          else controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }) as typeof fetch;
+
+    const ir = baseIR({
+      alias: c.alias,
+      tools: TRANSPORT_TOOL,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Oslo?' }] }],
+    });
+    const events: IRStreamEvent[] = [];
+    for await (const ev of streamIRTransport(ir, { fetchImpl })) events.push(ev);
+    return events;
+  } finally {
+    if (savedXai === undefined) delete process.env['XAI_API_KEY'];
+    else process.env['XAI_API_KEY'] = savedXai;
+    if (savedAnthropic === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = savedAnthropic;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Error-taxonomy fixtures — one case per LLMErrorClass (all 11)
 // ---------------------------------------------------------------------------
 
@@ -958,6 +1040,10 @@ export const ADAPTER_MATRIX: Record<string, MatrixCase[]> = {
     produce: () => runStreamCase(c),
   })),
   transport: TRANSPORT_CASES.map((c) => ({ name: c.name, produce: () => runTransportCase(c) })),
+  'stream-transport': STREAM_TRANSPORT_CASES.map((c) => ({
+    name: c.name,
+    produce: () => runStreamTransportCase(c),
+  })),
   errors: ERROR_CASES.map((c) => ({ name: c.name, produce: () => runErrorCase(c) })),
 };
 
