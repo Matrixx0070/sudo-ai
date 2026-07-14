@@ -103,7 +103,10 @@ decision — remember the weekly-pool quota is shared with interactive Grok use.
 | `grok-4.20-0309-reasoning` | ✅ | |
 | `grok-4.20-0309-non-reasoning` | ✅ | |
 | `grok-4.20-multi-agent-0309` | ✅⚠ | ~50x token burn per call (internal fan-out bills the weekly pool) — never put in a failover chain |
+| `grok-4.5` | ✅ | strongest Grok — was the API-key-era primary; full parity via OAuth |
+| `grok-4-fast-reasoning` | ✅ | fast reasoning tier |
 | `grok-4-fast-non-reasoning` | ✅ | cheap/fast tier — good failover entry |
 | `grok-4.1-fast` | ❌ 400 | model does not exist on this surface |
+| `grok-4.5-fast` | ❌ 400 | model does not exist on this surface |
 
-Recommended chain entries: `xai-oauth/grok-4.3` then `xai-oauth/grok-4-fast-non-reasoning`.
+Recommended chain entries: `xai-oauth/grok-4.5` (primary), then `xai-oauth/grok-4.3`, then `xai-oauth/grok-4-fast-non-reasoning`.
