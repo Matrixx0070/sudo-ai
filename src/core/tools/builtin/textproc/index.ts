@@ -8,12 +8,15 @@
 
 import type { ToolRegistry } from '../../registry.js';
 import { capabilitiesTool } from './capabilities-tool.js';
+import { extractTool } from './extract.js';
+import { replaceTool } from './replace.js';
+import { analyzeTool } from './analyze.js';
 import { getManifest, summaryLine } from './capabilities.js';
 import { createLogger } from '../../../shared/logger.js';
 
 const logger = createLogger('textproc-index');
 
-const TEXTPROC_TOOLS = [capabilitiesTool] as const;
+const TEXTPROC_TOOLS = [capabilitiesTool, extractTool, replaceTool, analyzeTool] as const;
 
 /**
  * Register all textproc tools with the given registry.
