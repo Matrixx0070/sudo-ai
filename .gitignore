@@ -79,6 +79,8 @@ test-tools.ts
 test-brain.ts
 # Python scratch scripts (not part of the TS codebase)
 *.py
+# …except the textproc pure-python fallback layer (Spec 10) — shipped product code
+!src/core/tools/builtin/textproc/fallbacks/*.py
 check_db.py
 heartbeat-check.py
 twitter_trends_sentiment.py
