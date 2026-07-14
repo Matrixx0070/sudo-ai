@@ -1,0 +1,25 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "You are a terse assistant. Answer in one sentence.",
+          "type": "input_text"
+        }
+      ],
+      "role": "system"
+    },
+    {
+      "content": [
+        {
+          "text": "What is IR v1?",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "testprov/conformance-model-1",
+  "temperature": 1.5
+}

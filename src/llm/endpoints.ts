@@ -24,6 +24,8 @@ export type ProviderHost = keyof typeof PROVIDER_BASE_URLS;
 
 // ---- chat / completions --------------------------------------------------
 export const XAI_CHAT_COMPLETIONS_URL = `${PROVIDER_BASE_URLS.xai}/chat/completions`;
+/** xAI Responses-style endpoint — the only surface subscription OAuth serves. */
+export const XAI_RESPONSES_URL = `${PROVIDER_BASE_URLS.xai}/responses`;
 export const OPENAI_CHAT_COMPLETIONS_URL = `${PROVIDER_BASE_URLS.openai}/chat/completions`;
 
 // ---- embeddings ----------------------------------------------------------

@@ -1,0 +1,44 @@
+{
+  "ir_response": {
+    "blocks": [
+      {
+        "text": "Hello back.",
+        "type": "text"
+      }
+    ],
+    "stop_reason": "end_turn",
+    "trace_id": "trace-conformance-0001",
+    "usage": {
+      "cached_in": 3,
+      "in": 12,
+      "out": 4
+    }
+  },
+  "wire_request": {
+    "body": {
+      "input": [
+        {
+          "content": [
+            {
+              "text": "You are a terse assistant.",
+              "type": "input_text"
+            }
+          ],
+          "role": "system"
+        },
+        {
+          "content": [
+            {
+              "text": "Hello, transport.",
+              "type": "input_text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "max_output_tokens": 1024,
+      "model": "conformance-model-1"
+    },
+    "url": "https://api.x.ai/v1/responses"
+  }
+}

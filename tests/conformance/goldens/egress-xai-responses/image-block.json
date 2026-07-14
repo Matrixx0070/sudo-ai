@@ -1,0 +1,23 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Describe these.",
+          "type": "input_text"
+        },
+        {
+          "image_url": "data:image/jpeg;base64,aGVsbG8taW1hZ2U=",
+          "type": "input_image"
+        },
+        {
+          "image_url": "https://example.com/cat.png",
+          "type": "input_image"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "testprov/conformance-model-1"
+}

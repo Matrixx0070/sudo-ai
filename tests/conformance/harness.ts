@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import type { IRRequest, IRResponse } from '../../shared-types/ir/v1.js';
 import { egressOpenAI, parseOpenAIResponse } from '../../src/llm/adapters/egress-openai.js';
 import { egressAnthropic, parseAnthropicResponse } from '../../src/llm/adapters/egress-anthropic.js';
+import { egressXaiResponses } from '../../src/llm/adapters/egress-xai-responses.js';
 import { ingressOpenAI, type IngressMeta } from '../../src/llm/adapters/ingress-openai.js';
 import { streamIR, type IRStreamEvent } from '../../src/llm/adapters/stream.js';
 import {
@@ -732,6 +733,39 @@ const TRANSPORT_TOOL: IRRequest['tools'] = [
 ];
 
 export const TRANSPORT_CASES: TransportCase[] = [
+  // xai-responses family (xai-oauth Phase 2). Auth comes from the vi.mock'd
+  // xai-oauth manager in conformance.test.ts — no env keys, no disk creds.
+  {
+    name: 'text-xai-responses-family',
+    ir: baseIR({
+      alias: 'xai-oauth/conformance-model-1',
+      system: 'You are a terse assistant.',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Hello, transport.' }] }],
+    }),
+    reply: {
+      id: 'resp_conf_1',
+      status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hello back.' }] }],
+      usage: { input_tokens: 12, output_tokens: 4, input_tokens_details: { cached_tokens: 3 } },
+    },
+  },
+  {
+    name: 'tool-call-xai-responses-family',
+    ir: baseIR({
+      alias: 'xai-oauth/conformance-model-1',
+      tools: TRANSPORT_TOOL,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Oslo?' }] }],
+    }),
+    reply: {
+      id: 'resp_conf_2',
+      status: 'completed',
+      output: [
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: 'need the weather tool' }] },
+        { type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{"city":"Oslo"}' },
+      ],
+      usage: { input_tokens: 30, output_tokens: 18 },
+    },
+  },
   {
     name: 'text-openai-family',
     ir: baseIR({
@@ -1018,6 +1052,12 @@ export const ADAPTER_MATRIX: Record<string, MatrixCase[]> = {
   'egress-anthropic': IR_CASES.filter((c) => !c.skip?.includes('egress-anthropic')).map((c) => ({
     name: c.name,
     produce: () => egressAnthropic(c.ir),
+  })),
+  // xai-oauth Phase 2: every IR case applies (thinking-passthrough pins the
+  // STRIP-on-replay rule — reasoning never goes back to /responses).
+  'egress-xai-responses': IR_CASES.map((c) => ({
+    name: c.name,
+    produce: () => egressXaiResponses(c.ir),
   })),
   'parse-openai': PARSE_OPENAI_CASES.map((c) => ({
     name: c.name,

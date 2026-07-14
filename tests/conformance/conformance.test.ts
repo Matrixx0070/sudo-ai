@@ -12,7 +12,16 @@
  *   the matrix.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// xai-oauth transport goldens need a Bearer token without touching disk
+// credentials — pin the manager accessor shape here (transport dynamic-imports
+// the module, so this mock covers it; headers are not captured into goldens).
+vi.mock('../../src/llm/xai-oauth-manager.js', () => ({
+  getXaiOAuthManager: () => ({ getAccessToken: async () => 'conformance-test-token' }),
+  XaiOAuthReloginRequiredError: class XaiOAuthReloginRequiredError extends Error {},
+}));
+
 import {
   ADAPTER_MATRIX,
   IR_CASES,

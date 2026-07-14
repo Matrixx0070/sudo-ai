@@ -1,0 +1,14 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Hello, gateway.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "testprov/conformance-model-1"
+}

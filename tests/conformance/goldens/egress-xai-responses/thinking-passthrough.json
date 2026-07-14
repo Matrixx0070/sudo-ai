@@ -1,0 +1,33 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Q",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "text": "A",
+          "type": "output_text"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "text": "go on",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "testprov/conformance-model-1"
+}

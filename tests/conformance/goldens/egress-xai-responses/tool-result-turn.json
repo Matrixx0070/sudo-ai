@@ -1,0 +1,60 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Weather in Oslo and Bergen?",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "arguments": "{\"city\":\"Oslo\"}",
+      "call_id": "tu_1",
+      "name": "get_weather",
+      "type": "function_call"
+    },
+    {
+      "arguments": "{\"city\":\"Bergen\"}",
+      "call_id": "tu_2",
+      "name": "get_weather",
+      "type": "function_call"
+    },
+    {
+      "call_id": "tu_1",
+      "output": "4°C, cloudy",
+      "type": "function_call_output"
+    },
+    {
+      "call_id": "tu_2",
+      "output": "[tool error] lookup failed: no station",
+      "type": "function_call_output"
+    },
+    {
+      "content": [
+        {
+          "text": "Bergen failed — just give me Oslo.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "testprov/conformance-model-1",
+  "tools": [
+    {
+      "name": "get_weather",
+      "parameters": {
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "type": "function"
+    }
+  ]
+}

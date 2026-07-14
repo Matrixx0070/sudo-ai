@@ -12,6 +12,11 @@
  * - `anthropic/` and `claude-oauth/` model prefixes → Anthropic Messages API
  *   (both hit PROVIDER_BASE_URLS.anthropic — the legacy oauth manager also
  *   targets api.anthropic.com; see MODELS_URL in claude-oauth-manager.ts).
+ * - `xai-oauth/` → xAI Responses-style endpoint (family 'xai-responses',
+ *   XAI_RESPONSES_URL): subscription OAuth Grok. Bearer from
+ *   getXaiOAuthManager().getAccessToken() (Phase-1 manager owns refresh),
+ *   `x-grok-conv-id` header from ir.extra.conv_id ?? trace_id (prompt-cache
+ *   routing), personalOnly guard (ir.extra.untrusted === true → refused).
  * - Everything else → OpenAI-compatible chat completions:
  *   openai/xai/groq/deepseek from PROVIDER_BASE_URLS, `ollama/` from the
  *   OLLAMA_URL env (default https://ollama.com/v1, matching legacy
@@ -49,10 +54,15 @@
 import { randomUUID } from 'node:crypto';
 import type { IRRequest, IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
 import { resolveAlias } from './aliases.js';
-import { PROVIDER_BASE_URLS } from './endpoints.js';
+import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL } from './endpoints.js';
 import { getProviderApiKey, recordGatewayCall, type ProviderKeyName } from './client.js';
 import { egressAnthropic, parseAnthropicResponse } from './adapters/egress-anthropic.js';
 import { egressOpenAI, parseOpenAIResponse } from './adapters/egress-openai.js';
+import {
+  egressXaiResponses,
+  parseXaiResponsesResponse,
+  createXaiResponsesSSEMachine,
+} from './adapters/egress-xai-responses.js';
 import {
   classifyHttpError,
   classifyThrown,
@@ -110,7 +120,7 @@ export interface CallIROptions {
 // Route resolution
 // ---------------------------------------------------------------------------
 
-type Family = 'anthropic' | 'openai';
+type Family = 'anthropic' | 'openai' | 'xai-responses';
 
 interface ResolvedRoute {
   family: Family;
@@ -153,6 +163,19 @@ function resolveRoute(alias: string): ResolvedRoute {
       modelId,
       url: `${PROVIDER_BASE_URLS.anthropic}/messages`,
       route: `${provider}:messages`,
+    };
+  }
+
+  if (provider === 'xai-oauth') {
+    // Subscription OAuth Grok is only served on the Responses-style endpoint.
+    // Distinct route key so an oauth outage never opens the API-key xai
+    // breaker (mirrors the anthropic / claude-oauth split above).
+    return {
+      family: 'xai-responses',
+      provider,
+      modelId,
+      url: XAI_RESPONSES_URL,
+      route: 'xai-oauth:responses',
     };
   }
 
@@ -227,6 +250,35 @@ async function authHeaders(r: ResolvedRoute): Promise<Record<string, string>> {
       'anthropic-version': ANTHROPIC_VERSION,
       'anthropic-beta': ANTHROPIC_OAUTH_BETA,
     };
+  }
+
+  if (r.provider === 'xai-oauth') {
+    // Phase-1 manager owns refresh discipline (cross-process lock + in-process
+    // single-flight; xAI ROTATES the refresh token) — NEVER a second refresher.
+    const { getXaiOAuthManager, XaiOAuthReloginRequiredError } = await import('./xai-oauth-manager.js');
+    let token: string | null;
+    try {
+      token = await getXaiOAuthManager().getAccessToken();
+    } catch (err) {
+      if (err instanceof XaiOAuthReloginRequiredError) {
+        // Dead refresh token — permanent until the operator re-authenticates.
+        throw new LLMPolicyError(
+          '[llm-transport] xai-oauth: refresh token invalid — run `sudo-ai xai-oauth login`',
+          { class: 'auth', retryable: false, route: r.route, cause: err },
+        );
+      }
+      throw err;
+    }
+    if (token === null) {
+      // Never logged in: no store on disk. Classified 'auth' (not
+      // invalid_request) — the request is well-formed; the credential is
+      // absent, same class as an expired login, and failover treats both alike.
+      throw new LLMPolicyError(
+        '[llm-transport] xai-oauth: not connected — run `sudo-ai xai-oauth login`',
+        { class: 'auth', retryable: false, route: r.route },
+      );
+    }
+    return { Authorization: `Bearer ${token}` };
   }
 
   if (r.family === 'anthropic') {
@@ -337,19 +389,39 @@ interface PreparedCall {
   wireBody: string;
   /** claude-oauth sanitized→original tool-name map (empty otherwise). */
   nameMap: Map<string, string>;
+  /** Route-specific request headers beyond auth (e.g. x-grok-conv-id). */
+  extraHeaders: Record<string, string>;
 }
 
 /**
  * Resolve route + build the exact wire body for one IR call. Shared verbatim
  * between callIR (stream=false) and streamIR (stream=true — the ONLY body
- * difference is the `stream: true` field, both families). Throws
+ * difference is the `stream: true` field, all families). Throws
  * invalid_request LLMPolicyError on unroutable/unbuildable input.
  */
-function prepareWireCall(ir: IRRequest, stream: boolean): PreparedCall {
+function prepareWireCall(ir: IRRequest, stream: boolean, traceId: string): PreparedCall {
   const r = resolveRoute(ir.alias);
+
+  // personalOnly hard rule: xai-oauth is the OWNER's subscription — any IR
+  // tagged untrusted (non-owner ingress: hooks/gateway/community) is refused
+  // outright. First line of defense; upstream isOwner gating (hook/webhook
+  // tool allowlists never expose model routing) is the second.
+  if (r.provider === 'xai-oauth' && ir.extra?.['untrusted'] === true) {
+    throw invalidRequest('xai-oauth is personalOnly — refused for untrusted caller', r.route);
+  }
+
+  const extraHeaders: Record<string, string> = {};
   let nameMap = new Map<string, string>();
   let body: Record<string, unknown>;
-  if (r.family === 'anthropic') {
+  if (r.family === 'xai-responses') {
+    body = egressXaiResponses(ir);
+    body['model'] = r.modelId; // strip the xai-oauth/ prefix, exactly once
+    if (stream) body['stream'] = true;
+    // Prompt caching routes on the conversation id header (operator gotcha 4).
+    const convId = ir.extra?.['conv_id'];
+    extraHeaders['x-grok-conv-id'] =
+      typeof convId === 'string' && convId !== '' ? convId : traceId;
+  } else if (r.family === 'anthropic') {
     // egressAnthropic already emits the bare model id for anthropic/
     // claude-oauth prefixes; custom anthropic-shaped providers need the
     // strip applied here (their prefix is not known to the adapter).
@@ -381,7 +453,42 @@ function prepareWireCall(ir: IRRequest, stream: boolean): PreparedCall {
       body['stream_options'] = { include_usage: true };
     }
   }
-  return { r, wireBody: JSON.stringify(body), nameMap };
+  return { r, wireBody: JSON.stringify(body), nameMap, extraHeaders };
+}
+
+/**
+ * Non-2xx HTTP → LLMPolicyError, with xai-oauth specifics layered on top of
+ * classifyHttpError: 401 → 'auth' + re-login hint; 403 → 'auth' +
+ * extra.tier_gated=true (subscription tier not allowlisted for OAuth
+ * inference — the Phase-0 probe's documented gate). Content-filter sniffs
+ * still win (a refusal is never a credential problem). 429 keeps its
+ * rate_limited class — policy's retry-after handling applies unchanged.
+ */
+function httpPolicyError(r: ResolvedRoute, status: number, text: string): LLMPolicyError {
+  let cls = classifyHttpError(status, text);
+  let hint = '';
+  let extra: Record<string, unknown> | undefined;
+  if (r.provider === 'xai-oauth' && cls !== 'content_filter') {
+    if (status === 401) {
+      cls = 'auth';
+      hint = ' — xai-oauth token rejected; re-login: `sudo-ai xai-oauth login`';
+    } else if (status === 403) {
+      cls = 'auth';
+      extra = { tier_gated: true };
+      hint = ' — subscription tier not allowlisted for OAuth inference (tier_gated)';
+    }
+  }
+  return new LLMPolicyError(
+    `[llm-transport] ${r.route} HTTP ${status}: ${text.slice(0, 300)}${hint}`,
+    { class: cls, status, route: r.route, ...(extra !== undefined ? { extra } : {}) },
+  );
+}
+
+/** Parse a 200 body for the route's family. */
+function parseByFamily(family: Family, json: unknown, traceId: string): IRResponse {
+  if (family === 'anthropic') return parseAnthropicResponse(json, traceId);
+  if (family === 'xai-responses') return parseXaiResponsesResponse(json, traceId);
+  return parseOpenAIResponse(json, traceId);
 }
 
 // ---------------------------------------------------------------------------
@@ -403,8 +510,9 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
   let r: ResolvedRoute;
   let wireBody: string;
   let nameMap: Map<string, string>;
+  let extraHeaders: Record<string, string>;
   try {
-    ({ r, wireBody, nameMap } = prepareWireCall(ir, false));
+    ({ r, wireBody, nameMap, extraHeaders } = prepareWireCall(ir, false, traceId));
   } catch (err) {
     recordCall({
       traceId,
@@ -441,6 +549,7 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
       attempt: async (ctx) => {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
+          ...extraHeaders,
           ...(await authHeaders(r)),
         };
         const response = await fetchImpl(r.url, {
@@ -452,11 +561,7 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
 
         if (!response.ok) {
           const text = await response.text().catch(() => '');
-          const cls = classifyHttpError(response.status, text);
-          throw new LLMPolicyError(
-            `[llm-transport] ${r.route} HTTP ${response.status}: ${text.slice(0, 300)}`,
-            { class: cls, status: response.status, route: r.route },
-          );
+          throw httpPolicyError(r, response.status, text);
         }
 
         // 200: parse defensively — non-JSON bodies fall through to the
@@ -468,10 +573,7 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
         } catch {
           json = undefined;
         }
-        let res =
-          r.family === 'anthropic'
-            ? parseAnthropicResponse(json, traceId)
-            : parseOpenAIResponse(json, traceId);
+        let res = parseByFamily(r.family, json, traceId);
         res = reverseToolNames(res, nameMap);
         const errorClass =
           r.family === 'anthropic' ? classifyAnthropicResponse(res) : classifyOpenAIResponse(res);
@@ -652,7 +754,9 @@ function feedChunk(live: LiveStream, chunk: Uint8Array, family: Family): IRStrea
   const out: IRStreamEvent[] = [];
   for (const payload of live.parser.feed(chunk)) {
     if (live.machine.terminated) break; // single-use: never push past terminal
-    if (family === 'openai' && payload.trim() === '[DONE]') {
+    if (family !== 'anthropic' && payload.trim() === '[DONE]') {
+      // xai-responses: response.completed is the in-band terminal — a
+      // trailing [DONE] (if the endpoint sends one) makes end() a no-op.
       // OpenAI trailing-usage contract: the transport calls machine.end() at
       // [DONE]; a trailing usage chunk after finish_reason has already
       // emitted the terminal message_end, in which case end() is a no-op.
@@ -699,8 +803,9 @@ export async function* streamIR(
   let r: ResolvedRoute;
   let wireBody: string;
   let nameMap: Map<string, string>;
+  let extraHeaders: Record<string, string>;
   try {
-    ({ r, wireBody, nameMap } = prepareWireCall(ir, true));
+    ({ r, wireBody, nameMap, extraHeaders } = prepareWireCall(ir, true, traceId));
   } catch (err) {
     recordCall({
       traceId,
@@ -757,7 +862,8 @@ export async function* streamIR(
         // attempt must never see a machine that already consumed events).
         const st: LiveStream = {
           reader: undefined as unknown as ReadableStreamDefaultReader<Uint8Array>,
-          machine: createSSEMachine(r.family),
+          machine:
+            r.family === 'xai-responses' ? createXaiResponsesSSEMachine() : createSSEMachine(r.family),
           parser: createSSEParser(),
           buffered: [],
           readerDone: false,
@@ -766,6 +872,7 @@ export async function* streamIR(
         };
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
+          ...extraHeaders,
           ...(await authHeaders(r)),
         };
         const signal =
@@ -779,11 +886,7 @@ export async function* streamIR(
 
         if (!response.ok) {
           const text = await response.text().catch(() => '');
-          const cls = classifyHttpError(response.status, text);
-          throw new LLMPolicyError(
-            `[llm-transport] ${r.route} HTTP ${response.status}: ${text.slice(0, 300)}`,
-            { class: cls, status: response.status, route: r.route },
-          );
+          throw httpPolicyError(r, response.status, text);
         }
         if (response.body === null) {
           throw new LLMPolicyError(`[llm-transport] ${r.route}: 200 response with no body stream`, {

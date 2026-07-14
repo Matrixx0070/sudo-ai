@@ -72,6 +72,12 @@ export interface ShadowBrainRequest {
   maxTokens?: number;
   /** OpenAI-function-shaped ToolSchema[] (registry emission). */
   tools?: Array<{ type?: string; function?: { name?: string; description?: string; parameters?: Record<string, unknown> } }>;
+  /**
+   * Session id when the caller has one (brain threads it through) — mapped to
+   * ir.extra.conv_id so conversation-keyed features (xai-oauth prompt caching
+   * via the x-grok-conv-id header) get a stable key per session.
+   */
+  sessionId?: string;
 }
 
 /** Legacy result as brain.ts reads it off the ai SDK / BrainResponse. */
@@ -210,6 +216,9 @@ export function brainRequestToIR(request: ShadowBrainRequest, modelId: string): 
   if (tools !== undefined) ir.tools = tools;
   if (request.maxTokens !== undefined) ir.max_tokens = request.maxTokens;
   if (request.temperature !== undefined) ir.temperature = request.temperature;
+  if (request.sessionId !== undefined && request.sessionId !== '') {
+    ir.extra = { conv_id: request.sessionId };
+  }
   return ir;
 }
 

@@ -1358,6 +1358,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
                 temperature,
                 maxTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
                 tools: request.tools,
+                ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
               },
               modelId,
             );
@@ -1816,6 +1817,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
             temperature,
             maxTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
             tools: request.tools,
+            ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
           },
           modelId,
         );
