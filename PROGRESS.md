@@ -165,3 +165,10 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
 - **A26**: mid-stream (post-first-token) IR terminal errors propagate to brain's failover catch = IDENTICAL to legacy streamText semantics (pre-existing duplicate-output risk unchanged); Rule 4 holds at the transport (never re-requests) — brain-level profile failover is legacy parity, kept.
 - **A27**: IR path lacks per-provider dotted-tool-name sanitization (google/openai/xai) — a 400 throws → clean legacy fallback; watch in Phase 3 soak. Anthropic usage.in = raw input_tokens (excludes cache reads) vs ai-SDK summing — telemetry-only, watch in soak.
 - Tests: 15 bridge + 6 brain-seam (deep-equal IR vs legacy, one-row, sessionId→markOutcome e2e, fallback, flag-off transport-never-invoked). No existing test modified; 793 green in llm/brain/conformance + 1283 agent tests.
+
+## PHASE 3 — staging soak STARTED 2026-07-14T18:16Z (gw-cutover-staging, port 28900)
+
+- LLM_IR_CALLERS=health,consciousness — FIRST LIVE IR-SERVED TRAFFIC: repeated clean xai:chat transport rows (health + consciousness, tokens populated, no error_class). Per-provider breaker keys confirmed on the wire.
+- Failure taxonomy all by-design (staging has no oauth/ollama/gemini creds): claude-oauth auth → fallback; after 5 fails/60s the claude-oauth:messages BREAKER OPENED and background calls were fail-closed skipped (overloaded @ ~13ms) — Phase-4 policy machinery live-proven incidentally. google → invalid_request (A23, no route) → clean fallback.
+- claude-oauth live-fire is deliberately NOT covered here (no creds in staging — the #457 refresher-collision rule); it happens at the prod ramp step.
+- Soak gate for the ramp: continued zero unhandled rejections, xai:chat error rate ~0, no ir_transport_fallback on credentialed routes, latency comparable to legacy rows.
