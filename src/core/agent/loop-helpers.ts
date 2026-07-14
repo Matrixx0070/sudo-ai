@@ -70,6 +70,8 @@ export interface BrainRequest {
   tools?: ToolSchema[];
   race?: boolean;
   source?: string;
+  /** gw-cutover Phase 2: session→trace correlation for IR-served calls. */
+  sessionId?: string;
 }
 
 export interface BrainResponse {

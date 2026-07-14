@@ -97,6 +97,13 @@ export interface CallIROptions {
   /** Test seams forwarded to runWithPolicy (deterministic retry timing). */
   sleep?: (ms: number) => Promise<void>;
   rng?: () => number;
+  /**
+   * Disable policy retry for this call (runWithPolicy maxAttempts 1). For
+   * callers that own retry themselves — Brain's failover loop already retries
+   * across profiles; stacking policy's 3 attempts under it would multiply.
+   * Breaker/lanes/budgets still apply.
+   */
+  noRetry?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +437,7 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
       priority: ir.priority,
       ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
       ...(opts.rng !== undefined ? { rng: opts.rng } : {}),
+      ...(opts.noRetry === true ? { maxAttempts: 1 } : {}),
       attempt: async (ctx) => {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
@@ -743,6 +751,7 @@ export async function* streamIR(
       priority: ir.priority,
       ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
       ...(opts.rng !== undefined ? { rng: opts.rng } : {}),
+      ...(opts.noRetry === true ? { maxAttempts: 1 } : {}),
       attempt: async (ctx) => {
         // Fresh single-use machine + parser per attempt (RULE 4: a retried
         // attempt must never see a machine that already consumed events).

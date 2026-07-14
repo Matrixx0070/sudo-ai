@@ -76,6 +76,13 @@ export interface RunWithPolicyOptions<T> {
   /** Test seams — injectable jitter RNG ([0,1)) and sleep. */
   rng?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Per-call attempt cap (clamped to 1..MAX_ATTEMPTS). Used by callers that
+   * OWN retry themselves (Brain's failover loop passes 1 via the transport's
+   * `noRetry` so policy retries never multiply under failover attempts).
+   * Unset → MAX_ATTEMPTS (or 1 under SUDO_LLM_RETRY_DISABLE=1).
+   */
+  maxAttempts?: number;
 }
 
 export interface PolicyOutcome<T> {
@@ -456,7 +463,12 @@ export async function runWithPolicy<T>(opts: RunWithPolicyOptions<T>): Promise<P
     budgetDecision,
   };
 
-  const maxAttempts = process.env['SUDO_LLM_RETRY_DISABLE'] === '1' ? 1 : MAX_ATTEMPTS;
+  const maxAttempts =
+    opts.maxAttempts !== undefined
+      ? Math.min(Math.max(1, Math.floor(opts.maxAttempts)), MAX_ATTEMPTS)
+      : process.env['SUDO_LLM_RETRY_DISABLE'] === '1'
+        ? 1
+        : MAX_ATTEMPTS;
 
   try {
     for (let attemptNo = 0; ; attemptNo++) {

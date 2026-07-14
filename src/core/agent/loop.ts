@@ -1807,6 +1807,7 @@ export class AgentLoop extends AgentLoopInjections {
                     ].filter(Boolean).join('\n'),
                   }],
                   source: 'agent',
+                  sessionId, // gw-cutover Phase 2: session→trace correlation (IR-served calls)
                 }, { tier: 'fast', strategy: 'single' });
                 return retryResp.content ?? '';
               });
@@ -2377,6 +2378,9 @@ export class AgentLoop extends AgentLoopInjections {
           response = await this.brain.call({
             messages: trimmed,
             source: 'agent',
+            // gw-cutover Phase 2: session→trace correlation for IR-served calls
+            // (noteTraceForSession → markOutcomeForSession). Legacy path ignores it.
+            sessionId: state.sessionId,
             model: effectiveModel,
             tools: _routedTools,
             ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),

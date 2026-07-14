@@ -147,6 +147,14 @@ export interface BrainRequest {
    */
   source?: string;
   /**
+   * Session id of the conversation driving this call (gw-cutover Phase 2).
+   * When set AND the call is served by the IR transport (LLM_IR_CALLERS),
+   * Brain calls noteTraceForSession(sessionId, trace_id) so downstream
+   * outcome signals (markOutcomeForSession) land on the right llm_calls row.
+   * Purely observational — never affects routing; legacy path ignores it.
+   */
+  sessionId?: string;
+  /**
    * System-prompt mode. 'slim-heartbeat' replaces the full assembled system
    * prompt with the minimal heartbeat health-check prompt (identity line +
    * protocol; see assembleSlimHeartbeatPrompt) and skips RAG/lens injection.
