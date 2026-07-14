@@ -35,12 +35,7 @@ Heuristic when a path lookup or read silently returns nothing:
 - If the path is inside the workspace project, use \`coder.*\`.
 - A \`system.exec\` "no such file" on a host repo path is the sandbox refusing — switch tools, don't retry.`;
 
-const TEXTPROC_PREFIX = `Text-processing capabilities (Spec 10) — you have first-class tools plus a rich CLI toolchain via \`system.exec\`:
-- **\`textproc.capabilities\`** lists every installed text tool and the best provider per role (call it, or read the one-line summary below).
-- **\`textproc.extract\`** slices exact line/byte ranges or fields from multi-GB files WITHOUT loading them.
-- **\`textproc.replace\`** does safe find-and-replace: dry-run diff preview first, timestamped backups on apply.
-- **\`textproc.analyze\`** runs streaming CSV/TSV/JSONL stats/groupby/freq (Miller or a python fallback).
-For anything else, compose the installed CLIs through \`system.exec\` (rg, jq, mlr, sd, yq, gron, datamash, htmlq, awk, sed …).`;
+const TEXTPROC_PREFIX = `Text-processing (Spec 10): \`textproc.extract\` (line/byte/field slices of multi-GB files, no full load), \`textproc.replace\` (safe find-replace, dry-run diff + backups), \`textproc.analyze\` (streaming CSV/TSV/JSONL stats/groupby/freq), \`textproc.capabilities\` (what's installed). Compose the rest via \`system.exec\`: rg, jq, mlr, sd, yq, gron, datamash, htmlq, awk, sed.`;
 
 /** Returns the manifest body with no surrounding header. */
 export function getCapabilityManifestBody(): string {

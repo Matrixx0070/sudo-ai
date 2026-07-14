@@ -46,8 +46,10 @@ describe('getCapabilityManifestBody', () => {
     expect(body.toLowerCase()).toMatch(/workspace/);
   });
 
-  it('is short enough to be cheap (< 2 KB)', () => {
-    expect(getCapabilityManifestBody().length).toBeLessThan(2048);
+  it('is short enough to be cheap (< 2.6 KB)', () => {
+    // Spec 10 added a terse textproc section (~400 chars) + a cached one-line
+    // coverage summary. Still a single cheap static block; cap nudged 2048→2650.
+    expect(getCapabilityManifestBody().length).toBeLessThan(2650);
   });
 
   // Issue #166 regression: agent picked meta.self-modify on "what channels
