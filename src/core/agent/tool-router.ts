@@ -95,7 +95,7 @@ type CategoryName =
   | 'research' | 'comms' | 'social' | 'marketing' | 'data'
   | 'meta' | 'dev' | 'github' | 'knowledge' | 'voice' | 'business'
   | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal'
-  | 'skill' | 'superpowers';
+  | 'skill' | 'superpowers' | 'textproc';
 
 /**
  * Full category → routing rule map.
@@ -175,6 +175,25 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     ],
     priority: 8,
     maxFromCategory: 6,
+  },
+  // Spec 10: text-processing / structured-data work. Keywords are WHOLE-WORD
+  // matched (the #743 lesson: list plurals/variants explicitly). Cap must
+  // track category size — 4 textproc tools land by PR-4; cap 5 keeps headroom.
+  textproc: {
+    keywords: [
+      'csv', 'tsv', 'json', 'jsonl', 'yaml', 'yml', 'xml', 'html',
+      'log', 'logs', 'logfile', 'grep', 'regex', 'parse', 'extract',
+      'transform', 'pipeline', 'replace', 'dedupe', 'deduplicate',
+      'aggregate', 'column', 'columns', 'field', 'fields', 'lines',
+      'jq', 'awk', 'sed', 'ripgrep', 'delimiter', 'delimited',
+    ],
+    patterns: [
+      /find.{0,20}(replace|in files)/i,
+      /\.(csv|tsv|jsonl?|ya?ml|xml|html?|log)\b/i,
+      /\b(unique|count|sum|mean|median|group.?by)\b.{0,30}\b(rows?|lines?|values?|entries|ips?|columns?)\b/i,
+    ],
+    priority: 8,
+    maxFromCategory: 5,
   },
   content: {
     keywords: [
