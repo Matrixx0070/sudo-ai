@@ -24,6 +24,7 @@ Adapters (golden directories):
 | `ingress-openai`   | `ingressOpenAI(body, meta)` → IRRequest       |
 | `stream-openai`    | OpenAI SSE machine → IRStreamEvent[]          |
 | `stream-anthropic` | Anthropic SSE machine → IRStreamEvent[]       |
+| `transport`        | `callIR(ir)` against an in-process fetch stub → `{wire_request, ir_response}` (gw-cutover Phase 0) |
 | `errors`           | classifyHttpError / classify*Response / classifyThrown → `{class, retryable}` |
 
 ## Running

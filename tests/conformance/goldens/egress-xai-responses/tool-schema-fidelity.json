@@ -1,0 +1,118 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Book a standup.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "testprov/conformance-model-1",
+  "tools": [
+    {
+      "description": "Create a calendar event.",
+      "name": "create_event",
+      "parameters": {
+        "additionalProperties": false,
+        "description": "Create a calendar event with attendees and recurrence.",
+        "properties": {
+          "attendees": {
+            "description": "People to invite",
+            "items": {
+              "properties": {
+                "email": {
+                  "format": "email",
+                  "type": "string"
+                },
+                "optional": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "email"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "kind": {
+            "description": "Event kind",
+            "enum": [
+              "meeting",
+              "reminder",
+              "ooo"
+            ],
+            "type": "string"
+          },
+          "recurrence": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "properties": {
+                  "freq": {
+                    "enum": [
+                      "daily",
+                      "weekly",
+                      "monthly"
+                    ],
+                    "type": "string"
+                  },
+                  "interval": {
+                    "maximum": 52,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "freq"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "title": {
+            "description": "Event title",
+            "minLength": 1,
+            "type": "string"
+          },
+          "when": {
+            "description": "Start/end pair",
+            "properties": {
+              "end": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "start": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "tz": {
+                "default": "UTC",
+                "type": "string"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "title",
+          "when"
+        ],
+        "type": "object"
+      },
+      "type": "function"
+    }
+  ]
+}

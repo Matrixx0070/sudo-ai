@@ -38,6 +38,22 @@ export const IRToolUseBlockSchema = z.object({
 });
 export type IRToolUseBlock = z.infer<typeof IRToolUseBlockSchema>;
 
+/**
+ * Extended-thinking block (gw-cutover Phase 0, A15 debt). Anthropic-only on
+ * the wire today: parseAnthropicResponse maps `thinking` blocks into this and
+ * egressAnthropic passes them back through verbatim (signature included, so
+ * multi-turn tool use with thinking survives). The OpenAI egress SKIPS them —
+ * that wire has no equivalent block and the text channel must not leak
+ * reasoning. ADDITIVE to the v1 union: absent blocks parse exactly as before.
+ */
+export const IRThinkingBlockSchema = z.object({
+  type: z.literal('thinking'),
+  thinking: z.string(),
+  /** Anthropic's integrity signature — must round-trip for passthrough. */
+  signature: z.string().optional(),
+});
+export type IRThinkingBlock = z.infer<typeof IRThinkingBlockSchema>;
+
 export const IRImageSourceSchema = z.object({
   type: z.enum(['base64', 'url']),
   media_type: z.string().optional(),
@@ -72,6 +88,7 @@ export const IRContentBlockSchema = z.discriminatedUnion('type', [
   IRToolUseBlockSchema,
   IRToolResultBlockSchema,
   IRImageBlockSchema,
+  IRThinkingBlockSchema,
 ]);
 export type IRContentBlock = z.infer<typeof IRContentBlockSchema>;
 
@@ -117,10 +134,19 @@ export const IRRequestSchema = z.object({
 });
 export type IRRequest = z.infer<typeof IRRequestSchema>;
 
+/**
+ * INVARIANT: `in` = TOTAL input tokens INCLUDING cached ones (cache reads AND
+ * cache-creation writes) — matches ai-SDK/OpenAI semantics, where
+ * prompt_tokens already covers cached input. `cached_in` (cache reads) and
+ * `cache_creation_in` (cache writes, Anthropic only) are SUBSETS of `in` used
+ * for cost discounting — never add them on top of `in`.
+ */
 export const IRUsageSchema = z.object({
   in: z.number(),
   out: z.number(),
   cached_in: z.number(),
+  /** Anthropic cache_creation_input_tokens (subset of `in`; absent elsewhere). */
+  cache_creation_in: z.number().optional(),
 });
 export type IRUsage = z.infer<typeof IRUsageSchema>;
 

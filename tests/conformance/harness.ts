@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import type { IRRequest, IRResponse } from '../../shared-types/ir/v1.js';
 import { egressOpenAI, parseOpenAIResponse } from '../../src/llm/adapters/egress-openai.js';
 import { egressAnthropic, parseAnthropicResponse } from '../../src/llm/adapters/egress-anthropic.js';
+import { egressXaiResponses } from '../../src/llm/adapters/egress-xai-responses.js';
 import { ingressOpenAI, type IngressMeta } from '../../src/llm/adapters/ingress-openai.js';
 import { streamIR, type IRStreamEvent } from '../../src/llm/adapters/stream.js';
 import {
@@ -320,6 +321,25 @@ export const IR_CASES: IRCase[] = [
   {
     name: 'context-100k',
     ir: build100kIR(),
+  },
+  {
+    name: 'thinking-passthrough',
+    // gw-cutover Phase 0 (A15): assistant thinking blocks in request history
+    // pass through to the anthropic wire (signature preserved) and are
+    // SKIPPED on the openai wire — both pinned by their egress goldens.
+    ir: baseIR({
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Q' }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'private reasoning chain', signature: 'sig-conformance-1' },
+            { type: 'text', text: 'A' },
+          ],
+        },
+        { role: 'user', content: [{ type: 'text', text: 'go on' }] },
+      ],
+    }),
   },
 ];
 
@@ -688,6 +708,239 @@ export function runStreamCase(c: StreamCase): IRStreamEvent[] {
 }
 
 // ---------------------------------------------------------------------------
+// Transport fixtures (gw-cutover Phase 0) — callIR against an in-process
+// fetchImpl stub returning canned JSON (no sockets, fully deterministic).
+// Goldens pin the FULL {wire_request, ir_response} pair: the exact wire body
+// + URL the transport produced AND the IRResponse it parsed back. Auth
+// headers are deliberately NOT captured (no secret shapes in goldens).
+// ---------------------------------------------------------------------------
+
+import { callIR } from '../../src/llm/transport.js';
+
+export interface TransportCase {
+  name: string;
+  ir: IRRequest;
+  /** Canned HTTP-200 JSON the fetch stub replies with. */
+  reply: unknown;
+}
+
+const TRANSPORT_TOOL: IRRequest['tools'] = [
+  {
+    name: 'get_weather',
+    description: 'Look up current weather for a city.',
+    input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+  },
+];
+
+export const TRANSPORT_CASES: TransportCase[] = [
+  // xai-responses family (xai-oauth Phase 2). Auth comes from the vi.mock'd
+  // xai-oauth manager in conformance.test.ts — no env keys, no disk creds.
+  {
+    name: 'text-xai-responses-family',
+    ir: baseIR({
+      alias: 'xai-oauth/conformance-model-1',
+      system: 'You are a terse assistant.',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Hello, transport.' }] }],
+    }),
+    reply: {
+      id: 'resp_conf_1',
+      status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hello back.' }] }],
+      usage: { input_tokens: 12, output_tokens: 4, input_tokens_details: { cached_tokens: 3 } },
+    },
+  },
+  {
+    name: 'tool-call-xai-responses-family',
+    ir: baseIR({
+      alias: 'xai-oauth/conformance-model-1',
+      tools: TRANSPORT_TOOL,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Oslo?' }] }],
+    }),
+    reply: {
+      id: 'resp_conf_2',
+      status: 'completed',
+      output: [
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: 'need the weather tool' }] },
+        { type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{"city":"Oslo"}' },
+      ],
+      usage: { input_tokens: 30, output_tokens: 18 },
+    },
+  },
+  {
+    name: 'text-openai-family',
+    ir: baseIR({
+      alias: 'xai/conformance-model-1',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Hello, transport.' }] }],
+    }),
+    reply: {
+      choices: [{ message: { role: 'assistant', content: 'Hello back.' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 12, completion_tokens: 4, prompt_tokens_details: { cached_tokens: 3 } },
+    },
+  },
+  {
+    name: 'tool-call-openai-family',
+    ir: baseIR({
+      alias: 'xai/conformance-model-1',
+      tools: TRANSPORT_TOOL,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Oslo?' }] }],
+    }),
+    reply: {
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Oslo"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 30, completion_tokens: 18 },
+    },
+  },
+  {
+    name: 'text-anthropic-family',
+    ir: baseIR({
+      alias: 'anthropic/conformance-model-1',
+      system: 'You are a terse assistant.',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Hello, transport.' }] }],
+    }),
+    reply: {
+      content: [{ type: 'text', text: 'Hello back.' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 3 },
+    },
+  },
+  {
+    name: 'tool-call-anthropic-family',
+    ir: baseIR({
+      alias: 'anthropic/conformance-model-1',
+      tools: TRANSPORT_TOOL,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Oslo?' }] }],
+    }),
+    reply: {
+      content: [
+        { type: 'text', text: 'Checking.' },
+        { type: 'tool_use', id: 'tu_1', name: 'get_weather', input: { city: 'Oslo' } },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 30, output_tokens: 18 },
+    },
+  },
+];
+
+/** Run one transport case with a local fetch stub; env keys are scoped. */
+export async function runTransportCase(
+  c: TransportCase,
+): Promise<{ wire_request: { url: string; body: unknown }; ir_response: IRResponse }> {
+  const savedXai = process.env['XAI_API_KEY'];
+  const savedAnthropic = process.env['ANTHROPIC_API_KEY'];
+  process.env['XAI_API_KEY'] = 'conformance-test-key';
+  process.env['ANTHROPIC_API_KEY'] = 'conformance-test-key';
+  try {
+    let captured: { url: string; body: unknown } = { url: '', body: undefined };
+    const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+      captured = { url: String(input), body: JSON.parse(String(init?.body)) };
+      return new Response(JSON.stringify(c.reply), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    const ir_response = await callIR(c.ir, { fetchImpl });
+    return { wire_request: captured, ir_response };
+  } finally {
+    if (savedXai === undefined) delete process.env['XAI_API_KEY'];
+    else process.env['XAI_API_KEY'] = savedXai;
+    if (savedAnthropic === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = savedAnthropic;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stream-transport fixtures (gw-cutover Phase 1) — streamIR against a fetch
+// stub whose Response body is a ReadableStream of scripted SSE BYTES. Goldens
+// pin the FULL yielded IRStreamEvent array for one scripted session per
+// family (framing → machine → transport, end to end, fully deterministic).
+// ---------------------------------------------------------------------------
+
+import { streamIR as streamIRTransport } from '../../src/llm/transport.js';
+
+export interface StreamTransportCase {
+  name: string;
+  /** Model alias — picks the family/route exactly like the transport cases. */
+  alias: string;
+  /** Scripted SSE wire chunks (byte boundaries are part of the fixture). */
+  chunks: string[];
+}
+
+const SSE_OPENAI_SESSION: string[] = [
+  'data: {"choices":[{"delta":{"role":"assistant","content":"Let me "}}]}\n\n',
+  ': keepalive\n\n',
+  'data: {"choices":[{"delta":{"content":"check."}}]}\n\ndata: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_weather","arguments":"{\\"city\\":"}}]}}]}\n\n',
+  'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"Oslo\\"}"}}]}}]}\n\n',
+  'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+  'data: {"choices":[],"usage":{"prompt_tokens":25,"completion_tokens":17,"prompt_tokens_details":{"cached_tokens":10}}}\n\n',
+  'data: [DONE]\n\n',
+];
+
+const SSE_ANTHROPIC_SESSION: string[] = [
+  'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":25,"cache_read_input_tokens":10,"output_tokens":1}}}\n\n',
+  'event: ping\ndata: {"type":"ping"}\n\n',
+  'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me "}}\n\n',
+  // Event split across a chunk boundary — framing reassembly is pinned.
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_del',
+  'ta","text":"check."}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+  'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"get_weather","input":{}}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":"}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\\"Oslo\\"}"}}\n\n',
+  'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":17}}\n\n',
+  'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+];
+
+export const STREAM_TRANSPORT_CASES: StreamTransportCase[] = [
+  { name: 'session-openai-family', alias: 'xai/conformance-model-1', chunks: SSE_OPENAI_SESSION },
+  { name: 'session-anthropic-family', alias: 'anthropic/conformance-model-1', chunks: SSE_ANTHROPIC_SESSION },
+];
+
+/** Run one stream-transport case; returns every yielded IRStreamEvent. */
+export async function runStreamTransportCase(c: StreamTransportCase): Promise<IRStreamEvent[]> {
+  const savedXai = process.env['XAI_API_KEY'];
+  const savedAnthropic = process.env['ANTHROPIC_API_KEY'];
+  process.env['XAI_API_KEY'] = 'conformance-test-key';
+  process.env['ANTHROPIC_API_KEY'] = 'conformance-test-key';
+  try {
+    const encoder = new TextEncoder();
+    const fetchImpl = (async () => {
+      let i = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (i < c.chunks.length) controller.enqueue(encoder.encode(c.chunks[i++]!));
+          else controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }) as typeof fetch;
+
+    const ir = baseIR({
+      alias: c.alias,
+      tools: TRANSPORT_TOOL,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather in Oslo?' }] }],
+    });
+    const events: IRStreamEvent[] = [];
+    for await (const ev of streamIRTransport(ir, { fetchImpl })) events.push(ev);
+    return events;
+  } finally {
+    if (savedXai === undefined) delete process.env['XAI_API_KEY'];
+    else process.env['XAI_API_KEY'] = savedXai;
+    if (savedAnthropic === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = savedAnthropic;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Error-taxonomy fixtures — one case per LLMErrorClass (all 11)
 // ---------------------------------------------------------------------------
 
@@ -787,7 +1040,8 @@ export function runErrorCase(c: ErrorCase): Record<string, unknown> {
 
 export interface MatrixCase {
   name: string;
-  produce: () => unknown;
+  /** May be async (transport family) — the test file awaits every produce(). */
+  produce: () => unknown | Promise<unknown>;
 }
 
 export const ADAPTER_MATRIX: Record<string, MatrixCase[]> = {
@@ -798,6 +1052,12 @@ export const ADAPTER_MATRIX: Record<string, MatrixCase[]> = {
   'egress-anthropic': IR_CASES.filter((c) => !c.skip?.includes('egress-anthropic')).map((c) => ({
     name: c.name,
     produce: () => egressAnthropic(c.ir),
+  })),
+  // xai-oauth Phase 2: every IR case applies (thinking-passthrough pins the
+  // STRIP-on-replay rule — reasoning never goes back to /responses).
+  'egress-xai-responses': IR_CASES.map((c) => ({
+    name: c.name,
+    produce: () => egressXaiResponses(c.ir),
   })),
   'parse-openai': PARSE_OPENAI_CASES.map((c) => ({
     name: c.name,
@@ -818,6 +1078,11 @@ export const ADAPTER_MATRIX: Record<string, MatrixCase[]> = {
   'stream-anthropic': STREAM_CASES.filter((c) => c.target === 'anthropic').map((c) => ({
     name: c.name,
     produce: () => runStreamCase(c),
+  })),
+  transport: TRANSPORT_CASES.map((c) => ({ name: c.name, produce: () => runTransportCase(c) })),
+  'stream-transport': STREAM_TRANSPORT_CASES.map((c) => ({
+    name: c.name,
+    produce: () => runStreamTransportCase(c),
   })),
   errors: ERROR_CASES.map((c) => ({ name: c.name, produce: () => runErrorCase(c) })),
 };

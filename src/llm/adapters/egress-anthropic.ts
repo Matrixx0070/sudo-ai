@@ -130,6 +130,14 @@ function blockOut(block: IRContentBlock): Rec {
     }
     case 'image':
       return imageBlockOut(block);
+    case 'thinking': {
+      // Passthrough (A15): thinking blocks in request history go back to the
+      // Anthropic wire verbatim — signature included, or the API rejects the
+      // replayed block on multi-turn tool use.
+      const out: Rec = { type: 'thinking', thinking: block.thinking };
+      if (block.signature !== undefined) out['signature'] = block.signature;
+      return out;
+    }
   }
 }
 
@@ -182,11 +190,23 @@ export function egressAnthropic(ir: IRRequest): Rec {
 
 function parseUsage(u: unknown): IRUsage {
   if (!isRec(u)) return { in: 0, out: 0, cached_in: 0 };
-  return {
-    in: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : 0,
+  const input = typeof u['input_tokens'] === 'number' ? u['input_tokens'] : 0;
+  const cacheRead =
+    typeof u['cache_read_input_tokens'] === 'number' ? u['cache_read_input_tokens'] : 0;
+  const cacheCreation =
+    typeof u['cache_creation_input_tokens'] === 'number' ? u['cache_creation_input_tokens'] : 0;
+  // IRUsage invariant: `in` = TOTAL input incl. cached (matches ai-SDK/OpenAI
+  // semantics). Anthropic's input_tokens EXCLUDES cache reads/writes, so sum
+  // them here; cached_in/cache_creation_in stay the discountable subsets.
+  const usage: IRUsage = {
+    in: input + cacheRead + cacheCreation,
     out: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : 0,
-    cached_in: typeof u['cache_read_input_tokens'] === 'number' ? u['cache_read_input_tokens'] : 0,
+    cached_in: cacheRead,
   };
+  if (typeof u['cache_creation_input_tokens'] === 'number') {
+    usage.cache_creation_in = cacheCreation;
+  }
+  return usage;
 }
 
 /**
@@ -225,9 +245,15 @@ export function parseAnthropicResponse(json: unknown, trace_id: string): IRRespo
         name: typeof raw['name'] === 'string' ? raw['name'] : '',
         input,
       });
+    } else if (raw['type'] === 'thinking' && typeof raw['thinking'] === 'string') {
+      // A15: thinking blocks are mapped into the IR (previously dropped) so
+      // opus/fable extended thinking is never silently lost.
+      const tb: IRContentBlock = { type: 'thinking', thinking: raw['thinking'] };
+      if (typeof raw['signature'] === 'string') tb.signature = raw['signature'];
+      blocks.push(tb);
     }
-    // thinking/redacted_thinking and unknown block types are dropped from the
-    // typed surface (vendor-specific; nothing downstream consumes them yet).
+    // redacted_thinking and unknown block types are dropped from the typed
+    // surface (vendor-specific; nothing downstream consumes them yet).
   }
 
   const extra: Record<string, unknown> = {};

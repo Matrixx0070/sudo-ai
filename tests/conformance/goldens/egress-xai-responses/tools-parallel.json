@@ -1,0 +1,53 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Weather and time in Oslo?",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "arguments": "{\"city\":\"Oslo\"}",
+      "call_id": "tu_1",
+      "name": "get_weather",
+      "type": "function_call"
+    },
+    {
+      "arguments": "{\"tz\":\"Europe/Oslo\"}",
+      "call_id": "tu_2",
+      "name": "get_time",
+      "type": "function_call"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "testprov/conformance-model-1",
+  "tools": [
+    {
+      "name": "get_weather",
+      "parameters": {
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "type": "function"
+    },
+    {
+      "name": "get_time",
+      "parameters": {
+        "properties": {
+          "tz": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "type": "function"
+    }
+  ]
+}

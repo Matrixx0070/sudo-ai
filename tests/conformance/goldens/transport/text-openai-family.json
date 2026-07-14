@@ -1,0 +1,30 @@
+{
+  "ir_response": {
+    "blocks": [
+      {
+        "text": "Hello back.",
+        "type": "text"
+      }
+    ],
+    "stop_reason": "end_turn",
+    "trace_id": "trace-conformance-0001",
+    "usage": {
+      "cached_in": 3,
+      "in": 12,
+      "out": 4
+    }
+  },
+  "wire_request": {
+    "body": {
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "content": "Hello, transport.",
+          "role": "user"
+        }
+      ],
+      "model": "conformance-model-1"
+    },
+    "url": "https://api.x.ai/v1/chat/completions"
+  }
+}

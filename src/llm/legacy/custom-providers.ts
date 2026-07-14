@@ -59,6 +59,15 @@ type ModelKind = 'native' | 'chat';
 interface CustomProviderEntry {
   provider: AnyCustomProvider;
   modelKind: ModelKind;
+  /** Raw wire config, for transports that fetch directly (gw-cutover Phase 0). */
+  wire: CustomProviderWireConfig;
+}
+
+/** What the IR transport needs to call a custom endpoint without the AI SDK. */
+export interface CustomProviderWireConfig {
+  baseURL: string;
+  apiKey: string;
+  adapter: CustomAdapter;
 }
 
 /**
@@ -119,6 +128,14 @@ export function getCustomProvider(name: string): AnyCustomProvider | null {
 
 export function listCustomProviders(): string[] {
   return [...registry.keys()];
+}
+
+/**
+ * Wire config (baseURL/apiKey/adapter) for a registered custom provider, for
+ * the in-process IR transport's direct fetch path. Null when unregistered.
+ */
+export function getCustomProviderWireConfig(name: string): CustomProviderWireConfig | null {
+  return registry.get(name)?.wire ?? null;
 }
 
 /**
@@ -206,7 +223,11 @@ export function registerCustomProvider(
 
   try {
     const instance = adapter.build(apiKey, baseURL, config);
-    registry.set(name, { provider: instance, modelKind: adapter.modelKind });
+    registry.set(name, {
+      provider: instance,
+      modelKind: adapter.modelKind,
+      wire: { baseURL, apiKey, adapter: rawAdapter as CustomAdapter },
+    });
     log.info({ name, baseURL, adapter: rawAdapter }, 'custom provider registered');
     return true;
   } catch (err) {

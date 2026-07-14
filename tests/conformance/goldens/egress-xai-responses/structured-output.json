@@ -1,0 +1,37 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Grade this.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "testprov/conformance-model-1",
+  "text": {
+    "format": {
+      "name": "structured_output",
+      "schema": {
+        "properties": {
+          "verdict": {
+            "enum": [
+              "pass",
+              "fail"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "strict": true,
+      "type": "json_schema"
+    }
+  }
+}

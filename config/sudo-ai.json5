@@ -30,6 +30,10 @@
     // cheap + premium pinned to primary so _smartRoute's cheap branch and
     // reasoning-tier branch stay no-ops.
     primary: [
+      // xai-oauth example (subscription OAuth Grok via /v1/responses; personalOnly,
+      // requires `sudo-ai xai-oauth login` — see docs/providers/xai-oauth.md).
+      // Uncomment to add to the failover chain (deploy decision is the operator's):
+      // { id: 'xai-oauth/grok-4.3', contextWindow: 256000, maxOutputTokens: 8192, temperature: 0.7 },
       // 2026-07-08 (operator): Fable 5 pinned as DEFAULT model. NB: on the
       // daemon's OAuth token claude-fable-5 currently returns rate_limit_error
       // (verified 3x direct probe) — failover parks it and serves Haiku below;

@@ -185,6 +185,8 @@ export class LLMPolicyError extends Error {
   public readonly retryable: boolean;
   /** True when policy skipped the call (breaker open / budget / halt) — no attempt was made. */
   public readonly skipped: boolean;
+  /** Structured extras (e.g. xai-oauth 403 → { tier_gated: true }). */
+  public readonly extra?: Record<string, unknown>;
 
   constructor(
     message: string,
@@ -195,6 +197,7 @@ export class LLMPolicyError extends Error {
       retryable?: boolean;
       skipped?: boolean;
       cause?: unknown;
+      extra?: Record<string, unknown>;
     },
   ) {
     super(message, opts.cause !== undefined ? { cause: opts.cause } : undefined);
@@ -204,5 +207,6 @@ export class LLMPolicyError extends Error {
     if (opts.route !== undefined) this.route = opts.route;
     this.retryable = opts.retryable ?? isRetryable(opts.class);
     this.skipped = opts.skipped ?? false;
+    if (opts.extra !== undefined) this.extra = opts.extra;
   }
 }

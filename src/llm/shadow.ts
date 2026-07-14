@@ -72,6 +72,12 @@ export interface ShadowBrainRequest {
   maxTokens?: number;
   /** OpenAI-function-shaped ToolSchema[] (registry emission). */
   tools?: Array<{ type?: string; function?: { name?: string; description?: string; parameters?: Record<string, unknown> } }>;
+  /**
+   * Session id when the caller has one (brain threads it through) — mapped to
+   * ir.extra.conv_id so conversation-keyed features (xai-oauth prompt caching
+   * via the x-grok-conv-id header) get a stable key per session.
+   */
+  sessionId?: string;
 }
 
 /** Legacy result as brain.ts reads it off the ai SDK / BrainResponse. */
@@ -132,6 +138,15 @@ function imageToBlock(img: NonNullable<ShadowLegacyMessage['images']>[number]): 
  * - assistant toolCalls[] → tool_use blocks appended after any text block
  *   (arguments are already parsed objects in legacy history — carried as-is).
  * - messages that yield no blocks (empty content, no tools/images) are dropped.
+ *
+ * Malformation strips (mirrors the legacy claude-oauth interceptor repairs in
+ * legacy/providers.ts — the window/fork trim path can leave these, and both
+ * are guaranteed Anthropic 400s):
+ * - whitespace-only text blocks are dropped (stripEmptyTextBlocks parity:
+ *   "text content blocks must be non-empty").
+ * - tool_result blocks whose tool_use_id has no matching tool_use EARLIER in
+ *   the mapped history are dropped (orphan strip parity); a folded user
+ *   tool-results message left empty by the strip is dropped entirely.
  */
 export function brainRequestToIR(request: ShadowBrainRequest, modelId: string): IRRequest {
   const systemParts: string[] = [];
@@ -139,6 +154,9 @@ export function brainRequestToIR(request: ShadowBrainRequest, modelId: string): 
 
   const messages: IRMessage[] = [];
   let pendingToolResults: IRToolResultBlock[] = [];
+  /** tool_use ids seen so far — tool_use always precedes its tool_result in
+   * valid history, so a single forward pass matches legacy's two-pass scan. */
+  const seenToolUseIds = new Set<string>();
 
   const flushToolResults = (): void => {
     if (pendingToolResults.length > 0) {
@@ -155,11 +173,16 @@ export function brainRequestToIR(request: ShadowBrainRequest, modelId: string): 
     }
 
     if (msg.role === 'tool') {
-      pendingToolResults.push({
-        type: 'tool_result',
-        tool_use_id: msg.toolCallId ?? '',
-        content: msg.content ?? '',
-      });
+      // Orphan strip: a tool_result whose id has no earlier tool_use is a
+      // guaranteed Anthropic 400 — drop it (legacy providers.ts orphan strip).
+      const toolUseId = msg.toolCallId ?? '';
+      if (seenToolUseIds.has(toolUseId)) {
+        pendingToolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: msg.content ?? '',
+        });
+      }
       continue;
     }
 
@@ -167,7 +190,9 @@ export function brainRequestToIR(request: ShadowBrainRequest, modelId: string): 
 
     if (msg.role === 'user') {
       const blocks: IRContentBlock[] = [];
-      if (msg.content !== '') blocks.push({ type: 'text', text: msg.content });
+      // Whitespace-only text = empty text block on the wire (400) — strip
+      // (legacy stripEmptyTextBlocks parity: t.trim() === '').
+      if (msg.content.trim() !== '') blocks.push({ type: 'text', text: msg.content });
       for (const img of msg.images ?? []) blocks.push(imageToBlock(img));
       if (blocks.length > 0) messages.push({ role: 'user', content: blocks });
       continue;
@@ -175,11 +200,13 @@ export function brainRequestToIR(request: ShadowBrainRequest, modelId: string): 
 
     // assistant
     const blocks: IRContentBlock[] = [];
-    if (msg.content !== '') blocks.push({ type: 'text', text: msg.content });
+    if (msg.content.trim() !== '') blocks.push({ type: 'text', text: msg.content });
     for (const tc of msg.toolCalls ?? []) {
+      const id = tc.id ?? '';
+      seenToolUseIds.add(id);
       blocks.push({
         type: 'tool_use',
-        id: tc.id ?? '',
+        id,
         name: tc.name ?? '',
         input: isRec(tc.arguments) ? tc.arguments : {},
       });
@@ -210,6 +237,9 @@ export function brainRequestToIR(request: ShadowBrainRequest, modelId: string): 
   if (tools !== undefined) ir.tools = tools;
   if (request.maxTokens !== undefined) ir.max_tokens = request.maxTokens;
   if (request.temperature !== undefined) ir.temperature = request.temperature;
+  if (request.sessionId !== undefined && request.sessionId !== '') {
+    ir.extra = { conv_id: request.sessionId };
+  }
   return ir;
 }
 
@@ -380,6 +410,10 @@ function expectedSemantics(request: ShadowBrainRequest, family: WireFamily): Exp
   let assistantText = '';
   let toolResultsText = '';
   let inToolRun = false;
+  // Mirror brainRequestToIR's malformation strips (whitespace-only text,
+  // orphan tool_results) — the LEGACY interceptor repairs those before the
+  // wire too, so the expected semantics are of the REPAIRED history.
+  const seenToolUseIds = new Set<string>();
 
   for (const msg of request.messages) {
     if (msg.role === 'system') {
@@ -388,6 +422,7 @@ function expectedSemantics(request: ShadowBrainRequest, family: WireFamily): Exp
       continue;
     }
     if (msg.role === 'tool') {
+      if (!seenToolUseIds.has(msg.toolCallId ?? '')) continue; // orphan — stripped
       toolResultsText += msg.content ?? '';
       if (family === 'openai') {
         count += 1; // each tool message is its own role:'tool' wire message
@@ -399,15 +434,18 @@ function expectedSemantics(request: ShadowBrainRequest, family: WireFamily): Exp
     }
     inToolRun = false;
     if (msg.role === 'user') {
-      const hasContent = msg.content !== '' || (msg.images?.length ?? 0) > 0;
+      const text = msg.content.trim() !== '' ? msg.content : '';
+      const hasContent = text !== '' || (msg.images?.length ?? 0) > 0;
       if (hasContent) count += 1;
-      userText += msg.content;
+      userText += text;
       continue;
     }
     // assistant
-    const hasContent = msg.content !== '' || (msg.toolCalls?.length ?? 0) > 0;
+    for (const tc of msg.toolCalls ?? []) seenToolUseIds.add(tc.id ?? '');
+    const text = msg.content.trim() !== '' ? msg.content : '';
+    const hasContent = text !== '' || (msg.toolCalls?.length ?? 0) > 0;
     if (hasContent) count += 1;
-    assistantText += msg.content;
+    assistantText += text;
   }
 
   const system = systemParts.join('\n\n');

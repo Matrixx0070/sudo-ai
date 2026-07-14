@@ -137,3 +137,53 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
   - Shadow: 38/38 live shadow_match; SHADOW_REPORT.md regenerated — PASS 0.000% over 341 (303 replay + 38 live).
   - NOT MEASURABLE here: cache-hit >50% on agent-loop (staging is xai-only; anthropic cache_control traffic exists only on prod claude-oauth) — flagged for post-merge observation; LLM_DIRECT_FALLBACK=0 flip deferred pending the in-process IR transport decision (operator discussion logged — recommendation: src/llm IS the gateway, no external LLM_BASE_URL).
 - Staging soak stays running for continued burn-in until the PR is reviewed.
+
+# GW-CUTOVER (successor mission — specs/gw-cutover-spec.md)
+
+## PHASE 0 — IR transport core (non-streaming)
+
+- src/llm/transport.ts callIR: alias → route (per-provider breaker keys, e.g. claude-oauth:messages separate from anthropic:messages), egress adapters, authed fetch, parse+classify (200-garbage/refusal returned as stop_reason 'error', never thrown), runWithPolicy wrap, full-fidelity llm_calls row + wire sha256, injectable fetch/sleep/rng.
+- claude-oauth contract REUSED from legacy (single-flight refresh via getClaudeOAuthManager; headers verbatim incl. anthropic-beta oauth-2025-04-20; Claude Code attestation prepend; sanitizeOAuthToolName + reverse map on response tool_use).
+- IR v1 + adapters: thinking block added (A15 paid); anthropic parse/egress passthrough w/ signature; openai egress skips thinking (documented); redacted_thinking still dropped.
+- Temperature-deprecation strip ported verbatim from legacy (opus-4-8+/claude-*-5 400 class) + 2 pin tests — the builder's flagged weakest point, closed same session.
+- custom-providers: getCustomProviderWireConfig() added (registry previously exposed only SDK instances).
+- **A22**: legacy-only body repairs (orphan tool_result strip, empty-text strip, thinking-budget injection) deliberately NOT ported — quarantined with the legacy path; revisit at Phase 2 brain wiring if live traffic needs them.
+- **A23**: google provider → invalid_request in transport (not OpenAI-compat at its base); reachable only via legacy until someone needs it.
+- Tests: 19 transport + thinking/adapters additions; conformance +6 goldens (transport family + thinking) with zero modifications to existing goldens. UNVERIFIED: live provider acceptance (mocked fetch only — Phase 3 soak covers).
+
+## PHASE 1 — streaming transport
+
+- streamIR in transport.ts: shared prepareWireCall(ir, stream) factored out of callIR (callIR wire bytes unchanged — goldens/sha256 prove); fresh single-use SSE machine + incremental SSE parser per attempt (CRLF-across-chunks, multi-data joins, keepalives ignored); Rule 4 structural: policy retries only until the machine's first emission (ctx.markFirstToken), after that failures → machine.fail() → stream_error + terminal message_end 'error', never re-request; OpenAI [DONE] → machine.end(); truncation → terminal flush + error_class provider_bug (**A24**: judgment call, reviewer may prefer 'network'); consumer break → AbortController fires, partial row written, nothing thrown; ONE llm_calls row per stream w/ ttft_ms + reconstructed ir_response; claude-oauth reverse name map applied to streamed tool events.
+- **A25**: stream_options {include_usage:true} added for the openai family (builder left it out — streamed rows would log ZERO usage, blinding budgets; standard spec field, xai/groq/deepseek/ollama tolerate) + pin test asserting anthropic bodies do NOT carry it.
+- Legacy oauth streaming nuance check: no extra headers/params beyond stream:true (verified against legacy providers.ts); legacy's idle-timeout resilience wrappers deliberately not ported (policy owns retry/timeout semantics now).
+- Tests: 13 stream tests (happy both families, [DONE]+trailing usage, truncation, abort-after-first-token proves fetch-called-once, retry-before-first-token, retries-exhausted, consumer break, oauth event name reversal, framing edges) + 2 stream-transport conformance goldens. UNVERIFIED: live provider streaming (Phase 3 soak).
+
+## PHASE 2 — brain seam behind LLM_IR_CALLERS
+
+- src/llm/brain-bridge.ts: irCallersEnabled (exact-match list or '*'), irResponseToBrainResult (inverse mapper: toolCalls {toolCallId,toolName,input}, ai-SDK v6 usage, thinking→reasoningText, cached_in→synthesized anthropic providerMetadata so cache telemetry untouched), callTransportForBrain (noRetry — new CallIROptions seam → runWithPolicy maxAttempts:1; brain failover owns retry; 200-lie/refusal converted to THROW → legacy fallback same attempt = most conservative ramp), streamTransportForBrain (facade {textStream,usage,finishReason}; pre-first-token failure rejects → legacy fallback; promises always settle).
+- brain.ts seams: stream() L1342 + _callSingleModel L1802 guarded branches; _recordGatewayCall+runShadow skipped when IR-served (one-row invariant — transport's fuller row wins); ir_transport_fallback warn on fallback. sessionId? added to BrainRequest (both type decls) + passed at loop.ts:2383/1810 → noteTraceForSession → markOutcome correlation LIVE on IR-served calls.
+- **A26**: mid-stream (post-first-token) IR terminal errors propagate to brain's failover catch = IDENTICAL to legacy streamText semantics (pre-existing duplicate-output risk unchanged); Rule 4 holds at the transport (never re-requests) — brain-level profile failover is legacy parity, kept.
+- **A27**: IR path lacks per-provider dotted-tool-name sanitization (google/openai/xai) — a 400 throws → clean legacy fallback; watch in Phase 3 soak. Anthropic usage.in = raw input_tokens (excludes cache reads) vs ai-SDK summing — telemetry-only, watch in soak.
+- Tests: 15 bridge + 6 brain-seam (deep-equal IR vs legacy, one-row, sessionId→markOutcome e2e, fallback, flag-off transport-never-invoked). No existing test modified; 793 green in llm/brain/conformance + 1283 agent tests.
+
+## PHASE 3 — staging soak STARTED 2026-07-14T18:16Z (gw-cutover-staging, port 28900)
+
+- LLM_IR_CALLERS=health,consciousness — FIRST LIVE IR-SERVED TRAFFIC: repeated clean xai:chat transport rows (health + consciousness, tokens populated, no error_class). Per-provider breaker keys confirmed on the wire.
+- Failure taxonomy all by-design (staging has no oauth/ollama/gemini creds): claude-oauth auth → fallback; after 5 fails/60s the claude-oauth:messages BREAKER OPENED and background calls were fail-closed skipped (overloaded @ ~13ms) — Phase-4 policy machinery live-proven incidentally. google → invalid_request (A23, no route) → clean fallback.
+- claude-oauth live-fire is deliberately NOT covered here (no creds in staging — the #457 refresher-collision rule); it happens at the prod ramp step.
+- Soak gate for the ramp: continued zero unhandled rejections, xai:chat error rate ~0, no ir_transport_fallback on credentialed routes, latency comparable to legacy rows.
+
+## INCIDENT #4 — branch theft corrupted a gate run; commit chain didn't gate on TEST result
+
+- xai-oauth Phase 1 commit (38c7c91) was pushed while the gate's TEST step showed 18 test FILES failed. Diagnosis: the auto-fix automation checked out its branch (at an ancient commit) mid-vitest-run — the 18 "failures" are "Cannot find module <the test file itself>" load errors from the tree swap (same signature as incident #1); 0 individual test failures; the pre-commit-chain `git checkout gw-cutover` restored the branch, so the commit CONTENT is correct. PROCESS VIOLATION acknowledged: the commit command chained unconditionally after the gate instead of gating on TEST:0 — the corrupted run should have blocked the push until re-run. Full-suite re-run on a stable tree is the retroactive validation (result recorded below).
+- NEW COUNTERMEASURE for long gate runs: a background guard loop during gates (`while sleep 15; git symbolic-ref HEAD | grep -q gw-cutover || git checkout gw-cutover`) so mid-run thefts self-heal within seconds instead of corrupting the collection phase.
+
+## XAI-OAUTH PHASES 2+3 — Responses transport + registration (LIVE-PROVEN)
+
+- egress-xai-responses.ts: IR → Responses items (role msgs w/ input_text/output_text, function_call/function_call_output, FLAT tools), thinking STRIPPED on replay (gotcha 2), reasoning items → IR thinking on the way out; parse w/ shared tool-args funnel; SSE machine (output_text.delta / function_call_arguments.delta / response.completed in-band terminal) same single-use Rule-4 contract.
+- transport: family xai-responses, route xai-oauth:responses (own breaker), Bearer via getXaiOAuthManager, 401→auth+relogin hint, 403→auth+extra.tier_gated, x-grok-conv-id = extra.conv_id ?? trace_id (gotcha 4); conv_id threaded from BrainRequest.sessionId via brainRequestToIR.
+- personalOnly: first-line block in prepareWireCall (ir.extra.untrusted → invalid_request before token/fetch); hook/community callers additionally rely on existing upstream isOwner gating — split documented in docs/providers/xai-oauth.md.
+- Registration: commented example in config/sudo-ai.json5 models.primary only (live config = operator deploy decision); docs page complete.
+- **LIVE SMOKE (subscription, 2 calls)**: callIR → 200, end_turn, [thinking, "ready"], usage in:198/out:131/cached:192; streamIR → "ready", cached:128 — conv-id caching visibly ACTIVE. Zero shape iterations needed. llm_calls rows route xai-oauth:responses both.
+- **A28**: never-logged-in → class auth (failover treats like expired creds); text.format json_schema emitted per spec but NOT live-verified; tool-call STREAMING shape pinned by spec+goldens only (live stream had no tool items) — weakest point for prod watch.
+- 31 new tests + 12 new goldens (zero churn on existing).

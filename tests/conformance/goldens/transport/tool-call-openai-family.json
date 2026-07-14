@@ -1,0 +1,54 @@
+{
+  "ir_response": {
+    "blocks": [
+      {
+        "id": "call_1",
+        "input": {
+          "city": "Oslo"
+        },
+        "name": "get_weather",
+        "type": "tool_use"
+      }
+    ],
+    "stop_reason": "tool_use",
+    "trace_id": "trace-conformance-0001",
+    "usage": {
+      "cached_in": 0,
+      "in": 30,
+      "out": 18
+    }
+  },
+  "wire_request": {
+    "body": {
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "content": "Weather in Oslo?",
+          "role": "user"
+        }
+      ],
+      "model": "conformance-model-1",
+      "tools": [
+        {
+          "function": {
+            "description": "Look up current weather for a city.",
+            "name": "get_weather",
+            "parameters": {
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "function"
+        }
+      ]
+    },
+    "url": "https://api.x.ai/v1/chat/completions"
+  }
+}

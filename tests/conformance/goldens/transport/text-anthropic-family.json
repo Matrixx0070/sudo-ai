@@ -1,0 +1,41 @@
+{
+  "ir_response": {
+    "blocks": [
+      {
+        "text": "Hello back.",
+        "type": "text"
+      }
+    ],
+    "stop_reason": "end_turn",
+    "trace_id": "trace-conformance-0001",
+    "usage": {
+      "cached_in": 3,
+      "in": 15,
+      "out": 4
+    }
+  },
+  "wire_request": {
+    "body": {
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Hello, transport.",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "conformance-model-1",
+      "system": [
+        {
+          "text": "You are a terse assistant.",
+          "type": "text"
+        }
+      ]
+    },
+    "url": "https://api.anthropic.com/v1/messages"
+  }
+}

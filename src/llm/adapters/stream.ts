@@ -50,6 +50,13 @@ export interface IRStreamMachine {
   readonly firstTokenEmitted: boolean;
   /** True after the terminal message_end; the machine is spent. */
   readonly terminated: boolean;
+  /**
+   * Last-known usage snapshot (copy). Anthropic message_start already carries
+   * input_tokens, so a cancelled stream still knows its prompt cost — the
+   * transport reads this for partial llm_calls rows and cancelled-stream
+   * billing (never undefined; zeros until the wire reports anything).
+   */
+  readonly partialUsage: IRUsage;
   /** Feed one parsed SSE event/chunk object; returns 0..n IR stream events. */
   push(event: unknown): IRStreamEvent[];
   /**
@@ -92,6 +99,10 @@ abstract class BaseMachine implements IRStreamMachine {
   protected usage: IRUsage = { in: 0, out: 0, cached_in: 0 };
   protected stopReason: IRResponse['stop_reason'] = 'end_turn';
 
+  get partialUsage(): IRUsage {
+    return { ...this.usage };
+  }
+
   protected emit(events: IRStreamEvent[]): IRStreamEvent[] {
     if (events.length > 0) this.firstTokenEmitted = true;
     if (events.some((e) => e.type === 'message_end')) this.terminated = true;
@@ -133,6 +144,30 @@ abstract class BaseMachine implements IRStreamMachine {
 class AnthropicMachine extends BaseMachine {
   /** input_json_delta partials keyed by content_block index. */
   private pending = new Map<number, PendingTool>();
+  /** Raw wire components — Anthropic's input_tokens EXCLUDES cache tokens. */
+  private rawIn = 0;
+  private cacheRead = 0;
+  private cacheCreation = 0;
+  private sawCacheCreation = false;
+
+  /**
+   * Fold a wire `usage` object (message_start or message_delta) into the IR
+   * usage. Same math as parseUsage in egress-anthropic.ts: IR `in` = TOTAL
+   * input incl. cache reads/writes (ai-SDK/OpenAI semantics); cached_in /
+   * cache_creation_in remain the discountable subsets.
+   */
+  private applyWireUsage(u: Rec): void {
+    if (typeof u['input_tokens'] === 'number') this.rawIn = u['input_tokens'];
+    if (typeof u['cache_read_input_tokens'] === 'number') this.cacheRead = u['cache_read_input_tokens'];
+    if (typeof u['cache_creation_input_tokens'] === 'number') {
+      this.cacheCreation = u['cache_creation_input_tokens'];
+      this.sawCacheCreation = true;
+    }
+    if (typeof u['output_tokens'] === 'number') this.usage.out = u['output_tokens'];
+    this.usage.in = this.rawIn + this.cacheRead + this.cacheCreation;
+    this.usage.cached_in = this.cacheRead;
+    if (this.sawCacheCreation) this.usage.cache_creation_in = this.cacheCreation;
+  }
 
   protected flushPending(): IRStreamEvent[] {
     const out: IRStreamEvent[] = [];
@@ -148,10 +183,7 @@ class AnthropicMachine extends BaseMachine {
     switch (event['type']) {
       case 'message_start': {
         const msg = isRec(event['message']) ? event['message'] : {};
-        const u = isRec(msg['usage']) ? msg['usage'] : {};
-        if (typeof u['input_tokens'] === 'number') this.usage.in = u['input_tokens'];
-        if (typeof u['cache_read_input_tokens'] === 'number') this.usage.cached_in = u['cache_read_input_tokens'];
-        if (typeof u['output_tokens'] === 'number') this.usage.out = u['output_tokens'];
+        if (isRec(msg['usage'])) this.applyWireUsage(msg['usage']);
         break;
       }
       case 'content_block_start': {
@@ -196,8 +228,7 @@ class AnthropicMachine extends BaseMachine {
         if (d['stop_reason'] !== undefined && d['stop_reason'] !== null) {
           this.stopReason = anthropicStopReasonToIR(d['stop_reason']);
         }
-        const u = isRec(event['usage']) ? event['usage'] : {};
-        if (typeof u['output_tokens'] === 'number') this.usage.out = u['output_tokens'];
+        if (isRec(event['usage'])) this.applyWireUsage(event['usage']);
         break;
       }
       case 'message_stop': {

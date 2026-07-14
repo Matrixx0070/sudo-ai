@@ -33,8 +33,10 @@ import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
 import { getCostTracker } from '../billing/cost-tracker.js';
-import { getGatewayCallLog, type LLMCallRecord } from '../../llm/logging.js';
+import { getGatewayCallLog, noteTraceForSession, type LLMCallRecord } from '../../llm/logging.js';
 import { runShadow } from '../../llm/shadow.js';
+// gw-cutover Phase 2: per-attempt IR-transport seam (LLM_IR_CALLERS ramp flag).
+import { irCallersEnabled, irErrorClass, callTransportForBrain, streamTransportForBrain } from '../../llm/brain-bridge.js';
 import { queryAllModelsConsensus, type ConsensusOptions } from './model-consensus.js';
 import { DispatchRouter } from './dispatch-router.js';
 import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
@@ -1337,6 +1339,95 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       log.info({ attempt, modelId }, 'Streaming LLM call starting');
 
       try {
+        // gw-cutover Phase 2: IR-transport streaming seam (LLM_IR_CALLERS).
+        // Pre-first-token transport failure → warn + fall through to the
+        // legacy streamText path below for the SAME attempt. Once the facade
+        // resolves (first token seen) the stream is IR-owned: a later terminal
+        // error throws from textStream (the transport never re-requests —
+        // Rule 4) and brain's existing failover error handling applies,
+        // exactly as a legacy mid-stream streamText error would.
+        if (irCallersEnabled(request.source ?? 'chat')) {
+          const irSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
+          let facade: Awaited<ReturnType<typeof streamTransportForBrain>> | null = null;
+          try {
+            facade = await streamTransportForBrain(
+              {
+                messages: request.messages,
+                system: irSystem,
+                source: request.source,
+                temperature,
+                maxTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
+                tools: request.tools,
+                ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+              },
+              modelId,
+            );
+          } catch (irErr) {
+            log.warn({ modelId, errorClass: irErrorClass(irErr), err: String(irErr) }, 'ir_transport_fallback — IR stream failed pre-first-token, using legacy streaming path');
+          }
+          if (facade !== null) {
+            if (request.sessionId !== undefined) noteTraceForSession(request.sessionId, facade.traceId);
+            let irStreamCompleted = false;
+            let irStreamErrored = false;
+            try {
+              for await (const chunk of facade.textStream) {
+                if (!yieldedAny) _firstTokenAt = Date.now();
+                yieldedAny = true;
+                _streamedChars += chunk.length;
+                yield chunk;
+              }
+              irStreamCompleted = true;
+            } catch (err) {
+              irStreamErrored = true;
+              throw err;
+            } finally {
+              if (!irStreamCompleted && !irStreamErrored) {
+                // Consumer broke out early — the model streamed fine (legacy
+                // early-break parity); the transport's own finally wrote the
+                // llm_calls row and aborted the fetch. facade.usage settles
+                // immediately on break (last-known partial usage), so bill it
+                // like the legacy cancelled-stream path — fire-and-forget,
+                // NEVER throwing from this finally.
+                void Promise.resolve(facade.usage).then(
+                  (u) => {
+                    const usage = u !== undefined
+                      ? buildTokenUsage(modelId, u, { create: u.cacheCreationInputTokens, read: u.cachedInputTokens })
+                      : undefined;
+                    if (usage !== undefined && usage.completionTokens > 0) {
+                      log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }, 'Streaming call ended early by consumer (IR transport)');
+                    }
+                    try {
+                      this._recordBillingUsage(modelId, usage, { create: u?.cacheCreationInputTokens ?? 0, read: u?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+                    } catch (billErr) {
+                      log.warn({ modelId, err: billErr }, 'Billing record failed for cancelled IR stream (non-fatal)');
+                    }
+                  },
+                  () => { /* usage unavailable — facade promises never reject, defensive */ },
+                );
+                this.failover.recordSuccess(profile.id);
+                this.idleBreaker.recordDurableProgress();
+              }
+            }
+            this.failover.recordSuccess(profile.id);
+            this.idleBreaker.recordDurableProgress();
+            // Post-stream bookkeeping — best-effort, response already on the
+            // wire. Brain's _recordGatewayCall AND runShadow are SKIPPED: the
+            // transport already wrote the one llm_calls row for this call.
+            try {
+              const irUsage = await facade.usage;
+              const usage = irUsage !== undefined
+                ? buildTokenUsage(modelId, irUsage, { create: irUsage.cacheCreationInputTokens, read: irUsage.cachedInputTokens })
+                : undefined;
+              this._recordBillingUsage(modelId, usage, { create: irUsage?.cacheCreationInputTokens ?? 0, read: irUsage?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+              log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed (IR transport)');
+            } catch (bookkeepErr) {
+              log.warn({ modelId, err: bookkeepErr }, 'post-stream bookkeeping failed (IR path; response already delivered)');
+            }
+            return;
+          }
+          // facade === null → legacy streaming path below (same attempt).
+        }
+
         const modelHandle = getModel(modelId);
 
         // SUDO_PROMPT_CACHE=1 + Anthropic model: explicit cache_control breakpoints —
@@ -1728,7 +1819,37 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // before model-level failover gives up. Sets callParams.model to the chosen
     // key's handle; the single env-key path runs unchanged when <2 keys exist.
     const _callStartedAt = Date.now();
-    let result = await this._generateWithKeyRotation(profile, callParams);
+    // gw-cutover Phase 2: when LLM_IR_CALLERS matches the source, this ONE
+    // wire hop goes through the IR transport instead of the ai-SDK. Everything
+    // around it (failover loop, cooldowns, billing, post-processing below) is
+    // UNCHANGED. Transport throw → warn + fall through to the legacy call for
+    // the SAME attempt (users never see a difference during the ramp).
+    let _irTraceId: string | undefined;
+    let _irResult: BrainCompletion | undefined;
+    if (irCallersEnabled(request.source ?? 'chat')) {
+      try {
+        const irCall = await callTransportForBrain(
+          {
+            messages: request.messages,
+            system: effectiveSystem,
+            source: request.source,
+            temperature,
+            maxTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
+            tools: request.tools,
+            ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+          },
+          modelId,
+        );
+        _irResult = irCall.result as unknown as BrainCompletion;
+        _irTraceId = irCall.traceId;
+        // Session→trace correlation: markOutcomeForSession goes live for
+        // IR-served calls (the transport row carries this trace_id).
+        if (request.sessionId !== undefined) noteTraceForSession(request.sessionId, irCall.traceId);
+      } catch (irErr) {
+        log.warn({ modelId, errorClass: irErrorClass(irErr), err: String(irErr) }, 'ir_transport_fallback — IR transport failed, using legacy ai-SDK path');
+      }
+    }
+    let result = _irResult ?? (await this._generateWithKeyRotation(profile, callParams));
 
     // --- Tool-empty retry: some providers (Ollama cloud) return empty content
     // when tools are attached but don't actually support structured tool calls.
@@ -1890,23 +2011,29 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // gw-refactor Phase 5: GatewayCallLog row for the legacy non-streaming path.
     // Cheap summary payloads only (legacy path is not IR); tokens_cached reuses
     // the extractPromptCacheTokens cache_read figure. Fail-open inside the helper.
-    this._recordGatewayCall({
-      traceId: randomUUID(),
-      caller: request.source ?? 'chat',
-      purpose: 'brain.call',
-      alias: modelId,
-      route: Brain._gatewayRouteFor(modelId),
-      priority: Brain._gatewayPriorityFor(request.source),
-      irRequest: { legacy: true, model: modelId, messageCount: request.messages.length, system_chars: effectiveSystem.length },
-      irResponse: { text_chars: finalContent.length, finishReason: finalFinishReason },
-      latencyMs: Date.now() - _callStartedAt,
-      tokensIn: usage.promptTokens,
-      tokensOut: usage.completionTokens,
-      tokensCached: cacheTokens.read,
-      ...(usage.estimatedCost !== undefined ? { costUsd: usage.estimatedCost } : {}),
-    });
-    // gw-refactor Phase 7: transformation shadow (LLM_SHADOW=1, default OFF; fire-and-forget, fail-open).
-    runShadow({ messages: request.messages, system: effectiveSystem, source: request.source, temperature, maxTokens, tools: request.tools }, modelId, { text: finalContent, finishReason: finalFinishReason, usage, toolCalls: finalToolCalls });
+    // gw-cutover Phase 2: SKIPPED for IR-served attempts — the transport already
+    // wrote the fuller llm_calls row (one-row-per-call invariant; its caller +
+    // priority match brain's). runShadow is skipped too: the shadow compares the
+    // legacy ai-SDK transformation, which an IR-served call never performed.
+    if (_irTraceId === undefined) {
+      this._recordGatewayCall({
+        traceId: randomUUID(),
+        caller: request.source ?? 'chat',
+        purpose: 'brain.call',
+        alias: modelId,
+        route: Brain._gatewayRouteFor(modelId),
+        priority: Brain._gatewayPriorityFor(request.source),
+        irRequest: { legacy: true, model: modelId, messageCount: request.messages.length, system_chars: effectiveSystem.length },
+        irResponse: { text_chars: finalContent.length, finishReason: finalFinishReason },
+        latencyMs: Date.now() - _callStartedAt,
+        tokensIn: usage.promptTokens,
+        tokensOut: usage.completionTokens,
+        tokensCached: cacheTokens.read,
+        ...(usage.estimatedCost !== undefined ? { costUsd: usage.estimatedCost } : {}),
+      });
+      // gw-refactor Phase 7: transformation shadow (LLM_SHADOW=1, default OFF; fire-and-forget, fail-open).
+      runShadow({ messages: request.messages, system: effectiveSystem, source: request.source, temperature, maxTokens, tools: request.tools }, modelId, { text: finalContent, finishReason: finalFinishReason, usage, toolCalls: finalToolCalls });
+    }
 
     return {
       content: finalContent, toolCalls: finalToolCalls, usage,

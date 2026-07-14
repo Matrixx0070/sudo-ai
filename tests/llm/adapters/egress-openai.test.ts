@@ -179,6 +179,32 @@ describe('egressOpenAI', () => {
     const toolMsg = msgs.find((m) => m['role'] === 'tool')!;
     expect(toolMsg).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'sunny' });
   });
+
+  it('thinking blocks are SKIPPED on the OpenAI wire (documented — no reasoning leak)', () => {
+    const body = egressOpenAI(
+      baseIR({
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'Q' }] },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'thinking', thinking: 'private chain', signature: 'sig-1' },
+              { type: 'text', text: 'A' },
+              { type: 'tool_use', id: 'c1', name: 'f', input: { x: 1 } },
+            ],
+          },
+        ],
+      }),
+    );
+    const msgs = body['messages'] as Array<Record<string, unknown>>;
+    expect(msgs[1]).toEqual({
+      role: 'assistant',
+      content: 'A',
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'f', arguments: '{"x":1}' } }],
+    });
+    // The reasoning text appears NOWHERE in the serialized body.
+    expect(JSON.stringify(body)).not.toContain('private chain');
+  });
 });
 
 describe('parseOpenAIResponse', () => {
