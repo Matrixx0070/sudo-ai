@@ -282,7 +282,10 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
   // skill.apply when asked to author a skill.
   skill: {
     keywords: [
-      'skill', 'author a skill', 'create a skill', 'write a skill',
+      // 'skill' AND 'skills': single tokens match whole-word only, so the
+      // plural must be its own keyword ("check my skills for updates" matched
+      // NOTHING before it was added).
+      'skill', 'skills', 'author a skill', 'create a skill', 'write a skill',
       'revise a skill', 'update a skill', 'edit a skill', 'new skill',
       'rollback skill', 'roll back skill', 'skill.apply', 'skill.rollback',
       'refine skill', 'compose skill', 'my skills', 'own skill', 'self-author',
@@ -290,13 +293,22 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'install skill', 'install a skill', 'skill registry', 'registry skill',
       'browse skills', 'search skills', 'find skills', 'available skills',
       'skill store', 'sudoapi.shop',
+      // Spec 9 packaging lifecycle (skill.init/pack/publish/update/changelog)
+      'update skills', 'update my skills', 'skill update', 'skill updates',
+      'publish skill', 'publish a skill', 'publish my skill',
+      'pack skill', 'pack a skill', 'skill package', 'skill tarball',
+      'skill changelog', 'skill version', 'skill versions', 'scaffold a skill',
       'plugin', 'install plugin', 'install a plugin', 'add plugin', 'role bundle',
       'browse plugins', 'plugin catalog', 'plugin registry',
     ],
     patterns: [
       /\bplugin[.-](search|install)\b/i,
       /\b(install|add|browse|search|find)\s+(a\s+|the\s+)?plugin\b/i,
-      /\bskill[.-](apply|rollback|refine|compose|explain|federate|install|search|eval|trigger-eval)\b/i,
+      /\bskill[.-](apply|rollback|refine|compose|explain|federate|install|search|eval|trigger-eval|init|pack|publish|update|changelog)\b/i,
+      /\b(update|upgrade)\s+((my|the|all|installed)\s+)*skills?\b/i,
+      /\b(check|look)\s+.{0,24}skills?\s+for\s+updates?\b/i,
+      /\b(publish|pack|package|scaffold)\s+((a|my|the|this|new)\s+)*skill\b/i,
+      /\b(changelog|version\s+history)\s+(for|of)\s+.{0,32}skill\b/i,
       /\b(install|download|get|add)\s+(a\s+|the\s+)?(new\s+)?skill\b/i,
       /\bskill\s+(registry|store|marketplace)\b/i,
       /\b(test|evaluate|eval|benchmark|measure)\s+(a\s+|the\s+|this\s+)?skill\b/i,
@@ -307,15 +319,16 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       /\bskill\.md\b/i,
     ],
     priority: 8,
-    // The skill category has exactly 11 tools and the write/install/eval paths
-    // (skill.apply/rollback/install/search/eval/trigger-eval) must ALWAYS
-    // travel together on a skill turn. At 5 the within-category ranker dropped
-    // some (e.g. a "roll back the skill" turn surfaced compose/explain/
-    // federate/refine/usage-stats but NOT rollback); the cap must track the
-    // category size whenever a skill.* tool is added, else the new tool is
-    // registered-but-unroutable. 11 fits the whole small category — plus the 2
-    // Directory plugin.* tools (plugin.search/plugin.install) = 13.
-    maxFromCategory: 13,
+    // The skill category's write/install/eval/update paths must ALWAYS travel
+    // together on a skill turn. At 5 the within-category ranker dropped some
+    // (e.g. a "roll back the skill" turn surfaced compose/explain/federate/
+    // refine/usage-stats but NOT rollback); the cap must track the category
+    // size whenever a skill.* tool is added, else the new tool is
+    // registered-but-unroutable (probe on 2026-07-14 caught 13 dropping
+    // skill.publish/update from a "pack my skill" turn). 16 skill.* tools
+    // (Spec 9 added init/pack/publish/update/changelog) + the 2 Directory
+    // plugin.* tools (plugin.search/plugin.install) = 18.
+    maxFromCategory: 18,
   },
   // The 12 super.* power tools (category 'superpowers': translate, archive,
   // ffmpeg, edit-image, profile, security-scan, deploy, auto-fix, analyze-data,
