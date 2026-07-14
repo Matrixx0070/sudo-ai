@@ -93,3 +93,17 @@ In `config/sudo-ai.json5` `models.primary` (order = failover order):
 
 A commented example line is already in place. Deploying it is an operator
 decision — remember the weekly-pool quota is shared with interactive Grok use.
+
+## Verified model availability (live sweep, 2026-07-14)
+
+| Model | Status | Note |
+|---|---|---|
+| `grok-4.3` | ✅ | default; main reasoning model |
+| `grok-build-0.1` | ✅ | coding-agent model |
+| `grok-4.20-0309-reasoning` | ✅ | |
+| `grok-4.20-0309-non-reasoning` | ✅ | |
+| `grok-4.20-multi-agent-0309` | ✅⚠ | ~50x token burn per call (internal fan-out bills the weekly pool) — never put in a failover chain |
+| `grok-4-fast-non-reasoning` | ✅ | cheap/fast tier — good failover entry |
+| `grok-4.1-fast` | ❌ 400 | model does not exist on this surface |
+
+Recommended chain entries: `xai-oauth/grok-4.3` then `xai-oauth/grok-4-fast-non-reasoning`.
