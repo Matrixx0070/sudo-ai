@@ -1,0 +1,9 @@
+{
+  "class": "overloaded",
+  "input": {
+    "body": "{\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}",
+    "status": 503,
+    "via": "classifyHttpError"
+  },
+  "retryable": true
+}

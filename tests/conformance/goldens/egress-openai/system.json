@@ -1,0 +1,15 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": "You are a terse assistant. Answer in one sentence.",
+      "role": "system"
+    },
+    {
+      "content": "What is IR v1?",
+      "role": "user"
+    }
+  ],
+  "model": "testprov/conformance-model-1",
+  "temperature": 1.5
+}

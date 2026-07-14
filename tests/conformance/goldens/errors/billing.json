@@ -1,0 +1,9 @@
+{
+  "class": "billing",
+  "input": {
+    "body": "Payment Required",
+    "status": 402,
+    "via": "classifyHttpError"
+  },
+  "retryable": false
+}

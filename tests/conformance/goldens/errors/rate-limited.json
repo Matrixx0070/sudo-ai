@@ -1,0 +1,9 @@
+{
+  "class": "rate_limited",
+  "input": {
+    "body": "{\"error\":{\"message\":\"Rate limit reached for requests\",\"type\":\"requests\"}}",
+    "status": 429,
+    "via": "classifyHttpError"
+  },
+  "retryable": true
+}

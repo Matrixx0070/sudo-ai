@@ -1,0 +1,30 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Describe these.",
+          "type": "text"
+        },
+        {
+          "source": {
+            "data": "aGVsbG8taW1hZ2U=",
+            "media_type": "image/jpeg",
+            "type": "base64"
+          },
+          "type": "image"
+        },
+        {
+          "source": {
+            "type": "url",
+            "url": "https://example.com/cat.png"
+          },
+          "type": "image"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "testprov/conformance-model-1"
+}

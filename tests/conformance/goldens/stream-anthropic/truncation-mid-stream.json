@@ -1,0 +1,37 @@
+[
+  {
+    "text": "Let me ",
+    "type": "text_delta"
+  },
+  {
+    "text": "check.",
+    "type": "text_delta"
+  },
+  {
+    "id": "tu_1",
+    "name": "get_weather",
+    "type": "tool_use_start"
+  },
+  {
+    "id": "tu_1",
+    "partial_json": "{\"city\":",
+    "type": "tool_input_delta"
+  },
+  {
+    "id": "tu_1",
+    "input": {
+      "city": null
+    },
+    "name": "get_weather",
+    "type": "tool_use_end"
+  },
+  {
+    "stop_reason": "end_turn",
+    "type": "message_end",
+    "usage": {
+      "cached_in": 10,
+      "in": 25,
+      "out": 1
+    }
+  }
+]

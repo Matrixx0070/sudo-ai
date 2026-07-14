@@ -1,0 +1,32 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": "Grade this.",
+      "role": "user"
+    }
+  ],
+  "model": "testprov/conformance-model-1",
+  "response_format": {
+    "json_schema": {
+      "name": "structured_output",
+      "schema": {
+        "properties": {
+          "verdict": {
+            "enum": [
+              "pass",
+              "fail"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "strict": true
+    },
+    "type": "json_schema"
+  }
+}

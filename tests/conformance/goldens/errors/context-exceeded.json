@@ -1,0 +1,9 @@
+{
+  "class": "context_exceeded",
+  "input": {
+    "body": "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 250123 tokens > 200000 maximum\"}}",
+    "status": 400,
+    "via": "classifyHttpError"
+  },
+  "retryable": false
+}

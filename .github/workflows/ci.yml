@@ -8,9 +8,14 @@ name: CI
 
 on:
   push:
-    branches: [main]        # run on direct pushes to main (e.g. merge commits)
+    branches: [main, gw-refactor]   # direct pushes to main + the gateway-refactor branch
   pull_request:
-    branches: [main]        # run on PRs before they can merge
+    branches: [main, gw-refactor]   # PRs targeting either branch
+
+# Cancel superseded runs for the same branch/PR — only the newest push matters.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci:
@@ -60,9 +65,17 @@ jobs:
       - name: Contract guards
         run: pnpm check:contracts
 
-      # 8. Test — full suite must pass (vitest exits non-zero on any failure)
+      # 8. Test — full suite must pass (vitest exits non-zero on any failure).
+      # This already includes tests/conformance; the explicit step below gives
+      # the gateway golden matrix its own visible gate.
       - name: Test
         run: pnpm test
+
+      # 8a. Conformance — LLM gateway adapter golden matrix (gw-refactor Phase 6).
+      # Goldens live in tests/conformance/goldens/; regenerate with
+      # `pnpm conformance:update` and review the diff.
+      - name: Conformance
+        run: pnpm vitest run tests/conformance
 
       # 8b. Smoke (prod runtime) — runs file-producing tools under the real tsx
       # loader (the daemon's runtime), which catches ESM/CJS dynamic-import interop

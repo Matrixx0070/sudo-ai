@@ -1,0 +1,15 @@
+{
+  "max_tokens": 8192,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Hello, gateway.",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "testprov/conformance-model-1"
+}

@@ -1,0 +1,9 @@
+{
+  "messages": [
+    {
+      "content": "Hello, gateway.",
+      "role": "user"
+    }
+  ],
+  "model": "testprov/conformance-model-1"
+}

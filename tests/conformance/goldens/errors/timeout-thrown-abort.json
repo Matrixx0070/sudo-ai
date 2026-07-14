@@ -1,0 +1,8 @@
+{
+  "class": "timeout",
+  "input": {
+    "thrown": "AbortError",
+    "via": "classifyThrown"
+  },
+  "retryable": true
+}

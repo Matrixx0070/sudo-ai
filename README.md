@@ -1,10 +1,13 @@
 # SUDO-AI
 
+[![CI](https://github.com/Matrixx0070/sudo-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Matrixx0070/sudo-ai/actions/workflows/ci.yml)
 ![Version](https://img.shields.io/badge/version-4.1.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Docker%20%7C%20CLI-success)
+
+> CI runs lint, build, the full test suite, and the LLM gateway conformance golden matrix (`tests/conformance`) on every push and PR.
 
 **SUDO-AI is a persistent, self-hosted autonomous agent platform.** It runs continuously on a machine you control, remembers across sessions, connects to any major LLM provider with automatic failover, and can browse the web, write and run code, manage files and processes, send messages, and operate your system — all under your control, with sandboxing, approval tiers, kill-switches, and audit logging as safety controls.
 

@@ -1,0 +1,9 @@
+{
+  "class": "content_filter",
+  "input": {
+    "body": "{\"error\":{\"message\":\"Your request was rejected by the content policy filter\",\"code\":\"content_policy_violation\"}}",
+    "status": 400,
+    "via": "classifyHttpError"
+  },
+  "retryable": false
+}

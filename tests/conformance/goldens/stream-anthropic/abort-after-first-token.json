@@ -1,0 +1,19 @@
+[
+  {
+    "text": "partial an",
+    "type": "text_delta"
+  },
+  {
+    "error": "upstream socket reset",
+    "type": "stream_error"
+  },
+  {
+    "stop_reason": "error",
+    "type": "message_end",
+    "usage": {
+      "cached_in": 0,
+      "in": 0,
+      "out": 0
+    }
+  }
+]

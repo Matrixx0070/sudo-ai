@@ -73,6 +73,8 @@
     "doctor": "tsx src/cli/index.ts doctor",
     "cli": "tsx src/cli.ts",
     "test": "vitest run",
+    "conformance": "vitest run tests/conformance",
+    "conformance:update": "CONFORMANCE_UPDATE=1 vitest run tests/conformance",
     "smoke:prod-tools": "tsx scripts/smoke/prod-runtime-tools.mts",
     "check:contracts": "tsx scripts/check-brain-contract.mts",
     "test:watch": "vitest",

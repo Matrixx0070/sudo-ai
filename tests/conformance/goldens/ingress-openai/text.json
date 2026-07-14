@@ -1,0 +1,18 @@
+{
+  "alias": "testprov/conformance-model-1",
+  "caller": "conformance",
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Hello, gateway.",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "priority": "user",
+  "purpose": "golden-matrix",
+  "trace_id": "trace-conformance-0001"
+}

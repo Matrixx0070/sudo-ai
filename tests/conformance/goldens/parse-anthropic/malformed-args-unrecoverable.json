@@ -1,0 +1,22 @@
+{
+  "blocks": [
+    {
+      "id": "tu_1",
+      "input": {},
+      "name": "get_weather",
+      "type": "tool_use"
+    }
+  ],
+  "extra": {
+    "parse_error": {
+      "tu_1": "arguments parsed to non-object (string)"
+    }
+  },
+  "stop_reason": "tool_use",
+  "trace_id": "trace-conformance-0001",
+  "usage": {
+    "cached_in": 0,
+    "in": 10,
+    "out": 5
+  }
+}

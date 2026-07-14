@@ -1,0 +1,13 @@
+{
+  "blocks": [],
+  "extra": {
+    "provider_bug": true
+  },
+  "stop_reason": "error",
+  "trace_id": "trace-conformance-0001",
+  "usage": {
+    "cached_in": 0,
+    "in": 0,
+    "out": 0
+  }
+}

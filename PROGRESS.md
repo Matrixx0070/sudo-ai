@@ -105,3 +105,9 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
 - **A18**: legacy-path rows store summary ir_request {legacy:true, model, messageCount, system_chars} — full IR arrives at cutover. BrainRequest has no sessionId → noteTraceForSession dormant on legacy path until IR transport (outcome sites live but no-op until then).
 - **LIVE DoD PROOF (2026-07-14)**: OPENAI key quota-dead (429, known operator item) → proof ran via xai/grok-4-fast-non-reasoning through chatIR direct-fallback with DATA_DIR=/tmp scratch: 3 calls → 3 rows (caller/purpose/alias/route/latency/tokens all sane), tokens_cached 128 → 128 → 3456 on a 3,511-token identical prefix — cache plumbing proven end-to-end. Harness not committed (throwaway).
 - Improvement noted for cutover: chatIR record leaves priority null (ChatIRRequestLite.priority optional) — set it when the IR transport lands.
+
+## PHASE 6 — conformance suite + CI
+
+- tests/conformance/: harness (sorted-key stable-stringify goldens, >32KB → digest {bytes, sha256}), 57 golden cases + 7 invariant tests = 64 across egress-openai/egress-anthropic/parse-*/ingress-openai/stream-*/errors (all 11 error classes pinned); CONFORMANCE_UPDATE=1 = pnpm conformance:update; loud-fail proven by golden mutation.
+- CI: extended existing .github/workflows/ci.yml (branches +gw-refactor, concurrency-cancel, explicit Conformance step); README badge added.
+- **A19 (planned, Phase 7)**: literal dual-send shadow REJECTED (doubles user-facing claude-oauth quota burn + side effects). Shadow = shape-shadow: build legacy AND IR wire requests from the same input → diff; parse the SAME captured provider response through both parsers → diff. Corpus: prod traces.db has 5,082 brain_call traces with prompt_raw/response_raw/model_params (>200 required), replayable at zero cost/side effects. Live-fire coverage comes from the Final Acceptance 24h staging soak.
