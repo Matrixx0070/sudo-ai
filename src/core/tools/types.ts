@@ -38,6 +38,7 @@ export type ToolCategory =
   | 'marketing'
   | 'finance'
   | 'data'
+  | 'textproc'
   | 'pm'
   | 'personal'
   | 'legal'
