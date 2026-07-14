@@ -1,6 +1,6 @@
 # SHADOW_REPORT — gw-refactor Phase 7
 
-**Verdict: PASS** — material divergence 0.000% over 303 comparisons (threshold: < 1%).
+**Verdict: PASS** — material divergence 0.000% over 341 comparisons (threshold: < 1%).
 
 Method (A19, PROGRESS.md): NO dual provider calls. The shadow compares
 TRANSFORMATIONS on the same data — the legacy BrainRequest is mapped to IR and
@@ -33,4 +33,4 @@ _none_
 
 ## Live shadow (gateway.db, LLM_SHADOW=1)
 
-_No live-shadow rows yet — enable LLM_SHADOW=1 on the staging soak and re-run with --gateway-db data/gateway.db. Live rows add coverage the replay cannot: real streamed responses, usage figures, and tool-call results as brain.ts actually saw them._
+- Rows: **38** — divergent: **0**, match: **38**

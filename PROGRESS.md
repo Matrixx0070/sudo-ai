@@ -120,3 +120,20 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
 - **REPLAY VERDICT (real prod traces, read-only)**: 500 rows fetched → 303 replayable (197 skipped: trace-capture 16KB prompt truncation, by design) → **material divergence 0/303 = 0.000% — PASS** (<1% criterion; ≥200 real requests satisfied). Families: 325 xai / 167 claude-oauth / 8 google in window. Response text compared on 45 untruncated finishReason=stop rows.
 - **A20**: response-side live shadow validates IR representability of brain's parsed result, not parser-vs-parser (no raw provider body at the hook site — A19); parser agreement is pinned by the 57 conformance goldens instead.
 - Remaining for cutover: LLM_SHADOW=1 during the staging soak folds live rows into shadow-report; LLM_DIRECT_FALLBACK=0 flip requires an actual gateway endpoint (LLM_BASE_URL) — OPERATOR DECISION: which OpenAI-compat gateway to point at (none deployed today); legacy deletion waits a week post-cutover per spec.
+
+## FINAL ACCEPTANCE — staging soak STARTED 2026-07-14T14:09:15Z
+
+- pm2 app `gw-refactor-staging` from /root/gwrefactor-clone: GATEWAY_PORT=28900, SUDO_TELEGRAM_DISABLE=1 (poller conflict with prod), LLM_SHADOW=1, WEB_CHAT_ENABLED=true, isolated DATA_DIR/WORKSPACE_DIR, SUDO_DASHBOARD_PORT=28910. Prod sudo-ai-v5 untouched throughout.
+- Boot gotchas found (worth folding into docs at PR time): TELEGRAM boot is FATAL without SUDO_TELEGRAM_DISABLE=1; GATEWAY_PORT and WEB_CHAT_ENABLED are read at module-import time — must be process env (pm2/ecosystem), config/.env dotenv loads too late for them; config/sudo-ai.json5 gateway.port is NOT consulted by startGateway (env-only).
+- END-TO-END PROVEN on staging: POST /api/message → agent loop → brain.call → xai → reply "ready" delivered; llm_calls rows with priority='user' (agent) and 'background' (consciousness/health); every brain call paired with a live-shadow row, all 'shadow_match' so far.
+- Soak criteria to check at +24h: zero unhandled rejections in logs, no background caller over budget without a logged skip, shadow rows still 100% match (re-run scripts/shadow-report.mts --gateway-db data/gateway.db), llm_calls caller variety. Cache-hit >50% criterion needs claude-oauth/anthropic traffic (xai-only staging reports cached tokens only when xai cache engages) — note for the PR.
+
+## FINAL ACCEPTANCE — ACCELERATED REVIEW (operator-directed, 2026-07-14 ~14:45Z)
+
+- **A21 (deviation)**: operator waived the 24h soak window ("we have to decide it now"); review ran at ~40min uptime + a 12-turn live burst instead. Deviation is observation-time only — all functional verification (unit gate, conformance, replay, live rows) was already complete.
+- VERDICT — PASS on every measurable criterion:
+  - Process: 0 restarts since final launch, 0 unhandled rejections / uncaught exceptions / error-level lines in the soak boot (all earlier fatals attributed to setup iterations: Telegram-required boot + port collisions, fixed via env).
+  - llm_calls: 76 rows, 0 error_class; lanes correct (19 user / 19 background); user latency avg 1641ms max 1935ms.
+  - Shadow: 38/38 live shadow_match; SHADOW_REPORT.md regenerated — PASS 0.000% over 341 (303 replay + 38 live).
+  - NOT MEASURABLE here: cache-hit >50% on agent-loop (staging is xai-only; anthropic cache_control traffic exists only on prod claude-oauth) — flagged for post-merge observation; LLM_DIRECT_FALLBACK=0 flip deferred pending the in-process IR transport decision (operator discussion logged — recommendation: src/llm IS the gateway, no external LLM_BASE_URL).
+- Staging soak stays running for continued burn-in until the PR is reviewed.
