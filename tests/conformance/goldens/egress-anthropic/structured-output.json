@@ -1,0 +1,43 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Grade this.",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "testprov/conformance-model-1",
+  "tool_choice": {
+    "name": "structured_output",
+    "type": "tool"
+  },
+  "tools": [
+    {
+      "cache_control": {
+        "type": "ephemeral"
+      },
+      "description": "Emit the final answer as structured output matching the schema.",
+      "input_schema": {
+        "properties": {
+          "verdict": {
+            "enum": [
+              "pass",
+              "fail"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "name": "structured_output"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "class": "network",
+  "input": {
+    "thrown": "TypeError('fetch failed')",
+    "via": "classifyThrown"
+  },
+  "retryable": true
+}

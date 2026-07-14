@@ -1,0 +1,8 @@
+{
+  "class": "provider_bug",
+  "input": {
+    "via": "classifyOpenAIResponse",
+    "wire": "HTTP 200 with no choices"
+  },
+  "retryable": false
+}

@@ -1,0 +1,8 @@
+{
+  "class": "content_filter",
+  "input": {
+    "via": "classifyAnthropicResponse",
+    "wire": "HTTP 200 with stop_reason refusal"
+  },
+  "retryable": false
+}

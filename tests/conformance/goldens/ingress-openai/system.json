@@ -1,0 +1,21 @@
+{
+  "alias": "testprov/conformance-model-1",
+  "caller": "conformance",
+  "max_tokens": 256,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is IR v1?",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "priority": "user",
+  "purpose": "golden-matrix",
+  "system": "You are terse.\n\nAnswer in one sentence.",
+  "temperature": 0.5,
+  "trace_id": "trace-conformance-0001"
+}

@@ -1,0 +1,9 @@
+{
+  "class": "invalid_request",
+  "input": {
+    "body": "{\"error\":{\"message\":\"Invalid value for parameter temperature: 9.5\"}}",
+    "status": 400,
+    "via": "classifyHttpError"
+  },
+  "retryable": false
+}

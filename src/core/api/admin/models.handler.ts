@@ -16,6 +16,13 @@ import { adminRouter, sendJson, readJsonBody } from '../admin-router.js';
 import { readConfig, writeConfig, updateEnvVar } from './config-io.js';
 import { createLogger } from '../../shared/logger.js';
 import { DATA_DIR } from '../../shared/paths.js';
+import { getProviderApiKey, llmFetch, type ProviderKeyName } from '../../../llm/client.js';
+import {
+  XAI_MODELS_URL,
+  OPENAI_MODELS_URL,
+  ANTHROPIC_MODELS_URL,
+  GOOGLE_MODELS_URL,
+} from '../../../llm/endpoints.js';
 
 const log = createLogger('api:admin:models');
 
@@ -23,16 +30,19 @@ const log = createLogger('api:admin:models');
 interface ProviderMeta {
   id: string;
   name: string;
+  /** Display/updateEnvVar name only — actual key reads go through getProviderApiKey. */
   envKey: string;
+  /** llm-client key name for getProviderApiKey(). */
+  keyName: ProviderKeyName;
   testUrl: string;
   authScheme: 'bearer' | 'x-api-key' | 'google';
 }
 
 const PROVIDERS: ProviderMeta[] = [
-  { id: 'xai',       name: 'xAI (Grok)',       envKey: 'XAI_API_KEY',       testUrl: 'https://api.x.ai/v1/models',                                         authScheme: 'bearer'   },
-  { id: 'openai',    name: 'OpenAI',            envKey: 'OPENAI_API_KEY',    testUrl: 'https://api.openai.com/v1/models',                                    authScheme: 'bearer'   },
-  { id: 'anthropic', name: 'Anthropic',         envKey: 'ANTHROPIC_API_KEY', testUrl: 'https://api.anthropic.com/v1/models',                                 authScheme: 'x-api-key'},
-  { id: 'google',    name: 'Google (Gemini)',   envKey: 'GEMINI_API_KEY',    testUrl: 'https://generativelanguage.googleapis.com/v1beta/models',             authScheme: 'google'   },
+  { id: 'xai',       name: 'xAI (Grok)',       envKey: 'XAI_API_KEY',       keyName: 'xai',       testUrl: XAI_MODELS_URL,       authScheme: 'bearer'   },
+  { id: 'openai',    name: 'OpenAI',            envKey: 'OPENAI_API_KEY',    keyName: 'openai',    testUrl: OPENAI_MODELS_URL,    authScheme: 'bearer'   },
+  { id: 'anthropic', name: 'Anthropic',         envKey: 'ANTHROPIC_API_KEY', keyName: 'anthropic', testUrl: ANTHROPIC_MODELS_URL, authScheme: 'x-api-key'},
+  { id: 'google',    name: 'Google (Gemini)',   envKey: 'GEMINI_API_KEY',    keyName: 'google',    testUrl: GOOGLE_MODELS_URL,    authScheme: 'google'   },
 ];
 
 function findProvider(id: string): ProviderMeta | undefined {
@@ -102,7 +112,7 @@ adminRouter.get('/api/admin/models/providers', async (_req, res) => {
       id: p.id,
       name: p.name,
       envKey: p.envKey,
-      hasKey: Boolean(process.env[p.envKey]),
+      hasKey: Boolean(getProviderApiKey(p.keyName)),
     }));
     sendJson(res, 200, { status: 'ok', data: result });
   } catch (err) {
@@ -123,7 +133,7 @@ adminRouter.post('/api/admin/models/providers/:id/test', async (_req, res, param
     return;
   }
 
-  const apiKey = process.env[provider.envKey];
+  const apiKey = getProviderApiKey(provider.keyName);
   if (!apiKey) {
     sendJson(res, 422, {
       error: { message: `No API key set for provider "${id}" (env: ${provider.envKey})`, code: 422 },
@@ -144,7 +154,11 @@ adminRouter.post('/api/admin/models/providers/:id/test', async (_req, res, param
 
   const start = Date.now();
   try {
-    const response = await fetch(provider.testUrl, { method: 'GET', headers, signal: AbortSignal.timeout(10_000) });
+    const response = await llmFetch(
+      provider.testUrl,
+      { method: 'GET', headers, signal: AbortSignal.timeout(10_000) },
+      { caller: 'admin:models', purpose: 'provider connection test' },
+    );
     const latencyMs = Date.now() - start;
     if (response.ok) {
       log.info({ id, latencyMs, status: response.status }, 'Provider connection test passed');

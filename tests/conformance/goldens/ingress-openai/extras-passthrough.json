@@ -1,0 +1,25 @@
+{
+  "alias": "testprov/conformance-model-1",
+  "caller": "conformance",
+  "extra": {
+    "seed": 42,
+    "stream_options": {
+      "include_usage": true
+    },
+    "top_p": 0.9
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "hi",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "priority": "user",
+  "purpose": "golden-matrix",
+  "trace_id": "trace-conformance-0001"
+}

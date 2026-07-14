@@ -1,0 +1,45 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": "Weather in Oslo?",
+      "role": "user"
+    },
+    {
+      "content": "Checking.",
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"city\":\"Oslo\"}",
+            "name": "get_weather"
+          },
+          "id": "tu_1",
+          "type": "function"
+        }
+      ]
+    }
+  ],
+  "model": "testprov/conformance-model-1",
+  "temperature": 0.2,
+  "tools": [
+    {
+      "function": {
+        "description": "Look up current weather for a city.",
+        "name": "get_weather",
+        "parameters": {
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

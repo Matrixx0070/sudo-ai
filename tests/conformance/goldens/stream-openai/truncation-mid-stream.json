@@ -1,0 +1,42 @@
+[
+  {
+    "text": "Let me ",
+    "type": "text_delta"
+  },
+  {
+    "text": "check.",
+    "type": "text_delta"
+  },
+  {
+    "id": "call_1",
+    "name": "get_weather",
+    "type": "tool_use_start"
+  },
+  {
+    "id": "call_1",
+    "partial_json": "{\"city\":",
+    "type": "tool_input_delta"
+  },
+  {
+    "id": "call_1",
+    "partial_json": "\"Oslo\"}",
+    "type": "tool_input_delta"
+  },
+  {
+    "id": "call_1",
+    "input": {
+      "city": "Oslo"
+    },
+    "name": "get_weather",
+    "type": "tool_use_end"
+  },
+  {
+    "stop_reason": "end_turn",
+    "type": "message_end",
+    "usage": {
+      "cached_in": 0,
+      "in": 0,
+      "out": 0
+    }
+  }
+]

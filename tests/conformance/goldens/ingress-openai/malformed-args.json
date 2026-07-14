@@ -1,0 +1,25 @@
+{
+  "alias": "testprov/conformance-model-1",
+  "caller": "conformance",
+  "extra": {
+    "parse_error": {
+      "call_1": "unrecoverable tool arguments: Unexpected character \"{\" at position 9"
+    }
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "id": "call_1",
+          "input": {},
+          "name": "get_weather",
+          "type": "tool_use"
+        }
+      ],
+      "role": "assistant"
+    }
+  ],
+  "priority": "user",
+  "purpose": "golden-matrix",
+  "trace_id": "trace-conformance-0001"
+}

@@ -4,6 +4,13 @@
  * Provides SandboxPolicy interface and base environment allowlist.
  */
 
+import { PROVIDER_BASE_URLS } from '../../llm/endpoints.js';
+
+/** Hostname of an LLM provider, derived from the src/llm endpoint choke point. */
+function providerHost(provider: keyof typeof PROVIDER_BASE_URLS): string {
+  return new URL(PROVIDER_BASE_URLS[provider]).hostname;
+}
+
 // ---------------------------------------------------------------------------
 // SandboxPolicy
 // ---------------------------------------------------------------------------
@@ -118,12 +125,14 @@ export const DEFAULT_EGRESS_ALLOWLIST: ReadonlyArray<string> = [
   'github.com',
   'raw.githubusercontent.com',
   'objects.githubusercontent.com',
-  // External LLM APIs
-  'api.openai.com',
-  'api.anthropic.com',
-  'generativelanguage.googleapis.com',
-  'api.x.ai',
-  'api.deepseek.com',
+  // External LLM APIs — derived from src/llm/endpoints.ts so the allowlist can
+  // never drift from the URLs the code actually calls. NOTE: deliberately NOT
+  // the full PROVIDER_HOSTNAMES set (groq is not in the historical allowlist).
+  providerHost('openai'),
+  providerHost('anthropic'),
+  providerHost('google'),
+  providerHost('xai'),
+  providerHost('deepseek'),
 ];
 
 /**

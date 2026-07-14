@@ -1,0 +1,9 @@
+{
+  "class": "timeout",
+  "input": {
+    "body": "Request Timeout",
+    "status": 408,
+    "via": "classifyHttpError"
+  },
+  "retryable": true
+}

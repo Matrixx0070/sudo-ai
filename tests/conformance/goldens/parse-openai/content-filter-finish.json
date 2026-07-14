@@ -1,0 +1,18 @@
+{
+  "blocks": [
+    {
+      "text": "I cannot help with that.",
+      "type": "text"
+    }
+  ],
+  "extra": {
+    "reason": "content_filter"
+  },
+  "stop_reason": "error",
+  "trace_id": "trace-conformance-0001",
+  "usage": {
+    "cached_in": 0,
+    "in": 8,
+    "out": 7
+  }
+}

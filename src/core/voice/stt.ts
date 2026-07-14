@@ -12,13 +12,15 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { getProviderApiKey, llmFetch } from '../../llm/client.js';
+import { GROQ_STT_URL, OPENAI_STT_URL } from '../../llm/endpoints.js';
 import { WhisperLocalSTT } from './whisper-local.js';
 import type { STTResult, STTOptions } from './types.js';
 
 const log = createLogger('voice:stt');
 
-const GROQ_URL        = 'https://api.groq.com/openai/v1/audio/transcriptions';
-const OPENAI_URL      = 'https://api.openai.com/v1/audio/transcriptions';
+const GROQ_URL        = GROQ_STT_URL;
+const OPENAI_URL      = OPENAI_STT_URL;
 const ELEVENLABS_STT_URL = 'https://api.elevenlabs.io/v1/speech-to-text';
 const DEFAULT_MODEL      = 'whisper-1';
 const GROQ_DEFAULT_MODEL = 'whisper-large-v3-turbo'; // Groq's fastest free model
@@ -115,9 +117,9 @@ export class SpeechToText {
   private readonly cloudEnabled:   boolean;
 
   constructor() {
-    this.groqKey       = process.env['GROQ_API_KEY'];
+    this.groqKey       = getProviderApiKey('groq') ?? undefined;
     this.elevenLabsKey = process.env['ELEVENLABS_API_KEY'];
-    this.openaiKey     = process.env['OPENAI_API_KEY'];
+    this.openaiKey     = getProviderApiKey('openai') ?? undefined;
     this.whisper       = new WhisperLocalSTT();
 
     const cloudFlag = process.env['SUDO_STT_CLOUD'];
@@ -319,14 +321,14 @@ export class SpeechToText {
 
     let resp: Response;
     try {
-      resp = await fetch(url, {
+      resp = await llmFetch(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': contentType,
         },
         body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
-      });
+      }, { caller: 'voice:stt', purpose: 'cloud STT' });
     } catch (err) {
       log.error({ provider: providerName, err }, 'STT fetch failed — network error');
       throw new Error(`STT network error (${providerName}): ${String(err)}`);

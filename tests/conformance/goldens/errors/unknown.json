@@ -1,0 +1,8 @@
+{
+  "class": "unknown",
+  "input": {
+    "thrown": "Error('mystery failure with no signature')",
+    "via": "classifyThrown"
+  },
+  "retryable": false
+}

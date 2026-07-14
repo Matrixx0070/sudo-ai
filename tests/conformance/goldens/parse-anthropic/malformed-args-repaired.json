@@ -1,0 +1,19 @@
+{
+  "blocks": [
+    {
+      "id": "tu_1",
+      "input": {
+        "city": "Oslo"
+      },
+      "name": "get_weather",
+      "type": "tool_use"
+    }
+  ],
+  "stop_reason": "tool_use",
+  "trace_id": "trace-conformance-0001",
+  "usage": {
+    "cached_in": 0,
+    "in": 10,
+    "out": 9
+  }
+}

@@ -8,6 +8,9 @@ import type { ToolDefinition, ToolContext, ToolResult, ToolArtifact } from '../.
 import { createLogger } from '../../../shared/logger.js';
 import { ensureDir, missingKey } from './helpers.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+// URL/key source only — requests stay on toolFetch (SSRF guard).
+import { getProviderApiKey } from '../../../../llm/client.js';
+import { OPENAI_IMAGES_URL } from '../../../../llm/endpoints.js';
 
 const logger = createLogger('media-image');
 
@@ -44,9 +47,9 @@ export const imageGenerateTool: ToolDefinition = {
       let imageBuffer: Buffer;
 
       if (provider === 'dalle') {
-        const apiKey = process.env['OPENAI_API_KEY'];
+        const apiKey = getProviderApiKey('openai');
         if (!apiKey) return missingKey('OPENAI_API_KEY', 'media.image-generate');
-        const res = await toolFetch('https://api.openai.com/v1/images/generations', {
+        const res = await toolFetch(OPENAI_IMAGES_URL, {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           signal: ctx.signal,

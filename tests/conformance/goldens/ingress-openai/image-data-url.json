@@ -1,0 +1,33 @@
+{
+  "alias": "testprov/conformance-model-1",
+  "caller": "conformance",
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Describe this.",
+          "type": "text"
+        },
+        {
+          "source": {
+            "data": "aGVsbG8taW1hZ2U=",
+            "media_type": "image/jpeg",
+            "type": "base64"
+          },
+          "type": "image"
+        },
+        {
+          "source": {
+            "type": "url",
+            "url": "https://example.com/cat.png"
+          },
+          "type": "image"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "priority": "user",
+  "purpose": "golden-matrix",
+  "trace_id": "trace-conformance-0001"
+}

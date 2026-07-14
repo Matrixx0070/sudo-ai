@@ -33,6 +33,8 @@ import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
 import { getCostTracker } from '../billing/cost-tracker.js';
+import { getGatewayCallLog, type LLMCallRecord } from '../../llm/logging.js';
+import { runShadow } from '../../llm/shadow.js';
 import { queryAllModelsConsensus, type ConsensusOptions } from './model-consensus.js';
 import { DispatchRouter } from './dispatch-router.js';
 import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
@@ -62,6 +64,26 @@ import type { NegativeRouter, RoutingResult } from './negative-router.js';
 import type { HistoryMessage } from '../agent/cheap-model-router.js';
 
 const log = createLogger('brain');
+
+/**
+ * gw-refactor Phase 5: ErrorCategory (failover layer) → LLMErrorClass
+ * (src/llm/errors.ts taxonomy) for the terminal-failure gateway-log row.
+ * Local copy of the mapping in src/llm/errors.ts (CATEGORY_TO_CLASS is not
+ * exported); brain already holds a categorized error at the throw sites, so
+ * mapping it directly is cheaper than re-classifying the raw thrown value.
+ */
+const GATEWAY_ERROR_CLASS: Record<ErrorCategory, string> = {
+  rate_limit: 'rate_limited',
+  overloaded: 'overloaded',
+  timeout: 'timeout',
+  context_overflow: 'context_exceeded',
+  billing: 'billing',
+  auth: 'auth',
+  auth_permanent: 'auth',
+  model_not_found: 'invalid_request',
+  format: 'invalid_request',
+  session_expired: 'invalid_request',
+};
 
 /**
  * Per-attempt backoff cap (ms) for failover when a provider is overloaded /
@@ -1195,6 +1217,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // -------------------------------------------------------------------------
     // Phase 2: Sequential fallback through remaining models.
     // -------------------------------------------------------------------------
+    const _failoverStartedAt = Date.now(); // Phase 5: latency for the terminal-failure gateway-log row
     for (let attempt = 0; attempt < MAX_FAILOVER_ATTEMPTS; attempt++) {
       const profile = this.failover.getNextProfile();
 
@@ -1248,6 +1271,17 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       // the original as a non-enumerable cause so it stays debuggable but isn't logged.
       const { status, body } = Brain.extractErrorDetails(lastError);
       const lastErrorCategory = this.failover.categorizeError(status, body);
+      // gw-refactor Phase 5: ONE terminal-failure row for the whole failover
+      // sequence (per-attempt errors are failover-internal). Fail-open helper.
+      this._recordGatewayCall({
+        traceId: randomUUID(),
+        caller: request.source ?? 'chat',
+        purpose: 'brain.call',
+        priority: Brain._gatewayPriorityFor(request.source),
+        irRequest: { legacy: true, messageCount: request.messages.length },
+        errorClass: GATEWAY_ERROR_CLASS[lastErrorCategory] ?? 'unknown',
+        latencyMs: Date.now() - _failoverStartedAt,
+      });
       const allFailedErr = new LLMError('All failover attempts failed', 'llm_all_attempts_failed', {
         attempts: MAX_FAILOVER_ATTEMPTS,
         lastErrorStatus: status,
@@ -1275,6 +1309,8 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     const maxTokens = this.resolveMaxTokens(request);
     let lastError: unknown;
 
+    const _streamFailoverStartedAt = Date.now(); // Phase 5: latency for the terminal-failure gateway-log row
+
     // Cross-call idle breaker: refuse to open yet another paid stream while a
     // provider is wedged (N consecutive idle-timeouts, no output). Half-opens
     // after the cooldown so a transient outage recovers without a restart.
@@ -1295,6 +1331,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       // Track whether THIS attempt produced any output — a pure idle stall (no
       // chunk) counts toward the breaker; partial-then-stall does not reset it.
       let yieldedAny = false;
+      // Phase 5: ttft + output size for the gateway-log row (cheap counters).
+      let _firstTokenAt: number | undefined;
+      let _streamedChars = 0;
       log.info({ attempt, modelId }, 'Streaming LLM call starting');
 
       try {
@@ -1365,7 +1404,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         let streamErrored = false;
         try {
           for await (const chunk of result.textStream) {
+            if (!yieldedAny) _firstTokenAt = Date.now(); // Phase 5: ttft capture
             yieldedAny = true;
+            _streamedChars += chunk.length;
             yield chunk;
           }
           if (streamError) throw streamError;
@@ -1434,6 +1475,28 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
             : undefined;
 
           this._recordBillingUsage(modelId, usage, cacheTokens, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+          // gw-refactor Phase 5: GatewayCallLog row for the legacy streaming
+          // path. finishReason is a lazily-resolved promise on streamText —
+          // not awaited here (post-stream bookkeeping stays cheap), so the
+          // summary carries null. Fail-open inside the helper.
+          this._recordGatewayCall({
+            traceId: randomUUID(),
+            caller: request.source ?? 'chat',
+            purpose: 'brain.stream',
+            alias: modelId,
+            route: Brain._gatewayRouteFor(modelId),
+            priority: Brain._gatewayPriorityFor(request.source),
+            irRequest: { legacy: true, model: modelId, messageCount: request.messages.length, system_chars: effectiveSystem.length },
+            irResponse: { text_chars: _streamedChars, finishReason: null },
+            latencyMs: Date.now() - _streamStartedAt,
+            ...(_firstTokenAt !== undefined ? { ttftMs: _firstTokenAt - _streamStartedAt } : {}),
+            ...(usage ? { tokensIn: usage.promptTokens, tokensOut: usage.completionTokens } : {}),
+            tokensCached: cacheTokens.read,
+            ...(usage?.estimatedCost !== undefined ? { costUsd: usage.estimatedCost } : {}),
+          });
+          // gw-refactor Phase 7: transformation shadow (LLM_SHADOW=1, default OFF). Streaming
+          // path has no assembled text/finishReason here — request-side + usage diffs only.
+          runShadow({ messages: request.messages, system: effectiveSystem, source: request.source, temperature, maxTokens, tools: request.tools }, modelId, { ...(usage ? { usage } : {}) });
           log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
         } catch (bookkeepErr) {
           log.warn({ modelId, err: bookkeepErr }, 'post-stream bookkeeping failed (response already delivered)');
@@ -1472,6 +1535,17 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       // the original as a non-enumerable cause so it stays debuggable but isn't logged.
       const { status, body } = Brain.extractErrorDetails(lastError);
       const lastErrorCategory = this.failover.categorizeError(status, body);
+      // gw-refactor Phase 5: ONE terminal-failure row for the whole streaming
+      // failover sequence. Fail-open helper.
+      this._recordGatewayCall({
+        traceId: randomUUID(),
+        caller: request.source ?? 'chat',
+        purpose: 'brain.stream',
+        priority: Brain._gatewayPriorityFor(request.source),
+        irRequest: { legacy: true, messageCount: request.messages.length },
+        errorClass: GATEWAY_ERROR_CLASS[lastErrorCategory] ?? 'unknown',
+        latencyMs: Date.now() - _streamFailoverStartedAt,
+      });
       const streamFailErr = new LLMError('All streaming failover attempts failed', 'llm_all_attempts_failed', {
         attempts: MAX_FAILOVER_ATTEMPTS,
         lastErrorStatus: status,
@@ -1490,6 +1564,49 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
    * not break a call. Skipped under vitest (no test-DB pollution) and via the
    * SUDO_COST_TRACKING=0 kill-switch.
    */
+  /**
+   * gw-refactor Phase 5: fire-and-forget GatewayCallLog row for one legacy
+   * Brain call. FAIL-OPEN by contract: gated by SUDO_GATEWAY_LOG (default ON,
+   * '0' disables) and fully try/caught so a logging bug can never break a
+   * call. Skipped under vitest unless SUDO_GATEWAY_LOG_TEST=1 (same no-test-DB
+   * -pollution idiom as _recordBillingUsage).
+   *
+   * NOTE: the legacy path is not IR — ir_request stores a cheap
+   * {legacy:true, model, messageCount, system_chars} summary, never the full
+   * messages. Full IR logging arrives with the IR transport at cutover.
+   * BrainRequest carries no sessionId, so caller is request.source only and
+   * noteTraceForSession is not called from Brain (session→trace correlation
+   * goes live with the src/llm/client.ts path).
+   */
+  private _recordGatewayCall(entry: LLMCallRecord): void {
+    try {
+      if (process.env['SUDO_GATEWAY_LOG'] === '0') return;
+      if (process.env['VITEST'] && process.env['SUDO_GATEWAY_LOG_TEST'] !== '1') return;
+      getGatewayCallLog().record(entry);
+    } catch (err) {
+      if (!Brain._gatewayLogWarned) {
+        Brain._gatewayLogWarned = true;
+        log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Gateway call-log record failed (fail-open, warn once)');
+      }
+    }
+  }
+
+  /** Warn-once latch for _recordGatewayCall failures. */
+  private static _gatewayLogWarned = false;
+
+  /** Phase 5: coarse route tag for a legacy modelId ('provider/model'). */
+  private static _gatewayRouteFor(modelId: string): string {
+    const provider = modelId.split('/')[0] ?? 'unknown';
+    return provider === 'anthropic' || provider === 'claude-oauth'
+      ? 'anthropic:messages'
+      : 'openai-compat:chat';
+  }
+
+  /** Phase 5: priority class from the caller tag (user-facing vs background). */
+  private static _gatewayPriorityFor(source: string | undefined): string {
+    return source === 'chat' || source === 'agent' ? 'user' : 'background';
+  }
+
   private _recordBillingUsage(
     modelId: string,
     usage: TokenUsage | undefined,
@@ -1769,6 +1886,27 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     }
     recordPromptCacheUsageFromProviderMetadata((result as { providerMetadata?: unknown }).providerMetadata);
     log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
+
+    // gw-refactor Phase 5: GatewayCallLog row for the legacy non-streaming path.
+    // Cheap summary payloads only (legacy path is not IR); tokens_cached reuses
+    // the extractPromptCacheTokens cache_read figure. Fail-open inside the helper.
+    this._recordGatewayCall({
+      traceId: randomUUID(),
+      caller: request.source ?? 'chat',
+      purpose: 'brain.call',
+      alias: modelId,
+      route: Brain._gatewayRouteFor(modelId),
+      priority: Brain._gatewayPriorityFor(request.source),
+      irRequest: { legacy: true, model: modelId, messageCount: request.messages.length, system_chars: effectiveSystem.length },
+      irResponse: { text_chars: finalContent.length, finishReason: finalFinishReason },
+      latencyMs: Date.now() - _callStartedAt,
+      tokensIn: usage.promptTokens,
+      tokensOut: usage.completionTokens,
+      tokensCached: cacheTokens.read,
+      ...(usage.estimatedCost !== undefined ? { costUsd: usage.estimatedCost } : {}),
+    });
+    // gw-refactor Phase 7: transformation shadow (LLM_SHADOW=1, default OFF; fire-and-forget, fail-open).
+    runShadow({ messages: request.messages, system: effectiveSystem, source: request.source, temperature, maxTokens, tools: request.tools }, modelId, { text: finalContent, finishReason: finalFinishReason, usage, toolCalls: finalToolCalls });
 
     return {
       content: finalContent, toolCalls: finalToolCalls, usage,

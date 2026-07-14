@@ -12,16 +12,19 @@ import path from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import { getProviderApiKey, type ProviderKeyName } from '../../../../llm/client.js';
+import { XAI_TTS_URL, OPENAI_TTS_URL, OPENAI_STT_URL } from '../../../../llm/endpoints.js';
 
 const log = createLogger('comms:voice');
 
-// TTS/STT providers — try xAI first, fallback to OpenAI
-const TTS_PROVIDERS = [
-  { name: 'xai', url: 'https://api.x.ai/v1/audio/speech', envKey: 'XAI_API_KEY', model: 'tts-1', voices: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] },
-  { name: 'openai', url: 'https://api.openai.com/v1/audio/speech', envKey: 'OPENAI_API_KEY', model: 'tts-1', voices: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] },
+// TTS/STT providers — try xAI first, fallback to OpenAI (caller 'tool:comms-voice').
+// Requests stay on toolFetch (the SSRF guard); only the URL/key source moved to src/llm.
+const TTS_PROVIDERS: Array<{ name: string; url: string; key: ProviderKeyName; model: string; voices: string[] }> = [
+  { name: 'xai', url: XAI_TTS_URL, key: 'xai', model: 'tts-1', voices: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] },
+  { name: 'openai', url: OPENAI_TTS_URL, key: 'openai', model: 'tts-1', voices: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] },
 ];
-const STT_PROVIDERS = [
-  { name: 'openai', url: 'https://api.openai.com/v1/audio/transcriptions', envKey: 'OPENAI_API_KEY', model: 'whisper-1' },
+const STT_PROVIDERS: Array<{ name: string; url: string; key: ProviderKeyName; model: string }> = [
+  { name: 'openai', url: OPENAI_STT_URL, key: 'openai', model: 'whisper-1' },
   // xAI doesn't have STT yet — OpenAI only for now
 ];
 const DEFAULT_OUTPUT = 'data/voice/output.mp3';
@@ -79,11 +82,11 @@ export const voiceTool: ToolDefinition = {
     // TTS
     // -----------------------------------------------------------------------
     if (operation === 'tts') {
-      const ttsProvider = TTS_PROVIDERS.find(p => process.env[p.envKey]);
+      const ttsProvider = TTS_PROVIDERS.find(p => getProviderApiKey(p.key));
       if (!ttsProvider) {
         return { success: false, output: 'comms.voice: No API key set. Set XAI_API_KEY or OPENAI_API_KEY.' };
       }
-      const apiKey = process.env[ttsProvider.envKey]!;
+      const apiKey = getProviderApiKey(ttsProvider.key)!;
       log.info({ provider: ttsProvider.name }, 'Using TTS provider');
 
       const text = typeof params['text'] === 'string' ? params['text'].trim() : '';
@@ -141,11 +144,11 @@ export const voiceTool: ToolDefinition = {
       return { success: false, output: `comms.voice: audio file not found at "${audioPath}".` };
     }
 
-    const sttProvider = STT_PROVIDERS.find(p => process.env[p.envKey]);
+    const sttProvider = STT_PROVIDERS.find(p => getProviderApiKey(p.key));
     if (!sttProvider) {
       return { success: false, output: 'comms.voice: No STT API key set. Set OPENAI_API_KEY.' };
     }
-    const sttApiKey = process.env[sttProvider.envKey]!;
+    const sttApiKey = getProviderApiKey(sttProvider.key)!;
 
     log.info({ sessionId: ctx.sessionId, audioPath, provider: sttProvider.name }, 'STT request');
 

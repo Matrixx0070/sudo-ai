@@ -1,0 +1,62 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": "Weather and time in Oslo?",
+      "role": "user"
+    },
+    {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"city\":\"Oslo\"}",
+            "name": "get_weather"
+          },
+          "id": "tu_1",
+          "type": "function"
+        },
+        {
+          "function": {
+            "arguments": "{\"tz\":\"Europe/Oslo\"}",
+            "name": "get_time"
+          },
+          "id": "tu_2",
+          "type": "function"
+        }
+      ]
+    }
+  ],
+  "model": "testprov/conformance-model-1",
+  "tools": [
+    {
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "name": "get_time",
+        "parameters": {
+          "properties": {
+            "tz": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

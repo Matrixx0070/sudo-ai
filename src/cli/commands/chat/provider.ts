@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import type Anthropic from '@anthropic-ai/sdk';
 import type OpenAI from 'openai';
 import { PATHS } from '../../../core/shared/constants.js';
+import { getProviderApiKey } from '../../../llm/client.js';
+import { PROVIDER_BASE_URLS } from '../../../llm/endpoints.js';
 
 // ---------------------------------------------------------------------------
 // .env loader
@@ -116,13 +118,13 @@ type ProviderClient = AnthropicClient | OpenAICompatClient;
 let _clientPromise: Promise<ProviderClient> | null = null;
 
 async function buildClient(): Promise<ProviderClient> {
-  const anthropicKey = process.env['ANTHROPIC_API_KEY'];
+  const anthropicKey = getProviderApiKey('anthropic');
   const ollamaUrl    = process.env['OLLAMA_URL'];
   const ollamaKey    = process.env['OLLAMA_API_KEY'];
-  const openaiKey    = process.env['OPENAI_API_KEY'];
-  const xaiKey       = process.env['XAI_API_KEY'];
+  const openaiKey    = getProviderApiKey('openai');
+  const xaiKey       = getProviderApiKey('xai');
   const xaiModel     = process.env['XAI_MODEL'];
-  const xaiBaseUrl   = process.env['XAI_BASE_URL'] ?? 'https://api.x.ai/v1';
+  const xaiBaseUrl   = process.env['XAI_BASE_URL'] ?? PROVIDER_BASE_URLS.xai;
 
   if (anthropicKey) {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');

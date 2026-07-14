@@ -1,4 +1,5 @@
-// No explicit import of fetch needed: Node.js 22 includes fetch globally.
+import { getProviderApiKey, llmFetch } from '../../llm/client.js';
+import { XAI_CHAT_COMPLETIONS_URL } from '../../llm/endpoints.js';
 
 /**
  * Represents a message exchanged with the xAI chat API. A role of
@@ -93,9 +94,9 @@ export class XaiEnsemble {
     }
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.XAI_API_KEY ?? ''}`,
+      Authorization: `Bearer ${getProviderApiKey('xai') ?? ''}`,
     };
-    const url = 'https://api.x.ai/v1/chat/completions';
+    const url = XAI_CHAT_COMPLETIONS_URL;
     let attempt = 0;
     // Always an Error after at least one failed attempt — never a raw HTTP
     // body string (the prior code overloaded this slot, immediately
@@ -105,11 +106,11 @@ export class XaiEnsemble {
     let lastError: Error | undefined;
     while (attempt < 3) {
       try {
-        const response = await fetch(url, {
+        const response = await llmFetch(url, {
           method: 'POST',
           headers,
           body: JSON.stringify(body),
-        });
+        }, { caller: 'forge:xai-ensemble', purpose: 'ensemble completion' });
         // If rate limited, respect Retry‑After header.
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
