@@ -2058,7 +2058,39 @@ export class AgentLoop extends AgentLoopInjections {
         // Hook: before_prompt_build — fires before the message array is prepared for the API call.
         void this.hooks?.emit('before_prompt_build', { event: 'before_prompt_build', sessionId: state.sessionId, iteration: state.iteration });
 
-        const trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
+        let trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
+
+        // gw-refactor Phase 2: proactive context budget. Estimate the prompt
+        // BEFORE the call and compact from the estimate — the loop must never
+        // learn its limit from a context_exceeded error. >80% of the model's
+        // window triggers the existing compaction; >95% escalates (force).
+        // Fail-open: any error here proceeds with the un-compacted prompt.
+        // Kill-switch: SUDO_CONTEXT_BUDGET=0.
+        if (process.env['SUDO_CONTEXT_BUDGET'] !== '0') {
+          try {
+            const { estimateContextSize } = await import('./context.js');
+            const { getAliasLimits } = await import('../../llm/limits.js');
+            const { decideContextBudget } = await import('../../llm/budget.js');
+            const windowTokens = getAliasLimits(model ?? '').context_window;
+            const estimated = estimateContextSize(trimmed as Array<{ content: string }>);
+            const decision = decideContextBudget(estimated, windowTokens);
+            if (decision !== 'none') {
+              const force = decision === 'force';
+              log.info(
+                { sessionId: state.sessionId, estimated, windowTokens, force },
+                'Context budget: proactive compaction before call',
+              );
+              await runCompaction(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
+              if (force) {
+                const { escalateCompaction } = await import('./loop-helpers.js');
+                await escalateCompaction(this.brain, session, state);
+              }
+              trimmed = await prepareMessages(this.brain, session, state, emit, hooksHelper, this._preCompactionFlush);
+            }
+          } catch (budgetErr) {
+            log.warn({ sessionId: state.sessionId, err: String(budgetErr) }, 'Context budget check failed — proceeding without (fail-open)');
+          }
+        }
 
         // Hook: before_model_resolve — fires after messages are prepared, just before brain.call().
         void this.hooks?.emit('before_model_resolve', { event: 'before_model_resolve', sessionId: state.sessionId, modelName: model ?? '' });

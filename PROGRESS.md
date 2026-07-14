@@ -74,3 +74,9 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
 - **A10**: visionIR carries a 60s AbortSignal.timeout per route (replaces the legacy per-provider 60s timeout the sweep would otherwise have dropped). browser.vision `data.provider` now reports 'llm-client' instead of which fallback answered.
 - **A11**: getProviderApiKey trims — whitespace-only keys now count as unset (previously truthy). Judged a bug-fix-grade difference, kept.
 - **A12 (DoD deviation)**: "app boots and answers on Telegram" cannot be proven from this branch without touching prod (single Telegram bot token — a second poller would steal prod's getUpdates). Boot/Telegram proof deferred to the Final Acceptance staging soak; Phase 1 verification = full unit gate + choke-point grep guards. UNVERIFIED: live provider calls on the new paths.
+
+## PHASE 2 — IR + context budgets
+
+- Proactive context-budget gate wired at the loop's pre-call site (loop.ts, after prepareMessages): estimateContextSize(trimmed) vs getAliasLimits(model).context_window via pure decideContextBudget (src/llm/budget.ts); >80% → runCompaction, >95% → runCompaction + escalateCompaction, then prepareMessages re-runs. Fail-open try/catch; kill-switch SUDO_CONTEXT_BUDGET=0. Previously compaction was only reactive (llm_context_overflow catch / finishReason==='length').
+- **A13**: gate defaults ON (protective + fail-open, mirrors repo convention for safe additions); thresholds exclusive (> not >=), unit-pinned in tests/llm/budget.test.ts.
+- shared-types/ir/v1.ts + src/llm/limits.ts + 20+ tests: built by subagent (report pending).
