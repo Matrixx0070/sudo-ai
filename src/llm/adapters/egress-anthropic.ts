@@ -190,11 +190,23 @@ export function egressAnthropic(ir: IRRequest): Rec {
 
 function parseUsage(u: unknown): IRUsage {
   if (!isRec(u)) return { in: 0, out: 0, cached_in: 0 };
-  return {
-    in: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : 0,
+  const input = typeof u['input_tokens'] === 'number' ? u['input_tokens'] : 0;
+  const cacheRead =
+    typeof u['cache_read_input_tokens'] === 'number' ? u['cache_read_input_tokens'] : 0;
+  const cacheCreation =
+    typeof u['cache_creation_input_tokens'] === 'number' ? u['cache_creation_input_tokens'] : 0;
+  // IRUsage invariant: `in` = TOTAL input incl. cached (matches ai-SDK/OpenAI
+  // semantics). Anthropic's input_tokens EXCLUDES cache reads/writes, so sum
+  // them here; cached_in/cache_creation_in stay the discountable subsets.
+  const usage: IRUsage = {
+    in: input + cacheRead + cacheCreation,
     out: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : 0,
-    cached_in: typeof u['cache_read_input_tokens'] === 'number' ? u['cache_read_input_tokens'] : 0,
+    cached_in: cacheRead,
   };
+  if (typeof u['cache_creation_input_tokens'] === 'number') {
+    usage.cache_creation_in = cacheCreation;
+  }
+  return usage;
 }
 
 /**

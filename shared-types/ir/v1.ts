@@ -134,10 +134,19 @@ export const IRRequestSchema = z.object({
 });
 export type IRRequest = z.infer<typeof IRRequestSchema>;
 
+/**
+ * INVARIANT: `in` = TOTAL input tokens INCLUDING cached ones (cache reads AND
+ * cache-creation writes) — matches ai-SDK/OpenAI semantics, where
+ * prompt_tokens already covers cached input. `cached_in` (cache reads) and
+ * `cache_creation_in` (cache writes, Anthropic only) are SUBSETS of `in` used
+ * for cost discounting — never add them on top of `in`.
+ */
 export const IRUsageSchema = z.object({
   in: z.number(),
   out: z.number(),
   cached_in: z.number(),
+  /** Anthropic cache_creation_input_tokens (subset of `in`; absent elsewhere). */
+  cache_creation_in: z.number().optional(),
 });
 export type IRUsage = z.infer<typeof IRUsageSchema>;
 

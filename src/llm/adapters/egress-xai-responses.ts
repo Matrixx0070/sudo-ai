@@ -418,6 +418,9 @@ export function createXaiResponsesSSEMachine(): IRStreamMachine {
     get terminated() {
       return terminated;
     },
+    get partialUsage(): IRUsage {
+      return { ...usage };
+    },
     push(event: unknown): IRStreamEvent[] {
       if (terminated) {
         throw new Error('IR stream machine is single-use: received input after terminal message_end (RULE 4)');

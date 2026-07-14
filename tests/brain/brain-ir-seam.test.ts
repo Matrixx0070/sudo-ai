@@ -252,3 +252,101 @@ describe('Brain.call IR seam (LLM_IR_CALLERS)', () => {
     expect(generateTextMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F3: cancelled IR streams still bill their partial usage
+// ---------------------------------------------------------------------------
+
+const enc = new TextEncoder();
+
+function sseChunk(obj: unknown): string {
+  return `data: ${JSON.stringify(obj)}\n\n`;
+}
+
+function stubFetchSSE(chunks: string[]): ReturnType<typeof vi.fn> {
+  const spy = vi.fn(async () => {
+    let i = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (i < chunks.length) controller.enqueue(enc.encode(chunks[i++]!));
+        else controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  });
+  vi.stubGlobal('fetch', spy);
+  return spy;
+}
+
+describe('Brain.stream IR seam — cancelled-stream billing (F3)', () => {
+  it('early break → _recordBillingUsage called with the LAST-KNOWN partial usage', async () => {
+    process.env['LLM_IR_CALLERS'] = '*';
+    // Usage rides the first chunk so the machine holds a partial snapshot
+    // when the consumer walks away (OpenAI include_usage may attach anywhere).
+    stubFetchSSE([
+      sseChunk({ choices: [{ delta: { role: 'assistant', content: 'Hel' } }], usage: { prompt_tokens: 30, completion_tokens: 2 } }),
+      sseChunk({ choices: [{ delta: { content: 'lo.' } }] }),
+      sseChunk({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      'data: [DONE]\n\n',
+    ]);
+    const brain = await newBrain();
+    const billSpy = vi
+      .spyOn(brain as unknown as { _recordBillingUsage: (...a: unknown[]) => void }, '_recordBillingUsage')
+      .mockImplementation(() => {});
+
+    const chunks: string[] = [];
+    for await (const chunk of brain.stream({ messages: [{ role: 'user', content: 'hi' }], source: 'agent' })) {
+      chunks.push(chunk);
+      break; // consumer walks away mid-stream
+    }
+    expect(chunks).toEqual(['Hel']);
+
+    // Billing is fire-and-forget from the finally — flush the microtasks.
+    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setImmediate(r));
+
+    expect(billSpy).toHaveBeenCalledTimes(1);
+    const [model, usage, cacheTokens, , isStream, source] = billSpy.mock.calls[0]! as [
+      string,
+      { promptTokens: number; completionTokens: number } | undefined,
+      { create: number; read: number },
+      number,
+      boolean,
+      string,
+    ];
+    expect(model).toBe(MODEL);
+    expect(usage?.promptTokens).toBe(30); // the PARTIAL usage, not zeros/undefined
+    expect(usage?.completionTokens).toBe(2);
+    expect(cacheTokens).toEqual({ create: 0, read: 0 });
+    expect(isStream).toBe(true);
+    expect(source).toBe('agent');
+  });
+
+  it('full consumption bills exactly ONCE (no double-billing from the finally)', async () => {
+    process.env['LLM_IR_CALLERS'] = '*';
+    stubFetchSSE([
+      sseChunk({ choices: [{ delta: { role: 'assistant', content: 'Hello.' } }] }),
+      sseChunk({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      sseChunk({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 4 } }),
+      'data: [DONE]\n\n',
+    ]);
+    const brain = await newBrain();
+    const billSpy = vi
+      .spyOn(brain as unknown as { _recordBillingUsage: (...a: unknown[]) => void }, '_recordBillingUsage')
+      .mockImplementation(() => {});
+
+    let text = '';
+    for await (const chunk of brain.stream({ messages: [{ role: 'user', content: 'hi' }], source: 'agent' })) {
+      text += chunk;
+    }
+    expect(text).toBe('Hello.');
+
+    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setImmediate(r));
+
+    expect(billSpy).toHaveBeenCalledTimes(1);
+    const usage = billSpy.mock.calls[0]![1] as { promptTokens: number; completionTokens: number };
+    expect(usage.promptTokens).toBe(12);
+    expect(usage.completionTokens).toBe(4);
+  });
+});

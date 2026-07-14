@@ -74,10 +74,14 @@ export function irErrorClass(err: unknown): string {
 
 /** ai-SDK v6 usage naming, as buildTokenUsage/_callSingleModel consume it. */
 export interface BrainLegacyUsage {
+  /** TOTAL input incl. cached (IRUsage invariant — ai-SDK/OpenAI semantics). */
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** Cache-READ subset of inputTokens (Anthropic cache_read_input_tokens). */
   cachedInputTokens: number;
+  /** Cache-CREATION subset of inputTokens (Anthropic only; 0 elsewhere). */
+  cacheCreationInputTokens: number;
 }
 
 /**
@@ -125,6 +129,7 @@ function irUsageToLegacy(u: IRUsage): BrainLegacyUsage {
     outputTokens: u.out,
     totalTokens: u.in + u.out,
     cachedInputTokens: u.cached_in,
+    cacheCreationInputTokens: u.cache_creation_in ?? 0,
   };
 }
 
@@ -144,11 +149,13 @@ export function irResponseToBrainResult(ir: IRResponse, _modelId: string): Brain
     }
   }
   // Synthesized Anthropic-shaped metadata so extractPromptCacheTokens (the
-  // only providerMetadata reader on this path) sees the cache-read count the
-  // IR usage already carries. cached_in is 0 on non-Anthropic routes.
+  // only providerMetadata reader on this path) sees the cache-read AND
+  // cache-creation counts the IR usage already carries. Both are 0 on
+  // non-Anthropic routes.
+  const cacheCreation = ir.usage.cache_creation_in ?? 0;
   const providerMetadata =
-    ir.usage.cached_in > 0
-      ? { anthropic: { usage: { cache_read_input_tokens: ir.usage.cached_in, cache_creation_input_tokens: 0 } } }
+    ir.usage.cached_in > 0 || cacheCreation > 0
+      ? { anthropic: { usage: { cache_read_input_tokens: ir.usage.cached_in, cache_creation_input_tokens: cacheCreation } } }
       : undefined;
   return {
     text,
@@ -216,6 +223,12 @@ export async function callTransportForBrain(
  */
 export interface BrainStreamFacade {
   textStream: AsyncIterable<string>;
+  /**
+   * Resolves with the terminal usage on completion, or the transport's
+   * LAST-KNOWN partial usage when the consumer breaks/abandons textStream
+   * (never undefined once the facade was returned) — brain bills cancelled
+   * IR streams from this, exactly like the legacy cancelled-stream path.
+   */
   usage: Promise<BrainLegacyUsage | undefined>;
   finishReason: Promise<BrainLegacyResult['finishReason'] | undefined>;
   /** The llm_calls trace_id the transport logged (for noteTraceForSession). */
@@ -241,14 +254,24 @@ export async function streamTransportForBrain(
   opts: CallIROptions = {},
 ): Promise<BrainStreamFacade> {
   const ir = toBrainIR(request, modelId, 'brain.stream');
-  const gen = streamIR(ir, { ...opts, noRetry: true });
 
   // Holder object (not bare lets) so TS control-flow narrowing can't wrongly
-  // pin `terminal` to null across the closure mutations below.
+  // pin `terminal` to null across the closure mutations below. `lastUsage`
+  // is the transport's last-known partial-usage snapshot (settled from
+  // streamIR's finally) — a consumer-cancelled stream bills THAT, never
+  // undefined, mirroring legacy brain's cancelled-stream billing.
   const st = {
     terminal: null as { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null,
     streamError: undefined as string | undefined,
+    lastUsage: { in: 0, out: 0, cached_in: 0 } as IRUsage,
   };
+  const gen = streamIR(ir, {
+    ...opts,
+    noRetry: true,
+    onPartialUsage: (u) => {
+      st.lastUsage = u;
+    },
+  });
 
   let resolveUsage!: (u: BrainLegacyUsage | undefined) => void;
   let resolveFinish!: (f: BrainLegacyResult['finishReason'] | undefined) => void;
@@ -306,7 +329,17 @@ export async function streamTransportForBrain(
         throw new Error(st.streamError ?? 'IR stream terminated with stop_reason error');
       }
     } finally {
-      resolveUsage(st.terminal !== null ? irUsageToLegacy(st.terminal.usage) : undefined);
+      // Consumer break/abandonment: close the transport generator FIRST so its
+      // finally runs (fetch abort + partial llm_calls row + onPartialUsage
+      // callback) before we settle. Cheap no-op when the stream already
+      // finished. NEVER throws (generator return does not re-raise).
+      await gen.return(undefined).catch(() => {
+        /* transport finally owns cleanup */
+      });
+      // Settle usage from the terminal when the stream completed, else from
+      // the transport's last-known partial snapshot — never undefined once
+      // the facade was handed out, so cancelled streams still get billed.
+      resolveUsage(irUsageToLegacy(st.terminal !== null ? st.terminal.usage : st.lastUsage));
       resolveFinish(
         st.terminal !== null ? irStopReasonToFinishReason(st.terminal.stop_reason) : undefined,
       );

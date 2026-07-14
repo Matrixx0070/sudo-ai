@@ -1384,7 +1384,26 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
               if (!irStreamCompleted && !irStreamErrored) {
                 // Consumer broke out early — the model streamed fine (legacy
                 // early-break parity); the transport's own finally wrote the
-                // llm_calls row and aborted the fetch.
+                // llm_calls row and aborted the fetch. facade.usage settles
+                // immediately on break (last-known partial usage), so bill it
+                // like the legacy cancelled-stream path — fire-and-forget,
+                // NEVER throwing from this finally.
+                void Promise.resolve(facade.usage).then(
+                  (u) => {
+                    const usage = u !== undefined
+                      ? buildTokenUsage(modelId, u, { create: u.cacheCreationInputTokens, read: u.cachedInputTokens })
+                      : undefined;
+                    if (usage !== undefined && usage.completionTokens > 0) {
+                      log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }, 'Streaming call ended early by consumer (IR transport)');
+                    }
+                    try {
+                      this._recordBillingUsage(modelId, usage, { create: u?.cacheCreationInputTokens ?? 0, read: u?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+                    } catch (billErr) {
+                      log.warn({ modelId, err: billErr }, 'Billing record failed for cancelled IR stream (non-fatal)');
+                    }
+                  },
+                  () => { /* usage unavailable — facade promises never reject, defensive */ },
+                );
                 this.failover.recordSuccess(profile.id);
                 this.idleBreaker.recordDurableProgress();
               }
@@ -1397,9 +1416,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
             try {
               const irUsage = await facade.usage;
               const usage = irUsage !== undefined
-                ? buildTokenUsage(modelId, irUsage, { create: 0, read: irUsage.cachedInputTokens })
+                ? buildTokenUsage(modelId, irUsage, { create: irUsage.cacheCreationInputTokens, read: irUsage.cachedInputTokens })
                 : undefined;
-              this._recordBillingUsage(modelId, usage, { create: 0, read: irUsage?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+              this._recordBillingUsage(modelId, usage, { create: irUsage?.cacheCreationInputTokens ?? 0, read: irUsage?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
               log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed (IR transport)');
             } catch (bookkeepErr) {
               log.warn({ modelId, err: bookkeepErr }, 'post-stream bookkeeping failed (IR path; response already delivered)');

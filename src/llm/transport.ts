@@ -33,9 +33,12 @@
  *   Claude Code attestation sentence (Anthropic gates OAuth inference on it).
  * - tool names: sanitizeOAuthToolName (the reserved `mcp_` prefix 400 class,
  *   #685) with a per-call reverse map applied to response tool_use blocks.
- * Legacy-only request repairs (orphan tool_result strip, empty-text strip,
- * thinking-budget injection) are deliberately NOT ported here — the IR layer
- * never produces those malformations; they stay quarantined in legacy.
+ * Legacy-only request repairs (orphan tool_result strip, empty-text strip)
+ * are deliberately NOT ported here — brainRequestToIR (shadow.ts) strips those
+ * malformations before the IR ever reaches this transport. Thinking-budget
+ * injection (legacy providers.ts section 1c) IS ported: prepareWireCall's
+ * anthropic branch reuses resolveThinkingBudget so opus-4-8+ bodies get the
+ * same {thinking, max_tokens} the legacy interceptor produces.
  *
  * Error semantics:
  * - non-2xx HTTP → classifyHttpError → LLMPolicyError THROWN (policy retries
@@ -79,6 +82,7 @@ import {
 } from './adapters/stream.js';
 import { sha256Hex, type LLMCallRecord } from './logging.js';
 import { sanitizeOAuthToolName } from '../core/brain/tool-schema-compat.js';
+import { resolveThinkingBudget } from '../core/brain/thinking-inject.js';
 import { getCustomProviderWireConfig } from './legacy/custom-providers.js';
 import { createLogger } from '../core/shared/logger.js';
 
@@ -114,6 +118,14 @@ export interface CallIROptions {
    * Breaker/lanes/budgets still apply.
    */
   noRetry?: boolean;
+  /**
+   * streamIR only: called from the generator's finally with the machine's
+   * last-known usage snapshot (anthropic message_start already carries
+   * input_tokens), so a consumer that breaks out early can still bill the
+   * partial usage. Invoked exactly once, before the generator settles; a
+   * throwing observer is swallowed (billing hooks must never break cleanup).
+   */
+  onPartialUsage?: (usage: IRUsage) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +448,28 @@ function prepareWireCall(ir: IRRequest, stream: boolean, traceId: string): Prepa
     ) {
       delete body['temperature'];
     }
+    // Extended-thinking injection for opus-4-8+ (ported verbatim from legacy
+    // providers.ts section 1c). Only when the body carries no explicit
+    // `thinking` (a future ir.extra passthrough must stay untouched).
+    // resolveThinkingBudget owns ALL budget/clamp math — including the
+    // SUDO_THINKING_DISABLE kill-switch, SUDO_THINKING_BUDGET override, and
+    // the SUDO_THINKING_MODEL_MAX ceiling — and bumps max_tokens so
+    // budget_tokens < max_tokens (Anthropic 400s otherwise).
+    if (typeof body['model'] === 'string' && body['thinking'] === undefined) {
+      const tb = resolveThinkingBudget(
+        body['model'],
+        typeof body['max_tokens'] === 'number' ? body['max_tokens'] : 0,
+        {
+          disable: process.env['SUDO_THINKING_DISABLE'],
+          budget: process.env['SUDO_THINKING_BUDGET'],
+          modelMax: process.env['SUDO_THINKING_MODEL_MAX'],
+        },
+      );
+      if (tb) {
+        body['thinking'] = { type: 'enabled', budget_tokens: tb.budgetTokens };
+        body['max_tokens'] = tb.maxTokens;
+      }
+    }
     if (stream) body['stream'] = true;
     if (r.provider === 'claude-oauth') nameMap = applyOAuthBodyContract(body);
   } else {
@@ -703,7 +737,7 @@ function reverseEventToolName(ev: IRStreamEvent, nameMap: Map<string, string>): 
 function createResponseAccumulator(traceId: string): {
   add(ev: IRStreamEvent): void;
   terminal: { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null;
-  toIRResponse(): IRResponse;
+  toIRResponse(partialUsage?: IRUsage): IRResponse;
 } {
   const blocks: IRResponse['blocks'] = [];
   const acc = {
@@ -719,14 +753,15 @@ function createResponseAccumulator(traceId: string): {
         acc.terminal = { stop_reason: ev.stop_reason, usage: ev.usage };
       }
     },
-    toIRResponse(): IRResponse {
+    toIRResponse(partialUsage?: IRUsage): IRResponse {
       return {
         blocks,
         // Consumer abandoned the stream before the terminal event →
         // stop_reason 'error' on the partial (mirror brain's partial-usage
-        // billing philosophy: record what is known, never invent success).
+        // billing philosophy: record what is known, never invent success) —
+        // with the machine's last-known usage snapshot, not zeros.
         stop_reason: acc.terminal?.stop_reason ?? 'error',
-        usage: acc.terminal?.usage ?? { in: 0, out: 0, cached_in: 0 },
+        usage: acc.terminal?.usage ?? partialUsage ?? { in: 0, out: 0, cached_in: 0 },
         trace_id: traceId,
       };
     },
@@ -1002,6 +1037,25 @@ export async function* streamIR(
     } catch {
       /* reader already released */
     }
-    writeRow({ irResponse: acc.toIRResponse() });
+    // Last-known usage: terminal usage when the stream finished, otherwise the
+    // machine's snapshot (anthropic message_start already carried input_tokens)
+    // — cancelled streams must bill their partial usage, not zeros.
+    let partial: IRUsage = { in: 0, out: 0, cached_in: 0 };
+    try {
+      partial = acc.terminal?.usage ?? live.machine.partialUsage;
+    } catch {
+      /* defensive — a broken machine getter must not mask cleanup */
+    }
+    try {
+      opts.onPartialUsage?.({ ...partial });
+    } catch {
+      /* observer failures never break stream cleanup */
+    }
+    writeRow({
+      irResponse: acc.toIRResponse(partial),
+      tokensIn: partial.in,
+      tokensOut: partial.out,
+      tokensCached: partial.cached_in,
+    });
   }
 }

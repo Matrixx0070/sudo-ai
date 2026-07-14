@@ -35,7 +35,7 @@
     "type": "message_end",
     "usage": {
       "cached_in": 10,
-      "in": 25,
+      "in": 35,
       "out": 17
     }
   }

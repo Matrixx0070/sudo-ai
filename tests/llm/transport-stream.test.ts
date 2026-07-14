@@ -269,13 +269,14 @@ describe('streamIR — happy path', () => {
       { type: 'tool_input_delta', id: 'tu_1', partial_json: '{"city":' },
       { type: 'tool_input_delta', id: 'tu_1', partial_json: '"Oslo"}' },
       { type: 'tool_use_end', id: 'tu_1', name: 'get_weather', input: { city: 'Oslo' } },
-      { type: 'message_end', stop_reason: 'tool_use', usage: { in: 25, out: 17, cached_in: 10 } },
+      // usage.in = TOTAL input incl. cache reads (25 + 10) — IRUsage invariant.
+      { type: 'message_end', stop_reason: 'tool_use', usage: { in: 35, out: 17, cached_in: 10 } },
     ]);
 
     const row = readRow('trace-stream-1');
     expect(row['route']).toBe('anthropic:messages');
     expect(row['error_class']).toBeNull();
-    expect(row['tokens_in']).toBe(25);
+    expect(row['tokens_in']).toBe(35);
     expect(row['tokens_out']).toBe(17);
     expect(typeof row['ttft_ms']).toBe('number');
   });
@@ -312,7 +313,7 @@ describe('streamIR — SSE framing', () => {
     expect(events.at(-1)).toEqual({
       type: 'message_end',
       stop_reason: 'tool_use',
-      usage: { in: 25, out: 17, cached_in: 10 },
+      usage: { in: 35, out: 17, cached_in: 10 },
     });
   });
 
@@ -441,6 +442,38 @@ describe('streamIR — consumer break', () => {
     // No unhandled rejection: vitest fails the test run on any, and the
     // event loop settles here before the assertion.
     await new Promise((r) => setImmediate(r));
+  });
+
+  it('anthropic early break: the partial row carries the machine\'s last-known usage (F3)', async () => {
+    const { fetchImpl } = mockFetch([{ stream: () => sseStream(ANTHROPIC_CHUNKS) }]);
+
+    const seen: IRStreamEvent[] = [];
+    for await (const ev of streamIR(baseIR({ alias: 'anthropic/claude-opus-4-8' }), { fetchImpl })) {
+      seen.push(ev);
+      if (seen.length === 1) break; // consumer walks away after the first delta
+    }
+    expect(seen).toEqual([{ type: 'text_delta', text: 'Hel' }]);
+
+    const row = readRow('trace-stream-1');
+    // message_start already reported input_tokens 25 + cache_read 10 → in 35;
+    // out is the message_start's 1 (message_delta was never consumed).
+    expect(row['tokens_in']).toBe(35);
+    expect(row['tokens_out']).toBe(1);
+    expect(row['tokens_cached']).toBe(10);
+    const irRes = JSON.parse(row['ir_response'] as string) as { stop_reason: string; usage: Record<string, number> };
+    expect(irRes.stop_reason).toBe('error'); // partial — never invent success
+    expect(irRes.usage).toEqual({ in: 35, out: 1, cached_in: 10 });
+  });
+
+  it('onPartialUsage fires from the finally with the last-known snapshot (F3)', async () => {
+    const { fetchImpl } = mockFetch([{ stream: () => sseStream(ANTHROPIC_CHUNKS) }]);
+    let observed: unknown;
+    const gen = streamIR(baseIR({ alias: 'anthropic/claude-opus-4-8' }), {
+      fetchImpl,
+      onPartialUsage: (u) => { observed = u; },
+    });
+    for await (const _ev of gen) break;
+    expect(observed).toEqual({ in: 35, out: 1, cached_in: 10 });
   });
 });
 

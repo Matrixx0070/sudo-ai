@@ -53,6 +53,107 @@ describe('brainRequestToIR', () => {
     expect(ir.trace_id).toMatch(/^shadow-/);
   });
 
+  it('F4a: whitespace-only text is stripped (user and assistant), never an empty text block', () => {
+    const req: ShadowBrainRequest = {
+      messages: [
+        { role: 'user', content: 'real question' },
+        { role: 'assistant', content: '   \n\t ' }, // whitespace-only → message dropped
+        { role: 'user', content: '  ' }, // whitespace-only → message dropped
+        { role: 'user', content: 'follow-up' },
+      ],
+    };
+    const ir = brainRequestToIR(req, 'anthropic/claude-opus-4-8');
+    expect(ir.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'real question' }] },
+      { role: 'user', content: [{ type: 'text', text: 'follow-up' }] },
+    ]);
+  });
+
+  it('F4a: whitespace-only assistant text with toolCalls keeps the tool_use, drops the text block', () => {
+    const req: ShadowBrainRequest = {
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: ' ', toolCalls: [{ id: 'c1', name: 'fs.read', arguments: { path: 'x' } }] },
+        { role: 'tool', content: 'body', toolCallId: 'c1' },
+      ],
+    };
+    const ir = brainRequestToIR(req, 'anthropic/claude-opus-4-8');
+    expect(ir.messages[1]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'c1', name: 'fs.read', input: { path: 'x' } }],
+    });
+    // The whitespace-only user message with an image keeps the image only.
+    const ir2 = brainRequestToIR(
+      { messages: [{ role: 'user', content: '  ', images: [{ type: 'url', data: 'https://x/i.png' }] }] },
+      'anthropic/claude-opus-4-8',
+    );
+    expect(ir2.messages).toEqual([
+      { role: 'user', content: [{ type: 'image', source: { type: 'url', url: 'https://x/i.png' } }] },
+    ]);
+  });
+
+  it('F4b: orphan tool_result dropped, paired one survives (legacy orphan-strip parity)', () => {
+    const req: ShadowBrainRequest = {
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: 'ok', toolCalls: [{ id: 'c1', name: 'fs.read', arguments: {} }] },
+        { role: 'tool', content: 'kept result', toolCallId: 'c1' },
+        { role: 'tool', content: 'orphan result', toolCallId: 'fallback_123' }, // no matching tool_use
+        { role: 'user', content: 'summarize' },
+      ],
+    };
+    const ir = brainRequestToIR(req, 'anthropic/claude-opus-4-8');
+    expect(ir.messages[2]).toEqual({
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'kept result' }],
+    });
+    // The orphan never appears anywhere in the IR.
+    const allBlocks = ir.messages.flatMap((m) => m.content);
+    expect(allBlocks.some((b) => b.type === 'tool_result' && b.tool_use_id === 'fallback_123')).toBe(false);
+    expect(ir.messages).toHaveLength(4); // user, assistant, folded results, user
+  });
+
+  it('F4b: a folded tool-results message that becomes EMPTY is dropped entirely', () => {
+    const req: ShadowBrainRequest = {
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: 'no tools used' },
+        { role: 'tool', content: 'orphan A', toolCallId: 'ghost_1' },
+        { role: 'tool', content: 'orphan B', toolCallId: 'ghost_2' },
+        { role: 'user', content: 'and?' },
+      ],
+    };
+    const ir = brainRequestToIR(req, 'anthropic/claude-opus-4-8');
+    expect(ir.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'no tools used' }] },
+      { role: 'user', content: [{ type: 'text', text: 'and?' }] },
+    ]);
+  });
+
+  it('F4: a history legacy would repair yields a CLEAN IR (no empty text, no orphans)', () => {
+    const req: ShadowBrainRequest = {
+      messages: [
+        { role: 'user', content: 'start' },
+        { role: 'assistant', content: '\n', toolCalls: [{ id: 'c1', name: 't', arguments: {} }] },
+        { role: 'tool', content: 'r1', toolCallId: 'c1' },
+        { role: 'tool', content: 'r-orphan', toolCallId: 'fallback_9' },
+        { role: 'user', content: '\t ' },
+        { role: 'user', content: 'end' },
+      ],
+    };
+    const ir = brainRequestToIR(req, 'claude-oauth/claude-fable-5');
+    const seenToolUse = new Set<string>();
+    for (const m of ir.messages) {
+      for (const b of m.content) {
+        if (b.type === 'text') expect(b.text.trim()).not.toBe('');
+        if (b.type === 'tool_use') seenToolUse.add(b.id);
+        if (b.type === 'tool_result') expect(seenToolUse.has(b.tool_use_id)).toBe(true);
+      }
+      expect(m.content.length).toBeGreaterThan(0); // no empty-content messages
+    }
+  });
+
   it('maps priority background for non-chat/agent sources and defaults caller', () => {
     const ir = brainRequestToIR({ messages: [{ role: 'user', content: 'x' }], source: 'consciousness' }, 'm');
     expect(ir.priority).toBe('background');

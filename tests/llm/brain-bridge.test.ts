@@ -177,13 +177,40 @@ describe('irResponseToBrainResult', () => {
     );
     expect(res.text).toBe('Hello back.');
     expect(res.finishReason).toBe('stop');
-    expect(res.usage).toEqual({ inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 60 });
+    expect(res.usage).toEqual({ inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 60, cacheCreationInputTokens: 0 });
     // cached tokens surface through the synthesized Anthropic-shaped metadata
     // (the only providerMetadata reader on the brain path).
     expect(res.providerMetadata).toEqual({
       anthropic: { usage: { cache_read_input_tokens: 60, cache_creation_input_tokens: 0 } },
     });
     expect(res.toolCalls).toEqual([]);
+  });
+
+  it('cache_creation_in maps into usage + synthesized providerMetadata (F2)', () => {
+    const res = irResponseToBrainResult(
+      irResponse({ usage: { in: 100, out: 20, cached_in: 60, cache_creation_in: 15 } }),
+      MODEL,
+    );
+    expect(res.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      cachedInputTokens: 60,
+      cacheCreationInputTokens: 15,
+    });
+    expect(res.providerMetadata).toEqual({
+      anthropic: { usage: { cache_read_input_tokens: 60, cache_creation_input_tokens: 15 } },
+    });
+  });
+
+  it('cache creation WITHOUT cache reads still synthesizes providerMetadata (F2)', () => {
+    const res = irResponseToBrainResult(
+      irResponse({ usage: { in: 50, out: 5, cached_in: 0, cache_creation_in: 30 } }),
+      MODEL,
+    );
+    expect(res.providerMetadata).toEqual({
+      anthropic: { usage: { cache_read_input_tokens: 0, cache_creation_input_tokens: 30 } },
+    });
   });
 
   it('no cached tokens → providerMetadata undefined (legacy absence tolerated)', () => {
@@ -250,7 +277,7 @@ describe('callTransportForBrain', () => {
 
     expect(result.text).toBe('Hello back.');
     expect(result.finishReason).toBe('stop');
-    expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 4, totalTokens: 16, cachedInputTokens: 3 });
+    expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 4, totalTokens: 16, cachedInputTokens: 3, cacheCreationInputTokens: 0 });
     expect(traceId).toMatch(/^[0-9a-f-]{36}$/); // minted uuid, not the shadow- prefix
   });
 
@@ -294,6 +321,7 @@ describe('streamTransportForBrain', () => {
       outputTokens: 17,
       totalTokens: 42,
       cachedInputTokens: 10,
+      cacheCreationInputTokens: 0,
     });
     await expect(facade.finishReason).resolves.toBe('stop');
     expect(facade.traceId).toMatch(/^[0-9a-f-]{36}$/);
@@ -327,7 +355,54 @@ describe('streamTransportForBrain', () => {
     ).rejects.toThrow(); // terminal error surfaces — the transport never re-requested (Rule 4)
     expect(seen).toEqual(['Hel']); // the partial output was delivered before the failure
     // fail() emits a terminal message_end with whatever usage accumulated (zeros here).
-    await expect(facade.usage).resolves.toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0 });
+    await expect(facade.usage).resolves.toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0 });
     await expect(facade.finishReason).resolves.toBe('error');
+  });
+
+  it('consumer break: facade.usage settles with the LAST-KNOWN partial usage, never undefined (F3)', async () => {
+    // Usage rides the FIRST chunk (OpenAI include_usage can attach it to any
+    // chunk) so the machine has a partial snapshot before the consumer breaks.
+    const chunks = [
+      oai({ choices: [{ delta: { role: 'assistant', content: 'Hel' } }], usage: { prompt_tokens: 30, completion_tokens: 2 } }),
+      oai({ choices: [{ delta: { content: 'lo.' } }] }),
+      oai({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      'data: [DONE]\n\n',
+    ];
+    const { fetchImpl } = mockFetch([{ stream: () => sseStream(chunks) }]);
+    const facade = await streamTransportForBrain(baseRequest(), MODEL, { fetchImpl });
+
+    for await (const chunk of facade.textStream) {
+      expect(chunk).toBe('Hel');
+      break; // consumer walks away mid-stream
+    }
+
+    // Settles immediately (no terminal event) from the transport's snapshot.
+    await expect(facade.usage).resolves.toEqual({
+      inputTokens: 30,
+      outputTokens: 2,
+      totalTokens: 32,
+      cachedInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    });
+    // No terminal was seen — finishReason stays undefined on abandonment.
+    await expect(facade.finishReason).resolves.toBeUndefined();
+  });
+
+  it('consumer break BEFORE any usage chunk: facade.usage resolves zeros, never undefined (F3)', async () => {
+    const chunks = [
+      oai({ choices: [{ delta: { role: 'assistant', content: 'Hel' } }] }),
+      oai({ choices: [{ delta: { content: 'lo.' } }] }),
+      'data: [DONE]\n\n',
+    ];
+    const { fetchImpl } = mockFetch([{ stream: () => sseStream(chunks) }]);
+    const facade = await streamTransportForBrain(baseRequest(), MODEL, { fetchImpl });
+    for await (const _chunk of facade.textStream) break;
+    await expect(facade.usage).resolves.toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    });
   });
 });

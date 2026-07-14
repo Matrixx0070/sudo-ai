@@ -47,9 +47,34 @@ describe('parseAnthropicSSE', () => {
       { type: 'tool_input_delta', id: 'tu_1', partial_json: '"Oslo","days"' },
       { type: 'tool_input_delta', id: 'tu_1', partial_json: ':3}' },
       { type: 'tool_use_end', id: 'tu_1', name: 'get_weather', input: { city: 'Oslo', days: 3 } },
-      { type: 'message_end', stop_reason: 'tool_use', usage: { in: 25, out: 17, cached_in: 10 } },
+      // usage.in = TOTAL input incl. cache reads (25 + 10) — IRUsage invariant.
+      { type: 'message_end', stop_reason: 'tool_use', usage: { in: 35, out: 17, cached_in: 10 } },
     ]);
     expect(m.terminated).toBe(true);
+  });
+
+  it('(f2) message_start cache_creation_input_tokens: summed into in + cache_creation_in kept', () => {
+    const m = streamIR('anthropic');
+    m.push({ type: 'message_start', message: { usage: { input_tokens: 25, cache_read_input_tokens: 10, cache_creation_input_tokens: 5, output_tokens: 1 } } });
+    const events = m.push({ type: 'message_stop' });
+    expect(events).toEqual([
+      { type: 'message_end', stop_reason: 'end_turn', usage: { in: 40, out: 1, cached_in: 10, cache_creation_in: 5 } },
+    ]);
+  });
+
+  it('(f3) partialUsage exposes the last-known snapshot BEFORE any terminal (cancelled-stream billing)', () => {
+    const m = streamIR('anthropic');
+    expect(m.partialUsage).toEqual({ in: 0, out: 0, cached_in: 0 });
+    m.push({ type: 'message_start', message: { usage: { input_tokens: 25, cache_read_input_tokens: 10, output_tokens: 1 } } });
+    // message_start alone emits nothing, but the snapshot already knows the prompt cost.
+    expect(m.firstTokenEmitted).toBe(false);
+    expect(m.partialUsage).toEqual({ in: 35, out: 1, cached_in: 10 });
+    m.push({ type: 'message_delta', delta: {}, usage: { output_tokens: 9 } });
+    expect(m.partialUsage).toEqual({ in: 35, out: 9, cached_in: 10 });
+    // Snapshot is a COPY — mutating it never poisons the machine.
+    const snap = m.partialUsage;
+    snap.in = 0;
+    expect(m.partialUsage.in).toBe(35);
   });
 
   it('malformed accumulated tool JSON: jsonrepair fallback; truly broken → {} + parse_error', () => {

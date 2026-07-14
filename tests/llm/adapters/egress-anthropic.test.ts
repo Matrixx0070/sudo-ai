@@ -147,7 +147,7 @@ describe('egressAnthropic', () => {
 });
 
 describe('parseAnthropicResponse', () => {
-  it('(a) plain text response: blocks 1:1, usage incl. cache_read_input_tokens', () => {
+  it('(a) plain text response: blocks 1:1, usage.in TOTAL incl. cache_read_input_tokens', () => {
     const res = parseAnthropicResponse(
       {
         content: [{ type: 'text', text: 'Hello!' }],
@@ -159,9 +159,23 @@ describe('parseAnthropicResponse', () => {
     expect(res).toEqual({
       blocks: [{ type: 'text', text: 'Hello!' }],
       stop_reason: 'end_turn',
-      usage: { in: 10, out: 5, cached_in: 7 },
+      // IRUsage invariant: in = TOTAL input incl. cached (10 + 7 cache reads).
+      usage: { in: 17, out: 5, cached_in: 7 },
       trace_id: 'tr1',
     });
+  });
+
+  it('(a2) cache_creation_input_tokens: summed into in, surfaced as cache_creation_in', () => {
+    const res = parseAnthropicResponse(
+      {
+        content: [{ type: 'text', text: 'Hello!' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 7, cache_creation_input_tokens: 4 },
+      },
+      'tr1',
+    );
+    // in = 10 + 7 (read) + 4 (creation); both cache fields kept as subsets.
+    expect(res.usage).toEqual({ in: 21, out: 5, cached_in: 7, cache_creation_in: 4 });
   });
 
   it('(b/c) tool_use blocks pass through with object input (parallel preserved)', () => {

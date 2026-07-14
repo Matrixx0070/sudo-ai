@@ -149,6 +149,7 @@ describe('callIR — openai-compat family', () => {
 
     expect(res.blocks).toEqual([{ type: 'text', text: 'Hello back.' }]);
     expect(res.stop_reason).toBe('end_turn');
+    // OpenAI prompt_tokens is ALREADY cache-inclusive — no summing on this family.
     expect(res.usage).toEqual({ in: 12, out: 4, cached_in: 3 });
     expect(res.trace_id).toBe('trace-transport-1');
   });
@@ -224,7 +225,8 @@ describe('callIR — anthropic family', () => {
     expect(typeof body['max_tokens']).toBe('number');
     expect(body['max_tokens'] as number).toBeGreaterThan(0);
     expect(res.blocks).toEqual([{ type: 'text', text: 'Hello back.' }]);
-    expect(res.usage).toEqual({ in: 12, out: 4, cached_in: 3 });
+    // IRUsage invariant: in = TOTAL input incl. cache reads (12 + 3).
+    expect(res.usage).toEqual({ in: 15, out: 4, cached_in: 3 });
   });
 
   it('response_schema → forced structured_output tool on the wire, tool_use parsed to object args', async () => {
