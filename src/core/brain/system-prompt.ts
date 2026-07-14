@@ -449,12 +449,51 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     if (shouldIncludeMemory && longTermMemoryCapped) {
       parts.push(sectionWithHeader('Long-Term Memory', longTermMemoryCapped));
     }
+    // Static rule sections (workspace markdown, byte-identical across calls
+    // within a process) lifted above the boundary too — same rationale as
+    // AGENTS/TOOLS above: static bytes below the boundary are wasted cache
+    // opportunity. Relative order matches the legacy (flag-off) layout.
+    if (remotionContent) {
+      parts.push(sectionWithHeader('Remotion Video Engine', remotionContent));
+    }
+    if (learningsContent) {
+      parts.push(sectionWithHeader('Self-Improvement Learnings', learningsContent));
+    }
+    if (codingContent) {
+      parts.push(sectionWithHeader('Coding Army — Standing Orders', codingContent));
+    }
+    if (autonomyContent) {
+      parts.push(sectionWithHeader('Autonomy Rules', autonomyContent));
+    }
+    if (formattingContent) {
+      parts.push(sectionWithHeader('Formatting Rules', formattingContent));
+    }
+    if (safetyRulesContent) {
+      parts.push(sectionWithHeader('Safety Rules', safetyRulesContent));
+    }
+    if (gitSafetyContent) {
+      parts.push(sectionWithHeader('Git Safety Protocol', gitSafetyContent));
+    }
+    if (prWorkflowContent) {
+      parts.push(sectionWithHeader('PR Creation Workflow', prWorkflowContent));
+    }
+    if (frontendContent) {
+      parts.push(sectionWithHeader('Frontend Task Rules', frontendContent));
+    }
+    if (dirtyWorktreeContent) {
+      parts.push(sectionWithHeader('Dirty Worktree Rules', dirtyWorktreeContent));
+    }
+    if (thinkingRulesContent) {
+      parts.push(sectionWithHeader('Thinking Rules', thinkingRulesContent));
+    }
   }
 
   // --- PROMPT CACHE BOUNDARY ---
   // Everything above: stable (SOUL, IDENTITY, USER, tools[, AGENTS, TOOLS,
-  //   capability manifest, long-term memory when SUDO_PROMPT_CACHE=1])
-  //   → reused across calls.
+  //   capability manifest, long-term memory, and the static rule sections
+  //   (Remotion/Learnings/Coding/Autonomy/Formatting/Safety/Git Safety/
+  //   PR Workflow/Frontend/Dirty Worktree/Thinking Rules) when
+  //   SUDO_PROMPT_CACHE=1]) → reused across calls.
   // Everything below: dynamic (date, mood, consciousness, persona, recent
   //   memory, custom instructions) → fresh each call.
   // With SUDO_PROMPT_CACHE=1 the date/time block also sits below this line.
@@ -538,7 +577,8 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   }
 
   // 9.5 REMOTION.md — professional video rendering knowledge
-  if (remotionContent) {
+  //     (Lifted above the boundary when SUDO_PROMPT_CACHE=1.)
+  if (!promptCacheStable && remotionContent) {
     parts.push(sectionWithHeader('Remotion Video Engine', remotionContent));
   }
 
@@ -560,54 +600,60 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     parts.push(sectionWithHeader('Long-Term Memory', longTermMemoryCapped));
   }
 
-  // 13. Learnings — autonomous self-improvement rules
-  if (learningsContent) {
-    parts.push(sectionWithHeader('Self-Improvement Learnings', learningsContent));
-  }
+  // 13.–16.9. Static rule sections (Learnings, Coding, Autonomy, Formatting,
+  // Safety, Git Safety, PR Workflow, Frontend, Dirty Worktree, Thinking
+  // Rules) — byte-identical across calls, so they are lifted above the
+  // boundary when SUDO_PROMPT_CACHE=1. Legacy (flag-off) positions below.
+  if (!promptCacheStable) {
+    // 13. Learnings — autonomous self-improvement rules
+    if (learningsContent) {
+      parts.push(sectionWithHeader('Self-Improvement Learnings', learningsContent));
+    }
 
-  // 14. CODING.md — coding army standing orders
-  if (codingContent) {
-    parts.push(sectionWithHeader('Coding Army — Standing Orders', codingContent));
-  }
+    // 14. CODING.md — coding army standing orders
+    if (codingContent) {
+      parts.push(sectionWithHeader('Coding Army — Standing Orders', codingContent));
+    }
 
-  // 15. Autonomy Rules — persist until done, bias to action
-  if (autonomyContent) {
-    parts.push(sectionWithHeader('Autonomy Rules', autonomyContent));
-  }
+    // 15. Autonomy Rules — persist until done, bias to action
+    if (autonomyContent) {
+      parts.push(sectionWithHeader('Autonomy Rules', autonomyContent));
+    }
 
-  // 15.5. Formatting Rules — response structure guidelines
-  if (formattingContent) {
-    parts.push(sectionWithHeader('Formatting Rules', formattingContent));
-  }
+    // 15.5. Formatting Rules — response structure guidelines
+    if (formattingContent) {
+      parts.push(sectionWithHeader('Formatting Rules', formattingContent));
+    }
 
-  // 16. Safety Rules — blast radius awareness
-  if (safetyRulesContent) {
-    parts.push(sectionWithHeader('Safety Rules', safetyRulesContent));
-  }
+    // 16. Safety Rules — blast radius awareness
+    if (safetyRulesContent) {
+      parts.push(sectionWithHeader('Safety Rules', safetyRulesContent));
+    }
 
-  // 16.5. Git Safety Protocol
-  if (gitSafetyContent) {
-    parts.push(sectionWithHeader('Git Safety Protocol', gitSafetyContent));
-  }
+    // 16.5. Git Safety Protocol
+    if (gitSafetyContent) {
+      parts.push(sectionWithHeader('Git Safety Protocol', gitSafetyContent));
+    }
 
-  // 16.6. PR Workflow — Upgrade 29
-  if (prWorkflowContent) {
-    parts.push(sectionWithHeader('PR Creation Workflow', prWorkflowContent));
-  }
+    // 16.6. PR Workflow — Upgrade 29
+    if (prWorkflowContent) {
+      parts.push(sectionWithHeader('PR Creation Workflow', prWorkflowContent));
+    }
 
-  // 16.7. Frontend Task Rules — Upgrade 41
-  if (frontendContent) {
-    parts.push(sectionWithHeader('Frontend Task Rules', frontendContent));
-  }
+    // 16.7. Frontend Task Rules — Upgrade 41
+    if (frontendContent) {
+      parts.push(sectionWithHeader('Frontend Task Rules', frontendContent));
+    }
 
-  // 16.8. Dirty Worktree Rules — Upgrade 53
-  if (dirtyWorktreeContent) {
-    parts.push(sectionWithHeader('Dirty Worktree Rules', dirtyWorktreeContent));
-  }
+    // 16.8. Dirty Worktree Rules — Upgrade 53
+    if (dirtyWorktreeContent) {
+      parts.push(sectionWithHeader('Dirty Worktree Rules', dirtyWorktreeContent));
+    }
 
-  // 16.9. Thinking Rules — behavioral patterns, anti-patterns, UX behaviors
-  if (thinkingRulesContent) {
-    parts.push(sectionWithHeader('Thinking Rules', thinkingRulesContent));
+    // 16.9. Thinking Rules — behavioral patterns, anti-patterns, UX behaviors
+    if (thinkingRulesContent) {
+      parts.push(sectionWithHeader('Thinking Rules', thinkingRulesContent));
+    }
   }
 
   // 17. Custom instructions

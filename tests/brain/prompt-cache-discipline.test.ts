@@ -3,7 +3,10 @@
  * @description Tests for SUDO_PROMPT_CACHE stable-prefix discipline.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { writeFile, unlink, mkdir, access } from 'fs/promises';
+import path from 'path';
+import { PATHS } from '../../src/core/shared/constants.js';
 import {
   isPromptCacheEnabled,
   isCacheBreakpointsEnabled,
@@ -261,5 +264,82 @@ describe('assembleSystemPrompt prefix stability', () => {
       const idx = prompt.indexOf(marker);
       if (idx >= 0) expect(idx).toBeGreaterThan(boundaryIdx);
     }
+  });
+});
+
+describe('assembleSystemPrompt static rule sections (Phase 3 cache-locality lift)', () => {
+  // These sections come from workspace/*.md files that are not guaranteed to
+  // exist in a checkout (workspace/ is gitignored). To make the assertions
+  // NON-vacuous, sentinel rule files are created for the duration of this
+  // block and removed afterwards — but only the ones this block created.
+  const sentinelFiles: Record<string, string> = {
+    'SAFETY-RULES.md': 'Sentinel safety rule: never rm -rf without confirmation.',
+    'CODING.md': 'Sentinel coding rule: prefer const over let.',
+  };
+  const created: string[] = [];
+
+  beforeAll(async () => {
+    await mkdir(PATHS.WORKSPACE, { recursive: true });
+    for (const [name, content] of Object.entries(sentinelFiles)) {
+      const filePath = path.join(PATHS.WORKSPACE, name);
+      try {
+        await access(filePath); // pre-existing — leave it alone
+      } catch {
+        await writeFile(filePath, content, 'utf8');
+        created.push(filePath);
+      }
+    }
+  });
+
+  afterAll(async () => {
+    for (const filePath of created) {
+      try {
+        await unlink(filePath);
+      } catch {
+        /* already gone */
+      }
+    }
+  });
+
+  const HEADERS = ['## Safety Rules', '## Coding Army — Standing Orders'];
+
+  it('flag on: Safety and Coding rule sections sit ABOVE the boundary', async () => {
+    process.env[FLAG] = '1';
+    const prompt = await assembleSystemPrompt({});
+    const boundaryIdx = prompt.indexOf(BOUNDARY);
+    expect(boundaryIdx).toBeGreaterThan(-1);
+    for (const header of HEADERS) {
+      const idx = prompt.indexOf(header);
+      expect(idx, `${header} missing from prompt`).toBeGreaterThan(-1);
+      expect(idx, `${header} should be above the boundary`).toBeLessThan(boundaryIdx);
+    }
+    // Relative order preserved from the legacy layout: Coding before Safety.
+    expect(prompt.indexOf('## Coding Army — Standing Orders'))
+      .toBeLessThan(prompt.indexOf('## Safety Rules'));
+  });
+
+  it('flag off: Safety and Coding rule sections sit BELOW the boundary (legacy position)', async () => {
+    const prompt = await assembleSystemPrompt({});
+    const boundaryIdx = prompt.indexOf(BOUNDARY);
+    expect(boundaryIdx).toBeGreaterThan(-1);
+    for (const header of HEADERS) {
+      const idx = prompt.indexOf(header);
+      expect(idx, `${header} missing from prompt`).toBeGreaterThan(-1);
+      expect(idx, `${header} should be below the boundary`).toBeGreaterThan(boundaryIdx);
+    }
+    // Legacy relative order: Coding before Safety.
+    expect(prompt.indexOf('## Coding Army — Standing Orders'))
+      .toBeLessThan(prompt.indexOf('## Safety Rules'));
+  });
+
+  it('flag on: prefix is byte-identical across calls WITH lifted rule content and tools present', async () => {
+    process.env[FLAG] = '1';
+    const opts = { tools: [{ name: 'b.tool', description: 'B' }, { name: 'a.tool', description: 'A' }] };
+    const p1 = (await assembleSystemPrompt(opts)).split(BOUNDARY)[0];
+    await new Promise((r) => setTimeout(r, 1100)); // cross a second boundary
+    const p2 = (await assembleSystemPrompt(opts)).split(BOUNDARY)[0];
+    // Sanity: the lifted rule content is actually inside the compared prefix.
+    expect(p1).toContain('## Safety Rules');
+    expect(p1).toBe(p2);
   });
 });
