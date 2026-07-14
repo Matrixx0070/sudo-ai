@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. Versioning follows the
 `version` field in `package.json`; entries are newest-first.
 
+## [Unreleased]
+
+### Added
+- **Text-processing toolchain (Spec 10)** — composable, low-memory access to the
+  classic Unix toolchain, modern replacements (rg/sd/fd/delta/difft), and
+  structured-data processors (jq/yq/mlr/qsv/gron/dasel/htmlq/datamash). Four
+  first-class tools in the new `textproc` category (kill-switch `SUDO_TEXTPROC=0`):
+  `textproc.extract` (line/byte/field slices of multi-GB files without loading
+  them — line 20M of a 1.2 GB file in ~750 ms at 85 MB RSS), `textproc.replace`
+  (safe find-replace: dry-run diff default, timestamped backups, binary refusal),
+  `textproc.analyze` (streaming CSV/TSV/JSONL stats/groupby/freq via Miller or a
+  pure-python fallback), `textproc.capabilities` (binary auto-detection + role
+  resolution native→alias→alt→python→none). Includes a capability registry with a
+  PATH-hashed cached manifest, 8 stdlib-first python fallbacks, a plugin path
+  (`config/textproc-plugins.json5`), an operator provisioning script
+  (`scripts/provision-textproc.sh`, sha256-pinned), a curated toolchain subset in
+  the untrusted Docker sandbox, router reachability for the category, an allowlist
+  extension for ~45 read-only text tools (with a `sed -i` flag-scan), and a
+  capability-manifest summary line. (#744–#749, PR-6)
+
 ## [4.1.7] — 2026-07-10
 
 ### Fixed

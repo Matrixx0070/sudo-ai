@@ -186,6 +186,7 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'transform', 'pipeline', 'replace', 'dedupe', 'deduplicate',
       'aggregate', 'column', 'columns', 'field', 'fields', 'lines',
       'jq', 'awk', 'sed', 'ripgrep', 'delimiter', 'delimited',
+      'diff', 'compare', 'difference',
     ],
     patterns: [
       /find.{0,20}(replace|in files)/i,
