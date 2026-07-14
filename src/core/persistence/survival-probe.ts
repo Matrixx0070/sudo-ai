@@ -5,6 +5,8 @@
 
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
+import { getProviderApiKey, llmFetch, type ProviderKeyName } from '../../llm/client.js';
+import { XAI_MODELS_URL, OPENAI_MODELS_URL, ANTHROPIC_MODELS_URL } from '../../llm/endpoints.js';
 
 const log = createLogger('persistence:probe');
 
@@ -43,10 +45,10 @@ interface MigrationRow {
 // Known model probes
 // ---------------------------------------------------------------------------
 
-const MODEL_PROBES: Array<{ model: string; url: string; envKey: string }> = [
-  { model: 'xai/grok',        url: 'https://api.x.ai/v1/models',               envKey: 'XAI_API_KEY' },
-  { model: 'openai/gpt',      url: 'https://api.openai.com/v1/models',          envKey: 'OPENAI_API_KEY' },
-  { model: 'anthropic/claude', url: 'https://api.anthropic.com/v1/models',      envKey: 'ANTHROPIC_API_KEY' },
+const MODEL_PROBES: Array<{ model: string; url: string; key: ProviderKeyName }> = [
+  { model: 'xai/grok',         url: XAI_MODELS_URL,       key: 'xai' },
+  { model: 'openai/gpt',       url: OPENAI_MODELS_URL,    key: 'openai' },
+  { model: 'anthropic/claude', url: ANTHROPIC_MODELS_URL, key: 'anthropic' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -65,7 +67,7 @@ export class SurvivalProbe {
     const results: ModelProbeResult[] = [];
 
     for (const probe of MODEL_PROBES) {
-      const apiKey = process.env[probe.envKey];
+      const apiKey = getProviderApiKey(probe.key);
       if (!apiKey) {
         results.push({ model: probe.model, available: false, latencyMs: 0 });
         continue;
@@ -76,10 +78,10 @@ export class SurvivalProbe {
       const timer      = setTimeout(() => controller.abort(), 10_000);
 
       try {
-        const resp = await fetch(probe.url, {
+        const resp = await llmFetch(probe.url, {
           headers: { Authorization: `Bearer ${apiKey}`, 'x-api-key': apiKey },
           signal:  controller.signal,
-        });
+        }, { caller: 'cron:survival-probe', purpose: 'provider liveness' });
         clearTimeout(timer);
         const latencyMs = Date.now() - start;
         results.push({ model: probe.model, available: resp.ok, latencyMs });

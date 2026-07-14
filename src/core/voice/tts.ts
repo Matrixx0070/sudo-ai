@@ -10,6 +10,8 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { getProviderApiKey, llmFetch } from '../../llm/client.js';
+import { XAI_TTS_URL, OPENAI_TTS_URL } from '../../llm/endpoints.js';
 import { ElevenLabsTTS } from './elevenlabs.js';
 import { KokoroLocalTTS } from './kokoro.js';
 import type { TTSResult, TTSOptions } from './types.js';
@@ -19,9 +21,6 @@ const log = createLogger('voice:tts');
 // ---------------------------------------------------------------------------
 // Provider config
 // ---------------------------------------------------------------------------
-
-const XAI_TTS_URL = 'https://api.x.ai/v1/audio/speech';
-const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech';
 
 const DEFAULT_XAI_VOICE = 'rex';
 const DEFAULT_OPENAI_VOICE = 'alloy';
@@ -66,8 +65,8 @@ export class TextToSpeech {
   private readonly cloudEnabled: boolean;
 
   constructor() {
-    this.xaiKey = process.env['XAI_VOICE_API_KEY'];
-    this.openaiKey = process.env['OPENAI_API_KEY'];
+    this.xaiKey = getProviderApiKey('xai-voice') ?? undefined;
+    this.openaiKey = getProviderApiKey('openai') ?? undefined;
     this.elevenlabs = new ElevenLabsTTS();
     this.kokoro = new KokoroLocalTTS();
 
@@ -175,14 +174,14 @@ export class TextToSpeech {
 
     let resp: Response;
     try {
-      resp = await fetch(XAI_TTS_URL, {
+      resp = await llmFetch(XAI_TTS_URL, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.xaiKey}`,
           'Content-Type': 'application/json',
         },
         body,
-      });
+      }, { caller: 'voice:tts', purpose: 'cloud TTS' });
     } catch (err) {
       log.error({ err }, 'xAI TTS fetch failed — network error');
       throw new Error(`xAI TTS network error: ${String(err)}`);
@@ -221,14 +220,14 @@ export class TextToSpeech {
 
     let resp: Response;
     try {
-      resp = await fetch(OPENAI_TTS_URL, {
+      resp = await llmFetch(OPENAI_TTS_URL, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.openaiKey}`,
           'Content-Type': 'application/json',
         },
         body,
-      });
+      }, { caller: 'voice:tts', purpose: 'cloud TTS' });
     } catch (err) {
       log.error({ err }, 'OpenAI TTS fetch failed — network error');
       throw new Error(`OpenAI TTS network error: ${String(err)}`);

@@ -3,8 +3,8 @@
  * @description EmbeddingService — generates and caches OpenAI text embeddings.
  *
  * Design decisions:
- *  - Uses raw fetch() rather than the OpenAI SDK to keep the memory module
- *    light and avoid circular imports with the AI-SDK layer.
+ *  - Uses the src/llm client embed() choke point (one attempt per call) rather
+ *    than the OpenAI SDK — this module still owns retry/backoff/circuit policy.
  *  - Embeddings are cached in embedding_cache by SHA-256 hash of the input
  *    text, so identical text never hits the API twice.
  *  - If OPENAI_API_KEY is not set, embed() returns null and callers degrade
@@ -12,13 +12,11 @@
  */
 
 import { createHash } from 'node:crypto';
+import { embed as llmEmbed, embeddingsAvailable } from '../../llm/client.js';
 import type { MindDB } from './db.js';
 
 /** Default model — 1536 dimensions, cheap and accurate */
 const DEFAULT_MODEL = 'text-embedding-3-small';
-
-/** OpenAI embeddings endpoint */
-const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 
 /** Maximum texts per batch request (OpenAI allows up to 2048, we use a safe limit) */
 const BATCH_SIZE = 100;
@@ -90,7 +88,13 @@ export function __resetEmbedCircuit(): void {
 export class EmbeddingService {
   private readonly db: MindDB;
   private readonly model: string;
-  private readonly apiKey: string | null;
+  /**
+   * Snapshot of embeddings-route availability at construction time (was: the
+   * raw OPENAI_API_KEY). The actual key/URL now lives behind the src/llm
+   * choke point — this field only preserves the old "no key → degrade to
+   * BM25" gating semantics.
+   */
+  private readonly apiAvailable: boolean;
   /** When false (SUDO_EMBED_BACKOFF=0), make a single attempt — the old behaviour. */
   private readonly backoffEnabled: boolean;
   /** Base backoff delay in ms (SUDO_EMBED_BACKOFF_BASE_MS overrides; tests use 1). */
@@ -109,7 +113,7 @@ export class EmbeddingService {
   constructor(db: MindDB, model = DEFAULT_MODEL) {
     this.db    = db;
     this.model = model;
-    this.apiKey = process.env['OPENAI_API_KEY'] ?? null;
+    this.apiAvailable = embeddingsAvailable();
     this.backoffEnabled = process.env['SUDO_EMBED_BACKOFF'] !== '0';
     const baseMs = Number(process.env['SUDO_EMBED_BACKOFF_BASE_MS']);
     this.backoffBaseMs = Number.isFinite(baseMs) && baseMs >= 0 ? baseMs : BACKOFF_DEFAULT_BASE_MS;
@@ -119,7 +123,7 @@ export class EmbeddingService {
     const cd = Number(process.env['SUDO_EMBED_CIRCUIT_COOLDOWN_MS']);
     this.circuitCooldownMs = Number.isFinite(cd) && cd >= 0 ? cd : CIRCUIT_DEFAULT_COOLDOWN_MS;
 
-    if (!this.apiKey) {
+    if (!this.apiAvailable) {
       console.warn('[EmbeddingService] OPENAI_API_KEY not set — running in BM25-only mode');
     }
   }
@@ -129,7 +133,7 @@ export class EmbeddingService {
     // Also honor the quota circuit: while it's OPEN (after 429s) every embed call
     // throws immediately, so callers gating on isAvailable would otherwise pay one
     // wasted exception per query for the whole cooldown window (RAG-7).
-    if (this.apiKey === null) return false;
+    if (!this.apiAvailable) return false;
     return !this.circuitEnabled || embedCircuit.openUntil <= Date.now();
   }
 
@@ -144,7 +148,7 @@ export class EmbeddingService {
    * @returns A 1536-dimension Float32Array, or null if no API key is set.
    */
   async embed(text: string): Promise<Float32Array | null> {
-    if (!this.apiKey) return null;
+    if (!this.apiAvailable) return null;
 
     const hash = this._cacheKey(text);
 
@@ -170,7 +174,7 @@ export class EmbeddingService {
    *          the text was skipped due to an API failure.
    */
   async embedBatch(texts: string[]): Promise<(Float32Array | null)[]> {
-    if (!this.apiKey) return texts.map(() => null);
+    if (!this.apiAvailable) return texts.map(() => null);
     if (texts.length === 0) return [];
 
     const results: (Float32Array | null)[] = new Array(texts.length).fill(null);
@@ -233,21 +237,39 @@ export class EmbeddingService {
     let lastNetworkError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      let response: Response;
       try {
-        response = await fetch(OPENAI_EMBEDDINGS_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            'Authorization': `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: this.model,
-            input: texts,
-            encoding_format: 'float',
-          }),
-        });
+        // One attempt through the src/llm choke point (llm client embed() makes
+        // no retries of its own — this loop owns the retry/circuit policy).
+        const result = await llmEmbed(
+          texts,
+          { caller: 'rag', purpose: 'hybrid-RAG dense embeddings' },
+          { model: this.model },
+        );
+
+        // A success closes the circuit / resets the consecutive-429 counter.
+        this._recordEmbedSuccess();
+
+        // embed() already returns vectors sorted by input index.
+        return result.embeddings.map((embedding) => new Float32Array(embedding));
       } catch (err) {
+        const status = (err as Error & { status?: number }).status;
+
+        if (typeof status === 'number') {
+          // Non-2xx HTTP response — same classification as the old response.ok branch.
+          const retryable = status === 429 || status >= 500;
+          if (retryable && attempt < maxAttempts) {
+            await this._sleep(this._backoffDelayMs(attempt));
+            continue;
+          }
+          // Terminal failure. A terminal 429 is a quota/rate signal — feed it to
+          // the circuit-breaker so sustained exhaustion opens the circuit and
+          // callers stop hammering the dead API.
+          if (status === 429) this._recordQuota429();
+          // Preserve the historical error shape ("API error <status>: <body>").
+          const body = (err as Error).message.replace(/^\[llm-client\] embed failed: \d+ ?/, '');
+          throw new Error(`[EmbeddingService] API error ${status}: ${body}`);
+        }
+
         // Network-level failure (DNS, connection reset, etc.) — retryable.
         lastNetworkError = err;
         if (attempt < maxAttempts) {
@@ -256,29 +278,6 @@ export class EmbeddingService {
         }
         throw err;
       }
-
-      if (!response.ok) {
-        const body = await response.text();
-        const retryable = response.status === 429 || response.status >= 500;
-        if (retryable && attempt < maxAttempts) {
-          await this._sleep(this._backoffDelayMs(attempt));
-          continue;
-        }
-        // Terminal failure. A terminal 429 is a quota/rate signal — feed it to
-        // the circuit-breaker so sustained exhaustion opens the circuit and
-        // callers stop hammering the dead API.
-        if (response.status === 429) this._recordQuota429();
-        throw new Error(`[EmbeddingService] API error ${response.status}: ${body}`);
-      }
-
-      const json = await response.json() as OpenAIEmbeddingResponse;
-
-      // A success closes the circuit / resets the consecutive-429 counter.
-      this._recordEmbedSuccess();
-
-      // Sort by index to guarantee order matches input
-      const sorted = [...json.data].sort((a, b) => a.index - b.index);
-      return sorted.map((item) => new Float32Array(item.embedding));
     }
 
     // Unreachable in practice: the loop either returns, or throws on the final
@@ -379,15 +378,4 @@ export class EmbeddingService {
   private _cacheKey(text: string): string {
     return this._sha256(`${this.model}\x00${text}`);
   }
-}
-
-// ---------------------------------------------------------------------------
-// OpenAI response shape (minimal — we only parse what we use)
-// ---------------------------------------------------------------------------
-
-interface OpenAIEmbeddingResponse {
-  data: Array<{
-    index: number;
-    embedding: number[];
-  }>;
 }

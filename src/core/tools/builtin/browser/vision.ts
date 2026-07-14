@@ -13,7 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
-import { toolFetch } from '../../../security/guarded-fetch.js';
+import { visionIR } from '../../../../llm/client.js';
 import type { BrainMessage } from '../../../brain/types.js';
 
 const log = createLogger('browser:vision');
@@ -30,11 +30,8 @@ interface ConfigLike { brain?: BrainLike }
 
 type VisionMime = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
 
-// Vision API providers — xAI first (primary), OpenAI fallback
-const VISION_PROVIDERS = [
-  { name: 'xai',    url: 'https://api.x.ai/v1/chat/completions',      model: 'grok-4-fast-non-reasoning', envKey: 'XAI_API_KEY'    },
-  { name: 'openai', url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o',                   envKey: 'OPENAI_API_KEY' },
-];
+// HTTP fallback model (xAI attempt inside visionIR; its OpenAI fallback uses gpt-4o).
+const FALLBACK_VISION_MODEL = 'xai/grok-4-fast-non-reasoning';
 
 const MAX_OUTPUT_CHARS = 4_000;
 
@@ -54,55 +51,6 @@ function getMimeType(filePath: string): string | null {
 async function readImageAsBase64(filePath: string): Promise<string> {
   const buf = await fs.readFile(filePath);
   return buf.toString('base64');
-}
-
-async function callVisionApi(
-  base64: string,
-  mimeType: string,
-  question: string,
-  apiKey: string,
-  apiUrl: string,
-  model: string,
-): Promise<string> {
-  const body = {
-    model,
-    max_tokens: 1024,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: question },
-          {
-            type: 'image_url',
-            image_url: { url: `data:${mimeType};base64,${base64}` },
-          },
-        ],
-      },
-    ],
-  };
-
-  const controller = AbortSignal.timeout(60_000);
-  const res = await toolFetch(apiUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: controller,
-  });
-
-  const json = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    error?: { message?: string };
-  };
-
-  if (!res.ok) {
-    const errMsg = json.error?.message ?? `HTTP ${res.status}`;
-    throw new Error(`Vision API error (${errMsg})`);
-  }
-
-  return json.choices?.[0]?.message?.content ?? '(no response)';
 }
 
 export const visionTool: ToolDefinition = {
@@ -181,23 +129,24 @@ export const visionTool: ToolDefinition = {
       }
     }
 
-    // Try each standalone provider in priority order
-    for (const provider of VISION_PROVIDERS) {
-      const apiKey = process.env[provider.envKey];
-      if (!apiKey) {
-        log.debug({ provider: provider.name }, 'Vision provider skipped — API key not set');
-        continue;
-      }
-
-      try {
-        log.info({ provider: provider.name, model: provider.model, question: question.slice(0, 60) }, 'Calling vision API');
-        const answer = await callVisionApi(base64, mimeType, question, apiKey, provider.url, provider.model);
-        const truncated = answer.length > MAX_OUTPUT_CHARS ? answer.slice(0, MAX_OUTPUT_CHARS) + '\n[truncated]' : answer;
-        log.info({ provider: provider.name, answerLen: answer.length }, 'Vision API success');
-        return { success: true, output: truncated, data: { provider: provider.name, model: provider.model } };
-      } catch (err) {
-        log.warn({ provider: provider.name, err: (err as Error).message }, 'Vision provider failed — trying next');
-      }
+    // Standalone HTTP fallback — visionIR tries xAI first, then OpenAI (gpt-4o),
+    // skipping providers whose API key is not set (same ordering as before).
+    try {
+      log.info({ model: FALLBACK_VISION_MODEL, question: question.slice(0, 60) }, 'Calling vision API');
+      const { text } = await visionIR({
+        caller: 'browser-vision',
+        purpose: 'screenshot analysis',
+        imageUrl: `data:${mimeType};base64,${base64}`,
+        prompt: question,
+        alias: FALLBACK_VISION_MODEL,
+        maxTokens: 1024,
+      });
+      const answer = text || '(no response)';
+      const truncated = answer.length > MAX_OUTPUT_CHARS ? answer.slice(0, MAX_OUTPUT_CHARS) + '\n[truncated]' : answer;
+      log.info({ answerLen: answer.length }, 'Vision API success');
+      return { success: true, output: truncated, data: { provider: 'llm-client' } };
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, 'Vision HTTP fallback failed');
     }
 
     return {

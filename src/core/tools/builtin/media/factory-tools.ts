@@ -11,6 +11,9 @@ import { createLogger } from '../../../shared/logger.js';
 import { ensureDir, missingKey } from './helpers.js';
 import { imageGenerateTool } from './image-tools.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+// URL/key source only (caller 'tool:media-factory') — requests stay on toolFetch (SSRF guard).
+import { getProviderApiKey } from '../../../../llm/client.js';
+import { OPENAI_TTS_URL } from '../../../../llm/endpoints.js';
 
 const logger = createLogger('media-factory');
 const execFileAsync = promisify(execFile);
@@ -52,7 +55,7 @@ export const shortsFactoryTool: ToolDefinition = {
     if (!script?.trim()) return { success: false, output: 'script is required.' };
     if (!outputPath?.trim()) return { success: false, output: 'outputPath is required.' };
 
-    const apiKey = process.env['OPENAI_API_KEY'];
+    const apiKey = getProviderApiKey('openai');
     if (!apiKey) return missingKey('OPENAI_API_KEY', 'media.shorts-factory');
 
     logger.info({ session: ctx.sessionId, scriptLen: script.length, voiceId }, 'media.shorts-factory invoked');
@@ -81,7 +84,7 @@ export const shortsFactoryTool: ToolDefinition = {
 
       // Step 2: Generate voiceover via OpenAI TTS
       const audioPath = path.join(tmpDir, `shorts_audio_${Date.now()}.mp3`);
-      const ttsRes = await toolFetch('https://api.openai.com/v1/audio/speech', {
+      const ttsRes = await toolFetch(OPENAI_TTS_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         signal: ctx.signal,

@@ -64,3 +64,13 @@ This is a known repeat gotcha (Spec 9: "daemon auto-fix branch theft mid-session
   (own .git, origin = github.com/Matrixx0070/sudo-ai). The shared worktree and its
   gw-refactor branch in prod's repo were deleted. Prod's automation cannot reach this clone.
   The first gate run's results are VOID; gate re-run in the clone before the Phase 0 commit.
+
+## PHASE 1 — choke point (implementation)
+
+- New `src/llm/`: `client.ts` (chatIR/embed/visionIR/llmFetch/getProviderApiKey, LLM_BASE_URL+LLM_API_KEY config, LLM_DIRECT_FALLBACK default ON, caller+purpose mandatory — throws in dev, logs+coerces 'unknown' in production per fail-open), `endpoints.ts` (every provider URL), `aliases.ts` (sudo/local|cheap|mid|frontier|embed|vision, env-overridable LLM_ALIAS_*).
+- Legacy layer physically moved: `src/core/brain/{providers,custom-providers,claude-oauth-manager}.ts` → `src/llm/legacy/` with re-export shims at old paths (~25+ importers untouched).
+- All 12 bypass files re-routed (same URLs/keys/bodies — mechanical): embeddings.ts (client.embed inside existing retry/circuit; apiKey field → embeddingsAvailable()), browser/vision.ts (visionIR; brain-first path untouched), xai-ensemble, cli chat provider, survival-probe, admin models.handler, sandbox-types (exact 5-host list preserved — deliberately NOT widened with groq), voice tts/stt, comms/voice, media factory/image (toolFetch kept — SSRF guard).
+- Guard tests: `tests/llm/choke-point.test.ts` greps provider URLs AND provider-key env reads outside src/llm/ (whitelisted exception: cli/commands/setup.tsx pre-fills the .env wizard — config authoring, not a call). `tests/llm/aliases.test.ts` covers defaults/overrides.
+- **A10**: visionIR carries a 60s AbortSignal.timeout per route (replaces the legacy per-provider 60s timeout the sweep would otherwise have dropped). browser.vision `data.provider` now reports 'llm-client' instead of which fallback answered.
+- **A11**: getProviderApiKey trims — whitespace-only keys now count as unset (previously truthy). Judged a bug-fix-grade difference, kept.
+- **A12 (DoD deviation)**: "app boots and answers on Telegram" cannot be proven from this branch without touching prod (single Telegram bot token — a second poller would steal prod's getUpdates). Boot/Telegram proof deferred to the Final Acceptance staging soak; Phase 1 verification = full unit gate + choke-point grep guards. UNVERIFIED: live provider calls on the new paths.
