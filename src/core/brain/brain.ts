@@ -34,6 +34,7 @@ import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
 import { getCostTracker } from '../billing/cost-tracker.js';
 import { getGatewayCallLog, type LLMCallRecord } from '../../llm/logging.js';
+import { runShadow } from '../../llm/shadow.js';
 import { queryAllModelsConsensus, type ConsensusOptions } from './model-consensus.js';
 import { DispatchRouter } from './dispatch-router.js';
 import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
@@ -1493,6 +1494,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
             tokensCached: cacheTokens.read,
             ...(usage?.estimatedCost !== undefined ? { costUsd: usage.estimatedCost } : {}),
           });
+          // gw-refactor Phase 7: transformation shadow (LLM_SHADOW=1, default OFF). Streaming
+          // path has no assembled text/finishReason here — request-side + usage diffs only.
+          runShadow({ messages: request.messages, system: effectiveSystem, source: request.source, temperature, maxTokens, tools: request.tools }, modelId, { ...(usage ? { usage } : {}) });
           log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
         } catch (bookkeepErr) {
           log.warn({ modelId, err: bookkeepErr }, 'post-stream bookkeeping failed (response already delivered)');
@@ -1901,6 +1905,8 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       tokensCached: cacheTokens.read,
       ...(usage.estimatedCost !== undefined ? { costUsd: usage.estimatedCost } : {}),
     });
+    // gw-refactor Phase 7: transformation shadow (LLM_SHADOW=1, default OFF; fire-and-forget, fail-open).
+    runShadow({ messages: request.messages, system: effectiveSystem, source: request.source, temperature, maxTokens, tools: request.tools }, modelId, { text: finalContent, finishReason: finalFinishReason, usage, toolCalls: finalToolCalls });
 
     return {
       content: finalContent, toolCalls: finalToolCalls, usage,
