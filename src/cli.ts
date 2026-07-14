@@ -61,6 +61,7 @@ import { approvalManager } from './core/agent/approval.js';
 import { TelegramAdapter } from './core/channels/telegram.js';
 import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
+import { normalizeReplyText } from './core/channels/empty-reply.js';
 import type { UnifiedMessage } from './core/channels/types.js';
 import { CronStore } from './core/cron/store.js';
 import { CronScheduler } from './core/cron/scheduler.js';
@@ -1856,8 +1857,11 @@ async function boot(): Promise<void> {
             log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
             return;
           }
-          const replyText = result?.text ?? 'No response generated.';
           const attachments = result?.attachments ?? [];
+          // A content-filtered / phantom-completion turn returns an EMPTY string
+          // (not null), so `?? fallback` misses it and Telegram 400s on the empty
+          // edit → the user sees silence. Normalise empties to a visible message.
+          const replyText = normalizeReplyText(result?.text, attachments.length > 0);
 
           // Save turn to daily memory log
           try {
@@ -2230,8 +2234,8 @@ async function boot(): Promise<void> {
             log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
             return;
           }
-          const webReplyText = webResult?.text ?? 'No response generated.';
           const webAttachments = webResult?.attachments ?? [];
+          const webReplyText = normalizeReplyText(webResult?.text, webAttachments.length > 0);
           log.info({ replyLen: webReplyText.length, attachmentCount: webAttachments.length }, 'Web agent reply ready');
 
           // Save web turn to daily memory log (skip loopback/diagnostic probes —

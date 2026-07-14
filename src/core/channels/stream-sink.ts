@@ -215,6 +215,11 @@ export async function createBufferedEditSink(
       if (messageId === null) return;
       const target = clampForChannel(finalText ?? buffer);
       if (target === lastEditedText) return;
+      // Defense-in-depth: an empty final edit makes Telegram throw
+      // `400: message text is empty` (a content-filter/phantom turn hits this).
+      // Callers normalise empties via normalizeReplyText upstream; if one still
+      // reaches here, skip the edit rather than 400 — the placeholder stays put.
+      if (target.trim().length === 0) return;
       try {
         await edit(messageId, target);
         lastEditedText = target;
