@@ -64,6 +64,30 @@ import type { HistoryMessage } from '../agent/cheap-model-router.js';
 const log = createLogger('brain');
 
 /**
+ * Count of provider-side content-filter terminations observed this process
+ * (finishReason === 'content-filter'). Exposed for diagnostics/tests via
+ * getContentFilterHits(). These are upstream safeguard classifier events
+ * (e.g. Anthropic AUP filter cutting a stream after a few tokens) — they were
+ * previously logged as successful calls and silently lost.
+ */
+let contentFilterHits = 0;
+
+/** Diagnostic accessor for the process-lifetime content-filter hit count. */
+export function getContentFilterHits(): number {
+  return contentFilterHits;
+}
+
+/** @internal test-only reset for the content-filter counter. */
+export function _resetContentFilterHits(): void {
+  contentFilterHits = 0;
+}
+
+/** @internal increment — called by the brain call path on finishReason === 'content-filter'. */
+export function _recordContentFilterHit(): number {
+  return ++contentFilterHits;
+}
+
+/**
  * Per-attempt backoff cap (ms) for failover when a provider is overloaded /
  * transient / timing out. Raised 5s → 15s and tunable via
  * SUDO_FAILOVER_BACKOFF_CAP_MS so a multi-second-to-minute cloud incident can
@@ -1768,7 +1792,19 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
     recordPromptCacheUsageFromProviderMetadata((result as { providerMetadata?: unknown }).providerMetadata);
-    log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
+    if (finalFinishReason === 'content-filter') {
+      // Provider-side safeguard classifier terminated the response (observed
+      // live 2026-07-14: Fable 5 cutting goal-planner calls at 3-4 completion
+      // tokens). This is NOT a normal completion — surface it as WARN so it can
+      // never again hide inside an info-level "LLM call succeeded" line.
+      const hits = _recordContentFilterHit();
+      log.warn(
+        { modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, source: request.source ?? 'llm', totalContentFilterHits: hits },
+        'PROVIDER CONTENT-FILTER HIT: upstream safeguard truncated the response — output is a stub, not a real completion',
+      );
+    } else {
+      log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
+    }
 
     return {
       content: finalContent, toolCalls: finalToolCalls, usage,
