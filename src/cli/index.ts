@@ -349,6 +349,30 @@ claudeOauthCmd
   });
 
 // ---------------------------------------------------------------------------
+// xai-oauth — xAI subscription OAuth (device flow) connector
+// ---------------------------------------------------------------------------
+
+const xaiOauthCmd = program
+  .command('xai-oauth')
+  .description('Manage xAI subscription OAuth (device flow) — login, status');
+
+xaiOauthCmd
+  .command('login')
+  .description('Run the device-code OAuth flow — prints URL + code, waits for approval')
+  .action(async () => {
+    const { runXaiOAuthLogin } = await import('./commands/xai-oauth.js');
+    process.exit(await runXaiOAuthLogin());
+  });
+
+xaiOauthCmd
+  .command('status')
+  .description('Show whether sudo-ai has a usable xAI OAuth token')
+  .action(async () => {
+    const { runXaiOAuthStatus } = await import('./commands/xai-oauth.js');
+    process.exit(await runXaiOAuthStatus());
+  });
+
+// ---------------------------------------------------------------------------
 // update — check for and apply SUDO-AI updates
 // ---------------------------------------------------------------------------
 
