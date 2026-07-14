@@ -110,6 +110,11 @@ describe('csv_fallback', () => {
     expect(r.stdout).toContain('bo,5.0');
   });
 
+  it('freq builds a frequency table, most-common first', async () => {
+    const r = await run('csv_fallback.py', ['freq', '--col', 'name'], csv);
+    expect(r.stdout.trim().split('\n')).toEqual(['value,count', 'al,2', 'bo,1']);
+  });
+
   it('to-json / from-json round-trip', async () => {
     const j = await run('csv_fallback.py', ['to-json'], csv);
     expect(j.stdout.trim().split('\n')).toHaveLength(3);
