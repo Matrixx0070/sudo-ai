@@ -50,6 +50,9 @@ let sumCost = 0, sumIn = 0, sumOut = 0, sumCached = 0;
 const perCallerTotal = new Map<string, number>();
 const perCallerDup = new Map<string, number>();
 const fpAll = new Map<string, number>();
+const fpFull = new Map<string, number>();   // fingerprints of full-IR rows only
+const fpFullOk = new Map<string, number>(); // full-IR AND successful (2xx)
+let stubRows = 0;
 
 // admissible bookkeeping
 interface Adm { fp: string; cost: number }
@@ -68,6 +71,18 @@ for (const r of rows) {
   if (!r.ir_request) { parseFail++; continue; }
   let ir: IRRequest;
   try { ir = JSON.parse(r.ir_request) as IRRequest; } catch { parseFail++; continue; }
+  // CRITICAL: many callers (rag embeddings, legacy path) log a SUMMARY STUB, not
+  // the full IR — no messages/system/alias. The fingerprint of a stub collapses
+  // unrelated requests into one key, inflating the apparent dup rate. Dedup is
+  // only meaningful on rows carrying a real messages array.
+  const isFullIr = Array.isArray((ir as { messages?: unknown }).messages);
+  if (isFullIr) {
+    const ffp = contentFingerprint(ir);
+    fpFull.set(ffp, (fpFull.get(ffp) ?? 0) + 1);
+    if (!r.error_class) { fpFullOk.set(ffp, (fpFullOk.get(ffp) ?? 0) + 1); }
+  } else {
+    stubRows++;
+  }
   const fp = contentFingerprint(ir);
   fpAll.set(fp, (fpAll.get(fp) ?? 0) + 1);
   perCallerTotal.set(r.caller, (perCallerTotal.get(r.caller) ?? 0) + 1);
@@ -121,6 +136,14 @@ for (const costs of admByFp.values()) {
   for (let i = 1; i < costs.length; i++) { l2SavingUsd += costs[i]; admDupReqs++; }
 }
 
+// TRUE dedup — full-IR rows only (stub rows are not real requests).
+const fullIrRows = [...fpFull.values()].reduce((a, b) => a + b, 0);
+const fullIrDistinct = fpFull.size;
+const fullIrDup = fullIrRows - fullIrDistinct;
+const fullOkRows = [...fpFullOk.values()].reduce((a, b) => a + b, 0);
+const fullOkDistinct = fpFullOk.size;
+const fullOkDup = fullOkRows - fullOkDistinct;
+
 const l1CapturedPct = sumIn > 0 ? +(100 * sumCached / sumIn).toFixed(1) : 0;
 const l2BlendedPct = sumCost > 0 ? +(100 * l2SavingUsd / sumCost).toFixed(1) : 0;
 const days = minTs && maxTs ? +((Date.parse(maxTs) - Date.parse(minTs)) / 86400000).toFixed(2) : 0;
@@ -134,7 +157,13 @@ const report = {
   sample_note: 'SHORT window; mostly automated/background traffic — NOT 7-day representative. Re-run after 72h live collection.',
   rows_total: rows.length,
   fingerprinted, parse_failures: parseFail,
-  raw_exact_dup: { distinct_content_keys: distinct, duplicate_requests: rawDup, dup_pct: +(100 * rawDup / fingerprinted).toFixed(1) },
+  raw_exact_dup_CONTAMINATED: { distinct_content_keys: distinct, duplicate_requests: rawDup, dup_pct: +(100 * rawDup / fingerprinted).toFixed(1), warning: 'INFLATED by stub rows — do not use; see true_dedup_full_ir' },
+  stub_rows: { count: stubRows, note: 'ir_request is a summary stub (rag embeddings, legacy path) with no messages/system — fingerprint is meaningless for these' },
+  true_dedup_full_ir: {
+    full_ir_rows: fullIrRows, distinct: fullIrDistinct, duplicate_requests: fullIrDup, dup_pct: fullIrRows > 0 ? +(100 * fullIrDup / fullIrRows).toFixed(1) : 0,
+    successful_only: { rows: fullOkRows, distinct: fullOkDistinct, duplicate_requests: fullOkDup, dup_pct: fullOkRows > 0 ? +(100 * fullOkDup / fullOkRows).toFixed(1) : 0 },
+    note: 'This is the HONEST exact-duplicate signal. Real requests essentially never repeat byte-for-byte on this traffic.',
+  },
   cost_split: { total_cost_usd: +sumCost.toFixed(4), tokens_in: sumIn, tokens_cached: sumCached, tokens_out: sumOut, output_share_of_tokens_pct: +(100 * sumOut / (sumIn + sumOut)).toFixed(2) },
   l1_already_deployed: { input_tokens_cached_pct: l1CapturedPct, note: 'provider prefix cache already live (egress-anthropic cache_control)' },
   temperature_mix: { temp_zero: tempZero, temp_positive: tempPos, temp_absent_provider_default: tempAbsent },
