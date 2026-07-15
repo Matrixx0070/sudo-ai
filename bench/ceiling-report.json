@@ -1,0 +1,90 @@
+{
+  "generated_from": "/tmp/gwcopy.db",
+  "window_days": 0.62,
+  "sample_note": "SHORT window; mostly automated/background traffic — NOT 7-day representative. Re-run after 72h live collection.",
+  "rows_total": 603,
+  "fingerprinted": 603,
+  "parse_failures": 0,
+  "raw_exact_dup_CONTAMINATED": {
+    "distinct_content_keys": 132,
+    "duplicate_requests": 471,
+    "dup_pct": 78.1,
+    "warning": "INFLATED by stub rows — do not use; see true_dedup_full_ir"
+  },
+  "stub_rows": {
+    "count": 465,
+    "note": "ir_request is a summary stub (rag embeddings, legacy path) with no messages/system — fingerprint is meaningless for these"
+  },
+  "true_dedup_full_ir": {
+    "full_ir_rows": 138,
+    "distinct": 131,
+    "duplicate_requests": 7,
+    "dup_pct": 5.1,
+    "successful_only": {
+      "rows": 96,
+      "distinct": 95,
+      "duplicate_requests": 1,
+      "dup_pct": 1
+    },
+    "note": "This is the HONEST exact-duplicate signal. Real requests essentially never repeat byte-for-byte on this traffic."
+  },
+  "cost_split": {
+    "total_cost_usd": 11.3238,
+    "tokens_in": 5633079,
+    "tokens_cached": 3285215,
+    "tokens_out": 91245,
+    "output_share_of_tokens_pct": 1.59
+  },
+  "l1_already_deployed": {
+    "input_tokens_cached_pct": 58.3,
+    "note": "provider prefix cache already live (egress-anthropic cache_control)"
+  },
+  "temperature_mix": {
+    "temp_zero": 0,
+    "temp_positive": 138,
+    "temp_absent_provider_default": 465
+  },
+  "non_admissible": {
+    "error_rows": 256,
+    "tool_use_side_effect_rows": 20
+  },
+  "l2_admissible": {
+    "admissible_requests": 0,
+    "admissible_duplicate_requests": 0,
+    "marginal_saving_usd": 0,
+    "marginal_blended_pct_of_total_spend": 0
+  },
+  "kill_gate": {
+    "threshold_pct": 30,
+    "marginal_l2_blended_pct": 0,
+    "verdict": "KILL→L1-only (marginal L2 < 30%)"
+  },
+  "proposed_ratified_target_pct": 0,
+  "per_caller": {
+    "rag": {
+      "requests": 213,
+      "duplicate_requests": 212,
+      "dup_pct": 99.5
+    },
+    "health": {
+      "requests": 45,
+      "duplicate_requests": 21,
+      "dup_pct": 46.7
+    },
+    "consciousness": {
+      "requests": 93,
+      "duplicate_requests": 45,
+      "dup_pct": 48.4
+    },
+    "agent": {
+      "requests": 163,
+      "duplicate_requests": 115,
+      "dup_pct": 70.6
+    },
+    "chat": {
+      "requests": 89,
+      "duplicate_requests": 74,
+      "dup_pct": 83.1
+    }
+  }
+}
