@@ -59,6 +59,15 @@ describe('SecretRef resolution', () => {
     expect(resolveSecretRef({ source: 'file', provider: 'default', id: f })).toBe('file-secret');
   });
 
+  it('S-4b: absolute file path resolves through resolveSecretValue (parseSecretRef path)', () => {
+    const f = join(dir, 'abs.txt');
+    writeFileSync(f, 'abs-secret\n');
+    // resolveSecretValue → isSecretRef → parseSecretRef → resolveSecretRef; the
+    // id regex must accept a leading '/', else the whole _REF path fails closed.
+    expect(resolveSecretValue({ source: 'file', provider: 'default', id: f })).toBe('abs-secret');
+    expect(parseSecretRef({ source: 'file', provider: 'default', id: f })).not.toBeNull();
+  });
+
   it('S-5: file SecretRef with JSON pointer selector', () => {
     const f = join(dir, 'creds.json');
     writeFileSync(f, JSON.stringify({ token: 'json-file-secret' }));

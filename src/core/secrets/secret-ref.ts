@@ -39,7 +39,10 @@ export interface SecretRef {
 // Spec regexes (Part 4 §Canonical Frame Schemas): provider is a short slug; id is
 // a bounded token that also carries the optional `path#selector` for file/env JSON.
 const PROVIDER_RE = /^[a-z][a-z0-9_-]{0,63}$/;
-const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
+// Spec id regex, relaxed to allow a leading '/' so absolute file paths
+// (/run/secrets/...) validate. Path-traversal (./..) is caught separately in
+// parseSecretRef for the file source; env/exec ids never start with '/'.
+const ID_RE = /^[A-Za-z0-9/][A-Za-z0-9._:/#-]{0,255}$/;
 
 export const SecretRefSchema = z
   .object({

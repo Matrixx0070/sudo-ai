@@ -373,6 +373,46 @@ xaiOauthCmd
   });
 
 // ---------------------------------------------------------------------------
+// secrets — audit / apply / configure SecretRef indirect secrets
+// ---------------------------------------------------------------------------
+
+const secretsCmd = program
+  .command('secrets')
+  .description('Audit, resolve, and configure SecretRef indirect secrets (never prints values)');
+
+secretsCmd
+  .command('audit')
+  .description('Report credential posture + findings (I90 reuse, short token). Read-only; exit 2 on CRITICAL')
+  .action(async () => {
+    const { runSecretsAudit } = await import('./commands/secrets.js');
+    process.exit(await runSecretsAudit(PROJECT_ROOT));
+  });
+
+secretsCmd
+  .command('apply')
+  .description('Resolve every declared <NAME>_REF in config/.env and report OK/FAIL (preview only)')
+  .option('--dry-run', 'Preview only (default; activation requires a daemon restart)')
+  .option('--allow-exec', 'Allow exec-source SecretRefs to run during the preview')
+  .action(async (opts: { allowExec?: boolean }) => {
+    const { runSecretsApply } = await import('./commands/secrets.js');
+    process.exit(await runSecretsApply(PROJECT_ROOT, { allowExec: opts.allowExec }));
+  });
+
+secretsCmd
+  .command('configure')
+  .description('Build a <NAME>_REF SecretRef line; --write appends it to config/.env (with backup)')
+  .requiredOption('--name <NAME>', 'Credential env var name (e.g. GATEWAY_TOKEN)')
+  .requiredOption('--source <source>', 'SecretRef source: env | file | exec')
+  .requiredOption('--id <id>', 'Source id (env var name, absolute file path[#selector], or command)')
+  .option('--provider <provider>', 'Provider slug (^[a-z][a-z0-9_-]*$)', 'default')
+  .option('--write', 'Append the line to config/.env (backup to config/.env.bak)')
+  .option('--force', 'Overwrite an existing differing <NAME>_REF value')
+  .action(async (opts: { name?: string; source?: string; id?: string; provider?: string; write?: boolean; force?: boolean }) => {
+    const { runSecretsConfigure } = await import('./commands/secrets.js');
+    process.exit(runSecretsConfigure(PROJECT_ROOT, opts));
+  });
+
+// ---------------------------------------------------------------------------
 // update — check for and apply SUDO-AI updates
 // ---------------------------------------------------------------------------
 
