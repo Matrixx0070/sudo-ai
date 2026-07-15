@@ -27,6 +27,9 @@
     {
       "content": [
         {
+          "cache_control": {
+            "type": "ephemeral"
+          },
           "text": "go on",
           "type": "text"
         }

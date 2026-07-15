@@ -146,6 +146,68 @@ describe('egressAnthropic', () => {
   });
 });
 
+describe('egressAnthropic — rolling conversation-history cache', () => {
+  const convo: IRRequest['messages'] = [
+    { role: 'user', content: [{ type: 'text', text: 'first' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
+    { role: 'user', content: [{ type: 'text', text: 'second' }] },
+  ];
+
+  function lastMsgLastBlock(body: Record<string, unknown>): Record<string, unknown> {
+    const msgs = body['messages'] as Array<{ content: Array<Record<string, unknown>> }>;
+    const last = msgs[msgs.length - 1]!;
+    return last.content[last.content.length - 1]!;
+  }
+
+  it('marks the last block of the last message with cache_control when history exists (≥2 msgs)', () => {
+    const body = egressAnthropic(baseIR({ messages: convo, max_tokens: 10 }));
+    expect(lastMsgLastBlock(body)).toEqual({ type: 'text', text: 'second', cache_control: { type: 'ephemeral' } });
+    // Earlier blocks stay uncached.
+    const msgs = body['messages'] as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(msgs[0]!.content[0]).toEqual({ type: 'text', text: 'first' });
+  });
+
+  it('does NOT cache history for a single-message request (no prior turn to reuse)', () => {
+    const body = egressAnthropic(baseIR({ max_tokens: 10 })); // baseIR = 1 user message
+    expect(lastMsgLastBlock(body)).toEqual({ type: 'text', text: 'Hi' });
+  });
+
+  it('kill switch SUDO_PROMPT_CACHE_HISTORY=0 disables it', () => {
+    const prev = process.env['SUDO_PROMPT_CACHE_HISTORY'];
+    process.env['SUDO_PROMPT_CACHE_HISTORY'] = '0';
+    try {
+      const body = egressAnthropic(baseIR({ messages: convo, max_tokens: 10 }));
+      expect(lastMsgLastBlock(body)).toEqual({ type: 'text', text: 'second' });
+    } finally {
+      if (prev === undefined) delete process.env['SUDO_PROMPT_CACHE_HISTORY'];
+      else process.env['SUDO_PROMPT_CACHE_HISTORY'] = prev;
+    }
+  });
+
+  it('skips a trailing thinking block (not a cache anchor)', () => {
+    const msgs: IRRequest['messages'] = [
+      { role: 'user', content: [{ type: 'text', text: 'q' }] },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }] },
+    ];
+    const body = egressAnthropic(baseIR({ messages: msgs, max_tokens: 10 }));
+    expect(lastMsgLastBlock(body)).toEqual({ type: 'thinking', thinking: 'hmm' });
+  });
+
+  it('coexists with the system + last-tool breakpoints (all three present)', () => {
+    const system = `STATIC\n${DYNAMIC_BOUNDARY_MARKER}\ndyn`;
+    const body = egressAnthropic(baseIR({
+      messages: convo,
+      system,
+      tools: [{ name: 't1', input_schema: { type: 'object' } }],
+      max_tokens: 10,
+    }));
+    expect((body['system'] as Array<Record<string, unknown>>)[0]).toMatchObject({ cache_control: { type: 'ephemeral' } });
+    const tools = body['tools'] as Array<Record<string, unknown>>;
+    expect(tools[tools.length - 1]).toMatchObject({ cache_control: { type: 'ephemeral' } });
+    expect(lastMsgLastBlock(body)).toMatchObject({ cache_control: { type: 'ephemeral' } });
+  });
+});
+
 describe('parseAnthropicResponse', () => {
   it('(a) plain text response: blocks 1:1, usage.in TOTAL incl. cache_read_input_tokens', () => {
     const res = parseAnthropicResponse(
@@ -283,7 +345,9 @@ describe('parseAnthropicResponse', () => {
     expect(msgs[1]!.content).toEqual([
       { type: 'thinking', thinking: 'chain', signature: 'sig-1' },
       { type: 'thinking', thinking: 'no-sig' },
-      { type: 'text', text: 'A' },
+      // thinking passthrough is verbatim; the trailing block is the last of a
+      // ≥2-message history so it also carries the rolling history cache breakpoint.
+      { type: 'text', text: 'A', cache_control: { type: 'ephemeral' } },
     ]);
   });
 
