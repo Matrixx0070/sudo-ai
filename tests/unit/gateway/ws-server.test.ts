@@ -377,3 +377,59 @@ describe('attachWsRpc (ws-server)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// RPC v2 handshake (Slice C/2) — gated by SUDO_GATEWAY_RPC_V2=1
+// ---------------------------------------------------------------------------
+
+describe('attachWsRpc — RPC v2 handshake (SUDO_GATEWAY_RPC_V2=1)', () => {
+  let testServer: TestServer;
+  let ws: WebSocket | null = null;
+  const savedV2 = process.env['SUDO_GATEWAY_RPC_V2'];
+
+  beforeEach(() => { process.env['SUDO_GATEWAY_RPC_V2'] = '1'; });
+  afterEach(async () => {
+    if (ws && ws.readyState !== WebSocket.CLOSED) await closeWs(ws);
+    ws = null;
+    if (testServer) await testServer.close();
+    if (savedV2 === undefined) delete process.env['SUDO_GATEWAY_RPC_V2'];
+    else process.env['SUDO_GATEWAY_RPC_V2'] = savedV2;
+  });
+
+  it('connect returns hello-ok with scopes + methods', async () => {
+    testServer = await startServer(); // no secret → loopback → admin principal
+    ws = await connectWs(testServer.port);
+    const res = await sendAndReceive(ws, { id: '1', method: 'connect', params: {} }) as {
+      id: string; result?: { type: string; scopes: string[]; methods: string[] };
+    };
+    expect(res.id).toBe('1');
+    expect(res.result?.type).toBe('hello-ok');
+    expect(res.result?.scopes).toContain('operator.admin');
+    expect(res.result?.methods).toContain('health');
+  });
+
+  it('rejects a non-connect first frame (-32001)', async () => {
+    testServer = await startServer();
+    ws = await connectWs(testServer.port);
+    const res = await sendAndReceive(ws, { id: '2', method: 'health' }) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32001);
+  });
+
+  it('lets an admin call a scoped method after connect', async () => {
+    testServer = await startServer();
+    ws = await connectWs(testServer.port);
+    await sendAndReceive(ws, { id: '1', method: 'connect', params: {} });
+    const res = await sendAndReceive(ws, { id: '2', method: 'health' }) as { id: string; error?: { code: number } };
+    expect(res.id).toBe('2');
+    expect(res.error?.code).not.toBe(-32001); // not a handshake rejection
+    expect(res.error?.code).not.toBe(-32003); // not a scope rejection
+  });
+
+  it('rejects a second connect (-32002)', async () => {
+    testServer = await startServer();
+    ws = await connectWs(testServer.port);
+    await sendAndReceive(ws, { id: '1', method: 'connect', params: {} });
+    const res = await sendAndReceive(ws, { id: '2', method: 'connect', params: {} }) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32002);
+  });
+});

@@ -16,7 +16,8 @@
  *   - Never throw out of this module
  */
 
-import { authenticateToken } from './auth.js';
+import { authenticateToken, type GatewayPrincipal } from './auth.js';
+import { ConnectParamsSchema, buildHelloOk, mayCallMethod, requiredScopeFor, rpcV2Enabled } from './rpc-schema.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { IncomingMessage } from 'node:http';
 import type { Server as HttpServer } from 'node:http';
@@ -211,6 +212,7 @@ export function attachWsRpc(
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
+      (ws as WebSocket & { _principal?: GatewayPrincipal })._principal = principal;
       wss.emit('connection', ws, req);
     });
   });
@@ -230,6 +232,11 @@ export function attachWsRpc(
     }
 
     log.info({ clientId }, 'WebSocket client connected');
+
+    // Slice C/2: when RPC v2 is on, require a connect handshake first frame and
+    // enforce per-method operator scopes against the auth principal from upgrade.
+    const principal = (ws as WebSocket & { _principal?: GatewayPrincipal })._principal;
+    let handshakeDone = !rpcV2Enabled();
 
     // Per-connection message rate limiting: max MSG_RATE_LIMIT messages per MSG_RATE_WINDOW_MS
     let msgCount = 0;
@@ -283,6 +290,31 @@ export function attachWsRpc(
       }
 
       const { id, method, params } = parsed;
+
+      // 2b. RPC v2 (gated): connect handshake + per-method operator scopes.
+      if (rpcV2Enabled()) {
+        if (!handshakeDone) {
+          if (method !== 'connect') {
+            sendResponse(ws, { id, error: { code: -32001, message: 'Expected connect as the first frame' } });
+            return;
+          }
+          if (!ConnectParamsSchema.safeParse(params).success) {
+            sendResponse(ws, { id, error: { code: -32602, message: 'Invalid connect params' } });
+            return;
+          }
+          handshakeDone = true;
+          sendResponse(ws, { id, result: buildHelloOk(principal, Array.from(router.keys())) });
+          return;
+        }
+        if (method === 'connect') {
+          sendResponse(ws, { id, error: { code: -32002, message: 'Already connected' } });
+          return;
+        }
+        if (!mayCallMethod(principal, method)) {
+          sendResponse(ws, { id, error: { code: -32003, message: `Forbidden: requires ${requiredScopeFor(method)}` } });
+          return;
+        }
+      }
 
       // 3. Route to handler (async, errors caught below)
       const handler = router.get(method);
