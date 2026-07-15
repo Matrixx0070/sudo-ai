@@ -280,8 +280,9 @@ class OpenAIMachine extends BaseMachine {
 
     // usage may arrive on any chunk (stream_options.include_usage sends a
     // final choices-empty chunk carrying it).
-    if (isRec(event['usage'])) {
-      const u = event['usage'];
+    const usageRec = isRec(event['usage']) ? event['usage'] : undefined;
+    if (usageRec !== undefined) {
+      const u = usageRec;
       const details = isRec(u['prompt_tokens_details']) ? u['prompt_tokens_details'] : {};
       this.usage = {
         in: typeof u['prompt_tokens'] === 'number' ? u['prompt_tokens'] : this.usage.in,
@@ -335,8 +336,18 @@ class OpenAIMachine extends BaseMachine {
       this.sawFinish = true;
       this.stopReason = openAIFinishReasonToIR(finish);
       out.push(...this.flushPending());
-      // message_end is emitted at end() (transport's [DONE]) or on a trailing
-      // usage chunk — whichever comes first — so include_usage totals land in it.
+      // message_end is emitted at end() (transport's [DONE]), on a trailing
+      // usage chunk, or in-band below when THIS chunk also carried usage —
+      // whichever comes first — so include_usage totals land in it.
+    }
+
+    // Same-chunk usage + finish_reason (some OpenAI-compat providers batch
+    // them into one chunk): the terminal totals are already known — emit
+    // message_end in-band rather than depending on a trailing [DONE]. Only
+    // reachable when finish_reason arrived in THIS chunk: a usage chunk
+    // AFTER a prior finish already returned from the usage branch above.
+    if (this.sawFinish && usageRec !== undefined) {
+      out.push({ type: 'message_end', stop_reason: this.stopReason, usage: this.usage });
     }
     return out;
   }

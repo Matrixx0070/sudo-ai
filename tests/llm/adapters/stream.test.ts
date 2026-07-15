@@ -149,6 +149,41 @@ describe('parseOpenAISSE', () => {
     expect(m.end()).toEqual([]); // idempotent after terminal
   });
 
+  it('same-chunk usage + finish_reason: message_end emitted IN-BAND, without [DONE]', () => {
+    // Some OpenAI-compat providers batch finish_reason and usage into ONE
+    // chunk. The terminal must not wait for a trailing usage chunk / [DONE]
+    // that may never come before the socket idles.
+    const m = parseOpenAISSE();
+    const events = pushAll(m, [
+      { choices: [{ delta: { content: 'Hi' }, finish_reason: null }] },
+      {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 9, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 4 } },
+      },
+    ]);
+    expect(events).toEqual([
+      { type: 'text_delta', text: 'Hi' },
+      { type: 'message_end', stop_reason: 'end_turn', usage: { in: 9, out: 2, cached_in: 4 } },
+    ]);
+    expect(m.terminated).toBe(true);
+    expect(m.end()).toEqual([]); // a trailing [DONE] stays a no-op
+  });
+
+  it('same-chunk usage + finish_reason flushes pending tools BEFORE the in-band terminal', () => {
+    const m = parseOpenAISSE();
+    const events = pushAll(m, [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'f', arguments: '{"a":1}' } }] }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 5, completion_tokens: 3 } },
+    ]);
+    expect(events).toEqual([
+      { type: 'tool_use_start', id: 'c1', name: 'f' },
+      { type: 'tool_input_delta', id: 'c1', partial_json: '{"a":1}' },
+      { type: 'tool_use_end', id: 'c1', name: 'f', input: { a: 1 } },
+      { type: 'message_end', stop_reason: 'tool_use', usage: { in: 5, out: 3, cached_in: 0 } },
+    ]);
+    expect(m.terminated).toBe(true);
+  });
+
   it('parallel tool calls accumulate per index and flush in index order', () => {
     const m = parseOpenAISSE();
     const events = pushAll(m, [

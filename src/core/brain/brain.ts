@@ -36,7 +36,7 @@ import { getCostTracker } from '../billing/cost-tracker.js';
 import { getGatewayCallLog, noteTraceForSession, type LLMCallRecord } from '../../llm/logging.js';
 import { runShadow } from '../../llm/shadow.js';
 // gw-cutover Phase 2: per-attempt IR-transport seam (LLM_IR_CALLERS ramp flag).
-import { irCallersEnabled, irErrorClass, callTransportForBrain, streamTransportForBrain } from '../../llm/brain-bridge.js';
+import { irCallersEnabled, irErrorClass, mustUseIrTransport, callTransportForBrain, streamTransportForBrain } from '../../llm/brain-bridge.js';
 import { queryAllModelsConsensus, type ConsensusOptions } from './model-consensus.js';
 import { DispatchRouter } from './dispatch-router.js';
 import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
@@ -1346,7 +1346,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         // error throws from textStream (the transport never re-requests —
         // Rule 4) and brain's existing failover error handling applies,
         // exactly as a legacy mid-stream streamText error would.
-        if (irCallersEnabled(request.source ?? 'chat')) {
+        // xai-oauth models are served ONLY by the IR transport: stream them
+        // through it UNCONDITIONALLY, and rethrow pre-first-token failures
+        // instead of falling back to legacy streamText (getModel would throw
+        // 'Unknown provider'). See mustUseIrTransport.
+        const _irOnly = mustUseIrTransport(modelId);
+        if (_irOnly || irCallersEnabled(request.source ?? 'chat')) {
           const irSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
           let facade: Awaited<ReturnType<typeof streamTransportForBrain>> | null = null;
           try {
@@ -1363,6 +1368,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
               modelId,
             );
           } catch (irErr) {
+            if (_irOnly) {
+              // IR-only model: rethrow so this attempt's failover catch
+              // classifies + cooldowns the profile and the loop advances to
+              // the next one — legacy streaming cannot serve it.
+              throw irErr;
+            }
             log.warn({ modelId, errorClass: irErrorClass(irErr), err: String(irErr) }, 'ir_transport_fallback — IR stream failed pre-first-token, using legacy streaming path');
           }
           if (facade !== null) {
@@ -1826,7 +1837,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // the SAME attempt (users never see a difference during the ramp).
     let _irTraceId: string | undefined;
     let _irResult: BrainCompletion | undefined;
-    if (irCallersEnabled(request.source ?? 'chat')) {
+    // xai-oauth models are served ONLY by the IR transport: route them through
+    // it UNCONDITIONALLY (independent of LLM_IR_CALLERS), and NEVER fall
+    // through to the legacy ai-SDK call — getModel would just throw 'Unknown
+    // provider' (the 2026-07-14 crash-loop). See mustUseIrTransport.
+    const _irOnly = mustUseIrTransport(modelId);
+    if (_irOnly || irCallersEnabled(request.source ?? 'chat')) {
       try {
         const irCall = await callTransportForBrain(
           {
@@ -1846,6 +1862,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         // IR-served calls (the transport row carries this trace_id).
         if (request.sessionId !== undefined) noteTraceForSession(request.sessionId, irCall.traceId);
       } catch (irErr) {
+        if (_irOnly) {
+          // IR-only model: rethrow so the failover catch classifies + cooldowns
+          // this profile and advances to the next one — the legacy fallback
+          // below cannot serve it (getModel throws 'Unknown provider').
+          throw irErr;
+        }
         log.warn({ modelId, errorClass: irErrorClass(irErr), err: String(irErr) }, 'ir_transport_fallback — IR transport failed, using legacy ai-SDK path');
       }
     }
@@ -1861,6 +1883,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     if (
       hadTools &&
       isEmpty &&
+      // IR-only models can't take the legacy retry: _completeOnce runs the
+      // ai-SDK with callParams.model unset on the IR path (getModel would
+      // throw 'Unknown provider' anyway). An empty xai-oauth response falls
+      // through and is handled like any other empty completion.
+      !_irOnly &&
       process.env['SUDO_TOOL_EMPTY_RETRY_DISABLE'] !== '1'
     ) {
       log.warn({ modelId }, 'Empty response with tools — retrying without tools');

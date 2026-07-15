@@ -187,6 +187,63 @@ describe('XaiOAuthManager', () => {
     expect(f2.calls).toHaveLength(0);
   });
 
+  it('short-token skew guard: 30-min lifetime → effective skew 450s (lifetime/4), not 3600s', async () => {
+    // 30-min (1800s) token with 1700s of validity left. The fixed 3600s skew
+    // would call this stale ON ARRIVAL — refresh-per-request churn if xAI ever
+    // issues ≤1h tokens. min(3600, floor(1800/4)) = 450s keeps it fresh.
+    writeStore({
+      access_token: 'AT-short',
+      refresh_token: 'RT-short',
+      obtained_at: new Date(now - 100_000).toISOString(),
+      expires_at: new Date(now + 1_700_000).toISOString(),
+    });
+    const f1 = makeFetch([]);
+    const m1 = new XaiOAuthManager(storePath, { fetch: f1.fetch, sleep, now: clock });
+    expect(await m1.getAccessToken()).toBe('AT-short');
+    expect(f1.calls).toHaveLength(0); // no refresh, no discovery
+
+    // Same 1800s lifetime with only 400s left — inside the 450s effective
+    // window → refreshes.
+    writeStore({
+      access_token: 'AT-short-stale',
+      refresh_token: 'RT-short-stale',
+      obtained_at: new Date(now - 1_400_000).toISOString(),
+      expires_at: new Date(now + 400_000).toISOString(),
+    });
+    const f2 = makeFetch([() => json({ access_token: 'AT-short-new', refresh_token: 'RT-short-new', expires_in: 1800 })]);
+    const m2 = new XaiOAuthManager(storePath, { fetch: f2.fetch, sleep, now: clock });
+    expect(await m2.getAccessToken()).toBe('AT-short-new');
+    expect(f2.tokenCalls()).toHaveLength(1);
+  });
+
+  it('long-token skew unchanged: ~6h lifetime keeps the full 3600s ceiling; no obtained_at → 3600s', async () => {
+    // 6h lifetime, 3599s left — lifetime/4 (5400s) exceeds the 3600s ceiling,
+    // so the effective skew stays 3600s and this still refreshes.
+    writeStore({
+      access_token: 'AT-6h',
+      refresh_token: 'RT-6h',
+      obtained_at: new Date(now + 3_599_000 - 21_600_000).toISOString(),
+      expires_at: new Date(now + 3_599_000).toISOString(),
+    });
+    const f1 = makeFetch([() => json({ access_token: 'AT-6h-new', refresh_token: 'RT-6h-new', expires_in: 21_600 })]);
+    const m1 = new XaiOAuthManager(storePath, { fetch: f1.fetch, sleep, now: clock });
+    expect(await m1.getAccessToken()).toBe('AT-6h-new');
+    expect(f1.tokenCalls()).toHaveLength(1);
+
+    // Lifetime unknown (no obtained_at — legacy/probe-shaped store): falls
+    // back to the conservative full 3600s skew — 3599s left refreshes exactly
+    // as before this guard.
+    writeStore({
+      access_token: 'AT-legacy',
+      refresh_token: 'RT-legacy',
+      expires_at: new Date(now + 3_599_000).toISOString(),
+    });
+    const f2 = makeFetch([() => json({ access_token: 'AT-legacy-new', refresh_token: 'RT-legacy-new', expires_in: 21_600 })]);
+    const m2 = new XaiOAuthManager(storePath, { fetch: f2.fetch, sleep, now: clock });
+    expect(await m2.getAccessToken()).toBe('AT-legacy-new');
+    expect(f2.tokenCalls()).toHaveLength(1);
+  });
+
   it('invalid_grant: persists needs_relogin, throws typed error, never retries', async () => {
     writeStore({ access_token: 'AT-x', refresh_token: 'RT-dead' });
     const f = makeFetch([() => json({ error: 'invalid_grant' }, 400)]);
