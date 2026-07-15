@@ -1,0 +1,72 @@
+{
+  "generated_from": "/tmp/gwcopy.db",
+  "window_days": 0.49,
+  "sample_note": "SHORT window; mostly automated/background traffic — NOT 7-day representative. Re-run after 72h live collection.",
+  "rows_total": 487,
+  "fingerprinted": 487,
+  "parse_failures": 0,
+  "raw_exact_dup": {
+    "distinct_content_keys": 72,
+    "duplicate_requests": 415,
+    "dup_pct": 85.2
+  },
+  "cost_split": {
+    "total_cost_usd": 10.6993,
+    "tokens_in": 4883887,
+    "tokens_cached": 3027899,
+    "tokens_out": 65435,
+    "output_share_of_tokens_pct": 1.32
+  },
+  "l1_already_deployed": {
+    "input_tokens_cached_pct": 62,
+    "note": "provider prefix cache already live (egress-anthropic cache_control)"
+  },
+  "temperature_mix": {
+    "temp_zero": 0,
+    "temp_positive": 78,
+    "temp_absent_provider_default": 409
+  },
+  "non_admissible": {
+    "error_rows": 210,
+    "tool_use_side_effect_rows": 9
+  },
+  "l2_admissible": {
+    "admissible_requests": 0,
+    "admissible_duplicate_requests": 0,
+    "marginal_saving_usd": 0,
+    "marginal_blended_pct_of_total_spend": 0
+  },
+  "kill_gate": {
+    "threshold_pct": 30,
+    "marginal_l2_blended_pct": 0,
+    "verdict": "KILL→L1-only (marginal L2 < 30%)"
+  },
+  "proposed_ratified_target_pct": 0,
+  "per_caller": {
+    "rag": {
+      "requests": 173,
+      "duplicate_requests": 172,
+      "dup_pct": 99.4
+    },
+    "health": {
+      "requests": 36,
+      "duplicate_requests": 20,
+      "dup_pct": 55.6
+    },
+    "consciousness": {
+      "requests": 77,
+      "duplicate_requests": 45,
+      "dup_pct": 58.4
+    },
+    "agent": {
+      "requests": 125,
+      "duplicate_requests": 104,
+      "dup_pct": 83.2
+    },
+    "chat": {
+      "requests": 76,
+      "duplicate_requests": 70,
+      "dup_pct": 92.1
+    }
+  }
+}
