@@ -16,7 +16,8 @@
  *   503  { error: 'synthesize disabled', code: 'SYNTH_DISABLED' }
  */
 
-import { timingSafeEqual, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { authenticateHttp } from './auth.js';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 import { metrics } from '../health/metrics.js';
@@ -45,11 +46,7 @@ function extractBearer(req: IncomingMessage): string {
   return m ? (m[1] ?? '') : '';
 }
 
-function isAuthorised(req: IncomingMessage, tokenBuf: Buffer | null): boolean {
-  if (tokenBuf === null) return true;
-  const candidate = Buffer.from(extractBearer(req), 'utf8');
-  return candidate.length === tokenBuf.length && timingSafeEqual(candidate, tokenBuf);
-}
+// isAuthorised removed — auth centralised in ./auth.ts (authenticateHttp).
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
@@ -141,7 +138,7 @@ function checkProbeRateLimit(req: IncomingMessage): { allowed: boolean; retryAft
 
 async function handleSynthProbe(req: IncomingMessage, res: ServerResponse, tokenBuf: Buffer | null): Promise<void> {
   // 1. Auth
-  if (!isAuthorised(req, tokenBuf)) {
+  if (!authenticateHttp(req, { secretOverride: tokenBuf }).ok) {
     sendError(res, 401, 'Unauthorized: invalid or missing bearer token');
     return;
   }

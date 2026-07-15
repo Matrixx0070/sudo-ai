@@ -158,4 +158,17 @@ describe('gateway/auth', () => {
       expect(authenticateHttp(mkReq({ bearer: 'nope' })).ok).toBe(false);
     });
   });
+
+  describe('secretOverride (dependency-injected surfaces)', () => {
+    it('uses the injected buffer, ignoring env GATEWAY_TOKEN', () => {
+      const tok = Buffer.from('injected', 'utf8'); // env has no token; surface injects one
+      expect(authenticateHttp(mkReq({ bearer: 'injected' }), { secretOverride: tok }).ok).toBe(true);
+      expect(authenticateHttp(mkReq({ bearer: 'wrong' }), { secretOverride: tok }).ok).toBe(false);
+      expect(authenticateHttp(mkReq({ remote: '127.0.0.1' }), { secretOverride: tok }).ok).toBe(false);
+    });
+    it('override=null → no secret → loopback dev ok, proxied fail-closed', () => {
+      expect(authenticateHttp(mkReq({ remote: '127.0.0.1' }), { secretOverride: null }).ok).toBe(true);
+      expect(authenticateHttp(mkReq({ remote: '127.0.0.1', headers: { 'x-forwarded-for': '8.8.8.8' } }), { secretOverride: null }).ok).toBe(false);
+    });
+  });
 });

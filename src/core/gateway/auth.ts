@@ -133,9 +133,23 @@ export function isLocalDirectRequest(req: IncomingMessage): boolean {
 export interface AuthenticateOptions {
   /**
    * Which credentials this surface accepts, in priority order. Defaults to the
-   * operator token plus the loopback dev convenience.
+   * operator token plus the loopback dev convenience. Most surfaces also include
+   * 'gateway-token' so one operator secret can authenticate everywhere while the
+   * surface-specific token (web-chat/gateway-secret) keeps working.
    */
   accept?: GatewayCredential[];
+  /**
+   * Env var that drives LEGACY (kill-switch) behaviour for this surface — the
+   * secret it used before unification (default GATEWAY_TOKEN). In legacy mode the
+   * surface is open when this env is unset, matching the old per-surface code.
+   */
+  legacySecretEnv?: string;
+  /**
+   * Explicit secret for the 'gateway-token' credential — for dependency-injected
+   * surfaces whose register() receives a pre-computed token buffer. undefined =
+   * read env GATEWAY_TOKEN; null = no secret configured; Buffer = use it.
+   */
+  secretOverride?: Buffer | null;
 }
 
 const DENY = (reason: string): GatewayPrincipal => ({
@@ -157,27 +171,30 @@ const DENY = (reason: string): GatewayPrincipal => ({
  *        - local-direct (loopback, no forwarded headers) → authorised (dev);
  *        - otherwise (proxied / non-loopback) → DENY (closes the open hole).
  *
- * Legacy mode (SUDO_GATEWAY_UNIFIED_AUTH=0): only GATEWAY_TOKEN is considered and
- * the surface is open when it is unset — byte-for-byte the old behaviour.
+ * Legacy mode (SUDO_GATEWAY_UNIFIED_AUTH=0): only the surface's legacy secret
+ * (legacySecretEnv) is considered and the surface is open when it is unset.
  */
-export function authenticateHttp(
+function authenticateCore(
+  bearer: Buffer,
   req: IncomingMessage,
-  opts: AuthenticateOptions = {},
+  accept: GatewayCredential[],
+  legacySecretEnv: string,
+  secretOverride: Buffer | null | undefined,
 ): GatewayPrincipal {
-  const accept = opts.accept ?? ['gateway-token', 'loopback'];
-
+  // An injected secret (DI surfaces) overrides the env lookup for gateway-token.
+  const gwTok = secretOverride !== undefined ? secretOverride : envSecret('GATEWAY_TOKEN');
   if (!unifiedAuthEnabled()) {
-    const tok = envSecret('GATEWAY_TOKEN');
+    const tok = secretOverride !== undefined ? secretOverride : envSecret(legacySecretEnv);
     if (tok === null) {
       return {
         ok: true,
         credential: 'none',
         scopes: GATEWAY_TOKEN_SCOPES,
         isOwner: true,
-        reason: 'legacy-open (no GATEWAY_TOKEN)',
+        reason: `legacy-open (no ${legacySecretEnv})`,
       };
     }
-    return timingMatch(bearerOf(req), tok)
+    return timingMatch(bearer, tok)
       ? {
           ok: true,
           credential: 'gateway-token',
@@ -188,11 +205,8 @@ export function authenticateHttp(
       : DENY('legacy-token-mismatch');
   }
 
-  const bearer = bearerOf(req);
-
   if (accept.includes('gateway-token')) {
-    const s = envSecret('GATEWAY_TOKEN');
-    if (s && timingMatch(bearer, s)) {
+    if (gwTok && timingMatch(bearer, gwTok)) {
       return { ok: true, credential: 'gateway-token', scopes: GATEWAY_TOKEN_SCOPES, isOwner: true, reason: 'gateway-token' };
     }
   }
@@ -210,7 +224,7 @@ export function authenticateHttp(
   }
 
   const anyConfigured =
-    (accept.includes('gateway-token') && envSecret('GATEWAY_TOKEN') !== null) ||
+    (accept.includes('gateway-token') && gwTok !== null) ||
     (accept.includes('gateway-secret') && envSecret('GATEWAY_SECRET') !== null) ||
     (accept.includes('web-chat-token') && envSecret('WEB_CHAT_TOKEN') !== null);
 
@@ -229,4 +243,30 @@ export function authenticateHttp(
   }
 
   return DENY('no-secret-and-not-local');
+}
+
+/** Authenticate using the Authorization: Bearer header. */
+export function authenticateHttp(req: IncomingMessage, opts: AuthenticateOptions = {}): GatewayPrincipal {
+  return authenticateCore(
+    bearerOf(req),
+    req,
+    opts.accept ?? ['gateway-token', 'loopback'],
+    opts.legacySecretEnv ?? 'GATEWAY_TOKEN',
+    opts.secretOverride,
+  );
+}
+
+/** Authenticate using a token supplied out-of-band (e.g. a WS ?token= query param). */
+export function authenticateToken(
+  token: string | null | undefined,
+  req: IncomingMessage,
+  opts: AuthenticateOptions = {},
+): GatewayPrincipal {
+  return authenticateCore(
+    Buffer.from(token ?? '', 'utf8'),
+    req,
+    opts.accept ?? ['gateway-token', 'loopback'],
+    opts.legacySecretEnv ?? 'GATEWAY_TOKEN',
+    opts.secretOverride,
+  );
 }
