@@ -3,7 +3,7 @@
  * @description Dashboard module tests for SUDO-AI v4 (Part 1: Server tests).
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
 import { DashboardServer, getDashboard } from '../../src/core/dashboard/dashboard-server.js';
 import { registerRoutes } from '../../src/core/dashboard/dashboard-routes.js';
@@ -150,5 +150,38 @@ describe('DashboardServer', () => {
     expect(activity.length).toBe(100);
     expect(activity[0].summary).toBe('Event 109');
     expect(activity[99].summary).toBe('Event 10');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice D/2 — opt-in unified auth backend selection
+// ---------------------------------------------------------------------------
+
+describe('DashboardServer default auth backend (Slice D/2)', () => {
+  const keys = ['SUDO_GATEWAY_UI_UNIFIED_AUTH', 'GATEWAY_TOKEN'] as const;
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => { saved = {}; for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; } });
+  afterEach(() => { for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
+
+  const mkReq = (bearer?: string): import('node:http').IncomingMessage => ({
+    headers: bearer ? { authorization: `Bearer ${bearer}`, host: '127.0.0.1' } : { host: '127.0.0.1' },
+    url: '/',
+    socket: { remoteAddress: '127.0.0.1' },
+  } as unknown as import('node:http').IncomingMessage);
+
+  it('defaults to the basic backend (flag off)', () => {
+    const server = new DashboardServer(getTestConfig());
+    expect(server.getAuthBackend().name).toBe('basic');
+  });
+
+  it('uses the unified backend when SUDO_GATEWAY_UI_UNIFIED_AUTH=1 (GATEWAY_TOKEN + own token)', () => {
+    process.env['SUDO_GATEWAY_UI_UNIFIED_AUTH'] = '1';
+    process.env['GATEWAY_TOKEN'] = 'op-token';
+    const server = new DashboardServer(getTestConfig()); // authToken: 'test-dashboard-auth-token-xyz'
+    const backend = server.getAuthBackend();
+    expect(backend.name).toBe('unified');
+    expect(backend.authenticate(mkReq('op-token'), { allowQueryToken: false }).ok).toBe(true);
+    expect(backend.authenticate(mkReq('test-dashboard-auth-token-xyz'), { allowQueryToken: false }).ok).toBe(true);
+    expect(backend.authenticate(mkReq('wrong'), { allowQueryToken: false }).ok).toBe(false);
   });
 });

@@ -332,7 +332,15 @@ export class DashboardServer {
 
   constructor(config: DashboardConfig) {
     this.config = config;
-    this.defaultAuthBackend = createBasicAuthBackend(config.authToken);
+    // Slice D/2: opt-in unified auth backend (SUDO_GATEWAY_UI_UNIFIED_AUTH=1) — one
+    // boundary: the operator GATEWAY_TOKEN or the dashboard's own token, loopback-dev,
+    // fail-closed when proxied. Default OFF preserves the legacy basic (own-token)
+    // backend, so behaviour is unchanged unless explicitly enabled. A registered
+    // OAuth/device backend still wins via getRegisteredAuthBackend().
+    this.defaultAuthBackend =
+      process.env['SUDO_GATEWAY_UI_UNIFIED_AUTH'] === '1'
+        ? createUnifiedAuthBackend(config.authToken)
+        : createBasicAuthBackend(config.authToken);
     if (DASHBOARD_DISABLED) log.warn('Dashboard server disabled via SUDO_DASHBOARD_DISABLE=1');
   }
 
