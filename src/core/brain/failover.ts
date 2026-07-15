@@ -104,7 +104,12 @@ export class ModelFailover {
       const provider = modelString.slice(0, slashIndex) as ModelProfile['provider'];
       const modelId = modelString.slice(slashIndex + 1);
 
-      const validProviders = ['xai', 'openai', 'anthropic', 'claude-oauth', 'google', 'groq', 'mistral', 'deepseek', 'ollama', 'together'];
+      // 'xai-oauth' is served ONLY by the IR transport (src/llm/transport.ts) —
+      // legacy getModel() has no such provider and keeps throwing for it, which
+      // is fine: brain routes xai-oauth/ models through the transport
+      // unconditionally (mustUseIrTransport). Rejecting it HERE crash-looped
+      // prod when it was added to models.primary (2026-07-14 incident).
+      const validProviders = ['xai', 'openai', 'anthropic', 'claude-oauth', 'xai-oauth', 'google', 'groq', 'mistral', 'deepseek', 'ollama', 'together'];
       if (!validProviders.includes(provider)) {
         throw new LLMError(
           `Unknown provider "${provider}" in model string "${modelString}"`,

@@ -61,6 +61,22 @@ export function irCallersEnabled(source: string): boolean {
     .includes(source);
 }
 
+/**
+ * True when `modelId` is served ONLY by the IR transport — no legacy ai-SDK
+ * provider exists for it (legacy getModel throws 'Unknown provider').
+ *
+ * Brain's seams treat these models specially, independent of LLM_IR_CALLERS:
+ * - the IR branch fires UNCONDITIONALLY for them, and
+ * - a transport failure is RETHROWN instead of falling through to the legacy
+ *   ai-SDK call (which can only throw 'Unknown provider' — the failure mode
+ *   that crash-looped prod on 2026-07-14). The rethrow lands in brain's
+ *   failover catch, which classifies the error, cooldowns the profile, and
+ *   advances to the next one.
+ */
+export function mustUseIrTransport(modelId: string): boolean {
+  return modelId.startsWith('xai-oauth/');
+}
+
 /** Short error-class tag for the `ir_transport_fallback` warn log. */
 export function irErrorClass(err: unknown): string {
   if (err instanceof LLMPolicyError) return err.class;

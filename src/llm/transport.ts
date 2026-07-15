@@ -910,13 +910,15 @@ export async function* streamIR(
           ...extraHeaders,
           ...(await authHeaders(r)),
         };
-        const signal =
-          ctx.signal !== undefined ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
+        // runWithPolicy never populates ctx.signal (no option plumbs one in) —
+        // the stream's own controller is the sole abort source for this fetch.
+        // If policy ever grows a per-attempt signal, compose it here via
+        // AbortSignal.any([ctx.signal, controller.signal]).
         const response = await fetchImpl(r.url, {
           method: 'POST',
           headers,
           body: wireBody,
-          signal,
+          signal: controller.signal,
         });
 
         if (!response.ok) {
@@ -932,28 +934,43 @@ export async function* streamIR(
         }
         st.reader = response.body.getReader();
 
-        // Read until the machine emits its FIRST event(s) — errors thrown in
-        // this window are pre-first-token and therefore policy-retryable.
-        while (st.buffered.length === 0) {
-          const { done, value } = await st.reader.read();
-          if (done) {
-            st.readerDone = true;
-            if (!st.machine.terminated) {
-              // Stream closed without a single event or terminal — truncation
-              // flush per machine contract.
-              st.truncated = !st.cleanTerminal;
-              st.buffered.push(...st.machine.end());
+        try {
+          // Read until the machine emits its FIRST event(s) — errors thrown in
+          // this window are pre-first-token and therefore policy-retryable.
+          while (st.buffered.length === 0) {
+            const { done, value } = await st.reader.read();
+            if (done) {
+              st.readerDone = true;
+              if (!st.machine.terminated) {
+                // Stream closed without a single event or terminal — truncation
+                // flush per machine contract.
+                st.truncated = !st.cleanTerminal;
+                st.buffered.push(...st.machine.end());
+              }
+              break;
             }
-            break;
+            st.buffered.push(...feedChunk(st, value, r.family));
+            if (st.machine.terminated) break;
           }
-          st.buffered.push(...feedChunk(st, value, r.family));
-          if (st.machine.terminated) break;
+          if (st.buffered.length > 0) {
+            ctx.markFirstToken(); // RULE 4: no retries past this point
+            ttftMs = Date.now() - startedAt;
+          }
+          return st;
+        } catch (err) {
+          // Attempt-scoped cleanup: a throw after getReader() (read error, SSE
+          // parse/machine assertion) would otherwise leak THIS attempt's body
+          // stream across a policy retry — the generator's outer finally only
+          // cancels the reader of the attempt that was RETURNED.
+          try {
+            st.reader?.cancel().catch(() => {
+              /* stream already errored/aborted — fine */
+            });
+          } catch {
+            /* reader already released */
+          }
+          throw err;
         }
-        if (st.buffered.length > 0) {
-          ctx.markFirstToken(); // RULE 4: no retries past this point
-          ttftMs = Date.now() - startedAt;
-        }
-        return st;
       },
     }));
   } catch (err) {

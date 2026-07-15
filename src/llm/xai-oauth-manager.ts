@@ -70,6 +70,10 @@ const DEFAULT_STORE_PATH = path.join(DATA_DIR, 'xai-oauth.json');
 /**
  * Refresh when within this many seconds of expiry. See file header: deliberate
  * 3600s (not the plan's 60s) — 60s is too narrow for ~6h tokens + cron cadence.
+ *
+ * This is a CEILING: the effective skew is min(REFRESH_SKEW_SEC, lifetime/4)
+ * — see effectiveSkewSec(). A fixed 3600s skew on a short-lived token (≤1h)
+ * would mark every token stale on arrival and refresh on every request.
  */
 const REFRESH_SKEW_SEC = 3600;
 
@@ -214,14 +218,35 @@ export class XaiOAuthManager {
   }
 
   /**
-   * A token is usable when expires_at exists AND is more than REFRESH_SKEW_SEC
-   * away. Missing expires_at (probe-shaped file) = expired-now by design.
+   * Effective refresh skew for a store: min(REFRESH_SKEW_SEC, floor(lifetime/4)),
+   * where lifetime is the token's expires_in at persist time, derived from the
+   * obtained_at → expires_at span. Guards against refresh-per-request churn if
+   * xAI ever issues short tokens: a 30-min token gets a 450s skew, not 3600s
+   * (which would mark it stale on arrival, burning a rotation every call).
+   * Unknown lifetime (no/invalid obtained_at) → the full REFRESH_SKEW_SEC.
+   */
+  private effectiveSkewSec(store: XaiOAuthStore): number {
+    if (store.obtained_at !== undefined && store.expires_at !== undefined) {
+      const obtainedMs = Date.parse(store.obtained_at);
+      const expMs = Date.parse(store.expires_at);
+      if (Number.isFinite(obtainedMs) && Number.isFinite(expMs) && expMs > obtainedMs) {
+        const lifetimeSec = Math.floor((expMs - obtainedMs) / 1000);
+        return Math.min(REFRESH_SKEW_SEC, Math.floor(lifetimeSec / 4));
+      }
+    }
+    return REFRESH_SKEW_SEC;
+  }
+
+  /**
+   * A token is usable when expires_at exists AND is more than the effective
+   * skew away (see effectiveSkewSec). Missing expires_at (probe-shaped file)
+   * = expired-now by design.
    */
   private isFresh(store: XaiOAuthStore): boolean {
     if (!store.expires_at) return false;
     const expMs = Date.parse(store.expires_at);
     if (!Number.isFinite(expMs)) return false;
-    return expMs - this.deps.now() > REFRESH_SKEW_SEC * 1000;
+    return expMs - this.deps.now() > this.effectiveSkewSec(store) * 1000;
   }
 
   // -------------------------------------------------------------------------
@@ -326,7 +351,8 @@ export class XaiOAuthManager {
   // -------------------------------------------------------------------------
 
   /**
-   * Return a valid access token, refreshing when within 3600s of expiry.
+   * Return a valid access token, refreshing when within the effective skew
+   * (min(3600s, lifetime/4) — see effectiveSkewSec) of expiry.
    * Returns null when no store exists. Throws XaiOAuthReloginRequiredError
    * when the refresh token is dead — never retries.
    */
