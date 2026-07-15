@@ -23,6 +23,19 @@ export function redactDeep(input: unknown, depth = 0, seen: WeakSet<object> = ne
   if (Array.isArray(input)) {
     return input.map((v) => redactDeep(v, depth + 1, seen));
   }
+  // SecretRef-shaped objects ({ source: env|file|exec, provider, id }) are posture-
+  // only: source/provider are safe, but the id can be a file path or exec command
+  // line, so it is redacted. Mirrors the spec's "evidence records provider/source
+  // posture only" (see secrets/secret-ref.ts).
+  const rec = input as Record<string, unknown>;
+  if (
+    typeof rec['source'] === 'string' &&
+    (['env', 'file', 'exec'] as string[]).includes(rec['source']) &&
+    typeof rec['provider'] === 'string' &&
+    typeof rec['id'] === 'string'
+  ) {
+    return { source: rec['source'], provider: rec['provider'], id: '<redacted>' };
+  }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
     if (SENSITIVE_KEY_REGEX.test(k)) out[k] = '<redacted>';

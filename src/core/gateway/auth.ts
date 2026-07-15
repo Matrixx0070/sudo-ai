@@ -14,6 +14,7 @@
  */
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import { resolveEnvSecretBuffer } from '../secrets/secret-ref.js';
 
 // ---------------------------------------------------------------------------
 // Scopes (closed set — admin implies all)
@@ -81,8 +82,9 @@ export function unifiedAuthEnabled(): boolean {
 // ---------------------------------------------------------------------------
 
 function envSecret(name: string): Buffer | null {
-  const v = process.env[name];
-  return v && v.length > 0 ? Buffer.from(v, 'utf8') : null;
+  // SecretRef seam: honours `<NAME>_REF` (a JSON SecretRef) when SUDO_SECRETS_REF
+  // is on; otherwise identical to reading process.env[name]. See secrets/secret-ref.ts.
+  return resolveEnvSecretBuffer(name);
 }
 
 function bearerOf(req: IncomingMessage): Buffer {
