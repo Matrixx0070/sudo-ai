@@ -8,9 +8,11 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
+import { timingSafeEqual } from 'node:crypto';
 import JSON5 from 'json5';
 import { projectPath } from '../shared/paths.js';
 import { createLogger } from '../shared/logger.js';
+import { resolveEnvSecret, secretsRefEnabled } from '../secrets/secret-ref.js';
 
 const log = createLogger('gateway:webhook-config');
 
@@ -90,6 +92,39 @@ function normalizeHook(id: string, raw: unknown): WebhookHook | null {
   };
 }
 
+/** Timing-safe equality for two secret strings (unequal lengths → false). */
+function sameSecret(a: string, b: string): boolean {
+  const ba = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  return ba.length === bb.length && timingSafeEqual(ba, bb);
+}
+
+/**
+ * Invariant I90 (OpenClaw spec): a hook's secret must NOT reuse the gateway
+ * token/secret — a leaked hook credential must never grant operator access. Any
+ * hook whose resolved secret equals GATEWAY_TOKEN / GATEWAY_SECRET is dropped
+ * (fail-closed) with a loud warning. Gated by SUDO_SECRETS_REF so `=0` restores
+ * byte-for-byte legacy loading (no gateway-token read, no drop). Never logs values.
+ */
+function dropHooksReusingGatewayToken(hooks: Record<string, WebhookHook>): void {
+  if (!secretsRefEnabled()) return;
+  const gwToken = resolveEnvSecret('GATEWAY_TOKEN');
+  const gwSecret = resolveEnvSecret('GATEWAY_SECRET');
+  if (!gwToken && !gwSecret) return;
+  for (const [id, hook] of Object.entries(hooks)) {
+    const secret = hookSecret(hook);
+    if (!secret) continue;
+    const collidesWith =
+      (gwToken && sameSecret(secret, gwToken) && 'GATEWAY_TOKEN') ||
+      (gwSecret && sameSecret(secret, gwSecret) && 'GATEWAY_SECRET') ||
+      null;
+    if (collidesWith) {
+      log.error({ id, secretEnv: hook.secretEnv, collidesWith }, 'I90 VIOLATION: hook secret reuses the gateway token — hook DROPPED (fail-closed)');
+      delete hooks[id];
+    }
+  }
+}
+
 let _cache: WebhooksConfig | null = null;
 
 export function loadWebhooks(path: string = CONFIG_PATH, force = false): WebhooksConfig {
@@ -107,6 +142,7 @@ export function loadWebhooks(path: string = CONFIG_PATH, force = false): Webhook
       const h = normalizeHook(id, val);
       if (h) hooks[id] = h;
     }
+    dropHooksReusingGatewayToken(hooks); // I90: no hook may reuse the gateway token
     _cache = { hooks };
     log.info({ hooks: Object.keys(hooks) }, 'webhooks.json5 loaded');
     return _cache;
