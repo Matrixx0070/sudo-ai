@@ -95,6 +95,34 @@ function systemBlocks(system: string): Rec[] {
   ];
 }
 
+/**
+ * Rolling conversation-history cache (L1, gw-cache #1). Mark the LAST content
+ * block of the LAST message with a cache_control breakpoint so the whole prompt
+ * prefix (tools → system → history) becomes a cache READ on the next turn — the
+ * standard Anthropic multi-turn pattern. Previously ONLY system + tools were
+ * cached; message history was re-sent uncached every turn (the dominant input
+ * cost on long agent loops).
+ *
+ * Guards:
+ *  - Only with prior history to reuse (≥2 messages) — the first user turn has
+ *    nothing to read back and would only pay cache-creation.
+ *  - Skip a trailing `thinking` block (assistant reasoning; not a cache anchor).
+ *  - Anthropic silently no-ops the breakpoint when the cumulative prefix is
+ *    below the min cacheable length, so this never errors on short prompts.
+ *  - Kill switch: SUDO_PROMPT_CACHE_HISTORY=0.
+ * Mutates the passed array in place (already a fresh per-call mapping).
+ */
+function markHistoryForCache(messages: Array<{ role: string; content: Rec[] }>): void {
+  if (process.env['SUDO_PROMPT_CACHE_HISTORY'] === '0') return;
+  if (messages.length < 2) return;
+  const last = messages[messages.length - 1];
+  if (!last || !Array.isArray(last.content) || last.content.length === 0) return;
+  const i = last.content.length - 1;
+  const block = last.content[i]!;
+  if (block['type'] === 'thinking') return;
+  last.content[i] = { ...block, cache_control: { type: 'ephemeral' } };
+}
+
 function imageBlockOut(block: IRImageBlock): Rec {
   const src = block.source;
   if (src.type === 'base64') {
@@ -143,10 +171,12 @@ function blockOut(block: IRContentBlock): Rec {
 
 /** IRRequest → Anthropic Messages API request body. max_tokens ALWAYS set. */
 export function egressAnthropic(ir: IRRequest): Rec {
+  const messages = ir.messages.map((m) => ({ role: m.role, content: m.content.map(blockOut) }));
+  markHistoryForCache(messages);
   const body: Rec = {
     model: bareModelId(resolveAlias(ir.alias)),
     max_tokens: ir.max_tokens ?? getAliasLimits(ir.alias).max_output,
-    messages: ir.messages.map((m) => ({ role: m.role, content: m.content.map(blockOut) })),
+    messages,
   };
 
   if (ir.system !== undefined && ir.system !== '') {

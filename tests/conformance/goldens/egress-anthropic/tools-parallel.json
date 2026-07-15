@@ -21,6 +21,9 @@
           "type": "tool_use"
         },
         {
+          "cache_control": {
+            "type": "ephemeral"
+          },
           "id": "tu_2",
           "input": {
             "tz": "Europe/Oslo"
