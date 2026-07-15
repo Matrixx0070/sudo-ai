@@ -28,6 +28,8 @@ import { createLogger } from '../core/shared/logger.js';
 import { DATA_DIR } from '../core/shared/paths.js';
 import { redactDeep } from '../core/shared/redact.js';
 import { redactSecrets } from '../core/federation/federation-error-sanitizer.js';
+import { contentFingerprint } from './cache/canonical.js';
+import type { IRRequest } from '../../shared-types/ir/v1.js';
 
 const logger = createLogger('gateway-call-log');
 
@@ -108,6 +110,7 @@ const DDL_TABLE = `
     ir_request          TEXT,
     ir_response         TEXT,
     wire_payload_sha256 TEXT,
+    content_sha256      TEXT,
     error_class         TEXT,
     latency_ms          INTEGER,
     ttft_ms             INTEGER,
@@ -122,13 +125,18 @@ const DDL_TABLE = `
 const DDL_IDX_TS          = `CREATE INDEX IF NOT EXISTS idx_llm_calls_ts          ON llm_calls(ts)`;
 const DDL_IDX_CALLER      = `CREATE INDEX IF NOT EXISTS idx_llm_calls_caller      ON llm_calls(caller)`;
 const DDL_IDX_ERROR_CLASS = `CREATE INDEX IF NOT EXISTS idx_llm_calls_error_class ON llm_calls(error_class)`;
+// Content-fingerprint index powers the Phase-0 dedup GROUP BY. Created AFTER the
+// column migration below (an existing DB lacks the column until then).
+const DDL_IDX_CONTENT     = `CREATE INDEX IF NOT EXISTS idx_llm_calls_content     ON llm_calls(content_sha256)`;
 
 /**
  * Additive migrations for DBs created before a column existed. Guarded by a
  * PRAGMA table_info check (trace-store idiom) so re-runs are no-ops. Empty
  * today; append `{ column, ddl }` entries as the schema evolves.
  */
-const COLUMN_MIGRATIONS: ReadonlyArray<{ column: string; ddl: string }> = [];
+const COLUMN_MIGRATIONS: ReadonlyArray<{ column: string; ddl: string }> = [
+  { column: 'content_sha256', ddl: 'ALTER TABLE llm_calls ADD COLUMN content_sha256 TEXT' },
+];
 
 // ---------------------------------------------------------------------------
 // Redaction
@@ -347,6 +355,17 @@ export class GatewayCallLog {
         }
       }
     }
+
+    // content_sha256 index — created here, after the column migration guarantees
+    // the column exists on legacy DBs (a fresh DDL_TABLE already has it).
+    try {
+      this.db.exec(DDL_IDX_CONTENT);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('already exists')) {
+        logger.warn({ err: msg }, 'content index DDL warning');
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -363,15 +382,27 @@ export class GatewayCallLog {
    */
   record(entry: LLMCallRecord): void {
     try {
+      // Canonical content fingerprint — computed centrally so every caller (IR
+      // AND legacy path) gets it, since ir_request is populated on all rows.
+      // Fail-open: a malformed IR yields NULL, never a thrown/blocked call.
+      let contentSha: string | null = null;
+      if (entry.irRequest !== undefined && entry.irRequest !== null) {
+        try {
+          contentSha = contentFingerprint(entry.irRequest as IRRequest);
+        } catch {
+          contentSha = null;
+        }
+      }
+
       this.db.prepare(`
         INSERT OR REPLACE INTO llm_calls
           (trace_id, ts, caller, purpose, alias, route, priority,
-           ir_request, ir_response, wire_payload_sha256, error_class,
+           ir_request, ir_response, wire_payload_sha256, content_sha256, error_class,
            latency_ms, ttft_ms, tokens_in, tokens_out, tokens_cached,
            cost_usd, outcome)
         VALUES
           (:trace_id, :ts, :caller, :purpose, :alias, :route, :priority,
-           :ir_request, :ir_response, :wire_payload_sha256, :error_class,
+           :ir_request, :ir_response, :wire_payload_sha256, :content_sha256, :error_class,
            :latency_ms, :ttft_ms, :tokens_in, :tokens_out, :tokens_cached,
            :cost_usd, :outcome)
       `).run({
@@ -385,6 +416,7 @@ export class GatewayCallLog {
         ir_request:          toJsonColumn(entry.irRequest),
         ir_response:         toJsonColumn(entry.irResponse),
         wire_payload_sha256: entry.wirePayloadSha256 ?? null,
+        content_sha256:      contentSha,
         error_class:         entry.errorClass ?? null,
         latency_ms:          entry.latencyMs ?? null,
         ttft_ms:             entry.ttftMs ?? null,
