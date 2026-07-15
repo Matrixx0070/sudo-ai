@@ -36,6 +36,7 @@ import {
   FederationStateSource,
 } from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
+import { authenticateToken } from '../gateway/auth.js';
 import { listCredentialsMetadata, type CredentialsSnapshot } from './credentials-meta.js';
 import { buildDebugShareSnapshot, type DebugShareSnapshot } from './debug-share.js';
 import { getRegisteredLogRing, type LogLine } from './log-ring.js';
@@ -220,6 +221,40 @@ export function createBasicAuthBackend(authToken: string): AuthBackend {
         if (safeTokenEq(queryToken, authToken)) return { ok: true, principal: 'dashboard:basic-query' };
       }
       return { ok: false, reason: 'invalid_or_missing_token' };
+    },
+  };
+}
+
+/**
+ * Unified auth backend (Slice D) — bridges the dashboard's AuthBackend contract to
+ * the gateway's central auth module (src/core/gateway/auth.ts) so the dashboard shares
+ * ONE credential→scope boundary: the operator GATEWAY_TOKEN (or loopback-dev, fail-closed
+ * when proxied), with the dashboard's own token still accepted for back-compat. It only
+ * replaces the DEFAULT `basic` backend — a registered OAuth/device backend still wins via
+ * getRegisteredAuthBackend().
+ */
+export function createUnifiedAuthBackend(fallbackToken?: string): AuthBackend {
+  return {
+    name: 'unified',
+    authenticate(req, opts) {
+      const authHeader = req.headers.authorization ?? '';
+      let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      if (!token && opts.allowQueryToken) {
+        try {
+          const host = req.headers.host ?? 'localhost';
+          token = new URL(req.url ?? '/', `http://${host}`).searchParams.get('token') ?? '';
+        } catch {
+          /* ignore malformed URL */
+        }
+      }
+      // 1. Central gateway auth: GATEWAY_TOKEN (env) or loopback-dev; fail-closed when proxied.
+      const p = authenticateToken(token, req, { accept: ['gateway-token', 'loopback'], legacySecretEnv: 'GATEWAY_TOKEN' });
+      if (p.ok) return { ok: true, principal: `operator:${p.credential}` };
+      // 2. Back-compat: the dashboard's own token (may differ from GATEWAY_TOKEN).
+      if (fallbackToken && token.length > 0 && safeTokenEq(token, fallbackToken)) {
+        return { ok: true, principal: 'dashboard:token' };
+      }
+      return { ok: false, reason: p.reason };
     },
   };
 }
