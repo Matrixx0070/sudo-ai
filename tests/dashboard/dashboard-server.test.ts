@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
-import { DashboardServer, getDashboard } from '../../src/core/dashboard/dashboard-server.js';
+import { DashboardServer, getDashboard, stripMountPrefix } from '../../src/core/dashboard/dashboard-server.js';
 import { registerRoutes } from '../../src/core/dashboard/dashboard-routes.js';
 import type { DashboardConfig, DashboardStats } from '../../src/core/dashboard/dashboard-types.js';
 
@@ -183,5 +183,36 @@ describe('DashboardServer default auth backend (Slice D/2)', () => {
     expect(backend.authenticate(mkReq('op-token'), { allowQueryToken: false }).ok).toBe(true);
     expect(backend.authenticate(mkReq('test-dashboard-auth-token-xyz'), { allowQueryToken: false }).ok).toBe(true);
     expect(backend.authenticate(mkReq('wrong'), { allowQueryToken: false }).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice D/3 — mount onto the gateway server under /__dashboard__/
+// ---------------------------------------------------------------------------
+
+describe('DashboardServer mount on gateway (Slice D/3)', () => {
+  it('stripMountPrefix strips the prefix and preserves the query', () => {
+    expect(stripMountPrefix('/__dashboard__/api/x', '/__dashboard__')).toBe('/api/x');
+    expect(stripMountPrefix('/__dashboard__/api/x?token=y', '/__dashboard__')).toBe('/api/x?token=y');
+    expect(stripMountPrefix('/__dashboard__', '/__dashboard__')).toBe('/');
+    expect(stripMountPrefix('/__dashboard__/', '/__dashboard__')).toBe('/');
+    expect(stripMountPrefix('/__dashboard__?x=1', '/__dashboard__')).toBe('/?x=1');
+  });
+
+  it('mounts routes on a gateway server under /__dashboard__/ (auth runs → 401 without token)', async () => {
+    const httpServer = http.createServer();
+    const dash = new DashboardServer(getTestConfig());
+    dash.mountOnGatewayServer(httpServer);
+    await new Promise<void>((r) => httpServer.listen(0, '127.0.0.1', () => r()));
+    const port = (httpServer.address() as import('node:net').AddressInfo).port;
+    const status = await new Promise<number>((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: '/__dashboard__/api/stats' }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      }).on('error', reject);
+    });
+    // reached registerRoutes → the dashboard's auth/routing ran (no token → 401/403, or 404 unknown route)
+    expect([401, 403, 404]).toContain(status);
+    await new Promise<void>((r) => httpServer.close(() => r()));
   });
 });

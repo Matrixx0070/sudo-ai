@@ -299,6 +299,16 @@ export function checkHostHeader(hostHeader: string | undefined, allowlist: reado
 }
 
 /**
+ * Strip the mount prefix from a request URL so the dashboard's own routes match
+ * (Slice D/3). '/__dashboard__/api/x?y' → '/api/x?y'; '/__dashboard__' → '/'.
+ */
+export function stripMountPrefix(url: string, prefix: string): string {
+  const rest = url.slice(prefix.length);
+  if (rest === '' || rest === '?') return '/';
+  return rest.startsWith('/') ? rest : `/${rest}`;
+}
+
+/**
  * Structural Brain narrowing for `getCurrentModel()` / `switchModel()` —
  * `__sudoBrain` is `unknown` at the registry boundary; the callers below verify
  * the two methods exist before invoking. Returns `undefined` when the brain is
@@ -398,6 +408,35 @@ export class DashboardServer {
   /** Bind address the dashboard is configured to use. */
   getBindAddress(): string {
     return this.config.bindAddress ?? '127.0.0.1';
+  }
+
+  /**
+   * Slice D/3: mount the dashboard's routes onto an existing (gateway) http.Server
+   * under `prefix`, so the dashboard is reachable on the main port (18900) as well.
+   * Additive — the standalone start() listener is unaffected (kept for rollback).
+   * Auth + host-check run through the same registerRoutes path; the Host header is
+   * port-stripped by checkHostHeader, so :18900 is treated identically to :18910.
+   */
+  mountOnGatewayServer(gatewayServer: Server, prefix = '/__dashboard__'): void {
+    gatewayServer.on('request', (req, res) => {
+      const pathname = (req.url ?? '/').split('?')[0] ?? '/';
+      if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) return; // not a dashboard request
+      req.url = stripMountPrefix(req.url ?? '/', prefix);
+      const handleErr = (err: unknown): void => {
+        const safeUrl = (req.url ?? '/').replace(/([?&])token=[^&]*/g, '$1token=REDACTED');
+        log.error({ err: err instanceof Error ? err.message : String(err), url: safeUrl }, 'Dashboard mount handler threw');
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+      };
+      try {
+        Promise.resolve(registerRoutes(req, res, this, this.config)).catch(handleErr);
+      } catch (err) {
+        handleErr(err);
+      }
+    });
+    log.info({ prefix }, 'Dashboard mounted on gateway server (Slice D/3, SUDO_GATEWAY_UI_ON_MAIN)');
   }
 
   /** True iff loopback-trust GET-skip-auth is active (set by boot wiring based on bindAddress). */

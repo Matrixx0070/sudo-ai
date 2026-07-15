@@ -3247,7 +3247,7 @@ async function boot(): Promise<void> {
       ...(fleetNonceStore ? { fleetNonceStore } : {}),
     });
 
-    initDashboard({
+    const dashboardInstance = initDashboard({
       port: dashboardPort,
       authToken: dashboardToken,
       refreshIntervalMs: 5000,
@@ -3256,6 +3256,13 @@ async function boot(): Promise<void> {
       loopbackTrust,
     });
     registerShutdown(() => shutdownDashboard());
+    // Slice D/3: also fold the dashboard onto the main gateway port under
+    // /__dashboard__/ (SUDO_GATEWAY_UI_ON_MAIN=1). Additive — the standalone
+    // dashboard port keeps running for rollback; the mount shares the unified auth
+    // boundary (Slice D/1–D/2). The route-owner guard defers /__dashboard__ paths.
+    if (gatewayServer && process.env['SUDO_GATEWAY_UI_ON_MAIN'] === '1') {
+      dashboardInstance.mountOnGatewayServer(gatewayServer);
+    }
     log.info({
       port: dashboardPort,
       bind: dashboardBind,
