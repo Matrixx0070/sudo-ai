@@ -19,6 +19,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { CredentialStore } from '../security/vault-credentials.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 const log = createLogger('channels:github');
 
@@ -70,7 +71,7 @@ async function resolveToken(): Promise<string | null> {
   }
 
   // 2. Env fallback
-  const envToken = process.env['GITHUB_TOKEN'];
+  const envToken = resolveEnvSecret('GITHUB_TOKEN') ?? undefined;
   if (envToken) return envToken;
 
   return null;

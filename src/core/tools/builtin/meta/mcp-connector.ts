@@ -25,6 +25,7 @@ import {
   type MCPAdapterLike,
 } from '../../mcp-adapter.js';
 import { DATA_DIR } from '../../../shared/paths.js';
+import { resolveEnvSecret } from '../../../secrets/secret-ref.js';
 import { createLogger } from '../../../shared/logger.js';
 
 const logger = createLogger('meta:mcp-connector');
@@ -82,7 +83,7 @@ const SERVER_ID_RE = /^(?!.*__)[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 /** Build the adapter for a connector config; resolves auth from env. */
 function buildAdapter(c: PersistedConnector): MCPAdapterLike {
   if (c.transport === 'http') {
-    const accessToken = c.authEnvKey ? process.env[c.authEnvKey] : undefined;
+    const accessToken = c.authEnvKey ? (resolveEnvSecret(c.authEnvKey) ?? undefined) : undefined;
     if (c.authEnvKey && !accessToken) {
       throw new Error(
         `env var "${c.authEnvKey}" is not set — add it to config/.env (values are read at connect time, never stored)`,

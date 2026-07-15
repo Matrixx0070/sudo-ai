@@ -10,6 +10,7 @@ import {
   resolveSecretValue,
   resolveSecretRef,
   resolveEnvSecret,
+  resolveSecretMap,
   parseSecretRef,
   isSecretRef,
   secretPosture,
@@ -130,6 +131,28 @@ describe('resolveEnvSecret (gateway seam)', () => {
     process.env['GATEWAY_TOKEN'] = 'raw-wins';
     process.env['GATEWAY_TOKEN_REF'] = JSON.stringify({ source: 'env', provider: 'p', id: 'SR_TEST_TOKEN' });
     expect(resolveEnvSecret('GATEWAY_TOKEN')).toBe('raw-wins');
+  });
+});
+
+describe('resolveSecretMap (MCP env block)', () => {
+  const KEYS = ['SR_MAP_A', 'SUDO_SECRETS_REF'];
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => { saved = {}; for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; } });
+  afterEach(() => { for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
+
+  it('S-18: all-string map passes through unchanged', () => {
+    expect(resolveSecretMap({ A: 'x', B: 'y' })).toEqual({ A: 'x', B: 'y' });
+    expect(resolveSecretMap(undefined)).toEqual({});
+  });
+
+  it('S-19: SecretRef values are resolved; unresolvable entries dropped', () => {
+    process.env['SR_MAP_A'] = 'resolved-a';
+    const out = resolveSecretMap({
+      A: { source: 'env', provider: 'default', id: 'SR_MAP_A' },
+      B: 'plain-b',
+      C: { source: 'env', provider: 'default', id: 'MISSING_ZZZ' },
+    });
+    expect(out).toEqual({ A: 'resolved-a', B: 'plain-b' }); // C dropped
   });
 });
 

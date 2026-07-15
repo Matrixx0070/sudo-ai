@@ -10,6 +10,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
+import { resolveSecretMap, type SecretRef } from '../secrets/secret-ref.js';
 import { OAuthClient } from './mcp-oauth.js';
 import { SSETransport } from './mcp-sse-transport.js';
 import { WSTransport } from './mcp-ws-transport.js';
@@ -35,8 +36,9 @@ export interface MCPServerConfig {
   command?: string;
   /** Arguments passed to the executable. */
   args?: string[];
-  /** Additional environment variables for the child process. */
-  env?: Record<string, string>;
+  /** Additional environment variables for the child process. Each value may be a
+   * plain string or a SecretRef ({source,provider,id}) resolved at spawn time. */
+  env?: Record<string, string | SecretRef>;
   /**
    * Base URL of the MCP server.
    * Required when transport === 'http', 'sse', or 'websocket'.
@@ -214,7 +216,7 @@ export class MCPAdapter {
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      ...this.config.env,
+      ...resolveSecretMap(this.config.env), // SecretRef values resolved at spawn
     };
 
     this.process = spawn(this.config.command, this.config.args ?? [], {

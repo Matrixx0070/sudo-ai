@@ -21,6 +21,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { CredentialStore } from '../security/vault-credentials.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 const log = createLogger('channels:slack-real');
 
@@ -55,7 +56,7 @@ async function resolveToken(): Promise<string | null> {
   }
 
   // 2. Env fallback
-  const envToken = process.env['SLACK_BOT_TOKEN'] ?? process.env['SLACK_TOKEN'];
+  const envToken = resolveEnvSecret('SLACK_BOT_TOKEN') ?? resolveEnvSecret('SLACK_TOKEN') ?? undefined;
   if (envToken) return envToken;
 
   return null;

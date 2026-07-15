@@ -21,6 +21,7 @@
 
 import http from 'node:http';
 import { createLogger } from '../shared/logger.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 const log = createLogger('channels:websocket');
 
@@ -94,7 +95,7 @@ export class WebSocketChannel {
 
   constructor(port?: number) {
     this._port = port ?? parseInt(process.env['WS_STREAMING_PORT'] ?? '3003', 10);
-    this._token = process.env['WS_STREAMING_TOKEN'] || undefined;
+    this._token = resolveEnvSecret('WS_STREAMING_TOKEN') || undefined;
   }
 
   // -------------------------------------------------------------------------
