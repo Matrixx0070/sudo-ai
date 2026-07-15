@@ -9,30 +9,21 @@
  * gateway 404s the request before this listener runs.
  */
 
-import { timingSafeEqual } from 'node:crypto';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 import { deliverCanvasEvent, type CanvasEvent } from '../canvas/canvas-bridge.js';
+import { authenticateToken } from './auth.js';
 
 const log = createLogger('gateway:canvas-routes');
 const MAX_BODY = 64 * 1024;
 
-// This endpoint is called by the WEB CHAT client, so it uses WEB_CHAT_TOKEN
-// (bearer OR ?token= query — the same credential the SPA already holds), NOT the
-// server-only GATEWAY_TOKEN. Unset → permissive (dev), matching the web chat.
-function getTokenBuf(): Buffer | null {
-  const t = process.env['WEB_CHAT_TOKEN'];
-  return t && t.length > 0 ? Buffer.from(t, 'utf8') : null;
-}
+// Called by the WEB CHAT client — accepts its WEB_CHAT_TOKEN (bearer OR ?token=
+// query, the credential the SPA holds) or the operator GATEWAY_TOKEN; loopback-dev
+// when neither is configured. Auth logic is centralised in ./auth.ts.
 function extractToken(req: IncomingMessage): string {
   const h = req.headers['authorization'] ?? '';
   if (typeof h === 'string') { const m = /^Bearer\s+(.+)$/i.exec(h.trim()); if (m) return m[1] ?? ''; }
   try { return new URL(req.url ?? '/', 'http://localhost').searchParams.get('token') ?? ''; } catch { return ''; }
-}
-function isAuthorised(req: IncomingMessage, tokenBuf: Buffer | null): boolean {
-  if (tokenBuf === null) return true;
-  const candidate = Buffer.from(extractToken(req), 'utf8');
-  return candidate.length === tokenBuf.length && timingSafeEqual(candidate, tokenBuf);
 }
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
@@ -69,13 +60,14 @@ function parseEvent(raw: string): { peerId: string; event: CanvasEvent } | null 
 }
 
 export function registerCanvasRoutes(server: HttpServer): void {
-  const tb = getTokenBuf(); // WEB_CHAT_TOKEN — the credential the web SPA holds
-
   server.on('request', (req: IncomingMessage, res: ServerResponse) => {
     const method = req.method ?? '';
     const pathname = (req.url ?? '/').split('?')[0] ?? '/';
     if (!pathname.startsWith('/v1/canvas')) return;
-    if (!isAuthorised(req, tb)) { sendJson(res, 401, { error: { message: 'Unauthorized', code: 401 } }); return; }
+    if (!authenticateToken(extractToken(req), req, {
+      accept: ['gateway-token', 'web-chat-token', 'loopback'],
+      legacySecretEnv: 'WEB_CHAT_TOKEN',
+    }).ok) { sendJson(res, 401, { error: { message: 'Unauthorized', code: 401 } }); return; }
 
     if (method === 'POST' && pathname === '/v1/canvas/event') {
       readBody(req).then(async (raw) => {

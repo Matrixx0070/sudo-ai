@@ -10,7 +10,7 @@
  * Errors: never leak internal details; return generic 500 message.
  */
 
-import { timingSafeEqual } from 'node:crypto';
+import { authenticateHttp } from './auth.js';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 
@@ -38,22 +38,8 @@ export interface AdminSleepRoutesDeps {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Internal auth helpers (copied inline — do NOT import from admin-routes.ts)
-// ---------------------------------------------------------------------------
-
-function extractBearer(req: IncomingMessage): string {
-  const h = req.headers['authorization'] ?? '';
-  if (typeof h !== 'string') return '';
-  const m = /^Bearer\s+(.+)$/i.exec(h.trim());
-  return m ? (m[1] ?? '') : '';
-}
-
-function isAuthorised(req: IncomingMessage, tokenBuf: Buffer | null): boolean {
-  if (tokenBuf === null) return true;
-  const candidate = Buffer.from(extractBearer(req), 'utf8');
-  return candidate.length === tokenBuf.length && timingSafeEqual(candidate, tokenBuf);
-}
+// Auth centralised in ./auth.ts (authenticateHttp): GATEWAY_TOKEN header bearer,
+// loopback-dev when unset, fail-closed when proxied.
 
 // ---------------------------------------------------------------------------
 // Internal HTTP helpers (copied inline)
@@ -164,7 +150,7 @@ export function registerAdminSleepRoutes(
     const pathname = (req.url ?? '/').split('?')[0] ?? '/';
 
     if (method === 'POST' && pathname === '/v1/admin/sleep/reset-degraded') {
-      if (!isAuthorised(req, tokenBuf)) {
+      if (!authenticateHttp(req, { secretOverride: tokenBuf }).ok) {
         sendError(res, 401, 'Unauthorized: invalid or missing bearer token');
         return;
       }

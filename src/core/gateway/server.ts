@@ -195,6 +195,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     (ADMIN_API_ON && pathname.startsWith('/api/admin')) ||   // opt-in admin REST API (SUDO_ADMIN_API=1), token-gated by api/admin/register.ts
     pathname.startsWith('/v1/federation/') ||   // Federation routes (registered via server.on('request'))
     pathname.startsWith('/.well-known') ||   // agentskills.io discovery (public no-auth)
+    pathname.startsWith('/__dashboard__') ||   // Dashboard folded onto 18900 (Slice D/3, SUDO_GATEWAY_UI_ON_MAIN)
     pathname === '/v1/models' ||
     pathname === '/v1/chat/completions'    // Handled by http-api.ts via Brain's direct provider connections
   ) {

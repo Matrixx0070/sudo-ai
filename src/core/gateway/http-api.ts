@@ -12,10 +12,11 @@
  * Errors: never leak internal details to the caller.
  */
 
-import { timingSafeEqual, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 import { serveStaticFile } from './static-middleware.js';
+import { authenticateHttp, unifiedAuthEnabled } from './auth.js';
 import { getCacheKey, cacheGet, cacheSet } from './cache.js';
 import { registerAdminRoutes } from './admin-routes.js';
 import { registerAdminSleepRoutes } from './admin-sleep-routes.js';
@@ -284,18 +285,9 @@ function getTokenBuf(): Buffer | null {
   return t && t.length > 0 ? Buffer.from(t, 'utf8') : null;
 }
 
-function extractBearer(req: IncomingMessage): string {
-  const h = req.headers['authorization'] ?? '';
-  if (typeof h !== 'string') return '';
-  const m = /^Bearer\s+(.+)$/i.exec(h.trim());
-  return m ? (m[1] ?? '') : '';
-}
-
-function isAuthorised(req: IncomingMessage, tokenBuf: Buffer | null): boolean {
-  if (tokenBuf === null) return true;
-  const candidate = Buffer.from(extractBearer(req), 'utf8');
-  return candidate.length === tokenBuf.length && timingSafeEqual(candidate, tokenBuf);
-}
+// Bearer extraction + timing-safe comparison now live in ./auth.ts
+// (authenticateHttp), which also applies the fail-closed loopback/forwarded rule
+// that closes the open-when-unset hole for proxied / non-loopback callers.
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
@@ -531,9 +523,17 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   }
   // Synth-probe: always registered (kill-switch checked per-request)
   registerSynthProbeRoutes(server, tokenBuf);
-  log[tokenBuf ? 'info' : 'warn'](
-    tokenBuf ? 'HTTP API auth enabled (GATEWAY_TOKEN is set)' : 'HTTP API auth DISABLED — set GATEWAY_TOKEN',
-  );
+  if (unifiedAuthEnabled()) {
+    log[tokenBuf ? 'info' : 'warn'](
+      tokenBuf
+        ? 'HTTP API auth: unified (GATEWAY_TOKEN set — required for all callers)'
+        : 'HTTP API auth: unified, no GATEWAY_TOKEN — loopback-direct allowed, proxied/remote fail-closed. Set GATEWAY_TOKEN to require auth on loopback too.',
+    );
+  } else {
+    log[tokenBuf ? 'info' : 'warn'](
+      tokenBuf ? 'HTTP API auth enabled (GATEWAY_TOKEN is set) [legacy mode]' : 'HTTP API auth DISABLED — set GATEWAY_TOKEN [legacy mode]',
+    );
+  }
 
   server.on('request', (req: IncomingMessage, res: ServerResponse) => {
     const method   = req.method ?? '';
@@ -569,7 +569,7 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
         return;
       }
 
-      if (!isAuthorised(req, tokenBuf)) { sendError(res, 401, 'Unauthorized: invalid or missing bearer token'); return; }
+      if (!authenticateHttp(req).ok) { sendError(res, 401, 'Unauthorized: invalid or missing bearer token'); return; }
 
       if (method === 'GET' && pathname === '/v1/models') { handleModels(res); return; }
 

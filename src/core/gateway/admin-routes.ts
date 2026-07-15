@@ -10,7 +10,8 @@
  * Errors: never leak internal details; return generic 500 message.
  */
 
-import { timingSafeEqual, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { authenticateHttp, authenticateToken } from './auth.js';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 import { artifactSigner } from '../security/signer.js';
@@ -231,11 +232,7 @@ function extractBearer(req: IncomingMessage): string {
   return m ? (m[1] ?? '') : '';
 }
 
-function isAuthorised(req: IncomingMessage, tokenBuf: Buffer | null): boolean {
-  if (tokenBuf === null) return true;
-  const candidate = Buffer.from(extractBearer(req), 'utf8');
-  return candidate.length === tokenBuf.length && timingSafeEqual(candidate, tokenBuf);
-}
+// isAuthorised removed — auth centralised in ./auth.ts (authenticateHttp / authenticateToken).
 
 // ---------------------------------------------------------------------------
 // Internal HTTP helpers
@@ -1649,18 +1646,13 @@ function handleDashboard(
   const urlObj = new URL(rawUrl, 'http://localhost');
   const qToken = urlObj.searchParams.get('token') ?? '';
 
-  let authed = false;
-  if (tokenBuf === null) {
-    // No token configured — open access
-    authed = true;
-  } else if (isAuthorised(req, tokenBuf)) {
-    // Bearer header matched
-    authed = true;
-  } else if (qToken.length > 0) {
-    // ?token= query param timing-safe compare
-    const qBuf = Buffer.from(qToken, 'utf8');
-    authed = qBuf.length === tokenBuf.length && timingSafeEqual(qBuf, tokenBuf);
-  }
+  // Header bearer OR ?token= query, against the injected GATEWAY_TOKEN buffer;
+  // loopback-dev when unset, fail-closed when proxied. Centralised in ./auth.ts.
+  const authed = authenticateToken(extractBearer(req) || qToken, req, {
+    accept: ['gateway-token', 'loopback'],
+    legacySecretEnv: 'GATEWAY_TOKEN',
+    secretOverride: tokenBuf,
+  }).ok;
 
   if (!authed) {
     const body = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>401 Unauthorized</title></head><body style="font-family:monospace;background:#0d1117;color:#c9d1d9;padding:32px"><h1 style="color:#f85149">401 Unauthorized</h1><p style="margin-top:12px">Supply your admin token via:<br><code>Authorization: Bearer &lt;token&gt;</code> header<br>or append <code>?token=&lt;token&gt;</code> to the URL.</p></body></html>';
@@ -1912,7 +1904,7 @@ export function registerAdminRoutes(
     }
 
     // Auth check for all other admin routes
-    if (!isAuthorised(req, tokenBuf)) {
+    if (!authenticateHttp(req, { secretOverride: tokenBuf }).ok) {
       sendError(res, 401, 'Unauthorized: invalid or missing bearer token');
       return;
     }

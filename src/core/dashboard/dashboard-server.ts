@@ -36,6 +36,7 @@ import {
   FederationStateSource,
 } from './dashboard-types.js';
 import { registerRoutes } from './dashboard-routes.js';
+import { authenticateToken } from '../gateway/auth.js';
 import { listCredentialsMetadata, type CredentialsSnapshot } from './credentials-meta.js';
 import { buildDebugShareSnapshot, type DebugShareSnapshot } from './debug-share.js';
 import { getRegisteredLogRing, type LogLine } from './log-ring.js';
@@ -224,6 +225,40 @@ export function createBasicAuthBackend(authToken: string): AuthBackend {
   };
 }
 
+/**
+ * Unified auth backend (Slice D) — bridges the dashboard's AuthBackend contract to
+ * the gateway's central auth module (src/core/gateway/auth.ts) so the dashboard shares
+ * ONE credential→scope boundary: the operator GATEWAY_TOKEN (or loopback-dev, fail-closed
+ * when proxied), with the dashboard's own token still accepted for back-compat. It only
+ * replaces the DEFAULT `basic` backend — a registered OAuth/device backend still wins via
+ * getRegisteredAuthBackend().
+ */
+export function createUnifiedAuthBackend(fallbackToken?: string): AuthBackend {
+  return {
+    name: 'unified',
+    authenticate(req, opts) {
+      const authHeader = req.headers.authorization ?? '';
+      let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      if (!token && opts.allowQueryToken) {
+        try {
+          const host = req.headers.host ?? 'localhost';
+          token = new URL(req.url ?? '/', `http://${host}`).searchParams.get('token') ?? '';
+        } catch {
+          /* ignore malformed URL */
+        }
+      }
+      // 1. Central gateway auth: GATEWAY_TOKEN (env) or loopback-dev; fail-closed when proxied.
+      const p = authenticateToken(token, req, { accept: ['gateway-token', 'loopback'], legacySecretEnv: 'GATEWAY_TOKEN' });
+      if (p.ok) return { ok: true, principal: `operator:${p.credential}` };
+      // 2. Back-compat: the dashboard's own token (may differ from GATEWAY_TOKEN).
+      if (fallbackToken && token.length > 0 && safeTokenEq(token, fallbackToken)) {
+        return { ok: true, principal: 'dashboard:token' };
+      }
+      return { ok: false, reason: p.reason };
+    },
+  };
+}
+
 /** Re-export AuthBackend / AuthResult / DashboardBindMode for downstream consumers. */
 export type { AuthBackend, AuthResult, DashboardBindMode };
 
@@ -264,6 +299,16 @@ export function checkHostHeader(hostHeader: string | undefined, allowlist: reado
 }
 
 /**
+ * Strip the mount prefix from a request URL so the dashboard's own routes match
+ * (Slice D/3). '/__dashboard__/api/x?y' → '/api/x?y'; '/__dashboard__' → '/'.
+ */
+export function stripMountPrefix(url: string, prefix: string): string {
+  const rest = url.slice(prefix.length);
+  if (rest === '' || rest === '?') return '/';
+  return rest.startsWith('/') ? rest : `/${rest}`;
+}
+
+/**
  * Structural Brain narrowing for `getCurrentModel()` / `switchModel()` —
  * `__sudoBrain` is `unknown` at the registry boundary; the callers below verify
  * the two methods exist before invoking. Returns `undefined` when the brain is
@@ -297,7 +342,15 @@ export class DashboardServer {
 
   constructor(config: DashboardConfig) {
     this.config = config;
-    this.defaultAuthBackend = createBasicAuthBackend(config.authToken);
+    // Slice D/2: opt-in unified auth backend (SUDO_GATEWAY_UI_UNIFIED_AUTH=1) — one
+    // boundary: the operator GATEWAY_TOKEN or the dashboard's own token, loopback-dev,
+    // fail-closed when proxied. Default OFF preserves the legacy basic (own-token)
+    // backend, so behaviour is unchanged unless explicitly enabled. A registered
+    // OAuth/device backend still wins via getRegisteredAuthBackend().
+    this.defaultAuthBackend =
+      process.env['SUDO_GATEWAY_UI_UNIFIED_AUTH'] === '1'
+        ? createUnifiedAuthBackend(config.authToken)
+        : createBasicAuthBackend(config.authToken);
     if (DASHBOARD_DISABLED) log.warn('Dashboard server disabled via SUDO_DASHBOARD_DISABLE=1');
   }
 
@@ -355,6 +408,35 @@ export class DashboardServer {
   /** Bind address the dashboard is configured to use. */
   getBindAddress(): string {
     return this.config.bindAddress ?? '127.0.0.1';
+  }
+
+  /**
+   * Slice D/3: mount the dashboard's routes onto an existing (gateway) http.Server
+   * under `prefix`, so the dashboard is reachable on the main port (18900) as well.
+   * Additive — the standalone start() listener is unaffected (kept for rollback).
+   * Auth + host-check run through the same registerRoutes path; the Host header is
+   * port-stripped by checkHostHeader, so :18900 is treated identically to :18910.
+   */
+  mountOnGatewayServer(gatewayServer: Server, prefix = '/__dashboard__'): void {
+    gatewayServer.on('request', (req, res) => {
+      const pathname = (req.url ?? '/').split('?')[0] ?? '/';
+      if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) return; // not a dashboard request
+      req.url = stripMountPrefix(req.url ?? '/', prefix);
+      const handleErr = (err: unknown): void => {
+        const safeUrl = (req.url ?? '/').replace(/([?&])token=[^&]*/g, '$1token=REDACTED');
+        log.error({ err: err instanceof Error ? err.message : String(err), url: safeUrl }, 'Dashboard mount handler threw');
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'internal_error' }));
+        }
+      };
+      try {
+        Promise.resolve(registerRoutes(req, res, this, this.config)).catch(handleErr);
+      } catch (err) {
+        handleErr(err);
+      }
+    });
+    log.info({ prefix }, 'Dashboard mounted on gateway server (Slice D/3, SUDO_GATEWAY_UI_ON_MAIN)');
   }
 
   /** True iff loopback-trust GET-skip-auth is active (set by boot wiring based on bindAddress). */
