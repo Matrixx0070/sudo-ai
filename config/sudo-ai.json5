@@ -80,10 +80,17 @@
       },
       // Gemini fallback below the OAuth tiers (reverted from front 2026-07-12 per operator).
       {
-        // 2026-07-13: switched to grok-4.5 (new key). The retired
-        // grok-4-fast-non-reasoning returned 400 "format" on every call for days;
-        // grok-4.5 accepts our payload (verified). Conservative contextWindow.
-        id: 'xai/grok-4.5',
+        // 2026-07-15 (#754): Grok via SuperGrok subscription OAuth on the IR
+        // transport (xai-oauth family; XAI_API_KEY expired and was retired).
+        // Boot-validated by tests/brain/provider-prefix-boot.test.ts.
+        id: 'xai-oauth/grok-4.5',
+        contextWindow: 256000,
+        maxOutputTokens: 8192,
+        temperature: 0.7,
+      },
+      {
+        // Cheap/fast Grok tier on the same subscription.
+        id: 'xai-oauth/grok-4-fast-non-reasoning',
         contextWindow: 256000,
         maxOutputTokens: 8192,
         temperature: 0.7,
