@@ -38,6 +38,7 @@ import type { CommandContext } from '../commands/types.js';
 
 import type { HookContext, HookEvent } from '../hooks/index.js';
 import { rateLimiter } from './rate-limit.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 // ---------------------------------------------------------------------------
 // Hook emission support
@@ -401,7 +402,7 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
 
-    const token = process.env[this.tokenEnvKey];
+    const token = resolveEnvSecret(this.tokenEnvKey) ?? undefined;
     if (!token) {
       throw new ChannelError(
         `Telegram bot token not found in env var: ${this.tokenEnvKey}`,
@@ -838,7 +839,7 @@ export class TelegramAdapter implements ChannelAdapter {
       const media: MediaAttachment[] = [];
 
       if (photo) {
-        const token = process.env[this.tokenEnvKey] ?? '';
+        const token = resolveEnvSecret(this.tokenEnvKey) ?? '';
         const savedPath = token
           ? await downloadTelegramPhoto(bot, photo.file_id, token)
           : undefined;
@@ -874,7 +875,7 @@ export class TelegramAdapter implements ChannelAdapter {
     bot.on('message:document', async (ctx) => {
       const doc = ctx.message.document;
       const caption = ctx.message.caption ?? '';
-      const token = process.env[this.tokenEnvKey] ?? '';
+      const token = resolveEnvSecret(this.tokenEnvKey) ?? '';
       const dl = token
         ? await downloadTelegramDocument(bot, doc.file_id, token, doc.file_name)
         : undefined;
@@ -891,7 +892,7 @@ export class TelegramAdapter implements ChannelAdapter {
     // Voice messages — transcribe with Whisper then process as text
     bot.on('message:voice', async (ctx) => {
       const voice = ctx.message.voice;
-      const token = process.env[this.tokenEnvKey] ?? '';
+      const token = resolveEnvSecret(this.tokenEnvKey) ?? '';
       // The "listening" ack and the eventual voice reply must target the chat
       // (group id in groups), not the sender's user id — otherwise deleteMessage
       // hits the wrong chat and the voice-reply flag (consumed by send() keyed on
@@ -955,7 +956,7 @@ export class TelegramAdapter implements ChannelAdapter {
     // Audio files (voice notes sent as audio, not the voice type)
     bot.on('message:audio', async (ctx) => {
       const audio = ctx.message.audio;
-      const token = process.env[this.tokenEnvKey] ?? '';
+      const token = resolveEnvSecret(this.tokenEnvKey) ?? '';
       const caption = ctx.message.caption ?? '';
 
       const downloaded = token

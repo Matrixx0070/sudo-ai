@@ -13,6 +13,7 @@ import { createLogger } from '../shared/logger.js';
 import { CredentialStore } from '../security/vault-credentials.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 const log = createLogger('channels:github-issues');
 
@@ -84,7 +85,7 @@ export interface GitHubIssuesResult<T = unknown> {
 
 async function resolveToken(): Promise<string | null> {
   // 1. Env var (primary)
-  const envToken = process.env['GITHUB_TOKEN'];
+  const envToken = resolveEnvSecret('GITHUB_TOKEN') ?? undefined;
   if (envToken) return envToken;
 
   // 2. Vault fallback

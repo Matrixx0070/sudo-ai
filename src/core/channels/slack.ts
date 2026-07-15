@@ -23,6 +23,7 @@ import type {
 } from './types.js';
 import { SlackSocketMode, SlackPoller } from './slack-receive.js';
 import type { SlackMessageEvent } from './slack-receive.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 const log = createLogger('channels:slack');
 
@@ -96,7 +97,7 @@ export class SlackAdapter implements ChannelAdapter {
   private readonly _pollChannels: string[];
 
   constructor() {
-    const bot = process.env['SLACK_BOT_TOKEN'];
+    const bot = resolveEnvSecret('SLACK_BOT_TOKEN') ?? undefined;
     if (!bot) {
       throw new ChannelError(
         'SLACK_BOT_TOKEN env var is required',
@@ -105,7 +106,7 @@ export class SlackAdapter implements ChannelAdapter {
       );
     }
     this._botToken = bot;
-    this._appToken = process.env['SLACK_APP_TOKEN'];
+    this._appToken = resolveEnvSecret('SLACK_APP_TOKEN') ?? undefined;
     this._pollChannels = (process.env['SLACK_POLL_CHANNELS'] ?? '').split(',').filter(Boolean);
   }
 

@@ -35,6 +35,7 @@ import type {
   SendOptions,
   UnifiedMessage,
 } from './types.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 const log = createLogger('channels:web');
 
@@ -270,7 +271,7 @@ export class WebAdapter implements ChannelAdapter {
     }
 
     // Validate WEB_CHAT_TOKEN is configured when running in production mode.
-    const configuredToken = process.env['WEB_CHAT_TOKEN'] ?? '';
+    const configuredToken = resolveEnvSecret('WEB_CHAT_TOKEN') ?? '';
     if (isProductionMode() && !configuredToken) {
       const msg = 'WEB_CHAT_TOKEN must be set when WEB_CHAT_ENABLED=true and NODE_ENV=production';
       log.error(msg);
@@ -391,7 +392,7 @@ export class WebAdapter implements ChannelAdapter {
 
       // Fix 2: Auth — check WEB_CHAT_TOKEN via Bearer header or ?token= param.
       // Skip auth for local/loopback connections so dev testing works seamlessly.
-      const wsToken = process.env['WEB_CHAT_TOKEN'] ?? '';
+      const wsToken = resolveEnvSecret('WEB_CHAT_TOKEN') ?? '';
       const isLocalDev = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost' || clientIp?.startsWith('192.168.') || clientIp?.startsWith('10.');
       if (wsToken && !isLocalDev) {
         let parsedUpgradeUrl: URL;
@@ -540,7 +541,7 @@ export class WebAdapter implements ChannelAdapter {
     // Skip auth for local/loopback connections so dev testing works seamlessly
     // (mirrors the WS upgrade path bypass above).
     // -----------------------------------------------------------------------
-    const requiredToken = process.env['WEB_CHAT_TOKEN'] ?? '';
+    const requiredToken = resolveEnvSecret('WEB_CHAT_TOKEN') ?? '';
     const clientIp = (req.socket as { remoteAddress?: string } | null)?.remoteAddress;
     const isLocalDev = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost' || clientIp?.startsWith('192.168.') || clientIp?.startsWith('10.');
     if (requiredToken && !isLocalDev) {

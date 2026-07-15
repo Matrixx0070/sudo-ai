@@ -21,6 +21,7 @@ import type {
   SendOptions,
   UnifiedMessage,
 } from './types.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 const log = createLogger('channels:matrix');
 
@@ -65,7 +66,7 @@ export class MatrixAdapter implements ChannelAdapter {
 
   constructor() {
     const hs = process.env['MATRIX_HOMESERVER'];
-    const token = process.env['MATRIX_ACCESS_TOKEN'];
+    const token = resolveEnvSecret('MATRIX_ACCESS_TOKEN') ?? undefined;
     if (!hs) throw new ChannelError('MATRIX_HOMESERVER env var required', 'channel_auth_missing', { envKey: 'MATRIX_HOMESERVER' });
     if (!token) throw new ChannelError('MATRIX_ACCESS_TOKEN env var required', 'channel_auth_missing', { envKey: 'MATRIX_ACCESS_TOKEN' });
     this._hs = hs.replace(/\/$/, '');

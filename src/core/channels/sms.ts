@@ -30,6 +30,7 @@ import type {
   UnifiedMessage,
 } from './types.js';
 import type { HookContext, HookEvent } from '../hooks/index.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,7 +55,7 @@ async function vaultOrEnv(
   } catch {
     /* not in vault or vault not configured — fall through to env */
   }
-  return process.env[envKey];
+  return resolveEnvSecret(envKey) ?? undefined;
 }
 
 // ---------------------------------------------------------------------------

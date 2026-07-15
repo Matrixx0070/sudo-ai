@@ -35,6 +35,7 @@ import type {
 
 import type { HookContext, HookEvent } from '../hooks/index.js';
 import { rateLimiter } from './rate-limit.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 // ---------------------------------------------------------------------------
 // Hook emission support
@@ -144,7 +145,7 @@ export class DiscordAdapter implements ChannelAdapter {
       return;
     }
 
-    const token = process.env[this.tokenEnvKey];
+    const token = resolveEnvSecret(this.tokenEnvKey) ?? undefined;
     if (!token) {
       throw new ChannelError(
         `Discord token not found in env var: ${this.tokenEnvKey}`,

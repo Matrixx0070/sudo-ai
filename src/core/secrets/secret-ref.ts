@@ -208,14 +208,32 @@ export function resolveEnvSecret(name: string): string | null {
       return ref ? resolveSecretRef(ref) : null;
     }
   }
+  // No _REF: pure identity to process.env[name] — an empty string is preserved
+  // (some callers treat a configured-but-empty secret as a distinct error), and
+  // only an unset var becomes null. Keeps every migrated call site byte-for-byte.
   const raw = process.env[name];
-  return raw && raw.length > 0 ? raw : null;
+  return raw ?? null;
 }
 
 /** Buffer form for timing-safe comparisons (returns null when unset/unresolved). */
 export function resolveEnvSecretBuffer(name: string): Buffer | null {
   const v = resolveEnvSecret(name);
   return v && v.length > 0 ? Buffer.from(v, 'utf8') : null;
+}
+
+/**
+ * Resolve a map whose values are each a plain string OR a SecretRef (e.g. an MCP
+ * server's `env` block). Unresolvable entries are dropped. Plain-string values
+ * pass through unchanged, so an all-string map is returned as-is.
+ */
+export function resolveSecretMap(map: Record<string, string | SecretRef> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!map) return out;
+  for (const [k, v] of Object.entries(map)) {
+    const r = resolveSecretValue(v);
+    if (r !== null) out[k] = r;
+  }
+  return out;
 }
 
 /** Logging-safe posture: source/provider only, never the material or id. */

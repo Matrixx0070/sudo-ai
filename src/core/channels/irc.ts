@@ -23,6 +23,7 @@ import type {
   SendOptions,
   UnifiedMessage,
 } from './types.js';
+import { resolveEnvSecret } from '../secrets/secret-ref.js';
 
 const log = createLogger('channels:irc');
 
@@ -105,7 +106,7 @@ export class IRCAdapter implements ChannelAdapter {
     this._port = parseInt(process.env['IRC_PORT'] ?? '6667', 10);
     this._nick = nick;
     this._channels = (process.env['IRC_CHANNELS'] ?? '').split(',').map((c) => c.trim()).filter(Boolean);
-    this._password = process.env['IRC_PASSWORD'];
+    this._password = resolveEnvSecret('IRC_PASSWORD') ?? undefined;
   }
 
   get isConnected(): boolean {
