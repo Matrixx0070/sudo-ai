@@ -150,6 +150,8 @@ export interface AuthenticateOptions {
    * read env GATEWAY_TOKEN; null = no secret configured; Buffer = use it.
    */
   secretOverride?: Buffer | null;
+  /** Which credential secretOverride applies to (default 'gateway-token'). */
+  secretOverrideCredential?: GatewayCredential;
 }
 
 const DENY = (reason: string): GatewayPrincipal => ({
@@ -180,9 +182,14 @@ function authenticateCore(
   accept: GatewayCredential[],
   legacySecretEnv: string,
   secretOverride: Buffer | null | undefined,
+  secretOverrideCredential: GatewayCredential,
 ): GatewayPrincipal {
-  // An injected secret (DI surfaces) overrides the env lookup for gateway-token.
-  const gwTok = secretOverride !== undefined ? secretOverride : envSecret('GATEWAY_TOKEN');
+  // An injected secret (DI surfaces) overrides the env lookup for its credential.
+  const resolveSecret = (cred: GatewayCredential, envName: string): Buffer | null =>
+    secretOverride !== undefined && secretOverrideCredential === cred ? secretOverride : envSecret(envName);
+  const gwTok = resolveSecret('gateway-token', 'GATEWAY_TOKEN');
+  const gwSecret = resolveSecret('gateway-secret', 'GATEWAY_SECRET');
+  const webTok = resolveSecret('web-chat-token', 'WEB_CHAT_TOKEN');
   if (!unifiedAuthEnabled()) {
     const tok = secretOverride !== undefined ? secretOverride : envSecret(legacySecretEnv);
     if (tok === null) {
@@ -211,13 +218,13 @@ function authenticateCore(
     }
   }
   if (accept.includes('gateway-secret')) {
-    const s = envSecret('GATEWAY_SECRET');
+    const s = gwSecret;
     if (s && timingMatch(bearer, s)) {
       return { ok: true, credential: 'gateway-secret', scopes: GATEWAY_SECRET_SCOPES, isOwner: true, reason: 'gateway-secret' };
     }
   }
   if (accept.includes('web-chat-token')) {
-    const s = envSecret('WEB_CHAT_TOKEN');
+    const s = webTok;
     if (s && timingMatch(bearer, s)) {
       return { ok: true, credential: 'web-chat-token', scopes: WEB_CHAT_SCOPES, isOwner: false, reason: 'web-chat-token' };
     }
@@ -225,8 +232,8 @@ function authenticateCore(
 
   const anyConfigured =
     (accept.includes('gateway-token') && gwTok !== null) ||
-    (accept.includes('gateway-secret') && envSecret('GATEWAY_SECRET') !== null) ||
-    (accept.includes('web-chat-token') && envSecret('WEB_CHAT_TOKEN') !== null);
+    (accept.includes('gateway-secret') && gwSecret !== null) ||
+    (accept.includes('web-chat-token') && webTok !== null);
 
   if (anyConfigured) {
     return DENY('bearer-required');
@@ -253,6 +260,7 @@ export function authenticateHttp(req: IncomingMessage, opts: AuthenticateOptions
     opts.accept ?? ['gateway-token', 'loopback'],
     opts.legacySecretEnv ?? 'GATEWAY_TOKEN',
     opts.secretOverride,
+    opts.secretOverrideCredential ?? 'gateway-token',
   );
 }
 
@@ -268,5 +276,6 @@ export function authenticateToken(
     opts.accept ?? ['gateway-token', 'loopback'],
     opts.legacySecretEnv ?? 'GATEWAY_TOKEN',
     opts.secretOverride,
+    opts.secretOverrideCredential ?? 'gateway-token',
   );
 }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { IncomingMessage } from 'node:http';
 import {
   authenticateHttp,
+  authenticateToken,
   hasScope,
   isLocalDirectRequest,
   isLoopbackAddress,
@@ -169,6 +170,20 @@ describe('gateway/auth', () => {
     it('override=null → no secret → loopback dev ok, proxied fail-closed', () => {
       expect(authenticateHttp(mkReq({ remote: '127.0.0.1' }), { secretOverride: null }).ok).toBe(true);
       expect(authenticateHttp(mkReq({ remote: '127.0.0.1', headers: { 'x-forwarded-for': '8.8.8.8' } }), { secretOverride: null }).ok).toBe(false);
+    });
+    it('secretOverrideCredential routes the injected secret to gateway-secret (ws-server)', () => {
+      const opts = {
+        accept: ['gateway-secret', 'gateway-token', 'loopback'] as GatewayCredential[],
+        legacySecretEnv: 'GATEWAY_SECRET',
+        secretOverride: Buffer.from('wssecret', 'utf8'),
+        secretOverrideCredential: 'gateway-secret' as const,
+      };
+      // injected ws secret matches → ok (non-loopback remote, so not a loopback pass)
+      expect(authenticateToken('wssecret', mkReq({ remote: '10.0.0.5' }), opts).ok).toBe(true);
+      expect(authenticateToken('wrong', mkReq({ remote: '10.0.0.5' }), opts).ok).toBe(false);
+      // operator GATEWAY_TOKEN (from env) also works on the same surface → unified boundary
+      process.env['GATEWAY_TOKEN'] = 'optok';
+      expect(authenticateToken('optok', mkReq({ remote: '10.0.0.5' }), opts).ok).toBe(true);
     });
   });
 });

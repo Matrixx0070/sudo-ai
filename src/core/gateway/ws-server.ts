@@ -16,7 +16,7 @@
  *   - Never throw out of this module
  */
 
-import { timingSafeEqual } from 'node:crypto';
+import { authenticateToken } from './auth.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { IncomingMessage } from 'node:http';
 import type { Server as HttpServer } from 'node:http';
@@ -189,21 +189,25 @@ export function attachWsRpc(
       return;
     }
 
-    // Optional bearer token authentication (timing-safe comparison).
-    if (secret !== null) {
-      const token = extractToken(req);
-      const tokenBuf = Buffer.from(token ?? '', 'utf8');
-      const secretBuf = Buffer.from(secret, 'utf8');
-      const tokenValid = tokenBuf.length === secretBuf.length && timingSafeEqual(tokenBuf, secretBuf);
-      if (!tokenValid) {
-        log.warn({ reqPath }, 'WebSocket upgrade rejected — invalid or missing token');
-        // Destroy the socket with an HTTP 401 response.
-        (socket as import('node:net').Socket).write(
-          'HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
-        );
-        socket.destroy();
-        return;
-      }
+    // Auth via the unified module (./auth.ts): the injected GATEWAY_SECRET (as the
+    // gateway-secret credential) OR the operator GATEWAY_TOKEN, presented via ?token=.
+    // Loopback-dev when no secret is configured; fail-closed when proxied.
+    // SUDO_GATEWAY_UNIFIED_AUTH=0 restores the legacy open-when-unset behaviour.
+    const secretBuf = secret !== null ? Buffer.from(secret, 'utf8') : null;
+    const principal = authenticateToken(extractToken(req), req, {
+      accept: ['gateway-secret', 'gateway-token', 'loopback'],
+      legacySecretEnv: 'GATEWAY_SECRET',
+      secretOverride: secretBuf,
+      secretOverrideCredential: 'gateway-secret',
+    });
+    if (!principal.ok) {
+      log.warn({ reqPath, reason: principal.reason }, 'WebSocket upgrade rejected — invalid or missing token');
+      // Destroy the socket with an HTTP 401 response.
+      (socket as import('node:net').Socket).write(
+        'HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+      );
+      socket.destroy();
+      return;
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
