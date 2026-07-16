@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "brainId": "golden",
+  "counter": 3,
+  "createdAt": "2026-07-16T00:00:00.000Z",
+  "entries": [
+    {
+      "logicalPath": "chunks/zone2.jsonl",
+      "blob": "memory/blobs/aaaa",
+      "sha256": "aaaa",
+      "zone": 2,
+      "bytes": 42,
+      "category": "knowledge"
+    },
+    {
+      "logicalPath": "workspace/MEMORY.md",
+      "blob": "memory/blobs/bbbb",
+      "sha256": "bbbb",
+      "zone": 2,
+      "bytes": 10,
+      "category": "policy"
+    }
+  ],
+  "hmac": "97f68b4a291b2cab50c8723255403bd08bacb75792060a5863a2af6d033c6ba5"
+}

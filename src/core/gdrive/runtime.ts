@@ -72,6 +72,78 @@ export async function runGdriveHeartbeatJob(): Promise<void> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// F2 — checkpoint / restore jobs
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the snapshot dependencies against the REAL memory backends. Lazy
+ * dynamic imports keep gdrive out of any static import graph that boots the
+ * agent loop; note the direction gdrive -> memory is fine (the hot-path guard
+ * forbids only memory -> gdrive).
+ */
+async function buildCheckpointDeps(): Promise<import('./checkpoint.js').CheckpointDeps> {
+  const rt = await getGdriveRuntime();
+  const { loadHmacKey, loadEncKey } = await import('./keys.js');
+  const { MindDB } = await import('../memory/db.js');
+  const structured = await import('../memory/structured-memory.js');
+  const hmacKey = loadHmacKey();
+  let encKey: Buffer | undefined;
+  try {
+    encKey = loadEncKey();
+  } catch {
+    // Optional until a zone-1 record exists; pushBrain fails loudly if one
+    // appears without a key.
+    encKey = undefined;
+  }
+  const db = new MindDB();
+  return {
+    client: rt.client,
+    folders: rt.folders,
+    keys: { hmacKey, encKey },
+    audit: rt.audit,
+    snapshot: {
+      chunks: db,
+      structured: {
+        listMemories: () => structured.listMemories(),
+        saveMemory: (m) => structured.saveMemory(m as never),
+      },
+    },
+  };
+}
+
+/** Cron entry: push a brain checkpoint (F2 write-behind mirror). */
+export async function runGdriveCheckpointJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const { runCheckpoint } = await import('./checkpoint.js');
+  const deps = await buildCheckpointDeps();
+  const result = await runCheckpoint(deps);
+  log.info(
+    { counter: result.manifest.counter, uploaded: result.uploadedBlobs, skipped: result.skippedBlobs },
+    'brain checkpoint pushed',
+  );
+}
+
+/** Boot entry: hydrate-and-apply when the remote brain is ahead (F2). */
+export async function runGdriveRestoreCheckJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const { runRestoreCheck } = await import('./checkpoint.js');
+  const deps = await buildCheckpointDeps();
+  const outcome = await runRestoreCheck(deps);
+  log.info({ outcome: outcome.action }, 'gdrive restore check complete');
+}
+
+/** Cron entry: monthly kill-and-restore rehearsal (F2 rider). */
+export async function runGdriveRestoreDrillJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const { runRestoreDrill } = await import('./checkpoint.js');
+  const deps = await buildCheckpointDeps();
+  const result = await runRestoreDrill(deps);
+  if (!result.ok) {
+    log.error({ divergent: result.divergent }, 'RESTORE DRILL FAILED — backup does not reproduce local brain');
+  }
+}
+
 /** Test hook: reset the singleton between cases. */
 export function _resetGdriveRuntime(): void {
   runtimePromise = null;

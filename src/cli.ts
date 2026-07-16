@@ -2718,6 +2718,22 @@ async function boot(): Promise<void> {
         } catch (stErr) {
           log.warn({ err: String(stErr) }, 'Capability self-test failed to run');
         }
+      } else if (payload.event === 'gdrive:checkpoint') {
+        // F2: write-behind brain mirror. Failure = queue-and-retry next tick.
+        try {
+          const { runGdriveCheckpointJob } = await import('./core/gdrive/runtime.js');
+          await runGdriveCheckpointJob();
+        } catch (gdErr) {
+          log.warn({ err: String(gdErr) }, 'gdrive checkpoint failed (non-fatal)');
+        }
+      } else if (payload.event === 'gdrive:restore-drill') {
+        // F2 rider: periodic kill-and-restore rehearsal against a temp view.
+        try {
+          const { runGdriveRestoreDrillJob } = await import('./core/gdrive/runtime.js');
+          await runGdriveRestoreDrillJob();
+        } catch (gdErr) {
+          log.warn({ err: String(gdErr) }, 'gdrive restore drill failed (non-fatal)');
+        }
       } else if (payload.event === 'gdrive:heartbeat') {
         // Drive roadmap Phase 0 (F34 substrate): liveness beat to
         // ops/heartbeat.json in the shared Drive tree. Failures are non-fatal
@@ -2961,12 +2977,51 @@ async function boot(): Promise<void> {
         { intervalMs: gdriveCfg.heartbeatIntervalMs, rescheduled: gdNeedsUpsert },
         'gdrive heartbeat scheduled',
       );
+
+      // F2 — brain checkpoint (default 6h) + restore drill (default weekly).
+      // Same re-upsert-on-interval-change pattern as the heartbeat above.
+      const ckRaw = Number(process.env['SUDO_GDRIVE_CHECKPOINT_MS']);
+      const ckMs = Number.isFinite(ckRaw) && ckRaw >= 60_000 ? ckRaw : 6 * 60 * 60 * 1000;
+      const ckJob = cronStore.get('gdrive-checkpoint');
+      if (!ckJob || !ckJob.enabled || ckJob.schedule.kind !== 'every' || ckJob.schedule.ms !== ckMs) {
+        cronStore.upsert({
+          id: 'gdrive-checkpoint',
+          name: 'Google Drive Brain Checkpoint',
+          enabled: true,
+          schedule: { kind: 'every', ms: ckMs },
+          payload: { kind: 'systemEvent', event: 'gdrive:checkpoint' },
+          sessionTarget: 'isolated',
+          consecutiveErrors: 0,
+        });
+      }
+      const drRaw = Number(process.env['SUDO_GDRIVE_DRILL_MS']);
+      const drMs = Number.isFinite(drRaw) && drRaw >= 60_000 ? drRaw : 7 * 24 * 60 * 60 * 1000;
+      const drJob = cronStore.get('gdrive-restore-drill');
+      if (!drJob || !drJob.enabled || drJob.schedule.kind !== 'every' || drJob.schedule.ms !== drMs) {
+        cronStore.upsert({
+          id: 'gdrive-restore-drill',
+          name: 'Google Drive Restore Drill',
+          enabled: true,
+          schedule: { kind: 'every', ms: drMs },
+          payload: { kind: 'systemEvent', event: 'gdrive:restore-drill' },
+          sessionTarget: 'isolated',
+          consecutiveErrors: 0,
+        });
+      }
+      log.info({ checkpointMs: ckMs, drillMs: drMs }, 'gdrive checkpoint + drill scheduled');
+
+      // F2 — startup restore check: if a NEWER brain exists in Drive (another
+      // machine pushed), hydrate-and-apply. Detached: boot never waits on Drive.
+      void import('./core/gdrive/runtime.js')
+        .then((r) => r.runGdriveRestoreCheckJob())
+        .catch((err) => log.warn({ err: String(err) }, 'gdrive restore check failed (non-fatal)'));
     } else {
-      // Flag flipped off: park the job instead of firing no-op events forever.
-      const existingGd = cronStore.get(gdriveJobId);
-      if (existingGd?.enabled) {
-        cronStore.patch(gdriveJobId, { enabled: false });
-        log.info('gdrive heartbeat disabled (SUDO_GDRIVE != 1)');
+      // Flag flipped off: park the jobs instead of firing no-op events forever.
+      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill']) {
+        if (cronStore.get(id)?.enabled) {
+          cronStore.patch(id, { enabled: false });
+          log.info({ jobId: id }, 'gdrive job disabled (SUDO_GDRIVE != 1)');
+        }
       }
     }
   }
