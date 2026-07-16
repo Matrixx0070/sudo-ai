@@ -144,6 +144,42 @@ export function getThreadContext(threadId: string): ThreadContext | undefined {
 }
 export function __resetThreadContextForTests(): void { _threadCtx.clear(); _threadsLoaded = true; _skipPersist = true; }
 
+// ---------------------------------------------------------------------------
+// UID baseline — only mail arriving AT/AFTER this uid is ever processed.
+// First-ever start on a mailbox pins the baseline to the CURRENT uidNext, so a
+// pre-existing unread backlog (a real inbox can hold hundreds of unseen mails)
+// is never chewed through, dispatched, or marked \Seen. Subsequent restarts
+// reuse the persisted baseline, so mail that arrived while the daemon was down
+// IS caught up. Mirrors the signal.ts poll-since-MAX(ROWID) pattern.
+// ---------------------------------------------------------------------------
+const UID_BASELINE_FILE = dataPath('email', '_uid-baseline.json');
+
+function _baselinePersistDisabled(): boolean {
+  return _skipPersist || process.env['VITEST'] !== undefined;
+}
+
+export function loadUidBaseline(user: string): number | null {
+  try {
+    if (_baselinePersistDisabled() || !existsSync(UID_BASELINE_FILE)) return null;
+    const obj = JSON.parse(readFileSync(UID_BASELINE_FILE, 'utf8')) as Record<string, number>;
+    return typeof obj[user] === 'number' && obj[user] > 0 ? obj[user] : null;
+  } catch { return null; }
+}
+
+export function saveUidBaseline(user: string, uid: number): void {
+  if (_baselinePersistDisabled()) return;
+  try {
+    const dir = dataPath('email');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    let obj: Record<string, number> = {};
+    if (existsSync(UID_BASELINE_FILE)) {
+      try { obj = JSON.parse(readFileSync(UID_BASELINE_FILE, 'utf8')) as Record<string, number>; } catch { /* fresh */ }
+    }
+    obj[user] = uid;
+    writeFileSync(UID_BASELINE_FILE, JSON.stringify(obj), { mode: 0o600 });
+  } catch (err) { log.warn({ err: String(err) }, 'failed to persist email uid baseline'); }
+}
+
 /** Derive a stable thread id from mail headers (References → In-Reply-To → Message-ID). */
 export function deriveThreadId(parsed: ParsedMail, fallbackUid: string): string {
   const refs = parsed.references;
@@ -186,6 +222,8 @@ export class EmailAdapter implements ChannelAdapter {
   private _handler: MessageHandler | null = null;
   private _hooks: HookEmitterLike | null = null;
   private _imap: ImapFlow | null = null;
+  /** IMAP account — keys the persisted uid baseline. */
+  private _imapUser = '';
   private _transport: nodemailer.Transporter | null = null;
   private readonly _allowedSenders: Set<string>;
   /** Outbound recipient allowlist (EMAIL_ALLOWED_RECIPIENTS) — hard-required for a real send. */
@@ -314,6 +352,7 @@ export class EmailAdapter implements ChannelAdapter {
     }
 
     this._isConnected = true;
+    this._imapUser = imapUser;
     log.info({ imapHost, imapUser }, 'EmailAdapter connected');
 
     // Expose IMAP-backed search/read/reply to the email.* tools via the bridge.
@@ -509,7 +548,18 @@ export class EmailAdapter implements ChannelAdapter {
     if (!imap) return;
 
     try {
-      await imap.mailboxOpen('INBOX');
+      const box = await imap.mailboxOpen('INBOX');
+      const exists = typeof (box as { exists?: unknown })?.exists === 'number' ? (box as { exists: number }).exists : null;
+      const uidNext = typeof (box as { uidNext?: unknown })?.uidNext === 'number' ? (box as { uidNext: number }).uidNext : null;
+
+      // UID baseline (see loadUidBaseline): first-ever start pins to the
+      // current uidNext so the historical unread backlog is untouched.
+      let baseline = loadUidBaseline(this._imapUser);
+      if (baseline === null) {
+        baseline = uidNext ?? 1;
+        saveUidBaseline(this._imapUser, baseline);
+      }
+      this._uidBaseline = baseline;
 
       // New mail arrives as imapflow 'exists' EVENTS; the client keeps the
       // connection in IDLE automatically whenever no command is pending.
@@ -517,9 +567,10 @@ export class EmailAdapter implements ChannelAdapter {
       // while+idle() loop blocked forever and never processed a single
       // message. Found by the first live-mailbox verification.)
       imap.on('exists', () => { void this._sweepUnseen(); });
+      log.info({ exists, uidNext, baseline }, 'IMAP INBOX listening (exists-event mode)');
 
-      // Initial sweep: anything already unseen (arrived while offline, or
-      // before the listener attached) is processed immediately.
+      // Initial sweep: unseen mail at/after the baseline (arrived while the
+      // daemon was down, or before the listener attached) is processed now.
       await this._sweepUnseen();
     } catch (err) {
       if (this._isConnected) {
@@ -531,8 +582,10 @@ export class EmailAdapter implements ChannelAdapter {
   /** Re-entrancy guard + coalescing for 'exists'-triggered sweeps. */
   private _sweeping = false;
   private _sweepPending = false;
+  /** Only mail with uid >= this is processed (set from the persisted baseline). */
+  private _uidBaseline = 1;
 
-  /** Fetch + process every unseen INBOX message (each marked \Seen on all paths). */
+  /** Fetch + process unseen INBOX mail at/after the uid baseline (each marked \Seen on all paths). */
   private async _sweepUnseen(): Promise<void> {
     const imap = this._imap;
     if (!imap || !this._isConnected) return;
@@ -542,10 +595,17 @@ export class EmailAdapter implements ChannelAdapter {
       return;
     }
     this._sweeping = true;
+    let processed = 0;
+    let maxUid: number | null = null;
     try {
       do {
         this._sweepPending = false;
-        for await (const msg of imap.fetch({ seen: false }, { source: true })) {
+        for await (const msg of imap.fetch({ seen: false, uid: `${this._uidBaseline}:*` }, { source: true })) {
+          // The `N:*` IMAP range quirk: when N > every uid the range matches the
+          // LAST message — filter explicitly so pre-baseline mail never slips in.
+          if (typeof msg.uid === 'number' && msg.uid < this._uidBaseline) continue;
+          processed++;
+          if (typeof msg.uid === 'number' && (maxUid === null || msg.uid > maxUid)) maxUid = msg.uid;
           try {
             if (!msg.source) continue;
             const parsed: ParsedMail = await simpleParser(msg.source as Buffer);
@@ -640,6 +700,16 @@ export class EmailAdapter implements ChannelAdapter {
           }
         }
       } while (this._sweepPending);
+      if (processed > 0) {
+        // Advance + persist the baseline so a restart never reprocesses.
+        if (maxUid !== null) {
+          this._uidBaseline = maxUid + 1;
+          saveUidBaseline(this._imapUser, this._uidBaseline);
+        }
+        log.info({ processed, nextBaseline: this._uidBaseline }, 'IMAP unseen sweep processed mail');
+      } else {
+        log.debug('IMAP unseen sweep: nothing at/after baseline');
+      }
     } catch (err) {
       if (this._isConnected) {
         log.error({ err: String(err) }, 'IMAP unseen sweep error');
