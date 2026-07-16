@@ -31,6 +31,7 @@ import {
   checkConsciousness,
 } from './checks.js';
 import { checkCacheDupRate } from '../../llm/cache/dup-watch.js';
+import { checkCacheHitRate } from '../../llm/cache/hit-rate.js';
 import { fixLogRotation, fixDiskSpace, fixMemory } from './fixes.js';
 import { ErrorReporter, ErrorSeverity } from './error-reporter.js';
 import { HealthAlertPolicy } from './alert-policy.js';
@@ -194,6 +195,7 @@ export class Watchdog {
       { name: 'log_file', run: () => checkLogs(fixLogRotation) },
       { name: 'consciousness_stream', run: () => this._runConsciousnessCheck() },
       { name: 'cache_dup_rate', run: () => checkCacheDupRate() },
+      { name: 'cache_hit_rate', run: () => checkCacheHitRate() },
     ];
     // Real brain-liveness probe (actually drives a call) — only when a probe
     // was attached. checkBrain() above only sees key PRESENCE; this catches an

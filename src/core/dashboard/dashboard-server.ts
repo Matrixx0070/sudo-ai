@@ -40,6 +40,7 @@ import { authenticateToken } from '../gateway/auth.js';
 import { listCredentialsMetadata, type CredentialsSnapshot } from './credentials-meta.js';
 import { buildDebugShareSnapshot, type DebugShareSnapshot } from './debug-share.js';
 import { getRegisteredLogRing, type LogLine } from './log-ring.js';
+import { lastBlendedCacheReadPct } from '../../llm/cache/hit-rate.js';
 
 const log = createLogger('dashboard');
 const DASHBOARD_DISABLED = process.env['SUDO_DASHBOARD_DISABLE'] === '1';
@@ -522,6 +523,9 @@ export class DashboardServer {
       sudo_system_total_requests: stats.totalRequests,
       sudo_health_checks_ok: metrics.healthChecksOk,
       sudo_health_checks_fail: metrics.healthChecksFail,
+      // L1 prompt-cache blended read-rate (cached input / input tokens). Reads the
+      // watchdog's last-cached compute — no DB query on the scrape path.
+      sudo_llm_cache_read_rate_percent: lastBlendedCacheReadPct(),
       // FleetView agent metrics (gap #25 slice 1). When no swarm is
       // registered these are all zero — `getLiveAgents()` returns an
       // empty default for the same reason `getAlignment()` does.
