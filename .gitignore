@@ -171,3 +171,11 @@ internal/misc/json         # duplicate of the above
 
 # npm pack artifacts (local publish testing)
 *.tgz
+
+# Google Drive foundation (Drive roadmap) — key material must NEVER be committed.
+# Keys belong OUTSIDE the repo (see docs/gdrive-setup.md); these patterns are a backstop.
+gdrive-sa-key*.json
+gdrive-oauth-client*.json
+gdrive-oauth-token*.json
+brain-hmac.key
+brain-enc.key

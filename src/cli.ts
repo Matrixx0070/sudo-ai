@@ -2718,6 +2718,17 @@ async function boot(): Promise<void> {
         } catch (stErr) {
           log.warn({ err: String(stErr) }, 'Capability self-test failed to run');
         }
+      } else if (payload.event === 'gdrive:heartbeat') {
+        // Drive roadmap Phase 0 (F34 substrate): liveness beat to
+        // ops/heartbeat.json in the shared Drive tree. Failures are non-fatal
+        // here (queue-and-retry next tick); the gdrive AuditTrail records them.
+        try {
+          const { runGdriveHeartbeatJob } = await import('./core/gdrive/runtime.js');
+          await runGdriveHeartbeatJob();
+          log.debug({ jobId: job.id }, 'gdrive heartbeat written');
+        } catch (gdErr) {
+          log.warn({ err: String(gdErr) }, 'gdrive heartbeat failed (non-fatal)');
+        }
       } else {
         log.info({ event: payload.event, jobId: job.id }, 'System event dispatched');
       }
@@ -2914,6 +2925,50 @@ async function boot(): Promise<void> {
     log.info({ expr: selftestExpr, tz: selftestTz, rescheduled: selftestNeedsUpsert }, 'Capability self-test scheduled');
   } catch (err) {
     log.warn({ err: String(err) }, 'Capability self-test scheduling failed');
+  }
+
+  // Google Drive foundation (Drive roadmap Phase 0, opt-in SUDO_GDRIVE=1):
+  // register the liveness heartbeat CronJob (writes ops/heartbeat.json in the
+  // shared tree; the F34 dead-man's switch consumes it). Config validation is
+  // deliberately OUTSIDE a catch — SUDO_GDRIVE=1 with a broken config fails
+  // the boot fast with an actionable GdriveConfigError instead of silently
+  // running without its memory substrate. Drive I/O itself is background-only
+  // (enforced by tests/gdrive/hot-path.test.ts).
+  {
+    const { isGdriveEnabled, loadGdriveConfig } = await import('./core/gdrive/config.js');
+    const gdriveJobId = 'gdrive-heartbeat';
+    if (isGdriveEnabled()) {
+      const gdriveCfg = loadGdriveConfig();
+      const existingGd = cronStore.get(gdriveJobId);
+      const gcur = existingGd?.schedule;
+      const gdNeedsUpsert =
+        !existingGd ||
+        !existingGd.enabled ||
+        gcur?.kind !== 'every' ||
+        gcur.ms !== gdriveCfg.heartbeatIntervalMs;
+      if (gdNeedsUpsert) {
+        cronStore.upsert({
+          id: gdriveJobId,
+          name: 'Google Drive Heartbeat',
+          enabled: true,
+          schedule: { kind: 'every', ms: gdriveCfg.heartbeatIntervalMs },
+          payload: { kind: 'systemEvent', event: 'gdrive:heartbeat' },
+          sessionTarget: 'isolated',
+          consecutiveErrors: 0,
+        });
+      }
+      log.info(
+        { intervalMs: gdriveCfg.heartbeatIntervalMs, rescheduled: gdNeedsUpsert },
+        'gdrive heartbeat scheduled',
+      );
+    } else {
+      // Flag flipped off: park the job instead of firing no-op events forever.
+      const existingGd = cronStore.get(gdriveJobId);
+      if (existingGd?.enabled) {
+        cronStore.patch(gdriveJobId, { enabled: false });
+        log.info('gdrive heartbeat disabled (SUDO_GDRIVE != 1)');
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
