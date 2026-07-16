@@ -447,6 +447,26 @@ describe('EmailAdapter', () => {
     await adapter.stop();
   });
 
+  it('reconnects the listener when the IMAP connection closes (Gmail drops idle conns)', async () => {
+    setValidEmailEnv();
+    process.env['EMAIL_RECONNECT_BACKOFF_MS'] = '5';
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 25));
+    const opensBefore = mocks.mockMailboxOpen.mock.calls.length;
+    const closeCall = mocks.mockOn.mock.calls.find((c) => c[0] === 'close');
+    expect(closeCall).toBeTruthy(); // a close handler is registered
+    // simulate Gmail dropping the connection
+    (closeCall![1] as () => void)();
+    await new Promise((r) => setTimeout(r, 60)); // let backoff(5ms)+reconnect run
+    // reconnect rebuilt the client and re-opened INBOX (mailboxOpen called again)
+    expect(mocks.mockMailboxOpen.mock.calls.length).toBeGreaterThan(opensBefore);
+    const a = adapter as unknown as { _reconnecting: boolean };
+    expect(a._reconnecting).toBe(false); // reconnect completed
+    delete process.env['EMAIL_RECONNECT_BACKOFF_MS'];
+    await adapter.stop();
+  });
+
   it('draft writes use a SEPARATE IMAP connection from the receive listener', async () => {
     setValidEmailEnv();
     const adapter = new EmailAdapter();
