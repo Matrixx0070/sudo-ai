@@ -25,3 +25,42 @@ export {
 export { emitGdriveAudit, auditedJob, digestInputs, GDRIVE_AUDIT_ACTOR } from './audit.js';
 export { writeHeartbeat, buildHeartbeatBody, HEARTBEAT_FILE_NAME } from './heartbeat.js';
 export { getGdriveRuntime, runGdriveHeartbeatJob, _resetGdriveRuntime } from './runtime.js';
+// Phase 1 — integrity substrate (F17/F16/F29)
+export { canonicalJson, CanonicalJsonError } from './canonical-json.js';
+export { loadHmacKey, loadEncKey, type BrainKeys } from './keys.js';
+export {
+  encryptZone1,
+  decryptZone1,
+  classifyZone,
+  ZoneCryptoError,
+  type Zone,
+} from './zones.js';
+export {
+  deriveTrustTier,
+  TRUST_WEIGHTS,
+  type TrustTier,
+  type TrustContext,
+  type PermissionLike,
+  type ProvenanceRecord,
+} from './trust.js';
+export {
+  buildManifest,
+  verifyManifest,
+  computeManifestHmac,
+  isNewerManifest,
+  sha256Hex,
+  ManifestVerifyError,
+  type BrainManifest,
+  type ManifestEntry,
+  type EntryCategory,
+} from './manifest.js';
+export {
+  pushBrain,
+  hydrateBrain,
+  gcBlobs,
+  prepareBlobs,
+  MANIFEST_FILE_NAME,
+  type BrainBlobInput,
+  type PushResult,
+  type HydrateResult,
+} from './blob-store.js';

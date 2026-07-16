@@ -8,8 +8,8 @@ referenced in commits, PRs, and code comments. Spec: the 38-feature roadmap
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Recon + foundation | **foundation shipped (this PR)** — recon confirmed |
-| 1 | F17 F16 F29 integrity substrate | todo |
+| 0 | Recon + foundation | **shipped** — PR #775 merged 2026-07-16 |
+| 1 | F17 F16 F29 integrity substrate | **shipped (this PR)** — see below |
 | 2 | F2 F36 F10 F9 durability | todo |
 | 3 | F18 F1 F15 F19 F20 guarded ingestion | todo |
 | 4 | F3 F4 F7 F6 F30 F21 human interface | todo |
@@ -33,6 +33,40 @@ referenced in commits, PRs, and code comments. Spec: the 38-feature roadmap
 **HUMAN (open):** GCP project + Drive/Sheets APIs + SA key + shared `sudo-ai/`
 folder (`docs/gdrive-setup.md`). Live-folder smoke test blocked on this.
 
+## Phase 1 (F17/F16/F29) — shipped in `feat/gdrive-phase1-integrity`
+
+- `canonical-json.ts` — deterministic serializer (sorted keys, cycle/NaN
+  rejection); the ONLY byte source for manifest HMACs. Do not change its output.
+- `manifest.ts` (F17) — `buildManifest`/`verifyManifest`, HMAC-SHA256 with the
+  local `BRAIN_HMAC_KEY_PATH` key, timing-safe compare, newest-wins comparator
+  (counter, then createdAt). Verification also REJECTS any zone-0 entry in a
+  remote manifest, even correctly signed.
+- `blob-store.ts` (F17+F29) — `pushBrain` (zone-0 filtered pre-network, zone-1
+  encrypted, content-hash dedup, blobs-first/manifest-last, manifest updated in
+  place so Drive revisions = brain timeline for F9), `hydrateBrain`
+  (verify HMAC → verify each blob sha256 → decrypt; ANY failure refuses with
+  local state untouched), `gcBlobs` (trash only — 30-day undo; takes the
+  keep-set as a parameter).
+- `zones.ts` (F29) — AES-256-GCM wire format `[ver|iv|tag|ct]`, fresh IV per
+  blob, blob named by ciphertext sha256; `classifyZone` keyword pass
+  (credential/financial/personal → 1; `never-sync` marker → 0).
+- `trust.ts` (F16) — `deriveTrustTier` from permissions.list fixtures across
+  file + parent; WEAKEST writer wins; fail-closed to `external`;
+  `TRUST_WEIGHTS` 1.0/0.9/0.7/0.5; `ProvenanceRecord` type.
+- `keys.ts` — fail-fast key loading; enforces 0600 and >=32 bytes.
+
+Phase 1 gate evidence: tamper tests (blob byte-flip, manifest edit, wrong key
+→ refused), zone round-trip + zone-0-never-in-payload assertions, trust fixture
+matrix — all in `tests/gdrive/` (38 new tests).
+
+Deferred within Phase 1 (by design, noted per spec §"done when"):
+- F17 GC *scheduling* (which manifests to keep) lands with F2 checkpointing —
+  the GC primitive is done and parameterized.
+- F16 "externally-shared file ingests as external end-to-end" needs the F1
+  ingestion pipeline (Phase 3); the derivation itself is fixture-proven.
+- Constitution/values doc as `category: policy` manifest entry: type support
+  exists; the actual document wiring lands with F2 serialization (D7).
+
 ## Decisions & deviations from spec (repo architecture wins on *how*)
 
 | # | Decision | Why |
@@ -51,9 +85,11 @@ folder (`docs/gdrive-setup.md`). Live-folder smoke test blocked on this.
 ## Feature ledger
 
 F1 todo · F2 todo · F3 todo · F4 todo · F5 todo · F6 todo · F7 todo · F8 todo ·
-F9 todo · F10 todo · F11 todo · F12 todo · F14 todo · F15 todo · F16 todo ·
-F17 todo · F18 todo · F19 todo · F20 todo · F21 todo · F22 todo · F23 todo ·
-F24 todo · F25 todo · F26 todo · F27 todo · F28 todo · F29 todo · F30 todo ·
+F9 todo · F10 todo · F11 todo · F12 todo · F14 todo · F15 todo ·
+**F16 shipped** (derivation + fixtures; e2e proof lands with F1) ·
+**F17 shipped** (GC scheduling lands with F2) · F18 todo · F19 todo · F20 todo ·
+F21 todo · F22 todo · F23 todo · F24 todo · F25 todo · F26 todo · F27 todo ·
+F28 todo · **F29 shipped** · F30 todo ·
 F31 todo · F32 todo · F33 todo · F34 todo (heartbeat producer shipped in Phase 0) ·
 F35 todo · F36 todo · F37 todo · F38 todo
 
