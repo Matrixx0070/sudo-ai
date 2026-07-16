@@ -419,7 +419,11 @@ export class EmailAdapter implements ChannelAdapter {
     // Resolve recipient + reply threading from thread context (peerId=threadId)
     // or treat peerId as a raw address.
     const ctx = getThreadContext(peerId);
-    const recipient = peerId.includes('@') ? peerId : ctx?.replyTo;
+    // A thread's real reply address (ctx.replyTo) ALWAYS wins — a threadId is
+    // derived from the Message-ID and often contains '@' (e.g. "id@gmail.com"),
+    // so it must NOT be mistaken for the recipient. Only when there is no thread
+    // context is peerId treated as a raw recipient address.
+    const recipient = ctx?.replyTo ?? (peerId.includes('@') ? peerId : undefined);
     if (!recipient || !recipient.includes('@')) {
       throw new ChannelError(`cannot resolve a recipient address for "${peerId}"`, 'channel_invalid_peer', { peerId });
     }

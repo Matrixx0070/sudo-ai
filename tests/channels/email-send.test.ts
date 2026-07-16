@@ -76,6 +76,20 @@ describe('EmailAdapter.send — draft-default', () => {
     expect(arg.headers['In-Reply-To']).toBe('<m1@x>');
   });
 
+  it('a threadId that CONTAINS "@" (real Message-ID) resolves to ctx.replyTo, not the threadId', async () => {
+    process.env['EMAIL_ALLOW_SEND'] = '1';
+    process.env['EMAIL_ALLOWED_RECIPIENTS'] = 'sender@ext.com';
+    const adapter = new EmailAdapter();
+    const { sendMail } = wire(adapter);
+    // threadId derived from a Message-ID — contains '@', must NOT be the recipient.
+    const threadId = '00cdfbae-4a66-f3b7-6e62-cc859e031e4c@gmail.com';
+    setThreadContext(threadId, { replyTo: 'sender@ext.com', subject: 'Q', messageId: `<${threadId}>`, references: '', autoReply: true });
+    await adapter.send(threadId, 'reply body');
+    const arg = sendMail.mock.calls[0]![0] as { to: string };
+    expect(arg.to).toBe('sender@ext.com'); // the real sender, NOT the threadId
+    expect(arg.to).not.toBe(threadId);
+  });
+
   it('forces DRAFT for a QUARANTINED thread even with allow-send + autoReply (injection cannot auto-send)', async () => {
     process.env['EMAIL_ALLOW_SEND'] = '1';
     process.env['EMAIL_ALLOWED_RECIPIENTS'] = 'sender@ext.com';
