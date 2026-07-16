@@ -21,15 +21,14 @@
  */
 import { ImapFlow } from 'imapflow';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import path from 'node:path';
+import { dataPath } from '../shared/paths.js';
 
 const HOST = process.env['EMAIL_IMAP_HOST'] ?? 'imap.gmail.com';
 const PORT = parseInt(process.env['EMAIL_IMAP_PORT'] ?? '993', 10);
 const USER = process.env['EMAIL_IMAP_USER'] ?? '';
 const PASS = process.env['EMAIL_IMAP_PASS'] ?? '';
 const INTERVAL = Math.max(3000, Number(process.env['EMAIL_POLL_INTERVAL_MS'] ?? '15000'));
-const DATA_DIR = process.env['DATA_DIR'] ?? path.join(process.cwd(), 'data');
-const BASELINE_FILE = path.join(DATA_DIR, 'email', '_uid-baseline.json');
+const BASELINE_FILE = dataPath('email', '_uid-baseline.json');
 
 type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 function wlog(level: LogLevel, msg: string, extra?: unknown): void {
@@ -45,7 +44,7 @@ function loadBaseline(): number | null {
 }
 function saveBaseline(uid: number): void {
   try {
-    const dir = path.join(DATA_DIR, 'email');
+    const dir = dataPath('email');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     let o: Record<string, number> = {};
     if (existsSync(BASELINE_FILE)) { try { o = JSON.parse(readFileSync(BASELINE_FILE, 'utf8')) as Record<string, number>; } catch { /* fresh */ } }
