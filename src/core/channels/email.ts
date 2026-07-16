@@ -228,8 +228,10 @@ export class EmailAdapter implements ChannelAdapter {
   private _imapWrite: ImapFlow | null = null;
   /** Connection params, captured at start() so the write client can be (re)built. */
   private _imapConn: { host: string; port: number; user: string; pass: string } | null = null;
-  /** Guards against concurrent listener reconnect loops. */
-  private _reconnecting = false;
+  /** Poll timer (interval) + in-flight guard + first-poll baseline pin flag. */
+  private _pollTimer: ReturnType<typeof setInterval> | null = null;
+  private _polling = false;
+  private _baselinePinned = false;
   /** IMAP account — keys the persisted uid baseline. */
   private _imapUser = '';
   private _transport: nodemailer.Transporter | null = null;
@@ -333,10 +335,12 @@ export class EmailAdapter implements ChannelAdapter {
       );
     }
 
-    // Params for the (re)built listener + the dedicated write connection.
+    // Params for the (re)built receive/read connection + the dedicated write
+    // connection.
     this._imapConn = { host: imapHost, port: imapPort, user: imapUser, pass: imapPass };
-    // Build the listener IMAP client (error + close handlers attached).
-    this._imap = this._buildListenerImap();
+    // Build the IMAP client. disableAutoIdle keeps it a plain command connection
+    // — NEVER stuck in IDLE — so poll fetches + bridge reads always run.
+    this._imap = this._buildImap();
 
     try {
       await this._imap.connect();
@@ -354,12 +358,13 @@ export class EmailAdapter implements ChannelAdapter {
     // Expose IMAP-backed search/read/reply to the email.* tools via the bridge.
     this._registerBridge();
 
-    // Start listening in background — not awaited.
-    void this._listenIdle(smtpFrom);
+    // Start the poll loop (fresh-connection sweep, no fragile IDLE). Not awaited.
+    this._startPolling();
   }
 
   async stop(): Promise<void> {
     this._isConnected = false;
+    if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
     clearEmailBridge();
     if (this._imap) {
       try {
@@ -514,19 +519,19 @@ export class EmailAdapter implements ChannelAdapter {
 
   /** IMAP search over INBOX (mailbox-locked so it coexists with the IDLE loop). */
   private async _searchMailbox(c: { from?: string; subject?: string; unseen?: boolean; limit?: number }): Promise<EmailSearchHit[]> {
-    if (!this._imap) throw new ChannelError('IMAP not connected', 'channel_not_connected', {});
+    const imap = await this._ensureImap();
     const criteria: Record<string, unknown> = {};
     if (c.from) criteria['from'] = c.from;
     if (c.subject) criteria['subject'] = c.subject;
     if (c.unseen) criteria['seen'] = false;
     if (Object.keys(criteria).length === 0) criteria['all'] = true;
-    const lock = await this._imap.getMailboxLock('INBOX');
+    const lock = await imap.getMailboxLock('INBOX');
     try {
-      const uids = (await this._imap.search(criteria, { uid: true })) || [];
+      const uids = (await imap.search(criteria, { uid: true })) || [];
       const limit = Math.max(1, Math.min(c.limit ?? 20, 50));
       const recent = (uids as number[]).slice(-limit).reverse(); // newest first
       const hits: EmailSearchHit[] = [];
-      for await (const m of this._imap.fetch(recent, { uid: true, source: true }, { uid: true })) {
+      for await (const m of imap.fetch(recent, { uid: true, source: true }, { uid: true })) {
         if (!m.source) continue;
         const p: ParsedMail = await simpleParser(m.source as Buffer);
         hits.push({
@@ -543,10 +548,10 @@ export class EmailAdapter implements ChannelAdapter {
 
   /** Read one message by UID → plaintext body + saved attachment paths. */
   private async _readMessage(uid: number): Promise<EmailMessage | null> {
-    if (!this._imap) throw new ChannelError('IMAP not connected', 'channel_not_connected', {});
-    const lock = await this._imap.getMailboxLock('INBOX');
+    const imap = await this._ensureImap();
+    const lock = await imap.getMailboxLock('INBOX');
     try {
-      for await (const m of this._imap.fetch(String(uid), { uid: true, source: true }, { uid: true })) {
+      for await (const m of imap.fetch(String(uid), { uid: true, source: true }, { uid: true })) {
         if (!m.source) continue;
         const p: ParsedMail = await simpleParser(m.source as Buffer);
         const threadId = deriveThreadId(p, String(uid));
@@ -569,88 +574,73 @@ export class EmailAdapter implements ChannelAdapter {
   // Internal: IMAP IDLE listener
   // ---------------------------------------------------------------------------
 
-  /** Build a listener IMAP client with error + close handlers (close → reconnect). */
-  private _buildListenerImap(): ImapFlow {
+  /** Build a plain (disableAutoIdle) IMAP client. No 'close' handler — the poll
+   * loop rebuilds a dropped connection on the next tick, so there is no fragile
+   * reconnect state machine. */
+  private _buildImap(): ImapFlow {
     const { host, port, user, pass } = this._imapConn!;
     const imap = new ImapFlow({
       host, port, secure: port === 993, tls: { rejectUnauthorized: true },
-      auth: { user, pass }, logger: false,
+      auth: { user, pass }, logger: false, disableAutoIdle: true,
     });
-    imap.on('error', (err: Error) => log.warn({ err: String(err) }, 'IMAP listener connection error'));
-    imap.on('close', () => this._onImapClose());
+    imap.on('error', (err: Error) => log.warn({ err: String(err) }, 'IMAP connection error'));
     return imap;
   }
 
-  /** Gmail (and networks) drop idle IMAP connections; a dropped listener stops
-   * receiving 'exists' events, so reconnect it. No-op when the adapter is stopping. */
-  private _onImapClose(): void {
-    if (!this._isConnected || this._reconnecting) return;
-    log.warn('IMAP listener connection closed — scheduling reconnect');
-    void this._reconnectListener();
+  /** Ensure `this._imap` is a usable connection, rebuilding + reconnecting if it
+   * dropped. Shared by the poll loop and the bridge read tools. */
+  private async _ensureImap(): Promise<ImapFlow> {
+    if (this._imap?.usable) return this._imap;
+    if (this._imap) { try { await this._imap.logout(); } catch { /* gone */ } this._imap = null; }
+    if (!this._imapConn) throw new ChannelError('IMAP not connected', 'channel_not_connected', {});
+    const imap = this._buildImap();
+    await imap.connect();
+    this._imap = imap;
+    log.debug('IMAP connection (re)established');
+    return imap;
   }
 
-  /** Rebuild + reconnect the listener connection with exponential backoff, then
-   * re-open INBOX + re-attach the exists listener + re-sweep (catches mail that
-   * arrived while disconnected). */
-  private async _reconnectListener(): Promise<void> {
-    if (this._reconnecting) return;
-    this._reconnecting = true;
-    const base = Number(process.env['EMAIL_RECONNECT_BACKOFF_MS'] ?? '2000');
-    let delayMs = Number.isFinite(base) && base >= 0 ? base : 2000;
-    while (this._isConnected) {
-      await new Promise((r) => setTimeout(r, delayMs));
-      if (!this._isConnected) break;
-      try {
-        try { if (this._imap) await this._imap.logout(); } catch { /* already gone */ }
-        this._imap = this._buildListenerImap();
-        await this._imap.connect();
-        this._reconnecting = false;
-        log.info('IMAP listener reconnected');
-        await this._listenIdle('');
-        return;
-      } catch (err) {
-        log.warn({ err: String(err), delayMs }, 'IMAP listener reconnect failed — retrying');
-        delayMs = Math.min(delayMs * 2, 60_000);
-      }
-    }
-    this._reconnecting = false;
+  /**
+   * POLLING receive. Every EMAIL_POLL_INTERVAL_MS (default 15s) a sweep runs on
+   * a plain (never-idling) connection, rebuilt on any failure. This replaces the
+   * IDLE + 'exists'-event + reconnect design, which was fragile against Gmail
+   * dropping idle connections (a dropped listener silently stopped receiving) and
+   * against IDLE-break latency. Polling is stateless per tick: a failed poll just
+   * retries next interval. Kill switch: SUDO_EMAIL_POLL_DISABLE=1.
+   */
+  private _startPolling(): void {
+    if (process.env['SUDO_EMAIL_POLL_DISABLE'] === '1') { log.warn('Email polling disabled (SUDO_EMAIL_POLL_DISABLE=1)'); return; }
+    const raw = Number(process.env['EMAIL_POLL_INTERVAL_MS'] ?? '15000');
+    const intervalMs = Number.isFinite(raw) && raw >= 3000 ? raw : 15000;
+    log.info({ intervalMs }, 'IMAP INBOX polling started (fresh-connection sweep)');
+    void this._pollOnce();
+    this._pollTimer = setInterval(() => { void this._pollOnce(); }, intervalMs);
+    if (typeof this._pollTimer.unref === 'function') this._pollTimer.unref();
   }
 
-  private async _listenIdle(_from: string): Promise<void> {
-    const imap = this._imap;
-    if (!imap) return;
-
+  /** One poll tick: ensure a usable connection, open INBOX, pin the baseline on
+   * the first successful open, then sweep unseen mail at/after the baseline. */
+  private async _pollOnce(): Promise<void> {
+    if (!this._isConnected || this._polling) return;
+    this._polling = true;
     try {
+      const imap = await this._ensureImap();
       const box = await imap.mailboxOpen('INBOX');
-      const exists = typeof (box as { exists?: unknown })?.exists === 'number' ? (box as { exists: number }).exists : null;
-      const uidNext = typeof (box as { uidNext?: unknown })?.uidNext === 'number' ? (box as { uidNext: number }).uidNext : null;
-
-      // UID baseline (see loadUidBaseline): first-ever start pins to the
-      // current uidNext so the historical unread backlog is untouched.
-      let baseline = loadUidBaseline(this._imapUser);
-      if (baseline === null) {
-        baseline = uidNext ?? 1;
-        saveUidBaseline(this._imapUser, baseline);
+      if (!this._baselinePinned) {
+        const uidNext = typeof (box as { uidNext?: unknown })?.uidNext === 'number' ? (box as { uidNext: number }).uidNext : null;
+        let baseline = loadUidBaseline(this._imapUser);
+        if (baseline === null) { baseline = uidNext ?? 1; saveUidBaseline(this._imapUser, baseline); }
+        this._uidBaseline = baseline;
+        this._baselinePinned = true;
+        log.info({ uidNext, baseline }, 'IMAP INBOX baseline pinned (poll mode)');
       }
-      this._uidBaseline = baseline;
-
-      // New mail arrives as imapflow 'exists' EVENTS; the client keeps the
-      // connection in IDLE automatically whenever no command is pending.
-      // (`await imap.idle()` only resolves when IDLE *ends* — the previous
-      // while+idle() loop blocked forever and never processed a single
-      // message. Found by the first live-mailbox verification.)
-      imap.on('exists', () => { void this._sweepUnseen(); });
-      log.info({ exists, uidNext, baseline }, 'IMAP INBOX listening (exists-event mode)');
-
-      // Initial sweep: unseen mail at/after the baseline (arrived while the
-      // daemon was down, or before the listener attached) is processed now.
-      await this._sweepUnseen();
+      await this._sweepUnseen(imap);
     } catch (err) {
-      if (this._isConnected) {
-        log.error({ err: String(err) }, 'IMAP listen setup error');
-        // A setup failure on a dead/unusable connection → reconnect.
-        if (!imap.usable) this._onImapClose();
-      }
+      // Drop the connection so the next tick rebuilds cleanly. Never throws out.
+      if (this._isConnected) log.warn({ err: String(err) }, 'IMAP poll failed — will retry next tick');
+      if (this._imap) { try { await this._imap.logout(); } catch { /* gone */ } this._imap = null; }
+    } finally {
+      this._polling = false;
     }
   }
 
@@ -660,15 +650,11 @@ export class EmailAdapter implements ChannelAdapter {
   /** Only mail with uid >= this is processed (set from the persisted baseline). */
   private _uidBaseline = 1;
 
-  /** Fetch + process unseen INBOX mail at/after the uid baseline (each marked \Seen on all paths). */
-  private async _sweepUnseen(): Promise<void> {
-    const imap = this._imap;
-    if (!imap || !this._isConnected) return;
-    if (this._sweeping) {
-      // An event landed mid-sweep — remember it so tail mail is not missed.
-      this._sweepPending = true;
-      return;
-    }
+  /** Fetch + process unseen INBOX mail at/after the uid baseline (each marked
+   * \Seen on all paths). Runs on the poll connection passed in. */
+  private async _sweepUnseen(imap: ImapFlow): Promise<void> {
+    if (!this._isConnected) return;
+    if (this._sweeping) { this._sweepPending = true; return; }
     this._sweeping = true;
     let processed = 0;
     let maxUid: number | null = null;
@@ -786,11 +772,10 @@ export class EmailAdapter implements ChannelAdapter {
         log.debug('IMAP unseen sweep: nothing at/after baseline');
       }
     } catch (err) {
-      if (this._isConnected) {
-        log.error({ err: String(err) }, 'IMAP unseen sweep error');
-        // Sweep failed because the listener connection is gone → reconnect.
-        if (!this._imap?.usable) this._onImapClose();
-      }
+      // Let the error propagate to _pollOnce, which drops the connection so the
+      // next poll tick rebuilds it. (No reconnect state machine to trip.)
+      if (this._isConnected) log.warn({ err: String(err) }, 'IMAP unseen sweep error');
+      throw err;
     } finally {
       this._sweeping = false;
     }
