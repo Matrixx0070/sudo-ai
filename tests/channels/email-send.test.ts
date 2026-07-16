@@ -8,9 +8,12 @@ type MockSend = ReturnType<typeof vi.fn>;
 function wire(adapter: EmailAdapter): { sendMail: MockSend; append: MockSend } {
   const sendMail = vi.fn(async () => ({ message: Buffer.from('raw') }));
   const append = vi.fn(async () => {});
-  const a = adapter as unknown as { _transport: unknown; _imap: unknown };
+  const a = adapter as unknown as { _transport: unknown; _imap: unknown; _imapWrite: unknown };
   a._transport = { sendMail };
   a._imap = { append };
+  // Draft append now goes through the dedicated write connection (usable=true so
+  // _getWriteClient reuses it instead of building a real one).
+  a._imapWrite = { append, usable: true };
   return { sendMail, append };
 }
 

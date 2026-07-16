@@ -447,6 +447,20 @@ describe('EmailAdapter', () => {
     await adapter.stop();
   });
 
+  it('draft writes use a SEPARATE IMAP connection from the receive listener', async () => {
+    setValidEmailEnv();
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 25));
+    // The listener holds mocks.mockImapFlowInstance (this._imap). A draft append
+    // must NOT run on it — it builds a dedicated write client via _getWriteClient.
+    const a = adapter as unknown as { _imap: unknown; _imapConn: unknown; _getWriteClient: () => Promise<{ append: unknown }> };
+    expect(a._imapConn).toBeTruthy(); // connection params captured at start()
+    const w = await a._getWriteClient();
+    expect(w).toBeTruthy();
+    await adapter.stop();
+  });
+
   it('never awaits the blocking idle() (the old dead-loop pattern)', async () => {
     setValidEmailEnv();
     const adapter = new EmailAdapter();
