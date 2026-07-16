@@ -228,6 +228,8 @@ export class EmailAdapter implements ChannelAdapter {
   private _imapWrite: ImapFlow | null = null;
   /** Connection params, captured at start() so the write client can be (re)built. */
   private _imapConn: { host: string; port: number; user: string; pass: string } | null = null;
+  /** Guards against concurrent listener reconnect loops. */
+  private _reconnecting = false;
   /** IMAP account — keys the persisted uid baseline. */
   private _imapUser = '';
   private _transport: nodemailer.Transporter | null = null;
@@ -331,25 +333,10 @@ export class EmailAdapter implements ChannelAdapter {
       );
     }
 
-    // Build IMAP client.
-    this._imap = new ImapFlow({
-      host: imapHost,
-      port: imapPort,
-      secure: imapPort === 993,
-      tls: { rejectUnauthorized: true },
-      auth: {
-        user: imapUser,
-        pass: imapPass,
-      },
-      logger: false,
-    });
-
-    this._imap.on('error', (err: Error) => {
-      log.error({ err: String(err) }, 'IMAP connection error');
-    });
-
-    // Params for the lazily-built dedicated write connection (see _imapWrite).
+    // Params for the (re)built listener + the dedicated write connection.
     this._imapConn = { host: imapHost, port: imapPort, user: imapUser, pass: imapPass };
+    // Build the listener IMAP client (error + close handlers attached).
+    this._imap = this._buildListenerImap();
 
     try {
       await this._imap.connect();
@@ -582,6 +569,53 @@ export class EmailAdapter implements ChannelAdapter {
   // Internal: IMAP IDLE listener
   // ---------------------------------------------------------------------------
 
+  /** Build a listener IMAP client with error + close handlers (close → reconnect). */
+  private _buildListenerImap(): ImapFlow {
+    const { host, port, user, pass } = this._imapConn!;
+    const imap = new ImapFlow({
+      host, port, secure: port === 993, tls: { rejectUnauthorized: true },
+      auth: { user, pass }, logger: false,
+    });
+    imap.on('error', (err: Error) => log.warn({ err: String(err) }, 'IMAP listener connection error'));
+    imap.on('close', () => this._onImapClose());
+    return imap;
+  }
+
+  /** Gmail (and networks) drop idle IMAP connections; a dropped listener stops
+   * receiving 'exists' events, so reconnect it. No-op when the adapter is stopping. */
+  private _onImapClose(): void {
+    if (!this._isConnected || this._reconnecting) return;
+    log.warn('IMAP listener connection closed — scheduling reconnect');
+    void this._reconnectListener();
+  }
+
+  /** Rebuild + reconnect the listener connection with exponential backoff, then
+   * re-open INBOX + re-attach the exists listener + re-sweep (catches mail that
+   * arrived while disconnected). */
+  private async _reconnectListener(): Promise<void> {
+    if (this._reconnecting) return;
+    this._reconnecting = true;
+    const base = Number(process.env['EMAIL_RECONNECT_BACKOFF_MS'] ?? '2000');
+    let delayMs = Number.isFinite(base) && base >= 0 ? base : 2000;
+    while (this._isConnected) {
+      await new Promise((r) => setTimeout(r, delayMs));
+      if (!this._isConnected) break;
+      try {
+        try { if (this._imap) await this._imap.logout(); } catch { /* already gone */ }
+        this._imap = this._buildListenerImap();
+        await this._imap.connect();
+        this._reconnecting = false;
+        log.info('IMAP listener reconnected');
+        await this._listenIdle('');
+        return;
+      } catch (err) {
+        log.warn({ err: String(err), delayMs }, 'IMAP listener reconnect failed — retrying');
+        delayMs = Math.min(delayMs * 2, 60_000);
+      }
+    }
+    this._reconnecting = false;
+  }
+
   private async _listenIdle(_from: string): Promise<void> {
     const imap = this._imap;
     if (!imap) return;
@@ -614,6 +648,8 @@ export class EmailAdapter implements ChannelAdapter {
     } catch (err) {
       if (this._isConnected) {
         log.error({ err: String(err) }, 'IMAP listen setup error');
+        // A setup failure on a dead/unusable connection → reconnect.
+        if (!imap.usable) this._onImapClose();
       }
     }
   }
@@ -752,6 +788,8 @@ export class EmailAdapter implements ChannelAdapter {
     } catch (err) {
       if (this._isConnected) {
         log.error({ err: String(err) }, 'IMAP unseen sweep error');
+        // Sweep failed because the listener connection is gone → reconnect.
+        if (!this._imap?.usable) this._onImapClose();
       }
     } finally {
       this._sweeping = false;
