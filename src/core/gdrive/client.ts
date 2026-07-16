@@ -94,10 +94,16 @@ export class DriveClient {
 
   /** Download raw file content (alt=media) as a UTF-8 string. */
   async filesDownload(fileId: string, opts: CallOpts = {}): Promise<string> {
+    return (await this.filesDownloadRaw(fileId, opts)).toString('utf-8');
+  }
+
+  /** Download raw file content as bytes — REQUIRED for binary/encrypted blobs
+   * (a UTF-8 round-trip corrupts ciphertext). */
+  async filesDownloadRaw(fileId: string, opts: CallOpts = {}): Promise<Buffer> {
     const res = await this.call(opts.lane, () =>
       this.drive.files.get({ fileId, alt: 'media' }, { responseType: 'arraybuffer' }),
     );
-    return Buffer.from(res.data as ArrayBuffer).toString('utf-8');
+    return Buffer.from(res.data as ArrayBuffer);
   }
 
   async filesList(
