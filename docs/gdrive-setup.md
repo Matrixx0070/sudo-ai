@@ -99,6 +99,31 @@ group/world-readable.
   updates `ops/heartbeat.json` in place — the dead-man's-switch signal for F34.
 - Every Drive job emits a hash-chained audit row (`data/audit.db`, actor `gdrive`).
 
+## Canary files (Phase 3, F19 — HUMAN)
+
+Plant 2–3 decoy files that look real but should never be read:
+
+1. Create Google Docs with plausible names (e.g. "admin-credentials",
+   "recovery-codes-backup") in plausible places — inside `sudo-ai/ops/` or your
+   own folders. Do NOT put them in an obviously-named folder.
+2. Put a unique random marker string inside each (`uuidgen` output works).
+3. Record them locally — **never** in Drive, never committed:
+   ```bash
+   cat > data/gdrive/canaries.json <<'JSON'
+   { "canaries": [
+     { "fileId": "<doc id>", "marker": "<uuid>", "label": "admin-creds-decoy" }
+   ] }
+   JSON
+   chmod 600 data/gdrive/canaries.json
+   ```
+
+Any Drive-derived payload or inbox file matching a canary id/marker triggers a
+CRITICAL audit event and writes `data/gdrive/PAUSED` — all gdrive jobs no-op
+until you review and remove that file (`rm data/gdrive/PAUSED`).
+
+Also set `GDRIVE_PRINCIPAL_EMAILS=<your gmail>` in `config/.env` so ACL-derived
+trust tiers (F16) can recognize you as the principal writer.
+
 ## Manual smoke test (after the HUMAN steps)
 
 ```bash

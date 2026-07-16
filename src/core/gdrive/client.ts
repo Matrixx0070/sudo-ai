@@ -30,7 +30,7 @@ export interface CallOpts {
   lane?: GdriveLane;
 }
 
-const FILE_FIELDS = 'id, name, mimeType, parents, modifiedTime, size, trashed';
+const FILE_FIELDS = 'id, name, mimeType, parents, modifiedTime, size, trashed, headRevisionId';
 
 export class DriveClient {
   private readonly drive: drive_v3.Drive;
@@ -137,6 +137,33 @@ export class DriveClient {
         removeParents,
         requestBody,
         media,
+        fields: FILE_FIELDS,
+      }),
+    );
+    return res.data as GdriveFileMeta;
+  }
+
+  /**
+   * Upload with conversion to a Google Doc (Drive's free OCR path, F15).
+   * ocrLanguage hints the recognizer; the returned Doc is temporary — callers
+   * export its text then trash it.
+   */
+  async filesImportAsGoogleDoc(
+    name: string,
+    parentId: string,
+    media: { mimeType: string; body: string | NodeJS.ReadableStream },
+    ocrLanguage?: string,
+    opts: CallOpts = {},
+  ): Promise<GdriveFileMeta> {
+    const res = await this.call(opts.lane, () =>
+      this.drive.files.create({
+        requestBody: {
+          name,
+          parents: [parentId],
+          mimeType: 'application/vnd.google-apps.document',
+        },
+        media,
+        ocrLanguage,
         fields: FILE_FIELDS,
       }),
     );

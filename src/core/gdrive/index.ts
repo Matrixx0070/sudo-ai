@@ -105,4 +105,38 @@ export {
   runGdriveCheckpointJob,
   runGdriveRestoreCheckJob,
   runGdriveRestoreDrillJob,
+  runGdriveInboxJob,
+  setGdriveInspectorBrain,
 } from './runtime.js';
+// Phase 3 — guarded ingestion (F18/F1/F15/F19)
+export {
+  inspectContent,
+  scoreContentDeterministic,
+  quarantineAndInspect,
+  buildInspectorPrompt,
+  DEFAULT_RISK_THRESHOLD,
+  type InspectionVerdict,
+  type InspectorBrainCall,
+  type InspectOptions,
+  type QuarantineResult,
+} from './quarantine.js';
+export {
+  loadCanaryConfig,
+  checkCanaryFileId,
+  checkCanaryPayload,
+  tripCanary,
+  isGdrivePaused,
+  setGdrivePaused,
+  clearGdrivePause,
+  canaryConfigPath,
+  type CanaryConfig,
+  type CanaryHit,
+} from './canary.js';
+export { ocrViaDriveImport, looksLikeUsableText, OCR_CONVERTIBLE_MIMES, type OcrResult } from './ocr.js';
+export {
+  processInboxOnce,
+  chunkText,
+  DEFAULT_MAX_SOURCE_BYTES,
+  type InboxDeps,
+  type InboxSweepResult,
+} from './inbox.js';

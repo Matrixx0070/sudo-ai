@@ -133,6 +133,67 @@ export async function runGdriveRestoreCheckJob(): Promise<void> {
   log.info({ outcome: outcome.action }, 'gdrive restore check complete');
 }
 
+// ---------------------------------------------------------------------------
+// F1/F18 — inbox ingestion job
+// ---------------------------------------------------------------------------
+
+import type { InspectorBrainCall } from './quarantine.js';
+
+let inspectorBrain: InspectorBrainCall | null = null;
+
+/**
+ * cli.ts injects the CHEAPEST-route brain call here once the brain exists
+ * (same pattern as AutoDream's brainCall). Until injected, quarantine runs
+ * deterministic-only — it never fails open.
+ */
+export function setGdriveInspectorBrain(fn: InspectorBrainCall): void {
+  inspectorBrain = fn;
+}
+
+/** Cron entry: one knowledge-inbox sweep (F1 -> F18 -> memory API). */
+export async function runGdriveInboxJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { processInboxOnce } = await import('./inbox.js');
+  const { MindDB } = await import('../memory/db.js');
+  const structured = await import('../memory/structured-memory.js');
+  const config = rt.config;
+  const db = new MindDB();
+  const saEmail = await resolveServiceAccountEmail(config.credentialsPath);
+  const result = await processInboxOnce({
+    client: rt.client,
+    folders: rt.folders,
+    audit: rt.audit,
+    chunks: db,
+    structured: {
+      listMemories: () => structured.listMemories(),
+      saveMemory: (m) => structured.saveMemory(m as never),
+    },
+    trustCtx: {
+      serviceAccountEmail: saEmail ?? 'unknown-sa',
+      principalEmails: (process.env['GDRIVE_PRINCIPAL_EMAILS'] ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    },
+    inspect: inspectorBrain ? { brainCall: inspectorBrain } : {},
+  });
+  if (result.processed.length || result.held.length || result.aborted) {
+    log.info(result, 'inbox sweep complete');
+  }
+}
+
+async function resolveServiceAccountEmail(credPath?: string): Promise<string | null> {
+  if (!credPath) return null;
+  try {
+    const { readFileSync } = await import('node:fs');
+    const parsed = JSON.parse(readFileSync(credPath, 'utf-8')) as { client_email?: string };
+    return parsed.client_email ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Cron entry: monthly kill-and-restore rehearsal (F2 rider). */
 export async function runGdriveRestoreDrillJob(): Promise<void> {
   if (!isGdriveEnabled()) return;

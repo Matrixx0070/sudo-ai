@@ -1,0 +1,3 @@
+SQLite WAL mode allows one writer and many readers concurrently. Checkpointing
+moves WAL frames back into the main database file. Set synchronous=NORMAL for
+a good durability/speed tradeoff in WAL mode.

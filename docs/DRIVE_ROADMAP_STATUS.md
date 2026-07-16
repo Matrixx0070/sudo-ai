@@ -10,8 +10,8 @@ referenced in commits, PRs, and code comments. Spec: the 38-feature roadmap
 |---|---|---|
 | 0 | Recon + foundation | **shipped** — PR #775 merged 2026-07-16 |
 | 1 | F17 F16 F29 integrity substrate | **shipped** — PR #777 merged 2026-07-16 |
-| 2 | F2 F36 F10 F9 durability | **shipped (this PR)** — see below |
-| 3 | F18 F1 F15 F19 F20 guarded ingestion | todo |
+| 2 | F2 F36 F10 F9 durability | **shipped** — PR #778 merged 2026-07-16 |
+| 3 | F18 F1 F15 F19 F20 guarded ingestion | **shipped (this PR)** — see below |
 | 4 | F3 F4 F7 F6 F30 F21 human interface | todo |
 | 5 | F22 F23 F24 F31 F33 F37 epistemics | todo |
 | 6 | F12 F11 F27 F28 F35 F14 autonomy | todo |
@@ -107,6 +107,49 @@ Phase 2 deferrals/gaps:
 - Restore drill hydrates into memory and diffs (no temp-dir apply) — cheaper,
   same guarantee (backup reproduces local brain byte-for-byte).
 
+## Phase 3 (F18/F1/F15/F19/F20) — shipped in `feat/gdrive-phase3-ingestion`
+
+- **F18** `quarantine.ts` — two-layer inspection: deterministic pattern scoring
+  (Drive-specific lures + the repo's injection detector, with
+  NORMALIZE-THEN-RESCAN: zero-width strip + Cyrillic homoglyph fold before
+  pattern matching) and a disposable LLM inspector (plain one-shot chat, zero
+  tools — module provably imports no tool code, test-asserted; output treated
+  as untrusted: clamped, re-scored, flagged summaries withheld). Verdict =
+  max(deterministic, llm) — a lying inspector can only RAISE risk, never lower
+  a deterministic hold; inspector failure degrades to deterministic-only.
+  Holds write a readable report beside the staged file.
+- **F1** `inbox.ts` — poll sweep (60s default): canary fileId check → 20MB cap
+  → type-route (Doc→markdown export, text direct, image/PDF→F15 OCR) → canary
+  marker check → quarantine → clean: chunk + storeChunk (role 'user' = full
+  injection scan, defense in depth) + ACL trust tier + provenance reference
+  memory (citations fileId@headRevisionId) + move to processed/ + ingestion
+  record; hold: move original to quarantine/. F16's "externally-shared file
+  ingests as external end-to-end" done-when now proven in tests.
+- **F15** `ocr.ts` — Drive import-conversion OCR (temp Doc in quarantine
+  folder, ocrLanguage, export text/plain, trash in finally); garbage-export
+  heuristic so callers fall back.
+- **F19** `canary.ts` — local-only config (data/gdrive/canaries.json or
+  GDRIVE_CANARY_CONFIG), fileId + marker checks in the inbox pipeline, trip =
+  CRITICAL audit + data/gdrive/PAUSED flag (all gdrive jobs no-op until the
+  operator removes it). HUMAN planting guide in gdrive-setup.md.
+- **F20** gym — 16-case fixture corpus (instruction override, tool lures,
+  exfil links, delimiter forgery, role hijack, fake-turn, zero-width,
+  homoglyph, base64 smuggle, canary bait, nested doc, 4 clean controls +
+  classics variant) asserted attack=hold / clean=promote in CI on every run;
+  new case = one fixture file. Plus: lying-inspector, poisoned-summary, and
+  inspector-down tests.
+
+Phase 3 notes/deferrals:
+- The gym found 3 REAL gaps during development (zero-width splitting,
+  single-adjacency homoglyphs, inverted canary-bait word order) — fixed via
+  normalize-then-rescan. Working as intended.
+- Outbound tool-call canary check (F19 full scope) needs the loop-hook seam —
+  lands with F33 in Phase 5. Inbox-side checks are live.
+- Scheduled gym-vs-temp-brain run + scorecard rows land with F4 (Phase 4);
+  the CI gym is the regression gate meanwhile.
+- Oversized extracted text: chunked ingestion (no LLM summarization pass yet;
+  AutoSummarizer wiring when F12 lands).
+
 ## Decisions & deviations from spec (repo architecture wins on *how*)
 
 | # | Decision | Why |
@@ -124,12 +167,14 @@ Phase 2 deferrals/gaps:
 
 ## Feature ledger
 
-F1 todo · **F2 shipped** (live cross-machine proof pending HUMAN GCP setup) ·
+**F1 shipped** · **F2 shipped** (live cross-machine proof pending HUMAN GCP setup) ·
 F3 todo · F4 todo · F5 todo · F6 todo · F7 todo · F8 todo ·
 **F9 shipped** (CLI wiring → Phase 5) · **F10 shipped** (run-end wiring → Phase 5;
-replay = digest-verify stub) · F11 todo · F12 todo · F14 todo · F15 todo ·
-**F16 shipped** (derivation + fixtures; e2e proof lands with F1) ·
-**F17 shipped** (GC scheduling lands with F2) · F18 todo · F19 todo · F20 todo ·
+replay = digest-verify stub) · F11 todo · F12 todo · F14 todo · **F15 shipped** ·
+**F16 shipped** (e2e proof now in inbox tests) ·
+**F17 shipped** (GC scheduling lands with F2) · **F18 shipped** ·
+**F19 shipped** (outbound tool-call check → Phase 5 seam; HUMAN planting open) ·
+**F20 shipped** (CI gym; scheduled run + scorecard → F4) ·
 F21 todo · F22 todo · F23 todo · F24 todo · F25 todo · F26 todo · F27 todo ·
 F28 todo · **F29 shipped** · F30 todo ·
 F31 todo · F32 todo · F33 todo · F34 todo (heartbeat producer shipped in Phase 0) ·

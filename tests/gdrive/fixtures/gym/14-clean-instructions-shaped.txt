@@ -1,0 +1,3 @@
+How to use this library: first install the package, then call init() with your
+configuration. Remember to close the connection when done. Do not call reset()
+before init() or you will get an error.
