@@ -45,6 +45,8 @@ const mocks = vi.hoisted(() => {
   const mockOn = vi.fn();
   const mockAppend = vi.fn().mockResolvedValue(undefined);
   const mockImapClose = vi.fn();
+  const mockChild = { on: vi.fn(), send: vi.fn(), kill: vi.fn(), pid: 4242 };
+  const mockFork = vi.fn(() => mockChild);
 
   const mockImapFlowInstance = {
     connect: mockConnect,
@@ -84,6 +86,8 @@ const mocks = vi.hoisted(() => {
     mockOn,
     mockAppend,
     mockImapClose,
+    mockChild,
+    mockFork,
     mockImapFlowInstance,
     ImapFlowConstructor,
     mockRateLimiterCheck,
@@ -100,6 +104,10 @@ vi.mock('nodemailer', () => ({
 
 vi.mock('imapflow', () => ({
   ImapFlow: mocks.ImapFlowConstructor,
+}));
+
+vi.mock('node:child_process', () => ({
+  fork: mocks.mockFork,
 }));
 
 vi.mock('mailparser', () => ({
@@ -159,6 +167,8 @@ describe('EmailAdapter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearEmailEnv();
+    process.env['SUDO_EMAIL_WORKER_DISABLE'] = '1'; // existing tests exercise the in-process fallback
+    mocks.mockFork.mockReturnValue(mocks.mockChild);
     mocks.mockConnect.mockResolvedValue(undefined);
     mocks.mockLogout.mockResolvedValue(undefined);
     // idle() rejects after first call to terminate the background listen loop in tests.
@@ -182,6 +192,7 @@ describe('EmailAdapter', () => {
 
   afterEach(() => {
     clearEmailEnv();
+    delete process.env['SUDO_EMAIL_WORKER_DISABLE'];
   });
 
   // 1. Constructor builds
@@ -494,6 +505,39 @@ describe('EmailAdapter', () => {
     expect(a._imap).toBeNull(); // zombie connection dropped
     delete process.env['EMAIL_POLL_TIMEOUT_MS'];
     await adapter.stop();
+  });
+
+  it('DEFAULT receive mode forks the child-process IMAP worker (isolated process)', async () => {
+    setValidEmailEnv();
+    delete process.env['SUDO_EMAIL_WORKER_DISABLE']; // worker is the default
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mocks.mockFork).toHaveBeenCalledTimes(1); // forked one worker
+    const [scriptPath, , opts] = mocks.mockFork.mock.calls[0]!;
+    expect(String(scriptPath)).toMatch(/email-imap-worker/);
+    expect((opts as { execArgv: string[] }).execArgv).toEqual(['--import', 'tsx']);
+    // IPC wired: 'message' + 'exit' handlers registered on the child.
+    const events = mocks.mockChild.on.mock.calls.map((c) => c[0]);
+    expect(events).toContain('message');
+    expect(events).toContain('exit');
+    await adapter.stop();
+    expect(mocks.mockChild.kill).toHaveBeenCalled(); // stop() tears the worker down
+  });
+
+  it('a "mail" IPC message from the worker is processed (allowlist gate)', async () => {
+    setValidEmailEnv();
+    delete process.env['SUDO_EMAIL_WORKER_DISABLE'];
+    process.env['EMAIL_ALLOWED_SENDERS'] = 'nobody@blocked.test'; // sender NOT allowed → dropped, no throw
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 20));
+    const onMsg = mocks.mockChild.on.mock.calls.find((c) => c[0] === 'message')![1] as (m: unknown) => void;
+    // A raw source over IPC → _processMessageSource runs (simpleParser mocked → no from → returns cleanly).
+    expect(() => onMsg({ type: 'mail', uid: 7, source: Buffer.from('raw').toString('base64') })).not.toThrow();
+    onMsg({ type: 'log', level: 'info', msg: 'worker log relayed' }); // log relay path
+    await adapter.stop();
+    delete process.env['EMAIL_ALLOWED_SENDERS'];
   });
 
   it('draft writes use a SEPARATE IMAP connection from the receive listener', async () => {
