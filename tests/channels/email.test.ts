@@ -435,14 +435,14 @@ describe('EmailAdapter', () => {
 
     const existsCall = mocks.mockOn.mock.calls.find((c) => c[0] === 'exists');
     expect(existsCall).toBeTruthy(); // new-mail notifications are event-driven
-    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false }, { source: true }); // initial sweep
+    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false, uid: '1:*' }, { source: true }); // initial sweep (no uidNext from mock → baseline 1)
 
     // Firing the captured 'exists' handler triggers another sweep.
     mocks.mockFetch.mockClear();
     mocks.mockFetch.mockReturnValue((async function* () {})());
     (existsCall![1] as () => void)();
     await new Promise((r) => setTimeout(r, 25));
-    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false }, { source: true });
+    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false, uid: '1:*' }, { source: true });
 
     await adapter.stop();
   });
@@ -453,6 +453,18 @@ describe('EmailAdapter', () => {
     await adapter.start();
     await new Promise((r) => setTimeout(r, 25));
     expect(mocks.mockIdle).not.toHaveBeenCalled();
+    await adapter.stop();
+  });
+
+  it('first-ever start pins the uid baseline to uidNext — historical unread backlog untouched', async () => {
+    setValidEmailEnv();
+    // Mailbox with 339 pre-existing messages; next uid will be 500.
+    mocks.mockMailboxOpen.mockResolvedValue({ exists: 339, uidNext: 500 });
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 25));
+    // The sweep must be scoped to uid >= 500 — never the 339-mail backlog.
+    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false, uid: '500:*' }, { source: true });
     await adapter.stop();
   });
 });
