@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => {
   const mockFetch = vi.fn().mockReturnValue((async function* () {})());
   const mockOn = vi.fn();
   const mockAppend = vi.fn().mockResolvedValue(undefined);
+  const mockImapClose = vi.fn();
 
   const mockImapFlowInstance = {
     connect: mockConnect,
@@ -51,6 +52,7 @@ const mocks = vi.hoisted(() => {
     fetch: mockFetch,
     on: mockOn,
     append: mockAppend,
+    close: mockImapClose,
     usable: true, // real ImapFlow reports usable=true after connect (so _ensureImap reuses)
   };
 
@@ -75,6 +77,7 @@ const mocks = vi.hoisted(() => {
     mockFetch,
     mockOn,
     mockAppend,
+    mockImapClose,
     mockImapFlowInstance,
     ImapFlowConstructor,
     mockRateLimiterCheck,
@@ -455,6 +458,20 @@ describe('EmailAdapter', () => {
     await new Promise((r) => setTimeout(r, 30));
     expect((adapter as unknown as { _pollTimer: unknown })._pollTimer).toBeNull();
     delete process.env['SUDO_EMAIL_POLL_DISABLE'];
+    await adapter.stop();
+  });
+
+  it('a hung poll times out, drops the connection, and does not wedge later polls', async () => {
+    setValidEmailEnv();
+    process.env['EMAIL_POLL_TIMEOUT_MS'] = '50';
+    mocks.mockMailboxOpen.mockReturnValue(new Promise(() => {})); // never resolves → hang
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 160)); // let the first poll time out
+    const a = adapter as unknown as { _polling: boolean; _imap: unknown };
+    expect(a._polling).toBe(false); // guard released — not wedged
+    expect(a._imap).toBeNull(); // zombie connection dropped
+    delete process.env['EMAIL_POLL_TIMEOUT_MS'];
     await adapter.stop();
   });
 
