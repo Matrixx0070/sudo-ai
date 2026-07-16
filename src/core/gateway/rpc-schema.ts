@@ -12,6 +12,7 @@
  */
 import { z } from 'zod';
 import { hasScope, type GatewayPrincipal, type OperatorScope } from './auth.js';
+import type { RpcEvent } from './rpc-types.js';
 
 /** sudo-ai's own WS RPC protocol version (independent of the OpenAI-compat HTTP). */
 export const RPC_PROTOCOL_VERSION = 1;
@@ -51,6 +52,36 @@ const METHOD_SCOPES: Record<string, OperatorScope> = {
   'secrets.reload': 'operator.admin',
   'secrets.resolve': 'operator.admin',
 };
+
+/** A per-connection event sequencer (see RpcEvent). */
+export interface EventSequencer {
+  /** Stamp the next event with a 1-based monotonic seq (+ optional stateVersion). */
+  next(event: string, data: unknown, stateVersion?: number): RpcEvent;
+  /** The last seq handed out (0 before the first event). */
+  readonly current: number;
+}
+
+/**
+ * Create a per-connection event sequencer implementing the OpenClaw ordering
+ * contract (invariants I3/I66). Each `next()` returns an RpcEvent stamped with a
+ * fresh 1-based monotonic `seq`; pass `stateVersion` when the underlying state
+ * changes so a client can detect a discontinuity and refresh. There is no
+ * server-push emitter today — this is the canonical builder for when one is added,
+ * so events are born sequenced instead of retrofitted. See RpcEvent for the
+ * client-side gap-recovery contract.
+ */
+export function createEventSequencer(): EventSequencer {
+  let seq = 0;
+  return {
+    next(event: string, data: unknown, stateVersion?: number): RpcEvent {
+      seq += 1;
+      return stateVersion === undefined
+        ? { type: 'event', event, data, seq }
+        : { type: 'event', event, data, seq, stateVersion };
+    },
+    get current(): number { return seq; },
+  };
+}
 
 export function requiredScopeFor(method: string): OperatorScope {
   return METHOD_SCOPES[method] ?? 'operator.write';
