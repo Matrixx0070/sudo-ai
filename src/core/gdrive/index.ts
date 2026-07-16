@@ -64,3 +64,45 @@ export {
   type PushResult,
   type HydrateResult,
 } from './blob-store.js';
+// Phase 2 — durability & reproducibility (F2/F36/F10/F9)
+export {
+  loadVersionedManifest,
+  CURRENT_MANIFEST_SCHEMA,
+  MIGRATIONS,
+  type ManifestMigration,
+} from './migrations.js';
+export {
+  collectBrainSnapshot,
+  applyBrainSnapshot,
+  type BrainSnapshotDeps,
+  type ChunkStoreLike,
+  type StructuredStoreLike,
+  type ApplyReport,
+} from './brain-serializer.js';
+export {
+  runCheckpoint,
+  runRestoreCheck,
+  runRestoreDrill,
+  loadBrainState,
+  saveBrainState,
+  type CheckpointDeps,
+  type BrainState,
+  type RestoreOutcome,
+  type DrillResult,
+} from './checkpoint.js';
+export { createRelease, getRelease, MAX_PINNED_REVISIONS, type ReleaseResult } from './releases.js';
+export { bisectBrain, diffManifests, type BisectJudge, type BisectResult, type ManifestDiff } from './bisect.js';
+export {
+  buildRunBundle,
+  packBundle,
+  unpackBundle,
+  verifyBundle,
+  uploadBundle,
+  type RunBundle,
+  type BuildBundleParams,
+} from './flight-recorder.js';
+export {
+  runGdriveCheckpointJob,
+  runGdriveRestoreCheckJob,
+  runGdriveRestoreDrillJob,
+} from './runtime.js';
