@@ -222,6 +222,12 @@ export class EmailAdapter implements ChannelAdapter {
   private _handler: MessageHandler | null = null;
   private _hooks: HookEmitterLike | null = null;
   private _imap: ImapFlow | null = null;
+  /** Dedicated 2nd IMAP connection for WRITES (draft append). The primary
+   * connection is held in auto-IDLE by the receive listener, so an append on it
+   * fails with "Connection not available" — writes get their own connection. */
+  private _imapWrite: ImapFlow | null = null;
+  /** Connection params, captured at start() so the write client can be (re)built. */
+  private _imapConn: { host: string; port: number; user: string; pass: string } | null = null;
   /** IMAP account — keys the persisted uid baseline. */
   private _imapUser = '';
   private _transport: nodemailer.Transporter | null = null;
@@ -342,6 +348,9 @@ export class EmailAdapter implements ChannelAdapter {
       log.error({ err: String(err) }, 'IMAP connection error');
     });
 
+    // Params for the lazily-built dedicated write connection (see _imapWrite).
+    this._imapConn = { host: imapHost, port: imapPort, user: imapUser, pass: imapPass };
+
     try {
       await this._imap.connect();
     } catch (err) {
@@ -374,6 +383,9 @@ export class EmailAdapter implements ChannelAdapter {
       } finally {
         this._imap = null;
       }
+    }
+    if (this._imapWrite) {
+      try { await this._imapWrite.logout(); } catch { /* best effort */ } finally { this._imapWrite = null; }
     }
     if (this._transport) {
       this._transport.close();
@@ -459,15 +471,38 @@ export class EmailAdapter implements ChannelAdapter {
     }
   }
 
-  /** Build the raw MIME (no transmit) and APPEND it to the Drafts mailbox. */
-  private async _createDraft(from: string, to: string, subject: string, text: string, headers: Record<string, string>): Promise<void> {
-    if (!this._imap) {
+  /**
+   * A dedicated IMAP connection for writes (append), lazily built and reused.
+   * Kept OUT of the receive listener's auto-IDLE so appends never contend with
+   * it. Rebuilt if the previous one dropped (Gmail closes idle connections).
+   * disableAutoIdle keeps it a plain command connection.
+   */
+  private async _getWriteClient(): Promise<ImapFlow> {
+    if (this._imapWrite?.usable) return this._imapWrite;
+    if (this._imapWrite) { try { await this._imapWrite.logout(); } catch { /* dropped */ } this._imapWrite = null; }
+    if (!this._imapConn) {
       throw new ChannelError('IMAP not connected — cannot create draft', 'channel_not_connected', {});
     }
+    const { host, port, user, pass } = this._imapConn;
+    const c = new ImapFlow({
+      host, port, secure: port === 993, tls: { rejectUnauthorized: true },
+      auth: { user, pass }, logger: false, disableAutoIdle: true,
+    });
+    c.on('error', (err: Error) => log.warn({ err: String(err) }, 'IMAP write-connection error'));
+    await c.connect();
+    this._imapWrite = c;
+    log.debug('IMAP write connection established (dedicated to draft/append)');
+    return c;
+  }
+
+  /** Build the raw MIME (no transmit) and APPEND it to the Drafts mailbox
+   * on the dedicated write connection. */
+  private async _createDraft(from: string, to: string, subject: string, text: string, headers: Record<string, string>): Promise<void> {
     const builder = nodemailer.createTransport({ streamTransport: true, buffer: true, newline: 'unix' });
     const built = await builder.sendMail({ from, to, subject, text, headers }) as unknown as { message: Buffer };
     const mailbox = process.env['EMAIL_DRAFTS_MAILBOX'] ?? 'Drafts';
-    await this._imap.append(mailbox, built.message, ['\\Draft']);
+    const w = await this._getWriteClient();
+    await w.append(mailbox, built.message, ['\\Draft']);
   }
 
   // ---------------------------------------------------------------------------
