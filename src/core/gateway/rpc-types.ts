@@ -27,11 +27,28 @@ export interface RpcResponse {
   readonly error?: { code: number; message: string };
 }
 
-/** A server-initiated push event (no id — not a reply to a request). */
+/**
+ * A server-initiated push event (no id — not a reply to a request).
+ *
+ * Ordering contract (OpenClaw invariants I3/I66 — future-proofing; no server-push
+ * emitter exists yet). When a server DOES emit events it should stamp a
+ * per-connection monotonic `seq`, plus a `stateVersion` when the underlying state
+ * changes. Events are NON-REPLAYABLE: there is no event-log/replay API. A client
+ * therefore tracks the last `seq` it saw and, on ANY gap (a skipped `seq`, or a
+ * `stateVersion` discontinuity), MUST actively refresh — re-call `health` /
+ * re-list — instead of assuming it can request the missed events.
+ *
+ * Both fields are optional so unsequenced/legacy events are still valid; use
+ * `createEventSequencer()` (rpc-schema.ts) to stamp them consistently.
+ */
 export interface RpcEvent {
   readonly type: 'event';
   readonly event: string;
   readonly data: unknown;
+  /** Per-connection monotonic sequence number (1-based). Absent = unsequenced. */
+  readonly seq?: number;
+  /** Opaque state-version counter; a discontinuity tells the client to refresh. */
+  readonly stateVersion?: number;
 }
 
 /** Union of all message shapes that travel over the WebSocket. */
