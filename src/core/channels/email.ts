@@ -511,13 +511,40 @@ export class EmailAdapter implements ChannelAdapter {
     try {
       await imap.mailboxOpen('INBOX');
 
-      // Loop: wait for new messages, process each, repeat.
-      while (this._isConnected && imap) {
-        // idle() resolves when new messages arrive or when stop() is called.
-        await imap.idle();
-        if (!this._isConnected) break;
+      // New mail arrives as imapflow 'exists' EVENTS; the client keeps the
+      // connection in IDLE automatically whenever no command is pending.
+      // (`await imap.idle()` only resolves when IDLE *ends* — the previous
+      // while+idle() loop blocked forever and never processed a single
+      // message. Found by the first live-mailbox verification.)
+      imap.on('exists', () => { void this._sweepUnseen(); });
 
-        // Fetch unseen messages after IDLE notification.
+      // Initial sweep: anything already unseen (arrived while offline, or
+      // before the listener attached) is processed immediately.
+      await this._sweepUnseen();
+    } catch (err) {
+      if (this._isConnected) {
+        log.error({ err: String(err) }, 'IMAP listen setup error');
+      }
+    }
+  }
+
+  /** Re-entrancy guard + coalescing for 'exists'-triggered sweeps. */
+  private _sweeping = false;
+  private _sweepPending = false;
+
+  /** Fetch + process every unseen INBOX message (each marked \Seen on all paths). */
+  private async _sweepUnseen(): Promise<void> {
+    const imap = this._imap;
+    if (!imap || !this._isConnected) return;
+    if (this._sweeping) {
+      // An event landed mid-sweep — remember it so tail mail is not missed.
+      this._sweepPending = true;
+      return;
+    }
+    this._sweeping = true;
+    try {
+      do {
+        this._sweepPending = false;
         for await (const msg of imap.fetch({ seen: false }, { source: true })) {
           try {
             if (!msg.source) continue;
@@ -612,11 +639,13 @@ export class EmailAdapter implements ChannelAdapter {
             }
           }
         }
-      }
+      } while (this._sweepPending);
     } catch (err) {
       if (this._isConnected) {
-        log.error({ err: String(err) }, 'IMAP IDLE loop error');
+        log.error({ err: String(err) }, 'IMAP unseen sweep error');
       }
+    } finally {
+      this._sweeping = false;
     }
   }
 

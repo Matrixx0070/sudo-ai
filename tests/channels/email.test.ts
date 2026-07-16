@@ -420,4 +420,39 @@ describe('EmailAdapter', () => {
 
     await adapter.stop();
   });
+
+  // -------------------------------------------------------------------------
+  // IMAP receive — exists-event sweeps (regression for the live-found bug:
+  // `await imap.idle()` never resolves on new mail, so the old while+idle()
+  // loop connected but processed NOTHING).
+  // -------------------------------------------------------------------------
+
+  it('registers an "exists" listener and runs an initial unseen sweep on start', async () => {
+    setValidEmailEnv();
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 25)); // _listenIdle is fire-and-forget
+
+    const existsCall = mocks.mockOn.mock.calls.find((c) => c[0] === 'exists');
+    expect(existsCall).toBeTruthy(); // new-mail notifications are event-driven
+    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false }, { source: true }); // initial sweep
+
+    // Firing the captured 'exists' handler triggers another sweep.
+    mocks.mockFetch.mockClear();
+    mocks.mockFetch.mockReturnValue((async function* () {})());
+    (existsCall![1] as () => void)();
+    await new Promise((r) => setTimeout(r, 25));
+    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false }, { source: true });
+
+    await adapter.stop();
+  });
+
+  it('never awaits the blocking idle() (the old dead-loop pattern)', async () => {
+    setValidEmailEnv();
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 25));
+    expect(mocks.mockIdle).not.toHaveBeenCalled();
+    await adapter.stop();
+  });
 });
