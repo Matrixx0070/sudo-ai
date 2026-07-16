@@ -67,7 +67,6 @@ describe('sessions.send', () => {
     expect(r.output).toMatch(/hop-depth/i);
     expect(run).not.toHaveBeenCalled();
   });
-
   it('GAP A: clears the target chain after the delivered turn (no stale poisoning)', async () => {
     await sessionsSendTool.execute({ targetSessionId: 'B', message: 'hi', waitForReply: true }, ctx());
     // After delivery completes, B must be back to a root chain, not {depth:1,[A,B]}.
@@ -81,5 +80,59 @@ describe('sessions.send', () => {
     expect(r.output).toMatch(/busy/i);
     expect(r.data).toMatchObject({ queued: true, busy: true });
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe('sessions.send — friendly agent-name resolution', () => {
+  // 'writer' peerId exists on TWO channels → ambiguous by bare name.
+  const sessions = [
+    { id: 'S_res', channel: 'web', peerId: 'researcher' },
+    { id: 'S_wri', channel: 'web', peerId: 'writer' },
+    { id: 'S_tg', channel: 'telegram', peerId: 'writer' },
+  ];
+  beforeEach(() => {
+    __resetSessionBusForTests();
+    __resetQueueForTests();
+    run = vi.fn(async () => ({ text: 'ok' }));
+    injectMetaToolDeps({
+      sessionManager: {
+        get: async (id: string) => sessions.find((s) => s.id === id),
+        listActive: async () => sessions,
+      },
+      agentLoop: { run },
+    });
+  });
+
+  it('resolves a bare peerId to the session id and delivers there', async () => {
+    const r = await sessionsSendTool.execute({ targetSessionId: 'researcher', message: 'hi' }, ctx());
+    expect(r.success).toBe(true);
+    expect(run.mock.calls[0]![0]).toBe('S_res'); // delivered to the resolved id
+  });
+
+  it('resolves a channel:peerId (disambiguates across channels)', async () => {
+    const r = await sessionsSendTool.execute({ targetSessionId: 'telegram:writer', message: 'hi' }, ctx());
+    expect(r.success).toBe(true);
+    expect(run.mock.calls[0]![0]).toBe('S_tg');
+  });
+
+  it('rejects an ambiguous bare name with the candidates', async () => {
+    const r = await sessionsSendTool.execute({ targetSessionId: 'writer', message: 'hi' }, ctx());
+    expect(r.success).toBe(false);
+    expect(r.output).toMatch(/ambiguous/i);
+    expect(r.output).toMatch(/web:writer/);
+    expect(r.output).toMatch(/telegram:writer/);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('a raw session id still takes precedence (back-compat)', async () => {
+    const r = await sessionsSendTool.execute({ targetSessionId: 'S_res', message: 'hi' }, ctx());
+    expect(r.success).toBe(true);
+    expect(run.mock.calls[0]![0]).toBe('S_res');
+  });
+
+  it('unknown name → unknown target error', async () => {
+    const r = await sessionsSendTool.execute({ targetSessionId: 'nobody', message: 'hi' }, ctx());
+    expect(r.success).toBe(false);
+    expect(r.output).toMatch(/unknown target/i);
   });
 });

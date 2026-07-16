@@ -7,8 +7,9 @@
  * returns the target's reply (or a clean timeout). The delivered turn inherits
  * the origin's owner tier so a multi-agent pipeline stays same-owner.
  *
- * MVP targets by sessionId (agent-name resolution + durable offline queue are
- * PR2). Reuses the meta-tool deps already injected for sessions.spawn.
+ * Targets by session id OR by friendly agent name (channel:peerId / peerId of an
+ * active session — resolveTargetSession); durable offline queue via deliverMode.
+ * Reuses the meta-tool deps already injected for sessions.spawn.
  */
 
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
@@ -20,7 +21,39 @@ const logger = createLogger('meta.sessions.send');
 const MAX_MESSAGE_BYTES = 32 * 1024;
 const DEFAULT_WAIT_MS = 120_000;
 
-interface SessionManagerLike { get(sessionId: string): Promise<{ id: string | number } | undefined> }
+interface SessionSummary { id: string | number; channel?: string; peerId?: string }
+interface SessionManagerLike {
+  get(sessionId: string): Promise<{ id: string | number } | undefined>;
+  /** Optional — enables friendly-name resolution (channel:peerId / peerId). */
+  listActive?(): Promise<SessionSummary[]>;
+}
+
+/**
+ * Resolve a target to a canonical session id. Tries an exact session id first
+ * (back-compat), then falls back to a friendly NAME matched against active
+ * sessions: an exact `channel:peerId`, else a bare `peerId`. Ambiguous bare names
+ * (same peerId on multiple channels) return an error listing the candidates so
+ * the caller can qualify with `channel:peerId`.
+ */
+async function resolveTargetSession(sm: SessionManagerLike, target: string): Promise<{ id: string } | { error: string }> {
+  const byId = await sm.get(target).catch(() => undefined);
+  if (byId) return { id: String(byId.id) };
+  if (typeof sm.listActive !== 'function') return { error: `unknown target session "${target}".` };
+
+  const active = await sm.listActive().catch(() => [] as SessionSummary[]);
+  const t = target.toLowerCase();
+  const full = active.filter((s) => `${s.channel}:${s.peerId}`.toLowerCase() === t);
+  if (full.length === 1) return { id: String(full[0]!.id) };
+  const byPeer = active.filter((s) => String(s.peerId).toLowerCase() === t);
+  if (byPeer.length === 1) return { id: String(byPeer[0]!.id) };
+
+  const matches = byPeer.length > 0 ? byPeer : full;
+  if (matches.length > 1) {
+    const cands = matches.slice(0, 8).map((s) => `${s.channel}:${s.peerId}`).join(', ');
+    return { error: `ambiguous target "${target}" — matches ${matches.length} sessions (${cands}). Use a specific "channel:peerId" or the session id.` };
+  }
+  return { error: `unknown target session "${target}".` };
+}
 interface AgentLoopLike {
   run(
     sessionId: string,
@@ -39,7 +72,7 @@ export const sessionsSendTool: ToolDefinition = {
   category: 'meta',
   timeout: 130_000,
   parameters: {
-    targetSessionId: { type: 'string', required: true, description: 'The target session id to deliver to.' },
+    targetSessionId: { type: 'string', required: true, description: 'The target: a session id, OR a friendly agent name — the "channel:peerId" (e.g. "web:researcher") or bare "peerId" of an active session (e.g. one from sessions.spawn). Ambiguous bare names are rejected with the candidates.' },
     message: { type: 'string', required: true, description: 'The message/handoff content for the target session.' },
     waitForReply: { type: 'boolean', required: false, description: "Await the target's reply (default false = fire-and-forget)." },
     timeoutMs: { type: 'number', required: false, description: 'Reply timeout in ms when waitForReply (default 120000).' },
@@ -47,7 +80,7 @@ export const sessionsSendTool: ToolDefinition = {
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-    const targetSessionId = typeof params['targetSessionId'] === 'string' ? params['targetSessionId'].trim() : '';
+    const targetInput = typeof params['targetSessionId'] === 'string' ? params['targetSessionId'].trim() : '';
     const message = typeof params['message'] === 'string' ? params['message'] : '';
     const waitForReply = params['waitForReply'] === true;
     const timeoutMs = typeof params['timeoutMs'] === 'number' && params['timeoutMs'] > 0 ? params['timeoutMs'] : DEFAULT_WAIT_MS;
@@ -56,10 +89,10 @@ export const sessionsSendTool: ToolDefinition = {
     // identity (internal/autonomous turns) is allowed (channel policy is the
     // authoritative per-caller gate, per Spec 3).
     if (ctx.isOwner === false) {
-      auditSend({ event: 'blocked-acl', from: ctx.sessionId, target: targetSessionId });
+      auditSend({ event: 'blocked-acl', from: ctx.sessionId, target: targetInput });
       return { success: false, output: 'sessions.send: refused — only owner-tier sessions may message other sessions.' };
     }
-    if (!targetSessionId || !message) {
+    if (!targetInput || !message) {
       return { success: false, output: 'sessions.send: "targetSessionId" and "message" are required.' };
     }
     if (Buffer.byteLength(message, 'utf8') > MAX_MESSAGE_BYTES) {
@@ -72,11 +105,13 @@ export const sessionsSendTool: ToolDefinition = {
       return { success: false, output: 'sessions.send: session manager / agent loop not initialised (injectMetaToolDeps).' };
     }
 
-    // Unknown target → tool error (acceptance 3).
-    const target = await sm.get(targetSessionId).catch(() => undefined);
-    if (!target) {
-      return { success: false, output: `sessions.send: unknown target session "${targetSessionId}".` };
+    // Resolve target: a raw session id OR a friendly name (channel:peerId /
+    // peerId of an active session). Unknown/ambiguous → tool error (acceptance 3).
+    const resolved = await resolveTargetSession(sm, targetInput);
+    if ('error' in resolved) {
+      return { success: false, output: `sessions.send: ${resolved.error}` };
     }
+    const targetSessionId = resolved.id;
 
     // Hop-depth + cycle (acceptance 4).
     const gate = checkAndAdvance(ctx.sessionId, targetSessionId);
