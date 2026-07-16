@@ -272,6 +272,37 @@ export function buildRpcRouter(deps: WsServerDeps): Map<string, RpcHandlerFn> {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // secrets.* — SecretRef runtime snapshot (operator.admin). POSTURE-ONLY:
+  // no resolved secret material is ever returned.
+  // -------------------------------------------------------------------------
+
+  router.set('secrets.reload', async (_params: unknown) => {
+    log.debug('secrets.reload called');
+    try {
+      const { reloadSecretSnapshot } = await import('../secrets/snapshot.js');
+      const { PROJECT_ROOT } = await import('../shared/paths.js');
+      return await reloadSecretSnapshot(PROJECT_ROOT);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error({ err: msg }, 'secrets.reload handler error');
+      return { error: msg };
+    }
+  });
+
+  router.set('secrets.resolve', async (params: unknown) => {
+    log.debug('secrets.resolve called');
+    try {
+      const { secretResolveProbe } = await import('../secrets/snapshot.js');
+      const p = (params && typeof params === 'object' ? params : {}) as { name?: string; ref?: unknown };
+      return secretResolveProbe({ name: p.name, ref: p.ref });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error({ err: msg }, 'secrets.resolve handler error');
+      return { error: msg };
+    }
+  });
+
   log.info({ methods: [...router.keys()] }, 'RPC router built');
   return router;
 }

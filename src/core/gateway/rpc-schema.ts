@@ -48,6 +48,8 @@ const METHOD_SCOPES: Record<string, OperatorScope> = {
   'sessions.send': 'operator.write',
   'cron.add': 'operator.write',
   'cron.remove': 'operator.write',
+  'secrets.reload': 'operator.admin',
+  'secrets.resolve': 'operator.admin',
 };
 
 export function requiredScopeFor(method: string): OperatorScope {
