@@ -40,6 +40,8 @@ const mocks = vi.hoisted(() => {
   const mockIdle = vi.fn().mockResolvedValue(undefined);
   const mockMailboxOpen = vi.fn().mockResolvedValue(undefined);
   const mockFetch = vi.fn().mockReturnValue((async function* () {})());
+  const mockSearch = vi.fn().mockResolvedValue([]);
+  const mockFetchOne = vi.fn().mockResolvedValue(false);
   const mockOn = vi.fn();
   const mockAppend = vi.fn().mockResolvedValue(undefined);
   const mockImapClose = vi.fn();
@@ -50,6 +52,8 @@ const mocks = vi.hoisted(() => {
     idle: mockIdle,
     mailboxOpen: mockMailboxOpen,
     fetch: mockFetch,
+    search: mockSearch,
+    fetchOne: mockFetchOne,
     on: mockOn,
     append: mockAppend,
     close: mockImapClose,
@@ -75,6 +79,8 @@ const mocks = vi.hoisted(() => {
     mockIdle,
     mockMailboxOpen,
     mockFetch,
+    mockSearch,
+    mockFetchOne,
     mockOn,
     mockAppend,
     mockImapClose,
@@ -159,6 +165,8 @@ describe('EmailAdapter', () => {
     // This simulates the IMAP server closing the connection.
     mocks.mockIdle.mockRejectedValue(new Error('IDLE terminated'));
     mocks.mockFetch.mockReturnValue((async function* () {})());
+    mocks.mockSearch.mockResolvedValue([]);
+    mocks.mockFetchOne.mockResolvedValue(false);
     mocks.ImapFlowConstructor.mockImplementation(function () { return mocks.mockImapFlowInstance; });
     mocks.mockCreateTransport.mockReturnValue({
       sendMail: mocks.mockSendMail,
@@ -439,7 +447,7 @@ describe('EmailAdapter', () => {
 
     // Poll receive: opens INBOX and fetches unseen at/after the baseline.
     expect(mocks.mockMailboxOpen).toHaveBeenCalledWith('INBOX');
-    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false, uid: '1:*' }, { source: true });
+    expect(mocks.mockSearch).toHaveBeenCalledWith({ seen: false, uid: '1:*' }, { uid: true });
     // No 'exists' event subscription — delivery is poll-driven, not event-driven.
     expect(mocks.mockOn.mock.calls.find((c) => c[0] === 'exists')).toBeUndefined();
     // A running poll interval is set.
@@ -448,6 +456,19 @@ describe('EmailAdapter', () => {
     await adapter.stop();
     // stop() clears the poll timer.
     expect((adapter as unknown as { _pollTimer: unknown })._pollTimer).toBeNull();
+  });
+
+  it('sweeps via search + per-message fetchOne (not a bulk streaming fetch)', async () => {
+    setValidEmailEnv();
+    mocks.mockSearch.mockResolvedValue([501, 502]); // two unseen uids at/after baseline
+    mocks.mockFetchOne.mockResolvedValue(false); // (parsing not needed — just count the calls)
+    const adapter = new EmailAdapter();
+    await adapter.start();
+    await new Promise((r) => setTimeout(r, 40));
+    // Each uid fetched INDIVIDUALLY via fetchOne — no bulk imap.fetch on the poll path.
+    expect(mocks.mockFetchOne).toHaveBeenCalledWith('501', { source: true, uid: true }, { uid: true });
+    expect(mocks.mockFetchOne).toHaveBeenCalledWith('502', { source: true, uid: true }, { uid: true });
+    await adapter.stop();
   });
 
   it('SUDO_EMAIL_POLL_DISABLE=1 skips the poll loop (kill switch)', async () => {
@@ -506,7 +527,7 @@ describe('EmailAdapter', () => {
     await adapter.start();
     await new Promise((r) => setTimeout(r, 25));
     // The sweep must be scoped to uid >= 500 — never the 339-mail backlog.
-    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false, uid: '500:*' }, { source: true });
+    expect(mocks.mockSearch).toHaveBeenCalledWith({ seen: false, uid: '500:*' }, { uid: true });
     await adapter.stop();
   });
 });
