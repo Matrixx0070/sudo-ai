@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => {
     fetch: mockFetch,
     on: mockOn,
     append: mockAppend,
+    usable: true, // real ImapFlow reports usable=true after connect (so _ensureImap reuses)
   };
 
   const ImapFlowConstructor = vi.fn().mockImplementation(function () {
@@ -427,43 +428,33 @@ describe('EmailAdapter', () => {
   // loop connected but processed NOTHING).
   // -------------------------------------------------------------------------
 
-  it('registers an "exists" listener and runs an initial unseen sweep on start', async () => {
+  it('polls INBOX on start and sweeps unseen mail (no fragile IDLE/exists)', async () => {
     setValidEmailEnv();
     const adapter = new EmailAdapter();
     await adapter.start();
-    await new Promise((r) => setTimeout(r, 25)); // _listenIdle is fire-and-forget
+    await new Promise((r) => setTimeout(r, 40)); // first poll runs immediately
 
-    const existsCall = mocks.mockOn.mock.calls.find((c) => c[0] === 'exists');
-    expect(existsCall).toBeTruthy(); // new-mail notifications are event-driven
-    expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false, uid: '1:*' }, { source: true }); // initial sweep (no uidNext from mock → baseline 1)
-
-    // Firing the captured 'exists' handler triggers another sweep.
-    mocks.mockFetch.mockClear();
-    mocks.mockFetch.mockReturnValue((async function* () {})());
-    (existsCall![1] as () => void)();
-    await new Promise((r) => setTimeout(r, 25));
+    // Poll receive: opens INBOX and fetches unseen at/after the baseline.
+    expect(mocks.mockMailboxOpen).toHaveBeenCalledWith('INBOX');
     expect(mocks.mockFetch).toHaveBeenCalledWith({ seen: false, uid: '1:*' }, { source: true });
+    // No 'exists' event subscription — delivery is poll-driven, not event-driven.
+    expect(mocks.mockOn.mock.calls.find((c) => c[0] === 'exists')).toBeUndefined();
+    // A running poll interval is set.
+    expect((adapter as unknown as { _pollTimer: unknown })._pollTimer).toBeTruthy();
 
     await adapter.stop();
+    // stop() clears the poll timer.
+    expect((adapter as unknown as { _pollTimer: unknown })._pollTimer).toBeNull();
   });
 
-  it('reconnects the listener when the IMAP connection closes (Gmail drops idle conns)', async () => {
+  it('SUDO_EMAIL_POLL_DISABLE=1 skips the poll loop (kill switch)', async () => {
     setValidEmailEnv();
-    process.env['EMAIL_RECONNECT_BACKOFF_MS'] = '5';
+    process.env['SUDO_EMAIL_POLL_DISABLE'] = '1';
     const adapter = new EmailAdapter();
     await adapter.start();
-    await new Promise((r) => setTimeout(r, 25));
-    const opensBefore = mocks.mockMailboxOpen.mock.calls.length;
-    const closeCall = mocks.mockOn.mock.calls.find((c) => c[0] === 'close');
-    expect(closeCall).toBeTruthy(); // a close handler is registered
-    // simulate Gmail dropping the connection
-    (closeCall![1] as () => void)();
-    await new Promise((r) => setTimeout(r, 60)); // let backoff(5ms)+reconnect run
-    // reconnect rebuilt the client and re-opened INBOX (mailboxOpen called again)
-    expect(mocks.mockMailboxOpen.mock.calls.length).toBeGreaterThan(opensBefore);
-    const a = adapter as unknown as { _reconnecting: boolean };
-    expect(a._reconnecting).toBe(false); // reconnect completed
-    delete process.env['EMAIL_RECONNECT_BACKOFF_MS'];
+    await new Promise((r) => setTimeout(r, 30));
+    expect((adapter as unknown as { _pollTimer: unknown })._pollTimer).toBeNull();
+    delete process.env['SUDO_EMAIL_POLL_DISABLE'];
     await adapter.stop();
   });
 
