@@ -623,24 +623,57 @@ export class EmailAdapter implements ChannelAdapter {
   private async _pollOnce(): Promise<void> {
     if (!this._isConnected || this._polling) return;
     this._polling = true;
+    // Hard watchdog: a connection can zombie (TCP up but commands hang forever —
+    // seen when the boot-time connect raced heavy event-loop congestion). Without
+    // a timeout the stuck poll would hold the _polling guard and wedge every later
+    // tick. On timeout we DROP the connection; the next tick rebuilds a fresh one.
+    const rawTimeout = Number(process.env['EMAIL_POLL_TIMEOUT_MS']);
+    const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 20000;
     try {
-      const imap = await this._ensureImap();
-      const box = await imap.mailboxOpen('INBOX');
-      if (!this._baselinePinned) {
-        const uidNext = typeof (box as { uidNext?: unknown })?.uidNext === 'number' ? (box as { uidNext: number }).uidNext : null;
-        let baseline = loadUidBaseline(this._imapUser);
-        if (baseline === null) { baseline = uidNext ?? 1; saveUidBaseline(this._imapUser, baseline); }
-        this._uidBaseline = baseline;
-        this._baselinePinned = true;
-        log.info({ uidNext, baseline }, 'IMAP INBOX baseline pinned (poll mode)');
-      }
-      await this._sweepUnseen(imap);
+      await this._withTimeout(this._pollWork(), timeoutMs, 'email poll');
     } catch (err) {
-      // Drop the connection so the next tick rebuilds cleanly. Never throws out.
-      if (this._isConnected) log.warn({ err: String(err) }, 'IMAP poll failed — will retry next tick');
-      if (this._imap) { try { await this._imap.logout(); } catch { /* gone */ } this._imap = null; }
+      if (this._isConnected) log.warn({ err: String(err) }, 'IMAP poll failed/timed out — dropping connection, retry next tick');
+      this._dropImap();
     } finally {
       this._polling = false;
+    }
+  }
+
+  /** The actual poll body: ensure a usable connection, open INBOX, pin the
+   * baseline on first open, sweep unseen at/after the baseline. */
+  private async _pollWork(): Promise<void> {
+    const imap = await this._ensureImap();
+    const box = await imap.mailboxOpen('INBOX');
+    if (!this._baselinePinned) {
+      const uidNext = typeof (box as { uidNext?: unknown })?.uidNext === 'number' ? (box as { uidNext: number }).uidNext : null;
+      let baseline = loadUidBaseline(this._imapUser);
+      if (baseline === null) { baseline = uidNext ?? 1; saveUidBaseline(this._imapUser, baseline); }
+      this._uidBaseline = baseline;
+      this._baselinePinned = true;
+      log.info({ uidNext, baseline }, 'IMAP INBOX baseline pinned (poll mode)');
+    }
+    await this._sweepUnseen(imap);
+  }
+
+  /** Race a promise against a timeout. The underlying op keeps running but is
+   * abandoned; _dropImap severs the connection it was stuck on. */
+  private _withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms); });
+    return Promise.race([p.finally(() => clearTimeout(timer)), timeout]);
+  }
+
+  /** Sever the poll/read connection immediately (close, not graceful logout, so a
+   * zombie can't hang the drop). Next _ensureImap rebuilds fresh. */
+  private _dropImap(): void {
+    const imap = this._imap;
+    this._imap = null;
+    if (imap) {
+      try {
+        const closable = imap as unknown as { close?: () => void; logout?: () => Promise<void> };
+        if (typeof closable.close === 'function') closable.close();
+        else void closable.logout?.();
+      } catch { /* already gone */ }
     }
   }
 
