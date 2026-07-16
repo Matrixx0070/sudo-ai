@@ -694,12 +694,18 @@ export class EmailAdapter implements ChannelAdapter {
     try {
       do {
         this._sweepPending = false;
-        for await (const msg of imap.fetch({ seen: false, uid: `${this._uidBaseline}:*` }, { source: true })) {
-          // The `N:*` IMAP range quirk: when N > every uid the range matches the
-          // LAST message — filter explicitly so pre-baseline mail never slips in.
-          if (typeof msg.uid === 'number' && msg.uid < this._uidBaseline) continue;
+        // Per-message fetch (search → fetchOne) instead of one bulk streaming
+        // fetch: in the heavy daemon the streamed fetch-with-source starves and
+        // hangs forever, while discrete small request/response commands (search,
+        // fetchOne) get through. The `N:*` range quirk (N above every uid matches
+        // the LAST msg) is neutralised by the explicit >= baseline filter.
+        const found = (await imap.search({ seen: false, uid: `${this._uidBaseline}:*` }, { uid: true })) || [];
+        const uids = (found as number[]).filter((u) => u >= this._uidBaseline).sort((a, b) => a - b);
+        for (const uid of uids) {
+          const msg = await imap.fetchOne(String(uid), { source: true, uid: true }, { uid: true });
+          if (!msg) continue;
           processed++;
-          if (typeof msg.uid === 'number' && (maxUid === null || msg.uid > maxUid)) maxUid = msg.uid;
+          if (maxUid === null || uid > maxUid) maxUid = uid;
           try {
             if (!msg.source) continue;
             const parsed: ParsedMail = await simpleParser(msg.source as Buffer);
