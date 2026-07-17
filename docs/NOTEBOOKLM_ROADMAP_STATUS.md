@@ -8,7 +8,7 @@ Composes on the completed Drive roadmap (`docs/DRIVE_ROADMAP.md`, F1–F38 shipp
 | Phase | Scope | Status |
 |---|---|---|
 | N0 | Recon + core rails (E1/E2/E3) | **recon confirmed; build in progress (this PR)** |
-| N1 | Broadcast surface | todo |
+| N1 | Broadcast surface | **build in progress (this PR)** — shapes+CLI+rituals+2 gap-repairs |
 | N2 | Probe & verification | todo |
 | N3 | Judgment/relationship/self-knowledge | todo |
 | N4 | Lineage & society | todo |
@@ -37,9 +37,9 @@ Additive gaps (small, mechanical, done inside their phase):
 | Gap | What | Phase |
 |---|---|---|
 | G-MODELGEN | add `modelGeneration` to `ResolvedRoute` + `aliases.ts` | N4 (F64) |
-| G-F46MARK | comment source-marker field (corrections countable) | N1 (F46) |
+| ~~G-F46MARK~~ | **DONE** — comments.ts extracts `[F46]`/`F46:` marker → dataset row + memory name | N1 (F46) |
 | G-CANARYWRITE | `registerCanary(entry)` writer (canary is read/trip only) | N4 (F67) |
-| G-F52RANK | rank open-questions in `dream.ts` (arbitrary order today) | N1 (F52) |
+| ~~G-F52RANK~~ | **DONE** — dream.ts ranks (orphaned>stale>hold); open-questions file carries `ranked[]` | N1 (F52) |
 | G-PROPOSALS | `tasks/proposals/` folder key (blackboard peer-read grabs all `.json`) | N4 (F70) |
 | G-F43 | incident-theater net-new (consumes `ops/incidents` + `unpackBundle`) | N1 (F43) |
 

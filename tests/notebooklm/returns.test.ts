@@ -72,7 +72,10 @@ describe('E2 filename parsing', () => {
     expect(R.parseReturnFilename('F57.mirror-account.2026-07-21.md')).toMatchObject({ featureId: 'F57', type: 'mirror-account', date: '2026-07-21', approved: false, ext: 'md' });
     expect(R.parseReturnFilename('F62.principal-model.2026-08-01.approved.md')).toMatchObject({ featureId: 'F62', approved: true });
     expect(R.parseReturnFilename('garbage.txt')).toBeNull();
-    expect(R.parseReturnFilename('F1.x.2026-1-1.md')).toBeNull(); // bad date
+    expect(R.parseReturnFilename('F1.x.md')).toBeNull(); // missing ref segment
+    expect(R.parseReturnFilename('notafeature.type.2026-07-21.md')).toBeNull(); // no F<id>
+    // Third segment accepts a date OR an id (F43 uses an incident id).
+    expect(R.parseReturnFilename('F43.postmortem.inc-99.md')).toMatchObject({ featureId: 'F43', date: 'inc-99' });
   });
   it('tier + category by convention', () => {
     expect(R.tierFor(R.parseReturnFilename('F1.x.2026-07-21.md')!)).toBe('self_acquired');

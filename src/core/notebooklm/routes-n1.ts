@@ -1,0 +1,42 @@
+/**
+ * @file notebooklm/routes-n1.ts
+ * @description N1 special return routes. F43 postmortems become dead-end
+ * candidates (F33) instead of plain memories. F51/F52/F67 external-tier
+ * forcing is handled by the runtime's forcedTier map, not a route. Content
+ * arriving here has ALREADY passed quarantine (E2 guarantee).
+ */
+
+import { createLogger } from '../shared/logger.js';
+import { registerReturnRoute } from './returns.js';
+
+const log = createLogger('notebooklm:routes-n1');
+
+let registered = false;
+export function registerN1Routes(): void {
+  if (registered) return;
+  registered = true;
+
+  // F43 — postmortem conclusions → dead-end candidate (F33).
+  registerReturnRoute('F43', async ({ parsed, content }) => {
+    const { draftDeadEnd } = await import('../gdrive/dead-ends.js');
+    // Derive coarse pattern keys from the first line + any quoted tool names.
+    const firstLine = content.split('\n').find((l) => l.trim()) ?? 'incident postmortem';
+    const toolHits = [...content.matchAll(/\b([a-z]+\.[a-z-]+)\b/g)].map((m) => m[1]!).slice(0, 5);
+    draftDeadEnd({
+      summary: firstLine.slice(0, 300),
+      patternKeys: toolHits.length ? toolHits : [parsed.type],
+      context: `NotebookLM postmortem of incident ${parsed.date}`,
+      cause: 'incident postmortem (F43)',
+      evidenceRef: parsed.raw,
+    });
+    log.info({ file: parsed.raw, patternKeys: toolHits.length }, 'F43 postmortem → dead-end candidate');
+    return 'dead-end-candidate';
+  });
+}
+
+/** Feature ids whose returns are FORCED to external tier (no elevation). */
+export const N1_FORCED_EXTERNAL: Record<string, 'external'> = {
+  F51: 'external', // video briefs originate from third-party video
+  F52: 'external', // deep-research briefs
+  F67: 'external', // embassy (N4; set here so the map is complete)
+};

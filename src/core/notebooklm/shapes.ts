@@ -22,6 +22,8 @@ export interface ShapeContext {
   readChunks?: (query: string, limit: number) => Promise<Array<{ text: string; path: string }>>;
   /** Repo/text file reader for architecture shapes. */
   readFile?: (path: string) => string | null;
+  /** Live source Docs to point a notebook at (F41 cockpit pointer card). */
+  readSourceDocs?: () => Promise<Array<{ name: string; id: string; url?: string }>>;
 }
 
 export interface CompiledDoc {
