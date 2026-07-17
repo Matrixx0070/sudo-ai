@@ -60,3 +60,40 @@ export function resolveAlias(name: string): string {
   const override = process.env[envKeyFor(name)];
   return override && override.trim() !== '' ? override.trim() : DEFAULTS[name];
 }
+
+/**
+ * G-MODELGEN: derive a coarse MODEL GENERATION token from a `provider/model`
+ * string — the family + major version, minor/point releases dropped. Used by
+ * the F64 succession gate: when the primary brain's generation changes (e.g.
+ * `anthropic/opus-4` → `anthropic/opus-5`), succession fires (pause→ack→pulse→
+ * unpause). A point bump (`opus-4-8` → `opus-4-9`) is the SAME generation.
+ *
+ * Examples: anthropic/claude-opus-4-8 → anthropic/opus-4 ·
+ * xai/grok-4-fast-reasoning → xai/grok-4 · openai/gpt-4o → openai/gpt-4 ·
+ * ollama/llama3.2 → ollama/llama-3.
+ */
+const MODEL_FAMILIES = [
+  'opus', 'sonnet', 'haiku', 'grok', 'gpt', 'llama', 'gemini', 'mistral',
+  'qwen', 'deepseek', 'fable', 'o1', 'o3', 'o4',
+] as const;
+
+export function modelGenerationOf(model: string): string {
+  const slash = model.indexOf('/');
+  const provider = slash > 0 ? model.slice(0, slash).toLowerCase() : '';
+  const id = (slash > 0 ? model.slice(slash + 1) : model).toLowerCase();
+  const fam = MODEL_FAMILIES.find((f) => id.includes(f));
+  const prefix = provider ? `${provider}/` : '';
+  if (fam) {
+    const major = id.slice(id.indexOf(fam)).match(/[a-z]+[-_\s]?(\d+)/)?.[1];
+    return `${prefix}${fam}${major ? `-${major}` : ''}`;
+  }
+  // Fallback: first token + first number anywhere.
+  const base = id.split(/[-/._\s]/)[0] || id;
+  const num = id.match(/(\d+)/)?.[1];
+  return `${prefix}${base}${num ? `-${num}` : ''}`;
+}
+
+/** The current PRIMARY-brain generation (the frontier alias, override-aware). */
+export function currentModelGeneration(alias: SudoAlias = 'sudo/frontier'): string {
+  return modelGenerationOf(resolveAlias(alias));
+}
