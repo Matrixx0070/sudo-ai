@@ -10,7 +10,7 @@ Composes on the completed Drive roadmap (`docs/DRIVE_ROADMAP.md`, F1–F38 shipp
 | N0 | Recon + core rails (E1/E2/E3) | **recon confirmed; build in progress (this PR)** |
 | N1 | Broadcast surface | **build in progress (this PR)** — shapes+CLI+rituals+2 gap-repairs |
 | N2 | Probe & verification | **shipped** — E4 engine + F40/F50/F58/F61/F63/F68 (#790) |
-| N3 | Judgment/relationship/self-knowledge | **build in progress** — structural repairs G-PLANNER+G-F32WIRE shipped (#791); F69 error-atlas (this PR); F48/F54/F49/F59/F62/F66 remain |
+| N3 | Judgment/relationship/self-knowledge | **build in progress** — G-PLANNER+G-F32WIRE (#791), F69 error-atlas (#792), F48 debate-chamber (this PR) shipped; F54/F49/F59/F62/F66 remain |
 | N4 | Lineage & society | todo |
 | N5 | The Organ (optional autonomous) | todo (gated; not entered) |
 
@@ -64,6 +64,7 @@ Additive gaps (small, mechanical, done inside their phase):
 | F63 identity pulse | `tests/notebooklm/probe.test.ts` | alerts when identity answers drift from baseline |
 | F68 curriculum ladder | `tests/notebooklm/probe.test.ts` | advances one rung on pass; holds on fail; fully offline |
 | F69 error atlas | `tests/gdrive/error-atlas.test.ts` | clusters corrections into ranked themes; bias-priors preamble; zone-1 example screened out of the broadcast shape |
+| F48 debate chamber | `tests/notebooklm/debate.test.ts` | symmetric FOR/AGAINST pack; reuses F32 conclusion-guard; zone-1 position never broadcast (fail-closed, zero partial writes) |
 | (later) embassy verbatim | tbd (N4) | verbatim-dump held, authored distillate external |
 
 ## Annex B — API-day upgrade map (maintain from day one)

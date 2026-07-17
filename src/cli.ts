@@ -3120,6 +3120,30 @@ async function boot(): Promise<void> {
         }
       }
 
+      // F48 — debate chamber (opt-in, default OFF): a CRITICAL-risk approved
+      // action also gets a symmetric FOR/AGAINST pack in notebooklm/debates.
+      // Both advocates pinned to the INDEPENDENT judge route (invariant 7).
+      if (process.env['SUDO_DEBATE_CHAMBER'] === '1') {
+        try {
+          const { setDebateRequester } = await import('./core/agent/debate-seam.js');
+          const { resolveJudgeModel } = await import('./llm/judge.js');
+          setDebateRequester(async (req) => {
+            const { getNlmRuntime } = await import('./core/notebooklm/runtime.js');
+            const { exportDebatePack } = await import('./core/notebooklm/debate.js');
+            const rt = await getNlmRuntime();
+            await exportDebatePack(
+              rt.client,
+              rt.folders,
+              { id: req.key, question: req.question, evidence: req.evidence, constraints: req.constraints, impact: 'critical', createdAt: new Date().toISOString() },
+              (_stance, prompt) => brain.chat([{ role: 'user', content: prompt }], resolveJudgeModel()),
+            );
+          });
+          log.info('F48: debate-chamber requester wired (judge-route advocates)');
+        } catch (err) {
+          log.warn({ err: String(err) }, 'F48 debate-chamber wiring failed (non-fatal)');
+        }
+      }
+
       // F2 — brain checkpoint (default 6h) + restore drill (default weekly).
       // Same re-upsert-on-interval-change pattern as the heartbeat above.
       const ckRaw = Number(process.env['SUDO_GDRIVE_CHECKPOINT_MS']);
