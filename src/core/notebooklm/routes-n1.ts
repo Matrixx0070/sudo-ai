@@ -32,6 +32,16 @@ export function registerN1Routes(): void {
     log.info({ file: parsed.raw, patternKeys: toolHits.length }, 'F43 postmortem → dead-end candidate');
     return 'dead-end-candidate';
   });
+
+  // F54 — informed-approval attestation → validate token, grant/hold the gate.
+  // Never lands in memory; the harness-enforced gate state lives on disk.
+  // parsed.date carries the approval id (third filename segment).
+  registerReturnRoute('F54:attestation', async ({ parsed, content }) => {
+    const { recordAttestation } = await import('./informed-approval.js');
+    const r = recordAttestation(parsed.date, content);
+    log.info({ id: parsed.date, granted: r.granted, reason: r.reason }, 'F54 attestation processed');
+    return r.granted ? 'approval-granted' : 'approval-held';
+  });
 }
 
 /** Feature ids whose returns are FORCED to external tier (no elevation). */
