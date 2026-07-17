@@ -347,6 +347,19 @@ Desktop client; folder shared to frankmartin7722@gmail.com):
   classifier caught credential-adjacent content; working as designed).
 - **Restore drill: PASS** (divergent=[] — the Drive backup reproduces the
   local brain byte-for-byte).
+- **Prod daemon LIVE** (pid 2105507): all gdrive cron jobs scheduled and
+  firing — boot restore-check "up-to-date", control-panel Sheet created live
+  (1fSmaBPK…), inbox/changes/blackboard/panel sweeps on schedule, audit rows
+  in data/audit.db. (Daemon logs at data/logs/sudo-ai-v5-out.log.)
+- **F34 pacemaker DEPLOYED + LIVE** (Apps Script "sudo-ai pacemaker (F34)",
+  scriptId 1_EZ-yhKra9j465ALgmuYag3m48XapYNACpNQ7IUsjFsTju9yVAZyXEzn, owned by
+  megastream). 3 time-triggers installed: deadMan/10min, morningDigest/07:00,
+  rotatePins/03:00. Advanced Drive service enabled via manifest; scopes
+  auto-detected + granted. VERIFIED: setupTriggers ran clean; deadMan computed
+  heartbeat age 2.8min < 20min threshold → correctly silent (no false alarm);
+  morningDigest executed to completion → MailApp.sendEmail path proven
+  authorized + working. Both dead-man leaves (staleness arithmetic + email
+  delivery) independently proven without forcing a 20-min outage.
 
 Field findings folded into gdrive-setup.md: SA storage-quota removal (403 on
 file create) ⇒ oauth mode is the consumer-account path; gcloud default client
@@ -369,7 +382,7 @@ Production (unverified).
 - [x] Epistemics (stale→re-derive lifecycle + rider live in retrieval).
 - [x] Continuity (hibernate/resume two-namespace + blackboard division).
 - [x] Self-improvement (eval+approval-only promotion; second opinion blocks).
-- [ ] Liveness dead-man email — Script specified; HUMAN deploy + hosts-down
+- [x] Liveness dead-man email — Script DEPLOYED + LIVE (F34); email path proven via morningDigest run; full hosts-down
       drill.
 - [x] Per-phase lint+test+typecheck green; mocked CI; stacked PRs; no secrets.
 
