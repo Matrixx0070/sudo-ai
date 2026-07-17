@@ -788,6 +788,8 @@ export class ConsciousnessOrchestrator {
    * read/write the orchestrator's own DB, where live episodes are recorded.
    */
   getEpisodicMemory(): EpisodicMemory { return this.episodicMemory; }
+  getSelfModel(): SelfModel { return this.selfModel; }
+  getTemporalSelf(): TemporalSelf { return this.temporalSelf; }
   getCounterfactualEngine(): CounterfactualEngine { return this.counterfactualEngine; }
   getMetacognitionEngine(): MetacognitionEngine { return this.metacognition; }
 
