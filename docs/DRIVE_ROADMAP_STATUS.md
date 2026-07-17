@@ -11,8 +11,8 @@ referenced in commits, PRs, and code comments. Spec: the 38-feature roadmap
 | 0 | Recon + foundation | **shipped** — PR #775 merged 2026-07-16 |
 | 1 | F17 F16 F29 integrity substrate | **shipped** — PR #777 merged 2026-07-16 |
 | 2 | F2 F36 F10 F9 durability | **shipped** — PR #778 merged 2026-07-16 |
-| 3 | F18 F1 F15 F19 F20 guarded ingestion | **shipped (this PR)** — see below |
-| 4 | F3 F4 F7 F6 F30 F21 human interface | todo |
+| 3 | F18 F1 F15 F19 F20 guarded ingestion | **shipped** — PR #779 merged 2026-07-16 |
+| 4 | F3 F4 F7 F6 F30 F21 human interface | **shipped (this PR)** — see below |
 | 5 | F22 F23 F24 F31 F33 F37 epistemics | todo |
 | 6 | F12 F11 F27 F28 F35 F14 autonomy | todo |
 | 7 | F8 F32 F25 F26 F38 F34 experimentation/ops | todo |
@@ -150,6 +150,50 @@ Phase 3 notes/deferrals:
 - Oversized extracted text: chunked ingestion (no LLM summarization pass yet;
   AutoSummarizer wiring when F12 lands).
 
+## Phase 4 (F3/F4/F7/F6/F30/F21) — shipped in `feat/gdrive-phase4-human-interface`
+
+- **F3** `report.ts` — nightly job (cron 23:55 default) aggregates audit rows +
+  held-quarantine items → fixed-section markdown (≤800 words) → Google Doc in
+  ops/reports/ (Doc deliberately: carries the F6 comment channel), updated in
+  place on same-day re-runs; auto-registered as an F6 watched doc.
+- **F4** `scorecard.ts` — one Sheet, tabs Evals/Telemetry/Skills/Forks/Derived;
+  headers + Derived formulas (rolling means, Sheet-side, zero tokens) seeded
+  once; writers use values.append only. Telemetry row daily from
+  api_call_log aggregation (read-only SQL) + limiter queue depths
+  (sync-observability rider). syncLagS/divergenceCount are 0 until F11/F12.
+- **F7** `control-panel.ts` — Config (typed whitelist, hard bounds,
+  harness-side enforcement), Control (PAUSE — writes the same pause flag
+  canaries use, so all gdrive jobs idle while the heartbeat keeps beating; a
+  CANARY pause is NOT releasable from the Sheet), Frozen display tab (written,
+  NEVER read back; frozen = PROTECTED_PATHS ∪ key paths ∪ SUDO_GDRIVE).
+  Cadence keys apply at next boot (status writeback says so explicitly).
+- **F6** `comments.ts` — 2-min poll on watched Docs (reports, atlas):
+  principal-authored unresolved comments → guard-delimited high-priority
+  'feedback' structured memory (injection-shaped comments stored inertly with
+  a guard note) → reply summarizing what was stored → resolve thread → seen-id
+  dedup. Corrections reach planning through the intelligence brief's
+  structured-memory search (existing path).
+- **F30** `atlas.ts` — nightly Doc updated in place (stable link): domains from
+  chunk paths, freshness (>60d = stale), zone-1 titles withheld, corrections +
+  projects sections; registered as watched doc so commenting on the atlas
+  produces F6 corrections.
+- **F21** `push.ts` + docs/gdrive-apps-script.md — transport (b): Apps Script
+  1-min trigger POSTs HMAC-signed pings; harness verifies (timing-safe, ±5min
+  freshness) and dispatches the matching job. Rides the EXISTING Spec-4
+  webhook gateway — no new route surface. Polling remains the backstop.
+  Transport (a) changes.watch deliberately not built (needs public HTTPS +
+  domain verification).
+
+Phase 4 scope notes:
+- F7 PAUSE scope: gdrive jobs idle (agent-wide idle would need loop-level
+  integration — deferred; PAUSE flag file is readable by any future consumer).
+- F21 hook wiring is config-side (webhooks.json5, HUMAN) + documented; the
+  verification/dispatch library is tested. The full <10s live demo needs the
+  HUMAN Apps Script deploy.
+- Phase 4 gate ("comment from phone → correction → behavior change →
+  scorecard") is UNVERIFIED live end-to-end — blocked on the HUMAN GCP setup;
+  every stage is unit-proven.
+
 ## Decisions & deviations from spec (repo architecture wins on *how*)
 
 | # | Decision | Why |
@@ -168,15 +212,17 @@ Phase 3 notes/deferrals:
 ## Feature ledger
 
 **F1 shipped** · **F2 shipped** (live cross-machine proof pending HUMAN GCP setup) ·
-F3 todo · F4 todo · F5 todo · F6 todo · F7 todo · F8 todo ·
+**F3 shipped** · **F4 shipped** (Evals rows wire to eval runner in Phase 7) · F5 todo ·
+**F6 shipped** · **F7 shipped** (PAUSE = gdrive scope) · F8 todo ·
 **F9 shipped** (CLI wiring → Phase 5) · **F10 shipped** (run-end wiring → Phase 5;
 replay = digest-verify stub) · F11 todo · F12 todo · F14 todo · **F15 shipped** ·
 **F16 shipped** (e2e proof now in inbox tests) ·
 **F17 shipped** (GC scheduling lands with F2) · **F18 shipped** ·
 **F19 shipped** (outbound tool-call check → Phase 5 seam; HUMAN planting open) ·
 **F20 shipped** (CI gym; scheduled run + scorecard → F4) ·
-F21 todo · F22 todo · F23 todo · F24 todo · F25 todo · F26 todo · F27 todo ·
-F28 todo · **F29 shipped** · F30 todo ·
+**F21 shipped** (lib+Script template; HUMAN deploy for live <10s demo) ·
+F22 todo · F23 todo · F24 todo · F25 todo · F26 todo · F27 todo ·
+F28 todo · **F29 shipped** · **F30 shipped** ·
 F31 todo · F32 todo · F33 todo · F34 todo (heartbeat producer shipped in Phase 0) ·
 F35 todo · **F36 shipped** · F37 todo · F38 todo
 

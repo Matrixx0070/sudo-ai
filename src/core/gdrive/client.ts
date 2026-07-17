@@ -170,6 +170,97 @@ export class DriveClient {
     return res.data as GdriveFileMeta;
   }
 
+  /**
+   * Upload markdown/text with conversion to a Google Doc (F3/F30 — Docs
+   * deliberately, not .md: they carry the comment channel for F6).
+   */
+  async filesCreateAsGoogleDoc(
+    name: string,
+    parentId: string,
+    body: string,
+    opts: CallOpts = {},
+  ): Promise<GdriveFileMeta> {
+    const res = await this.call(opts.lane, () =>
+      this.drive.files.create({
+        requestBody: { name, parents: [parentId], mimeType: 'application/vnd.google-apps.document' },
+        media: { mimeType: 'text/markdown', body },
+        fields: FILE_FIELDS,
+      }),
+    );
+    return res.data as GdriveFileMeta;
+  }
+
+  /** Update a Google Doc's content in place (stable fileId/link, F30). */
+  async filesUpdateGoogleDoc(fileId: string, body: string, opts: CallOpts = {}): Promise<void> {
+    await this.call(opts.lane, () =>
+      this.drive.files.update({ fileId, media: { mimeType: 'text/markdown', body } }),
+    );
+  }
+
+  /** Create an empty Google Sheet (F4/F7). */
+  async sheetsCreateSpreadsheet(
+    name: string,
+    parentId: string,
+    opts: CallOpts = {},
+  ): Promise<GdriveFileMeta> {
+    const res = await this.call(opts.lane, () =>
+      this.drive.files.create({
+        requestBody: {
+          name,
+          parents: [parentId],
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+        },
+        fields: FILE_FIELDS,
+      }),
+    );
+    return res.data as GdriveFileMeta;
+  }
+
+  /** Raw Sheets batchUpdate (tab creation, formatting). */
+  async sheetsBatchUpdate(
+    spreadsheetId: string,
+    requests: object[],
+    opts: CallOpts = {},
+  ): Promise<void> {
+    await this.call(opts.lane, () =>
+      this.sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } }),
+    );
+  }
+
+  /** Spreadsheet metadata (existing tab titles). */
+  async sheetsGetMeta(
+    spreadsheetId: string,
+    opts: CallOpts = {},
+  ): Promise<{ sheets: Array<{ title: string; sheetId: number }> }> {
+    const res = await this.call(opts.lane, () =>
+      this.sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(title,sheetId))' }),
+    );
+    return {
+      sheets: (res.data.sheets ?? []).map((s) => ({
+        title: s.properties?.title ?? '',
+        sheetId: s.properties?.sheetId ?? 0,
+      })),
+    };
+  }
+
+  /** Reply to a comment; action 'resolve' closes the thread (F6). */
+  async repliesCreate(
+    fileId: string,
+    commentId: string,
+    content: string,
+    action?: 'resolve' | 'reopen',
+    opts: CallOpts = {},
+  ): Promise<void> {
+    await this.call(opts.lane, () =>
+      this.drive.replies.create({
+        fileId,
+        commentId,
+        fields: 'id',
+        requestBody: { content, action },
+      }),
+    );
+  }
+
   /** Export a Google-native file (Doc/Sheet) to the given mimeType. */
   async filesExport(fileId: string, mimeType: string, opts: CallOpts = {}): Promise<string> {
     const res = await this.call(opts.lane, () =>

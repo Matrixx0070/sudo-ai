@@ -140,3 +140,36 @@ export {
   type InboxDeps,
   type InboxSweepResult,
 } from './inbox.js';
+// Phase 4 — human interface (F3/F4/F6/F7/F30/F21)
+export {
+  buildDailyReport,
+  publishDailyReport,
+  listHeldQuarantine,
+  type DailyReportInputs,
+} from './report.js';
+export {
+  ensureScorecard,
+  appendEvalRow,
+  appendTelemetryRow,
+  SCORECARD_NAME,
+  type EvalRow,
+  type TelemetryRow,
+} from './scorecard.js';
+export {
+  ensureControlPanel,
+  pollControlPanel,
+  defaultTunables,
+  frozenKeySet,
+  CONTROL_PANEL_NAME,
+  type TunableSpec,
+  type PanelPollResult,
+} from './control-panel.js';
+export { pollComments, watchDoc, loadWatchedDocs, type CommentsDeps, type CommentsPollResult } from './comments.js';
+export { buildAtlas, publishAtlas, ATLAS_NAME, type AtlasInputs } from './atlas.js';
+export { verifyPing, signPing, handlePushPing, PING_TOLERANCE_MS, type PushPing, type PushKind } from './push.js';
+export {
+  runGdriveDailyReportJob,
+  runGdriveControlPanelJob,
+  runGdriveCommentsJob,
+  runGdriveAtlasJob,
+} from './runtime.js';
