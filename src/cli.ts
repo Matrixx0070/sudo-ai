@@ -3487,6 +3487,26 @@ async function boot(): Promise<void> {
 
     registerSelfBuildCron(cronScheduler, selfBuildDepsRef);
 
+    // F90: AutoBugFix Modules C+D (auto-fix PR creation + deploy watch).
+
+    // Fully dormant unless SUDO_AUTOBUGFIX=1; per-module kill-switches
+
+    // (SUDO_AUTOFIX_DISABLE / SUDO_AUTODEPLOY_DISABLE) still apply.
+
+    try {
+
+      const { startAutoBugFix } = await import('./core/self-build/autobugfix-boot.js');
+
+      const autoBugFix = await startAutoBugFix({ mindDb: db.db as unknown as import('./core/self-build/autobugfix-boot.js').AutoBugFixDb });
+
+      if (autoBugFix) registerShutdown(() => autoBugFix.stop());
+
+    } catch (err) {
+
+      log.warn({ err: String(err) }, 'AutoBugFix C/D wiring failed — continuing without');
+
+    }
+
     if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
       log.info('Self-build autopilot WIRED — SUDO_SELF_BUILD_MODE=1 is active');
     } else {
