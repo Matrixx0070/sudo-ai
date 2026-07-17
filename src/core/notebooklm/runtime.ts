@@ -51,6 +51,16 @@ export function setNlmInspectorBrain(fn: InspectorBrainCall): void {
   inspectorBrain = fn;
 }
 
+// E4 self-runner + judge injections (background-only, cheapest routes).
+let selfAnswer: import('./probe.js').SelfAnswerFn | null = null;
+export function setNlmSelfAnswer(fn: import('./probe.js').SelfAnswerFn): void {
+  selfAnswer = fn;
+}
+let judgeCall: import('./probe.js').JudgeFn | null = null;
+export function setNlmJudge(fn: import('./probe.js').JudgeFn): void {
+  judgeCall = fn;
+}
+
 // ---------------------------------------------------------------------------
 // Cron entries
 // ---------------------------------------------------------------------------
@@ -89,6 +99,13 @@ export async function runNlmReturnsJob(): Promise<void> {
   const { MindDB } = await import('../memory/db.js');
   const structured = await import('../memory/structured-memory.js');
   registerN1Routes();
+  // E4: register probe-answer routes + the known probe sets + judge so
+  // F40/F50/F58 returns route to the comparator instead of memory.
+  const { registerProbeRoutes, registerProbeSet, setProbeJudge } = await import('./probe-route.js');
+  const { ALL_PROBE_SETS } = await import('./probe-sets.js');
+  registerProbeRoutes();
+  for (const set of ALL_PROBE_SETS) registerProbeSet(set);
+  if (judgeCall) setProbeJudge(judgeCall);
   const db = new MindDB();
   await processReturnsOnce({
     client: rt.client,
@@ -102,6 +119,72 @@ export async function runNlmReturnsJob(): Promise<void> {
     inspect: inspectorBrain ? { brainCall: inspectorBrain } : {},
     forcedTier: N1_FORCED_EXTERNAL,
   });
+}
+
+/**
+ * E4 verify job: the self reader answers every probe set (recorded for later
+ * comparison), then the OFFLINE gates run — F61 Feynman (blocking), F63 identity
+ * pulse (alert vs baseline), F68 curriculum ladder. Publishes a verify report
+ * and the probe question sheets to notebooklm/probes. No external paste needed
+ * for the gates; the F40/F50/F58 comparisons arrive later via the returns job.
+ */
+export async function runNlmVerifyJob(): Promise<{ ran: boolean; blocked: string[]; alerts: string[] }> {
+  if (!isNotebookLmEnabled()) return { ran: false, blocked: [], alerts: [] };
+  if (!selfAnswer) {
+    log.warn('nlm verify: no self-answer injected — skipping');
+    return { ran: false, blocked: [], alerts: [] };
+  }
+  const rt = await getNlmRuntime();
+  const { runProbeSelf } = await import('./probe.js');
+  const { feynmanGate, identityPulse, evaluateLadder } = await import('./probe-gates.js');
+  const { ALL_PROBE_SETS, F50_LEGIBILITY, F63_IDENTITY, CORE_LADDER } = await import('./probe-sets.js');
+  const { saveSelfRun, ensureBaseline, loadBaseline } = await import('./probe-store.js');
+  const { resolveJudgeModel } = await import('../../llm/judge.js');
+  const { HEADER_SENTENCE } = await import('./export-lane.js');
+
+  const studentRoute = 'sudo/cheap'; // the self reader's route (student under test)
+  const blocked: string[] = [];
+  const alerts: string[] = [];
+  const lines: string[] = [`> ${HEADER_SENTENCE}`, '', '# E4 verify report', '', `judge: \`${resolveJudgeModel()}\``, ''];
+
+  for (const set of ALL_PROBE_SETS) {
+    const run = await runProbeSelf(set, selfAnswer, { studentRoute });
+    saveSelfRun(run);
+  }
+
+  // F61 — blocking Feynman gate on the legibility core.
+  const legRun = (await import('./probe-store.js')).loadSelfRun(F50_LEGIBILITY.id);
+  if (legRun) {
+    const g = feynmanGate(F50_LEGIBILITY, legRun);
+    lines.push(`- F61 Feynman: ${g.pass ? 'PASS' : 'BLOCK'} — ${g.reason}`);
+    if (g.blocked) blocked.push('F61');
+  }
+
+  // F63 — identity pulse vs pinned baseline.
+  const idRun = (await import('./probe-store.js')).loadSelfRun(F63_IDENTITY.id);
+  if (idRun) {
+    const baseline = loadBaseline(F63_IDENTITY.id) ?? ensureBaseline(idRun);
+    const p = identityPulse(F63_IDENTITY, idRun, baseline);
+    lines.push(`- F63 identity: ${p.alert ? 'ALERT' : 'stable'} — ${p.reason}`);
+    if (p.alert) alerts.push('F63');
+  }
+
+  // F68 — curriculum ladder from rung 0.
+  const rung0Run = (await import('./probe-store.js')).loadSelfRun(CORE_LADDER.rungs[0]!.set.id);
+  if (rung0Run) {
+    const r = evaluateLadder(CORE_LADDER, 0, rung0Run);
+    lines.push(`- F68 ladder: ${r.reason}`);
+  }
+
+  const folder = rt.folders['notebooklm/probes'];
+  if (folder) {
+    await rt.client.filesCreate(
+      { name: 'verify-report.md', parents: [folder], mimeType: 'text/markdown' },
+      { mimeType: 'text/markdown', body: lines.join('\n') },
+    );
+  }
+  log.info({ blocked, alerts }, 'nlm verify job complete');
+  return { ran: true, blocked, alerts };
 }
 
 /** Rituals refresh: Rituals tab + status file + manifest Doc. */

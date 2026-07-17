@@ -9,7 +9,7 @@ Composes on the completed Drive roadmap (`docs/DRIVE_ROADMAP.md`, F1–F38 shipp
 |---|---|---|
 | N0 | Recon + core rails (E1/E2/E3) | **recon confirmed; build in progress (this PR)** |
 | N1 | Broadcast surface | **build in progress (this PR)** — shapes+CLI+rituals+2 gap-repairs |
-| N2 | Probe & verification | todo |
+| N2 | Probe & verification | **build in progress (this PR)** — E4 engine + F40/F50/F58/F61/F63/F68 |
 | N3 | Judgment/relationship/self-knowledge | todo |
 | N4 | Lineage & society | todo |
 | N5 | The Organ (optional autonomous) | todo (gated; not entered) |
@@ -58,7 +58,11 @@ Additive gaps (small, mechanical, done inside their phase):
 |---|---|---|
 | Zone screen sweep | `tests/notebooklm/zone-screen.test.ts` | seeded zone-1 record absent from every compiled shape; secrets regex catches |
 | Returns routing | `tests/notebooklm/returns.test.ts` | filename convention → tier/category; unparseable held; quarantine-before-route |
-| (later) judge independence | tbd (N2) | student ≠ judge enforced |
+| Judge independence | `tests/llm/judge.test.ts`, `tests/notebooklm/probe.test.ts` | student ≠ judge enforced; comparator HOLDS when judge shares student's provider |
+| E4 end-to-end | `tests/notebooklm/probe-route.test.ts` | F40 probe-answers return → comparison report; external-only = dark memory; never ingests to memory |
+| F61 Feynman gate | `tests/notebooklm/probe.test.ts` | blocks (blocked===true) when self coverage below threshold |
+| F63 identity pulse | `tests/notebooklm/probe.test.ts` | alerts when identity answers drift from baseline |
+| F68 curriculum ladder | `tests/notebooklm/probe.test.ts` | advances one rung on pass; holds on fail; fully offline |
 | (later) embassy verbatim | tbd (N4) | verbatim-dump held, authored distillate external |
 
 ## Annex B — API-day upgrade map (maintain from day one)
