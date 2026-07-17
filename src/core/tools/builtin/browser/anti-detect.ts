@@ -7,6 +7,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { createLogger } from '../../../shared/logger.js';
 
@@ -70,9 +71,56 @@ export function insecureBrowserEnabled(): boolean {
  * @param extra - Additional caller-specific args (e.g. --remote-debugging-port).
  */
 export function buildLaunchArgs(extra: string[] = []): string[] {
-  const args = ['--no-sandbox', ...ANTI_DETECT_ARGS, ...extra];
+  const args = ['--no-sandbox', '--disable-dev-shm-usage', ...ANTI_DETECT_ARGS, ...extra];
   if (insecureBrowserEnabled()) args.push(...INSECURE_ARGS);
   return args;
+}
+
+// ---------------------------------------------------------------------------
+// Real Chrome resolution (Google rejects Playwright's bundled Chromium)
+// ---------------------------------------------------------------------------
+
+/**
+ * Candidate paths for a real Google Chrome / Chromium install.
+ * Prefer google-chrome-stable — that binary is what Google trusts for login.
+ * Playwright's bundled Chromium is intentionally last-resort (not listed here).
+ */
+const CHROME_CANDIDATES: string[] = [
+  process.env['SUDO_BROWSER_EXECUTABLE'] ?? '',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/google-chrome',
+  '/opt/google/chrome/chrome',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/chromium',
+].filter(Boolean);
+
+/**
+ * Resolve a real Chrome/Chromium executable on the host.
+ * Returns null when none is found (caller falls back to Playwright bundled).
+ *
+ * Override with SUDO_BROWSER_EXECUTABLE=/path/to/chrome.
+ */
+export function resolveChromeExecutable(): string | null {
+  for (const candidate of CHROME_CANDIDATES) {
+    try {
+      if (existsSync(candidate)) {
+        log.info({ executablePath: candidate }, 'Resolved real Chrome executable');
+        return candidate;
+      }
+    } catch {
+      // fail-open — try next
+    }
+  }
+  log.info({}, 'No real Chrome executable found — Playwright bundled Chromium will be used');
+  return null;
+}
+
+/**
+ * Display for headed (non-headless) launches. Default `:10` (VPS XFCE).
+ * Override with SUDO_BROWSER_DISPLAY.
+ */
+export function resolveBrowserDisplay(): string {
+  return process.env['SUDO_BROWSER_DISPLAY']?.trim() || ':10';
 }
 
 // ---------------------------------------------------------------------------
