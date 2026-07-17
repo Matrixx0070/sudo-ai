@@ -1309,24 +1309,39 @@ async function boot(): Promise<void> {
       // (zero LLM cost / no behavior change). Adapters bind the orchestrator's real
       // episodic store so reflection runs over live episodes (orchestrator DB).
       const reflectOn = process.env['SUDO_CONSCIOUSNESS_REFLECT'] === '1';
-      const reflectEpisodic = consciousnessInstance.getEpisodicMemory();
+      // F83: bind the REAL episodic/self-model/temporal-self/wisdom engines
+      // when reflection is on (previously always no-op stubs — sleep
+      // consolidation ran on empty data). reflectOn=false keeps the legacy
+      // zero-cost stubs.
+      let sleepWisdom: import('./core/learning/store.js').WisdomStore | null = null;
+      if (reflectOn) {
+        try {
+          const { WisdomStore } = await import('./core/learning/store.js');
+          sleepWisdom = new WisdomStore(path.join(DATA_DIR, 'wisdom.db'));
+          registerShutdown(() => sleepWisdom?.close());
+        } catch (err) {
+          log.warn({ err: String(err) }, 'WisdomStore init failed — sleep wisdom path stays no-op');
+        }
+      }
+      const { buildSleepCycleAdapters } = await import('./core/consciousness/sleep-adapters.js');
+      // WisdomStore.source is a strict union; sleep-cycle insights map to 'pipeline'.
+      const VALID_WISDOM_SOURCES = new Set(['session', 'user', 'pipeline', 'analytics']);
+      const wisdomAdapter = sleepWisdom
+        ? {
+            storeInsight: (i: { category: string; source: string; insight: string; confidence: number }) =>
+              sleepWisdom!.storeInsight({
+                category: (['error', 'success', 'pattern', 'optimization'].includes(i.category) ? i.category : 'pattern') as 'error' | 'success' | 'pattern' | 'optimization',
+                source: (VALID_WISDOM_SOURCES.has(i.source) ? i.source : 'pipeline') as 'session' | 'user' | 'pipeline' | 'analytics',
+                insight: i.insight,
+                confidence: i.confidence,
+              }),
+          }
+        : null;
+      const sleepAdapters = buildSleepCycleAdapters(reflectOn, consciousnessInstance, wisdomAdapter);
       const sleepCycle = new SleepCycle({
         cdb: sleepCDB,
         brain,
-        episodicMemory: {
-          getBySignificance: () => [],
-          strengthenEpisode: () => undefined,
-          weakenEpisode: () => undefined,
-        },
-        counterfactualEngine: reflectOn
-          ? { runIdleBatch: (count: number) => consciousnessInstance.getCounterfactualEngine().runIdleBatch(reflectEpisodic, count) }
-          : { runIdleBatch: async () => [] },
-        selfModel: { updateFromEpisode: () => undefined },
-        temporalSelf: { takeSnapshot: () => undefined },
-        metacognition: reflectOn
-          ? { runBatchReflection: (count: number) => consciousnessInstance.getMetacognitionEngine().runBatchReflection(reflectEpisodic, count) }
-          : { runBatchReflection: async () => [] },
-        wisdomStore: { storeInsight: () => undefined },
+        ...sleepAdapters,
         commitmentAuditor,
         trustTracker: sleepTrustTracker,
         mistakePatternRecognizer,
