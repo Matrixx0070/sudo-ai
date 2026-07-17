@@ -173,6 +173,62 @@ static sweep called dormant: `SUDO_CONSCIOUSNESS_REFLECT=1`, `SUDO_SELF_VERIFY=1
   `SUDO_STANDING_ORDERS` (F89 ships CRUD-only), + 76 opt-in flags unset
   (full list in the census).
 
+
+## Autonomous execution plan v2 (mapped 2026-07-17 night, post #806–#815)
+
+Verified starting state: Waves A/B/D opening slices shipped + deployed (pid
+2474934 clean); budget guardrails live (100/50); F93/F94 **PARKED by Frank —
+do not start**; N5 standing NO; frozen surfaces untouchable (invariant 4).
+
+### Phase 1 — Observe + cheap wins (no new spend, 1 session)
+| Step | Work | Gate/proof |
+|---|---|---|
+| 1.1 | Live-verify F83: first sleep-cycle pass over real episodes (grep sleep/dream logs after a night) + F82 closure | log evidence of non-empty consolidation |
+| 1.2 | F84/F85 measurement: query traces/mind.db for self-verify + predictor hit rates over 7 days → adopt/kill verdict per flag | verdict written to this ledger |
+| 1.3 | F105 ZDR audit: sweep every persistence path for SUDO_ZDR honor (3 call-sites today), add tests | new tests + sweep table |
+| 1.4 | F108: fix alignment "not yet seeded" warm-up; add kill-switch + per-run budget to forge; per-tool gating for superpowers | tests + boot line |
+| 1.5 | Tails F109 (gdrive CLI commander wiring) + F110 (F35 auto-hibernation loop calls) | CLI smoke + unit tests |
+
+### Phase 2 — Structural (F97 first, its own session)
+| Step | Work | Gate/proof |
+|---|---|---|
+| 2.1 | F97 stage a: inventory src/llm/legacy importers + brain shim call-graph | inventory table in PR |
+| 2.2 | F97 stage b: port claude-oauth/custom-provider logic onto the IR transport; keep byte-compat via existing 57 goldens | conformance green |
+| 2.3 | F97 stage c: delete legacy + 3 shims, retire LLM_IR_CALLERS allowlist | grep-guard test: no src/llm/legacy imports |
+| 2.4 | F97 gate: LLM_SHADOW replay over ≥300 real prompts, 0 material divergences, then deploy + live smoke on all providers | SHADOW report + live turns |
+| 2.5 | F101 HTTP/admin dedup, then F99 session-store layering doc/merge (post-F97 only) | route parity tests |
+
+### Phase 3 — Consolidation (PR-sized, interleave freely)
+F98 one dream engine · F100 channel dedup (Slack ×2, iMessage ×2, stale
+gmail/gcalendar connectors) · F102 money ledger → billing substrate ·
+F103 god-file splits (loop.ts / loop-helpers / brain.ts / cli.ts boot
+phases; mechanical, test-guarded, no behavior change).
+
+### Phase 4 — Autonomy deepening (each step has an explicit gate)
+| Step | Work | Gate |
+|---|---|---|
+| 4.1 | F88 activation: set SUDO_GOAL_EVAL_MODEL=haiku (caller already wired) | deploy-state edit + restart; watch cost lines |
+| 4.2 | F86 flywheel apply: two-reader consensus (invariant 9) + daily cap + audit trail | consensus tests + capped live trial |
+| 4.3 | F92 tenancy / F95 FleetView / F96 voice-at-boot verdicts (wire-or-park each) | verdict rows in this ledger |
+| 4.4 | F87 world-state goals | **FRANK GATE — autonomous spend; do not flip solo** |
+
+### Phase 5 — Rolling/research
+F107 stub-debt triage (tools 179 / api 92, rolling burn-down) · F111 F5
+gated user-file tool · F112 record-replay determinism research (unlocks true
+F10 flight-recorder replay).
+
+### Standing rules for every autonomous session
+1. Read this ledger first; execute the lowest unfinished phase step.
+2. One worktree per slice off origin/main; node_modules symlink; tsc + suite
+   + semgrep per slice; PR; merge only on green CI; clean up worktrees.
+3. Deploys: only from a src-clean tree; restart via
+   `pm2 restart ecosystem.config.cjs --only sudo-ai-v5 --update-env`
+   (plain restart does NOT re-read the ecosystem file); verify boot lines +
+   zero level-50 from the NEW pid before declaring done.
+4. PARKED/GATED: F93/F94 (Frank), F87 flip (Frank), N5 (standing NO),
+   frozen surfaces (invariant 4). Never silently drop functionality —
+   wire-or-delete requires reachability proof; rescues beat deletions.
+
 ## Status
 
 | Wave | Status |
