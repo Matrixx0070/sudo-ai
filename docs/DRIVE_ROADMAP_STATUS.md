@@ -361,6 +361,17 @@ Desktop client; folder shared to frankmartin7722@gmail.com):
   authorized + working. Both dead-man leaves (staleness arithmetic + email
   delivery) independently proven without forcing a 20-min outage.
 
+- **F19 canaries PLANTED + LIVE-VERIFIED.** 3 decoy Google Docs created in
+  megastream's My Drive (NOT in the sudo-ai/ tree, per spec): admin-credentials,
+  aws-root-recovery-codes, prod-ssh-private-keys — each with a unique UUID
+  marker in its body. fileIds + markers recorded ONLY in
+  data/gdrive/canaries.json (0600, never in Drive). Verified against the real
+  config: fileId tripwire HIT, marker-in-payload tripwire HIT, clean payload no
+  false-positive, daemon not paused. The inbox job reloads canaries.json each
+  sweep, so the live daemon is already armed (no restart needed). Full
+  trip→PAUSED→CRITICAL-audit path covered by committed inbox.test.ts CANARY
+  cases (not force-tripped in prod to avoid pausing live jobs).
+
 Field findings folded into gdrive-setup.md: SA storage-quota removal (403 on
 file create) ⇒ oauth mode is the consumer-account path; gcloud default client
 blocked for Drive scopes; client secret creation-time-only in the new console;
