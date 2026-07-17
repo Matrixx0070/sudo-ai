@@ -71,9 +71,11 @@ export async function runNlmExportJob(): Promise<void> {
   const rt = await getNlmRuntime();
   const { allShapes } = await import('./shapes.js');
   const { registerN1Shapes } = await import('./shapes-n1.js');
+  const { registerN3Shapes } = await import('./shapes-n3.js');
   const { compileAndExport } = await import('./export-lane.js');
   const { auditedJob } = await import('../gdrive/audit.js');
   registerN1Shapes();
+  registerN3Shapes();
 
   const ctx = await buildShapeContext(rt);
   // Auto-refresh shapes (rolling + the F42 architecture pack). Per-item packs
