@@ -64,6 +64,24 @@ export const blindSpotsShape: ShapeSpec = {
   },
 };
 
+// F60 — forks museum: catalog of past selves (metadata only → zone-2).
+export const forksMuseumShape: ShapeSpec = {
+  id: 'forks-museum',
+  featureIds: ['F60'],
+  mode: 'rolling',
+  folder: 'notebooklm/releases/forks-museum',
+  cadence: 'weekly',
+  async compile(ctx) {
+    const { renderForksMuseum } = await import('../gdrive/forks-museum.js');
+    const entries = (await ctx.readForks?.()) ?? [];
+    // Screen each policy note; drop any that fail (belt-and-braces on zone-2).
+    const kept = screenRecords(entries, (e) => `${e.name} ${e.policyNote}`).kept;
+    const body = renderForksMuseum(kept);
+    assertZone2(body);
+    return [{ name: 'forks-museum', body }];
+  },
+};
+
 let registered = false;
 export function registerN3Shapes(): void {
   if (registered) return;
@@ -71,4 +89,11 @@ export function registerN3Shapes(): void {
   registerShape(dyadHealthShape);
   registerShape(blindSpotsShape);
   registered = true;
+}
+
+let registeredN4 = false;
+export function registerN4Shapes(): void {
+  if (registeredN4) return;
+  registerShape(forksMuseumShape);
+  registeredN4 = true;
 }

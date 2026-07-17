@@ -24,6 +24,8 @@ export interface ShapeContext {
   readFile?: (path: string) => string | null;
   /** Live source Docs to point a notebook at (F41 cockpit pointer card). */
   readSourceDocs?: () => Promise<Array<{ name: string; id: string; url?: string }>>;
+  /** Past-self fork catalog (F60 forks museum). */
+  readForks?: () => Promise<Array<{ name: string; brainId: string; counter: number; createdAt: string; policyNote: string; entryCount: number }>>;
 }
 
 export interface CompiledDoc {
