@@ -530,6 +530,57 @@ export async function runGdriveIndexSnapshotJob(): Promise<void> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// F35 — loop-side auto-hibernation handler
+// ---------------------------------------------------------------------------
+
+let _autoHibernateInFlight = false;
+
+/**
+ * Called (fire-and-forget) from the agent loop's iteration boundary via the
+ * setAutoHibernate seam. Serializes the loop snapshot to Drive so the task can
+ * resume on another machine. Coalesced: at most one write in flight at a time
+ * (the loop fires on a coarse iteration cadence anyway).
+ */
+export function runGdriveAutoHibernate(snap: {
+  sessionId: string;
+  plan: string;
+  stepCursor: number;
+  toolResultDigests: string[];
+}): void {
+  if (!isGdriveEnabled() || process.env['SUDO_GDRIVE_AUTOHIBERNATE'] !== '1') return;
+  if (_autoHibernateInFlight) return;
+  _autoHibernateInFlight = true;
+  void (async () => {
+    try {
+      const rt = await getGdriveRuntime();
+      const { hibernateTask } = await import('./hibernate.js');
+      const { loadHmacKey, loadEncKey } = await import('./keys.js');
+      const { loadBrainState } = await import('./checkpoint.js');
+      // taskId must be filename-safe (^[\w-]{1,64}$) — sanitize the sessionId.
+      const taskId = snap.sessionId.replace(/[^\w-]/g, '_').slice(0, 64) || 'session';
+      await hibernateTask(
+        rt.client,
+        rt.folders,
+        { hmacKey: loadHmacKey(), encKey: loadEncKey() },
+        {
+          taskId,
+          plan: snap.plan,
+          stepCursor: snap.stepCursor,
+          toolResultDigests: snap.toolResultDigests,
+          pendingApprovals: [],
+          brainCounter: loadBrainState().counter,
+        },
+      );
+      log.debug({ taskId, step: snap.stepCursor }, 'auto-hibernated loop state');
+    } catch (err) {
+      log.debug({ err: String(err) }, 'auto-hibernate failed (non-fatal)');
+    } finally {
+      _autoHibernateInFlight = false;
+    }
+  })();
+}
+
 /** Cron entry: monthly kill-and-restore rehearsal (F2 rider). */
 export async function runGdriveRestoreDrillJob(): Promise<void> {
   if (!isGdriveEnabled()) return;

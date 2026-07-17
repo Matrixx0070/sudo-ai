@@ -307,3 +307,14 @@ export {
   type ResearchCall,
   type DrainResult,
 } from './curiosity.js';
+// Deferred slices — F5 user-file surface + F35 auto-hibernation handler
+export {
+  forbiddenIds,
+  assertOutsideMemoryTree,
+  listUserFiles,
+  readUserFile,
+  writeUserFile,
+  UserFileAccessError,
+  USER_FILE_MAX_BYTES,
+} from './user-files.js';
+export { runGdriveAutoHibernate } from './runtime.js';

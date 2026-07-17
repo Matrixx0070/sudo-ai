@@ -413,6 +413,48 @@ secretsCmd
   });
 
 // ---------------------------------------------------------------------------
+// gdrive — Drive memory-substrate operator commands (status/knew-at/bisect/resume)
+// ---------------------------------------------------------------------------
+
+const gdriveCmd = program
+  .command('gdrive')
+  .description('Google Drive memory substrate: status, knew-at (F31), bisect (F9), resume (F35)');
+
+gdriveCmd
+  .command('status')
+  .description('Live health snapshot: auth mode, tree, brain counter, heartbeat age, canaries, pause')
+  .action(async () => {
+    const { runGdriveStatus } = await import('./commands/gdrive.js');
+    process.exit(await runGdriveStatus());
+  });
+
+gdriveCmd
+  .command('knew-at <timestamp>')
+  .description('Reconstruct what the brain knew at an ISO-8601 moment (F31 bitemporal chronicle)')
+  .option('--path <logicalPath>', 'Report only whether this memory was known at that time')
+  .action(async (timestamp: string, opts: { path?: string }) => {
+    const { runGdriveKnewAt } = await import('./commands/gdrive.js');
+    process.exit(await runGdriveKnewAt(timestamp, opts));
+  });
+
+gdriveCmd
+  .command('bisect')
+  .description('Find the manifest revision where a memory first changed (F9 memory bisection)')
+  .requiredOption('--path <logicalPath>', 'The memory (logical path) to trace')
+  .action(async (opts: { path?: string }) => {
+    const { runGdriveBisect } = await import('./commands/gdrive.js');
+    process.exit(await runGdriveBisect(opts));
+  });
+
+gdriveCmd
+  .command('resume <taskId>')
+  .description('Load + claim a hibernated task from tasks/active/ (F35 task hibernation)')
+  .action(async (taskId: string) => {
+    const { runGdriveResume } = await import('./commands/gdrive.js');
+    process.exit(await runGdriveResume(taskId));
+  });
+
+// ---------------------------------------------------------------------------
 // update — check for and apply SUDO-AI updates
 // ---------------------------------------------------------------------------
 
