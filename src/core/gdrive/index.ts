@@ -166,12 +166,21 @@ export {
 } from './control-panel.js';
 export { pollComments, watchDoc, loadWatchedDocs, type CommentsDeps, type CommentsPollResult } from './comments.js';
 export { buildAtlas, publishAtlas, ATLAS_NAME, type AtlasInputs } from './atlas.js';
+export {
+  buildSelfDiff,
+  publishSelfDiff,
+  readTopologyLink,
+  topologyLinkPath,
+  type SelfDiffInputs,
+  type SelfDiffResult,
+} from './self-diff.js';
 export { verifyPing, signPing, handlePushPing, PING_TOLERANCE_MS, type PushPing, type PushKind } from './push.js';
 export {
   runGdriveDailyReportJob,
   runGdriveControlPanelJob,
   runGdriveCommentsJob,
   runGdriveAtlasJob,
+  runGdriveSelfDiffJob,
 } from './runtime.js';
 // Phase 5 — epistemics (F22/F23/F24/F31/F33/F37 + ranking rider)
 export {

@@ -2738,9 +2738,10 @@ async function boot(): Promise<void> {
         payload.event === 'gdrive:daily-report' ||
         payload.event === 'gdrive:control-panel' ||
         payload.event === 'gdrive:comments' ||
-        payload.event === 'gdrive:atlas'
+        payload.event === 'gdrive:atlas' ||
+        payload.event === 'gdrive:self-diff'
       ) {
-        // Phase 4 human-interface jobs (F3/F4/F6/F7/F30).
+        // Phase 4 human-interface jobs (F3/F4/F6/F7/F30) + F13 self-diff.
         try {
           const rt = await import('./core/gdrive/runtime.js');
           const fn = {
@@ -2748,6 +2749,7 @@ async function boot(): Promise<void> {
             'gdrive:control-panel': rt.runGdriveControlPanelJob,
             'gdrive:comments': rt.runGdriveCommentsJob,
             'gdrive:atlas': rt.runGdriveAtlasJob,
+            'gdrive:self-diff': rt.runGdriveSelfDiffJob,
           }[payload.event];
           await fn();
         } catch (gdErr) {
@@ -3124,6 +3126,7 @@ async function boot(): Promise<void> {
         { id: 'gdrive-atlas', name: 'Google Drive Brain Atlas', event: 'gdrive:atlas', schedule: { kind: 'cron', expr: process.env['SUDO_GDRIVE_ATLAS_CRON'] ?? '15 0 * * *', tz: gdriveTz } },
         { id: 'gdrive-control-panel', name: 'Google Drive Control Panel Poll', event: 'gdrive:control-panel', schedule: { kind: 'every', ms: Math.max(10_000, Number(process.env['SUDO_GDRIVE_PANEL_MS']) || 30_000) } },
         { id: 'gdrive-comments', name: 'Google Drive Comments Poll', event: 'gdrive:comments', schedule: { kind: 'every', ms: Math.max(30_000, Number(process.env['SUDO_GDRIVE_COMMENTS_MS']) || 120_000) } },
+        { id: 'gdrive-self-diff', name: 'Google Drive Weekly Self-Diff', event: 'gdrive:self-diff', schedule: { kind: 'cron', expr: process.env['SUDO_GDRIVE_SELFDIFF_CRON'] ?? '30 0 * * 1', tz: gdriveTz } },
       ];
       for (const j of phase4Jobs) {
         const cur = cronStore.get(j.id);
@@ -3294,7 +3297,7 @@ async function boot(): Promise<void> {
         .catch((err) => log.warn({ err: String(err) }, 'gdrive restore check failed (non-fatal)'));
     } else {
       // Flag flipped off: park the jobs instead of firing no-op events forever.
-      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill', 'gdrive-inbox', 'gdrive-daily-report', 'gdrive-atlas', 'gdrive-control-panel', 'gdrive-comments', 'gdrive-changes', 'gdrive-revalidate', 'gdrive-mirror', 'gdrive-dream', 'gdrive-freeze', 'gdrive-index-snapshot', 'gdrive-blackboard', 'gdrive-curiosity']) {
+      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill', 'gdrive-inbox', 'gdrive-daily-report', 'gdrive-atlas', 'gdrive-control-panel', 'gdrive-comments', 'gdrive-changes', 'gdrive-revalidate', 'gdrive-mirror', 'gdrive-dream', 'gdrive-freeze', 'gdrive-index-snapshot', 'gdrive-blackboard', 'gdrive-curiosity', 'gdrive-self-diff']) {
         if (cronStore.get(id)?.enabled) {
           cronStore.patch(id, { enabled: false });
           log.info({ jobId: id }, 'gdrive job disabled (SUDO_GDRIVE != 1)');
