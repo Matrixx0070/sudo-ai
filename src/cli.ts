@@ -4535,6 +4535,42 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 9.57 Standing orders (F89) — permanent autonomous rules.
+  //      The manager is ALWAYS constructed and injected so the registered
+  //      system.standing-orders tool can manage orders (it previously threw
+  //      "not initialised" on every call — the manager was never wired).
+  //      The 60s trigger-evaluation loop that actually EXECUTES orders as
+  //      agent turns is opt-in via SUDO_STANDING_ORDERS=1 (seeded builtin
+  //      orders fire daily turns = autonomous spend; default stays OFF).
+  // -------------------------------------------------------------------------
+  try {
+    const { StandingOrderManager } = await import('./core/automation/standing-orders.js');
+    const { setManager: setStandingOrderManager } = await import('./core/tools/builtin/system/standing-orders.js');
+    const standingOrders = new StandingOrderManager(async (action: string, orderId: string) => {
+      // Same per-peer serialization as the autonomy goal turns: nothing else
+      // runs a turn on this order's session while the order turn is live.
+      await dualSessionManager.peerQueue.enqueue(`order:${orderId}`, async () => {
+        const session = await dualSessionManager.getOrCreate('autonomy', `order:${orderId}`);
+        const prompt = [
+          '[standing order turn] Execute this standing order now.',
+          `Order: ${action}`,
+        ].join('\n');
+        await finalAgentLoop.run(String(session.id), prompt, undefined, { race: true });
+      });
+    });
+    setStandingOrderManager(standingOrders);
+    if (process.env['SUDO_STANDING_ORDERS'] === '1') {
+      standingOrders.start();
+      registerShutdown(() => standingOrders.stop());
+      log.info('Standing orders ACTIVE (SUDO_STANDING_ORDERS=1) — trigger evaluation every 60s');
+    } else {
+      log.info('Standing orders manager wired (tool live, CRUD only) — set SUDO_STANDING_ORDERS=1 to activate trigger execution');
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Standing orders failed to wire — system.standing-orders unavailable');
+  }
+
+  // -------------------------------------------------------------------------
   // 9.6 Meta tool dependency injection
   // -------------------------------------------------------------------------
   try {
