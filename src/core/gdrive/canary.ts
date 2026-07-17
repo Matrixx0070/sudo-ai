@@ -42,8 +42,30 @@ export interface CanaryHit {
 
 /** Check a Drive fileId against the canary list. */
 export function checkCanaryFileId(fileId: string, config: CanaryConfig): CanaryHit | null {
-  const c = config.canaries.find((x) => x.fileId === fileId);
+  // Guard: marker-only canaries store an empty fileId — never match a real file.
+  const c = config.canaries.find((x) => x.fileId !== '' && x.fileId === fileId);
   return c ? { kind: 'fileId', label: c.label } : null;
+}
+
+/**
+ * G-CANARYWRITE: register a canary LOCALLY (never in Drive, never committed —
+ * same invariant as the human-planted ones). F67 uses this to watermark an
+ * outbound embassy pack: the marker is registered here, so if that watermarked
+ * text ever returns as inbound content, checkCanaryPayload trips F19. Idempotent
+ * by marker. `fileId` is optional (marker-only watermark canaries omit it).
+ */
+export function registerCanary(
+  entry: { marker: string; fileId?: string; label?: string },
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!entry.marker) throw new Error('registerCanary: marker required');
+  const config = loadCanaryConfig(env);
+  if (config.canaries.some((c) => c.marker === entry.marker)) return; // dedupe
+  config.canaries.push({ fileId: entry.fileId ?? '', marker: entry.marker, ...(entry.label ? { label: entry.label } : {}) });
+  const p = canaryConfigPath(env);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify(config, null, 2), { mode: 0o600 });
+  log.info({ label: entry.label }, 'canary registered locally (G-CANARYWRITE)');
 }
 
 /** Check any Drive-derived payload / outbound argument for canary markers. */
