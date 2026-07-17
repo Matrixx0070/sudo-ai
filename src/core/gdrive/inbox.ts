@@ -218,6 +218,22 @@ export async function processInboxOnce(deps: InboxDeps): Promise<InboxSweepResul
       content: JSON.stringify(provenance),
     });
 
+    // F22 — register the belief so source edits/deletions propagate and the
+    // epistemic ranking rider can weight these chunks by trust + validation.
+    try {
+      const { loadBeliefs, saveBeliefs, upsertBelief } = await import('./beliefs.js');
+      const graph = loadBeliefs();
+      upsertBelief(graph, {
+        id: `gdrive-${file.id}`,
+        chunkPathPrefix: `gdrive/${file.name}`,
+        sources: [{ fileId: file.id, revisionId: file.headRevisionId }],
+        trustTier: tier,
+      });
+      saveBeliefs(graph);
+    } catch (err) {
+      log.warn({ err: String(err) }, 'belief registration failed (ingest still recorded)');
+    }
+
     // Move original + write the ingestion record beside it.
     await moveFile(client, file, inboxId, processedId);
     await client.filesCreate(

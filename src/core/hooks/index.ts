@@ -125,6 +125,9 @@ export type HookEvent =
   // Compaction alias events (distinct from pre:compact / post:compact)
   | 'before_compaction'
   | 'after_compaction'
+  // Loop-pathology telemetry (DoomLoopDetector — F33 dead-ends consumer)
+  | 'doom_loop_warning'
+  | 'doom_loop_terminated'
   // Install lifecycle events
   | 'before_install'
   | 'after_install'

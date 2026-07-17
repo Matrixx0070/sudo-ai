@@ -12,8 +12,8 @@ referenced in commits, PRs, and code comments. Spec: the 38-feature roadmap
 | 1 | F17 F16 F29 integrity substrate | **shipped** — PR #777 merged 2026-07-16 |
 | 2 | F2 F36 F10 F9 durability | **shipped** — PR #778 merged 2026-07-16 |
 | 3 | F18 F1 F15 F19 F20 guarded ingestion | **shipped** — PR #779 merged 2026-07-16 |
-| 4 | F3 F4 F7 F6 F30 F21 human interface | **shipped (this PR)** — see below |
-| 5 | F22 F23 F24 F31 F33 F37 epistemics | todo |
+| 4 | F3 F4 F7 F6 F30 F21 human interface | **shipped** — PR #780 merged 2026-07-17 |
+| 5 | F22 F23 F24 F31 F33 F37 epistemics | **shipped (this PR)** — see below |
 | 6 | F12 F11 F27 F28 F35 F14 autonomy | todo |
 | 7 | F8 F32 F25 F26 F38 F34 experimentation/ops | todo |
 
@@ -194,6 +194,59 @@ Phase 4 scope notes:
   scorecard") is UNVERIFIED live end-to-end — blocked on the HUMAN GCP setup;
   every stage is unit-proven.
 
+## Phase 5 (F22/F23/F24/F31/F33/F37 + ranking rider) — shipped in `feat/gdrive-phase5-epistemics`
+
+- **Ranking rider** — `src/core/memory/epistemic-score.ts` (PURE, inside the
+  memory subsystem so retrieval never imports gdrive): scoreMemory =
+  similarity × trustWeight × freshnessDecay × validationState. Live in
+  retrieval: `SearchOptions.epistemicAdjuster` applied in hybridSearch after
+  temporal decay, before the minScore gate (neutral when absent; throwing
+  adjuster ignored). `beliefs.buildEpistemicAdjuster()` supplies it from the
+  graph, longest-prefix keyed on chunk paths.
+- **F22** `beliefs.ts` + `changes.ts` — beliefs graph
+  (data/gdrive/beliefs-graph.json, checkpointed as an epistemic sidecar);
+  inbox ingestion registers a belief per file; the changes feed (persisted
+  page token, never re-lists the tree) flags dependents stale (confidence
+  ×0.6, re-derive queued for F12) on edits, orphaned (×0.4) on deletions.
+- **F23** — REVIEW_LADDER 7→30→90→365d, doubling past the ladder (cap 730d);
+  sweep compares headRevisionId vs citation: pass extends, changed →
+  stale+queue, missing → orphaned; deprecate path available; validationState
+  feeds the rider (fresh 1.0 / due .9 / stale .6 / orphaned .4 / deprecated .2).
+- **F24** `prospective.ts` — noteToFutureSelf(openAt, content, context);
+  nightly delivery converts due notes to high-priority 'feedback' memories
+  (the planning channel F6 uses) + "DUE NOTE" lines in the self-report;
+  outcome-annotated, never double-delivered.
+- **F31** `chronicle.ts` — append-only daily JSONL ops derived STRUCTURALLY
+  from manifest diffs at checkpoint (add/update/deprecate per logicalPath) —
+  captures every synced mutation without instrumenting the memory subsystem;
+  closed days mirror to memory/chronicle/; knewAt(ts) = nearest manifest
+  revision + chronicle delta → read-only view (test proves a later-learned
+  memory is excluded).
+- **F33** `dead-ends.ts` — the loop-hook seam is CLOSED: loop.ts now passes
+  its HookManager into DoomLoopDetector (events added to the HookEvent union
+  + typed-hooks registry), cli.ts subscribes doom_loop_terminated →
+  draftDeadEnd (deduped by pattern digest). Confirmation (dream cycle/F6) →
+  'DEAD END' feedback memory; matchDeadEnds() is the planner pre-check;
+  confirmed records mirror to memory/dead-ends/.
+- **F37** `mirror.ts` — config/gdrive-mirror.json refs; per-ref cadence +
+  per-sweep budget + byte cap + 30s timeout; snapshot updated IN PLACE
+  (revisions = history); changed content inspected by F18 FIRST (injected
+  upstream docs are held, never snapshotted); change cascades stale flags to
+  dependent beliefs.
+
+Phase 5 gate evidence (16 new tests + agent/memory suites 1432 green after
+hot-path touches): stale→re-derive-queue lifecycle, planted-stale caught by
+the scheduled sweep with interval extension on pass, due-note delivery on the
+exact date, knew-at exclusion proof, dead-end dedup/confirm/match, mirror
+change→stale cascade + injection hold + budget/cadence.
+
+Phase 5 deviations:
+- "Dead end outranks fresh similarity" approximated via the high-priority
+  feedback channel + matchDeadEnds() pre-check (chunks carry no belief refs).
+- Planner pre-check integration point = matchDeadEnds() exported; wiring into
+  goal-pipeline plan commit is a Phase 6 line item (F12 confirms candidates).
+- F9/F31 CLI commands still pending (library-tested); slated for Phase 6.
+
 ## Decisions & deviations from spec (repo architecture wins on *how*)
 
 | # | Decision | Why |
@@ -221,10 +274,12 @@ replay = digest-verify stub) · F11 todo · F12 todo · F14 todo · **F15 shippe
 **F19 shipped** (outbound tool-call check → Phase 5 seam; HUMAN planting open) ·
 **F20 shipped** (CI gym; scheduled run + scorecard → F4) ·
 **F21 shipped** (lib+Script template; HUMAN deploy for live <10s demo) ·
-F22 todo · F23 todo · F24 todo · F25 todo · F26 todo · F27 todo ·
+**F22 shipped** · **F23 shipped** · **F24 shipped** · F25 todo · F26 todo · F27 todo ·
 F28 todo · **F29 shipped** · **F30 shipped** ·
-F31 todo · F32 todo · F33 todo · F34 todo (heartbeat producer shipped in Phase 0) ·
-F35 todo · **F36 shipped** · F37 todo · F38 todo
+**F31 shipped** (knew-at library; CLI → Phase 6) · F32 todo ·
+**F33 shipped** (planner-commit wiring → Phase 6) ·
+F34 todo (heartbeat producer shipped in Phase 0) ·
+F35 todo · **F36 shipped** · **F37 shipped** · F38 todo
 
 ## Known gaps / UNVERIFIED
 
