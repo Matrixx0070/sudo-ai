@@ -13,8 +13,8 @@ referenced in commits, PRs, and code comments. Spec: the 38-feature roadmap
 | 2 | F2 F36 F10 F9 durability | **shipped** — PR #778 merged 2026-07-16 |
 | 3 | F18 F1 F15 F19 F20 guarded ingestion | **shipped** — PR #779 merged 2026-07-16 |
 | 4 | F3 F4 F7 F6 F30 F21 human interface | **shipped** — PR #780 merged 2026-07-17 |
-| 5 | F22 F23 F24 F31 F33 F37 epistemics | **shipped (this PR)** — see below |
-| 6 | F12 F11 F27 F28 F35 F14 autonomy | todo |
+| 5 | F22 F23 F24 F31 F33 F37 epistemics | **shipped** — PR #781 merged 2026-07-17 |
+| 6 | F12 F11 F27 F28 F35 F14 autonomy | **shipped (this PR)** — see below |
 | 7 | F8 F32 F25 F26 F38 F34 experimentation/ops | todo |
 
 ## Foundation (Phase 0) — shipped in `feat/gdrive-phase0-foundation`
@@ -247,6 +247,47 @@ Phase 5 deviations:
   goal-pipeline plan commit is a Phase 6 line item (F12 confirms candidates).
 - F9/F31 CLI commands still pending (library-tested); slated for Phase 6.
 
+## Phase 6 (F12/F11/F27/F28/F35/F14) — shipped in `feat/gdrive-phase6-autonomy`
+
+- **F12** `dream.ts` — nightly (02:30): re-derive queued beliefs (re-fetch →
+  F18 re-inspect → memory-API re-ingest → belief refreshed), confirm matured
+  dead-end candidates (LLM judge when available, age-based default; judge can
+  VETO), reconcile divergence (restore-check then checkpoint — newest-wins),
+  write the open-questions agenda file. Each re-derivation "plan" runs the
+  matchDeadEnds pre-check — a confirmed dead end is skipped, not re-entered.
+  NOTE: day-conversation distillation deliberately NOT duplicated — AutoDream
+  (6h) already owns it; this dream handles the Drive-epistemics workload.
+- **F11** `deep-freeze.ts` — INDEX HOT, PAYLOAD COLD enforced: episodic
+  day-logs >30d evict to content-addressed Drive blobs; hot stub (summary +
+  keywords) stays in data/gdrive/freeze-index.json; recallFrozen() returns
+  immediately (cached or null+prefetching) with fire-and-forget background
+  prefetch into an LRU-capped cache — no synchronous Drive wait, ever.
+- **F27** — freeRecall(): Drive fullText search scoped to the blobs folder →
+  stub candidates → prefetch. Zone-1 intentionally unsearchable (F29 note).
+- **F28** `index-snapshot.ts` — embedding_cache serialized → gzip →
+  AES-256-GCM (embeddings leak content), content-hash named, keep last 3;
+  hydration INSERT OR IGNORE (local rows win) — re-hydration inserts 0
+  (the "embedding-call count ≈ 0" gate, test-proven). Format versioned.
+- **F35** `hibernate.ts` — task state ALWAYS encrypted to tasks/active/;
+  resume claims via the blackboard (single-writer advisory), verifies brain
+  counter (behind ⇒ "run restore-check first"), archive = trash. Two-namespace
+  hibernate-A/resume-B test per spec. Loop-side safe-checkpoint calls are a
+  documented seam (library + claim logic complete).
+- **F14** `blackboard.ts` — one file per instance (single-writer sidesteps
+  Drive's lack of locking), 5-min beat, peer reads, earliest-timestamp-wins
+  advisory claims. Documented: seconds-to-minutes, best-effort, never
+  correctness-critical.
+
+Phase 6 evidence: 11 new tests — freeze/recall/prefetch round-trip, fullText
+fallback, snapshot round-trip + zero-re-embed + dedup/prune, claim division,
+hibernate→resume cross-namespace + counter guard, full dream pipeline incl.
+dead-end skip + judge veto.
+
+Phase 6 deferrals: F9/F31/F35 CLI commands + loop-side hibernation hooks →
+Phase 7 wrap-up slice; planner-commit matchDeadEnds wiring found no clean
+seam in autonomous-executor (control-action oriented) — implemented inside
+the dream's re-derivation planner instead + exported for future planners.
+
 ## Decisions & deviations from spec (repo architecture wins on *how*)
 
 | # | Decision | Why |
@@ -267,19 +308,19 @@ Phase 5 deviations:
 **F1 shipped** · **F2 shipped** (live cross-machine proof pending HUMAN GCP setup) ·
 **F3 shipped** · **F4 shipped** (Evals rows wire to eval runner in Phase 7) · F5 todo ·
 **F6 shipped** · **F7 shipped** (PAUSE = gdrive scope) · F8 todo ·
-**F9 shipped** (CLI wiring → Phase 5) · **F10 shipped** (run-end wiring → Phase 5;
-replay = digest-verify stub) · F11 todo · F12 todo · F14 todo · **F15 shipped** ·
+**F9 shipped** (CLI → Phase 7 wrap-up) · **F10 shipped** (run-end wiring → Phase 7;
+replay = digest-verify stub) · **F11 shipped** · **F12 shipped** · **F14 shipped** · **F15 shipped** ·
 **F16 shipped** (e2e proof now in inbox tests) ·
 **F17 shipped** (GC scheduling lands with F2) · **F18 shipped** ·
 **F19 shipped** (outbound tool-call check → Phase 5 seam; HUMAN planting open) ·
 **F20 shipped** (CI gym; scheduled run + scorecard → F4) ·
 **F21 shipped** (lib+Script template; HUMAN deploy for live <10s demo) ·
-**F22 shipped** · **F23 shipped** · **F24 shipped** · F25 todo · F26 todo · F27 todo ·
-F28 todo · **F29 shipped** · **F30 shipped** ·
+**F22 shipped** · **F23 shipped** · **F24 shipped** · F25 todo · F26 todo · **F27 shipped** ·
+**F28 shipped** · **F29 shipped** · **F30 shipped** ·
 **F31 shipped** (knew-at library; CLI → Phase 6) · F32 todo ·
 **F33 shipped** (planner-commit wiring → Phase 6) ·
 F34 todo (heartbeat producer shipped in Phase 0) ·
-F35 todo · **F36 shipped** · **F37 shipped** · F38 todo
+**F35 shipped** (loop-side hooks = documented seam) · **F36 shipped** · **F37 shipped** · F38 todo
 
 ## Known gaps / UNVERIFIED
 
