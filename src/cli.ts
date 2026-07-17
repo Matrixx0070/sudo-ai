@@ -3774,6 +3774,19 @@ async function boot(): Promise<void> {
       log.warn({ err: String(err) }, 'gdrive inspector brain injection failed');
     }
 
+    // F35 — wire loop-side auto-hibernation (opt-in SUDO_GDRIVE_AUTOHIBERNATE=1).
+    // The loop calls this at safe iteration boundaries of long runs; the
+    // handler serializes state to Drive so the task can resume elsewhere.
+    if (process.env['SUDO_GDRIVE'] === '1' && process.env['SUDO_GDRIVE_AUTOHIBERNATE'] === '1') {
+      try {
+        const { runGdriveAutoHibernate } = await import('./core/gdrive/runtime.js');
+        finalAgentLoop.setAutoHibernate((snap) => runGdriveAutoHibernate(snap));
+        log.info('gdrive auto-hibernation armed (F35)');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'gdrive auto-hibernation wiring failed');
+      }
+    }
+
     autoDream = new AutoDream(
       async (prompt: string) => brain.chat([{ role: 'user', content: prompt }]),
       db.db,

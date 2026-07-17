@@ -165,6 +165,17 @@ export class AgentLoop extends AgentLoopInjections {
   private readonly pollingStagnationDetector: PollingStagnationDetector | null =
     process.env['SUDO_DOOM_LOOP_EXTRAS'] === '1' ? new PollingStagnationDetector() : null;
   private readonly stuckDetector = new StuckDetector();
+  /**
+   * F35 auto-hibernation seam (Drive roadmap). cli.ts injects a callback that
+   * serializes long-running loop state to Drive at the safe iteration
+   * boundary. Kept as a bare function ref so this hot-path file never imports
+   * core/gdrive (the hot-path isolation invariant). Null unless injected +
+   * SUDO_GDRIVE_AUTOHIBERNATE=1.
+   */
+  private _autoHibernate:
+    | ((snap: { sessionId: string; plan: string; stepCursor: number; toolResultDigests: string[] }) => void)
+    | null = null;
+  private readonly _autoHibernateEvery = Math.max(5, Number(process.env['SUDO_GDRIVE_AUTOHIBERNATE_EVERY']) || 25);
   private readonly consciousness: ConsciousnessLike | null;
   private readonly security: SecurityGuardLike | null;
   private readonly toolRouter: ToolRouter;
@@ -619,6 +630,17 @@ export class AgentLoop extends AgentLoopInjections {
 
   /** Returns the AlignmentAggregator instance created during construction, or null. */
   getAlignmentAggregator(): AlignmentAggregator | null { return this.alignmentAggregator; }
+
+  /**
+   * F35 (Drive roadmap) — inject the auto-hibernation callback. cli.ts wires
+   * this to the Drive hibernator; the loop calls it at the safe iteration
+   * boundary of long runs. Pass null to disable.
+   */
+  setAutoHibernate(
+    fn: ((snap: { sessionId: string; plan: string; stepCursor: number; toolResultDigests: string[] }) => void) | null,
+  ): void {
+    this._autoHibernate = fn;
+  }
 
   /** Returns the VetoOverrideStore instance created during construction, or null. */
   getVetoOverrideStore(): VetoOverrideStore | null { return this.vetoOverrideStore; }
@@ -2089,6 +2111,23 @@ export class AgentLoop extends AgentLoopInjections {
                 'Steering: mid-run guidance injected',
               );
             }
+          }
+        }
+
+        // F35 — auto-hibernation checkpoint. At the safe iteration boundary,
+        // for genuinely long runs, hand a lightweight snapshot to the injected
+        // Drive hibernator so this task can resume on another machine. Never
+        // throws into the loop; a no-op unless cli.ts injected the callback.
+        if (this._autoHibernate && state.iteration >= this._autoHibernateEvery && state.iteration % this._autoHibernateEvery === 0) {
+          try {
+            const plan = (session.messages.find((m) => m.role === 'user')?.content ?? '').toString().slice(0, 1000);
+            const toolResultDigests = session.messages
+              .filter((m) => m.role === 'tool')
+              .slice(-5)
+              .map((m) => (m.content ?? '').toString().slice(0, 120));
+            this._autoHibernate({ sessionId: state.sessionId, plan, stepCursor: state.iteration, toolResultDigests });
+          } catch {
+            /* hibernation must never break the loop */
           }
         }
 
