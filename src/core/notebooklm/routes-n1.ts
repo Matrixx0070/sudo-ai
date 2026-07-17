@@ -91,6 +91,16 @@ export function registerN1Routes(): void {
     return 'past-self-dialogue';
   });
 
+  // F65 — fork interview verdict: validate the packet-bound token + PASS/FAIL.
+  // Never lands in memory; opens/holds the harness-enforced adoption gate.
+  // parsed.date carries the fork name (third filename segment).
+  registerReturnRoute('F65:interview', async ({ parsed, content }) => {
+    const { recordForkInterview } = await import('./fork-interview.js');
+    const r = recordForkInterview(parsed.date, content);
+    log.info({ fork: parsed.date, phase: r.phase, reason: r.reason }, 'F65 interview verdict processed');
+    return r.decided ? `interview-${r.phase}` : 'interview-pending';
+  });
+
   // F64 — successor ACK: validate the token bound to the sealed successor pack.
   // Never lands in memory; advances the harness-enforced succession gate.
   registerReturnRoute('F64:ack', async ({ content }) => {

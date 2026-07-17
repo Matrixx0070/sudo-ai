@@ -65,14 +65,30 @@ export async function recordForkScore(
   ]]);
 }
 
+/**
+ * Optional F65 adoption gate. When provided, a fork that requires an interview
+ * must have PASSED it before it can be adopted. Injected so gdrive never imports
+ * notebooklm (layering preserved).
+ */
+export interface AdoptOpts {
+  requiresInterview?: (fork: string) => boolean;
+  interviewPassed?: (fork: string) => boolean;
+}
+
 /** Adopt a winning fork: its manifest becomes main (re-signed, counter+1). */
 export async function adoptFork(
   client: DriveClient,
   folders: FolderIdMap,
   name: string,
   keys: BrainKeys,
+  opts: AdoptOpts = {},
 ): Promise<BrainManifest> {
   if (!NAME_RE.test(name)) throw new Error(`forks: invalid fork name "${name}"`);
+  // F65 — harness-enforced adoption gate: a fork requiring an interview must
+  // have passed it (invariant 8 — no interview means no adoption).
+  if (opts.requiresInterview?.(name) && !opts.interviewPassed?.(name)) {
+    throw new Error(`forks: adoption of "${name}" BLOCKED — fork interview not passed (F65)`);
+  }
   const forksFolder = folders['brains/forks'];
   const manifestFolder = folders['manifest'];
   if (!forksFolder || !manifestFolder) throw new Error('forks: folder ids missing');
