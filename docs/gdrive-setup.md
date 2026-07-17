@@ -4,23 +4,33 @@ This wires sudo-ai's Google Drive memory substrate (see `docs/DRIVE_ROADMAP_STAT
 The layer is **opt-in** (`SUDO_GDRIVE=1`) and all Drive I/O runs as background jobs —
 the agent loop never waits on Drive.
 
-## Auth mode decision (already made)
+## Auth mode decision — REVISED after live rollout (2026-07-17)
 
-**Default: service account.** Headless, no consent-screen token expiry, survives
-restarts and machines without a browser.
+> **FIELD FINDING (live-verified):** Google removed My-Drive storage quota from
+> service accounts — a new SA can create FOLDERS but every file upload fails
+> with 403 `storageQuotaExceeded` ("Service Accounts do not have storage
+> quota"). Shared Drives require paid Workspace. **On consumer Gmail accounts
+> the working mode is `GDRIVE_AUTH_MODE=oauth`** (loopback, our own OAuth
+> client): files are owned by the authorizing user and use their 15 GB.
+> The service-account path below remains valid ONLY for Workspace accounts
+> with Shared Drives.
 
-Tradeoffs to know:
+OAuth-mode realities discovered during rollout:
 
-- Files the service account (SA) creates are **owned by the SA**, not by you, and
-  count against the SA's own fixed **15 GB quota**. That is ample for a
-  text-dominant memory substrate, but don't point large binary pipelines at it.
-- You see the files because the `sudo-ai/` folder is shared with the SA inside a
-  folder you own; you retain visibility and can revoke the SA at any time.
+- gcloud's built-in client ID is now **blocked** for Drive/Sheets scopes
+  ("This app is blocked") — you MUST create your own OAuth Desktop client.
+- The new Auth Platform console shows the client secret **only at creation
+  time** (Download JSON in the creation dialog); afterwards it is
+  irretrievable — capture it then or create a new client.
+- Publish the consent screen to **Production** (unverified is fine — click
+  Advanced → "Go to sudo-ai (unsafe)" once) or refresh tokens expire in 7
+  days while in Testing.
+- The consent screen uses **granular checkboxes** — "Select all" must be
+  ticked before Continue, or the flow returns `access_denied`.
+- Trust-tier note: in oauth mode the authorizing account is the writer of all
+  agent files; list it in `GDRIVE_PRINCIPAL_EMAILS` alongside the owner.
 
-An OAuth **loopback** mode also exists (`GDRIVE_AUTH_MODE=oauth`) for portability.
-It is not the default. Never the deprecated `oob` flow. Caveat: while a GCP consent
-screen is in **Testing** status, refresh tokens expire after **7 days** — publish the
-app (internal is fine) before relying on it.
+Never the deprecated `oob` flow.
 
 ## HUMAN: one-time GCP setup (~10 minutes)
 
