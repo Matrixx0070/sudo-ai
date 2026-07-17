@@ -434,8 +434,22 @@ async function boot(): Promise<void> {
     const { SecurityGuard } = await import('./core/security/index.js');
     security = new SecurityGuard();
     log.info('SecurityGuard initialized');
+    // F106: announce every active posture-weakening flag in one loud place
+    // instead of each subsystem degrading silently.
+    try {
+      const { postureBannerLines } = await import('./core/security/posture.js');
+      for (const line of postureBannerLines()) {
+        log.error({ posture: 'weakened' }, `SECURITY POSTURE: ${line}`);
+      }
+    } catch { /* banner is best-effort */ }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    // F104: SUDO_SECURITY_STRICT=1 makes a SecurityGuard init failure FATAL
+    // instead of silently running without hardening.
+    if (process.env['SUDO_SECURITY_STRICT'] === '1') {
+      log.error({ err: msg }, 'SecurityGuard failed to initialize and SUDO_SECURITY_STRICT=1 — refusing to boot');
+      throw err;
+    }
     log.warn({ err: msg }, 'SecurityGuard failed to initialize — running without security hardening');
   }
 
