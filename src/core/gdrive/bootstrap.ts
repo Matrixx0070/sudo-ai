@@ -38,6 +38,7 @@ export const CANONICAL_FOLDERS: readonly string[] = [
   'tasks',
   'tasks/active',
   'tasks/blackboard',
+  'tasks/proposals',
   'datasets',
   'evals',
   'evals/gym',

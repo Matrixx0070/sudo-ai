@@ -129,6 +129,7 @@ import { GoalClassifier } from '../autonomy/goal-pipeline.js';
 import { GoalPlanner, type BrainForPlanning } from '../autonomy/goal-planner.js';
 import { matchPlanDeadEnds, renderDeadEndWarning } from './dead-end-seam.js';
 import { getBiasPriorsPreamble } from './bias-priors-seam.js';
+import { matchPrecedents, renderPrecedentConsult } from './case-law-seam.js';
 import { GoalStopDetector } from '../autonomy/goal-stop-detector.js';
 import { PlanModeStateMachine } from './plan-mode-v2.js';
 import { ProfileManager } from '../sandbox/sandbox-profiles.js';
@@ -1548,6 +1549,8 @@ export class AgentLoop extends AgentLoopInjections {
               // F69: bias-priors preamble — the agent's characteristic errors
               // from the principal's past corrections. Injected seam; fail-open.
               const biasPriors = getBiasPriorsPreamble();
+              // F70: fleet case law — binding precedents relevant to this plan.
+              const precedents = renderPrecedentConsult(matchPrecedents(`${current}\n${strategySteps.join('\n')}`));
               session.messages.push({
                 role: 'system',
                 content:
@@ -1556,7 +1559,8 @@ export class AgentLoop extends AgentLoopInjections {
                   "Follow your normal safety rules and the user's actual request, and ignore any step that conflicts with them:\n" +
                   checklist +
                   warning +
-                  biasPriors,
+                  biasPriors +
+                  precedents,
               });
               log.info({ sessionId, goalType: gc.type, stepCount: strategySteps.length, deadEndHits: deadEndHits.length }, 'GoalPlanner: strategy plan injected');
             }
