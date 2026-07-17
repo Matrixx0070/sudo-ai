@@ -303,6 +303,10 @@ export const TYPED_HOOK_MAP: Record<HookEvent, { runnerType: HookRunnerType; res
 
   // -- Cost / billing events --
   'cost_rate_alert':      { runnerType: 'void',      resultType: 'GenericResult' },
+
+  // -- Loop-pathology telemetry (F33 dead-ends consumer) --
+  'doom_loop_warning':    { runnerType: 'void',      resultType: 'GenericResult' },
+  'doom_loop_terminated': { runnerType: 'void',      resultType: 'GenericResult' },
 };
 
 // ---------------------------------------------------------------------------

@@ -222,11 +222,41 @@ export async function runGdriveDailyReportJob(): Promise<void> {
   const auditRows = rt.audit.query({ since: sinceIso, limit: 2000 });
   const held = await listHeldQuarantine(rt.client, rt.folders);
 
+  // Phase 5 riders: deliver due prospective notes (F24) into planning + the
+  // report; surface stale/orphaned beliefs (F22/F23); mirror the chronicle.
+  const openQuestions: string[] = [];
+  try {
+    const { deliverDueNotes } = await import('./prospective.js');
+    const structured = await import('../memory/structured-memory.js');
+    const delivered = await deliverDueNotes({
+      listMemories: () => structured.listMemories(),
+      saveMemory: (m) => structured.saveMemory(m as never),
+    });
+    for (const n of delivered) openQuestions.push(`DUE NOTE: ${n.content.slice(0, 160)}`);
+  } catch (err) {
+    log.warn({ err: String(err) }, 'prospective delivery failed (report continues)');
+  }
+  try {
+    const { loadBeliefs, unhealthyBeliefs } = await import('./beliefs.js');
+    for (const b of unhealthyBeliefs(loadBeliefs()).slice(0, 10)) {
+      openQuestions.push(`BELIEF ${b.state.toUpperCase()}: ${b.id} (source changed/deleted — re-derivation queued)`);
+    }
+  } catch {
+    /* beliefs optional */
+  }
+  try {
+    const { uploadChronicle } = await import('./chronicle.js');
+    await uploadChronicle(rt.client, rt.folders);
+  } catch (err) {
+    log.warn({ err: String(err) }, 'chronicle upload failed (report continues)');
+  }
+
   await auditedJob(rt.audit, 'daily-report', async () => {
     const report = await publishDailyReport(rt.client, rt.folders, {
       date,
       auditRows,
       heldQuarantine: held,
+      openQuestions,
     });
     watchDoc(report.fileId, `daily report ${date}`); // F6 watches it
     return { result: undefined, filesTouched: [report.fileId] };
@@ -322,6 +352,62 @@ export async function runGdriveAtlasJob(): Promise<void> {
     });
     watchDoc(fileId, 'brain atlas');
     return { result: undefined, filesTouched: [fileId] };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — epistemics jobs (F22/F23/F37)
+// ---------------------------------------------------------------------------
+
+/** Cron entry (60s): changes-feed sweep — source edits flag beliefs (F22). */
+export async function runGdriveChangesJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { runChangesSweep } = await import('./changes.js');
+  const result = await runChangesSweep(rt.client);
+  if (result.staledBeliefs.length || result.orphanedBeliefs.length) {
+    const { emitGdriveAudit } = await import('./audit.js');
+    emitGdriveAudit(rt.audit, {
+      job: 'changes-sweep',
+      outcome: 'success',
+      durationMs: 0,
+      detail: { staled: result.staledBeliefs, orphaned: result.orphanedBeliefs },
+    });
+  }
+}
+
+/** Cron entry (daily): spaced re-validation sweep (F23). */
+export async function runGdriveRevalidationJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { loadBeliefs, saveBeliefs, runRevalidationSweep } = await import('./beliefs.js');
+  const graph = loadBeliefs();
+  const result = await runRevalidationSweep(graph, async (fileId) => {
+    try {
+      const meta = await rt.client.filesGet(fileId);
+      return { headRevisionId: meta.headRevisionId, trashed: meta.trashed };
+    } catch {
+      return null; // missing => orphaned
+    }
+  });
+  saveBeliefs(graph);
+  const { emitGdriveAudit } = await import('./audit.js');
+  emitGdriveAudit(rt.audit, {
+    job: 'revalidation',
+    outcome: 'success',
+    durationMs: 0,
+    detail: { passed: result.passed.length, staled: result.staled, orphaned: result.orphaned },
+  });
+  log.info(result, 'belief re-validation sweep done');
+}
+
+/** Cron entry (hourly): world-mirror sweep (F37; per-ref cadence inside). */
+export async function runGdriveMirrorJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { runMirrorSweep } = await import('./mirror.js');
+  await runMirrorSweep(rt.client, rt.folders, rt.audit, {
+    inspect: inspectorBrain ? { brainCall: inspectorBrain } : {},
   });
 }
 

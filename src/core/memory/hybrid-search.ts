@@ -410,6 +410,23 @@ export async function hybridSearch(
   }
 
   // -------------------------------------------------------------------------
+  // Step 4.5: Epistemic ranking rider — provenance-aware multiplier supplied
+  // by the caller (trustWeight × validationState; see memory/epistemic-score).
+  // Neutral when absent; a throwing adjuster must not break retrieval.
+  // -------------------------------------------------------------------------
+
+  const epistemicAdjuster = options.epistemicAdjuster;
+  if (epistemicAdjuster) {
+    results = results.map((r) => {
+      try {
+        return { ...r, score: epistemicAdjuster(r.chunk.path, r.score) };
+      } catch {
+        return r;
+      }
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Step 5: Score filter + sort
   // -------------------------------------------------------------------------
 

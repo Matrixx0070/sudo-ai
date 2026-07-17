@@ -82,6 +82,23 @@ export async function runCheckpoint(deps: CheckpointDeps): Promise<PushResult> {
       createdAt,
     });
     saveBrainState({ ...state, counter: result.manifest.counter, lastPushAt: createdAt });
+
+    // F31 — chronicle: derive add/update/deprecate ops from the manifest
+    // transition (every synced memory mutation, no memory-API instrumentation).
+    try {
+      const { appendChronicle, opsFromManifestDiff } = await import('./chronicle.js');
+      const prevPath = dataPath('gdrive', 'last-manifest.json');
+      let prev = null;
+      try {
+        prev = JSON.parse(readFileSync(prevPath, 'utf-8'));
+      } catch {
+        /* first checkpoint */
+      }
+      appendChronicle(opsFromManifestDiff(prev, result.manifest, createdAt), createdAt.slice(0, 10));
+      writeFileSync(prevPath, JSON.stringify(result.manifest), { mode: 0o600 });
+    } catch (chronErr) {
+      log.warn({ err: String(chronErr) }, 'chronicle append failed (checkpoint still recorded)');
+    }
     emitGdriveAudit(deps.audit, {
       job: 'checkpoint',
       outcome: 'success',

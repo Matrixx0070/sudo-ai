@@ -173,3 +173,58 @@ export {
   runGdriveCommentsJob,
   runGdriveAtlasJob,
 } from './runtime.js';
+// Phase 5 — epistemics (F22/F23/F24/F31/F33/F37 + ranking rider)
+export {
+  loadBeliefs,
+  saveBeliefs,
+  upsertBelief,
+  flagSourceChanged,
+  flagSourceDeleted,
+  dueForReview,
+  recordValidationPass,
+  recordValidationFail,
+  runRevalidationSweep,
+  buildEpistemicAdjuster,
+  unhealthyBeliefs,
+  REVIEW_LADDER_DAYS,
+  type Belief,
+  type BeliefsGraph,
+} from './beliefs.js';
+export { runChangesSweep, loadChangesToken, saveChangesToken, type ChangesSweepResult } from './changes.js';
+export {
+  noteToFutureSelf,
+  listDueNotes,
+  listPendingNotes,
+  deliverDueNotes,
+  type ProspectiveNote,
+} from './prospective.js';
+export {
+  appendChronicle,
+  opsFromManifestDiff,
+  readChronicle,
+  uploadChronicle,
+  knewAt,
+  type ChronicleOp,
+  type KnewAtView,
+} from './chronicle.js';
+export {
+  draftDeadEnd,
+  confirmDeadEnd,
+  listDeadEnds,
+  matchDeadEnds,
+  uploadDeadEnds,
+  type DeadEnd,
+} from './dead-ends.js';
+export {
+  runMirrorSweep,
+  loadMirrorConfig,
+  defaultFetcher,
+  type MirrorRef,
+  type MirrorConfig,
+  type MirrorSweepResult,
+} from './mirror.js';
+export {
+  runGdriveChangesJob,
+  runGdriveRevalidationJob,
+  runGdriveMirrorJob,
+} from './runtime.js';

@@ -155,7 +155,10 @@ export class AgentLoop extends AgentLoopInjections {
   private readonly sessionManager: SessionManagerLike;
   private readonly config: AgentConfig;
   private readonly loopGuard = new LoopGuard();
-  private readonly doomLoopDetector = new DoomLoopDetector();
+  // Re-created with the hook emitter in the constructor (field initializers
+  // run before `this.hooks` is assigned) so doom_loop_* telemetry reaches
+  // HookManager subscribers (F33 dead-ends drafting consumes it).
+  private doomLoopDetector = new DoomLoopDetector();
   /** gap #23 — opt-in via SUDO_DOOM_LOOP_EXTRAS=1; both null when flag off. */
   private readonly writeCycleDetector: WriteCycleDetector | null =
     process.env['SUDO_DOOM_LOOP_EXTRAS'] === '1' ? new WriteCycleDetector() : null;
@@ -353,6 +356,10 @@ export class AgentLoop extends AgentLoopInjections {
     if (hooks != null && typeof (hooks as HookEmitterLike).emit === 'function') {
       this.hooks = hooks as HookEmitterLike;
       log.info('AgentLoop: HookEmitter attached');
+      // Wire doom-loop telemetry to the emitter (events: doom_loop_warning /
+      // doom_loop_terminated) — previously constructed without one, so the
+      // events never left the detector.
+      this.doomLoopDetector = new DoomLoopDetector(this.hooks);
     } else if (hooks != null) {
       log.warn('AgentLoop: hooks argument does not implement HookEmitterLike — ignoring');
     }

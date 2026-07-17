@@ -135,6 +135,26 @@ export async function collectBrainSnapshot(deps: BrainSnapshotDeps): Promise<Bra
     }
   }
 
+  // 2.5 Epistemic sidecar files (Phase 5): beliefs graph, prospective notes,
+  // dead-ends index — zone-2 JSON state that must survive kill-and-restore.
+  const { dataPath } = await import('../shared/paths.js');
+  const { join } = await import('node:path');
+  const sidecars: Array<{ file: string; logicalPath: string }> = [
+    { file: join(dataPath('gdrive'), 'beliefs-graph.json'), logicalPath: 'epistemics/beliefs-graph.json' },
+    { file: join(dataPath('gdrive'), 'prospective.json'), logicalPath: 'epistemics/prospective.json' },
+    { file: join(dataPath('gdrive'), 'dead-ends.json'), logicalPath: 'epistemics/dead-ends.json' },
+  ];
+  for (const s of sidecars) {
+    if (existsSync(s.file)) {
+      inputs.push({
+        logicalPath: s.logicalPath,
+        content: readFileSync(s.file),
+        zone: 2,
+        category: 'knowledge',
+      });
+    }
+  }
+
   // 3. workspace/MEMORY.md — the human-readable long-term policy surface.
   const mdPath = deps.memoryMdPath ?? defaultMemoryMdPath();
   if (existsSync(mdPath)) {
@@ -205,6 +225,25 @@ export async function applyBrainSnapshot(
     for (const m of parseJsonl<StructuredMemoryLike>(blob)) {
       await deps.structured.saveMemory(m);
       report.structuredApplied++;
+    }
+  }
+
+  // Epistemic sidecars: restore only when absent locally (local state wins —
+  // it is newer by definition on the machine that kept running).
+  {
+    const { dataPath } = await import('../shared/paths.js');
+    const { join } = await import('node:path');
+    const sidecars: Array<{ file: string; logicalPath: string }> = [
+      { file: join(dataPath('gdrive'), 'beliefs-graph.json'), logicalPath: 'epistemics/beliefs-graph.json' },
+      { file: join(dataPath('gdrive'), 'prospective.json'), logicalPath: 'epistemics/prospective.json' },
+      { file: join(dataPath('gdrive'), 'dead-ends.json'), logicalPath: 'epistemics/dead-ends.json' },
+    ];
+    for (const s of sidecars) {
+      const blob = blobs.get(s.logicalPath);
+      if (blob && !existsSync(s.file)) {
+        mkdirSync(dirname(s.file), { recursive: true });
+        writeFileSync(s.file, blob, { mode: 0o600 });
+      }
     }
   }
 

@@ -92,6 +92,13 @@ export interface SearchOptions {
   mmrLambda?: number;
   /** Only return chunks whose path starts with this prefix */
   pathFilter?: string;
+  /**
+   * Epistemic ranking rider: per-chunk score adjuster
+   * (path, baseScore) => adjustedScore. Applied after temporal decay, before
+   * the minScore gate. Built from provenance metadata by callers that have it
+   * (e.g. the Drive beliefs layer); plain callers omit it — neutral.
+   */
+  epistemicAdjuster?: (chunkPath: string, baseScore: number) => number;
 }
 
 /**
