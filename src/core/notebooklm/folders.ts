@@ -20,6 +20,7 @@ export const NOTEBOOKLM_FOLDERS: readonly string[] = [
   'notebooklm/incidents',
   'notebooklm/probes',
   'notebooklm/approvals',
+  'notebooklm/reception',
   'notebooklm/skills',
   'notebooklm/debates',
   'notebooklm/corpora',
