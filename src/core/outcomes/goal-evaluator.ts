@@ -131,22 +131,88 @@ export class HeuristicGoalEvaluator implements GoalEvaluator {
 }
 
 // ---------------------------------------------------------------------------
-// LlmGoalEvaluator (stub for this wave)
+// LlmGoalEvaluator (F88 — real implementation, injected-caller seam)
 // ---------------------------------------------------------------------------
 
+/** Injected LLM caller — keeps core/outcomes free of heavy brain imports.
+ *  Takes a prompt, returns the model's raw text reply. */
+export type GoalEvalLlmCall = (prompt: string) => Promise<string>;
+
+const LLM_EVAL_MAX_MSG_CHARS = 400;
+const LLM_EVAL_MAX_MESSAGES = 8;
+const LLM_EVAL_MIN_CONFIDENCE = 0;
+const LLM_EVAL_MAX_CONFIDENCE = 1;
+
 /**
- * Stub LLM-backed evaluator. Logs intent and delegates to heuristic.
- * A real implementation will call the configured model in a future wave.
+ * F88: real LLM-backed evaluator. Builds a compact transcript summary,
+ * requests a strict-JSON verdict, validates it, and FALLS BACK to the
+ * heuristic (with honest evidence) on any call/parse/validation failure.
+ * Cost is bounded: truncated transcript in, small completion out.
  */
-class LlmGoalEvaluator implements GoalEvaluator {
+export class LlmGoalEvaluator implements GoalEvaluator {
   private readonly heuristic = new HeuristicGoalEvaluator();
+  private readonly llmCall: GoalEvalLlmCall;
+
+  constructor(llmCall: GoalEvalLlmCall) {
+    this.llmCall = llmCall;
+  }
+
+  private buildPrompt(ctx: EvalContext): string {
+    const msgs = ctx.recentMessages
+      .slice(-LLM_EVAL_MAX_MESSAGES)
+      .map((m) => `${m.role}: ${(m.content ?? '').slice(0, LLM_EVAL_MAX_MSG_CHARS)}`)
+      .join('\n');
+    return [
+      'You judge whether an AI agent session achieved its stated goal.',
+      'Reply with ONLY a JSON object, no prose, no code fences:',
+      '{"outcome":"success"|"failure"|"partial","confidence":0.0-1.0,"evidence":["short reason", ...]}',
+      '',
+      `Goal: ${ctx.goal || '(none recorded)'}`,
+      `Tool calls: ${ctx.toolSuccessCount} succeeded, ${ctx.toolFailureCount} failed.`,
+      'Recent messages (truncated):',
+      msgs || '(none)',
+    ].join('\n');
+  }
+
+  private parseVerdict(raw: string): GoalEvalResult | null {
+    // Tolerate accidental fencing/prose by extracting the first {...} block.
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start === -1 || end <= start) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const v = parsed as Record<string, unknown>;
+    const outcome = v['outcome'];
+    if (outcome !== 'success' && outcome !== 'failure' && outcome !== 'partial') return null;
+    const confRaw = typeof v['confidence'] === 'number' ? v['confidence'] : NaN;
+    if (!Number.isFinite(confRaw)) return null;
+    const confidence = Math.min(LLM_EVAL_MAX_CONFIDENCE, Math.max(LLM_EVAL_MIN_CONFIDENCE, confRaw));
+    const evidence = Array.isArray(v['evidence'])
+      ? v['evidence'].filter((e): e is string => typeof e === 'string').slice(0, 10)
+      : [];
+    return { outcome, confidence, evidence };
+  }
 
   async evaluate(ctx: EvalContext): Promise<GoalEvalResult> {
-    log.info(
-      { sessionId: ctx.sessionId, model: process.env['SUDO_GOAL_EVAL_MODEL'] },
-      'LlmGoalEvaluator: LLM evaluation not yet implemented — delegating to heuristic',
-    );
-    return this.heuristic.evaluate(ctx);
+    try {
+      const raw = await this.llmCall(this.buildPrompt(ctx));
+      const verdict = this.parseVerdict(raw);
+      if (verdict) {
+        log.debug({ sessionId: ctx.sessionId, outcome: verdict.outcome }, 'LlmGoalEvaluator: verdict');
+        return verdict;
+      }
+      log.warn({ sessionId: ctx.sessionId, rawPreview: raw.slice(0, 120) }, 'LlmGoalEvaluator: unparseable reply — falling back to heuristic');
+    } catch (err) {
+      log.warn({ sessionId: ctx.sessionId, err: String(err) }, 'LlmGoalEvaluator: call failed — falling back to heuristic');
+    }
+    const fallback = await this.heuristic.evaluate(ctx);
+    fallback.evidence.push('LLM evaluation unavailable — heuristic fallback');
+    return fallback;
   }
 }
 
@@ -157,14 +223,18 @@ class LlmGoalEvaluator implements GoalEvaluator {
 /**
  * Returns a GoalEvaluator appropriate for the current environment.
  *
- * When SUDO_GOAL_EVAL_MODEL=haiku, returns LlmGoalEvaluator (stub).
- * Any other value or absent env var returns HeuristicGoalEvaluator.
+ * SUDO_GOAL_EVAL_MODEL set (e.g. 'haiku') AND an llmCall injected →
+ * LlmGoalEvaluator. Model set but no caller → heuristic with a warning
+ * (the wiring site did not provide the seam). Otherwise heuristic.
  */
-export function createGoalEvaluator(): GoalEvaluator {
+export function createGoalEvaluator(llmCall?: GoalEvalLlmCall): GoalEvaluator {
   const model = process.env['SUDO_GOAL_EVAL_MODEL'];
-  if (model === 'haiku') {
-    log.info({ model }, 'createGoalEvaluator: using LlmGoalEvaluator (stub)');
-    return new LlmGoalEvaluator();
+  if (model) {
+    if (llmCall) {
+      log.info({ model }, 'createGoalEvaluator: using LlmGoalEvaluator');
+      return new LlmGoalEvaluator(llmCall);
+    }
+    log.warn({ model }, 'createGoalEvaluator: SUDO_GOAL_EVAL_MODEL set but no llmCall injected — using heuristic');
   }
   log.debug({}, 'createGoalEvaluator: using HeuristicGoalEvaluator');
   return new HeuristicGoalEvaluator();
