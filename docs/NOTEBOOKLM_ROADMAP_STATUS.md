@@ -36,7 +36,7 @@ Additive gaps (small, mechanical, done inside their phase):
 
 | Gap | What | Phase |
 |---|---|---|
-| G-MODELGEN | add `modelGeneration` to `ResolvedRoute` + `aliases.ts` | N4 (F64) |
+| ~~G-MODELGEN~~ | **DONE** — `modelGenerationOf`/`currentModelGeneration` in aliases.ts (family+major, point releases dropped) + `modelGeneration` on `ResolvedRoute`; F64 succession watches it | N4 (F64) |
 | ~~G-F46MARK~~ | **DONE** — comments.ts extracts `[F46]`/`F46:` marker → dataset row + memory name | N1 (F46) |
 | G-CANARYWRITE | `registerCanary(entry)` writer (canary is read/trip only) | N4 (F67) |
 | ~~G-F52RANK~~ | **DONE** — dream.ts ranks (orphaned>stale>hold); open-questions file carries `ranked[]` | N1 (F52) |

@@ -56,7 +56,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { IRRequest, IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
-import { resolveAlias } from './aliases.js';
+import { resolveAlias, modelGenerationOf } from './aliases.js';
 import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL } from './endpoints.js';
 import { getProviderApiKey, recordGatewayCall, type ProviderKeyName } from './client.js';
 import { egressAnthropic, parseAnthropicResponse } from './adapters/egress-anthropic.js';
@@ -144,6 +144,8 @@ interface ResolvedRoute {
   url: string;
   /** Breaker/lane key: `<provider>:<messages|chat>`. */
   route: string;
+  /** G-MODELGEN: coarse family+major-version lineage token (F64 succession). */
+  modelGeneration: string;
 }
 
 function invalidRequest(message: string, route?: string): LLMPolicyError {
@@ -163,6 +165,7 @@ function resolveRoute(alias: string): ResolvedRoute {
   }
   const provider = resolved.slice(0, slash);
   const modelId = resolved.slice(slash + 1);
+  const modelGeneration = modelGenerationOf(resolved);
 
   if (provider === 'anthropic' || provider === 'claude-oauth') {
     // claude-oauth uses the SAME api.anthropic.com base as anthropic — the
@@ -175,6 +178,7 @@ function resolveRoute(alias: string): ResolvedRoute {
       modelId,
       url: `${PROVIDER_BASE_URLS.anthropic}/messages`,
       route: `${provider}:messages`,
+      modelGeneration,
     };
   }
 
@@ -188,6 +192,7 @@ function resolveRoute(alias: string): ResolvedRoute {
       modelId,
       url: XAI_RESPONSES_URL,
       route: 'xai-oauth:responses',
+      modelGeneration,
     };
   }
 
@@ -207,6 +212,7 @@ function resolveRoute(alias: string): ResolvedRoute {
           modelId,
           url: `${custom.baseURL.replace(/\/+$/, '')}/messages`,
           route: `${provider}:messages`,
+          modelGeneration,
         };
       }
       if (custom.adapter !== 'openai') {
@@ -228,6 +234,7 @@ function resolveRoute(alias: string): ResolvedRoute {
     modelId,
     url: `${baseURL}/chat/completions`,
     route: `${provider}:chat`,
+    modelGeneration,
   };
 }
 
