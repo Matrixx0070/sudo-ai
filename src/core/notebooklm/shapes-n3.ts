@@ -7,7 +7,7 @@
  * may contain zone-1 material, so the hard screen applies example-by-example.
  */
 
-import { screenRecords } from './zone-screen.js';
+import { screenRecords, assertZone2 } from './zone-screen.js';
 import { registerShape, type ShapeSpec } from './shapes.js';
 import type { ErrorAtlas } from '../gdrive/error-atlas.js';
 
@@ -34,9 +34,41 @@ export const errorAtlasShape: ShapeSpec = {
   },
 };
 
+// F66 — dyad health audit (aggregate stats; no raw correction text).
+export const dyadHealthShape: ShapeSpec = {
+  id: 'dyad-health',
+  featureIds: ['F66'],
+  mode: 'rolling',
+  folder: 'notebooklm/architecture',
+  cadence: 'weekly',
+  async compile() {
+    const { buildDyadStats, renderDyadHealthReport } = await import('../gdrive/dyad.js');
+    const body = renderDyadHealthReport(buildDyadStats());
+    assertZone2(body); // aggregates only, but fail-closed on any leak.
+    return [{ name: 'dyad-health', body }];
+  },
+};
+
+// F49 — operator calibration (persistent blind-spot themes; theme words only).
+export const blindSpotsShape: ShapeSpec = {
+  id: 'blind-spots',
+  featureIds: ['F49'],
+  mode: 'rolling',
+  folder: 'notebooklm/architecture',
+  cadence: 'weekly',
+  async compile() {
+    const { buildBlindSpots, renderBlindSpotsReport } = await import('../gdrive/dyad.js');
+    const body = renderBlindSpotsReport(buildBlindSpots());
+    assertZone2(body);
+    return [{ name: 'blind-spots', body }];
+  },
+};
+
 let registered = false;
 export function registerN3Shapes(): void {
   if (registered) return;
   registerShape(errorAtlasShape);
+  registerShape(dyadHealthShape);
+  registerShape(blindSpotsShape);
   registered = true;
 }

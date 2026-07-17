@@ -46,7 +46,7 @@ const STOP = new Set([
   'when', 'should', 'must', 'can', 'will', 'they', 'them', 'his', 'her', 'its',
 ]);
 
-function contentWords(s: string): string[] {
+export function contentWords(s: string): string[] {
   // Cap length: real error themes are natural words. Long high-entropy tokens
   // are identifiers/keys/hashes, never themes — excluding them also keeps a
   // secret fragment from ever surfacing as a theme key (defence-in-depth on top
