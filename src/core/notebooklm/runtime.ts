@@ -278,6 +278,17 @@ export async function runNlmSuccessionJob(): Promise<{ phase: string }> {
   return { phase: succ.loadSuccessionState()?.phase ?? 'stable' };
 }
 
+/** F56 estate pack: publish the pointer-only succession notebook. */
+export async function runNlmEstatePackJob(): Promise<{ published: boolean }> {
+  if (!isNotebookLmEnabled()) return { published: false };
+  const rt = await getNlmRuntime();
+  const { getGdriveRuntime } = await import('../gdrive/runtime.js');
+  const grt = await getGdriveRuntime();
+  const { publishEstatePack } = await import('./estate-pack.js');
+  const id = await publishEstatePack(rt.client, grt.folders, rt.folders);
+  return { published: id !== null };
+}
+
 async function buildShapeContext(rt: NlmRuntime): Promise<import('./shapes.js').ShapeContext> {
   const { getGdriveRuntime } = await import('../gdrive/runtime.js');
   const { readFileSync } = await import('node:fs');
