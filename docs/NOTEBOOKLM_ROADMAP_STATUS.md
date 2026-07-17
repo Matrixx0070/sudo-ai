@@ -10,8 +10,8 @@ Composes on the completed Drive roadmap (`docs/DRIVE_ROADMAP.md`, F1–F38 shipp
 | N0 | Recon + core rails (E1/E2/E3) | **recon confirmed; build in progress (this PR)** |
 | N1 | Broadcast surface | **build in progress (this PR)** — shapes+CLI+rituals+2 gap-repairs |
 | N2 | Probe & verification | **shipped** — E4 engine + F40/F50/F58/F61/F63/F68 (#790) |
-| N3 | Judgment/relationship/self-knowledge | **COMPLETE** — G-PLANNER+G-F32WIRE (#791), F69 (#792), F48 (#793), F54 (#794), F49+F66 (#795), F62 (#796), F59 reception (this PR) all shipped |
-| N4 | Lineage & society | todo |
+| N3 | Judgment/relationship/self-knowledge | **COMPLETE** — G-PLANNER+G-F32WIRE (#791), F69 (#792), F48 (#793), F54 (#794), F49+F66 (#795), F62 (#796), F59 (#797) all shipped |
+| N4 | Lineage & society | **build in progress** — G-MODELGEN (#798), F64 succession gate (this PR) shipped; F60/F65/F67/F70/F56 remain |
 | N5 | The Organ (optional autonomous) | todo (gated; not entered) |
 
 ## N0 recon — confirmed 2026-07-17
@@ -69,6 +69,7 @@ Additive gaps (small, mechanical, done inside their phase):
 | F49/F66 dyad analysis | `tests/gdrive/dyad.test.ts` | windowed correction stats + trend (F66); persistent-blind-spot detection across time windows (F49); export shapes are zone-2 aggregates |
 | F62 study-of-principal | `tests/gdrive/study-of-principal.test.ts`, `tests/notebooklm/no-zone1-export.test.ts` | operator model SEALED (AES-256-GCM); principal's words never plaintext at rest; wrong key → null; **no F62 shape in the export registry (zone-1 never broadcast)** |
 | F59 reception | `tests/notebooklm/reception.test.ts` | sentiment/theme/confusion analysis of a returned transcript; reception Doc + EXTERNAL-tier memory; never the default chunk ingest |
+| F64 succession | `tests/notebooklm/succession.test.ts` | generation change → PAUSE; sealed successor pack (ciphertext at rest); ack token-bound; pulse-before-ack holds; alerting pulse holds for human; resume only when acked+pulsed → baseline advances |
 | (later) embassy verbatim | tbd (N4) | verbatim-dump held, authored distillate external |
 
 ## Annex B — API-day upgrade map (maintain from day one)
