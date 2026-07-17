@@ -15,6 +15,9 @@ export const SUDO_ALIASES = [
   'sudo/frontier',
   'sudo/embed',
   'sudo/vision',
+  // Pinned LLM-judge/comparator route (G-JUDGE). Must be independent of the
+  // route under test — the judge-independence rule is enforced in src/llm/judge.ts.
+  'sudo/judge',
 ] as const;
 
 export type SudoAlias = (typeof SUDO_ALIASES)[number];
@@ -31,6 +34,11 @@ const DEFAULTS: Record<SudoAlias, string> = {
   'sudo/frontier': 'anthropic/claude-opus-4-8',
   'sudo/embed': 'openai/text-embedding-3-small',
   'sudo/vision': 'xai/grok-4-fast',
+  // Default judge = a cheap anthropic route, deliberately a DIFFERENT provider
+  // from the xai-heavy cheap/mid tier so it's independent of the usual routes
+  // under test. Override with LLM_ALIAS_JUDGE. When the judge shares a provider
+  // with the route under test, the gate holds for human review (see judge.ts).
+  'sudo/judge': 'anthropic/claude-haiku-4-5-20251001',
 };
 
 /** Env override key for an alias: sudo/frontier → LLM_ALIAS_FRONTIER. */
