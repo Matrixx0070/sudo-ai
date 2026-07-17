@@ -30,7 +30,7 @@ Structural gaps (minimal Drive-side repair PR first, then annex builds — D-N0.
 | **G-PLANNER** | `matchDeadEnds` wired only in `dream.ts`, not the agent `GoalPlanner` (no live plan pre-commit hook). Seam: post-`GoalPlanner.plan()` `goal-planner.ts:490`. | F69/F70/F73 (N3) | Drive-side repair PR wires dead-ends pre-check into the planner; annex adds precedent/assumption consults alongside. |
 | **G-F32WIRE** | F32 second-opinion complete but no trigger site; nothing constructs a `DecisionPacket`. `cognition/epistemic-gate.ts` owns `ImpactLevel`. | F48/F65 (N3/N4) | Repair PR adds the above-threshold trigger site + `awaitDissent` block. |
 | ~~G-F13~~ | Weekly self-diff — **REPAIRED** (src/core/gdrive/self-diff.ts, weekly cron, F53 topology slot). | ~~F42/F53~~ | DONE — Drive-side repair PR shipped. |
-| **G-JUDGE** | No `judgeRoute`; existing `skill-eval` judge is same-route position-swap (violates independence). | E4/F64/F68 (N2+) | Add `sudo/judge` alias + config pin; hold-for-human where no independent route. |
+| ~~G-JUDGE~~ | **REPAIRED** — `sudo/judge` alias + `src/llm/judge.ts` (providerOf/isIndependentJudge/judgeFor: holds-for-human when judge shares a provider with a route under test). | E4/F64/F68 | DONE — repair PR shipped. |
 
 Additive gaps (small, mechanical, done inside their phase):
 

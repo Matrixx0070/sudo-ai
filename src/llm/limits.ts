@@ -58,6 +58,7 @@ const MODEL_LIMITS: Record<string, AliasLimits> = {
   'anthropic/claude-opus-4-7': { context_window: 200_000, max_output: 32_000 },
   'anthropic/claude-opus-4-6': { context_window: 200_000, max_output: 32_000 },
   'anthropic/claude-opus-4-5': { context_window: 200_000, max_output: 32_000 },
+  'anthropic/claude-haiku-4-5-20251001': { context_window: 200_000, max_output: 32_000 },
 
   // OpenAI
   'openai/gpt-4o': { context_window: 128_000, max_output: 16_384 },
@@ -79,6 +80,7 @@ const ALIAS_LIMITS: Record<SudoAlias, AliasLimits> = {
   'sudo/frontier': MODEL_LIMITS['anthropic/claude-opus-4-8']!,
   'sudo/embed': MODEL_LIMITS['openai/text-embedding-3-small']!,
   'sudo/vision': MODEL_LIMITS['xai/grok-4-fast']!,
+  'sudo/judge': MODEL_LIMITS['anthropic/claude-haiku-4-5-20251001']!,
 };
 
 /** In-memory overrides populated by refreshAliasLimitsFromGateway(). */
