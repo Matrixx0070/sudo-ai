@@ -296,6 +296,7 @@ export {
   writeDissent,
   awaitDissent,
   resolveDissent,
+  runSecondOpinionCycle,
   type DecisionPacket,
   type ReviewerCall,
   type SecondOpinionOutcome,

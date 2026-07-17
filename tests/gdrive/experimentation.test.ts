@@ -226,6 +226,21 @@ describe('F32 — cold second opinion', () => {
     });
     expect([...drive.files.values()].some((f) => f.name === 'dec-1.resolution.json')).toBe(true);
   });
+
+  it('G-F32WIRE: runSecondOpinionCycle exports the packet and writes the dissent in one call', async () => {
+    const drive = new FakeDrive();
+    let reviewerSawPacket = false;
+    const res = await opinion.runSecondOpinionCycle(
+      drive as never,
+      FOLDERS,
+      { ...packet, id: 'dec-cycle' },
+      async (prompt) => { reviewerSawPacket = prompt.includes('forgetting policy'); return 'Dissent: consider a 30d trial first.'; },
+    );
+    expect(reviewerSawPacket).toBe(true);
+    expect(res.packetId).toBe('dec-cycle');
+    expect([...drive.files.values()].some((f) => f.name === 'dec-cycle.packet.json')).toBe(true);
+    expect([...drive.files.values()].some((f) => f.name === 'dec-cycle.dissent.md')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

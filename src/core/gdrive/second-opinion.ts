@@ -118,6 +118,26 @@ export async function awaitDissent(
   }
 }
 
+/**
+ * G-F32WIRE: the coherent cycle a caller invokes as one unit — export the
+ * (conclusion-free) packet, then have an INDEPENDENT reviewer write the dissent
+ * memo beside it. Returns the packet id + memo. Background-only (Drive I/O +
+ * a reviewer LLM call); the agent triggers it fire-and-forget via the seam.
+ * The reviewer route MUST differ from the decider's (invariant 7) — the caller
+ * (cli.ts) pins it to the judge route.
+ */
+export async function runSecondOpinionCycle(
+  client: DriveClient,
+  folders: FolderIdMap,
+  packet: DecisionPacket,
+  reviewer: ReviewerCall,
+): Promise<{ packetId: string; memoId: string }> {
+  await exportDecisionPacket(client, folders, packet);
+  const memoId = await writeDissent(client, folders, packet.id, reviewer);
+  log.info({ packetId: packet.id, impact: packet.impact }, 'second-opinion cycle complete — dissent memo written');
+  return { packetId: packet.id, memoId };
+}
+
 /** Record the decider's resolution (addressed / proceeding-despite) — audited. */
 export async function resolveDissent(
   client: DriveClient,

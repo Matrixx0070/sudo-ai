@@ -15,6 +15,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { queryAllModels } from '../brain/model-consensus.js';
+import { requestSecondOpinion, secondOpinionEnabled } from './second-opinion-seam.js';
 
 const log = createLogger('agent:veto-gate');
 
@@ -559,6 +560,21 @@ export async function runVetoGate(
     } catch {
       // fail-open — re-anchor emission is non-fatal
     }
+  }
+
+  // G-F32WIRE: a CRITICAL-risk action the gate is about to APPROVE gets an
+  // independent second opinion — a dissent memo lands in the review queue for
+  // the owner. Fire-and-forget (never blocks the turn); no-op unless a
+  // requester is wired (cli.ts, opt-in). Conclusion-free packet by construction.
+  if (decision === 'APPROVE' && risk === 'CRITICAL' && secondOpinionEnabled()) {
+    const key = `veto-${input.toolName}-${risk}`.replace(/[^\w-]/g, '-').slice(0, 64);
+    requestSecondOpinion({
+      key,
+      question: `Independent review: the agent is about to run the high-impact tool "${input.toolName}". What is the strongest case against proceeding, and what could go wrong?`,
+      evidence: [`tool: ${input.toolName}`, `argument keys: ${Object.keys(input.args).join(', ') || '(none)'}`, `deny votes: ${vetoVotes}/${totalVotes}`],
+      constraints: [`risk: ${risk}`],
+      impact: 'critical',
+    });
   }
 
   return { decision, risk, reason };
