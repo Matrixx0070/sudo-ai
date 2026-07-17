@@ -2812,6 +2812,7 @@ async function boot(): Promise<void> {
             'notebooklm:export': nlm.runNlmExportJob,
             'notebooklm:returns': nlm.runNlmReturnsJob,
             'notebooklm:rituals': nlm.runNlmRitualsJob,
+            'notebooklm:verify': nlm.runNlmVerifyJob,
           }[payload.event];
           await fn();
         } catch (nlmErr) {
@@ -3233,6 +3234,7 @@ async function boot(): Promise<void> {
         { id: 'nlm-export', name: 'NotebookLM Export Lane', event: 'notebooklm:export', schedule: { kind: 'cron', expr: process.env['SUDO_NOTEBOOKLM_EXPORT_CRON'] ?? '40 23 * * *', tz: gdriveTz } },
         { id: 'nlm-returns', name: 'NotebookLM Returns Sweep', event: 'notebooklm:returns', schedule: { kind: 'every', ms: Math.max(60_000, Number(process.env['SUDO_NOTEBOOKLM_RETURNS_MS']) || 300_000) } },
         { id: 'nlm-rituals', name: 'NotebookLM Rituals Refresh', event: 'notebooklm:rituals', schedule: { kind: 'cron', expr: process.env['SUDO_NOTEBOOKLM_RITUALS_CRON'] ?? '20 0 * * 1', tz: gdriveTz } },
+        { id: 'nlm-verify', name: 'NotebookLM E4 Verify', event: 'notebooklm:verify', schedule: { kind: 'cron', expr: process.env['SUDO_NOTEBOOKLM_VERIFY_CRON'] ?? '50 0 * * 1', tz: gdriveTz } },
       ];
       for (const j of nlmJobs) {
         const cur = cronStore.get(j.id);
@@ -3246,8 +3248,17 @@ async function boot(): Promise<void> {
       }
       if (nlmOn) {
         try {
-          const { setNlmInspectorBrain } = await import('./core/notebooklm/runtime.js');
+          const { setNlmInspectorBrain, setNlmSelfAnswer, setNlmJudge } = await import('./core/notebooklm/runtime.js');
           setNlmInspectorBrain(async (prompt: string) => brain.chat([{ role: 'user', content: prompt }]));
+          // E4 self reader: fresh-context answer under the question's scope.
+          setNlmSelfAnswer(async (q) => {
+            const prompt = `Answer the following question about this system concisely and factually, using only what you actually know. Scope: ${q.scope}.\n\nQ: ${q.text}`;
+            const answer = await brain.chat([{ role: 'user', content: prompt }]);
+            return { answer, citations: [] };
+          });
+          // E4 judge: pinned INDEPENDENT judge route (G-JUDGE).
+          const { resolveJudgeModel } = await import('./llm/judge.js');
+          setNlmJudge(async (prompt: string) => brain.chat([{ role: 'user', content: prompt }], resolveJudgeModel()));
         } catch (err) {
           log.warn({ err: String(err) }, 'notebooklm inspector injection failed');
         }
