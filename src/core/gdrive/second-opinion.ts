@@ -30,6 +30,23 @@ export interface DecisionPacket {
 
 const ID_RE = /^[\w-]{1,64}$/;
 
+/**
+ * Guard shared by F32 (second opinion) and F48 (debate chamber): a packet must
+ * NOT smuggle a conclusion — the independent reviewer(s) must reason from the
+ * evidence, not ratify a pre-baked answer. Throws with the offending word.
+ */
+export function assertNoConclusion(packet: Pick<DecisionPacket, 'question' | 'evidence'>): void {
+  const smuggled = ['conclusion', 'recommendation', 'preferred', 'decision:'];
+  const flat = `${packet.question}\n${packet.evidence.join('\n')}`.toLowerCase();
+  for (const word of smuggled) {
+    if (flat.includes(word)) {
+      throw new Error(
+        `decision packet appears to contain a conclusion ("${word}") — strip it; the reviewer must reason independently`,
+      );
+    }
+  }
+}
+
 /** Validate + export a packet. REFUSES packets that smuggle conclusions. */
 export async function exportDecisionPacket(
   client: DriveClient,
@@ -39,15 +56,7 @@ export async function exportDecisionPacket(
   const folderId = folders['ops/review-queue'];
   if (!folderId) throw new Error('second-opinion: ops/review-queue folder id missing');
   if (!ID_RE.test(packet.id)) throw new Error(`second-opinion: invalid packet id "${packet.id}"`);
-  const smuggled = ['conclusion', 'recommendation', 'preferred', 'decision:'];
-  const flat = `${packet.question}\n${packet.evidence.join('\n')}`.toLowerCase();
-  for (const word of smuggled) {
-    if (flat.includes(word)) {
-      throw new Error(
-        `second-opinion: packet appears to contain a conclusion ("${word}") — strip it; the reviewer must reason independently`,
-      );
-    }
-  }
+  assertNoConclusion(packet);
   const created = await client.filesCreate(
     { name: `${packet.id}.packet.json`, parents: [folderId] },
     { mimeType: 'application/json', body: JSON.stringify(packet, null, 2) },

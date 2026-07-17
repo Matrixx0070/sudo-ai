@@ -16,6 +16,7 @@
 import { createLogger } from '../shared/logger.js';
 import { queryAllModels } from '../brain/model-consensus.js';
 import { requestSecondOpinion, secondOpinionEnabled } from './second-opinion-seam.js';
+import { requestDebate, debateEnabled } from './debate-seam.js';
 
 const log = createLogger('agent:veto-gate');
 
@@ -566,15 +567,15 @@ export async function runVetoGate(
   // independent second opinion — a dissent memo lands in the review queue for
   // the owner. Fire-and-forget (never blocks the turn); no-op unless a
   // requester is wired (cli.ts, opt-in). Conclusion-free packet by construction.
-  if (decision === 'APPROVE' && risk === 'CRITICAL' && secondOpinionEnabled()) {
+  if (decision === 'APPROVE' && risk === 'CRITICAL' && (secondOpinionEnabled() || debateEnabled())) {
     const key = `veto-${input.toolName}-${risk}`.replace(/[^\w-]/g, '-').slice(0, 64);
-    requestSecondOpinion({
-      key,
-      question: `Independent review: the agent is about to run the high-impact tool "${input.toolName}". What is the strongest case against proceeding, and what could go wrong?`,
-      evidence: [`tool: ${input.toolName}`, `argument keys: ${Object.keys(input.args).join(', ') || '(none)'}`, `deny votes: ${vetoVotes}/${totalVotes}`],
-      constraints: [`risk: ${risk}`],
-      impact: 'critical',
-    });
+    const question = `Independent review: the agent is about to run the high-impact tool "${input.toolName}". What is the strongest case against proceeding, and what could go wrong?`;
+    const evidence = [`tool: ${input.toolName}`, `argument keys: ${Object.keys(input.args).join(', ') || '(none)'}`, `deny votes: ${vetoVotes}/${totalVotes}`];
+    const constraints = [`risk: ${risk}`];
+    // F32 — one-sided dissent memo.
+    requestSecondOpinion({ key, question, evidence, constraints, impact: 'critical' });
+    // F48 — symmetric FOR/AGAINST debate pack (opt-in, separate wiring).
+    requestDebate({ key: `debate-${key}`.slice(0, 64), question, evidence, constraints });
   }
 
   return { decision, risk, reason };

@@ -12,10 +12,18 @@ import {
   type SecondOpinionRequest,
 } from '../../src/core/agent/second-opinion-seam.js';
 import { runVetoGate, type VetoInput } from '../../src/core/agent/veto-gate.js';
+import {
+  setDebateRequester,
+  requestDebate,
+  debateEnabled,
+  _resetDebateSeam,
+  type DebateRequest,
+} from '../../src/core/agent/debate-seam.js';
 
 afterEach(() => {
   setPlanDeadEndMatcher(null);
   _resetSecondOpinionSeam();
+  _resetDebateSeam();
 });
 
 describe('G-PLANNER — dead-end seam', () => {
@@ -81,6 +89,17 @@ describe('G-F32WIRE — second-opinion seam', () => {
     expect(got).toHaveLength(0);
   });
 
+  it('the veto gate also requests a DEBATE on a CRITICAL-risk APPROVE (F48)', async () => {
+    const got: DebateRequest[] = [];
+    setDebateRequester(async (req) => { got.push(req); });
+    expect(debateEnabled()).toBe(true);
+    const res = await runVetoGate({ toolName: 'execCommand', args: { cmd: 'ls' } }, async () => 'APPROVE fine');
+    expect(res.decision).toBe('APPROVE');
+    expect(got).toHaveLength(1);
+    expect(got[0]!.key).toMatch(/^debate-/);
+    expect(got[0]!.question).not.toMatch(/conclusion|recommendation|preferred|decision:/i);
+  });
+
   it('does not throw when the requester rejects, and re-allows retry of that key', async () => {
     let calls = 0;
     setSecondOpinionRequester(async () => { calls++; throw new Error('drive down'); });
@@ -91,5 +110,16 @@ describe('G-F32WIRE — second-opinion seam', () => {
     expect(requestSecondOpinion({ key: 'retry', question: 'q', evidence: [], constraints: [], impact: 'high' })).toBe(true);
     await Promise.resolve();
     expect(calls).toBe(2);
+  });
+
+  it('debate seam: no-op until wired, dispatches once, dedups', async () => {
+    expect(debateEnabled()).toBe(false);
+    expect(requestDebate({ key: 'd', question: 'q', evidence: [], constraints: [] })).toBe(false);
+    const got: string[] = [];
+    setDebateRequester(async (req) => { got.push(req.key); });
+    expect(requestDebate({ key: 'd', question: 'q', evidence: [], constraints: [] })).toBe(true);
+    expect(requestDebate({ key: 'd', question: 'q', evidence: [], constraints: [] })).toBe(false);
+    await Promise.resolve();
+    expect(got).toEqual(['d']);
   });
 });
