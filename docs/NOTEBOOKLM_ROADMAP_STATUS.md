@@ -11,7 +11,7 @@ Composes on the completed Drive roadmap (`docs/DRIVE_ROADMAP.md`, F1–F38 shipp
 | N1 | Broadcast surface | **shipped** (#787/#788) — shapes+CLI+rituals+gap-repairs |
 | N2 | Probe & verification | **shipped** — E4 engine + F40/F50/F58/F61/F63/F68 (#790) |
 | N3 | Judgment/relationship/self-knowledge | **COMPLETE** — G-PLANNER+G-F32WIRE (#791), F69 (#792), F48 (#793), F54 (#794), F49+F66 (#795), F62 (#796), F59 (#797) all shipped |
-| N4 | Lineage & society | **build in progress** — G-MODELGEN (#798), F64 (#800), F60 (#801), F65 (#802), F67 embassy+G-CANARYWRITE (this PR) shipped; F70/F56 remain |
+| N4 | Lineage & society | **build in progress** — G-MODELGEN (#798), F64 (#800), F60 (#801), F65 (#802), F67+G-CANARYWRITE (#803), F70 case-law+G-PROPOSALS (this PR) shipped; F56 remains |
 | N5 | The Organ (optional autonomous) | todo (gated; not entered) |
 
 ## N0 recon — confirmed 2026-07-17
@@ -40,7 +40,7 @@ Additive gaps (small, mechanical, done inside their phase):
 | ~~G-F46MARK~~ | **DONE** — comments.ts extracts `[F46]`/`F46:` marker → dataset row + memory name | N1 (F46) |
 | ~~G-CANARYWRITE~~ | **DONE** — `registerCanary()` in canary.ts (local-only, dedupe by marker) + empty-fileId guard; F67 watermarks with it | N4 (F67) |
 | ~~G-F52RANK~~ | **DONE** — dream.ts ranks (orphaned>stale>hold); open-questions file carries `ranked[]` | N1 (F52) |
-| G-PROPOSALS | `tasks/proposals/` folder key (blackboard peer-read grabs all `.json`) | N4 (F70) |
+| ~~G-PROPOSALS~~ | **DONE** — `tasks/proposals` added to CANONICAL_FOLDERS; F70 proposals land there (peer-visible via blackboard) | N4 (F70) |
 | G-F43 | incident-theater net-new (consumes `ops/incidents` + `unpackBundle`) | N1 (F43) |
 
 ## Decisions
@@ -73,6 +73,7 @@ Additive gaps (small, mechanical, done inside their phase):
 | F60 forks museum | `tests/gdrive/forks-museum.test.ts` | past-self catalog (metadata only, newest era first, junk skipped); zone-2 museum shape; F60:dialogue return → external-tier memory |
 | F65 fork interview | `tests/notebooklm/fork-interview.test.ts` | packet-bound token; grants only on PASS+token; FAIL holds; adoptFork BLOCKED until passed (harness-enforced); F65:interview return route |
 | F67 embassy + G-CANARYWRITE | `tests/notebooklm/embassy.test.ts` | publish GATED; watermark registered as local canary; inbound HELD on canary trip OR verbatim echo; novel → external tier |
+| F70 case law + G-PROPOSALS | `tests/gdrive/case-law.test.ts` | propose → tasks/proposals; a proposal is NOT binding until RATIFIED; consult matches ratified-only by keyword overlap; planner seam |
 
 ## Annex B — API-day upgrade map (maintain from day one)
 

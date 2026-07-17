@@ -3099,6 +3099,17 @@ async function boot(): Promise<void> {
         log.warn({ err: String(err) }, 'F69 bias-priors wiring failed (non-fatal)');
       }
 
+      // F70 — wire fleet case law (ratified precedents) as a planning consult
+      // (pure local read; no Drive I/O on the hot path).
+      try {
+        const { setCaseLawMatcher } = await import('./core/agent/case-law-seam.js');
+        const { consultPrecedents } = await import('./core/gdrive/case-law.js');
+        setCaseLawMatcher((planText) => consultPrecedents(planText));
+        log.info('F70: fleet case law wired as a planning precedent consult');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'F70 case-law wiring failed (non-fatal)');
+      }
+
       // G-F32WIRE — wire the second-opinion requester (opt-in, default OFF): a
       // CRITICAL-risk approved action gets an independent dissent memo in the
       // review queue. Reviewer pinned to the INDEPENDENT judge route (G-JUDGE).
