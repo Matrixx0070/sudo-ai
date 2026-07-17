@@ -3084,6 +3084,17 @@ async function boot(): Promise<void> {
         log.warn({ err: String(err) }, 'G-PLANNER dead-end wiring failed (non-fatal)');
       }
 
+      // F69 — wire the characteristic-error atlas as a bias-priors planning
+      // preamble (TTL-memoised local read; no Drive I/O on the hot path).
+      try {
+        const { setBiasPriorsProvider } = await import('./core/agent/bias-priors-seam.js');
+        const { atlasPreamble } = await import('./core/gdrive/error-atlas.js');
+        setBiasPriorsProvider(() => atlasPreamble());
+        log.info('F69: characteristic-error atlas wired as bias-priors preamble');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'F69 bias-priors wiring failed (non-fatal)');
+      }
+
       // G-F32WIRE — wire the second-opinion requester (opt-in, default OFF): a
       // CRITICAL-risk approved action gets an independent dissent memo in the
       // review queue. Reviewer pinned to the INDEPENDENT judge route (G-JUDGE).
