@@ -333,6 +333,27 @@ Phase 7 deferrals (final open items, all operator-facing):
 - F5 (gated user-file tool) was never in any phase plan — the only F# with no
   implementation; needs its own slice if wanted.
 
+## LIVE ROLLOUT — 2026-07-17 (real Drive, real brain)
+
+Executed end-to-end against real Google Drive (account
+megastreambroadbandservice@gmail.com, project sudo-ai-drive-2026, OAuth
+Desktop client; folder shared to frankmartin7722@gmail.com):
+
+- CONFIG_OK (oauth mode) → KEYS_OK (0600 enforced) → **TREE_OK 29/29**
+  canonical folders → **HEARTBEAT_OK** (ops/heartbeat.json live).
+- **First live brain checkpoint: counter=1, 3 entries, 456 KB** —
+  chunks/zone1.jsonl (encrypted, 3.5 KB), chunks/zone2.jsonl (405 KB),
+  workspace/MEMORY.md → classified **zone 1 and encrypted** (the keyword
+  classifier caught credential-adjacent content; working as designed).
+- **Restore drill: PASS** (divergent=[] — the Drive backup reproduces the
+  local brain byte-for-byte).
+
+Field findings folded into gdrive-setup.md: SA storage-quota removal (403 on
+file create) ⇒ oauth mode is the consumer-account path; gcloud default client
+blocked for Drive scopes; client secret creation-time-only in the new console;
+granular consent checkboxes; Testing-status 7-day token expiry ⇒ published to
+Production (unverified).
+
 ## Global acceptance — status at roadmap completion
 
 - [x] Recon confirmed; this doc tracks every F#.
