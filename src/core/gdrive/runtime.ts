@@ -194,6 +194,137 @@ async function resolveServiceAccountEmail(credPath?: string): Promise<string | n
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 4 — human-interface jobs (F3/F4/F6/F7/F30)
+// ---------------------------------------------------------------------------
+
+function principalEmails(): string[] {
+  return (process.env['GDRIVE_PRINCIPAL_EMAILS'] ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function saEmail(credPath?: string): Promise<string> {
+  return (await resolveServiceAccountEmail(credPath)) ?? 'unknown-sa';
+}
+
+/** Cron entry (nightly): daily self-report + telemetry scorecard row. */
+export async function runGdriveDailyReportJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { publishDailyReport, listHeldQuarantine } = await import('./report.js');
+  const { ensureScorecard, appendTelemetryRow } = await import('./scorecard.js');
+  const { watchDoc } = await import('./comments.js');
+
+  const date = new Date().toISOString().slice(0, 10);
+  const sinceIso = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const auditRows = rt.audit.query({ since: sinceIso, limit: 2000 });
+  const held = await listHeldQuarantine(rt.client, rt.folders);
+
+  await auditedJob(rt.audit, 'daily-report', async () => {
+    const report = await publishDailyReport(rt.client, rt.folders, {
+      date,
+      auditRows,
+      heldQuarantine: held,
+    });
+    watchDoc(report.fileId, `daily report ${date}`); // F6 watches it
+    return { result: undefined, filesTouched: [report.fileId] };
+  });
+
+  // F4 telemetry row (sync-observability rider included). Token/cost figures
+  // read from mind.db api_call_log (read-only aggregation).
+  await auditedJob(rt.audit, 'scorecard-telemetry', async () => {
+    const sheetId = await ensureScorecard(rt.client, rt.folders);
+    const { MindDB } = await import('../memory/db.js');
+    const mind = new MindDB();
+    const agg = mind.db
+      .prepare(
+        `SELECT COALESCE(SUM(prompt_tokens),0) AS tin, COALESCE(SUM(completion_tokens),0) AS tout,
+                COALESCE(SUM(estimated_cost_usd),0) AS cost,
+                COALESCE(SUM(cache_read_tokens),0) AS cread, COUNT(*) AS calls,
+                COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0) AS errs
+         FROM api_call_log WHERE called_at >= ?`,
+      )
+      .get(sinceIso) as { tin: number; tout: number; cost: number; cread: number; calls: number; errs: number };
+    const depth = rt.client.queueDepth;
+    await appendTelemetryRow(rt.client, sheetId, {
+      date,
+      tokensIn: agg.tin,
+      tokensOut: agg.tout,
+      estCostUsd: Number(agg.cost.toFixed(4)),
+      cacheHitRate: agg.tin > 0 ? Number((agg.cread / agg.tin).toFixed(4)) : 0,
+      toolCalls: agg.calls,
+      errorCount: agg.errs,
+      syncLagS: 0, // populated when the sync queue tracks lag (F11)
+      divergenceCount: 0, // populated by dream-cycle divergence handling (F12)
+      queueDepthInteractive: depth.interactive,
+      queueDepthBackground: depth.background,
+    });
+    return { result: undefined };
+  });
+}
+
+/** Cron entry (30s default): control-panel Config/PAUSE poll (F7). */
+export async function runGdriveControlPanelJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { ensureControlPanel, pollControlPanel } = await import('./control-panel.js');
+  const sheetId = await ensureControlPanel(rt.client, rt.folders);
+  const result = await pollControlPanel(rt.client, sheetId);
+  if (result.applied.length || result.rejected.length) {
+    log.info(result, 'control panel poll applied changes');
+    emitControlAudit(rt, result);
+  }
+}
+
+function emitControlAudit(rt: GdriveRuntime, result: { applied: string[]; rejected: Array<{ key: string; reason: string }> }): void {
+  void import('./audit.js').then(({ emitGdriveAudit }) =>
+    emitGdriveAudit(rt.audit, {
+      job: 'control-panel',
+      outcome: result.rejected.length && !result.applied.length ? 'denied' : 'success',
+      durationMs: 0,
+      detail: { applied: result.applied, rejected: result.rejected },
+    }),
+  );
+}
+
+/** Cron entry (2min default): comment-driven corrections (F6). */
+export async function runGdriveCommentsJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { pollComments } = await import('./comments.js');
+  const structured = await import('../memory/structured-memory.js');
+  await pollComments({
+    client: rt.client,
+    structured: {
+      listMemories: () => structured.listMemories(),
+      saveMemory: (m) => structured.saveMemory(m as never),
+    },
+    principalEmails: principalEmails(),
+    serviceAccountEmail: await saEmail(rt.config.credentialsPath),
+  });
+}
+
+/** Cron entry (nightly): regenerate the brain atlas (F30). */
+export async function runGdriveAtlasJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { publishAtlas } = await import('./atlas.js');
+  const { watchDoc } = await import('./comments.js');
+  const { MindDB } = await import('../memory/db.js');
+  const structured = await import('../memory/structured-memory.js');
+  const mind = new MindDB();
+  await auditedJob(rt.audit, 'atlas', async () => {
+    const fileId = await publishAtlas(rt.client, rt.folders, {
+      chunks: mind.getActiveChunks(50_000),
+      structured: (await structured.listMemories()) as never,
+    });
+    watchDoc(fileId, 'brain atlas');
+    return { result: undefined, filesTouched: [fileId] };
+  });
+}
+
 /** Cron entry: monthly kill-and-restore rehearsal (F2 rider). */
 export async function runGdriveRestoreDrillJob(): Promise<void> {
   if (!isGdriveEnabled()) return;

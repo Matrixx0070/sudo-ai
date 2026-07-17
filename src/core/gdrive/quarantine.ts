@@ -162,7 +162,12 @@ export interface InspectOptions {
 }
 
 export async function inspectContent(text: string, opts: InspectOptions = {}): Promise<InspectionVerdict> {
-  const threshold = opts.threshold ?? DEFAULT_RISK_THRESHOLD;
+  const envThreshold = Number(process.env['GDRIVE_QUARANTINE_THRESHOLD']);
+  const threshold =
+    opts.threshold ??
+    (Number.isFinite(envThreshold) && envThreshold >= 0.1 && envThreshold <= 0.9
+      ? envThreshold
+      : DEFAULT_RISK_THRESHOLD);
   const det = scoreContentDeterministic(text);
   let llmScore: number | undefined;
   let summary = '';
