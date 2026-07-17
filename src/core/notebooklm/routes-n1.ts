@@ -42,6 +42,35 @@ export function registerN1Routes(): void {
     log.info({ id: parsed.date, granted: r.granted, reason: r.reason }, 'F54 attestation processed');
     return r.granted ? 'approval-granted' : 'approval-held';
   });
+
+  // F59 — reception transcript (already E2-quarantined) → reception report Doc
+  // (zone-2 self-knowledge) + the derived analysis stored at EXTERNAL tier.
+  registerReturnRoute('F59:reception', async ({ parsed, content, deps }) => {
+    const { analyzeReception, renderReceptionReport } = await import('./reception.js');
+    const { assertZone2 } = await import('./zone-screen.js');
+    const { HEADER_SENTENCE } = await import('./export-lane.js');
+    const report = analyzeReception(content);
+    const body = `> ${HEADER_SENTENCE}\n\n${renderReceptionReport(parsed.date, report)}`;
+    assertZone2(body); // the transcript is about zone-2 broadcasts; fail-closed anyway.
+    const folder = deps.folders['notebooklm/reception'];
+    if (folder) {
+      await deps.client.filesCreate(
+        { name: `reception-${parsed.date}.md`, parents: [folder], mimeType: 'text/markdown' },
+        { mimeType: 'text/markdown', body },
+      );
+    }
+    // Derived analysis → external tier (never over-trust text descended from
+    // untrusted external audio). Quarantine already ran in the E2 sweep.
+    await deps.structured.saveMemory({
+      type: 'reference',
+      id: `nlm-F59-reception-${parsed.date}`,
+      name: `Reception report ${parsed.date}`,
+      description: `reception · tier external · net sentiment ${report.sentiment.net}`,
+      content: JSON.stringify({ featureId: 'F59', returnType: 'reception', trustTier: 'external', date: parsed.date, sentiment: report.sentiment, themes: report.themes.map((t) => t.theme) }),
+    } as never);
+    log.info({ date: parsed.date, net: report.sentiment.net, confusions: report.confusions.length }, 'F59 reception analysed');
+    return 'reception-analyzed';
+  });
 }
 
 /** Feature ids whose returns are FORCED to external tier (no elevation). */
