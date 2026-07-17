@@ -20,6 +20,8 @@ import {
   detectChromiumVersion,
   buildUserAgent,
   buildClientHintsHeaders,
+  resolveChromeExecutable,
+  resolveBrowserDisplay,
 } from './anti-detect.js';
 import { CDPManager, type CDPConfig } from './cdp-manager.js';
 import { SSRFGuard } from './ssrf-guard.js';
@@ -272,16 +274,33 @@ export class BrowserManager {
     // Detect Chromium version once for UA/CH-header accuracy
     const chromiumVersion = await getCachedChromiumVersion();
 
+    // Prefer real Google Chrome over Playwright's bundled Chromium.
+    // Google actively rejects Playwright Chromium for sign-in ("This browser
+    // or app may not be secure"). Real chrome-stable + a headed display is
+    // the durable path for Gmail / Google Workspace login.
+    const executablePath = resolveChromeExecutable() ?? undefined;
+    // Headed launches need a real X display (VPS XFCE is :10 by default).
+    // Headless ignores DISPLAY; headed without it fails with "Missing X server".
+    if (!headless && !process.env['DISPLAY']) {
+      process.env['DISPLAY'] = resolveBrowserDisplay();
+    }
+
     // Persistent context: userDataDir is the profile. Launch + context options
     // are merged here (Playwright API). This is what makes logins durable.
     const context = await chromium.launchPersistentContext(userDataDir, {
       headless,
+      executablePath,
       args: buildLaunchArgs(),
       userAgent: buildUserAgent(chromiumVersion),
       extraHTTPHeaders: buildClientHintsHeaders(chromiumVersion),
       viewport: { width: 1280, height: 800 },
       ignoreHTTPSErrors: true,
     });
+
+    log.info(
+      { name, executablePath: executablePath ?? 'playwright-bundled', headless, display: process.env['DISPLAY'] ?? null },
+      'Browser launch options resolved',
+    );
 
     // Auto-dismiss any browser dialogs so they never block automation
     context.on('dialog', async (dialog) => {

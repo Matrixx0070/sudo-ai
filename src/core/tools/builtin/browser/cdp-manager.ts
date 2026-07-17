@@ -261,9 +261,20 @@ export class CDPManager {
 
   /** Launch a new Chromium instance with CDP endpoint exposed. */
   private async launchBrowser(): Promise<void> {
-    log.info({ cdpPort: this.config.cdpPort, headless: this.config.headless }, 'Launching Chromium with CDP');
+    // Prefer real Google Chrome — Playwright bundled Chromium is rejected by
+    // Google sign-in. SUDO_BROWSER_EXECUTABLE overrides the auto-detect path.
+    const { resolveChromeExecutable, resolveBrowserDisplay } = await import('./anti-detect.js');
+    const executablePath = resolveChromeExecutable() ?? undefined;
+    if (!this.config.headless && !process.env['DISPLAY']) {
+      process.env['DISPLAY'] = resolveBrowserDisplay();
+    }
+    log.info(
+      { cdpPort: this.config.cdpPort, headless: this.config.headless, executablePath: executablePath ?? 'playwright-bundled' },
+      'Launching Chromium with CDP',
+    );
     this.browser = await chromium.launch({
       headless: this.config.headless,
+      executablePath,
       slowMo: this.config.slowMo,
       // Security-weakening flags gated behind SUDO_BROWSER_INSECURE=1; always
       // exposes the CDP port and the anti-automation-signal flags.
