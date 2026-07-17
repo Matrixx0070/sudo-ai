@@ -129,3 +129,33 @@ function rotatePins() {
 
 **Done-when drill:** stop all sudo-ai hosts; within `HEARTBEAT_THRESHOLD_MIN`
 +10min the alert email arrives; restart; the recovery email arrives.
+
+## NotebookLM annex — rituals digest extension (F34 → E3)
+
+The morning digest gains an overdue-rituals line. The harness writes the ritual
+status to `sudo-ai/notebooklm/rituals/ritual-manifest` (a Doc) and a local
+`data/notebooklm/rituals-status.json`; the Script reads the manifest Doc.
+
+**HUMAN: redeploy** — add this function to the pacemaker Script and a
+`RITUALS_DOC_ID` Script Property (fileId of the `ritual-manifest` Doc), then
+extend the `morningDigest` trigger body to also call `ritualsDigestLine()`.
+
+```javascript
+// Appends an overdue-rituals line to the morning digest. The manifest Doc
+// carries the Tier-1 budget line + the ritual table; we surface the budget
+// status and flag if it went over. (Full overdue tracking = the harness ticks
+// the Rituals scorecard tab; this is the nudge.)
+function ritualsDigestLine() {
+  var p = PropertiesService.getScriptProperties();
+  var id = p.getProperty('RITUALS_DOC_ID');
+  if (!id) return '';
+  try {
+    var text = DocumentApp.openById(id).getBody().getText();
+    var m = text.match(/Tier-1 \(core\) weekly budget: [^\n]+/);
+    return m ? ('\nRituals: ' + m[0]) : '';
+  } catch (e) { return ''; }
+}
+
+// In morningDigest(), change the MailApp.sendEmail body to:
+//   body + ritualsDigestLine()
+```
