@@ -68,3 +68,14 @@ export {
   _resetNlmRuntime,
   type NlmRuntime,
 } from './runtime.js';
+// N1 broadcast surface
+export { redactSecrets } from './zone-screen.js';
+export { registerN1Shapes, cockpitShape, architectureShape, researchTargetShape } from './shapes-n1.js';
+export { registerN1Rituals } from './rituals-n1.js';
+export { registerN1Routes, N1_FORCED_EXTERNAL } from './routes-n1.js';
+export {
+  exportIncidentPack,
+  exportStudyPack,
+  type IncidentPackResult,
+  type StudyPackResult,
+} from './packs.js';

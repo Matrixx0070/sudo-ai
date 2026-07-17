@@ -60,6 +60,25 @@ export function assertZone2(text: string, context = 'export'): void {
   if (!r.ok) throw new ZoneScreenError(`${context}: ${r.reason}`);
 }
 
+/**
+ * F43 declassification screen (the invariant-1 exception): incident transcript
+ * TEXT is zone-1 by default, so it can't pass the zone-2 gate — instead the
+ * secrets regex REDACTS any secret span in place, and the caller audits the
+ * declassification. Only ever used by the F43 incident exporter on transcript
+ * text (never raw tool payloads). Returns redacted text + hit count.
+ */
+export function redactSecrets(text: string): { redacted: string; hits: number } {
+  let redacted = text;
+  let hits = 0;
+  for (const p of SECRETS_PATTERNS) {
+    redacted = redacted.replace(new RegExp(p.re, p.re.flags.includes('g') ? p.re.flags : p.re.flags + 'g'), () => {
+      hits++;
+      return `[REDACTED:${p.name}]`;
+    });
+  }
+  return { redacted, hits };
+}
+
 /** Filter a batch of records to zone-2-safe ones; returns kept + dropped counts. */
 export function screenRecords<T>(
   records: T[],

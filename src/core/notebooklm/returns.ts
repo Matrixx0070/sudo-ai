@@ -32,13 +32,15 @@ const log = createLogger('notebooklm:returns');
 export interface ParsedReturn {
   featureId: string; // e.g. "F57"
   type: string; // e.g. "mirror-account"
-  date: string; // YYYY-MM-DD
+  /** Third segment: a YYYY-MM-DD date OR an id (F43 uses an incident id). */
+  date: string;
   approved: boolean;
   ext: 'md' | 'txt' | 'json';
   raw: string;
 }
 
-const RETURN_RE = /^(F\d{1,3})\.([a-z0-9-]+)\.(\d{4}-\d{2}-\d{2})(\.approved)?\.(md|txt|json)$/i;
+// Third segment is a date OR an id token (e.g. F43.postmortem.<incidentId>.md).
+const RETURN_RE = /^(F\d{1,3})\.([a-z0-9-]+)\.([A-Za-z0-9][A-Za-z0-9-]*)(\.approved)?\.(md|txt|json)$/i;
 
 export function parseReturnFilename(name: string): ParsedReturn | null {
   const m = RETURN_RE.exec(name);

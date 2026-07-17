@@ -455,6 +455,38 @@ gdriveCmd
   });
 
 // ---------------------------------------------------------------------------
+// notebooklm — NotebookLM annex (status / export-incident / export-studypack)
+// ---------------------------------------------------------------------------
+
+const nlmCmd = program
+  .command('notebooklm')
+  .description('NotebookLM annex: status, export-incident (F43), export-studypack (F45)');
+
+nlmCmd
+  .command('status')
+  .description('Annex health: folders, registered shapes, ritual budget')
+  .action(async () => {
+    const { runNlmStatus } = await import('./commands/notebooklm.js');
+    process.exit(await runNlmStatus());
+  });
+
+nlmCmd
+  .command('export-incident <bundleId>')
+  .description('Export a redacted incident pack from a flight-recorder bundle (F43)')
+  .action(async (bundleId: string) => {
+    const { runNlmExportIncident } = await import('./commands/notebooklm.js');
+    process.exit(await runNlmExportIncident(bundleId));
+  });
+
+nlmCmd
+  .command('export-studypack <topic>')
+  .description('Export a study pack (question + zone-2 context) for a topic (F45)')
+  .action(async (topic: string) => {
+    const { runNlmExportStudypack } = await import('./commands/notebooklm.js');
+    process.exit(await runNlmExportStudypack(topic));
+  });
+
+// ---------------------------------------------------------------------------
 // update — check for and apply SUDO-AI updates
 // ---------------------------------------------------------------------------
 

@@ -169,19 +169,30 @@ export async function runDreamCycle(deps: DreamDeps): Promise<DreamReport> {
     log.warn({ err: String(err) }, 'dream reconcile stage failed');
   }
 
-  // -- 4. AGENDA — the open-questions file ----------------------------------
+  // -- 4. AGENDA — the RANKED open-questions file (G-F52RANK) ----------------
+  // Ranked so F52's research desk can pick the single highest-priority
+  // question: orphaned (source gone) > stale (re-derive queued) > quarantine
+  // hold. The flat `questions` array preserves rank order for back-compat.
   try {
     const graph = loadBeliefs();
-    for (const b of graph.beliefs.filter((x) => x.rederiveQueued).slice(0, 10)) {
-      report.openQuestions.push(`Belief ${b.id} still ${b.state} — re-derivation pending`);
+    const scored: Array<{ question: string; score: number }> = [];
+    for (const b of graph.beliefs.filter((x) => x.rederiveQueued).slice(0, 20)) {
+      const score = b.state === 'orphaned' ? 3 : b.state === 'stale' ? 2 : 1;
+      scored.push({ question: `Belief ${b.id} still ${b.state} — re-derivation pending`, score });
     }
     for (const held of await listHeldQuarantine(deps.client, deps.folders)) {
-      report.openQuestions.push(`Quarantine HOLD needs review: ${held}`);
+      scored.push({ question: `Quarantine HOLD needs review: ${held}`, score: 1 });
     }
+    scored.sort((a, b) => b.score - a.score);
+    report.openQuestions = scored.map((s) => s.question);
     const opsFolder = deps.folders['ops/reports'];
     if (opsFolder) {
       const name = `open-questions-${now.toISOString().slice(0, 10)}.json`;
-      const body = JSON.stringify({ generatedAt: now.toISOString(), questions: report.openQuestions }, null, 2);
+      const body = JSON.stringify(
+        { generatedAt: now.toISOString(), questions: report.openQuestions, ranked: scored },
+        null,
+        2,
+      );
       const existing = (await deps.client.listChildren(opsFolder)).find((f) => f.name === name);
       if (existing) await deps.client.filesUpdate(existing.id, {}, { mimeType: 'application/json', body });
       else await deps.client.filesCreate({ name, parents: [opsFolder] }, { mimeType: 'application/json', body });
