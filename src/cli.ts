@@ -2789,6 +2789,14 @@ async function boot(): Promise<void> {
         } catch (gdErr) {
           log.warn({ err: String(gdErr), event: payload.event }, 'gdrive job failed (non-fatal)');
         }
+      } else if (payload.event === 'gdrive:curiosity') {
+        // F38: budget-bounded curiosity drain in the dream window.
+        try {
+          const { runGdriveCuriosityJob } = await import('./core/gdrive/runtime.js');
+          await runGdriveCuriosityJob();
+        } catch (gdErr) {
+          log.warn({ err: String(gdErr) }, 'gdrive curiosity drain failed (non-fatal)');
+        }
       } else if (payload.event === 'gdrive:inbox') {
         // F1: knowledge-inbox sweep (quarantine-gated ingestion).
         try {
@@ -3180,6 +3188,58 @@ async function boot(): Promise<void> {
       }
       log.info('gdrive autonomy jobs scheduled (dream/freeze/index-snapshot/blackboard)');
 
+      // Phase 7 — curiosity drain rides the dream window (never preempts
+      // principal work).
+      const curJob = cronStore.get('gdrive-curiosity');
+      const curSchedule: CronSchedule = { kind: 'cron', expr: process.env['SUDO_GDRIVE_CURIOSITY_CRON'] ?? '45 3 * * *', tz: gdriveTz };
+      if (!curJob || !curJob.enabled || JSON.stringify(curJob.schedule) !== JSON.stringify(curSchedule)) {
+        cronStore.upsert({
+          id: 'gdrive-curiosity',
+          name: 'Google Drive Curiosity Drain',
+          enabled: true,
+          schedule: curSchedule,
+          payload: { kind: 'systemEvent', event: 'gdrive:curiosity' },
+          sessionTarget: 'isolated',
+          consecutiveErrors: 0,
+        });
+      }
+
+      // F10 wrap-up — flight-recorder run bundles on session end (opt-in
+      // until validated live: SUDO_GDRIVE_FLIGHT_RECORDER=1). Post-hoc join;
+      // upload is background — the ending session never waits.
+      if (process.env['SUDO_GDRIVE_FLIGHT_RECORDER'] === '1') {
+        hooks.register('session:end', async (ctx) => {
+          try {
+            const data = ctx as unknown as { sessionId?: string; success?: boolean; error?: unknown };
+            if (!data.sessionId) return;
+            const failed = data.success === false || data.error != null;
+            const rt = await import('./core/gdrive/runtime.js');
+            const g = await rt.getGdriveRuntime();
+            const { buildRunBundle, uploadBundle } = await import('./core/gdrive/flight-recorder.js');
+            const { loadHmacKey, loadEncKey } = await import('./core/gdrive/keys.js');
+            const { loadBrainState } = await import('./core/gdrive/checkpoint.js');
+            const { TraceStore } = await import('./core/learning/trace-store.js');
+            const bundle = buildRunBundle({
+              runId: `${data.sessionId}-${Date.now()}`,
+              sessionId: data.sessionId,
+              startedAt: '', // per-call rows carry their own timestamps
+              finishedAt: new Date().toISOString(),
+              outcome: failed ? 'failure' : 'success',
+              manifestCounter: loadBrainState().counter,
+              traceStore: new TraceStore(),
+            });
+            // Rolling audit uploads only failures by default; successes are
+            // high-volume — keep incidents-only unless explicitly widened.
+            if (failed || process.env['SUDO_GDRIVE_FLIGHT_ALL'] === '1') {
+              await uploadBundle(g.client, g.folders, bundle, { hmacKey: loadHmacKey(), encKey: loadEncKey() });
+            }
+          } catch (frErr) {
+            log.debug({ err: String(frErr) }, 'flight recorder bundle failed (non-fatal)');
+          }
+        });
+        log.info('gdrive flight recorder armed (session:end -> incident bundles)');
+      }
+
       // F2 — startup restore check: if a NEWER brain exists in Drive (another
       // machine pushed), hydrate-and-apply. Detached: boot never waits on Drive.
       void import('./core/gdrive/runtime.js')
@@ -3187,7 +3247,7 @@ async function boot(): Promise<void> {
         .catch((err) => log.warn({ err: String(err) }, 'gdrive restore check failed (non-fatal)'));
     } else {
       // Flag flipped off: park the jobs instead of firing no-op events forever.
-      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill', 'gdrive-inbox', 'gdrive-daily-report', 'gdrive-atlas', 'gdrive-control-panel', 'gdrive-comments', 'gdrive-changes', 'gdrive-revalidate', 'gdrive-mirror', 'gdrive-dream', 'gdrive-freeze', 'gdrive-index-snapshot', 'gdrive-blackboard']) {
+      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill', 'gdrive-inbox', 'gdrive-daily-report', 'gdrive-atlas', 'gdrive-control-panel', 'gdrive-comments', 'gdrive-changes', 'gdrive-revalidate', 'gdrive-mirror', 'gdrive-dream', 'gdrive-freeze', 'gdrive-index-snapshot', 'gdrive-blackboard', 'gdrive-curiosity']) {
         if (cronStore.get(id)?.enabled) {
           cronStore.patch(id, { enabled: false });
           log.info({ jobId: id }, 'gdrive job disabled (SUDO_GDRIVE != 1)');

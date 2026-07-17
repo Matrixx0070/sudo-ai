@@ -70,8 +70,62 @@ matching `gdrive:*` job immediately. Forged or stale pings are rejected and
 logged. Wire it from the `gdrive-push` hook handler with a closure over the
 cron event dispatch.
 
-## F34 additions (Phase 7 — same Script grows into the pacemaker)
+## F34 — the pacemaker + dead-man's switch (Phase 7)
 
-The dead-man's switch, pin rotation, and morning digest land in this same
-Script later: read `ops/heartbeat.json`, alert when `now - lastBeat` exceeds
-the threshold, rotate `keepRevisionForever` pins, and email the daily digest.
+Add these to the SAME Script project. They run even when every sudo-ai host is
+off — infrastructure that outlives the process it guards.
+
+Extra Script Properties: `ALERT_EMAIL` (Frank's), `HEARTBEAT_FILE_ID` (id of
+`sudo-ai/ops/heartbeat.json`), `HEARTBEAT_THRESHOLD_MIN` (e.g. `20`),
+`MANIFEST_FILE_ID` (id of `sudo-ai/manifest/manifest.json`),
+`REPORTS_FOLDER_ID` (id of `sudo-ai/ops/reports`).
+
+Triggers: `deadMan` every 10 minutes; `morningDigest` daily 7–8am;
+`rotatePins` daily.
+
+```javascript
+function deadMan() {
+  var p = PropertiesService.getScriptProperties();
+  var hb = JSON.parse(DriveApp.getFileById(p.getProperty('HEARTBEAT_FILE_ID')).getBlob().getDataAsString());
+  var ageMin = (Date.now() - new Date(hb.lastBeat).getTime()) / 60000;
+  var threshold = Number(p.getProperty('HEARTBEAT_THRESHOLD_MIN') || 20);
+  var state = PropertiesService.getScriptProperties();
+  if (ageMin > threshold) {
+    if (state.getProperty('DEADMAN_FIRED') !== '1') {
+      MailApp.sendEmail(p.getProperty('ALERT_EMAIL'), '⚠️ sudo-ai heartbeat lost',
+        'Last beat: ' + hb.lastBeat + ' (' + Math.round(ageMin) + ' min ago) from ' + hb.host + '. All hosts may be down.');
+      state.setProperty('DEADMAN_FIRED', '1');
+    }
+  } else if (state.getProperty('DEADMAN_FIRED') === '1') {
+    MailApp.sendEmail(p.getProperty('ALERT_EMAIL'), '✅ sudo-ai heartbeat recovered', 'Beating again as of ' + hb.lastBeat);
+    state.deleteProperty('DEADMAN_FIRED');
+  }
+}
+
+function morningDigest() {
+  var p = PropertiesService.getScriptProperties();
+  var folder = DriveApp.getFolderById(p.getProperty('REPORTS_FOLDER_ID'));
+  var yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  var it = folder.getFilesByName('daily-' + yesterday);
+  var body = it.hasNext() ? ('Daily report: ' + it.next().getUrl()) : 'No daily report found for ' + yesterday;
+  MailApp.sendEmail(p.getProperty('ALERT_EMAIL'), 'sudo-ai morning digest ' + yesterday, body);
+}
+
+function rotatePins() {
+  // Cap-aware keepForever rotation on the manifest (Drive caps ~200 pins/file).
+  var p = PropertiesService.getScriptProperties();
+  var fileId = p.getProperty('MANIFEST_FILE_ID');
+  var revs = Drive.Revisions.list(fileId, {fields: 'revisions(id,keepForever,modifiedTime)'}).revisions || [];
+  var pinned = revs.filter(function(r){ return r.keepForever; });
+  var MAX = 25;
+  for (var i = 0; i < pinned.length - MAX; i++) {
+    Drive.Revisions.update({keepForever: false}, fileId, pinned[i].id);
+  }
+}
+```
+
+`rotatePins` needs the **Drive Advanced Service** enabled in the Script
+(Services → Drive API).
+
+**Done-when drill:** stop all sudo-ai hosts; within `HEARTBEAT_THRESHOLD_MIN`
++10min the alert email arrives; restart; the recovery email arrives.

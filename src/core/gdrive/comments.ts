@@ -144,6 +144,14 @@ export async function pollComments(deps: CommentsDeps): Promise<CommentsPollResu
       seen.add(`${doc.fileId}:${id}`);
       dirty = true;
 
+      // F26 — corrections dataset (free side effect of operating).
+      try {
+        const { appendDatasetRow } = await import('./datasets.js');
+        appendDatasetRow('corrections', { doc: doc.label, correction: raw, directive });
+      } catch {
+        /* dataset best-effort */
+      }
+
       // Close the loop: reply with what was stored, resolve the thread.
       try {
         await deps.client.repliesCreate(

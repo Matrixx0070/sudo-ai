@@ -268,4 +268,42 @@ export {
   runGdriveFreezeJob,
   runGdriveBlackboardJob,
   runGdriveIndexSnapshotJob,
+  runGdriveCuriosityJob,
 } from './runtime.js';
+// Phase 7 — experimentation & ops backbone (F8/F32/F25/F26/F38)
+export {
+  listCandidates,
+  evalCandidate,
+  readApprovals,
+  promoteCandidate,
+  rollbackSkill,
+  stableSkillsDir,
+  type SkillCandidate,
+  type SkillEvalRunner,
+  type PromotionOutcome,
+} from './skill-registry.js';
+export {
+  exportDecisionPacket,
+  writeDissent,
+  awaitDissent,
+  resolveDissent,
+  type DecisionPacket,
+  type ReviewerCall,
+  type SecondOpinionOutcome,
+} from './second-opinion.js';
+export { forkBrain, recordForkScore, adoptFork } from './forks.js';
+export {
+  appendDatasetRow,
+  readDataset,
+  retrieveExemplars,
+  uploadDatasets,
+  type DatasetName,
+  type Exemplar,
+} from './datasets.js';
+export {
+  appendCuriosity,
+  listCuriosity,
+  drainCuriosity,
+  type ResearchCall,
+  type DrainResult,
+} from './curiosity.js';

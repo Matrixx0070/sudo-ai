@@ -14,8 +14,8 @@ referenced in commits, PRs, and code comments. Spec: the 38-feature roadmap
 | 3 | F18 F1 F15 F19 F20 guarded ingestion | **shipped** — PR #779 merged 2026-07-16 |
 | 4 | F3 F4 F7 F6 F30 F21 human interface | **shipped** — PR #780 merged 2026-07-17 |
 | 5 | F22 F23 F24 F31 F33 F37 epistemics | **shipped** — PR #781 merged 2026-07-17 |
-| 6 | F12 F11 F27 F28 F35 F14 autonomy | **shipped (this PR)** — see below |
-| 7 | F8 F32 F25 F26 F38 F34 experimentation/ops | todo |
+| 6 | F12 F11 F27 F28 F35 F14 autonomy | **shipped** — PR #782 merged 2026-07-17 |
+| 7 | F8 F32 F25 F26 F38 F34 experimentation/ops | **shipped (this PR)** — see below |
 
 ## Foundation (Phase 0) — shipped in `feat/gdrive-phase0-foundation`
 
@@ -288,6 +288,70 @@ Phase 7 wrap-up slice; planner-commit matchDeadEnds wiring found no clean
 seam in autonomous-executor (control-action oriented) — implemented inside
 the dream's re-derivation planner instead + exported for future planners.
 
+## Phase 7 (F8/F32/F25/F26/F38/F34) — shipped in `feat/gdrive-phase7-experimentation`
+
+- **F8** `skill-registry.ts` — candidates (artifact + meta JSON) → injected
+  eval runner → scorecard Skills rows → promotion requires BOTH eval pass AND
+  a TRUE row in the control panel's Approvals tab (harness-enforced; the
+  spec's "unapproved-but-passing does NOT promote" is test-proven). Stable
+  files update in place (revisions = rollback, rollbackSkill restores the
+  prior revision) and mirror locally so checkpoints sign them as
+  `category: skill` entries. Frozen surfaces untouchable (name-validated,
+  artifact-only writes).
+- **F32** `second-opinion.ts` — decision packets validated to be
+  conclusion-free (refuses smuggled recommendations), exported to
+  ops/review-queue/; reviewer (injected different-route call) writes the
+  dissent memo beside it; awaitDissent() BLOCKS and on timeout ESCALATES to
+  the human — never auto-proceeds; resolveDissent audits both paths.
+- **F25** `forks.ts` — fork = re-signed manifest copy in brains/forks/
+  (blobs shared, cheap); scorecard Forks rows compare; adoptFork verifies the
+  fork's signature, re-signs as main with a monotonic counter.
+- **F26** `datasets.ts` — corrections (auto-fed from F6), eval-pairs
+  (auto-fed from F8 evals), edits; exemplar bank retrieval with zone-1 rows
+  PROVABLY excluded (tested across queries incl. the secret itself); daily
+  Drive mirror rides the report job.
+- **F38** `curiosity.ts` — bounded buffer, hard daily budget (resets by day),
+  drain in the dream window only (never preempts principal work), output
+  through the SAME F18 quarantine (injected research output is held), ingest
+  at self_acquired trust with a belief registered; PAUSE halts.
+- **F34** — the Apps Script pacemaker is fully specified in
+  docs/gdrive-apps-script.md: dead-man email (fire-once + recovery), morning
+  digest, cap-aware pin rotation via the Drive Advanced Service. HUMAN
+  deploy; the harness half (heartbeat, verifyPing) shipped in Phases 0/4.
+- **F10 wrap-up** — session:end hook (opt-in SUDO_GDRIVE_FLIGHT_RECORDER=1)
+  builds and uploads incident bundles for failed sessions (successes only
+  with SUDO_GDRIVE_FLIGHT_ALL=1).
+
+Phase 7 evidence: 10 new tests — both-gates promotion + rollback, packet
+conclusion-refusal + dissent flow + timeout-escalation, fork/adopt signature
+chain, exemplar zone-1 exclusion, curiosity budget/quarantine/pause.
+
+Phase 7 deferrals (final open items, all operator-facing):
+- `sudo-ai gdrive` CLI subcommands (status/bisect/knew-at/resume) — libraries
+  are tested; commander wiring is a small follow-up slice.
+- F35 loop-side auto-hibernation calls (library complete).
+- F5 (gated user-file tool) was never in any phase plan — the only F# with no
+  implementation; needs its own slice if wanted.
+
+## Global acceptance — status at roadmap completion
+
+- [x] Recon confirmed; this doc tracks every F#.
+- [x] Hot-path proof (automated: tests/gdrive/hot-path.test.ts, every PR).
+- [x] Kill-and-restore incl. index (unit: machine-B hydration + zero-re-embed).
+      Live drill: HUMAN GCP setup pending.
+- [x] Tamper-evidence (F17 refusal tests; frozen surfaces enforced in F7/F8).
+- [x] Confidentiality (zone-0 never in payloads; zone-1 ciphertext asserted).
+- [x] Guarded ingestion (gym green in CI; canary drill test; quarantine-only
+      entry). Live canary planting: HUMAN.
+- [x] Feedback loop (comment→correction→reply→resolve + scorecard, unit).
+      Live phone demo: HUMAN.
+- [x] Epistemics (stale→re-derive lifecycle + rider live in retrieval).
+- [x] Continuity (hibernate/resume two-namespace + blackboard division).
+- [x] Self-improvement (eval+approval-only promotion; second opinion blocks).
+- [ ] Liveness dead-man email — Script specified; HUMAN deploy + hosts-down
+      drill.
+- [x] Per-phase lint+test+typecheck green; mocked CI; stacked PRs; no secrets.
+
 ## Decisions & deviations from spec (repo architecture wins on *how*)
 
 | # | Decision | Why |
@@ -306,8 +370,8 @@ the dream's re-derivation planner instead + exported for future planners.
 ## Feature ledger
 
 **F1 shipped** · **F2 shipped** (live cross-machine proof pending HUMAN GCP setup) ·
-**F3 shipped** · **F4 shipped** (Evals rows wire to eval runner in Phase 7) · F5 todo ·
-**F6 shipped** · **F7 shipped** (PAUSE = gdrive scope) · F8 todo ·
+**F3 shipped** · **F4 shipped** · F5 todo (never phase-planned; own slice if wanted) ·
+**F6 shipped** · **F7 shipped** (PAUSE = gdrive scope) · **F8 shipped** ·
 **F9 shipped** (CLI → Phase 7 wrap-up) · **F10 shipped** (run-end wiring → Phase 7;
 replay = digest-verify stub) · **F11 shipped** · **F12 shipped** · **F14 shipped** · **F15 shipped** ·
 **F16 shipped** (e2e proof now in inbox tests) ·
@@ -315,12 +379,12 @@ replay = digest-verify stub) · **F11 shipped** · **F12 shipped** · **F14 ship
 **F19 shipped** (outbound tool-call check → Phase 5 seam; HUMAN planting open) ·
 **F20 shipped** (CI gym; scheduled run + scorecard → F4) ·
 **F21 shipped** (lib+Script template; HUMAN deploy for live <10s demo) ·
-**F22 shipped** · **F23 shipped** · **F24 shipped** · F25 todo · F26 todo · **F27 shipped** ·
+**F22 shipped** · **F23 shipped** · **F24 shipped** · **F25 shipped** · **F26 shipped** · **F27 shipped** ·
 **F28 shipped** · **F29 shipped** · **F30 shipped** ·
-**F31 shipped** (knew-at library; CLI → Phase 6) · F32 todo ·
-**F33 shipped** (planner-commit wiring → Phase 6) ·
-F34 todo (heartbeat producer shipped in Phase 0) ·
-**F35 shipped** (loop-side hooks = documented seam) · **F36 shipped** · **F37 shipped** · F38 todo
+**F31 shipped** (knew-at library; CLI = follow-up slice) · **F32 shipped** ·
+**F33 shipped** (dream-planner pre-check live) ·
+**F34 shipped** (full Script specified; HUMAN deploy + hosts-down drill) ·
+**F35 shipped** (loop-side hooks = documented seam) · **F36 shipped** · **F37 shipped** · **F38 shipped**
 
 ## Known gaps / UNVERIFIED
 

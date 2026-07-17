@@ -155,6 +155,24 @@ export async function collectBrainSnapshot(deps: BrainSnapshotDeps): Promise<Bra
     }
   }
 
+  // 2.6 Promoted stable skills (F8) — signed `category: skill` entries.
+  {
+    const { dataPath } = await import('../shared/paths.js');
+    const { join } = await import('node:path');
+    const { readdirSync } = await import('node:fs');
+    const skillsDir = join(dataPath('gdrive'), 'stable-skills');
+    if (existsSync(skillsDir)) {
+      for (const f of readdirSync(skillsDir).filter((x) => x.endsWith('.md'))) {
+        inputs.push({
+          logicalPath: `skills/${f}`,
+          content: readFileSync(join(skillsDir, f)),
+          zone: 2,
+          category: 'skill',
+        });
+      }
+    }
+  }
+
   // 3. workspace/MEMORY.md — the human-readable long-term policy surface.
   const mdPath = deps.memoryMdPath ?? defaultMemoryMdPath();
   if (existsSync(mdPath)) {

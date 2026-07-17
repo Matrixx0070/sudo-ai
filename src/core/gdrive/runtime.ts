@@ -250,6 +250,12 @@ export async function runGdriveDailyReportJob(): Promise<void> {
   } catch (err) {
     log.warn({ err: String(err) }, 'chronicle upload failed (report continues)');
   }
+  try {
+    const { uploadDatasets } = await import('./datasets.js');
+    await uploadDatasets(rt.client, rt.folders); // F26 mirror rides the report
+  } catch (err) {
+    log.warn({ err: String(err) }, 'datasets upload failed (report continues)');
+  }
 
   await auditedJob(rt.audit, 'daily-report', async () => {
     const report = await publishDailyReport(rt.client, rt.folders, {
@@ -446,6 +452,35 @@ export async function runGdriveDreamJob(): Promise<void> {
       const result = await runCheckpoint(deps);
       return { counter: result.manifest.counter };
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 — experimentation & ops (F38 drain rides the dream window; F26
+// datasets mirror rides the daily report)
+// ---------------------------------------------------------------------------
+
+/** Cron entry (dream window): drain the curiosity buffer, budget-bounded (F38). */
+export async function runGdriveCuriosityJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  if (!inspectorBrain) {
+    log.debug('curiosity drain skipped — no brain injected yet');
+    return;
+  }
+  const rt = await getGdriveRuntime();
+  const { drainCuriosity } = await import('./curiosity.js');
+  const { MindDB } = await import('../memory/db.js');
+  const structured = await import('../memory/structured-memory.js');
+  const db = new MindDB();
+  await drainCuriosity(rt.client, rt.folders, {
+    research: inspectorBrain, // one-shot cheapest-route call; bounded by caps
+    chunks: db,
+    structured: {
+      listMemories: () => structured.listMemories(),
+      saveMemory: (m) => structured.saveMemory(m as never),
+    },
+    inspectorBrain,
+    dailyBudget: Number(process.env['SUDO_GDRIVE_CURIOSITY_BUDGET']) || 5,
   });
 }
 
