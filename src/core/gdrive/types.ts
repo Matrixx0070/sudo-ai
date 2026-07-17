@@ -65,6 +65,7 @@ export interface GdriveFileMeta {
   modifiedTime?: string;
   size?: string;
   trashed?: boolean;
+  headRevisionId?: string;
 }
 
 /** Map of canonical logical folder path (e.g. "memory/blobs") -> Drive folderId. */

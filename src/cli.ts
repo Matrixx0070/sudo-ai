@@ -2734,6 +2734,14 @@ async function boot(): Promise<void> {
         } catch (gdErr) {
           log.warn({ err: String(gdErr) }, 'gdrive restore drill failed (non-fatal)');
         }
+      } else if (payload.event === 'gdrive:inbox') {
+        // F1: knowledge-inbox sweep (quarantine-gated ingestion).
+        try {
+          const { runGdriveInboxJob } = await import('./core/gdrive/runtime.js');
+          await runGdriveInboxJob();
+        } catch (gdErr) {
+          log.warn({ err: String(gdErr) }, 'gdrive inbox sweep failed (non-fatal)');
+        }
       } else if (payload.event === 'gdrive:heartbeat') {
         // Drive roadmap Phase 0 (F34 substrate): liveness beat to
         // ops/heartbeat.json in the shared Drive tree. Failures are non-fatal
@@ -3010,6 +3018,23 @@ async function boot(): Promise<void> {
       }
       log.info({ checkpointMs: ckMs, drillMs: drMs }, 'gdrive checkpoint + drill scheduled');
 
+      // F1 — knowledge-inbox poll (default 60s; F21 push notifications later).
+      const ibRaw = Number(process.env['SUDO_GDRIVE_INBOX_MS']);
+      const ibMs = Number.isFinite(ibRaw) && ibRaw >= 10_000 ? ibRaw : 60_000;
+      const ibJob = cronStore.get('gdrive-inbox');
+      if (!ibJob || !ibJob.enabled || ibJob.schedule.kind !== 'every' || ibJob.schedule.ms !== ibMs) {
+        cronStore.upsert({
+          id: 'gdrive-inbox',
+          name: 'Google Drive Knowledge Inbox',
+          enabled: true,
+          schedule: { kind: 'every', ms: ibMs },
+          payload: { kind: 'systemEvent', event: 'gdrive:inbox' },
+          sessionTarget: 'isolated',
+          consecutiveErrors: 0,
+        });
+      }
+      log.info({ inboxMs: ibMs }, 'gdrive inbox poll scheduled');
+
       // F2 — startup restore check: if a NEWER brain exists in Drive (another
       // machine pushed), hydrate-and-apply. Detached: boot never waits on Drive.
       void import('./core/gdrive/runtime.js')
@@ -3017,7 +3042,7 @@ async function boot(): Promise<void> {
         .catch((err) => log.warn({ err: String(err) }, 'gdrive restore check failed (non-fatal)'));
     } else {
       // Flag flipped off: park the jobs instead of firing no-op events forever.
-      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill']) {
+      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill', 'gdrive-inbox']) {
         if (cronStore.get(id)?.enabled) {
           cronStore.patch(id, { enabled: false });
           log.info({ jobId: id }, 'gdrive job disabled (SUDO_GDRIVE != 1)');
@@ -3533,6 +3558,17 @@ async function boot(): Promise<void> {
 
     // AutoDream: brain caller + the raw better-sqlite3 Database (MindDB exposes
     // it as the public readonly `db` field) + the post-write contradiction hook.
+    // F18 — inject the quarantine inspector's brain call (fresh context, zero
+    // tools, zero memory: it is a plain one-shot chat; route selection is the
+    // brain's own cost optimizer). Until this runs, quarantine is
+    // deterministic-only — never fail-open.
+    try {
+      const { setGdriveInspectorBrain } = await import('./core/gdrive/runtime.js');
+      setGdriveInspectorBrain(async (prompt: string) => brain.chat([{ role: 'user', content: prompt }]));
+    } catch (err) {
+      log.warn({ err: String(err) }, 'gdrive inspector brain injection failed');
+    }
+
     autoDream = new AutoDream(
       async (prompt: string) => brain.chat([{ role: 'user', content: prompt }]),
       db.db,

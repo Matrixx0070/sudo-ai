@@ -1,0 +1,2 @@
+Team sync 2026-07-15: shipped the email adapter fix; Frank to review the
+gateway PR; next milestone is the Drive integration foundation.
