@@ -101,7 +101,7 @@ Measure-then-fix beats speculation (proven pattern, #678–#680).
 |---|---|---|
 | F89 | **Standing orders live** | One-slice fix: instantiate `StandingOrderManager` + call `setManager()` at boot; the registered tool currently throws. Smallest slice in the roadmap. |
 | F90 | **Auto-fix-trigger + deployment-hook wiring** | Both built + tested + env-documented, zero importers. Wire into health/error-reporter + self-build, or delete with their tests. |
-| F91 | **Orphan sweep** | Explicit verdict per module: auto-research, evolution/analyzer, approval-matrix, autonomous-executor, goal-pursuit (legacy), trend-radar, user-adapter, embodiment. Wire behind a flag or delete — no third state. |
+| F91 | **Orphan sweep** | VERDICTS DELIVERED: DELETED goal-pursuit (legacy, superseded by goal-engine-v2), autonomous-executor, user-adapter (all barrel-only, barrels externally unimported). KEPT — corrected, NOT orphans: evolution/analyzer (used by code-evolver → meta.code-evolver tool), auto-research (used by self-improvement engine → meta.self-improve tool), approval-matrix (computer-use approval seam reference + live test). Remaining: trend-radar + embodiment need their own wire-or-delete decision (radar has no scheduler; embodiment is tool-gated cosmetic). |
 | F92 | **Tenancy verdict** | Whole dir has zero consumers; delete or demote to documented library. (Its launcher already refuses without OS isolation — good bones if kept.) |
 | F93 | **Remotion render pipeline** | Wire the dead video compositions to a real render path (`renderMedia` trigger + delivery). This is the video half of the standing DIY-beats-NotebookLM decision and directly serves the content-video business. |
 | F94 | **DIY audio-overview pipeline** | Grounded script gen → local Kokoro / ElevenLabs TTS → publish. The audio half of the same decision; removes the last argument for NLM Enterprise. |
@@ -178,7 +178,7 @@ static sweep called dormant: `SUDO_CONSCIOUSNESS_REFLECT=1`, `SUDO_SELF_VERIFY=1
 | Wave | Status |
 |---|---|
 | A (F81–F88) | **F81 shipped** (census + matrix, `docs/FLAG_CENSUS.md`); rest not started |
-| B (F89–F96) | **F89 shipped** (PR #806, CRUD-only default; SUDO_STANDING_ORDERS=1 activates); rest not started |
+| B (F89–F96) | **F89 shipped** (#806); **F90 shipped** (AutoBugFix C+D behind SUDO_AUTOBUGFIX=1); **F91 verdicts delivered** (3 deleted, 3 corrected-keep); rest not started |
 | C (F97–F103) | not started |
 | D (F104–F108) | not started |
 | E (F109–F112) | not started |

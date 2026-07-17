@@ -21,12 +21,4 @@ export {
 } from './proactive-notifier.js';
 export type { ProactiveNotification, NotificationType } from './proactive-notifier.js';
 
-// Upgrade 67: User Style Adaptation
-export {
-  updateProfile,
-  getProfile,
-  learnFromInteraction,
-  toPromptHint,
-  resetProfile,
-} from './user-adapter.js';
-export type { UserProfile } from './user-adapter.js';
+// F91: user-adapter (Upgrade 67) removed — never wired to any consumer.
