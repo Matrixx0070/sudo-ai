@@ -177,8 +177,8 @@ static sweep called dormant: `SUDO_CONSCIOUSNESS_REFLECT=1`, `SUDO_SELF_VERIFY=1
 
 | Wave | Status |
 |---|---|
-| A (F81–F88) | **F81 shipped** (census + matrix, `docs/FLAG_CENSUS.md`); rest not started |
+| A (F81–F88) | **F81 shipped** (#807, census + `docs/FLAG_CENSUS.md`); **F88 shipped** (#809, real LlmGoalEvaluator behind injected seam; activate via SUDO_GOAL_EVAL_MODEL); F82–F87 = verify/measure tasks per census corrections |
 | B (F89–F96) | **F89 shipped** (#806); **F90 shipped** (AutoBugFix C+D behind SUDO_AUTOBUGFIX=1); **F91 verdicts delivered** (3 deleted, 3 corrected-keep); rest not started |
 | C (F97–F103) | not started |
-| D (F104–F108) | not started |
-| E (F109–F112) | not started |
+| D (F104–F108) | **F104+F106 shipped** (#810: SUDO_SECURITY_STRICT fatal guard-init + posture-weakening boot banner, posture.ts); F105/F107/F108 not started |
+| E (F109–F112) | not started. Census follow-up shipped: SUDO_UPDATE_* env→config mapping (#808). |
