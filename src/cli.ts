@@ -4444,7 +4444,15 @@ async function boot(): Promise<void> {
         registerWellKnownRoutes(gatewayServer, skillRegistry);
         log.info('agentskills.io well-known route attached (GET /.well-known/agentskills.json)');
 
-        const goalEvaluator = createGoalEvaluator();
+        // F88: inject a cheap bounded brain call so SUDO_GOAL_EVAL_MODEL
+        // activates the real LLM evaluator (was a heuristic-delegating stub).
+        const goalEvaluator = createGoalEvaluator(async (prompt: string) => {
+          const resp = await brain.call({
+            messages: [{ role: 'user', content: prompt }],
+            maxTokens: 400,
+          });
+          return resp.content ?? '';
+        });
 
         const { buildOutcomeAdapters } = await import('./core/sessions/outcome-adapters.js');
 

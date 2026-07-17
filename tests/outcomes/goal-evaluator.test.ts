@@ -228,16 +228,21 @@ describe('createGoalEvaluator', () => {
     expect(evaluator).toBeInstanceOf(HeuristicGoalEvaluator);
   });
 
-  it('7: returns LlmGoalEvaluator stub when SUDO_GOAL_EVAL_MODEL=haiku', () => {
+  it('7: returns LlmGoalEvaluator when SUDO_GOAL_EVAL_MODEL=haiku AND a caller is injected', () => {
     process.env['SUDO_GOAL_EVAL_MODEL'] = 'haiku';
-    const evaluator = createGoalEvaluator();
-    // LlmGoalEvaluator is not exported, but it should NOT be HeuristicGoalEvaluator
+    const evaluator = createGoalEvaluator(async () => '{}');
     expect(evaluator).not.toBeInstanceOf(HeuristicGoalEvaluator);
   });
 
-  it('8: LlmGoalEvaluator stub returns a valid GoalEvalResult shape', async () => {
+  it('7b: model set but NO caller injected → heuristic (seam not provided)', () => {
     process.env['SUDO_GOAL_EVAL_MODEL'] = 'haiku';
     const evaluator = createGoalEvaluator();
+    expect(evaluator).toBeInstanceOf(HeuristicGoalEvaluator);
+  });
+
+  it('8: LlmGoalEvaluator returns a valid GoalEvalResult shape', async () => {
+    process.env['SUDO_GOAL_EVAL_MODEL'] = 'haiku';
+    const evaluator = createGoalEvaluator(async () => '{"outcome":"success","confidence":0.9,"evidence":["all tools green"]}');
     const result = await evaluator.evaluate(makeCtx({
       recentMessages: [msg('assistant', 'done')],
       toolSuccessCount: 8,
@@ -261,5 +266,53 @@ describe('createGoalEvaluator', () => {
     process.env['SUDO_GOAL_EVAL_MODEL'] = 'gpt4';
     const evaluator = createGoalEvaluator();
     expect(evaluator).toBeInstanceOf(HeuristicGoalEvaluator);
+  });
+});
+
+describe('LlmGoalEvaluator (F88)', () => {
+  const mkEval = (reply: () => Promise<string>) => {
+    process.env['SUDO_GOAL_EVAL_MODEL'] = 'haiku';
+    const e = createGoalEvaluator(reply);
+    delete process.env['SUDO_GOAL_EVAL_MODEL'];
+    return e;
+  };
+
+  it('accepts a strict-JSON verdict', async () => {
+    const e = mkEval(async () => '{"outcome":"failure","confidence":0.8,"evidence":["tests failed"]}');
+    const r = await e.evaluate(makeCtx({}));
+    expect(r).toEqual({ outcome: 'failure', confidence: 0.8, evidence: ['tests failed'] });
+  });
+
+  it('tolerates fenced/prosey replies by extracting the JSON block', async () => {
+    const e = mkEval(async () => 'Sure!\n```json\n{"outcome":"partial","confidence":0.5,"evidence":[]}\n```');
+    const r = await e.evaluate(makeCtx({}));
+    expect(r.outcome).toBe('partial');
+    expect(r.confidence).toBe(0.5);
+  });
+
+  it('clamps out-of-range confidence', async () => {
+    const e = mkEval(async () => '{"outcome":"success","confidence":7,"evidence":[]}');
+    const r = await e.evaluate(makeCtx({}));
+    expect(r.confidence).toBe(1);
+  });
+
+  it('falls back to heuristic on unparseable reply, with honest evidence', async () => {
+    const e = mkEval(async () => 'I think it went fine.');
+    const r = await e.evaluate(makeCtx({ recentMessages: [msg('assistant', 'error: failed')] }));
+    expect(r.outcome).toBe('failure'); // heuristic verdict
+    expect(r.evidence).toContain('LLM evaluation unavailable — heuristic fallback');
+  });
+
+  it('falls back to heuristic when the call throws', async () => {
+    const e = mkEval(async () => { throw new Error('provider down'); });
+    const r = await e.evaluate(makeCtx({}));
+    expect(['success', 'failure', 'partial']).toContain(r.outcome);
+    expect(r.evidence).toContain('LLM evaluation unavailable — heuristic fallback');
+  });
+
+  it('rejects invalid outcome values → fallback', async () => {
+    const e = mkEval(async () => '{"outcome":"maybe","confidence":0.5,"evidence":[]}');
+    const r = await e.evaluate(makeCtx({}));
+    expect(r.evidence).toContain('LLM evaluation unavailable — heuristic fallback');
   });
 });
