@@ -17,20 +17,7 @@ export type {
 } from './event-loop.js';
 
 // Upgrade 70: Proactive Goal Pursuit
-export {
-  setGoal,
-  addMilestone,
-  completeMilestone,
-  getActiveGoals,
-  getGoal,
-  pauseGoal,
-  resumeGoal,
-  listGoals,
-} from './goal-pursuit.js';
-export type { Goal, GoalMilestone, GoalPriority, GoalStatus } from './goal-pursuit.js';
-
-// Cross-platform control wiring (approval + executor for IComputerUse)
-export {
-  type ControlAction,
-} from './autonomous-executor.js';
+// F91: legacy goal-pursuit (superseded by goal-engine-v2) and the unused
+// autonomous-executor were removed; approval-matrix stays (computer-use
+// approval seam reference implementation).
 export type { ApprovalTier, ApprovalRule, ApprovalDecision } from './approval-matrix.js';
