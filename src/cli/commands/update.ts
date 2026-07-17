@@ -8,7 +8,7 @@
 
 import path from 'node:path';
 import { AutoUpdateManager } from '../../core/update/update-manager.js';
-import { DEFAULT_UPDATE_CONFIG } from '../../core/update/update-manager-types.js';
+import { DEFAULT_UPDATE_CONFIG, readUpdateEnvOverrides } from '../../core/update/update-manager-types.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,7 +28,9 @@ interface UpdateOptions {
 export async function runUpdate(projectRoot: string, opts: UpdateOptions): Promise<number> {
   const config = {
     ...DEFAULT_UPDATE_CONFIG,
+    ...readUpdateEnvOverrides(),
     projectRoot,
+    // Explicit CLI flag beats env.
     ...(opts.channel ? { channel: opts.channel as 'latest' | 'stable' } : {}),
   };
 

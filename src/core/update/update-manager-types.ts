@@ -92,6 +92,42 @@ export interface AutoUpdateConfig {
   projectRoot: string;
 }
 
+/**
+ * Read `SUDO_UPDATE_*` environment overrides — the documented precedence
+ * tier 1 for AutoUpdateConfig (previously documented but unimplemented, so
+ * prod env entries were silently inert). Invalid or empty values are ignored
+ * and fall through to lower tiers rather than throwing.
+ * `SUDO_UPDATE_DISABLE` stays a runtime kill-switch checked at call sites.
+ */
+export function readUpdateEnvOverrides(env: NodeJS.ProcessEnv = process.env): Partial<AutoUpdateConfig> {
+  const out: Partial<AutoUpdateConfig> = {};
+  const bool = (v: string | undefined): boolean | undefined =>
+    v === '1' ? true : v === '0' ? false : undefined;
+
+  const autoApply = bool(env['SUDO_UPDATE_AUTO_APPLY']);
+  if (autoApply !== undefined) out.autoApply = autoApply;
+
+  const healthGate = bool(env['SUDO_UPDATE_HEALTH_GATE']);
+  if (healthGate !== undefined) out.healthGate = healthGate;
+
+  const channel = env['SUDO_UPDATE_CHANNEL'];
+  if (channel === 'latest' || channel === 'stable') out.channel = channel;
+
+  const interval = Number(env['SUDO_UPDATE_INTERVAL_MS']);
+  if (Number.isFinite(interval) && interval >= 60_000) out.checkIntervalMs = interval;
+
+  const rollback = Number(env['SUDO_UPDATE_ROLLBACK_VERSIONS']);
+  if (Number.isInteger(rollback) && rollback >= 0) out.rollbackVersions = rollback;
+
+  const maxVersion = env['SUDO_UPDATE_MAX_VERSION']?.trim();
+  if (maxVersion) out.maxVersion = maxVersion;
+
+  const skip = env['SUDO_UPDATE_SKIP_VERSIONS']?.trim();
+  if (skip) out.skipVersions = skip.split(',').map((v) => v.trim()).filter(Boolean);
+
+  return out;
+}
+
 /** Default configuration values. */
 export const DEFAULT_UPDATE_CONFIG: Readonly<AutoUpdateConfig> = {
   enabled: true,

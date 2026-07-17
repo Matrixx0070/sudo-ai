@@ -81,7 +81,7 @@ import { GoalEngineV2 } from './core/autonomy/goal-engine-v2.js';
 import { OutcomesLedger } from './core/autonomy/outcomes.js';
 import { AuditTrail } from './core/security/audit-trail.js';
 import { AutoUpdateManager } from './core/update/update-manager.js';
-import { DEFAULT_UPDATE_CONFIG } from './core/update/update-manager-types.js';
+import { DEFAULT_UPDATE_CONFIG, readUpdateEnvOverrides } from './core/update/update-manager-types.js';
 import { AutoDream } from './core/memory/auto-dream.js';
 import { flushBeforeCompaction } from './core/memory/compaction-flush.js';
 import { TeammateIdleDetector } from './core/agent/teammate-idle.js';
@@ -3501,7 +3501,7 @@ async function boot(): Promise<void> {
   let autoUpdater: AutoUpdateManager | null = null;
   try {
     autoUpdater = new AutoUpdateManager({
-      config: { ...DEFAULT_UPDATE_CONFIG, projectRoot: PROJECT_ROOT },
+      config: { ...DEFAULT_UPDATE_CONFIG, ...readUpdateEnvOverrides(), projectRoot: PROJECT_ROOT },
     });
     // Note: we don't call .start() here — that would enable the periodic
     // auto-update timer. Slice 1 ships manual-trigger only via the dashboard
