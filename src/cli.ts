@@ -2797,6 +2797,24 @@ async function boot(): Promise<void> {
         } catch (gdErr) {
           log.warn({ err: String(gdErr) }, 'gdrive curiosity drain failed (non-fatal)');
         }
+      } else if (
+        payload.event === 'notebooklm:export' ||
+        payload.event === 'notebooklm:returns' ||
+        payload.event === 'notebooklm:rituals'
+      ) {
+        // NotebookLM annex N0 rails (E1/E2/E3). Background-only; no programmatic
+        // NotebookLM access (export lane + returns + rituals only).
+        try {
+          const nlm = await import('./core/notebooklm/runtime.js');
+          const fn = {
+            'notebooklm:export': nlm.runNlmExportJob,
+            'notebooklm:returns': nlm.runNlmReturnsJob,
+            'notebooklm:rituals': nlm.runNlmRitualsJob,
+          }[payload.event];
+          await fn();
+        } catch (nlmErr) {
+          log.warn({ err: String(nlmErr), event: payload.event }, 'notebooklm job failed (non-fatal)');
+        }
       } else if (payload.event === 'gdrive:inbox') {
         // F1: knowledge-inbox sweep (quarantine-gated ingestion).
         try {
@@ -3202,6 +3220,35 @@ async function boot(): Promise<void> {
           sessionTarget: 'isolated',
           consecutiveErrors: 0,
         });
+      }
+
+      // NotebookLM annex N0 rails — export (nightly), returns (5min), rituals
+      // (weekly). Gated on SUDO_NOTEBOOKLM=1 (default OFF) in addition to
+      // SUDO_GDRIVE. Parked when the flag is off.
+      const nlmOn = process.env['SUDO_NOTEBOOKLM'] === '1';
+      const nlmJobs: Array<{ id: string; name: string; event: string; schedule: CronSchedule }> = [
+        { id: 'nlm-export', name: 'NotebookLM Export Lane', event: 'notebooklm:export', schedule: { kind: 'cron', expr: process.env['SUDO_NOTEBOOKLM_EXPORT_CRON'] ?? '40 23 * * *', tz: gdriveTz } },
+        { id: 'nlm-returns', name: 'NotebookLM Returns Sweep', event: 'notebooklm:returns', schedule: { kind: 'every', ms: Math.max(60_000, Number(process.env['SUDO_NOTEBOOKLM_RETURNS_MS']) || 300_000) } },
+        { id: 'nlm-rituals', name: 'NotebookLM Rituals Refresh', event: 'notebooklm:rituals', schedule: { kind: 'cron', expr: process.env['SUDO_NOTEBOOKLM_RITUALS_CRON'] ?? '20 0 * * 1', tz: gdriveTz } },
+      ];
+      for (const j of nlmJobs) {
+        const cur = cronStore.get(j.id);
+        if (nlmOn) {
+          if (!cur || !cur.enabled || JSON.stringify(cur.schedule) !== JSON.stringify(j.schedule)) {
+            cronStore.upsert({ id: j.id, name: j.name, enabled: true, schedule: j.schedule, payload: { kind: 'systemEvent', event: j.event }, sessionTarget: 'isolated', consecutiveErrors: 0 });
+          }
+        } else if (cur?.enabled) {
+          cronStore.patch(j.id, { enabled: false });
+        }
+      }
+      if (nlmOn) {
+        try {
+          const { setNlmInspectorBrain } = await import('./core/notebooklm/runtime.js');
+          setNlmInspectorBrain(async (prompt: string) => brain.chat([{ role: 'user', content: prompt }]));
+        } catch (err) {
+          log.warn({ err: String(err) }, 'notebooklm inspector injection failed');
+        }
+        log.info('notebooklm annex jobs scheduled (export/returns/rituals)');
       }
 
       // F10 wrap-up — flight-recorder run bundles on session end (opt-in
