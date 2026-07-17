@@ -71,6 +71,15 @@ export function registerN1Routes(): void {
     log.info({ date: parsed.date, net: report.sentiment.net, confusions: report.confusions.length }, 'F59 reception analysed');
     return 'reception-analyzed';
   });
+
+  // F64 — successor ACK: validate the token bound to the sealed successor pack.
+  // Never lands in memory; advances the harness-enforced succession gate.
+  registerReturnRoute('F64:ack', async ({ content }) => {
+    const { recordSuccessionAck } = await import('./succession.js');
+    const r = recordSuccessionAck(content);
+    log.info({ accepted: r.accepted, reason: r.reason }, 'F64 succession ack processed');
+    return r.accepted ? 'succession-acked' : 'succession-ack-rejected';
+  });
 }
 
 /** Feature ids whose returns are FORCED to external tier (no elevation). */

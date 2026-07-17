@@ -2816,6 +2816,7 @@ async function boot(): Promise<void> {
             'notebooklm:returns': nlm.runNlmReturnsJob,
             'notebooklm:rituals': nlm.runNlmRitualsJob,
             'notebooklm:verify': nlm.runNlmVerifyJob,
+            'notebooklm:succession': nlm.runNlmSuccessionJob,
           }[payload.event];
           await fn();
         } catch (nlmErr) {
@@ -3313,6 +3314,7 @@ async function boot(): Promise<void> {
         { id: 'nlm-returns', name: 'NotebookLM Returns Sweep', event: 'notebooklm:returns', schedule: { kind: 'every', ms: Math.max(60_000, Number(process.env['SUDO_NOTEBOOKLM_RETURNS_MS']) || 300_000) } },
         { id: 'nlm-rituals', name: 'NotebookLM Rituals Refresh', event: 'notebooklm:rituals', schedule: { kind: 'cron', expr: process.env['SUDO_NOTEBOOKLM_RITUALS_CRON'] ?? '20 0 * * 1', tz: gdriveTz } },
         { id: 'nlm-verify', name: 'NotebookLM E4 Verify', event: 'notebooklm:verify', schedule: { kind: 'cron', expr: process.env['SUDO_NOTEBOOKLM_VERIFY_CRON'] ?? '50 0 * * 1', tz: gdriveTz } },
+        { id: 'nlm-succession', name: 'NotebookLM F64 Succession Gate', event: 'notebooklm:succession', schedule: { kind: 'every', ms: Math.max(300_000, Number(process.env['SUDO_NOTEBOOKLM_SUCCESSION_MS']) || 3_600_000) } },
       ];
       for (const j of nlmJobs) {
         const cur = cronStore.get(j.id);

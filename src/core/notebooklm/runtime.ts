@@ -68,6 +68,11 @@ export function setNlmJudge(fn: import('./probe.js').JudgeFn): void {
 /** Export-lane refresh: compile + export all registered shapes (E1 + N1). */
 export async function runNlmExportJob(): Promise<void> {
   if (!isNotebookLmEnabled()) return;
+  // F64: while a succession is in flight, autonomous broadcast is PAUSED.
+  if ((await import('./succession.js')).isSuccessionPaused()) {
+    log.info('nlm export skipped — succession gate paused');
+    return;
+  }
   const rt = await getNlmRuntime();
   const { allShapes } = await import('./shapes.js');
   const { registerN1Shapes } = await import('./shapes-n1.js');
@@ -132,6 +137,10 @@ export async function runNlmReturnsJob(): Promise<void> {
  */
 export async function runNlmVerifyJob(): Promise<{ ran: boolean; blocked: string[]; alerts: string[] }> {
   if (!isNotebookLmEnabled()) return { ran: false, blocked: [], alerts: [] };
+  if ((await import('./succession.js')).isSuccessionPaused()) {
+    log.info('nlm verify skipped — succession gate paused');
+    return { ran: false, blocked: [], alerts: [] };
+  }
   if (!selfAnswer) {
     log.warn('nlm verify: no self-answer injected — skipping');
     return { ran: false, blocked: [], alerts: [] };
@@ -203,6 +212,69 @@ export async function runNlmRitualsJob(): Promise<void> {
   const scorecardId = await ensureScorecard(grt.client, grt.folders);
   await ensureRitualsTab(rt.client, scorecardId);
   await writeRitualStatus(rt.client, rt.folders);
+}
+
+/**
+ * F64 succession job: detect a model-generation change and drive the gate —
+ * pause (checkSuccession) → seal a successor pack → once acked, run the identity
+ * pulse (F63) → resume when acked+pulsed. Each step is best-effort/idempotent;
+ * the job is safe to run on a cadence. Autonomous jobs consult isSuccessionPaused().
+ */
+export async function runNlmSuccessionJob(): Promise<{ phase: string }> {
+  if (!isNotebookLmEnabled()) return { phase: 'disabled' };
+  const succ = await import('./succession.js');
+  const { currentModelGeneration } = await import('../../llm/aliases.js');
+  const check = succ.checkSuccession(currentModelGeneration());
+  const state = succ.loadSuccessionState();
+  const phase = state?.phase ?? 'stable';
+
+  // Just paused → seal the successor pack (needs an enc key + inputs).
+  if (check.changed || (phase === 'paused' && !state?.ackToken)) {
+    try {
+      const { loadEncKey } = await import('../gdrive/keys.js');
+      const encKey = loadEncKey();
+      const [directives, learnings, openQuestions] = await Promise.all([
+        (async () => {
+          try {
+            const m = (await import('../gdrive/study-of-principal.js')).loadSealedOperatorModel(encKey);
+            return m?.standingDirectives ?? [];
+          } catch { return []; }
+        })(),
+        (async () => {
+          try { return (await import('../gdrive/dead-ends.js')).listDeadEnds('confirmed').map((d) => `${d.summary} — ${d.cause}`).slice(0, 10); } catch { return []; }
+        })(),
+        (async () => { try { const rt = await getNlmRuntime(); return (await buildShapeContext(rt)).readOpenQuestions?.() ?? []; } catch { return []; } })(),
+      ]);
+      succ.buildSuccessorPack({
+        identitySummary: 'Identity and values are defined by the signed manifest (read-only). Preserve them; do not rewrite frozen surfaces.',
+        standingDirectives: directives,
+        openQuestions,
+        learnings,
+      }, encKey);
+    } catch (err) {
+      log.warn({ err: String(err) }, 'F64 successor pack not sealed (no enc key?) — gate still holds');
+    }
+  }
+
+  // Acked → run the identity pulse (needs the injected self-answer + a baseline).
+  if (phase === 'acked' && selfAnswer) {
+    try {
+      const { runProbeSelf } = await import('./probe.js');
+      const { identityPulse } = await import('./probe-gates.js');
+      const { F63_IDENTITY } = await import('./probe-sets.js');
+      const { loadBaseline, ensureBaseline } = await import('./probe-store.js');
+      const run = await runProbeSelf(F63_IDENTITY, selfAnswer, { studentRoute: 'sudo/cheap' });
+      const baseline = loadBaseline(F63_IDENTITY.id) ?? ensureBaseline(run);
+      const pulse = identityPulse(F63_IDENTITY, run, baseline);
+      succ.recordSuccessionPulse(pulse.alert);
+    } catch (err) {
+      log.warn({ err: String(err) }, 'F64 succession pulse failed — gate holds');
+    }
+  }
+
+  // Ready → resume.
+  if ((succ.loadSuccessionState()?.phase ?? phase) === 'ready') succ.tryResumeSuccession();
+  return { phase: succ.loadSuccessionState()?.phase ?? 'stable' };
 }
 
 async function buildShapeContext(rt: NlmRuntime): Promise<import('./shapes.js').ShapeContext> {
