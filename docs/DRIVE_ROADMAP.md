@@ -63,6 +63,6 @@
 ## Known integration notes for the annex
 - Second-opinion (F32) machinery complete but has **no trigger site** — nothing decides which actions cross the impact threshold (annex F48/F65 must wire it).
 - `matchDeadEnds` (F33) is consulted only inside `dream.ts`, **not** the agent's `GoalPlanner` — no live planner pre-commit hook (annex F69/F70/F73 must build it).
-- F13 weekly self-diff was scoped but **not built** (annex F42/F53 build it).
+- **F13 weekly self-diff — SHIPPED** (`src/core/gdrive/self-diff.ts`; repaired post-roadmap for the NotebookLM annex F42/F53).
 - Brain routes have **no `modelGeneration` field** and **no `judgeRoute` pin** (annex adds both).
 - Local STT exists (`voice/whisper-local.ts`).

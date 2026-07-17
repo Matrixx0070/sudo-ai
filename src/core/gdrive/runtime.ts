@@ -361,6 +361,36 @@ export async function runGdriveAtlasJob(): Promise<void> {
   });
 }
 
+/** Cron entry (weekly): F13 self-diff — memory churn + belief health over 7 days. */
+export async function runGdriveSelfDiffJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { readChronicle } = await import('./chronicle.js');
+  const { loadBeliefs } = await import('./beliefs.js');
+  const { publishSelfDiff, readTopologyLink } = await import('./self-diff.js');
+  const { watchDoc } = await import('./comments.js');
+  const now = new Date();
+  const toDay = now.toISOString().slice(0, 10);
+  const fromDay = new Date(now.getTime() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const chronicleOps = readChronicle(fromDay, toDay);
+  const beliefs = loadBeliefs().beliefs.map((b) => ({
+    state: b.state,
+    rederiveQueued: b.rederiveQueued,
+    trustTier: b.trustTier,
+  }));
+  await auditedJob(rt.audit, 'self-diff', async () => {
+    const res = await publishSelfDiff(rt.client, rt.folders, {
+      fromDay,
+      toDay,
+      chronicleOps,
+      beliefs,
+      topology: readTopologyLink(),
+    });
+    watchDoc(res.fileId, `self-diff ${toDay}`);
+    return { result: undefined, filesTouched: [res.fileId] };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Phase 5 — epistemics jobs (F22/F23/F37)
 // ---------------------------------------------------------------------------
