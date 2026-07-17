@@ -11,6 +11,15 @@ import { registerReturnRoute } from './returns.js';
 
 const log = createLogger('notebooklm:routes-n1');
 
+/** Read a Doc's text — Google Docs export, falling back to raw download. */
+async function readDocText(client: import('../gdrive/client.js').DriveClient, id: string): Promise<string> {
+  try {
+    return await client.filesExport(id, 'text/plain');
+  } catch {
+    return client.filesDownload(id);
+  }
+}
+
 let registered = false;
 export function registerN1Routes(): void {
   if (registered) return;
@@ -70,6 +79,47 @@ export function registerN1Routes(): void {
     } as never);
     log.info({ date: parsed.date, net: report.sentiment.net, confusions: report.confusions.length }, 'F59 reception analysed');
     return 'reception-analyzed';
+  });
+
+  // F67 — embassy inbound: foreign distillate. Held if it trips our watermark
+  // canary (our own text bounced back → F19) or is a near-verbatim echo of what
+  // we published; otherwise stored EXTERNAL-tier only. Already E2-quarantined.
+  registerReturnRoute('F67', async ({ parsed, content, deps }) => {
+    const { loadCanaryConfig, checkCanaryPayload, tripCanary } = await import('../gdrive/canary.js');
+    const hit = checkCanaryPayload(content, loadCanaryConfig());
+    if (hit) {
+      tripCanary(deps.audit, hit, `embassy inbound ${parsed.raw}`);
+      log.warn({ file: parsed.raw, label: hit.label }, 'F67 embassy inbound tripped a watermark canary — HELD');
+      return 'embassy-canary-tripped';
+    }
+    const outFolder = deps.folders['notebooklm/embassy/outbound'];
+    if (outFolder) {
+      try {
+        const { verbatimHeuristic } = await import('./embassy.js');
+        const own: Array<{ name: string; body: string }> = [];
+        for (const f of await deps.client.listChildren(outFolder)) {
+          try { own.push({ name: f.name, body: await readDocText(deps.client, f.id) }); } catch { /* skip */ }
+        }
+        const v = verbatimHeuristic(content, own);
+        if (v.isEcho) {
+          log.warn({ file: parsed.raw, ratio: v.ratio, matched: v.matched }, 'F67 embassy inbound is a verbatim echo — HELD');
+          return 'embassy-verbatim-held';
+        }
+      } catch { /* heuristic best-effort */ }
+    }
+    // Novel foreign distillate → external tier (F67 is forced-external anyway).
+    for (const piece of content.slice(0, 8000).match(/[\s\S]{1,1500}/g) ?? []) {
+      deps.chunks.storeChunk(piece, `nlm/F67/${parsed.type}`, 'learning', { role: 'user' });
+    }
+    await deps.structured.saveMemory({
+      type: 'reference',
+      id: `nlm-F67-${parsed.type}-${parsed.date}`,
+      name: `Embassy distillate ${parsed.date}`,
+      description: `embassy · tier external · returned ${parsed.date}`,
+      content: JSON.stringify({ featureId: 'F67', returnType: parsed.type, trustTier: 'external', date: parsed.date }),
+    } as never);
+    log.info({ file: parsed.raw }, 'F67 embassy inbound stored (external tier)');
+    return 'embassy-external';
   });
 
   // F60 — conversation with a past self: NotebookLM chats the forks museum;
