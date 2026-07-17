@@ -76,11 +76,12 @@ export async function runNlmExportJob(): Promise<void> {
   const rt = await getNlmRuntime();
   const { allShapes } = await import('./shapes.js');
   const { registerN1Shapes } = await import('./shapes-n1.js');
-  const { registerN3Shapes } = await import('./shapes-n3.js');
+  const { registerN3Shapes, registerN4Shapes } = await import('./shapes-n3.js');
   const { compileAndExport } = await import('./export-lane.js');
   const { auditedJob } = await import('../gdrive/audit.js');
   registerN1Shapes();
   registerN3Shapes();
+  registerN4Shapes();
 
   const ctx = await buildShapeContext(rt);
   // Auto-refresh shapes (rolling + the F42 architecture pack). Per-item packs
@@ -337,6 +338,11 @@ async function buildShapeContext(rt: NlmRuntime): Promise<import('./shapes.js').
         .filter((f) => /^(atlas|daily-|self-diff-)/.test(f.name))
         .slice(0, 20)
         .map((f) => ({ name: f.name, id: f.id, url: `https://drive.google.com/open?id=${f.id}` }));
+    },
+    // F60 forks museum — catalog of past selves (metadata only).
+    readForks: async () => {
+      const { buildForksMuseum } = await import('../gdrive/forks-museum.js');
+      return buildForksMuseum(grt.client, grt.folders);
     },
   };
 }

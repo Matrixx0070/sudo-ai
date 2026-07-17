@@ -72,6 +72,25 @@ export function registerN1Routes(): void {
     return 'reception-analyzed';
   });
 
+  // F60 — conversation with a past self: NotebookLM chats the forks museum;
+  // the reflection returns here (already E2-quarantined) and is stored at
+  // EXTERNAL tier (a past self's voice reconstructed by an external model —
+  // never over-trusted, never executed as instructions).
+  registerReturnRoute('F60:dialogue', async ({ parsed, content, deps }) => {
+    for (const piece of content.slice(0, 8000).match(/[\s\S]{1,1500}/g) ?? []) {
+      deps.chunks.storeChunk(piece, `nlm/F60/dialogue`, 'learning', { role: 'user' });
+    }
+    await deps.structured.saveMemory({
+      type: 'reference',
+      id: `nlm-F60-dialogue-${parsed.date}`,
+      name: `Conversation with a past self ${parsed.date}`,
+      description: `past-self dialogue · tier external · returned ${parsed.date}`,
+      content: JSON.stringify({ featureId: 'F60', returnType: 'dialogue', trustTier: 'external', date: parsed.date }),
+    } as never);
+    log.info({ date: parsed.date }, 'F60 past-self dialogue ingested (external tier)');
+    return 'past-self-dialogue';
+  });
+
   // F64 — successor ACK: validate the token bound to the sealed successor pack.
   // Never lands in memory; advances the harness-enforced succession gate.
   registerReturnRoute('F64:ack', async ({ content }) => {
