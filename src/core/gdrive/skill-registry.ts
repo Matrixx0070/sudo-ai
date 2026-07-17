@@ -111,10 +111,23 @@ export async function readApprovals(client: DriveClient, controlPanelId: string)
 
 export type PromotionOutcome =
   | { action: 'promoted'; stableFileId: string }
-  | { action: 'blocked'; reason: 'eval-failed' | 'not-approved' };
+  | { action: 'blocked'; reason: 'eval-failed' | 'not-approved' | 'informed-approval-pending' };
 
 /**
- * Promote: BOTH gates required. Stable file updates in place (revisions =
+ * Optional F54 hook. When provided, a candidate that requires informed approval
+ * must ALSO clear the informed-approval gate (explainer read + valid
+ * attestation) before promotion. Injected so gdrive never imports notebooklm.
+ */
+export interface PromoteOpts {
+  /** Returns true if this candidate needs the informed-approval gate. */
+  requiresInformedApproval?: (candidateId: string) => boolean;
+  /** Returns true if the informed-approval gate is satisfied for this candidate. */
+  informedApprovalGranted?: (candidateId: string) => boolean;
+}
+
+/**
+ * Promote: eval + control-panel approval required; the optional F54 informed-
+ * approval gate adds a third. Stable file updates in place (revisions =
  * rollback); artifact mirrors locally for the signed checkpoint.
  */
 export async function promoteCandidate(
@@ -124,10 +137,16 @@ export async function promoteCandidate(
   controlPanelId: string,
   candidate: SkillCandidate,
   evalResult: { score: number; pass: boolean },
+  opts: PromoteOpts = {},
 ): Promise<PromotionOutcome> {
   if (!evalResult.pass) return { action: 'blocked', reason: 'eval-failed' };
   const approvals = await readApprovals(client, controlPanelId);
   if (!approvals.has(candidate.candidateId)) return { action: 'blocked', reason: 'not-approved' };
+  // F54 — harness-enforced informed-approval gate: HOLDS when required but not
+  // yet granted (invariant 8 — no-human never means no-gate).
+  if (opts.requiresInformedApproval?.(candidate.candidateId) && !opts.informedApprovalGranted?.(candidate.candidateId)) {
+    return { action: 'blocked', reason: 'informed-approval-pending' };
+  }
 
   const stableFolder = folders['skills/stable'];
   if (!stableFolder) throw new Error('skill-registry: skills/stable folder id missing');

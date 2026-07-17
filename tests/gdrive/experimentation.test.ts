@@ -129,6 +129,28 @@ function backends() {
 // ---------------------------------------------------------------------------
 
 describe('F8 — eval-gated skill promotion', () => {
+  it('F54 informed-approval gate HOLDS a required candidate until granted', async () => {
+    const drive = new FakeDrive();
+    await seedCandidate(drive, 'risky-skill');
+    const [candidate] = await skills.listCandidates(drive as never, FOLDERS);
+    const evalResult = await skills.evalCandidate(drive as never, 'SC', candidate!, async () => ({ score: 0.9, pass: true }));
+    await drive.sheetsValuesUpdate('CP', 'Approvals!A1', [['candidateId', 'approved'], ['risky-skill', 'TRUE']]);
+
+    // Requires informed approval but not yet granted → held.
+    const held = await skills.promoteCandidate(drive as never, FOLDERS, 'SC', 'CP', candidate!, evalResult, {
+      requiresInformedApproval: () => true,
+      informedApprovalGranted: () => false,
+    });
+    expect(held).toEqual({ action: 'blocked', reason: 'informed-approval-pending' });
+
+    // Granted → promotes.
+    const ok = await skills.promoteCandidate(drive as never, FOLDERS, 'SC', 'CP', candidate!, evalResult, {
+      requiresInformedApproval: () => true,
+      informedApprovalGranted: () => true,
+    });
+    expect(ok.action).toBe('promoted');
+  });
+
   it('promotes ONLY with eval pass AND human approval; rollback restores prior revision', async () => {
     const drive = new FakeDrive();
     await seedCandidate(drive, 'summarizer-v2');
