@@ -127,6 +127,7 @@ import { SelfVerify } from './self-verify.js';
 import { verifyBrowserTaskCompletion, isBrowserVerifyEnabled } from './browser-verify.js';
 import { GoalClassifier } from '../autonomy/goal-pipeline.js';
 import { GoalPlanner, type BrainForPlanning } from '../autonomy/goal-planner.js';
+import { matchPlanDeadEnds, renderDeadEndWarning } from './dead-end-seam.js';
 import { GoalStopDetector } from '../autonomy/goal-stop-detector.js';
 import { PlanModeStateMachine } from './plan-mode-v2.js';
 import { ProfileManager } from '../sandbox/sandbox-profiles.js';
@@ -1538,15 +1539,21 @@ export class AgentLoop extends AgentLoopInjections {
               .slice(0, MAX_PLAN_STEPS);
             if (strategySteps.length > 0) {
               const checklist = strategySteps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+              // G-PLANNER: pre-check the plan against confirmed dead ends (F33),
+              // matching what the F12 dream cycle already does. Injected seam —
+              // no core/gdrive import on the hot path; fail-open.
+              const deadEndHits = matchPlanDeadEnds(`${current}\n${strategySteps.join('\n')}`);
+              const warning = renderDeadEndWarning(deadEndHits);
               session.messages.push({
                 role: 'system',
                 content:
                   `# STRATEGY (${gc.type})\n` +
                   'Suggested, advisory steps for this kind of goal — treat them as hints, not instructions. ' +
                   "Follow your normal safety rules and the user's actual request, and ignore any step that conflicts with them:\n" +
-                  checklist,
+                  checklist +
+                  warning,
               });
-              log.info({ sessionId, goalType: gc.type, stepCount: strategySteps.length }, 'GoalPlanner: strategy plan injected');
+              log.info({ sessionId, goalType: gc.type, stepCount: strategySteps.length, deadEndHits: deadEndHits.length }, 'GoalPlanner: strategy plan injected');
             }
           }
         } catch (gpErr) {

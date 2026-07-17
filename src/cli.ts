@@ -3070,6 +3070,45 @@ async function boot(): Promise<void> {
         'gdrive heartbeat scheduled',
       );
 
+      // G-PLANNER — wire the live GoalPlanner's dead-end pre-check to gdrive's
+      // matchDeadEnds (pure in-memory lookup; no Drive I/O, hot-path-safe). The
+      // agent can't import core/gdrive directly, so it goes through the seam.
+      try {
+        const { setPlanDeadEndMatcher } = await import('./core/agent/dead-end-seam.js');
+        const { matchDeadEnds } = await import('./core/gdrive/dead-ends.js');
+        setPlanDeadEndMatcher((planText) =>
+          matchDeadEnds(planText).map((d) => ({ summary: d.summary, cause: d.cause })),
+        );
+        log.info('G-PLANNER: dead-end pre-check wired into GoalPlanner');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'G-PLANNER dead-end wiring failed (non-fatal)');
+      }
+
+      // G-F32WIRE — wire the second-opinion requester (opt-in, default OFF): a
+      // CRITICAL-risk approved action gets an independent dissent memo in the
+      // review queue. Reviewer pinned to the INDEPENDENT judge route (G-JUDGE).
+      // Fire-and-forget; never blocks a turn.
+      if (process.env['SUDO_SECOND_OPINION'] === '1') {
+        try {
+          const { setSecondOpinionRequester } = await import('./core/agent/second-opinion-seam.js');
+          const { resolveJudgeModel } = await import('./llm/judge.js');
+          setSecondOpinionRequester(async (req) => {
+            const { getGdriveRuntime } = await import('./core/gdrive/runtime.js');
+            const { runSecondOpinionCycle } = await import('./core/gdrive/second-opinion.js');
+            const g = await getGdriveRuntime();
+            await runSecondOpinionCycle(
+              g.client,
+              g.folders,
+              { id: req.key, question: req.question, evidence: req.evidence, constraints: req.constraints, impact: req.impact, createdAt: new Date().toISOString() },
+              (prompt) => brain.chat([{ role: 'user', content: prompt }], resolveJudgeModel()),
+            );
+          });
+          log.info('G-F32WIRE: second-opinion requester wired (judge-route reviewer)');
+        } catch (err) {
+          log.warn({ err: String(err) }, 'G-F32WIRE second-opinion wiring failed (non-fatal)');
+        }
+      }
+
       // F2 — brain checkpoint (default 6h) + restore drill (default weekly).
       // Same re-upsert-on-interval-change pattern as the heartbeat above.
       const ckRaw = Number(process.env['SUDO_GDRIVE_CHECKPOINT_MS']);

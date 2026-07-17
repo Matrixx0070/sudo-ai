@@ -27,8 +27,8 @@ Structural gaps (minimal Drive-side repair PR first, then annex builds — D-N0.
 
 | Gap | What | Blocks | Repair plan |
 |---|---|---|---|
-| **G-PLANNER** | `matchDeadEnds` wired only in `dream.ts`, not the agent `GoalPlanner` (no live plan pre-commit hook). Seam: post-`GoalPlanner.plan()` `goal-planner.ts:490`. | F69/F70/F73 (N3) | Drive-side repair PR wires dead-ends pre-check into the planner; annex adds precedent/assumption consults alongside. |
-| **G-F32WIRE** | F32 second-opinion complete but no trigger site; nothing constructs a `DecisionPacket`. `cognition/epistemic-gate.ts` owns `ImpactLevel`. | F48/F65 (N3/N4) | Repair PR adds the above-threshold trigger site + `awaitDissent` block. |
+| ~~G-PLANNER~~ | **REPAIRED** — `src/core/agent/dead-end-seam.ts` (injected `setPlanDeadEndMatcher`, hot-path-safe: no core/gdrive import) wired into the live GoalPlanner at `loop.ts` (STRATEGY message gets a "previously-failed approaches" warning); cli.ts binds it to gdrive `matchDeadEnds`. | F69/F70/F73 (N3) | DONE — repair PR shipped. Annex adds precedent/assumption consults on the same seam. |
+| ~~G-F32WIRE~~ | **REPAIRED** — `src/core/agent/second-opinion-seam.ts` (injected fire-and-forget `requestSecondOpinion`, in-process dedup) triggered from the veto gate on a CRITICAL-risk APPROVE; gdrive `runSecondOpinionCycle` composes export→independent dissent; reviewer pinned to the judge route (G-JUDGE). Opt-in `SUDO_SECOND_OPINION=1`. | F48/F65 (N3/N4) | DONE — repair PR shipped. |
 | ~~G-F13~~ | Weekly self-diff — **REPAIRED** (src/core/gdrive/self-diff.ts, weekly cron, F53 topology slot). | ~~F42/F53~~ | DONE — Drive-side repair PR shipped. |
 | ~~G-JUDGE~~ | **REPAIRED** — `sudo/judge` alias + `src/llm/judge.ts` (providerOf/isIndependentJudge/judgeFor: holds-for-human when judge shares a provider with a route under test). | E4/F64/F68 | DONE — repair PR shipped. |
 
