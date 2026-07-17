@@ -411,6 +411,90 @@ export async function runGdriveMirrorJob(): Promise<void> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Phase 6 — autonomy & continuity jobs (F12/F11/F28/F14)
+// ---------------------------------------------------------------------------
+
+/** Cron entry (nightly): the F12 dream cycle. */
+export async function runGdriveDreamJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { runDreamCycle } = await import('./dream.js');
+  const { loadBrainState } = await import('./checkpoint.js');
+  const { MindDB } = await import('../memory/db.js');
+  const structured = await import('../memory/structured-memory.js');
+  const db = new MindDB();
+  await runDreamCycle({
+    client: rt.client,
+    folders: rt.folders,
+    audit: rt.audit,
+    chunks: db,
+    structured: {
+      listMemories: () => structured.listMemories(),
+      saveMemory: (m) => structured.saveMemory(m as never),
+    },
+    brainCall: inspectorBrain ?? undefined,
+    localCounter: loadBrainState().counter,
+    restoreCheck: async () => {
+      const deps = await buildCheckpointDeps();
+      const { runRestoreCheck } = await import('./checkpoint.js');
+      return runRestoreCheck(deps);
+    },
+    checkpoint: async () => {
+      const deps = await buildCheckpointDeps();
+      const { runCheckpoint } = await import('./checkpoint.js');
+      const result = await runCheckpoint(deps);
+      return { counter: result.manifest.counter };
+    },
+  });
+}
+
+/** Cron entry (daily): deep-freeze eviction sweep over episodic day-logs (F11). */
+export async function runGdriveFreezeJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { runFreezeSweep } = await import('./deep-freeze.js');
+  const { WORKSPACE_DIR } = await import('../shared/paths.js');
+  const { join } = await import('node:path');
+  const maxAge = Number(process.env['SUDO_GDRIVE_FREEZE_AGE_DAYS']) || 30;
+  const frozen = await runFreezeSweep(rt.client, rt.folders, join(WORKSPACE_DIR, 'memory'), maxAge);
+  if (frozen.length) {
+    const { emitGdriveAudit } = await import('./audit.js');
+    emitGdriveAudit(rt.audit, {
+      job: 'freeze-sweep',
+      outcome: 'success',
+      durationMs: 0,
+      filesTouched: frozen.map((f) => f.driveFileId),
+      bytes: frozen.reduce((a, f) => a + f.bytes, 0),
+      detail: { count: frozen.length },
+    });
+  }
+}
+
+/** Cron entry (5min): blackboard heartbeat + peer visibility (F14). */
+export async function runGdriveBlackboardJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { writeMyStatus, readPeers } = await import('./blackboard.js');
+  await writeMyStatus(rt.client, rt.folders, { status: 'running' });
+  const peers = await readPeers(rt.client, rt.folders);
+  if (peers.length) log.debug({ peers: peers.map((p) => p.instanceId) }, 'blackboard peers');
+}
+
+/** Cron entry (daily): embedding-index snapshot (F28). */
+export async function runGdriveIndexSnapshotJob(): Promise<void> {
+  if (!isGdriveEnabled()) return;
+  const rt = await getGdriveRuntime();
+  const { uploadIndexSnapshot } = await import('./index-snapshot.js');
+  const { loadHmacKey, loadEncKey } = await import('./keys.js');
+  const { MindDB } = await import('../memory/db.js');
+  const db = new MindDB();
+  await uploadIndexSnapshot(rt.client, rt.folders, db.db, {
+    hmacKey: loadHmacKey(),
+    encKey: loadEncKey(),
+  });
+}
+
 /** Cron entry: monthly kill-and-restore rehearsal (F2 rider). */
 export async function runGdriveRestoreDrillJob(): Promise<void> {
   if (!isGdriveEnabled()) return;

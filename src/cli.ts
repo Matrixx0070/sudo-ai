@@ -2770,6 +2770,25 @@ async function boot(): Promise<void> {
         } catch (gdErr) {
           log.warn({ err: String(gdErr), event: payload.event }, 'gdrive job failed (non-fatal)');
         }
+      } else if (
+        payload.event === 'gdrive:dream' ||
+        payload.event === 'gdrive:freeze' ||
+        payload.event === 'gdrive:blackboard' ||
+        payload.event === 'gdrive:index-snapshot'
+      ) {
+        // Phase 6 autonomy jobs (F12/F11/F14/F28).
+        try {
+          const rt = await import('./core/gdrive/runtime.js');
+          const fn = {
+            'gdrive:dream': rt.runGdriveDreamJob,
+            'gdrive:freeze': rt.runGdriveFreezeJob,
+            'gdrive:blackboard': rt.runGdriveBlackboardJob,
+            'gdrive:index-snapshot': rt.runGdriveIndexSnapshotJob,
+          }[payload.event];
+          await fn();
+        } catch (gdErr) {
+          log.warn({ err: String(gdErr), event: payload.event }, 'gdrive job failed (non-fatal)');
+        }
       } else if (payload.event === 'gdrive:inbox') {
         // F1: knowledge-inbox sweep (quarantine-gated ingestion).
         try {
@@ -3137,6 +3156,30 @@ async function boot(): Promise<void> {
       });
       log.info('gdrive epistemics jobs scheduled (changes/revalidate/mirror) + doom-loop dead-end drafting');
 
+      // Phase 6 — autonomy jobs: dream (nightly), freeze + index snapshot
+      // (daily), blackboard beat (5min).
+      const phase6Jobs: Array<{ id: string; name: string; event: string; schedule: CronSchedule }> = [
+        { id: 'gdrive-dream', name: 'Google Drive Dream Cycle', event: 'gdrive:dream', schedule: { kind: 'cron', expr: process.env['SUDO_GDRIVE_DREAM_CRON'] ?? '30 2 * * *', tz: gdriveTz } },
+        { id: 'gdrive-freeze', name: 'Google Drive Deep-Freeze Sweep', event: 'gdrive:freeze', schedule: { kind: 'cron', expr: process.env['SUDO_GDRIVE_FREEZE_CRON'] ?? '50 2 * * *', tz: gdriveTz } },
+        { id: 'gdrive-index-snapshot', name: 'Google Drive Index Snapshot', event: 'gdrive:index-snapshot', schedule: { kind: 'cron', expr: process.env['SUDO_GDRIVE_SNAPSHOT_CRON'] ?? '10 3 * * *', tz: gdriveTz } },
+        { id: 'gdrive-blackboard', name: 'Google Drive Blackboard Beat', event: 'gdrive:blackboard', schedule: { kind: 'every', ms: Math.max(60_000, Number(process.env['SUDO_GDRIVE_BLACKBOARD_MS']) || 300_000) } },
+      ];
+      for (const j of phase6Jobs) {
+        const cur = cronStore.get(j.id);
+        if (!cur || !cur.enabled || JSON.stringify(cur.schedule) !== JSON.stringify(j.schedule)) {
+          cronStore.upsert({
+            id: j.id,
+            name: j.name,
+            enabled: true,
+            schedule: j.schedule,
+            payload: { kind: 'systemEvent', event: j.event },
+            sessionTarget: 'isolated',
+            consecutiveErrors: 0,
+          });
+        }
+      }
+      log.info('gdrive autonomy jobs scheduled (dream/freeze/index-snapshot/blackboard)');
+
       // F2 — startup restore check: if a NEWER brain exists in Drive (another
       // machine pushed), hydrate-and-apply. Detached: boot never waits on Drive.
       void import('./core/gdrive/runtime.js')
@@ -3144,7 +3187,7 @@ async function boot(): Promise<void> {
         .catch((err) => log.warn({ err: String(err) }, 'gdrive restore check failed (non-fatal)'));
     } else {
       // Flag flipped off: park the jobs instead of firing no-op events forever.
-      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill', 'gdrive-inbox', 'gdrive-daily-report', 'gdrive-atlas', 'gdrive-control-panel', 'gdrive-comments', 'gdrive-changes', 'gdrive-revalidate', 'gdrive-mirror']) {
+      for (const id of [gdriveJobId, 'gdrive-checkpoint', 'gdrive-restore-drill', 'gdrive-inbox', 'gdrive-daily-report', 'gdrive-atlas', 'gdrive-control-panel', 'gdrive-comments', 'gdrive-changes', 'gdrive-revalidate', 'gdrive-mirror', 'gdrive-dream', 'gdrive-freeze', 'gdrive-index-snapshot', 'gdrive-blackboard']) {
         if (cronStore.get(id)?.enabled) {
           cronStore.patch(id, { enabled: false });
           log.info({ jobId: id }, 'gdrive job disabled (SUDO_GDRIVE != 1)');

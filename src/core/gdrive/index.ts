@@ -228,3 +228,44 @@ export {
   runGdriveRevalidationJob,
   runGdriveMirrorJob,
 } from './runtime.js';
+// Phase 6 — autonomy & continuity (F12/F11/F27/F28/F35/F14)
+export { runDreamCycle, type DreamDeps, type DreamReport } from './dream.js';
+export {
+  freezeFile,
+  runFreezeSweep,
+  searchStubs,
+  recallFrozen,
+  prefetchFrozen,
+  freeRecall,
+  type FreezeStub,
+} from './deep-freeze.js';
+export {
+  exportEmbeddingCache,
+  importEmbeddingCache,
+  packSnapshot,
+  unpackSnapshot,
+  uploadIndexSnapshot,
+  hydrateIndexSnapshot,
+  SNAPSHOT_FORMAT_VERSION,
+  type IndexSnapshot,
+} from './index-snapshot.js';
+export {
+  hibernateTask,
+  resumeTask,
+  archiveTask,
+  type HibernatedTask,
+  type ResumeOutcome,
+} from './hibernate.js';
+export {
+  getInstanceId,
+  writeMyStatus,
+  readPeers,
+  resolveClaim,
+  type BlackboardStatus,
+} from './blackboard.js';
+export {
+  runGdriveDreamJob,
+  runGdriveFreezeJob,
+  runGdriveBlackboardJob,
+  runGdriveIndexSnapshotJob,
+} from './runtime.js';
