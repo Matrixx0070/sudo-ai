@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 624,
+  "count": 626,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -377,6 +377,7 @@
     "SUDO_MEMORY_CONSOLIDATE",
     "SUDO_MEMORY_SCAN_MODE",
     "SUDO_MEMORY_SUPERSEDE",
+    "SUDO_MIDRUN_STEER",
     "SUDO_MODAL_",
     "SUDO_MODAL_APP",
     "SUDO_MODAL_BIN",
@@ -432,6 +433,7 @@
     "SUDO_PTC_PYTHON_BWRAP",
     "SUDO_PUBLIC_BASE_URL",
     "SUDO_PUBLIC_REGISTRY_BASE",
+    "SUDO_QUEUE_MODE_DEFAULT",
     "SUDO_RATE_LIMIT_",
     "SUDO_RATE_LIMIT_BURST",
     "SUDO_RATE_LIMIT_PERSIST",

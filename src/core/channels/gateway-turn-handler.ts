@@ -19,6 +19,9 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { getRunRegistry } from '../agent/run-registry.js';
+import { getSteerBuffer } from '../agent/steer-buffer.js';
+import { getQueueModeStore, decideQueueMode } from './queue-modes.js';
 import type { MessageHandler, UnifiedMessage } from './types.js';
 import type { JournalEvent } from '../sessions/journal-types.js';
 
@@ -64,10 +67,18 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
   const errorText = deps.errorText ?? DEFAULT_ERROR;
 
   const runTurn = async (msg: UnifiedMessage): Promise<void> => {
+    const convKey = `${msg.channel}:${msg.peerId}`;
     try {
-      const convKey = `${msg.channel}:${msg.peerId}`;
       const runGen = deps.runGenerations.current(convKey);
       const session = await deps.sessionManager.getOrCreate(msg.channel, msg.peerId);
+      // GW-5/GW-11: register this run so mid-run arrivals can be steered and so
+      // one-run-per-session accounting has a source of truth. Unregistered in the
+      // finally below.
+      getRunRegistry().beginRun({
+        key: convKey,
+        sessionId: String(session.id),
+        tier: msg.isOwner === true ? 'owner' : 'untrusted',
+      });
       // Bind the Feature 1 caller identity to THIS turn so ToolContext carries
       // isOwner for owner-only tool gating — covers every router channel
       // (telegram/signal/slack/…), not just web. Turn-scoped (no shared registry).
@@ -103,6 +114,8 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
     } catch (err) {
       log.error({ err: err instanceof Error ? err.message : String(err), channel: msg.channel, peerId: msg.peerId }, 'Agent turn failed');
       try { await deps.send(msg, errorText); } catch { /* best effort */ }
+    } finally {
+      getRunRegistry().endRun(convKey);
     }
   };
 
@@ -122,6 +135,38 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
     if (deps.directiveDispatch && await deps.directiveDispatch(msg, (text) => deps.send(msg, text))) {
       return;
     }
+    // 3b. GW-5 mid-run steering. If a run is already active for this session and
+    //     steering is enabled, decide steer/followup/collect/interrupt instead of
+    //     blindly queueing a full new turn behind it. Registered commands and
+    //     directives already short-circuited above; media is excluded here.
+    if (process.env['SUDO_MIDRUN_STEER'] === '1') {
+      const convKey = `${msg.channel}:${msg.peerId}`;
+      const active = getRunRegistry().get(convKey);
+      if (active) {
+        const decision = decideQueueMode({
+          mode: getQueueModeStore().resolve(msg.channel, msg.peerId),
+          activeRun: true,
+          isMedia: (msg.media?.length ?? 0) > 0,
+          isCommand: false,
+          runTier: active.tier,
+          msgTier: msg.isOwner === true ? 'owner' : 'untrusted',
+        });
+        if (decision.action === 'steer') {
+          getSteerBuffer().push(active.sessionId, msg.text ?? '', decision.tier);
+          log.info(
+            { channel: msg.channel, peerId: msg.peerId, tier: decision.tier },
+            'GW-5: message steered into the active run (not queued as a new turn)',
+          );
+          return;
+        }
+        if (decision.action === 'interrupt' && active.abort) {
+          active.abort('interrupted by a newer message');
+          // fall through to enqueue the replacement turn.
+        }
+        // followup / collect / normal → fall through to the normal enqueue path.
+      }
+    }
+
     // 4. Run the turn (optionally serialized per peer).
     if (serialize) {
       await deps.sessionManager.peerQueue.enqueue(msg.peerId, () => runTurn(msg)).catch((err) => {
