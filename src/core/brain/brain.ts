@@ -5,8 +5,9 @@
  * system prompt assembly, token cost tracking, and streaming support.
  */
 
-import { generateText, streamText, tool as aiTool, jsonSchema } from 'ai';
-import { sanitizeToolSchemaForProvider, providerNeedsToolNameSanitize, sanitizeToolNameForProvider } from './tool-schema-compat.js';
+// generateText is imported ONLY for its result type (BrainCompletion below);
+// no ai-SDK wire call remains in brain (F97 — the IR transport owns the wire).
+import { generateText } from 'ai';
 import { createHash, randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } from '../shared/prompt-cache-telemetry.js';
@@ -22,21 +23,18 @@ import {
 } from './brain-strategy.js';
 import { runDebate } from './brain-debate.js';
 import { runTreeSearch } from './brain-tree-search.js';
-import { getModel, getModelWithKey, initProviders } from './providers.js';
 import { clampMaxTokensToModel } from './thinking-inject.js';
-import { isCustomProvider } from './custom-providers.js';
+import { isCustomProvider, registerCustomProvidersOnce } from '../../llm/custom-providers.js';
 import { assembleSystemPrompt, assembleSlimHeartbeatPrompt } from './system-prompt.js';
-import { sortToolEntries, isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages, markLastToolForCache } from './prompt-cache-discipline.js';
-import { warnOnDuplicateToolNames } from './tool-name-collision.js';
+import { isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages } from './prompt-cache-discipline.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
 import { isGrokRefusal } from './grok-refusal-detect.js';
 import { getCostTracker } from '../billing/cost-tracker.js';
 import { getGatewayCallLog, noteTraceForSession, type LLMCallRecord } from '../../llm/logging.js';
-import { runShadow } from '../../llm/shadow.js';
-// gw-cutover Phase 2: per-attempt IR-transport seam (LLM_IR_CALLERS ramp flag).
-import { irCallersEnabled, irErrorClass, mustUseIrTransport, callTransportForBrain, streamTransportForBrain } from '../../llm/brain-bridge.js';
+// F97: every wire hop goes through the IR transport via the brain-bridge seam.
+import { callTransportForBrain, streamTransportForBrain, type BrainTransportCall } from '../../llm/brain-bridge.js';
 import { queryAllModelsConsensus, type ConsensusOptions } from './model-consensus.js';
 import { DispatchRouter } from './dispatch-router.js';
 import { estimateTaskComplexity, pickOptimalModel } from './cost-optimizer.js';
@@ -506,8 +504,10 @@ export class Brain {
     this.failover = new ModelFailover(modelIds);
     this.configuredModels = modelIds.length > 0 ? modelIds : [DEFAULT_MODEL];
     this.primaryModel = modelIds[0] ?? DEFAULT_MODEL;
-    // Auto-init providers on construction (async, awaited on first call)
-    this.providersReady = initProviders();
+    // F97: custom-provider env registration is the only boot step left
+    // (the transport resolves routes/auth per call — no instance warmup).
+    registerCustomProvidersOnce();
+    this.providersReady = Promise.resolve();
     log.info({ modelCount: modelIds.length, models: modelIds }, 'Brain initialised');
   }
 
@@ -1339,269 +1339,81 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       log.info({ attempt, modelId }, 'Streaming LLM call starting');
 
       try {
-        // gw-cutover Phase 2: IR-transport streaming seam (LLM_IR_CALLERS).
-        // Pre-first-token transport failure → warn + fall through to the
-        // legacy streamText path below for the SAME attempt. Once the facade
-        // resolves (first token seen) the stream is IR-owned: a later terminal
-        // error throws from textStream (the transport never re-requests —
-        // Rule 4) and brain's existing failover error handling applies,
-        // exactly as a legacy mid-stream streamText error would.
-        // xai-oauth models are served ONLY by the IR transport: stream them
-        // through it UNCONDITIONALLY, and rethrow pre-first-token failures
-        // instead of falling back to legacy streamText (getModel would throw
-        // 'Unknown provider'). See mustUseIrTransport.
-        const _irOnly = mustUseIrTransport(modelId);
-        if (_irOnly || irCallersEnabled(request.source ?? 'chat')) {
-          const irSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
-          let facade: Awaited<ReturnType<typeof streamTransportForBrain>> | null = null;
-          try {
-            facade = await streamTransportForBrain(
-              {
-                messages: request.messages,
-                system: irSystem,
-                source: request.source,
-                temperature,
-                maxTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
-                tools: request.tools,
-                ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
-              },
-              modelId,
-            );
-          } catch (irErr) {
-            if (_irOnly) {
-              // IR-only model: rethrow so this attempt's failover catch
-              // classifies + cooldowns the profile and the loop advances to
-              // the next one — legacy streaming cannot serve it.
-              throw irErr;
-            }
-            log.warn({ modelId, errorClass: irErrorClass(irErr), err: String(irErr) }, 'ir_transport_fallback — IR stream failed pre-first-token, using legacy streaming path');
-          }
-          if (facade !== null) {
-            if (request.sessionId !== undefined) noteTraceForSession(request.sessionId, facade.traceId);
-            let irStreamCompleted = false;
-            let irStreamErrored = false;
-            try {
-              for await (const chunk of facade.textStream) {
-                if (!yieldedAny) _firstTokenAt = Date.now();
-                yieldedAny = true;
-                _streamedChars += chunk.length;
-                yield chunk;
-              }
-              irStreamCompleted = true;
-            } catch (err) {
-              irStreamErrored = true;
-              throw err;
-            } finally {
-              if (!irStreamCompleted && !irStreamErrored) {
-                // Consumer broke out early — the model streamed fine (legacy
-                // early-break parity); the transport's own finally wrote the
-                // llm_calls row and aborted the fetch. facade.usage settles
-                // immediately on break (last-known partial usage), so bill it
-                // like the legacy cancelled-stream path — fire-and-forget,
-                // NEVER throwing from this finally.
-                void Promise.resolve(facade.usage).then(
-                  (u) => {
-                    const usage = u !== undefined
-                      ? buildTokenUsage(modelId, u, { create: u.cacheCreationInputTokens, read: u.cachedInputTokens })
-                      : undefined;
-                    if (usage !== undefined && usage.completionTokens > 0) {
-                      log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }, 'Streaming call ended early by consumer (IR transport)');
-                    }
-                    try {
-                      this._recordBillingUsage(modelId, usage, { create: u?.cacheCreationInputTokens ?? 0, read: u?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
-                    } catch (billErr) {
-                      log.warn({ modelId, err: billErr }, 'Billing record failed for cancelled IR stream (non-fatal)');
-                    }
-                  },
-                  () => { /* usage unavailable — facade promises never reject, defensive */ },
-                );
-                this.failover.recordSuccess(profile.id);
-                this.idleBreaker.recordDurableProgress();
-              }
-            }
-            this.failover.recordSuccess(profile.id);
-            this.idleBreaker.recordDurableProgress();
-            // Post-stream bookkeeping — best-effort, response already on the
-            // wire. Brain's _recordGatewayCall AND runShadow are SKIPPED: the
-            // transport already wrote the one llm_calls row for this call.
-            try {
-              const irUsage = await facade.usage;
-              const usage = irUsage !== undefined
-                ? buildTokenUsage(modelId, irUsage, { create: irUsage.cacheCreationInputTokens, read: irUsage.cachedInputTokens })
-                : undefined;
-              this._recordBillingUsage(modelId, usage, { create: irUsage?.cacheCreationInputTokens ?? 0, read: irUsage?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
-              log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed (IR transport)');
-            } catch (bookkeepErr) {
-              log.warn({ modelId, err: bookkeepErr }, 'post-stream bookkeeping failed (IR path; response already delivered)');
-            }
-            return;
-          }
-          // facade === null → legacy streaming path below (same attempt).
-        }
-
-        const modelHandle = getModel(modelId);
-
-        // SUDO_PROMPT_CACHE=1 + Anthropic model: explicit cache_control breakpoints —
-        // system prompt split at the dynamic boundary (stable part cached) and the
-        // last sorted tool marked. Non-Anthropic paths are byte-identical to before.
-        const cacheBreakpoints = isCacheBreakpointsEnabled() && isAnthropicModelId(modelId);
-
-        // Fold dropped array system messages into the model input (opt-in;
-        // cache-safe — see _callSingleModel). No-op when the flag is unset.
-        const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
-        if (readFoldSystemEnabled()) {
-          const foldedChars = extractSystemMessageContent(request.messages).length;
-          if (foldedChars > 0) {
-            log.info({ foldedChars, approxTokens: Math.round(foldedChars / 4), cachePath: cacheBreakpoints, model: modelId, stream: true }, 'system-fold: in-loop guidance delivered to model');
-          }
-        }
-
-        const streamParams: Record<string, unknown> = {
-          model: modelHandle,
-          messages: cacheBreakpoints
-            ? [...buildCachedSystemMessages(systemPrompt), ...buildFoldedSystemMessages(request.messages), ...toSDKMessages(request.messages)]
-            : toSDKMessages(request.messages),
-          temperature,
-          maxOutputTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
-        };
-        if (!cacheBreakpoints) {
-          streamParams.system = effectiveSystem;
-        }
-
-        if (request.tools && request.tools.length > 0) {
-          // Forward-sanitize names so google/openai/xai don't 400 on dotted tool
-          // names. This streaming path returns text only (it does not extract
-          // tool_calls), so no reverse map is needed here.
-          const streamSanitizeNames = providerNeedsToolNameSanitize(modelId);
-          const toolEntries = request.tools.map((t): [string, object] => {
-            const original = t.function?.name ?? '';
-            const name = streamSanitizeNames ? sanitizeToolNameForProvider(original) : original;
-            const desc = t.function?.description ?? '';
-            const params = sanitizeToolSchemaForProvider(t.function?.parameters ?? {}, modelId);
-            return [name, aiTool({
-              description: desc,
-              inputSchema: jsonSchema(params),
-            })];
-          });
-          warnOnDuplicateToolNames(toolEntries);
-          // SUDO_PROMPT_CACHE=1: deterministic tool order → byte-stable prefix for provider caches.
-          let sortedEntries = sortToolEntries(toolEntries);
-          if (cacheBreakpoints) {
-            sortedEntries = markLastToolForCache(sortedEntries);
-          }
-          streamParams.tools = Object.fromEntries(sortedEntries);
-        }
-
-        // AI SDK v6: a provider error before/during streaming ends textStream
-        // WITHOUT throwing (the real error goes to onError, not the iterator).
-        // Capture it so an auth/rate-limit failure fails over instead of being
-        // recorded as an empty, successful stream.
-        let streamError: unknown;
-        const result = streamText({
-          ...(streamParams as Parameters<typeof streamText>[0]),
-          onError: (e: { error: unknown }) => { streamError = e.error; },
-        });
-
-        let streamCompleted = false;
-        let streamErrored = false;
+        // F97 cutover: the IR transport is the ONLY wire path. A pre-first-token
+        // transport failure throws to the failover catch below, which
+        // classifies + cooldowns this profile and advances to the next one.
+        // Once the facade resolves (first token seen) the stream is IR-owned:
+        // a later terminal error throws from textStream (the transport never
+        // re-requests — Rule 4) and brain's existing failover error handling
+        // applies, exactly as a mid-stream provider error always did.
+        const irSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
+        const facade = await streamTransportForBrain(
+          {
+            messages: request.messages,
+            system: irSystem,
+            source: request.source,
+            temperature,
+            maxTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
+            tools: request.tools,
+            ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+          },
+          modelId,
+        );
+        if (request.sessionId !== undefined) noteTraceForSession(request.sessionId, facade.traceId);
+        let irStreamCompleted = false;
+        let irStreamErrored = false;
         try {
-          for await (const chunk of result.textStream) {
-            if (!yieldedAny) _firstTokenAt = Date.now(); // Phase 5: ttft capture
+          for await (const chunk of facade.textStream) {
+            if (!yieldedAny) _firstTokenAt = Date.now();
             yieldedAny = true;
             _streamedChars += chunk.length;
             yield chunk;
           }
-          if (streamError) throw streamError;
-          streamCompleted = true;
+          irStreamCompleted = true;
         } catch (err) {
-          streamErrored = true;
+          irStreamErrored = true;
           throw err;
         } finally {
-          if (!streamCompleted && !streamErrored) {
-            // The consumer broke out of the stream (generator return() at the
-            // yield), so execution never reaches the post-loop bookkeeping
-            // below. The model itself streamed fine: credit it, and detach the
-            // abandoned usage promise — stream cancellation can reject it,
-            // which would otherwise surface as an unhandled rejection.
-            void Promise.resolve(result.usage).then(
+          if (!irStreamCompleted && !irStreamErrored) {
+            // Consumer broke out early — the model streamed fine; the
+            // transport's own finally wrote the llm_calls row and aborted the
+            // fetch. facade.usage settles immediately on break (last-known
+            // partial usage), so bill it — fire-and-forget, NEVER throwing
+            // from this finally.
+            void Promise.resolve(facade.usage).then(
               (u) => {
-                const usage = buildTokenUsage(modelId, u);
-                if (usage.completionTokens > 0) {
-                  log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }, 'Streaming call ended early by consumer');
+                const usage = u !== undefined
+                  ? buildTokenUsage(modelId, u, { create: u.cacheCreationInputTokens, read: u.cachedInputTokens })
+                  : undefined;
+                if (usage !== undefined && usage.completionTokens > 0) {
+                  log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }, 'Streaming call ended early by consumer (IR transport)');
                 }
-                // Bill the tokens the provider already generated for this cancelled
-                // stream — otherwise cost tracking silently under-reports exactly the
-                // longest (cancelled) sessions, drifting from the failover ledger.
                 try {
-                  this._recordBillingUsage(modelId, usage, { create: 0, read: 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+                  this._recordBillingUsage(modelId, usage, { create: u?.cacheCreationInputTokens ?? 0, read: u?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
                 } catch (billErr) {
-                  log.warn({ modelId, err: billErr }, 'Billing record failed for cancelled stream (non-fatal)');
+                  log.warn({ modelId, err: billErr }, 'Billing record failed for cancelled IR stream (non-fatal)');
                 }
               },
-              () => { /* stream cancelled — usage unavailable */ },
+              () => { /* usage unavailable — facade promises never reject, defensive */ },
             );
             this.failover.recordSuccess(profile.id);
             this.idleBreaker.recordDurableProgress();
           }
         }
-
-        // The stream fully delivered — credit the model FIRST, before any post-stream
-        // bookkeeping, so a later throw can neither undo the success record nor fall
-        // into the outer failover catch and retry-stream a DUPLICATE response.
         this.failover.recordSuccess(profile.id);
         this.idleBreaker.recordDurableProgress();
-
-        // result is StreamTextResult (not a Promise); usage is PromiseLike<LanguageModelUsage>.
-        // All post-stream bookkeeping is best-effort: the response is already on the wire.
-        // Any throw here (buildTokenUsage SDK-shape change, billing, etc.) MUST NOT reach
-        // the outer failover loop — wrap the whole block so it can only log.
+        // Post-stream bookkeeping — best-effort, response already on the
+        // wire. Brain's _recordGatewayCall AND runShadow are SKIPPED: the
+        // transport already wrote the one llm_calls row for this call.
         try {
-          let finalUsage: Awaited<typeof result.usage> | undefined;
-          try {
-            finalUsage = await result.usage;
-          } catch (usageErr) {
-            log.warn({ modelId, err: usageErr }, 'Usage unavailable after completed stream');
-          }
-          // Anthropic prompt-cache telemetry. providerMetadata is a PromiseLike on streamText;
-          // await defensively so a cancelled-after-completion stream can't poison the success path.
-          // Resolve it BEFORE building usage so the cost estimate can discount cached tokens.
-          let cacheTokens = { create: 0, read: 0 };
-          try {
-            const meta = await (result as { providerMetadata?: PromiseLike<unknown> }).providerMetadata;
-            cacheTokens = extractPromptCacheTokens(meta);
-            recordPromptCacheUsageFromProviderMetadata(meta);
-          } catch { /* providerMetadata may reject on cancelled streams — non-fatal */ }
-
-          const usage = finalUsage
-            ? buildTokenUsage(modelId, finalUsage, cacheTokens)
+          const irUsage = await facade.usage;
+          const usage = irUsage !== undefined
+            ? buildTokenUsage(modelId, irUsage, { create: irUsage.cacheCreationInputTokens, read: irUsage.cachedInputTokens })
             : undefined;
-
-          this._recordBillingUsage(modelId, usage, cacheTokens, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
-          // gw-refactor Phase 5: GatewayCallLog row for the legacy streaming
-          // path. finishReason is a lazily-resolved promise on streamText —
-          // not awaited here (post-stream bookkeeping stays cheap), so the
-          // summary carries null. Fail-open inside the helper.
-          this._recordGatewayCall({
-            traceId: randomUUID(),
-            caller: request.source ?? 'chat',
-            purpose: 'brain.stream',
-            alias: modelId,
-            route: Brain._gatewayRouteFor(modelId),
-            priority: Brain._gatewayPriorityFor(request.source),
-            irRequest: { legacy: true, model: modelId, messageCount: request.messages.length, system_chars: effectiveSystem.length },
-            irResponse: { text_chars: _streamedChars, finishReason: null },
-            latencyMs: Date.now() - _streamStartedAt,
-            ...(_firstTokenAt !== undefined ? { ttftMs: _firstTokenAt - _streamStartedAt } : {}),
-            ...(usage ? { tokensIn: usage.promptTokens, tokensOut: usage.completionTokens } : {}),
-            tokensCached: cacheTokens.read,
-            ...(usage?.estimatedCost !== undefined ? { costUsd: usage.estimatedCost } : {}),
-          });
-          // gw-refactor Phase 7: transformation shadow (LLM_SHADOW=1, default OFF). Streaming
-          // path has no assembled text/finishReason here — request-side + usage diffs only.
-          runShadow({ messages: request.messages, system: effectiveSystem, source: request.source, temperature, maxTokens, tools: request.tools }, modelId, { ...(usage ? { usage } : {}) });
-          log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed');
+          this._recordBillingUsage(modelId, usage, { create: irUsage?.cacheCreationInputTokens ?? 0, read: irUsage?.cachedInputTokens ?? 0 }, Date.now() - _streamStartedAt, true, request.source ?? 'llm');
+          log.info({ modelId, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens }, 'Streaming call completed (IR transport)');
         } catch (bookkeepErr) {
-          log.warn({ modelId, err: bookkeepErr }, 'post-stream bookkeeping failed (response already delivered)');
+          log.warn({ modelId, err: bookkeepErr }, 'post-stream bookkeeping failed (IR path; response already delivered)');
         }
         return;
 
@@ -1775,103 +1587,33 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
 
-    // Per-call {sanitized tool name -> original dotted name}, populated when the
-    // provider needs name sanitization; used to reverse returned tool_call names.
+    // F97: the transport's adapters own message/system/tool wire shaping,
+    // provider tool-name sanitization + reversal, and prompt-cache breakpoints.
+    // This map stays only for the text/JSON tool-call fallback parsers below
+    // (structured names already arrive reversed from the transport).
     const toolNameReverseMap = new Map<string, string>();
-    const callParams: Record<string, unknown> = {
-      messages: cacheBreakpoints
-        ? [...buildCachedSystemMessages(systemPrompt), ...buildFoldedSystemMessages(request.messages), ...toSDKMessages(request.messages)]
-        : toSDKMessages(request.messages),
-      temperature,
-      maxOutputTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
-    };
-    // Best-effort deterministic sampling — forwarded only when the caller pins a
-    // seed; providers that don't support it ignore the field.
-    if (request.seed !== undefined) callParams.seed = request.seed;
-    if (!cacheBreakpoints) {
-      callParams.system = effectiveSystem;
-    }
-    // Providers other than claude-oauth (google/openai/xai) reject dotted tool
-    // names (mcp.connect, skill.install). Sanitize the name for those providers
-    // and record {sanitized -> original} so the returned tool_call names can be
-    // reversed back to the dotted originals the dispatcher expects. claude-oauth
-    // is untouched here — its fetch interceptor owns name sanitization.
-    const sanitizeNames = providerNeedsToolNameSanitize(modelId);
-    if (request.tools && request.tools.length > 0) {
-      const toolEntries = request.tools.map((t: any): [string, object] => {
-        const original = t.function?.name ?? t.name;
-        let name = original;
-        if (sanitizeNames) {
-          name = sanitizeToolNameForProvider(original);
-          if (name !== original) {
-            if (toolNameReverseMap.has(name) && toolNameReverseMap.get(name) !== original) {
-              log.warn({ original, collidesWith: toolNameReverseMap.get(name), sanitized: name }, 'Tool-name sanitization collision');
-            }
-            toolNameReverseMap.set(name, original);
-          }
-        }
-        const desc = t.function?.description ?? t.description;
-        const params = sanitizeToolSchemaForProvider(t.function?.parameters ?? t.parameters, modelId);
-        return [name, aiTool({
-          description: desc,
-          inputSchema: jsonSchema(params),
-        })];
-      });
-      warnOnDuplicateToolNames(toolEntries);
-      // SUDO_PROMPT_CACHE=1: deterministic tool order → byte-stable prefix for provider caches.
-      let sortedEntries = sortToolEntries(toolEntries);
-      if (cacheBreakpoints) {
-        sortedEntries = markLastToolForCache(sortedEntries);
-      }
-      callParams.tools = Object.fromEntries(sortedEntries);
-    }
-    // A4: obtain the completion through the auth-profile rotation path — rotates
-    // across multiple API keys for this provider on rate-limit/auth/billing errors
-    // before model-level failover gives up. Sets callParams.model to the chosen
-    // key's handle; the single env-key path runs unchanged when <2 keys exist.
     const _callStartedAt = Date.now();
-    // gw-cutover Phase 2: when LLM_IR_CALLERS matches the source, this ONE
-    // wire hop goes through the IR transport instead of the ai-SDK. Everything
-    // around it (failover loop, cooldowns, billing, post-processing below) is
-    // UNCHANGED. Transport throw → warn + fall through to the legacy call for
-    // the SAME attempt (users never see a difference during the ramp).
-    let _irTraceId: string | undefined;
-    let _irResult: BrainCompletion | undefined;
-    // xai-oauth models are served ONLY by the IR transport: route them through
-    // it UNCONDITIONALLY (independent of LLM_IR_CALLERS), and NEVER fall
-    // through to the legacy ai-SDK call — getModel would just throw 'Unknown
-    // provider' (the 2026-07-14 crash-loop). See mustUseIrTransport.
-    const _irOnly = mustUseIrTransport(modelId);
-    if (_irOnly || irCallersEnabled(request.source ?? 'chat')) {
-      try {
-        const irCall = await callTransportForBrain(
-          {
-            messages: request.messages,
-            system: effectiveSystem,
-            source: request.source,
-            temperature,
-            maxTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
-            tools: request.tools,
-            ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
-          },
-          modelId,
-        );
-        _irResult = irCall.result as unknown as BrainCompletion;
-        _irTraceId = irCall.traceId;
-        // Session→trace correlation: markOutcomeForSession goes live for
-        // IR-served calls (the transport row carries this trace_id).
-        if (request.sessionId !== undefined) noteTraceForSession(request.sessionId, irCall.traceId);
-      } catch (irErr) {
-        if (_irOnly) {
-          // IR-only model: rethrow so the failover catch classifies + cooldowns
-          // this profile and advances to the next one — the legacy fallback
-          // below cannot serve it (getModel throws 'Unknown provider').
-          throw irErr;
-        }
-        log.warn({ modelId, errorClass: irErrorClass(irErr), err: String(irErr) }, 'ir_transport_fallback — IR transport failed, using legacy ai-SDK path');
-      }
-    }
-    let result = _irResult ?? (await this._generateWithKeyRotation(profile, callParams));
+    // F97 cutover: the ONE wire hop goes through the IR transport, wrapped in
+    // the auth-profile key-rotation port (env-key providers with 2+ numbered
+    // keys rotate via CallIROptions.apiKeyOverride). Everything around it —
+    // failover loop, cooldowns, billing, post-processing below — is unchanged.
+    // A transport throw lands in the failover catch, which classifies +
+    // cooldowns this profile and advances to the next one.
+    const irRequestBase = {
+      messages: request.messages,
+      system: effectiveSystem,
+      source: request.source,
+      temperature,
+      maxTokens: clampMaxTokensToModel(modelId, maxTokens, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
+      tools: request.tools,
+      ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+    };
+    const irCall = await this._callIRWithKeyRotation(profile, irRequestBase, modelId);
+    const _irTraceId = irCall.traceId;
+    // Session→trace correlation: markOutcomeForSession lands on the
+    // transport's llm_calls row for this call.
+    if (request.sessionId !== undefined) noteTraceForSession(request.sessionId, irCall.traceId);
+    let result = irCall.result as unknown as BrainCompletion;
 
     // --- Tool-empty retry: some providers (Ollama cloud) return empty content
     // when tools are attached but don't actually support structured tool calls.
@@ -1883,21 +1625,17 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     if (
       hadTools &&
       isEmpty &&
-      // IR-only models can't take the legacy retry: _completeOnce runs the
-      // ai-SDK with callParams.model unset on the IR path (getModel would
-      // throw 'Unknown provider' anyway). An empty xai-oauth response falls
-      // through and is handled like any other empty completion.
-      !_irOnly &&
       process.env['SUDO_TOOL_EMPTY_RETRY_DISABLE'] !== '1'
     ) {
       log.warn({ modelId }, 'Empty response with tools — retrying without tools');
-      // When cacheBreakpoints=true the system prompt lives in callParams.messages
-      // (leading system messages), not callParams.system — do not re-add a system key here.
-      const noToolParams = { ...callParams };
-      delete noToolParams.tools;
-      // Slightly raise temperature for the retry to avoid deterministic empty loops
-      noToolParams.temperature = Math.min(temperature + 0.1, 1.0);
-      result = await this._completeOnce(profile.provider, noToolParams);
+      // Same attempt, no tools, slightly raised temperature to avoid
+      // deterministic empty loops — through the transport (F97).
+      const { tools: _droppedTools, ...noToolReq } = irRequestBase;
+      const retry = await callTransportForBrain(
+        { ...noToolReq, temperature: Math.min(temperature + 0.1, 1.0) },
+        modelId,
+      );
+      result = retry.result as unknown as BrainCompletion;
       log.info({ modelId, textLen: result.text?.length ?? 0 }, 'Retried without tools');
     }
     // --- end tool-empty retry ---
@@ -2035,32 +1773,10 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     recordPromptCacheUsageFromProviderMetadata((result as { providerMetadata?: unknown }).providerMetadata);
     log.info({ modelId, promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, estimatedCost: usage.estimatedCost, finishReason: finalFinishReason }, 'LLM call succeeded');
 
-    // gw-refactor Phase 5: GatewayCallLog row for the legacy non-streaming path.
-    // Cheap summary payloads only (legacy path is not IR); tokens_cached reuses
-    // the extractPromptCacheTokens cache_read figure. Fail-open inside the helper.
-    // gw-cutover Phase 2: SKIPPED for IR-served attempts — the transport already
-    // wrote the fuller llm_calls row (one-row-per-call invariant; its caller +
-    // priority match brain's). runShadow is skipped too: the shadow compares the
-    // legacy ai-SDK transformation, which an IR-served call never performed.
-    if (_irTraceId === undefined) {
-      this._recordGatewayCall({
-        traceId: randomUUID(),
-        caller: request.source ?? 'chat',
-        purpose: 'brain.call',
-        alias: modelId,
-        route: Brain._gatewayRouteFor(modelId),
-        priority: Brain._gatewayPriorityFor(request.source),
-        irRequest: { legacy: true, model: modelId, messageCount: request.messages.length, system_chars: effectiveSystem.length },
-        irResponse: { text_chars: finalContent.length, finishReason: finalFinishReason },
-        latencyMs: Date.now() - _callStartedAt,
-        tokensIn: usage.promptTokens,
-        tokensOut: usage.completionTokens,
-        tokensCached: cacheTokens.read,
-        ...(usage.estimatedCost !== undefined ? { costUsd: usage.estimatedCost } : {}),
-      });
-      // gw-refactor Phase 7: transformation shadow (LLM_SHADOW=1, default OFF; fire-and-forget, fail-open).
-      runShadow({ messages: request.messages, system: effectiveSystem, source: request.source, temperature, maxTokens, tools: request.tools }, modelId, { text: finalContent, finishReason: finalFinishReason, usage, toolCalls: finalToolCalls });
-    }
+    // F97: no brain-side GatewayCallLog row and no runShadow — the transport
+    // wrote the one llm_calls row (trace ${_irTraceId}), and the legacy
+    // ai-SDK transformation the shadow compared no longer runs.
+    void _irTraceId;
 
     return {
       content: finalContent, toolCalls: finalToolCalls, usage,
@@ -2150,47 +1866,39 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
   }
 
   /**
-   * Run generateText for a profile through the auth-profile rotation path.
+   * Run one IR-transport call for a profile through the auth-profile rotation
+   * path (F97 port of the former ai-SDK _generateWithKeyRotation).
    *
-   * When 2+ API keys are configured for the provider (e.g. XAI_API_KEY_1,
-   * XAI_API_KEY_2), each rate-limit / auth / billing failure rotates to the next
-   * key and retries the SAME model before the caller's model-level failover gives
-   * up. Non-key errors (overload, timeout, format, …) propagate immediately so the
-   * model-failover loop can switch models. With fewer than 2 keys it falls back to
-   * the single env-key path — byte-for-byte the previous behavior.
-   *
-   * Sets `callParams.model` to the chosen key's handle as a side effect, so the
-   * downstream tool-empty retry reuses the same working key.
+   * When 2+ numbered API keys are configured for the provider (e.g.
+   * XAI_API_KEY_1, XAI_API_KEY_2), each rate-limit / auth / billing failure
+   * rotates to the next key (CallIROptions.apiKeyOverride) and retries the
+   * SAME model before the caller's model-level failover gives up. Non-key
+   * errors (overload, timeout, format, …) propagate immediately so the
+   * model-failover loop can switch models. Custom providers and the oauth
+   * managers (claude-oauth / xai-oauth) carry their own single credential —
+   * no rotation, plain transport call.
    */
-  private async _generateWithKeyRotation(
+  private async _callIRWithKeyRotation(
     profile: ModelProfile,
-    callParams: Record<string, unknown>,
-  ): Promise<BrainCompletion> {
-    const provider = profile.provider;
-
-    // Custom providers (gap #27) carry a single configured key and have no
-    // rotation profiles — skip rotation entirely so numbered _API_KEY_N vars
-    // for a custom name don't spin the loop with keys that never get used.
-    if (isCustomProvider(provider)) {
-      callParams.model = getModel(profile.id);
-      return this._completeOnce(provider, callParams);
+    irRequest: Parameters<typeof callTransportForBrain>[0],
+    modelId: string,
+  ): Promise<BrainTransportCall> {
+    // ModelProfile.provider is typed narrower than runtime reality (profiles
+    // carry claude-oauth / xai-oauth / ollama / custom names too) — widen.
+    const provider: string = profile.provider;
+    if (isCustomProvider(provider) || provider === 'claude-oauth' || provider === 'xai-oauth' || provider === 'ollama') {
+      return callTransportForBrain(irRequest, modelId);
     }
-
     const keyCount = this._ensureRotationKeys(provider);
-
-    // Single-key / env path — unchanged behavior.
     if (keyCount < 2) {
-      callParams.model = getModel(profile.id);
-      return this._completeOnce(provider, callParams);
+      return callTransportForBrain(irRequest, modelId);
     }
-
     let lastErr: unknown;
     for (let k = 0; k < keyCount; k++) {
       const key = this.authRotation.getNextKey(provider);
       if (!key) break;
       try {
-        callParams.model = await getModelWithKey(profile.id, key.apiKey);
-        const res = await this._completeOnce(provider, callParams);
+        const res = await callTransportForBrain(irRequest, modelId, { apiKeyOverride: key.apiKey });
         this.authRotation.reportSuccess(provider, key.keyId);
         return res;
       } catch (err) {
@@ -2205,62 +1913,6 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       }
     }
     throw lastErr ?? new LLMError('All API keys for provider exhausted', 'llm_all_keys_exhausted', { provider });
-  }
-
-  /**
-   * Run one completion and return it in generateText's resolved shape.
-   *
-   * For `claude-oauth` this streams instead of buffering. A non-streaming
-   * generateText holds the claude-oauth response headers until the whole
-   * completion finishes, which trips the provider's fast-fail headers timer
-   * (default 45s, providers.ts) on long Opus turns and surfaces as a false stall
-   * — the exact trap PRs #277-#279 fixed in the coder tools (swarm/analyze/codex/
-   * arsenal). The central brain.call() path had the same defect, and it sits on
-   * the highest-frequency caller (consciousness/cognitive-stream every tick).
-   * streamText sends `stream:true`, so Anthropic lands headers in ~1-2s, the
-   * headers timer clears, and the body-idle guard (providers.ts) bounds a stall
-   * mid-body; awaiting the aggregate promises drains the stream to the full
-   * completion. Reasoning/providerMetadata are best-effort — a post-completion
-   * rejection (e.g. a cancelled stream) must not fail an otherwise-served call,
-   * mirroring stream()'s defensive handling.
-   *
-   * Every other provider has no headers timer, so it keeps the simpler buffered
-   * generateText path byte-for-byte. Kill-switch SUDO_BRAIN_OAUTH_STREAM_DISABLE=1
-   * forces the legacy generateText path for claude-oauth too.
-   */
-  private async _completeOnce(
-    provider: string,
-    callParams: Record<string, unknown>,
-  ): Promise<BrainCompletion> {
-    if (provider !== 'claude-oauth' || process.env['SUDO_BRAIN_OAUTH_STREAM_DISABLE'] === '1') {
-      return generateText(callParams as Parameters<typeof generateText>[0]);
-    }
-    // AI SDK v6 streamText rejects the aggregate promises (result.text, …) with a
-    // generic NoOutputGeneratedError that DROPS the underlying cause — no
-    // statusCode, no responseBody. The real provider error (e.g. APICallError
-    // 401) is delivered ONLY to onError. Capture it so failover classifies the
-    // true status (auth/rate-limit/overloaded) instead of defaulting to 500
-    // "overloaded" and re-hammering a dead credential. (Verified empirically:
-    // 401 → aggregate throws NoOutputGeneratedError, onError gets APICallError.)
-    let streamError: unknown;
-    const result = streamText({
-      ...(callParams as Parameters<typeof streamText>[0]),
-      onError: (e: { error: unknown }) => { streamError = e.error; },
-    });
-    // Awaiting these aggregates consumes the stream (feeding the body-idle guard)
-    // and resolves the same fields generateText returns. A rejection here is a
-    // real call failure and propagates to the rotation/failover loop — prefer the
-    // onError-captured provider error so its status survives.
-    const [text, toolCalls, usage, finishReason] = await Promise.all([
-      result.text,
-      result.toolCalls,
-      result.usage,
-      result.finishReason,
-    ]).catch((err: unknown): never => { throw streamError ?? err; });
-    const reasoning: unknown = await Promise.resolve(result.reasoning).catch(() => undefined);
-    const reasoningText: string | undefined = await Promise.resolve(result.reasoningText).catch(() => undefined);
-    const providerMetadata: unknown = await Promise.resolve(result.providerMetadata).catch(() => undefined);
-    return { text, toolCalls, usage, finishReason, reasoning, reasoningText, providerMetadata };
   }
 
   /**

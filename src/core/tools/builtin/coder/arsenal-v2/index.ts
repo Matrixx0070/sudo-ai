@@ -19,14 +19,13 @@
  * Critic loop and related-tests verification come in slices 3-4.
  */
 
-import { generateText, streamText } from 'ai';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ToolContext, ToolDefinition, ToolResult } from '../../../types.js';
 import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../../shared/paths.js';
-import { getModel } from '../../../../brain/providers.js';
+import { chatIR } from '../../../../../llm/client.js';
 import { clampMaxTokensToModel } from '../../../../brain/thinking-inject.js';
 import { modelForAttempt, parseCascade } from './cascade.js';
 import {
@@ -132,17 +131,19 @@ function runTsc(): TscResult {
 }
 
 async function callLLM(modelId: string, system: string, user: string): Promise<string> {
-  const model = getModel(modelId);
-  // streamText avoids the undici HeadersTimeout that plagued v1 on large
-  // bodies — the server responds with stream headers immediately and we
-  // accumulate text as it arrives.
-  // Clamp to the model's output ceiling (opus-4-8 → 32000) so the AI SDK doesn't
-  // warn on every call; behaviour-identical (the SDK clamps anyway), no-op for
-  // non-opus. DEFAULT_MODEL is opus-4-8, so this path warned without the clamp.
-  const stream = await streamText({ model, system, prompt: user, maxOutputTokens: clampMaxTokensToModel(modelId, 32_768, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }) });
-  let buf = '';
-  for await (const chunk of stream.textStream) buf += chunk;
-  return buf;
+  // F97: routed through the IR facade (buffered). This is a batch tool — the
+  // old streamText path only accumulated text, so chatIR is equivalent.
+  // Clamp to the model's output ceiling (opus-4-8 → 32000); behaviour-identical,
+  // no-op for non-opus. DEFAULT_MODEL is opus-4-8.
+  const res = await chatIR({
+    alias: modelId,
+    caller: 'coder.arsenal-v2',
+    purpose: 'patch-driven coding attempt',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: clampMaxTokensToModel(modelId, 32_768, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
+  });
+  return res.text;
 }
 
 export const arsenalV2Tool: ToolDefinition = {

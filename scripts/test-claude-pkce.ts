@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   generatePkceVerifier,
-} from '../src/core/brain/claude-oauth-manager.js';
+} from '../src/llm/claude-oauth-manager.js';
 
 const STATE_PATH = '/tmp/claude-pkce-test.json';
 // Authoritative endpoints extracted from claude-code 2.1.177:

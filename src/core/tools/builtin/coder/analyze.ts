@@ -12,13 +12,12 @@
  * Modes: architecture | security | performance | complexity | refactor | full | attack-surface
  */
 
-import { streamText } from 'ai';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
-import { getModel } from '../../../brain/providers.js';
+import { chatIR } from '../../../../llm/client.js';
 import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.analyze');
@@ -354,22 +353,21 @@ export const analyzeCodeTool: ToolDefinition = {
 
     for (const option of cascade) {
       try {
-        const model = getModel(option.model);
         logger.info({ model: option.model, mode }, 'Trying model for analysis');
 
-        // Stream: a non-streaming generateText holds claude-oauth response headers
-        // until the full generation completes, tripping the fast-fail headers timer
-        // on the sonnet OAuth tier (same trap as PR #277). streamText lands headers
-        // in ~1-2s; awaiting result.text drains the stream to the full completion.
-        const result = streamText({
-          model,
+        // F97: routed through the IR facade (buffered). This is a batch tool —
+        // the old streamText path only accumulated text, so chatIR is equivalent.
+        const res = await chatIR({
+          alias: option.model,
+          caller: 'coder.analyze',
+          purpose: `deep code analysis (${mode})`,
           system: systemPrompt,
-          prompt: userPrompt,
-          maxOutputTokens: 16384,
+          messages: [{ role: 'user', content: userPrompt }],
+          maxTokens: 16384,
           temperature: 0.2,
         });
 
-        const output = (await result.text)?.trim() ?? '';
+        const output = res.text?.trim() ?? '';
         if (!output) {
           errors.push(`${option.label}: empty response`);
           continue;

@@ -14,13 +14,28 @@
  * Actions: run (default), review
  */
 
-import { streamText } from 'ai';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
-import { getModel, listAvailableProviders } from '../../../brain/providers.js';
+import { chatIR, getProviderApiKey, type ProviderKeyName } from '../../../../llm/client.js';
+import { getClaudeOAuthManager } from '../../../../llm/claude-oauth-manager.js';
 import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('custom.codex');
+
+/**
+ * F97: local replacement for the retired legacy listAvailableProviders().
+ * Same env-key semantics via the choke point's getProviderApiKey, plus the
+ * claude-oauth manager for the OAuth route. Used only by the "providers"
+ * listing action.
+ */
+function listAvailableProviders(): string[] {
+  const keyed: ProviderKeyName[] = ['xai', 'openai', 'google', 'groq', 'anthropic', 'deepseek'];
+  const available: string[] = keyed.filter((p) => getProviderApiKey(p) !== null);
+  try {
+    if (getClaudeOAuthManager().isAvailable()) available.push('claude-oauth');
+  } catch { /* manager unavailable — treat as not configured */ }
+  return available;
+}
 
 // ---------------------------------------------------------------------------
 // Provider cascade — tried in order, first success wins
@@ -120,7 +135,7 @@ export const codexTool: ToolDefinition = {
       const available = listAvailableProviders();
       const lines = PROVIDER_CASCADE.map(p => {
         const [providerName] = p.model.split('/');
-        const isAvail = available.includes(providerName as never);
+        const isAvail = available.includes(providerName ?? '');
         return `  ${isAvail ? '✅' : '❌'} ${p.model.padEnd(35)} ${p.label}`;
       });
       return {
@@ -148,22 +163,21 @@ export const codexTool: ToolDefinition = {
 
     for (const option of cascade) {
       try {
-        const model = getModel(option.model);
         logger.info({ model: option.model, action }, 'Trying provider');
 
-        // Stream: a non-streaming generateText holds claude-oauth response headers
-        // until the full generation completes, tripping the fast-fail headers timer
-        // on the sonnet OAuth tier (same trap as PR #277). streamText lands headers
-        // in ~1-2s; awaiting result.text drains the stream to the full completion.
-        const result = streamText({
-          model,
+        // F97: routed through the IR facade (buffered). This is a batch tool —
+        // the old streamText path only accumulated text, so chatIR is equivalent.
+        const res = await chatIR({
+          alias: option.model,
+          caller: 'custom.codex',
+          purpose: `autonomous coding agent (${action})`,
           system: systemPrompt,
-          prompt: userPrompt,
-          maxOutputTokens: option.maxTokens,
+          messages: [{ role: 'user', content: userPrompt }],
+          maxTokens: option.maxTokens,
           temperature: action === 'review' ? 0.3 : 0.5,
         });
 
-        const output = (await result.text)?.trim() ?? '';
+        const output = res.text?.trim() ?? '';
         if (!output) {
           errors.push(`${option.label}: empty response`);
           continue;

@@ -32,7 +32,7 @@ function formatExpiry(expiresInSec: number | null): string {
 }
 
 export async function runClaudeOAuthLogin(): Promise<number> {
-  const { getClaudeOAuthManager } = await import('../../core/brain/claude-oauth-manager.js');
+  const { getClaudeOAuthManager } = await import('../../llm/claude-oauth-manager.js');
   const mgr = getClaudeOAuthManager();
 
   const pending = mgr.startLogin();
@@ -73,7 +73,7 @@ export async function runClaudeOAuthLogin(): Promise<number> {
 }
 
 export async function runClaudeOAuthStatus(): Promise<number> {
-  const { getClaudeOAuthManager } = await import('../../core/brain/claude-oauth-manager.js');
+  const { getClaudeOAuthManager } = await import('../../llm/claude-oauth-manager.js');
   const mgr = getClaudeOAuthManager();
   const s = mgr.getStatus();
   console.log('');
@@ -89,7 +89,7 @@ export async function runClaudeOAuthStatus(): Promise<number> {
 }
 
 export async function runClaudeOAuthRefresh(): Promise<number> {
-  const { getClaudeOAuthManager } = await import('../../core/brain/claude-oauth-manager.js');
+  const { getClaudeOAuthManager } = await import('../../llm/claude-oauth-manager.js');
   const mgr = getClaudeOAuthManager();
   if (!mgr.isAvailable()) {
     console.error('Not connected — run `sudo-ai claude-oauth login` first.');
@@ -101,7 +101,7 @@ export async function runClaudeOAuthRefresh(): Promise<number> {
 }
 
 export async function runClaudeOAuthDisconnect(): Promise<number> {
-  const { getClaudeOAuthManager } = await import('../../core/brain/claude-oauth-manager.js');
+  const { getClaudeOAuthManager } = await import('../../llm/claude-oauth-manager.js');
   const mgr = getClaudeOAuthManager();
   mgr.disconnect();
   console.log('Disconnected — local credentials wiped.');
@@ -109,7 +109,7 @@ export async function runClaudeOAuthDisconnect(): Promise<number> {
 }
 
 export async function runClaudeOAuthModels(refresh: boolean): Promise<number> {
-  const { getClaudeOAuthManager } = await import('../../core/brain/claude-oauth-manager.js');
+  const { getClaudeOAuthManager } = await import('../../llm/claude-oauth-manager.js');
   const mgr = getClaudeOAuthManager();
   if (!mgr.isAvailable()) {
     console.error('Not connected — run `sudo-ai claude-oauth login` first.');
@@ -153,7 +153,7 @@ export async function runClaudeOAuthModels(refresh: boolean): Promise<number> {
 }
 
 export async function runClaudeOAuthSetModel(id: string): Promise<number> {
-  const { getClaudeOAuthManager } = await import('../../core/brain/claude-oauth-manager.js');
+  const { getClaudeOAuthManager } = await import('../../llm/claude-oauth-manager.js');
   const mgr = getClaudeOAuthManager();
   if (!mgr.isAvailable()) {
     console.error('Not connected — run `sudo-ai claude-oauth login` first.');

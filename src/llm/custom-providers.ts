@@ -242,6 +242,28 @@ export function registerCustomProvider(
  *
  * @returns the number of providers successfully registered.
  */
+/**
+ * Built-in provider names custom providers may not shadow (F97: owned here
+ * now that legacy providers.ts is retired; previously ALL_PROVIDERS there).
+ */
+const RESERVED_BUILTIN_PROVIDERS: ReadonlySet<string> = new Set([
+  'ollama', 'xai', 'openai', 'anthropic', 'claude-oauth', 'xai-oauth',
+  'google', 'groq', 'mistral', 'deepseek', 'together',
+]);
+
+let envRegistrationDone = false;
+
+/**
+ * Idempotent boot-time registration of SUDO_CUSTOM_PROVIDERS (F97: called by
+ * Brain's constructor, replacing legacy initProviders()). No-op when the env
+ * is unset or on repeat calls.
+ */
+export function registerCustomProvidersOnce(): void {
+  if (envRegistrationDone) return;
+  envRegistrationDone = true;
+  registerCustomProvidersFromEnv(RESERVED_BUILTIN_PROVIDERS);
+}
+
 export function registerCustomProvidersFromEnv(reserved: ReadonlySet<string>): number {
   const raw = process.env['SUDO_CUSTOM_PROVIDERS'];
   if (!raw || raw.trim() === '') return 0;

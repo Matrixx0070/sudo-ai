@@ -1,19 +1,18 @@
 /**
- * Debug: call claude-oauth/claude-haiku-4-5 via the actual brain provider stack
- * to reproduce + diagnose the 401 the running daemon hit.
+ * Debug: call claude-oauth/claude-haiku-4-5 via the IR transport stack
+ * to reproduce + diagnose auth failures (e.g. the 401 the daemon hit).
+ * F97: legacy ai-SDK provider layer retired — probe goes through chatIR.
  */
-import { initProviders, getModel } from '../src/core/brain/providers.js';
-import { generateText } from 'ai';
+import { chatIR } from '../src/llm/client.js';
 
 async function main(): Promise<void> {
-  await initProviders();
-  const model = getModel('claude-oauth/claude-haiku-4-5-20251001');
-  console.log('Model handle obtained:', typeof model);
   try {
-    const result = await generateText({
-      model,
-      prompt: 'Reply with exactly: ALIVE',
-      maxOutputTokens: 30,
+    const result = await chatIR({
+      alias: 'claude-oauth/claude-haiku-4-5-20251001',
+      caller: 'script:debug-claude-oauth',
+      purpose: 'liveness probe for claude-oauth route',
+      messages: [{ role: 'user', content: 'Reply with exactly: ALIVE' }],
+      maxTokens: 30,
     });
     console.log('SUCCESS:', result.text);
   } catch (err) {

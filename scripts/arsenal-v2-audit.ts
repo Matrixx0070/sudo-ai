@@ -4,7 +4,7 @@
  * `review` mode against the arsenal-v2 source itself. No disk mutation.
  *
  * Provider creds are loaded from config/.env BEFORE the tool module is
- * imported, since the brain/providers layer reads env at import time.
+ * imported, since the LLM layer reads env at import time.
  *
  * Run: npx tsx scripts/arsenal-v2-audit.ts
  */
@@ -40,11 +40,10 @@ async function main(): Promise<void> {
   // provider module reads env before dotenv runs.
   const { arsenalV2Tool } = await import('../src/core/tools/builtin/coder/arsenal-v2/index.js');
   const { createLogger } = await import('../src/core/shared/logger.js');
-  const { initProviders } = await import('../src/core/brain/providers.js');
-
-  // Populates the provider cache by checking env keys. Without this,
-  // buildProvider() returns null and getProvider() throws.
-  await initProviders();
+  // F97: legacy provider init retired — the IR transport resolves routes per
+  // call; only custom OpenAI-compatible providers need one-time registration.
+  const { registerCustomProvidersOnce } = await import('../src/llm/custom-providers.js');
+  registerCustomProvidersOnce();
 
   const model = process.env['SUDO_ARSENAL_V2_AUDIT_MODEL'] || 'claude-oauth/claude-sonnet-4-6';
   console.log(`[harness] using model: ${model}`);
