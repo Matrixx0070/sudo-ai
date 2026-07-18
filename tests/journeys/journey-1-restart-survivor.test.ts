@@ -58,7 +58,7 @@ describe('GW-13 Journey 1 — restart-survivor', () => {
     const raw = new Database(env.outboxDbPath);
     raw.prepare(`UPDATE deliveries SET state='dispatched', attempt=1 WHERE id=@id`).run({ id: idA });
     raw.close();
-    // (predecessor process is now gone)
+    pre.close(); // predecessor process is now gone
 
     // ---- Successor boots over the SAME data dir -------------------------
     const post = new DeliveryQueue(env.outboxDbPath, { mediaDir });
@@ -88,6 +88,7 @@ describe('GW-13 Journey 1 — restart-survivor', () => {
     // The human received #B once and was never double-messaged with #A.
     expect(sent.filter((t) => t.includes('reply-A')).length).toBe(0);
     void idB;
+    post.close();
   });
 
   it('a stale intent at successor boot is flagged as a failed prior handoff', () => {

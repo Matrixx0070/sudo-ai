@@ -20,6 +20,13 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 # Journeys are hermetic — no LLM egress. Point the choke point at the in-test stub.
 ENV NODE_ENV=test
 
+# Build toolchain so native deps (better-sqlite3, required by the durable outbox)
+# compile from source if no prebuilt binary is published for this platform.
+# node:20-slim ships none of python3/make/g++ by default.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN corepack enable
 WORKDIR /app
 

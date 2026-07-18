@@ -18,11 +18,11 @@ services:
       # GW-11 run lanes / GW-5 steering are default-off; journeys drive the
       # subsystems directly, so no feature flags are required here.
     networks:
-      - none
+      - hermetic
     # Fail the compose run with the suite's exit code.
     restart: "no"
 
 networks:
-  # Hermetic: the journeys must not reach any real provider.
-  none:
+  # Hermetic: the journeys must not reach any real provider (no egress).
+  hermetic:
     internal: true
