@@ -200,7 +200,7 @@ do not start**; N5 standing NO; frozen surfaces untouchable (invariant 4).
 
 ### Phase 3 — Consolidation (PR-sized, interleave freely)
 F98 ✅ 2026-07-18 (one dream engine: memory/auto-dream survives) · F100 ✅ 2026-07-18 (4 stale connectors + paired tools deleted) · F102 ✅ 2026-07-18 (docs/MONEY_LEDGER.md verdicts; earning/revenue deleted; finance conversions deferred w/ reasons) ·
-F103 god-file splits (loop.ts / loop-helpers / brain.ts / cli.ts boot
+F103 🟡 slices 1-2 ✅ 2026-07-18 (loop-helpers → 7-module dir + barrel; brain.ts free-standing code → 4 sibling modules, 2194→1838 ln); TAILS w/ reasons: loop.ts = one 50-method class (needs DESIGNED decomposition, not mechanical), cli.ts boot = phases share wide closure state + pm2 entry + constant merge traffic (
 phases; mechanical, test-guarded, no behavior change).
 
 ### Phase 4 — Autonomy deepening (each step has an explicit gate)
