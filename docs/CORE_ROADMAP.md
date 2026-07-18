@@ -229,6 +229,74 @@ F10 flight-recorder replay).
    frozen surfaces (invariant 4). Never silently drop functionality —
    wire-or-delete requires reachability proof; rescues beat deletions.
 
+---
+
+# Round-2 review (2026-07-18, three-angle deep scan) — Waves F/G/H (F113–F127)
+
+Second full-structure review at angles round 1 didn't cover: the persistence
+layer, the background metabolism (every recurring loop + its token cost), and
+test-coverage on live paths. Evidence snapshots below; slot these waves into
+plan-v2 as Phase 1.5 (F: cheap+urgent), Phase 3.5 (G), rolling (H).
+
+## Evidence snapshot
+
+**Persistence:** `data/` = 1.1 GB. `data/logs/` 491M unrotated ·
+`consciousness.db` 136M with **unbounded episodic_memory** (only
+somatic_markers + thoughts capped) · `mind.db` 100M god-database written by
+~37 modules across unrelated domains · WAL checkpoint failures
+(skill-optimizations.db 24K main / **14M WAL**; update-versions, audit) ·
+five overlapping audit stores (audit.db, alignment-audit.db 13M append-only,
+trust.db, calibration.db + 3 audit JSONLs) · six overlapping session
+mechanisms (sqlite, JSONL journal + unfinished migrate-jsonl, 3 per-session
+JSON dirs, SQL backups) · dead: cron-jobs.db (0 bytes), empty
+structured-memory/, stale task_queue backups.
+
+**Metabolism (prod defaults):** token-spending on bare boot = CognitiveStream
+(~60s tick; deep tier 1500 tokens every 120 ticks **feeds a 20-entry cache of
+which only the last 3 thoughts are ever read** — mostly evaporates),
+Heartbeat agentTurn (30m), AutoDream (6h), brain-liveness ping (15m). Kairos
+daemon (5m) is **always-on with NO env gate** and can execSync/systemctl-
+restart the service. Dead wiring: TeammateIdleDetector constructed but never
+started; `_backgroundExecutor` voided; self-build daily-report cron fires
+daily and no-ops without self-build deps. WorldStateMonitor detections are
+computed then discarded when WORLD_STATE_GOALS≠1.
+
+**Coverage:** tools = 311 src files / 69 tests (0.22) with **9 of 36 builtin
+categories at zero tests**; consciousness 0.23; ranked gaps: meta/
+tool-synthesize (49K, live, most-skipped tests), mcp-adapter (53K),
+coder/arsenal (50K), loop-helpers (98K), content + personal category
+indexes; 38 skipped tests concentrated in meta + browser suites.
+
+## Wave F — PERSISTENCE (Phase 1.5: cheap, urgent, zero-risk-to-behavior)
+
+| ID | Feature |
+|---|---|
+| F113 | **Retention everywhere**: episodic_memory age/importance prune (the 136M driver); retention for alignment-audit/audit/trust/calibration; rotation for kairos.log + exec/browser/github-audit JSONLs + cron runs.jsonl; caps for workflow-runs/ + signals/ dirs; data/logs rotation policy. Follow the traces.db pattern (boot + periodic prune, env-tunable). |
+| F114 | **WAL hygiene**: periodic `wal_checkpoint(TRUNCATE)` sweep for stores with runaway WALs; find the long-lived-reader culprits. |
+| F115 | **One audit substrate**: consolidate the 5 audit stores into one retention-managed store (or a documented layering with shared prune); JSONL audit logs fold in or rotate. |
+| F116 | **mind.db ownership map → decomposition plan**: document which of ~37 modules owns which tables; then either ATTACH-split by domain or formal ownership doc. Plan first, no big-bang. |
+| F117 | **Finish session-store unification** (absorbs F99): complete migrate-jsonl, retire legacy JSONL journal path, document the surviving layering. |
+| F118 | **Dead-store cleanup**: cron-jobs.db, empty structured-memory/, stale task_queue backups, transparency-report staleness. |
+
+## Wave G — METABOLISM (Phase 3.5: measured, ROI-driven)
+
+| ID | Feature |
+|---|---|
+| F119 | **CognitiveStream ROI**: deep-tier thoughts mostly evaporate (20-entry cache, last-3 read). Either wire real consumption (feed sleep-cycle reflection / memory) or cut deep cadence. Measure via api_call_log before/after. |
+| F120 | **Dead-wiring removal**: TeammateIdleDetector, `_backgroundExecutor`, always-enabled-but-no-op self-build daily report job. Wire-or-delete, same proof standard as F91. |
+| F121 | **Kairos governance**: the always-on 5-min daemon can execSync + systemctl restart with NO kill-switch — add `SUDO_KAIROS=0`, register its restart power in the F106 posture banner, audit its actions. |
+| F122 | **Discard-path fixes**: blackboard beat skips Drive writes when no peers; WorldStateMonitor detections surface to Telemetry instead of being computed-then-dropped. |
+| F123 | **Metabolism dashboard**: one Telemetry view enumerating every live loop, cadence, last run, and per-loop spend attribution (api_call_log GROUP BY source). |
+
+## Wave H — QUALITY (rolling, interleave with everything)
+
+| ID | Feature |
+|---|---|
+| F124 | **Ranked-gap tests**: dedicated suites for tool-synthesize, mcp-adapter, coder/arsenal(+v2), loop-helpers, tool-creator, consciousness-db, channels/web. |
+| F125 | **Category smoke harness**: one parameterized smoke test per builtin tool category — kills the 9 zero-test categories in one slice. |
+| F126 | **Unskip audit**: triage all 38 skipped tests (meta + browser concentration) — fix, gate behind env, or delete with reason. |
+| F127 | **Consciousness coverage uplift**: targeted suites for the stores backing the 136M DB (episodic/procedural/self-model), paired with F113's prune work. |
+
 ## Status
 
 | Wave | Status |
@@ -238,3 +306,6 @@ F10 flight-recorder replay).
 | C (F97–F103) | not started |
 | D (F104–F108) | **F104+F106 shipped** (#810: SUDO_SECURITY_STRICT fatal guard-init + posture-weakening boot banner, posture.ts); F105/F107/F108 not started |
 | E (F109–F112) | not started. Census follow-up shipped: SUDO_UPDATE_* env→config mapping (#808). |
+| F (F113–F118) persistence | not started — Phase 1.5 |
+| G (F119–F123) metabolism | not started — Phase 3.5 |
+| H (F124–F127) quality | not started — rolling |
