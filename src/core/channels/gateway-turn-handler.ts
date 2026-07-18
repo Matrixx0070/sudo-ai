@@ -20,6 +20,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { getRunRegistry } from '../agent/run-registry.js';
+import { getRunLanes, type RunLane } from '../agent/run-lanes.js';
 import { getSteerBuffer } from '../agent/steer-buffer.js';
 import { getQueueModeStore, decideQueueMode } from './queue-modes.js';
 import type { MessageHandler, UnifiedMessage } from './types.js';
@@ -68,6 +69,7 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
 
   const runTurn = async (msg: UnifiedMessage): Promise<void> => {
     const convKey = `${msg.channel}:${msg.peerId}`;
+    let laneRelease: (() => void) | null = null;
     try {
       const runGen = deps.runGenerations.current(convKey);
       const session = await deps.sessionManager.getOrCreate(msg.channel, msg.peerId);
@@ -79,6 +81,13 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
         sessionId: String(session.id),
         tier: msg.isOwner === true ? 'owner' : 'untrusted',
       });
+      // GW-11: acquire a global run-lane slot (opt-in SUDO_RUN_LANES_ENABLED=1).
+      // Channel turns run in the 'user' lane (default cap 4). The user lane never
+      // drops — it queues. Released in the finally below.
+      if (process.env['SUDO_RUN_LANES_ENABLED'] === '1') {
+        const lane: RunLane = 'user';
+        laneRelease = await getRunLanes().acquireRunSlot(convKey, lane);
+      }
       // Bind the Feature 1 caller identity to THIS turn so ToolContext carries
       // isOwner for owner-only tool gating — covers every router channel
       // (telegram/signal/slack/…), not just web. Turn-scoped (no shared registry).
@@ -115,6 +124,7 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
       log.error({ err: err instanceof Error ? err.message : String(err), channel: msg.channel, peerId: msg.peerId }, 'Agent turn failed');
       try { await deps.send(msg, errorText); } catch { /* best effort */ }
     } finally {
+      if (laneRelease) laneRelease();
       getRunRegistry().endRun(convKey);
     }
   };

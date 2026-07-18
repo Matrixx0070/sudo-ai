@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 626,
+  "count": 628,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -464,6 +464,8 @@
     "SUDO_ROTATE_KAIROS_MB",
     "SUDO_ROTATE_SESSION_BUS_MB",
     "SUDO_ROUTING_GUARD_RUNTIME",
+    "SUDO_RUN_LANES",
+    "SUDO_RUN_LANES_ENABLED",
     "SUDO_SANDBOX_ALLOW_UNCONFINED",
     "SUDO_SANDBOX_AUTOBUILD",
     "SUDO_SANDBOX_DISABLE",
