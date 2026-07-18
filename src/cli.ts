@@ -84,8 +84,6 @@ import { AutoUpdateManager } from './core/update/update-manager.js';
 import { DEFAULT_UPDATE_CONFIG, readUpdateEnvOverrides } from './core/update/update-manager-types.js';
 import { AutoDream } from './core/memory/auto-dream.js';
 import { flushBeforeCompaction } from './core/memory/compaction-flush.js';
-import { TeammateIdleDetector } from './core/agent/teammate-idle.js';
-import { BackgroundAgentExecutor } from './core/agent/background-agent.js';
 import { InMemorySteeringChannel } from './core/agent/steering.js';
 import { loadMarkdownSkills, parseSkillRoots } from './core/skills/markdown-loader.js';
 import { startGateway, gatewayServer } from './core/gateway/server.js';
@@ -3459,11 +3457,17 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   // Kairos — autonomous background daemon
   // -------------------------------------------------------------------------
-  try {
+  // F121 governance: SUDO_KAIROS=0 disables the daemon entirely;
+  // SUDO_KAIROS_AUTONOMOUS=0 keeps it observing but strips its power to act
+  // (execSync fixes / systemctl restart). Defaults preserve prior behavior.
+  if (process.env['SUDO_KAIROS'] === '0') {
+    log.info('Kairos daemon disabled (SUDO_KAIROS=0)');
+  } else try {
     const { Kairos } = await import('./core/consciousness/kairos.js');
+    const kairosAutonomous = process.env['SUDO_KAIROS_AUTONOMOUS'] !== '0';
     const kairos = new Kairos({
       refreshIntervalMs: 5 * 60 * 1000,
-      autonomousActions: true,
+      autonomousActions: kairosAutonomous,
       // Kairos CRITICAL alerts now route through proactiveNotifier → channel adapters.
       // telegramBotToken/chatId still passed as fallback for when notifier has no listeners.
       telegramBotToken: process.env['TELEGRAM_BOT_TOKEN'],
@@ -3479,7 +3483,7 @@ async function boot(): Promise<void> {
     });
     kairos.start();
     registerShutdown(() => kairos.stop());
-    log.info('Kairos daemon started — watching codebase, system, tasks, memory');
+    log.info({ autonomousActions: kairosAutonomous }, 'Kairos daemon started — CAN execute fixes + service restarts when autonomousActions=true (SUDO_KAIROS=0 disables, SUDO_KAIROS_AUTONOMOUS=0 observe-only)');
   } catch (err) {
     log.warn({ err: String(err) }, 'Kairos failed to start — running without daemon');
   }
@@ -4044,20 +4048,9 @@ async function boot(): Promise<void> {
       log.warn({ err: String(err) }, 'Boot MEMORY.md heal failed (non-fatal)');
     }
 
-    // Background agent executor (needs an agentRunner function)
-    const _backgroundExecutor = new BackgroundAgentExecutor(
-      async (sessionId: string, prompt: string) => {
-        console.log(`[background] stub runner: session=${sessionId} prompt=${prompt.slice(0, 50)}`);
-        return 'background-stub-result';
-      },
-    );
-    void _backgroundExecutor;
-    // Teammate idle detector (needs getIdleAgents + onIdle callbacks)
-    const _idleDetector = new TeammateIdleDetector(
-      () => [],  // Will be wired to swarm.getIdleAgents() when swarm is initialized
-      (agentId: string) => console.log(`[idle] Agent ${agentId} is idle`),
-    );
-    void _idleDetector;
+    // F120: the stub BackgroundAgentExecutor and never-started
+    // TeammateIdleDetector constructions were removed (dead wiring — stub
+    // runner + empty getIdleAgents; modules remain for real wiring later).
 
     // Suppress unused-variable warnings for modules registered but not yet
     // exposed via their own shutdown hooks.
@@ -4199,7 +4192,16 @@ async function boot(): Promise<void> {
               return readings;
             },
           });
-          const monitorTimer = setInterval(() => { try { monitor.tick(); } catch { /* fail-open */ } }, 120_000);
+          const monitorTimer = setInterval(() => {
+            try {
+              // F122: detections were computed then silently discarded when
+              // live goals are off — surface them so the signal isn't wasted.
+              const anomalies = monitor.tick();
+              if (Array.isArray(anomalies) && anomalies.length > 0 && process.env['SUDO_WORLD_STATE_GOALS'] !== '1') {
+                log.info({ anomalies }, 'WorldStateMonitor: anomalies detected (live goals OFF — surfaced only)');
+              }
+            } catch { /* fail-open */ }
+          }, 120_000);
           monitorTimer.unref?.();
           registerShutdown(() => clearInterval(monitorTimer));
           log.info({ liveGoals: process.env['SUDO_WORLD_STATE_GOALS'] === '1' }, 'WorldStateMonitor wired (gap #3; SUDO_WORLD_STATE_GOALS=1 for live goal synthesis)');

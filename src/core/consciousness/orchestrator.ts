@@ -584,6 +584,10 @@ export class ConsciousnessOrchestrator {
     const body    = this.embodiedState.getState();
     const emotion = this.emotionalState.getCurrentState();
     const thoughts = this.cognitiveStream.getRecentThoughts(3).map((t) => truncate(t.content, 60)).join(' | ') || '(none)';
+    // F119: deep-tier thoughts are the expensive ones (up to 1500 tokens) and
+    // previously drowned among micro ticks — surface the latest one explicitly
+    // so the spend has a consumer.
+    const deepThought = this.cognitiveStream.getRecentThoughts(20).find((t) => t.tier === 'deep');
 
     let dominantDrive = '(unknown)'; let satisfiedBy = '';
     try {
@@ -614,6 +618,7 @@ export class ConsciousnessOrchestrator {
       `Feeling: ${emotion.dominantEmotion} (intensity ${emotion.intensity.toFixed(2)})`,
       `Drive: ${dominantDrive}${satisfiedBy ? ` — ${satisfiedBy}` : ''}`,
       `Thinking about: ${thoughts}`,
+      ...(deepThought ? [`Deep insight: ${truncate(deepThought.content, 200)}`] : []),
       `Intentions: ${intentionLine}`,
       `Self: ${selfLine}`,
     ].join('\n') + episodic;
