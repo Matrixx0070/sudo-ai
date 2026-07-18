@@ -146,25 +146,25 @@ describe('GW-4 registerAdminApi mounted auth gate (HIGH-1/HIGH-2)', () => {
   }
 
   it('(a) non-loopback remote with NO credential → 401', () => {
-    const status = call(fakeReq('GET', '/api/admin/status', {}, '203.0.113.9'));
+    const status = call(fakeReq('GET', '/v1/admin/service/status', {}, '203.0.113.9'));
     expect(status()).toBe(401);
   });
 
   it('(b) forwarded proxy headers + NO credential → 401 (untrusted proxy)', () => {
     const status = call(
-      fakeReq('GET', '/api/admin/status', { 'x-forwarded-for': '10.0.0.1' }, '203.0.113.9'),
+      fakeReq('GET', '/v1/admin/service/status', { 'x-forwarded-for': '10.0.0.1' }, '203.0.113.9'),
     );
     expect(status()).toBe(401);
   });
 
   it('fail-closed: even loopback with NO credential is denied once a token is set', () => {
-    const status = call(fakeReq('GET', '/api/admin/status', {}, '127.0.0.1'));
+    const status = call(fakeReq('GET', '/v1/admin/service/status', {}, '127.0.0.1'));
     expect(status()).toBe(401);
   });
 
   it('(c) remote with the correct dashboard token → authorized (not 401)', async () => {
     const status = call(
-      fakeReq('GET', '/api/admin/no-such-route', { authorization: 'Bearer dash-secret' }, '203.0.113.9'),
+      fakeReq('GET', '/v1/admin/service/no-such-route', { authorization: 'Bearer dash-secret' }, '203.0.113.9'),
     );
     // dispatch is async; let the promise settle before asserting the status.
     await new Promise((r) => setTimeout(r, 25));
@@ -172,9 +172,16 @@ describe('GW-4 registerAdminApi mounted auth gate (HIGH-1/HIGH-2)', () => {
     expect(status()).toBe(404); // authed → route matching → no such route
   });
 
+  it('legacy /api/admin/* 308-redirects to canonical /v1/admin/* (before auth)', () => {
+    const { res, status } = fakeRes();
+    const req = fakeReq('GET', '/api/admin/service/status', {}, '203.0.113.9');
+    handler!(req, res);
+    expect(status()).toBe(308); // redirected to canonical /v1/admin/* BEFORE any auth
+  });
+
   it('a wrong token is rejected with 401', () => {
     const status = call(
-      fakeReq('GET', '/api/admin/status', { authorization: 'Bearer WRONG' }, '203.0.113.9'),
+      fakeReq('GET', '/v1/admin/service/status', { authorization: 'Bearer WRONG' }, '203.0.113.9'),
     );
     expect(status()).toBe(401);
   });
