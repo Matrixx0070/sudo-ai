@@ -442,13 +442,20 @@ async function boot(): Promise<void> {
     } catch { /* banner is best-effort */ }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    // F104: SUDO_SECURITY_STRICT=1 makes a SecurityGuard init failure FATAL
-    // instead of silently running without hardening.
-    if (process.env['SUDO_SECURITY_STRICT'] === '1') {
-      log.error({ err: msg }, 'SecurityGuard failed to initialize and SUDO_SECURITY_STRICT=1 — refusing to boot');
+    // GW-3b: strict is now the DEFAULT. A SecurityGuard init failure is FATAL
+    // unless SUDO_SECURITY_STRICT=0 is EXPLICITLY set (posture-registered as a
+    // weakening flag). No more silent "running without hardening" on prod.
+    if (process.env['SUDO_SECURITY_STRICT'] !== '0') {
+      log.error(
+        { err: msg },
+        'SecurityGuard failed to initialize — refusing to boot (set SUDO_SECURITY_STRICT=0 to run without hardening)',
+      );
       throw err;
     }
-    log.warn({ err: msg }, 'SecurityGuard failed to initialize — running without security hardening');
+    log.warn(
+      { err: msg },
+      'SecurityGuard failed to initialize and SUDO_SECURITY_STRICT=0 — running WITHOUT security hardening (posture weakened)',
+    );
   }
 
   // -------------------------------------------------------------------------

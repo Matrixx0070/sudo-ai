@@ -11,6 +11,16 @@ export interface WeakeningFlag {
   flag: string;
   /** What protection is lost while it is active. */
   effect: string;
+  /**
+   * GW-3: the env VALUE that activates this flag. Default '1'. Kill-switches
+   * that weaken when turned OFF use their off-value here (e.g. '0').
+   */
+  activeWhen?: string;
+  /**
+   * GW-3: for flags whose "active" condition spans multiple env vars (e.g.
+   * Kairos = enabled AND autonomous), a custom predicate overrides activeWhen.
+   */
+  predicate?: (env: NodeJS.ProcessEnv) => boolean;
 }
 
 /** Every flag that, when set to '1', disables or bypasses a protection. */
@@ -26,11 +36,33 @@ const WEAKENING_FLAGS: ReadonlyArray<WeakeningFlag> = [
   { flag: 'SUDO_SELFBUILD_ALLOW_PROTECTED', effect: 'self-build may write PROTECTED_PATHS' },
   { flag: 'SUDO_MCP_ALLOW_PRIVATE_HOSTS', effect: 'MCP connectors may reach private/loopback hosts (SSRF guard off)' },
   { flag: 'SUDO_ADMIN_API_DANGER', effect: 'dangerous admin API endpoints enabled' },
+  // GW-3 fail-open-closure flags: kill-switches that weaken when set to their
+  // off-value, plus Kairos' default-active restart authority.
+  {
+    flag: 'SUDO_GATEWAY_UNIFIED_AUTH',
+    effect:
+      'unified-auth kill-switch — legacy semantics restored for LOOPBACK-DIRECT requests only (proxied/non-loopback still denied)',
+    activeWhen: '0',
+  },
+  {
+    flag: 'SUDO_SECURITY_STRICT',
+    effect: 'SecurityGuard init failure is NON-fatal — daemon may run without hardening',
+    activeWhen: '0',
+  },
+  {
+    flag: 'SUDO_KAIROS',
+    effect:
+      'Kairos restart authority active — 5-min daemon may execSync + systemctl restart (SUDO_KAIROS=0 disables, SUDO_KAIROS_AUTONOMOUS=0 observe-only, SUDO_KAIROS_DRY_RUN=1 no-op)',
+    predicate: (env: NodeJS.ProcessEnv): boolean =>
+      env['SUDO_KAIROS'] !== '0' && env['SUDO_KAIROS_AUTONOMOUS'] !== '0',
+  },
 ] as const;
 
 /** Return the subset of posture-weakening flags active in `env`. */
 export function collectWeakeningFlags(env: NodeJS.ProcessEnv = process.env): WeakeningFlag[] {
-  return WEAKENING_FLAGS.filter((w) => env[w.flag] === '1');
+  return WEAKENING_FLAGS.filter((w) =>
+    w.predicate ? w.predicate(env) : env[w.flag] === (w.activeWhen ?? '1'),
+  );
 }
 
 /** One log-ready line per active weakening flag; empty array = clean posture. */
@@ -38,7 +70,11 @@ export function postureBannerLines(env: NodeJS.ProcessEnv = process.env): string
   return collectWeakeningFlags(env).map((w) => `${w.flag}=1 — ${w.effect}`);
 }
 
-/** F104: strict mode — SecurityGuard init failure becomes fatal. */
+/**
+ * GW-3b: strict is now the DEFAULT. A SecurityGuard init failure is FATAL
+ * unless SUDO_SECURITY_STRICT=0 is explicitly set (which registers as a
+ * posture-weakening flag above). Returns true = strict/fatal.
+ */
 export function isSecurityStrict(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env['SUDO_SECURITY_STRICT'] === '1';
+  return env['SUDO_SECURITY_STRICT'] !== '0';
 }

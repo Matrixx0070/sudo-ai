@@ -148,15 +148,19 @@ describe('gateway/auth', () => {
     beforeEach(() => {
       process.env['SUDO_GATEWAY_UNIFIED_AUTH'] = '0';
     });
-    it('is open when GATEWAY_TOKEN is unset (byte-for-byte old behaviour)', () => {
+    it('GW-3a: legacy-open ONLY for loopback-direct; proxied/non-loopback denied', () => {
       expect(unifiedAuthEnabled()).toBe(false);
-      const p = authenticateHttp(mkReq({ remote: '8.8.8.8', headers: { 'x-forwarded-for': '1.2.3.4' } }));
-      expect(p.ok).toBe(true); // legacy: open even when proxied/non-loopback
+      // proxied / non-loopback is now DENIED even under the kill-switch (hole closed)
+      expect(authenticateHttp(mkReq({ remote: '8.8.8.8', headers: { 'x-forwarded-for': '1.2.3.4' } })).ok).toBe(false);
+      // loopback-direct is still open (dev convenience)
+      const local = authenticateHttp(mkReq({ remote: '127.0.0.1' }));
+      expect(local.ok).toBe(true);
+      expect(local.reason).toContain('legacy-open-loopback');
     });
-    it('requires the token when GATEWAY_TOKEN is set', () => {
+    it('requires the token when GATEWAY_TOKEN is set (loopback-direct)', () => {
       process.env['GATEWAY_TOKEN'] = 'sekret';
-      expect(authenticateHttp(mkReq({ bearer: 'sekret' })).ok).toBe(true);
-      expect(authenticateHttp(mkReq({ bearer: 'nope' })).ok).toBe(false);
+      expect(authenticateHttp(mkReq({ remote: '127.0.0.1', bearer: 'sekret' })).ok).toBe(true);
+      expect(authenticateHttp(mkReq({ remote: '127.0.0.1', bearer: 'nope' })).ok).toBe(false);
     });
   });
 

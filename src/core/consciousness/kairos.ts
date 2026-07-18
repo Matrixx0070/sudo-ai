@@ -409,6 +409,39 @@ function isAgentBusy(dbPath: string): boolean {
   }
 }
 
+/** GW-3c: seam for a Kairos restart — audit sink + exec + dry-run flag. */
+export interface GuardedRestartDeps {
+  audit: (entry: { ts: string; reason: string; command: string; dryRun: boolean }) => void;
+  exec: (command: string) => void;
+  dryRun: boolean;
+}
+
+const RESTART_AUDIT_FILE = path.join(PROJECT_ROOT, 'data', 'kairos-restart-audit.log');
+
+/** Default audit sink: append one JSON row to data/kairos-restart-audit.log. */
+function auditKairosRestart(entry: { ts: string; reason: string; command: string; dryRun: boolean }): void {
+  try {
+    mkdirSync(path.dirname(RESTART_AUDIT_FILE), { recursive: true });
+    appendFileSync(RESTART_AUDIT_FILE, JSON.stringify(entry) + '\n');
+    log.warn({ ...entry }, 'Kairos restart authority exercised — audit row written BEFORE exec');
+  } catch (err) {
+    log.error({ err: String(err) }, 'Kairos restart audit write failed');
+  }
+}
+
+/**
+ * GW-3c: run a Kairos restart under governance. The audit row is written FIRST,
+ * before any exec; SUDO_KAIROS_DRY_RUN=1 audits then returns without executing.
+ * Pure + injectable so the audit-precedes-exec ordering is unit-testable.
+ * @returns true when the command actually executed, false on dry-run.
+ */
+export function performGuardedRestart(reason: string, command: string, deps: GuardedRestartDeps): boolean {
+  deps.audit({ ts: new Date().toISOString(), reason, command, dryRun: deps.dryRun });
+  if (deps.dryRun) return false;
+  deps.exec(command);
+  return true;
+}
+
 async function actOnObservation(obs: KairosObservation, config: Required<KairosConfig>): Promise<KairosObservation> {
   if (!config.autonomousActions) return obs;
   try {
@@ -418,8 +451,24 @@ async function actOnObservation(obs: KairosObservation, config: Required<KairosC
         log.warn('Kairos: RAM critical but agent is busy — skipping restart, will retry next cycle');
         return { ...obs, acted: false, actionResult: 'Skipped restart: agent session active — will retry when idle' };
       }
-      execSync('systemctl restart sudo-ai', { timeout: 30_000 });
-      return { ...obs, acted: true, actionResult: 'Service restarted to reclaim RAM' };
+      const executed = performGuardedRestart(
+        'RAM critical — reclaim memory via service restart',
+        'systemctl restart sudo-ai',
+        {
+          audit: auditKairosRestart,
+          exec: (cmd) => {
+            execSync(cmd, { timeout: 30_000 });
+          },
+          dryRun: process.env['SUDO_KAIROS_DRY_RUN'] === '1',
+        },
+      );
+      return {
+        ...obs,
+        acted: executed,
+        actionResult: executed
+          ? 'Service restarted to reclaim RAM'
+          : 'DRY-RUN: restart audited, not executed (SUDO_KAIROS_DRY_RUN=1)',
+      };
     }
     if (obs.type === 'disk_pressure' && obs.severity === 'CRITICAL') {
       // Each entry specifies a target dir and the find predicate to apply.
