@@ -14,7 +14,10 @@
  * downgrade an owner run (untrusted steer → owner run) — that goes to followup.
  *
  * Overflow: cap of 20 buffered messages per session. When full, the two oldest
- * are coalesced into a single summarized line (never silently dropped).
+ * are coalesced into a single summarized line, capped at COALESCE_MAX_CHARS
+ * chars. Coalescing never drops a whole message; a coalesced line longer than
+ * the cap is truncated at the tail and the dropped char count is logged at WARN
+ * (observable, not silent).
  *
  * Pure, in-memory, single-process. Keyed by the loop's sessionId so producer
  * (router/turn-handler) and consumer (loop) agree without extra plumbing.
@@ -45,6 +48,13 @@ export interface SteerMessage {
 
 export const STEER_BUFFER_CAP = 20;
 
+/**
+ * Max chars a coalesced overflow summary retains. Raised from the original 500
+ * so sustained overflow keeps far more context; anything beyond this is trimmed
+ * from the tail and the dropped count is logged (see coalesceOldest).
+ */
+export const COALESCE_MAX_CHARS = 2000;
+
 export class SteerBuffer {
   private readonly buffers = new Map<string, SteerMessage[]>();
   private readonly cap: number;
@@ -72,14 +82,19 @@ export class SteerBuffer {
     if (!a || !b) return;
     // The summary inherits the LESS-trusted tier of the two (conservative).
     const tier = minTier(a.tier, b.tier);
-    const merged: SteerMessage = {
-      text: `[${a.coalesced ? 'earlier steers' : '2 earlier steer messages'}] ${a.text} | ${b.text}`.slice(0, 500),
-      tier,
-      at: a.at,
-      coalesced: true,
-    };
+    const full = `[${a.coalesced ? 'earlier steers' : '2 earlier steer messages'}] ${a.text} | ${b.text}`;
+    const text = full.slice(0, COALESCE_MAX_CHARS);
+    const droppedChars = full.length - text.length;
+    const merged: SteerMessage = { text, tier, at: a.at, coalesced: true };
     buf.unshift(merged);
-    log.warn({ sessionId, size: buf.length }, 'GW-5 steer buffer overflow — coalesced oldest (never dropped)');
+    if (droppedChars > 0) {
+      log.warn(
+        { sessionId, size: buf.length, droppedChars },
+        'GW-5 steer buffer overflow — coalesced oldest and truncated tail past cap (observable)',
+      );
+    } else {
+      log.warn({ sessionId, size: buf.length }, 'GW-5 steer buffer overflow — coalesced oldest (never dropped)');
+    }
   }
 
   /** Number of buffered steer messages for a session. */

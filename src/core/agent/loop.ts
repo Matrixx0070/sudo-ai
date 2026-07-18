@@ -2137,7 +2137,11 @@ export class AgentLoop extends AgentLoopInjections {
         // never buffers a downgrade of an owner run; we tag the tier so downstream
         // trust checks never see an upgraded run. No-op unless SUDO_MIDRUN_STEER
         // enabled a producer that filled the buffer.
-        {
+        //
+        // LOW-1: cheap flag guard so with steering OFF this is a true no-op — no
+        // drain call, no Map lookup — on every loop iteration. The producer
+        // (turn handler) only ever populates the buffer under the same flag.
+        if (process.env['SUDO_MIDRUN_STEER'] === '1') {
           const steers = getSteerBuffer().drain(state.sessionId);
           for (const st of steers) {
             session.messages.push({

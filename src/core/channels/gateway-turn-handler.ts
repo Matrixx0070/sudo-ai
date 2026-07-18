@@ -70,9 +70,11 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
   const runTurn = async (msg: UnifiedMessage): Promise<void> => {
     const convKey = `${msg.channel}:${msg.peerId}`;
     let laneRelease: (() => void) | null = null;
+    let steerSessionId: string | null = null;
     try {
       const runGen = deps.runGenerations.current(convKey);
       const session = await deps.sessionManager.getOrCreate(msg.channel, msg.peerId);
+      steerSessionId = String(session.id);
       // GW-5/GW-11: register this run so mid-run arrivals can be steered and so
       // one-run-per-session accounting has a source of truth. Unregistered in the
       // finally below.
@@ -126,6 +128,17 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
     } finally {
       if (laneRelease) laneRelease();
       getRunRegistry().endRun(convKey);
+      // MEDIUM-1: drop any steer that landed after the loop's final iteration-boundary
+      // drain but before run-end — otherwise it would be injected into the NEXT run for
+      // this session (mis-delivery). Log the discarded count so the drop is observable.
+      if (steerSessionId !== null && process.env['SUDO_MIDRUN_STEER'] === '1') {
+        const buf = getSteerBuffer();
+        const orphaned = buf.size(steerSessionId);
+        if (orphaned > 0) {
+          buf.clear(steerSessionId);
+          log.debug({ channel: msg.channel, peerId: msg.peerId, discarded: orphaned }, 'GW-5: discarded orphaned steer(s) at run end (not carried into next run)');
+        }
+      }
     }
   };
 

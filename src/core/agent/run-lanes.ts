@@ -153,6 +153,19 @@ export class RunLanes {
   get activeSessionCount(): number { return this.activeSessions.size; }
 
   /**
+   * Count of runs parked in acquireSession — the session mutex is held by another
+   * run, so these are in-flight runs that are not yet lane-active. With the current
+   * single-run-per-peer caller there are never any (upstream per-peer serialization
+   * means at most one run per session key at a time), but drainAndSuspend gates on
+   * this too so it stays correct if a future caller admits same-session concurrency.
+   */
+  private get pendingSessionWaiters(): number {
+    let n = 0;
+    for (const q of this.sessionWaiters.values()) n += q.length;
+    return n;
+  }
+
+  /**
    * Acquire a run slot: the per-session mutex FIRST (one active run per session),
    * then the global lane semaphore. Returns a release fn that frees both. ALWAYS
    * release in a finally.
@@ -209,7 +222,12 @@ export class RunLanes {
     const deadline = now() + timeoutMs;
     for (;;) {
       const anyActive = LANES.some((l) => this.semaphores[l].active > 0);
-      if (!anyActive) { log.info('GW-11: all run lanes drained — safe to suspend'); return true; }
+      // ASSUMPTION: upstream serializes per peer, so a run parked in acquireSession
+      // (mutex held, not yet lane-active) does not occur for today's single caller.
+      // We still gate on it so a future reuse that admits concurrent same-session
+      // runs cannot suspend out from under a waiting run.
+      const anyPending = this.pendingSessionWaiters > 0;
+      if (!anyActive && !anyPending) { log.info('GW-11: all run lanes drained — safe to suspend'); return true; }
       if (now() >= deadline) { log.warn({ stats: this.stats() }, 'GW-11: drain timeout — runs still active'); return false; }
       await new Promise<void>((r) => setTimeout(r, pollMs));
     }

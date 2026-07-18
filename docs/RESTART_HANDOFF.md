@@ -30,12 +30,30 @@ Files live under `DATA_DIR/restart/`:
 - Intent present, **stale** (> 10 min, `DEFAULT_STALE_MS`) ⇒ the previous handoff
   likely failed: `log.error` (surfaces on the Telemetry log tab) and, if the
   intent was Kairos-initiated, Kairos enters a 1h restart **cooldown**
-  (`applyFailedHandoffCooldown`) so a bad restart cannot loop.
+  (`applyFailedHandoffCooldown`) so a *failed* handoff cannot immediately retry.
 - Always writes `ready.json`.
 
-### Kairos cooldown
-`isKairosRestartOnCooldown()` gates the RAM-critical restart branch. After a failed
-handoff Kairos will not restart again for `KAIROS_RESTART_BACKOFF_MS` (1h).
+### Kairos restart guards
+Two independent guards gate the RAM-critical restart branch; both must pass before
+Kairos restarts:
+
+1. **Failed-handoff cooldown** (`isKairosRestartOnCooldown()`). Engages only when a
+   handoff FAILS — the successor never wrote `ready.json`, detected at the next boot
+   as a stale intent. Then Kairos will not restart again for
+   `KAIROS_RESTART_BACKOFF_MS` (1h). This does NOT catch the classic loop where each
+   restart SUCCEEDS (intent cleared, `ready.json` written) yet the condition keeps
+   re-firing — every handoff is clean, so `staleHandoff` is always false.
+
+2. **Restart-frequency ceiling** (`isKairosRestartFrequencyExceeded()`). Trips
+   regardless of handoff success. A rolling record of Kairos-initiated restart
+   timestamps (`data/kairos-restarts.json`, atomic tmp+rename write) refuses another
+   restart once `KAIROS_RESTART_MAX_IN_WINDOW` (3) have occurred within
+   `KAIROS_RESTART_WINDOW_MS` (30 min). The suppression is logged and registered as
+   an observation posture (`acted: false`, actionResult), not silent.
+
+Together these bound *both* the failed-handoff retry storm and the
+succeed-but-still-critical loop. Neither guard is a promise that a restart is always
+correct — only that Kairos cannot restart-loop unbounded.
 
 ## Budgets / invariants
 Pure-local file I/O, zero LLM/network calls, no new recurring job. Systemd remains
