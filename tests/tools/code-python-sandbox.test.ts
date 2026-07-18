@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -51,18 +51,25 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   };
 }
 
-let dockerAvailable = false;
-
-beforeAll(async () => {
-  stopSweeper();
+// Env gate: the container-isolation tests need a reachable Docker daemon
+// (`docker version` must answer); they skip on hosts/CI without Docker.
+// Probed SYNCHRONOUSLY at module load: it.skipIf() captures its condition at
+// collection time, so a probe inside beforeAll() would leave the flag false
+// and permanently skip the integration tests even where Docker works (F126).
+const dockerAvailable = ((): boolean => {
   try {
-    await execFileAsync('docker', ['version', '--format', '{{.Server.Version}}'], {
+    execFileSync('docker', ['version', '--format', '{{.Server.Version}}'], {
       timeout: 5000,
+      stdio: 'ignore',
     });
-    dockerAvailable = true;
+    return true;
   } catch {
-    dockerAvailable = false;
+    return false;
   }
+})();
+
+beforeAll(() => {
+  stopSweeper();
 });
 
 afterAll(async () => {
