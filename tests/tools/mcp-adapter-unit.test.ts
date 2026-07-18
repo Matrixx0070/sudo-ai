@@ -438,3 +438,22 @@ describe('MCPAdapter http transport callTool() (mocked fetch)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('listTools over http transport (dead-path fix)', () => {
+  it('routes tools/list through _httpRpc instead of throwing "_send not used"', async () => {
+    const { MCPAdapter } = await import('../../src/core/tools/mcp-adapter.js');
+    const adapter = new MCPAdapter({ id: 'http-list', transport: 'http', baseUrl: 'http://mcp.example' });
+    (adapter as unknown as { connected: boolean }).connected = true;
+    (adapter as unknown as { httpSession: unknown }).httpSession = { baseUrl: 'http://mcp.example', headers: {} };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'ping', description: 'p' }] } }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const tools = await adapter.listTools();
+      expect(tools).toHaveLength(1);
+      expect(tools[0]!.name).toBe('mcp__http-list__ping');
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
