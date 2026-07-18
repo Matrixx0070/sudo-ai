@@ -425,6 +425,39 @@ async function boot(): Promise<void> {
   });
 
   // -------------------------------------------------------------------------
+  // 3.14 GW-10 — config-ambiguity rejection + flag lint. Ghost flags WARN;
+  // known-bad combos REFUSE BOOT unless SUDO_ALLOW_CONTRADICTORY_CONFIG=1.
+  // -------------------------------------------------------------------------
+  try {
+    const { lintFlags, isContradictionOverride } = await import('./core/config/flag-lint.js');
+    const manifestMod = await import('./core/config/flag-manifest.json', { with: { type: 'json' } });
+    const manifest = ((manifestMod.default ?? manifestMod) as { flags?: string[] }).flags ?? [];
+    const lint = lintFlags(process.env, manifest);
+    for (const g of lint.ghosts) {
+      log.warn({ flag: g }, `ghost flag set but no code reads it: ${g}`);
+    }
+    for (const w of lint.warnings) {
+      log.warn({ config: 'ambiguous' }, w);
+    }
+    if (lint.contradictions.length > 0) {
+      for (const c of lint.contradictions) {
+        log.error({ contradiction: c.id }, `CONFIG CONTRADICTION: ${c.detail}`);
+      }
+      if (!isContradictionOverride()) {
+        throw new Error(
+          `refusing to boot: ${lint.contradictions.length} contradictory config combo(s) — fix them or set SUDO_ALLOW_CONTRADICTORY_CONFIG=1`,
+        );
+      }
+      log.error({ posture: 'weakened' }, 'SUDO_ALLOW_CONTRADICTORY_CONFIG=1 — booting despite contradictory config');
+    }
+  } catch (err) {
+    // A thrown Error here is an intentional boot refusal — rethrow it. Only a
+    // lint-infrastructure failure (missing manifest, import error) is swallowed.
+    if (err instanceof Error && err.message.startsWith('refusing to boot')) throw err;
+    log.warn({ err: String(err) }, 'GW-10 flag lint skipped (lint infrastructure error)');
+  }
+
+  // -------------------------------------------------------------------------
   // 3.15 SecurityGuard — prompt injection detection + tool-call validation
   // -------------------------------------------------------------------------
   let security: import('./core/security/index.js').SecurityGuard | null = null;

@@ -36,6 +36,7 @@ const WEAKENING_FLAGS: ReadonlyArray<WeakeningFlag> = [
   { flag: 'SUDO_SELFBUILD_ALLOW_PROTECTED', effect: 'self-build may write PROTECTED_PATHS' },
   { flag: 'SUDO_MCP_ALLOW_PRIVATE_HOSTS', effect: 'MCP connectors may reach private/loopback hosts (SSRF guard off)' },
   { flag: 'SUDO_ADMIN_API_DANGER', effect: 'dangerous admin API endpoints enabled' },
+  { flag: 'SUDO_ALLOW_CONTRADICTORY_CONFIG', effect: 'GW-10 config-contradiction gate bypassed — daemon boots on known-bad flag combos' },
   // GW-3 fail-open-closure flags: kill-switches that weaken when set to their
   // off-value, plus Kairos' default-active restart authority.
   {
