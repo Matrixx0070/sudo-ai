@@ -199,8 +199,7 @@ do not start**; N5 standing NO; frozen surfaces untouchable (invariant 4).
 | 2.5 | 🟡 F101 slice 1 ✅ 2026-07-18 (dead api/ stack + orphan tool-translator deleted, docs/HTTP_SURFACES.md owners table; tail = dashboard fold + admin-namespace reconcile); F99 next | route parity tests |
 
 ### Phase 3 — Consolidation (PR-sized, interleave freely)
-F98 ✅ 2026-07-18 (one dream engine: memory/auto-dream survives) · F100 channel dedup (Slack ×2, iMessage ×2, stale
-gmail/gcalendar connectors) · F102 money ledger → billing substrate ·
+F98 ✅ 2026-07-18 (one dream engine: memory/auto-dream survives) · F100 ✅ 2026-07-18 (4 stale connectors + paired tools deleted) · F102 money ledger → billing substrate ·
 F103 god-file splits (loop.ts / loop-helpers / brain.ts / cli.ts boot
 phases; mechanical, test-guarded, no behavior change).
 

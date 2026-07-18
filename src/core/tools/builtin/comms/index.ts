@@ -10,11 +10,7 @@
  *   comms.voice   — Text-to-speech (TTS) and speech-to-text (STT) via OpenAI
  *
  * OAuth/vault-backed connectors (5):
- *   comms.gmail        — Gmail OAuth (requires googleapis + vault token)
- *   comms.gcalendar    — Google Calendar OAuth (requires googleapis + vault token)
  *   comms.github-notify — GitHub unread notifications (PAT from vault or GITHUB_TOKEN)
- *   comms.slack-rt     — Slack Bot Token via vault (chat.postMessage)
- *   comms.imessage     — iMessage read-only (macOS only, chat.db)
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -25,11 +21,7 @@ import { webhookTool } from './webhook.js';
 import { notificationTool } from './notification.js';
 import { voiceTool } from './voice.js';
 // OAuth/vault-backed connector tools
-import { gmailTool } from './gmail.js';
-import { gcalendarTool } from './gcalendar.js';
 import { githubNotifyTool } from './github-notify.js';
-import { slackRtTool } from './slack-rt.js';
-import { imessageTool } from './imessage.js';
 import { emailSearchTool, emailReadTool, emailReplyTool } from './email-inbox.js';
 
 /** All comms tools in a stable order. */
@@ -41,11 +33,7 @@ export const COMMS_TOOLS = [
   notificationTool,
   voiceTool,
   // OAuth/vault-backed connectors
-  gmailTool,
-  gcalendarTool,
   githubNotifyTool,
-  slackRtTool,
-  imessageTool,
   // Email inbox (Spec 5) — IMAP search/read + draft-default reply
   emailSearchTool,
   emailReadTool,
@@ -64,6 +52,6 @@ export function registerCommsTools(registry: ToolRegistry): void {
 // Named re-exports for consumers that import individual tools.
 export {
   emailTool, slackTool, smsTool, webhookTool, notificationTool, voiceTool,
-  gmailTool, gcalendarTool, githubNotifyTool, slackRtTool, imessageTool,
+  githubNotifyTool,
   emailSearchTool, emailReadTool, emailReplyTool,
 };
