@@ -25,7 +25,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createLogger } from '../../core/shared/logger.js';
+import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('brain:custom-providers');
 

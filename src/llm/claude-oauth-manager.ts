@@ -19,11 +19,11 @@
  */
 
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { writeFileAtomic } from '../../core/shared/atomic-write.js';
+import { writeFileAtomic } from '../core/shared/atomic-write.js';
 import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { dataPath } from '../../core/shared/paths.js';
-import { createLogger } from '../../core/shared/logger.js';
+import { dataPath } from '../core/shared/paths.js';
+import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('brain:claude-oauth');
 

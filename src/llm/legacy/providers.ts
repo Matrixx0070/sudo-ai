@@ -25,7 +25,7 @@ import {
   isCustomProvider,
   resolveCustomModel,
   listCustomProviders,
-} from './custom-providers.js';
+} from '../custom-providers.js';
 
 const log = createLogger('brain:providers');
 
@@ -247,7 +247,7 @@ const BUILTIN_PROVIDERS: Record<ProviderName, BuiltinProviderSpec> = {
     keyOptional: true, // gating happens via the manager, not env
     modelKind: 'native',
     async create() {
-      const { getClaudeOAuthManager } = await import('./claude-oauth-manager.js');
+      const { getClaudeOAuthManager } = await import('../claude-oauth-manager.js');
       const mgr = getClaudeOAuthManager();
       if (!mgr.isAvailable()) {
         log.warn('claude-oauth: no credentials — run `sudo-ai claude-oauth login`');

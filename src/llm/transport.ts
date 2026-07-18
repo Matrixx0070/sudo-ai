@@ -83,7 +83,7 @@ import {
 import { sha256Hex, type LLMCallRecord } from './logging.js';
 import { sanitizeOAuthToolName } from '../core/brain/tool-schema-compat.js';
 import { resolveThinkingBudget } from '../core/brain/thinking-inject.js';
-import { getCustomProviderWireConfig } from './legacy/custom-providers.js';
+import { getCustomProviderWireConfig } from './custom-providers.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('llm-transport');
@@ -249,7 +249,7 @@ function resolveRoute(alias: string): ResolvedRoute {
  */
 async function authHeaders(r: ResolvedRoute): Promise<Record<string, string>> {
   if (r.provider === 'claude-oauth') {
-    const { getClaudeOAuthManager } = await import('./legacy/claude-oauth-manager.js');
+    const { getClaudeOAuthManager } = await import('./claude-oauth-manager.js');
     const mgr = getClaudeOAuthManager();
     let token = mgr.getAccessToken();
     if (token === null) {

@@ -21,7 +21,7 @@ const oauthMock = {
   refreshToken: vi.fn(async () => true),
   isAvailable: vi.fn(() => true),
 };
-vi.mock('../../src/llm/legacy/claude-oauth-manager.js', () => ({
+vi.mock('../../src/llm/claude-oauth-manager.js', () => ({
   getClaudeOAuthManager: () => oauthMock,
 }));
 

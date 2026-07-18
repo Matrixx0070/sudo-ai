@@ -1,3 +1,3 @@
-// moved to src/llm/legacy/claude-oauth-manager.ts — shim kept so legacy importers survive the
+// moved to src/llm/claude-oauth-manager.ts — shim kept so legacy importers survive the
 // gw-refactor migration; new code imports src/llm/client.ts
-export * from '../../llm/legacy/claude-oauth-manager.js';
+export * from '../../llm/claude-oauth-manager.js';
