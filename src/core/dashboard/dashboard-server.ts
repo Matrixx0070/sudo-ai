@@ -440,6 +440,11 @@ export class DashboardServer {
     log.info({ prefix }, 'Dashboard mounted on gateway server (Slice D/3, SUDO_GATEWAY_UI_ON_MAIN)');
   }
 
+  /** GW-4: true when the standalone HTTP listener is active (test/introspection). */
+  isListening(): boolean {
+    return this.server !== null;
+  }
+
   /** True iff loopback-trust GET-skip-auth is active (set by boot wiring based on bindAddress). */
   isLoopbackTrust(): boolean {
     return this.config.loopbackTrust === true;
@@ -864,7 +869,12 @@ export function initDashboard(config: DashboardConfig): DashboardServer {
     return dashboardInstance;
   }
   dashboardInstance = new DashboardServer(config);
-  dashboardInstance.start();
+  if (config.standalone === false) {
+    // GW-4: folded onto the main gateway port — no second listener.
+    log.info('Dashboard standalone listener suppressed (folded onto the gateway port — GW-4; set SUDO_DASHBOARD_STANDALONE=1 to restore)');
+  } else {
+    dashboardInstance.start();
+  }
   return dashboardInstance;
 }
 

@@ -3909,6 +3909,14 @@ async function boot(): Promise<void> {
       ...(fleetNonceStore ? { fleetNonceStore } : {}),
     });
 
+    // GW-4: fold the dashboard onto the main gateway port (18900) by DEFAULT.
+    // SUDO_GATEWAY_UI_ON_MAIN=0 restores the split; SUDO_DASHBOARD_STANDALONE=1
+    // (or a missing gateway server) keeps the legacy 18910 listener for rollback.
+    const uiOnMain = gatewayServer != null && process.env['SUDO_GATEWAY_UI_ON_MAIN'] !== '0';
+    const wantStandalone = !uiOnMain || process.env['SUDO_DASHBOARD_STANDALONE'] === '1';
+    if (process.env['SUDO_DASHBOARD_PORT'] !== undefined && uiOnMain && !wantStandalone) {
+      log.warn({ port: dashboardPort }, 'SUDO_DASHBOARD_PORT is deprecated and ignored — the dashboard is served from the main gateway port (18900). Set SUDO_DASHBOARD_STANDALONE=1 to restore the standalone listener.');
+    }
     const dashboardInstance = initDashboard({
       port: dashboardPort,
       authToken: dashboardToken,
@@ -3916,13 +3924,14 @@ async function boot(): Promise<void> {
       bindAddress: dashboardBind,
       hostAllowlist,
       loopbackTrust,
+      standalone: wantStandalone,
     });
     registerShutdown(() => shutdownDashboard());
     // Slice D/3: also fold the dashboard onto the main gateway port under
     // /__dashboard__/ (SUDO_GATEWAY_UI_ON_MAIN=1). Additive — the standalone
     // dashboard port keeps running for rollback; the mount shares the unified auth
     // boundary (Slice D/1–D/2). The route-owner guard defers /__dashboard__ paths.
-    if (gatewayServer && process.env['SUDO_GATEWAY_UI_ON_MAIN'] === '1') {
+    if (uiOnMain && gatewayServer) {
       dashboardInstance.mountOnGatewayServer(gatewayServer);
     }
     log.info({

@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 623,
+  "count": 624,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -178,6 +178,7 @@
     "SUDO_DASHBOARD_OAUTH_REQUIRED_SCOPE",
     "SUDO_DASHBOARD_PORT",
     "SUDO_DASHBOARD_RESTART_NOEXIT",
+    "SUDO_DASHBOARD_STANDALONE",
     "SUDO_DASHBOARD_TOKEN",
     "SUDO_DATA_RETENTION_OPT_OUT",
     "SUDO_DEBATE_CHAMBER",

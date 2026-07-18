@@ -18,8 +18,8 @@
  */
 
 import type http from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
 import { adminRouter } from '../admin-router.js';
+import { authenticateHttp, hasScope } from '../../gateway/auth.js';
 import { registerAdminHandlers } from './index.js';
 import { createLogger } from '../../shared/logger.js';
 
@@ -39,13 +39,15 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(JSON.stringify(body));
 }
 
-/** Constant-time Bearer check against the configured admin token. */
-function isAuthorized(req: http.IncomingMessage, tokenBuf: Buffer): boolean {
-  const header = (req.headers['authorization'] ?? '') as string;
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  if (!m) return false;
-  const cand = Buffer.from(m[1]!.trim(), 'utf8');
-  return cand.length === tokenBuf.length && timingSafeEqual(cand, tokenBuf);
+/**
+ * GW-4: authenticate through the unified resolver (gateway/auth.ts) requiring
+ * operator.admin — the SAME boundary as /v1/admin/*. Replaces the bespoke
+ * per-surface Bearer compare so there is no drift surface. GATEWAY_TOKEN (or a
+ * loopback-trusted request) grants operator.admin.
+ */
+function isAuthorized(req: http.IncomingMessage): boolean {
+  const principal = authenticateHttp(req, { accept: ['gateway-token', 'loopback'] });
+  return principal.ok && hasScope(principal, 'operator.admin');
 }
 
 /**
@@ -66,7 +68,6 @@ export async function registerAdminApi(server: http.Server): Promise<boolean> {
     );
     return false;
   }
-  const tokenBuf = Buffer.from(adminToken, 'utf8');
   // Danger flag captured at mount time — a runtime change requires a restart
   // (intentional: the irreversible routes stay fail-closed until reboot).
   const dangerOn = process.env['SUDO_ADMIN_API_DANGER'] === '1';
@@ -92,7 +93,7 @@ export async function registerAdminApi(server: http.Server): Promise<boolean> {
     }
 
     // Auth gate — BEFORE dispatch, so unauthenticated callers never reach a handler.
-    if (!isAuthorized(req, tokenBuf)) {
+    if (!isAuthorized(req)) {
       sendJson(res, 401, { error: { message: 'Unauthorized', code: 401 } });
       return;
     }
@@ -118,7 +119,7 @@ export async function registerAdminApi(server: http.Server): Promise<boolean> {
 
   log.warn(
     { dangerRoutesEnabled: dangerOn },
-    'Admin API MOUNTED at /api/admin/* (Bearer token-gated). Irreversible routes '
+    'Admin API MOUNTED at /api/admin/* (DEPRECATED prefix — /v1/admin/* is canonical; unified operator.admin auth). Irreversible routes '
       + '(service/restart, service/stop, system/backup, system/restore) '
       + (dangerOn ? 'are ENABLED (SUDO_ADMIN_API_DANGER=1).' : 'return 403 until SUDO_ADMIN_API_DANGER=1.'),
   );
