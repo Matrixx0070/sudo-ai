@@ -5,9 +5,6 @@
  * system prompt assembly, token cost tracking, and streaming support.
  */
 
-// generateText is imported ONLY for its result type (BrainCompletion below);
-// no ai-SDK wire call remains in brain (F97 — the IR transport owns the wire).
-import { generateText } from 'ai';
 import { createHash, randomUUID } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } from '../shared/prompt-cache-telemetry.js';
@@ -62,401 +59,48 @@ import { ToolRegistry } from '../tools/registry.js';
 import { tryParseJson, isJsonRepairEnabled } from '../tools/json-repair.js';
 import type { NegativeRouter, RoutingResult } from './negative-router.js';
 import type { HistoryMessage } from '../agent/cheap-model-router.js';
+import {
+  GATEWAY_ERROR_CLASS,
+  failoverBackoffMs,
+  MAX_FAILOVER_ATTEMPTS,
+  sleep,
+  resolveModelSwitch,
+} from './brain-failover-policy.js';
+import { splitConcatenatedJsonObjects, findBalancedJsonObjects } from './brain-json-scan.js';
+import { readFoldSystemEnabled, extractSystemMessageContent, buildEffectiveSystemPrompt } from './brain-messages.js';
+import type { BrainCompletion } from './brain-completion.js';
 
 const log = createLogger('brain');
 
-/**
- * gw-refactor Phase 5: ErrorCategory (failover layer) → LLMErrorClass
- * (src/llm/errors.ts taxonomy) for the terminal-failure gateway-log row.
- * Local copy of the mapping in src/llm/errors.ts (CATEGORY_TO_CLASS is not
- * exported); brain already holds a categorized error at the throw sites, so
- * mapping it directly is cheaper than re-classifying the raw thrown value.
- */
-const GATEWAY_ERROR_CLASS: Record<ErrorCategory, string> = {
-  rate_limit: 'rate_limited',
-  overloaded: 'overloaded',
-  timeout: 'timeout',
-  context_overflow: 'context_exceeded',
-  billing: 'billing',
-  auth: 'auth',
-  auth_permanent: 'auth',
-  model_not_found: 'invalid_request',
-  format: 'invalid_request',
-  session_expired: 'invalid_request',
-};
-
-/**
- * Per-attempt backoff cap (ms) for failover when a provider is overloaded /
- * transient / timing out. Raised 5s → 15s and tunable via
- * SUDO_FAILOVER_BACKOFF_CAP_MS so a multi-second-to-minute cloud incident can
- * be ridden out instead of immediately surfacing "All failover attempts
- * failed". Clamped to [1s, 60s].
- */
-export const FAILOVER_BACKOFF_CAP_MS = Math.min(
-  60_000,
-  Math.max(1_000, Number(process.env['SUDO_FAILOVER_BACKOFF_CAP_MS']) || 15_000),
-);
-
-/**
- * Backoff between sequential failover attempts when the previous profile
- * failed with a transient/overloaded category. Without this, the entire
- * chain fires in <2ms — a single anthropic blip 500s opus, sonnet, and
- * any same-window upstream simultaneously (observed live 2026-06-17 02:40).
- * If the upstream sent a retry-after header, honour it (capped). Otherwise
- * exponential: 250ms × 2^attempt, capped at FAILOVER_BACKOFF_CAP_MS.
- *
- * Kill-switch: SUDO_FAILOVER_BACKOFF_DISABLE=1 restores the zero-wait
- * burst (default off — always wait).
- */
-export function failoverBackoffMs(category: string, attempt: number, retryAfterMs?: number): number {
-  if (process.env['SUDO_FAILOVER_BACKOFF_DISABLE'] === '1') return 0;
-  if (category !== 'overloaded' && category !== 'transient' && category !== 'timeout') return 0;
-  if (typeof retryAfterMs === 'number' && retryAfterMs > 0) {
-    return Math.min(retryAfterMs, FAILOVER_BACKOFF_CAP_MS);
-  }
-  // Guard against a NaN/undefined/huge attempt counter: Math.pow(2, NaN) = NaN,
-  // Math.min(cap, NaN) = NaN, and setTimeout(fn, NaN) fires immediately —
-  // re-creating the zero-wait thundering-herd this backoff exists to prevent.
-  const safeAttempt = Number.isFinite(attempt) ? Math.max(0, Math.floor(attempt)) : 0;
-  const exp = Math.min(safeAttempt, 20);
-  return Math.min(FAILOVER_BACKOFF_CAP_MS, 250 * Math.pow(2, exp));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Maximum number of provider failover attempts per call. Raised 6 → 10 and
- * tunable via SUDO_FAILOVER_MAX_ATTEMPTS (clamped [1, 30]). Combined with the
- * 15s FAILOVER_BACKOFF_CAP_MS, a fully-overloaded chain now rides out ~60-75s
- * before surfacing an error (was ~9s) — per the operator's request to keep
- * retrying past 60s on a total upstream outage.
- *
- * Trade-off: when EVERY provider is down, a single reply can now take up to
- * ~75s instead of failing fast. Normal operation is unaffected — backoff only
- * applies to overloaded/transient/timeout categories, which are rare.
- */
-export const MAX_FAILOVER_ATTEMPTS = Math.min(
-  30,
-  Math.max(1, Number(process.env['SUDO_FAILOVER_MAX_ATTEMPTS']) || 10),
-);
-
 // ---------------------------------------------------------------------------
-// Concatenated-JSON splitter — handles LLMs that batch multiple tool call
-// argument objects into a single arguments string, e.g. grok-3 via xai.
+// F103 mechanical slimming: the free-standing helpers that used to live here
+// moved verbatim to sibling modules. Re-export every previously-exported
+// symbol so ALL existing importers (agent loop-helpers, verify-gate-critic,
+// subagent-resume, tests) compile unchanged.
 // ---------------------------------------------------------------------------
-
-/**
- * Split a string that may contain one or more concatenated JSON objects.
- *
- * The scanner tracks brace depth and whether it is inside a JSON string
- * literal (respecting backslash-escape sequences), so values that contain
- * literal `{` or `}` characters inside strings are handled correctly.
- *
- * @param raw - The raw arguments string from the LLM.
- * @returns An array of parsed objects; empty array on total failure.
- */
-export function splitConcatenatedJsonObjects(raw: string): Record<string, unknown>[] {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith('{')) return [];
-
-  const results: Record<string, unknown>[] = [];
-  let depth = 0;
-  let inString = false;
-  let escapeNext = false;
-  let objectStart = -1; // sentinel: -1 = not currently inside a top-level object
-
-  for (let i = 0; i < trimmed.length; i++) {
-    const ch = trimmed[i];
-
-    if (escapeNext) {
-      escapeNext = false;
-      continue;
-    }
-
-    if (ch === '\\' && inString) {
-      escapeNext = true;
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) continue;
-
-    if (ch === '{') {
-      if (depth === 0) objectStart = i;
-      depth++;
-    } else if (ch === '}') {
-      depth--;
-      if (depth < 0) {
-        // Unbalanced closing brace — input is corrupt. A stale objectStart from
-        // a prior segment would slice the wrong bytes, so abort rather than
-        // emit garbage that could drive tool dispatch with wrong arguments.
-        log.warn({ at: i }, 'splitConcatenatedJsonObjects: unbalanced closing brace — aborting parse');
-        return [];
-      }
-      if (depth === 0 && objectStart >= 0) {
-        const segment = trimmed.slice(objectStart, i + 1);
-        objectStart = -1;
-        try {
-          const parsed = JSON.parse(segment) as Record<string, unknown>;
-          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            results.push(parsed);
-          }
-        } catch {
-          // malformed segment — skip it
-        }
-      }
-    }
-  }
-
-  if (depth !== 0) {
-    // Trailing object truncated mid-stream (depth never returned to 0). Nothing
-    // partial was pushed (we only push on depth===0), but surface it so callers
-    // can tell "no tool calls" from "tool calls truncated".
-    log.warn({ depth }, 'splitConcatenatedJsonObjects: truncated trailing object — ignored');
-  }
-
-  return results;
-}
-
-/**
- * Scan arbitrary text for ALL balanced top-level JSON objects, returning each
- * `{...}` substring. Unlike splitConcatenatedJsonObjects this does NOT require
- * the text to start with `{` — it locates objects embedded anywhere (e.g. an
- * LLM that wraps a `{"tool_calls":[...]}` payload in prose). String/escape
- * aware, O(n), no regex backtracking.
- */
-function findBalancedJsonObjects(text: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let inString = false;
-  let escapeNext = false;
-  let objectStart = -1;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-
-    if (escapeNext) { escapeNext = false; continue; }
-    if (ch === '\\' && inString) { escapeNext = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-
-    if (ch === '{') {
-      if (depth === 0) objectStart = i;
-      depth++;
-    } else if (ch === '}') {
-      if (depth === 0) continue; // stray closing brace outside any object — ignore
-      depth--;
-      if (depth === 0 && objectStart >= 0) {
-        out.push(text.slice(objectStart, i + 1));
-        objectStart = -1;
-      }
-    }
-  }
-
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Message format conversion: internal BrainMessage -> Vercel AI SDK ModelMessage
-// ---------------------------------------------------------------------------
-
-/**
- * Convert our internal BrainMessage[] to the format that Vercel AI SDK's
- * generateText/streamText expects (ModelMessage[]).
- *
- * Key differences:
- * - Assistant messages with tool calls use content array with ToolCallPart objects
- * - Tool result messages use content array with ToolResultPart objects
- */
-/**
- * Opt-in (SUDO_FOLD_SYSTEM_MESSAGES=1). `toSDKMessages` drops every role:'system'
- * message from request.messages (the SDK requires system content via the `system`
- * param, not the array). That silently discards ALL in-loop guidance injected as
- * system messages — auto-plan PLAN, compaction/session-fork summaries, safety
- * warnings, routing hints, etc. — so the model never sees them. When this flag is
- * on, their content is FOLDED into the `system` param instead, so it actually
- * reaches the model. Default OFF: flipping it delivers many previously-inert
- * injections at once — a real behavior + token change — so measure before enabling.
- */
-export function readFoldSystemEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env['SUDO_FOLD_SYSTEM_MESSAGES'] === '1';
-}
-
-/** Concatenate non-empty role:'system' message contents, in order (for folding). */
-export function extractSystemMessageContent(messages: BrainMessage[]): string {
-  return messages
-    .filter((m) => m.role === 'system' && typeof m.content === 'string' && m.content.trim().length > 0)
-    .map((m) => m.content)
-    .join('\n\n');
-}
-
-/**
- * The effective system prompt: the base persona `systemPrompt` with any
- * request-array system messages appended, when folding is enabled. Pure +
- * exported for tests. Disabled or no system messages → returns `systemPrompt`
- * unchanged (byte-identical to prior behavior). NOTE: when folding AND Anthropic
- * prompt-caching are both on, the per-turn folded suffix reduces cache hits on
- * the system prefix — acceptable for this opt-in flag; prod (ollama) is uncached.
- */
-export function buildEffectiveSystemPrompt(
-  systemPrompt: string,
-  messages: BrainMessage[],
-  enabled: boolean = readFoldSystemEnabled(),
-): string {
-  if (!enabled) return systemPrompt;
-  const folded = extractSystemMessageContent(messages);
-  return folded.length > 0 ? `${systemPrompt}\n\n${folded}` : systemPrompt;
-}
-
-/**
- * Cache-safe fold for the Anthropic prompt-cache path: returns the folded
- * content as a SEPARATE, uncached leading system message (no cache_control) to
- * sit AFTER `buildCachedSystemMessages(systemPrompt)`. This keeps the cached
- * persona prefix byte-identical turn to turn (cache hits preserved); the
- * per-turn folded content is simply uncached input — which it must be, since
- * new dynamic content can never be cached. Empty / disabled → [] (no-op).
- */
-export function buildFoldedSystemMessages(
-  messages: BrainMessage[],
-  enabled: boolean = readFoldSystemEnabled(),
-): Array<{ role: 'system'; content: string }> {
-  if (!enabled) return [];
-  const folded = extractSystemMessageContent(messages);
-  return folded.length > 0 ? [{ role: 'system', content: folded }] : [];
-}
-
-export function toSDKMessages(messages: BrainMessage[]): unknown[] {
-  return messages
-    .filter((msg) => {
-      // System messages are handled via the 'system' param of generateText.
-      // Including them in the messages array causes SDK schema validation errors.
-      if (msg.role === 'system') {
-        // Expected + handled, not an error: system content belongs in the
-        // `system` param, and with SUDO_FOLD_SYSTEM_MESSAGES=1 it's folded in
-        // (no loss). Routine → debug. (Was 90+/run of WARN noise for a by-design
-        // drop — the single highest-frequency warning in the daemon logs.)
-        log.debug(
-          { contentPreview: String(msg.content ?? '').slice(0, 80) },
-          'system-role message routed out of request.messages array (handled via system prompt / folding)',
-        );
-        return false;
-      }
-      return true;
-    })
-    .map((msg) => {
-      // Assistant message with tool calls: convert to content array format.
-      // The SDK expects ToolCallPart objects in the content array.
-      if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-        const contentParts: unknown[] = [];
-        if (msg.content) {
-          contentParts.push({ type: 'text', text: msg.content });
-        }
-        for (const tc of msg.toolCalls) {
-          contentParts.push({
-            type: 'tool-call',
-            toolCallId: tc.id,
-            toolName: tc.name,
-            // Ensure input is always an object, never null/undefined.
-            input: tc.arguments ?? {},
-          });
-        }
-        return { role: 'assistant', content: contentParts };
-      }
-
-      // Tool result message: ALWAYS convert to content array with tool-result parts.
-      // The SDK v6 requires role='tool', content = array of ToolResultPart.
-      // Never let a tool message fall through to plain string content — SDK rejects it.
-      if (msg.role === 'tool') {
-        let callId = msg.toolCallId;
-        if (!callId) {
-          // A missing toolCallId from upstream is a bug worth surfacing. Use a
-          // collision-free UUID (Date.now() collides for two tool messages in
-          // the same ms, cross-wiring tool results back to the wrong call).
-          callId = `fallback_${randomUUID()}`;
-          log.warn({ toolName: msg.toolName }, 'tool message missing toolCallId — synthesised fallback id');
-        }
-        return {
-          role: 'tool',
-          content: [{
-            type: 'tool-result',
-            toolCallId: callId,
-            toolName: msg.toolName ?? '',
-            output: { type: 'text', value: typeof msg.content === 'string' ? msg.content : String(msg.content ?? '') },
-          }],
-        };
-      }
-
-      // User message with image attachments: convert to multi-part content so
-      // vision-capable models actually receive the pixels. Without this the
-      // images field was silently dropped and the model saw text only — the
-      // vision-via-Brain path answered "no image attached" on every real call.
-      if (msg.role === 'user' && msg.images && msg.images.length > 0) {
-        const parts: unknown[] = [];
-        const text = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
-        if (text) parts.push({ type: 'text', text });
-        for (const img of msg.images) {
-          parts.push({
-            type: 'image',
-            image: img.type === 'url' ? new URL(img.data) : img.data,
-            ...(img.mediaType ? { mediaType: img.mediaType } : {}),
-          });
-        }
-        return { role: 'user', content: parts };
-      }
-
-      // Plain assistant and user messages pass through as-is.
-      return { role: msg.role, content: msg.content ?? '' };
-    });
-}
+export {
+  FAILOVER_BACKOFF_CAP_MS,
+  failoverBackoffMs,
+  MAX_FAILOVER_ATTEMPTS,
+  resolveModelSwitch,
+} from './brain-failover-policy.js';
+export { splitConcatenatedJsonObjects } from './brain-json-scan.js';
+export {
+  readFoldSystemEnabled,
+  extractSystemMessageContent,
+  buildEffectiveSystemPrompt,
+  buildFoldedSystemMessages,
+  toSDKMessages,
+} from './brain-messages.js';
 
 // ---------------------------------------------------------------------------
 // Brain class
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve a /model switch target against the configured failover chain.
- * Accepts the full "provider/model-id" ref or the bare model id, both
- * case-insensitive. Returns the canonical configured ref, or null when the
- * target is not configured (switching to arbitrary unconfigured models would
- * bypass the failover chain and provider key setup).
- */
-export function resolveModelSwitch(configured: string[], target: string): string | null {
-  const t = target.trim().toLowerCase();
-  if (!t) return null;
-  return (
-    configured.find((m) => m.toLowerCase() === t) ??
-    configured.find((m) => m.toLowerCase().split('/').pop() === t) ??
-    null
-  );
-}
-
 /** Minimal interface required from a RAG engine — avoids importing RAGEngine directly. */
 interface RAGEngineInterface {
   retrieveContext(query: string, maxChunks?: number): Promise<string>;
 }
-
-/**
- * The subset of a resolved generateText result that `_callSingleModel` consumes.
- * A full generateText result is structurally assignable to this; the streaming
- * path (`_completeOnce` for claude-oauth) reconstructs it from streamText's
- * aggregate promises. `reasoning`/`providerMetadata` stay `unknown` because the
- * downstream code already accesses them through casts and tolerates absence.
- */
-type BrainCompletion = {
-  text: Awaited<ReturnType<typeof generateText>>['text'];
-  toolCalls: Awaited<ReturnType<typeof generateText>>['toolCalls'];
-  usage: Awaited<ReturnType<typeof generateText>>['usage'];
-  finishReason: Awaited<ReturnType<typeof generateText>>['finishReason'];
-  reasoning: unknown;
-  reasoningText: string | undefined;
-  providerMetadata: unknown;
-};
 
 /** Core LLM interface with failover, persona, and mood management. */
 export class Brain {
