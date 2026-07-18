@@ -230,15 +230,37 @@ export async function checkApiKeys(): Promise<HealthCheck> {
     (val && val.trim().length >= 8 ? present : missing).push(provider);
   }
 
+  // 2026-07-18: oauth-era awareness. Prod deliberately runs the anthropic and
+  // xai lanes on OAuth managers with NO env keys — treating those lanes as
+  // "missing" made this check permanently degraded and (with the old re-alert
+  // policy) the top Telegram spam source. A live oauth store counts as a
+  // present auth source and clears its env-key twin from the missing list.
+  try {
+    const { getClaudeOAuthManager } = await import('../../llm/claude-oauth-manager.js');
+    if (getClaudeOAuthManager().isAvailable()) {
+      present.push('claude-oauth');
+      const i = missing.indexOf('anthropic');
+      if (i >= 0) missing.splice(i, 1);
+    }
+  } catch { /* manager unavailable — env keys speak for themselves */ }
+  try {
+    const { getXaiOAuthManager } = await import('../../llm/xai-oauth-manager.js');
+    if (getXaiOAuthManager().status().connected) {
+      present.push('xai-oauth');
+      const i = missing.indexOf('xai');
+      if (i >= 0) missing.splice(i, 1);
+    }
+  } catch { /* manager unavailable */ }
+
   if (present.length === 0) {
-    return { name, status: 'critical', message: `All API keys missing: ${missing.join(', ')}`, lastCheck: ts };
+    return { name, status: 'critical', message: `No usable auth source: ${missing.join(', ')} all missing`, lastCheck: ts };
   }
-
-  if (missing.length > 0) {
-    return { name, status: 'degraded', message: `${present.length} key(s) present (${present.join(', ')}); missing: ${missing.join(', ')}`, lastCheck: ts };
+  // 2+ usable sources = failover possible = healthy operation; a single
+  // source is worth a (once, per the new alert policy) heads-up.
+  if (present.length === 1) {
+    return { name, status: 'degraded', message: `Single auth source (${present[0]}); unconfigured: ${missing.join(', ')}`, lastCheck: ts };
   }
-
-  return { name, status: 'healthy', message: `All ${present.length} API keys present`, lastCheck: ts };
+  return { name, status: 'healthy', message: `${present.length} auth sources usable (${present.join(', ')})${missing.length > 0 ? `; unconfigured: ${missing.join(', ')}` : ''}`, lastCheck: ts };
 }
 
 // ---------------------------------------------------------------------------

@@ -102,6 +102,8 @@ export class Watchdog {
   private brainLivenessCheck: (() => Promise<HealthCheck>) | null = null;
   private alertPolicy = new HealthAlertPolicy({
     cooldownMs: parsePositiveInt(process.env['SUDO_HEALTH_ALERT_COOLDOWN_MS'], 2_700_000),
+    // Unchanged still-broken states remind at most daily (2026-07-18 anti-spam fix).
+    reminderMs: parsePositiveInt(process.env['SUDO_HEALTH_ALERT_REMINDER_MS'], 86_400_000),
     degradedConsecutiveThreshold: 3,
   });
 
