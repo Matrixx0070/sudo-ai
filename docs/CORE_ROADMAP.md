@@ -196,7 +196,7 @@ do not start**; N5 standing NO; frozen surfaces untouchable (invariant 4).
 | 2.2 | ✅ 2026-07-18 F97 stage b: brain/client/coder-tools on IR; key-rotation ported (apiKeyOverride); buffered-call deadline added | conformance green |
 | 2.3 | ✅ 2026-07-18 F97 stage c: legacy+shims deleted, LLM_IR_CALLERS retired | grep-guard test: no src/llm/legacy imports |
 | 2.4 | 🟡 2026-07-18 F97 gate: replay 408 prompts 0 material (shadow-replay-f97.json); deploy + live smoke pending merge | SHADOW report + live turns |
-| 2.5 | F101 HTTP/admin dedup, then F99 session-store layering doc/merge (post-F97 only) | route parity tests |
+| 2.5 | 🟡 F101 slice 1 ✅ 2026-07-18 (dead api/ stack + orphan tool-translator deleted, docs/HTTP_SURFACES.md owners table; tail = dashboard fold + admin-namespace reconcile); F99 next | route parity tests |
 
 ### Phase 3 — Consolidation (PR-sized, interleave freely)
 F98 one dream engine · F100 channel dedup (Slack ×2, iMessage ×2, stale
