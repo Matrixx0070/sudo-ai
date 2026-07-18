@@ -210,101 +210,9 @@ const optimizerTool: ToolDefinition = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// earning.revenue
-// ---------------------------------------------------------------------------
-
-const revenueTool: ToolDefinition = {
-  name: 'earning.revenue',
-  description:
-    'Track revenue milestones, compute ROI vs API costs, and generate revenue reports for any time period. Integrates with YouTube Analytics data.',
-  category: 'earning',
-  timeout: 30_000,
-  parameters: {
-    action: {
-      type: 'string',
-      required: true,
-      description: 'Operation to perform.',
-      enum: ['get-report', 'check-milestones', 'record-cost'],
-    },
-    period: {
-      type: 'string',
-      description: 'Period for get-report: ISO prefix like "2026-03", "2026", or "all" (default: all).',
-      default: 'all',
-    },
-    costUsd: {
-      type: 'number',
-      description: 'API cost in USD to record for ROI calculation (required for record-cost).',
-    },
-  },
-
-  async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-    const action = params['action'] as string;
-    logger.info({ session: ctx.sessionId, action }, 'earning.revenue invoked');
-
-    try {
-      const { EarningTracker } = await import('../../../earning/tracker.js');
-      const { RevenueTracker } = await import('../../../earning/revenue.js');
-
-      const earningTracker = new EarningTracker();
-      const revenueTracker = new RevenueTracker(earningTracker);
-
-      switch (action) {
-        case 'get-report': {
-          const period = (params['period'] as string | undefined) ?? 'all';
-          const topVideos = earningTracker.getTopVideos(50);
-          const report = revenueTracker.getReport(period, topVideos);
-          return {
-            success: true,
-            output: [
-              `Revenue report (${report.period}):`,
-              `Total revenue: $${report.totalRevenue.toFixed(2)}`,
-              `Total views: ${report.totalViews.toLocaleString()}`,
-              `Cost vs revenue: $${report.costVsRevenue.toFixed(2)}`,
-              `Top videos: ${report.topVideos.slice(0, 3).map((v) => v.title || v.youtubeId).join(', ')}`,
-            ].join('\n'),
-            data: report,
-          };
-        }
-
-        case 'check-milestones': {
-          const totalRevenue = earningTracker.getRevenue('all');
-          const newlyReached = revenueTracker.checkMilestones();
-          return {
-            success: true,
-            output: newlyReached.length > 0
-              ? `New milestones reached: ${newlyReached.map((m) => `${m.label} ($${m.amount})`).join(', ')}`
-              : `No new milestones. Total revenue: $${totalRevenue.toFixed(2)}`,
-            data: { newlyReached, totalRevenue },
-          };
-        }
-
-        case 'record-cost': {
-          const costUsd = params['costUsd'] as number | undefined;
-          if (costUsd === undefined || costUsd === null) {
-            return { success: false, output: 'costUsd is required for record-cost.' };
-          }
-          if (typeof costUsd !== 'number' || costUsd < 0) {
-            return { success: false, output: 'costUsd must be a non-negative number.' };
-          }
-          revenueTracker.recordApiCost(costUsd);
-          return {
-            success: true,
-            output: `API cost of $${costUsd.toFixed(4)} recorded for ROI tracking.`,
-            data: { recorded: costUsd },
-          };
-        }
-
-        default:
-          return { success: false, output: `Unknown action: ${action}` };
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error({ action, err: msg }, 'earning.revenue error');
-      return { success: false, output: `Revenue tracker error: ${msg}` };
-    }
-  },
-};
+// (F102) earning.revenue tool retired 2026-07-18 — its RevenueTracker was
+// constructed fresh per invocation (record-cost/check-milestones state died
+// at call end); revenue reporting lives in earning.tracker get-revenue.
 
 // ---------------------------------------------------------------------------
 // Registration
@@ -313,7 +221,6 @@ const revenueTool: ToolDefinition = {
 const EARNING_TOOLS: ToolDefinition[] = [
   trackerTool,
   optimizerTool,
-  revenueTool,
 ];
 
 /**
