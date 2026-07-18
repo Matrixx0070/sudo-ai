@@ -1616,6 +1616,23 @@ async function boot(): Promise<void> {
         if (tracePruneTimer.unref) tracePruneTimer.unref();
         registerShutdown(() => clearInterval(tracePruneTimer));
 
+        // F113/F114 — retention sweep for unbounded stores + WAL hygiene.
+        // Boot pass (detached) + daily. Kill-switch SUDO_RETENTION_SWEEP=0.
+        try {
+          const { runRetentionSweep } = await import('./core/health/retention-sweep.js');
+          setTimeout(() => {
+            try { runRetentionSweep(); } catch (err) { log.warn({ err: String(err) }, 'retention sweep (boot) failed'); }
+          }, 30_000).unref?.();
+          const retentionTimer = setInterval(() => {
+            try { runRetentionSweep(); } catch (err) { log.warn({ err: String(err) }, 'retention sweep failed'); }
+          }, 24 * 60 * 60 * 1000);
+          retentionTimer.unref?.();
+          registerShutdown(() => clearInterval(retentionTimer));
+          log.info('Retention sweep scheduled (boot+30s, then daily) — SUDO_RETENTION_SWEEP=0 disables');
+        } catch (err) {
+          log.warn({ err: String(err) }, 'retention sweep wiring failed — continuing');
+        }
+
         // Repair flywheel (REPORT-ONLY, Phase A): periodically mine trace failures
         // for addressable/learnable clusters and flag system-bug failure signatures
         // (e.g. the read-file guard depth bug it surfaced). No behavior change — it
