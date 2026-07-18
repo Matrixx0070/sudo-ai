@@ -59,6 +59,12 @@ import { runGenerations } from './core/sessions/run-generation.js';
 import { AgentLoop } from './core/agent/loop.js';
 import { approvalManager } from './core/agent/approval.js';
 import { TelegramAdapter } from './core/channels/telegram.js';
+// GW-5/GW-11: steer producer wiring so the web /api/message path gets mid-run
+// steering + run-lane accounting on par with the router channels.
+import { getRunRegistry } from './core/agent/run-registry.js';
+import { getRunLanes } from './core/agent/run-lanes.js';
+import { getSteerBuffer } from './core/agent/steer-buffer.js';
+import { getQueueModeStore, decideQueueMode } from './core/channels/queue-modes.js';
 import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
 import { normalizeReplyText } from './core/channels/empty-reply.js';
@@ -2362,15 +2368,51 @@ async function boot(): Promise<void> {
         reply: (text) => web.send(msg.peerId, text),
       })) return;
 
+      // GW-5 mid-run steering (parity with the router channels). If a run is
+      // already active for THIS web session and steering is enabled, steer the
+      // message into it instead of queueing a full new turn behind it. Web chat
+      // is owner-gated, so the message tier is owner.
+      if (process.env['SUDO_MIDRUN_STEER'] === '1') {
+        const steerKey = `${msg.channel}:${msg.peerId}`;
+        const activeRun = getRunRegistry().get(steerKey);
+        if (activeRun) {
+          const decision = decideQueueMode({
+            mode: getQueueModeStore().resolve(msg.channel, msg.peerId),
+            activeRun: true,
+            isMedia: (msg.media?.length ?? 0) > 0,
+            isCommand: false,
+            runTier: activeRun.tier,
+            msgTier: 'owner',
+          });
+          if (decision.action === 'steer') {
+            getSteerBuffer().push(activeRun.sessionId, msg.text ?? '', decision.tier);
+            log.info({ peerId: msg.peerId, tier: decision.tier }, 'GW-5: web message steered into the active run');
+            return;
+          }
+          if (decision.action === 'interrupt' && activeRun.abort) {
+            activeRun.abort('interrupted by a newer message');
+          }
+        }
+      }
+
       // Serialized per-peer: enqueue so concurrent messages from the same user
       // never overlap on the same session (prevents race conditions).
       dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
         // taskStartMs measured at execution time (excludes queue wait).
         const taskStartMs = Date.now();
+        const convKey = `${msg.channel}:${msg.peerId}`;
+        let steerSessionId: string | null = null;
+        let laneRelease: (() => void) | null = null;
         try {
-          const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
+          // GW-5/GW-11: register this web run so mid-run arrivals steer into it and
+          // one-run-per-session accounting is correct. Unregistered in the finally.
+          steerSessionId = String(session.id);
+          getRunRegistry().beginRun({ key: convKey, sessionId: String(session.id), tier: 'owner' });
+          if (process.env['SUDO_RUN_LANES_ENABLED'] === '1') {
+            laneRelease = await getRunLanes().acquireRunSlot(convKey, 'user');
+          }
           // Stream live activity (tool calls + intermediate text) to the browser so a
           // long turn shows progress instead of a silent wait. Default-on; SUDO_WEB_STREAM=0
           // disables. Best-effort: a failed frame never breaks the turn.
@@ -2467,6 +2509,13 @@ async function boot(): Promise<void> {
             if (tgChatId) {
               try { await telegramNotifier.send(tgChatId, `❌ Web task failed after ${Math.round(durationMs / 60_000)}m:\n${sanitizeUserFacingError(err)}`); } catch { /* non-fatal */ }
             }
+          }
+        } finally {
+          if (laneRelease) laneRelease();
+          getRunRegistry().endRun(convKey);
+          if (steerSessionId !== null && process.env['SUDO_MIDRUN_STEER'] === '1') {
+            const _buf = getSteerBuffer();
+            if (_buf.size(steerSessionId) > 0) _buf.clear(steerSessionId);
           }
         }
       }).catch((err: unknown) => {
