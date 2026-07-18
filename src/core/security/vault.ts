@@ -16,8 +16,20 @@ import { HookManager } from '../hooks/index.js';
 
 const log = createLogger('vault');
 
-const VAULT_DIR = path.resolve('workspace/vault');
-const AUDIT_LOG = path.join(VAULT_DIR, 'audit.log');
+/**
+ * Vault directory — cwd-relative default, overridable via SUDO_VAULT_DIR.
+ * Resolved LAZILY (per call) so tests can point it at a tmpdir at runtime:
+ * the module-load-time constant let 557 vault.test.ts runs write ~10K test
+ * namespaces + a 2.9MB audit.log into the REAL prod workspace/vault
+ * (discovered + cleaned 2026-07-18).
+ */
+function vaultDir(): string {
+  const env = process.env['SUDO_VAULT_DIR'];
+  return env !== undefined && env.trim() !== '' ? path.resolve(env) : path.resolve('workspace/vault');
+}
+function auditLogPath(): string {
+  return path.join(vaultDir(), 'audit.log');
+}
 const NAMESPACE_RE = /^[a-z0-9_-]{1,64}$/;
 
 // Static salt ONLY retained for migrate-legacy path — never used for new namespaces.
@@ -82,7 +94,7 @@ export function initVault(hooks: HookManager): void { _hooks = hooks; }
 // ── Directory setup ───────────────────────────────────────────────────────────
 
 try {
-  fs.mkdirSync(VAULT_DIR, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(vaultDir(), { recursive: true, mode: 0o700 });
 } catch (err) {
   log.warn({ err: String(err) }, 'vault: could not create vault directory');
 }
@@ -197,7 +209,7 @@ function validateNamespace(ns: string): void {
  */
 async function readNamespaceFile(namespace: string): Promise<VaultNamespaceFile> {
   validateNamespace(namespace);
-  const filePath = path.join(VAULT_DIR, `${namespace}.json`);
+  const filePath = path.join(vaultDir(), `${namespace}.json`);
   try {
     const raw = await fs.promises.readFile(filePath, 'utf8');
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -226,8 +238,8 @@ async function readNamespaceFile(namespace: string): Promise<VaultNamespaceFile>
 
 async function writeNamespaceFile(namespace: string, data: VaultNamespaceFile): Promise<void> {
   validateNamespace(namespace);
-  const filePath = path.join(VAULT_DIR, `${namespace}.json`);
-  const tmpPath = path.join(VAULT_DIR, `${namespace}.${crypto.randomUUID()}.tmp.json`);
+  const filePath = path.join(vaultDir(), `${namespace}.json`);
+  const tmpPath = path.join(vaultDir(), `${namespace}.${crypto.randomUUID()}.tmp.json`);
   await fs.promises.writeFile(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
   try {
     await fs.promises.rename(tmpPath, filePath);
@@ -242,7 +254,7 @@ async function writeNamespaceFile(namespace: string, data: VaultNamespaceFile): 
 // ── Audit log ─────────────────────────────────────────────────────────────────
 
 function audit(entry: AuditLogEntry): void {
-  try { fs.appendFileSync(AUDIT_LOG, JSON.stringify(entry) + '\n', 'utf8'); }
+  try { fs.appendFileSync(auditLogPath(), JSON.stringify(entry) + '\n', 'utf8'); }
   catch (err) { log.warn({ err: String(err) }, 'vault: audit log write failed'); }
 }
 
