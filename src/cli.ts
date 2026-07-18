@@ -1627,6 +1627,16 @@ async function boot(): Promise<void> {
           retentionTimer.unref?.();
           registerShutdown(() => clearInterval(retentionTimer));
           log.info('Retention sweep scheduled (boot+30s, then daily) — SUDO_RETENTION_SWEEP=0 disables');
+          // F123: daily metabolism report (loops registry + 24h spend by source).
+          const { buildMetabolismReport } = await import('./core/health/metabolism-report.js');
+          setTimeout(() => {
+            try { buildMetabolismReport(); } catch (err) { log.warn({ err: String(err) }, 'metabolism report (boot) failed'); }
+          }, 45_000).unref?.();
+          const metabolismTimer = setInterval(() => {
+            try { buildMetabolismReport(); } catch (err) { log.warn({ err: String(err) }, 'metabolism report failed'); }
+          }, 24 * 60 * 60 * 1000);
+          metabolismTimer.unref?.();
+          registerShutdown(() => clearInterval(metabolismTimer));
         } catch (err) {
           log.warn({ err: String(err) }, 'retention sweep wiring failed — continuing');
         }
