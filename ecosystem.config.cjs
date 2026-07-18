@@ -107,8 +107,10 @@ module.exports = {
         // ones by removing commitment:* from data/cron/jobs.json.
         SUDO_COMMITMENTS: '1',
 
-        SUDO_DAILY_BUDGET_USD: 'off',
-        SUDO_DAILY_LLM_BUDGET_USD: 'off',
+        // Re-enabled 2026-07-17 (F81 census: 'off' left cost monitoring blind).
+        // Alerting guardrails only — never hard-block. Normal burn ~$57/day.
+        SUDO_DAILY_BUDGET_USD: '100',
+        SUDO_DAILY_LLM_BUDGET_USD: '50',
 
         // ---- GitHub connector tools (opt-in) ----
         // Enables the github.* agent tools (commit / push / open_pr / merge_pr /

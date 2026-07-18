@@ -19,6 +19,14 @@
 
   rules: [
     {
+      // Owner — the bot replies directly to Frank's emails (real send, autoReply).
+      name: 'owner',
+      from: 'frankmartin7722@gmail.com',
+      prompt: 'This email is from Frank, your owner. Read it and reply helpfully and directly. If it is a greeting or test, confirm the email channel is working and answer any question he asked. Keep it concise and friendly.',
+      autoReply: true,
+      tools: ['email.read'],
+    },
+    {
       name: 'ci-failures',
       from: '/github|ci|builds/i',
       subject: '/fail|broke|error/i',
