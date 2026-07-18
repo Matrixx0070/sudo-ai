@@ -112,6 +112,16 @@ module.exports = {
         SUDO_DAILY_BUDGET_USD: '100',
         SUDO_DAILY_LLM_BUDGET_USD: '50',
 
+        // ---- 2026-07-18 safe activations (Frank-approved) ----
+        // F89: runner only executes operator-created standing orders (idle otherwise).
+        SUDO_STANDING_ORDERS: '1',
+        // F88: real LLM goal evaluator; injected call rides brain's normal
+        // failover (value is an activator + label — model not pinned by it).
+        SUDO_GOAL_EVAL_MODEL: 'sudo/cheap',
+        // Self-healing trust-tier sandbox: build image on boot if missing
+        // (untrusted turns fail closed until built — better than failing forever).
+        SUDO_SANDBOX_AUTOBUILD: '1',
+
         // ---- GitHub connector tools (opt-in) ----
         // Enables the github.* agent tools (commit / push / open_pr / merge_pr /
         // pr_status) — see src/core/tools/builtin/github/. They wrap local git +
