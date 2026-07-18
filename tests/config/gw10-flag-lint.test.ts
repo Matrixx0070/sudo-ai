@@ -48,23 +48,31 @@ describe('GW-10 contradictions', () => {
     const ids = lintFlags(env, MANIFEST, allFiles).contradictions.map((c) => c.id);
     expect(ids).not.toContain('sandbox-disabled-with-untrusted-inbound');
   });
-  it('secrets-ref file missing', () => {
+  it('secrets-ref file missing WARNS (not a boot-refusal) — MEDIUM-2', () => {
     const env = {
       MY_CRED_REF: JSON.stringify({ source: 'file', id: '/nope/secret.txt' }),
     } as unknown as NodeJS.ProcessEnv;
-    const missing = lintFlags(env, MANIFEST, noFiles).contradictions.map((c) => c.id);
-    expect(missing).toContain('secrets-ref-missing-file');
-    // present → no contradiction
-    const present = lintFlags(env, MANIFEST, allFiles).contradictions.map((c) => c.id);
-    expect(present).not.toContain('secrets-ref-missing-file');
+    const missing = lintFlags(env, MANIFEST, noFiles);
+    // NOT a contradiction any more (must not brick boot mid-migration)…
+    expect(missing.contradictions.map((c) => c.id)).not.toContain('secrets-ref-missing-file');
+    // …but a loud warning naming the offending _REF and its path.
+    const warn = missing.warnings.find((w) => w.startsWith('secrets-ref-missing-file:'));
+    expect(warn).toBeDefined();
+    expect(warn).toContain('MY_CRED_REF');
+    expect(warn).toContain('/nope/secret.txt');
+    // present → neither contradiction nor warning
+    const present = lintFlags(env, MANIFEST, allFiles);
+    expect(present.contradictions.map((c) => c.id)).not.toContain('secrets-ref-missing-file');
+    expect(present.warnings.some((w) => w.startsWith('secrets-ref-missing-file:'))).toBe(false);
   });
-  it('secrets-ref check skipped when SUDO_SECRETS_REF=0', () => {
+  it('secrets-ref check skipped when SUDO_SECRETS_REF=0 (no warn, no refuse)', () => {
     const env = {
       SUDO_SECRETS_REF: '0',
       MY_CRED_REF: JSON.stringify({ source: 'file', id: '/nope/secret.txt' }),
     } as unknown as NodeJS.ProcessEnv;
-    const ids = lintFlags(env, MANIFEST, noFiles).contradictions.map((c) => c.id);
-    expect(ids).not.toContain('secrets-ref-missing-file');
+    const res = lintFlags(env, MANIFEST, noFiles);
+    expect(res.contradictions.map((c) => c.id)).not.toContain('secrets-ref-missing-file');
+    expect(res.warnings.some((w) => w.startsWith('secrets-ref-missing-file:'))).toBe(false);
   });
   it('web-chat exposed without token', () => {
     const env = {
@@ -88,10 +96,10 @@ describe('GW-10 contradictions', () => {
     expect(lintFlags(env, MANIFEST, allFiles).contradictions).toEqual([]);
   });
   it('every contradiction rule has a stable id', () => {
+    // secrets-ref-missing-file was DOWNGRADED to a warning (MEDIUM-2) — no longer here.
     expect(CONTRADICTIONS.map((c) => c.id).sort()).toEqual(
       [
         'sandbox-disabled-with-untrusted-inbound',
-        'secrets-ref-missing-file',
         'unified-auth-off-with-token',
         'web-chat-no-token-exposed',
       ].sort(),

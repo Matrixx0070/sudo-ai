@@ -437,7 +437,19 @@ function auditKairosRestart(entry: { ts: string; reason: string; command: string
  * @returns true when the command actually executed, false on dry-run.
  */
 export function performGuardedRestart(reason: string, command: string, deps: GuardedRestartDeps): boolean {
-  deps.audit({ ts: new Date().toISOString(), reason, command, dryRun: deps.dryRun });
+  // LOW-2: audit-before-exec is the ordering guarantee — the audit attempt ALWAYS
+  // strictly precedes any exec. AVAILABILITY-OVER-AUDIT tradeoff (explicit): if the
+  // audit sink itself throws we log at error and STILL restart. A wedged audit log
+  // (full disk, EACCES) must not strand a RAM-critical box unrecoverable; the
+  // ordering invariant is preserved because the audit is attempted first either way.
+  try {
+    deps.audit({ ts: new Date().toISOString(), reason, command, dryRun: deps.dryRun });
+  } catch (err) {
+    log.error(
+      { err: String(err), reason, command },
+      'Kairos restart audit sink threw — proceeding with restart (availability over audit)',
+    );
+  }
   if (deps.dryRun) return false;
   deps.exec(command);
   return true;

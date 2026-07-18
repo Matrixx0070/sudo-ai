@@ -737,6 +737,16 @@ function withEstimatedCost(entry: LLMCallRecord): LLMCallRecord {
   return entry;
 }
 
+/**
+ * Test-only seam: drive the per-call accrual choke point (recordCall →
+ * withEstimatedCost → recordSpend) directly, without standing up a full
+ * provider round-trip. Exercises the SAME code the live transport runs, so a
+ * test can assert the in-memory budget counter actually accrues.
+ */
+export function __recordCallForBudgetTest(entry: LLMCallRecord): void {
+  recordCall(entry);
+}
+
 // ---------------------------------------------------------------------------
 // streamIR — SSE byte-stream transport (gw-cutover Phase 1)
 // ---------------------------------------------------------------------------

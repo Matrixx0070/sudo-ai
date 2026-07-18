@@ -478,7 +478,10 @@ async function boot(): Promise<void> {
     // GW-3b: strict is now the DEFAULT. A SecurityGuard init failure is FATAL
     // unless SUDO_SECURITY_STRICT=0 is EXPLICITLY set (posture-registered as a
     // weakening flag). No more silent "running without hardening" on prod.
-    if (process.env['SUDO_SECURITY_STRICT'] !== '0') {
+    // LOW-1: reuse the single posture predicate instead of duplicating the
+    // `!== '0'` strict test inline (keeps isSecurityStrict() load-bearing).
+    const { isSecurityStrict } = await import('./core/security/posture.js');
+    if (isSecurityStrict()) {
       log.error(
         { err: msg },
         'SecurityGuard failed to initialize — refusing to boot (set SUDO_SECURITY_STRICT=0 to run without hardening)',
