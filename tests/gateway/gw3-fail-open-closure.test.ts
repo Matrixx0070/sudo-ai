@@ -116,6 +116,37 @@ describe('GW-3c Kairos restart governance', () => {
     expect(order).toEqual(['audit']);
   });
 
+  it('LOW-2: a THROWING audit sink still restarts (availability over audit), audit attempted first', () => {
+    const order: string[] = [];
+    const executed = performGuardedRestart('ram', 'systemctl restart sudo-ai', {
+      audit: () => {
+        // audit is attempted FIRST, then throws (e.g. full disk / EACCES on the log).
+        order.push('audit');
+        throw new Error('audit log write failed');
+      },
+      exec: () => order.push('exec'),
+      dryRun: false,
+    });
+    // The restart still happens (availability wins) …
+    expect(executed).toBe(true);
+    // … and the ordering invariant holds: the audit attempt strictly precedes exec.
+    expect(order).toEqual(['audit', 'exec']);
+  });
+
+  it('LOW-2: a throwing audit sink is still HONORED under dry-run (no exec despite the throw)', () => {
+    const order: string[] = [];
+    const executed = performGuardedRestart('ram', 'systemctl restart sudo-ai', {
+      audit: () => {
+        order.push('audit');
+        throw new Error('audit log write failed');
+      },
+      exec: () => order.push('exec'),
+      dryRun: true,
+    });
+    expect(executed).toBe(false);
+    expect(order).toEqual(['audit']); // exec never ran
+  });
+
   it('registers restart authority in the posture banner (default on)', () => {
     // default: SUDO_KAIROS unset, SUDO_KAIROS_AUTONOMOUS unset → active
     expect(postureBannerLines().some((l) => l.includes('Kairos restart authority active'))).toBe(true);
