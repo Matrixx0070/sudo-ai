@@ -12,6 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { authenticateHttp, authenticateToken } from './auth.js';
+import { isMigratedAdminPath } from '../api/admin/register.js';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
 import { artifactSigner } from '../security/signer.js';
@@ -2105,6 +2106,15 @@ export function registerAdminRoutes(
       pathname === '/v1/admin/synth-probe'
       // NOTE: /v1/admin/canvas is deferred earlier (before the auth gate above).
     ) {
+      return;
+    }
+
+    // GW-4 tail: the api/admin handler set is canonically served under
+    // /v1/admin/* by the separate adminRouter listener (api/admin/register.ts),
+    // registered AFTER this one and only when SUDO_ADMIN_API=1. Defer its
+    // namespaces so it can respond. When SUDO_ADMIN_API is off no such listener
+    // exists — so we must NOT defer (would hang); 404 as before.
+    if (process.env['SUDO_ADMIN_API'] === '1' && isMigratedAdminPath(pathname)) {
       return;
     }
 

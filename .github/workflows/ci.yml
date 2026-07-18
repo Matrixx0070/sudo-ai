@@ -65,6 +65,14 @@ jobs:
       - name: Contract guards
         run: pnpm check:contracts
 
+      # 7c. GW-12 architecture ratchets — per-file max-lines baseline, SUDO_* flag
+      # manifest freshness, and the generic import-ban table (hot-path isolation +
+      # layering). All seeded at current values so this is green on day one; it
+      # only fails on NEW debt (a file grown past baseline+10%, a stale manifest,
+      # or a banned import).
+      - name: Architecture ratchets
+        run: pnpm check:arch
+
       # 8. Test — full suite must pass (vitest exits non-zero on any failure).
       # This already includes tests/conformance; the explicit step below gives
       # the gateway golden matrix its own visible gate.

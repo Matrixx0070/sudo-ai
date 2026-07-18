@@ -1,0 +1,17 @@
+# Per-Dockerfile ignore for the GW-13 journey image (BuildKit uses
+# <dockerfile>.dockerignore in preference to .dockerignore). The default
+# .dockerignore excludes `tests` and `*.md`, but the journey suite IS the tests —
+# so this build needs tests/ and config/ in context. Keep everything the runner
+# does not need out to keep the context small.
+.git
+node_modules
+dist
+build
+coverage
+.cache
+data
+*.log
+config/.env
+*.tsbuildinfo
+.github
+docs

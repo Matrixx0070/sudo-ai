@@ -74,6 +74,7 @@ import type {
   PredictorLike,
 } from './loop-types.js';
 import { AgentLoopInjections } from './loop-injections.js';
+import { getSteerBuffer } from './steer-buffer.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler, AgentRunResult } from './types.js';
 import { LoopGuard } from './loop-guard.js';
 import { buildLoopFallbackReply } from './loop-fallback.js';
@@ -2127,6 +2128,32 @@ export class AgentLoop extends AgentLoopInjections {
                 'Steering: mid-run guidance injected',
               );
             }
+          }
+        }
+
+        // GW-5: drain the mid-run steer buffer at the safe iteration boundary and
+        // append each steered message as user-role input with a [mid-run] marker.
+        // The producer already applied the trust-tier guard (min(run, steered)) and
+        // never buffers a downgrade of an owner run; we tag the tier so downstream
+        // trust checks never see an upgraded run. No-op unless SUDO_MIDRUN_STEER
+        // enabled a producer that filled the buffer.
+        //
+        // LOW-1: cheap flag guard so with steering OFF this is a true no-op — no
+        // drain call, no Map lookup — on every loop iteration. The producer
+        // (turn handler) only ever populates the buffer under the same flag.
+        if (process.env['SUDO_MIDRUN_STEER'] === '1') {
+          const steers = getSteerBuffer().drain(state.sessionId);
+          for (const st of steers) {
+            session.messages.push({
+              role: 'user',
+              content: `[mid-run${st.tier === 'untrusted' ? ' • untrusted' : ''}] ${st.text}`,
+            });
+          }
+          if (steers.length > 0) {
+            log.info(
+              { sessionId: state.sessionId, count: steers.length, iteration: state.iteration },
+              'GW-5: drained mid-run steer buffer into the next model request',
+            );
           }
         }
 

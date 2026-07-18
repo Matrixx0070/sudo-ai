@@ -32,6 +32,15 @@ export interface ChannelPolicy {
   allowedPeers?: string[];
   /** Admit everyone on this channel (isOwner still only true for `owners`). */
   open?: boolean;
+  /**
+   * GW-6: DM admission posture for unknown senders.
+   *  - 'allowlist' (default): unknown sender denied (silent drop) — today's behavior.
+   *  - 'pairing': unknown sender gets a pairing code (decision.action='pair'); the
+   *    message is NOT processed until the owner approves.
+   *  - 'open': admit everyone, but ONLY effective when an explicit '*' wildcard is
+   *    present in owners/allowedPeers (OpenClaw guard); otherwise behaves as allowlist.
+   */
+  dmPolicy?: 'allowlist' | 'pairing' | 'open';
 }
 
 export interface ChannelAccessConfig {
@@ -44,6 +53,8 @@ export interface ChannelAccessConfig {
 export interface AccessDecision {
   admit: boolean;
   isOwner: boolean;
+  /** GW-6: 'admit' | 'deny' | 'pair' (unknown sender on a pairing channel). */
+  action: 'admit' | 'deny' | 'pair';
   reason: string;
 }
 
@@ -79,16 +90,29 @@ export class ChannelAccessPolicy {
 
     if (!policy) {
       return this.defaultDeny
-        ? { admit: false, isOwner: false, reason: 'no-policy + defaultDeny' }
-        : { admit: true, isOwner: false, reason: 'no-policy (default admit)' };
+        ? { admit: false, isOwner: false, action: 'deny', reason: 'no-policy + defaultDeny' }
+        : { admit: true, isOwner: false, action: 'admit', reason: 'no-policy (default admit)' };
     }
 
     const isOwner = has(policy.owners, id);
-    if (isOwner) return { admit: true, isOwner: true, reason: 'owner' };
-    if (policy.open) return { admit: true, isOwner: false, reason: 'channel open' };
-    if (has(policy.allowedPeers, id)) return { admit: true, isOwner: false, reason: 'allowed peer' };
+    if (isOwner) return { admit: true, isOwner: true, action: 'admit', reason: 'owner' };
+
+    // Legacy `open: true` boolean admits everyone (unchanged for back-compat).
+    if (policy.open) return { admit: true, isOwner: false, action: 'admit', reason: 'channel open' };
+    if (has(policy.allowedPeers, id)) return { admit: true, isOwner: false, action: 'admit', reason: 'allowed peer' };
+
+    // GW-6: dmPolicy governs UNKNOWN senders.
+    const dm = policy.dmPolicy ?? 'allowlist';
+    if (dm === 'open') {
+      // Effective only with an explicit '*' wildcard; otherwise falls back to allowlist.
+      const wildcard = has(policy.owners, '*') || has(policy.allowedPeers, '*');
+      if (wildcard) return { admit: true, isOwner: false, action: 'admit', reason: 'dmPolicy open (wildcard present)' };
+      return { admit: false, isOwner: false, action: 'deny', reason: 'dmPolicy open but no wildcard — treated as allowlist' };
+    }
+    if (dm === 'pairing') {
+      return { admit: false, isOwner: false, action: 'pair', reason: 'unknown sender on pairing channel' };
+    }
 
     // Explicit block present but sender not listed → deny-by-default within it.
-    return { admit: false, isOwner: false, reason: 'not in channel allowlist' };
-  }
-}
+    return { admit: false, isOwner: false, action: 'deny', reason: 'not in channel allowlist' };
+  }}

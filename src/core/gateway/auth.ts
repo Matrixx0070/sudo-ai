@@ -193,6 +193,13 @@ function authenticateCore(
   const gwSecret = resolveSecret('gateway-secret', 'GATEWAY_SECRET');
   const webTok = resolveSecret('web-chat-token', 'WEB_CHAT_TOKEN');
   if (!unifiedAuthEnabled()) {
+    // GW-3a: the kill-switch no longer restores the "open when secret unset"
+    // hole on exposed surfaces. Legacy semantics apply to LOCAL-DIRECT requests
+    // only (loopback socket, no forwarding headers); any proxied/non-loopback
+    // request is DENIED regardless of the flag — closing the hole permanently.
+    if (!isLocalDirectRequest(req)) {
+      return DENY('legacy-flag-set-but-request-not-loopback-direct');
+    }
     const tok = secretOverride !== undefined ? secretOverride : envSecret(legacySecretEnv);
     if (tok === null) {
       return {
@@ -200,7 +207,7 @@ function authenticateCore(
         credential: 'none',
         scopes: GATEWAY_TOKEN_SCOPES,
         isOwner: true,
-        reason: `legacy-open (no ${legacySecretEnv})`,
+        reason: `legacy-open-loopback (no ${legacySecretEnv})`,
       };
     }
     return timingMatch(bearer, tok)
@@ -209,7 +216,7 @@ function authenticateCore(
           credential: 'gateway-token',
           scopes: GATEWAY_TOKEN_SCOPES,
           isOwner: true,
-          reason: 'legacy-token',
+          reason: 'legacy-token-loopback',
         }
       : DENY('legacy-token-mismatch');
   }
