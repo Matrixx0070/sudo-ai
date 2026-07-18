@@ -6,7 +6,7 @@
  * through the pure units these compose from.
  */
 import { describe, it, expect } from 'vitest';
-import { IdempotencyStore } from '../../src/core/gateway/idempotency.js';
+import { IdempotencyStore, scopedIdempotencyKey } from '../../src/core/gateway/idempotency.js';
 import { SlidingWindowLimiter } from '../../src/core/gateway/rate-limit.js';
 import {
   isMutatingMethod,
@@ -60,26 +60,66 @@ describe('GW-8 IdempotencyStore', () => {
     expect(calls).toBe(2);
   });
 
-  it('caps entries and evicts the oldest', async () => {
+  it('caps entries and evicts the oldest SETTLED entry', async () => {
     const store = new IdempotencyStore({ maxEntries: 2 });
-    store.run('m:1', () => Promise.resolve(1));
-    store.run('m:2', () => Promise.resolve(2));
-    store.run('m:3', () => Promise.resolve(3)); // evicts m:1
+    // Await so each entry has settled (resolved) before the overflow insert.
+    await store.run('m:1', () => Promise.resolve(1)).promise;
+    await store.run('m:2', () => Promise.resolve(2)).promise;
+    store.run('m:3', () => Promise.resolve(3)); // both older entries settled → evicts m:1
     expect(store.size()).toBe(2);
     // m:1 evicted → re-run happens (replayed false)
     expect(store.run('m:1', () => Promise.resolve(9)).replayed).toBe(false);
   });
 
-  it('caches a rejection so a replay reproduces the same error without re-running', async () => {
+  it('never evicts an in-flight (unsettled) entry under overflow (LOW-2)', () => {
+    const store = new IdempotencyStore({ maxEntries: 2 });
+    const pending = () => new Promise<number>(() => { /* never settles */ });
+    store.run('m:a', pending);
+    store.run('m:b', pending);
+    store.run('m:c', pending); // overflow, but everything is in-flight → nothing safe to evict
+    // m:a must still be cached so a concurrent duplicate collapses, not re-executes.
+    expect(store.run('m:a', pending).replayed).toBe(true);
+  });
+
+  it('concurrent in-flight duplicates collapse to one execution even when it rejects', async () => {
     const store = new IdempotencyStore();
     let calls = 0;
     const factory = () => { calls += 1; return Promise.reject(new Error('boom')); };
     const a = store.run('m:x', factory);
-    const b = store.run('m:x', factory);
+    const b = store.run('m:x', factory); // arrives before a settles
+    expect(b.replayed).toBe(true);
     await expect(a.promise).rejects.toThrow('boom');
     await expect(b.promise).rejects.toThrow('boom');
-    expect(b.replayed).toBe(true);
     expect(calls).toBe(1);
+  });
+
+  it('does NOT cache a settled rejection — an honest retry re-executes (MEDIUM-2)', async () => {
+    const store = new IdempotencyStore();
+    let calls = 0;
+    const r1 = store.run('m:x', () => { calls += 1; return Promise.reject(new Error('boom')); });
+    await expect(r1.promise).rejects.toThrow('boom');
+    // The rejection dropped its own entry, so the retry runs the side effect again
+    // (the #751 class: a cached rejection would silently swallow the real send).
+    const r2 = store.run('m:x', () => { calls += 1; return Promise.resolve('ok'); });
+    expect(r2.replayed).toBe(false);
+    await expect(r2.promise).resolves.toBe('ok');
+    expect(calls).toBe(2);
+  });
+
+  it('scopes keys by principal — two principals, same method+key, both execute (MEDIUM-1)', async () => {
+    const store = new IdempotencyStore();
+    let calls = 0;
+    const factory = () => { calls += 1; return Promise.resolve(calls); };
+    const k1 = scopedIdempotencyKey('1.2.3.4:5000', 'chat.send', 'dup');
+    const k2 = scopedIdempotencyKey('9.9.9.9:6000', 'chat.send', 'dup');
+    const a = store.run(k1, factory);
+    const b = store.run(k2, factory);
+    expect(a.replayed).toBe(false);
+    expect(b.replayed).toBe(false);
+    expect(await a.promise).toBe(1);
+    expect(await b.promise).toBe(2);
+    // Same principal + method + key still collapses to a single execution.
+    expect(store.run(k1, factory).replayed).toBe(true);
   });
 });
 

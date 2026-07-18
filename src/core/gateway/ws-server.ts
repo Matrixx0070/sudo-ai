@@ -37,7 +37,7 @@ import {
   MAX_BUFFERED_BYTES,
   MAX_UNAUTHORIZED_FRAMES,
 } from './rpc-schema.js';
-import { IdempotencyStore } from './idempotency.js';
+import { IdempotencyStore, scopedIdempotencyKey } from './idempotency.js';
 import { SlidingWindowLimiter } from './rate-limit.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { IncomingMessage } from 'node:http';
@@ -305,11 +305,24 @@ export function attachWsRpc(
     let msgCount = 0;
     const msgRateTimer = setInterval(() => { msgCount = 0; }, MSG_RATE_WINDOW_MS);
 
-    // Heartbeat: ping every 25s to detect stale connections early
-    const pingInterval = setInterval(() => {
-      if (ws.readyState === ws.OPEN) {
-        ws.ping();
+    /** GW-8: slow-consumer guard — close if the send buffer is over the ceiling. */
+    const backpressureExceeded = (): boolean => {
+      if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+        log.warn({ clientId, bufferedAmount: ws.bufferedAmount }, 'WebSocket slow consumer — closing (buffer over ceiling)');
+        ws.close(WS_CLOSE.POLICY, 'Slow consumer');
+        return true;
       }
+      return false;
+    };
+
+    // Heartbeat: ping every 25s to detect stale connections early.
+    // LOW-1: also re-check backpressure on the tick so a consumer that stops
+    // reading AND stops sending (no inbound frames to trigger the message-path
+    // check) is still closed once its send buffer blows past the ceiling.
+    const pingInterval = setInterval(() => {
+      if (ws.readyState !== ws.OPEN) return;
+      if (backpressureExceeded()) return; // already closing the slow consumer
+      ws.ping();
     }, 25_000);
     ws.on('pong', () => { /* alive */ });
 
@@ -319,16 +332,6 @@ export function attachWsRpc(
       if (unauthorizedFrames >= MAX_UNAUTHORIZED_FRAMES) {
         log.warn({ clientId, unauthorizedFrames }, 'WebSocket unauthorized-frame cap reached — closing');
         ws.close(WS_CLOSE.POLICY, 'Too many unauthorized frames');
-        return true;
-      }
-      return false;
-    };
-
-    /** GW-8: slow-consumer guard — close if the send buffer is over the ceiling. */
-    const backpressureExceeded = (): boolean => {
-      if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
-        log.warn({ clientId, bufferedAmount: ws.bufferedAmount }, 'WebSocket slow consumer — closing (buffer over ceiling)');
-        ws.close(WS_CLOSE.POLICY, 'Slow consumer');
         return true;
       }
       return false;
@@ -436,9 +439,12 @@ export function attachWsRpc(
 
       // GW-8: idempotency — a mutating method with a key runs at most once per
       // key within the TTL; a duplicate returns the same settled result.
+      // MEDIUM-1: the cache key is scoped by the connection principal (clientId)
+      // so two different clients reusing the same client-chosen key for the same
+      // method never collide (the second silently replaying the first's result).
       const exec: Promise<unknown> =
         idempotencyKey !== undefined && isMutatingMethod(method)
-          ? idempotency.run(`${method}:${idempotencyKey}`, () => handler(params)).promise
+          ? idempotency.run(scopedIdempotencyKey(clientId, method, idempotencyKey), () => handler(params)).promise
           : handler(params);
 
       exec.then((result) => {
