@@ -22,7 +22,7 @@
 
 import { execSync } from 'node:child_process';
 import { writeRestartIntent, restartDir } from '../health/restart-sentinel.js';
-import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync, rmSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
@@ -489,6 +489,56 @@ export function __resetRestartCooldownForTest(): void {
   try { if (existsSync(RESTART_COOLDOWN_FILE)) rmSync(RESTART_COOLDOWN_FILE, { force: true }); } catch { /* noop */ }
 }
 
+// GW-9: restart-FREQUENCY guard. The stale-handoff cooldown above only engages
+// when a handoff FAILS (successor never wrote ready.json → detected next boot as
+// a stale intent). The classic restart loop — condition-critical → restart →
+// still-critical → restart — has a SUCCESSFUL handoff each time (intent cleared,
+// ready.json written), so staleHandoff is never true and that cooldown never
+// fires. This guard trips regardless of handoff success: a small rolling record
+// of recent Kairos-initiated restart timestamps refuses another restart once N
+// have occurred within the window.
+const RESTART_LOG_FILE = path.join(PROJECT_ROOT, 'data', 'kairos-restarts.json');
+export const KAIROS_RESTART_MAX_IN_WINDOW = 3;
+export const KAIROS_RESTART_WINDOW_MS = 30 * 60 * 1000; // 30 min
+
+function loadRestartTimestamps(): number[] {
+  try {
+    if (existsSync(RESTART_LOG_FILE)) {
+      const parsed = JSON.parse(readFileSync(RESTART_LOG_FILE, 'utf-8')) as { restarts?: unknown };
+      if (Array.isArray(parsed.restarts)) return parsed.restarts.filter((n): n is number => typeof n === 'number');
+    }
+  } catch { /* ignore corrupt file */ }
+  return [];
+}
+
+/** Atomic write (tmp + rename) so a crash mid-write can't corrupt the record. */
+function saveRestartTimestamps(ts: number[]): void {
+  try {
+    mkdirSync(path.dirname(RESTART_LOG_FILE), { recursive: true });
+    const tmp = `${RESTART_LOG_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ restarts: ts }), 'utf-8');
+    renameSync(tmp, RESTART_LOG_FILE);
+  } catch (err) { log.error({ err: String(err) }, 'Kairos restart-log write failed'); }
+}
+
+/** True when >= N Kairos restarts fall inside the trailing window ending at now. */
+export function isKairosRestartFrequencyExceeded(now: number = Date.now()): boolean {
+  const recent = loadRestartTimestamps().filter((t) => now - t < KAIROS_RESTART_WINDOW_MS);
+  return recent.length >= KAIROS_RESTART_MAX_IN_WINDOW;
+}
+
+/** Record a Kairos-initiated restart at now, pruning entries outside the window. */
+export function recordKairosRestart(now: number = Date.now()): void {
+  const recent = loadRestartTimestamps().filter((t) => now - t < KAIROS_RESTART_WINDOW_MS);
+  recent.push(now);
+  saveRestartTimestamps(recent);
+}
+
+/** Test teardown — clear the restart-frequency record. */
+export function __resetRestartLogForTest(): void {
+  try { if (existsSync(RESTART_LOG_FILE)) rmSync(RESTART_LOG_FILE, { force: true }); } catch { /* noop */ }
+}
+
 async function actOnObservation(obs: KairosObservation, config: Required<KairosConfig>): Promise<KairosObservation> {
   if (!config.autonomousActions) return obs;
   try {
@@ -503,6 +553,13 @@ async function actOnObservation(obs: KairosObservation, config: Required<KairosC
         log.warn('Kairos: RAM critical but restart authority is on cooldown (prior failed handoff) — skipping');
         return { ...obs, acted: false, actionResult: 'Skipped restart: restart authority on cooldown after a failed handoff' };
       }
+      // GW-9: restart-frequency ceiling. Catches the loop where every handoff
+      // SUCCEEDS (so the stale-handoff cooldown never trips) but the condition
+      // keeps re-firing restarts. Suppress + register posture instead of looping.
+      if (isKairosRestartFrequencyExceeded()) {
+        log.warn({ maxInWindow: KAIROS_RESTART_MAX_IN_WINDOW, windowMs: KAIROS_RESTART_WINDOW_MS }, 'Kairos: RAM critical but restart-frequency ceiling reached within window — suppressing restart (possible loop)');
+        return { ...obs, acted: false, actionResult: `Skipped restart: ${KAIROS_RESTART_MAX_IN_WINDOW} restarts already within ${Math.round(KAIROS_RESTART_WINDOW_MS / 60000)}min — frequency ceiling reached (possible loop)` };
+      }
       const executed = performGuardedRestart(
         'RAM critical — reclaim memory via service restart',
         'systemctl restart sudo-ai',
@@ -516,6 +573,8 @@ async function actOnObservation(obs: KairosObservation, config: Required<KairosC
           dryRun: process.env['SUDO_KAIROS_DRY_RUN'] === '1',
         },
       );
+      // Record only real restarts so the frequency ceiling reflects actual loops.
+      if (executed) recordKairosRestart();
       return {
         ...obs,
         acted: executed,

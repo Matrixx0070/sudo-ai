@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { SteerBuffer, minTier } from '../../src/core/agent/steer-buffer.js';
+import { SteerBuffer, minTier, COALESCE_MAX_CHARS } from '../../src/core/agent/steer-buffer.js';
 import {
   decideQueueMode,
   globalDefaultMode,
@@ -48,6 +48,33 @@ describe('GW-5 SteerBuffer', () => {
     expect(joined).toContain('b');
     expect(joined).toContain('c');
     expect(joined).toContain('d');
+    expect(drained[0]?.coalesced).toBe(true);
+  });
+
+  it('sustained overflow coalesces across MULTIPLE rounds — head keeps growing, never dropped whole', () => {
+    const b = new SteerBuffer({ cap: 2 });
+    // 6 pushes at cap 2 → 4 coalesce rounds, each merging the head with the next.
+    for (const t of ['a', 'b', 'c', 'd', 'e', 'f']) b.push('s1', t, 'owner');
+    expect(b.size('s1')).toBeLessThanOrEqual(2);
+    const drained = b.drain('s1');
+    // The head is the repeatedly-coalesced summary and stays under the char cap.
+    expect(drained[0]?.coalesced).toBe(true);
+    expect((drained[0]?.text.length ?? 0)).toBeLessThanOrEqual(COALESCE_MAX_CHARS);
+    // Early content survives inside the coalesced head across rounds.
+    const head = drained[0]?.text ?? '';
+    expect(head).toContain('a');
+    expect(head).toContain('b');
+  });
+
+  it('coalesce truncates past COALESCE_MAX_CHARS but keeps a summary line (observable)', () => {
+    const b = new SteerBuffer({ cap: 1 });
+    const big = 'x'.repeat(COALESCE_MAX_CHARS);
+    b.push('s1', big, 'owner');
+    b.push('s1', 'y'.repeat(COALESCE_MAX_CHARS), 'owner'); // forces coalesce, well over the cap
+    const drained = b.drain('s1');
+    // A single coalesced line remains, trimmed to the documented cap (not lost).
+    expect(drained.length).toBeGreaterThanOrEqual(1);
+    expect((drained[0]?.text.length ?? 0)).toBe(COALESCE_MAX_CHARS);
     expect(drained[0]?.coalesced).toBe(true);
   });
 
