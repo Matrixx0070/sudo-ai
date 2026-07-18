@@ -203,14 +203,14 @@ describe('selectVerbatimTail', () => {
     expect(tail).toEqual([user, messages[4]]);
   });
 
-  it('k=0 returns ALL non-system messages (slice(-0) === slice(0) quirk — pinned as-is)', () => {
-    // NOTE: `nonSystem.slice(-Math.max(0, k))` with k=0 evaluates to slice(-0)
-    // === slice(0), i.e. the ENTIRE non-system history — not an empty tail.
-    // Pinning current behavior; a caller passing 0 expecting "summary only"
-    // would silently keep everything (loop-helpers.ts:469).
+  it('k=0 yields only the last-user invariant, never the full history (slice(-0) bug fixed)', () => {
+    // slice(-0) === slice(0) used to return the ENTIRE non-system history,
+    // silently defeating summary-only compaction. Fixed: k<=0 → empty slice;
+    // the always-retain-last-user invariant still re-adds the in-flight ask.
     const user = msg('user', 'ask');
     const a = msg('assistant', 'a');
-    expect(selectVerbatimTail([msg('system', 's'), user, a], 0)).toEqual([user, a]);
+    expect(selectVerbatimTail([msg('system', 's'), user, a], 0)).toEqual([user]);
+    expect(selectVerbatimTail([msg('system', 's'), a], 0)).toEqual([]);
   });
 });
 

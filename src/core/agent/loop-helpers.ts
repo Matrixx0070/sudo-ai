@@ -466,7 +466,10 @@ const COMPACT_TAIL_DEFAULT = 6;
  */
 export function selectVerbatimTail(messages: BrainMessage[], k: number): BrainMessage[] {
   const nonSystem = messages.filter((m) => m.role !== 'system');
-  let tail = nonSystem.slice(-Math.max(0, k));
+  // k<=0 must yield an EMPTY slice: slice(-0) === slice(0) returns the FULL
+  // history, silently defeating summary-only compaction. The last-user
+  // invariant below still re-adds the in-flight ask.
+  let tail = k > 0 ? nonSystem.slice(-k) : [];
   let firstNonOrphan = 0;
   while (firstNonOrphan < tail.length && tail[firstNonOrphan]!.role === 'tool') {
     firstNonOrphan++;

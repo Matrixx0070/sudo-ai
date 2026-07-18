@@ -706,6 +706,12 @@ export class MCPAdapter {
    * Rejects after CALL_TIMEOUT_MS.
    */
   private _rpc(method: string, params: unknown): Promise<unknown> {
+    // HTTP is request/response — _send() can never answer, so every _rpc
+    // caller (initialize, tools/list, tools/call fallback) dead-ended on the
+    // http transport with "_send not used for HTTP transport". Delegate.
+    if (this.config.transport === 'http') {
+      return this._httpRpc(method, params);
+    }
     const id = randomUUID();
 
     const isConnect = method === 'initialize';
