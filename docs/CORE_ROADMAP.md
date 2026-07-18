@@ -306,6 +306,6 @@ indexes; 38 skipped tests concentrated in meta + browser suites.
 | C (F97–F103) | not started |
 | D (F104–F108) | **F104+F106 shipped** (#810: SUDO_SECURITY_STRICT fatal guard-init + posture-weakening boot banner, posture.ts); F105/F107/F108 not started |
 | E (F109–F112) | not started. Census follow-up shipped: SUDO_UPDATE_* env→config mapping (#808). |
-| F (F113–F118) persistence | not started — Phase 1.5 |
+| F (F113–F118) persistence | **F113+F114 shipped** (#818 retention-sweep + WAL); **F115/F116/F117/F118 verdicts + map delivered** (docs/PERSISTENCE_MAP.md; physical merges rejected/deferred with reasons; F117 boot-scan = small follow-up) |
 | G (F119–F123) metabolism | not started — Phase 3.5 |
 | H (F124–F127) quality | not started — rolling |
