@@ -20,7 +20,24 @@
  * - production guard: _resetMasterKeyCache is no-op outside test env
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
+
+// Isolate ALL vault writes into a per-run tmpdir (vault.ts resolves
+// SUDO_VAULT_DIR lazily). Before this, every run wrote ~18 random test
+// namespaces + audit.log lines into the REAL workspace/vault (10K files
+// of pollution found on prod 2026-07-18).
+let _vaultTmpDir: string;
+beforeAll(() => {
+  _vaultTmpDir = mkdtempSync(joinPath(tmpdir(), 'vault-test-'));
+  process.env['SUDO_VAULT_DIR'] = _vaultTmpDir;
+});
+afterAll(() => {
+  delete process.env['SUDO_VAULT_DIR'];
+  rmSync(_vaultTmpDir, { recursive: true, force: true });
+});
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,7 +46,6 @@ import os from 'node:os';
 // We test vault through its public API + internal helpers.
 // Reset the key cache and env between tests.
 
-let VAULT_DIR: string;
 
 // Intercept the vault module with a custom workspace/vault dir
 // by pointing cwd to a temp dir before importing the module.
@@ -149,7 +165,7 @@ describe('encrypt/decrypt round-trip', () => {
     await vault.set(ns, 'k2', 'same-value');
 
     // Read namespace file directly to compare nonces (v2 format: data.entries)
-    const vaultDir = path.resolve('workspace/vault');
+    const vaultDir = _vaultTmpDir;
     const raw = fs.readFileSync(path.join(vaultDir, `${ns}.json`), 'utf8');
     const data = JSON.parse(raw);
     expect(data.entries['k1'].nonce).not.toBe(data.entries['k2'].nonce);
@@ -165,7 +181,7 @@ describe('encrypt/decrypt round-trip', () => {
     await vault.set(ns, 'mykey', 'important-secret');
 
     // Flip a byte in the ciphertext (v2 format: data.entries)
-    const vaultDir = path.resolve('workspace/vault');
+    const vaultDir = _vaultTmpDir;
     const nsPath = path.join(vaultDir, `${ns}.json`);
     const data = JSON.parse(fs.readFileSync(nsPath, 'utf8'));
     const ct: string = data.entries['mykey'].ciphertext;
@@ -247,7 +263,7 @@ describe('vault.rotate — replaces ciphertext with fresh nonce', () => {
     const ns = `rotate-${randomBytes(4).toString('hex')}`;
     await vault.set(ns, 'rkey', 'rotate-me');
 
-    const vaultDir = path.resolve('workspace/vault');
+    const vaultDir = _vaultTmpDir;
     const nsPath = path.join(vaultDir, `${ns}.json`);
     const before = JSON.parse(fs.readFileSync(nsPath, 'utf8'));
     // v2 format: data.entries
@@ -277,7 +293,7 @@ describe('vault.delete — removes key from namespace', () => {
     await vault.set(ns, 'delkey', 'bye');
     await vault.delete(ns, 'delkey', 'tester');
 
-    const vaultDir = path.resolve('workspace/vault');
+    const vaultDir = _vaultTmpDir;
     const raw = fs.readFileSync(path.join(vaultDir, `${ns}.json`), 'utf8');
     const data = JSON.parse(raw);
     // v2 format: data.entries
@@ -329,7 +345,7 @@ describe('audit log — all 5 actions produce entries', () => {
     process.env['SUDO_VAULT_MASTER_KEY'] = key;
 
     const ns = `audit-${randomBytes(4).toString('hex')}`;
-    const auditPath = path.resolve('workspace/vault/audit.log');
+    const auditPath = joinPath(_vaultTmpDir, 'audit.log');
 
     const sizeBefore = fs.existsSync(auditPath) ? fs.statSync(auditPath).size : 0;
 
@@ -414,7 +430,7 @@ describe('atomic write — rename failure leaves original intact', () => {
     // Write initial state
     await vault.set(ns, 'existing', 'safe-value');
 
-    const vaultDir = path.resolve('workspace/vault');
+    const vaultDir = _vaultTmpDir;
     const nsPath = path.join(vaultDir, `${ns}.json`);
     const before = fs.readFileSync(nsPath, 'utf8');
 
@@ -462,7 +478,7 @@ describe('AAD binding — cross-record swap is rejected', () => {
     await vault.set(ns, 'beta', 'secret-beta-value');
 
     // Manually swap alpha's ciphertext/nonce/tag into beta's slot
-    const vaultDir = path.resolve('workspace/vault');
+    const vaultDir = _vaultTmpDir;
     const nsPath = path.join(vaultDir, `${ns}.json`);
     const data = JSON.parse(fs.readFileSync(nsPath, 'utf8'));
 
@@ -489,7 +505,7 @@ describe('per-namespace KDF salt — each namespace gets a unique salt', () => {
     await vault.set(ns1, 'k', 'v1');
     await vault.set(ns2, 'k', 'v2');
 
-    const vaultDir = path.resolve('workspace/vault');
+    const vaultDir = _vaultTmpDir;
     const file1 = JSON.parse(fs.readFileSync(path.join(vaultDir, `${ns1}.json`), 'utf8'));
     const file2 = JSON.parse(fs.readFileSync(path.join(vaultDir, `${ns2}.json`), 'utf8'));
 
@@ -516,7 +532,7 @@ describe('legacy format — namespace without kdfSalt throws legacy_format', () 
     process.env['SUDO_VAULT_MASTER_KEY'] = key;
 
     const ns = `legacy-${randomBytes(4).toString('hex')}`;
-    const vaultDir = path.resolve('workspace/vault');
+    const vaultDir = _vaultTmpDir;
     fs.mkdirSync(vaultDir, { recursive: true });
 
     // Write a fake v1 namespace file (no kdfSalt, flat entries)
