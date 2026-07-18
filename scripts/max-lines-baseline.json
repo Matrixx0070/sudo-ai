@@ -31,6 +31,7 @@
   "src/core/brain/failover.ts": 460,
   "src/core/brain/system-prompt.ts": 715,
   "src/core/brain/thinking-budget.ts": 666,
+  "src/core/channels/delivery-queue.ts": 411,
   "src/core/channels/discord.ts": 422,
   "src/core/channels/email.ts": 882,
   "src/core/channels/github-issues.ts": 542,

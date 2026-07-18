@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 622,
+  "count": 623,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -402,6 +402,7 @@
     "SUDO_NOTEBOOKLM_VERIFY_CRON",
     "SUDO_NO_STATIC",
     "SUDO_NO_WIZARD",
+    "SUDO_OUTBOX_DURABLE",
     "SUDO_OUTCOME_ADAPTERS_DISABLE",
     "SUDO_OUTCOME_GATING",
     "SUDO_PARALLEL_TOOLS_DISABLE",

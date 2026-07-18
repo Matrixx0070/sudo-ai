@@ -1916,6 +1916,31 @@ async function boot(): Promise<void> {
     telegram.setHookEmitter(hooks);
     telegramNotifier = telegram;
     registerOutboundAdapter(telegram); // proactive scheduled-message delivery (channel-outbox)
+    // GW-15: durable outbound delivery queue (opt-in, SUDO_OUTBOX_DURABLE=1).
+    // Persists text deliveries with ack/claim + crash recovery so a restart
+    // mid-send never double-messages a human. Default OFF → direct send.
+    if (process.env['SUDO_OUTBOX_DURABLE'] === '1') {
+      try {
+        const [{ DeliveryQueue }, { installDurableOutbox, telegramQueueOptions }, { registerOutboundSender }, { DATA_DIR }, pathMod] = await Promise.all([
+          import('./core/channels/delivery-queue.js'),
+          import('./core/channels/durable-outbox.js'),
+          import('./core/channels/channel-outbox.js'),
+          import('./core/shared/paths.js'),
+          import('node:path'),
+        ]);
+        const outboxQueue = new DeliveryQueue(pathMod.join(DATA_DIR, 'outbox.db'), telegramQueueOptions());
+        const durable = installDurableOutbox({
+          queue: outboxQueue,
+          channel: 'telegram',
+          rawSend: (peer, text, opts) => telegram.send(peer, text, opts),
+          registerWrapper: (send) => registerOutboundSender('telegram', send),
+        });
+        registerShutdown(() => { durable.stop(); outboxQueue.close(); });
+        log.info('Durable outbound delivery queue enabled for Telegram (SUDO_OUTBOX_DURABLE=1)');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'Durable outbox failed to start — falling back to direct send');
+      }
+    }
     if (chatApprovals) approvalManager.registerSender('telegram', telegram);
 
     // Serialized per-peer: enqueue so concurrent messages from the same user
