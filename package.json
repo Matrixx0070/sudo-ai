@@ -77,6 +77,9 @@
     "conformance:update": "CONFORMANCE_UPDATE=1 vitest run tests/conformance",
     "smoke:prod-tools": "tsx scripts/smoke/prod-runtime-tools.mts",
     "check:contracts": "tsx scripts/check-brain-contract.mts",
+    "check:max-lines": "tsx scripts/check-max-lines.ts",
+    "check:flags": "tsx scripts/gen-flag-manifest.ts --check",
+    "check:arch": "pnpm check:max-lines && pnpm check:flags && vitest run tests/architecture",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "verify": "pnpm lint && pnpm test && pnpm build",
@@ -193,7 +196,6 @@
       "@whiskeysockets/baileys",
       "better-sqlite3",
       "electron",
-      "esbuild",
       "onnxruntime-node",
       "protobufjs",
       "sharp"

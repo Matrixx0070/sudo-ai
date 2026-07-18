@@ -27,7 +27,52 @@ export const RpcRequestSchema = z.object({
   id: z.string().min(1),
   method: z.string().min(1),
   params: z.unknown().optional(),
+  /** GW-8: optional dedupe key; REQUIRED for mutating methods under RPC v2. */
+  idempotencyKey: z.string().min(1).max(200).optional(),
 });
+
+// ---------------------------------------------------------------------------
+// GW-8: mutating methods + WS backpressure / close-code policy
+// ---------------------------------------------------------------------------
+
+/**
+ * Methods that cause a side effect (schedule an agent turn or mutate state).
+ * Under RPC v2 these REQUIRE an idempotencyKey so a duplicate frame (the
+ * session-fork-loop shape, #445-#447) collapses to a single execution.
+ */
+export const MUTATING_METHODS: ReadonlySet<string> = new Set([
+  'chat.send',
+  'sessions.send',
+  'cron.add',
+  'cron.remove',
+  'secrets.reload',
+]);
+
+/** True when method mutates and therefore must carry an idempotencyKey (v2). */
+export function isMutatingMethod(method: string): boolean {
+  return MUTATING_METHODS.has(method);
+}
+
+/** WebSocket close codes (OpenClaw semantics). */
+export const WS_CLOSE = {
+  /** Policy violation: unauthorized-frame cap, slow consumer, connect-order. */
+  POLICY: 1008,
+  /** Frame exceeds the advertised preauth cap (RFC 6455 "message too big"). */
+  TOO_BIG: 1009,
+  /** Server suspending (drain for restart). */
+  SUSPENDING: 1013,
+  /** GATEWAY_TOKEN rotated — clients must re-auth cleanly. */
+  AUTH_ROTATED: 4001,
+} as const;
+
+/** Max frame bytes accepted BEFORE the connect handshake completes (v2). */
+export const PREAUTH_MAX_FRAME_BYTES = 64 * 1024;
+/** Per-connection send-buffer ceiling; slow consumers past this are closed. */
+export const MAX_BUFFERED_BYTES = 50 * 1024 * 1024;
+/** Post-auth max payload the ws layer accepts (matches WebSocketServer config). */
+export const POST_AUTH_MAX_PAYLOAD = 512 * 1024;
+/** Close the connection after this many unauthorized/out-of-order frames. */
+export const MAX_UNAUTHORIZED_FRAMES = 10;
 
 /** connect params — protocol negotiation (all optional; forward-compatible). */
 export const ConnectParamsSchema = z
@@ -106,6 +151,8 @@ export interface HelloOk {
   scopes: OperatorScope[];
   methods: string[];
   server: { name: string; protocol: number };
+  /** GW-8: advertised backpressure policy so clients self-throttle. */
+  limits: { maxPayload: number; maxBufferedBytes: number };
 }
 
 export function buildHelloOk(
@@ -118,5 +165,6 @@ export function buildHelloOk(
     scopes: principal?.scopes ?? [],
     methods,
     server: { name: 'sudo-ai', protocol: RPC_PROTOCOL_VERSION },
+    limits: { maxPayload: POST_AUTH_MAX_PAYLOAD, maxBufferedBytes: MAX_BUFFERED_BYTES },
   };
 }

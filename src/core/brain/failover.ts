@@ -75,6 +75,18 @@ export interface RecordErrorOptions {
 /** Manages LLM model selection and per-model cooldown state. */
 export class ModelFailover {
   private readonly profiles: Map<string, ModelProfile> = new Map();
+  /** GW-2: optional sustained-failover notice monitor (observation only). */
+  private failoverMonitor: import('./failover-notice.js').SustainedFailoverMonitor | null = null;
+
+  /**
+   * GW-2: attach a monitor that fires ONE operator notice on sustained
+   * degradation (see failover-notice.ts). Null default → no behavior change.
+   */
+  setSustainedFailoverMonitor(
+    monitor: import('./failover-notice.js').SustainedFailoverMonitor | null,
+  ): void {
+    this.failoverMonitor = monitor;
+  }
 
   /**
    * Register a list of model strings with explicit priorities.
@@ -349,6 +361,8 @@ export class ModelFailover {
       { profileId: selected.id, priority: selected.priority },
       'Selected model profile',
     );
+    // GW-2: feed the sustained-failover monitor (priority 0 = primary).
+    this.failoverMonitor?.noteSelection(selected.id, selected.priority === 0);
     return selected;
   }
 

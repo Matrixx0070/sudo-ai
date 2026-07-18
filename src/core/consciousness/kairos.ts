@@ -21,7 +21,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync } from 'node:fs';
+import { writeRestartIntent, restartDir } from '../health/restart-sentinel.js';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync, rmSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
@@ -409,6 +410,135 @@ function isAgentBusy(dbPath: string): boolean {
   }
 }
 
+/** GW-3c: seam for a Kairos restart — audit sink + exec + dry-run flag. */
+export interface GuardedRestartDeps {
+  audit: (entry: { ts: string; reason: string; command: string; dryRun: boolean }) => void;
+  exec: (command: string) => void;
+  dryRun: boolean;
+}
+
+const RESTART_AUDIT_FILE = path.join(PROJECT_ROOT, 'data', 'kairos-restart-audit.log');
+
+/** Default audit sink: append one JSON row to data/kairos-restart-audit.log. */
+function auditKairosRestart(entry: { ts: string; reason: string; command: string; dryRun: boolean }): void {
+  try {
+    mkdirSync(path.dirname(RESTART_AUDIT_FILE), { recursive: true });
+    appendFileSync(RESTART_AUDIT_FILE, JSON.stringify(entry) + '\n');
+    log.warn({ ...entry }, 'Kairos restart authority exercised — audit row written BEFORE exec');
+  } catch (err) {
+    log.error({ err: String(err) }, 'Kairos restart audit write failed');
+  }
+}
+
+/**
+ * GW-3c: run a Kairos restart under governance. The audit row is written FIRST,
+ * before any exec; SUDO_KAIROS_DRY_RUN=1 audits then returns without executing.
+ * Pure + injectable so the audit-precedes-exec ordering is unit-testable.
+ * @returns true when the command actually executed, false on dry-run.
+ */
+export function performGuardedRestart(reason: string, command: string, deps: GuardedRestartDeps): boolean {
+  // LOW-2: audit-before-exec is the ordering guarantee — the audit attempt ALWAYS
+  // strictly precedes any exec. AVAILABILITY-OVER-AUDIT tradeoff (explicit): if the
+  // audit sink itself throws we log at error and STILL restart. A wedged audit log
+  // (full disk, EACCES) must not strand a RAM-critical box unrecoverable; the
+  // ordering invariant is preserved because the audit is attempted first either way.
+  try {
+    deps.audit({ ts: new Date().toISOString(), reason, command, dryRun: deps.dryRun });
+  } catch (err) {
+    log.error(
+      { err: String(err), reason, command },
+      'Kairos restart audit sink threw — proceeding with restart (availability over audit)',
+    );
+  }
+  if (deps.dryRun) return false;
+  deps.exec(command);
+  return true;
+}
+
+// GW-9: Kairos restart cooldown. After a FAILED handoff (successor never wrote
+// ready.json within the watchdog window, detected at the next boot as a stale
+// intent) Kairos backs off for 1h so a bad restart cannot loop.
+const RESTART_COOLDOWN_FILE = path.join(PROJECT_ROOT, 'data', 'kairos-restart-cooldown.json');
+export const KAIROS_RESTART_BACKOFF_MS = 60 * 60 * 1000; // 1h
+
+/** True while Kairos restart authority is suppressed after a failed handoff. */
+export function isKairosRestartOnCooldown(now: number = Date.now()): boolean {
+  try {
+    if (!existsSync(RESTART_COOLDOWN_FILE)) return false;
+    const parsed = JSON.parse(readFileSync(RESTART_COOLDOWN_FILE, 'utf-8')) as { until?: number };
+    return typeof parsed.until === 'number' && now < parsed.until;
+  } catch { return false; }
+}
+
+/** Suppress Kairos restarts until `untilMs`. */
+export function setKairosRestartCooldown(untilMs: number): void {
+  try {
+    mkdirSync(path.dirname(RESTART_COOLDOWN_FILE), { recursive: true });
+    writeFileSync(RESTART_COOLDOWN_FILE, JSON.stringify({ until: untilMs }), 'utf-8');
+    log.warn({ untilMs }, 'Kairos restart authority in COOLDOWN (failed handoff) — no restarts until then');
+  } catch (err) { log.error({ err: String(err) }, 'Kairos restart-cooldown write failed'); }
+}
+
+/** Boot-side: a stale Kairos restart intent ⇒ last handoff failed ⇒ back off 1h. */
+export function applyFailedHandoffCooldown(now: number = Date.now()): void {
+  setKairosRestartCooldown(now + KAIROS_RESTART_BACKOFF_MS);
+}
+
+/** Test teardown — clear the restart cooldown. */
+export function __resetRestartCooldownForTest(): void {
+  try { if (existsSync(RESTART_COOLDOWN_FILE)) rmSync(RESTART_COOLDOWN_FILE, { force: true }); } catch { /* noop */ }
+}
+
+// GW-9: restart-FREQUENCY guard. The stale-handoff cooldown above only engages
+// when a handoff FAILS (successor never wrote ready.json → detected next boot as
+// a stale intent). The classic restart loop — condition-critical → restart →
+// still-critical → restart — has a SUCCESSFUL handoff each time (intent cleared,
+// ready.json written), so staleHandoff is never true and that cooldown never
+// fires. This guard trips regardless of handoff success: a small rolling record
+// of recent Kairos-initiated restart timestamps refuses another restart once N
+// have occurred within the window.
+const RESTART_LOG_FILE = path.join(PROJECT_ROOT, 'data', 'kairos-restarts.json');
+export const KAIROS_RESTART_MAX_IN_WINDOW = 3;
+export const KAIROS_RESTART_WINDOW_MS = 30 * 60 * 1000; // 30 min
+
+function loadRestartTimestamps(): number[] {
+  try {
+    if (existsSync(RESTART_LOG_FILE)) {
+      const parsed = JSON.parse(readFileSync(RESTART_LOG_FILE, 'utf-8')) as { restarts?: unknown };
+      if (Array.isArray(parsed.restarts)) return parsed.restarts.filter((n): n is number => typeof n === 'number');
+    }
+  } catch { /* ignore corrupt file */ }
+  return [];
+}
+
+/** Atomic write (tmp + rename) so a crash mid-write can't corrupt the record. */
+function saveRestartTimestamps(ts: number[]): void {
+  try {
+    mkdirSync(path.dirname(RESTART_LOG_FILE), { recursive: true });
+    const tmp = `${RESTART_LOG_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ restarts: ts }), 'utf-8');
+    renameSync(tmp, RESTART_LOG_FILE);
+  } catch (err) { log.error({ err: String(err) }, 'Kairos restart-log write failed'); }
+}
+
+/** True when >= N Kairos restarts fall inside the trailing window ending at now. */
+export function isKairosRestartFrequencyExceeded(now: number = Date.now()): boolean {
+  const recent = loadRestartTimestamps().filter((t) => now - t < KAIROS_RESTART_WINDOW_MS);
+  return recent.length >= KAIROS_RESTART_MAX_IN_WINDOW;
+}
+
+/** Record a Kairos-initiated restart at now, pruning entries outside the window. */
+export function recordKairosRestart(now: number = Date.now()): void {
+  const recent = loadRestartTimestamps().filter((t) => now - t < KAIROS_RESTART_WINDOW_MS);
+  recent.push(now);
+  saveRestartTimestamps(recent);
+}
+
+/** Test teardown — clear the restart-frequency record. */
+export function __resetRestartLogForTest(): void {
+  try { if (existsSync(RESTART_LOG_FILE)) rmSync(RESTART_LOG_FILE, { force: true }); } catch { /* noop */ }
+}
+
 async function actOnObservation(obs: KairosObservation, config: Required<KairosConfig>): Promise<KairosObservation> {
   if (!config.autonomousActions) return obs;
   try {
@@ -418,8 +548,40 @@ async function actOnObservation(obs: KairosObservation, config: Required<KairosC
         log.warn('Kairos: RAM critical but agent is busy — skipping restart, will retry next cycle');
         return { ...obs, acted: false, actionResult: 'Skipped restart: agent session active — will retry when idle' };
       }
-      execSync('systemctl restart sudo-ai', { timeout: 30_000 });
-      return { ...obs, acted: true, actionResult: 'Service restarted to reclaim RAM' };
+      // GW-9: do not restart while the authority is on cooldown after a failed handoff.
+      if (isKairosRestartOnCooldown()) {
+        log.warn('Kairos: RAM critical but restart authority is on cooldown (prior failed handoff) — skipping');
+        return { ...obs, acted: false, actionResult: 'Skipped restart: restart authority on cooldown after a failed handoff' };
+      }
+      // GW-9: restart-frequency ceiling. Catches the loop where every handoff
+      // SUCCEEDS (so the stale-handoff cooldown never trips) but the condition
+      // keeps re-firing restarts. Suppress + register posture instead of looping.
+      if (isKairosRestartFrequencyExceeded()) {
+        log.warn({ maxInWindow: KAIROS_RESTART_MAX_IN_WINDOW, windowMs: KAIROS_RESTART_WINDOW_MS }, 'Kairos: RAM critical but restart-frequency ceiling reached within window — suppressing restart (possible loop)');
+        return { ...obs, acted: false, actionResult: `Skipped restart: ${KAIROS_RESTART_MAX_IN_WINDOW} restarts already within ${Math.round(KAIROS_RESTART_WINDOW_MS / 60000)}min — frequency ceiling reached (possible loop)` };
+      }
+      const executed = performGuardedRestart(
+        'RAM critical — reclaim memory via service restart',
+        'systemctl restart sudo-ai',
+        {
+          audit: auditKairosRestart,
+          exec: (cmd) => {
+            // GW-9: record intent BEFORE the restart so the successor verifies the handoff.
+            writeRestartIntent(restartDir(), { reason: 'RAM critical — Kairos service restart', initiator: 'kairos' });
+            execSync(cmd, { timeout: 30_000 });
+          },
+          dryRun: process.env['SUDO_KAIROS_DRY_RUN'] === '1',
+        },
+      );
+      // Record only real restarts so the frequency ceiling reflects actual loops.
+      if (executed) recordKairosRestart();
+      return {
+        ...obs,
+        acted: executed,
+        actionResult: executed
+          ? 'Service restarted to reclaim RAM'
+          : 'DRY-RUN: restart audited, not executed (SUDO_KAIROS_DRY_RUN=1)',
+      };
     }
     if (obs.type === 'disk_pressure' && obs.severity === 'CRITICAL') {
       // Each entry specifies a target dir and the find predicate to apply.

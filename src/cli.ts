@@ -425,6 +425,39 @@ async function boot(): Promise<void> {
   });
 
   // -------------------------------------------------------------------------
+  // 3.14 GW-10 — config-ambiguity rejection + flag lint. Ghost flags WARN;
+  // known-bad combos REFUSE BOOT unless SUDO_ALLOW_CONTRADICTORY_CONFIG=1.
+  // -------------------------------------------------------------------------
+  try {
+    const { lintFlags, isContradictionOverride } = await import('./core/config/flag-lint.js');
+    const manifestMod = await import('./core/config/flag-manifest.json', { with: { type: 'json' } });
+    const manifest = ((manifestMod.default ?? manifestMod) as { flags?: string[] }).flags ?? [];
+    const lint = lintFlags(process.env, manifest);
+    for (const g of lint.ghosts) {
+      log.warn({ flag: g }, `ghost flag set but no code reads it: ${g}`);
+    }
+    for (const w of lint.warnings) {
+      log.warn({ config: 'ambiguous' }, w);
+    }
+    if (lint.contradictions.length > 0) {
+      for (const c of lint.contradictions) {
+        log.error({ contradiction: c.id }, `CONFIG CONTRADICTION: ${c.detail}`);
+      }
+      if (!isContradictionOverride()) {
+        throw new Error(
+          `refusing to boot: ${lint.contradictions.length} contradictory config combo(s) — fix them or set SUDO_ALLOW_CONTRADICTORY_CONFIG=1`,
+        );
+      }
+      log.error({ posture: 'weakened' }, 'SUDO_ALLOW_CONTRADICTORY_CONFIG=1 — booting despite contradictory config');
+    }
+  } catch (err) {
+    // A thrown Error here is an intentional boot refusal — rethrow it. Only a
+    // lint-infrastructure failure (missing manifest, import error) is swallowed.
+    if (err instanceof Error && err.message.startsWith('refusing to boot')) throw err;
+    log.warn({ err: String(err) }, 'GW-10 flag lint skipped (lint infrastructure error)');
+  }
+
+  // -------------------------------------------------------------------------
   // 3.15 SecurityGuard — prompt injection detection + tool-call validation
   // -------------------------------------------------------------------------
   let security: import('./core/security/index.js').SecurityGuard | null = null;
@@ -442,13 +475,23 @@ async function boot(): Promise<void> {
     } catch { /* banner is best-effort */ }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    // F104: SUDO_SECURITY_STRICT=1 makes a SecurityGuard init failure FATAL
-    // instead of silently running without hardening.
-    if (process.env['SUDO_SECURITY_STRICT'] === '1') {
-      log.error({ err: msg }, 'SecurityGuard failed to initialize and SUDO_SECURITY_STRICT=1 — refusing to boot');
+    // GW-3b: strict is now the DEFAULT. A SecurityGuard init failure is FATAL
+    // unless SUDO_SECURITY_STRICT=0 is EXPLICITLY set (posture-registered as a
+    // weakening flag). No more silent "running without hardening" on prod.
+    // LOW-1: reuse the single posture predicate instead of duplicating the
+    // `!== '0'` strict test inline (keeps isSecurityStrict() load-bearing).
+    const { isSecurityStrict } = await import('./core/security/posture.js');
+    if (isSecurityStrict()) {
+      log.error(
+        { err: msg },
+        'SecurityGuard failed to initialize — refusing to boot (set SUDO_SECURITY_STRICT=0 to run without hardening)',
+      );
       throw err;
     }
-    log.warn({ err: msg }, 'SecurityGuard failed to initialize — running without security hardening');
+    log.warn(
+      { err: msg },
+      'SecurityGuard failed to initialize and SUDO_SECURITY_STRICT=0 — running WITHOUT security hardening (posture weakened)',
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -456,6 +499,41 @@ async function boot(): Promise<void> {
   // -------------------------------------------------------------------------
   const costTracker = new CostTracker();
   log.info('CostTracker initialized');
+
+  // -------------------------------------------------------------------------
+  // 3.2b GW-1 — persistent LLM budget bootstrap. Seed today's in-memory spend
+  // from the durable gateway.db ledger so budget enforcement survives restarts,
+  // wire the exhaustion alert seam, and warn LOUDLY when no daily cap is set.
+  // -------------------------------------------------------------------------
+  try {
+    const { getGatewayCallLog } = await import('./llm/logging.js');
+    const { initDaySpendFromHistory, isGlobalBudgetEnforced, setBudgetAlertSink } =
+      await import('./llm/policy.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const seeded = getGatewayCallLog().daySpend(today);
+    initDaySpendFromHistory({ day: today, total: seeded.total, byCaller: seeded.byCaller });
+    log.info({ day: today, spendUsd: Number(seeded.total.toFixed(4)) }, 'GW-1: LLM day-spend seeded from ledger');
+    if (!isGlobalBudgetEnforced()) {
+      log.error(
+        { posture: 'budget-off' },
+        'BUDGET ENFORCEMENT OFF — set SUDO_DAILY_LLM_BUDGET_USD to cap daily LLM spend ' +
+          '(user calls degrade one tier, background calls fail closed)',
+      );
+    }
+    // Exhaustion alert → loud structured error (captured by the log pipeline /
+    // Telemetry tab). Throttled to one per (day, verdict, lane) inside policy.ts.
+    setBudgetAlertSink((a) => {
+      log.error(
+        { budgetAlert: a },
+        `LLM BUDGET EXHAUSTED — ${a.verdict} on ${a.lane} lane (${a.caller} → ${a.route})`,
+      );
+    });
+  } catch (err) {
+    log.warn(
+      { err: String(err) },
+      'GW-1 budget bootstrap failed — continuing (day-spend may reset on this restart)',
+    );
+  }
 
   // -------------------------------------------------------------------------
   // 3.3 CommandRegistry — slash command routing
@@ -1841,6 +1919,31 @@ async function boot(): Promise<void> {
     telegram.setHookEmitter(hooks);
     telegramNotifier = telegram;
     registerOutboundAdapter(telegram); // proactive scheduled-message delivery (channel-outbox)
+    // GW-15: durable outbound delivery queue (opt-in, SUDO_OUTBOX_DURABLE=1).
+    // Persists text deliveries with ack/claim + crash recovery so a restart
+    // mid-send never double-messages a human. Default OFF → direct send.
+    if (process.env['SUDO_OUTBOX_DURABLE'] === '1') {
+      try {
+        const [{ DeliveryQueue }, { installDurableOutbox, telegramQueueOptions }, { registerOutboundSender }, { DATA_DIR }, pathMod] = await Promise.all([
+          import('./core/channels/delivery-queue.js'),
+          import('./core/channels/durable-outbox.js'),
+          import('./core/channels/channel-outbox.js'),
+          import('./core/shared/paths.js'),
+          import('node:path'),
+        ]);
+        const outboxQueue = new DeliveryQueue(pathMod.join(DATA_DIR, 'outbox.db'), telegramQueueOptions());
+        const durable = installDurableOutbox({
+          queue: outboxQueue,
+          channel: 'telegram',
+          rawSend: (peer, text, opts) => telegram.send(peer, text, opts),
+          registerWrapper: (send) => registerOutboundSender('telegram', send),
+        });
+        registerShutdown(() => { durable.stop(); outboxQueue.close(); });
+        log.info('Durable outbound delivery queue enabled for Telegram (SUDO_OUTBOX_DURABLE=1)');
+      } catch (err) {
+        log.warn({ err: String(err) }, 'Durable outbox failed to start — falling back to direct send');
+      }
+    }
     if (chatApprovals) approvalManager.registerSender('telegram', telegram);
 
     // Serialized per-peer: enqueue so concurrent messages from the same user
@@ -3809,6 +3912,14 @@ async function boot(): Promise<void> {
       ...(fleetNonceStore ? { fleetNonceStore } : {}),
     });
 
+    // GW-4: fold the dashboard onto the main gateway port (18900) by DEFAULT.
+    // SUDO_GATEWAY_UI_ON_MAIN=0 restores the split; SUDO_DASHBOARD_STANDALONE=1
+    // (or a missing gateway server) keeps the legacy 18910 listener for rollback.
+    const uiOnMain = gatewayServer != null && process.env['SUDO_GATEWAY_UI_ON_MAIN'] !== '0';
+    const wantStandalone = !uiOnMain || process.env['SUDO_DASHBOARD_STANDALONE'] === '1';
+    if (process.env['SUDO_DASHBOARD_PORT'] !== undefined && uiOnMain && !wantStandalone) {
+      log.warn({ port: dashboardPort }, 'SUDO_DASHBOARD_PORT is deprecated and ignored — the dashboard is served from the main gateway port (18900). Set SUDO_DASHBOARD_STANDALONE=1 to restore the standalone listener.');
+    }
     const dashboardInstance = initDashboard({
       port: dashboardPort,
       authToken: dashboardToken,
@@ -3816,13 +3927,14 @@ async function boot(): Promise<void> {
       bindAddress: dashboardBind,
       hostAllowlist,
       loopbackTrust,
+      standalone: wantStandalone,
     });
     registerShutdown(() => shutdownDashboard());
     // Slice D/3: also fold the dashboard onto the main gateway port under
     // /__dashboard__/ (SUDO_GATEWAY_UI_ON_MAIN=1). Additive — the standalone
     // dashboard port keeps running for rollback; the mount shares the unified auth
     // boundary (Slice D/1–D/2). The route-owner guard defers /__dashboard__ paths.
-    if (gatewayServer && process.env['SUDO_GATEWAY_UI_ON_MAIN'] === '1') {
+    if (uiOnMain && gatewayServer) {
       dashboardInstance.mountOnGatewayServer(gatewayServer);
     }
     log.info({
@@ -4097,6 +4209,29 @@ async function boot(): Promise<void> {
       { skillCount: mdSkillCount },
       'SUDO-AI v5 modules initialized',
     );
+
+    // GW-9: verified restart handoff. Now that the gateway is listening, the
+    // guard is up and channels are cross-wired, announce readiness so a restart
+    // initiator (updater / Kairos) can confirm the successor actually booted. A
+    // STALE intent here means the previous handoff failed — surface it, and for a
+    // Kairos-initiated restart put Kairos into cooldown so it cannot restart-loop.
+    try {
+      const { completeBootHandoff, restartDir } = await import('./core/health/restart-sentinel.js');
+      const gwPort = Number(process.env['GATEWAY_PORT'] ?? '18900') || 18900;
+      const handoff = completeBootHandoff(restartDir(), { port: gwPort });
+      if (handoff.resumed) {
+        log.info({ reason: handoff.intent?.reason, initiator: handoff.intent?.initiator }, 'GW-9: resumed from intended restart');
+      }
+      if (handoff.staleHandoff) {
+        log.error({ intent: handoff.intent }, 'GW-9: STALE restart intent at boot — prior handoff likely failed (possible restart loop)');
+        if (handoff.intent?.initiator === 'kairos') {
+          const { applyFailedHandoffCooldown } = await import('./core/consciousness/kairos.js');
+          applyFailedHandoffCooldown();
+        }
+      }
+    } catch (err: unknown) {
+      log.warn({ err: String(err) }, 'GW-9: restart-handoff boot step failed (non-fatal)');
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn({ err: msg }, 'v5 module initialization failed — running without v5 features');
@@ -4932,6 +5067,22 @@ if (process.argv[2] === 'chat') {
   }).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[chat] Failed to load chat module:', msg);
+    process.exit(1);
+  });
+} else if (process.argv[2] === 'security-audit') {
+  // security-audit subcommand — pure-local posture/flag/secret checks (GW-7).
+  // Read-only (unless --fix tightens file perms); never boots the daemon.
+  import('./cli/commands/security-audit.js').then(({ runSecurityAudit }) => {
+    runSecurityAudit(process.argv.slice(3))
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[security-audit] Fatal error:', msg);
+        process.exit(1);
+      });
+  }).catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[security-audit] Failed to load module:', msg);
     process.exit(1);
   });
 } else if (process.argv[2] === 'replay') {

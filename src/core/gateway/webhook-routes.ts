@@ -17,6 +17,7 @@ import { verifySignature, deliveryId, bodyEventId } from './webhook-signatures.j
 import { runWebhookTurn, type WebhookRunResult } from './webhook-bridge.js';
 import { toolFetch } from '../security/guarded-fetch.js';
 import { detectInjection } from '../security/injection-detector.js';
+import { SlidingWindowLimiter } from './rate-limit.js';
 
 const log = createLogger('gateway:webhook-routes');
 /** Self-modify tools a webhook may NOT use unless it opts in (allowSelfModify). */
@@ -32,6 +33,12 @@ async function fireCallback(url: string, hookId: string, delivery: string, r: We
     log.warn({ hookId, url, err: String(err) }, 'webhook callback failed');
   }
 }
+// GW-8: webhook signature-auth flood control — 10 bad-secret attempts/min per
+// (hook, ip) → 5-min lockout, reusing the WS/RPC sliding-window limiter. This
+// is brute-force protection for the per-hook secret, distinct from the accepted-
+// request rate limiter below.
+const authFailLimiter = new SlidingWindowLimiter({ limit: 10, windowMs: 60_000, lockoutMs: 5 * 60_000 });
+
 const MAX_BODY = 1_048_576; // 1 MB
 const BODY_IN_PROMPT_CAP = 8_000;
 const DEDUPE_TTL_MS = 10 * 60_000;
@@ -129,8 +136,20 @@ export function registerWebhookRoutes(server: HttpServer): void {
       if (tooLarge) { sendJson(res, 413, { error: { message: 'payload too large', code: 413 } }); return; }
 
       // 1. Authenticate (constant-time). Bad/missing secret → 401.
+      // GW-8: flood control — an IP hammering bad secrets at a hook is locked out.
+      const authKey = `${hookId}:${req.socket.remoteAddress ?? 'unknown'}`;
+      if (authFailLimiter.isLocked(authKey)) {
+        const retryAfterS = Math.max(1, Math.ceil(authFailLimiter.record(authKey).retryAfterMs / 1000));
+        sendJson(res, 429, { error: { message: 'too many failed attempts', code: 429 } }, { 'Retry-After': String(retryAfterS) });
+        return;
+      }
       const verdict = verifySignature(hook, hookSecret(hook), raw, req.headers);
-      if (!verdict.ok) { sendJson(res, 401, { error: { message: `unauthorized: ${verdict.reason}`, code: 401 } }); return; }
+      if (!verdict.ok) {
+        authFailLimiter.record(authKey);
+        sendJson(res, 401, { error: { message: `unauthorized: ${verdict.reason}`, code: 401 } });
+        return;
+      }
+      authFailLimiter.reset(authKey);
 
       // 2. Rate limit → 429.
       const rl = rateLimited(hookId, hook.rateLimitPerMin);

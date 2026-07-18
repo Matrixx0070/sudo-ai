@@ -10,6 +10,7 @@
  */
 
 import { execSync, spawn } from 'node:child_process';
+import { writeRestartIntent, restartDir } from '../../../health/restart-sentinel.js';
 import { createLogger } from '../../../shared/logger.js';
 import { PROJECT_ROOT } from '../../../shared/paths.js';
 
@@ -83,6 +84,13 @@ export function scheduleDetachedRestart(reason: string, cwd: string = PROJECT_RO
     return { scheduled: false, cmd: '', error: DARWIN_NO_RESTART_MSG };
   }
   logger.info({ cmd, via, reason }, 'Scheduling detached service restart');
+  // GW-9: record the restart intent BEFORE spawning the detached restarter so the
+  // successor can verify the handoff (writes ready.json on boot). Best-effort.
+  try {
+    writeRestartIntent(restartDir(), { reason, initiator: 'updater' });
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'GW-9: could not record restart intent (non-fatal)');
+  }
   try {
     const child = spawn('sh', ['-c', `sleep 3; ${cmd}`], {
       detached: true,

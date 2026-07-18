@@ -11,7 +11,6 @@
  */
 
 import http from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
 import { createLogger } from '../shared/logger.js';
 
 const log = createLogger('api:admin-router');
@@ -131,25 +130,11 @@ export class AdminRouter {
       return true;
     }
 
-    // --- Bearer token auth ------------------------------------------------
-    const requiredToken = process.env['SUDO_AI_DASHBOARD_TOKEN'];
-    if (requiredToken) {
-      // Constant-time compare (timingSafeEqual) so a direct caller of dispatch()
-      // that bypasses the gateway registrar still gets no timing oracle.
-      const authHeader = (req.headers['authorization'] ?? '') as string;
-      const m = /^Bearer\s+(.+)$/i.exec(authHeader);
-      const tokenBuf = Buffer.from(requiredToken, 'utf8');
-      const candBuf = m ? Buffer.from(m[1]!.trim(), 'utf8') : Buffer.alloc(0);
-      const ok = candBuf.length === tokenBuf.length && timingSafeEqual(candBuf, tokenBuf);
-      if (!ok) {
-        log.warn(
-          { ip: (req.socket as { remoteAddress?: string })?.remoteAddress, url, method },
-          'Admin auth failed — invalid or missing Bearer token',
-        );
-        sendJson(res, 401, { error: { message: 'Unauthorized', code: 401 } });
-        return true;
-      }
-    }
+    // --- Auth ---------------------------------------------------------------
+    // GW-4: NO bespoke Bearer check here. Auth is enforced upstream at the
+    // gateway boundary (api/admin/register.ts) through the unified resolver
+    // (gateway/auth.ts, operator.admin) — the same boundary as /v1/admin/*.
+    // dispatch() must only be reached post-auth; never wire it as a public entry.
 
     // --- Route matching ---------------------------------------------------
     for (const route of this._routes) {

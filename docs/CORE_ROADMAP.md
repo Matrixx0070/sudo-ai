@@ -308,3 +308,8 @@ indexes; 38 skipped tests concentrated in meta + browser suites.
 | F (F113–F118) persistence | **F113+F114 shipped** (#818 retention-sweep + WAL); **F115/F116/F117/F118 verdicts + map delivered** (docs/PERSISTENCE_MAP.md; physical merges rejected/deferred with reasons; F117 boot-scan = small follow-up) |
 | G (F119–F123) metabolism | **COMPLETE** — #820 (F119 deep-thought consumer, F120 dead wiring, F121 Kairos governance, F122 detection surfacing) + #821 (F123 metabolism report) |
 | H (F124–F127) quality | **COMPLETE (opening slices)** — #822 (F125 category smoke 35 cats/307 tools + F124 mcp-adapter/loop-helpers, 99 tests; 2 real bugs documented) + this PR (F126 unskip audit incl. never-running docker-gate fix; F127 consciousness store suites). Coverage stays a rolling discipline. |
+
+## Related programs
+
+- **OpenClaw gateway improvements (GW-1…GW-15)** — `docs/OPENCLAW_GATEWAY_IMPROVEMENTS_PLAN.md` (spec) borrows hardened mechanisms from the OpenClaw monorepo into the SUDO gateway (budget enforcement, failover chain, fail-open closure, pairing codes, durable outbox, run lanes, CI ratchets, e2e journeys).
+- **OpenClaw deliberate non-adoption** — `docs/OPENCLAW_NON_ADOPTION.md` (GW-14) records what SUDO will NOT copy from OpenClaw and why (sandbox-off default, agent-holds-operator-authority, cross-agent token read-through, channel/extension sprawl, in-process multi-tenancy, ACP runtimes, device-node pairing). **Read before re-proposing any of these.**

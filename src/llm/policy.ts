@@ -285,7 +285,90 @@ function rolloverSpend(): void {
     spend.day = today;
     spend.byCaller.clear();
     spend.total = 0;
+    _budgetAlertedKeys.clear();
   }
+}
+
+// ---------------------------------------------------------------------------
+// GW-1: budget-exhaustion alert seam
+// ---------------------------------------------------------------------------
+
+/** One exhaustion alert. Boot wires a sink (telemetry + owner notice). */
+export interface BudgetAlert {
+  verdict: 'caller_exceeded' | 'global_exceeded';
+  lane: 'user' | 'background';
+  caller: string;
+  route: string;
+  /** UTC day the exhaustion happened on. */
+  day: string;
+}
+
+type BudgetAlertSink = (alert: BudgetAlert) => void;
+let _budgetAlertSink: BudgetAlertSink | null = null;
+
+/**
+ * Register a sink for budget-exhaustion alerts (invariant #10: exhaustion must
+ * alert + report on Telemetry). Pass null to clear. Until a sink is wired the
+ * alert is a loud log only.
+ */
+export function setBudgetAlertSink(sink: BudgetAlertSink | null): void {
+  _budgetAlertSink = sink;
+}
+
+/** Dedupe key set — one alert per (day, verdict, lane); cleared on day rollover. */
+const _budgetAlertedKeys = new Set<string>();
+
+function emitBudgetAlert(
+  verdict: 'caller_exceeded' | 'global_exceeded',
+  lane: 'user' | 'background',
+  caller: string,
+  route: string,
+): void {
+  rolloverSpend();
+  const key = `${spend.day}:${verdict}:${lane}`;
+  if (_budgetAlertedKeys.has(key)) return;
+  _budgetAlertedKeys.add(key);
+  const alert: BudgetAlert = { verdict, lane, caller, route, day: spend.day };
+  log.error(
+    { ...alert },
+    `LLM budget exhausted (${verdict}, ${lane} lane) — ${lane === 'user' ? 'degrading' : 'skipping'} ${caller}`,
+  );
+  try {
+    _budgetAlertSink?.(alert);
+  } catch (err) {
+    log.error({ route, err: String(err) }, 'budget alert sink threw — ignored');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GW-1: seed today's spend from durable history at boot
+// ---------------------------------------------------------------------------
+
+/**
+ * Seed today's in-memory spend from the durable gateway.db ledger at boot so
+ * budget enforcement SURVIVES restarts instead of resetting to zero. `logging.ts`
+ * owns the DB and derives the numbers (`GatewayCallLog.daySpend()`); policy stays
+ * dependency-light and just accepts them here. Idempotent + safe:
+ *  - a stale/next-day seed is ignored (day must equal today),
+ *  - never clobbers spend already accrued this process (total>0 → no-op).
+ */
+export function initDaySpendFromHistory(seed: {
+  day: string;
+  total: number;
+  byCaller: Map<string, number>;
+}): void {
+  rolloverSpend();
+  if (seed.day !== spend.day) return;
+  if (spend.total > 0) return;
+  spend.total = Number.isFinite(seed.total) && seed.total > 0 ? seed.total : 0;
+  spend.byCaller.clear();
+  for (const [k, v] of seed.byCaller) {
+    if (Number.isFinite(v) && v > 0) spend.byCaller.set(k, v);
+  }
+  log.info(
+    { day: spend.day, total: spend.total, callers: spend.byCaller.size },
+    'GW-1: seeded day-spend from ledger history',
+  );
 }
 
 /**
@@ -320,10 +403,26 @@ function budgetsFromEnv(): Record<string, number> {
   return {};
 }
 
+/**
+ * GW-1: the global daily USD cap. `SUDO_DAILY_LLM_BUDGET_USD` (prod-facing
+ * name, shared with self-build + tenancy) wins; `SUDO_LLM_GLOBAL_BUDGET_USD`
+ * is the legacy alias. `off`/`0`/empty/invalid → Infinity (enforcement OFF).
+ */
 function globalBudget(): number {
-  const raw = process.env['SUDO_LLM_GLOBAL_BUDGET_USD'];
-  const n = raw !== undefined ? Number(raw) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : Infinity;
+  for (const key of ['SUDO_DAILY_LLM_BUDGET_USD', 'SUDO_LLM_GLOBAL_BUDGET_USD']) {
+    const raw = process.env[key];
+    if (raw === undefined) continue;
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === '' || trimmed === 'off') continue;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return Infinity;
+}
+
+/** GW-1: true when a global daily USD cap is configured (enforcement ON). */
+export function isGlobalBudgetEnforced(): boolean {
+  return globalBudget() !== Infinity;
 }
 
 type BudgetVerdict = 'ok' | 'caller_exceeded' | 'global_exceeded';
@@ -382,15 +481,18 @@ function preflight(
     });
   }
 
-  // Budgets.
+  // Budgets. Asymmetry (GW-1): a USER call is NEVER blocked by budget — it runs
+  // and returns 'degrade' so the caller drops the alias one tier. A BACKGROUND
+  // call fails closed. Either way, exhaustion emits ONE throttled alert.
   let budgetDecision: BudgetDecision = 'ok';
   const verdict = budgetVerdict(caller, opts.estimateCostUsd ?? 0);
   if (verdict !== 'ok') {
-    if (priority === 'user' && verdict === 'caller_exceeded') {
-      // User calls are never blocked — degrade instead.
+    if (priority === 'user') {
       budgetDecision = 'degrade';
-      log.warn({ route, caller }, 'budget exceeded — user call allowed, degrade alias one tier');
+      emitBudgetAlert(verdict, 'user', caller, route);
+      log.warn({ route, caller, verdict }, 'budget exceeded — user call allowed, degrade alias one tier');
     } else {
+      emitBudgetAlert(verdict, 'background', caller, route);
       throw new LLMPolicyError(
         `[llm-policy] ${verdict === 'global_exceeded' ? 'global' : 'caller'} budget exceeded: ${caller} → ${route} skipped`,
         { class: 'billing', route, retryable: false, skipped: true },
@@ -520,4 +622,6 @@ export function __resetPolicyState(): void {
   spend.day = todayKey();
   spend.byCaller.clear();
   spend.total = 0;
+  _budgetAlertedKeys.clear();
+  _budgetAlertSink = null;
 }

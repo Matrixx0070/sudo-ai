@@ -48,6 +48,12 @@ export interface DashboardConfig {
    * → false. POST mutation endpoints ALWAYS require auth regardless.
    */
   loopbackTrust?: boolean;
+  /**
+   * GW-4: when false, the dashboard does NOT open its own standalone listener
+   * (it is folded onto the main gateway port via mountOnGatewayServer). Default
+   * true preserves the legacy standalone behavior for rollback.
+   */
+  standalone?: boolean;
 }
 
 /** Alignment signal breakdown. */
