@@ -51,6 +51,12 @@ const WEAKENING_FLAGS: ReadonlyArray<WeakeningFlag> = [
     activeWhen: '0',
   },
   {
+    flag: 'TELEGRAM_DM_POLICY',
+    effect:
+      'GW-6 Telegram DM policy is OPEN — unknown senders admitted to the agent (only effective with an explicit wildcard; still a widened inbound surface)',
+    activeWhen: 'open',
+  },
+  {
     flag: 'SUDO_KAIROS',
     effect:
       'Kairos restart authority active — 5-min daemon may execSync + systemctl restart (SUDO_KAIROS=0 disables, SUDO_KAIROS_AUTONOMOUS=0 observe-only, SUDO_KAIROS_DRY_RUN=1 no-op)',

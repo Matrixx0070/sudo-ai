@@ -32,6 +32,7 @@ import type {
   SendOptions,
   UnifiedMessage,
 } from './types.js';
+import { getPairingManager } from './pairing.js';
 import { buildDocumentInbound, pickTelegramSendMethod } from './telegram-media.js';
 import type { CommandRegistry } from '../commands/registry.js';
 import type { CommandContext } from '../commands/types.js';
@@ -244,6 +245,10 @@ export class TelegramAdapter implements ChannelAdapter {
   private _isConnected = false;
   private _handler: MessageHandler | null = null;
   private readonly allowedUsers: Set<string>;
+  /** GW-6: original (owner) allowlist — only these may run /pair admin commands. */
+  private readonly ownerUsers: Set<string>;
+  /** GW-6: DM admission posture for unknown senders (TELEGRAM_DM_POLICY). */
+  private readonly dmPolicy: 'allowlist' | 'pairing' | 'open';
   private readonly tokenEnvKey: string;
   private _commandRegistry: CommandRegistry | null = null;
   private _commandContextFactory: CommandContextFactory | null = null;
@@ -290,8 +295,17 @@ export class TelegramAdapter implements ChannelAdapter {
   constructor(tokenEnvKey = 'TELEGRAM_BOT_TOKEN', allowedUsers: string[] = []) {
     this.tokenEnvKey = tokenEnvKey;
     this.allowedUsers = new Set(allowedUsers);
-    if (this.allowedUsers.size === 0) {
-      log.warn('Telegram allowedUsers is empty — all messages will be DENIED by default. Set TELEGRAM_CHAT_ID to allow users.');
+    // GW-6: remember the original owner allowlist BEFORE merging paired peers —
+    // only owners may run /pair admin commands.
+    this.ownerUsers = new Set(allowedUsers);
+    const rawPolicy = process.env['TELEGRAM_DM_POLICY'];
+    this.dmPolicy = rawPolicy === 'pairing' || rawPolicy === 'open' ? rawPolicy : 'allowlist';
+    // GW-6: admit previously-approved (paired) peers so approvals survive restart.
+    try {
+      for (const peer of getPairingManager().pairedPeers('telegram', this.tokenEnvKey)) this.allowedUsers.add(peer);
+    } catch { /* pairing store optional */ }
+    if (this.allowedUsers.size === 0 && this.dmPolicy === 'allowlist') {
+      log.warn('Telegram allowedUsers is empty — all messages will be DENIED by default. Set TELEGRAM_CHAT_ID to allow users, or TELEGRAM_DM_POLICY=pairing to hand out pairing codes.');
     }
   }
 
@@ -1035,6 +1049,54 @@ export class TelegramAdapter implements ChannelAdapter {
     await this._handleInbound(ctx, `/${command}`, []);
   }
 
+  /**
+   * GW-6: an unknown sender messaged a pairing-policy channel. Issue (or re-issue)
+   * a pairing code and tell them to ask the owner. No agent turn is scheduled.
+   */
+  private async _handleUnknownSenderPairing(ctx: Context, userId: string, text: string): Promise<void> {
+    const outcome = getPairingManager().requestPairing({
+      channel: 'telegram', accountId: this.tokenEnvKey, peerId: userId, preview: text,
+    });
+    if (outcome.status === 'created' || outcome.status === 'pending-exists') {
+      try {
+        await ctx.reply(
+          `You are not approved to message this assistant yet.\n\nShare this pairing code with the owner to be approved:\n\n${outcome.code}\n\n(valid for 1 hour). Your message was NOT delivered — please resend after the owner approves you.`,
+        );
+      } catch (err) { log.warn({ err }, 'GW-6: pairing code reply failed'); }
+      log.info({ userId, status: outcome.status }, 'GW-6: pairing code issued to unknown Telegram sender');
+    } else {
+      // capped / rate-limited / already-paired → no reply (avoid amplification).
+      log.warn({ userId, status: outcome.status }, 'GW-6: pairing request not issued');
+    }
+  }
+
+  /** GW-6: owner /pair list|approve|deny handler. Adapter-level, zero LLM. */
+  private async _handlePairAdmin(ctx: Context, text: string): Promise<void> {
+    const parts = text.split(/\s+/);
+    const sub = (parts[1] ?? '').toLowerCase();
+    const pm = getPairingManager();
+    let reply: string;
+    if (sub === 'list') {
+      const pend = pm.listPending('telegram', this.tokenEnvKey);
+      reply = pend.length === 0
+        ? 'No pending pairing requests.'
+        : 'Pending pairing requests:\n' + pend.map((x) => `• ${x.code} — "${x.firstMessagePreview}"`).join('\n');
+    } else if (sub === 'approve' && parts[2]) {
+      const entry = pm.approve(parts[2]);
+      if (entry) {
+        this.allowedUsers.add(entry.peerId);
+        reply = `Approved ${entry.code.toUpperCase()}. The sender may now message you — ask them to resend.`;
+      } else {
+        reply = `No pending request for code ${parts[2]} (expired or already handled).`;
+      }
+    } else if (sub === 'deny' && parts[2]) {
+      reply = pm.deny(parts[2]) ? `Denied ${parts[2]}.` : `No pending request for code ${parts[2]}.`;
+    } else {
+      reply = 'Usage: /pair list | /pair approve <code> | /pair deny <code>';
+    }
+    try { await ctx.reply(reply); } catch (err) { log.warn({ err }, 'GW-6: pair admin reply failed'); }
+  }
+
   private async _handleInbound(
     ctx: Context,
     text: string,
@@ -1044,7 +1106,21 @@ export class TelegramAdapter implements ChannelAdapter {
     const userId = String(from?.id ?? 'unknown');
 
     if (!this._isAllowed(userId)) {
-      log.warn({ userId }, 'Message from non-allowlisted user — dropped');
+      // GW-6: on a pairing channel, an unknown sender gets a one-time code
+      // (pure adapter-level reply, ZERO LLM) instead of a silent drop. The
+      // triggering message is NOT processed — it arrived pre-trust.
+      if (this.dmPolicy === 'pairing') {
+        await this._handleUnknownSenderPairing(ctx, userId, text);
+      } else {
+        log.warn({ userId }, 'Message from non-allowlisted user — dropped');
+      }
+      return;
+    }
+
+    // GW-6: owner pairing-admin commands (/pair list|approve|deny). Adapter-level,
+    // never an agent turn. Restricted to the original owner allowlist.
+    if (text.trim().startsWith('/pair') && this.ownerUsers.has(userId)) {
+      await this._handlePairAdmin(ctx, text.trim());
       return;
     }
 
