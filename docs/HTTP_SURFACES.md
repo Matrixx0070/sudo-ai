@@ -24,14 +24,19 @@ authenticate through the ONE unified resolver (`gateway/auth.ts`, requiring
 `operator.admin`):
 
 - `/v1/admin/*` (`gateway/admin-routes.ts`) — already on `authenticateHttp`.
-- `/api/admin/*` (`api/admin/register.ts`) — GW-4 switched its gate from a
-  bespoke per-surface Bearer compare to `authenticateHttp` + `hasScope('operator.admin')`,
-  and deleted the redundant self-auth inside `admin-router.ts` `dispatch()`.
-  The `/api/admin/*` **prefix is DEPRECATED** in favor of `/v1/admin/*` and logs
-  a deprecation notice at mount.
+- `/v1/admin/<section>/*` (`api/admin/register.ts`) — the migrated handler
+  set (dashboard/models/channels/tools/consciousness/cron/settings/security/logs/
+  system/sessions) is now served **canonically under `/v1/admin/*`** by the same
+  listener, gated by `authenticateHttp` + `hasScope('operator.admin')`. Its
+  namespaces are disjoint from the real `/v1/admin/*` audit/inspection routes;
+  `gateway/admin-routes.ts` defers them (only when `SUDO_ADMIN_API=1`) via
+  `isMigratedAdminPath`, and the exact `GET /v1/admin/dashboard` HTML route is
+  never shadowed (matched with a trailing slash).
+- `/api/admin/*` — **RETIRED**: now a thin **308 redirect** to the `/v1/admin/*`
+  equivalent (method + body + query preserved), logged as DEPRECATED (throttled
+  one line per section / 10 min). Kept one release for legacy callers; delete later.
 
-Deferred (GW-4 deviation): physically merging the two route SETS is not done —
-`/api/admin/*` (models/channels/tools/consciousness stubs) and `/v1/admin/*`
-(audit/inspection/alignment/epistemic) are DIFFERENT surfaces, not aliases of one
-another, so a 308 alias would misroute. Auth is unified; route consolidation is a
-separate follow-up once the stub surface has live handlers.
+GW-4 tail (route merge) COMPLETE: the two admin route sets are unified under one
+namespace (`/v1/admin/*`) behind one resolver, with `/api/admin/*` as a
+deprecated 308 alias. The earlier deferral (distinct surfaces → blanket alias would
+misroute) is resolved by path-scoped deferral, not a blanket alias.
