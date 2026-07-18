@@ -1,5 +1,8 @@
 /**
- * Tests for pluggable OpenAI-compatible providers (gap #27).
+ * Tests for pluggable custom providers (gap #27) — wire-config registry.
+ * F97: the ai-SDK instance half (getCustomProvider/resolveCustomModel/getModel
+ * integration) is retired with legacy providers.ts; the IR transport consumes
+ * getCustomProviderWireConfig instead.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -7,12 +10,10 @@ import {
   registerCustomProvider,
   registerCustomProvidersFromEnv,
   isCustomProvider,
-  getCustomProvider,
+  getCustomProviderWireConfig,
   listCustomProviders,
   clearCustomProviders,
-  resolveCustomModel,
-} from '../../src/core/brain/custom-providers.js';
-import { getModel } from '../../src/core/brain/providers.js';
+} from '../../src/llm/custom-providers.js';
 
 const RESERVED = new Set<string>([
   'ollama', 'xai', 'openai', 'anthropic', 'google', 'groq', 'mistral', 'deepseek', 'together',
@@ -33,7 +34,7 @@ describe('registerCustomProvider', () => {
     expect(ok).toBe(true);
     expect(isCustomProvider('myllm')).toBe(true);
     expect(listCustomProviders()).toEqual(['myllm']);
-    expect(getCustomProvider('myllm')).not.toBeNull();
+    expect(getCustomProviderWireConfig('myllm')).toEqual({ baseURL: 'https://api.example.com/v1', apiKey: 'sk-test', adapter: 'openai' });
   });
 
   it('reads the key from apiKeyEnv', () => {
@@ -123,51 +124,34 @@ describe('registerCustomProvidersFromEnv', () => {
   });
 });
 
-describe('getModel resolves custom providers', () => {
-  it('resolves a registered custom provider to a model handle', () => {
-    registerCustomProvider({ name: 'myllm', baseURL: 'https://api.example.com/v1', apiKey: 'sk-test' }, RESERVED);
-    const handle = getModel('myllm/some-model');
-    // The custom path must return a real LanguageModel handle (createOpenAI.chat),
-    // not undefined — same contract as the built-in OpenAI-compatible providers.
-    expect(handle).toBeTypeOf('object');
-    expect(handle).not.toBeNull();
-  });
-
-  it('still throws for an unknown, unregistered provider', () => {
-    expect(() => getModel('nonexistent/model')).toThrow('Unknown provider');
-  });
-});
-
-describe('custom provider adapters (non-OpenAI shapes)', () => {
-  it('defaults to the openai adapter and resolves a handle', () => {
+describe('custom provider adapters (wire configs)', () => {
+  it('defaults to the openai adapter', () => {
     registerCustomProvider({ name: 'defadapter', baseURL: 'https://x/v1', apiKey: 'k' }, RESERVED);
-    const handle = resolveCustomModel('defadapter', 'm');
-    expect(handle).toBeTypeOf('object');
-    expect(handle).not.toBeNull();
+    expect(getCustomProviderWireConfig('defadapter')?.adapter).toBe('openai');
   });
 
-  it('registers an anthropic-shaped endpoint and resolves a native handle', () => {
+  it('registers an anthropic-shaped endpoint with its wire config', () => {
     const ok = registerCustomProvider(
       { name: 'myanthropic', baseURL: 'https://anthropic-proxy.example/v1', apiKey: 'sk-test', adapter: 'anthropic' },
       RESERVED,
     );
     expect(ok).toBe(true);
     expect(isCustomProvider('myanthropic')).toBe(true);
-    expect(getCustomProvider('myanthropic')).not.toBeNull();
-    // Native handle resolution (provider(id)), not .chat(id).
-    const handle = resolveCustomModel('myanthropic', 'claude-x');
-    expect(handle).toBeTypeOf('object');
-    expect(handle).not.toBeNull();
+    expect(getCustomProviderWireConfig('myanthropic')).toEqual({
+      baseURL: 'https://anthropic-proxy.example/v1',
+      apiKey: 'sk-test',
+      adapter: 'anthropic',
+    });
   });
 
-  it('registers a google-shaped endpoint and resolves a native handle', () => {
+  it('accepts a google-shaped endpoint for config compatibility (transport rejects per-call)', () => {
     expect(
       registerCustomProvider(
         { name: 'mygemini', baseURL: 'https://gemini-proxy.example/v1', apiKey: 'sk-test', adapter: 'google' },
         RESERVED,
       ),
     ).toBe(true);
-    expect(resolveCustomModel('mygemini', 'gemini-x')).not.toBeNull();
+    expect(getCustomProviderWireConfig('mygemini')?.adapter).toBe('google');
   });
 
   it('rejects an unknown adapter (from env JSON)', () => {
@@ -178,17 +162,7 @@ describe('custom provider adapters (non-OpenAI shapes)', () => {
     expect(isCustomProvider('badadapter')).toBe(false);
   });
 
-  it('resolveCustomModel returns null for an unregistered provider', () => {
-    expect(resolveCustomModel('not-registered', 'm')).toBeNull();
-  });
-
-  it('getModel resolves an anthropic-adapter custom provider end-to-end', () => {
-    registerCustomProvider(
-      { name: 'anthro2', baseURL: 'https://anthropic-proxy.example/v1', apiKey: 'sk-test', adapter: 'anthropic' },
-      RESERVED,
-    );
-    const handle = getModel('anthro2/claude-x');
-    expect(handle).toBeTypeOf('object');
-    expect(handle).not.toBeNull();
+  it('getCustomProviderWireConfig returns null for an unregistered provider', () => {
+    expect(getCustomProviderWireConfig('not-registered')).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 /**
  * custom.codex — Autonomous coding agent using Vercel AI SDK.
  *
- * Uses streamText() with all configured providers in priority order.
+ * Tries all configured providers in priority order through the IR facade (chatIR).
  * No external CLI binary — pure SDK, works with any provider that has an API key.
  *
  * Provider priority (auto-fallback):

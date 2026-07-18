@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { IRResponse } from '../../shared-types/ir/v1.js';
 import {
-  irCallersEnabled,
   irResponseToBrainResult,
   irStopReasonToFinishReason,
   callTransportForBrain,
@@ -123,45 +122,6 @@ function mockFetch(replies: Reply[]): { fetchImpl: typeof fetch; calls: Captured
 }
 
 const noSleep = async (): Promise<void> => {};
-
-// ---------------------------------------------------------------------------
-// irCallersEnabled
-// ---------------------------------------------------------------------------
-
-describe('irCallersEnabled', () => {
-  it('unset → false for every source', () => {
-    delete process.env['LLM_IR_CALLERS'];
-    expect(irCallersEnabled('chat')).toBe(false);
-    expect(irCallersEnabled('agent')).toBe(false);
-  });
-
-  it('empty / whitespace-only → false', () => {
-    process.env['LLM_IR_CALLERS'] = '';
-    expect(irCallersEnabled('chat')).toBe(false);
-    process.env['LLM_IR_CALLERS'] = '   ';
-    expect(irCallersEnabled('chat')).toBe(false);
-  });
-
-  it("'*' → true for every source", () => {
-    process.env['LLM_IR_CALLERS'] = '*';
-    expect(irCallersEnabled('chat')).toBe(true);
-    expect(irCallersEnabled('consciousness')).toBe(true);
-  });
-
-  it('comma list → exact matches only (whitespace tolerated)', () => {
-    process.env['LLM_IR_CALLERS'] = 'health, consciousness';
-    expect(irCallersEnabled('health')).toBe(true);
-    expect(irCallersEnabled('consciousness')).toBe(true);
-    expect(irCallersEnabled('chat')).toBe(false);
-    expect(irCallersEnabled('agent')).toBe(false);
-    // no prefix/substring matching
-    expect(irCallersEnabled('healthcheck')).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// irResponseToBrainResult (inverse of resultToIR)
-// ---------------------------------------------------------------------------
 
 describe('irResponseToBrainResult', () => {
   it('joins text blocks and maps usage (ai-SDK v6 naming, cached included)', () => {

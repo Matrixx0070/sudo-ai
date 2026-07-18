@@ -56,6 +56,28 @@ function offenders(files: string[], whitelist: string[]): string[] {
   );
 }
 
+describe('F97: the legacy provider layer stays deleted', () => {
+  it('nothing imports src/llm/legacy or the retired brain provider shims', () => {
+    // The paths themselves are gone; this guards against REINTRODUCTION.
+    const files = gitGrepFiles(
+      "from '.*(llm/legacy|core/brain/providers|core/brain/custom-providers|core/brain/claude-oauth-manager)",
+    );
+    expect(files.filter((f) => f.endsWith('.ts') || f.endsWith('.tsx'))).toEqual([]);
+  });
+
+  it('LLM_IR_CALLERS is fully retired (no code reads it)', () => {
+    const files = gitGrepFiles("process\\.env\\[?.?LLM_IR_CALLERS");
+    expect(files).toEqual([]);
+  });
+
+  it('no ai-SDK wire call (streamText/generateText) exists outside allowed files', () => {
+    // brain.ts keeps `import { generateText } from 'ai'` for its result TYPE
+    // only; a call-site regex (open paren) catches real wire usage.
+    const files = gitGrepFiles('(streamText|generateText)\\(');
+    expect(files.filter((f) => (f.endsWith('.ts') || f.endsWith('.tsx')) && !f.endsWith('.test.ts'))).toEqual([]);
+  });
+});
+
 describe('src/llm choke point (gw-refactor Phase 1)', () => {
   it('no provider URL literal exists outside src/llm/', () => {
     const files = gitGrepFiles(PROVIDER_URL_PATTERN);

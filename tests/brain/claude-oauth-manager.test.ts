@@ -13,7 +13,7 @@ import {
   generatePkceVerifier,
   pkceChallengeFor,
   buildAuthorizeUrl,
-} from '../../src/core/brain/claude-oauth-manager.js';
+} from '../../src/llm/claude-oauth-manager.js';
 
 const ORIG_FETCH = globalThis.fetch;
 let tmpDir = '';
