@@ -433,3 +433,78 @@ describe('attachWsRpc — RPC v2 handshake (SUDO_GATEWAY_RPC_V2=1)', () => {
     expect(res.error?.code).toBe(-32002);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// GW-8: idempotency + backpressure + preauth flood control (SUDO_GATEWAY_RPC_V2=1)
+// ---------------------------------------------------------------------------
+
+describe('attachWsRpc — GW-8 hardening (SUDO_GATEWAY_RPC_V2=1)', () => {
+  let testServer: TestServer;
+  let ws: WebSocket | null = null;
+  const savedV2 = process.env['SUDO_GATEWAY_RPC_V2'];
+
+  beforeEach(() => { process.env['SUDO_GATEWAY_RPC_V2'] = '1'; });
+  afterEach(async () => {
+    if (ws && ws.readyState !== WebSocket.CLOSED) await closeWs(ws);
+    ws = null;
+    if (testServer) await testServer.close();
+    if (savedV2 === undefined) delete process.env['SUDO_GATEWAY_RPC_V2'];
+    else process.env['SUDO_GATEWAY_RPC_V2'] = savedV2;
+  });
+
+  it('hello-ok advertises the backpressure policy (limits)', async () => {
+    testServer = await startServer();
+    ws = await connectWs(testServer.port);
+    const res = await sendAndReceive(ws, { id: '1', method: 'connect', params: {} }) as {
+      result?: { limits?: { maxPayload: number; maxBufferedBytes: number } };
+    };
+    expect(res.result?.limits?.maxPayload).toBe(512 * 1024);
+    expect(res.result?.limits?.maxBufferedBytes).toBe(50 * 1024 * 1024);
+  });
+
+  it('a duplicate idempotencyKey executes the handler once and replays the result', async () => {
+    let calls = 0;
+    const agentLoop = { run: async (_sid: string, _msg: string) => { calls += 1; return { text: 'reply-' + calls, attachments: [] as unknown[] }; } };
+    testServer = await startServer({ agentLoop });
+    ws = await connectWs(testServer.port);
+    await sendAndReceive(ws, { id: 'c', method: 'connect', params: {} });
+
+    const first = await sendAndReceive(ws, { id: '1', method: 'sessions.send', params: { sessionId: 's', message: 'hi' }, idempotencyKey: 'dup-1' }) as { result?: { text: string } };
+    const second = await sendAndReceive(ws, { id: '2', method: 'sessions.send', params: { sessionId: 's', message: 'hi' }, idempotencyKey: 'dup-1' }) as { result?: { text: string } };
+
+    expect(calls).toBe(1);
+    expect(first.result?.text).toBe('reply-1');
+    expect(second.result?.text).toBe('reply-1');
+  });
+
+  it('rejects a mutating method with no idempotencyKey (-32602)', async () => {
+    testServer = await startServer({ agentLoop: { run: async () => ({ text: 'x', attachments: [] }) } });
+    ws = await connectWs(testServer.port);
+    await sendAndReceive(ws, { id: 'c', method: 'connect', params: {} });
+    const res = await sendAndReceive(ws, { id: '1', method: 'sessions.send', params: { sessionId: 's', message: 'hi' } }) as { error?: { code: number } };
+    expect(res.error?.code).toBe(-32602);
+  });
+
+  it('closes the connection (1008) after too many unauthorized pre-connect frames', async () => {
+    testServer = await startServer();
+    ws = await connectWs(testServer.port);
+    const closed = new Promise<number>((resolve) => { ws!.once('close', (code) => resolve(code)); });
+    // Spam non-connect frames before the handshake — each is unauthorized.
+    for (let i = 0; i < 12; i++) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id: String(i), method: 'health' }));
+    }
+    const code = await closed;
+    expect(code).toBe(1008);
+  });
+
+  it('closes the connection (1009) on an oversized preauth frame', async () => {
+    testServer = await startServer();
+    ws = await connectWs(testServer.port);
+    const closed = new Promise<number>((resolve) => { ws!.once('close', (code) => resolve(code)); });
+    const big = 'x'.repeat(70 * 1024);
+    ws.send(JSON.stringify({ id: '1', method: 'connect', params: { pad: big } }));
+    const code = await closed;
+    expect(code).toBe(1009);
+  });
+});

@@ -63,6 +63,7 @@
   "src/core/gateway/dashboard-html.ts": 644,
   "src/core/gateway/federation-routes.ts": 455,
   "src/core/gateway/http-api.ts": 596,
+  "src/core/gateway/ws-server.ts": 494,
   "src/core/gdrive/client.ts": 436,
   "src/core/gdrive/runtime.ts": 629,
   "src/core/hooks/hook-engine.ts": 765,

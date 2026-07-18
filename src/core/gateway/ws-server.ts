@@ -9,6 +9,14 @@
  * Protocol:    RpcRequest → RpcResponse (one response per request)
  *              Server may also push RpcEvent messages at any time
  *
+ * GW-8 hardening:
+ *   - Idempotency keys on mutating methods (dedupe, single execution).
+ *   - Backpressure contract: hello advertises {maxPayload, maxBufferedBytes};
+ *     slow consumers past the buffer ceiling are closed (metadata-only log).
+ *   - Preauth flood control: per-IP auth-attempt lockout at upgrade;
+ *     per-connection unauthorized-frame cap; preauth frame-size cap.
+ *   - Close codes: 1008 policy, 1009 too-big, 1013 suspending, 4001 auth-rotated.
+ *
  * Error policy:
  *   - Parse errors       → respond with code -32700 (Parse error)
  *   - Unknown method     → respond with code -32601 (Method not found)
@@ -17,7 +25,20 @@
  */
 
 import { authenticateToken, type GatewayPrincipal } from './auth.js';
-import { ConnectParamsSchema, buildHelloOk, mayCallMethod, requiredScopeFor, rpcV2Enabled } from './rpc-schema.js';
+import {
+  ConnectParamsSchema,
+  buildHelloOk,
+  mayCallMethod,
+  requiredScopeFor,
+  rpcV2Enabled,
+  isMutatingMethod,
+  WS_CLOSE,
+  PREAUTH_MAX_FRAME_BYTES,
+  MAX_BUFFERED_BYTES,
+  MAX_UNAUTHORIZED_FRAMES,
+} from './rpc-schema.js';
+import { IdempotencyStore } from './idempotency.js';
+import { SlidingWindowLimiter } from './rate-limit.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { IncomingMessage } from 'node:http';
 import type { Server as HttpServer } from 'node:http';
@@ -41,6 +62,20 @@ const MSG_RATE_WINDOW_MS = 10_000;
 
 /** Per-IP active connection counts. */
 const ipConnectionCounts = new Map<string, number>();
+
+/**
+ * GW-8: per-IP upgrade auth-attempt limiter (10 failed auths/min → 5-min
+ * lockout). Shared shape with webhook auth flood control (rate-limit.ts).
+ * Module-scoped so it persists across connections for the process lifetime.
+ */
+const authAttemptLimiter = new SlidingWindowLimiter({
+  limit: 10,
+  windowMs: 60_000,
+  lockoutMs: 5 * 60_000,
+});
+
+/** GW-8: process-wide idempotency cache for mutating RPC methods. */
+const idempotency = new IdempotencyStore();
 
 /** Increment the count for an IP; return false if it would exceed the cap. */
 function trackIpConnect(ip: string): boolean {
@@ -133,6 +168,15 @@ function isRpcRequest(value: unknown): value is RpcRequest {
   return typeof v['id'] === 'string' && typeof v['method'] === 'string';
 }
 
+/** Extract the optional idempotencyKey from a parsed frame (string or undefined). */
+function extractIdempotencyKey(value: unknown): string | undefined {
+  if (value && typeof value === 'object') {
+    const k = (value as Record<string, unknown>)['idempotencyKey'];
+    if (typeof k === 'string' && k.length > 0 && k.length <= 200) return k;
+  }
+  return undefined;
+}
+
 /** Extract the ?token= query param from an upgrade request URL. */
 function extractToken(req: IncomingMessage): string | null {
   try {
@@ -190,6 +234,18 @@ export function attachWsRpc(
       return;
     }
 
+    // GW-8: preauth flood control — an IP that has flooded failed auth attempts
+    // is locked out before we even do the constant-time compare.
+    const upgradeIp = req.socket.remoteAddress ?? 'unknown';
+    if (authAttemptLimiter.isLocked(upgradeIp)) {
+      log.warn({ reqPath, ip: upgradeIp }, 'WebSocket upgrade rejected — auth-attempt lockout');
+      (socket as import('node:net').Socket).write(
+        'HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
+      );
+      socket.destroy();
+      return;
+    }
+
     // Auth via the unified module (./auth.ts): the injected GATEWAY_SECRET (as the
     // gateway-secret credential) OR the operator GATEWAY_TOKEN, presented via ?token=.
     // Loopback-dev when no secret is configured; fail-closed when proxied.
@@ -202,7 +258,9 @@ export function attachWsRpc(
       secretOverrideCredential: 'gateway-secret',
     });
     if (!principal.ok) {
-      log.warn({ reqPath, reason: principal.reason }, 'WebSocket upgrade rejected — invalid or missing token');
+      // GW-8: count the failed auth toward the per-IP lockout.
+      authAttemptLimiter.record(upgradeIp);
+      log.warn({ reqPath, ip: upgradeIp, reason: principal.reason }, 'WebSocket upgrade rejected — invalid or missing token');
       // Destroy the socket with an HTTP 401 response.
       (socket as import('node:net').Socket).write(
         'HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n',
@@ -210,6 +268,8 @@ export function attachWsRpc(
       socket.destroy();
       return;
     }
+    // Verified-good auth clears any accumulated attempts for this IP.
+    authAttemptLimiter.reset(upgradeIp);
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       (ws as WebSocket & { _principal?: GatewayPrincipal })._principal = principal;
@@ -227,7 +287,7 @@ export function attachWsRpc(
     // Per-IP connection cap
     if (!trackIpConnect(remoteIp)) {
       log.warn({ clientId, remoteIp }, 'WebSocket connection rejected — per-IP connection limit exceeded');
-      ws.close(1008, 'Too many connections from this IP');
+      ws.close(WS_CLOSE.POLICY, 'Too many connections from this IP');
       return;
     }
 
@@ -237,6 +297,9 @@ export function attachWsRpc(
     // enforce per-method operator scopes against the auth principal from upgrade.
     const principal = (ws as WebSocket & { _principal?: GatewayPrincipal })._principal;
     let handshakeDone = !rpcV2Enabled();
+
+    // GW-8: per-connection unauthorized/out-of-order frame counter.
+    let unauthorizedFrames = 0;
 
     // Per-connection message rate limiting: max MSG_RATE_LIMIT messages per MSG_RATE_WINDOW_MS
     let msgCount = 0;
@@ -250,10 +313,34 @@ export function attachWsRpc(
     }, 25_000);
     ws.on('pong', () => { /* alive */ });
 
+    /** GW-8: record an unauthorized/out-of-order frame; close at the cap. */
+    const flagUnauthorized = (): boolean => {
+      unauthorizedFrames += 1;
+      if (unauthorizedFrames >= MAX_UNAUTHORIZED_FRAMES) {
+        log.warn({ clientId, unauthorizedFrames }, 'WebSocket unauthorized-frame cap reached — closing');
+        ws.close(WS_CLOSE.POLICY, 'Too many unauthorized frames');
+        return true;
+      }
+      return false;
+    };
+
+    /** GW-8: slow-consumer guard — close if the send buffer is over the ceiling. */
+    const backpressureExceeded = (): boolean => {
+      if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+        log.warn({ clientId, bufferedAmount: ws.bufferedAmount }, 'WebSocket slow consumer — closing (buffer over ceiling)');
+        ws.close(WS_CLOSE.POLICY, 'Slow consumer');
+        return true;
+      }
+      return false;
+    };
+
     // -----------------------------------------------------------------------
     // Message handler
     // -----------------------------------------------------------------------
     ws.on('message', (raw) => {
+      // GW-8: slow-consumer backpressure check before doing any work.
+      if (backpressureExceeded()) return;
+
       msgCount++;
       if (msgCount > MSG_RATE_LIMIT) {
         log.warn({ clientId, msgCount }, 'WebSocket message rate limit exceeded — dropping message');
@@ -261,6 +348,15 @@ export function attachWsRpc(
           id: '',
           error: { code: -32000, message: 'Rate limit exceeded' },
         });
+        return;
+      }
+
+      const rawBytes = Buffer.isBuffer(raw) ? raw.length : Buffer.byteLength(String(raw), 'utf8');
+      // GW-8: preauth frame-size cap — before the connect handshake completes,
+      // frames are tiny (connect only); anything larger is rejected.
+      if (!handshakeDone && rawBytes > PREAUTH_MAX_FRAME_BYTES) {
+        log.warn({ clientId, rawBytes }, 'WebSocket preauth frame exceeds cap — closing');
+        ws.close(WS_CLOSE.TOO_BIG, 'Preauth frame too large');
         return;
       }
 
@@ -290,11 +386,14 @@ export function attachWsRpc(
       }
 
       const { id, method, params } = parsed;
+      const idempotencyKey = extractIdempotencyKey(parsed);
 
       // 2b. RPC v2 (gated): connect handshake + per-method operator scopes.
       if (rpcV2Enabled()) {
         if (!handshakeDone) {
           if (method !== 'connect') {
+            // Out-of-order frame before the handshake — unauthorized.
+            if (flagUnauthorized()) return;
             sendResponse(ws, { id, error: { code: -32001, message: 'Expected connect as the first frame' } });
             return;
           }
@@ -311,7 +410,13 @@ export function attachWsRpc(
           return;
         }
         if (!mayCallMethod(principal, method)) {
+          if (flagUnauthorized()) return;
           sendResponse(ws, { id, error: { code: -32003, message: `Forbidden: requires ${requiredScopeFor(method)}` } });
+          return;
+        }
+        // GW-8: mutating methods MUST carry an idempotencyKey under v2.
+        if (isMutatingMethod(method) && idempotencyKey === undefined) {
+          sendResponse(ws, { id, error: { code: -32602, message: `idempotencyKey required for mutating method ${method}` } });
           return;
         }
       }
@@ -327,9 +432,16 @@ export function attachWsRpc(
         return;
       }
 
-      log.debug({ clientId, id, method }, 'Dispatching RPC call');
+      log.debug({ clientId, id, method, idempotent: idempotencyKey !== undefined }, 'Dispatching RPC call');
 
-      handler(params).then((result) => {
+      // GW-8: idempotency — a mutating method with a key runs at most once per
+      // key within the TTL; a duplicate returns the same settled result.
+      const exec: Promise<unknown> =
+        idempotencyKey !== undefined && isMutatingMethod(method)
+          ? idempotency.run(`${method}:${idempotencyKey}`, () => handler(params)).promise
+          : handler(params);
+
+      exec.then((result) => {
         sendResponse(ws, { id, result });
       }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -364,4 +476,18 @@ export function attachWsRpc(
 
   log.info({ path: wsPath, auth: secret !== null }, 'WebSocket RPC server attached');
   return wss;
+}
+
+/**
+ * GW-8: close every live connection with 4001 (auth-rotated) so clients re-auth
+ * cleanly after a GATEWAY_TOKEN rotation. Call from the token-reload seam.
+ */
+export function closeAllForAuthRotation(wss: WebSocketServer): void {
+  for (const ws of wss.clients) {
+    try {
+      ws.close(WS_CLOSE.AUTH_ROTATED, 'GATEWAY_TOKEN rotated — re-authenticate');
+    } catch {
+      /* best effort */
+    }
+  }
 }
