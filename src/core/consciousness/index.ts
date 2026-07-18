@@ -43,14 +43,10 @@ export type {
   HeartbeatConfig,
 } from './heartbeat.js';
 
-// Dream consolidation (proactive intelligence during idle)
-export { DreamConsolidator } from './dream-consolidator.js';
-export type {
-  DreamSession,
-  DreamConsolidatorConfig,
-  ConsolidationPattern,
-  MemoryEntry,
-} from './dream-consolidator.js';
+// (F98) DreamConsolidator + consciousness/auto-dream retired 2026-07-18 —
+// zero runtime callers; src/core/memory/auto-dream.ts (cron auto-dream-consolidation,
+// 6h) is the one dream engine. Unique orphan behaviors noted in the F98 commit
+// (daily-log .md ingestion; brain-less idle compaction) as port-candidates.
 
 // Cron scheduler (scheduled tasks with persistence + jitter)
 export { CronScheduler } from './cron-scheduler.js';

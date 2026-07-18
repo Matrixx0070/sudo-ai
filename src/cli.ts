@@ -2585,23 +2585,11 @@ async function boot(): Promise<void> {
     log.info('Extra channels disabled (set IRC_SERVER+IRC_NICK, MATRIX_HOMESERVER+MATRIX_ACCESS_TOKEN, or SIGNAL_PHONE_NUMBER to enable IRC/Matrix/Signal)');
   }
 
-  // -------------------------------------------------------------------------
-  // 8.5 OpenAI-compatible API — merged into port 3001 (no separate server)
-  // Register brain + models into shared singleton so WebAdapter's /v1/ handler
-  // can serve OpenAI-compatible requests on the same port.
-  // -------------------------------------------------------------------------
-  try {
-    const { setSharedBrain } = await import('./core/api/http-server.js');
-    const availableModels: string[] = [
-      ...config.models.primary.map((m) => m.id),
-      config.models.fallback.id,
-    ].filter((id, idx, arr) => id && arr.indexOf(id) === idx);
-    setSharedBrain(brain, availableModels);
-    log.info({ models: availableModels.length }, 'OpenAI-compatible API mounted on port 3001 (/v1/*)');
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn({ err: msg }, 'Failed to register shared brain for /v1/ routes');
-  }
+  // (F101) The former "8.5 OpenAI-compatible API on port 3001" block is gone:
+  // it fed a shared-brain singleton whose only reader (api/http-server.ts
+  // HttpServer.handleV1Route) had ZERO callers — the boot log it printed was
+  // false, and nothing listens on 3001's /v1. The real OpenAI-compatible
+  // surface is the gateway (:18900 /v1/* via gateway/http-api.ts).
 
   // -------------------------------------------------------------------------
   // 8. CronScheduler + HeartbeatRunner

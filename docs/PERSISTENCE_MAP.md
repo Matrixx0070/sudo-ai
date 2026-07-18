@@ -22,8 +22,7 @@ consolidation the inventory suggested is delivered as: one retention owner
 Six mechanisms, roles clarified: `mind.db` sessions via sqlite-session-store
 = SOURCE OF TRUTH (write-through persistence #668/#670); JSONL journal
 (sessions/journal-store) = crash-forensics append log, NOT read for state
-except recovery; `migrate-jsonl.ts` = one-time legacy importer (keep until a
-scan shows zero unmigrated JSONLs, then delete); acp/session-store +
+except recovery; `migrate-jsonl.ts` = DELETED 2026-07-18 (F99: prod scan found no data/sessions.json and zero legacy session JSONLs; migrator had no callers); acp/session-store +
 task-manager per-session JSON = separate subsystem-scoped stores (fine);
 session-backups/*.sql = survival backups (capped at 10). **Engineering
 follow-up (own slice): auto-run the unmigrated-JSONL scan at boot and log a
