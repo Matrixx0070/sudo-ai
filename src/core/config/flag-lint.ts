@@ -51,8 +51,8 @@ function truthy(v: string | undefined): boolean {
   return v !== undefined && v !== '' && v !== '0' && v.toLowerCase() !== 'false' && v.toLowerCase() !== 'off';
 }
 
-/** True if any untrusted inbound channel is enabled (the sandbox must stay on). */
-function untrustedInboundActive(env: NodeJS.ProcessEnv): string[] {
+/** True if any untrusted inbound channel is enabled (the sandbox must stay on). Exported so GW-7's security audit shares the same definition. */
+export function untrustedInboundActive(env: NodeJS.ProcessEnv): string[] {
   const on: string[] = [];
   if (truthy(env['WEBHOOKS_ENABLED'])) on.push('WEBHOOKS_ENABLED');
   if (truthy(env['EMAIL_IMAP_HOST']) || truthy(env['EMAIL_IMAP_PASS'])) on.push('EMAIL_IMAP');

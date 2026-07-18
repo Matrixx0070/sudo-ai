@@ -5034,6 +5034,22 @@ if (process.argv[2] === 'chat') {
     console.error('[chat] Failed to load chat module:', msg);
     process.exit(1);
   });
+} else if (process.argv[2] === 'security-audit') {
+  // security-audit subcommand — pure-local posture/flag/secret checks (GW-7).
+  // Read-only (unless --fix tightens file perms); never boots the daemon.
+  import('./cli/commands/security-audit.js').then(({ runSecurityAudit }) => {
+    runSecurityAudit(process.argv.slice(3))
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[security-audit] Fatal error:', msg);
+        process.exit(1);
+      });
+  }).catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[security-audit] Failed to load module:', msg);
+    process.exit(1);
+  });
 } else if (process.argv[2] === 'replay') {
   // replay subcommand — read-only inspection of a captured session trace
   // (traces.db). Intercept BEFORE full boot so it never starts the daemon.
