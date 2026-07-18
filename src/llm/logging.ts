@@ -453,6 +453,54 @@ export class GatewayCallLog {
   }
 
   // -------------------------------------------------------------------------
+  // Day-spend derivation (GW-1: persistent budget across restarts)
+  // -------------------------------------------------------------------------
+
+  /**
+   * GW-1: derive today's (or any day's) recorded USD spend from the durable
+   * `llm_calls` ledger, so the in-memory budget counter in `src/llm/policy.ts`
+   * survives process restarts instead of resetting to zero on every boot.
+   *
+   * `dayKey` is an ISO date (`YYYY-MM-DD`); rows are matched by `ts LIKE
+   * '<dayKey>%'` (ts is always ISO-8601, so a prefix match is the UTC day).
+   * Rows with NULL `cost_usd` contribute 0 (SUM ignores NULLs) — a floor, never
+   * a throw. Fail-open: any query error returns an empty result and is logged.
+   *
+   * @returns `{ total, byCaller }` — total USD and per-caller-key USD for the day.
+   */
+  daySpend(dayKey: string = new Date().toISOString().slice(0, 10)): {
+    total: number;
+    byCaller: Map<string, number>;
+  } {
+    const byCaller = new Map<string, number>();
+    let total = 0;
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT caller, COALESCE(SUM(cost_usd), 0) AS spend
+             FROM llm_calls
+            WHERE ts LIKE :prefix AND cost_usd IS NOT NULL
+            GROUP BY caller`,
+        )
+        .all({ prefix: `${dayKey}%` }) as Array<{ caller: string; spend: number }>;
+      for (const r of rows) {
+        const usd = typeof r.spend === 'number' && Number.isFinite(r.spend) ? r.spend : 0;
+        if (usd <= 0) continue;
+        const idx = r.caller.indexOf(':');
+        const key = idx === -1 ? r.caller : r.caller.slice(0, idx);
+        byCaller.set(key, (byCaller.get(key) ?? 0) + usd);
+        total += usd;
+      }
+    } catch (err) {
+      logger.warn(
+        { dayKey, err: err instanceof Error ? err.message : String(err) },
+        'GatewayCallLog.daySpend failed — treating recorded spend as 0',
+      );
+    }
+    return { total, byCaller };
+  }
+
+  // -------------------------------------------------------------------------
   // Retention
   // -------------------------------------------------------------------------
 

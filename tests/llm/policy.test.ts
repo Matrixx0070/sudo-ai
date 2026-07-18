@@ -400,13 +400,15 @@ describe('budgets', () => {
     expect(degradeAlias('anthropic/claude-opus-4-8')).toBe('anthropic/claude-opus-4-8');
   });
 
-  it('global cap halts everything except agent-loop (even user priority)', async () => {
+  // GW-1: user priority is NEVER blocked by budget — over the global cap it
+  // DEGRADES (runs on a cheaper alias) instead of halting. Background over the
+  // cap still fails closed. agent-loop is exempt from the global cap entirely.
+  it('global cap degrades user, skips background, exempts agent-loop', async () => {
     process.env['SUDO_LLM_GLOBAL_BUDGET_USD'] = '1';
     recordSpend('whatever', 2);
-    await expect(run({ caller: 'swarm:x', priority: 'user' })).rejects.toMatchObject({
-      class: 'billing',
-      skipped: true,
-    });
+    const degraded = await run({ caller: 'swarm:x', priority: 'user' });
+    expect(degraded.value).toBe('ok');
+    expect(degraded.budgetDecision).toBe('degrade');
     await expect(run({ caller: 'cron:daily', priority: 'background' })).rejects.toMatchObject({
       skipped: true,
     });

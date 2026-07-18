@@ -458,6 +458,41 @@ async function boot(): Promise<void> {
   log.info('CostTracker initialized');
 
   // -------------------------------------------------------------------------
+  // 3.2b GW-1 — persistent LLM budget bootstrap. Seed today's in-memory spend
+  // from the durable gateway.db ledger so budget enforcement survives restarts,
+  // wire the exhaustion alert seam, and warn LOUDLY when no daily cap is set.
+  // -------------------------------------------------------------------------
+  try {
+    const { getGatewayCallLog } = await import('./llm/logging.js');
+    const { initDaySpendFromHistory, isGlobalBudgetEnforced, setBudgetAlertSink } =
+      await import('./llm/policy.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const seeded = getGatewayCallLog().daySpend(today);
+    initDaySpendFromHistory({ day: today, total: seeded.total, byCaller: seeded.byCaller });
+    log.info({ day: today, spendUsd: Number(seeded.total.toFixed(4)) }, 'GW-1: LLM day-spend seeded from ledger');
+    if (!isGlobalBudgetEnforced()) {
+      log.error(
+        { posture: 'budget-off' },
+        'BUDGET ENFORCEMENT OFF — set SUDO_DAILY_LLM_BUDGET_USD to cap daily LLM spend ' +
+          '(user calls degrade one tier, background calls fail closed)',
+      );
+    }
+    // Exhaustion alert → loud structured error (captured by the log pipeline /
+    // Telemetry tab). Throttled to one per (day, verdict, lane) inside policy.ts.
+    setBudgetAlertSink((a) => {
+      log.error(
+        { budgetAlert: a },
+        `LLM BUDGET EXHAUSTED — ${a.verdict} on ${a.lane} lane (${a.caller} → ${a.route})`,
+      );
+    });
+  } catch (err) {
+    log.warn(
+      { err: String(err) },
+      'GW-1 budget bootstrap failed — continuing (day-spend may reset on this restart)',
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // 3.3 CommandRegistry — slash command routing
   // -------------------------------------------------------------------------
   const commandRegistry = new CommandRegistry();

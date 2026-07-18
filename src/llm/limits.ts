@@ -188,6 +188,76 @@ export function clearGatewayLimitOverrides(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Cost estimation (GW-1) — minimal static price map, ESTIMATE only
+// ---------------------------------------------------------------------------
+
+/**
+ * USD per 1,000,000 tokens (input / output). Deliberately a SMALL static map
+ * living in src/llm (not imported from core/brain/costs.ts) so the policy layer
+ * stays dependency-light. These are list-price ESTIMATES for budgeting, NOT
+ * billing truth — the durable per-call cost in gateway.db is authoritative.
+ * Keep the frontier/failover rows honest: grok-4.5 caches nothing and is the
+ * expensive failover landing (GW-2), so its per-token price is set high on
+ * purpose to make the budget bite.
+ */
+interface PriceRate {
+  inUsdPerM: number;
+  outUsdPerM: number;
+}
+
+const PRICE_TABLE: Record<string, PriceRate> = {
+  // xAI — fast tier (cheap, caches well)
+  'xai/grok-4-fast': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
+  'xai/grok-4-fast-reasoning': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
+  'xai/grok-4-fast-non-reasoning': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
+  'xai/grok-4-1-fast-reasoning': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
+  'xai/grok-4-1-fast-non-reasoning': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
+  'xai/grok-4-0709': { inUsdPerM: 2.0, outUsdPerM: 6.0 },
+  // xAI — premium / failover landing (no caching → effectively ~10x, GW-2)
+  'xai/grok-4.5': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
+  'xai-oauth/grok-4.5': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
+  'xai/grok-3-fast': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
+  // Anthropic
+  'anthropic/claude-opus-4-8': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
+  'anthropic/claude-opus-4-7': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
+  'anthropic/claude-haiku-4-5-20251001': { inUsdPerM: 1.0, outUsdPerM: 5.0 },
+  // OpenAI
+  'openai/gpt-4o': { inUsdPerM: 2.5, outUsdPerM: 10.0 },
+  'openai/gpt-4o-mini': { inUsdPerM: 0.15, outUsdPerM: 0.6 },
+  'openai/text-embedding-3-small': { inUsdPerM: 0.02, outUsdPerM: 0.0 },
+  // Local (free)
+  'ollama/llama3.2': { inUsdPerM: 0.0, outUsdPerM: 0.0 },
+};
+
+/** Conservative fallback when the model is unknown (ESTIMATE, mid-tier). */
+const DEFAULT_PRICE: PriceRate = { inUsdPerM: 3.0, outUsdPerM: 15.0 };
+
+function priceFor(model: string): PriceRate {
+  const resolved = resolveAlias(model);
+  const direct = PRICE_TABLE[resolved] ?? PRICE_TABLE[model];
+  if (direct) return direct;
+  // Bare-model match (provider prefix differs, e.g. xai-oauth vs xai).
+  const bare = bareModel(resolved);
+  for (const [k, v] of Object.entries(PRICE_TABLE)) {
+    if (bareModel(k) === bare) return v;
+  }
+  return DEFAULT_PRICE;
+}
+
+/**
+ * GW-1: rough USD cost for a call, from token counts × the static price map.
+ * ESTIMATE only — used for pre-flight budget accounting and (when the real
+ * provider cost is absent) the recorded cost floor. Accepts an alias or a
+ * concrete `provider/model` id. Ollama / unknown-free models cost 0.
+ */
+export function estimateCostUsd(model: string, tokensIn: number, tokensOut: number): number {
+  const rate = priceFor(model);
+  const tin = Number.isFinite(tokensIn) && tokensIn > 0 ? tokensIn : 0;
+  const tout = Number.isFinite(tokensOut) && tokensOut > 0 ? tokensOut : 0;
+  return (tin / 1_000_000) * rate.inUsdPerM + (tout / 1_000_000) * rate.outUsdPerM;
+}
+
+// ---------------------------------------------------------------------------
 // Token estimator
 // ---------------------------------------------------------------------------
 

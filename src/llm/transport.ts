@@ -74,7 +74,8 @@ import {
   LLMPolicyError,
   type LLMErrorClass,
 } from './errors.js';
-import { runWithPolicy } from './policy.js';
+import { runWithPolicy, recordSpend } from './policy.js';
+import { estimateCostUsd } from './limits.js';
 import {
   streamIR as createSSEMachine,
   type IRStreamEvent,
@@ -699,10 +700,41 @@ function classifyThrownSafe(err: unknown): LLMErrorClass {
 /** Fail-open llm_calls row — mirrors client.ts recordGatewayCall contract. */
 function recordCall(entry: LLMCallRecord): void {
   try {
-    recordGatewayCall(entry);
+    // GW-1: enrich with an ESTIMATED USD cost from token counts when the
+    // provider didn't hand us a real cost, so (a) gateway.db has a cost floor
+    // for boot-time day-spend derivation and (b) the in-memory budget counter
+    // in policy.ts actually accrues. Real provider cost, when present, wins.
+    const enriched = withEstimatedCost(entry);
+    recordGatewayCall(enriched);
+    // Feed the asymmetric budget counter. Guard on >0 so error rows (no tokens)
+    // never move the needle; recordCall is the single per-call choke point
+    // (streaming writeRow is idempotent), so this counts each call exactly once.
+    if (typeof enriched.costUsd === 'number' && enriched.costUsd > 0) {
+      recordSpend(enriched.caller, enriched.costUsd);
+    }
   } catch (err) {
     log.warn({ err: err instanceof Error ? err.message : String(err) }, 'llm_calls record failed (fail-open)');
   }
+}
+
+/**
+ * GW-1: attach an estimated USD cost to a call record when one isn't already
+ * set and token counts are available. Uses the resolved route (or alias) as the
+ * pricing key. Never throws — a bad estimate must not block recording.
+ */
+function withEstimatedCost(entry: LLMCallRecord): LLMCallRecord {
+  if (typeof entry.costUsd === 'number' && entry.costUsd > 0) return entry;
+  const tin = entry.tokensIn ?? 0;
+  const tout = entry.tokensOut ?? 0;
+  if (tin <= 0 && tout <= 0) return entry;
+  try {
+    const model = entry.route ?? entry.alias ?? '';
+    const usd = estimateCostUsd(model, tin, tout);
+    if (usd > 0) return { ...entry, costUsd: usd };
+  } catch {
+    /* estimation is best-effort */
+  }
+  return entry;
 }
 
 // ---------------------------------------------------------------------------
