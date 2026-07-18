@@ -1,0 +1,30 @@
+# GW-13 — scenario journeys (nightly).
+# Journey-shaped e2e over the real GW-9/GW-15/GW-2/GW-11 subsystems with a mock
+# LLM transport. Kept OFF the per-PR path (runtime + Docker build) — runs nightly
+# and on demand. MVP acceptance = journey 1 (restart-survivor) green.
+name: journeys
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # 07:00 UTC nightly
+  workflow_dispatch: {}
+
+concurrency:
+  group: journeys-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  journeys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run scenario journeys
+        run: pnpm exec vitest run tests/journeys/

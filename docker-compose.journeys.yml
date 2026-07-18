@@ -1,0 +1,28 @@
+# =============================================================================
+# GW-13 scenario journeys — compose vehicle
+# =============================================================================
+# Runs the hermetic journey suite in a throwaway container. No ports, no
+# volumes, no secrets, no network egress (internal-only) — the journeys use an
+# in-process mock LLM transport and temp on-disk SQLite for the durable outbox
+# and restart sentinel, all inside the container's filesystem.
+#
+#   docker compose -f docker-compose.journeys.yml up --build --exit-code-from journeys
+# =============================================================================
+services:
+  journeys:
+    build:
+      context: .
+      dockerfile: Dockerfile.journeys
+    environment:
+      NODE_ENV: test
+      # GW-11 run lanes / GW-5 steering are default-off; journeys drive the
+      # subsystems directly, so no feature flags are required here.
+    networks:
+      - none
+    # Fail the compose run with the suite's exit code.
+    restart: "no"
+
+networks:
+  # Hermetic: the journeys must not reach any real provider.
+  none:
+    internal: true

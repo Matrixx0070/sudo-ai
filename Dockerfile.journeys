@@ -1,0 +1,38 @@
+# =============================================================================
+# SUDO-AI v4 — GW-13 scenario-journey runner image
+# =============================================================================
+# Runs the tests/journeys/ scenario suite in an isolated container (the CI
+# vehicle for GW-13). The journeys boot the REAL subsystems (GW-9 restart
+# sentinel, GW-15 durable outbox, GW-2 failover, GW-11 lanes) against a mock LLM
+# transport and assert on observable artifacts — no live provider, no network
+# egress, no secrets. Single stage: the journeys run from TS source via vitest,
+# so no dist/ build is required.
+#
+# Build+run (from repo root):
+#   docker build -f Dockerfile.journeys -t sudo-ai-journeys .
+#   docker run --rm sudo-ai-journeys
+# or via compose:  docker compose -f docker-compose.journeys.yml up --exit-code-from journeys
+# =============================================================================
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+# Journeys are hermetic — no LLM egress. Point the choke point at the in-test stub.
+ENV NODE_ENV=test
+
+RUN corepack enable
+WORKDIR /app
+
+# Deps layer (cached unless the lockfile changes). devDependencies are required
+# because vitest + the journey harness run from source.
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+# Source + the config the subsystems read at import time.
+COPY src/ ./src/
+COPY tests/ ./tests/
+COPY config/ ./config/
+COPY tsconfig.json vitest.config.ts ./
+
+# Nightly CI runs exactly the journey suite; a non-zero exit fails the job.
+CMD ["pnpm", "exec", "vitest", "run", "tests/journeys/"]
