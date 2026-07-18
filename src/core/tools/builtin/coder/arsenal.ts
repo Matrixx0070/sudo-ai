@@ -24,7 +24,6 @@
  * Model: Grok 4 (grok-4-0709, 2M tokens) → cascade fallback
  */
 
-import { streamText } from 'ai';
 import {
   readFileSync, writeFileSync, existsSync,
   mkdirSync, copyFileSync, statSync, lstatSync, renameSync, readdirSync, unlinkSync, mkdtempSync, realpathSync, rmSync,
@@ -36,7 +35,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
-import { getModel } from '../../../brain/providers.js';
+import { chatIR } from '../../../../llm/client.js';
 import { clampMaxTokensToModel } from '../../../brain/thinking-inject.js';
 import { PROJECT_ROOT } from '../../../shared/paths.js';
 
@@ -1000,36 +999,24 @@ export const arsenalTool: ToolDefinition = {
 
     for (const option of cascade) {
       try {
-        const model = getModel(option.model);
-        if (!model) {
-          errors.push(`${option.label}: model not configured`);
-          continue;
-        }
         logger.info({ model: option.model, mode }, 'arsenal: trying model');
 
-        // Stream rather than buffer: generateText sends stream:false, so the
-        // upstream holds ALL response headers until the entire (up to 32k-token)
-        // generation completes — minutes for a heavy model like Opus. That stalls
-        // time-to-first-byte past the claude-oauth fast-fail headers timeout
-        // (providers.ts), so every Opus arsenal call was aborted mid-flight and
-        // the cascade fell through to a fallback. streamText sends stream:true →
-        // headers (SSE) land in ~1-2s, the fast-fail timer clears, and the long
-        // body streams normally. Awaiting result.text drains the stream to the
-        // full completion, so downstream handling is unchanged.
-        const result = streamText({
-          model,
+        // F97: routed through the IR facade (buffered). This is a batch tool —
+        // the old streamText path only accumulated text, so chatIR is equivalent.
+        const res = await chatIR({
+          alias: option.model,
+          caller: 'coder.arsenal',
+          purpose: `autonomous coding pipeline (${mode})`,
           system: systemPrompt,
-          prompt: userPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
           // Clamp to the model's output ceiling so opus-4-8 (32000) doesn't trip
-          // the AI SDK "maxOutputTokens > max" warning on every KAIROS-triggered
-          // repair. Behaviour-identical — the SDK already clamps to 32000; this
-          // just does it first. No-op for non-opus cascade models. (Closes the
-          // gap #484 left: it clamped brain.ts but not the coder-tool call sites.)
-          maxOutputTokens: clampMaxTokensToModel(option.model, 32768, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
+          // the "maxTokens > max" warning on every KAIROS-triggered repair.
+          // Behaviour-identical; no-op for non-opus cascade models.
+          maxTokens: clampMaxTokensToModel(option.model, 32768, { modelMax: process.env['SUDO_THINKING_MODEL_MAX'] }),
           temperature: mode === 'review' || mode === 'analyze' ? 0.2 : 0.4,
         });
 
-        const text = (await result.text)?.trim() ?? '';
+        const text = res.text?.trim() ?? '';
         if (!text) { errors.push(`${option.label}: empty response`); continue; }
 
         aiText = text;

@@ -9,7 +9,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
-import { ClaudeOAuthManager, type PendingLogin } from '../src/core/brain/claude-oauth-manager.js';
+import { ClaudeOAuthManager, type PendingLogin } from '../src/llm/claude-oauth-manager.js';
 import { dataPath } from '../src/core/shared/paths.js';
 
 const PENDING_PATH = '/tmp/prod-oauth-pending.json';

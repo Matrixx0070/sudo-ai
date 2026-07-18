@@ -5,9 +5,9 @@
  * for the Phase-0 savings-ceiling probe.
  *
  * WHY a separate fingerprint instead of reusing `wire_payload_sha256`:
- *  - `wire_payload_sha256` hashes the exact provider wire bytes, which are only
- *    computed on the IR-transport path (LLM_IR_CALLERS ramp) — it is NULL for
- *    the legacy path (rag/agent/chat today). This fingerprint is computed
+ *  - `wire_payload_sha256` hashes the exact provider wire bytes as computed
+ *    on the IR-transport path (F97: the only wire path; historical legacy
+ *    rows carry NULL). This fingerprint is computed
  *    centrally in GatewayCallLog.record() from `ir_request`, which is populated
  *    for 100% of rows, so Phase-0 dedup measurement covers every caller.
  *  - The wire bytes carry VOLATILE fields (stream flag, x-grok-conv-id source,

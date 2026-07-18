@@ -9,7 +9,6 @@
  * Model: Grok 4 (grok-4-0709) with grok-4-1-fast-reasoning fallback.
  */
 
-import { streamText } from 'ai';
 import {
   readFileSync, writeFileSync, existsSync,
   mkdirSync, copyFileSync, statSync,
@@ -18,7 +17,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
-import { getModel } from '../../../brain/providers.js';
+import { chatIR } from '../../../../llm/client.js';
 import { PROJECT_ROOT as RESOLVED_PROJECT_ROOT } from '../../../shared/paths.js';
 
 const logger = createLogger('coder.swarm');
@@ -194,19 +193,18 @@ async function callModel(system: string, prompt: string): Promise<string> {
   const errors: string[] = [];
   for (const option of SWARM_MODELS) {
     try {
-      const model = getModel(option.model);
-      // Stream: a non-streaming generateText holds claude-oauth response headers
-      // until the full generation completes, tripping the fast-fail headers timer
-      // on the sonnet OAuth tier (same trap as PR #277). streamText lands headers
-      // in ~1-2s; awaiting result.text drains the stream to the full completion.
-      const result = streamText({
-        model,
+      // F97: routed through the IR facade (buffered). This is a batch tool —
+      // the old streamText path only accumulated text, so chatIR is equivalent.
+      const res = await chatIR({
+        alias: option.model,
+        caller: 'coder.swarm',
+        purpose: 'parallel subtask coding',
         system,
-        prompt,
-        maxOutputTokens: 32768,
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 32768,
         temperature: 0.3,
       });
-      const text = (await result.text)?.trim() ?? '';
+      const text = res.text?.trim() ?? '';
       if (!text) { errors.push(`${option.label}: empty response`); continue; }
       return text;
     } catch (err) {

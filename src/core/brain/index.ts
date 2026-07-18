@@ -12,14 +12,6 @@ export { Brain } from './brain.js';
 export { ModelFailover } from './failover.js';
 
 // Provider utilities
-export {
-  getProvider,
-  getModel,
-  listAvailableProviders,
-  getEnvKeyForProvider,
-} from './providers.js';
-export type { ProviderName } from './providers.js';
-
 // System prompt
 export { assembleSystemPrompt, readWorkspaceFile } from './system-prompt.js';
 

@@ -15,8 +15,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../shared/logger.js';
-import { getClaudeOAuthManager } from '../brain/claude-oauth-manager.js';
-import { reinitProvider } from '../brain/providers.js';
+import { getClaudeOAuthManager } from '../../llm/claude-oauth-manager.js';
 
 const log = createLogger('gateway:admin-claude-oauth');
 
@@ -122,10 +121,8 @@ async function handleLoginComplete(req: IncomingMessage, res: ServerResponse): P
     const mgr = getClaudeOAuthManager();
     await mgr.completeLogin(code);
     mgr.startAutoRefresh();
-    // Rebuild the brain provider so getModel('claude-oauth/...') starts working.
-    await reinitProvider('claude-oauth').catch((err: unknown) => {
-      log.warn({ err: String(err) }, 'reinitProvider(claude-oauth) failed — provider will pick up on next boot');
-    });
+    // F97: no provider rebuild needed — the IR transport resolves the OAuth
+    // token per call via the manager, so a re-login is picked up automatically.
     sendJson(res, 200, { ok: true, data: mgr.getStatus() });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

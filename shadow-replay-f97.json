@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-07-18T12:37:59.658Z",
+  "db": "/root/sudo-ai-v4/data/traces.db",
+  "limit": 500,
+  "rows_fetched": 500,
+  "total": 408,
+  "materialCount": 0,
+  "materialPct": 0,
+  "byField": {},
+  "skipped": {
+    "truncated_prompt_raw": 92,
+    "bad_prompt_json": 0,
+    "no_model": 0
+  },
+  "response_side": {
+    "note": "usage and toolCalls are not stored in traces.db — skipped; text compared only when finishReason=stop and response_raw not truncated",
+    "text_compared": 107,
+    "text_skipped": 301
+  },
+  "examples": []
+}

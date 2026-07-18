@@ -20,7 +20,7 @@ import { sha256Hex, __resetGatewayCallLog, getGatewayCallLog } from '../../src/l
 import {
   registerCustomProvider,
   clearCustomProviders,
-} from '../../src/llm/legacy/custom-providers.js';
+} from '../../src/llm/custom-providers.js';
 
 // ---------------------------------------------------------------------------
 // claude-oauth manager mock — pins the exact accessor shape the transport
@@ -33,7 +33,7 @@ const oauthMock = {
   isAvailable: vi.fn(() => true),
 };
 
-vi.mock('../../src/llm/legacy/claude-oauth-manager.js', () => ({
+vi.mock('../../src/llm/claude-oauth-manager.js', () => ({
   getClaudeOAuthManager: () => oauthMock,
 }));
 

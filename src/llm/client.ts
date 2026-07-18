@@ -11,7 +11,7 @@
  *
  * Migration switch:
  *   LLM_DIRECT_FALLBACK=1 (DEFAULT during migration) — chat resolves through
- *   the legacy multi-provider layer (src/llm/legacy/providers.ts) exactly as
+ *   the IR transport in-process (F97: the legacy provider layer is gone) as
  *   before; embeddings/vision hit their provider URL directly with the
  *   provider key. Set to 0 after cutover: everything goes to LLM_BASE_URL.
  *
@@ -22,10 +22,11 @@
  * blocked by telemetry hygiene (fail-open rule).
  */
 
-import { generateText } from 'ai';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../core/shared/logger.js';
 import { resolveAlias } from './aliases.js';
+import { callIR } from './transport.js';
+import { brainRequestToIR, type ShadowBrainRequest } from './shadow.js';
 import { classifyThrown } from './errors.js';
 import { getGatewayCallLog, sha256Hex, type LLMCallRecord } from './logging.js';
 import { OPENAI_EMBEDDINGS_URL, PROVIDER_BASE_URLS, PROVIDER_HOSTNAMES } from './endpoints.js';
@@ -70,7 +71,7 @@ function gatewayKey(): string | null {
   return process.env['LLM_API_KEY']?.trim() || null;
 }
 
-/** Default ON during migration (rule: legacy failover behind LLM_DIRECT_FALLBACK=1). */
+/** Default ON (F97: 'direct' = the in-process IR transport; OFF routes via an external gateway, never deployed for claude-oauth). */
 export function directFallbackEnabled(): boolean {
   return process.env['LLM_DIRECT_FALLBACK'] !== '0';
 }
@@ -115,7 +116,7 @@ const PROVIDER_KEY_ENVS = {
 export type ProviderKeyName = keyof typeof PROVIDER_KEY_ENVS;
 
 /**
- * Resolve a provider API key for a direct (legacy-fallback) call. Returns
+ * Resolve a provider API key for a direct call. Returns
  * null when unset. Outside `src/llm/` nothing reads provider key envs.
  */
 export function getProviderApiKey(name: ProviderKeyName): string | null {
@@ -252,10 +253,9 @@ export interface ChatIRResponseLite {
 
 /**
  * Chat through the choke point. Gateway route when LLM_BASE_URL is set and
- * direct fallback is off; otherwise the legacy provider layer (identical
- * behavior to pre-refactor). NOTE (Phase 1): the user-facing agent loop still
- * calls Brain.call directly — Brain is migrated onto this path in Phases 2–3
- * behind LLM_SHADOW. New code must use chatIR, never providers directly.
+ * direct fallback is off; otherwise the in-process IR transport (F97). The
+ * user-facing agent loop calls Brain.call, which rides the same transport via
+ * brain-bridge. New code must use chatIR / Brain — never raw provider calls.
  */
 export async function chatIR(req: ChatIRRequestLite): Promise<ChatIRResponseLite> {
   const m = requireMeta(req, 'chatIR');
@@ -341,53 +341,34 @@ export async function chatIR(req: ChatIRRequestLite): Promise<ChatIRResponseLite
     }
   }
 
-  // Legacy direct path (default during migration) — same provider layer as before.
-  const { getModel } = await import('./legacy/providers.js');
-  log.debug({ caller: m.caller, purpose: m.purpose, model }, 'chatIR (direct fallback)');
-  try {
-    const result = await generateText({
-      model: getModel(model) as Parameters<typeof generateText>[0]['model'],
-      ...(req.system ? { system: req.system } : {}),
-      messages: req.messages as NonNullable<Parameters<typeof generateText>[0]['messages']>,
-      ...(req.maxTokens !== undefined ? { maxOutputTokens: req.maxTokens } : {}),
+  // In-process IR path (F97 cutover: the transport IS the direct path — no
+  // legacy provider layer). The transport writes the llm_calls row for this
+  // trace (success AND error), so no client-side recordGatewayCall here —
+  // one-row-per-call invariant.
+  log.debug({ caller: m.caller, purpose: m.purpose, model }, 'chatIR (in-process IR transport)');
+  const ir = brainRequestToIR(
+    {
+      messages: req.messages as ShadowBrainRequest['messages'],
+      ...(req.system !== undefined ? { system: req.system } : {}),
+      source: m.caller,
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-    });
-    const out: ChatIRResponseLite = {
-      text: result.text,
-      stop_reason:
-        result.finishReason === 'length'
-          ? 'max_tokens'
-          : result.finishReason === 'tool-calls'
-            ? 'tool_use'
-            : result.finishReason === 'error'
-              ? 'error'
-              : 'end_turn',
-      usage: {
-        in: result.usage?.inputTokens ?? 0,
-        out: result.usage?.outputTokens ?? 0,
-        cached_in: result.usage?.cachedInputTokens ?? 0,
-      },
-      trace_id: traceId,
-    };
-    recordGatewayCall({
-      ...baseRecord,
-      route: `legacy:${model.split('/')[0] ?? 'unknown'}`,
-      irResponse: out,
-      latencyMs: Date.now() - startedAt,
-      tokensIn: out.usage.in,
-      tokensOut: out.usage.out,
-      tokensCached: out.usage.cached_in,
-    });
-    return out;
-  } catch (err) {
-    recordGatewayCall({
-      ...baseRecord,
-      route: `legacy:${model.split('/')[0] ?? 'unknown'}`,
-      errorClass: classifyThrown(err),
-      latencyMs: Date.now() - startedAt,
-    });
-    throw err;
-  }
+      ...(req.maxTokens !== undefined ? { maxTokens: req.maxTokens } : {}),
+    },
+    model,
+  );
+  ir.caller = m.caller;
+  ir.purpose = m.purpose || 'chatIR';
+  if (req.priority !== undefined) ir.priority = req.priority;
+  ir.trace_id = traceId;
+  const res = await callIR(ir);
+  let text = '';
+  for (const b of res.blocks) if (b.type === 'text') text += b.text;
+  return {
+    text,
+    stop_reason: res.stop_reason,
+    usage: { in: res.usage.in, out: res.usage.out, cached_in: res.usage.cached_in },
+    trace_id: res.trace_id,
+  };
 }
 
 // ---------------------------------------------------------------------------

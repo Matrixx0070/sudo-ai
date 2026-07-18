@@ -1,18 +1,20 @@
 /**
  * @file stream-early-break.test.ts
- * @description Brain.stream() generator-unwind bookkeeping: a consumer breaking
- * out of the chunk loop must still credit the model (recordSuccess) and must
- * not leave the abandoned `result.usage` promise to reject unhandled; error
- * and full-consumption paths keep their existing semantics.
+ * @description Brain.stream() generator-unwind bookkeeping on the F97 IR facade
+ * (`streamTransportForBrain` → { textStream, usage, finishReason, traceId }):
+ * a consumer breaking out of the chunk loop must still credit the model
+ * (recordSuccess) and bill from facade.usage; error and full-consumption paths
+ * keep their existing semantics. Facade promises RESOLVE (never reject) by
+ * contract, so no path may leak an unhandled rejection.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const streamTextMock = vi.hoisted(() => vi.fn());
-vi.mock('ai', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('ai')>();
-  return { ...actual, streamText: streamTextMock };
-});
+const streamTransportMock = vi.hoisted(() => vi.fn());
+vi.mock('../../src/llm/brain-bridge.js', () => ({
+  callTransportForBrain: vi.fn(),
+  streamTransportForBrain: streamTransportMock,
+}));
 
 import { Brain } from '../../src/core/brain/brain.js';
 import type { ModelProfile } from '../../src/core/brain/types.js';
@@ -33,10 +35,25 @@ function profile(id: string): ModelProfile {
 }
 
 const REQUEST = { messages: [{ role: 'user' as const, content: 'hi' }] };
-const USAGE = { promptTokens: 10, completionTokens: 5, totalTokens: 15, inputTokens: 10, outputTokens: 5 };
+const USAGE = { inputTokens: 10, outputTokens: 5, totalTokens: 15, cachedInputTokens: 0, cacheCreationInputTokens: 0 };
+const PARTIAL_USAGE = { inputTokens: 30, outputTokens: 2, totalTokens: 32, cachedInputTokens: 0, cacheCreationInputTokens: 0 };
 
-async function setupBrain(streamResult: object) {
-  streamTextMock.mockReturnValue(streamResult);
+/** Build an IR facade as streamTransportForBrain resolves it. */
+function facade(opts: {
+  textStream: AsyncIterable<string>;
+  usage?: Promise<typeof USAGE | undefined>;
+  finishReason?: Promise<'stop' | 'tool-calls' | 'length' | 'error' | undefined>;
+}) {
+  return {
+    textStream: opts.textStream,
+    usage: opts.usage ?? Promise.resolve(USAGE),
+    finishReason: opts.finishReason ?? Promise.resolve('stop' as const),
+    traceId: 'trace-stream-facade',
+  };
+}
+
+async function setupBrain(streamFacade: object) {
+  streamTransportMock.mockResolvedValue(streamFacade);
   const brain = new Brain(null);
   await (brain as any).providersReady;
   const prof = profile(MODEL);
@@ -44,32 +61,30 @@ async function setupBrain(streamResult: object) {
   (brain as any).failover.getNextProfile = vi.fn().mockReturnValueOnce(prof).mockReturnValue(null);
   const recordError = vi.spyOn((brain as any).failover, 'recordError');
   const recordSuccess = vi.spyOn((brain as any).failover, 'recordSuccess').mockImplementation(() => {});
-  return { brain, recordError, recordSuccess };
+  const billSpy = vi
+    .spyOn(brain as unknown as { _recordBillingUsage: (...a: unknown[]) => void }, '_recordBillingUsage')
+    .mockImplementation(() => {});
+  return { brain, recordError, recordSuccess, billSpy };
 }
 
-describe('Brain.stream() early-break bookkeeping', () => {
-  const savedKey = process.env['XAI_API_KEY'];
-
+describe('Brain.stream() early-break bookkeeping (IR facade)', () => {
   beforeEach(() => {
-    process.env['XAI_API_KEY'] = 'test-key';
+    streamTransportMock.mockReset();
   });
 
   afterEach(() => {
-    if (savedKey === undefined) delete process.env['XAI_API_KEY'];
-    else process.env['XAI_API_KEY'] = savedKey;
     vi.restoreAllMocks();
-    streamTextMock.mockReset();
+    streamTransportMock.mockReset();
   });
 
-  it('BREAK-1: consumer break records success and swallows the abandoned usage rejection', async () => {
-    // Rejected only AFTER the consumer breaks — as a cancelled stream would,
-    // and so the rejection cannot race the handler attachment in `finally`.
-    let rejectUsage!: (err: Error) => void;
-    const usage = new Promise((_resolve, reject) => { rejectUsage = reject; });
-    const { brain, recordError, recordSuccess } = await setupBrain({
+  it('BREAK-1: consumer break records success and bills from facade.usage — no unhandled rejection', async () => {
+    const { brain, recordError, recordSuccess, billSpy } = await setupBrain(facade({
       textStream: (async function* () { yield 'a'; yield 'b'; yield 'c'; })(),
-      usage,
-    });
+      // The real facade settles usage with the LAST-KNOWN partial snapshot
+      // when the consumer walks away — never undefined, never rejecting.
+      usage: Promise.resolve(PARTIAL_USAGE),
+      finishReason: Promise.resolve(undefined),
+    }));
 
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
@@ -82,8 +97,7 @@ describe('Brain.stream() early-break bookkeeping', () => {
       }
       expect(chunks).toEqual(['a']);
 
-      rejectUsage(new Error('stream aborted'));
-      // Let the rejection surface (unhandledRejection fires on a later tick).
+      // Billing is fire-and-forget from the finally — flush the microtasks.
       await new Promise((r) => setTimeout(r, 5));
       await new Promise((r) => setImmediate(r));
 
@@ -91,17 +105,22 @@ describe('Brain.stream() early-break bookkeeping', () => {
       expect(recordSuccess).toHaveBeenCalledTimes(1);
       expect(recordSuccess).toHaveBeenCalledWith(MODEL);
       expect(recordError).not.toHaveBeenCalled();
+      // Billed from facade.usage (the partial snapshot), not zeros/undefined.
+      expect(billSpy).toHaveBeenCalledTimes(1);
+      const usage = billSpy.mock.calls[0]![1] as { promptTokens: number; completionTokens: number } | undefined;
+      expect(usage?.promptTokens).toBe(30);
+      expect(usage?.completionTokens).toBe(2);
+      expect(billSpy.mock.calls[0]![0]).toBe(MODEL);
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
   });
 
-  // Regression guard — the normal path is unchanged by this fix.
-  it('BREAK-2: full consumption keeps the normal completion path (single success record)', async () => {
-    const { brain, recordError, recordSuccess } = await setupBrain({
+  it('BREAK-2: full consumption keeps the normal completion path (single success record, terminal usage billed)', async () => {
+    const { brain, recordError, recordSuccess, billSpy } = await setupBrain(facade({
       textStream: (async function* () { yield 'x'; yield 'y'; })(),
       usage: Promise.resolve(USAGE),
-    });
+    }));
 
     const chunks: string[] = [];
     for await (const chunk of brain.stream(REQUEST)) {
@@ -112,16 +131,19 @@ describe('Brain.stream() early-break bookkeeping', () => {
     expect(recordSuccess).toHaveBeenCalledTimes(1);
     expect(recordSuccess).toHaveBeenCalledWith(MODEL);
     expect(recordError).not.toHaveBeenCalled();
+    expect(billSpy).toHaveBeenCalledTimes(1);
+    const usage = billSpy.mock.calls[0]![1] as { promptTokens: number; completionTokens: number } | undefined;
+    expect(usage?.promptTokens).toBe(10);
+    expect(usage?.completionTokens).toBe(5);
   });
 
-  it('BREAK-3: a mid-stream provider error still records the error and never credits the model', async () => {
-    const { brain, recordError, recordSuccess } = await setupBrain({
+  it('BREAK-3: a mid-stream throw from textStream records the error and never credits the model', async () => {
+    const { brain, recordError, recordSuccess } = await setupBrain(facade({
       textStream: (async function* () {
         yield 'partial';
         throw Object.assign(new Error('status 429'), { status: 429, statusCode: 429 });
       })(),
-      usage: Promise.resolve(USAGE),
-    });
+    }));
 
     const consume = async () => {
       const chunks: string[] = [];
@@ -139,17 +161,11 @@ describe('Brain.stream() early-break bookkeeping', () => {
     expect(recordSuccess).not.toHaveBeenCalled();
   });
 
-  it('BREAK-4: a usage rejection after full delivery still records success, never an error', async () => {
-    // Rejected as the stream finishes — right before the normal path awaits it.
-    let rejectUsage!: (err: Error) => void;
-    const usage = new Promise((_resolve, reject) => { rejectUsage = reject; });
-    const { brain, recordError, recordSuccess } = await setupBrain({
-      textStream: (async function* () {
-        yield 'x';
-        rejectUsage(new Error('usage fetch failed'));
-      })(),
-      usage,
-    });
+  it('BREAK-4: usage resolving UNDEFINED after full delivery still records success, never an error', async () => {
+    const { brain, recordError, recordSuccess } = await setupBrain(facade({
+      textStream: (async function* () { yield 'x'; })(),
+      usage: Promise.resolve(undefined),
+    }));
 
     const chunks: string[] = [];
     for await (const chunk of brain.stream(REQUEST)) {
@@ -162,25 +178,16 @@ describe('Brain.stream() early-break bookkeeping', () => {
     expect(recordError).not.toHaveBeenCalled();
   });
 
-  it('BREAK-5: an SDK-v6 onError-only failure (textStream ends WITHOUT throwing) fails over with the real status, never crediting the model', async () => {
-    // AI SDK v6: a provider error before/during streaming ends textStream
-    // without throwing — the real error (APICallError 401) is delivered ONLY to
-    // onError. Before the onError-capture fix this empty stream was mis-recorded
-    // as success; now it must surface the real 401 → category 'auth' → failover.
-    const apiErr = Object.assign(new Error('Invalid bearer token'), { statusCode: 401 });
-    streamTextMock.mockImplementation((opts: { onError?: (e: { error: unknown }) => void }) => {
-      opts.onError?.({ error: apiErr });
-      return {
-        textStream: (async function* () { /* no chunks, no throw */ })(),
-        usage: Promise.resolve(USAGE),
-      };
-    });
-    const brain = new Brain(null);
-    await (brain as any).providersReady;
-    const prof = profile(MODEL);
-    (brain as any).failover.getNextProfile = vi.fn().mockReturnValueOnce(prof).mockReturnValue(null);
-    const recordError = vi.spyOn((brain as any).failover, 'recordError');
-    const recordSuccess = vi.spyOn((brain as any).failover, 'recordSuccess').mockImplementation(() => {});
+  it('BREAK-5: terminal error thrown from textStream BEFORE any chunk (IR equivalent of the old onError-only failure) fails over with the real status, never crediting the model', async () => {
+    // F97: the transport surfaces a pre/mid-stream provider failure as a THROW
+    // from the facade's textStream — there is no onError side channel anymore.
+    const { brain, recordError, recordSuccess } = await setupBrain(facade({
+      textStream: (async function* () {
+        throw Object.assign(new Error('Invalid bearer token'), { statusCode: 401 });
+        // eslint-disable-next-line no-unreachable
+        yield '';
+      })(),
+    }));
 
     const consume = async () => { for await (const _chunk of brain.stream(REQUEST)) { /* drain */ } };
     await expect(consume()).rejects.toThrow('exhausted');

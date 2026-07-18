@@ -1,19 +1,20 @@
 /**
- * @file brain/custom-providers.ts
- * @description Pluggable model providers (gap #27).
+ * @file custom-providers.ts
+ * @description Pluggable model providers (gap #27) — wire-config registry.
  *
- * Opens the otherwise-closed ProviderName switch: register ADDITIONAL providers
- * at boot from the `SUDO_CUSTOM_PROVIDERS` env (a JSON array) so sudo can talk to
- * ANY supported endpoint WITHOUT a core code change. providers.ts consults this
- * registry when a model string's provider isn't one of the built-ins.
+ * Registers ADDITIONAL providers at boot from the `SUDO_CUSTOM_PROVIDERS` env
+ * (a JSON array) so sudo can talk to ANY supported endpoint WITHOUT a core
+ * code change. The IR transport (transport.ts resolveRoute/authHeaders)
+ * consults this registry when a model string's provider isn't a built-in.
  *
- * Each entry picks an `adapter` — the AI-SDK provider shape to build it with:
- *   - 'openai' (default): createOpenAI + baseURL — OpenAI-compatible endpoints
- *     (vLLM, LM Studio, OpenRouter, a local server). Model handle via `.chat(id)`.
- *   - 'anthropic': createAnthropic + baseURL — an Anthropic-API-shaped endpoint
- *     (e.g. a gateway/proxy). Native handle via `provider(id)`.
- *   - 'google': createGoogleGenerativeAI + baseURL — a Gemini-API-shaped endpoint.
- *     Native handle.
+ * Each entry picks an `adapter` — the wire shape the endpoint speaks:
+ *   - 'openai' (default): OpenAI-compatible /chat/completions (vLLM, LM
+ *     Studio, OpenRouter, a local server).
+ *   - 'anthropic': an Anthropic-Messages-shaped endpoint (gateway/proxy).
+ *   - 'google': accepted for config compatibility, but the IR transport
+ *     serves openai/anthropic-shaped endpoints only — a google-shaped custom
+ *     provider registers and then fails per-call with an explicit transport
+ *     error (F97: the legacy ai-SDK instance path that could serve it is gone).
  * Opt-in: when `SUDO_CUSTOM_PROVIDERS` is unset the registry is empty and
  * resolution is byte-identical to before.
  *
@@ -22,12 +23,9 @@
  * plaintext http to a non-local host is warned about, not blocked.
  */
 
-import { createOpenAI } from '@ai-sdk/openai';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createLogger } from '../../core/shared/logger.js';
+import { createLogger } from '../core/shared/logger.js';
 
-const log = createLogger('brain:custom-providers');
+const log = createLogger('llm:custom-providers');
 
 /** Which AI-SDK provider shape a custom endpoint speaks. */
 export type CustomAdapter = 'openai' | 'anthropic' | 'google';
@@ -48,21 +46,6 @@ export interface CustomProviderConfig {
   compatibility?: 'compatible' | 'strict';
 }
 
-type AnyCustomProvider =
-  | ReturnType<typeof createOpenAI>
-  | ReturnType<typeof createAnthropic>
-  | ReturnType<typeof createGoogleGenerativeAI>;
-
-/** How a model handle is obtained: OpenAI-compatible via `.chat(id)`; native call directly. */
-type ModelKind = 'native' | 'chat';
-
-interface CustomProviderEntry {
-  provider: AnyCustomProvider;
-  modelKind: ModelKind;
-  /** Raw wire config, for transports that fetch directly (gw-cutover Phase 0). */
-  wire: CustomProviderWireConfig;
-}
-
 /** What the IR transport needs to call a custom endpoint without the AI SDK. */
 export interface CustomProviderWireConfig {
   baseURL: string;
@@ -70,38 +53,8 @@ export interface CustomProviderWireConfig {
   adapter: CustomAdapter;
 }
 
-/**
- * One adapter: the model-handle shape it produces + a factory that builds the SDK
- * provider from the resolved key + baseURL. Mirrors the built-in BUILTIN_PROVIDERS
- * registry in providers.ts — adding a new adapter is a one-line entry.
- */
-interface AdapterSpec {
-  modelKind: ModelKind;
-  build(apiKey: string, baseURL: string, config: CustomProviderConfig): AnyCustomProvider;
-}
-
-const ADAPTERS: Record<CustomAdapter, AdapterSpec> = {
-  openai: {
-    modelKind: 'chat',
-    build: (apiKey, baseURL, config) =>
-      createOpenAI({
-        apiKey,
-        baseURL,
-        name: config.name,
-        compatibility: config.compatibility ?? 'compatible',
-      } as Parameters<typeof createOpenAI>[0]),
-  },
-  anthropic: {
-    modelKind: 'native',
-    build: (apiKey, baseURL) =>
-      createAnthropic({ apiKey, baseURL } as Parameters<typeof createAnthropic>[0]),
-  },
-  google: {
-    modelKind: 'native',
-    build: (apiKey, baseURL) =>
-      createGoogleGenerativeAI({ apiKey, baseURL } as Parameters<typeof createGoogleGenerativeAI>[0]),
-  },
-};
+/** Known adapter wire shapes (see header — google registers but the IR transport cannot serve it). */
+const KNOWN_ADAPTERS: ReadonlySet<string> = new Set(['openai', 'anthropic', 'google']);
 
 /**
  * Provider names must be a lowercase model-string-safe token. Lowercase-only
@@ -110,7 +63,7 @@ const ADAPTERS: Record<CustomAdapter, AdapterSpec> = {
  */
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
-const registry = new Map<string, CustomProviderEntry>();
+const registry = new Map<string, CustomProviderWireConfig>();
 
 /** Reset the registry (tests only). */
 export function clearCustomProviders(): void {
@@ -119,11 +72,6 @@ export function clearCustomProviders(): void {
 
 export function isCustomProvider(name: string): boolean {
   return registry.has(name);
-}
-
-/** The built SDK provider instance for a custom name (null if unregistered). */
-export function getCustomProvider(name: string): AnyCustomProvider | null {
-  return registry.get(name)?.provider ?? null;
 }
 
 export function listCustomProviders(): string[] {
@@ -135,21 +83,7 @@ export function listCustomProviders(): string[] {
  * the in-process IR transport's direct fetch path. Null when unregistered.
  */
 export function getCustomProviderWireConfig(name: string): CustomProviderWireConfig | null {
-  return registry.get(name)?.wire ?? null;
-}
-
-/**
- * Resolve a LanguageModel handle for a registered custom provider, honoring its
- * adapter's model kind: OpenAI-compatible → `.chat(id)`; anthropic/google native
- * → `provider(id)`. Returns null when the name isn't registered.
- */
-export function resolveCustomModel(name: string, modelId: string): unknown {
-  const entry = registry.get(name);
-  if (!entry) return null;
-  if (entry.modelKind === 'chat') {
-    return (entry.provider as { chat: (id: string) => unknown }).chat(modelId);
-  }
-  return (entry.provider as unknown as (id: string) => unknown)(modelId);
+  return registry.get(name) ?? null;
 }
 
 /**
@@ -212,8 +146,7 @@ export function registerCustomProvider(
   // adapter comes from untrusted JSON — treat as a string and validate against
   // the known set; an unknown value is skipped (fail-safe), default is 'openai'.
   const rawAdapter = (config as { adapter?: string }).adapter ?? 'openai';
-  const adapter = (ADAPTERS as Record<string, AdapterSpec | undefined>)[rawAdapter];
-  if (!adapter) {
+  if (!KNOWN_ADAPTERS.has(rawAdapter)) {
     log.warn({ name, adapter: rawAdapter }, 'custom provider: unknown adapter (use openai|anthropic|google) — skipped');
     return false;
   }
@@ -221,19 +154,9 @@ export function registerCustomProvider(
     log.warn({ name, adapter: rawAdapter }, 'custom provider: `compatibility` is ignored for non-openai adapters');
   }
 
-  try {
-    const instance = adapter.build(apiKey, baseURL, config);
-    registry.set(name, {
-      provider: instance,
-      modelKind: adapter.modelKind,
-      wire: { baseURL, apiKey, adapter: rawAdapter as CustomAdapter },
-    });
-    log.info({ name, baseURL, adapter: rawAdapter }, 'custom provider registered');
-    return true;
-  } catch (err) {
-    log.error({ name, err: String(err) }, 'custom provider: failed to instantiate — skipped');
-    return false;
-  }
+  registry.set(name, { baseURL, apiKey, adapter: rawAdapter as CustomAdapter });
+  log.info({ name, baseURL, adapter: rawAdapter }, 'custom provider registered');
+  return true;
 }
 
 /**
@@ -242,6 +165,28 @@ export function registerCustomProvider(
  *
  * @returns the number of providers successfully registered.
  */
+/**
+ * Built-in provider names custom providers may not shadow (F97: owned here
+ * now that legacy providers.ts is retired; previously ALL_PROVIDERS there).
+ */
+const RESERVED_BUILTIN_PROVIDERS: ReadonlySet<string> = new Set([
+  'ollama', 'xai', 'openai', 'anthropic', 'claude-oauth', 'xai-oauth',
+  'google', 'groq', 'mistral', 'deepseek', 'together',
+]);
+
+let envRegistrationDone = false;
+
+/**
+ * Idempotent boot-time registration of SUDO_CUSTOM_PROVIDERS (F97: called by
+ * Brain's constructor, replacing legacy initProviders()). No-op when the env
+ * is unset or on repeat calls.
+ */
+export function registerCustomProvidersOnce(): void {
+  if (envRegistrationDone) return;
+  envRegistrationDone = true;
+  registerCustomProvidersFromEnv(RESERVED_BUILTIN_PROVIDERS);
+}
+
 export function registerCustomProvidersFromEnv(reserved: ReadonlySet<string>): number {
   const raw = process.env['SUDO_CUSTOM_PROVIDERS'];
   if (!raw || raw.trim() === '') return 0;

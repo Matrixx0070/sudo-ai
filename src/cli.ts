@@ -350,7 +350,7 @@ async function boot(): Promise<void> {
   // no-op — login can happen later and reinitProvider() picks it up.
   // -------------------------------------------------------------------------
   try {
-    const { getClaudeOAuthManager } = await import('./core/brain/claude-oauth-manager.js');
+    const { getClaudeOAuthManager } = await import('./llm/claude-oauth-manager.js');
     const oauthMgr = getClaudeOAuthManager();
     if (oauthMgr.isAvailable()) {
       oauthMgr.startAutoRefresh();

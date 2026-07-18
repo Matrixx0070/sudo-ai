@@ -16,7 +16,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
-import { ClaudeOAuthManager, type PendingLogin } from '../src/core/brain/claude-oauth-manager.js';
+import { ClaudeOAuthManager, type PendingLogin } from '../src/llm/claude-oauth-manager.js';
 
 const PENDING_PATH = '/tmp/verify-prod-pending.json';
 const STORE_PATH = '/tmp/verify-prod-store.json';

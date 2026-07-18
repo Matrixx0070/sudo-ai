@@ -2,7 +2,7 @@
  * @file xai-oauth-manager.ts
  * @description xAI subscription OAuth (device flow) connector — Phase 1 (auth).
  *
- * Modeled on src/llm/legacy/claude-oauth-manager.ts (singleton accessor,
+ * Modeled on src/llm/claude-oauth-manager.ts (singleton accessor,
  * data-dir persistence, refresh discipline, logger usage) but NOT legacy:
  * this is the forward-looking xai-oauth provider's token manager.
  *

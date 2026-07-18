@@ -83,7 +83,7 @@ import {
 import { sha256Hex, type LLMCallRecord } from './logging.js';
 import { sanitizeOAuthToolName } from '../core/brain/tool-schema-compat.js';
 import { resolveThinkingBudget } from '../core/brain/thinking-inject.js';
-import { getCustomProviderWireConfig } from './legacy/custom-providers.js';
+import { getCustomProviderWireConfig } from './custom-providers.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('llm-transport');
@@ -126,6 +126,22 @@ export interface CallIROptions {
    * throwing observer is swallowed (billing hooks must never break cleanup).
    */
   onPartialUsage?: (usage: IRUsage) => void;
+  /**
+   * Per-call API-key override for env-key providers (brain's auth-profile
+   * rotation port — F97). Ignored for claude-oauth / xai-oauth, whose managers
+   * own the credential. anthropic-family overrides ship as x-api-key; the
+   * OpenAI-compatible family as Bearer.
+   */
+  apiKeyOverride?: string;
+  /**
+   * Overall deadline for one buffered callIR attempt (fetch + body read), in
+   * ms. Default SUDO_LLM_CALL_TIMEOUT_MS or 600000 (10 min). F97: the legacy
+   * provider layer bounded stalls with a headers timer + body-idle guard;
+   * this is the buffered path's replacement — an abort classifies as
+   * 'timeout' so brain's failover advances instead of hanging a turn forever.
+   * streamIR is NOT covered (its consumer observes progress per chunk).
+   */
+  timeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,9 +263,9 @@ function resolveRoute(alias: string): ResolvedRoute {
  * throw (never a silent fallback). claude-oauth reuses the legacy manager's
  * token accessor — NEVER a second refresh implementation (single-flight rule).
  */
-async function authHeaders(r: ResolvedRoute): Promise<Record<string, string>> {
+async function authHeaders(r: ResolvedRoute, apiKeyOverride?: string): Promise<Record<string, string>> {
   if (r.provider === 'claude-oauth') {
-    const { getClaudeOAuthManager } = await import('./legacy/claude-oauth-manager.js');
+    const { getClaudeOAuthManager } = await import('./claude-oauth-manager.js');
     const mgr = getClaudeOAuthManager();
     let token = mgr.getAccessToken();
     if (token === null) {
@@ -298,6 +314,14 @@ async function authHeaders(r: ResolvedRoute): Promise<Record<string, string>> {
       );
     }
     return { Authorization: `Bearer ${token}` };
+  }
+
+  // F97 rotation port: an explicit per-call key outranks env/wire-config keys.
+  // Never applies to the oauth managers above (they returned already).
+  if (apiKeyOverride !== undefined) {
+    return r.family === 'anthropic'
+      ? { 'x-api-key': apiKeyOverride, 'anthropic-version': ANTHROPIC_VERSION }
+      : { Authorization: `Bearer ${apiKeyOverride}` };
   }
 
   if (r.family === 'anthropic') {
@@ -591,23 +615,42 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           ...extraHeaders,
-          ...(await authHeaders(r)),
+          ...(await authHeaders(r, opts.apiKeyOverride)),
         };
-        const response = await fetchImpl(r.url, {
-          method: 'POST',
-          headers,
-          body: wireBody,
-          ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-        });
+        // F97: overall per-attempt deadline (replaces the legacy layer's
+        // headers/body-idle guards on the buffered path). Abort → 'timeout'.
+        const timeoutMs = opts.timeoutMs ?? Number(process.env['SUDO_LLM_CALL_TIMEOUT_MS'] ?? 600_000);
+        const deadline = new AbortController();
+        const deadlineTimer = setTimeout(() => deadline.abort(), timeoutMs);
+        let response: Response;
+        let raw: string;
+        try {
+          response = await fetchImpl(r.url, {
+            method: 'POST',
+            headers,
+            body: wireBody,
+            signal: ctx.signal !== undefined ? AbortSignal.any([ctx.signal, deadline.signal]) : deadline.signal,
+          });
 
-        if (!response.ok) {
-          const text = await response.text().catch(() => '');
-          throw httpPolicyError(r, response.status, text);
+          if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            throw httpPolicyError(r, response.status, text);
+          }
+
+          // 200: parse defensively — non-JSON bodies fall through to the
+          // parsers' provider_bug path (they never throw).
+          raw = await response.text().catch(() => '');
+        } catch (err) {
+          if (deadline.signal.aborted && !(ctx.signal !== undefined && ctx.signal.aborted)) {
+            throw new LLMPolicyError(
+              `[llm-transport] ${r.route}: buffered call exceeded ${timeoutMs}ms`,
+              { class: 'timeout', route: r.route, retryable: true },
+            );
+          }
+          throw err;
+        } finally {
+          clearTimeout(deadlineTimer);
         }
-
-        // 200: parse defensively — non-JSON bodies fall through to the
-        // parsers' provider_bug path (they never throw).
-        const raw = await response.text().catch(() => '');
         let json: unknown;
         try {
           json = JSON.parse(raw);
@@ -915,7 +958,7 @@ export async function* streamIR(
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           ...extraHeaders,
-          ...(await authHeaders(r)),
+          ...(await authHeaders(r, opts.apiKeyOverride)),
         };
         // runWithPolicy never populates ctx.signal (no option plumbs one in) —
         // the stream's own controller is the sole abort source for this fetch.

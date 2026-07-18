@@ -107,7 +107,7 @@ export class ModelFailover {
       // 'xai-oauth' is served ONLY by the IR transport (src/llm/transport.ts) —
       // legacy getModel() has no such provider and keeps throwing for it, which
       // is fine: brain routes xai-oauth/ models through the transport
-      // unconditionally (mustUseIrTransport). Rejecting it HERE crash-looped
+      // unconditionally (F97: every model is IR-served). Rejecting it HERE crash-looped
       // prod when it was added to models.primary (2026-07-14 incident).
       const validProviders = ['xai', 'openai', 'anthropic', 'claude-oauth', 'xai-oauth', 'google', 'groq', 'mistral', 'deepseek', 'ollama', 'together'];
       if (!validProviders.includes(provider)) {

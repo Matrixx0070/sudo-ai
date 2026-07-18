@@ -1,12 +1,13 @@
 /**
  * @file brain-bridge.ts
- * @description gw-cutover Phase 2 — the Brain↔IR-transport seam, kept OUT of
- * brain.ts so the brain diff stays minimal. When `LLM_IR_CALLERS` matches the
- * request source, Brain's PER-ATTEMPT wire call goes through callIR/streamIR
- * instead of the ai-SDK. Brain's failover profile loop, cooldowns, billing
- * recorder, and all post-processing stay UNCHANGED — this module only swaps
- * the wire hop and maps the IRResponse back into the legacy result shape
- * (the exact INVERSE of shadow.ts resultToIR).
+ * @description The Brain↔IR-transport seam, kept OUT of brain.ts so the brain
+ * diff stays minimal. Every Brain PER-ATTEMPT wire call goes through
+ * callIR/streamIR (F97: the LLM_IR_CALLERS ramp and the legacy ai-SDK path
+ * are retired — this is the only wire path). Brain's failover profile loop,
+ * cooldowns, billing recorder, and all post-processing are UNCHANGED — this
+ * module only performs the wire hop and maps the IRResponse back into the
+ * result shape brain's post-processing consumes (the exact INVERSE of
+ * shadow.ts resultToIR).
  *
  * Retry ownership: Brain's failover loop already owns retry (10 attempts
  * across profiles). Layering policy's 3 retries underneath would multiply, so
@@ -38,51 +39,6 @@ import type { IRStreamEvent } from './adapters/stream.js';
 import { brainRequestToIR, type ShadowBrainRequest } from './shadow.js';
 import { callIR, streamIR, type CallIROptions } from './transport.js';
 import { LLMPolicyError } from './errors.js';
-
-// ---------------------------------------------------------------------------
-// Ramp flag
-// ---------------------------------------------------------------------------
-
-/**
- * True when `LLM_IR_CALLERS` covers `source`. Unset/empty → false (byte-
- * identical legacy behavior); `*` → all callers; otherwise a comma list of
- * exact source tags ('chat', 'agent', 'consciousness', …).
- */
-export function irCallersEnabled(source: string): boolean {
-  const raw = process.env['LLM_IR_CALLERS'];
-  if (raw === undefined) return false;
-  const trimmed = raw.trim();
-  if (trimmed === '') return false;
-  if (trimmed === '*') return true;
-  return trimmed
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s !== '')
-    .includes(source);
-}
-
-/**
- * True when `modelId` is served ONLY by the IR transport — no legacy ai-SDK
- * provider exists for it (legacy getModel throws 'Unknown provider').
- *
- * Brain's seams treat these models specially, independent of LLM_IR_CALLERS:
- * - the IR branch fires UNCONDITIONALLY for them, and
- * - a transport failure is RETHROWN instead of falling through to the legacy
- *   ai-SDK call (which can only throw 'Unknown provider' — the failure mode
- *   that crash-looped prod on 2026-07-14). The rethrow lands in brain's
- *   failover catch, which classifies the error, cooldowns the profile, and
- *   advances to the next one.
- */
-export function mustUseIrTransport(modelId: string): boolean {
-  return modelId.startsWith('xai-oauth/');
-}
-
-/** Short error-class tag for the `ir_transport_fallback` warn log. */
-export function irErrorClass(err: unknown): string {
-  if (err instanceof LLMPolicyError) return err.class;
-  if (err instanceof Error) return err.constructor.name;
-  return typeof err;
-}
 
 // ---------------------------------------------------------------------------
 // IRResponse → legacy result shape (inverse of shadow.ts resultToIR)
@@ -206,8 +162,9 @@ export interface BrainTransportCall {
 /**
  * One non-streaming brain attempt via callIR, policy retry DISABLED (brain's
  * failover loop owns retry). Throws on any transport failure — including
- * stop_reason 'error' responses (provider refusal/garbage), which the brain
- * seam converts into a same-attempt legacy fallback during the ramp.
+ * stop_reason 'error' responses (provider refusal/garbage) — so brain's
+ * failover catch classifies + cooldowns the profile and advances (F97: there
+ * is no legacy fallback; the throw IS the failover signal).
  */
 export async function callTransportForBrain(
   request: ShadowBrainRequest,
@@ -218,7 +175,7 @@ export async function callTransportForBrain(
   const res = await callIR(ir, { ...opts, noRetry: true });
   if (res.stop_reason === 'error') {
     throw new LLMPolicyError(
-      `[brain-bridge] IR response stop_reason 'error' for ${modelId} — deferring to legacy path`,
+      `[brain-bridge] IR response stop_reason 'error' for ${modelId} — failing the attempt over`,
       { class: 'provider_bug', retryable: false },
     );
   }
