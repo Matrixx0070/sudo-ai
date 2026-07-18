@@ -6,6 +6,8 @@
  *   - adminRouter.dispatch no longer self-auths (the bespoke Bearer check was
  *     removed; auth is enforced upstream at the gateway boundary).
  *   - registerAdminApi stays fail-closed when no admin token is configured.
+ *   - registerAdminApi's mounted request handler enforces the 401-on-remote gate
+ *     and accepts the effective mount token (HIGH-1/HIGH-2).
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -43,8 +45,13 @@ function fakeRes(): { res: ServerResponse; status: () => number | null } {
   return { res, status: () => status };
 }
 
-function fakeReq(method: string, url: string, headers: Record<string, string> = {}): IncomingMessage {
-  return { method, url, headers, socket: { remoteAddress: '127.0.0.1' } } as unknown as IncomingMessage;
+function fakeReq(
+  method: string,
+  url: string,
+  headers: Record<string, string> = {},
+  remoteAddress = '127.0.0.1',
+): IncomingMessage {
+  return { method, url, headers, socket: { remoteAddress } } as unknown as IncomingMessage;
 }
 
 describe('GW-4 admin-router: bespoke Bearer check removed', () => {
@@ -88,5 +95,87 @@ describe('GW-4 registerAdminApi fail-closed', () => {
     delete process.env['SUDO_ADMIN_API'];
     const fakeServer = { on: () => {} } as unknown as import('node:http').Server;
     expect(await registerAdminApi(fakeServer)).toBe(false);
+  });
+});
+
+/**
+ * HIGH-2: the mounted request handler is the core GW-4 security gate — a remote
+ * request with no (or wrong) credential must 401, and the effective mount token
+ * (SUDO_AI_DASHBOARD_TOKEN, HIGH-1) must actually authorize. The prior suite only
+ * ever exercised loopback with no assertion on the denial path.
+ */
+describe('GW-4 registerAdminApi mounted auth gate (HIGH-1/HIGH-2)', () => {
+  const savedApi = process.env['SUDO_ADMIN_API'];
+  const savedTok = process.env['SUDO_AI_DASHBOARD_TOKEN'];
+  const savedGw = process.env['GATEWAY_TOKEN'];
+  const savedUnified = process.env['SUDO_GATEWAY_UNIFIED_AUTH'];
+
+  let handler: ((req: IncomingMessage, res: ServerResponse) => void) | undefined;
+
+  beforeEach(async () => {
+    process.env['SUDO_ADMIN_API'] = '1';
+    process.env['SUDO_AI_DASHBOARD_TOKEN'] = 'dash-secret';
+    delete process.env['GATEWAY_TOKEN'];              // ONLY the dashboard token is set
+    delete process.env['SUDO_GATEWAY_UNIFIED_AUTH'];  // unified auth ON (default)
+    handler = undefined;
+    const fakeServer = {
+      on: (evt: string, cb: (req: IncomingMessage, res: ServerResponse) => void) => {
+        if (evt === 'request') handler = cb;
+      },
+    } as unknown as import('node:http').Server;
+    const mounted = await registerAdminApi(fakeServer);
+    expect(mounted).toBe(true);
+    expect(handler).toBeTypeOf('function');
+  });
+
+  afterEach(() => {
+    for (const [k, v] of [
+      ['SUDO_ADMIN_API', savedApi],
+      ['SUDO_AI_DASHBOARD_TOKEN', savedTok],
+      ['GATEWAY_TOKEN', savedGw],
+      ['SUDO_GATEWAY_UNIFIED_AUTH', savedUnified],
+    ] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  });
+
+  function call(req: IncomingMessage): () => number | null {
+    const { res, status } = fakeRes();
+    handler!(req, res);
+    return status;
+  }
+
+  it('(a) non-loopback remote with NO credential → 401', () => {
+    const status = call(fakeReq('GET', '/api/admin/status', {}, '203.0.113.9'));
+    expect(status()).toBe(401);
+  });
+
+  it('(b) forwarded proxy headers + NO credential → 401 (untrusted proxy)', () => {
+    const status = call(
+      fakeReq('GET', '/api/admin/status', { 'x-forwarded-for': '10.0.0.1' }, '203.0.113.9'),
+    );
+    expect(status()).toBe(401);
+  });
+
+  it('fail-closed: even loopback with NO credential is denied once a token is set', () => {
+    const status = call(fakeReq('GET', '/api/admin/status', {}, '127.0.0.1'));
+    expect(status()).toBe(401);
+  });
+
+  it('(c) remote with the correct dashboard token → authorized (not 401)', async () => {
+    const status = call(
+      fakeReq('GET', '/api/admin/no-such-route', { authorization: 'Bearer dash-secret' }, '203.0.113.9'),
+    );
+    // dispatch is async; let the promise settle before asserting the status.
+    await new Promise((r) => setTimeout(r, 25));
+    expect(status()).not.toBe(401);
+    expect(status()).toBe(404); // authed → route matching → no such route
+  });
+
+  it('a wrong token is rejected with 401', () => {
+    const status = call(
+      fakeReq('GET', '/api/admin/status', { authorization: 'Bearer WRONG' }, '203.0.113.9'),
+    );
+    expect(status()).toBe(401);
   });
 });

@@ -66,6 +66,29 @@ describe('GW-15 DeliveryQueue', () => {
     expect(delivered).toBe(0);
   });
 
+  it('crash-safety: dispatchRow writes dispatched BEFORE the platform call (observable mid-deliver)', async () => {
+    const db = new Database(':memory:');
+    const { q } = mkQueue({}, db);
+    const id = q.enqueue({ channel: 'telegram', account: 'default', peer: 'p1', text: 'hi' });
+    const row = q.claimNext();
+    expect(row?.id).toBe(id);
+
+    let observedState: string | undefined;
+    const deliver: DeliverFn = async () => {
+      // Inside the platform call the row MUST already be 'dispatched' — that is
+      // the crash-safety pivot (a crash here -> recovery moves it to 'unknown',
+      // never a resend). A reorder that wrote 'dispatched' AFTER the send would
+      // observe 'claimed' here and fail this assertion.
+      observedState = q.get(id)?.state;
+      throw Object.assign(new Error('boom mid-send'), { status: 504 }); // ambiguous -> unknown
+    };
+    const state = await q.dispatchRow(row!, deliver);
+
+    expect(observedState).toBe('dispatched');
+    expect(state).toBe('unknown'); // 5xx after the send may have landed -> never auto-retried
+    expect(q.get(id)?.state).toBe('unknown');
+  });
+
   it('presend failure retries with exponential backoff then caps at 5 attempts', async () => {
     let now = 0;
     const { q } = mkQueue({ now: () => now });

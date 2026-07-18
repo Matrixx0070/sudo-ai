@@ -12,6 +12,14 @@
  * registrar refuses to mount (fail-closed), so the destructive routes can never
  * be reached unauthenticated.
  *
+ * The mount credential is `SUDO_AI_DASHBOARD_TOKEN || GATEWAY_TOKEN`. Whichever
+ * is effective is injected into the unified resolver as the accepted operator
+ * secret (HIGH-1), so a remote `Authorization: Bearer <that token>` is accepted
+ * with operator.admin — an operator who sets ONLY SUDO_AI_DASHBOARD_TOKEN is no
+ * longer locked out of a mounted-but-inert API. A no-credential remote request
+ * stays fail-closed (the injected secret makes the loopback-only path
+ * unreachable without the token).
+ *
  * Irreversible routes are double-gated: even an authenticated caller gets 403 on
  * POST /api/admin/service/{restart,stop} and /api/admin/system/{backup,restore}
  * unless SUDO_ADMIN_API_DANGER=1 is also set.
@@ -40,13 +48,19 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
 }
 
 /**
- * GW-4: authenticate through the unified resolver (gateway/auth.ts) requiring
- * operator.admin — the SAME boundary as /v1/admin/*. Replaces the bespoke
- * per-surface Bearer compare so there is no drift surface. GATEWAY_TOKEN (or a
- * loopback-trusted request) grants operator.admin.
+ * GW-4 / HIGH-1: authenticate through the unified resolver (gateway/auth.ts)
+ * requiring operator.admin — the SAME boundary as /v1/admin/*. `adminSecret` is
+ * the effective mount credential (SUDO_AI_DASHBOARD_TOKEN or GATEWAY_TOKEN),
+ * injected as the accepted 'gateway-token' secret so a remote Bearer of THAT
+ * token authorizes. Injecting a non-null secret also makes the loopback-only
+ * grant unreachable, so a no-credential remote is denied (fail-closed).
  */
-function isAuthorized(req: http.IncomingMessage): boolean {
-  const principal = authenticateHttp(req, { accept: ['gateway-token', 'loopback'] });
+function isAuthorized(req: http.IncomingMessage, adminSecret: Buffer): boolean {
+  const principal = authenticateHttp(req, {
+    accept: ['gateway-token', 'loopback'],
+    secretOverride: adminSecret,
+    secretOverrideCredential: 'gateway-token',
+  });
   return principal.ok && hasScope(principal, 'operator.admin');
 }
 
@@ -64,10 +78,13 @@ export async function registerAdminApi(server: http.Server): Promise<boolean> {
     log.error(
       'SUDO_ADMIN_API=1 but no admin token configured (SUDO_AI_DASHBOARD_TOKEN or GATEWAY_TOKEN). '
         + 'REFUSING to mount /api/admin/* — incl. POST /api/admin/service/restart (process.exit). '
-        + 'Set SUDO_AI_DASHBOARD_TOKEN to enable.',
+        + 'Set SUDO_AI_DASHBOARD_TOKEN (or GATEWAY_TOKEN) to enable.',
     );
     return false;
   }
+  // The effective mount credential, injected into the unified resolver so a
+  // remote Bearer of this exact token authorizes as operator.admin (HIGH-1).
+  const adminSecret = Buffer.from(adminToken, 'utf8');
   // Danger flag captured at mount time — a runtime change requires a restart
   // (intentional: the irreversible routes stay fail-closed until reboot).
   const dangerOn = process.env['SUDO_ADMIN_API_DANGER'] === '1';
@@ -93,7 +110,7 @@ export async function registerAdminApi(server: http.Server): Promise<boolean> {
     }
 
     // Auth gate — BEFORE dispatch, so unauthenticated callers never reach a handler.
-    if (!isAuthorized(req)) {
+    if (!isAuthorized(req, adminSecret)) {
       sendJson(res, 401, { error: { message: 'Unauthorized', code: 401 } });
       return;
     }
