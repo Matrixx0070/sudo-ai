@@ -5,6 +5,9 @@
  *
  * Updated Wave 10: 11 entries (6 original + 5 connectors).
  * Updated Spec 5: 14 entries (+ email.search / email.read / email.reply).
+ * Updated F100 (2026-07-18): 10 entries — stale connector tools deleted
+ * (comms.gmail/gcalendar/slack-rt/imessage; vault creds never existed, iMessage
+ * needs macOS).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -16,8 +19,8 @@ import { twitterManagerTool } from '../../../../src/core/tools/builtin/social/tw
 // the full dispatcher singleton (schedulePostTool.execute would fail without it).
 
 describe('comms/index.ts — COMMS_TOOLS registry', () => {
-  it('COMMS_TOOLS has exactly 14 entries (6 original + 5 connectors + 3 email-inbox)', () => {
-    expect(COMMS_TOOLS).toHaveLength(14);
+  it('COMMS_TOOLS has exactly 10 entries (F100: stale connector tools removed)', () => {
+    expect(COMMS_TOOLS).toHaveLength(10);
   });
 
   it('COMMS_TOOLS contains the Spec 5 email-inbox tools', () => {
@@ -37,13 +40,9 @@ describe('comms/index.ts — COMMS_TOOLS registry', () => {
     expect(names).toContain('comms.voice');
   });
 
-  it('COMMS_TOOLS contains all 5 Wave 10 connector tools', () => {
+  it('COMMS_TOOLS contains the surviving Wave 10 connector tool (F100)', () => {
     const names = COMMS_TOOLS.map((t) => t.name);
-    expect(names).toContain('comms.gmail');
-    expect(names).toContain('comms.gcalendar');
     expect(names).toContain('comms.github-notify');
-    expect(names).toContain('comms.slack-rt');
-    expect(names).toContain('comms.imessage');
   });
 
   it('COMMS_TOOLS does NOT contain comms.twitter-post', () => {
