@@ -36,7 +36,8 @@ export { DualSessionManager } from './dual-manager.js';
 // SQLite Session Store
 export { SqliteSessionStore, SessionStoreError } from './sqlite-session-store.js';
 export type { SessionRow, MessageRow, ListSessionsOptions } from './sqlite-session-store.js';
-export { migrateJsonlToSqlite } from './migrate-jsonl.js';
+// F99: migrate-jsonl retired 2026-07-18 — prod scan found zero unmigrated legacy
+// JSONL stores (no data/sessions.json anywhere) and the migrator had no callers.
 
 // Session State Machine + REST Routes
 export { SessionStateMachine, SessionStateError } from './state-machine.js';
