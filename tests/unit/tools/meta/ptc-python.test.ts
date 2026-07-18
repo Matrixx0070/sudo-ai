@@ -15,6 +15,7 @@ import { ptcPythonTool, setPtcPythonRegistry } from '../../../../src/core/tools/
 import type { ToolContext } from '../../../../src/core/tools/types.js';
 import type { ToolRegistry } from '../../../../src/core/tools/registry.js';
 
+// Env gate: protocol tests need a python3 binary on PATH; skip where absent.
 const hasPython3 = (() => { try { return spawnSync('python3', ['--version']).status === 0; } catch { return false; } })();
 // `bwrap --version` passes even when the kernel denies unshare (e.g. GitHub
 // Actions containers), so run a minimal SANDBOXED command to confirm bwrap can
