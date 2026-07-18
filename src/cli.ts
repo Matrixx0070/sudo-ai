@@ -4206,6 +4206,29 @@ async function boot(): Promise<void> {
       { skillCount: mdSkillCount },
       'SUDO-AI v5 modules initialized',
     );
+
+    // GW-9: verified restart handoff. Now that the gateway is listening, the
+    // guard is up and channels are cross-wired, announce readiness so a restart
+    // initiator (updater / Kairos) can confirm the successor actually booted. A
+    // STALE intent here means the previous handoff failed — surface it, and for a
+    // Kairos-initiated restart put Kairos into cooldown so it cannot restart-loop.
+    try {
+      const { completeBootHandoff, restartDir } = await import('./core/health/restart-sentinel.js');
+      const gwPort = Number(process.env['GATEWAY_PORT'] ?? '18900') || 18900;
+      const handoff = completeBootHandoff(restartDir(), { port: gwPort });
+      if (handoff.resumed) {
+        log.info({ reason: handoff.intent?.reason, initiator: handoff.intent?.initiator }, 'GW-9: resumed from intended restart');
+      }
+      if (handoff.staleHandoff) {
+        log.error({ intent: handoff.intent }, 'GW-9: STALE restart intent at boot — prior handoff likely failed (possible restart loop)');
+        if (handoff.intent?.initiator === 'kairos') {
+          const { applyFailedHandoffCooldown } = await import('./core/consciousness/kairos.js');
+          applyFailedHandoffCooldown();
+        }
+      }
+    } catch (err: unknown) {
+      log.warn({ err: String(err) }, 'GW-9: restart-handoff boot step failed (non-fatal)');
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn({ err: msg }, 'v5 module initialization failed — running without v5 features');

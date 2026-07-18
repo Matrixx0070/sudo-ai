@@ -21,7 +21,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync } from 'node:fs';
+import { writeRestartIntent, restartDir } from '../health/restart-sentinel.js';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
@@ -442,6 +443,40 @@ export function performGuardedRestart(reason: string, command: string, deps: Gua
   return true;
 }
 
+// GW-9: Kairos restart cooldown. After a FAILED handoff (successor never wrote
+// ready.json within the watchdog window, detected at the next boot as a stale
+// intent) Kairos backs off for 1h so a bad restart cannot loop.
+const RESTART_COOLDOWN_FILE = path.join(PROJECT_ROOT, 'data', 'kairos-restart-cooldown.json');
+export const KAIROS_RESTART_BACKOFF_MS = 60 * 60 * 1000; // 1h
+
+/** True while Kairos restart authority is suppressed after a failed handoff. */
+export function isKairosRestartOnCooldown(now: number = Date.now()): boolean {
+  try {
+    if (!existsSync(RESTART_COOLDOWN_FILE)) return false;
+    const parsed = JSON.parse(readFileSync(RESTART_COOLDOWN_FILE, 'utf-8')) as { until?: number };
+    return typeof parsed.until === 'number' && now < parsed.until;
+  } catch { return false; }
+}
+
+/** Suppress Kairos restarts until `untilMs`. */
+export function setKairosRestartCooldown(untilMs: number): void {
+  try {
+    mkdirSync(path.dirname(RESTART_COOLDOWN_FILE), { recursive: true });
+    writeFileSync(RESTART_COOLDOWN_FILE, JSON.stringify({ until: untilMs }), 'utf-8');
+    log.warn({ untilMs }, 'Kairos restart authority in COOLDOWN (failed handoff) — no restarts until then');
+  } catch (err) { log.error({ err: String(err) }, 'Kairos restart-cooldown write failed'); }
+}
+
+/** Boot-side: a stale Kairos restart intent ⇒ last handoff failed ⇒ back off 1h. */
+export function applyFailedHandoffCooldown(now: number = Date.now()): void {
+  setKairosRestartCooldown(now + KAIROS_RESTART_BACKOFF_MS);
+}
+
+/** Test teardown — clear the restart cooldown. */
+export function __resetRestartCooldownForTest(): void {
+  try { if (existsSync(RESTART_COOLDOWN_FILE)) rmSync(RESTART_COOLDOWN_FILE, { force: true }); } catch { /* noop */ }
+}
+
 async function actOnObservation(obs: KairosObservation, config: Required<KairosConfig>): Promise<KairosObservation> {
   if (!config.autonomousActions) return obs;
   try {
@@ -451,12 +486,19 @@ async function actOnObservation(obs: KairosObservation, config: Required<KairosC
         log.warn('Kairos: RAM critical but agent is busy — skipping restart, will retry next cycle');
         return { ...obs, acted: false, actionResult: 'Skipped restart: agent session active — will retry when idle' };
       }
+      // GW-9: do not restart while the authority is on cooldown after a failed handoff.
+      if (isKairosRestartOnCooldown()) {
+        log.warn('Kairos: RAM critical but restart authority is on cooldown (prior failed handoff) — skipping');
+        return { ...obs, acted: false, actionResult: 'Skipped restart: restart authority on cooldown after a failed handoff' };
+      }
       const executed = performGuardedRestart(
         'RAM critical — reclaim memory via service restart',
         'systemctl restart sudo-ai',
         {
           audit: auditKairosRestart,
           exec: (cmd) => {
+            // GW-9: record intent BEFORE the restart so the successor verifies the handoff.
+            writeRestartIntent(restartDir(), { reason: 'RAM critical — Kairos service restart', initiator: 'kairos' });
             execSync(cmd, { timeout: 30_000 });
           },
           dryRun: process.env['SUDO_KAIROS_DRY_RUN'] === '1',
