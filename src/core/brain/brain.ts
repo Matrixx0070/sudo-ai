@@ -11,6 +11,7 @@ import { recordPromptCacheUsageFromProviderMetadata, extractPromptCacheTokens } 
 import { LLMError, extractOverflowTokenCount } from '../shared/errors.js';
 import { DEFAULT_MODEL, FALLBACK_MODEL, MAX_AGENT_ITERATIONS } from '../shared/constants.js';
 import { ModelFailover } from './failover.js';
+import { SustainedFailoverMonitor } from './failover-notice.js';
 import { BrainIdleBreaker } from './idle-breaker.js';
 import {
   type BrainStrategy,
@@ -146,6 +147,17 @@ export class Brain {
     this.config = config as SudoConfig | null;
     const modelIds = this.buildModelList();
     this.failover = new ModelFailover(modelIds);
+    // GW-2: fire ONE operator notice on sustained failover (>30s or >3 hops
+    // off-primary), re-armed every 30 min. Observation only — never blocks.
+    this.failover.setSustainedFailoverMonitor(
+      new SustainedFailoverMonitor({
+        notify: (n) =>
+          log.warn(
+            { failover: n },
+            `sustained LLM failover — serving ${n.currentProfile} for ${Math.round(n.elapsedMs / 1000)}s / ${n.consecutiveHops} hops off primary`,
+          ),
+      }),
+    );
     this.configuredModels = modelIds.length > 0 ? modelIds : [DEFAULT_MODEL];
     this.primaryModel = modelIds[0] ?? DEFAULT_MODEL;
     // F97: custom-provider env registration is the only boot step left

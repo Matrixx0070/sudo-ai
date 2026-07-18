@@ -80,17 +80,22 @@
       },
       // Gemini fallback below the OAuth tiers (reverted from front 2026-07-12 per operator).
       {
+        // GW-2 cost-cliff fix: the CHEAP, cache-friendly Grok tier is tried
+        // BEFORE grok-4.5. grok-4.5 caches nothing (~10x cost), so landing on it
+        // first during a primary outage burned money. Chain order is data: fast
+        // tier here, grok-4.5 below as the last-resort escalation.
         // 2026-07-15 (#754): Grok via SuperGrok subscription OAuth on the IR
         // transport (xai-oauth family; XAI_API_KEY expired and was retired).
         // Boot-validated by tests/brain/provider-prefix-boot.test.ts.
-        id: 'xai-oauth/grok-4.5',
+        id: 'xai-oauth/grok-4-fast-non-reasoning',
         contextWindow: 256000,
         maxOutputTokens: 8192,
         temperature: 0.7,
       },
       {
-        // Cheap/fast Grok tier on the same subscription.
-        id: 'xai-oauth/grok-4-fast-non-reasoning',
+        // GW-2: expensive, no-cache escalation — reached only after the fast
+        // tier above also fails.
+        id: 'xai-oauth/grok-4.5',
         contextWindow: 256000,
         maxOutputTokens: 8192,
         temperature: 0.7,
