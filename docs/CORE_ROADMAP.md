@@ -192,10 +192,10 @@ do not start**; N5 standing NO; frozen surfaces untouchable (invariant 4).
 ### Phase 2 — Structural (F97 first, its own session)
 | Step | Work | Gate/proof |
 |---|---|---|
-| 2.1 | F97 stage a: inventory src/llm/legacy importers + brain shim call-graph | inventory table in PR |
-| 2.2 | F97 stage b: port claude-oauth/custom-provider logic onto the IR transport; keep byte-compat via existing 57 goldens | conformance green |
-| 2.3 | F97 stage c: delete legacy + 3 shims, retire LLM_IR_CALLERS allowlist | grep-guard test: no src/llm/legacy imports |
-| 2.4 | F97 gate: LLM_SHADOW replay over ≥300 real prompts, 0 material divergences, then deploy + live smoke on all providers | SHADOW report + live turns |
+| 2.1 | ✅ 2026-07-18 F97 stage a: inventory (docs/F97_INVENTORY.md) | inventory table in PR |
+| 2.2 | ✅ 2026-07-18 F97 stage b: brain/client/coder-tools on IR; key-rotation ported (apiKeyOverride); buffered-call deadline added | conformance green |
+| 2.3 | ✅ 2026-07-18 F97 stage c: legacy+shims deleted, LLM_IR_CALLERS retired | grep-guard test: no src/llm/legacy imports |
+| 2.4 | 🟡 2026-07-18 F97 gate: replay 408 prompts 0 material (shadow-replay-f97.json); deploy + live smoke pending merge | SHADOW report + live turns |
 | 2.5 | F101 HTTP/admin dedup, then F99 session-store layering doc/merge (post-F97 only) | route parity tests |
 
 ### Phase 3 — Consolidation (PR-sized, interleave freely)
@@ -303,7 +303,7 @@ indexes; 38 skipped tests concentrated in meta + browser suites.
 |---|---|
 | A (F81–F88) | **F81 shipped** (#807, census + `docs/FLAG_CENSUS.md`); **F88 shipped** (#809, real LlmGoalEvaluator behind injected seam; activate via SUDO_GOAL_EVAL_MODEL); F82–F87 = verify/measure tasks per census corrections |
 | B (F89–F96) | **F89 shipped** (#806); **F90 shipped** (AutoBugFix C+D behind SUDO_AUTOBUGFIX=1); **F91 verdicts delivered** (3 deleted, 3 corrected-keep); rest not started |
-| C (F97–F103) | not started |
+| C (F97–F103) | **F97 SHIPPED** (2026-07-18: legacy layer + shims deleted, LLM_IR_CALLERS retired, key-rotation + call-deadline ported to transport, replay 408/0 material; deploy+smoke pending merge); F98–F103 not started |
 | D (F104–F108) | **F104+F106 shipped** (#810: SUDO_SECURITY_STRICT fatal guard-init + posture-weakening boot banner, posture.ts); F105/F107/F108 not started |
 | E (F109–F112) | not started. Census follow-up shipped: SUDO_UPDATE_* env→config mapping (#808). |
 | F (F113–F118) persistence | **F113+F114 shipped** (#818 retention-sweep + WAL); **F115/F116/F117/F118 verdicts + map delivered** (docs/PERSISTENCE_MAP.md; physical merges rejected/deferred with reasons; F117 boot-scan = small follow-up) |

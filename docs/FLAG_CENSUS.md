@@ -712,7 +712,7 @@ contract comment + prod entries.
 | `SUDO_VAULT_MASTER_KEY` | dashboard | value/string | 3 | — |
 | `SUDO_VAULT_MASTER_KEY_PRESENT` | dashboard | indirect | 1 | — |
 | `SUDO_VAULT_PASSPHRASE` | security | value/string | 2 | — |
-| `SUDO_VAULT_PROVIDER_KEYS` | llm | opt-in (default OFF) | 1 | — |
+| `SUDO_VAULT_PROVIDER_KEYS` | llm | RETIRED (F97 — vault key fallback died with legacy providers.ts) | 0 | — |
 | `SUDO_VECTOR_BACKFILL` | memory | opt-in (default OFF) | 2 | 1 |
 | `SUDO_VERIFY_GATE` | agent | opt-in (default OFF) | 6 | 1 |
 | `SUDO_VERIFY_GATE_BLOCK` | agent | indirect | 4 | — |
@@ -758,5 +758,5 @@ contract comment + prod entries.
 | `LLM_API_KEY` | llm | value/string | 2 | — |
 | `LLM_BASE_URL` | llm | value/string | 2 | — |
 | `LLM_DIRECT_FALLBACK` | llm | default ON (kill via =0) | 1 | — |
-| `LLM_IR_CALLERS` | llm | value/string | 4 | health,consciousness |
+| `LLM_IR_CALLERS` | llm | RETIRED (F97 2026-07-18 — IR unconditional; env ignored) | 0 | health,consciousness (inert — remove from ecosystem) |
 | `LLM_SHADOW` | llm | opt-in (default OFF) | 3 | — |
