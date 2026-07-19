@@ -5209,6 +5209,24 @@ if (process.argv[2] === 'chat') {
     console.error('[replay] Failed to load replay module:', msg);
     process.exit(1);
   });
+} else if (process.argv[2] === 'gdrive') {
+  // gdrive subcommand (F109) — thin CLI over the tested Drive library:
+  // status | knew-at | bisect | resume. status/knew-at/bisect are read-only;
+  // resume uses the library's gated blackboard claim. Intercept BEFORE full
+  // boot so it runs standalone (no daemon) and never touches the hot path.
+  import('./core/gdrive/cli.js').then(({ runGdriveCli }) => {
+    runGdriveCli(process.argv.slice(3))
+      .then((code) => process.exit(code))
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[gdrive] Fatal error:', msg);
+        process.exit(1);
+      });
+  }).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[gdrive] Failed to load module:', msg);
+    process.exit(1);
+  });
 } else {
   // ---------------------------------------------------------------------------
   // Signal handlers — wire before boot so any early failure still cleans up

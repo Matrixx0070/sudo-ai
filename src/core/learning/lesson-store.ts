@@ -31,6 +31,12 @@ export interface AppliedLesson {
   state: LessonState;
   /** Recovery % from the live A/B that adopted it (provenance). */
   recoveryPct: number;
+  /**
+   * The LLM route that authored/proposed this lesson. Drives judge-independence in the
+   * F86 two-reader consensus gate (invariant 7): the independent reader must be on a
+   * DIFFERENT provider. Omitted → the configured default author route.
+   */
+  authorRoute?: string;
   /** ISO — became a candidate. */
   admittedAt: string;
   /** ISO — canary rollout began. */

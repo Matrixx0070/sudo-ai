@@ -45,6 +45,7 @@ export const LOOP_REGISTRY: ReadonlyArray<LoopInfo> = [
   { name: 'email-imap-worker', module: 'channels/email-imap-worker', cadence: '15s poll', llm: false, gate: 'EMAIL_IMAP_* configured' },
   { name: 'gdrive-lanes', module: 'gdrive/runtime', cadence: 'various (60s..nightly)', llm: true, gate: 'SUDO_GDRIVE=1' },
   { name: 'notebooklm-lanes', module: 'notebooklm/runtime', cadence: 'various (5m..weekly)', llm: true, gate: 'SUDO_NOTEBOOKLM=1' },
+  { name: 'forge', module: 'forge/forge-orchestrator', cadence: 'on-demand (meta.forge tool)', llm: true, gate: 'SUDO_FORGE!=0; per-run + per-day USD/token budget (SUDO_FORGE_BUDGET_*)' },
 ];
 
 export interface MetabolismReport {

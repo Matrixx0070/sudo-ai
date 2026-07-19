@@ -180,6 +180,11 @@ export class ZDRModeManager {
       log.info('Private repo detected — telemetry blocked');
     }
 
+    // Per-channel privacy policy (F105): SUDO_ZDR_CHANNELS=telegram,email marks
+    // those channels ZDR even when the global flag is off. Additive to any
+    // programmatic setChannelPrivacy() registrations.
+    loadChannelPrivacyFromEnv();
+
     this._resolved = true;
     return { ...this.config };
   }
@@ -277,9 +282,94 @@ export function getZDRManager(): ZDRModeManager {
 }
 
 /**
+ * Test hook: drop the ZDR singleton + clear per-channel registrations so the
+ * next getZDRManager()/isZDRBlocked() re-resolves from the current environment.
+ */
+export function __resetZDRManager(): void {
+  _instance = null;
+  clearChannelPrivacy();
+}
+
+/**
  * Convenience: check if a data operation is blocked by ZDR.
  * Uses the global singleton. Auto-resolves if not yet resolved.
  */
 export function isZDRBlocked(operation: Parameters<ZDRModeManager['isBlocked']>[0]): boolean {
   return getZDRManager().isBlocked(operation);
+}
+
+// ---------------------------------------------------------------------------
+// Per-channel privacy policy hook (F105)
+// ---------------------------------------------------------------------------
+//
+// A channel can declare `privacy: 'zdr'` so its turns are treated as
+// zero-data-retention even when the global SUDO_ZDR flag is OFF. This is the
+// seam where per-channel config flows into the persistence gate: content-bearing
+// persistence paths call isZDRBlockedForChannel(op, channel) instead of the
+// global isZDRBlocked(op), and get ZDR semantics for that channel alone.
+//
+// Sources (union): programmatic setChannelPrivacy() + the SUDO_ZDR_CHANNELS env
+// list (comma/space separated), loaded at resolve() time.
+
+export type ChannelPrivacyPolicy = 'zdr' | 'standard';
+
+/** Content-bearing ZDR operations a per-channel 'zdr' policy suppresses. */
+const CHANNEL_CONTENT_OPERATIONS: ReadonlySet<
+  Parameters<ZDRModeManager['isBlocked']>[0]
+> = new Set(['session_persistence', 'memory_write', 'consciousness_recording']);
+
+/** channel id -> policy. Only non-default ('zdr') channels are stored. */
+const _channelPrivacy = new Map<string, ChannelPrivacyPolicy>();
+
+/**
+ * Declare a per-channel privacy policy. 'zdr' marks the channel for
+ * zero-data-retention on content paths; 'standard' clears any prior mark.
+ */
+export function setChannelPrivacy(channel: string, policy: ChannelPrivacyPolicy): void {
+  if (!channel) return;
+  if (policy === 'zdr') _channelPrivacy.set(channel, 'zdr');
+  else _channelPrivacy.delete(channel);
+}
+
+/** Get the effective policy for a channel ('standard' when unset). */
+export function getChannelPrivacy(channel: string | null | undefined): ChannelPrivacyPolicy {
+  return channel != null && _channelPrivacy.get(channel) === 'zdr' ? 'zdr' : 'standard';
+}
+
+/** True when this specific channel is ZDR (regardless of the global flag). */
+export function isChannelZDR(channel: string | null | undefined): boolean {
+  return channel != null && _channelPrivacy.get(channel) === 'zdr';
+}
+
+/** Clear all per-channel privacy registrations (tests / re-resolve). */
+export function clearChannelPrivacy(): void {
+  _channelPrivacy.clear();
+}
+
+/**
+ * Load per-channel ZDR marks from SUDO_ZDR_CHANNELS (comma/space separated
+ * channel ids). Additive — never clears programmatic registrations. Idempotent.
+ */
+export function loadChannelPrivacyFromEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const raw = env['SUDO_ZDR_CHANNELS'];
+  if (!raw || !raw.trim()) return;
+  for (const ch of raw.split(/[\s,]+/).map((c) => c.trim()).filter(Boolean)) {
+    _channelPrivacy.set(ch, 'zdr');
+  }
+}
+
+/**
+ * Channel-aware ZDR gate. Blocks when the GLOBAL flag blocks the op, OR when the
+ * given channel is marked ZDR and the op is a content-bearing operation.
+ * Operational-metadata ops (telemetry/trace_upload) are unaffected by a channel
+ * mark — a channel opting into ZDR suppresses its user content, not system
+ * counters. Falls back to the global gate when channel is undefined.
+ */
+export function isZDRBlockedForChannel(
+  operation: Parameters<ZDRModeManager['isBlocked']>[0],
+  channel?: string | null,
+): boolean {
+  if (isZDRBlocked(operation)) return true;
+  if (isChannelZDR(channel) && CHANNEL_CONTENT_OPERATIONS.has(operation)) return true;
+  return false;
 }
