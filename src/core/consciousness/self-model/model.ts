@@ -123,6 +123,22 @@ export class SelfModel {
     return Math.round((sum / all.length) * 1000) / 1000;
   }
 
+  /**
+   * CW1: Fraction of assessed capabilities currently on an 'improving' trend,
+   * in [0,1]. This is the real signal the drive-computer's
+   * `selfModelImprovingRatio` input expects (0 = all declining, 1 = all
+   * improving). Read-only. Returns the 0.5 baseline when there are no
+   * assessments yet, matching the placeholder constant it replaces at the
+   * drive-compute call site.
+   */
+  getImprovingRatio(): number {
+    const all = getCapabilities(this.db);
+    if (all.length === 0) return 0.5;
+
+    const improving = all.filter((a) => a.trend === 'improving').length;
+    return Math.round((improving / all.length) * 1000) / 1000;
+  }
+
   // -------------------------------------------------------------------------
   // Prompt integration
   // -------------------------------------------------------------------------
