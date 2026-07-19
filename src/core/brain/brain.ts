@@ -42,6 +42,12 @@ import { routeModel } from './model-router.js';
 import { AuthProfileRotation } from './auth-profile-rotation.js';
 import type { AuthErrorCategory } from './auth-profile-rotation.js';
 import { describeRouting } from './routing-trace.js';
+import {
+  sessionCacheAffinityEnabled,
+  explicitAffinityProvider,
+  getSessionAffinity,
+  setSessionAffinity,
+} from './cache-affinity.js';
 import type { RoutingTrace, RoutingPath } from './routing-trace.js';
 import { selectLenses } from './reasoning-lens.js';
 import type {
@@ -613,6 +619,19 @@ export class Brain {
   }
 
   async call(request: BrainRequest, opts?: BrainCallOpts): Promise<BrainResponse> {
+    const resp = await this._callRouted(request, opts);
+    // Capture the first-turn winner as the session pin (first writer wins:
+    // setSessionAffinity never overwrites an existing pin, so a later hard-fail
+    // failover does NOT repin — spec §3). Only conversational calls (sessionId)
+    // pin; RAG/judge/consciousness (no sessionId) never do. Gated OFF by default,
+    // so this is a no-op unless SUDO_SESSION_CACHE_AFFINITY=1.
+    if (sessionCacheAffinityEnabled() && request.sessionId && resp.model) {
+      setSessionAffinity(request.sessionId, resp.model);
+    }
+    return resp;
+  }
+
+  private async _callRouted(request: BrainRequest, opts?: BrainCallOpts): Promise<BrainResponse> {
     await this.providersReady;
 
     if (!request.messages || request.messages.length === 0) {
@@ -1546,6 +1565,35 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
   private _smartRoute(
     request: BrainRequest,
   ): { model: string; reason: string; complexity: number; kind: RoutingPath } | null {
+    // -----------------------------------------------------------------------
+    // Per-session cache affinity (opt-in; default OFF => byte-identical routing).
+    // When enabled for a conversational session, stick to ONE provider so its
+    // prompt cache stays warm (S1). The smart router still governs turn-1
+    // discovery, every non-affinity session, and every non-conversational call
+    // (no sessionId) — the S16 learning lead is never disabled.
+    // -----------------------------------------------------------------------
+    if (
+      sessionCacheAffinityEnabled() &&
+      request.sessionId &&
+      // NOTE: intentionally NOT guarded by request.race — an affinity session
+      // OPTS OUT of the multi-model cloud race so its single-provider prompt
+      // cache stays warm (S1). The fast-path below then routes single-model,
+      // bypassing consensus. Non-affinity race turns still consensus (guard
+      // `if (request.race === true) return null` a few lines down is unchanged).
+      (!request.model || request.model === 'auto')
+    ) {
+      let pin = getSessionAffinity(request.sessionId);
+      if (!pin) {
+        // Explicit operator pin skips first-turn discovery; otherwise fall
+        // through to normal routing THIS turn and capture the winner in call().
+        const explicit = explicitAffinityProvider();
+        if (explicit) pin = setSessionAffinity(request.sessionId, explicit);
+      }
+      if (pin) {
+        return { model: pin.model, reason: 'cache-affinity', complexity: 0, kind: 'affinity' };
+      }
+    }
+
     if (process.env['SUDO_SMART_ROUTE_DISABLE'] === '1') return null;
     // Respect explicit model pins and callers that force the cloud race.
     if (request.model && request.model !== 'auto') return null;
