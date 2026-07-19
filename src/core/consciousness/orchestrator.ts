@@ -212,6 +212,20 @@ export class ConsciousnessOrchestrator {
    */
   private _pendingToolPredictions = new Map<string, { id: string; prediction: string; confidence: number; domain: string }>();
 
+  /**
+   * F83: background sleep scheduler. The ONLY prior trigger for memory
+   * consolidation was the tail of onInteractionEnd, which measured idle from the
+   * interaction that had just fired — so SleepCycle.shouldSleep()'s 30min/2h idle
+   * threshold could never be satisfied and consolidation stopped running entirely
+   * (prod: zero non-degraded sessions since Jun 2026). This timer re-evaluates the
+   * idle condition during genuine quiet periods, off the hot path.
+   */
+  private _sleepSchedulerTimer: ReturnType<typeof setInterval> | null = null;
+  /** Rolling ms-timestamps of sleep-cycle starts in the last 24h (per-day budget, invariant 10). */
+  private _recentSleepStarts: number[] = [];
+  /** True once the per-day budget-exhaustion alert has fired (throttle to one alert/window). */
+  private _sleepBudgetAlerted = false;
+
   constructor(brain: OrchestratorBrainLike, config?: Partial<OrchestratorConfig>) {
     if (!brain || typeof brain.call !== 'function') {
       throw new ConsciousnessError(
@@ -303,6 +317,12 @@ export class ConsciousnessOrchestrator {
       // Module-level singleton listener handles control dispatch (see _registerOrchestratorInstance).
       _registerOrchestratorInstance(this);
 
+      // F83: start the background sleep scheduler. Default ON only when the REAL
+      // reflection adapters are bound (SUDO_CONSCIOUSNESS_REFLECT=1) so zero-cost
+      // stub mode never incurs consolidation LLM spend. SUDO_SLEEP_SCHEDULER=1|0
+      // forces on/off. Cadence SUDO_SLEEP_SCHEDULER_TICK_MS (default 5min, min 1min).
+      this._startSleepScheduler();
+
       this._booted = true;
       log.info('Consciousness online');
     } catch (err: unknown) {
@@ -314,6 +334,7 @@ export class ConsciousnessOrchestrator {
   async shutdown(): Promise<void> {
     this._assertBooted('shutdown');
     _unregisterOrchestratorInstance(this);
+    if (this._sleepSchedulerTimer) { clearInterval(this._sleepSchedulerTimer); this._sleepSchedulerTimer = null; }
     try { this.cognitiveStream.stop(); } catch (e) { swallow('stream stop')(e); }
     try { this.embodiedState.stop(); } catch (e) { swallow('embodied stop')(e); }
     try { this.db.close(); } catch (e) { swallow('db close')(e); }
@@ -526,17 +547,83 @@ export class ConsciousnessOrchestrator {
       }
     }
 
-    // Check if we should sleep
-    if (this._lastInteractionAt && this.sleepCycle) {
-      const idleMs = Date.now() - new Date(this._lastInteractionAt).getTime();
-      const hour = new Date().getUTCHours();
-      const qs = this.config.quietHoursStart, qe = this.config.quietHoursEnd;
-      // Handle windows that cross midnight (e.g. {start:22, end:6}): the naive
-      // `hour >= qs && hour < qe` is impossible when qs > qe. qs === qe = never quiet.
-      const isQuiet = qs === qe ? false : (qs < qe ? (hour >= qs && hour < qe) : (hour >= qs || hour < qe));
-      if (this.sleepCycle.shouldSleep(idleMs, isQuiet) && !this.sleepCycle.isAsleep()) {
-        this.sleepCycle.startSleep().catch(swallow('sleep start'));
+    // F83: idle-driven consolidation check. Turn-end idle is ~0 so this rarely
+    // fires here; the background scheduler (_startSleepScheduler) covers real idle.
+    this._maybeStartSleep('turn-end');
+  }
+
+  // -------------------------------------------------------------------------
+  // F83 — background sleep scheduler + per-day consolidation budget
+  // -------------------------------------------------------------------------
+
+  /** Read a positive-number env override, else the provided default. */
+  private _envMs(name: string, dflt: number, min = 0): number {
+    const raw = Number(process.env[name]);
+    if (!Number.isFinite(raw) || raw <= 0) return dflt;
+    return min > 0 ? Math.max(raw, min) : raw;
+  }
+
+  /**
+   * Start the periodic idle→sleep evaluator. Default ON only under
+   * SUDO_CONSCIOUSNESS_REFLECT=1 (real adapters bound); SUDO_SLEEP_SCHEDULER=1|0
+   * forces. Timer is unref()d so it never keeps the process alive. No-op if a
+   * timer already exists.
+   */
+  private _startSleepScheduler(): void {
+    if (this._sleepSchedulerTimer) return;
+    const flag = process.env['SUDO_SLEEP_SCHEDULER'];
+    const reflectOn = process.env['SUDO_CONSCIOUSNESS_REFLECT'] === '1';
+    const enabled = flag === '1' ? true : flag === '0' ? false : reflectOn;
+    if (!enabled) { log.info({ reflectOn }, 'Sleep scheduler disabled (no real adapters / SUDO_SLEEP_SCHEDULER=0)'); return; }
+    const tickMs = this._envMs('SUDO_SLEEP_SCHEDULER_TICK_MS', 5 * 60 * 1000, 60 * 1000);
+    this._sleepSchedulerTimer = setInterval(() => {
+      try { this._maybeStartSleep('scheduler'); } catch (e) { swallow('sleep scheduler tick')(e); }
+    }, tickMs);
+    if (typeof this._sleepSchedulerTimer.unref === 'function') this._sleepSchedulerTimer.unref();
+    log.info({ tickMs }, 'F83 sleep scheduler started');
+  }
+
+  /**
+   * Evaluate the idle condition and, if satisfied and within budget, start one
+   * consolidation cycle. Budget (invariant 10): at most SUDO_SLEEP_MAX_RUNS_PER_DAY
+   * (default 4) starts per rolling 24h AND a SUDO_SLEEP_MIN_INTERVAL_MS cooldown
+   * (default 6h) between starts — this bounds per-day LLM spend (Phase 2 + Phase 5
+   * calls). On budget exhaustion it halts gracefully and alerts once. Fail-open.
+   */
+  private _maybeStartSleep(source: 'turn-end' | 'scheduler'): void {
+    if (!this._lastInteractionAt || !this.sleepCycle) return;
+    if (this.sleepCycle.isAsleep()) return;
+
+    const now = Date.now();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    this._recentSleepStarts = this._recentSleepStarts.filter((t) => now - t < DAY_MS);
+
+    const maxPerDay = Math.floor(this._envMs('SUDO_SLEEP_MAX_RUNS_PER_DAY', 4));
+    if (this._recentSleepStarts.length >= maxPerDay) {
+      if (!this._sleepBudgetAlerted) {
+        this._sleepBudgetAlerted = true;
+        log.warn({ maxPerDay, source, event: 'sleep.budget.exhausted' },
+          'Sleep consolidation per-day budget exhausted — halting until the 24h window clears');
       }
+      return;
+    }
+    this._sleepBudgetAlerted = false;
+
+    const minIntervalMs = this._envMs('SUDO_SLEEP_MIN_INTERVAL_MS', 6 * 60 * 60 * 1000);
+    const last = this._recentSleepStarts.length ? this._recentSleepStarts[this._recentSleepStarts.length - 1]! : 0;
+    if (last && now - last < minIntervalMs) return;
+
+    const idleMs = now - new Date(this._lastInteractionAt).getTime();
+    const hour = new Date().getUTCHours();
+    const qs = this.config.quietHoursStart, qe = this.config.quietHoursEnd;
+    // Windows crossing midnight (e.g. {22,6}): naive hour>=qs&&hour<qe fails when qs>qe.
+    const isQuiet = qs === qe ? false : (qs < qe ? (hour >= qs && hour < qe) : (hour >= qs || hour < qe));
+
+    if (this.sleepCycle.shouldSleep(idleMs, isQuiet)) {
+      this._recentSleepStarts.push(now);
+      log.info({ source, idleMs, isQuiet, runsToday: this._recentSleepStarts.length, maxPerDay },
+        'F83: starting sleep consolidation cycle');
+      this.sleepCycle.startSleep().catch(swallow('sleep start'));
     }
   }
 
