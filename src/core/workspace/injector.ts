@@ -116,6 +116,200 @@ export function truncateForInjection(content: string, maxChars: number = MAX_INJ
   return `[...truncated: older entries trimmed — showing most recent ${tail.length} of ${content.length} chars]\n${tail}`;
 }
 
+// ---------------------------------------------------------------------------
+// BO3 / S2 — policy-digest truncation, missing-file markers, truncation warnings
+//
+// An over-budget rules file (AGENTS.md / SAFETY-RULES.md) that is blindly
+// tail-chopped can drop a hard rule (`NEVER delete production data`). These
+// helpers preserve the imperative/rule lines under heavy truncation, make an
+// absent rules/identity file VISIBLE instead of silently skipped, and emit a
+// deterministic in-band truncation warning. Every output here is a pure
+// function of its input (no clock, no env read) so the byte-stable cacheable
+// prefix (BO2b) stays byte-identical turn-over-turn.
+// ---------------------------------------------------------------------------
+
+/** Basename of a workspace file name (matches readWorkspaceFile's path-safety). */
+function baseName(name: string): string {
+  return name.split(/[\\/]/).pop() ?? name;
+}
+
+/**
+ * Workspace files whose ABSENCE must be visible (identity + hard-rules
+ * backbone). A deleted one of these degrades the agent invisibly today;
+ * assembleSystemPrompt injects a `[missing workspace file: NAME]` marker for
+ * each instead of silently skipping it.
+ */
+export const IMPORTANT_WORKSPACE_FILES: ReadonlySet<string> = new Set([
+  'SOUL.md',
+  'IDENTITY.md',
+  'AGENTS.md',
+  'SAFETY-RULES.md',
+]);
+
+/**
+ * Workspace files treated as POLICY/RULES: over-budget truncation of these must
+ * preserve the imperative/hard-rule lines (policy digest) rather than blindly
+ * tail-chopping and dropping a `NEVER …` rule.
+ */
+export const POLICY_WORKSPACE_FILES: ReadonlySet<string> = new Set([
+  'AGENTS.md',
+  'SAFETY-RULES.md',
+  'GIT-SAFETY.md',
+  'AUTONOMY.md',
+  'THINKING-RULES.md',
+  'PR-WORKFLOW.md',
+  'CODING.md',
+]);
+
+/** Is `name` a policy/rules file (by explicit set or a RULES/SAFETY/AGENTS/POLICY name)? */
+export function isPolicyFile(name: string): boolean {
+  const base = baseName(name);
+  if (POLICY_WORKSPACE_FILES.has(base)) return true;
+  return /(?:^|[-_])(?:SAFETY|RULES?|AGENTS?|POLICY|GUARD(?:RAILS?)?)(?:[-_.]|$)/i.test(base);
+}
+
+/** Deterministic marker injected for an absent important workspace file. */
+export function missingFileMarker(name: string): string {
+  return `[missing workspace file: ${baseName(name)}]`;
+}
+
+/** Default cap for policy/rules-file injection (safety net; large so normal files pass through). */
+export const RULES_INJECT_CHARS = 64_000;
+
+/** Header prefixing the extracted policy digest inside a truncated rules block. */
+export const POLICY_DIGEST_HEADER =
+  '[policy digest — imperative/rule lines preserved verbatim; prose truncated to fit budget]';
+
+/**
+ * Decide whether a single line is a RULE line worth preserving under truncation:
+ *  - bullet list item (`- ` / `* `)
+ *  - numbered rule (`1.` / `1)`)
+ *  - markdown section header (`#`..`######`)
+ *  - a line carrying an UPPERCASE imperative keyword (MUST / NEVER / ALWAYS / …).
+ * Prose paragraphs match none of these and are dropped from the digest.
+ */
+export function isRuleLine(line: string): boolean {
+  const t = line.trim();
+  if (!t) return false;
+  if (/^[-*]\s+\S/.test(t)) return true; // bullet
+  if (/^\d+[.)]\s+\S/.test(t)) return true; // numbered
+  if (/^#{1,6}\s+\S/.test(t)) return true; // header
+  // UPPERCASE imperative keyword anywhere on the line.
+  if (/\b(?:MUST NOT|MUST|NEVER|ALWAYS|SHALL NOT|SHALL|DO NOT|DON'T|FORBIDDEN|PROHIBITED|REQUIRED)\b/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Extract the policy digest — the imperative/rule lines — from a document,
+ * preserving each line VERBATIM and in document order. Prose is dropped.
+ */
+export function extractPolicyDigest(content: string): string {
+  const kept: string[] = [];
+  for (const line of content.split('\n')) {
+    if (isRuleLine(line)) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+/** Tail-keep on a line boundary, WITHOUT any marker (the warning is emitted separately). */
+function tailKeepOnLineBoundary(content: string, maxChars: number): string {
+  if (content.length <= maxChars) return content;
+  let tail = content.slice(content.length - maxChars);
+  const nl = tail.indexOf('\n');
+  if (nl > 0 && nl < maxChars / 10) tail = tail.slice(nl + 1);
+  return tail;
+}
+
+export interface PolicyTruncationResult {
+  /** Body to inject (digest-first when truncated). */
+  text: string;
+  /** True when the input exceeded maxChars and was truncated. */
+  truncated: boolean;
+  /** Original character length of the input. */
+  originalChars: number;
+}
+
+/**
+ * Truncate a POLICY/RULES file so the hard rules survive. Regex-extracted policy
+ * digest (rule lines) is emitted VERBATIM first — hard rules are non-negotiable
+ * and are never dropped, even when the digest alone exceeds the budget — then a
+ * head/tail split keeps the most-recent prose excerpt that still fits.
+ * Deterministic: same input → same output (byte-stable-prefix safe).
+ */
+export function truncatePolicyForInjection(
+  content: string,
+  maxChars: number = RULES_INJECT_CHARS,
+): PolicyTruncationResult {
+  const originalChars = content.length;
+  if (originalChars <= maxChars) return { text: content, truncated: false, originalChars };
+
+  const digest = extractPolicyDigest(content);
+  if (!digest) {
+    // No identifiable rule lines — nothing to preserve; plain tail truncation.
+    return { text: truncateForInjection(content, maxChars), truncated: true, originalChars };
+  }
+
+  const digestBlock = `${POLICY_DIGEST_HEADER}\n${digest}`;
+  const remaining = maxChars - digestBlock.length - 2;
+  let text: string;
+  if (remaining > 80) {
+    const excerpt = tailKeepOnLineBoundary(content, remaining);
+    text = `${digestBlock}\n\n[...prose truncated — most-recent excerpt follows...]\n${excerpt}`;
+  } else {
+    // Digest fills (or exceeds) the budget — keep the full digest; hard rules win.
+    text = digestBlock;
+  }
+  return { text, truncated: true, originalChars };
+}
+
+/** Deterministic in-band truncation warning line for a truncated file. */
+export function truncationWarning(name: string, keptChars: number): string {
+  return `[truncation warning: ${baseName(name)} cut to ${keptChars} chars]`;
+}
+
+/** Dedupe a list of warning lines, preserving first-seen order. */
+export function dedupeWarningLines(lines: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of lines) {
+    if (!line || seen.has(line)) continue;
+    seen.add(line);
+    out.push(line);
+  }
+  return out;
+}
+
+export interface PreparedRulesFile {
+  /** Policy-aware body to inject (no warning line). Empty when content is empty. */
+  body: string;
+  /** Deterministic warning line, or '' when the file was not truncated. */
+  warning: string;
+  /** Whether the file was truncated. */
+  truncated: boolean;
+}
+
+/**
+ * Prepare a policy/rules file for injection: apply policy-digest truncation and,
+ * when truncated, produce a single deterministic in-band truncation warning
+ * (the caller dedupes across files). `content` may already be a
+ * `[missing workspace file: …]` marker — returned untouched, never truncated.
+ */
+export function prepareRulesFile(
+  name: string,
+  content: string,
+  maxChars: number = RULES_INJECT_CHARS,
+): PreparedRulesFile {
+  if (!content) return { body: '', warning: '', truncated: false };
+  if (content.startsWith('[missing workspace file:')) {
+    return { body: content, warning: '', truncated: false };
+  }
+  const r = truncatePolicyForInjection(content, maxChars);
+  const warning = r.truncated ? truncationWarning(name, r.text.length) : '';
+  return { body: r.text, warning, truncated: r.truncated };
+}
+
 /**
  * Attempt to read a file at the given absolute path.
  * Returns the trimmed content string (tail-truncated to MAX_INJECT_CHARS),
