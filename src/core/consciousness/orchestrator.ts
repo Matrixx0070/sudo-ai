@@ -15,7 +15,7 @@ import { EmotionalStateManager, SomaticMarkerStore } from './emotional-memory/in
 import { AttentionManager } from './attention-system/index.js';
 import { CognitiveStream } from './cognitive-stream/index.js';
 import type { InterruptResult } from './cognitive-stream/index.js';
-import { EpisodicMemory } from './episodic-memory/index.js';
+import { EpisodicMemory, computeEpisodeSignals } from './episodic-memory/index.js';
 import type { Episode } from './episodic-memory/index.js';
 import { DriveManager } from './drive-system/index.js';
 import { WorldModel, computeToolUsePrior } from './world-model/index.js';
@@ -411,11 +411,21 @@ export class ConsciousnessOrchestrator {
     const _sessionStartedAt = this._interactionStartedAt.get(sessionId);
     this._interactionStartedAt.delete(sessionId);
 
+    // CW5 (SUDO_CAS_SURPRISE_GATE): real surprise + composite significance at
+    // encode time; flag OFF => the exact legacy constants (0 / 0.5) via helper.
+    const valence = this.emotionalState.getCurrentState();
+    let recentSurprise1h = 0;
+    try { recentSurprise1h = this.surpriseEngine.getAverageSurprise(1); } catch { /* keep 0 fallback */ }
     const episode: Episode = {
       id: genId(), summary: truncate(userMsg || 'Interaction', 120),
       participants: [userId], topic: truncate(userMsg, 60), tags: [],
-      emotionalValence: this.emotionalState.getCurrentState(),
-      surpriseLevel: 0, outcome: validOutcome, significance: 0.5,
+      emotionalValence: valence,
+      ...computeEpisodeSignals({
+        surprise: recentSurprise1h, emotionalIntensity: valence.intensity ?? 0,
+        messageCount: messages.length, toolCallCount: toolNames?.length ?? 0,
+        hasError: validOutcome === 'negative',
+      }),
+      outcome: validOutcome,
       sessionId, startedAt: _sessionStartedAt ?? now, endedAt: now,
       durationMs: _sessionStartedAt ? Date.now() - new Date(_sessionStartedAt).getTime() : 0,
     };
