@@ -504,10 +504,12 @@ describe('skill.explain', () => {
 // ---------------------------------------------------------------------------
 
 describe('registerSkillTools', () => {
-  it('registers exactly 16 skill tools', () => {
+  it('registers exactly 17 skill tools', () => {
     const registry = new ToolRegistry();
     registerSkillTools(registry);
-    expect(registry.size).toBe(16);
+    // 17th tool added by main commit e319c490 (BO6 skill catalog) without
+    // updating this assertion; caught up per CAS_WIRING_QA.md Q-1/A-1.
+    expect(registry.size).toBe(17);
   });
 
   it('registers all expected tool names', () => {
