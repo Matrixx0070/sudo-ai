@@ -93,6 +93,7 @@ import { AutoDream } from './core/memory/auto-dream.js';
 import { flushBeforeCompaction } from './core/memory/compaction-flush.js';
 import { InMemorySteeringChannel } from './core/agent/steering.js';
 import { loadMarkdownSkills, parseSkillRoots } from './core/skills/markdown-loader.js';
+import { buildAndRenderSkillCatalog, isSkillCatalogEnabled } from './core/skills/skill-catalog.js';
 import { startGateway, gatewayServer } from './core/gateway/server.js';
 import { attachWsRpc } from './core/gateway/ws-server.js';
 import { attachHttpApi } from './core/gateway/http-api.js';
@@ -4277,6 +4278,11 @@ async function boot(): Promise<void> {
       registry.setSkillIndex(buildSkillToolIndex(skills));
       // Wire skills into the agent loop so trigger phrases activate at turn start.
       finalAgentLoop.setMarkdownSkills(skills);
+      // BO6/S3: build the always-visible <available_skills> catalog (≤30 tok/skill,
+      // name/desc/path/hash only) and wire it into the stable cached prefix. Rebuilt
+      // on every live-reload so a mid-session SKILL.md edit re-hashes (invalidation).
+      // Kill-switch SUDO_SKILL_CATALOG=0.
+      brain.setSkillCatalog(isSkillCatalogEnabled() ? buildAndRenderSkillCatalog(skills) : '');
       return { count: skills.length };
     };
     const { count: mdSkillCount } = await loadAndWireSkills();

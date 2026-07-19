@@ -34,6 +34,7 @@ import { searchTool } from './tools/search.js';
 import { installTool } from './tools/install.js';
 import { evalTool } from './tools/eval.js';
 import { triggerEvalTool } from './tools/trigger-eval.js';
+import { readTool } from './tools/read.js';
 import { initTool } from './tools/init.js';
 import { packTool } from './tools/pack.js';
 import { publishTool } from './tools/publish.js';
@@ -54,6 +55,7 @@ const SKILL_TOOLS = [
   installTool,
   evalTool,
   triggerEvalTool,
+  readTool,
   initTool,
   packTool,
   publishTool,

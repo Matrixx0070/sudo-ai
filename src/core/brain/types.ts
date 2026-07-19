@@ -293,4 +293,11 @@ export interface SystemPromptOptions {
    * omitted, behavior is byte-identical (volatile block stays in the string).
    */
   captureVolatileTail?: (block: string) => void;
+  /**
+   * BO6/S3: pre-rendered <available_skills> catalog block (skills/skill-catalog.ts),
+   * injected into the STABLE cached prefix above the DYNAMIC_BOUNDARY_MARKER so it is
+   * cached. Byte-stable within a session (deterministic sort; per-skill hash changes
+   * only when a SKILL.md changes). Omitted → nothing injected (byte-identical default).
+   */
+  skillCatalog?: string;
 }
