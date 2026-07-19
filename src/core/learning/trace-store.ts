@@ -17,6 +17,7 @@ import { createLogger } from '../shared/logger.js';
 import { contentHash, genId } from '../shared/utils.js';
 import { DATA_DIR } from '../shared/paths.js';
 import { redactDeep } from '../shared/redact.js';
+import { isZDRBlocked } from '../privacy/zdr-mode.js';
 
 const log = createLogger('learning:trace-store');
 
@@ -331,6 +332,11 @@ export class TraceStore {
   /** Insert a raw trace record. Returns the auto-generated row ID. */
   record(trace: Omit<TraceRecord, 'id' | 'createdAt'>): number {
     this.ensure();
+    // F105 ZDR: when zero-data-retention is active, never persist raw user-content
+    // payloads (args/result/prompt/response). Hashes + all operational metadata
+    // (tokens, latency, success, model, timestamps) are still recorded so the
+    // trace store keeps functioning. modelParams (sampling config) is operational.
+    const zdrBlocked = isZDRBlocked('memory_write');
     const info = this.stmtInsertTrace.run({
       traceType: trace.traceType,
       sessionId: trace.sessionId ?? null,
@@ -347,10 +353,10 @@ export class TraceStore {
       routingConfidence: trace.routingConfidence ?? null,
       argsHash: trace.argsHash ?? null,
       resultHash: trace.resultHash ?? null,
-      argsRaw: trace.argsRaw ?? null,
-      resultRaw: trace.resultRaw ?? null,
-      promptRaw: trace.promptRaw ?? null,
-      responseRaw: trace.responseRaw ?? null,
+      argsRaw: zdrBlocked ? null : (trace.argsRaw ?? null),
+      resultRaw: zdrBlocked ? null : (trace.resultRaw ?? null),
+      promptRaw: zdrBlocked ? null : (trace.promptRaw ?? null),
+      responseRaw: zdrBlocked ? null : (trace.responseRaw ?? null),
       modelParams: trace.modelParams ?? null,
     });
     return info.lastInsertRowid as number;
