@@ -43,6 +43,7 @@
   "src/core/cognition/cross-signal-diagnostics.ts": 481,
   "src/core/cognition/epistemic-gate.ts": 416,
   "src/core/cognition/mistake-pattern-recognizer.ts": 428,
+  "src/core/commands/builtin/status-card.ts": 529,
   "src/core/config/settings-manager.ts": 794,
   "src/core/consciousness/consciousness-db.ts": 611,
   "src/core/consciousness/context-bridge.ts": 448,

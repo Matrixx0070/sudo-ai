@@ -14,6 +14,7 @@ import { getPersonaSystemBlock } from './personas.js';
 import { getMoodSystemBlock } from './moods.js';
 import { isPromptCacheEnabled, sortByName, DYNAMIC_BOUNDARY_MARKER } from './prompt-cache-discipline.js';
 import { getCapabilityManifestBody, isCapabilityManifestEnabled } from './capability-manifest.js';
+import { sanitizeForPrompt } from './sanitize-for-prompt.js';
 import { getAppliedLessonHints } from '../learning/lesson-apply.js';
 import { getAdoptedDirectives } from '../eval/self-eval.js';
 import { truncateForInjection, injectCap, MAX_INJECT_CHARS, DAILY_INJECT_CHARS } from '../workspace/injector.js';
@@ -129,6 +130,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     reasoningLens,
     peerId,
     mainPeerId: explicitMainPeerId,
+    captureVolatileTail,
   } = options;
 
   // Default mainPeerId to TELEGRAM_CHAT_ID first value (matches cli.ts line 470)
@@ -215,7 +217,11 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // Build tools list block with usage instructions.
   let toolsListBlock = '';
   if (tools && tools.length > 0) {
-    const lines = sortByName(tools, (t) => t.name).map((t) => `- **${t.name}**: ${t.description}`);
+    const lines = sortByName(tools, (t) => t.name).map(
+      // S11: tool name/description can originate from an untrusted remote MCP
+      // server; sanitize before they enter the system prompt.
+      (t) => `- **${sanitizeForPrompt(t.name)}**: ${sanitizeForPrompt(t.description)}`,
+    );
     toolsListBlock = [
       'You have access to the following tools. Use them ONLY when the user asks you to DO something concrete ' +
       '(check, search, navigate, read, write, screenshot, execute, etc.). ' +
@@ -257,7 +263,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
       '',
       'When calling tools:',
       '- Always provide ALL required parameters with correct types.',
-      `- Use paths relative to the working directory (e.g. "output.ts" not "${PROJECT_ROOT}/output.ts").`,
+      `- Use paths relative to the working directory (e.g. "output.ts" not "${sanitizeForPrompt(PROJECT_ROOT)}/output.ts").`,
       '- Do not invent parameters that are not in the tool schema.',
       '- For file writes, provide the complete file content — do not use placeholders or "// ... rest of code".',
       '- When writing multiple files, call the tool once per file.',
@@ -499,9 +505,16 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // With SUDO_PROMPT_CACHE=1 the date/time block also sits below this line.
   parts.push('\n' + DYNAMIC_BOUNDARY_MARKER);
 
-  if (promptCacheStable) {
-    parts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
-  }
+  // BO2/S1: with SUDO_PROMPT_CACHE=1 the volatile date/time block and the
+  // fresh-every-turn Recent Memory daily log are pushed to the very END of the
+  // prompt (after Custom Instructions) instead of here at the top of the
+  // dynamic region. Implicit-prefix-cache providers (xAI Grok /responses) cache
+  // only up to the FIRST byte that differs turn-over-turn; placing the churning
+  // date first capped the cached prefix at the boundary. Moving both volatile
+  // blocks to the tail lets the session-stable dynamic sections (persona, mood,
+  // custom instructions) join the cacheable run. Explicit-cache providers
+  // (Anthropic) are unaffected — their breakpoint sits on the stable prefix
+  // above the boundary either way.
 
   // 6. Persona
   if (persona) {
@@ -587,8 +600,11 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     parts.push(sectionWithHeader('Heartbeat Context', heartbeatContent));
   }
 
-  // 11. Recent memory context
-  if (dailyMemory) {
+  // 11. Recent memory context. Fresh-every-turn (the daily log is re-read each
+  // call and grows as the conversation is logged), so with SUDO_PROMPT_CACHE=1
+  // it is deferred to the tail (after Custom Instructions) to keep it out of
+  // the cacheable prefix; legacy (flag-off) position is here.
+  if (!promptCacheStable && dailyMemory) {
     parts.push(sectionWithHeader('Recent Memory', dailyMemory));
   }
 
@@ -659,6 +675,32 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // 17. Custom instructions
   if (customInstructions) {
     parts.push(sectionWithHeader('Custom Instructions', customInstructions));
+  }
+
+  // 18. Volatile tail (SUDO_PROMPT_CACHE=1 only) — the fresh Recent Memory daily
+  // log and the per-call date/time, pushed LAST so every byte before them is
+  // byte-stable turn-over-turn and thus cacheable by implicit-prefix caches.
+  // Order: Recent Memory then Date (date is the most volatile — changes every
+  // second — so it is the very last block).
+  if (promptCacheStable) {
+    // BO2b/S1: when the caller opts in via captureVolatileTail, the fresh
+    // every-turn volatile blocks are NOT appended to the system string. They are
+    // handed back so the caller can position them at the TAIL of the message
+    // array (after append-only history), leaving the whole system prompt
+    // byte-stable so implicit-prefix caches can also cache the conversation
+    // history. Without the callback, legacy behavior: appended here at the tail
+    // of the system prompt (byte-identical to before).
+    const volatileParts: string[] = [];
+    if (dailyMemory) {
+      volatileParts.push(sectionWithHeader('Recent Memory', dailyMemory));
+    }
+    volatileParts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
+    if (captureVolatileTail) {
+      const block = volatileParts.filter(Boolean).join('').trim();
+      if (block) captureVolatileTail(block);
+    } else {
+      for (const p of volatileParts) parts.push(p);
+    }
   }
 
   const assembled = parts.filter(Boolean).join('').trim();

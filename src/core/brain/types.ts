@@ -260,4 +260,15 @@ export interface SystemPromptOptions {
    * Defaults to process.env.TELEGRAM_CHAT_ID?.split(',')[0]?.trim()
    */
   mainPeerId?: string;
+  /**
+   * BO2b/S1 prompt-cache tail relocation. When provided AND SUDO_PROMPT_CACHE is
+   * on, the fresh-every-turn volatile tail (Recent Memory daily log + Current
+   * Date & Time) is NOT appended to the returned system string; the assembled
+   * volatile block is instead handed to this callback so the caller can place it
+   * at the TAIL of the message array (after the append-only conversation
+   * history), keeping the whole system prompt byte-stable turn-over-turn so
+   * implicit-prefix caches (xAI Grok /responses) cache the history too. When
+   * omitted, behavior is byte-identical (volatile block stays in the string).
+   */
+  captureVolatileTail?: (block: string) => void;
 }

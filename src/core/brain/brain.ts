@@ -24,7 +24,9 @@ import { runTreeSearch } from './brain-tree-search.js';
 import { clampMaxTokensToModel } from './thinking-inject.js';
 import { isCustomProvider, registerCustomProvidersOnce } from '../../llm/custom-providers.js';
 import { assembleSystemPrompt, assembleSlimHeartbeatPrompt } from './system-prompt.js';
+import { isPromptReportEnabled, recordPromptReport } from './prompt-report-store.js';
 import { isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages } from './prompt-cache-discipline.js';
+import { relocateVolatileToTail } from './prompt-cache-tail.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
@@ -700,12 +702,24 @@ export class Brain {
         log.warn({ err: String(slimErr) }, 'Slim heartbeat prompt failed — falling back to full system prompt');
       }
     }
+    // BO2b/S1: prompt-cache tail relocation. When on (default under
+    // SUDO_PROMPT_CACHE; SUDO_PROMPT_CACHE_TAIL_MEMORY=0 reverts), the volatile
+    // Recent Memory + Date blocks are captured OUT of the system prompt and
+    // re-emitted as a tail message below (after the append-only history) so the
+    // whole system prompt stays byte-stable and the history becomes cacheable.
+    const tailCacheMemory =
+      process.env['SUDO_PROMPT_CACHE'] !== '0' &&
+      process.env['SUDO_PROMPT_CACHE_TAIL_MEMORY'] !== '0';
+    let volatileTailBlock = '';
     if (!slimPromptApplied) {
       systemPrompt = await this.getSystemPrompt({
         heartbeat: false,
         tools: toolSummaries.length > 0 ? toolSummaries : undefined,
         ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
         ...(lens ? { reasoningLens: lens.text } : {}),
+        ...(tailCacheMemory
+          ? { captureVolatileTail: (b: string) => { volatileTailBlock = b; } }
+          : {}),
       });
     }
 
@@ -717,6 +731,28 @@ export class Brain {
     if (toolSummaries.length > 0 && !slimPromptApplied) {
       systemPrompt += `\n\n## TOOL-USE INSTRUCTION
 You have ${toolSummaries.length} tools available. When the user asks you to DO something concrete (check, search, navigate, read, write, screenshot, execute, etc.), call the appropriate tool. For casual conversation, greetings, opinions, or general questions, respond with normal text — do NOT call tools.`;
+    }
+
+    // BO2b/S1: the volatile system-prompt tail (captured in volatileTailBlock)
+    // and every per-turn (non-durable) inline system message are relocated to a
+    // tail user message at the WIRE boundary (see _applyTailRelocation, called in
+    // _callSingleModel). Doing it there — on a COPY — keeps request.messages
+    // pristine so failure-summary bookkeeping (messageCount) stays truthful.
+    if (tailCacheMemory && volatileTailBlock) {
+      (request as { _volatileTailBlock?: string })._volatileTailBlock = volatileTailBlock;
+    }
+
+    // BO1/S9: per-turn prompt report (observability-only, flag-gated OFF by
+    // default, fully fail-open). Records section chars+sha256 and the
+    // stable-prefix/dynamic-suffix split to data/prompt-reports.db, and flags
+    // stable-prefix churn. Never alters the prompt or blocks the call.
+    if (isPromptReportEnabled()) {
+      recordPromptReport(systemPrompt, {
+        sessionKey: request.sessionId,
+        source: request.source,
+        route: request.model,
+        heartbeat: slimPromptApplied,
+      });
     }
     const temperature = this.resolveTemperature(request);
     const maxTokens = this.resolveMaxTokens(request);
@@ -1210,6 +1246,34 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
    * Handles model resolution, tool attachment, refusal detection, and text fallback.
    * Records success/error on the failover tracker.
    */
+  /**
+   * BO2b/S1 prompt-cache tail relocation. Returns a NEW message array with the
+   * per-turn volatile context moved to a single user-role message at the TAIL
+   * (immediately before the latest user message). brainRequestToIR folds every
+   * role:'system' message into ir.system — the cached prefix that precedes the
+   * WHOLE conversation — so any per-turn system content there (workspace daily
+   * log '## Today', AUTO-ROUTING hints, deep insights, commitments, activation)
+   * plus the volatile Recent-Memory+Date block busts the history cache. Moving
+   * them to a user-role tail message keeps ir.system byte-stable (persona only)
+   * so the append-only history caches too, while the model still receives every
+   * string (repositioned, not dropped). Never mutates the input array.
+   *
+   * Kept in the cached prefix (byte-stable turn-over-turn): _durable system
+   * messages (compaction summaries, session-fork handoffs = collapsed history)
+   * and the session-stable memory blocks (## Yesterday, ## Long-Term Memory).
+   * Off with SUDO_PROMPT_CACHE_TAIL_MEMORY=0 (or SUDO_PROMPT_CACHE=0) → returns
+   * the input array unchanged (byte-identical to prior behavior).
+   */
+  private _applyTailRelocation(messages: BrainMessage[], volatileTailBlock: string): BrainMessage[] {
+    const on =
+      process.env['SUDO_PROMPT_CACHE'] !== '0' &&
+      process.env['SUDO_PROMPT_CACHE_TAIL_MEMORY'] !== '0';
+    // SUDO_FOLD_SYSTEM_MESSAGES is a distinct, mutually-exclusive strategy that
+    // folds array system messages into the system param — let it own them.
+    if (!on || readFoldSystemEnabled()) return messages;
+    return relocateVolatileToTail(messages, volatileTailBlock);
+  }
+
   private async _callSingleModel(
     profile: ModelProfile,
     request: BrainRequest,
@@ -1233,11 +1297,18 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // Cache path: persona stays in buildCachedSystemMessages(systemPrompt)
     // (cached prefix preserved) and the folded content rides a separate uncached
     // system message. Non-cache path: folded into the `system` param.
-    const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, request.messages);
+    // BO2b/S1: relocate per-turn volatile context to the tail on a COPY (never
+    // mutate request.messages — the failure-summary messageCount must reflect the
+    // original request). The volatile block is threaded on a transient request
+    // field (set in call()) to avoid changing _callSingleModel's arity. No-op when
+    // the flag is off or nothing is relocatable.
+    const volatileTailBlock = (request as { _volatileTailBlock?: string })._volatileTailBlock ?? '';
+    const wireMessages = this._applyTailRelocation(request.messages, volatileTailBlock);
+    const effectiveSystem = buildEffectiveSystemPrompt(systemPrompt, wireMessages);
     // Telemetry: exact size of the in-loop system guidance folded into the model
     // input this call (the per-turn token cost of SUDO_FOLD_SYSTEM_MESSAGES).
     if (readFoldSystemEnabled()) {
-      const foldedChars = extractSystemMessageContent(request.messages).length;
+      const foldedChars = extractSystemMessageContent(wireMessages).length;
       if (foldedChars > 0) {
         log.info({ foldedChars, approxTokens: Math.round(foldedChars / 4), cachePath: cacheBreakpoints, model: modelId }, 'system-fold: in-loop guidance delivered to model');
       }
@@ -1256,7 +1327,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // A transport throw lands in the failover catch, which classifies +
     // cooldowns this profile and advances to the next one.
     const irRequestBase = {
-      messages: request.messages,
+      messages: wireMessages,
       system: effectiveSystem,
       source: request.source,
       temperature,

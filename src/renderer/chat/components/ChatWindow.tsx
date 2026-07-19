@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { MessageBubble } from './MessageBubble';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { ProgressBar } from './ProgressBar';
+import { LivePhase } from './LivePhase';
 import type { Message, CurrentResponse } from '../hooks/useChatSession';
 
 interface ChatWindowProps {
@@ -61,6 +62,10 @@ export function ChatWindow({ messages, currentResponse, error }: ChatWindowProps
 
       {currentResponse?.type === 'progress' && (
         <ProgressBar label={currentResponse.text} progress={currentResponse.progress} />
+      )}
+
+      {currentResponse?.type === 'phase' && (
+        <LivePhase phase={currentResponse.phase} label={currentResponse.label} elapsedSec={currentResponse.elapsedSec} />
       )}
 
       {error && (

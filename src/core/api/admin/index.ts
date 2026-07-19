@@ -35,6 +35,12 @@ export async function registerAdminHandlers(): Promise<void> {
   await import('./dashboard.handler.js');
   await import('./logs.handler.js');
   await import('./system.handler.js');
+  await import('./status.handler.js');
+  await import('./usage.handler.js');
+  // BO9 / S8 — sessions table (context fill + fork + archive-with-confirm).
+  await import('./system-sessions.handler.js');
+  // BO10 / S10 — guidance-file viewer + gated hash-audited writes (frozen read-only).
+  await import('./system-guidance.handler.js');
 
   // New handlers — tools, consciousness, security:
   await import('./tools.handler.js');

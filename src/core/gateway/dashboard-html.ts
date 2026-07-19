@@ -11,6 +11,10 @@
  *  - Gracefully degrades when slices are null
  */
 
+import { USAGE_PANEL_HTML, USAGE_SCRIPT } from './dashboard-usage.js';
+import { SESSIONS_PANEL_HTML, SESSIONS_SCRIPT } from './dashboard-sessions.js';
+import { GUIDANCE_PANEL_HTML, GUIDANCE_SCRIPT } from './dashboard-guidance.js';
+
 export function renderDashboardHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -87,6 +91,9 @@ button:active{background:#3d444d}
 <div id="dashboard" style="margin-top:16px">
   <!-- rendered by JS -->
 </div>
+${USAGE_PANEL_HTML}
+${SESSIONS_PANEL_HTML}
+${GUIDANCE_PANEL_HTML}
 
 <!-- Browser watch/takeover (Spec 3). Kept OUTSIDE #dashboard so the 30s
      poll re-render never tears down the live <img> or takeover controls. -->
@@ -144,6 +151,7 @@ token = getToken();
 var lastDigest = null;
 var lastVeto = null;
 var lastCanvas = null;
+var lastStatus = null;
 var pollTimer = null;
 var countdownTimer = null;
 var countdownSec = 30;
@@ -179,7 +187,7 @@ function refresh(){
   var errors = [];
   function checkDone(){
     done++;
-    if(done===3){
+    if(done===4){
       if(errors.length){
         setStatus('error', errors.join('; '), 'dot-red');
       } else {
@@ -199,6 +207,11 @@ function refresh(){
   // A2UI canvases (Spec 2) — non-fatal: a failure must not degrade dashboard status.
   apiFetch('/v1/admin/canvas?limit=20', function(err, data){
     if(!err){ lastCanvas = data; }
+    checkDone();
+  });
+  // BO7 / S6 status card — non-fatal: a failure must not degrade dashboard status.
+  apiFetch('/v1/admin/system/status', function(err, data){
+    if(!err){ lastStatus = data; }
     checkDone();
   });
   document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
@@ -482,9 +495,36 @@ function renderCanvas(){
 // -------------------------------------------------------------------------
 // Main render
 // -------------------------------------------------------------------------
+function renderStatusCard(d){
+  if(!d){ return ''; }
+  function line(label, val){
+    return kvRow(label, esc(val==null?'':String(val)));
+  }
+  return '<div class="section-head">Status</div>' +
+    '<div class="panel" style="max-width:560px">' +
+    '<div class="panel-title">'+esc(d.headline||'Status')+'</div>' +
+    '<table class="kv-table" style="margin-top:8px">' +
+    line('Current time', d.currentTime) +
+    line('Reference UTC', d.referenceUtc) +
+    line('Uptime', d.uptime) +
+    line('Model', d.model) +
+    line('Auth', d.auth) +
+    line('Tokens', d.tokens) +
+    line('Cost', d.cost) +
+    line('Cache', d.cache) +
+    line('Context', (d.context||'') + '  \u00b7  Compactions: ' + (d.compactions==null?'':d.compactions)) +
+    line('Session', d.session) +
+    line('Execution', (d.execution||'') + '  \u00b7  Think: ' + (d.think||'') + '  \u00b7  Fast: ' + (d.fast||'')) +
+    line('Queue', d.queue) +
+    '</table>' +
+    '</div>';
+}
+
 function render(){
   var d = lastDigest && lastDigest.data ? lastDigest.data : null;
   var html = '';
+
+  html += renderStatusCard(lastStatus && lastStatus.data ? lastStatus.data : null);
 
   html += '<div class="grid">';
   html += renderAlignment(d);
@@ -630,6 +670,11 @@ function showLive(profile){
   kb.appendChild(browserBtn('Enter', function(){ apiPost('/v1/admin/browser/input',{profile:profile,kind:'key',key:'Enter'},function(){}); }));
   box.appendChild(kb);
 }
+
+${USAGE_SCRIPT}
+
+${SESSIONS_SCRIPT}
+${GUIDANCE_SCRIPT}
 
 if(token){
   refreshBrowser();

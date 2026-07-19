@@ -16,6 +16,9 @@ export type ChatWSMedia = {
 type ChatWSMessage =
   | { type: 'thinking'; text?: string }
   | { type: 'progress'; text: string; progress?: number }
+  // BO11/S13: live working-state — phase + server elapsed baseline + always-visible
+  // model/context chip. The client ticks the seconds locally from `elapsedSec`.
+  | { type: 'phase'; phase: 'waiting' | 'running' | 'streaming'; elapsedSec: number; label: string; chip?: string }
   | { type: 'token'; text: string }
   | { type: 'user_echo'; text: string }
   | { type: 'reply'; content: string; text?: string; media?: ChatWSMedia[] }

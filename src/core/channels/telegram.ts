@@ -1258,6 +1258,41 @@ export class TelegramAdapter implements ChannelAdapter {
       }
     }
 
+    // BO11/S13: optional progressive-edit working message (SUDO_TG_PROGRESS=1,
+    // default OFF → typing-only behavior unchanged). Edits ONE message in place
+    // with phase + live elapsed + the model/context chip, using the shared
+    // live-state formatter. Whimsy verbs surface on the waiting phase when
+    // SUDO_WHIMSY=1. Fully best-effort: any failure degrades to typing-only.
+    let stopProgress: (() => void) | null = null;
+    if (process.env['SUDO_TG_PROGRESS'] === '1') {
+      try {
+        const { formatTelegramWorking, formatModelContextChip } = await import('./live-state.js');
+        const { collectStatusCard, getStatusSources } = await import('../commands/builtin/status-card.js');
+        let chip: string | undefined;
+        try {
+          const card = await collectStatusCard({ ...(getStatusSources() ?? {}) });
+          chip = formatModelContextChip(card.model, card.context);
+        } catch { /* chip best-effort */ }
+        const startMs = Date.now();
+        const workingId = await this.sendForStream(
+          chatId,
+          formatTelegramWorking({ phase: 'waiting', elapsedMs: 0, ...(chip ? { chip } : {}), tick: 0 }),
+        );
+        let tick = 0;
+        const iv = setInterval(() => {
+          tick++;
+          const elapsedMs = Date.now() - startMs;
+          const phase = elapsedMs < 3000 ? ('waiting' as const) : ('running' as const);
+          const line = formatTelegramWorking({ phase, elapsedMs, ...(chip ? { chip } : {}), verbIndex: tick, tick });
+          void this.editText(chatId, workingId, line).catch(() => { /* noop/closed edit */ });
+        }, 3000);
+        stopProgress = () => {
+          clearInterval(iv);
+          void this.bot?.api.deleteMessage(chatId, Number(workingId)).catch(() => { /* best effort */ });
+        };
+      } catch { /* progressive edit is best-effort */ }
+    }
+
     try {
       await this._handler(msg);
     } catch (err) {
@@ -1265,6 +1300,7 @@ export class TelegramAdapter implements ChannelAdapter {
     } finally {
       stopTyping();
       unsubProgress();
+      stopProgress?.();
     }
   }
 

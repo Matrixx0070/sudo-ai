@@ -59,6 +59,12 @@ import { runGenerations } from './core/sessions/run-generation.js';
 import { AgentLoop } from './core/agent/loop.js';
 import { approvalManager } from './core/agent/approval.js';
 import { TelegramAdapter } from './core/channels/telegram.js';
+// GW-5/GW-11: steer producer wiring so the web /api/message path gets mid-run
+// steering + run-lane accounting on par with the router channels.
+import { getRunRegistry } from './core/agent/run-registry.js';
+import { getRunLanes } from './core/agent/run-lanes.js';
+import { getSteerBuffer } from './core/agent/steer-buffer.js';
+import { getQueueModeStore, decideQueueMode } from './core/channels/queue-modes.js';
 import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
 import { normalizeReplyText } from './core/channels/empty-reply.js';
@@ -69,6 +75,7 @@ import { HeartbeatRunner, type HeartbeatPayloadRunner } from './core/cron/heartb
 import { maybeGuardedSend } from './core/comms/idempotency.js';
 import { CommandRegistry } from './core/commands/registry.js';
 import { tryDispatchDirective } from './core/commands/dispatch.js';
+import { setStatusSources } from './core/commands/builtin/status-card.js';
 import { makeDirectiveAuthorizer } from './core/commands/directive-authorizer.js';
 import type { CommandContext } from './core/commands/types.js';
 import { HookManager } from './core/hooks/index.js';
@@ -1897,6 +1904,19 @@ async function boot(): Promise<void> {
     }
   };
 
+  // BO7 / S6: register runtime handles for the shared /status card so the admin
+  // dashboard endpoint reads the SAME source of truth as the Telegram/SPA command.
+  try {
+    setStatusSources({
+      agentLoop: finalAgentLoop,
+      config,
+      mindDb: db,
+      peerQueue: dualSessionManager.peerQueue,
+    });
+  } catch (err) {
+    log.warn({ err: String(err) }, 'setStatusSources failed (non-fatal)');
+  }
+
   // Directive short-circuits on every channel (opt-in: SUDO_CHANNEL_COMMANDS=1).
   // When enabled, slash commands on Discord/Slack/WhatsApp/Web/Email/SMS and
   // the routed channels are intercepted BEFORE the per-peer turn queue, so
@@ -2362,27 +2382,79 @@ async function boot(): Promise<void> {
         reply: (text) => web.send(msg.peerId, text),
       })) return;
 
+      // GW-5 mid-run steering (parity with the router channels). If a run is
+      // already active for THIS web session and steering is enabled, steer the
+      // message into it instead of queueing a full new turn behind it. Web chat
+      // is owner-gated, so the message tier is owner.
+      if (process.env['SUDO_MIDRUN_STEER'] === '1') {
+        const steerKey = `${msg.channel}:${msg.peerId}`;
+        const activeRun = getRunRegistry().get(steerKey);
+        if (activeRun) {
+          const decision = decideQueueMode({
+            mode: getQueueModeStore().resolve(msg.channel, msg.peerId),
+            activeRun: true,
+            isMedia: (msg.media?.length ?? 0) > 0,
+            isCommand: false,
+            runTier: activeRun.tier,
+            msgTier: 'owner',
+          });
+          if (decision.action === 'steer') {
+            getSteerBuffer().push(activeRun.sessionId, msg.text ?? '', decision.tier);
+            log.info({ peerId: msg.peerId, tier: decision.tier }, 'GW-5: web message steered into the active run');
+            return;
+          }
+          if (decision.action === 'interrupt' && activeRun.abort) {
+            activeRun.abort('interrupted by a newer message');
+          }
+        }
+      }
+
       // Serialized per-peer: enqueue so concurrent messages from the same user
       // never overlap on the same session (prevents race conditions).
       dualSessionManager.peerQueue.enqueue(msg.peerId, async () => {
         // taskStartMs measured at execution time (excludes queue wait).
         const taskStartMs = Date.now();
+        const convKey = `${msg.channel}:${msg.peerId}`;
+        let steerSessionId: string | null = null;
+        let laneRelease: (() => void) | null = null;
         try {
-          const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
+          // GW-5/GW-11: register this web run so mid-run arrivals steer into it and
+          // one-run-per-session accounting is correct. Unregistered in the finally.
+          steerSessionId = String(session.id);
+          getRunRegistry().beginRun({ key: convKey, sessionId: String(session.id), tier: 'owner' });
+          if (process.env['SUDO_RUN_LANES_ENABLED'] === '1') {
+            laneRelease = await getRunLanes().acquireRunSlot(convKey, 'user');
+          }
           // Stream live activity (tool calls + intermediate text) to the browser so a
           // long turn shows progress instead of a silent wait. Default-on; SUDO_WEB_STREAM=0
           // disables. Best-effort: a failed frame never breaks the turn.
           const webStreaming = process.env['SUDO_WEB_STREAM'] !== '0';
+          // BO11/S13: live working-states — a phase tracker (waiting→running→streaming
+          // with elapsed) plus the always-visible model/context chip, both derived from
+          // the SAME agent-event stream the SPA already consumes. Best-effort throughout.
+          const { LiveStateTracker, formatModelContextChip } = await import('./core/channels/live-state.js');
+          let liveChip: string | undefined;
+          try {
+            const { collectStatusCard, getStatusSources } = await import('./core/commands/builtin/status-card.js');
+            const card = await collectStatusCard({ ...(getStatusSources() ?? {}), sessionId: String(session.id), channel: 'web', peerId: msg.peerId });
+            liveChip = formatModelContextChip(card.model, card.context);
+          } catch { /* chip is best-effort — never block the turn */ }
+          const liveTracker = new LiveStateTracker({ ...(liveChip ? { chip: liveChip } : {}), verbIndex: taskStartMs });
           const onWebEvent: import('./core/agent/types.js').AgentEventHandler | undefined = webStreaming
             ? (ev) => {
                 try {
+                  const pf = liveTracker.onEvent(ev);
+                  if (pf) void web.send(msg.peerId, pf).catch(() => { /* ws closed mid-stream */ });
                   const frame = agentEventToWebFrame(ev);
                   if (frame) void web.send(msg.peerId, frame).catch(() => { /* ws closed mid-stream */ });
                 } catch { /* never break the turn on a streaming frame */ }
               }
             : undefined;
+          // Emit the initial "waiting" phase immediately so the SPA shows the live
+          // state (and chip) before the first token arrives.
+          if (webStreaming) void web.send(msg.peerId, liveTracker.initialFrame()).catch(() => { /* ws closed */ });
           // Web chat is gated by WEB_CHAT_TOKEN — its driver is the owner. Bind
           // that to the turn so owner-only browser profiles (e.g. personal) are
           // launchable here. Turn-scoped via AgentState (no shared registry).
@@ -2467,6 +2539,13 @@ async function boot(): Promise<void> {
             if (tgChatId) {
               try { await telegramNotifier.send(tgChatId, `❌ Web task failed after ${Math.round(durationMs / 60_000)}m:\n${sanitizeUserFacingError(err)}`); } catch { /* non-fatal */ }
             }
+          }
+        } finally {
+          if (laneRelease) laneRelease();
+          getRunRegistry().endRun(convKey);
+          if (steerSessionId !== null && process.env['SUDO_MIDRUN_STEER'] === '1') {
+            const _buf = getSteerBuffer();
+            if (_buf.size(steerSessionId) > 0) _buf.clear(steerSessionId);
           }
         }
       }).catch((err: unknown) => {
@@ -5083,6 +5162,23 @@ if (process.argv[2] === 'chat') {
   }).catch((err) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[security-audit] Failed to load module:', msg);
+    process.exit(1);
+  });
+} else if (process.argv[2] === 'onboard') {
+  // onboard subcommand (BO12/S12) — deterministic, ZERO-SPEND first-run setup:
+  // machine scan + hash-audited workspace seeding + gateway-token generation.
+  // Intercept BEFORE full boot so it runs standalone (no daemon, no LLM).
+  import('./core/onboard/index.js').then(({ runOnboard }) => {
+    runOnboard(process.argv.slice(3))
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[onboard] Fatal error:', msg);
+        process.exit(1);
+      });
+  }).catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[onboard] Failed to load onboard module:', msg);
     process.exit(1);
   });
 } else if (process.argv[2] === 'replay') {
