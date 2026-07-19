@@ -14,6 +14,16 @@
  *     window; otherwise it REVERTS. Pure given an injected metric measurer, so the
  *     decision is fully testable and the driver (the scanner) just supplies traces.
  *
+ * F86 — closing the loop SAFELY. Promotion to APPLIED status is memory surgery, so
+ * combined-invariant 9 requires TWO readers to agree: reader 1 is this module's own
+ * canary verification (the measured failure-rate drop); reader 2 is an INDEPENDENT
+ * judge-route LLM read (invariant 7). The live driver `runLessonApplyConsensus`
+ * HOLDS every promotion until both agree, caps promotions per day + budgets the
+ * reader calls (invariant 10), and audits every decision (see lesson-consensus.ts).
+ * Disagreement / no-independent-judge / cap / budget → ESCALATE, never execute.
+ * `advanceLessonLifecycle(..., holdPromotions=true)` performs the safe transitions
+ * (start-canary / revert / wait — all allowed solo) but merely PROPOSES promotions.
+ *
  * SAFETY ENVELOPE (why auto-apply is acceptable here):
  *  - Default OFF. With the flag unset, the daemon's prompt is byte-identical.
  *  - Injects ADVISORY TEXT only — never changes code, never removes a feature.
@@ -22,7 +32,8 @@
  *    samples / ≥80% recovery), which the corpus cannot currently satisfy — so even
  *    with the flag ON nothing applies until a lesson genuinely proves out.
  *  - Bias to safety: on ANY doubt (baseline no failures, not enough improvement,
- *    regression) the canary REVERTS, never promotes.
+ *    regression, reader disagreement, no independent judge) the gate REVERTS or
+ *    ESCALATES, never promotes.
  */
 import path from 'node:path';
 import { DATA_DIR } from '../shared/paths.js';
@@ -35,6 +46,19 @@ import {
   type LessonStore,
   type RateSample,
 } from './lesson-store.js';
+import {
+  type SecondReader,
+  type ApplyGovernance,
+  type PromotionCandidate,
+  type RunBudgetState,
+  applyGovernanceFromEnv,
+  budgetAllows,
+  consensusOutcome,
+  countPromotionsToday,
+  appendApplyAudit,
+  lessonHash,
+  storeHashOf,
+} from './lesson-consensus.js';
 
 /** Default sample guard: don't judge a canary on fewer than this many tool calls. */
 export const DEFAULT_MIN_CANARY_CALLS = 20;
@@ -116,8 +140,20 @@ export interface LifecycleDeps {
 
 export interface LifecycleAction {
   lessonId: string;
-  action: 'started-canary' | 'promoted' | 'reverted' | 'waiting';
+  action: 'started-canary' | 'promoted' | 'reverted' | 'waiting' | 'propose-promote' | 'escalated';
   reason: string;
+  /**
+   * Present ONLY on a 'propose-promote' action (hold mode): the measured numbers the
+   * two-reader consensus gate + audit ledger need to judge the promotion.
+   */
+  candidate?: {
+    tool: string;
+    hint: string;
+    baselineFailRate: number;
+    canaryFailRate: number;
+    canaryCalls: number;
+    authorRoute?: string;
+  };
 }
 
 /**
@@ -125,8 +161,13 @@ export interface LifecycleAction {
  * canary (recording the baseline); canaries past their window are judged and
  * promoted/reverted. Returns the new store, whether anything changed, and the actions
  * taken (for logging). Pure — no I/O; the caller persists and logs.
+ *
+ * When `holdPromotions` is true (the F86 live path), a would-promote canary is NOT
+ * mutated to `promoted` — it emits a 'propose-promote' action (carrying the measured
+ * numbers) and stays in `canary`, so the two-reader consensus gate can decide. Safe
+ * transitions (start-canary, revert, wait) always apply — they are not memory surgery.
  */
-export function advanceLessonLifecycle(store: LessonStore, deps: LifecycleDeps, opts: CanaryVerdictOpts = DEFAULT_CANARY_OPTS): { store: LessonStore; changed: boolean; actions: LifecycleAction[] } {
+export function advanceLessonLifecycle(store: LessonStore, deps: LifecycleDeps, opts: CanaryVerdictOpts = DEFAULT_CANARY_OPTS, holdPromotions = false): { store: LessonStore; changed: boolean; actions: LifecycleAction[] } {
   let next = store;
   const actions: LifecycleAction[] = [];
 
@@ -157,18 +198,41 @@ export function advanceLessonLifecycle(store: LessonStore, deps: LifecycleDeps, 
       }
 
       const v = canaryVerdict(lesson.baselineFailRate ?? 0, canary.rate, opts);
+      if (v.promote && holdPromotions) {
+        // F86: promotion is memory surgery — do NOT mutate. Propose it; the consensus
+        // gate (reader 2 + cap + budget) decides. Lesson stays in `canary`.
+        actions.push({
+          lessonId: lesson.lessonId,
+          action: 'propose-promote',
+          reason: v.reason,
+          candidate: {
+            tool: lesson.tool,
+            hint: lesson.hint,
+            baselineFailRate: lesson.baselineFailRate ?? 0,
+            canaryFailRate: canary.rate,
+            canaryCalls: canary.calls,
+            authorRoute: lesson.authorRoute,
+          },
+        });
+        continue;
+      }
       next = resolveCanary(next, lesson.lessonId, canary, v.promote, deps.nowISO, v.reason);
       actions.push({ lessonId: lesson.lessonId, action: v.promote ? 'promoted' : 'reverted', reason: `${v.reason} over ${canary.calls} calls` });
     }
   }
-  // 'waiting' is informational, not a store mutation — only real transitions persist.
-  const mutated = actions.some((a) => a.action !== 'waiting');
+  // 'waiting'/'propose-promote' are informational, not store mutations — only real transitions persist.
+  const mutated = actions.some((a) => a.action !== 'waiting' && a.action !== 'propose-promote');
   return { store: next, changed: mutated, actions };
 }
 
 /**
  * Full driver step used by the scanner (when apply is enabled): load → advance →
  * persist → invalidate cache. Fail-open. No-op (returns []) when apply is disabled.
+ *
+ * NOTE: this legacy synchronous driver promotes on the OWN canary verdict alone (no
+ * second reader). It is retained for the pure unit tests only; the LIVE path is the
+ * consensus-gated `runLessonApplyConsensus`, which the scanner uses. Do NOT wire this
+ * into any real mutation path — invariant 9 requires two readers for a promotion.
  */
 export function runLessonLifecycle(deps: LifecycleDeps, opts: CanaryVerdictOpts = DEFAULT_CANARY_OPTS): LifecycleAction[] {
   if (!isApplyEnabled()) return [];
@@ -180,6 +244,121 @@ export function runLessonLifecycle(deps: LifecycleDeps, opts: CanaryVerdictOpts 
       invalidateHintCache();
     }
     return actions;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * F86 LIVE DRIVER — consensus-gated, capped, audited lesson apply.
+ *
+ * 1. Apply the SAFE transitions (start-canary / revert / wait) via holdPromotions;
+ *    persist them (they are not memory surgery — allowed solo per invariant 9).
+ * 2. For each PROPOSED promotion (reader 1 = own canary verification already says
+ *    promote): enforce the daily cap, then the fail-closed per-run budget, then call
+ *    the INDEPENDENT second reader. Promote ONLY on two-reader agreement; otherwise
+ *    ESCALATE (leave in canary, never execute). Audit every outcome.
+ *
+ * No-op (returns []) when apply is disabled → today's exact byte-identical behavior.
+ * Fail-open on any unexpected error. Async because reader 2 is an LLM call.
+ */
+export async function runLessonApplyConsensus(
+  deps: LifecycleDeps,
+  reader: SecondReader,
+  gov: ApplyGovernance = applyGovernanceFromEnv(),
+  opts: CanaryVerdictOpts = DEFAULT_CANARY_OPTS,
+): Promise<LifecycleAction[]> {
+  if (!isApplyEnabled()) return [];
+  try {
+    let store = loadLessonStore(lessonStorePath());
+    const { store: afterSafe, changed: safeChanged, actions } = advanceLessonLifecycle(store, deps, opts, true);
+    store = afterSafe;
+    let dirty = safeChanged;
+
+    const out: LifecycleAction[] = [];
+    // Audit + surface the safe transitions.
+    for (const a of actions) {
+      if (a.action === 'propose-promote') continue;
+      out.push(a);
+      if (a.action === 'started-canary' || a.action === 'reverted') {
+        appendApplyAudit({
+          ts: deps.nowISO,
+          event: a.action,
+          lessonId: a.lessonId,
+          tool: '',
+          reader1: { promote: false, reason: a.reason },
+          lessonHash: lessonHash({ lessonId: a.lessonId, tool: '', hint: '' }),
+          storeHash: storeHashOf(store),
+        });
+      }
+    }
+
+    const proposals = actions.filter((a) => a.action === 'propose-promote');
+    if (proposals.length > 0) {
+      let promotedToday = countPromotionsToday(deps.nowISO);
+      const budget: RunBudgetState = { spentUsd: 0, spentTokens: 0 };
+      const storeHash = storeHashOf(store);
+
+      for (const a of proposals) {
+        const c = a.candidate!;
+        const cand: PromotionCandidate = {
+          lessonId: a.lessonId,
+          tool: c.tool,
+          hint: c.hint,
+          baselineFailRate: c.baselineFailRate,
+          canaryFailRate: c.canaryFailRate,
+          canaryCalls: c.canaryCalls,
+          authorRoute: c.authorRoute,
+        };
+        const reader1 = { promote: true, reason: a.reason };
+        const lHash = lessonHash(cand);
+
+        // Daily cap (invariant 10). Refuse — never execute.
+        if (promotedToday >= gov.dailyCap) {
+          appendApplyAudit({ ts: deps.nowISO, event: 'refused-cap', lessonId: a.lessonId, tool: c.tool, reader1, lessonHash: lHash, storeHash, authorRoute: c.authorRoute });
+          out.push({ lessonId: a.lessonId, action: 'waiting', reason: `daily apply cap reached (${gov.dailyCap}) — promotion deferred` });
+          continue;
+        }
+        // Per-run budget, fail-closed pre-check (invariant 10).
+        if (!budgetAllows(budget, gov)) {
+          appendApplyAudit({ ts: deps.nowISO, event: 'refused-budget', lessonId: a.lessonId, tool: c.tool, reader1, lessonHash: lHash, storeHash, authorRoute: c.authorRoute });
+          out.push({ lessonId: a.lessonId, action: 'waiting', reason: 'per-run consensus budget exhausted — promotion deferred (fail-closed)' });
+          continue;
+        }
+
+        // Reader 2 — the independent judge read.
+        let r2;
+        try {
+          r2 = await reader(cand);
+        } catch (e) {
+          r2 = { available: false as const, reason: `reader threw: ${String(e)}` };
+        }
+        if (r2.available) {
+          budget.spentUsd += r2.usdUsed;
+          budget.spentTokens += r2.tokensUsed;
+        }
+        const reader2Audit = r2.available
+          ? { available: true, agree: r2.agree, reason: r2.reason, judgeRoute: r2.judgeRoute }
+          : { available: false, reason: r2.reason };
+
+        if (consensusOutcome(r2) === 'promote') {
+          store = resolveCanary(store, a.lessonId, { rate: c.canaryFailRate, calls: c.canaryCalls }, true, deps.nowISO, `two-reader consensus: ${reader1.reason} | judge(${r2.available ? r2.judgeRoute : '-'})`);
+          dirty = true;
+          promotedToday += 1;
+          appendApplyAudit({ ts: deps.nowISO, event: 'promoted', lessonId: a.lessonId, tool: c.tool, reader1, reader2: reader2Audit, lessonHash: lHash, storeHash, authorRoute: c.authorRoute });
+          out.push({ lessonId: a.lessonId, action: 'promoted', reason: 'two-reader consensus agreed — promoted' });
+        } else {
+          appendApplyAudit({ ts: deps.nowISO, event: 'escalated', lessonId: a.lessonId, tool: c.tool, reader1, reader2: reader2Audit, lessonHash: lHash, storeHash, authorRoute: c.authorRoute });
+          out.push({ lessonId: a.lessonId, action: 'escalated', reason: r2.available ? 'independent reader DISAGREED — escalated for human review, not promoted' : `no independent reader (${r2.reason}) — escalated, not promoted` });
+        }
+      }
+    }
+
+    if (dirty) {
+      saveLessonStore(lessonStorePath(), store);
+      invalidateHintCache();
+    }
+    return out;
   } catch {
     return [];
   }

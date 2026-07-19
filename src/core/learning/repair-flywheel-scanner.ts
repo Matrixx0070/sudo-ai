@@ -1,24 +1,29 @@
 /**
  * @file learning/repair-flywheel-scanner.ts
- * @description Periodic, REPORT-ONLY driver for the repair flywheel (Phase A).
+ * @description Periodic driver for the repair flywheel (Phase A + F86 apply).
  *
  * On an interval it mines the trace store's real tool failures for addressable
  * (learnable) clusters and flags "system-bug" failure signatures — surfacing
- * actionable insight in the logs. It does NOT change agent behavior or apply any
- * lesson: applying lessons safely requires the verify-half (an A/B against the
- * eval set), which needs richer trace capture first. This is the observe-only
- * half wired to run continuously, so the addressable-failure signal (and any
- * harness bugs it exposes — like the read-file guard depth bug) show up over time.
+ * actionable insight in the logs. The SCAN half is report-only and never changes
+ * agent behavior.
  *
- * Fail-open: any error is logged, never thrown. The timer is unref'd so it never
- * holds the process open, and it opens the DB read-only.
+ * F86 adds the APPLY half, gated by SUDO_FLYWHEEL_APPLY (default OFF → no-op, no
+ * disk read, no LLM call): after each scan it advances adopted lessons through their
+ * canary lifecycle and, for any lesson its own verification would PROMOTE, runs the
+ * two-reader consensus gate (invariant 9) — an INDEPENDENT judge-route read that must
+ * agree — under a daily cap + per-run budget (invariant 10), auditing every decision.
+ * Disagreement / no independent judge / cap / budget → escalate, never execute.
+ *
+ * Fail-open: any error is logged, never thrown. Timers are unref'd so they never hold
+ * the process open, and DBs are opened read-only.
  */
 import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
 import { PROJECT_ROOT } from '../shared/paths.js';
 import { mineFailureClusters, measureCoverage, type FailureRow } from './repair-flywheel.js';
 import { runShadowVerification, makeReadFilePathRepair, type DeterministicRepair } from './repair-flywheel-verify.js';
-import { runLessonLifecycle, isApplyEnabled } from './lesson-apply.js';
+import { runLessonApplyConsensus, isApplyEnabled, type LifecycleDeps } from './lesson-apply.js';
+import { makeJudgeConsensusReader, type JudgeChatFn } from './lesson-consensus.js';
 import { verifyWorkflowOrder, decideWorkflowAdoption, WORKFLOW_REPAIRS, workflowScanBounds, type ToolEvent } from './workflow-order.js';
 import { verifyRetryPolicy, decideRetryPolicyAdoption, RETRY_POLICIES } from './retry-policy.js';
 import { mineHarnessBugs, HARNESS_CRASH_LIKE_FRAGMENTS, type HarnessBugRow } from './harness-bug-scan.js';
@@ -59,18 +64,28 @@ export class RepairFlywheelScanner {
   start(): void {
     if (this.timer) return;
     // First scan shortly after boot (off the boot critical path), then periodic.
-    const kick = setTimeout(() => this.scan(), 60_000);
+    const kick = setTimeout(() => void this.tick(), 60_000);
     if (kick.unref) kick.unref();
-    this.timer = setInterval(() => this.scan(), this.intervalMs);
+    this.timer = setInterval(() => void this.tick(), this.intervalMs);
     if (this.timer.unref) this.timer.unref();
-    log.info({ intervalMs: this.intervalMs, db: this.dbPath }, 'RepairFlywheelScanner started (report-only)');
+    log.info({ intervalMs: this.intervalMs, db: this.dbPath }, 'RepairFlywheelScanner started');
   }
 
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
   }
 
-  /** One scan. Synchronous (better-sqlite3), read-only, fail-open. */
+  /** One periodic tick: report-only scan, then (if apply enabled) the consensus apply step. */
+  async tick(): Promise<void> {
+    this.scan();
+    try {
+      await this.applyConsensusStep();
+    } catch (e) {
+      log.warn({ err: String(e) }, 'RepairFlywheel consensus apply step failed (non-fatal)');
+    }
+  }
+
+  /** One scan. Synchronous (better-sqlite3), read-only, fail-open. Report-only. */
   scan(): FlywheelScanReport | null {
     let db: Database.Database | null = null;
     try {
@@ -197,37 +212,70 @@ export class RepairFlywheelScanner {
         log.warn({ err: String(e) }, 'RepairFlywheel harness-bug scan failed (non-fatal)');
       }
 
-      // Canary lifecycle for ADOPTED lessons — advances candidate→canary→promoted/
-      // reverted from REAL measured failure rates. Gated by SUDO_FLYWHEEL_APPLY
-      // (default OFF → no-op). Measures a tool's failure rate over the canary window
-      // from the same open DB. This is the ONLY step that mutates live behavior, and
-      // it only ever promotes on a verified improvement (else auto-reverts).
-      if (isApplyEnabled()) {
-        const localDb = db;
-        // Per-CLUSTER rate: numerator = failures whose error_message matches the
-        // lesson's errorPattern; denominator = the tool's TOTAL calls (also the
-        // sample-guard size). Placeholders bind in SQL-text order: LIKE (SELECT),
-        // then tool (WHERE), then since.
-        const measureClusterRate = (tool: string, errorPattern?: string, sinceISO?: string): { rate: number; calls: number } => {
-          const failExpr = errorPattern ? 'success=0 AND error_message LIKE ?' : 'success=0';
-          let sql = `SELECT COUNT(*) AS calls, SUM(CASE WHEN ${failExpr} THEN 1 ELSE 0 END) AS fails FROM traces WHERE tool_name=?`;
-          const params: unknown[] = [];
-          if (errorPattern) params.push(`%${errorPattern}%`);
-          params.push(tool);
-          if (sinceISO) { sql += ' AND created_at >= ?'; params.push(sinceISO.slice(0, 19).replace('T', ' ')); }
-          const row = localDb.prepare(sql).get(...params) as { calls: number | null; fails: number | null } | undefined;
-          const calls = row?.calls ?? 0;
-          return { rate: calls > 0 ? (row?.fails ?? 0) / calls : 0, calls };
-        };
-        const now = new Date();
-        const actions = runLessonLifecycle({ measureClusterRate, nowMs: now.getTime(), nowISO: now.toISOString() });
-        if (actions.length > 0) log.warn({ actions }, 'RepairFlywheel APPLY: canary lifecycle advanced (live behavior changed)');
-      }
-
       return report;
     } catch (err) {
       log.warn({ err: String(err) }, 'RepairFlywheel scan failed (non-fatal)');
       return null;
+    } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * F86 APPLY STEP — consensus-gated canary lifecycle. Gated by SUDO_FLYWHEEL_APPLY
+   * (default OFF → immediate no-op, no DB open, no LLM call). Opens its OWN read-only
+   * DB (independent of scan's, so the async reader calls never touch a closed handle),
+   * measures per-cluster failure rates, and runs the two-reader consensus driver. The
+   * independent second reader is a judge-route LLM read (lazy `chatIR` import off the
+   * boot path). Fail-open.
+   */
+  async applyConsensusStep(): Promise<void> {
+    if (!isApplyEnabled()) return; // default OFF — byte-identical to today, no I/O.
+    let db: Database.Database | null = null;
+    try {
+      db = new Database(this.dbPath, { readonly: true, fileMustExist: true });
+      const localDb = db;
+      // Per-CLUSTER rate: numerator = failures whose error_message matches the lesson's
+      // errorPattern; denominator = the tool's TOTAL calls (also the sample-guard size).
+      const measureClusterRate = (tool: string, errorPattern?: string, sinceISO?: string): { rate: number; calls: number } => {
+        const failExpr = errorPattern ? 'success=0 AND error_message LIKE ?' : 'success=0';
+        let sql = `SELECT COUNT(*) AS calls, SUM(CASE WHEN ${failExpr} THEN 1 ELSE 0 END) AS fails FROM traces WHERE tool_name=?`;
+        const params: unknown[] = [];
+        if (errorPattern) params.push(`%${errorPattern}%`);
+        params.push(tool);
+        if (sinceISO) { sql += ' AND created_at >= ?'; params.push(sinceISO.slice(0, 19).replace('T', ' ')); }
+        const row = localDb.prepare(sql).get(...params) as { calls: number | null; fails: number | null } | undefined;
+        const calls = row?.calls ?? 0;
+        return { rate: calls > 0 ? (row?.fails ?? 0) / calls : 0, calls };
+      };
+      const now = new Date();
+      const deps: LifecycleDeps = { measureClusterRate, nowMs: now.getTime(), nowISO: now.toISOString() };
+
+      // Independent second reader: a judge-route LLM read (lazy import keeps transport
+      // off the boot path). On any construction failure the reader stays absent → the
+      // consensus gate HOLDS (escalates), never promotes.
+      const { chatIR } = await import('../../llm/client.js');
+      const chat: JudgeChatFn = async (route, system, user) => {
+        const res = await chatIR({
+          alias: route,
+          caller: 'learning:flywheel-consensus',
+          purpose: 'F86 two-reader lesson promotion',
+          system,
+          messages: [{ role: 'user', content: user }],
+          maxTokens: 200,
+          temperature: 0,
+          priority: 'background',
+        });
+        return { text: res.text, tokensIn: res.usage.in, tokensOut: res.usage.out };
+      };
+      const reader = makeJudgeConsensusReader(chat);
+
+      const actions = await runLessonApplyConsensus(deps, reader);
+      if (actions.length > 0) {
+        log.warn({ actions }, 'RepairFlywheel APPLY: consensus-gated canary lifecycle advanced (live behavior may have changed)');
+      }
+    } catch (err) {
+      log.warn({ err: String(err) }, 'RepairFlywheel apply step failed (non-fatal)');
     } finally {
       try { db?.close(); } catch { /* ignore */ }
     }
