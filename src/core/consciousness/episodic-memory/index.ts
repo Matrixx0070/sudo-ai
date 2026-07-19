@@ -54,6 +54,7 @@ const DEDUP_STRENGTHEN_DELTA = 0.02;
 export type { Episode, EpisodeQuery } from './types.js';
 export {
   computeSignificance,
+  computeEpisodeSignals,
   classifyOutcome,
   extractTags,
 } from './recorder.js';

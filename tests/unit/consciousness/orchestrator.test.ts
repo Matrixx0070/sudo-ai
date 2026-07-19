@@ -97,6 +97,9 @@ vi.mock('../../../src/core/consciousness/episodic-memory/index.js', () => ({
   EpisodicMemory: vi.fn().mockImplementation(function () {
     return { recordEpisode: vi.fn() };
   }),
+  // CW5: orchestrator now imports the flag-aware signals helper from this
+  // barrel; mirror the real contract (flag OFF -> legacy constants).
+  computeEpisodeSignals: vi.fn(() => ({ surpriseLevel: 0, significance: 0.5 })),
 }));
 
 vi.mock('../../../src/core/consciousness/drive-system/index.js', () => ({
