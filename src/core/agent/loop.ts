@@ -98,6 +98,7 @@ import { recordRecovery, loadActiveCommitments, formatCommitmentSystemMessage } 
 import { runVetoGate } from './veto-gate.js';
 import { queryAllModels } from '../brain/model-consensus.js';
 import { AlignmentAggregator } from './alignment-aggregator.js';
+import { seedAlignmentAggregator } from './alignment-seed.js';
 import type { AlignmentSignals } from './alignment-aggregator.js';
 import { AlignmentEngine } from '../alignment/alignment-engine.js';
 import type { AlignmentScore, AlignmentLevel } from '../alignment/alignment-engine.js';
@@ -445,6 +446,10 @@ export class AgentLoop extends AgentLoopInjections {
         this.trustTierTracker ?? undefined,
       );
       log.info('AgentLoop: AlignmentAggregator initialised');
+      // F108: seed the aggregator from the operator identity anchor (READ-ONLY)
+      // so downstream governance gates (SUDO_SELF_BUILD_MIN_ALIGN_SCORE) evaluate
+      // a real baseline score from boot instead of an inert warming-up null.
+      seedAlignmentAggregator(this.alignmentAggregator);
     } catch (err) {
       log.warn({ err: String(err) }, 'AgentLoop: AlignmentAggregator init failed — disabled');
     }

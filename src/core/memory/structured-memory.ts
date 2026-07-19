@@ -10,6 +10,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { isZDRBlocked } from '../privacy/zdr-mode.js';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { DATA_DIR } from '../shared/paths.js';
@@ -219,6 +220,14 @@ export async function saveMemory(
     createdAt,
     updatedAt: now,
   };
+
+  // F105 ZDR: structured memory content is user-derived. Under zero-data-retention
+  // return the constructed record WITHOUT writing it to disk — callers still get a
+  // usable in-memory object; nothing is persisted to the structured-memory store.
+  if (isZDRBlocked('memory_write')) {
+    log.info({ type: memory.type, id }, 'ZDR active — structured memory not persisted (in-memory only)');
+    return record;
+  }
 
   const fp = filePath(memory.type, id);
   await fs.writeFile(fp, JSON.stringify(record, null, 2), 'utf-8');

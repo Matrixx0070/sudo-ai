@@ -30,6 +30,7 @@ import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { genId } from '../shared/utils.js';
 import { DATA_DIR } from '../shared/paths.js';
+import { isZDRBlockedForChannel } from '../privacy/zdr-mode.js';
 
 const log = createLogger('channels:delivery-queue');
 
@@ -282,6 +283,13 @@ export class DeliveryQueue {
         mediaPaths: ref.media.map((f) => path.join(this.mediaDir, row.id, f)),
       });
       this.setState(row.id, 'acked', attempt, null);
+      // F105 ZDR: a durable outbox must retain the payload text until the platform
+      // confirms delivery (crash-safety). Under zero-data-retention — global or a
+      // per-channel 'zdr' policy — tombstone the payload once delivered so the reply
+      // text is not retained post-send. The row + delivery metadata are preserved.
+      if (isZDRBlockedForChannel('session_persistence', row.channel)) {
+        this.redactPayload(row.id);
+      }
       this.cleanupMedia(row.id);
       return 'acked';
     } catch (err) {
@@ -365,6 +373,21 @@ export class DeliveryQueue {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * F105 ZDR: overwrite a delivered row's payload with a tombstone so the reply
+   * text is not retained after delivery. Keeps the row (state, channel, peer,
+   * timestamps) for operational continuity. Never throws.
+   */
+  private redactPayload(id: string): void {
+    try {
+      const tombstone = JSON.stringify({ text: '', media: [], _zdrRedacted: true });
+      this.db.prepare(`UPDATE deliveries SET payload_ref=@ref, updated_at=@t WHERE id=@id`)
+        .run({ ref: tombstone, t: this.now(), id });
+    } catch (err) {
+      log.warn({ id, err: String(err) }, 'delivery-queue: ZDR payload redaction failed');
+    }
+  }
 
   private setState(id: string, state: DeliveryState, attempt: number, lastError: string | null): void {
     this.db
