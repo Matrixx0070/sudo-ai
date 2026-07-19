@@ -1,4 +1,5 @@
 import { ForgeOrchestrator, ForgeResult } from '../../../forge/forge-orchestrator.js';
+import { forgeEnabled } from '../../../forge/forge-budget.js';
 
 /**
  * The forgeTool exposes the SUDO FORGE orchestration as a callable
@@ -23,6 +24,9 @@ export const forgeTool = {
     ctx: any
   ): Promise<{ success: boolean; output: string; data?: unknown }> {
     try {
+      if (!forgeEnabled()) {
+        return { success: false, output: 'SUDO FORGE is disabled (SUDO_FORGE=0). Unset or set SUDO_FORGE=1 to enable the multi-model forge.' };
+      }
       const task = params.task;
       if (typeof task !== 'string' || task.trim().length === 0) {
         return { success: false, output: 'The "task" parameter must be a non-empty string.' };

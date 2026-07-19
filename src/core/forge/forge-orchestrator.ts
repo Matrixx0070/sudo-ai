@@ -4,6 +4,7 @@ import { XaiEnsemble, ChatMessage } from './xai-ensemble.js';
 import { ParallelBuilder, ModuleSpec, BuildResult } from './parallel-builder.js';
 import { CodeDNA } from './code-dna.js';
 import { EvolutionEngine } from './evolution-engine.js';
+import { ForgeBudget, forgeEnabled } from './forge-budget.js';
 
 /**
  * Input provided to the forge process. When modules are omitted the
@@ -45,8 +46,12 @@ export class ForgeOrchestrator {
   private readonly builder: ParallelBuilder;
   private readonly evolution: EvolutionEngine;
 
-  constructor(xai?: XaiEnsemble) {
-    this.xai = xai ?? new XaiEnsemble();
+  private readonly budget: ForgeBudget;
+
+  constructor(xai?: XaiEnsemble, budget?: ForgeBudget) {
+    // F108: a per-run + per-day token/USD budget governs the multi-model fan-out.
+    this.budget = budget ?? new ForgeBudget();
+    this.xai = xai ?? new XaiEnsemble(this.budget);
     this.dna = new CodeDNA();
     this.dna.initialize();
     this.builder = new ParallelBuilder();
@@ -64,6 +69,10 @@ export class ForgeOrchestrator {
    */
   public async forge(task: ForgeTask): Promise<ForgeResult> {
     const startTime = Date.now();
+    // F108 kill-switch: SUDO_FORGE=0 disables the forge pipeline entirely.
+    if (!forgeEnabled()) {
+      return { success: false, files: [], totalDurationMs: 0, modelsUsed: {}, patternsLearned: 0 };
+    }
     let modules: ModuleSpec[] | undefined = task.modules;
     const buildResults: BuildResult[] = [];
     try {

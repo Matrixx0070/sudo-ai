@@ -1,4 +1,5 @@
 import { getProviderApiKey, llmFetch } from '../../llm/client.js';
+import { ForgeBudget } from './forge-budget.js';
 import { XAI_CHAT_COMPLETIONS_URL } from '../../llm/endpoints.js';
 
 /**
@@ -42,6 +43,15 @@ export class XaiEnsemble {
    */
   public readonly usageByModel: Map<string, { promptTokens: number; completionTokens: number }> =
     new Map();
+
+  /** Optional spend budget (F108). When set, callModel halts the run if a
+   *  per-run/per-day token or USD cap is exhausted, and records usage after
+   *  each successful call. Absent → unmetered (legacy behaviour). */
+  private readonly budget: ForgeBudget | null;
+
+  constructor(budget?: ForgeBudget | null) {
+    this.budget = budget ?? null;
+  }
 
   /**
    * Performs a chat completion call against the xAI API using the model
@@ -97,6 +107,13 @@ export class XaiEnsemble {
       Authorization: `Bearer ${getProviderApiKey('xai') ?? ''}`,
     };
     const url = XAI_CHAT_COMPLETIONS_URL;
+    // F108: fail-closed on budget exhaustion before spending on another model call.
+    if (this.budget) {
+      const check = this.budget.checkExhausted();
+      if (check.exhausted) {
+        throw new Error(`forge budget exhausted — ${check.reason ?? 'cap reached'}`);
+      }
+    }
     let attempt = 0;
     // Always an Error after at least one failed attempt — never a raw HTTP
     // body string (the prior code overloaded this slot, immediately
@@ -143,6 +160,7 @@ export class XaiEnsemble {
             promptTokens: prev.promptTokens + (usage.prompt_tokens ?? 0),
             completionTokens: prev.completionTokens + (usage.completion_tokens ?? 0),
           });
+          this.budget?.recordUsage((usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0));
         }
         return typeof choice === 'string' ? choice : JSON.stringify(choice);
       } catch (err: unknown) {
