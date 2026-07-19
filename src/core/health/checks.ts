@@ -14,7 +14,6 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
 
 import Database from 'better-sqlite3';
 import type { HealthCheck } from './watchdog.js';
@@ -44,10 +43,11 @@ export const PROVIDER_ENV_KEYS: Record<string, string> = {
 };
 
 export const LOG_ROTATE_BYTES   = 50 * 1024 * 1024; // 50 MB
-const DISK_CRITICAL_PCT         = 90;
-const DISK_DEGRADED_PCT         = 80;
-const MEM_CRITICAL_PCT          = 90;
-const MEM_DEGRADED_PCT          = 80;
+// CW6: exported — these are the CANONICAL setpoints; HomeostatCore reads them.
+export const DISK_CRITICAL_PCT  = 90;
+export const DISK_DEGRADED_PCT  = 80;
+export const MEM_CRITICAL_PCT   = 90;
+export const MEM_DEGRADED_PCT   = 80;
 const HEARTBEAT_STALE_MS        = 10 * 60 * 1000;   // 10 minutes
 
 // ---------------------------------------------------------------------------
@@ -167,19 +167,13 @@ export async function checkDiskSpace(fixFn: () => Promise<void>): Promise<Health
   const name = 'disk_space';
   let usedPct: number;
 
+  // CW6: sensing moved to HomeostatCore (same statfs/df logic, extracted);
+  // the decision logic below is unchanged — byte-identical on the same reading.
   try {
-    const stats = fs.statfsSync(DATA_DIR);
-    const total     = stats.blocks * stats.bsize;
-    const available = stats.bavail * stats.bsize;
-    usedPct = Math.round(((total - available) / total) * 100);
-  } catch {
-    try {
-      const raw   = execSync(`df -P "${DATA_DIR}" 2>/dev/null | tail -1`, { encoding: 'utf8', timeout: 5_000 });
-      const parts = raw.trim().split(/\s+/);
-      usedPct     = parseInt(parts[4] ?? '0', 10);
-    } catch (err) {
-      return { name, status: 'degraded', message: `Cannot read disk stats: ${String(err)}`, lastCheck: ts };
-    }
+    const { readDiskUsedPct } = await import('./homeostat.js');
+    usedPct = readDiskUsedPct();
+  } catch (err) {
+    return { name, status: 'degraded', message: `Cannot read disk stats: ${String(err)}`, lastCheck: ts };
   }
 
   if (usedPct >= DISK_CRITICAL_PCT) {
@@ -202,7 +196,9 @@ export async function checkMemory(fixFn: () => Promise<void>): Promise<HealthChe
   const ts   = new Date().toISOString();
   const name = 'memory';
 
-  const usedPct   = Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100);
+  // CW6: RAM sensing via HomeostatCore (identical formula, extracted).
+  const { readRamUsedPct } = await import('./homeostat.js');
+  const usedPct   = readRamUsedPct();
   const mu        = process.memoryUsage();
   const heapMB    = `${Math.round(mu.heapUsed / 1048576)}/${Math.round(mu.heapTotal / 1048576)} MB`;
   const msg       = `System RAM ${usedPct}% used; heap ${heapMB}`;
