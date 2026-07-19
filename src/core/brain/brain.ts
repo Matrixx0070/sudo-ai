@@ -714,6 +714,7 @@ export class Brain {
     if (!slimPromptApplied) {
       systemPrompt = await this.getSystemPrompt({
         heartbeat: false,
+        ...(request.promptProfile ? { profile: request.promptProfile } : {}),
         tools: toolSummaries.length > 0 ? toolSummaries : undefined,
         ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
         ...(lens ? { reasoningLens: lens.text } : {}),

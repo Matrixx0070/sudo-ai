@@ -27,7 +27,7 @@ import {
   prepareRulesFile,
   dedupeWarningLines,
 } from '../workspace/injector.js';
-import type { SystemPromptOptions } from './types.js';
+import type { SystemPromptOptions, SessionProfile } from './types.js';
 
 const log = createLogger('brain:system-prompt');
 
@@ -158,6 +158,13 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
 
   // Default mainPeerId to TELEGRAM_CHAT_ID first value (matches cli.ts line 470)
   const mainPeerId = explicitMainPeerId ?? process.env['TELEGRAM_CHAT_ID']?.split(',')[0]?.trim();
+
+  // BO4/S4: session-type injection profile. 'main' (default) falls through to
+  // the full assembler below, byte-for-byte unchanged. Reduced profiles take the
+  // early return further down: 'subagent' = AGENTS+TOOLS+Safety; 'cron' adds the
+  // identity files. AGENTS + Safety Rules ride in every profile.
+  const profile: SessionProfile = options.profile ?? 'main';
+  const allowIdentity = profile !== 'subagent';
 
   log.debug(
     { persona, mood, heartbeat, toolCount: tools?.length ?? 0 },
@@ -448,6 +455,40 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     '3. merge_pr ONLY when checks are green. If it refuses (failing/pending checks, conflicts, protected path), read the reason and fix it — never force.',
     '4. Close out by reporting the concrete result: the branch name, the exact scoped-test command and its exit code, and the PR number/link. The cycle is not done until you have reported these.',
   ].join('\n');
+
+  // BO4/S4: reduced-profile early return. Ships only the minimal operating set
+  // so cron/subagent turns cost ≥30% less than a full 'main' turn. Reuses the
+  // already-computed section bodies + helpers so the layout (boundary, volatile
+  // date tail) mirrors 'main' and reduced turns stay cache-friendly. 'main'
+  // never reaches here — its full assembler below is untouched (BO2b byte-lock).
+  if (profile !== 'main') {
+    const reduced: string[] = [];
+    // Identity files: 'cron' keeps them, 'subagent' drops them.
+    if (allowIdentity) {
+      reduced.push(section(soulContent));
+      reduced.push(section(identityContent));
+      reduced.push(section(userContent));
+    }
+    // TOOLS: the live tool list + TOOLS.md — the agent cannot operate without it.
+    if (toolsListBlock) {
+      reduced.push(sectionWithHeader('Available Tools', toolsListBlock));
+    }
+    // AGENTS + Safety: mandatory in every profile (never dropped for tokens).
+    reduced.push(section(agentsBody));
+    reduced.push(section(toolsContent));
+    if (safetyRulesBody) {
+      reduced.push(sectionWithHeader('Safety Rules', safetyRulesBody));
+    }
+    if (truncationWarningBlock) {
+      reduced.push(sectionWithHeader('Context Truncation Warnings', truncationWarningBlock));
+    }
+    // Boundary + volatile date tail — mirror 'main' so the reduced prefix caches.
+    reduced.push('\n' + DYNAMIC_BOUNDARY_MARKER);
+    reduced.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
+    const assembledReduced = reduced.filter(Boolean).join('').trim();
+    log.debug({ chars: assembledReduced.length, profile }, 'Reduced system prompt assembled');
+    return assembledReduced;
+  }
 
   // Assemble in order.
   const parts: string[] = [];

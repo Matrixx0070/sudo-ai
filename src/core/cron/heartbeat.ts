@@ -79,6 +79,47 @@ function readHeartbeatFile(): string {
 }
 
 /**
+ * Read HEARTBEAT.md raw bytes, or '' when the file is absent/unreadable.
+ * (readHeartbeatFile above substitutes a placeholder on absence, which would
+ * mask an empty checklist — the S5 gate needs the true raw content.)
+ */
+function readHeartbeatRaw(): string {
+  try {
+    return readFileSync(HEARTBEAT_FILE, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * BO4/S5: does HEARTBEAT.md carry anything ACTIONABLE this tick?
+ *
+ * Strips YAML frontmatter, HTML comments (`<!-- -->`), markdown/comment lines
+ * (leading `#`), and whitespace. If nothing remains, the checklist is empty and
+ * the tick must NOT spend a model call. Exported for unit testing.
+ *
+ * @param raw - Raw HEARTBEAT.md content (may be '').
+ * @returns true when at least one non-comment, non-blank line survives.
+ */
+export function heartbeatHasActionableContent(raw: string): boolean {
+  if (!raw) return false;
+  let body = raw.replace(/\r\n/g, '\n');
+  // Strip a leading YAML frontmatter block.
+  if (body.startsWith('---\n')) {
+    const end = body.indexOf('\n---', 3);
+    if (end !== -1) body = body.slice(end + 4);
+  }
+  // Strip HTML comments.
+  body = body.replace(/<!--[\s\S]*?-->/g, '');
+  // A line is actionable only if, trimmed, it is non-empty and not a `#` line
+  // (markdown header / hash comment — headers alone are not actionable work).
+  return body
+    .split('\n')
+    .map((l) => l.trim())
+    .some((l) => l.length > 0 && !l.startsWith('#'));
+}
+
+/**
  * Build the heartbeat message injected as a user turn.
  * When `dueTaskNames` is provided, prepends a note listing which tasks are due.
  */
@@ -256,6 +297,14 @@ export class HeartbeatRunner {
       // Gate 1: quiet hours
       if (!this.isActiveNow()) {
         log.debug({ jobId: job.id }, 'Heartbeat skipped — outside active hours');
+        return;
+      }
+
+      // Gate 1.5 (BO4/S5): empty checklist ⇒ no model call. When HEARTBEAT.md is
+      // absent, blank, or comments/headers-only, there is nothing actionable to
+      // run — skip the model call entirely rather than pay for a HEARTBEAT_OK.
+      if (!heartbeatHasActionableContent(readHeartbeatRaw())) {
+        log.info({ jobId: job.id }, 'heartbeat: empty checklist — skipping model call');
         return;
       }
 
