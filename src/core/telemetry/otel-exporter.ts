@@ -99,6 +99,21 @@ export interface DigestSnapshot {
   injection: InjectionSlice | null;
   reanchor: ReanchorSlice | null;
   resolutions: ResolutionsSlice | null;
+  /** CW6 HomeostatCore essential-variables vector (sensing only). */
+  homeostat: HomeostatSlice | null;
+}
+
+export interface HomeostatSlice {
+  variables: Array<{
+    name: string;
+    value: number | null;
+    unit: string;
+    setpoint: number;
+    bounds: [number, number];
+    urgency: number;
+    available: boolean;
+  }>;
+  maxUrgency: number;
 }
 
 // ---------------------------------------------------------------------------

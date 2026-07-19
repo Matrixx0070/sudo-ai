@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 667,
+  "count": 669,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -333,6 +333,8 @@
     "SUDO_HEALTH_ALERT_DISABLE",
     "SUDO_HEALTH_ALERT_REMINDER_MS",
     "SUDO_HEALTH_FORCE_FAIL",
+    "SUDO_HOMEOSTAT_ERROR_RATE",
+    "SUDO_HOMEOSTAT_TOKENS_DAY",
     "SUDO_HOOKS_FILE",
     "SUDO_HOOK_AGENT",
     "SUDO_HOOK_EVENT",

@@ -28,6 +28,7 @@ import {
   digestToPrometheusText,
   toOTLPMetrics,
 } from '../telemetry/otel-exporter.js';
+import { readEssentialVariables } from '../health/homeostat.js';
 import { renderDashboardHtml } from './dashboard-html.js';
 import type { SkillOptimizationProposal, SkillOptimizationStatus } from '../shared/wave10-types.js';
 
@@ -1328,6 +1329,13 @@ function collectDigestSnapshot(deps: AdminRoutesDeps, windowDays: number): Diges
     trust = (deps.trustTierTracker?.getAuditSnapshot() ?? null) as DigestSnapshot['trust'];
   } catch { trust = null; }
 
+  // CW6: HomeostatCore essential-variables vector (sensing only, fail-open).
+  let homeostat: DigestSnapshot['homeostat'] = null;
+  try {
+    const variables = readEssentialVariables();
+    homeostat = { variables, maxUrgency: variables.reduce((m2, v) => Math.max(m2, v.urgency), 0) };
+  } catch { homeostat = null; }
+
   // calibration
   let calibration: DigestSnapshot['calibration'] = null;
   try {
@@ -1422,6 +1430,7 @@ function collectDigestSnapshot(deps: AdminRoutesDeps, windowDays: number): Diges
     injection,
     reanchor,
     resolutions,
+    homeostat,
   };
 }
 
