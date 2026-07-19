@@ -7,9 +7,9 @@ States: `TODO | IN_PROGRESS | BLOCKED(Q-n) | PR(#n) | MERGED(#n) | DEPLOYED | ME
 
 | WS | Title | State | PR | Flag | Evidence / numbers |
 |---|---|---|---|---|---|
-| CW0 | Measurement: map + baseline injection pipeline | MEASURING(until 2026-07-20) | #868 | — | MERGED green + DEPLOYED 12:11Z; merged-diff verified; 24h injectedTokensEst aggregate pending |
-| CW1 | Un-sever real signals into drive compute | DEPLOYED | #867 | none (bugfix-grade) | MERGED green + DEPLOYED 12:11Z; merged-diff verified (orchestrator.ts:687/689/691); live non-constant line PENDING organic traffic |
-| CW2 | Real context pressure into assembly | MERGED(#870) | #870 | SUDO_CAS_PRESSURE (default OFF) | MERGED green; merged-diff verified; deploy rides next prod merge (flag OFF = inert) |
+| CW0 | Measurement: map + baseline injection pipeline | MEASURING(until 2026-07-20) | #868 | — | LIVE CONFIRMED: 10 organic `injectedTokensEst:329` lines (18:02:44Z/18:32:45Z/19:32:45Z et al., pid 3450416); mean 329 tok/turn (periodic scheduled turns, zero variance so far) |
+| CW1 | Un-sever real signals into drive compute | DEPLOYED | #867 | none (bugfix-grade) | live line PENDING a CHANNEL turn: getConsciousnessContext only runs on channel messages (cli.ts:1993) — zero since deploy; signals verified hot in DB (36 surprise events/24h, improving 0/705 => line WILL fire, values 0.xx/0.0) |
+| CW2 | Real context pressure into assembly | MEASURING(until 2026-07-22) | #870 | SUDO_CAS_PRESSURE=1 LIVE | flag flipped 19:43Z per Fable authorization (config/.env:196 + restart); watch: tier distribution, user_rephrased vs 0.70%, no new error classes |
 | CW3 | Wire-or-delete: ContextSelector/Bridge | MERGED(#871) | #871 | — | verdict A: -1,238 LOC; CI green; merged-diff verified (files+refs gone) |
 | CW4 | Bid-based context arbiter | IN_PROGRESS | — | SUDO_CAS_ARBITER (default OFF) + SUDO_CAS_ARBITER_BUDGET (default 1200) | module+wiring+12 tests built session 4; A/B plan below; flip needs Fable GO (Q-n) |
 | CW5 | Surprise gates encoding + attention | TODO | — | SUDO_CAS_SURPRISE_GATE | — |
@@ -117,3 +117,12 @@ Flip procedure (post-GO): SUDO_CAS_ARBITER=1 in deploy-state env + restart; 3–
 3. **Task-success proxy:** user_rephrased rate vs 0.70% baseline; also zero new error classes in llm_calls.error_class.
 4. **Qualitative:** sample 20 winner/loser rounds from data/arbiter.db (`SELECT * FROM arbiter_decisions ORDER BY ts DESC`) — check losers were genuinely lower-value; loser distribution by source informs bid-tuning.
 Decision rule: all four healthy → file Q-n proposing default-ON; any regression → flag stays OFF or revert (revert IS success, F85 precedent).
+
+
+### 2026-07-19 (evening) — Opus session 4 resumed (post-limit): CW0 live-confirm, CW2 flip, CW4 PR
+
+- **CW0 LIVE CONFIRMED:** 10 organic `CW0: intelligence brief injected ... injectedTokensEst:329, consciousnessConsulted:true` lines (incl. Fable-verified 18:02:44Z / 18:32:45Z / 19:32:45Z, pid 3450416). Mean = 329 tokens/turn over 10 datapoints (periodic scheduled turns; zero variance — channel-turn variance pending).
+- **Restart mystery resolved:** pid 3450416 WAS deploy #2's pid (12:31:26Z boot, uptime 7.19h at check) — no intermediate restart occurred.
+- **CW1 stays PENDING with diagnosis:** the CW1 line lives in `getConsciousnessContext`, which the daemon calls only on CHANNEL messages (cli.ts:1993) — zero channel turns since deploy (0 "Session resolved"). DB proves the signals are hot: 36 surprise events in 24h (avg>0) and 0/705 capabilities improving (ratio 0.0 != 0.5 fallback) => the line fires on the first channel turn. Not a wiring gap.
+- **CW2 FLIPPED:** turn-health precondition verified (677 completed calls since 12:31, error classes a strict SUBSET of the chronic pre-deploy set — auth/billing/overloaded/rate_limited/invalid_request all pre-existed at higher rates; user_rephrased 2/679 ~ 0.29% vs 0.70% baseline). `SUDO_CAS_PRESSURE=1` appended to config/.env (line 196, gitignored deploy-state) + pm2 restart 19:43:40Z. Boot clean: post-restart level:50 lines are the chronic KAIROS posture banner, an IMAP logout from the dying old pid, one chronic ollama auth_permanent failover, and one cognitive-stream provider-failover tick error (old pid, chronic billing/auth class) — no new classes. NOTE: config/.env reaches process.env via the app's ConfigLoader at boot (loader.ts:130 ENV_FILE='config/.env', override:false), NOT via /proc environ — behavioral proof = the per-turn `CW2: context pressure tier chosen` line, expected on the next periodic turn (~20:02Z cadence).
+- **CW4:** PR #873 open, CI green at first push; 12/12 tests; this ledger fold rides the same PR.
