@@ -95,6 +95,14 @@ export interface ReadLedgerOptions {
   route?: string;
   /** Filter by caller (exact match on the `caller` column). */
   caller?: string;
+  /** Filter by purpose (exact match on the `purpose` column), e.g. 'brain.call'. */
+  purpose?: string;
+  /**
+   * Callers to EXCLUDE (e.g. 'consciousness', 'health') so the primary
+   * conversational call can be measured apples-to-apples with OpenClaw, free of
+   * background/probe traffic that shares the same ledger. Applied as NOT IN.
+   */
+  excludeCallers?: readonly string[];
   /** Max rows (most recent first by ts). Default 50. */
   limit?: number;
 }
@@ -114,6 +122,19 @@ export function readLedgerRows(db: Database.Database, opts: ReadLedgerOptions = 
   if (opts.caller) {
     where.push('caller = :caller');
     params['caller'] = opts.caller;
+  }
+  if (opts.purpose) {
+    where.push('purpose = :purpose');
+    params['purpose'] = opts.purpose;
+  }
+  if (opts.excludeCallers && opts.excludeCallers.length > 0) {
+    // Named placeholders per excluded caller — no string interpolation.
+    const names = opts.excludeCallers.map((c, i) => {
+      const key = `xc${i}`;
+      params[key] = c;
+      return `:${key}`;
+    });
+    where.push(`caller NOT IN (${names.join(', ')})`);
   }
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
   const rows = db
