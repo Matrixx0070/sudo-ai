@@ -11,6 +11,8 @@
  *  - Gracefully degrades when slices are null
  */
 
+import { USAGE_PANEL_HTML, USAGE_SCRIPT } from './dashboard-usage.js';
+
 export function renderDashboardHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -87,6 +89,7 @@ button:active{background:#3d444d}
 <div id="dashboard" style="margin-top:16px">
   <!-- rendered by JS -->
 </div>
+${USAGE_PANEL_HTML}
 
 <!-- Browser watch/takeover (Spec 3). Kept OUTSIDE #dashboard so the 30s
      poll re-render never tears down the live <img> or takeover controls. -->
@@ -663,6 +666,8 @@ function showLive(profile){
   kb.appendChild(browserBtn('Enter', function(){ apiPost('/v1/admin/browser/input',{profile:profile,kind:'key',key:'Enter'},function(){}); }));
   box.appendChild(kb);
 }
+
+${USAGE_SCRIPT}
 
 if(token){
   refreshBrowser();
