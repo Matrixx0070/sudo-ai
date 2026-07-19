@@ -147,6 +147,17 @@ const log = createLogger('agent:loop');
 // ---------------------------------------------------------------------------
 
 /**
+ * F35/F110 — pure gate for the loop-side auto-hibernation checkpoint. Returns
+ * true only when a hibernation callback is injected AND the current iteration
+ * lands on the coarse cadence boundary (>= every, and an exact multiple). Kept
+ * pure + exported so the boundary decision is unit-testable without booting a
+ * full AgentLoop; the loop calls it inline at the safe iteration boundary.
+ */
+export function shouldAutoHibernate(hasCallback: boolean, iteration: number, every: number): boolean {
+  return hasCallback && every > 0 && iteration >= every && iteration % every === 0;
+}
+
+/**
  * Stateless loop class that orchestrates one full agent turn.
  *
  * Inject Brain, ToolRegistry, and SessionManager via the constructor.
@@ -2167,14 +2178,14 @@ export class AgentLoop extends AgentLoopInjections {
         // for genuinely long runs, hand a lightweight snapshot to the injected
         // Drive hibernator so this task can resume on another machine. Never
         // throws into the loop; a no-op unless cli.ts injected the callback.
-        if (this._autoHibernate && state.iteration >= this._autoHibernateEvery && state.iteration % this._autoHibernateEvery === 0) {
+        if (shouldAutoHibernate(this._autoHibernate != null, state.iteration, this._autoHibernateEvery)) {
           try {
             const plan = (session.messages.find((m) => m.role === 'user')?.content ?? '').toString().slice(0, 1000);
             const toolResultDigests = session.messages
               .filter((m) => m.role === 'tool')
               .slice(-5)
               .map((m) => (m.content ?? '').toString().slice(0, 120));
-            this._autoHibernate({ sessionId: state.sessionId, plan, stepCursor: state.iteration, toolResultDigests });
+            this._autoHibernate!({ sessionId: state.sessionId, plan, stepCursor: state.iteration, toolResultDigests });
           } catch {
             /* hibernation must never break the loop */
           }
