@@ -5148,6 +5148,23 @@ if (process.argv[2] === 'chat') {
     console.error('[security-audit] Failed to load module:', msg);
     process.exit(1);
   });
+} else if (process.argv[2] === 'onboard') {
+  // onboard subcommand (BO12/S12) — deterministic, ZERO-SPEND first-run setup:
+  // machine scan + hash-audited workspace seeding + gateway-token generation.
+  // Intercept BEFORE full boot so it runs standalone (no daemon, no LLM).
+  import('./core/onboard/index.js').then(({ runOnboard }) => {
+    runOnboard(process.argv.slice(3))
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[onboard] Fatal error:', msg);
+        process.exit(1);
+      });
+  }).catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[onboard] Failed to load onboard module:', msg);
+    process.exit(1);
+  });
 } else if (process.argv[2] === 'replay') {
   // replay subcommand — read-only inspection of a captured session trace
   // (traces.db). Intercept BEFORE full boot so it never starts the daemon.
