@@ -13,6 +13,7 @@
  * stubs exactly.
  */
 
+import { createLogger } from '../shared/logger.js';
 import type { ConsciousnessOrchestrator } from './orchestrator.js';
 import type {
   SleepEpisodicLike,
@@ -32,6 +33,8 @@ export interface SleepCycleAdapters {
   metacognition: SleepMetacognitionLike;
   wisdomStore: SleepWisdomLike;
 }
+
+const log = createLogger('consciousness:sleep-adapters');
 
 const STUBS: SleepCycleAdapters = {
   episodicMemory: {
@@ -61,10 +64,26 @@ export function buildSleepCycleAdapters(
   if (!reflectOn) return STUBS;
 
   const episodic = orchestrator.getEpisodicMemory();
+  // Invariant 9 (two-reader consensus for automated memory surgery): the sleep
+  // cycle strengthens episodes solo (reinforcement / confidence annotation is
+  // allowed), but FORCE-DECAY (weaken) is memory surgery. Default = flag-only:
+  // record a decay-candidate mark and DO NOT mutate significance. Actual decay
+  // is gated behind SUDO_SLEEP_MEMORY_SURGERY=1 (operator-attested consensus).
+  const surgeryEnabled = process.env['SUDO_SLEEP_MEMORY_SURGERY'] === '1';
   return {
-    // Real episodic store: consolidation now runs over live episodes and
-    // strengthen/weaken actually persist.
-    episodicMemory: episodic,
+    // Real episodic store: consolidation now runs over live episodes; strengthen
+    // persists, weaken is flag-only unless consensus surgery is enabled.
+    episodicMemory: {
+      getBySignificance: (count: number) => episodic.getBySignificance(count),
+      strengthenEpisode: (id: string, delta: number) => episodic.strengthenEpisode(id, delta),
+      weakenEpisode: (id: string, delta: number) => {
+        if (surgeryEnabled) { episodic.weakenEpisode(id, delta); return; }
+        log.info(
+          { id, delta, event: 'sleep.decay.flagged' },
+          'decay candidate flagged (flag-only; force-decay surgery gated by two-reader consensus, invariant 9)',
+        );
+      },
+    },
     counterfactualEngine: {
       runIdleBatch: (count: number) => orchestrator.getCounterfactualEngine().runIdleBatch(episodic, count),
     },
