@@ -2807,7 +2807,13 @@ async function boot(): Promise<void> {
   ): Promise<string> => {
     const sessionTarget = job.sessionTarget === 'isolated' ? `cron:isolated:${job.id}` : `cron:main`;
     const session = await dualSessionManager.getOrCreate('web', sessionTarget);
-    const cronResult = await finalAgentLoop.run(session.id, payload.message, undefined, runOpts);
+    // BO4/S4: light-context cron turns (not the slim health tick, which already
+    // uses its own minimal prompt) get the reduced 'cron' injection profile.
+    const effectiveOpts =
+      payload.lightContext && !runOpts?.slimHeartbeat
+        ? { ...(runOpts ?? {}), promptProfile: 'cron' as const }
+        : runOpts;
+    const cronResult = await finalAgentLoop.run(session.id, payload.message, undefined, effectiveOpts);
     try {
       const cronTurnSummary = `**Cron (${job.name}):** ${payload.message.slice(0, 200)}\n**Agent:** ${(cronResult?.text ?? '').slice(0, 500)}`;
       await dailyLog.append(cronTurnSummary);
