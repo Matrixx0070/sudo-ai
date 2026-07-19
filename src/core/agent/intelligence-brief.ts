@@ -7,6 +7,17 @@
  */
 
 import { searchMemories } from '../memory/structured-memory.js';
+import { createLogger } from '../shared/logger.js';
+
+const log = createLogger('agent:intel-brief');
+
+/**
+ * CW0 measurement: rough token estimate (~4 chars/token) for the injected
+ * consciousness/brief block. Log-only; never used to alter injected content.
+ */
+function estimateBriefTokens(text: string): number {
+  return text ? Math.ceil(text.length / 4) : 0;
+}
 
 // ---------------------------------------------------------------------------
 // Duck-typed dependency interfaces
@@ -356,6 +367,32 @@ export async function generateIntelligenceBrief(
       selfCompetence,
     };
     const formatted = formatBrief(briefPayload);
+
+    // CW0 (log-only, no behavior change): per-turn injected consciousness token
+    // estimate + per-source share + whether the consciousness brief context was
+    // actually consulted. Reads `formatted`/`briefPayload` only; mutates nothing.
+    log.info(
+      {
+        injectedTokensEst: estimateBriefTokens(formatted),
+        consciousnessConsulted: consciousness !== null,
+        consciousnessReturned:
+          consciousnessResult.status === 'fulfilled' && consciousnessResult.value !== null,
+        surpriseLevel,
+        sources: {
+          wisdom: wisdom.length,
+          procedures: procedures.length,
+          episodes: episodes.length,
+          predictions: predictions.length,
+          structuredMemory: structuredMemory.length,
+          counterfactualLessons: counterfactualLessons.length,
+          metacognitiveReflections: metacognitiveReflections.length,
+          activeConcepts: activeConcepts.length,
+          hasTemporalNarrative: temporalNarrative.length > 0,
+          hasSelfCompetence: selfCompetence !== null,
+        },
+      },
+      'CW0: intelligence brief injected (consciousness token estimate)',
+    );
 
     return {
       generatedAt: new Date().toISOString(),
