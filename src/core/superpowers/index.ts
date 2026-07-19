@@ -21,6 +21,7 @@
 
 import type { ToolRegistry } from '../tools/registry.js';
 import { createLogger } from '../shared/logger.js';
+import { gateSuperpowers } from './gating.js';
 
 import { autoFixTool }             from './auto-fix.js';
 import { deployTool }              from './deploy.js';
@@ -59,11 +60,17 @@ const SUPERPOWER_TOOLS = [
  * @param registry - The application's central {@link ToolRegistry}.
  */
 export function registerSuperpowers(registry: ToolRegistry): void {
-  logger.info({ count: SUPERPOWER_TOOLS.length }, 'Registering superpower tools');
-  for (const tool of SUPERPOWER_TOOLS) {
+  // F108: per-tool gating — allowlist/denylist with fail-closed default for
+  // unknown tools. Prevents the superpower toolkit being an ungoverned surface.
+  const { enabled, denied, allowlistMode } = gateSuperpowers(SUPERPOWER_TOOLS);
+  logger.info({ count: enabled.length, denied: denied.length, allowlistMode }, 'Registering superpower tools');
+  for (const tool of enabled) {
     registry.register(tool);
   }
-  logger.info({ count: SUPERPOWER_TOOLS.length }, 'Superpower tools registered');
+  if (denied.length > 0) {
+    logger.warn({ denied }, 'Superpower tools withheld by gating');
+  }
+  logger.info({ count: enabled.length }, 'Superpower tools registered');
 }
 
 // Named re-exports for consumers that import individual tools.
