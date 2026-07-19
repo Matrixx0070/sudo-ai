@@ -129,6 +129,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     reasoningLens,
     peerId,
     mainPeerId: explicitMainPeerId,
+    captureVolatileTail,
   } = options;
 
   // Default mainPeerId to TELEGRAM_CHAT_ID first value (matches cli.ts line 470)
@@ -677,10 +678,24 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // Order: Recent Memory then Date (date is the most volatile — changes every
   // second — so it is the very last block).
   if (promptCacheStable) {
+    // BO2b/S1: when the caller opts in via captureVolatileTail, the fresh
+    // every-turn volatile blocks are NOT appended to the system string. They are
+    // handed back so the caller can position them at the TAIL of the message
+    // array (after append-only history), leaving the whole system prompt
+    // byte-stable so implicit-prefix caches can also cache the conversation
+    // history. Without the callback, legacy behavior: appended here at the tail
+    // of the system prompt (byte-identical to before).
+    const volatileParts: string[] = [];
     if (dailyMemory) {
-      parts.push(sectionWithHeader('Recent Memory', dailyMemory));
+      volatileParts.push(sectionWithHeader('Recent Memory', dailyMemory));
     }
-    parts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
+    volatileParts.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
+    if (captureVolatileTail) {
+      const block = volatileParts.filter(Boolean).join('').trim();
+      if (block) captureVolatileTail(block);
+    } else {
+      for (const p of volatileParts) parts.push(p);
+    }
   }
 
   const assembled = parts.filter(Boolean).join('').trim();
