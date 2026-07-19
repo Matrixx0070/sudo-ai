@@ -9,11 +9,11 @@ States: `TODO | IN_PROGRESS | BLOCKED(Q-n) | PR(#n) | MERGED(#n) | DEPLOYED | ME
 |---|---|---|---|---|---|
 | CW0 | Measurement: map + baseline injection pipeline | MEASURING(until 2026-07-20) | #868 | — | LIVE CONFIRMED: 10 organic `injectedTokensEst:329` lines (18:02:44Z/18:32:45Z/19:32:45Z et al., pid 3450416); mean 329 tok/turn (periodic scheduled turns, zero variance so far) |
 | CW1 | Un-sever real signals into drive compute | DEPLOYED | #867 | none (bugfix-grade) | live line PENDING a CHANNEL turn: getConsciousnessContext only runs on channel messages (cli.ts:1993) — zero since deploy; signals verified hot in DB (36 surprise events/24h, improving 0/705 => line WILL fire, values 0.xx/0.0) |
-| CW2 | Real context pressure into assembly | MEASURING(until 2026-07-22) | #870 | SUDO_CAS_PRESSURE=1 LIVE | flag flipped 19:43Z per Fable authorization (config/.env:196 + restart); watch: tier distribution, user_rephrased vs 0.70%, no new error classes |
+| CW2 | Real context pressure into assembly | MEASURING(until 2026-07-22) | #870 | SUDO_CAS_PRESSURE=1 LIVE | BEHAVIORALLY CONFIRMED 20:25:11Z: `CW2: context pressure tier chosen` occupancy=0 tier=full budget=null (correct fresh-session shape), pid 3546275 |
 | CW3 | Wire-or-delete: ContextSelector/Bridge | MERGED(#871) | #871 | — | verdict A: -1,238 LOC; CI green; merged-diff verified (files+refs gone) |
-| CW4 | Bid-based context arbiter | IN_PROGRESS | — | SUDO_CAS_ARBITER (default OFF) + SUDO_CAS_ARBITER_BUDGET (default 1200) | module+wiring+12 tests built session 4; A/B plan below; flip needs Fable GO (Q-n) |
-| CW5 | Surprise gates encoding + attention | TODO | — | SUDO_CAS_SURPRISE_GATE | — |
-| CW6 | HomeostatCore (essential variables) | TODO | — | — (sensing only) | — |
+| CW4 | Bid-based context arbiter | MERGED(#873)+DEPLOYED(flag OFF) | #873 | SUDO_CAS_ARBITER (default OFF) + SUDO_CAS_ARBITER_BUDGET (1200) | CI green x2; merged-diff verified; in prod via deploy #3 ~19:54Z; A/B plan below; flip needs Fable GO (Q-n) |
+| CW5 | Surprise gates encoding + attention | MERGED(#874) | #874 | SUDO_CAS_SURPRISE_GATE (default OFF) | CI green; merged-diff verified; deploy rides next prod merge |
+| CW6 | HomeostatCore (essential variables) | PR(#875) | #875 | — (sensing only; SUDO_HOMEOSTAT_* setpoint tuners) | 7 tests byte-identity + vector; digest slice; no contradictory thresholds found (no Q-n) |
 | CW7 | Expectation logging + mismatch credit | TODO | — | SUDO_CAS_AGENCY | — |
 | CW8 | Eligibility traces (multi-step credit) | TODO | — | SUDO_CAS_AGENCY | — |
 | CW9 | loop.ts decomposition DESIGN (execution gated) | TODO | — | — | — |
@@ -126,3 +126,28 @@ Decision rule: all four healthy → file Q-n proposing default-ON; any regressio
 - **CW1 stays PENDING with diagnosis:** the CW1 line lives in `getConsciousnessContext`, which the daemon calls only on CHANNEL messages (cli.ts:1993) — zero channel turns since deploy (0 "Session resolved"). DB proves the signals are hot: 36 surprise events in 24h (avg>0) and 0/705 capabilities improving (ratio 0.0 != 0.5 fallback) => the line fires on the first channel turn. Not a wiring gap.
 - **CW2 FLIPPED:** turn-health precondition verified (677 completed calls since 12:31, error classes a strict SUBSET of the chronic pre-deploy set — auth/billing/overloaded/rate_limited/invalid_request all pre-existed at higher rates; user_rephrased 2/679 ~ 0.29% vs 0.70% baseline). `SUDO_CAS_PRESSURE=1` appended to config/.env (line 196, gitignored deploy-state) + pm2 restart 19:43:40Z. Boot clean: post-restart level:50 lines are the chronic KAIROS posture banner, an IMAP logout from the dying old pid, one chronic ollama auth_permanent failover, and one cognitive-stream provider-failover tick error (old pid, chronic billing/auth class) — no new classes. NOTE: config/.env reaches process.env via the app's ConfigLoader at boot (loader.ts:130 ENV_FILE='config/.env', override:false), NOT via /proc environ — behavioral proof = the per-turn `CW2: context pressure tier chosen` line, expected on the next periodic turn (~20:02Z cadence).
 - **CW4:** PR #873 open, CI green at first push; 12/12 tests; this ledger fold rides the same PR.
+
+
+## CW5 seam map (recorded BEFORE wiring, per handoff CW5 step 1)
+
+**The encode-strength seam is a G2 mirror of CW1.** The episodic encode path:
+`orchestrator.onInteractionEnd` (orchestrator.ts:396) constructs every live Episode with **hardcoded `surpriseLevel: 0, significance: 0.5`** (was :418), while `computeSignificance` (episodic-memory/recorder.ts:60 — weights: base 0.30 + surprise*0.20 + emotionalIntensity*0.15 + msgCount cap 0.15 + toolCount cap 0.10 + error 0.10, clamped [0,1]) sat exported-but-never-called on the live path. Downstream consumers of significance: retrieval tie-break (episodic-memory/index.ts:444 `hits desc, significance desc`), significance-filtered queries (store-read.ts:73), consolidation (index.ts:273), self-model updates. Other memory-side seams checked: `store-write.ts:155/210` (boost/decay significance post-hoc), `memory-consolidator`/`epistemic-score` (different store — structured memory, not episodic; NOT touched this slice).
+
+**Wiring (flag SUDO_CAS_SURPRISE_GATE, default OFF):**
+- `computeEpisodeSignals` (recorder.ts, new): flag OFF => exact legacy constants {0, 0.5} (byte-identical rows); flag ON => real `surpriseLevel` = surpriseEngine.getAverageSurprise(1h window, event-local) and `significance` = computeSignificance(real inputs: valence intensity, message count, tool count, negative-outcome flag).
+- **Flood guard:** formula clamped [0,1] => max encode priority 1.0 = exactly 2.0x the 0.5 legacy baseline — the <=2x cap is inherent (test CW5-3). Watch plan: daily `SELECT COUNT(*), AVG(significance) FROM episodes` growth-rate check over the ON window; alert if daily episode count grows >2x the pre-flag rate.
+- **Attention side (CW4 integration, NOT a new system):** while ctx.surpriseLevel >= 0.7, episodic + metacognition bid VALUES are boosted x1.25 (clamped) in context-arbiter/sources.ts — self-expiring as the rolling average decays.
+
+### 2026-07-19 — Opus session 5 (CW5 build; cadence watch; ledger fold)
+
+- Session-4 outstanding facts folded: CW4 MERGED(#873)+DEPLOYED flag-OFF via deploy #3 (~19:54Z prod merge + restart, config-loaded 19:54:22Z); CW2 flip required a second restart with `--update-env` (19:44Z) and the flag reaches process.env via ConfigLoader dotenv (loader.ts ENV_FILE), NOT /proc environ.
+- Cadence check (opener, 20:16:54Z): no scheduled turn on post-19:58 pid yet (0 intel-brief lines on pid 3546275; last turn 19:32:45Z on old pid); within Fable's normal range at check time; re-check at ~40min mark — one pm2 restart pre-authorized if still silent, Q-n if dead after that.
+- CW1: still zero channel turns => line PENDING (unchanged).
+
+
+### 2026-07-19 (late) — Opus session 5 addendum: live confirmations + CW6
+
+- **CW2 flip BEHAVIORALLY CONFIRMED** 20:25:11Z (pid 3546275): `CW2: context pressure tier chosen {occupancy:0, tier:"full", budget:null}` — correct shape for a fresh scheduled-turn session (low occupancy => full tier => uncapped). Scheduler cadence self-recovered (~27min after the 19:58 boot); NO restart needed; the pre-authorized restart was not used.
+- **Real non-constant surprise observed live:** the same turn's brief line carries `surpriseLevel: 0.4313...` — the surprise-engine average flowing through getIntelligenceBriefContext. The CW1-specific `CW1: drive inputs` line still awaits a CHANNEL turn (its call site), but the underlying signal is confirmed live and non-zero.
+- CW5: MERGED(#874) after one CI round-trip (a pre-existing orchestrator unit test mocked the episodic-memory barrel without the new export — mock updated to mirror the real contract, the #441 lesson).
+- CW6 assumptions (recorded): tokens_day setpoint 15M/bound 30M (measured ~10M/day) via SUDO_HOMEOSTAT_TOKENS_DAY; error_rate setpoint 0.25/bound 0.6 (measured chronic ~22%) via SUDO_HOMEOSTAT_ERROR_RATE; queue_depth sensor honestly `available:false` (no cheap accessor). No contradictory thresholds between existing homeostats => no Q-n.

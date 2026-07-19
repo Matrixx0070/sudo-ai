@@ -101,5 +101,18 @@ export function collectBids(ctx: BriefContextLike): ContextBid[] {
     ));
   }
 
+  // CW5 (SUDO_CAS_SURPRISE_GATE): temporary attention re-weighting — while the
+  // rolling surprise average stays >= 0.7, boost the recall-oriented bids
+  // (episodic, metacognition) so surprising periods surface more supporting
+  // context. Self-expiring (decays with the average); clamp() caps the boost.
+  // NOT a new attention system — a bid-value modifier only (handoff CW5 step 3).
+  if (process.env['SUDO_CAS_SURPRISE_GATE'] === '1' && ctx.surpriseLevel >= 0.7) {
+    for (const b of bids) {
+      if (b.source === 'episodic' || b.source === 'metacognition') {
+        b.value = clamp(b.value * 1.25);
+      }
+    }
+  }
+
   return bids;
 }

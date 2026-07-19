@@ -100,6 +100,33 @@ export function computeSignificance(params: SignificanceParams): number {
 }
 
 // ---------------------------------------------------------------------------
+// computeEpisodeSignals (CW5)
+// ---------------------------------------------------------------------------
+
+/**
+ * CW5 (SUDO_CAS_SURPRISE_GATE, default OFF): flag-aware episode encode signals.
+ *
+ * The live onInteractionEnd path hardcoded `surpriseLevel: 0, significance: 0.5`
+ * on every episode while computeSignificance (surprise x0.20 + emotion x0.15)
+ * sat exported-but-uncalled — the G2 severed seam. Flag ON wires the real
+ * signals; flag OFF returns the exact legacy constants (byte-identical rows).
+ *
+ * Flood guard: computeSignificance is clamped to [0,1], so the maximum encode
+ * priority is 1.0 = 2.0x the legacy 0.5 baseline — the <=2x multiplier cap
+ * required by the handoff is inherent in the formula, not bolted on.
+ */
+export function computeEpisodeSignals(params: SignificanceParams): {
+  surpriseLevel: number;
+  significance: number;
+} {
+  if (process.env['SUDO_CAS_SURPRISE_GATE'] !== '1') {
+    return { surpriseLevel: 0, significance: 0.5 };
+  }
+  const surpriseLevel = Math.min(Math.max(params.surprise, 0), 1);
+  return { surpriseLevel, significance: computeSignificance(params) };
+}
+
+// ---------------------------------------------------------------------------
 // classifyOutcome
 // ---------------------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 666,
+  "count": 669,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -108,6 +108,7 @@
     "SUDO_CAS_ARBITER",
     "SUDO_CAS_ARBITER_BUDGET",
     "SUDO_CAS_PRESSURE",
+    "SUDO_CAS_SURPRISE_GATE",
     "SUDO_CDP_ENDPOINT",
     "SUDO_CHANNEL_COMMANDS",
     "SUDO_CHAT_APPROVALS",
@@ -332,6 +333,8 @@
     "SUDO_HEALTH_ALERT_DISABLE",
     "SUDO_HEALTH_ALERT_REMINDER_MS",
     "SUDO_HEALTH_FORCE_FAIL",
+    "SUDO_HOMEOSTAT_ERROR_RATE",
+    "SUDO_HOMEOSTAT_TOKENS_DAY",
     "SUDO_HOOKS_FILE",
     "SUDO_HOOK_AGENT",
     "SUDO_HOOK_EVENT",
