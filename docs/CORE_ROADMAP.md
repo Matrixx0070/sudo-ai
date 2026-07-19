@@ -211,6 +211,17 @@ phases; mechanical, test-guarded, no behavior change).
 | 4.3 | F92 tenancy / F95 FleetView / F96 voice-at-boot verdicts (wire-or-park each) | verdict rows in this ledger |
 | 4.4 | F87 world-state goals | **FRANK GATE — autonomous spend; do not flip solo** |
 
+### Phase 4.3 verdicts (2026-07-19)
+Wire-or-park delivered for F92/F95/F96 (F91 standard: reachability evidence,
+rescues beat deletions, a PARK = explicit docs entry not limbo). Docs-only PR —
+no product code touched; existing tenancy/fleetview/voice tests untouched.
+
+| Feature | Verdict | Evidence | Executed |
+|---|---|---|---|
+| **F92 tenancy** | **DEMOTE to documented library** (kept, not deleted) | Zero external consumers: `git grep -l tenancy src/ \| grep -v src/core/tenancy` → only a **doc comment** in `src/llm/policy.ts:408`; `git grep core/tenancy` → no imports. Good bones: `tenant-launcher.ts` fail-closed (throws w/o real isolation unless `SUDO_TENANCY_ALLOW_UNSAFE=1`); 21 passing tests. | `docs/TENANCY_STATUS.md` with explicit "no runtime consumers" note; code + tests retained. |
+| **F95 FleetView** | **PARK as experiments** (not packaged, not deleted) | `src/tui/fleetview` + `src/desktop/fleetview` + `src/gateway/jsonrpc` are **tsx-only** (package.json `tui:/gateway:/desktop:fleetview` scripts); TUI entry docstring states default build target excludes them; zero consumers; 6 test files present. Packaging (bundled TUI + Electron build) unwarranted w/o operator demand. | `docs/FLEETVIEW_STATUS.md` (what exists, tsx run instructions, why parked). |
+| **F96 voice at boot** | **PARK-until-F94-unparks** (no boot init wired) | Voice engine complete (`src/core/voice/`), but F93/F94 (its dependents) PARKED BY FRANK. Voice is NOT dead — independent live consumer: Telegram voice replies (`SUDO_TELEGRAM_VOICE_REPLY` **default ON**, telegram.ts:271-272) via **lazy** STT/TTS (created on first use, telegram.ts:223). Boot warmup would add cold-start + model-download cost for zero live benefit (no new spend rule). Assets: `~/.cache/whisper/base.pt` present; Kokoro/Whisper ONNX = download-on-first-use, not boot-provisioned. | `docs/VOICE_BOOT_STATUS.md` (park rationale + unpark trigger = F94). |
+
 ### Phase 5 — Rolling/research
 F107 stub-debt triage (tools 179 / api 92, rolling burn-down) · F111 F5
 gated user-file tool · F112 record-replay determinism research (unlocks true
