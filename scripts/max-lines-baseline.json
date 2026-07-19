@@ -8,6 +8,7 @@
   "src/core/agent/alignment-aggregator.ts": 475,
   "src/core/agent/approval.ts": 419,
   "src/core/agent/compaction.ts": 422,
+  "src/core/agent/intelligence-brief.ts": 411,
   "src/core/agent/loop-helpers/context-fold.ts": 461,
   "src/core/agent/loop-helpers/prepare-messages.ts": 405,
   "src/core/agent/loop-helpers/tool-exec.ts": 662,
