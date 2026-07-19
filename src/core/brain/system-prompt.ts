@@ -14,6 +14,7 @@ import { getPersonaSystemBlock } from './personas.js';
 import { getMoodSystemBlock } from './moods.js';
 import { isPromptCacheEnabled, sortByName, DYNAMIC_BOUNDARY_MARKER } from './prompt-cache-discipline.js';
 import { getCapabilityManifestBody, isCapabilityManifestEnabled } from './capability-manifest.js';
+import { sanitizeForPrompt } from './sanitize-for-prompt.js';
 import { getAppliedLessonHints } from '../learning/lesson-apply.js';
 import { getAdoptedDirectives } from '../eval/self-eval.js';
 import { truncateForInjection, injectCap, MAX_INJECT_CHARS, DAILY_INJECT_CHARS } from '../workspace/injector.js';
@@ -215,7 +216,11 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // Build tools list block with usage instructions.
   let toolsListBlock = '';
   if (tools && tools.length > 0) {
-    const lines = sortByName(tools, (t) => t.name).map((t) => `- **${t.name}**: ${t.description}`);
+    const lines = sortByName(tools, (t) => t.name).map(
+      // S11: tool name/description can originate from an untrusted remote MCP
+      // server; sanitize before they enter the system prompt.
+      (t) => `- **${sanitizeForPrompt(t.name)}**: ${sanitizeForPrompt(t.description)}`,
+    );
     toolsListBlock = [
       'You have access to the following tools. Use them ONLY when the user asks you to DO something concrete ' +
       '(check, search, navigate, read, write, screenshot, execute, etc.). ' +
@@ -257,7 +262,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
       '',
       'When calling tools:',
       '- Always provide ALL required parameters with correct types.',
-      `- Use paths relative to the working directory (e.g. "output.ts" not "${PROJECT_ROOT}/output.ts").`,
+      `- Use paths relative to the working directory (e.g. "output.ts" not "${sanitizeForPrompt(PROJECT_ROOT)}/output.ts").`,
       '- Do not invent parameters that are not in the tool schema.',
       '- For file writes, provide the complete file content — do not use placeholders or "// ... rest of code".',
       '- When writing multiple files, call the tool once per file.',
