@@ -680,12 +680,37 @@ export class ConsciousnessOrchestrator {
     try {
       const tags: Record<string, number> = {};
       for (const tag of emotion.tags) tags[tag] = emotion.intensity;
+      // CW1: un-sever the real consciousness signals into drive computation.
+      // These were hardcoded placeholders (recentSurprise:0, worldModelConfidence:0.5,
+      // selfModelImprovingRatio:0.5) — the surprise-engine and world/self models run
+      // and store state, but constants replaced their outputs exactly where they
+      // modulate drive value. This is the sole caller of driveManager.compute(), so
+      // these inputs set the drive state every downstream consumer reads (dominant
+      // drive, drive influence, intelligence brief). Each read is guarded; the old
+      // constant remains the fallback when a module is unavailable/not-yet-populated.
+      let recentSurprise = 0;
+      try { recentSurprise = this.surpriseEngine.getAverageSurprise(24); } catch { /* module unavailable — keep 0 fallback */ }
+      let worldModelConfidence = 0.5;
+      try { worldModelConfidence = this.worldModel.getAverageConfidence(); } catch { /* module unavailable — keep 0.5 fallback */ }
+      let selfModelImprovingRatio = 0.5;
+      try { selfModelImprovingRatio = this.selfModel.getImprovingRatio(); } catch { /* module unavailable — keep 0.5 fallback */ }
+      // recentInteractionRate: no cheap per-turn rate history exists (only a single
+      // _lastInteractionAt timestamp, not a windowed rate). Left at 0.5 per CW1 step 4;
+      // deferred to a follow-up if/when an interaction-rate accessor is added.
+      const recentInteractionRate = 0.5;
       this.driveManager.compute({
         bodyState: body, emotionalTags: tags, emotionalIntensity: emotion.intensity,
-        recentSurprise: 0, recentInteractionRate: 0.5, worldModelConfidence: 0.5,
-        selfModelImprovingRatio: 0.5,
+        recentSurprise, recentInteractionRate, worldModelConfidence,
+        selfModelImprovingRatio,
         timeSinceLastInteractionMs: this._lastInteractionAt ? Date.now() - new Date(this._lastInteractionAt).getTime() : 0,
       });
+      // CW1 deploy/telemetry proof: emit a line only when a real (non-fallback)
+      // signal is actually flowing, so it stays quiet at cold-start baseline and
+      // gives a single visible "non-constant value flowing" line once modules
+      // populate. Kept at info level (debug is suppressed in prod).
+      if (recentSurprise !== 0 || worldModelConfidence !== 0.5 || selfModelImprovingRatio !== 0.5) {
+        log.info({ recentSurprise, worldModelConfidence, selfModelImprovingRatio, recentInteractionRate }, 'CW1: drive inputs (real signals wired)');
+      }
       const d = this.driveManager.getDominant();
       dominantDrive = d.name; satisfiedBy = d.satisfiedBy;
     } catch { /* pre-first-compute */ }
