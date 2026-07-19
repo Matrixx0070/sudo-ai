@@ -473,6 +473,10 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     if (toolsListBlock) {
       reduced.push(sectionWithHeader('Available Tools', toolsListBlock));
     }
+    // BO6/S3: skill catalog (always-visible baseline) rides reduced profiles too.
+    if (options.skillCatalog) {
+      reduced.push(section(options.skillCatalog));
+    }
     // AGENTS + Safety: mandatory in every profile (never dropped for tokens).
     reduced.push(section(agentsBody));
     reduced.push(section(toolsContent));
@@ -524,6 +528,14 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // 5. Available tools
   if (toolsListBlock) {
     parts.push(sectionWithHeader('Available Tools', toolsListBlock));
+  }
+
+  // 5b. BO6/S3 skill catalog — the always-visible <available_skills> block
+  //     (name/desc/path/hash per skill, ≤30 tokens each; never a body). Above the
+  //     boundary so it rides the cached stable prefix; byte-stable within a session
+  //     (deterministic sort + body-hash marker). Read-on-demand via skill.read.
+  if (options.skillCatalog) {
+    parts.push(section(options.skillCatalog));
   }
 
   // With SUDO_PROMPT_CACHE=1 we lift the workspace markdown blocks (AGENTS,
