@@ -13,6 +13,7 @@ export type RoutingPath =
   | 'reasoning-tier'
   | 'cheap'
   | 'category'
+  | 'affinity'
   | 'consensus'
   | 'failover'
   | 'blocked';
@@ -49,6 +50,8 @@ export function describeRouting(t: RoutingTrace): string {
       return `⚡ cheap-route → ${t.activeModel} ${cost}${switched}`;
     case 'category':
       return `🎯 ${t.reason} → ${t.activeModel} ${cost}${switched}`;
+    case 'affinity':
+      return `📌 cache-affinity → ${t.activeModel} ${cost}${switched}`;
     case 'consensus': {
       const c = t.consensus;
       const pct = c ? `${Math.round(c.agreement * 100)}%` : '';
