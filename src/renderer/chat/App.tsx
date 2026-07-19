@@ -22,13 +22,17 @@ async function postCanvasEvent(e: CanvasEventOut): Promise<void> {
 export function App() {
   const [directoryOpen, setDirectoryOpen] = React.useState(false);
   const [canvas, setCanvas] = React.useState<CanvasData | null>(null);
-  const { messages, currentResponse, error, addMessage, clearMessages, setCurrentResponse, setError } = useChatSession();
+  const { messages, currentResponse, error, chip, addMessage, clearMessages, setCurrentResponse, setError, setChip } = useChatSession();
   const { connected, sendMessage, sendAttachment } = useWebSocket({
     onMessage: (data) => {
       if (data.type === 'thinking') {
         setCurrentResponse({ type: 'thinking', text: data.text || 'Thinking...' });
       } else if (data.type === 'progress') {
         setCurrentResponse({ type: 'progress', text: data.text, progress: data.progress });
+      } else if (data.type === 'phase') {
+        // BO11/S13: live working-state row + always-visible model/context chip.
+        setCurrentResponse({ type: 'phase', phase: data.phase, label: data.label, elapsedSec: data.elapsedSec });
+        if (data.chip) setChip(data.chip);
       } else if (data.type === 'token') {
         // Intermediate step text streamed during the turn — shown as a live
         // preview bubble; the final `reply` frame replaces it with the canonical text.
@@ -113,6 +117,15 @@ export function App() {
           <p className="text-xs text-gray-400">Digital Life Form v5</p>
         </div>
         <div className="ml-auto flex items-center gap-3">
+          {chip && (
+            <span
+              title="Active model | context used / window"
+              className="text-[11px] text-gray-400 font-mono border border-gray-700 rounded-md px-2 py-0.5 whitespace-nowrap"
+              data-testid="model-chip"
+            >
+              {chip}
+            </span>
+          )}
           <ConnectionStatus connected={connected} />
           <button
             onClick={() => setDirectoryOpen(true)}

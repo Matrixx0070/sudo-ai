@@ -2431,14 +2431,30 @@ async function boot(): Promise<void> {
           // long turn shows progress instead of a silent wait. Default-on; SUDO_WEB_STREAM=0
           // disables. Best-effort: a failed frame never breaks the turn.
           const webStreaming = process.env['SUDO_WEB_STREAM'] !== '0';
+          // BO11/S13: live working-states — a phase tracker (waiting→running→streaming
+          // with elapsed) plus the always-visible model/context chip, both derived from
+          // the SAME agent-event stream the SPA already consumes. Best-effort throughout.
+          const { LiveStateTracker, formatModelContextChip } = await import('./core/channels/live-state.js');
+          let liveChip: string | undefined;
+          try {
+            const { collectStatusCard, getStatusSources } = await import('./core/commands/builtin/status-card.js');
+            const card = await collectStatusCard({ ...(getStatusSources() ?? {}), sessionId: String(session.id), channel: 'web', peerId: msg.peerId });
+            liveChip = formatModelContextChip(card.model, card.context);
+          } catch { /* chip is best-effort — never block the turn */ }
+          const liveTracker = new LiveStateTracker({ ...(liveChip ? { chip: liveChip } : {}), verbIndex: taskStartMs });
           const onWebEvent: import('./core/agent/types.js').AgentEventHandler | undefined = webStreaming
             ? (ev) => {
                 try {
+                  const pf = liveTracker.onEvent(ev);
+                  if (pf) void web.send(msg.peerId, pf).catch(() => { /* ws closed mid-stream */ });
                   const frame = agentEventToWebFrame(ev);
                   if (frame) void web.send(msg.peerId, frame).catch(() => { /* ws closed mid-stream */ });
                 } catch { /* never break the turn on a streaming frame */ }
               }
             : undefined;
+          // Emit the initial "waiting" phase immediately so the SPA shows the live
+          // state (and chip) before the first token arrives.
+          if (webStreaming) void web.send(msg.peerId, liveTracker.initialFrame()).catch(() => { /* ws closed */ });
           // Web chat is gated by WEB_CHAT_TOKEN — its driver is the owner. Bind
           // that to the turn so owner-only browser profiles (e.g. personal) are
           // launchable here. Turn-scoped via AgentState (no shared registry).
