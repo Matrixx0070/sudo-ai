@@ -22,12 +22,8 @@ export { ConsciousnessError } from './errors.js';
 export { ConsciousnessDB } from './consciousness-db.js';
 
 // Context selector (consciousness bridge)
-export { ContextSelector } from './context-selector.js';
-export type { ContextSelection, ModuleRelevance } from './context-selector.js';
 
 // Consciousness bridge
-export { ConsciousnessBridge } from './context-bridge.js';
-export type { BridgeInjection } from './context-bridge.js';
 
 // HEARTBEAT morning briefing (community-driven feature)
 export { HeartbeatEngine } from './heartbeat.js';

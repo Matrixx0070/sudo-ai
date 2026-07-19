@@ -29,8 +29,6 @@ import { CounterfactualEngine } from './counterfactual-engine/index.js';
 import { TemporalSelf } from './temporal-self/index.js';
 import { ProceduralMemory } from './procedural-memory/index.js';
 import { SurpriseEngine, type SurpriseEvent } from './surprise-engine/index.js';
-import { ContextSelector, type ContextSelection } from './context-selector.js';
-import { ConsciousnessBridge, type BridgeInjection } from './context-bridge.js';
 
 // ---------------------------------------------------------------------------
 // Deep Insight output types — surfaced by getDeepInsights()
@@ -192,8 +190,6 @@ export class ConsciousnessOrchestrator {
   private temporalSelf!: TemporalSelf;
   private proceduralMemory!: ProceduralMemory;
   private surpriseEngine!: SurpriseEngine;
-  private contextSelector: ContextSelector | null = null;
-  private consciousnessBridge: ConsciousnessBridge | null = null;
   private sleepCycle: SleepCycleLike | null = null;
   private selfEvolution: SelfEvolutionLike | null = null;
   private _booted = false;
@@ -245,20 +241,6 @@ export class ConsciousnessOrchestrator {
   setZDRMode(enabled: boolean): void {
     this._zdrEnabled = enabled;
     if (enabled) log.info('ConsciousnessOrchestrator: ZDR mode active — data retention disabled');
-  }
-
-  /** Attach a ContextSelector for intent-based module selection (Phase 3 bridge). */
-  attachContextSelector(cs: ContextSelector): void {
-    if (!cs) { log.warn('attachContextSelector: null/undefined — ignoring'); return; }
-    this.contextSelector = cs;
-    log.info('ContextSelector attached to orchestrator');
-  }
-
-  /** Attach a ConsciousnessBridge for prompt injection (Phase 3 bridge). */
-  attachConsciousnessBridge(cb: ConsciousnessBridge): void {
-    if (!cb) { log.warn('attachConsciousnessBridge: null/undefined — ignoring'); return; }
-    this.consciousnessBridge = cb;
-    log.info('ConsciousnessBridge attached to orchestrator');
   }
 
   async boot(): Promise<void> {
@@ -653,20 +635,6 @@ export class ConsciousnessOrchestrator {
     if (this._zdrEnabled) return '## Internal State\n(ZDR active — data retention disabled)';
 
     const episodic = this._episodicRecallBlock();
-
-    // Phase 3 consciousness bridge: if bridge is configured, delegate to it for
-    // intent-aware module selection and budget-adaptive context injection.
-    if (this.contextSelector !== null && this.consciousnessBridge !== null) {
-      try {
-        const category = this._inferCurrentCategory();
-        const intent = this._lastInteractionAt ?? 'general';
-        // Use 0% context pressure as conservative default (full detail tier)
-        const injection: BridgeInjection = this.consciousnessBridge.bridge(category, intent, 0);
-        if (injection.context) return injection.context + episodic;
-      } catch (err) {
-        log.warn({ err: String(err) }, 'ConsciousnessBridge failed — falling back to legacy summary');
-      }
-    }
 
     const body    = this.embodiedState.getState();
     const emotion = this.emotionalState.getCurrentState();
@@ -1098,21 +1066,6 @@ export class ConsciousnessOrchestrator {
       const msg = err instanceof Error ? err.message : String(err);
       throw new ConsciousnessError(`introspect brain call failed: ${msg}`, 'consciousness_orchestrator_introspect_failed', { cause: msg });
     }
-  }
-
-  /** Infer a routing category from recent thoughts for the ContextSelector. */
-  private _inferCurrentCategory(): string {
-    try {
-      const recentThoughts = this.cognitiveStream.getRecentThoughts(5);
-      if (recentThoughts.length === 0) return 'general';
-      const text = recentThoughts.map((t) => t.content).join(' ').toLowerCase();
-      if (/code|implement|function|bug|debug|build|deploy/.test(text)) return 'coding';
-      if (/analy|data|eval|metric|report|stat/.test(text)) return 'analysis';
-      if (/research|search|investigat|find|look up/.test(text)) return 'research';
-      if (/block|restrict|denied|safe|veto|security/.test(text)) return 'blocked';
-      if (/chat|convers|hello|how are|help me/.test(text)) return 'conversation';
-    } catch { /* fall through */ }
-    return 'general';
   }
 
   _dispatchControl(payload: { module: string; action: string }): void {
