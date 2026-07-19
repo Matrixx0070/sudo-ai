@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 669,
+  "count": 670,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -105,6 +105,7 @@
     "SUDO_CAPABILITY_MANIFEST",
     "SUDO_CAP_SIGNALS",
     "SUDO_CAP_WORKFLOW_RUNS",
+    "SUDO_CAS_AGENCY",
     "SUDO_CAS_ARBITER",
     "SUDO_CAS_ARBITER_BUDGET",
     "SUDO_CAS_PRESSURE",
