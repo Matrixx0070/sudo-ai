@@ -318,11 +318,11 @@ indexes; 38 skipped tests concentrated in meta + browser suites.
 
 | Wave | Status |
 |---|---|
-| A (F81–F88) | **F81 shipped** (#807, census + `docs/FLAG_CENSUS.md`); **F88 shipped** (#809, real LlmGoalEvaluator behind injected seam; activate via SUDO_GOAL_EVAL_MODEL); F82–F87 = verify/measure tasks per census corrections |
-| B (F89–F96) | **F89 shipped** (#806); **F90 shipped** (AutoBugFix C+D behind SUDO_AUTOBUGFIX=1); **F91 verdicts delivered** (3 deleted, 3 corrected-keep); rest not started |
+| A (F81–F88) | **F81 ✅ #807 · F88 ✅ #809+ACTIVE (ecosystem sudo/cheap) · F83 ✅ #862 2026-07-19** (diagnosis: idle-trigger structurally unreachable + stub adapters; background scheduler + real consolidation proven on prod-DB copy: 20 replayed/3 patterns/3 insights; live boot line "F83 sleep scheduler started") · **F84 KEEP / F85 FIX-OR-OFF / F86 ✅ #863** (see Phase-1 verdicts + Phase 4.2); F82 verified-active; F87 = FRANK GATE |
+| B (F89–F96) | **F89 ✅ #806 · F90 ✅ · F91 verdicts ✅ · F92 DEMOTE ✅ · F95 PARK ✅ · F96 PARK-until-F94 ✅** (#857 2026-07-19, docs/{TENANCY,FLEETVIEW,VOICE_BOOT}_STATUS.md); F93/F94 PARKED (Frank) |
 | C (F97–F103) | **F97 SHIPPED** (2026-07-18, deployed+live via later merges); **F98/F100/F102 ✅ + F103 slices 1-2 ✅** (Phase-3 section); **F101 COMPLETE 2026-07-19** — the tail (dashboard fold + /api/admin→/v1/admin reconcile + unified admin auth) shipped via the gateway campaign (GW-4, PRs #832/#833/#856; live-verified authed 200 on all four /v1/admin/system/* routes); F99 absorbed into F117; remaining C = F103 loop.ts designed decomposition + cli.ts phased boot |
-| D (F104–F108) | **F104+F106 shipped** (#810: SUDO_SECURITY_STRICT fatal guard-init + posture-weakening boot banner, posture.ts); F105/F107/F108 not started |
-| E (F109–F112) | not started. Census follow-up shipped: SUDO_UPDATE_* env→config mapping (#808). |
+| D (F104–F108) | **F104+F106 shipped** (#810; strict default flipped by GW-3b #831); **F105 ✅ #859 2026-07-19** (ZDR 3→6 user-content paths + per-channel hook + docs/ZDR_AUDIT.md); **F107 rolling**; **F108 ✅ #860 2026-07-19** (alignment boot-seeding, forge kill-switch+budgets, superpowers fail-closed gating) |
+| E (F109–F112) | **F109+F110 ✅ #861 2026-07-19** (gdrive CLI status/knew-at/bisect/resume; F110 found already-wired, predicate extracted+tested); F111/F112 open. Census follow-up #808. |
 | F (F113–F118) persistence | **F113+F114 shipped** (#818 retention-sweep + WAL); **F115/F116/F117/F118 verdicts + map delivered** (docs/PERSISTENCE_MAP.md; physical merges rejected/deferred with reasons; F117 boot-scan = small follow-up) |
 | G (F119–F123) metabolism | **COMPLETE** — #820 (F119 deep-thought consumer, F120 dead wiring, F121 Kairos governance, F122 detection surfacing) + #821 (F123 metabolism report) |
 | H (F124–F127) quality | **COMPLETE (opening slices)** — #822 (F125 category smoke 35 cats/307 tools + F124 mcp-adapter/loop-helpers, 99 tests; 2 real bugs documented) + this PR (F126 unskip audit incl. never-running docker-gate fix; F127 consciousness store suites). Coverage stays a rolling discipline. |
