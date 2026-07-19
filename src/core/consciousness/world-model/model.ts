@@ -136,6 +136,22 @@ export class WorldModel {
   }
 
   /**
+   * CW1: Mean confidence across all currently-pending predictions, in [0,1].
+   * This is the real signal the drive-computer's `worldModelConfidence` input
+   * expects ("average prediction confidence from the world-model"). Read-only;
+   * reuses the existing pending-prediction accessor (no new store query).
+   * Returns the 0.5 baseline when there are no pending predictions, matching
+   * the placeholder constant it replaces at the drive-compute call site.
+   */
+  getAverageConfidence(): number {
+    const pending = getPending(this.cdb);
+    if (pending.length === 0) return 0.5;
+
+    const sum = pending.reduce((acc, p) => acc + (p.confidence ?? 0.5), 0);
+    return Math.round((sum / pending.length) * 1000) / 1000;
+  }
+
+  /**
    * Empirical match rate for a domain: confirmed / (confirmed + violated),
    * with the backing sample size. Used to seed a learned confidence prior so
    * predictions converge toward the true base rate instead of oscillating.

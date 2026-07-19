@@ -680,12 +680,27 @@ export class ConsciousnessOrchestrator {
     try {
       const tags: Record<string, number> = {};
       for (const tag of emotion.tags) tags[tag] = emotion.intensity;
+      // CW1: un-sever real signals into drive computation (the sole caller of
+      // compute(), so these inputs set the drive state every downstream consumer
+      // reads). Old placeholders (0 / 0.5) become module-unavailable fallbacks.
+      let recentSurprise = 0;
+      try { recentSurprise = this.surpriseEngine.getAverageSurprise(24); } catch { /* keep 0 fallback */ }
+      let worldModelConfidence = 0.5;
+      try { worldModelConfidence = this.worldModel.getAverageConfidence(); } catch { /* keep 0.5 fallback */ }
+      let selfModelImprovingRatio = 0.5;
+      try { selfModelImprovingRatio = this.selfModel.getImprovingRatio(); } catch { /* keep 0.5 fallback */ }
+      // recentInteractionRate: no cheap windowed rate exists yet — 0.5 (CW1 step 4).
       this.driveManager.compute({
         bodyState: body, emotionalTags: tags, emotionalIntensity: emotion.intensity,
-        recentSurprise: 0, recentInteractionRate: 0.5, worldModelConfidence: 0.5,
-        selfModelImprovingRatio: 0.5,
+        recentSurprise, recentInteractionRate: 0.5, worldModelConfidence,
+        selfModelImprovingRatio,
         timeSinceLastInteractionMs: this._lastInteractionAt ? Date.now() - new Date(this._lastInteractionAt).getTime() : 0,
       });
+      // CW1 telemetry: emit only when a real (non-fallback) signal flows — quiet at
+      // cold start; info level (debug is suppressed in prod).
+      if (recentSurprise !== 0 || worldModelConfidence !== 0.5 || selfModelImprovingRatio !== 0.5) {
+        log.info({ recentSurprise, worldModelConfidence, selfModelImprovingRatio }, 'CW1: drive inputs (real signals wired)');
+      }
       const d = this.driveManager.getDominant();
       dominantDrive = d.name; satisfiedBy = d.satisfiedBy;
     } catch { /* pre-first-compute */ }
