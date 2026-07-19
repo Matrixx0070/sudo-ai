@@ -9,11 +9,11 @@ States: `TODO | IN_PROGRESS | BLOCKED(Q-n) | PR(#n) | MERGED(#n) | DEPLOYED | ME
 |---|---|---|---|---|---|
 | CW0 | Measurement: map + baseline injection pipeline | MEASURING(until 2026-07-20) | #868 | — | LIVE CONFIRMED: 10 organic `injectedTokensEst:329` lines (18:02:44Z/18:32:45Z/19:32:45Z et al., pid 3450416); mean 329 tok/turn (periodic scheduled turns, zero variance so far) |
 | CW1 | Un-sever real signals into drive compute | DEPLOYED | #867 | none (bugfix-grade) | live line PENDING a CHANNEL turn: getConsciousnessContext only runs on channel messages (cli.ts:1993) — zero since deploy; signals verified hot in DB (36 surprise events/24h, improving 0/705 => line WILL fire, values 0.xx/0.0) |
-| CW2 | Real context pressure into assembly | MEASURING(until 2026-07-22) | #870 | SUDO_CAS_PRESSURE=1 LIVE | flag flipped 19:43Z per Fable authorization (config/.env:196 + restart); watch: tier distribution, user_rephrased vs 0.70%, no new error classes |
+| CW2 | Real context pressure into assembly | MEASURING(until 2026-07-22) | #870 | SUDO_CAS_PRESSURE=1 LIVE | BEHAVIORALLY CONFIRMED 20:25:11Z: `CW2: context pressure tier chosen` occupancy=0 tier=full budget=null (correct fresh-session shape), pid 3546275 |
 | CW3 | Wire-or-delete: ContextSelector/Bridge | MERGED(#871) | #871 | — | verdict A: -1,238 LOC; CI green; merged-diff verified (files+refs gone) |
 | CW4 | Bid-based context arbiter | MERGED(#873)+DEPLOYED(flag OFF) | #873 | SUDO_CAS_ARBITER (default OFF) + SUDO_CAS_ARBITER_BUDGET (1200) | CI green x2; merged-diff verified; in prod via deploy #3 ~19:54Z; A/B plan below; flip needs Fable GO (Q-n) |
-| CW5 | Surprise gates encoding + attention | IN_PROGRESS | — | SUDO_CAS_SURPRISE_GATE (default OFF) | seam mapped + wired + 7 tests (session 5); see seam map below |
-| CW6 | HomeostatCore (essential variables) | TODO | — | — (sensing only) | — |
+| CW5 | Surprise gates encoding + attention | MERGED(#874) | #874 | SUDO_CAS_SURPRISE_GATE (default OFF) | CI green; merged-diff verified; deploy rides next prod merge |
+| CW6 | HomeostatCore (essential variables) | PR(#875) | #875 | — (sensing only; SUDO_HOMEOSTAT_* setpoint tuners) | 7 tests byte-identity + vector; digest slice; no contradictory thresholds found (no Q-n) |
 | CW7 | Expectation logging + mismatch credit | TODO | — | SUDO_CAS_AGENCY | — |
 | CW8 | Eligibility traces (multi-step credit) | TODO | — | SUDO_CAS_AGENCY | — |
 | CW9 | loop.ts decomposition DESIGN (execution gated) | TODO | — | — | — |
@@ -143,3 +143,11 @@ Decision rule: all four healthy → file Q-n proposing default-ON; any regressio
 - Session-4 outstanding facts folded: CW4 MERGED(#873)+DEPLOYED flag-OFF via deploy #3 (~19:54Z prod merge + restart, config-loaded 19:54:22Z); CW2 flip required a second restart with `--update-env` (19:44Z) and the flag reaches process.env via ConfigLoader dotenv (loader.ts ENV_FILE), NOT /proc environ.
 - Cadence check (opener, 20:16:54Z): no scheduled turn on post-19:58 pid yet (0 intel-brief lines on pid 3546275; last turn 19:32:45Z on old pid); within Fable's normal range at check time; re-check at ~40min mark — one pm2 restart pre-authorized if still silent, Q-n if dead after that.
 - CW1: still zero channel turns => line PENDING (unchanged).
+
+
+### 2026-07-19 (late) — Opus session 5 addendum: live confirmations + CW6
+
+- **CW2 flip BEHAVIORALLY CONFIRMED** 20:25:11Z (pid 3546275): `CW2: context pressure tier chosen {occupancy:0, tier:"full", budget:null}` — correct shape for a fresh scheduled-turn session (low occupancy => full tier => uncapped). Scheduler cadence self-recovered (~27min after the 19:58 boot); NO restart needed; the pre-authorized restart was not used.
+- **Real non-constant surprise observed live:** the same turn's brief line carries `surpriseLevel: 0.4313...` — the surprise-engine average flowing through getIntelligenceBriefContext. The CW1-specific `CW1: drive inputs` line still awaits a CHANNEL turn (its call site), but the underlying signal is confirmed live and non-zero.
+- CW5: MERGED(#874) after one CI round-trip (a pre-existing orchestrator unit test mocked the episodic-memory barrel without the new export — mock updated to mirror the real contract, the #441 lesson).
+- CW6 assumptions (recorded): tokens_day setpoint 15M/bound 30M (measured ~10M/day) via SUDO_HOMEOSTAT_TOKENS_DAY; error_rate setpoint 0.25/bound 0.6 (measured chronic ~22%) via SUDO_HOMEOSTAT_ERROR_RATE; queue_depth sensor honestly `available:false` (no cheap accessor). No contradictory thresholds between existing homeostats => no Q-n.
