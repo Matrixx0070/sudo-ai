@@ -1575,7 +1575,11 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     if (
       sessionCacheAffinityEnabled() &&
       request.sessionId &&
-      request.race !== true &&
+      // NOTE: intentionally NOT guarded by request.race — an affinity session
+      // OPTS OUT of the multi-model cloud race so its single-provider prompt
+      // cache stays warm (S1). The fast-path below then routes single-model,
+      // bypassing consensus. Non-affinity race turns still consensus (guard
+      // `if (request.race === true) return null` a few lines down is unchanged).
       (!request.model || request.model === 'auto')
     ) {
       let pin = getSessionAffinity(request.sessionId);
