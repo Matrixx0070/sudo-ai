@@ -24,6 +24,7 @@ import { runTreeSearch } from './brain-tree-search.js';
 import { clampMaxTokensToModel } from './thinking-inject.js';
 import { isCustomProvider, registerCustomProvidersOnce } from '../../llm/custom-providers.js';
 import { assembleSystemPrompt, assembleSlimHeartbeatPrompt } from './system-prompt.js';
+import { isPromptReportEnabled, recordPromptReport } from './prompt-report-store.js';
 import { isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages } from './prompt-cache-discipline.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
@@ -717,6 +718,19 @@ export class Brain {
     if (toolSummaries.length > 0 && !slimPromptApplied) {
       systemPrompt += `\n\n## TOOL-USE INSTRUCTION
 You have ${toolSummaries.length} tools available. When the user asks you to DO something concrete (check, search, navigate, read, write, screenshot, execute, etc.), call the appropriate tool. For casual conversation, greetings, opinions, or general questions, respond with normal text — do NOT call tools.`;
+    }
+
+    // BO1/S9: per-turn prompt report (observability-only, flag-gated OFF by
+    // default, fully fail-open). Records section chars+sha256 and the
+    // stable-prefix/dynamic-suffix split to data/prompt-reports.db, and flags
+    // stable-prefix churn. Never alters the prompt or blocks the call.
+    if (isPromptReportEnabled()) {
+      recordPromptReport(systemPrompt, {
+        sessionKey: request.sessionId,
+        source: request.source,
+        route: request.model,
+        heartbeat: slimPromptApplied,
+      });
     }
     const temperature = this.resolveTemperature(request);
     const maxTokens = this.resolveMaxTokens(request);
