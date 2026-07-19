@@ -26,6 +26,7 @@ import { isCustomProvider, registerCustomProvidersOnce } from '../../llm/custom-
 import { assembleSystemPrompt, assembleSlimHeartbeatPrompt } from './system-prompt.js';
 import { isPromptReportEnabled, recordPromptReport } from './prompt-report-store.js';
 import { isCacheBreakpointsEnabled, isAnthropicModelId, buildCachedSystemMessages } from './prompt-cache-discipline.js';
+import { relocateVolatileToTail } from './prompt-cache-tail.js';
 import { getPersonaTemperature } from './personas.js';
 import { getMoodTemperatureDelta } from './moods.js';
 import { buildTokenUsage } from './costs.js';
@@ -1270,45 +1271,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // SUDO_FOLD_SYSTEM_MESSAGES is a distinct, mutually-exclusive strategy that
     // folds array system messages into the system param — let it own them.
     if (!on || readFoldSystemEnabled()) return messages;
-    const tailParts: string[] = [];
-    const kept: BrainMessage[] = [];
-    for (const m of messages) {
-      const content = typeof m.content === 'string' ? m.content : '';
-      const isPerTurnSystem =
-        m.role === 'system' &&
-        (m as { _durable?: boolean })._durable !== true &&
-        content.trim() !== '';
-      if (!isPerTurnSystem) { kept.push(m); continue; }
-      if (content.startsWith('## Yesterday') || content.startsWith('## Long-Term Memory')) {
-        kept.push(m);
-        continue;
-      }
-      // Dedup: '## Today' duplicates the system-prompt Recent Memory already in
-      // volatileTailBlock — drop the duplicate so the daily log is sent once.
-      const body = content.replace(/^##[^\n]*\n/, '');
-      if (volatileTailBlock && body.length > 0 && volatileTailBlock.includes(body)) continue;
-      tailParts.push(content);
-    }
-    if (volatileTailBlock) tailParts.push(volatileTailBlock);
-    if (tailParts.length === 0) return messages;
-    const tail = tailParts.join('\n\n');
-    // Prepend the relocated context to the latest user message (context BEFORE the
-    // question) rather than inserting a separate message — this keeps the message
-    // COUNT and role-alternation identical to the original request (no two
-    // consecutive user turns, which some providers reject), so only the newest
-    // user turn carries the fresh tail while all prior history stays append-only.
-    let lastUserIdx = -1;
-    for (let i = kept.length - 1; i >= 0; i--) {
-      if (kept[i]?.role === 'user') { lastUserIdx = i; break; }
-    }
-    if (lastUserIdx >= 0) {
-      const orig = kept[lastUserIdx];
-      const origContent = typeof orig.content === 'string' ? orig.content : '';
-      kept[lastUserIdx] = { ...orig, content: origContent ? (tail + '\n\n' + origContent) : tail };
-    } else {
-      kept.push({ role: 'user', content: tail });
-    }
-    return kept;
+    return relocateVolatileToTail(messages, volatileTailBlock);
   }
 
   private async _callSingleModel(
