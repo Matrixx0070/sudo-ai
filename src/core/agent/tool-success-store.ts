@@ -128,6 +128,36 @@ export class ToolSuccessStore {
   }
 
   /**
+   * CW8 (eligibility traces): apply the EMA update with the step scaled by an
+   * eligibility `weight` in [0,1]. weight=1 is byte-identical to record()
+   * (the most-recent decision gets the full step); earlier decisions in the
+   * trace get a fraction (weight = lambda^k), so credit for an outcome reaches
+   * the decisions that earned it — NOT a new learning system, the SAME EMA.
+   * Seeds like record() on first sight so a new tool is not masked by the 1.0
+   * default. Marks dirty. No-op on weight<=0.
+   */
+  recordWeighted(tool: string, success: boolean, weight: number): void {
+    if (!tool) return;
+    const w = Math.max(0, Math.min(1, weight));
+    if (w === 0) return;
+    const reward = success ? 1 : 0;
+    const prev = this.cache.get(tool);
+    if (!prev) {
+      // First observation: seed toward the (weighted) reward from the neutral
+      // baseline so a brand-new tool is not stuck at the optimistic default.
+      // Seed toward reward by the eligibility weight: w=1 jumps straight to
+      // reward (byte-identical to record()'s fresh-seed); w<1 lands between the
+      // neutral baseline and reward.
+      this.cache.set(tool, { n: 1, ema: this.baseline + (reward - this.baseline) * w, dirty: true });
+    } else {
+      const a = this.alpha * w;
+      prev.ema = a * reward + (1 - a) * prev.ema;
+      prev.n += 1;
+      prev.dirty = true;
+    }
+  }
+
+  /**
    * Bounded additive bias for the router's within-category sort. 0 while the
    * tool is under MIN_SAMPLES (explore); otherwise negative for chronic
    * failers, mildly positive for reliable tools, clamped.

@@ -80,6 +80,7 @@ import { LoopGuard } from './loop-guard.js';
 import { buildLoopFallbackReply } from './loop-fallback.js';
 import { DoomLoopDetector } from './doom-loop.js';
 import { AgencyMonitor, captureExpectation } from './agency-monitor.js';
+import { EligibilityTrace } from './eligibility-trace.js';
 import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
 import { StuckDetector, looksLikeToolError } from './stuck-detector.js';
 import { isSwarmRescueEnabled, getSwarmRescueStrategy, swarmRescueCallOpts } from './swarm-rescue.js';
@@ -178,6 +179,8 @@ export class AgentLoop extends AgentLoopInjections {
   private doomLoopDetector = new DoomLoopDetector();
   /** CW7 agency monitor — lazily built when SUDO_CAS_AGENCY=1 and a bias store is attached. */
   private _agencyMonitor: AgencyMonitor | null = null;
+  /** CW8 per-session eligibility traces (bounded); built when SUDO_CAS_AGENCY=1. */
+  private _eligibilityTraces = new Map<string, EligibilityTrace>();
   /** gap #23 — opt-in via SUDO_DOOM_LOOP_EXTRAS=1; both null when flag off. */
   private readonly writeCycleDetector: WriteCycleDetector | null =
     process.env['SUDO_DOOM_LOOP_EXTRAS'] === '1' ? new WriteCycleDetector() : null;
@@ -1057,7 +1060,26 @@ export class AgentLoop extends AgentLoopInjections {
           if (this._toolSuccessStore && event.type === 'tool-result') {
             const _tr2 = event as { name: string; success?: boolean; result: unknown; args?: Record<string, unknown> };
             const _ok = resolveToolSuccess(_tr2);
-            this._toolSuccessStore.record(_tr2.name, _ok);
+            // CW8 (SUDO_CAS_AGENCY): when eligibility traces are on, DISTRIBUTE
+            // this outcome across the session's recent tool decisions (the
+            // current tool at weight 1 == the same full EMA step it got before,
+            // earlier decisions at lambda^k) instead of crediting only the last
+            // tool. Flag OFF path is byte-identical (plain record()).
+            if (process.env['SUDO_CAS_AGENCY'] === '1') {
+              let _trace = this._eligibilityTraces.get(sessionId);
+              if (!_trace) {
+                _trace = new EligibilityTrace();
+                if (this._eligibilityTraces.size >= 256) {
+                  const _oldest = this._eligibilityTraces.keys().next().value;
+                  if (_oldest !== undefined) this._eligibilityTraces.delete(_oldest);
+                }
+                this._eligibilityTraces.set(sessionId, _trace);
+              }
+              _trace.push(_tr2.name);
+              _trace.distribute(this._toolSuccessStore, _ok);
+            } else {
+              this._toolSuccessStore.record(_tr2.name, _ok);
+            }
             // CW7 (SUDO_CAS_AGENCY): efference check for in-scope deterministic
             // tools (coder.* + system.exec). Expectation captured from the tool
             // identity (default: no error); a mismatch nudges bias + doom signal.

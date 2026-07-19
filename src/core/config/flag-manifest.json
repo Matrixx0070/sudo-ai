@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 670,
+  "count": 671,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -108,6 +108,7 @@
     "SUDO_CAS_AGENCY",
     "SUDO_CAS_ARBITER",
     "SUDO_CAS_ARBITER_BUDGET",
+    "SUDO_CAS_ELIGIBILITY_LAMBDA",
     "SUDO_CAS_PRESSURE",
     "SUDO_CAS_SURPRISE_GATE",
     "SUDO_CDP_ENDPOINT",
