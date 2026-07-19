@@ -75,6 +75,7 @@ import { HeartbeatRunner, type HeartbeatPayloadRunner } from './core/cron/heartb
 import { maybeGuardedSend } from './core/comms/idempotency.js';
 import { CommandRegistry } from './core/commands/registry.js';
 import { tryDispatchDirective } from './core/commands/dispatch.js';
+import { setStatusSources } from './core/commands/builtin/status-card.js';
 import { makeDirectiveAuthorizer } from './core/commands/directive-authorizer.js';
 import type { CommandContext } from './core/commands/types.js';
 import { HookManager } from './core/hooks/index.js';
@@ -1902,6 +1903,19 @@ async function boot(): Promise<void> {
       return null;
     }
   };
+
+  // BO7 / S6: register runtime handles for the shared /status card so the admin
+  // dashboard endpoint reads the SAME source of truth as the Telegram/SPA command.
+  try {
+    setStatusSources({
+      agentLoop: finalAgentLoop,
+      config,
+      mindDb: db,
+      peerQueue: dualSessionManager.peerQueue,
+    });
+  } catch (err) {
+    log.warn({ err: String(err) }, 'setStatusSources failed (non-fatal)');
+  }
 
   // Directive short-circuits on every channel (opt-in: SUDO_CHANNEL_COMMANDS=1).
   // When enabled, slash commands on Discord/Slack/WhatsApp/Web/Email/SMS and

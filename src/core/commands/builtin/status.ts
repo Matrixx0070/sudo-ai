@@ -1,73 +1,44 @@
 /**
  * @file builtin/status.ts
- * @description /status — agent status, model, tools, sessions, crons, memory, uptime.
+ * @description /status — the shared status card (BO7 / S6).
+ *
+ * Renders the ONE shared card (see `status-card.ts`) so Telegram, the web
+ * SPA/chat and the admin dashboard all show the SAME source of truth: version +
+ * commit, time + reference UTC, gateway + system uptime, model + auth profile,
+ * tokens + cost, cache % + cached/new tokens, context fill + compactions,
+ * session key + duration, execution/think/fast, queue mode + depth.
  */
 
-import os from 'os';
 import { createLogger } from '../../shared/index.js';
 import type { SlashCommand, CommandContext } from '../types.js';
+import { collectStatusCard, renderStatusCardText, type StatusSources } from './status-card.js';
 
 const log = createLogger('commands:status');
 
-const START_TIME = Date.now();
-
-function formatUptime(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  const d = Math.floor(h / 24);
-  if (d > 0) return `${d}d ${h % 24}h`;
-  if (h > 0) return `${h}h ${m % 60}m`;
-  if (m > 0) return `${m}m ${s % 60}s`;
-  return `${s}s`;
-}
-
 export const statusCommand: SlashCommand = {
   name: 'status',
-  description: 'Show agent status: model, tools, sessions, crons, memory, uptime.',
+  description: 'Show the status card: version, uptime, model, tokens/cost, cache, context, session, queue.',
   usage: '/status',
 
   async execute(_args: string, ctx: CommandContext): Promise<string> {
-    log.debug({ peerId: ctx.peerId }, '/status executed');
+    log.debug({ peerId: ctx.peerId, channel: ctx.channel }, '/status executed');
 
-    const uptime = formatUptime(Date.now() - START_TIME);
-    const memMb = (process.memoryUsage().rss / 1024 / 1024).toFixed(1);
-    const freeMb = (os.freemem() / 1024 / 1024).toFixed(0);
-    const totalMb = (os.totalmem() / 1024 / 1024).toFixed(0);
+    const sources: StatusSources = {
+      agentLoop: ctx.agentLoop,
+      config: ctx.config,
+      mindDb: ctx.db,
+      peerQueue: ctx.peerQueue,
+      sessionId: ctx.sessionId,
+      channel: ctx.channel,
+      peerId: ctx.peerId,
+    };
 
-    // Duck-typed reads — tolerate missing properties gracefully
-    const registry = ctx.toolRegistry as { size?: number; enabledSize?: number } | null;
-    const toolsTotal = registry?.size ?? '?';
-    const toolsEnabled = registry?.enabledSize ?? '?';
-
-    // Sessions count via db if available
-    const db = ctx.db as {
-      db?: { prepare: (q: string) => { get: () => { count: number } | undefined } };
-    } | null;
-
-    let sessionsActive = '?';
     try {
-      const row = db?.db?.prepare(
-        `SELECT COUNT(*) as count FROM chunks WHERE path LIKE 'session:%:meta'`,
-      ).get();
-      sessionsActive = String(row?.count ?? '?');
-    } catch {
-      // non-fatal
+      const card = await collectStatusCard(sources);
+      return renderStatusCardText(card);
+    } catch (err) {
+      log.error({ err: String(err) }, '/status card build failed');
+      return 'Status unavailable right now.';
     }
-
-    const lines = [
-      'SUDO-AI STATUS',
-      '──────────────',
-      `Agent:    online`,
-      `Uptime:   ${uptime}`,
-      `Process mem: ${memMb} MB RSS`,
-      `System mem:  ${freeMb} MB free / ${totalMb} MB total`,
-      `Tools:    ${toolsEnabled} enabled / ${toolsTotal} total`,
-      `Sessions: ${sessionsActive} stored`,
-      `Session:  ${ctx.sessionId}`,
-      `Channel:  ${ctx.channel}`,
-    ];
-
-    return lines.join('\n');
   },
 };

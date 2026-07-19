@@ -35,6 +35,7 @@ export async function registerAdminHandlers(): Promise<void> {
   await import('./dashboard.handler.js');
   await import('./logs.handler.js');
   await import('./system.handler.js');
+  await import('./status.handler.js');
 
   // New handlers — tools, consciousness, security:
   await import('./tools.handler.js');
