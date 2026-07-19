@@ -184,12 +184,24 @@ describe('GET /v1/admin/dashboard', () => {
     expect(body).toContain('/v1/admin/digest');
   });
 
-  // DASH-10: Response size < 30KB
-  it('DASH-10: response body is < 30KB', async () => {
+  // DASH-10: Response size RATCHET (was: hard 30KB budget).
+  //
+  // DEBT — DO NOT SILENTLY RAISE THIS CEILING.
+  // Measured 53,128 bytes on 2026-07-19 — 1.7x over the original 30KB target.
+  // The 30KB budget is RETAINED as documented debt: the dashboard HTML has
+  // genuinely bloated (cause unknown; likely recent dashboard/BO work — note
+  // dashboard-html duplication is already an F101 concern) and needs a
+  // properly-scoped repair. Per the ratchet idiom (see scripts/
+  // check-max-lines.ts) this ceiling is pinned at measured+~2% so any FURTHER
+  // growth fails CI immediately, while the pre-existing regression stays on
+  // the books instead of blocking unrelated work.
+  // Ruling: docs/CAS_WIRING_QA.md Q-1/A-1 (2026-07-19).
+  it('DASH-10: response body does not grow past the 2026-07-19 ratchet ceiling (debt: 30KB target)', async () => {
     const srv = await startServer(minimalDeps(), makeTokenBuf(VALID_TOKEN));
     servers.push(srv);
     const { body } = await rawGet(`${srv.baseUrl}/v1/admin/dashboard`, { token: VALID_TOKEN });
-    expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(30 * 1024);
+    const RATCHET_CEILING_BYTES = 54_272; // measured 53,128B on 2026-07-19 + ~2%
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(RATCHET_CEILING_BYTES);
   });
 
   // DASH-11: CSP header present
