@@ -12,6 +12,7 @@
  */
 
 import { USAGE_PANEL_HTML, USAGE_SCRIPT } from './dashboard-usage.js';
+import { SESSIONS_PANEL_HTML, SESSIONS_SCRIPT } from './dashboard-sessions.js';
 
 export function renderDashboardHtml(): string {
   return `<!DOCTYPE html>
@@ -90,6 +91,7 @@ button:active{background:#3d444d}
   <!-- rendered by JS -->
 </div>
 ${USAGE_PANEL_HTML}
+${SESSIONS_PANEL_HTML}
 
 <!-- Browser watch/takeover (Spec 3). Kept OUTSIDE #dashboard so the 30s
      poll re-render never tears down the live <img> or takeover controls. -->
@@ -668,6 +670,8 @@ function showLive(profile){
 }
 
 ${USAGE_SCRIPT}
+
+${SESSIONS_SCRIPT}
 
 if(token){
   refreshBrowser();
