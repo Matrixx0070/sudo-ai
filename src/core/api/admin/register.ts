@@ -97,6 +97,15 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
  * grant unreachable, so a no-credential remote is denied (fail-closed).
  */
 function isAuthorized(req: http.IncomingMessage, adminSecret: Buffer): boolean {
+  // Accept EITHER credential. The native /v1/admin guard (admin-routes.ts) only
+  // admits GATEWAY_TOKEN, while the override below only admits the dashboard
+  // token — with override-only, NO single token passed both layers (live 401s,
+  // 2026-07-19). Standard creds first (GATEWAY_TOKEN / GATEWAY_SECRET / loopback
+  // per unified-auth policy), then the SUDO_AI_DASHBOARD_TOKEN override.
+  // gateway-token ONLY on the std path — bare loopback stays denied here (the
+  // override below deliberately closes the free-loopback grant for admin).
+  const std = authenticateHttp(req, { accept: ['gateway-token', 'loopback'] });
+  if (std.ok && std.credential === 'gateway-token' && hasScope(std, 'operator.admin')) return true;
   const principal = authenticateHttp(req, {
     accept: ['gateway-token', 'loopback'],
     secretOverride: adminSecret,

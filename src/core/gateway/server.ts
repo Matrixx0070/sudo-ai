@@ -226,6 +226,10 @@ export function startGateway(): Promise<number> {
     });
     server.setMaxListeners(25);
     server.on('error', (err) => { log.error({ err: err.message, port: GATEWAY_PORT }, 'Gateway server error'); reject(err); });
+    // Every sibling route-owner (web, admin register, webhook, federation, …)
+    // attaches its own 'request' listener; 26 attached in prod tripped Node's
+    // default 25-listener leak warning. Real fan-out, not a leak — raise the cap.
+    server.setMaxListeners(40);
     server.listen(GATEWAY_PORT, '127.0.0.1', () => {
       gatewayServer = server;
       log.info({ port: GATEWAY_PORT }, 'SUDO-AI gateway started');
