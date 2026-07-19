@@ -8,6 +8,7 @@
 
 import { searchMemories } from '../memory/structured-memory.js';
 import { createLogger } from '../shared/logger.js';
+import { capToBudget } from '../consciousness/context-pressure.js';
 
 const log = createLogger('agent:intel-brief');
 
@@ -243,6 +244,7 @@ export async function generateIntelligenceBrief(
   message: string,
   consciousness: ConsciousnessLike | null,
   unifiedMemory: UnifiedMemoryLike | null,
+  contextBudgetTokens?: number,
 ): Promise<IntelligenceBrief> {
   const startMs = Date.now();
   const empty: IntelligenceBrief = {
@@ -366,7 +368,14 @@ export async function generateIntelligenceBrief(
       counterfactualLessons, metacognitiveReflections, surpriseLevel, temporalNarrative, activeConcepts,
       selfCompetence,
     };
-    const formatted = formatBrief(briefPayload);
+    // CW2 (SUDO_CAS_PRESSURE): when the caller supplies a context-pressure
+    // budget, cap the injected block. Default (undefined) = no cap =
+    // byte-identical output (preserves the CW0 snapshot guarantee).
+    const uncapped = formatBrief(briefPayload);
+    const formatted =
+      contextBudgetTokens !== undefined && contextBudgetTokens > 0
+        ? capToBudget(uncapped, contextBudgetTokens)
+        : uncapped;
 
     // CW0 (log-only, no behavior change): per-turn injected consciousness token
     // estimate + per-source share + whether the consciousness brief context was

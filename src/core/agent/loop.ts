@@ -1151,6 +1151,31 @@ export class AgentLoop extends AgentLoopInjections {
       }
     }
 
+    // CW2 (SUDO_CAS_PRESSURE, default OFF): derive real context pressure for the
+    // consciousness injection path. Occupancy = estimated prompt tokens /
+    // model window (same primitives as the gw-refactor P2 proactive budget
+    // gate). Fail-open: any error leaves the budget undefined (= no cap,
+    // byte-identical injection).
+    let casPressureBudget: number | undefined;
+    if (process.env['SUDO_CAS_PRESSURE'] === '1') {
+      try {
+        const { estimateContextSize } = await import('./context.js');
+        const { getAliasLimits } = await import('../../llm/limits.js');
+        const { pressureTier, budgetForTier } = await import('../consciousness/context-pressure.js');
+        const windowTokens = getAliasLimits(this.config.model ?? '').context_window;
+        const estimated = estimateContextSize(session.messages as Array<{ content: string }>);
+        const occupancy = windowTokens > 0 ? estimated / windowTokens : 0;
+        const tier = pressureTier(occupancy);
+        casPressureBudget = budgetForTier(tier);
+        log.info(
+          { sessionId, occupancy: Math.round(occupancy * 1000) / 1000, tier, budget: casPressureBudget ?? null },
+          'CW2: context pressure tier chosen',
+        );
+      } catch (err) {
+        log.warn({ sessionId, err: String(err) }, 'CW2: context pressure derivation failed — injecting uncapped (fail-open)');
+      }
+    }
+
     // Intelligence Brief injection — runs after consciousness init, before intent routing.
     // Only pass consciousness if it implements getIntelligenceBriefContext (duck-type guard).
     const briefConsciousness =
@@ -1163,6 +1188,7 @@ export class AgentLoop extends AgentLoopInjections {
           message,
           briefConsciousness,
           this.unifiedMemory ?? null,
+          casPressureBudget,
         );
         if (brief.formatted) {
           session.messages.push({
@@ -1185,7 +1211,12 @@ export class AgentLoop extends AgentLoopInjections {
     // Consciousness Deep Bridge: inject deep insights from ALL 20 consciousness modules.
     if (this._deepBridge) {
       try {
-        const deepInsights = this._deepBridge.formatTurnStartInsights(sessionId);
+        let deepInsights = this._deepBridge.formatTurnStartInsights(sessionId);
+        if (deepInsights && casPressureBudget !== undefined) {
+          // CW2: deep-bridge block shares the same pressure budget as the brief.
+          const { capToBudget } = await import('../consciousness/context-pressure.js');
+          deepInsights = capToBudget(deepInsights, casPressureBudget);
+        }
         if (deepInsights) {
           session.messages.push({ role: 'system', content: deepInsights, _ephemeral: true });
           log.debug({ sessionId }, 'Consciousness deep insights injected');
