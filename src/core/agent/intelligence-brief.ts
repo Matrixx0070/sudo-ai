@@ -9,6 +9,7 @@
 import { searchMemories } from '../memory/structured-memory.js';
 import { createLogger } from '../shared/logger.js';
 import { capToBudget } from '../consciousness/context-pressure.js';
+import { runArbiterForBrief, type InjectionScanner } from '../consciousness/context-arbiter/index.js';
 
 const log = createLogger('agent:intel-brief');
 
@@ -245,6 +246,7 @@ export async function generateIntelligenceBrief(
   consciousness: ConsciousnessLike | null,
   unifiedMemory: UnifiedMemoryLike | null,
   contextBudgetTokens?: number,
+  injectionScanner?: InjectionScanner,
 ): Promise<IntelligenceBrief> {
   const startMs = Date.now();
   const empty: IntelligenceBrief = {
@@ -363,15 +365,44 @@ export async function generateIntelligenceBrief(
       }
     }
 
+    // CW4 (SUDO_CAS_ARBITER, default OFF): bid-based arbitration for the
+    // consciousness sections it subsumes (procedure/episodic/metacognition/
+    // surprise + drive/emotion). See context-arbiter/apply.ts; fail-open.
+    const arbiter =
+      consciousnessResult.status === 'fulfilled' && consciousnessResult.value
+        ? runArbiterForBrief(
+            {
+              dominantDrive: consciousnessResult.value.dominantDrive ?? null,
+              emotionalState: consciousnessResult.value.emotionalState ?? null,
+              matchingProcedure: consciousnessResult.value.matchingProcedure ?? null,
+              recentEpisodes: consciousnessResult.value.recentEpisodes ?? [],
+              metacognitiveReflections: consciousnessResult.value.metacognitiveReflections ?? [],
+              surpriseLevel: consciousnessResult.value.surpriseLevel ?? 0,
+              selfCompetence: consciousnessResult.value.selfCompetence ?? null,
+            },
+            contextBudgetTokens,
+            injectionScanner,
+          )
+        : { active: false, block: '' };
+    const arbiterBlock = arbiter.block;
+    const arbiterActive = arbiter.active;
+
+    // When the arbiter is active, sections subsumed by its bids are suppressed
+    // to avoid double-injection; non-subsumed sections format as before.
     const briefPayload = {
-      wisdom, procedures, episodes, predictions, structuredMemory,
-      counterfactualLessons, metacognitiveReflections, surpriseLevel, temporalNarrative, activeConcepts,
-      selfCompetence,
+      wisdom, predictions, structuredMemory, counterfactualLessons, temporalNarrative, activeConcepts, selfCompetence,
+      procedures: arbiterActive ? [] : procedures,
+      episodes: arbiterActive ? [] : episodes,
+      metacognitiveReflections: arbiterActive ? [] : metacognitiveReflections,
+      surpriseLevel: arbiterActive ? 0 : surpriseLevel,
     };
     // CW2 (SUDO_CAS_PRESSURE): when the caller supplies a context-pressure
     // budget, cap the injected block. Default (undefined) = no cap =
     // byte-identical output (preserves the CW0 snapshot guarantee).
-    const uncapped = formatBrief(briefPayload);
+    const base = formatBrief(briefPayload);
+    // Arbiter block appended AFTER the base brief, BEFORE the CW2 total-envelope
+    // cap — deterministic position in the ephemeral (non-cached-prefix) region.
+    const uncapped = arbiterBlock ? (base ? base + '\n\n' + arbiterBlock : arbiterBlock) : base;
     const formatted =
       contextBudgetTokens !== undefined && contextBudgetTokens > 0
         ? capToBudget(uncapped, contextBudgetTokens)
