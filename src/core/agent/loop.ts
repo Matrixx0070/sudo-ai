@@ -1189,6 +1189,15 @@ export class AgentLoop extends AgentLoopInjections {
           briefConsciousness,
           this.unifiedMemory ?? null,
           casPressureBudget,
+          // CW4: injection scanner applied to bid content before prompt entry.
+          // Adapter: security.detectInjection returns { safe, threat: string|null };
+          // the arbiter's InjectionScanner wants { threat: boolean }.
+          this.security?.detectInjection
+            ? (text: string) => {
+                const r = this.security?.detectInjection?.(text);
+                return r ? { threat: r.safe === false } : undefined;
+              }
+            : undefined,
         );
         if (brief.formatted) {
           session.messages.push({
@@ -1209,7 +1218,12 @@ export class AgentLoop extends AgentLoopInjections {
 
     // Recovery protocol: inject active forward-commitments as system context.
     // Consciousness Deep Bridge: inject deep insights from ALL 20 consciousness modules.
-    if (this._deepBridge) {
+    // CW4: when the arbiter governs consciousness composition, the deep-bridge
+    // vibes-block is subsumed (its surprise/metacognition/drive content rides
+    // the bids) — skip it to avoid double-injection of the same state.
+    if (this._deepBridge && process.env['SUDO_CAS_ARBITER'] === '1') {
+      log.debug({ sessionId }, 'CW4: deep-bridge injection skipped (arbiter active)');
+    } else if (this._deepBridge) {
       try {
         let deepInsights = this._deepBridge.formatTurnStartInsights(sessionId);
         if (deepInsights && casPressureBudget !== undefined) {
