@@ -560,10 +560,23 @@ export class Brain {
    *
    * @param options - Optional overrides for prompt assembly.
    */
+  /** BO6/S3: pre-rendered <available_skills> catalog block for the stable prefix. */
+  private _skillCatalog = '';
+
+  /**
+   * Wire the boot-built (or live-reloaded) skill catalog (skills/skill-catalog.ts)
+   * into every assembled system prompt. Byte-stable within a session; a live reload
+   * after a SKILL.md edit re-hashes and updates the block (version-marker invalidation).
+   */
+  setSkillCatalog(block: string): void {
+    this._skillCatalog = typeof block === 'string' ? block : '';
+  }
+
   async getSystemPrompt(options: Partial<SystemPromptOptions> = {}): Promise<string> {
     return assembleSystemPrompt({
       persona: this.currentPersona,
       mood: this.currentMood,
+      ...(this._skillCatalog ? { skillCatalog: this._skillCatalog } : {}),
       ...options,
     });
   }
@@ -714,6 +727,7 @@ export class Brain {
     if (!slimPromptApplied) {
       systemPrompt = await this.getSystemPrompt({
         heartbeat: false,
+        ...(request.promptProfile ? { profile: request.promptProfile } : {}),
         tools: toolSummaries.length > 0 ? toolSummaries : undefined,
         ...(ragMemoryContext ? { memoryContext: ragMemoryContext } : {}),
         ...(lens ? { reasoningLens: lens.text } : {}),

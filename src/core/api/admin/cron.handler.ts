@@ -16,6 +16,7 @@
 
 import { adminRouter, sendJson, readJsonBody } from '../admin-router.js';
 import { createLogger } from '../../shared/logger.js';
+import { isConfirmed } from '../../sessions/session-admin-actions.js';
 import type { CronJob } from '../../cron/types.js';
 import {
   genId,
@@ -153,11 +154,27 @@ adminRouter.put('/api/admin/cron/jobs/:id', async (req, res, params) => {
 // DELETE /api/admin/cron/jobs/:id
 // ---------------------------------------------------------------------------
 
-adminRouter.delete('/api/admin/cron/jobs/:id', async (_req, res, params) => {
+adminRouter.delete('/api/admin/cron/jobs/:id', async (req, res, params) => {
   const { id } = params;
   log.debug({ id }, 'DELETE /api/admin/cron/jobs/:id');
 
   if (!id) { sendJson(res, 400, { error: { message: 'Job id is required', code: 400 } }); return; }
+
+  // BEAT-OPENCLAW (defect #2): destructive removal is a HARD delete, so it must
+  // carry an explicit confirm. OpenClaw removes cron jobs instantly with no
+  // confirm; we reject an unconfirmed delete with confirm_required before any
+  // state change. Confirm via ?confirm=true or ?confirm=<job-id> (type-to-confirm).
+  const confirm = new URL(req.url ?? '/', 'http://localhost').searchParams.get('confirm');
+  if (!isConfirmed(confirm ?? undefined, id)) {
+    sendJson(res, 400, {
+      error: {
+        message: 'Deleting a cron job requires explicit confirmation (?confirm=true or ?confirm=<id>)',
+        code: 400,
+        reason: 'confirm_required',
+      },
+    });
+    return;
+  }
 
   const jobs = readJobs();
   const idx = jobs.findIndex((j) => j.id === id);

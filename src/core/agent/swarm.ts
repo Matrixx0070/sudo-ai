@@ -369,7 +369,7 @@ export class AgentSwarm {
         });
 
         const startTime = Date.now();
-        const runPromise = loop.run(sessionId, taskDescription);
+        const runPromise = loop.run(sessionId, taskDescription, undefined, { promptProfile: 'subagent' });
         // Swallow any late rejection if the timeout wins the race below, so the
         // still-running loop does not surface as an unhandled rejection.
         runPromise.catch(() => { /* handled via race / timeout below */ });
@@ -595,7 +595,7 @@ export class AgentSwarm {
           });
 
           const startTime = Date.now();
-          const runPromise = loop.run(sessionId, taskDescription);
+          const runPromise = loop.run(sessionId, taskDescription, undefined, { promptProfile: 'subagent' });
           // Swallow any late rejection if the timeout wins the race below, so the
           // still-running loop does not surface as an unhandled rejection.
           runPromise.catch(() => { /* handled via race / timeout below */ });

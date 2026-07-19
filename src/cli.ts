@@ -93,6 +93,7 @@ import { AutoDream } from './core/memory/auto-dream.js';
 import { flushBeforeCompaction } from './core/memory/compaction-flush.js';
 import { InMemorySteeringChannel } from './core/agent/steering.js';
 import { loadMarkdownSkills, parseSkillRoots } from './core/skills/markdown-loader.js';
+import { buildAndRenderSkillCatalog, isSkillCatalogEnabled } from './core/skills/skill-catalog.js';
 import { startGateway, gatewayServer } from './core/gateway/server.js';
 import { attachWsRpc } from './core/gateway/ws-server.js';
 import { attachHttpApi } from './core/gateway/http-api.js';
@@ -2807,7 +2808,13 @@ async function boot(): Promise<void> {
   ): Promise<string> => {
     const sessionTarget = job.sessionTarget === 'isolated' ? `cron:isolated:${job.id}` : `cron:main`;
     const session = await dualSessionManager.getOrCreate('web', sessionTarget);
-    const cronResult = await finalAgentLoop.run(session.id, payload.message, undefined, runOpts);
+    // BO4/S4: light-context cron turns (not the slim health tick, which already
+    // uses its own minimal prompt) get the reduced 'cron' injection profile.
+    const effectiveOpts =
+      payload.lightContext && !runOpts?.slimHeartbeat
+        ? { ...(runOpts ?? {}), promptProfile: 'cron' as const }
+        : runOpts;
+    const cronResult = await finalAgentLoop.run(session.id, payload.message, undefined, effectiveOpts);
     try {
       const cronTurnSummary = `**Cron (${job.name}):** ${payload.message.slice(0, 200)}\n**Agent:** ${(cronResult?.text ?? '').slice(0, 500)}`;
       await dailyLog.append(cronTurnSummary);
@@ -4271,6 +4278,11 @@ async function boot(): Promise<void> {
       registry.setSkillIndex(buildSkillToolIndex(skills));
       // Wire skills into the agent loop so trigger phrases activate at turn start.
       finalAgentLoop.setMarkdownSkills(skills);
+      // BO6/S3: build the always-visible <available_skills> catalog (≤30 tok/skill,
+      // name/desc/path/hash only) and wire it into the stable cached prefix. Rebuilt
+      // on every live-reload so a mid-session SKILL.md edit re-hashes (invalidation).
+      // Kill-switch SUDO_SKILL_CATALOG=0.
+      brain.setSkillCatalog(isSkillCatalogEnabled() ? buildAndRenderSkillCatalog(skills) : '');
       return { count: skills.length };
     };
     const { count: mdSkillCount } = await loadAndWireSkills();

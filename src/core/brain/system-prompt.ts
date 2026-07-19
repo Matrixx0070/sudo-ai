@@ -17,8 +17,17 @@ import { getCapabilityManifestBody, isCapabilityManifestEnabled } from './capabi
 import { sanitizeForPrompt } from './sanitize-for-prompt.js';
 import { getAppliedLessonHints } from '../learning/lesson-apply.js';
 import { getAdoptedDirectives } from '../eval/self-eval.js';
-import { truncateForInjection, injectCap, MAX_INJECT_CHARS, DAILY_INJECT_CHARS } from '../workspace/injector.js';
-import type { SystemPromptOptions } from './types.js';
+import {
+  truncateForInjection,
+  injectCap,
+  MAX_INJECT_CHARS,
+  DAILY_INJECT_CHARS,
+  RULES_INJECT_CHARS,
+  missingFileMarker,
+  prepareRulesFile,
+  dedupeWarningLines,
+} from '../workspace/injector.js';
+import type { SystemPromptOptions, SessionProfile } from './types.js';
 
 const log = createLogger('brain:system-prompt');
 
@@ -33,7 +42,20 @@ const log = createLogger('brain:system-prompt');
  *
  * @param name - Filename relative to workspace/, e.g. "SOUL.md".
  */
-export async function readWorkspaceFile(name: string): Promise<string> {
+export interface ReadWorkspaceFileOptions {
+  /**
+   * When true and the file is cleanly ABSENT (ENOENT), return a deterministic
+   * `[missing workspace file: NAME]` marker instead of '' so the absence is
+   * VISIBLE in the assembled prompt and the prompt report (BO3/S2). Non-ENOENT
+   * read errors still return '' — only a clean absence is marked.
+   */
+  markMissing?: boolean;
+}
+
+export async function readWorkspaceFile(
+  name: string,
+  opts: ReadWorkspaceFileOptions = {},
+): Promise<string> {
   if (!name || typeof name !== 'string') {
     log.warn({ name }, 'readWorkspaceFile: invalid filename');
     return '';
@@ -51,6 +73,7 @@ export async function readWorkspaceFile(name: string): Promise<string> {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') {
       log.debug({ file: safeName }, 'Workspace file absent — skipping');
+      if (opts.markMissing) return missingFileMarker(safeName);
     } else {
       log.warn({ file: safeName, err }, 'Workspace file read error — skipping');
     }
@@ -136,6 +159,13 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // Default mainPeerId to TELEGRAM_CHAT_ID first value (matches cli.ts line 470)
   const mainPeerId = explicitMainPeerId ?? process.env['TELEGRAM_CHAT_ID']?.split(',')[0]?.trim();
 
+  // BO4/S4: session-type injection profile. 'main' (default) falls through to
+  // the full assembler below, byte-for-byte unchanged. Reduced profiles take the
+  // early return further down: 'subagent' = AGENTS+TOOLS+Safety; 'cron' adds the
+  // identity files. AGENTS + Safety Rules ride in every profile.
+  const profile: SessionProfile = options.profile ?? 'main';
+  const allowIdentity = profile !== 'subagent';
+
   log.debug(
     { persona, mood, heartbeat, toolCount: tools?.length ?? 0 },
     'Assembling system prompt',
@@ -163,10 +193,10 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     longTermMemoryContent,
   ] =
     await Promise.all([
-      readWorkspaceFile('SOUL.md'),
-      readWorkspaceFile('IDENTITY.md'),
+      readWorkspaceFile('SOUL.md', { markMissing: true }),
+      readWorkspaceFile('IDENTITY.md', { markMissing: true }),
       readWorkspaceFile('USER.md'),
-      readWorkspaceFile('AGENTS.md'),
+      readWorkspaceFile('AGENTS.md', { markMissing: true }),
       readWorkspaceFile('TOOLS.md'),
       heartbeat ? readWorkspaceFile('HEARTBEAT.md') : Promise.resolve(''),
       readWorkspaceFile('REMOTION.md'),
@@ -174,7 +204,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
       readWorkspaceFile('CODING.md'),
       readWorkspaceFile('AUTONOMY.md'),
       readWorkspaceFile('FORMATTING.md'),
-      readWorkspaceFile('SAFETY-RULES.md'),
+      readWorkspaceFile('SAFETY-RULES.md', { markMissing: true }),
       readWorkspaceFile('GIT-SAFETY.md'),
       readWorkspaceFile('PR-WORKFLOW.md'),
       readWorkspaceFile('FRONTEND.md'),
@@ -204,6 +234,29 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   const longTermMemoryCapped = longTermMemoryContent
     ? truncateForInjection(longTermMemoryContent, injectCap('SUDO_INJECT_MEMORY_MAX', MAX_INJECT_CHARS))
     : longTermMemoryContent;
+
+  // BO3/S2: policy-digest truncation for the rules-type files. An over-budget
+  // rules file must keep its hard rules (NEVER/MUST/…) rather than being blindly
+  // tail-chopped. prepareRulesFile extracts a regex policy digest under heavy
+  // truncation and yields a deterministic in-band truncation warning. Warnings
+  // are collected + deduped and surfaced as one block above the boundary. All
+  // deterministic (pure fn of file bytes + a stable cap) → byte-stable prefix
+  // preserved. Cap is generous by default (safety net); tune SUDO_INJECT_RULES_MAX.
+  const rulesCap = injectCap('SUDO_INJECT_RULES_MAX', RULES_INJECT_CHARS);
+  const truncationWarnings: string[] = [];
+  const ruleBody = (fileName: string, raw: string): string => {
+    const prepared = prepareRulesFile(fileName, raw, rulesCap);
+    if (prepared.warning) truncationWarnings.push(prepared.warning);
+    return prepared.body;
+  };
+  const agentsBody = ruleBody('AGENTS.md', agentsContent);
+  const codingBody = ruleBody('CODING.md', codingContent);
+  const autonomyBody = ruleBody('AUTONOMY.md', autonomyContent);
+  const safetyRulesBody = ruleBody('SAFETY-RULES.md', safetyRulesContent);
+  const gitSafetyBody = ruleBody('GIT-SAFETY.md', gitSafetyContent);
+  const prWorkflowBody = ruleBody('PR-WORKFLOW.md', prWorkflowContent);
+  const thinkingRulesBody = ruleBody('THINKING-RULES.md', thinkingRulesContent);
+  const truncationWarningBlock = dedupeWarningLines(truncationWarnings).join('\n');
 
   // Build current timestamp block.
   const now = new Date();
@@ -403,6 +456,44 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     '4. Close out by reporting the concrete result: the branch name, the exact scoped-test command and its exit code, and the PR number/link. The cycle is not done until you have reported these.',
   ].join('\n');
 
+  // BO4/S4: reduced-profile early return. Ships only the minimal operating set
+  // so cron/subagent turns cost ≥30% less than a full 'main' turn. Reuses the
+  // already-computed section bodies + helpers so the layout (boundary, volatile
+  // date tail) mirrors 'main' and reduced turns stay cache-friendly. 'main'
+  // never reaches here — its full assembler below is untouched (BO2b byte-lock).
+  if (profile !== 'main') {
+    const reduced: string[] = [];
+    // Identity files: 'cron' keeps them, 'subagent' drops them.
+    if (allowIdentity) {
+      reduced.push(section(soulContent));
+      reduced.push(section(identityContent));
+      reduced.push(section(userContent));
+    }
+    // TOOLS: the live tool list + TOOLS.md — the agent cannot operate without it.
+    if (toolsListBlock) {
+      reduced.push(sectionWithHeader('Available Tools', toolsListBlock));
+    }
+    // BO6/S3: skill catalog (always-visible baseline) rides reduced profiles too.
+    if (options.skillCatalog) {
+      reduced.push(section(options.skillCatalog));
+    }
+    // AGENTS + Safety: mandatory in every profile (never dropped for tokens).
+    reduced.push(section(agentsBody));
+    reduced.push(section(toolsContent));
+    if (safetyRulesBody) {
+      reduced.push(sectionWithHeader('Safety Rules', safetyRulesBody));
+    }
+    if (truncationWarningBlock) {
+      reduced.push(sectionWithHeader('Context Truncation Warnings', truncationWarningBlock));
+    }
+    // Boundary + volatile date tail — mirror 'main' so the reduced prefix caches.
+    reduced.push('\n' + DYNAMIC_BOUNDARY_MARKER);
+    reduced.push(sectionWithHeader('Current Date & Time', dateTimeBlock));
+    const assembledReduced = reduced.filter(Boolean).join('').trim();
+    log.debug({ chars: assembledReduced.length, profile }, 'Reduced system prompt assembled');
+    return assembledReduced;
+  }
+
   // Assemble in order.
   const parts: string[] = [];
 
@@ -439,6 +530,14 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     parts.push(sectionWithHeader('Available Tools', toolsListBlock));
   }
 
+  // 5b. BO6/S3 skill catalog — the always-visible <available_skills> block
+  //     (name/desc/path/hash per skill, ≤30 tokens each; never a body). Above the
+  //     boundary so it rides the cached stable prefix; byte-stable within a session
+  //     (deterministic sort + body-hash marker). Read-on-demand via skill.read.
+  if (options.skillCatalog) {
+    parts.push(section(options.skillCatalog));
+  }
+
   // With SUDO_PROMPT_CACHE=1 we lift the workspace markdown blocks (AGENTS,
   // TOOLS, Tool Capability Manifest, Long-Term Memory) ABOVE the boundary too.
   // They are static-on-the-scale-of-minutes — far slower-moving than the
@@ -447,7 +546,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // per-call cost. Without the flag set, these blocks remain in their legacy
   // positions below the boundary.
   if (promptCacheStable) {
-    parts.push(section(agentsContent));
+    parts.push(section(agentsBody));
     parts.push(section(toolsContent));
     if (isCapabilityManifestEnabled()) {
       parts.push(sectionWithHeader('Tool Capability Manifest', getCapabilityManifestBody()));
@@ -465,23 +564,23 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     if (learningsContent) {
       parts.push(sectionWithHeader('Self-Improvement Learnings', learningsContent));
     }
-    if (codingContent) {
-      parts.push(sectionWithHeader('Coding Army — Standing Orders', codingContent));
+    if (codingBody) {
+      parts.push(sectionWithHeader('Coding Army — Standing Orders', codingBody));
     }
-    if (autonomyContent) {
-      parts.push(sectionWithHeader('Autonomy Rules', autonomyContent));
+    if (autonomyBody) {
+      parts.push(sectionWithHeader('Autonomy Rules', autonomyBody));
     }
     if (formattingContent) {
       parts.push(sectionWithHeader('Formatting Rules', formattingContent));
     }
-    if (safetyRulesContent) {
-      parts.push(sectionWithHeader('Safety Rules', safetyRulesContent));
+    if (safetyRulesBody) {
+      parts.push(sectionWithHeader('Safety Rules', safetyRulesBody));
     }
-    if (gitSafetyContent) {
-      parts.push(sectionWithHeader('Git Safety Protocol', gitSafetyContent));
+    if (gitSafetyBody) {
+      parts.push(sectionWithHeader('Git Safety Protocol', gitSafetyBody));
     }
-    if (prWorkflowContent) {
-      parts.push(sectionWithHeader('PR Creation Workflow', prWorkflowContent));
+    if (prWorkflowBody) {
+      parts.push(sectionWithHeader('PR Creation Workflow', prWorkflowBody));
     }
     if (frontendContent) {
       parts.push(sectionWithHeader('Frontend Task Rules', frontendContent));
@@ -489,8 +588,8 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     if (dirtyWorktreeContent) {
       parts.push(sectionWithHeader('Dirty Worktree Rules', dirtyWorktreeContent));
     }
-    if (thinkingRulesContent) {
-      parts.push(sectionWithHeader('Thinking Rules', thinkingRulesContent));
+    if (thinkingRulesBody) {
+      parts.push(sectionWithHeader('Thinking Rules', thinkingRulesBody));
     }
   }
 
@@ -503,6 +602,13 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
   // Everything below: dynamic (date, mood, consciousness, persona, recent
   //   memory, custom instructions) → fresh each call.
   // With SUDO_PROMPT_CACHE=1 the date/time block also sits below this line.
+  // BO3/S2: deduped in-band truncation warnings (which rules files were cut),
+  // surfaced as one deterministic block above the boundary. Present only when a
+  // rules file was actually truncated → normal operation adds nothing.
+  if (truncationWarningBlock) {
+    parts.push(sectionWithHeader('Context Truncation Warnings', truncationWarningBlock));
+  }
+
   parts.push('\n' + DYNAMIC_BOUNDARY_MARKER);
 
   // BO2/S1: with SUDO_PROMPT_CACHE=1 the volatile date/time block and the
@@ -572,7 +678,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
 
   // 8. AGENTS.md (lifted above the boundary when SUDO_PROMPT_CACHE=1)
   if (!promptCacheStable) {
-    parts.push(section(agentsContent));
+    parts.push(section(agentsBody));
   }
 
   // 9. TOOLS.md (lifted above the boundary when SUDO_PROMPT_CACHE=1)
@@ -627,13 +733,13 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     }
 
     // 14. CODING.md — coding army standing orders
-    if (codingContent) {
-      parts.push(sectionWithHeader('Coding Army — Standing Orders', codingContent));
+    if (codingBody) {
+      parts.push(sectionWithHeader('Coding Army — Standing Orders', codingBody));
     }
 
     // 15. Autonomy Rules — persist until done, bias to action
-    if (autonomyContent) {
-      parts.push(sectionWithHeader('Autonomy Rules', autonomyContent));
+    if (autonomyBody) {
+      parts.push(sectionWithHeader('Autonomy Rules', autonomyBody));
     }
 
     // 15.5. Formatting Rules — response structure guidelines
@@ -642,18 +748,18 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     }
 
     // 16. Safety Rules — blast radius awareness
-    if (safetyRulesContent) {
-      parts.push(sectionWithHeader('Safety Rules', safetyRulesContent));
+    if (safetyRulesBody) {
+      parts.push(sectionWithHeader('Safety Rules', safetyRulesBody));
     }
 
     // 16.5. Git Safety Protocol
-    if (gitSafetyContent) {
-      parts.push(sectionWithHeader('Git Safety Protocol', gitSafetyContent));
+    if (gitSafetyBody) {
+      parts.push(sectionWithHeader('Git Safety Protocol', gitSafetyBody));
     }
 
     // 16.6. PR Workflow — Upgrade 29
-    if (prWorkflowContent) {
-      parts.push(sectionWithHeader('PR Creation Workflow', prWorkflowContent));
+    if (prWorkflowBody) {
+      parts.push(sectionWithHeader('PR Creation Workflow', prWorkflowBody));
     }
 
     // 16.7. Frontend Task Rules — Upgrade 41
@@ -667,8 +773,8 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     }
 
     // 16.9. Thinking Rules — behavioral patterns, anti-patterns, UX behaviors
-    if (thinkingRulesContent) {
-      parts.push(sectionWithHeader('Thinking Rules', thinkingRulesContent));
+    if (thinkingRulesBody) {
+      parts.push(sectionWithHeader('Thinking Rules', thinkingRulesBody));
     }
   }
 

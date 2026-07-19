@@ -162,6 +162,13 @@ export interface BrainRequest {
    * prompt falls back to the full prompt. Unset → full prompt (default).
    */
   promptMode?: 'slim-heartbeat';
+  /**
+   * BO4/S4 per-session-type injection profile. Selects the system-prompt
+   * allowlist for this call: 'main' (full prompt — default, unchanged),
+   * 'subagent' (AGENTS + TOOLS + Safety only), 'cron' (+ identity files).
+   * Reduced profiles cut cron/subagent turn cost ≥30%. Unset → 'main'.
+   */
+  promptProfile?: SessionProfile;
 }
 
 /** Token usage and estimated cost for a single LLM call. */
@@ -224,8 +231,23 @@ export interface ModelProfile {
 // System prompt assembly options
 // ---------------------------------------------------------------------------
 
+/**
+ * BO4/S4 session-type prompt profile. Controls which sections are injected:
+ * - 'main'     — every section (default; today's behavior, byte-for-byte).
+ * - 'subagent' — minimal operating set: AGENTS + TOOLS (+ Available Tools list)
+ *                + Safety Rules. No identity, memory, playbooks, or learnings.
+ * - 'cron'     — the subagent set PLUS the identity files (SOUL/IDENTITY/USER).
+ * SAFETY + AGENTS ride in EVERY profile — never dropped to save tokens.
+ */
+export type SessionProfile = 'main' | 'subagent' | 'cron';
+
 /** Options passed to assembleSystemPrompt(). */
 export interface SystemPromptOptions {
+  /**
+   * BO4/S4 injection profile (default 'main' = full prompt, unchanged). See
+   * SessionProfile. Reduced profiles ('subagent'/'cron') cut token cost ≥30%.
+   */
+  profile?: SessionProfile;
   /** Include HEARTBEAT.md context block. */
   heartbeat?: boolean;
   /** Active persona to inject. */
@@ -271,4 +293,11 @@ export interface SystemPromptOptions {
    * omitted, behavior is byte-identical (volatile block stays in the string).
    */
   captureVolatileTail?: (block: string) => void;
+  /**
+   * BO6/S3: pre-rendered <available_skills> catalog block (skills/skill-catalog.ts),
+   * injected into the STABLE cached prefix above the DYNAMIC_BOUNDARY_MARKER so it is
+   * cached. Byte-stable within a session (deterministic sort; per-skill hash changes
+   * only when a SKILL.md changes). Omitted → nothing injected (byte-identical default).
+   */
+  skillCatalog?: string;
 }

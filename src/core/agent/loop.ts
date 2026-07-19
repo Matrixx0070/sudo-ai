@@ -867,6 +867,12 @@ export class AgentLoop extends AgentLoopInjections {
       /** Tool names/globs to EXCLUDE from the allowlist (e.g. self-modify for
        *  webhooks). Applied on top of toolAllowlist. */
       toolDeny?: string[];
+      /**
+       * BO4/S4 per-session-type system-prompt profile. 'subagent' (swarm turns)
+       * and 'cron' (light-context cron turns) inject the reduced allowlist;
+       * unset/'main' = full prompt. Threaded straight to brain.call.
+       */
+      promptProfile?: 'main' | 'subagent' | 'cron';
     },
   ): Promise<AgentRunResult> {
     if (!sessionId || typeof sessionId !== 'string') {
@@ -2050,7 +2056,7 @@ export class AgentLoop extends AgentLoopInjections {
     session: SessionLike,
     state: AgentState,
     emit: Emitter,
-    opts?: { race?: boolean; slimHeartbeat?: boolean; toolAllowlist?: string[]; toolDeny?: string[] },
+    opts?: { race?: boolean; slimHeartbeat?: boolean; toolAllowlist?: string[]; toolDeny?: string[]; promptProfile?: 'main' | 'subagent' | 'cron' },
   ): Promise<string> {
     const { maxIterations, model } = this.config;
     let finalText = '';
@@ -2473,6 +2479,7 @@ export class AgentLoop extends AgentLoopInjections {
             model: effectiveModel,
             tools: _routedTools,
             ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),
+            ...(opts?.promptProfile && opts.promptProfile !== 'main' ? { promptProfile: opts.promptProfile } : {}),
             race: opts?.race,
           }, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts);
         } catch (brainErr) {
