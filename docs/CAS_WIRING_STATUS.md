@@ -1,5 +1,34 @@
 # CAS Wiring Campaign — Status Ledger
 
+> ## CAMPAIGN SUMMARY (2026-07-19, sessions 1–7)
+>
+> **Mission delivered:** sudo-ai's existing-but-severed consciousness subsystems wired into real control paths, in small flag-gated measured slices. 9/10 build workstreams complete; only CW9 is design-only (Q-2 pending Fable GO). Remaining tail is time-gated (measurement windows + flag-flip GOs), not build work.
+>
+> **What shipped (all merged + deployed unless noted):**
+> - CW0 — measurement instrumentation + path map + baselines (MEASURING until 2026-07-20; live-confirmed, 14+ datapoints @ 329 tok/turn).
+> - CW1 — un-severed drive-compute constants → real surprise/world/self signals (DEPLOYED; live signal 0.43 observed; per-turn CW1 log line awaits first CHANNEL turn).
+> - CW2 — real context-pressure tiering of the injection (flag LIVE, MEASURING until 2026-07-22; behaviorally confirmed 20:25Z).
+> - CW3 — deleted vestigial ContextSelector+ConsciousnessBridge (−1,238 LOC; harvest preceded deletion).
+> - CW4 — bid-based context arbiter, the G1 centerpiece (MERGED+DEPLOYED, flag OFF, HELD until CW2 verdict).
+> - CW5 — surprise gates episode encode-priority + attention (flag LIVE, MEASURING until 2026-07-23).
+> - CW6 — HomeostatCore essential-variables organ, sensing-only (MERGED+DEPLOYED; KAIROS byte-identical).
+> - CW7 — cheap agency: expectation logging + mismatch signal (PR #876, CI-pending on GitHub runner queue; flag OFF).
+> - CW8 — eligibility traces (TODO, builds on CW7 once merged).
+> - CW9 — loop.ts decomposition DESIGN delivered (docs/F103_LOOP_DECOMPOSITION_DESIGN.md); execution gated on Q-2.
+>
+> **The throughline — three "built-severed" instances un-severed:** the campaign's recurring finding was subsystems that were fully built but disconnected at the exact point they should act. (1) CW1: `driveManager.compute` fed hardcoded `recentSurprise:0 / worldModelConfidence:0.5 / selfModelImprovingRatio:0.5` while the real accessors sat unused. (2) CW5: `onInteractionEnd` hardcoded every episode's `surpriseLevel:0 / significance:0.5` while `computeSignificance` was exported-but-never-called. (3) CW7: not a hardcoded constant but an OMISSION — no intended-vs-actual (efference) comparison existed per tool call at all. Same pattern, three shapes: dead constant, dead function, absent check.
+>
+> **Flag states + measurement verdicts pending:**
+> - `SUDO_CAS_PRESSURE=1` LIVE → verdict 2026-07-22 (tier distribution, user_rephrased vs 0.70%, cache-read vs 0.1512/0.2902, no new error classes).
+> - `SUDO_CAS_SURPRISE_GATE=1` LIVE → verdict 2026-07-23 (flood guard: episodes/day vs 25–32 baseline, alert if >64).
+> - `SUDO_CAS_ARBITER=0` HELD → flip Q-n after CW2 verdict (one injection-affecting flag at a time).
+> - `SUDO_CAS_AGENCY=0` → flip decision after CW7+CW8 land + an agency watch.
+>
+> **Open tail:** CW1 per-turn line awaits the first organic CHANNEL turn (call site is channel-only — not a gap). CW7 merge + CW8 build + CW4/agency flips await GitHub CI clearing and Fable GOs. CW9 execution awaits A-2.
+>
+> **Standing rules established:** green-means-green (the ratchet-mask that let #864–866 merge red is repaired); one injection-affecting flag flipped at a time; every flip needs error-class-subset verification first; deploy = merge origin/main into the prod branch + `pm2 restart ecosystem.config.cjs --only sudo-ai-v5` (never touch the pre-existing ecosystem.config.cjs mod); config/.env flags reach process.env via ConfigLoader dotenv, not /proc.
+
+
 **Spec:** `docs/OPUS_HANDOFF_CAS_WIRING.md` (read first).
 **QA:** `docs/CAS_WIRING_QA.md` (check for OPEN questions first).
 **Convention:** update after every state change; append session reports at the bottom.
@@ -16,7 +45,7 @@ States: `TODO | IN_PROGRESS | BLOCKED(Q-n) | PR(#n) | MERGED(#n) | DEPLOYED | ME
 | CW6 | HomeostatCore (essential variables) | MERGED(#875)+DEPLOYED | #875 | — (sensing only; SUDO_HOMEOSTAT_* setpoint tuners) | CI green; merged-diff verified; live via deploy #4 (20:38Z) |
 | CW7 | Expectation logging + mismatch credit | PR(#TBD) | — | SUDO_CAS_AGENCY (default OFF) | agency-monitor + penalize + doom mismatch-weight; 7 tests; scope coder.*+system.exec |
 | CW8 | Eligibility traces (multi-step credit) | TODO | — | SUDO_CAS_AGENCY | — |
-| CW9 | loop.ts decomposition DESIGN (execution gated) | TODO | — | — | — |
+| CW9 | loop.ts decomposition DESIGN (execution gated) | DESIGN DELIVERED (Q-2) | — | — | docs/F103_LOOP_DECOMPOSITION_DESIGN.md; execution gated on A-2 |
 
 ## Audit re-verification (CW0, 2026-07-19)
 
