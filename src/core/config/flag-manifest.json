@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 650,
+  "count": 651,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -651,6 +651,7 @@
     "SUDO_WRITE_CYCLE_ABORT",
     "SUDO_WRITE_CYCLE_WARN",
     "SUDO_WRITE_THROUGH_PERSIST",
-    "SUDO_ZDR"
+    "SUDO_ZDR",
+    "SUDO_ZDR_CHANNELS"
   ]
 }

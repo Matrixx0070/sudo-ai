@@ -10,6 +10,7 @@
 import { createLogger } from '../../shared/logger.js';
 import { genId } from '../../shared/utils.js';
 import { ConsciousnessError } from '../errors.js';
+import { isZDRBlocked } from '../../privacy/zdr-mode.js';
 import type { ConsciousnessDB } from '../consciousness-db.js';
 import type { EmotionTag } from '../types.js';
 import type { Episode, EpisodeQuery } from './types.js';
@@ -117,6 +118,14 @@ export class EpisodicMemory {
         'consciousness_episodic_invalid_input',
         { received: typeof episode },
       );
+    }
+
+    // F105 ZDR: episodic memory is conversation-derived user content. Under
+    // zero-data-retention, do not persist a new episode at all (in-memory
+    // cognition still ran; nothing is written to consciousness.db).
+    if (isZDRBlocked('memory_write')) {
+      log.info({ id: episode.id, topic: episode.topic }, 'ZDR active — episode not persisted');
+      return;
     }
 
     // Suppress byte-identical recurrences (heartbeat-replay loops, repeated

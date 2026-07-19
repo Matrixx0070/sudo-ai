@@ -181,6 +181,13 @@ Verified starting state: Waves A/B/D opening slices shipped + deployed (pid
 do not start**; N5 standing NO; frozen surfaces untouchable (invariant 4).
 
 ### Phase 1 — Observe + cheap wins (no new spend, 1 session)
+
+**Phase-1 measurement verdicts (2026-07-19, live prod data):**
+- **1.1 F83 = NOT closed — real work.** consciousness.db: 1,158 episodes but only 4 sleep_sessions, ALL from Jun 4-5 with ZERO consolidation (episodes_replayed=0, patterns=0, insights=0, empty journals) and none since. SleepCycle boot-wires skillOptimizer but the episodic/self-model/temporal/wisdom consolidation produced nothing and the cycle hasn't completed a session in 6 weeks. F83 remains open: bind/verify real adapters + prove one non-empty consolidation pass. (Queued after current tracks — touches cli.ts.)
+- **1.2 F84 verdict = KEEP (active).** Self-verify runs on live turns (log evidence, SUDO_SELF_VERIFY=1); full verified-vs-unverified failure-rate comparison deferred to the metabolism report.
+- **1.2 F85 verdict = FIX-OR-OFF.** mind.db predictions: 1,324 total → 1,320 'incorrect', 0 'correct', 4 pending. Root cause is structural, not model quality: outcomes resolve ONLY via manual meta.predictor record-outcome (never happens) or the expiry sweep marking everything expired as 'incorrect'. Predictions are generated then never consumed or genuinely scored — computed-then-discarded (F122 class). Verdict: either wire a real consumer + outcome recording, or turn SUDO_PREDICTOR_LOOP off; as-is it earns nothing.
+- **4.1 F88 = ALREADY ACTIVE (ledger correction).** ecosystem.config.cjs:120 pins SUDO_GOAL_EVAL_MODEL='sudo/cheap' (grok-4-fast) and the running process carries it — the real LlmGoalEvaluator seam is live; Phase 4.1 needs no further action. (Note: this evaluator serves goal outcomes, NOT the predictions table above.)
+
 | Step | Work | Gate/proof |
 |---|---|---|
 | 1.1 | Live-verify F83: first sleep-cycle pass over real episodes (grep sleep/dream logs after a night) + F82 closure | log evidence of non-empty consolidation |
@@ -210,6 +217,17 @@ phases; mechanical, test-guarded, no behavior change).
 | 4.2 | F86 flywheel apply: two-reader consensus (invariant 9) + daily cap + audit trail | consensus tests + capped live trial |
 | 4.3 | F92 tenancy / F95 FleetView / F96 voice-at-boot verdicts (wire-or-park each) | verdict rows in this ledger |
 | 4.4 | F87 world-state goals | **FRANK GATE — autonomous spend; do not flip solo** |
+
+### Phase 4.3 verdicts (2026-07-19)
+Wire-or-park delivered for F92/F95/F96 (F91 standard: reachability evidence,
+rescues beat deletions, a PARK = explicit docs entry not limbo). Docs-only PR —
+no product code touched; existing tenancy/fleetview/voice tests untouched.
+
+| Feature | Verdict | Evidence | Executed |
+|---|---|---|---|
+| **F92 tenancy** | **DEMOTE to documented library** (kept, not deleted) | Zero external consumers: `git grep -l tenancy src/ \| grep -v src/core/tenancy` → only a **doc comment** in `src/llm/policy.ts:408`; `git grep core/tenancy` → no imports. Good bones: `tenant-launcher.ts` fail-closed (throws w/o real isolation unless `SUDO_TENANCY_ALLOW_UNSAFE=1`); 21 passing tests. | `docs/TENANCY_STATUS.md` with explicit "no runtime consumers" note; code + tests retained. |
+| **F95 FleetView** | **PARK as experiments** (not packaged, not deleted) | `src/tui/fleetview` + `src/desktop/fleetview` + `src/gateway/jsonrpc` are **tsx-only** (package.json `tui:/gateway:/desktop:fleetview` scripts); TUI entry docstring states default build target excludes them; zero consumers; 6 test files present. Packaging (bundled TUI + Electron build) unwarranted w/o operator demand. | `docs/FLEETVIEW_STATUS.md` (what exists, tsx run instructions, why parked). |
+| **F96 voice at boot** | **PARK-until-F94-unparks** (no boot init wired) | Voice engine complete (`src/core/voice/`), but F93/F94 (its dependents) PARKED BY FRANK. Voice is NOT dead — independent live consumer: Telegram voice replies (`SUDO_TELEGRAM_VOICE_REPLY` **default ON**, telegram.ts:271-272) via **lazy** STT/TTS (created on first use, telegram.ts:223). Boot warmup would add cold-start + model-download cost for zero live benefit (no new spend rule). Assets: `~/.cache/whisper/base.pt` present; Kokoro/Whisper ONNX = download-on-first-use, not boot-provisioned. | `docs/VOICE_BOOT_STATUS.md` (park rationale + unpark trigger = F94). |
 
 ### Phase 5 — Rolling/research
 F107 stub-debt triage (tools 179 / api 92, rolling burn-down) · F111 F5
@@ -302,7 +320,7 @@ indexes; 38 skipped tests concentrated in meta + browser suites.
 |---|---|
 | A (F81–F88) | **F81 shipped** (#807, census + `docs/FLAG_CENSUS.md`); **F88 shipped** (#809, real LlmGoalEvaluator behind injected seam; activate via SUDO_GOAL_EVAL_MODEL); F82–F87 = verify/measure tasks per census corrections |
 | B (F89–F96) | **F89 shipped** (#806); **F90 shipped** (AutoBugFix C+D behind SUDO_AUTOBUGFIX=1); **F91 verdicts delivered** (3 deleted, 3 corrected-keep); rest not started |
-| C (F97–F103) | **F97 SHIPPED** (2026-07-18: legacy layer + shims deleted, LLM_IR_CALLERS retired, key-rotation + call-deadline ported to transport, replay 408/0 material; deploy+smoke pending merge); F98–F103 not started |
+| C (F97–F103) | **F97 SHIPPED** (2026-07-18, deployed+live via later merges); **F98/F100/F102 ✅ + F103 slices 1-2 ✅** (Phase-3 section); **F101 COMPLETE 2026-07-19** — the tail (dashboard fold + /api/admin→/v1/admin reconcile + unified admin auth) shipped via the gateway campaign (GW-4, PRs #832/#833/#856; live-verified authed 200 on all four /v1/admin/system/* routes); F99 absorbed into F117; remaining C = F103 loop.ts designed decomposition + cli.ts phased boot |
 | D (F104–F108) | **F104+F106 shipped** (#810: SUDO_SECURITY_STRICT fatal guard-init + posture-weakening boot banner, posture.ts); F105/F107/F108 not started |
 | E (F109–F112) | not started. Census follow-up shipped: SUDO_UPDATE_* env→config mapping (#808). |
 | F (F113–F118) persistence | **F113+F114 shipped** (#818 retention-sweep + WAL); **F115/F116/F117/F118 verdicts + map delivered** (docs/PERSISTENCE_MAP.md; physical merges rejected/deferred with reasons; F117 boot-scan = small follow-up) |

@@ -28,6 +28,7 @@ import { createLogger } from '../core/shared/logger.js';
 import { DATA_DIR } from '../core/shared/paths.js';
 import { redactDeep } from '../core/shared/redact.js';
 import { redactSecrets } from '../core/federation/federation-error-sanitizer.js';
+import { isZDRBlocked } from '../core/privacy/zdr-mode.js';
 import { contentFingerprint } from './cache/canonical.js';
 import type { IRRequest } from '../../shared-types/ir/v1.js';
 
@@ -394,6 +395,11 @@ export class GatewayCallLog {
         }
       }
 
+      // F105 ZDR: under zero-data-retention, never persist the IR request/response
+      // payloads (the raw prompt + model reply = user content). Everything else —
+      // caller, route, tokens, cost, latency, content_sha256 fingerprint, outcome —
+      // is operational metadata and still recorded so budgets/dedup keep working.
+      const zdrBlocked = isZDRBlocked('session_persistence');
       this.db.prepare(`
         INSERT OR REPLACE INTO llm_calls
           (trace_id, ts, caller, purpose, alias, route, priority,
@@ -413,8 +419,8 @@ export class GatewayCallLog {
         alias:               entry.alias ?? null,
         route:               entry.route ?? null,
         priority:            entry.priority ?? null,
-        ir_request:          toJsonColumn(entry.irRequest),
-        ir_response:         toJsonColumn(entry.irResponse),
+        ir_request:          zdrBlocked ? null : toJsonColumn(entry.irRequest),
+        ir_response:         zdrBlocked ? null : toJsonColumn(entry.irResponse),
         wire_payload_sha256: entry.wirePayloadSha256 ?? null,
         content_sha256:      contentSha,
         error_class:         entry.errorClass ?? null,
