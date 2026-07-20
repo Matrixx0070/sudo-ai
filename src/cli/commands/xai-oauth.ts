@@ -76,7 +76,7 @@ export async function runXaiOAuthModels(refresh: boolean): Promise<number> {
 
 export async function runXaiOAuthSetModel(id: string): Promise<number> {
   const { getXaiOAuthManager } = await import('../../llm/xai-oauth-manager.js');
-  const { getModelsForDisplay } = await import('./xai-picker-shared.js');
+  const { getModelsForDisplay, setDefaultAdvisory } = await import('./xai-picker-shared.js');
   const mgr = getXaiOAuthManager();
   if (!mgr.status().connected) {
     console.error('Not connected — run `sudo-ai xai-oauth login` first.');
@@ -94,5 +94,7 @@ export async function runXaiOAuthSetModel(id: string): Promise<number> {
   }
   console.log(`Default model set: ${id}`);
   console.log(`Use this brain model string: xai-oauth/${id}`);
+  const advisory = setDefaultAdvisory(id);
+  if (advisory) console.log(`  ${advisory}`);
   return 0;
 }

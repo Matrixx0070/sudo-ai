@@ -12,8 +12,8 @@ import { XaiOAuthManager, type XaiOAuthStore } from '../../src/llm/xai-oauth-man
 import type { XaiModelEntry } from '../../src/llm/xai-models.js';
 
 const MODELS: XaiModelEntry[] = [
-  { id: 'grok-build', name: 'Grok Build', contextWindow: 512000, backend: 'responses', supportsReasoningEffort: true, reasoningEfforts: ['low', 'high'], billing: 'subscription' },
-  { id: 'grok-composer-2.5-fast', name: 'Composer', contextWindow: 200000, backend: 'responses', supportsReasoningEffort: false, reasoningEfforts: [], billing: 'subscription' },
+  { id: 'grok-build', name: 'Grok Build', contextWindow: 512000, backend: 'responses', supportsReasoningEffort: true, reasoningEfforts: ['low', 'high'], aliases: [], billing: 'subscription' },
+  { id: 'grok-composer-2.5-fast', name: 'Composer', contextWindow: 200000, backend: 'responses', supportsReasoningEffort: false, reasoningEfforts: [], aliases: [], billing: 'subscription' },
 ];
 
 let dir: string;

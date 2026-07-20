@@ -7,6 +7,18 @@
 
 import type { XaiAuthMethod, XaiModelEntry } from '../../llm/xai-models.js';
 
+/**
+ * Non-blocking advisory for models that fan out internally and bill far more
+ * than a single call — e.g. grok-4.20-multi-agent (~50x token burn per the RE
+ * report). Returned as a note to print on set-default; never blocks the choice.
+ */
+export function setDefaultAdvisory(id: string): string | null {
+  if (/multi-agent/i.test(id)) {
+    return 'Note: this is a multi-agent model — it fans out internally and can burn ~50x the tokens of a single-call model. Fine to pick deliberately; avoid it as an unattended default.';
+  }
+  return null;
+}
+
 /** Human cost label for a model's billing class. */
 export function billingLabel(billing: XaiModelEntry['billing']): string {
   return billing === 'subscription' ? 'subscription-covered' : 'pay-per-token';

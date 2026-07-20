@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { XaiModelEntry } from '../../src/llm/xai-models.js';
 
 const OAUTH_MODELS: XaiModelEntry[] = [
-  { id: 'grok-build', name: 'Grok Build', contextWindow: 512000, backend: 'responses', supportsReasoningEffort: true, reasoningEfforts: ['low'], billing: 'subscription' },
+  { id: 'grok-build', name: 'Grok Build', contextWindow: 512000, backend: 'responses', supportsReasoningEffort: true, reasoningEfforts: ['low'], aliases: [], billing: 'subscription' },
 ];
 
 const refreshMock = vi.fn(async () => OAUTH_MODELS);
@@ -17,7 +17,7 @@ vi.mock('../../src/llm/xai-models.js', async (orig) => {
   return { ...actual, getXaiModelDiscovery: () => ({ refresh: refreshMock }) };
 });
 
-import { billingLabel, getModelsForDisplay } from '../../src/cli/commands/xai-picker-shared.js';
+import { billingLabel, getModelsForDisplay, setDefaultAdvisory } from '../../src/cli/commands/xai-picker-shared.js';
 
 function fakeMgr(initial: XaiModelEntry[]) {
   let cache = [...initial];
@@ -61,5 +61,13 @@ describe('getModelsForDisplay', () => {
     const { live } = await getModelsForDisplay('apikey', mgr, false);
     expect(live).toBe(true);
     expect(refreshMock).toHaveBeenCalledWith('apikey');
+  });
+});
+
+
+describe('setDefaultAdvisory', () => {
+  it('warns for multi-agent models, silent otherwise', () => {
+    expect(setDefaultAdvisory('grok-4.20-multi-agent-0309')).toMatch(/50x|multi-agent/);
+    expect(setDefaultAdvisory('grok-4.5')).toBeNull();
   });
 });
