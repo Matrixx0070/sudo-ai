@@ -105,6 +105,26 @@ export const DASHBOARD_HTML = `
       </div>
     </div>
     <div class="card" style="grid-column: 1 / -1;">
+      <h2>Grok Model Picker</h2>
+      <div id="grok-status" style="margin-bottom: 12px;"><span class="stat-label">Loading...</span></div>
+      <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+        <label for="grok-method-select" style="color:#888; font-size:12px;">Provider</label>
+        <select id="grok-method-select" style="padding: 8px; background:#0f0f1a; color:#e0e0e0; border:1px solid #2a2a4a; border-radius: 4px;">
+          <option value="oauth">xai-oauth — Sign in with Grok (subscription-covered)</option>
+          <option value="apikey">xai — Grok API Key (pay-per-token)</option>
+        </select>
+        <button id="grok-models-refresh-btn" style="background: #2a2a4a; color: #e0e0e0; border: 0; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">Refresh list</button>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <select id="grok-models-select" style="flex:1; padding: 8px; background:#0f0f1a; color:#e0e0e0; border:1px solid #2a2a4a; border-radius: 4px;"></select>
+        <button id="grok-models-save-btn" style="background: #00d9ff; color: #0f0f1a; border: 0; padding: 8px 14px; border-radius: 4px; font-weight: bold; cursor: pointer;">Set default</button>
+      </div>
+      <div id="grok-models-hint" style="margin-top: 8px; color: #888; font-size: 12px;">
+        Brain model string: <code id="grok-model-string" style="color:#00ff88;">xai-oauth/&lt;id&gt;</code>
+      </div>
+      <div id="grok-models-error" class="error" style="margin-top: 8px; display: none;"></div>
+    </div>
+    <div class="card" style="grid-column: 1 / -1;">
       <h2>FleetView — Live Agents</h2>
       <div id="fleet-summary" class="fleet-summary">
         <span class="stat-label">Slots</span><span class="stat-value" id="fleet-slots">- / -</span>
@@ -370,6 +390,98 @@ export const DASHBOARD_HTML = `
         errEl.style.display = 'block';
       }
     });
+
+    // --- Grok model picker (GP6) -------------------------------------------
+    function grokMethod() {
+      return document.getElementById('grok-method-select').value;
+    }
+    function grokPrefix() {
+      return grokMethod() === 'oauth' ? 'xai-oauth' : 'xai';
+    }
+    function renderGrokModels(models, defaultModel) {
+      const sel = document.getElementById('grok-models-select');
+      const code = document.getElementById('grok-model-string');
+      sel.innerHTML = '';
+      if (!models || models.length === 0) {
+        const opt = document.createElement('option');
+        opt.textContent = 'No models — click Refresh list';
+        opt.disabled = true;
+        sel.appendChild(opt);
+        code.textContent = grokPrefix() + '/<id>';
+        return;
+      }
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        const ctx = m.contextWindow ? ' — ' + Math.round(m.contextWindow / 1000) + 'k ctx' : '';
+        opt.textContent = m.name + ' (' + m.id + ')' + ctx;
+        if (m.id === defaultModel) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      code.textContent = grokPrefix() + '/' + (defaultModel || sel.value);
+    }
+    async function refreshGrokModels(forceLive) {
+      const errEl = document.getElementById('grok-models-error');
+      errEl.style.display = 'none';
+      try {
+        const url = '/v1/admin/grok/models?method=' + grokMethod() + (forceLive ? '&refresh=1' : '');
+        const data = await fetchJson(url);
+        const payload = data.data || data;
+        renderGrokModels(payload.models, payload.defaultModel);
+      } catch (e) {
+        errEl.textContent = 'Models fetch failed: ' + e.message;
+        errEl.style.display = 'block';
+        renderGrokModels([], null);
+      }
+    }
+    async function refreshGrokStatus() {
+      const el = document.getElementById('grok-status');
+      try {
+        const data = await fetchJson('/v1/admin/grok/status');
+        const providers = (data.data || data).providers || [];
+        el.innerHTML = providers.map(function (p) {
+          const dot = p.connected ? '●' : '○';
+          const bill = p.billing === 'subscription' ? 'subscription-covered' : 'pay-per-token';
+          return '<div>' + dot + ' <strong>' + p.provider + '</strong> — ' +
+            (p.connected ? 'ready' : 'not configured') +
+            ' · default: ' + (p.defaultModel || '(none)') +
+            ' · ' + bill + '</div>';
+        }).join('');
+      } catch (e) {
+        el.innerHTML = '<span class="stat-label">Status unavailable: ' + e.message + '</span>';
+      }
+    }
+    async function refreshGrokProviders() {
+      await refreshGrokStatus();
+      await refreshGrokModels(false);
+    }
+    document.getElementById('grok-method-select').addEventListener('change', () => refreshGrokModels(false));
+    document.getElementById('grok-models-refresh-btn').addEventListener('click', () => refreshGrokModels(true));
+    document.getElementById('grok-models-select').addEventListener('change', function () {
+      document.getElementById('grok-model-string').textContent = grokPrefix() + '/' + this.value;
+    });
+    document.getElementById('grok-models-save-btn').addEventListener('click', async () => {
+      const sel = document.getElementById('grok-models-select');
+      const errEl = document.getElementById('grok-models-error');
+      const id = sel.value;
+      if (!id) { errEl.textContent = 'Pick a model first.'; errEl.style.display = 'block'; return; }
+      try {
+        const token = getToken();
+        const res = await fetch('/v1/admin/grok/default-model', {
+          method: 'PUT',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ method: grokMethod(), modelId: id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        errEl.style.display = 'none';
+        await refreshGrokProviders();
+      } catch (e) {
+        errEl.textContent = 'Save failed: ' + e.message;
+        errEl.style.display = 'block';
+      }
+    });
+    refreshGrokProviders();
 
     async function refreshCoauthStatus() {
       try {

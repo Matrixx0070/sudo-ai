@@ -55,7 +55,7 @@
   "src/core/consciousness/orchestrator.ts": 1047,
   "src/core/consciousness/session-compactor.ts": 402,
   "src/core/consciousness/sleep-cycle/consolidator.ts": 894,
-  "src/core/dashboard/dashboard-html.ts": 451,
+  "src/core/dashboard/dashboard-html.ts": 563,
   "src/core/dashboard/dashboard-routes.ts": 1134,
   "src/core/dashboard/dashboard-server.ts": 878,
   "src/core/federation/audit-chain-sync.ts": 418,
