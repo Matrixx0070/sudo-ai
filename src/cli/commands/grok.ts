@@ -80,3 +80,73 @@ export async function runGrokStatus(): Promise<number> {
   // Exit 0 when at least one provider is ready.
   return ready.length > 0 ? 0 : 1;
 }
+
+// ---------------------------------------------------------------------------
+// GW5 — subscription-free web-session media (image primary / video best-effort)
+// ---------------------------------------------------------------------------
+
+/** `sudo-ai grok image "<prompt>"` — generate on the Grok subscription (free). */
+export async function runGrokImage(
+  prompt: string,
+  opts: { aspect?: string; num?: number; pro?: boolean } = {},
+): Promise<number> {
+  const media = await import('../../llm/grok-web-media.js');
+  try {
+    const genOpts: { aspectRatio?: string; numGenerations?: number; pro?: boolean } = {};
+    if (opts.aspect) genOpts.aspectRatio = opts.aspect;
+    if (opts.num) genOpts.numGenerations = opts.num;
+    if (opts.pro) genOpts.pro = opts.pro;
+    const r = await media.generateGrokImage(prompt, genOpts);
+    console.log('');
+    console.log(`  Generated ${r.files.length} image(s) on your Grok subscription (no metered spend):`);
+    for (const f of r.files) console.log(`    ${f}`);
+    if (r.url) console.log(`  URL: ${r.url}`);
+    console.log('');
+    return 0;
+  } catch (err) {
+    return reportMediaError(err);
+  }
+}
+
+/** `sudo-ai grok video "<prompt>"` — best-effort image→video on the subscription. */
+export async function runGrokVideo(
+  prompt: string,
+  opts: { aspect?: string; length?: number; res?: string } = {},
+): Promise<number> {
+  const media = await import('../../llm/grok-web-media.js');
+  try {
+    const genOpts: { aspectRatio?: string; videoLength?: number; resolutionName?: string } = {};
+    if (opts.aspect) genOpts.aspectRatio = opts.aspect;
+    if (opts.length) genOpts.videoLength = opts.length;
+    if (opts.res) genOpts.resolutionName = opts.res;
+    const r = await media.generateGrokVideo(prompt, genOpts);
+    console.log('');
+    console.log('  Generated a video on your Grok subscription (no metered spend):');
+    console.log(`    ${r.videoUrl}`);
+    if (r.thumbnailUrl) console.log(`    thumbnail: ${r.thumbnailUrl}`);
+    console.log('');
+    return 0;
+  } catch (err) {
+    return reportMediaError(err);
+  }
+}
+
+/** `sudo-ai grok websession status` — capture health without printing secrets. */
+export async function runGrokWebsessionStatus(): Promise<number> {
+  const { getGrokWebSessionManager } = await import('../../llm/grok-web-session-manager.js');
+  const { isGrokWebSessionEnabled } = await import('../../llm/grok-web-media.js');
+  const st = getGrokWebSessionManager().status();
+  console.log('');
+  console.log('  Grok web-session (subscription-free image/video):');
+  console.log(`    flag:      SUDO_GROK_WEBSESSION=${isGrokWebSessionEnabled() ? 'on' : 'off (default)'}`);
+  console.log(`    captured:  ${st.connected ? `yes (${st.capturedAt ?? '?'})` : st.needsRelogin ? 'needs re-login' : 'no'}`);
+  console.log(`    video:     ${st.hasStatsig ? 'statsig present (video ready)' : 'no statsig (image only; video best-effort)'}`);
+  console.log('');
+  return st.connected ? 0 : 1;
+}
+
+function reportMediaError(err: unknown): number {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`\n  ${msg}\n`);
+  return 1;
+}
