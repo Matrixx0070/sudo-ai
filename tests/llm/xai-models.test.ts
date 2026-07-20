@@ -8,6 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import {
+  OAUTH_KNOWN_MODELS,
   XaiModelDiscovery,
   XaiNotConnectedError,
   type XaiAuthMethod,
@@ -82,18 +83,65 @@ describe('XaiModelDiscovery — oauth (subscription proxy)', () => {
     expect(seenHeaders['x-grok-client-version']).toBe('0.2.22');
     expect(seenHeaders['x-grok-client-identifier']).toBe('grok-shell');
     expect(seenHeaders['User-Agent']).toBe('grok/0.2.22');
-    expect(models).toEqual([
-      {
-        id: 'grok-4.5',
-        name: 'Grok 4.5',
-        contextWindow: 500000,
-        backend: 'responses',
-        supportsReasoningEffort: true,
-        reasoningEfforts: ['low', 'high'],
-        aliases: [],
-        billing: 'subscription',
-      },
+    // The live grok-4.5 is preserved verbatim (live wins on the merge)...
+    const g45 = models.find((m) => m.id === 'grok-4.5')!;
+    expect(g45).toEqual({
+      id: 'grok-4.5',
+      name: 'Grok 4.5',
+      contextWindow: 500000,
+      backend: 'responses',
+      supportsReasoningEffort: true,
+      reasoningEfforts: ['low', 'high'],
+      aliases: [],
+      billing: 'subscription',
+    });
+    // ...and appears exactly once — the curated grok-4.5 is deduped away.
+    expect(models.filter((m) => m.id === 'grok-4.5')).toHaveLength(1);
+  });
+});
+
+describe('XaiModelDiscovery — oauth curated-merge (endpoint under-reports)', () => {
+  it('merges the 1-model live /models response with OAUTH_KNOWN_MODELS to yield the 6 distinct ids', async () => {
+    const deps = makeDeps({ body: OAUTH_BODY, cred: 'tok-oauth' });
+    const d = new XaiModelDiscovery(deps);
+    const models = await d.refresh('oauth');
+
+    // >= 6 distinct models even though the endpoint advertised only grok-4.5
+    expect(models.length).toBeGreaterThanOrEqual(6);
+    const ids = models.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length); // no duplicate ids
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'grok-4.5',
+        'grok-build',
+        'grok-build-0.1',
+        'grok-4.3',
+        'grok-4.20-0309-reasoning',
+        'grok-4.20-0309-non-reasoning',
+      ]),
+    );
+    // dedup: the single live grok-4.5 is not duplicated by the curated one
+    expect(models.filter((m) => m.id === 'grok-4.5')).toHaveLength(1);
+
+    // curated gap-fillers carry subscription billing + a real context window
+    const build = models.find((m) => m.id === 'grok-build')!;
+    expect(build.billing).toBe('subscription');
+    expect(build.contextWindow).toBe(512000);
+    expect(build.name).toBe('Grok Build');
+    const g43 = models.find((m) => m.id === 'grok-4.3')!;
+    expect(g43.contextWindow).toBe(1000000);
+  });
+
+  it('OAUTH_KNOWN_MODELS holds exactly the 6 Fable-verified distinct models', () => {
+    expect(OAUTH_KNOWN_MODELS.map((m) => m.id)).toEqual([
+      'grok-4.5',
+      'grok-build',
+      'grok-build-0.1',
+      'grok-4.3',
+      'grok-4.20-0309-reasoning',
+      'grok-4.20-0309-non-reasoning',
     ]);
+    expect(OAUTH_KNOWN_MODELS.every((m) => m.billing === 'subscription')).toBe(true);
   });
 });
 
@@ -171,14 +219,18 @@ describe('XaiModelDiscovery — cache + refresh', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await d.refresh('oauth'); // forced
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(d.cached('oauth')).toHaveLength(1);
+    expect(d.cached('oauth')).toHaveLength(6); // 1 live grok-4.5 + 5 curated gap-fillers
   });
 
   it('drops malformed entries (no id) without throwing', async () => {
     const body = { object: 'list', data: [{ name: 'no id' }, { id: 'grok-build' }] };
     const d = new XaiModelDiscovery(makeDeps({ body, cred: 'tok-oauth' }));
     const models = await d.refresh('oauth');
-    expect(models.map((m) => m.id)).toEqual(['grok-build']);
+    // the no-id entry is dropped; grok-build survives once (live wins over the
+    // curated grok-build), and the remaining curated models fill the gaps.
+    expect(models.every((m) => m.id.length > 0)).toBe(true);
+    expect(models.filter((m) => m.id === 'grok-build')).toHaveLength(1);
+    expect(models.map((m) => m.id)).toContain('grok-build');
   });
 });
 
