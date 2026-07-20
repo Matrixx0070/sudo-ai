@@ -3,7 +3,7 @@
   "src/cli/commands/chat/App.tsx": 823,
   "src/cli/commands/doctor.ts": 508,
   "src/cli/commands/setup.tsx": 588,
-  "src/cli/index.ts": 522,
+  "src/cli/index.ts": 592,
   "src/core/acp/brain-backend.ts": 506,
   "src/core/agent/alignment-aggregator.ts": 475,
   "src/core/agent/approval.ts": 419,
