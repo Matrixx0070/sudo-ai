@@ -443,6 +443,22 @@ xaiApikeyCmd
   });
 
 // ---------------------------------------------------------------------------
+// grok — unified provider-management view across both Grok methods (GP5)
+// ---------------------------------------------------------------------------
+
+const grokCmd = program
+  .command('grok')
+  .description('Show both Grok providers (xai-oauth + xai) — status, default model, billing');
+
+grokCmd
+  .command('status', { isDefault: true })
+  .description('Provider-management view across both Grok methods')
+  .action(async () => {
+    const { runGrokStatus } = await import('./commands/grok.js');
+    process.exit(await runGrokStatus());
+  });
+
+// ---------------------------------------------------------------------------
 // secrets — audit / apply / configure SecretRef indirect secrets
 // ---------------------------------------------------------------------------
 
