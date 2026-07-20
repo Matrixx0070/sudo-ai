@@ -312,9 +312,9 @@ export function makeCdpConnectLauncher(cdpUrl: string): OracleLauncher {
  * `SUDO_GROK_ORACLE_CDP_URL` is set (recommended — see makeCdpConnectLauncher),
  * else fall back to launching one (only works where CF doesn't challenge it).
  */
-export function defaultOracleLauncher(): OracleLauncher {
-  const cdpUrl = process.env['SUDO_GROK_ORACLE_CDP_URL'];
-  return cdpUrl ? makeCdpConnectLauncher(cdpUrl) : makeRealOracleLauncher();
+export function defaultOracleLauncher(cdpUrl?: string): OracleLauncher {
+  const url = cdpUrl ?? process.env['SUDO_GROK_ORACLE_CDP_URL'];
+  return url ? makeCdpConnectLauncher(url) : makeRealOracleLauncher();
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +324,8 @@ export function defaultOracleLauncher(): OracleLauncher {
 export interface GrokStatsigOracleOptions {
   /** Durable grok profile dir (SSO logged-in). Required to launch. */
   profileDir?: string;
+  /** Attach to a persistent warm browser at this CDP URL (see WarmGrokBrowser). */
+  cdpUrl?: string;
   launcher?: OracleLauncher;
   /** Idle window before auto-close (ms). Env SUDO_GROK_ORACLE_IDLE_MS wins if set. */
   idleMs?: number;
@@ -360,16 +362,19 @@ export class GrokStatsigOracle {
   private readonly navigateUrl: string;
   private readonly breakpointTimeoutMs: number;
   private readonly profileDir?: string;
+  /** True when attaching to a warm browser (no own profile needed). */
+  private readonly usingConnect: boolean;
   private readonly now: () => number;
   /** Single-flight warm — concurrent minters share one launch+grab. */
   private warming: Promise<void> | null = null;
 
   constructor(opts: GrokStatsigOracleOptions = {}) {
-    this.launcher = opts.launcher ?? defaultOracleLauncher();
+    this.launcher = opts.launcher ?? defaultOracleLauncher(opts.cdpUrl);
     this.idleMs = resolveIdleMs(opts.idleMs);
     this.navigateUrl = opts.navigateUrl ?? DEFAULT_NAVIGATE_URL;
     this.breakpointTimeoutMs = opts.breakpointTimeoutMs ?? 20_000;
     if (opts.profileDir !== undefined) this.profileDir = opts.profileDir;
+    this.usingConnect = !!(opts.cdpUrl ?? process.env['SUDO_GROK_ORACLE_CDP_URL']);
     this.now = opts.now ?? (() => Date.now());
   }
 
@@ -393,14 +398,15 @@ export class GrokStatsigOracle {
   }
 
   private async doWarm(): Promise<void> {
-    if (!this.profileDir) {
+    // The fresh-launch launcher needs a profile; the connect launcher does not.
+    if (!this.profileDir && !this.usingConnect) {
       throw new Error(
         'Grok statsig oracle has no durable profile dir — run `sudo-ai grok websession setup` first.',
       );
     }
     if (!this.launch) {
       const t0 = this.now();
-      this.launch = await this.launcher(this.profileDir);
+      this.launch = await this.launcher(this.profileDir ?? '');
       log.info({ launchMs: this.now() - t0, headless: process.env['SUDO_GROK_ORACLE_HEADLESS'] === '1' }, 'grok statsig oracle launched');
     }
     await this.exposeMinter(this.launch);

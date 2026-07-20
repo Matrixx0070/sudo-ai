@@ -166,8 +166,18 @@ export async function generateGrokImage(
  */
 function makeOracleMint(profileDir?: string): (reqPath: string, method: string) => Promise<string> {
   return async (reqPath: string, method: string): Promise<string> => {
+    // Attach to an external warm browser if configured, else auto-provision a
+    // managed one (GWV6) — unless explicitly disabled with SUDO_GROK_WARM_BROWSER=0.
+    let cdpUrl = process.env['SUDO_GROK_ORACLE_CDP_URL'];
+    if (!cdpUrl && process.env['SUDO_GROK_WARM_BROWSER'] !== '0') {
+      const { getWarmGrokBrowser } = await import('./grok-warm-browser.js');
+      cdpUrl = await getWarmGrokBrowser(profileDir ? { profileDir } : {}).ensureRunning();
+    }
     const { getGrokStatsigOracle } = await import('./grok-statsig-oracle.js');
-    const oracle = getGrokStatsigOracle(profileDir ? { profileDir } : {});
+    const oracle = getGrokStatsigOracle({
+      ...(cdpUrl ? { cdpUrl } : {}),
+      ...(profileDir ? { profileDir } : {}),
+    });
     return oracle.mint(reqPath, method);
   };
 }
