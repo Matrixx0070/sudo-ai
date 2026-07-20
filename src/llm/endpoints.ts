@@ -44,6 +44,15 @@ export const OPENAI_STT_URL = `${PROVIDER_BASE_URLS.openai}/audio/transcriptions
 
 // ---- model listing / liveness probes --------------------------------------
 export const XAI_MODELS_URL = `${PROVIDER_BASE_URLS.xai}/models`;
+/**
+ * xAI subscription (grok-cli) proxy model-list endpoint — the account-specific
+ * model list the `xai-oauth` provider discovers live. Same host as the GX1
+ * chat proxy (`cli-chat-proxy.grok.com`); served to the OAuth seat, never the
+ * metered `api.x.ai` host. Requires the grok-cli client headers (see
+ * xai-models.ts). Kept here so the choke-point grep + egress allowlist stay
+ * in sync with the URLs the code calls.
+ */
+export const XAI_CLI_PROXY_MODELS_URL = 'https://cli-chat-proxy.grok.com/v1/models';
 export const OPENAI_MODELS_URL = `${PROVIDER_BASE_URLS.openai}/models`;
 export const ANTHROPIC_MODELS_URL = `${PROVIDER_BASE_URLS.anthropic}/models`;
 export const GOOGLE_MODELS_URL = `${PROVIDER_BASE_URLS.google}/models`;
