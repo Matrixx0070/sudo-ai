@@ -54,6 +54,22 @@ export interface XaiModelEntry {
   /** Enumerated reasoning-effort levels, when the endpoint lists them. */
   reasoningEfforts: string[];
   /**
+   * Alternate ids the endpoint accepts for this model (api.x.ai `aliases`);
+   * empty when not reported. The OAuth proxy does not send these.
+   */
+  aliases: string[];
+  /**
+   * Per-token pricing in micro-units (integer), when the endpoint reports it
+   * (api.x.ai metered list). Absent for the subscription seat (seat-covered,
+   * effectively $0). Surfaced so the picker can show real per-token cost.
+   */
+  pricing?: {
+    promptTextTokenPrice: number;
+    cachedPromptTextTokenPrice: number;
+    completionTextTokenPrice: number;
+    promptImageTokenPrice: number;
+  };
+  /**
    * Cost class, derived from the method — the seat is subscription-covered
    * ($0 to the user); the API key is pay-per-token. Surfaced so a picker can
    * make the distinction visible.
@@ -108,27 +124,77 @@ const defaultDeps: XaiModelsDeps = {
 
 interface RawModel {
   id?: unknown;
+  // OAuth proxy (cli-chat-proxy) shape:
   name?: unknown;
   context_window?: unknown;
   api_backend?: unknown;
   supports_reasoning_effort?: unknown;
   reasoning_efforts?: unknown;
+  // api.x.ai (metered) shape — DIFFERENT field names (Fable-verified live 2026-07-20):
+  context_length?: unknown;
+  aliases?: unknown;
+  prompt_text_token_price?: unknown;
+  cached_prompt_text_token_price?: unknown;
+  completion_text_token_price?: unknown;
+  prompt_image_token_price?: unknown;
 }
 
-/** Normalize one raw entry from either endpoint into an XaiModelEntry. */
+/** Title-case a model id into a display name when the endpoint omits `name`. */
+function prettify(id: string): string {
+  return id
+    .split(/[-_]/)
+    .filter((t) => t.length > 0)
+    .map((t) => t.charAt(0).toUpperCase() + t.slice(1))
+    .join(' ');
+}
+
+const numOr = (v: unknown, fallback: number): number => (typeof v === 'number' ? v : fallback);
+
+/**
+ * Normalize one raw entry from EITHER endpoint into an XaiModelEntry. The two
+ * xAI model endpoints use different field names (Fable-verified live 2026-07-20):
+ *   OAuth proxy : context_window, name, reasoning_efforts[]
+ *   api.x.ai    : context_length, NO name (id + aliases[]), per-token prices
+ */
 function normalize(raw: RawModel, method: XaiAuthMethod): XaiModelEntry | null {
   if (typeof raw.id !== 'string' || raw.id === '') return null;
-  return {
+
+  const contextWindow =
+    typeof raw.context_window === 'number'
+      ? raw.context_window
+      : typeof raw.context_length === 'number'
+        ? raw.context_length
+        : null;
+
+  const entry: XaiModelEntry = {
     id: raw.id,
-    name: typeof raw.name === 'string' && raw.name !== '' ? raw.name : raw.id,
-    contextWindow: typeof raw.context_window === 'number' ? raw.context_window : null,
+    name: typeof raw.name === 'string' && raw.name !== '' ? raw.name : prettify(raw.id),
+    contextWindow,
     backend: typeof raw.api_backend === 'string' ? raw.api_backend : null,
     supportsReasoningEffort: raw.supports_reasoning_effort === true,
     reasoningEfforts: Array.isArray(raw.reasoning_efforts)
       ? raw.reasoning_efforts.filter((e): e is string => typeof e === 'string')
       : [],
+    aliases: Array.isArray(raw.aliases)
+      ? raw.aliases.filter((a): a is string => typeof a === 'string')
+      : [],
     billing: method === 'oauth' ? 'subscription' : 'metered',
   };
+
+  // Capture metered per-token pricing when the endpoint reports it (api.x.ai).
+  if (
+    typeof raw.prompt_text_token_price === 'number' ||
+    typeof raw.completion_text_token_price === 'number'
+  ) {
+    entry.pricing = {
+      promptTextTokenPrice: numOr(raw.prompt_text_token_price, 0),
+      cachedPromptTextTokenPrice: numOr(raw.cached_prompt_text_token_price, 0),
+      completionTextTokenPrice: numOr(raw.completion_text_token_price, 0),
+      promptImageTokenPrice: numOr(raw.prompt_image_token_price, 0),
+    };
+  }
+
+  return entry;
 }
 
 interface CacheEntry {

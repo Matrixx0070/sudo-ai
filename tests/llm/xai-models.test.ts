@@ -90,6 +90,7 @@ describe('XaiModelDiscovery — oauth (subscription proxy)', () => {
         backend: 'responses',
         supportsReasoningEffort: true,
         reasoningEfforts: ['low', 'high'],
+        aliases: [],
         billing: 'subscription',
       },
     ]);
@@ -117,7 +118,7 @@ describe('XaiModelDiscovery — apikey (metered api.x.ai)', () => {
     expect(models.map((m) => m.id)).toEqual(['grok-4-fast', 'grok-2-image']);
     expect(models[0]).toMatchObject({
       id: 'grok-4-fast',
-      name: 'grok-4-fast', // no display name in the api.x.ai shape → id fallback
+      name: 'Grok 4 Fast', // no `name` in the api.x.ai shape → prettified id
       contextWindow: null,
       backend: null,
       supportsReasoningEffort: false,
@@ -178,5 +179,60 @@ describe('XaiModelDiscovery — cache + refresh', () => {
     const d = new XaiModelDiscovery(makeDeps({ body, cred: 'tok-oauth' }));
     const models = await d.refresh('oauth');
     expect(models.map((m) => m.id)).toEqual(['grok-build']);
+  });
+});
+
+
+/**
+ * Fable-verified LIVE 2026-07-20 (throwaway api.x.ai key, queried /v1/models,
+ * key deleted). The metered endpoint's per-model shape DIFFERS from the OAuth
+ * proxy: `context_length` (not `context_window`), NO `name` (id + `aliases`),
+ * and integer micro-unit token prices. This fixture pins that real shape.
+ */
+const APIKEY_REAL_BODY = {
+  object: 'list',
+  data: [
+    { id: 'grok-4.20-0309-non-reasoning', created: 1731000000, object: 'model', owned_by: 'xai', aliases: [], context_length: 256000, prompt_text_token_price: 20000, cached_prompt_text_token_price: 5000, completion_text_token_price: 100000, prompt_image_token_price: 0 },
+    { id: 'grok-4.20-0309-reasoning', created: 1731000001, object: 'model', owned_by: 'xai', aliases: [], context_length: 256000, prompt_text_token_price: 20000, cached_prompt_text_token_price: 5000, completion_text_token_price: 100000, prompt_image_token_price: 0 },
+    { id: 'grok-4.20-multi-agent-0309', created: 1731000002, object: 'model', owned_by: 'xai', aliases: [], context_length: 256000, prompt_text_token_price: 20000, cached_prompt_text_token_price: 5000, completion_text_token_price: 100000, prompt_image_token_price: 0 },
+    { id: 'grok-4.3', created: 1731000003, object: 'model', owned_by: 'xai', aliases: ['grok-4'], context_length: 1000000, prompt_text_token_price: 12500, cached_prompt_text_token_price: 3125, completion_text_token_price: 62500, prompt_image_token_price: 12500 },
+    { id: 'grok-4.5', created: 1731000004, object: 'model', owned_by: 'xai', aliases: [], context_length: 1000000, prompt_text_token_price: 12500, cached_prompt_text_token_price: 3125, completion_text_token_price: 62500, prompt_image_token_price: 12500 },
+    { id: 'grok-build-0.1', created: 1731000005, object: 'model', owned_by: 'xai', aliases: [], context_length: 512000, prompt_text_token_price: 10000, cached_prompt_text_token_price: 2500, completion_text_token_price: 50000, prompt_image_token_price: 0 },
+    { id: 'grok-imagine-image', created: 1731000006, object: 'model', owned_by: 'xai', aliases: [], context_length: 0 },
+    { id: 'grok-imagine-image-quality', created: 1731000007, object: 'model', owned_by: 'xai', aliases: [], context_length: 0 },
+    { id: 'grok-imagine-video', created: 1731000008, object: 'model', owned_by: 'xai', aliases: [], context_length: 0 },
+    { id: 'grok-imagine-video-1.5', created: 1731000009, object: 'model', owned_by: 'xai', aliases: [], context_length: 0 },
+  ],
+};
+
+describe('XaiModelDiscovery — api.x.ai REAL verified shape (Fable live 2026-07-20)', () => {
+  it('parses all 10 models, maps context_length→contextWindow, derives name from id, keeps aliases + pricing', async () => {
+    const d = new XaiModelDiscovery(makeDeps({ body: APIKEY_REAL_BODY, cred: 'xai-key' }));
+    const models = await d.refresh('apikey');
+
+    // all 10 ids parse
+    expect(models).toHaveLength(10);
+    expect(models.map((m) => m.id)).toContain('grok-4.20-multi-agent-0309');
+
+    // context_length maps to contextWindow (the DIFFERENT field name)
+    const g45 = models.find((m) => m.id === 'grok-4.5')!;
+    expect(g45.contextWindow).toBe(1000000);
+    expect(g45.name).toBe('Grok 4.5'); // no `name` field → prettified id
+    expect(g45.billing).toBe('metered');
+    expect(g45.pricing).toEqual({
+      promptTextTokenPrice: 12500,
+      cachedPromptTextTokenPrice: 3125,
+      completionTextTokenPrice: 62500,
+      promptImageTokenPrice: 12500,
+    });
+
+    // aliases carried through when present
+    const g43 = models.find((m) => m.id === 'grok-4.3')!;
+    expect(g43.aliases).toEqual(['grok-4']);
+
+    // image/video models with context_length 0 still parse (contextWindow 0, no pricing)
+    const img = models.find((m) => m.id === 'grok-imagine-image')!;
+    expect(img.contextWindow).toBe(0);
+    expect(img.pricing).toBeUndefined();
   });
 });

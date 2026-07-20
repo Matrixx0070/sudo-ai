@@ -12,7 +12,7 @@ import { XaiApiKeyManager } from '../../src/llm/xai-apikey-manager.js';
 import type { XaiModelEntry } from '../../src/llm/xai-models.js';
 
 const MODELS: XaiModelEntry[] = [
-  { id: 'grok-4-fast', name: 'grok-4-fast', contextWindow: null, backend: null, supportsReasoningEffort: false, reasoningEfforts: [], billing: 'metered' },
+  { id: 'grok-4-fast', name: 'grok-4-fast', contextWindow: null, backend: null, supportsReasoningEffort: false, reasoningEfforts: [], aliases: [], billing: 'metered' },
 ];
 
 let dir: string;

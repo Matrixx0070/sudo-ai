@@ -116,7 +116,7 @@ export async function runXaiApiKeyModels(refresh: boolean): Promise<number> {
 
 export async function runXaiApiKeySetModel(id: string): Promise<number> {
   const { getXaiApiKeyManager } = await import('../../llm/xai-apikey-manager.js');
-  const { getModelsForDisplay } = await import('./xai-picker-shared.js');
+  const { getModelsForDisplay, setDefaultAdvisory } = await import('./xai-picker-shared.js');
   const mgr = getXaiApiKeyManager();
   if (!mgr.status().connected) {
     console.error('No API key set — run `sudo-ai xai apikey set` first.');
@@ -133,6 +133,8 @@ export async function runXaiApiKeySetModel(id: string): Promise<number> {
   }
   console.log(`Default model set: ${id}`);
   console.log(`Use this brain model string: xai/${id}`);
+  const advisory = setDefaultAdvisory(id);
+  if (advisory) console.log(`  ${advisory}`);
   return 0;
 }
 
