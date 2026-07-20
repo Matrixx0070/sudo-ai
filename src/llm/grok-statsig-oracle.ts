@@ -35,6 +35,7 @@
  */
 
 import { chromium, type BrowserContext, type Page, type CDPSession } from 'playwright-core';
+import WebSocket from 'ws';
 import {
   buildLaunchArgs,
   resolveChromeExecutable,
@@ -168,17 +169,21 @@ export interface OracleLaunch {
 export type OracleLauncher = (profileDir: string) => Promise<OracleLaunch>;
 
 /**
- * Real Playwright launcher: a headless persistent-context Chrome on the durable
- * grok profile (SSO logged-in) with a CDP session bound to its first page. Same
- * host as the curl_cffi bridge (cf_clearance is IP-bound). Nothing is held open
- * beyond the oracle's idle window.
+ * Real Playwright launcher: a HEADED persistent-context Chrome (on a virtual
+ * display via resolveBrowserDisplay) on the durable grok profile (SSO logged-in),
+ * with a CDP session bound to its first page. Headed is MANDATORY: grok.com's
+ * Cloudflare gate challenges headless Chrome ("Just a moment...") so its app
+ * chunks never load and the minter can't be found. Set SUDO_GROK_ORACLE_HEADLESS=1
+ * only for environments proven to pass headless. Same host as the curl_cffi bridge
+ * (cf_clearance is IP-bound). Nothing is held open beyond the oracle's idle window.
  */
 export function makeRealOracleLauncher(): OracleLauncher {
   return async (profileDir: string): Promise<OracleLaunch> => {
     const executablePath = resolveChromeExecutable() ?? undefined;
     if (!process.env['DISPLAY']) process.env['DISPLAY'] = resolveBrowserDisplay();
+    const headless = process.env['SUDO_GROK_ORACLE_HEADLESS'] === '1';
     const context = await chromium.launchPersistentContext(profileDir, {
-      headless: true,
+      headless,
       executablePath,
       args: buildLaunchArgs(),
       viewport: { width: 1280, height: 800 },
@@ -203,6 +208,113 @@ export function makeRealOracleLauncher(): OracleLauncher {
       },
     };
   };
+}
+
+/**
+ * CDP-connect launcher: attach to a PERSISTENT, already-warm grok browser over
+ * the DevTools protocol (env `SUDO_GROK_ORACLE_CDP_URL`, e.g. http://127.0.0.1:9222).
+ * This is the ROBUST path: Cloudflare challenges freshly-launched Chrome (headed
+ * OR headless) so `makeRealOracleLauncher` can't load grok's app JS; a long-running
+ * browser that genuinely solved the CF challenge passes. We never close the shared
+ * browser on idle — we only detach our socket. Uses raw CDP over `ws` (reliable;
+ * Playwright connectOverCDP is flaky in some hosts).
+ */
+export function makeCdpConnectLauncher(cdpUrl: string): OracleLauncher {
+  return async (): Promise<OracleLaunch> => {
+    const base = cdpUrl.replace(/\/$/, '');
+    const targets = (await (await fetch(`${base}/json`)).json()) as Array<{
+      type: string;
+      url: string;
+      webSocketDebuggerUrl: string;
+    }>;
+    let target = targets.find((t) => t.type === 'page' && t.url.includes('grok.com'));
+    if (!target) {
+      const created = (await (
+        await fetch(`${base}/json/new?${encodeURIComponent('https://grok.com/imagine')}`, {
+          method: 'PUT',
+        })
+      ).json()) as { url: string; webSocketDebuggerUrl: string };
+      target = { type: 'page', url: created.url, webSocketDebuggerUrl: created.webSocketDebuggerUrl };
+    }
+    const sock = new WebSocket(target.webSocketDebuggerUrl);
+    await new Promise<void>((resolve, reject) => {
+      sock.once('open', () => resolve());
+      sock.once('error', reject);
+    });
+    let msgId = 0;
+    const pending = new Map<number, (v: Record<string, unknown>) => void>();
+    const handlers = new Map<string, Set<(p: Record<string, unknown>) => void>>();
+    sock.on('message', (data: Buffer) => {
+      const m = JSON.parse(data.toString()) as {
+        id?: number;
+        result?: unknown;
+        method?: string;
+        params?: Record<string, unknown>;
+      };
+      if (typeof m.id === 'number' && pending.has(m.id)) {
+        pending.get(m.id)!((m.result as Record<string, unknown>) ?? {});
+        pending.delete(m.id);
+        return;
+      }
+      if (m.method && handlers.has(m.method)) {
+        for (const h of handlers.get(m.method)!) h(m.params ?? {});
+      }
+    });
+    const cdp: OracleCdp = {
+      send: (method, params = {}) =>
+        new Promise((resolve) => {
+          const id = ++msgId;
+          pending.set(id, resolve);
+          sock.send(JSON.stringify({ id, method, params }));
+        }),
+      on: (event, handler) => {
+        if (!handlers.has(event)) handlers.set(event, new Set());
+        handlers.get(event)!.add(handler);
+      },
+      off: (event, handler) => {
+        handlers.get(event)?.delete(handler);
+      },
+    };
+    let currentUrl = target.url;
+    const page: OraclePage = {
+      goto: async (url) => {
+        await cdp.send('Page.enable');
+        await cdp.send('Page.navigate', { url });
+        currentUrl = url;
+        // Give the SPA a moment to start streaming chunks; exposeMinter polls.
+        await new Promise((r) => setTimeout(r, 1500));
+      },
+      reload: async () => {
+        await cdp.send('Page.reload', {});
+      },
+      url: () => currentUrl,
+    };
+    const context: OracleContext = {
+      // Detach only — the shared browser is NOT ours to close.
+      close: async () => {
+        try {
+          sock.close();
+        } catch {
+          /* already closed */
+        }
+      },
+      cookies: async () => {
+        const r = await cdp.send('Network.getAllCookies');
+        return (r['cookies'] as Array<{ name: string; value: string; domain: string }>) ?? [];
+      },
+    };
+    return { context, page, cdp };
+  };
+}
+
+/**
+ * Default launcher: connect to a persistent warm browser when
+ * `SUDO_GROK_ORACLE_CDP_URL` is set (recommended — see makeCdpConnectLauncher),
+ * else fall back to launching one (only works where CF doesn't challenge it).
+ */
+export function defaultOracleLauncher(): OracleLauncher {
+  const cdpUrl = process.env['SUDO_GROK_ORACLE_CDP_URL'];
+  return cdpUrl ? makeCdpConnectLauncher(cdpUrl) : makeRealOracleLauncher();
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +352,8 @@ function resolveIdleMs(opt?: number): number {
 export class GrokStatsigOracle {
   private launch: OracleLaunch | null = null;
   private minterReady = false;
+  /** Execution context where __grokMint was hoisted (mints must use it). */
+  private mintCtxId: number | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly launcher: OracleLauncher;
   private readonly idleMs: number;
@@ -251,7 +365,7 @@ export class GrokStatsigOracle {
   private warming: Promise<void> | null = null;
 
   constructor(opts: GrokStatsigOracleOptions = {}) {
-    this.launcher = opts.launcher ?? makeRealOracleLauncher();
+    this.launcher = opts.launcher ?? defaultOracleLauncher();
     this.idleMs = resolveIdleMs(opts.idleMs);
     this.navigateUrl = opts.navigateUrl ?? DEFAULT_NAVIGATE_URL;
     this.breakpointTimeoutMs = opts.breakpointTimeoutMs ?? 20_000;
@@ -287,7 +401,7 @@ export class GrokStatsigOracle {
     if (!this.launch) {
       const t0 = this.now();
       this.launch = await this.launcher(this.profileDir);
-      log.info({ launchMs: this.now() - t0 }, 'grok statsig oracle launched (headless)');
+      log.info({ launchMs: this.now() - t0, headless: process.env['SUDO_GROK_ORACLE_HEADLESS'] === '1' }, 'grok statsig oracle launched');
     }
     await this.exposeMinter(this.launch);
   }
@@ -299,57 +413,77 @@ export class GrokStatsigOracle {
   private async exposeMinter(launch: OracleLaunch): Promise<void> {
     const { cdp, page } = launch;
     const scripts = new Map<string, string>(); // scriptId -> url
+    const ctxOf = new Map<string, number>(); // scriptId -> executionContextId
 
     const onParsed = (p: Record<string, unknown>): void => {
       const id = p['scriptId'];
       const url = p['url'];
       if (typeof id === 'string' && typeof url === 'string' && CHUNK_URL_RE.test(url)) {
         scripts.set(id, url);
+        if (typeof p['executionContextId'] === 'number') ctxOf.set(id, p['executionContextId']);
       }
     };
     cdp.on('Debugger.scriptParsed', onParsed);
     await cdp.send('Debugger.enable');
     await cdp.send('Runtime.enable');
 
-    // Load the app so its chunks (incl. the signing chunk) parse.
+    // Load the app so its chunks (incl. the signing chunk) parse. With a headed
+    // browser Cloudflare auto-solves and the app JS loads a few seconds later, so
+    // we POLL until the signing chunk parses (scanning once right after
+    // domcontentloaded races the async Next.js chunks and finds nothing).
     await page.goto(this.navigateUrl, { waitUntil: 'domcontentloaded', timeout: this.breakpointTimeoutMs }).catch(() => {});
 
-    // Find the signing site among the parsed chunks.
+    // Find the signing site among the parsed chunks — poll new chunks until the
+    // deadline (chunks stream in after domcontentloaded).
     let found: { url: string; site: SigningSite } | null = null;
-    for (const [scriptId, url] of scripts) {
-      let src: string;
-      try {
-        const r = await cdp.send('Debugger.getScriptSource', { scriptId });
-        src = String(r['scriptSource'] ?? '');
-      } catch {
-        continue;
+    const checked = new Set<string>();
+    const deadline = this.now() + this.breakpointTimeoutMs;
+    while (this.now() < deadline && !found) {
+      for (const [scriptId, url] of scripts) {
+        if (checked.has(scriptId)) continue;
+        checked.add(scriptId);
+        let src: string;
+        try {
+          const r = await cdp.send('Debugger.getScriptSource', { scriptId });
+          src = String(r['scriptSource'] ?? '');
+        } catch {
+          continue;
+        }
+        const site = locateSigningSite(src);
+        if (site) {
+          found = { url, site };
+          break;
+        }
       }
-      const site = locateSigningSite(src);
-      if (site) {
-        found = { url, site };
-        break;
-      }
+      if (!found) await new Promise((r) => setTimeout(r, 400));
     }
-    cdp.off('Debugger.scriptParsed', onParsed);
     if (!found) {
-      throw new GrokOracleSigningSiteError(`scanned ${scripts.size} chunk(s)`);
+      cdp.off('Debugger.scriptParsed', onParsed);
+      throw new GrokOracleSigningSiteError(`scanned ${checked.size} chunk(s)`);
     }
+    // Keep the scriptParsed listener ACTIVE through the trigger navigation so the
+    // re-parsed signing chunk's NEW executionContextId is captured in ctxOf.
+
+    // The minter reads the rendered DOM (seed meta, SVG, animation) — settle the
+    // page before we reload to trigger the breakpoint so the grab context sticks.
+    await this.waitSettled(cdp);
 
     // Arm a one-shot paused handler BEFORE triggering a signed request.
-    const paused = new Promise<string>((resolve, reject) => {
+    const paused = new Promise<{ frameId: string; scriptId: string }>((resolve, reject) => {
       const timer = setTimeout(() => {
         cdp.off('Debugger.paused', onPaused);
         reject(new GrokOracleMintError('breakpoint did not trip within timeout'));
       }, this.breakpointTimeoutMs);
       const onPaused = (p: Record<string, unknown>): void => {
         const frames = p['callFrames'];
-        const frameId =
-          Array.isArray(frames) && frames[0] && typeof (frames[0] as Record<string, unknown>)['callFrameId'] === 'string'
-            ? ((frames[0] as Record<string, unknown>)['callFrameId'] as string)
-            : '';
+        const top =
+          Array.isArray(frames) && frames[0] ? (frames[0] as Record<string, unknown>) : undefined;
+        const frameId = typeof top?.['callFrameId'] === 'string' ? (top['callFrameId'] as string) : '';
+        const loc = top?.['location'] as Record<string, unknown> | undefined;
+        const scriptId = typeof loc?.['scriptId'] === 'string' ? (loc['scriptId'] as string) : '';
         clearTimeout(timer);
         cdp.off('Debugger.paused', onPaused);
-        resolve(frameId);
+        resolve({ frameId, scriptId });
       };
       cdp.on('Debugger.paused', onPaused);
     });
@@ -361,13 +495,20 @@ export class GrokStatsigOracle {
     });
     const breakpointId = typeof bp['breakpointId'] === 'string' ? bp['breakpointId'] : '';
 
-    // Any app navigation fires many signed requests → trips the breakpoint.
-    page.reload({ waitUntil: 'domcontentloaded', timeout: this.breakpointTimeoutMs }).catch(() => {});
+    // A fresh NAVIGATION (not reload) fires signed requests on the NEW document and
+    // traps the breakpoint there, so the minter we hoist lands on the surviving
+    // page's global (a reload can trip on the outgoing doc, losing __grokMint).
+    page.goto(this.navigateUrl, { waitUntil: 'domcontentloaded', timeout: this.breakpointTimeoutMs }).catch(() => {});
 
     let callFrameId: string;
     try {
-      callFrameId = await paused;
+      const pz = await paused;
+      callFrameId = pz.frameId;
+      // Pin the context where the breakpoint tripped == where we hoist __grokMint;
+      // mints MUST evaluate there (the default context can differ post-navigation).
+      this.mintCtxId = ctxOf.get(pz.scriptId);
     } finally {
+      cdp.off('Debugger.scriptParsed', onParsed);
       if (breakpointId) await cdp.send('Debugger.removeBreakpoint', { breakpointId }).catch(() => {});
     }
 
@@ -381,6 +522,10 @@ export class GrokStatsigOracle {
     // Leaving the debugger disabled keeps the page fast between mints.
     await cdp.send('Debugger.disable').catch(() => {});
 
+    // Wait for the post-reload page to finish rendering so the very first mint's
+    // DOM/animation reads succeed (else the minter returns null).
+    await this.waitSettled(cdp);
+
     this.minterReady = true;
     log.info({ minterName: found.site.minterName.length }, 'grok statsig minter exposed');
   }
@@ -391,17 +536,62 @@ export class GrokStatsigOracle {
    */
   async mint(reqPath: string, method: string): Promise<string> {
     await this.warm();
-    let token = await this.tryEval(reqPath, method);
-    if (!token) {
-      // Page may have reloaded (minter gone) — re-grab once.
-      this.minterReady = false;
-      await this.warm();
+    // The minter reads the fully-rendered DOM (seed meta, SVG paths, a CSS
+    // animation) — right after a reload the page may not be ready yet, so the
+    // minter returns null. Poll: if `__grokMint` is GONE (page navigated) re-grab
+    // it; if it's present but returns null, wait for the render and retry.
+    let token: string | null = null;
+    const deadline = this.now() + this.breakpointTimeoutMs;
+    for (let first = true; !token && this.now() < deadline; first = false) {
+      if (!first) await new Promise((r) => setTimeout(r, 800));
+      if (!(await this.minterPresent())) {
+        this.minterReady = false;
+        await this.warm();
+      }
       token = await this.tryEval(reqPath, method);
     }
     if (!token) throw new GrokOracleMintError('minter returned no token');
     this.touch();
     log.info({ tokenLen: token.length }, 'grok statsig token minted');
     return token;
+  }
+
+  /**
+   * Poll until the page is rendered enough for the minter: document.readyState
+   * `complete` AND the server-injected seed `<meta name^=gr>` present.
+   */
+  private async waitSettled(cdp: OracleCdp, timeoutMs = 8_000): Promise<void> {
+    const deadline = this.now() + timeoutMs;
+    while (this.now() < deadline) {
+      try {
+        const r = await cdp.send('Runtime.evaluate', {
+          expression:
+            "document.readyState + '|' + (document.querySelector('meta[name^=gr]') ? '1' : '0')",
+          returnByValue: true,
+          ...(this.mintCtxId ? { contextId: this.mintCtxId } : {}),
+        });
+        const v = String((r['result'] as Record<string, unknown> | undefined)?.['value'] ?? '');
+        if (v.startsWith('complete') && v.endsWith('|1')) return;
+      } catch {
+        /* transient context churn during load */
+      }
+      await new Promise((res) => setTimeout(res, 300));
+    }
+  }
+
+  /** True if `globalThis.__grokMint` is a live function on the current page. */
+  private async minterPresent(): Promise<boolean> {
+    if (!this.launch) return false;
+    try {
+      const r = await this.launch.cdp.send('Runtime.evaluate', {
+        expression: "typeof globalThis.__grokMint === 'function'",
+        returnByValue: true,
+        ...(this.mintCtxId ? { contextId: this.mintCtxId } : {}),
+      });
+      return (r['result'] as Record<string, unknown> | undefined)?.['value'] === true;
+    } catch {
+      return false;
+    }
   }
 
   private async tryEval(reqPath: string, method: string): Promise<string | null> {
@@ -411,6 +601,7 @@ export class GrokStatsigOracle {
         expression: `globalThis.__grokMint && globalThis.__grokMint(${JSON.stringify(reqPath)}, ${JSON.stringify(method)})`,
         awaitPromise: true,
         returnByValue: true,
+        ...(this.mintCtxId ? { contextId: this.mintCtxId } : {}),
       });
       if (r['exceptionDetails']) return null;
       const result = r['result'] as Record<string, unknown> | undefined;
