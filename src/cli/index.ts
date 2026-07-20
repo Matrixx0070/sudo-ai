@@ -372,6 +372,76 @@ xaiOauthCmd
     process.exit(await runXaiOAuthStatus());
   });
 
+xaiOauthCmd
+  .command('models')
+  .description('List Grok models available to the connected OAuth seat (subscription-covered)')
+  .option('--refresh', 'Force a live fetch instead of the cached list', false)
+  .action(async (opts: { refresh?: boolean }) => {
+    const { runXaiOAuthModels } = await import('./commands/xai-oauth.js');
+    process.exit(await runXaiOAuthModels(opts.refresh ?? false));
+  });
+
+xaiOauthCmd
+  .command('set-model <id>')
+  .description('Set the default xai-oauth Grok model')
+  .action(async (id: string) => {
+    const { runXaiOAuthSetModel } = await import('./commands/xai-oauth.js');
+    process.exit(await runXaiOAuthSetModel(id));
+  });
+
+// ---------------------------------------------------------------------------
+// xai apikey — metered xAI API-key provider (independent of xai-oauth)
+// ---------------------------------------------------------------------------
+
+const xaiCmd = program
+  .command('xai')
+  .description('Manage the metered xAI API-key provider (Grok via api.x.ai)');
+
+const xaiApikeyCmd = xaiCmd
+  .command('apikey')
+  .description('Set/list the xAI API key and pick a default metered Grok model');
+
+xaiApikeyCmd
+  .command('set')
+  .description('Paste + store an xAI API key (validated by a live model list)')
+  .action(async () => {
+    const { runXaiApiKeySet } = await import('./commands/xai-apikey.js');
+    process.exit(await runXaiApiKeySet());
+  });
+
+xaiApikeyCmd
+  .command('status')
+  .description('Show whether an xAI API key is set + the active default model')
+  .action(async () => {
+    const { runXaiApiKeyStatus } = await import('./commands/xai-apikey.js');
+    process.exit(await runXaiApiKeyStatus());
+  });
+
+xaiApikeyCmd
+  .command('models')
+  .description('List Grok models for the metered API key (pay-per-token)')
+  .option('--refresh', 'Force a live fetch instead of the cached list', false)
+  .action(async (opts: { refresh?: boolean }) => {
+    const { runXaiApiKeyModels } = await import('./commands/xai-apikey.js');
+    process.exit(await runXaiApiKeyModels(opts.refresh ?? false));
+  });
+
+xaiApikeyCmd
+  .command('set-model <id>')
+  .description('Set the default metered xai Grok model')
+  .action(async (id: string) => {
+    const { runXaiApiKeySetModel } = await import('./commands/xai-apikey.js');
+    process.exit(await runXaiApiKeySetModel(id));
+  });
+
+xaiApikeyCmd
+  .command('disconnect')
+  .description('Wipe the stored xAI API key (XAI_API_KEY env, if set, is kept)')
+  .action(async () => {
+    const { runXaiApiKeyDisconnect } = await import('./commands/xai-apikey.js');
+    process.exit(await runXaiApiKeyDisconnect());
+  });
+
 // ---------------------------------------------------------------------------
 // secrets — audit / apply / configure SecretRef indirect secrets
 // ---------------------------------------------------------------------------
