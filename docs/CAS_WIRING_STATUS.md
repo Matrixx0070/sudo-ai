@@ -201,10 +201,12 @@ CDP breakpoint at the request-signing site, feed it to the existing curl_cffi br
 
 | Row | Slice | State | PR |
 |-----|-------|-------|----|
-| GWV1 | `src/llm/grok-statsig-oracle.ts` — on-demand headless oracle; self-healing signing-site locate; lazy launch / idle-close | BUILT (CI pending) | TBD |
-| GWV2 | wire video in `grok-web-media.ts` through the oracle (mint→curl_cffi POST→mp4→download+quarantine; 403 re-mint once, never metered fallback) | TODO | — |
-| GWV3 | CLI `grok video` on the oracle path + `--image`; flag `SUDO_GROK_ORACLE_IDLE_MS`; flag-manifest regen | TODO | — |
-| GWV4 | unit tests (mocked CDP/Playwright + curl_cffi fixtures); locator vs chunk fixture; core-never-imports-oracle hot-path guard | TODO | — |
+| GWV1 | `src/llm/grok-statsig-oracle.ts` — on-demand headless oracle; self-healing signing-site locate; lazy launch / idle-close; flag-manifest regen (`SUDO_GROK_ORACLE_IDLE_MS`) | BUILT, stacked PR pushed | see PR list |
+| GWV2 | wire video in `grok-web-media.ts` through the oracle (mint→curl_cffi POST→mp4→download; 403 re-mint once, never metered fallback); python bridge text-to-video + download op | BUILT, 16/16 green | see PR list |
+| GWV3 | CLI `grok video` on the oracle path + `--image`; text-to-video default | BUILT | see PR list |
+| GWV4 | unit tests (mocked CDP/Playwright oracle: locator fixture, lazy mint, re-grab, idle-close, Q-GWV escalation) + core-never-imports-oracle hot-path guard | BUILT, 44/44 green (grok+oracle+hot-path) | see PR list |
+
+Stacked: GWV2←GWV1, GWV3←GWV2, GWV4←GWV3. Fable merges in order (each PR's diff is just its slice).
 
 **UNVERIFIED (honest):** CI cannot run the real oracle (no headless browser / no live grok
 session / zero net+LLM spend in CI). Live mint→200→mp4 + the console.x.ai money-meter-flat
