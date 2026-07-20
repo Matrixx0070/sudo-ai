@@ -57,14 +57,30 @@ export interface ImageRequest {
 }
 export interface VideoRequest {
   op: 'video';
-  imageUrl: string;
+  /** Text-to-video (PROVEN) when omitted; image-to-video when set. */
+  imageUrl?: string;
+  /** Prompt for text-to-video (required when imageUrl is absent). */
+  prompt?: string;
   aspectRatio?: string;
   videoLength?: number;
   resolutionName?: string;
   timeoutSec?: number;
+  /**
+   * Freshly-minted x-statsig-id for THIS request (GWV2 oracle path). When set it
+   * overrides any session-stored token — always mint-and-use in <1s.
+   */
+  statsigId?: string;
 }
 
-export type GrokWebRequest = ProbeRequest | ImageRequest | VideoRequest;
+/** Download a generated asset (mp4) with the session cookies to a local path. */
+export interface DownloadRequest {
+  op: 'download';
+  url: string;
+  outputPath: string;
+  timeoutSec?: number;
+}
+
+export type GrokWebRequest = ProbeRequest | ImageRequest | VideoRequest | DownloadRequest;
 
 /**
  * Error classes the python side emits so the manager can react correctly
@@ -104,6 +120,10 @@ export interface GrokWebResponse {
   videoUrl?: string;
   thumbnailUrl?: string;
   videoId?: string;
+  // download
+  path?: string;
+  bytes?: number;
+  ftyp?: boolean;
 }
 
 /** Injectable spawn seam — real child_process by default, mocked in tests. */
