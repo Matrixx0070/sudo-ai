@@ -18,6 +18,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
+import { config as loadDotenv } from 'dotenv';
 import { APP_VERSION } from '../core/shared/constants.js';
 import { PROJECT_ROOT } from '../core/shared/paths.js';
 
@@ -449,6 +450,13 @@ xaiApikeyCmd
 const grokCmd = program
   .command('grok')
   .description('Show both Grok providers (xai-oauth + xai) — status, default model, billing');
+
+// Hydrate config/.env so `grok` subcommands honor SUDO_GROK_* flags (media
+// enablement, warm-browser config) exactly like the daemon does. dotenv does not
+// override already-set vars, so an inline env still wins.
+grokCmd.hook('preAction', () => {
+  loadDotenv({ path: path.resolve(PROJECT_ROOT, 'config', '.env'), quiet: true });
+});
 
 grokCmd
   .command('status', { isDefault: true })
