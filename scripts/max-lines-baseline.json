@@ -3,7 +3,7 @@
   "src/cli/commands/chat/App.tsx": 823,
   "src/cli/commands/doctor.ts": 508,
   "src/cli/commands/setup.tsx": 588,
-  "src/cli/index.ts": 522,
+  "src/cli/index.ts": 592,
   "src/core/acp/brain-backend.ts": 506,
   "src/core/agent/alignment-aggregator.ts": 475,
   "src/core/agent/approval.ts": 419,
@@ -55,7 +55,7 @@
   "src/core/consciousness/orchestrator.ts": 1047,
   "src/core/consciousness/session-compactor.ts": 402,
   "src/core/consciousness/sleep-cycle/consolidator.ts": 894,
-  "src/core/dashboard/dashboard-html.ts": 451,
+  "src/core/dashboard/dashboard-html.ts": 563,
   "src/core/dashboard/dashboard-routes.ts": 1134,
   "src/core/dashboard/dashboard-server.ts": 878,
   "src/core/federation/audit-chain-sync.ts": 418,
@@ -162,6 +162,6 @@
   "src/llm/policy.ts": 628,
   "src/llm/shadow.ts": 644,
   "src/llm/transport.ts": 1161,
-  "src/llm/xai-oauth-manager.ts": 534,
+  "src/llm/xai-oauth-manager.ts": 601,
   "src/remotion/characters/AgentBase.tsx": 731
 }

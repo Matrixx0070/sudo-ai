@@ -8,7 +8,7 @@
  *   set        Prompt for an xAI API key (console.x.ai → API Keys), validate it
  *              by listing models live, then store it 0600 (data/xai-apikey.json).
  *   status     Show whether a key is set + the active default model.
- *   models     List the account's live models (from api.x.ai/v1/models).
+ *   models     List the account's live models (from the metered xAI API).
  *   set-model  Pick the default `xai` model.
  *   disconnect Wipe the stored key (a XAI_API_KEY env key, if any, is kept).
  */
@@ -56,7 +56,7 @@ export async function runXaiApiKeySet(): Promise<number> {
     mgr.setModels(models);
     console.log('');
     console.log(`  Key stored (data/xai-apikey.json, 0600) — ${models.length} model(s) discovered.`);
-    console.log('  These are METERED (pay-per-token) via api.x.ai.');
+    console.log('  These are METERED (pay-per-token) via the xAI API.');
     console.log('  Pick a default with: sudo-ai xai apikey set-model <id>');
     console.log('');
     return 0;
@@ -78,7 +78,7 @@ export async function runXaiApiKeyStatus(): Promise<number> {
   if (s.source) console.log(`  Key source:     ${s.source === 'store' ? 'stored (data/xai-apikey.json)' : 'XAI_API_KEY env'}`);
   console.log(`  Default model:  ${s.defaultModel ?? '(none)'}`);
   console.log(`  Cached models:  ${s.modelsCount}`);
-  console.log('  Billing:        metered (pay-per-token via api.x.ai)');
+  console.log('  Billing:        metered API (pay-per-token)');
   console.log('');
   return s.connected ? 0 : 1;
 }
@@ -99,7 +99,7 @@ export async function runXaiApiKeyModels(refresh: boolean): Promise<number> {
       return 1;
     }
     printModelsTable(models, mgr.getDefaultModel(), 'xai');
-    console.log(`  Source: ${live ? 'live (api.x.ai)' : 'cached — use --refresh for live'}`);
+    console.log(`  Source: ${live ? 'live (metered xAI API)' : 'cached — use --refresh for live'}`);
     console.log('  All models above are METERED (pay-per-token).');
     console.log('  Set a default with: sudo-ai xai apikey set-model <id>');
     console.log('');

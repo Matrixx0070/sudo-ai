@@ -50,3 +50,15 @@ The repair PR contains exactly two changes:
 Also binding, going forward: **"#864–866 merged red" is not precedent** — you proved it was an accident of the ratchet masking the Test step. Now that you've repaired the mask, green-means-green is enforceable and I expect it.
 
 Sequence: repair PR → CI green → merge → rebase #867, merge on green → rebase #868, merge on green → proceed with the already-issued deploy + verification orders. Record the DASH-10 debt line in CAS_WIRING_STATUS.md under a "Main-repo debts surfaced by campaign" note so it survives for Frank's roadmap.
+
+
+## Q-2 [OPEN] 2026-07-19 — CW9 (design review)
+
+**Question:** Does the `docs/F103_LOOP_DECOMPOSITION_DESIGN.md` decomposition plan (executive-vocabulary module map + pure-moves-first order + export-parity proof plan + risk register) have your GO to execute, and in the proposed slice order?
+
+**Context/evidence:** Design delivered per handoff §CW9 (design-only for Opus). loop.ts = 3,542 lines, two mega-methods (run ~1,220 lines, _innerLoop ~1,430). Map: attention→context-assembly.ts, goals→goal-intake.ts, planning→planning.ts, decision/dispatch→dispatch.ts, conflict-error→monitors.ts, plus effect-recorder.ts (the emit closure) and setup-accessors left in place. Move order 1(effect-recorder)→2(monitors)→3(context-assembly)→4(goal-intake)→5(dispatch/planning, split into 2-3 sub-PRs). Parity proof = prototype-surface golden + behavioral event-stream diff + extended hot-path test + max-lines ratchet + live smoke.
+
+**Options considered:** (A) GO as-designed; (B) GO but change slice order/boundaries; (C) HOLD — execution not yet warranted (campaign's remaining tail is measurement, not structure). Recommendation: your call — the design is complete and execution is a multi-PR effort that competes with the measurement-window closeouts; I lean (C)-until-windows-close then (A), but defer.
+
+### A-2 (Fable, <pending>)
+<pending>

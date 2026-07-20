@@ -49,6 +49,14 @@ describe('ModelFailover boot validation (provider prefixes)', () => {
     expect(() => new ModelFailover([model])).not.toThrow();
   });
 
+  it('GX1: xai-oauth/grok-build (subscription-proxy model id) constructs', () => {
+    // The proxy serves grok-build (not grok-4.5/grok-4-fast); boot must accept
+    // it as a routable xai-oauth model when Grok re-enters models.primary.
+    expect(() => new ModelFailover(['xai-oauth/grok-build'])).not.toThrow();
+    const failover = new ModelFailover(['xai-oauth/grok-build']);
+    expect(failover.getStatus().map((p) => p.id)).toEqual(['xai-oauth/grok-build']);
+  });
+
   it('unknown prefix still throws llm_unknown_provider (validation is not disabled)', () => {
     let thrown: unknown;
     try {

@@ -79,6 +79,7 @@ import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler, AgentRunRe
 import { LoopGuard } from './loop-guard.js';
 import { buildLoopFallbackReply } from './loop-fallback.js';
 import { DoomLoopDetector } from './doom-loop.js';
+import { AgencyMonitor, captureExpectation } from './agency-monitor.js';
 import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
 import { StuckDetector, looksLikeToolError } from './stuck-detector.js';
 import { isSwarmRescueEnabled, getSwarmRescueStrategy, swarmRescueCallOpts } from './swarm-rescue.js';
@@ -175,6 +176,8 @@ export class AgentLoop extends AgentLoopInjections {
   // run before `this.hooks` is assigned) so doom_loop_* telemetry reaches
   // HookManager subscribers (F33 dead-ends drafting consumes it).
   private doomLoopDetector = new DoomLoopDetector();
+  /** CW7 agency monitor — lazily built when SUDO_CAS_AGENCY=1 and a bias store is attached. */
+  private _agencyMonitor: AgencyMonitor | null = null;
   /** gap #23 — opt-in via SUDO_DOOM_LOOP_EXTRAS=1; both null when flag off. */
   private readonly writeCycleDetector: WriteCycleDetector | null =
     process.env['SUDO_DOOM_LOOP_EXTRAS'] === '1' ? new WriteCycleDetector() : null;
@@ -1052,8 +1055,19 @@ export class AgentLoop extends AgentLoopInjections {
         // failure-learning stack is off. Fail-open.
         try {
           if (this._toolSuccessStore && event.type === 'tool-result') {
-            const _tr2 = event as { name: string; success?: boolean; result: unknown };
-            this._toolSuccessStore.record(_tr2.name, resolveToolSuccess(_tr2));
+            const _tr2 = event as { name: string; success?: boolean; result: unknown; args?: Record<string, unknown> };
+            const _ok = resolveToolSuccess(_tr2);
+            this._toolSuccessStore.record(_tr2.name, _ok);
+            // CW7 (SUDO_CAS_AGENCY): efference check for in-scope deterministic
+            // tools (coder.* + system.exec). Expectation captured from the tool
+            // identity (default: no error); a mismatch nudges bias + doom signal.
+            if (process.env['SUDO_CAS_AGENCY'] === '1') {
+              if (!this._agencyMonitor) {
+                this._agencyMonitor = new AgencyMonitor(this._toolSuccessStore, this.doomLoopDetector);
+              }
+              const _exp = captureExpectation(_tr2.name, _tr2.args);
+              this._agencyMonitor.onToolResult(_exp, _ok, sessionId);
+            }
           }
         } catch { /* fail-open */ }
       }
