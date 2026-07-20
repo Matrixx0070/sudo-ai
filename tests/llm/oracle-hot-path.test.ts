@@ -12,7 +12,7 @@ import { join } from 'node:path';
 
 // The oracle is a Playwright-launching module; core cognition must never touch it.
 const HOT_PATH_DIRS = ['src/core/agent', 'src/core/memory', 'src/core/brain'];
-const ORACLE_RE = /['"][^'"]*grok-statsig-oracle(?:\.js)?['"]/;
+const ORACLE_RE = /['"][^'"]*grok-(?:statsig-oracle|warm-browser)(?:\.js)?['"]/;
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir)) {
@@ -23,7 +23,7 @@ function* walk(dir: string): Generator<string> {
 }
 
 describe('grok statsig oracle hot-path isolation', () => {
-  it('no core cognition module imports grok-statsig-oracle', () => {
+  it('no core cognition module imports grok-statsig-oracle or grok-warm-browser', () => {
     const offenders: string[] = [];
     for (const dir of HOT_PATH_DIRS) {
       for (const file of walk(dir)) {
