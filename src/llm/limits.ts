@@ -53,6 +53,10 @@ const MODEL_LIMITS: Record<string, AliasLimits> = {
   'xai/grok-3-mini': { context_window: 131_072, max_output: 16_384 },
   'xai/grok-3-fast': { context_window: 131_072, max_output: 16_384 },
 
+  // xai-oauth subscription proxy (GX1) — served by cli-chat-proxy.grok.com.
+  'xai-oauth/grok-build': { context_window: 512_000, max_output: 32_768 },
+  'xai-oauth/grok-composer-2.5-fast': { context_window: 200_000, max_output: 32_768 },
+
   // Anthropic — 200K context; 32000 output (DEFAULT_MODEL_MAX, thinking-inject.ts).
   'anthropic/claude-opus-4-8': { context_window: 200_000, max_output: 32_000 },
   'anthropic/claude-opus-4-7': { context_window: 200_000, max_output: 32_000 },
@@ -217,6 +221,12 @@ const PRICE_TABLE: Record<string, PriceRate> = {
   'xai/grok-4.5': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
   'xai-oauth/grok-4.5': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
   'xai/grok-3-fast': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
+  // xai-oauth subscription proxy (GX1) — SEAT-COVERED, not per-token metered.
+  // Priced at 0 so the in-memory budget counter never accrues phantom metered
+  // spend for a call the Grok subscription already paid for; the durable
+  // gateway.db row still records real token counts for telemetry.
+  'xai-oauth/grok-build': { inUsdPerM: 0.0, outUsdPerM: 0.0 },
+  'xai-oauth/grok-composer-2.5-fast': { inUsdPerM: 0.0, outUsdPerM: 0.0 },
   // Anthropic
   'anthropic/claude-opus-4-8': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
   'anthropic/claude-opus-4-7': { inUsdPerM: 5.0, outUsdPerM: 25.0 },

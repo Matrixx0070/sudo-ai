@@ -139,6 +139,23 @@ export class ToolSuccessStore {
     return Math.max(this.minBias, Math.min(this.maxBias, raw));
   }
 
+  /**
+   * CW7 (agency): an ADDITIONAL bounded negative nudge applied when the model's
+   * expectation for an in-scope tool is violated (expected success, got
+   * failure) — on top of the normal record(false) the outcome already logs.
+   * Moves the EMA a fraction of ONE EMA step toward 0, so the total penalty
+   * per mismatch stays <= the existing EMA step (handoff CW7). Does NOT change
+   * `n` (a nudge, not a fresh sample). No-op on unknown tools. Fail-safe clamp.
+   */
+  penalize(tool: string, factor: number = 0.5): void {
+    if (!tool) return;
+    const e = this.cache.get(tool);
+    if (!e) return;
+    const f = Math.max(0, Math.min(1, factor));
+    e.ema = Math.max(0, e.ema * (1 - this.alpha * f));
+    e.dirty = true;
+  }
+
   /** Current recency-weighted success rate (or null if unknown). Diagnostic. */
   successRate(tool: string): number | null {
     return this.cache.get(tool)?.ema ?? null;

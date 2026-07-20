@@ -56,6 +56,6 @@
         }
       ]
     },
-    "url": "https://api.x.ai/v1/responses"
+    "url": "https://cli-chat-proxy.grok.com/v1/responses"
   }
 }

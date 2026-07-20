@@ -134,6 +134,16 @@ export class DoomLoopDetector {
   /** Set of cycle keys that have already triggered a warning (avoid spam). */
   private warnedKeys = new Set<string>();
 
+  /**
+   * CW7 (agency): per-tool accrued expectation-mismatch weight. Added to the
+   * cross-turn cycle count when evaluating the doom thresholds, so a tool that
+   * keeps FAILING the model's expectations trips the warning/termination in
+   * fewer literal repeats. Only ever populated via registerMismatch() (called
+   * behind SUDO_CAS_AGENCY), so the detector is byte-identical when the flag
+   * is off. Capped so it can never single-handedly force a terminate.
+   */
+  private mismatchWeight = new Map<string, number>();
+
   /** Optional hook emitter for telemetry. */
   private readonly hooks?: { emit(event: string, data: Record<string, unknown>): void } | null;
 
@@ -193,56 +203,75 @@ export class DoomLoopDetector {
 
     const entry = this.cycleMap.get(key)!;
 
+    // CW7: fold accrued agency-mismatch weight into the effective repeat count
+    // (0 unless registerMismatch fired for this tool). Capped two below the
+    // terminate threshold so a mismatch streak alone can WARN but never ABORT
+    // without at least one real repeat (effective <= 1 + (RO-2) = RO-1 on the
+    // first real call).
+    const mismatchBonus = Math.min(this.mismatchWeight.get(toolName) ?? 0, DOOM_LOOP_RO_THRESHOLD - 2);
+    const effectiveCount = entry.count + mismatchBonus;
+
     // Check termination threshold first
-    if (entry.count >= DOOM_LOOP_RO_THRESHOLD) {
+    if (effectiveCount >= DOOM_LOOP_RO_THRESHOLD) {
       const event: DoomLoopTerminatedEvent = {
         event: 'doom_loop_terminated',
         toolName,
         argsSignature,
-        cycleCount: entry.count,
+        cycleCount: effectiveCount,
         roThreshold: DOOM_LOOP_RO_THRESHOLD,
         timestamp: new Date().toISOString(),
       };
       this._emitTelemetry(event);
 
       log.error(
-        { toolName, cycleCount: entry.count, threshold: DOOM_LOOP_RO_THRESHOLD },
+        { toolName, cycleCount: effectiveCount, threshold: DOOM_LOOP_RO_THRESHOLD },
         'DOOM LOOP TERMINATED — force-quit',
       );
 
       return {
         action: 'abort',
-        reason: `Doom loop detector: tool "${toolName}" repeated ${entry.count} times across turns (termination threshold: ${DOOM_LOOP_RO_THRESHOLD}). Force-terminating to prevent infinite loop.`,
+        reason: `Doom loop detector: tool "${toolName}" repeated ${effectiveCount} times across turns (termination threshold: ${DOOM_LOOP_RO_THRESHOLD}). Force-terminating to prevent infinite loop.`,
         telemetryEvent: event,
       };
     }
 
     // Check warning threshold
-    if (entry.count >= DOOM_LOOP_THRESHOLD && !this.warnedKeys.has(key)) {
+    if (effectiveCount >= DOOM_LOOP_THRESHOLD && !this.warnedKeys.has(key)) {
       this.warnedKeys.add(key);
       const event: DoomLoopWarningEvent = {
         event: 'doom_loop_warning',
         toolName,
         argsSignature,
-        cycleCount: entry.count,
+        cycleCount: effectiveCount,
         threshold: DOOM_LOOP_THRESHOLD,
         timestamp: new Date().toISOString(),
       };
       this._emitTelemetry(event);
 
       log.warn(
-        { toolName, cycleCount: entry.count, threshold: DOOM_LOOP_THRESHOLD },
+        { toolName, cycleCount: effectiveCount, threshold: DOOM_LOOP_THRESHOLD },
         'DOOM LOOP WARNING — repetitive cycle detected',
       );
 
       return {
         action: 'warn',
-        reason: `Doom loop detector: tool "${toolName}" repeated ${entry.count} times across turns (warning threshold: ${DOOM_LOOP_THRESHOLD}). Consider a different approach.`,
+        reason: `Doom loop detector: tool "${toolName}" repeated ${effectiveCount} times across turns (warning threshold: ${DOOM_LOOP_THRESHOLD}). Consider a different approach.`,
         telemetryEvent: event,
       };
     }
 
     return { action: 'allow' };
+  }
+
+  /**
+   * CW7 (agency): accrue one expectation-mismatch for a tool. Increases the
+   * effective cross-turn count on subsequent recordCall checks so a
+   * chronically-expectation-violating tool warns earlier. Bounded.
+   */
+  registerMismatch(toolName: string): void {
+    if (!toolName) return;
+    const cur = this.mismatchWeight.get(toolName) ?? 0;
+    if (cur < DOOM_LOOP_RO_THRESHOLD) this.mismatchWeight.set(toolName, cur + 1);
   }
 
   /**
@@ -260,6 +289,7 @@ export class DoomLoopDetector {
    */
   reset(): void {
     this.cycleMap.clear();
+    this.mismatchWeight.clear();
     this.fingerprints = [];
     this.warnedKeys.clear();
     log.debug('DoomLoopDetector fully reset');
