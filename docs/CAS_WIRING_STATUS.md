@@ -1,5 +1,34 @@
 # CAS Wiring Campaign — Status Ledger
 
+> ## CAMPAIGN SUMMARY (2026-07-19, sessions 1–7)
+>
+> **Mission delivered:** sudo-ai's existing-but-severed consciousness subsystems wired into real control paths, in small flag-gated measured slices. 9/10 build workstreams complete; only CW9 is design-only (Q-2 pending Fable GO). Remaining tail is time-gated (measurement windows + flag-flip GOs), not build work.
+>
+> **What shipped (all merged + deployed unless noted):**
+> - CW0 — measurement instrumentation + path map + baselines (MEASURING until 2026-07-20; live-confirmed, 14+ datapoints @ 329 tok/turn).
+> - CW1 — un-severed drive-compute constants → real surprise/world/self signals (DEPLOYED; live signal 0.43 observed; per-turn CW1 log line awaits first CHANNEL turn).
+> - CW2 — real context-pressure tiering of the injection (flag LIVE, MEASURING until 2026-07-22; behaviorally confirmed 20:25Z).
+> - CW3 — deleted vestigial ContextSelector+ConsciousnessBridge (−1,238 LOC; harvest preceded deletion).
+> - CW4 — bid-based context arbiter, the G1 centerpiece (MERGED+DEPLOYED, flag OFF, HELD until CW2 verdict).
+> - CW5 — surprise gates episode encode-priority + attention (flag LIVE, MEASURING until 2026-07-23).
+> - CW6 — HomeostatCore essential-variables organ, sensing-only (MERGED+DEPLOYED; KAIROS byte-identical).
+> - CW7 — cheap agency: expectation logging + mismatch signal (PR #876, CI-pending on GitHub runner queue; flag OFF).
+> - CW8 — eligibility traces (TODO, builds on CW7 once merged).
+> - CW9 — loop.ts decomposition DESIGN delivered (docs/F103_LOOP_DECOMPOSITION_DESIGN.md); execution gated on Q-2.
+>
+> **The throughline — three "built-severed" instances un-severed:** the campaign's recurring finding was subsystems that were fully built but disconnected at the exact point they should act. (1) CW1: `driveManager.compute` fed hardcoded `recentSurprise:0 / worldModelConfidence:0.5 / selfModelImprovingRatio:0.5` while the real accessors sat unused. (2) CW5: `onInteractionEnd` hardcoded every episode's `surpriseLevel:0 / significance:0.5` while `computeSignificance` was exported-but-never-called. (3) CW7: not a hardcoded constant but an OMISSION — no intended-vs-actual (efference) comparison existed per tool call at all. Same pattern, three shapes: dead constant, dead function, absent check.
+>
+> **Flag states + measurement verdicts pending:**
+> - `SUDO_CAS_PRESSURE=1` LIVE → verdict 2026-07-22 (tier distribution, user_rephrased vs 0.70%, cache-read vs 0.1512/0.2902, no new error classes).
+> - `SUDO_CAS_SURPRISE_GATE=1` LIVE → verdict 2026-07-23 (flood guard: episodes/day vs 25–32 baseline, alert if >64).
+> - `SUDO_CAS_ARBITER=0` HELD → flip Q-n after CW2 verdict (one injection-affecting flag at a time).
+> - `SUDO_CAS_AGENCY=0` → flip decision after CW7+CW8 land + an agency watch.
+>
+> **Open tail:** CW1 per-turn line awaits the first organic CHANNEL turn (call site is channel-only — not a gap). CW7 merge + CW8 build + CW4/agency flips await GitHub CI clearing and Fable GOs. CW9 execution awaits A-2.
+>
+> **Standing rules established:** green-means-green (the ratchet-mask that let #864–866 merge red is repaired); one injection-affecting flag flipped at a time; every flip needs error-class-subset verification first; deploy = merge origin/main into the prod branch + `pm2 restart ecosystem.config.cjs --only sudo-ai-v5` (never touch the pre-existing ecosystem.config.cjs mod); config/.env flags reach process.env via ConfigLoader dotenv, not /proc.
+
+
 **Spec:** `docs/OPUS_HANDOFF_CAS_WIRING.md` (read first).
 **QA:** `docs/CAS_WIRING_QA.md` (check for OPEN questions first).
 **Convention:** update after every state change; append session reports at the bottom.
@@ -12,11 +41,11 @@ States: `TODO | IN_PROGRESS | BLOCKED(Q-n) | PR(#n) | MERGED(#n) | DEPLOYED | ME
 | CW2 | Real context pressure into assembly | MEASURING(until 2026-07-22) | #870 | SUDO_CAS_PRESSURE=1 LIVE | BEHAVIORALLY CONFIRMED 20:25:11Z: `CW2: context pressure tier chosen` occupancy=0 tier=full budget=null (correct fresh-session shape), pid 3546275 |
 | CW3 | Wire-or-delete: ContextSelector/Bridge | MERGED(#871) | #871 | — | verdict A: -1,238 LOC; CI green; merged-diff verified (files+refs gone) |
 | CW4 | Bid-based context arbiter | MERGED(#873)+DEPLOYED(flag OFF) | #873 | SUDO_CAS_ARBITER (default OFF) + SUDO_CAS_ARBITER_BUDGET (1200) | CI green x2; merged-diff verified; in prod via deploy #3 ~19:54Z; A/B plan below; flip needs Fable GO (Q-n) |
-| CW5 | Surprise gates encoding + attention | MERGED(#874) | #874 | SUDO_CAS_SURPRISE_GATE (default OFF) | CI green; merged-diff verified; deploy rides next prod merge |
-| CW6 | HomeostatCore (essential variables) | PR(#875) | #875 | — (sensing only; SUDO_HOMEOSTAT_* setpoint tuners) | 7 tests byte-identity + vector; digest slice; no contradictory thresholds found (no Q-n) |
-| CW7 | Expectation logging + mismatch credit | TODO | — | SUDO_CAS_AGENCY | — |
+| CW5 | Surprise gates encoding + attention | MEASURING(until 2026-07-23) | #874 | SUDO_CAS_SURPRISE_GATE=1 LIVE | flag flipped 23:06Z per Fable session-6 authorization (config/.env:200 + restart, pid 3594868, 0 non-chronic level:50); flood-guard watch active |
+| CW6 | HomeostatCore (essential variables) | MERGED(#875)+DEPLOYED | #875 | — (sensing only; SUDO_HOMEOSTAT_* setpoint tuners) | CI green; merged-diff verified; live via deploy #4 (20:38Z) |
+| CW7 | Expectation logging + mismatch credit | PR(#TBD) | — | SUDO_CAS_AGENCY (default OFF) | agency-monitor + penalize + doom mismatch-weight; 7 tests; scope coder.*+system.exec |
 | CW8 | Eligibility traces (multi-step credit) | TODO | — | SUDO_CAS_AGENCY | — |
-| CW9 | loop.ts decomposition DESIGN (execution gated) | TODO | — | — | — |
+| CW9 | loop.ts decomposition DESIGN (execution gated) | DESIGN DELIVERED (Q-2) | — | — | docs/F103_LOOP_DECOMPOSITION_DESIGN.md; execution gated on A-2 |
 
 ## Audit re-verification (CW0, 2026-07-19)
 
@@ -151,3 +180,11 @@ Decision rule: all four healthy → file Q-n proposing default-ON; any regressio
 - **Real non-constant surprise observed live:** the same turn's brief line carries `surpriseLevel: 0.4313...` — the surprise-engine average flowing through getIntelligenceBriefContext. The CW1-specific `CW1: drive inputs` line still awaits a CHANNEL turn (its call site), but the underlying signal is confirmed live and non-zero.
 - CW5: MERGED(#874) after one CI round-trip (a pre-existing orchestrator unit test mocked the episodic-memory barrel without the new export — mock updated to mirror the real contract, the #441 lesson).
 - CW6 assumptions (recorded): tokens_day setpoint 15M/bound 30M (measured ~10M/day) via SUDO_HOMEOSTAT_TOKENS_DAY; error_rate setpoint 0.25/bound 0.6 (measured chronic ~22%) via SUDO_HOMEOSTAT_ERROR_RATE; queue_depth sensor honestly `available:false` (no cheap accessor). No contradictory thresholds between existing homeostats => no Q-n.
+
+
+### 2026-07-19 (late) — Opus session 6 (retry): CW5 flip + CW7 build
+
+- **Openers:** CW1 line still 0 (no channel turn — its call site is channel-only). CW0 = 14 datapoints, all 329 tok/turn; window (2026-07-20) NOT yet elapsed at 23:06Z, so CW0 stays MEASURING (final mean recording deferred to next session per the window close). CW2 tier distribution so far: 4x `full` (all low-occupancy scheduled turns; non-full tiers await a heavier session).
+- **CW5 flip applied** (Fable session-6 authorization): SUDO_CAS_SURPRISE_GATE=1 at config/.env:200, one `pm2 restart`, boot 23:06:12Z pid 3594868, 0 non-chronic level:50. CW5 -> MEASURING(until 2026-07-23) with the flood-guard watch (daily episode count/AVG significance growth; alert if >2x pre-flag rate).
+- **CW6 ledger row corrected** to MERGED(#875)+DEPLOYED (was stale PR).
+- **CW7 built:** expectation logging / efference. Seam = the tool-result record path (loop.ts:1054, ToolSuccessStore.record + doomLoopDetector). Scope coder.*+system.exec; expectation is deterministic "no error / exit 0" (zero new LLM calls). New agency-monitor.ts (capture-at-dispatch + compare-at-result); on mismatch: (a) doomLoopDetector.registerMismatch -> effective repeat count += accrued weight (capped RO-2 so a mismatch streak can WARN but never ABORT without a real repeat) -> warns earlier; (b) ToolSuccessStore.penalize -> additional bounded EMA nudge <= one step, ON TOP of the normal record(false). Flag SUDO_CAS_AGENCY default OFF; per-tool mismatch counter surfaced via log telemetry (module agent:agency, event agency_mismatch) + AgencyMonitor.snapshot().

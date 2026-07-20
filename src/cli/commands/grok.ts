@@ -52,7 +52,7 @@ export async function collectGrokProviders(): Promise<ProviderView[]> {
       detail: apiDetail,
       defaultModel: apiMgr.getDefaultModel(),
       modelsCount: api.modelsCount,
-      billing: 'pay-per-token (api.x.ai)',
+      billing: 'pay-per-token (metered xAI API)',
     },
   ];
 }
