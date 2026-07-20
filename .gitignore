@@ -179,3 +179,6 @@ gdrive-oauth-client*.json
 gdrive-oauth-token*.json
 brain-hmac.key
 brain-enc.key
+
+# GW2 grok-web replay bridge (python is the only impl lane; not a secret)
+!scripts/grok-web/*.py
