@@ -93,13 +93,17 @@ function mockFetch(replies: Array<{ status: number; json: unknown }>): {
   return { fetchImpl, calls };
 }
 
-const ENV_KEYS = ['SUDO_LLM_RETRY_DISABLE', 'SUDO_GATEWAY_LOG_TEST'] as const;
+const ENV_KEYS = ['SUDO_LLM_RETRY_DISABLE', 'SUDO_GATEWAY_LOG_TEST', 'SUDO_XAI_OAUTH_SUBSCRIPTION', 'SUDO_GROK_CLI_VERSION', 'XAI_API_KEY'] as const;
 let envBackup: Record<string, string | undefined>;
 
 beforeEach(() => {
   envBackup = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
   process.env['SUDO_LLM_RETRY_DISABLE'] = '1';
   delete process.env['SUDO_GATEWAY_LOG_TEST'];
+  // GX1: default ON (subscription proxy). Individual tests flip it OFF to
+  // exercise the legacy metered path. SUDO_GROK_CLI_VERSION unset → 0.2.22.
+  delete process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'];
+  delete process.env['SUDO_GROK_CLI_VERSION'];
   __resetPolicyState();
   xaiOauthMock.getAccessToken.mockClear();
   xaiOauthMock.getAccessToken.mockResolvedValue('xai-oauth-test-token');
@@ -123,10 +127,17 @@ describe('callIR — xai-responses family', () => {
     const res = await callIR(baseIR(), { fetchImpl });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe('https://api.x.ai/v1/responses');
+    // GX1 default ON: seat-covered Grok CLI subscription proxy, not api.x.ai.
+    expect(calls[0]!.url).toBe('https://cli-chat-proxy.grok.com/v1/responses');
     expect(calls[0]!.headers['authorization']).toBe('Bearer xai-oauth-test-token');
     // No extra.conv_id → derived from the trace_id.
     expect(calls[0]!.headers['x-grok-conv-id']).toBe('trace-xai-oauth-1');
+    // GX1: the five grok-cli client headers the proxy requires (Authorization
+    // above + these four). model-override pins the resolved model id.
+    expect(calls[0]!.headers['x-grok-client-version']).toBe('0.2.22');
+    expect(calls[0]!.headers['x-grok-client-identifier']).toBe('grok-shell');
+    expect(calls[0]!.headers['x-grok-model-override']).toBe('grok-4.3');
+    expect(calls[0]!.headers['user-agent']).toBe('grok/0.2.22');
     expect(xaiOauthMock.getAccessToken).toHaveBeenCalledTimes(1);
 
     const body = JSON.parse(calls[0]!.body) as Record<string, unknown>;
@@ -304,9 +315,12 @@ describe('streamIR — xai-responses family', () => {
     for await (const ev of streamIR(baseIR({ extra: { conv_id: 'sess-7' } }), { fetchImpl })) {
       events.push(ev);
     }
-    expect(calls[0]!.url).toBe('https://api.x.ai/v1/responses');
+    expect(calls[0]!.url).toBe('https://cli-chat-proxy.grok.com/v1/responses');
     expect(calls[0]!.headers['authorization']).toBe('Bearer xai-oauth-test-token');
     expect(calls[0]!.headers['x-grok-conv-id']).toBe('sess-7');
+    // GX1: proxy client headers present on the streaming path too.
+    expect(calls[0]!.headers['x-grok-client-version']).toBe('0.2.22');
+    expect(calls[0]!.headers['x-grok-model-override']).toBe('grok-4.3');
     expect((JSON.parse(calls[0]!.body) as Record<string, unknown>)['stream']).toBe(true);
     expect(events).toEqual([
       { type: 'text_delta', text: 'rea' },
@@ -322,5 +336,60 @@ describe('streamIR — xai-responses family', () => {
     expect(err).toBeInstanceOf(LLMPolicyError);
     expect((err as LLMPolicyError).class).toBe('invalid_request');
     expect(calls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GX1 — subscription proxy routing (SUDO_XAI_OAUTH_SUBSCRIPTION)
+// ---------------------------------------------------------------------------
+
+describe('GX1 — xai-oauth subscription proxy path', () => {
+  it('grok-build model → proxy URL with model-override "grok-build" (default ON)', async () => {
+    const { fetchImpl, calls } = mockFetch([{ status: 200, json: RESPONSES_TEXT_WIRE }]);
+    await callIR(baseIR({ alias: 'xai-oauth/grok-build' }), { fetchImpl });
+    expect(calls[0]!.url).toBe('https://cli-chat-proxy.grok.com/v1/responses');
+    const body = JSON.parse(calls[0]!.body) as Record<string, unknown>;
+    expect(body['model']).toBe('grok-build');
+    expect(calls[0]!.headers['x-grok-model-override']).toBe('grok-build');
+    expect(calls[0]!.headers['x-grok-client-identifier']).toBe('grok-shell');
+    expect(calls[0]!.headers['x-grok-client-version']).toBe('0.2.22');
+    expect(calls[0]!.headers['user-agent']).toBe('grok/0.2.22');
+  });
+
+  it('SUDO_GROK_CLI_VERSION overrides the version + User-Agent headers', async () => {
+    process.env['SUDO_GROK_CLI_VERSION'] = '0.3.0';
+    const { fetchImpl, calls } = mockFetch([{ status: 200, json: RESPONSES_TEXT_WIRE }]);
+    await callIR(baseIR({ alias: 'xai-oauth/grok-build' }), { fetchImpl });
+    expect(calls[0]!.headers['x-grok-client-version']).toBe('0.3.0');
+    expect(calls[0]!.headers['user-agent']).toBe('grok/0.3.0');
+  });
+
+  it('flag OFF → legacy metered api.x.ai path, NO grok-cli client headers', async () => {
+    process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] = '0';
+    const { fetchImpl, calls } = mockFetch([{ status: 200, json: RESPONSES_TEXT_WIRE }]);
+    await callIR(baseIR({ alias: 'xai-oauth/grok-build' }), { fetchImpl });
+    expect(calls[0]!.url).toBe('https://api.x.ai/v1/responses');
+    // conv-id is not proxy-specific and stays; the four proxy-only headers do not.
+    expect(calls[0]!.headers['x-grok-conv-id']).toBeDefined();
+    expect(calls[0]!.headers['x-grok-client-version']).toBeUndefined();
+    expect(calls[0]!.headers['x-grok-client-identifier']).toBeUndefined();
+    expect(calls[0]!.headers['x-grok-model-override']).toBeUndefined();
+    expect(calls[0]!.headers['user-agent']).toBeUndefined();
+  });
+
+  it('api-key xai family is UNCHANGED — still api.x.ai/v1/chat/completions, no grok headers', async () => {
+    // Independent proof the GX1 change is scoped to xai-oauth only: the metered
+    // api-key `xai` provider (OpenAI-compat family) keeps hitting api.x.ai.
+    process.env['XAI_API_KEY'] = 'xai-test-key';
+    const openaiWire = {
+      choices: [{ message: { role: 'assistant', content: 'ready' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 2 },
+    };
+    const { fetchImpl, calls } = mockFetch([{ status: 200, json: openaiWire }]);
+    await callIR(baseIR({ alias: 'xai/grok-4-fast-non-reasoning' }), { fetchImpl });
+    expect(calls[0]!.url).toBe('https://api.x.ai/v1/chat/completions');
+    expect(calls[0]!.headers['authorization']).toBe('Bearer xai-test-key');
+    expect(calls[0]!.headers['x-grok-client-version']).toBeUndefined();
+    expect(calls[0]!.headers['x-grok-model-override']).toBeUndefined();
   });
 });

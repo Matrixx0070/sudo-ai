@@ -57,7 +57,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IRRequest, IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
 import { resolveAlias, modelGenerationOf } from './aliases.js';
-import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL } from './endpoints.js';
+import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL, XAI_CLI_PROXY_RESPONSES_URL } from './endpoints.js';
 import { getProviderApiKey, recordGatewayCall, type ProviderKeyName } from './client.js';
 import { egressAnthropic, parseAnthropicResponse } from './adapters/egress-anthropic.js';
 import { egressOpenAI, parseOpenAIResponse } from './adapters/egress-openai.js';
@@ -105,6 +105,34 @@ const OLLAMA_DEFAULT_URL = 'https://ollama.com/v1';
 
 /** Built-in OpenAI-compatible providers with a PROVIDER_BASE_URLS entry. */
 const OPENAI_COMPAT_BUILTINS: ReadonlySet<string> = new Set(['openai', 'xai', 'groq', 'deepseek']);
+
+/**
+ * GX1: default grok-cli client version the subscription proxy requires. The
+ * proxy returns HTTP 426 "Grok CLI version (none) is outdated" without a
+ * version header ≥ 0.1.202; env-tunable so a future proxy bump is config-only.
+ */
+const GROK_CLI_DEFAULT_VERSION = '0.2.22';
+
+/**
+ * GX1: is the xai-oauth subscription-proxy path enabled? Default ON — the old
+ * api.x.ai/v1/responses route billed the metered developer API instead of the
+ * user's Grok seat (a billing bug), so the corrected seat-covered path is the
+ * safe default. Set SUDO_XAI_OAUTH_SUBSCRIPTION=0 (or false/off/no) to fall
+ * back to the legacy metered endpoint.
+ */
+function xaiSubscriptionProxyEnabled(): boolean {
+  const v = process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'];
+  if (v === undefined) return true;
+  const s = v.trim().toLowerCase();
+  if (s === '') return true;
+  return !(s === '0' || s === 'false' || s === 'off' || s === 'no');
+}
+
+/** GX1: resolved grok-cli version for the proxy version + User-Agent headers. */
+function grokCliVersion(): string {
+  const v = process.env['SUDO_GROK_CLI_VERSION']?.trim();
+  return v !== undefined && v !== '' ? v : GROK_CLI_DEFAULT_VERSION;
+}
 
 export interface CallIROptions {
   /** Injectable fetch for tests. Defaults to globalThis.fetch. */
@@ -200,14 +228,16 @@ function resolveRoute(alias: string): ResolvedRoute {
   }
 
   if (provider === 'xai-oauth') {
-    // Subscription OAuth Grok is only served on the Responses-style endpoint.
-    // Distinct route key so an oauth outage never opens the API-key xai
-    // breaker (mirrors the anthropic / claude-oauth split above).
+    // Subscription OAuth Grok rides the Responses-style endpoint. GX1: the
+    // seat-covered Grok CLI proxy (default) instead of the metered developer
+    // API — same OAuth token, different host + required grok-cli headers
+    // (attached in prepareWireCall). Distinct route key so an oauth outage
+    // never opens the API-key xai breaker (mirrors anthropic / claude-oauth).
     return {
       family: 'xai-responses',
       provider,
       modelId,
-      url: XAI_RESPONSES_URL,
+      url: xaiSubscriptionProxyEnabled() ? XAI_CLI_PROXY_RESPONSES_URL : XAI_RESPONSES_URL,
       route: 'xai-oauth:responses',
       modelGeneration,
     };
@@ -465,6 +495,19 @@ function prepareWireCall(ir: IRRequest, stream: boolean, traceId: string): Prepa
     const convId = ir.extra?.['conv_id'];
     extraHeaders['x-grok-conv-id'] =
       typeof convId === 'string' && convId !== '' ? convId : traceId;
+    // GX1: the Grok CLI subscription proxy requires these grok-cli client
+    // headers (Authorization Bearer is added by authHeaders; Content-Type by
+    // the attempt). Without x-grok-client-version the proxy 426s. model-override
+    // pins the request's resolved model id (proxy serves grok-build /
+    // grok-composer-2.5-fast). Gated with the URL choice so the legacy metered
+    // path (flag OFF) sends no proxy-only headers.
+    if (xaiSubscriptionProxyEnabled()) {
+      const version = grokCliVersion();
+      extraHeaders['x-grok-client-version'] = version;
+      extraHeaders['x-grok-client-identifier'] = 'grok-shell';
+      extraHeaders['x-grok-model-override'] = r.modelId;
+      extraHeaders['User-Agent'] = `grok/${version}`;
+    }
   } else if (r.family === 'anthropic') {
     // egressAnthropic already emits the bare model id for anthropic/
     // claude-oauth prefixes; custom anthropic-shaped providers need the
