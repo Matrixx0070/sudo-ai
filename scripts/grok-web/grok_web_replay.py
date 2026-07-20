@@ -172,33 +172,47 @@ def op_image(req):
 
 
 def op_video(req):
+    """Kick off a video via the app-chat stream. GWV2: the x-statsig-id is minted
+    FRESH per request by the Node-side headless oracle and arrives in req.
+    Text-to-video (PROVEN) is the default; image-to-video runs when imageUrl is
+    given (publishes the source image as a post first). Returns STRUCTURED fields
+    only (URLs / ids) — never free-form model text (quarantine posture)."""
     from curl_cffi import requests as creq
 
     if not req.get("statsigId"):
         return {"ok": False, "errorClass": "statsig", "detail": "x-statsig-id required for video"}
-    img_url = req["imageUrl"]
     H = {**base_headers(req), "Content-Type": "application/json"}
-    tmo = req.get("timeoutSec", 150)
+    tmo = req.get("timeoutSec", 180)
+    video_cfg = {
+        "aspectRatio": req.get("aspectRatio", "9:16"),
+        "videoLength": req.get("videoLength", 6),
+        "resolutionName": req.get("resolutionName", "720p"),
+    }
+    img_url = req.get("imageUrl")
 
-    # Step 1: publish the source image as a post.
-    r1 = creq.post(GROK + "/rest/media/post/create", impersonate="chrome", headers=H,
-                   data=json.dumps({"mediaType": "MEDIA_POST_TYPE_IMAGE", "mediaUrl": img_url}),
-                   timeout=30)
-    if r1.status_code != 200:
-        return {"ok": False, "status": r1.status_code, "errorClass": classify(r1.status_code, r1.text)}
-    post_id = _safe_json(r1.text).get("post", {}).get("id")
+    if img_url:
+        # image-to-video: publish the source image as a post so it has an id.
+        r1 = creq.post(GROK + "/rest/media/post/create", impersonate="chrome", headers=H,
+                       data=json.dumps({"mediaType": "MEDIA_POST_TYPE_IMAGE", "mediaUrl": img_url}),
+                       timeout=30)
+        if r1.status_code != 200:
+            return {"ok": False, "status": r1.status_code, "errorClass": classify(r1.status_code, r1.text)}
+        post_id = _safe_json(r1.text).get("post", {}).get("id")
+        if post_id:
+            video_cfg["parentPostId"] = post_id
+        message = f"{img_url}  --mode=normal"
+    else:
+        # text-to-video (PROVEN): the prompt drives it, custom mode.
+        prompt = req.get("prompt") or ""
+        if not prompt:
+            return {"ok": False, "errorClass": "bad_request", "detail": "video needs prompt or imageUrl"}
+        message = f"{prompt} --mode=custom"
 
-    # Step 2: kick off video via the app-chat stream (needs x-statsig-id).
     body = {
         "temporary": True, "modelName": "imagine-video-gen",
-        "message": f"{img_url}  --mode=normal", "enableSideBySide": True,
+        "message": message, "enableSideBySide": True,
         "responseMetadata": {"experiments": [], "modelConfigOverride": {"modelMap": {
-            "videoGenModelConfig": {
-                "parentPostId": post_id,
-                "aspectRatio": req.get("aspectRatio", "9:16"),
-                "videoLength": req.get("videoLength", 6),
-                "resolutionName": req.get("resolutionName", "720p"),
-            }}}},
+            "videoGenModelConfig": video_cfg}}},
     }
     vh = {**H, "x-statsig-id": req["statsigId"], "x-xai-request-id": str(uuid.uuid4())}
     r2 = creq.post(GROK + "/rest/app-chat/conversations/new", impersonate="chrome",
@@ -226,6 +240,26 @@ def op_video(req):
     return {"ok": False, "errorClass": "stream_ended", "detail": "app-chat stream ended before progress 100"}
 
 
+def op_download(req):
+    """Download a generated asset (assets.grok.com mp4) with the session cookies,
+    same-host, to a local path. Returns bytes + an ISO-MP4 ftyp-magic check."""
+    from curl_cffi import requests as creq
+
+    url = req.get("url")
+    out = req.get("outputPath")
+    if not url or not out:
+        return {"ok": False, "errorClass": "bad_request", "detail": "download needs url and outputPath"}
+    r = creq.get(url, impersonate="chrome", headers=base_headers(req),
+                 timeout=req.get("timeoutSec", 120))
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, getattr(r, "text", ""))}
+    data = r.content
+    with open(out, "wb") as f:
+        f.write(data)
+    ftyp = len(data) >= 12 and data[4:8] == b"ftyp"
+    return {"ok": True, "status": 200, "path": out, "bytes": len(data), "ftyp": bool(ftyp)}
+
+
 def _safe_json(text):
     try:
         return json.loads(text)
@@ -233,7 +267,7 @@ def _safe_json(text):
         return {}
 
 
-OPS = {"probe": op_probe, "image": op_image, "video": op_video}
+OPS = {"probe": op_probe, "image": op_image, "video": op_video, "download": op_download}
 
 
 def main():
