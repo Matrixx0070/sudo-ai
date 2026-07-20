@@ -52,6 +52,7 @@ import path from 'node:path';
 import { DATA_DIR } from '../core/shared/paths.js';
 import { writeFileAtomic } from '../core/shared/atomic-write.js';
 import { createLogger } from '../core/shared/logger.js';
+import type { XaiModelEntry } from './xai-models.js';
 
 const log = createLogger('llm:xai-oauth');
 
@@ -108,6 +109,16 @@ export interface XaiOAuthStore {
   obtained_at?: string;
   /** Set when the refresh token was rejected (invalid_grant) — re-login needed. */
   needs_relogin?: boolean;
+  /**
+   * GP4 picker state — persisted IN the oauth cred store (mirror claude-oauth):
+   * the user-picked default model id for the `xai-oauth` method. When unset the
+   * provider falls back to the first cached model.
+   */
+  defaultModel?: string;
+  /** Cached live model list (from XaiModelDiscovery.refresh('oauth')). */
+  models?: XaiModelEntry[];
+  /** ms epoch when `models` was cached — used to decide staleness. */
+  modelsFetchedAt?: number;
 }
 
 export interface XaiOAuthStatus {
@@ -200,6 +211,9 @@ export class XaiOAuthManager {
       if (typeof raw['expires_at'] === 'string') store.expires_at = raw['expires_at'];
       if (typeof raw['obtained_at'] === 'string') store.obtained_at = raw['obtained_at'];
       if (raw['needs_relogin'] === true) store.needs_relogin = true;
+      if (typeof raw['defaultModel'] === 'string') store.defaultModel = raw['defaultModel'];
+      if (Array.isArray(raw['models'])) store.models = raw['models'] as XaiModelEntry[];
+      if (typeof raw['modelsFetchedAt'] === 'number') store.modelsFetchedAt = raw['modelsFetchedAt'];
       return store;
     } catch (err) {
       log.error({ err: String(err) }, 'Failed to load xAI OAuth store');
@@ -414,6 +428,12 @@ export class XaiOAuthManager {
         refresh_token: typeof data.refresh_token === 'string' ? data.refresh_token : store.refresh_token,
         expires_at: new Date(nowMs + (data.expires_in ?? DEFAULT_TOKEN_LIFETIME_SEC) * 1000).toISOString(),
         obtained_at: new Date(nowMs).toISOString(),
+        // Carry the GP4 picker state across a token rotation (JSON.stringify
+        // drops the undefined ones) — a refresh must not wipe the user's
+        // default model or cached list.
+        defaultModel: store.defaultModel,
+        models: store.models,
+        modelsFetchedAt: store.modelsFetchedAt,
       };
       // WRITE-THEN-USE: persist the rotated pair before any caller sees it —
       // a crash after return-but-before-write would strand a dead refresh token.
@@ -512,6 +532,53 @@ export class XaiOAuthManager {
     const out: XaiOAuthStatus = { connected: true };
     if (store.expires_at) out.expiresAt = store.expires_at;
     return out;
+  }
+
+  // -------------------------------------------------------------------------
+  // Model cache + default selection (GP4 — mirror claude-oauth-manager)
+  // -------------------------------------------------------------------------
+
+  /** Cached model list for the oauth method (may be empty). */
+  listModels(): XaiModelEntry[] {
+    return this.loadStore()?.models ?? [];
+  }
+
+  /**
+   * Resolve which oauth model is the default: the user-picked id when it is
+   * still present in (or there is no) cached list, else the first cached model,
+   * else null. Never returns a stale id that dropped out of the live list.
+   */
+  getDefaultModel(): string | null {
+    const store = this.loadStore();
+    if (!store) return null;
+    const cached = store.models ?? [];
+    const picked = store.defaultModel;
+    if (picked && (cached.length === 0 || cached.some((m) => m.id === picked))) return picked;
+    return cached[0]?.id ?? null;
+  }
+
+  /**
+   * Persist the picked default. Returns false when the id is not in the cached
+   * list (caller should refresh + surface the error). Preserves credentials.
+   */
+  setDefaultModel(id: string): boolean {
+    const store = this.loadStore();
+    if (!store) return false;
+    const cached = store.models ?? [];
+    if (cached.length > 0 && !cached.some((m) => m.id === id)) {
+      log.warn({ id }, 'xai-oauth setDefaultModel: id not in cached model list');
+      return false;
+    }
+    this.saveStore({ ...store, defaultModel: id });
+    log.info({ id }, 'xai-oauth default model set');
+    return true;
+  }
+
+  /** Cache a freshly-discovered model list into the oauth cred store. */
+  setModels(models: XaiModelEntry[]): void {
+    const store = this.loadStore();
+    if (!store) return;
+    this.saveStore({ ...store, models, modelsFetchedAt: this.deps.now() });
   }
 }
 
