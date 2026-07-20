@@ -21,6 +21,7 @@ import { getCacheKey, cacheGet, cacheSet } from './cache.js';
 import { registerAdminRoutes } from './admin-routes.js';
 import { registerAdminSleepRoutes } from './admin-sleep-routes.js';
 import { registerAdminClaudeOAuthRoutes } from './admin-claude-oauth-routes.js';
+import { registerAdminGrokRoutes } from './admin-grok-routes.js';
 import { registerFederationRoutes } from './federation-routes.js';
 import type { FederationRoutesDeps } from './federation-routes.js';
 import { registerFederationErrorRoutes } from './federation-error-routes.js';
@@ -491,6 +492,7 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   // Claude OAuth (PKCE) admin routes — login/status/refresh/disconnect.
   // No deps: the manager is a process-wide singleton (claude-oauth-manager.ts).
   registerAdminClaudeOAuthRoutes(server, tokenBuf);
+  registerAdminGrokRoutes(server, tokenBuf);
   if (deps.federation) {
     registerFederationRoutes(server, deps.federation, tokenBuf);
   }
