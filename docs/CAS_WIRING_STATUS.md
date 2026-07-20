@@ -188,3 +188,24 @@ Decision rule: all four healthy → file Q-n proposing default-ON; any regressio
 - **CW5 flip applied** (Fable session-6 authorization): SUDO_CAS_SURPRISE_GATE=1 at config/.env:200, one `pm2 restart`, boot 23:06:12Z pid 3594868, 0 non-chronic level:50. CW5 -> MEASURING(until 2026-07-23) with the flood-guard watch (daily episode count/AVG significance growth; alert if >2x pre-flag rate).
 - **CW6 ledger row corrected** to MERGED(#875)+DEPLOYED (was stale PR).
 - **CW7 built:** expectation logging / efference. Seam = the tool-result record path (loop.ts:1054, ToolSuccessStore.record + doomLoopDetector). Scope coder.*+system.exec; expectation is deterministic "no error / exit 0" (zero new LLM calls). New agency-monitor.ts (capture-at-dispatch + compare-at-result); on mismatch: (a) doomLoopDetector.registerMismatch -> effective repeat count += accrued weight (capped RO-2 so a mismatch streak can WARN but never ABORT without a real repeat) -> warns earlier; (b) ToolSuccessStore.penalize -> additional bounded EMA nudge <= one step, ON TOP of the normal record(false). Flag SUDO_CAS_AGENCY default OFF; per-tool mismatch counter surfaced via log telemetry (module agent:agency, event agency_mismatch) + AgencyMonitor.snapshot().
+
+
+## GWV campaign — Grok video via headless statsig oracle (Opus, 2026-07-20)
+
+Builds on the merged GW stack (image lane) to add the free-on-subscription VIDEO lane.
+Spec: `docs/OPUS_HANDOFF_GROK_VIDEO_ORACLE.md`. Mechanism (Fable-proven live): mint the
+`x-statsig-id` anti-bot token on demand from an on-demand headless grok.com page via a
+CDP breakpoint at the request-signing site, feed it to the existing curl_cffi bridge for
+`POST /rest/app-chat/conversations/new`. grok.com path only (never api.x.ai). Stacked PRs
+(each slice branches off the previous); Fable reviews+merges in order.
+
+| Row | Slice | State | PR |
+|-----|-------|-------|----|
+| GWV1 | `src/llm/grok-statsig-oracle.ts` — on-demand headless oracle; self-healing signing-site locate; lazy launch / idle-close | BUILT (CI pending) | TBD |
+| GWV2 | wire video in `grok-web-media.ts` through the oracle (mint→curl_cffi POST→mp4→download+quarantine; 403 re-mint once, never metered fallback) | TODO | — |
+| GWV3 | CLI `grok video` on the oracle path + `--image`; flag `SUDO_GROK_ORACLE_IDLE_MS`; flag-manifest regen | TODO | — |
+| GWV4 | unit tests (mocked CDP/Playwright + curl_cffi fixtures); locator vs chunk fixture; core-never-imports-oracle hot-path guard | TODO | — |
+
+**UNVERIFIED (honest):** CI cannot run the real oracle (no headless browser / no live grok
+session / zero net+LLM spend in CI). Live mint→200→mp4 + the console.x.ai money-meter-flat
+check is Fable's deploy-time verification.
