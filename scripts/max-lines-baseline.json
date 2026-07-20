@@ -162,6 +162,6 @@
   "src/llm/policy.ts": 628,
   "src/llm/shadow.ts": 644,
   "src/llm/transport.ts": 1161,
-  "src/llm/xai-oauth-manager.ts": 534,
+  "src/llm/xai-oauth-manager.ts": 601,
   "src/remotion/characters/AgentBase.tsx": 731
 }
