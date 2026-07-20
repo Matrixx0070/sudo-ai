@@ -79,7 +79,10 @@ export function makeRealLauncher(headless = true): PersistentLauncher {
       executablePath,
       args: buildLaunchArgs(),
       viewport: { width: 1280, height: 800 },
-      ignoreHTTPSErrors: true,
+      // Strict TLS by default: this browser harvests grok.com session cookies, so a
+      // MITM with a forged cert must NOT be able to feed us a bogus session. Opt-out
+      // only for a dev environment that needs it, via explicit env flag.
+      ignoreHTTPSErrors: process.env['SUDO_GROK_WEB_INSECURE_TLS'] === '1',
     });
     context.on('dialog', (d) => {
       d.dismiss().catch(() => {});
