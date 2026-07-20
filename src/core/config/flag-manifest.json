@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 676,
+  "count": 678,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -329,6 +329,8 @@
     "SUDO_GOAL_PLANNER_SEMANTIC",
     "SUDO_GOAL_PLANNER_SEMANTIC_MAX_PER_RUN",
     "SUDO_GROK_CLI_VERSION",
+    "SUDO_GROK_ORACLE_CDP_URL",
+    "SUDO_GROK_ORACLE_HEADLESS",
     "SUDO_GROK_ORACLE_IDLE_MS",
     "SUDO_GROK_REFUSAL_DETECT_DISABLE",
     "SUDO_GROK_WEBSESSION",

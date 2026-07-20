@@ -63,7 +63,13 @@ function makeFake(cfg: { chunkSource?: string; token?: string } = {}): FakeHandl
           const expr = String(params?.['expression'] ?? '');
           if (expr.includes('__grokMint(')) {
             mintCalls++;
-            return minterPresent ? { result: { value: token } } : { result: {} };
+            return minterPresent ? { result: { value: token } } : { result: { type: 'undefined' } };
+          }
+          if (expr.includes("typeof globalThis.__grokMint")) {
+            return { result: { value: minterPresent } };
+          }
+          if (expr.includes('readyState')) {
+            return { result: { value: 'complete|1' } };
           }
           return { result: {} };
         }
@@ -73,16 +79,25 @@ function makeFake(cfg: { chunkSource?: string; token?: string } = {}): FakeHandl
     },
   };
 
+  const drive = (): void => {
+    // App boot parses the signing chunk (with an execution context id) ...
+    emit('Debugger.scriptParsed', { scriptId: 's1', url: CHUNK_URL, executionContextId: 100 });
+    emit('Debugger.scriptParsed', {
+      scriptId: 's2',
+      url: 'https://cdn.grok.com/_next/static/chunks/other.js',
+      executionContextId: 100,
+    });
+    // ... and a signed request trips the breakpoint in the signing chunk's frame.
+    emit('Debugger.paused', { callFrames: [{ callFrameId: 'cf1', location: { scriptId: 's1' } }] });
+  };
   const page = {
+    // The oracle uses goto both to load the app AND to trigger the breakpoint.
     goto: async (): Promise<unknown> => {
-      // App boot parses the signing chunk.
-      emit('Debugger.scriptParsed', { scriptId: 's1', url: CHUNK_URL });
-      emit('Debugger.scriptParsed', { scriptId: 's2', url: 'https://cdn.grok.com/_next/static/chunks/other.js' });
+      drive();
       return null;
     },
     reload: async (): Promise<unknown> => {
-      // A navigation fires a signed request → the breakpoint trips.
-      emit('Debugger.paused', { callFrames: [{ callFrameId: 'cf1' }] });
+      drive();
       return null;
     },
     url: () => 'https://grok.com/imagine',
@@ -151,14 +166,18 @@ describe('GrokStatsigOracle', () => {
     f.dropMinter(); // simulate a page reload that cleared globalThis.__grokMint
     const token = await oracle.mint('/p', 'POST');
     expect(token).toHaveLength(94);
-    // Two eval attempts on the second mint (miss → re-grab → hit) + one on the first.
-    expect(f.mintCalls()).toBeGreaterThanOrEqual(3);
+    // Miss is detected via a `typeof __grokMint` probe (not a wasted mint call),
+    // so each of the two mints makes exactly one minter call; success after the
+    // drop proves the re-grab happened.
+    expect(f.mintCalls()).toBeGreaterThanOrEqual(2);
     await oracle.close();
   });
 
   it('escalates (GrokOracleSigningSiteError) when the signing shape is gone', async () => {
     const f = makeFake({ chunkSource: 'var noSigningSiteHere=1;' });
-    const oracle = new GrokStatsigOracle({ profileDir: '/prof', launcher: f.launcher, idleMs: 0 });
+    // breakpointTimeoutMs bounds the signing-chunk poll; keep it short so the
+    // "shape is gone" escalation resolves fast instead of polling the default 20s.
+    const oracle = new GrokStatsigOracle({ profileDir: '/prof', launcher: f.launcher, idleMs: 0, breakpointTimeoutMs: 200 });
     await expect(oracle.mint('/p', 'POST')).rejects.toBeInstanceOf(GrokOracleSigningSiteError);
   });
 
