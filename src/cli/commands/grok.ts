@@ -108,21 +108,32 @@ export async function runGrokImage(
   }
 }
 
-/** `sudo-ai grok video "<prompt>"` — best-effort image→video on the subscription. */
+/**
+ * `sudo-ai grok video "<prompt>"` — generate a video FREE on the Grok
+ * subscription via the statsig-oracle lane (GWV3). Text-to-video by default;
+ * image-to-video with `--image <public-url>`.
+ */
 export async function runGrokVideo(
   prompt: string,
-  opts: { aspect?: string; length?: number; res?: string } = {},
+  opts: { aspect?: string; length?: number; res?: string; image?: string } = {},
 ): Promise<number> {
   const media = await import('../../llm/grok-web-media.js');
   try {
-    const genOpts: { aspectRatio?: string; videoLength?: number; resolutionName?: string } = {};
+    const genOpts: {
+      aspectRatio?: string;
+      videoLength?: number;
+      resolutionName?: string;
+      imageUrl?: string;
+    } = {};
     if (opts.aspect) genOpts.aspectRatio = opts.aspect;
     if (opts.length) genOpts.videoLength = opts.length;
     if (opts.res) genOpts.resolutionName = opts.res;
+    if (opts.image) genOpts.imageUrl = opts.image;
     const r = await media.generateGrokVideo(prompt, genOpts);
     console.log('');
     console.log('  Generated a video on your Grok subscription (no metered spend):');
-    console.log(`    ${r.videoUrl}`);
+    if (r.file) console.log(`    ${r.file}`);
+    console.log(`    URL: ${r.videoUrl}`);
     if (r.thumbnailUrl) console.log(`    thumbnail: ${r.thumbnailUrl}`);
     console.log('');
     return 0;

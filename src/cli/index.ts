@@ -476,13 +476,15 @@ grokCmd
 
 grokCmd
   .command('video <prompt>')
-  .description('Generate a video FREE on your Grok subscription (best-effort). Needs SUDO_GROK_WEBSESSION=1 + a captured statsig')
+  .description('Generate a video FREE on your Grok subscription via the statsig oracle. Needs SUDO_GROK_WEBSESSION=1')
+  .option('--image <url>', 'Source image public URL for image-to-video (default: text-to-video)')
   .option('--aspect <ratio>', 'Aspect ratio (default 9:16)')
   .option('--length <sec>', 'Video length seconds (default 6)', (v) => parseInt(v, 10))
   .option('--res <name>', 'Resolution, e.g. 720p (default 720p)')
-  .action(async (prompt: string, opts: { aspect?: string; length?: number; res?: string }) => {
+  .action(async (prompt: string, opts: { aspect?: string; length?: number; res?: string; image?: string }) => {
     const { runGrokVideo } = await import('./commands/grok.js');
-    const a: { aspect?: string; length?: number; res?: string } = {};
+    const a: { aspect?: string; length?: number; res?: string; image?: string } = {};
+    if (opts.image) a.image = opts.image;
     if (opts.aspect) a.aspect = opts.aspect;
     if (opts.length) a.length = opts.length;
     if (opts.res) a.res = opts.res;
