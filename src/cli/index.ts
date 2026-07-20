@@ -458,6 +458,45 @@ grokCmd
     process.exit(await runGrokStatus());
   });
 
+// GW5 — subscription-free media on the captured Grok web session (flag: SUDO_GROK_WEBSESSION)
+grokCmd
+  .command('image <prompt>')
+  .description('Generate image(s) FREE on your Grok subscription (web session). Needs SUDO_GROK_WEBSESSION=1')
+  .option('--aspect <ratio>', 'Aspect ratio, e.g. 1:1, 9:16, 16:9 (default 1:1)')
+  .option('--num <n>', 'Number of images (default 1)', (v) => parseInt(v, 10))
+  .option('--pro', 'Use the imagePro tier')
+  .action(async (prompt: string, opts: { aspect?: string; num?: number; pro?: boolean }) => {
+    const { runGrokImage } = await import('./commands/grok.js');
+    const a: { aspect?: string; num?: number; pro?: boolean } = {};
+    if (opts.aspect) a.aspect = opts.aspect;
+    if (opts.num) a.num = opts.num;
+    if (opts.pro) a.pro = true;
+    process.exit(await runGrokImage(prompt, a));
+  });
+
+grokCmd
+  .command('video <prompt>')
+  .description('Generate a video FREE on your Grok subscription (best-effort). Needs SUDO_GROK_WEBSESSION=1 + a captured statsig')
+  .option('--aspect <ratio>', 'Aspect ratio (default 9:16)')
+  .option('--length <sec>', 'Video length seconds (default 6)', (v) => parseInt(v, 10))
+  .option('--res <name>', 'Resolution, e.g. 720p (default 720p)')
+  .action(async (prompt: string, opts: { aspect?: string; length?: number; res?: string }) => {
+    const { runGrokVideo } = await import('./commands/grok.js');
+    const a: { aspect?: string; length?: number; res?: string } = {};
+    if (opts.aspect) a.aspect = opts.aspect;
+    if (opts.length) a.length = opts.length;
+    if (opts.res) a.res = opts.res;
+    process.exit(await runGrokVideo(prompt, a));
+  });
+
+grokCmd
+  .command('websession')
+  .description('Grok web-session status (subscription-free media capture health)')
+  .action(async () => {
+    const { runGrokWebsessionStatus } = await import('./commands/grok.js');
+    process.exit(await runGrokWebsessionStatus());
+  });
+
 // ---------------------------------------------------------------------------
 // secrets — audit / apply / configure SecretRef indirect secrets
 // ---------------------------------------------------------------------------
