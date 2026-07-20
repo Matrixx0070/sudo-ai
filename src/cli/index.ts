@@ -395,7 +395,7 @@ xaiOauthCmd
 
 const xaiCmd = program
   .command('xai')
-  .description('Manage the metered xAI API-key provider (Grok via api.x.ai)');
+  .description('Manage the metered xAI API-key provider (metered Grok API)');
 
 const xaiApikeyCmd = xaiCmd
   .command('apikey')
