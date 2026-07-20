@@ -151,6 +151,59 @@ function prettify(id: string): string {
 const numOr = (v: unknown, fallback: number): number => (typeof v === 'number' ? v : fallback);
 
 /**
+ * Build a minimal curated subscription-seat entry (id + contextWindow), name
+ * derived through the same `prettify` the live path uses so display is
+ * consistent. Metadata the endpoint would report (backend, reasoning efforts,
+ * pricing) is left at conservative defaults — a live entry always wins on merge,
+ * so these fill only the gaps the endpoint omits, never override real data.
+ */
+function curatedOAuthEntry(id: string, contextWindow: number): XaiModelEntry {
+  return {
+    id,
+    name: prettify(id),
+    contextWindow,
+    backend: null,
+    supportsReasoningEffort: false,
+    reasoningEfforts: [],
+    aliases: [],
+    billing: 'subscription',
+  };
+}
+
+/**
+ * Curated OAuth (subscription-seat) model set. The OAuth `/v1/models` endpoint
+ * (cli-chat-proxy) UNDER-REPORTS — it advertises only `grok-4.5`, but these are
+ * Fable-verified-working models reachable through the same subscription proxy
+ * (live seat-covered probes 2026-07-20). `listModels('oauth')` MERGES this with
+ * the live `/models` response (live entry wins on id conflict, so real API
+ * metadata is preferred; curated only fills the gaps the endpoint omits). This
+ * curated supplement is justified ONLY because the endpoint provably
+ * under-reports; the apikey path is left purely live (api.x.ai reports fully).
+ * Aliases that merely remap (grok-4, grok-4-fast-*, grok-3, grok-code-fast,
+ * grok-composer-2.5-fast) and proxy-rejected ids (grok-composer, grok-code,
+ * grok-2) are intentionally excluded — only the distinct working models below.
+ */
+export const OAUTH_KNOWN_MODELS: readonly XaiModelEntry[] = [
+  curatedOAuthEntry('grok-4.5', 500000),
+  curatedOAuthEntry('grok-build', 512000),
+  curatedOAuthEntry('grok-build-0.1', 256000),
+  curatedOAuthEntry('grok-4.3', 1000000),
+  curatedOAuthEntry('grok-4.20-0309-reasoning', 1000000),
+  curatedOAuthEntry('grok-4.20-0309-non-reasoning', 1000000),
+];
+
+/**
+ * Merge the live OAuth `/models` response with the curated known set, deduped by
+ * id. Live entries are kept first and win on conflict (real API metadata beats
+ * the curated gap-filler); curated entries append only for ids the endpoint
+ * omitted. apikey lists never pass through here.
+ */
+function mergeWithKnownOAuth(live: XaiModelEntry[]): XaiModelEntry[] {
+  const liveIds = new Set(live.map((m) => m.id));
+  return [...live, ...OAUTH_KNOWN_MODELS.filter((m) => !liveIds.has(m.id))];
+}
+
+/**
  * Normalize one raw entry from EITHER endpoint into an XaiModelEntry. The two
  * xAI model endpoints use different field names (Fable-verified live 2026-07-20):
  *   OAuth proxy : context_window, name, reasoning_efforts[]
@@ -262,9 +315,14 @@ export class XaiModelDiscovery {
 
     const parsed = (await res.json().catch(() => ({}))) as { data?: unknown };
     const rawList = Array.isArray(parsed.data) ? parsed.data : [];
-    const models = rawList
+    const live = rawList
       .map((m) => normalize((m ?? {}) as RawModel, method))
       .filter((m): m is XaiModelEntry => m !== null);
+
+    // The OAuth /models endpoint under-reports (advertises only grok-4.5); merge
+    // in the Fable-verified-working models (live probe 2026-07-20). The apikey
+    // path is left purely live — api.x.ai reports its metered catalog in full.
+    const models = method === 'oauth' ? mergeWithKnownOAuth(live) : live;
 
     this.cache.set(method, { models, fetchedAt: this.deps.now() });
     log.info({ method, count: models.length }, 'xAI models refreshed');
