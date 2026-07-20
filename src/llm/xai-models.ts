@@ -99,8 +99,8 @@ const defaultDeps: XaiModelsDeps = {
       const { getXaiOAuthManager } = await import('./xai-oauth-manager.js');
       return getXaiOAuthManager().getAccessToken();
     }
-    const { getProviderApiKey } = await import('./client.js');
-    return getProviderApiKey('xai');
+    const { getXaiApiKeyManager } = await import('./xai-apikey-manager.js');
+    return getXaiApiKeyManager().getApiKey();
   },
   cliVersion: () => process.env['SUDO_GROK_CLI_VERSION']?.trim() || DEFAULT_GROK_CLI_VERSION,
   now: () => Date.now(),
