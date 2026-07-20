@@ -124,6 +124,16 @@ export class GrokWebSessionManager {
     this.deps = { ...defaultDeps, ...deps };
   }
 
+  /**
+   * Wire the real headless capture/refresh (GW4). Kept as a setter — not a
+   * constructor dep — so the manager module stays free of any playwright /
+   * browser import (layering: this file is pure; GW4's grok-web-capture owns the
+   * heavy dep and calls this at boot).
+   */
+  setRefresher(refresher: GrokWebRefresher): void {
+    this.deps.refresher = refresher;
+  }
+
   // ----- persistence ------------------------------------------------------
 
   /** Read fresh from disk every call (another process may have refreshed). */
