@@ -28,8 +28,10 @@ export interface STTOptions {
    * Provider to use. Priority when omitted: whisper-local (default, offline) →
    * cloud (groq → elevenlabs → openai) only when SUDO_STT_CLOUD=1.
    * 'whisper-local' runs a Whisper ONNX model locally (offline, key-free).
+   * 'grok' routes to the user's Grok subscription voice lane (free, browserless)
+   * and requires SUDO_GROK_WEBSESSION=1.
    */
-  provider?: 'whisper-local' | 'groq' | 'elevenlabs' | 'openai';
+  provider?: 'whisper-local' | 'groq' | 'elevenlabs' | 'openai' | 'grok';
 }
 
 // ---------------------------------------------------------------------------
@@ -53,8 +55,10 @@ export interface TTSOptions {
   /**
    * Provider to use. Priority when omitted: elevenlabs → xai → openai → kokoro.
    * 'kokoro' runs the Kokoro-82M ONNX model locally (offline, key-free).
+   * 'grok' routes to the user's Grok subscription voice lane (free, browserless)
+   * and requires SUDO_GROK_WEBSESSION=1.
    */
-  provider?: 'elevenlabs' | 'xai' | 'openai' | 'kokoro';
+  provider?: 'elevenlabs' | 'xai' | 'openai' | 'kokoro' | 'grok';
   /** Playback speed multiplier (0.5–2.0). Currently honoured by the kokoro provider. */
   speed?: number;
 }
