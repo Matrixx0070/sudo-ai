@@ -288,6 +288,16 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /**
+   * True when this peer's voice STT/TTS should route through the owner's free
+   * Grok seat: both flags on AND peer is an owner. Default OFF → stays local.
+   */
+  private _useGrokVoiceFor(peerId: string | number): boolean {
+    const flag = process.env['SUDO_VOICE_GROK_DEFAULT'];
+    if ((flag !== '1' && flag !== 'true') || process.env['SUDO_GROK_WEBSESSION'] !== '1') return false;
+    return this.ownerUsers.has(String(peerId));
+  }
+
+  /**
    * @param tokenEnvKey  - Environment variable holding the bot token.
    * @param allowedUsers - Allowlisted Telegram user IDs (as strings).
    *                       Empty array = allow everyone (use with caution).
@@ -601,7 +611,8 @@ export class TelegramAdapter implements ChannelAdapter {
       if (wantVoiceReply) {
         try {
           const tts = getTts();
-          const ttsResult = await tts.synthesize(text.trim().slice(0, 4000));
+          const gVoice = this._useGrokVoiceFor(peerId) ? { provider: 'grok' as const } : {};
+          const ttsResult = await tts.synthesize(text.trim().slice(0, 4000), gVoice);
           if (ttsResult.audioBuffer && ttsResult.audioBuffer.length > 0) {
             const voiceFile = new InputFile(ttsResult.audioBuffer, 'voice.ogg');
             await this.bot.api.sendVoice(peerId, voiceFile, {
@@ -930,9 +941,9 @@ export class TelegramAdapter implements ChannelAdapter {
           return;
         }
 
-        // Transcribe
+        // Transcribe (owner voice may route through the free grok seat)
         const stt = getStt();
-        const result = await stt.transcribe(downloaded.buffer);
+        const result = await stt.transcribe(downloaded.buffer, this._useGrokVoiceFor(chatId) ? { provider: 'grok' } : {});
 
         // Clean up temp file
         try { if (existsSync(downloaded.path)) unlinkSync(downloaded.path); } catch { /* ignore */ }
@@ -980,7 +991,7 @@ export class TelegramAdapter implements ChannelAdapter {
       if (downloaded) {
         try {
           const stt = getStt();
-          const result = await stt.transcribe(downloaded.buffer);
+          const result = await stt.transcribe(downloaded.buffer, this._useGrokVoiceFor(this._replyTargetOf(ctx)) ? { provider: 'grok' } : {});
           try { if (existsSync(downloaded.path)) unlinkSync(downloaded.path); } catch { /* ignore */ }
           if (result.text.trim()) {
             // Auto voice-out for audio notes too (consumed by send()).

@@ -14,6 +14,7 @@ interface VoiceReplyInternals {
   _markVoiceReply(peerId: string): void;
   _consumeVoiceReply(peerId: string): boolean;
   _voiceReplyPending: Map<string, number>;
+  _useGrokVoiceFor(peerId: string | number): boolean;
 }
 
 function internals(a: TelegramAdapter): VoiceReplyInternals {
@@ -52,5 +53,42 @@ describe('TelegramAdapter auto voice-reply marker', () => {
     const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
     a._voiceReplyPending.set('peer-1', Date.now() - 1_000); // already expired
     expect(a._consumeVoiceReply('peer-1')).toBe(false);
+  });
+});
+
+describe('TelegramAdapter grok-seat voice routing (SUDO_VOICE_GROK_DEFAULT)', () => {
+  beforeEach(() => {
+    delete process.env['SUDO_VOICE_GROK_DEFAULT'];
+    delete process.env['SUDO_GROK_WEBSESSION'];
+  });
+  afterEach(() => {
+    delete process.env['SUDO_VOICE_GROK_DEFAULT'];
+    delete process.env['SUDO_GROK_WEBSESSION'];
+  });
+
+  it('defaults OFF — no flags → local voice', () => {
+    const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
+    expect(a._useGrokVoiceFor('1')).toBe(false);
+  });
+
+  it('routes an OWNER through the grok seat when both flags are on', () => {
+    process.env['SUDO_VOICE_GROK_DEFAULT'] = '1';
+    process.env['SUDO_GROK_WEBSESSION'] = '1';
+    const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
+    expect(a._useGrokVoiceFor('1')).toBe(true);
+    expect(a._useGrokVoiceFor(1)).toBe(true); // numeric chat id
+  });
+
+  it('never spends the seat on a non-owner peer', () => {
+    process.env['SUDO_VOICE_GROK_DEFAULT'] = '1';
+    process.env['SUDO_GROK_WEBSESSION'] = '1';
+    const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
+    expect(a._useGrokVoiceFor('999')).toBe(false);
+  });
+
+  it('requires SUDO_GROK_WEBSESSION too (grok lane must be enabled)', () => {
+    process.env['SUDO_VOICE_GROK_DEFAULT'] = '1';
+    const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
+    expect(a._useGrokVoiceFor('1')).toBe(false);
   });
 });
