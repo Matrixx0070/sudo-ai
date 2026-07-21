@@ -19,7 +19,7 @@ Response:
 
 Needs: `livekit` (pip), ffmpeg, curl_cffi. Same-host as the captured session.
 """
-import asyncio, json, subprocess, sys, wave
+import asyncio, json, os, pathlib, subprocess, sys, wave
 
 GROK = "https://grok.com"
 LIVEKIT_URL = "wss://livekit.grok.com"
@@ -39,18 +39,38 @@ def mint_token(cookie: str, ua: str, timeout: int) -> str:
 
 
 def to_pcm48k(path: str) -> bytes:
+    # Require an existing LOCAL file + whitelist file/pipe protocols so `ffmpeg -i`
+    # can never be tricked into fetching a URL (no SSRF).
+    p = pathlib.Path(path).resolve()
+    if not p.is_file():
+        raise ValueError(f"input audio must be an existing local file: {path!r}")
     return subprocess.run(
-        ["ffmpeg", "-y", "-i", path, "-f", "s16le", "-ac", "1", "-ar", str(SR), "-loglevel", "error", "pipe:1"],
+        ["ffmpeg", "-nostdin", "-protocol_whitelist", "file,pipe", "-y", "-i", str(p),
+         "-f", "s16le", "-ac", "1", "-ar", str(SR), "-loglevel", "error", "pipe:1"],
         check=True, capture_output=True).stdout
+
+
+def safe_out(path: str, roots: list) -> str:
+    """Resolve `path` and require it under one of `roots` (path-traversal guard)."""
+    p = pathlib.Path(path).resolve()
+    if not any(p == r or str(p).startswith(str(r) + os.sep) for r in roots):
+        raise ValueError(f"out path escapes allowed dirs: {path!r}")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return str(p)
 
 
 async def run(req: dict) -> dict:
     from livekit import rtc
 
     cookie, ua = req["cookie"], req["userAgent"]
-    out_path = req["outputPath"]
     capture_s = float(req.get("captureSeconds", 12))
     tmo = int(req.get("timeoutSec", 45))
+    # Reply WAV may only be written next to the (local) input or under /tmp.
+    try:
+        out_path = safe_out(req["outputPath"],
+                            [pathlib.Path(req["inputWav"]).resolve().parent, pathlib.Path("/tmp").resolve()])
+    except (ValueError, KeyError) as e:
+        return {"ok": False, "errorClass": "bad_request", "detail": f"outputPath rejected: {e}"}
 
     try:
         token = mint_token(cookie, ua, min(tmo, 30))
