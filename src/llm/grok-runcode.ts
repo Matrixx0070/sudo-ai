@@ -26,6 +26,27 @@
  * MONEY SAFETY: subscription-cover lane ONLY. If the GX1 subscription proxy is
  * disabled (SUDO_XAI_OAUTH_SUBSCRIPTION=0) this module FAILS LOUD — it never
  * falls back to the metered api.x.ai developer API.
+ *
+ * KNOWN LIMITATION — output FILES are NOT surfaced on this lane (probed live
+ * 2026-07-21, full raw responses inspected):
+ *   - a script CAN write files inside the sandbox (`/home/workdir/out.txt`,
+ *     a 21KB matplotlib PNG under `/home/workdir/artifacts/`, `plt.show()`)
+ *     and read them back within the SAME call, but the response carries no
+ *     artifact channel whatsoever: `code_interpreter_call.outputs` is always
+ *     `[{type:'logs',logs:''}]`, there is no `container_id`, message
+ *     `annotations` are `[]`, and no `file`/`image`/URL item appears anywhere
+ *     in the payload. Generated files die with the sandbox. Only text printed
+ *     to stdout/stderr comes back.
+ *
+ * LANGUAGES — the sandbox is a Python REPL (`/home/workdir/pyrepl.py`,
+ * `exec`-based), probed live 2026-07-21:
+ *   - `javascript` `console.log(6*7)` → the snippet is exec'd AS PYTHON →
+ *     `NameError: name 'console' is not defined`;
+ *   - `bash` `echo hi` only "worked" because the model IGNORED the
+ *     run-exactly-as-provided contract and improvised a python `subprocess`
+ *     shim over 3 interpreter calls — unreliable model behaviour, not real
+ *     bash support. Therefore only python is accepted; anything else is
+ *     rejected up front with `errorClass:'unsupported_language'`.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -42,7 +63,8 @@ export type GrokRunCodeErrorClass =
   | 'http_error'
   | 'timeout'
   | 'bad_response'
-  | 'not_executed';
+  | 'not_executed'
+  | 'unsupported_language';
 
 export class GrokRunCodeError extends Error {
   readonly errorClass: GrokRunCodeErrorClass;
@@ -75,6 +97,12 @@ export interface GrokRunCodeOptions {
   /** Whole-call timeout; default 120s (sandbox turns can be slow). */
   timeoutMs?: number;
 }
+
+/**
+ * Languages that ACTUALLY execute in the sandbox (a Python REPL — see the
+ * module header for the live probe evidence). Aliases normalise to `python`.
+ */
+export const GROK_RUNCODE_SUPPORTED_LANGUAGES = ['python', 'python3', 'py'] as const;
 
 /** Proxy model verified to serve the server-side code interpreter. */
 const RUNCODE_MODEL = 'grok-4.5';
@@ -170,9 +198,17 @@ function interpreterCalls(payload: Rec): number {
  * Execute `code` in grok's server-side code interpreter on the free
  * subscription seat and return the executed stdout/stderr.
  *
- * `language` is advisory (fed to the interpreter prompt); `python` is the
- * verified language. Throws `TypeError` on bad input and `GrokRunCodeError`
- * (with `errorClass`) on every lane failure — never falls back to a paid API.
+ * Only python (aliases: python3, py) is supported — the sandbox is a Python
+ * REPL and other languages either fail (`javascript` → NameError under
+ * python `exec`) or run via an unreliable model-improvised subprocess shim
+ * (`bash`). Unsupported languages are rejected up front with
+ * `GrokRunCodeError('unsupported_language')` before any network call.
+ * Throws `TypeError` on malformed input and `GrokRunCodeError` (with
+ * `errorClass`) on every lane failure — never falls back to a paid API.
+ *
+ * Files written by the code are NOT returned (no artifact channel on this
+ * lane — module header has the probe evidence). To get file content out,
+ * the code itself must print it to stdout (e.g. base64).
  */
 export async function runGrokCode(
   language: string,
@@ -185,10 +221,25 @@ export async function runGrokCode(
   if (Buffer.byteLength(code, 'utf8') > MAX_CODE_BYTES) {
     throw new TypeError(`runGrokCode: code exceeds ${MAX_CODE_BYTES} bytes`);
   }
-  const lang = typeof language === 'string' && language.trim() !== '' ? language.trim() : 'python';
-  if (!/^[a-zA-Z0-9+#._-]{1,32}$/.test(lang)) {
+  const rawLang =
+    typeof language === 'string' && language.trim() !== '' ? language.trim() : 'python';
+  if (!/^[a-zA-Z0-9+#._-]{1,32}$/.test(rawLang)) {
     throw new TypeError('runGrokCode: language must match [a-zA-Z0-9+#._-]{1,32}');
   }
+  if (
+    !(GROK_RUNCODE_SUPPORTED_LANGUAGES as readonly string[]).includes(rawLang.toLowerCase())
+  ) {
+    throw new GrokRunCodeError(
+      'unsupported_language',
+      `grok run-code: language "${rawLang}" is not supported — the grok sandbox is a ` +
+        `Python REPL (probed live: javascript fails with NameError under python exec; ` +
+        `bash only runs via an unreliable model-improvised subprocess shim). ` +
+        `Supported: ${GROK_RUNCODE_SUPPORTED_LANGUAGES.join(', ')}. ` +
+        `To run shell/other-language snippets, wrap them yourself in explicit python ` +
+        `(e.g. subprocess.run([...])) so the executed code is exactly what you wrote.`,
+    );
+  }
+  const lang = 'python';
 
   if (!subscriptionProxyEnabled()) {
     throw new GrokRunCodeError(

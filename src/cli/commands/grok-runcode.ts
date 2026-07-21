@@ -4,6 +4,12 @@
  * server-side code interpreter, free on the $30 subscription seat, and print
  * the executed stdout/stderr. Reads code from `--code`, `--file`, or stdin.
  *
+ * LIMITS (live-probed 2026-07-21, see src/llm/grok-runcode.ts header):
+ * python-only (the sandbox is a Python REPL; other languages are rejected
+ * with a clear error), and generated FILES are not returned by the lane —
+ * only stdout/stderr text. There is deliberately no `--out-dir` flag: it
+ * would promise a files feature the lane cannot deliver.
+ *
  * NOTE: registration into the `grok` command group in src/cli/index.ts is
  * wired by the supervisor (kept out of this file to avoid sibling conflicts).
  */
@@ -14,7 +20,7 @@ export interface GrokRunCodeCliOptions {
   code?: string;
   /** Path to a file containing the code (used when --code is absent). */
   file?: string;
-  /** Interpreter language hint; defaults to python (the verified language). */
+  /** Language; python-only (aliases python3/py) — others rejected upstream. */
   lang?: string;
 }
 

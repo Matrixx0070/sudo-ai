@@ -94,6 +94,33 @@ describe('runGrokCode', () => {
     expect(d.fetchImpl).not.toHaveBeenCalled();
   });
 
+  it.each(['javascript', 'node', 'bash', 'sh', 'ruby'])(
+    'rejects unsupported language "%s" with a clear actionable error, before any network call',
+    async (lang) => {
+      const d = deps(proxyPayload(OK_MSG));
+      const err = await runGrokCode(lang, 'console.log(6*7)', { deps: d }).catch(
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(GrokRunCodeError);
+      expect((err as GrokRunCodeError).errorClass).toBe('unsupported_language');
+      expect((err as GrokRunCodeError).message).toContain(`"${lang}"`);
+      expect((err as GrokRunCodeError).message).toContain('python');
+      expect(d.fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['python3', 'py', 'Python'])('accepts python alias "%s"', async (lang) => {
+    const d = deps(proxyPayload(OK_MSG));
+    const r = await runGrokCode(lang, 'print(1)', { deps: d });
+    expect(r.stdout).toBe('hello-out');
+    // The prompt always declares the normalised language, never the alias.
+    const [, init] = d.fetchImpl.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as {
+      input: Array<{ content: Array<{ text: string }> }>;
+    };
+    expect(body.input[1]?.content[0]?.text).toContain('Language: python\n');
+  });
+
   it('refuses when the subscription proxy flag is OFF (never metered fallback)', async () => {
     process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] = '0';
     const d = deps(proxyPayload(OK_MSG));

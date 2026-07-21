@@ -520,7 +520,7 @@ registerGrokEmbeddings(grokCmd); // FREE managed-embedding RAG collections (stat
 
 grokCmd.command('run-code')
   .description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
-  .option('--lang <lang>', 'Interpreter language hint (default python)')
+  .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)')
   .option('--code <code>', 'Inline code to execute').option('--file <path>', 'Read code from a file (else stdin)')
   .action(async (opts: { lang?: string; code?: string; file?: string }) => process.exit(await (await import('./commands/grok-runcode.js')).runGrokRunCode(opts)));
 
