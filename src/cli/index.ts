@@ -511,6 +511,15 @@ grokCmd
   });
 
 grokCmd
+  .command('converse <inputs...>')
+  .description('PERSISTENT multi-turn realtime conversation with grok\'s voice agent over one LiveKit connection (context persists). Speaks each input WAV; saves reply-<i>.wav. Needs SUDO_GROK_WEBSESSION=1')
+  .option('--out <prefix>', 'Reply path prefix (default /tmp/grok-converse-reply)')
+  .action(async (inputs: string[], opts: { out?: string }) => {
+    const { runGrokConverse } = await import('./commands/grok-voice.js');
+    process.exit(await runGrokConverse(inputs, opts));
+  });
+
+grokCmd
   .command('websession')
   .description('Grok web-session status (subscription-free media capture health)')
   .action(async () => {
