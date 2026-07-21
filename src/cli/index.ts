@@ -25,6 +25,7 @@ import { registerGrokEmbeddings } from './commands/grok-embeddings.js';
 import { registerGrokRag } from './commands/grok-rag.js';
 import { registerGrokFiles } from './commands/grok-files.js';
 import { registerGrokMemory } from './commands/grok-memory.js';
+import { registerGrokMediaExtras } from './commands/grok-media-extras.js';
 import { registerGrokAutomations } from './commands/grok-automations.js';
 
 // ---------------------------------------------------------------------------
@@ -517,7 +518,7 @@ grokCmd.command('models').option('--limits <model>', 'Show rate limits for one m
 registerGrokEmbeddings(grokCmd); // FREE managed-embedding RAG collections (statsig-free ingest/mgmt)
 registerGrokRag(grokCmd); // FREE grounded RAG over uploaded docs (app-chat file-attach)
 registerGrokFiles(grokCmd); // FREE persistent file upload/info/download (app-chat file lane)
-registerGrokMemory(grokCmd); // FREE persistent-memory read (+ verified blurb write) on the seat
+registerGrokMemory(grokCmd); registerGrokMediaExtras(grokCmd); // FREE memory read + video upscale/caption on the seat
 registerGrokAutomations(grokCmd); // FREE automations/tasks (owner-only; create=one-time, LIVE at once)
 
 grokCmd.command('run-code').description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
