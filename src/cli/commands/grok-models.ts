@@ -2,7 +2,8 @@
  * @file grok-models.ts
  * @description `sudo-ai grok models` — the seat's model catalog + tier
  * defaults, and `--limits <model>` for remaining/total query windows. FREE on
- * the $30 subscription (cookie lane, statsig-free), never api.x.ai.
+ * the $30 subscription (cookie lane, statsig-free), never the metered dev API.
+ * All provider URLs live in the llm module + python bridge, never here.
  */
 
 export interface GrokModelsCliOptions {
