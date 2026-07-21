@@ -22,6 +22,7 @@ import { config as loadDotenv } from 'dotenv';
 import { APP_VERSION } from '../core/shared/constants.js';
 import { PROJECT_ROOT } from '../core/shared/paths.js';
 import { registerGrokEmbeddings } from './commands/grok-embeddings.js';
+import { registerGrokRag } from './commands/grok-rag.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -517,15 +518,14 @@ grokCmd.command('models').option('--limits <model>', 'Show rate limits for one m
   .action(async (opts: { limits?: string }) => process.exit(await (await import('./commands/grok-models.js')).runGrokModels(opts)));
 
 registerGrokEmbeddings(grokCmd); // FREE managed-embedding RAG collections (statsig-free ingest/mgmt)
+registerGrokRag(grokCmd); // FREE grounded RAG over uploaded docs (app-chat file-attach)
 
-grokCmd.command('run-code')
-  .description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
+grokCmd.command('run-code').description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
   .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)')
   .option('--code <code>', 'Inline code to execute').option('--file <path>', 'Read code from a file (else stdin)')
   .action(async (opts: { lang?: string; code?: string; file?: string }) => process.exit(await (await import('./commands/grok-runcode.js')).runGrokRunCode(opts)));
 
-grokCmd.command('websession').description('Grok web-session status (subscription-free media capture health)')
-  .action(async () => process.exit(await (await import('./commands/grok.js')).runGrokWebsessionStatus()));
+grokCmd.command('websession').description('Grok web-session status (subscription-free media capture health)').action(async () => process.exit(await (await import('./commands/grok.js')).runGrokWebsessionStatus()));
 
 // ---------------------------------------------------------------------------
 // voice — turn-based voice conversation (audio → STT → agent → TTS → audio)
