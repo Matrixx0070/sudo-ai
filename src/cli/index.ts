@@ -25,6 +25,7 @@ import { registerGrokEmbeddings } from './commands/grok-embeddings.js';
 import { registerGrokRag } from './commands/grok-rag.js';
 import { registerGrokFiles } from './commands/grok-files.js';
 import { registerGrokMemory } from './commands/grok-memory.js';
+import { registerGrokAutomations } from './commands/grok-automations.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -517,6 +518,7 @@ registerGrokEmbeddings(grokCmd); // FREE managed-embedding RAG collections (stat
 registerGrokRag(grokCmd); // FREE grounded RAG over uploaded docs (app-chat file-attach)
 registerGrokFiles(grokCmd); // FREE persistent file upload/info/download (app-chat file lane)
 registerGrokMemory(grokCmd); // FREE persistent-memory read (+ verified blurb write) on the seat
+registerGrokAutomations(grokCmd); // FREE automations/tasks (owner-only; create=one-time, LIVE at once)
 
 grokCmd.command('run-code').description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
   .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)').option('--code <code>', 'Inline code to execute').option('--file <path>', 'Read code from a file (else stdin)')
