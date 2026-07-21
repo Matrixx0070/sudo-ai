@@ -18,7 +18,10 @@ Protocol: line-delimited JSON on stdin, line-delimited JSON events on stdout.
 Secrets (cookie) arrive on argv[1..2] path to the session file, read locally.
 Needs: `livekit`, ffmpeg, curl_cffi. Same-host as the captured session.
 """
-import asyncio, json, subprocess, sys, time, wave
+import asyncio, json, os, pathlib, subprocess, sys, time, wave
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from grok_turn_vad import AdaptiveTurnSegmenter  # noqa: E402
 
 GROK = "https://grok.com"
 LIVEKIT_URL = "wss://livekit.grok.com"
@@ -26,8 +29,7 @@ SR = 48000
 FRAME = int(SR * 0.02)             # 20ms
 MAX_REPLY_S = 40                    # hard cap per turn
 SPEAK_START_TIMEOUT_S = 12         # how long to wait for the agent to begin replying
-WIN_BYTES = int(SR * 0.4) * 2      # 400ms trailing window for silence detection
-SIL_RMS = 150                      # trailing window below this = silence
+WIN_BYTES = int(SR * 0.4) * 2      # 400ms trailing window for the RMS estimate
 HANGOVER_S = 1.0                   # trailing silence that ends the agent reply
 
 
@@ -52,9 +54,26 @@ def mint_token(session_path: str, timeout: int = 30) -> str:
 
 
 def to_pcm48k(path: str) -> bytes:
+    # The input path comes over the stdin protocol; require an existing LOCAL file
+    # and whitelist only the file/pipe protocols so `ffmpeg -i` can never be tricked
+    # into fetching a URL (http/rtmp/…) — no SSRF.
+    p = pathlib.Path(path).resolve()
+    if not p.is_file():
+        raise ValueError(f"input audio must be an existing local file: {path!r}")
     return subprocess.run(
-        ["ffmpeg", "-y", "-i", path, "-f", "s16le", "-ac", "1", "-ar", str(SR), "-loglevel", "error", "pipe:1"],
+        ["ffmpeg", "-nostdin", "-protocol_whitelist", "file,pipe", "-y", "-i", str(p),
+         "-f", "s16le", "-ac", "1", "-ar", str(SR), "-loglevel", "error", "pipe:1"],
         check=True, capture_output=True).stdout
+
+
+def safe_out(path: str, roots: list) -> str:
+    """Resolve `path` and require it to live under one of `roots` (defends against
+    path traversal / symlink escape in the caller-supplied output path)."""
+    p = pathlib.Path(path).resolve()
+    if not any(p == r or str(p).startswith(str(r) + os.sep) for r in roots):
+        raise ValueError(f"out path escapes allowed dirs: {path!r}")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return str(p)
 
 
 def emit(obj: dict) -> None:
@@ -104,6 +123,8 @@ async def main(session_path: str) -> int:
         await room.disconnect(); return 1
     emit({"event": "ready", "agentIdentity": agent_id["v"]})
 
+    # Reply WAVs may only be written under DATA_DIR (the session file's dir) or /tmp.
+    out_roots = [pathlib.Path(session_path).resolve().parent, pathlib.Path("/tmp").resolve()]
     turn = 0
     while True:
         line = (await read_line()).strip()
@@ -120,43 +141,43 @@ async def main(session_path: str) -> int:
 
         turn += 1
         start = len(agent_pcm)          # capture the reply from here (barge-in truncates any prior reply)
-        pcm = to_pcm48k(cmd["wav"])
+        # Validate the caller paths BEFORE any ffmpeg/file work (SSRF + traversal).
+        try:
+            out = safe_out(cmd.get("out", f"/tmp/grok-session-reply-{turn}.wav"), out_roots)
+            pcm = to_pcm48k(cmd["wav"])
+        except (ValueError, subprocess.CalledProcessError, KeyError) as e:
+            emit({"event": "error", "errorClass": "bad_request", "detail": f"input rejected: {e}"}); continue
         chunk = FRAME * 2
         for off in range(0, max(0, len(pcm) - chunk), chunk):
             await source.capture_frame(rtc.AudioFrame(pcm[off:off + chunk], SR, 1, FRAME))
-        # Turn boundaries are audio-based (the agent track genuinely falls to ~0
-        # between replies; `lk.agent.state` does NOT reliably reset, so it can't be
-        # used). Wait for the agent's speech ONSET, then for a trailing-silence
-        # hangover. `onset` is where the reply's audio begins.
+        # Turn boundaries are audio-based (the agent track genuinely falls to a
+        # noise floor between replies; `lk.agent.state` does NOT reliably reset, so
+        # it can't be used). The AdaptiveTurnSegmenter calibrates the noise floor
+        # per turn and sets speech ENTER/EXIT thresholds RELATIVE to it (robust to
+        # whatever idle level grok's agent emits), then ends the reply on a
+        # trailing-silence hangover.
+        # RMS over the trailing window of THIS TURN's audio only (from `start`), so
+        # a prior reply's tail or the join greeting can't poison the calibration.
         def tail() -> bytes:
-            return bytes(agent_pcm[-WIN_BYTES:]) if len(agent_pcm) >= WIN_BYTES else bytes(agent_pcm[start:])
+            seg_pcm = agent_pcm[start:]
+            return bytes(seg_pcm[-WIN_BYTES:]) if len(seg_pcm) >= WIN_BYTES else bytes(seg_pcm)
 
-        onset = None
+        seg = AdaptiveTurnSegmenter(hangover_s=HANGOVER_S)
         onset_deadline = time.time() + SPEAK_START_TIMEOUT_S
-        while time.time() < onset_deadline:
+        deadline = time.time() + MAX_REPLY_S
+        t0 = time.monotonic()
+        while time.time() < deadline:
             await asyncio.sleep(0.05)
-            if rms(tail()) > SIL_RMS:
-                onset = len(agent_pcm) - WIN_BYTES
+            if seg.feed(rms(tail()), len(agent_pcm), time.monotonic() - t0) == "end":
                 break
-        if onset is None:
+            if seg.state == AdaptiveTurnSegmenter.WAIT_ONSET and time.time() > onset_deadline:
+                break  # agent never started replying
+
+        if seg.onset_index is None:
             emit({"event": "reply", "turn": turn, "path": cmd.get("out", ""), "bytes": 44, "durationMs": 0, "detail": "no agent reply"})
             continue
-
-        deadline = time.time() + MAX_REPLY_S
-        last_voiced = len(agent_pcm)
-        silent_since = None
-        while time.time() < deadline:
-            await asyncio.sleep(0.1)
-            if rms(tail()) > SIL_RMS:
-                last_voiced = len(agent_pcm)
-                silent_since = None
-            else:
-                if silent_since is None:
-                    silent_since = time.time()
-                elif time.time() - silent_since > HANGOVER_S:
-                    break
-        reply = bytes(agent_pcm[max(start, onset):last_voiced])
-        out = cmd.get("out", f"/tmp/grok-session-reply-{turn}.wav")
+        end = seg.end_index if seg.end_index is not None else len(agent_pcm)
+        reply = bytes(agent_pcm[max(start, seg.onset_index):end])
         with wave.open(out, "wb") as w:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR); w.writeframes(reply)
         emit({"event": "reply", "turn": turn, "path": out, "bytes": len(reply) + 44,
