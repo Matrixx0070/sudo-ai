@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 685,
+  "count": 686,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -605,6 +605,7 @@
     "SUDO_TAINT_DISABLE",
     "SUDO_TASK_TRACKER",
     "SUDO_TELEGRAM_DISABLE",
+    "SUDO_TELEGRAM_GROK_VOICE",
     "SUDO_TELEGRAM_VIA_GATEWAY",
     "SUDO_TELEGRAM_VOICE_REPLY",
     "SUDO_TENANCY_ALLOW_UNSAFE",
