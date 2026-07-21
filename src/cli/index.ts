@@ -499,6 +499,17 @@ grokCmd
     process.exit(await runGrokVideo(prompt, a));
   });
 
+// Path A — realtime voice with grok's own voice agent over LiveKit (seat-covered)
+grokCmd
+  .command('voice <input>')
+  .description('One realtime voice turn with grok\'s voice agent over LiveKit — FREE on your subscription. Speaks <input> audio, saves the spoken reply. Needs SUDO_GROK_WEBSESSION=1')
+  .option('--seconds <n>', 'Seconds to capture the reply (default 12)', (v) => parseInt(v, 10))
+  .option('--out <path>', 'Where to write the reply WAV (default /tmp/grok-voice-reply-*.wav)')
+  .action(async (input: string, opts: { seconds?: number; out?: string }) => {
+    const { runGrokVoice } = await import('./commands/grok-voice.js');
+    process.exit(await runGrokVoice(input, opts));
+  });
+
 grokCmd
   .command('websession')
   .description('Grok web-session status (subscription-free media capture health)')
