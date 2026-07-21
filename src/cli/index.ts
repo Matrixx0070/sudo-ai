@@ -508,6 +508,35 @@ grokCmd
   });
 
 // ---------------------------------------------------------------------------
+// voice — turn-based voice conversation (audio → STT → agent → TTS → audio)
+// ---------------------------------------------------------------------------
+
+const voiceCmd = program
+  .command('voice')
+  .description('Turn-based voice conversation utilities');
+
+// Hydrate config/.env so `--stt grok` / `--tts grok` honor SUDO_GROK_WEBSESSION
+// exactly like the daemon does (dotenv does not override already-set vars).
+voiceCmd.hook('preAction', () => {
+  loadDotenv({ path: path.resolve(PROJECT_ROOT, 'config', '.env'), quiet: true });
+});
+
+voiceCmd
+  .command('turn <audio>')
+  .description('Run one voice turn: transcribe <audio>, get an agent reply, synthesise it back to audio')
+  .option('--stt <provider>', 'STT provider: whisper-local (default), groq, elevenlabs, openai, grok')
+  .option('--tts <provider>', 'TTS provider: kokoro (default), elevenlabs, xai, openai, grok')
+  .option('--voice <name>', 'TTS voice override (provider-specific)')
+  .option('--language <code>', 'STT language hint (BCP-47, e.g. en)')
+  .option('--model <alias>', 'LLM alias for the reply (default sudo/cheap)')
+  .option('--out <path>', 'Where to write the reply audio (default: /tmp/sudo-ai-voice-turn-*.wav)')
+  .option('--echo', 'Skip the LLM — reply with the transcript itself (zero-spend pipeline check)')
+  .action(async (audio: string, opts: { stt?: string; tts?: string; voice?: string; language?: string; model?: string; out?: string; echo?: boolean }) => {
+    const { runVoiceTurnCli } = await import('./commands/voice.js');
+    process.exit(await runVoiceTurnCli(audio, opts));
+  });
+
+// ---------------------------------------------------------------------------
 // secrets — audit / apply / configure SecretRef indirect secrets
 // ---------------------------------------------------------------------------
 
