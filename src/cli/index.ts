@@ -21,6 +21,7 @@ import { Command } from 'commander';
 import { config as loadDotenv } from 'dotenv';
 import { APP_VERSION } from '../core/shared/constants.js';
 import { PROJECT_ROOT } from '../core/shared/paths.js';
+import { registerGrokEmbeddings } from './commands/grok-embeddings.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -518,14 +519,13 @@ grokCmd
 grokCmd.command('models')
   .option('--limits <model>', 'Show rate limits for one model instead of the catalog')
   .description('Seat model catalog + tier defaults, FREE on your subscription (cookie lane). --limits <model> shows remaining/total query windows. Needs SUDO_GROK_WEBSESSION=1')
-  .action(async (opts: { limits?: string }) =>
-    process.exit(await (await import('./commands/grok-models.js')).runGrokModels(opts)));
+  .action(async (opts: { limits?: string }) => process.exit(await (await import('./commands/grok-models.js')).runGrokModels(opts)));
 
-grokCmd
-  .command('websession')
+registerGrokEmbeddings(grokCmd); // FREE managed-embedding RAG collections (statsig-free ingest/mgmt)
+
+grokCmd.command('websession')
   .description('Grok web-session status (subscription-free media capture health)')
-  .action(async () =>
-    process.exit(await (await import('./commands/grok.js')).runGrokWebsessionStatus()));
+  .action(async () => process.exit(await (await import('./commands/grok.js')).runGrokWebsessionStatus()));
 
 // ---------------------------------------------------------------------------
 // voice — turn-based voice conversation (audio → STT → agent → TTS → audio)
