@@ -23,6 +23,7 @@ import { APP_VERSION } from '../core/shared/constants.js';
 import { PROJECT_ROOT } from '../core/shared/paths.js';
 import { registerGrokEmbeddings } from './commands/grok-embeddings.js';
 import { registerGrokRag } from './commands/grok-rag.js';
+import { registerGrokFiles } from './commands/grok-files.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -460,13 +461,8 @@ grokCmd.hook('preAction', () => {
   loadDotenv({ path: path.resolve(PROJECT_ROOT, 'config', '.env'), quiet: true });
 });
 
-grokCmd
-  .command('status', { isDefault: true })
-  .description('Provider-management view across both Grok methods')
-  .action(async () => {
-    const { runGrokStatus } = await import('./commands/grok.js');
-    process.exit(await runGrokStatus());
-  });
+grokCmd.command('status', { isDefault: true }).description('Provider-management view across both Grok methods')
+  .action(async () => process.exit(await (await import('./commands/grok.js')).runGrokStatus()));
 
 // GW5 — subscription-free media on the captured Grok web session (flag: SUDO_GROK_WEBSESSION)
 grokCmd
@@ -519,6 +515,7 @@ grokCmd.command('models').option('--limits <model>', 'Show rate limits for one m
 
 registerGrokEmbeddings(grokCmd); // FREE managed-embedding RAG collections (statsig-free ingest/mgmt)
 registerGrokRag(grokCmd); // FREE grounded RAG over uploaded docs (app-chat file-attach)
+registerGrokFiles(grokCmd); // FREE persistent file upload/info/download (app-chat file lane)
 
 grokCmd.command('run-code').description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
   .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)')
