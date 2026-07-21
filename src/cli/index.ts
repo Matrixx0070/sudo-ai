@@ -505,27 +505,27 @@ grokCmd
   .description('One realtime voice turn with grok\'s voice agent over LiveKit — FREE on your subscription. Speaks <input> audio, saves the spoken reply. Needs SUDO_GROK_WEBSESSION=1')
   .option('--seconds <n>', 'Seconds to capture the reply (default 12)', (v) => parseInt(v, 10))
   .option('--out <path>', 'Where to write the reply WAV (default /tmp/grok-voice-reply-*.wav)')
-  .action(async (input: string, opts: { seconds?: number; out?: string }) => {
-    const { runGrokVoice } = await import('./commands/grok-voice.js');
-    process.exit(await runGrokVoice(input, opts));
-  });
+  .action(async (input: string, opts: { seconds?: number; out?: string }) =>
+    process.exit(await (await import('./commands/grok-voice.js')).runGrokVoice(input, opts)));
 
 grokCmd
   .command('converse <inputs...>')
   .description('PERSISTENT multi-turn realtime conversation with grok\'s voice agent over one LiveKit connection (context persists). Speaks each input WAV; saves reply-<i>.wav. Needs SUDO_GROK_WEBSESSION=1')
   .option('--out <prefix>', 'Reply path prefix (default /tmp/grok-converse-reply)')
-  .action(async (inputs: string[], opts: { out?: string }) => {
-    const { runGrokConverse } = await import('./commands/grok-voice.js');
-    process.exit(await runGrokConverse(inputs, opts));
-  });
+  .action(async (inputs: string[], opts: { out?: string }) =>
+    process.exit(await (await import('./commands/grok-voice.js')).runGrokConverse(inputs, opts)));
+
+grokCmd.command('models')
+  .option('--limits <model>', 'Show rate limits for one model instead of the catalog')
+  .description('Seat model catalog + tier defaults, FREE on your subscription (cookie lane). --limits <model> shows remaining/total query windows. Needs SUDO_GROK_WEBSESSION=1')
+  .action(async (opts: { limits?: string }) =>
+    process.exit(await (await import('./commands/grok-models.js')).runGrokModels(opts)));
 
 grokCmd
   .command('websession')
   .description('Grok web-session status (subscription-free media capture health)')
-  .action(async () => {
-    const { runGrokWebsessionStatus } = await import('./commands/grok.js');
-    process.exit(await runGrokWebsessionStatus());
-  });
+  .action(async () =>
+    process.exit(await (await import('./commands/grok.js')).runGrokWebsessionStatus()));
 
 // ---------------------------------------------------------------------------
 // voice — turn-based voice conversation (audio → STT → agent → TTS → audio)
