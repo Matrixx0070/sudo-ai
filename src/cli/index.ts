@@ -536,6 +536,22 @@ voiceCmd
     process.exit(await runVoiceTurnCli(audio, opts));
   });
 
+voiceCmd
+  .command('stream <audio>')
+  .description('Stream an audio file through the VAD session: segment utterances, run a turn per utterance, support barge-in (a live mic is the same pipeline with the frame source swapped)')
+  .option('--stt <provider>', 'STT provider (default whisper-local; grok for the free seat)')
+  .option('--tts <provider>', 'TTS provider (default kokoro; grok for the free seat)')
+  .option('--voice <name>', 'TTS voice override (provider-specific)')
+  .option('--language <code>', 'STT language hint (BCP-47, e.g. en)')
+  .option('--model <alias>', 'LLM alias for replies (default sudo/cheap)')
+  .option('--threshold <n>', 'VAD energy threshold 0..1 (default 0.02)', (v) => parseFloat(v))
+  .option('--out <path>', 'Output audio path prefix (default: /tmp/sudo-ai-voice-stream-*.wav)')
+  .option('--echo', 'Skip the LLM — reply with the transcript itself (zero-spend pipeline check)')
+  .action(async (audio: string, opts: { stt?: string; tts?: string; voice?: string; language?: string; model?: string; threshold?: number; out?: string; echo?: boolean }) => {
+    const { runVoiceStreamCli } = await import('./commands/voice.js');
+    process.exit(await runVoiceStreamCli(audio, opts));
+  });
+
 // ---------------------------------------------------------------------------
 // secrets — audit / apply / configure SecretRef indirect secrets
 // ---------------------------------------------------------------------------
