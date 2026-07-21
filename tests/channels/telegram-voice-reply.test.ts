@@ -9,12 +9,12 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TelegramAdapter } from '../../src/core/channels/telegram.js';
+import { useGrokVoiceFor, grokRealtimeEnabledFor } from '../../src/core/channels/telegram-grok-voice.js';
 
 interface VoiceReplyInternals {
   _markVoiceReply(peerId: string): void;
   _consumeVoiceReply(peerId: string): boolean;
   _voiceReplyPending: Map<string, number>;
-  _useGrokVoiceFor(peerId: string | number): boolean;
 }
 
 function internals(a: TelegramAdapter): VoiceReplyInternals {
@@ -56,39 +56,34 @@ describe('TelegramAdapter auto voice-reply marker', () => {
   });
 });
 
-describe('TelegramAdapter grok-seat voice routing (SUDO_VOICE_GROK_DEFAULT)', () => {
+describe('telegram grok voice gating (owner-only, flag-gated)', () => {
+  const OWNERS = new Set(['1']);
   beforeEach(() => {
-    delete process.env['SUDO_VOICE_GROK_DEFAULT'];
-    delete process.env['SUDO_GROK_WEBSESSION'];
+    for (const k of ['SUDO_VOICE_GROK_DEFAULT', 'SUDO_TELEGRAM_GROK_VOICE', 'SUDO_GROK_WEBSESSION']) delete process.env[k];
   });
   afterEach(() => {
-    delete process.env['SUDO_VOICE_GROK_DEFAULT'];
+    for (const k of ['SUDO_VOICE_GROK_DEFAULT', 'SUDO_TELEGRAM_GROK_VOICE', 'SUDO_GROK_WEBSESSION']) delete process.env[k];
+  });
+
+  // SUDO_VOICE_GROK_DEFAULT: STT/TTS through the seat, sudo-ai brain (#904).
+  it('useGrokVoiceFor defaults OFF; routes an owner when both flags on; never a stranger', () => {
+    expect(useGrokVoiceFor(OWNERS, '1')).toBe(false);
+    process.env['SUDO_VOICE_GROK_DEFAULT'] = '1';
+    process.env['SUDO_GROK_WEBSESSION'] = '1';
+    expect(useGrokVoiceFor(OWNERS, '1')).toBe(true);
+    expect(useGrokVoiceFor(OWNERS, 1)).toBe(true); // numeric chat id
+    expect(useGrokVoiceFor(OWNERS, '999')).toBe(false); // non-owner
     delete process.env['SUDO_GROK_WEBSESSION'];
+    expect(useGrokVoiceFor(OWNERS, '1')).toBe(false); // needs SUDO_GROK_WEBSESSION
   });
 
-  it('defaults OFF — no flags → local voice', () => {
-    const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
-    expect(a._useGrokVoiceFor('1')).toBe(false);
-  });
-
-  it('routes an OWNER through the grok seat when both flags are on', () => {
-    process.env['SUDO_VOICE_GROK_DEFAULT'] = '1';
+  // SUDO_TELEGRAM_GROK_VOICE: route the note to grok's OWN realtime voice agent.
+  it('grokRealtimeEnabledFor defaults OFF; owner-only; needs both flags', () => {
+    expect(grokRealtimeEnabledFor(OWNERS, '1')).toBe(false);
+    process.env['SUDO_TELEGRAM_GROK_VOICE'] = '1';
+    expect(grokRealtimeEnabledFor(OWNERS, '1')).toBe(false); // still needs SUDO_GROK_WEBSESSION
     process.env['SUDO_GROK_WEBSESSION'] = '1';
-    const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
-    expect(a._useGrokVoiceFor('1')).toBe(true);
-    expect(a._useGrokVoiceFor(1)).toBe(true); // numeric chat id
-  });
-
-  it('never spends the seat on a non-owner peer', () => {
-    process.env['SUDO_VOICE_GROK_DEFAULT'] = '1';
-    process.env['SUDO_GROK_WEBSESSION'] = '1';
-    const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
-    expect(a._useGrokVoiceFor('999')).toBe(false);
-  });
-
-  it('requires SUDO_GROK_WEBSESSION too (grok lane must be enabled)', () => {
-    process.env['SUDO_VOICE_GROK_DEFAULT'] = '1';
-    const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
-    expect(a._useGrokVoiceFor('1')).toBe(false);
+    expect(grokRealtimeEnabledFor(OWNERS, '1')).toBe(true);
+    expect(grokRealtimeEnabledFor(OWNERS, '999')).toBe(false); // non-owner never spends the seat
   });
 });
