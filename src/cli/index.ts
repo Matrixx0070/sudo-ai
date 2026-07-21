@@ -24,6 +24,7 @@ import { PROJECT_ROOT } from '../core/shared/paths.js';
 import { registerGrokEmbeddings } from './commands/grok-embeddings.js';
 import { registerGrokRag } from './commands/grok-rag.js';
 import { registerGrokFiles } from './commands/grok-files.js';
+import { registerGrokMemory } from './commands/grok-memory.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -500,8 +501,7 @@ grokCmd
 // Path A — realtime voice with grok's own voice agent over LiveKit (seat-covered)
 grokCmd.command('voice <input>')
   .description('One realtime voice turn with grok\'s voice agent over LiveKit — FREE on your subscription. Speaks <input> audio, saves the spoken reply. Needs SUDO_GROK_WEBSESSION=1')
-  .option('--seconds <n>', 'Seconds to capture the reply (default 12)', (v) => parseInt(v, 10))
-  .option('--out <path>', 'Where to write the reply WAV (default /tmp/grok-voice-reply-*.wav)')
+  .option('--seconds <n>', 'Seconds to capture the reply (default 12)', (v) => parseInt(v, 10)).option('--out <path>', 'Where to write the reply WAV (default /tmp/grok-voice-reply-*.wav)')
   .action(async (input: string, opts: { seconds?: number; out?: string }) => process.exit(await (await import('./commands/grok-voice.js')).runGrokVoice(input, opts)));
 
 grokCmd.command('converse <inputs...>')
@@ -516,10 +516,10 @@ grokCmd.command('models').option('--limits <model>', 'Show rate limits for one m
 registerGrokEmbeddings(grokCmd); // FREE managed-embedding RAG collections (statsig-free ingest/mgmt)
 registerGrokRag(grokCmd); // FREE grounded RAG over uploaded docs (app-chat file-attach)
 registerGrokFiles(grokCmd); // FREE persistent file upload/info/download (app-chat file lane)
+registerGrokMemory(grokCmd); // FREE persistent-memory read (+ verified blurb write) on the seat
 
 grokCmd.command('run-code').description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
-  .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)')
-  .option('--code <code>', 'Inline code to execute').option('--file <path>', 'Read code from a file (else stdin)')
+  .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)').option('--code <code>', 'Inline code to execute').option('--file <path>', 'Read code from a file (else stdin)')
   .action(async (opts: { lang?: string; code?: string; file?: string }) => process.exit(await (await import('./commands/grok-runcode.js')).runGrokRunCode(opts)));
 
 grokCmd.command('websession').description('Grok web-session status (subscription-free media capture health)').action(async () => process.exit(await (await import('./commands/grok.js')).runGrokWebsessionStatus()));
