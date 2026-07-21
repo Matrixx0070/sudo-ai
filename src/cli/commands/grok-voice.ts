@@ -46,3 +46,41 @@ export async function runGrokVoice(inputPath: string, opts: GrokVoiceCliOptions)
   console.log(`Reply: ${outPath} (~${Math.round(result.durationMs / 1000)}s, ${result.replyWav.length} bytes, agent ${result.agentIdentity ?? '?'})`);
   return 0;
 }
+
+/**
+ * `sudo-ai grok converse <inputs...>` — a PERSISTENT multi-turn realtime voice
+ * conversation with grok's agent over ONE LiveKit connection (context persists
+ * across turns). Speaks each input WAV in order; saves reply-<i>.wav.
+ */
+export async function runGrokConverse(inputs: string[], opts: { out?: string }): Promise<number> {
+  if (!inputs.length) {
+    console.error('Provide one or more input audio files.');
+    return 1;
+  }
+  const { GrokVoiceSession } = await import('../../llm/grok-voice-session.js');
+  const session = new GrokVoiceSession();
+  console.log('Joining grok voice room (LiveKit, subscription seat)…');
+  try {
+    const { agentIdentity } = await session.start();
+    console.log(`Connected — agent ${agentIdentity ?? '?'}. ${inputs.length} turn(s).`);
+    for (const [i, input] of inputs.entries()) {
+      let wav: Buffer;
+      try {
+        wav = await readFile(input);
+      } catch (err) {
+        console.error(`turn ${i}: cannot read "${input}": ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      const r = await session.speak(wav);
+      const outPath = `${opts.out ?? path.join('/tmp', 'grok-converse-reply')}-${i}.wav`;
+      await writeFile(outPath, r.replyWav);
+      console.log(`turn ${r.turn}: reply ${outPath} (~${Math.round(r.durationMs / 1000)}s, ${r.replyWav.length} bytes)`);
+    }
+    return 0;
+  } catch (err) {
+    console.error(`Conversation failed: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  } finally {
+    await session.stop();
+  }
+}
