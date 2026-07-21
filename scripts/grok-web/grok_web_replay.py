@@ -260,6 +260,135 @@ def op_download(req):
     return {"ok": True, "status": 200, "path": out, "bytes": len(data), "ftyp": bool(ftyp)}
 
 
+def op_voice_stt(req):
+    """Transcribe audio on the Grok subscription voice lane (seat-covered,
+    statsig-free — proven 2026-07-20). JSON in, JSON out; returns the transcript
+    plus per-word timing. No x-statsig-id needed (unlike video)."""
+    from curl_cffi import requests as creq
+
+    audio_b64 = req.get("audioBase64")
+    if not audio_b64:
+        return {"ok": False, "errorClass": "bad_request", "detail": "voice_stt needs audioBase64"}
+    body = {
+        "audioBase64": audio_b64,
+        "audioFormat": req.get("audioFormat", "wav"),
+        "enhance": bool(req.get("enhance", False)),
+    }
+    r = creq.post(
+        GROK + "/rest/voice/speech-to-text",
+        data=json.dumps(body),
+        headers={**base_headers(req), "Content-Type": "application/json"},
+        impersonate="chrome",
+        timeout=req.get("timeoutSec", 60),
+    )
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, r.text)}
+    j = _safe_json(r.text)
+    return {"ok": True, "status": 200, "text": j.get("text", ""),
+            "words": j.get("words", []), "samplingTime": j.get("samplingTime")}
+
+
+def _wrap_wav(pcm, rate):
+    """Wrap raw 16-bit mono little-endian PCM in a canonical WAV container."""
+    import struct
+    n = len(pcm)
+    return (b"RIFF" + struct.pack("<I", 36 + n) + b"WAVEfmt "
+            + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+            + b"data" + struct.pack("<I", n) + pcm)
+
+
+def op_voice_tts(req):
+    """Synthesise speech on the Grok subscription voice lane (seat-covered,
+    statsig-free — proven 2026-07-20). The app-chat/tts route streams JSON docs
+    {"result":{"data":<b64>}}; concatenating the decoded bytes yields a
+    multipart/form-data (boundary=frame) body whose audio parts are
+    `audio/l16;rate=<hz>` (16-bit mono PCM). We reassemble the PCM by
+    Content-Length (never rstrip — PCM may end in 0x0d0a) and wrap it in WAV."""
+    from curl_cffi import requests as creq
+
+    text = (req.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "errorClass": "bad_request", "detail": "voice_tts needs text"}
+    body = {
+        "articles": [{"text": text}],
+        "sanitize": bool(req.get("sanitize", True)),
+        "enableAlignment": bool(req.get("enableAlignment", True)),
+    }
+    voice = req.get("voice")
+    if voice:
+        body["voice"] = voice
+
+    r = creq.post(
+        GROK + "/rest/app-chat/tts",
+        data=json.dumps(body),
+        headers={**base_headers(req), "Content-Type": "application/json"},
+        impersonate="chrome",
+        stream=True,
+        timeout=req.get("timeoutSec", 90),
+    )
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, getattr(r, "text", ""))}
+
+    buf = bytearray()
+    for chunk in r.iter_content():
+        if chunk:
+            buf += chunk
+
+    dec = json.JSONDecoder()
+    s = bytes(buf).decode("utf-8", "replace")
+    multipart = bytearray()
+    words = []
+    i = 0
+    while i < len(s):
+        while i < len(s) and s[i] in " \r\n\t":
+            i += 1
+        if i >= len(s):
+            break
+        try:
+            obj, end = dec.raw_decode(s, i)
+        except ValueError:
+            break
+        i = end
+        d = obj.get("result", {}).get("data") if isinstance(obj, dict) else None
+        if d:
+            multipart += base64.b64decode(d)
+
+    pcm = bytearray()
+    rate = 24000
+    for seg in bytes(multipart).split(b"--frame"):
+        seg = seg.lstrip(b"-").lstrip(b"\r\n")
+        if b"\r\n\r\n" not in seg:
+            continue
+        hdr, part = seg.split(b"\r\n\r\n", 1)
+        htxt = hdr.decode("latin1").lower()
+        clen = None
+        for line in hdr.split(b"\r\n"):
+            if line.lower().startswith(b"content-length:"):
+                try:
+                    clen = int(line.split(b":", 1)[1].strip())
+                except ValueError:
+                    clen = None
+        if "audio/l16" in htxt:
+            if "rate=" in htxt:
+                try:
+                    rate = int(htxt.split("rate=")[1].split(";")[0].split("\r")[0].strip())
+                except ValueError:
+                    pass
+            pcm += part[:clen] if clen is not None else part.rstrip(b"\r\n")
+        elif "application/json" in htxt and clen:
+            wj = _safe_json(part[:clen].decode("utf-8", "replace"))
+            if wj.get("words"):
+                words.extend(wj["words"])
+
+    if not pcm:
+        return {"ok": False, "errorClass": "no_audio",
+                "detail": "tts stream produced no audio frames (stale session?)"}
+    wav = _wrap_wav(bytes(pcm), rate)
+    return {"ok": True, "status": 200, "audioBase64": base64.b64encode(wav).decode(),
+            "audioFormat": "wav", "sampleRate": rate,
+            "durationMs": int(len(pcm) / 2 / rate * 1000), "words": words}
+
+
 def _safe_json(text):
     try:
         return json.loads(text)
@@ -267,7 +396,8 @@ def _safe_json(text):
         return {}
 
 
-OPS = {"probe": op_probe, "image": op_image, "video": op_video, "download": op_download}
+OPS = {"probe": op_probe, "image": op_image, "video": op_video, "download": op_download,
+       "voice_stt": op_voice_stt, "voice_tts": op_voice_tts}
 
 
 def main():

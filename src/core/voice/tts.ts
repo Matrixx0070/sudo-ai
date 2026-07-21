@@ -104,6 +104,19 @@ export class TextToSpeech {
       text = text.slice(0, 4096);
     }
 
+    // Grok subscription voice lane (FREE, browserless) — gated by its OWN flag
+    // (SUDO_GROK_WEBSESSION), independent of the SUDO_TTS_CLOUD paid-cloud flag.
+    // When the flag is off, fall through to the normal local/cloud resolution.
+    if (options.provider === 'grok') {
+      const grok = await import('../../llm/grok-voice.js');
+      if (grok.isGrokWebSessionEnabled()) {
+        const r = await grok.synthesizeGrokVoice(text, options.voice ? { voice: options.voice } : {});
+        return { audioBuffer: r.audioBuffer, format: 'wav', durationMs: r.durationMs };
+      }
+      log.warn('Grok TTS requested but SUDO_GROK_WEBSESSION is off — using local/cloud resolution');
+      options = { ...options, provider: undefined };
+    }
+
     // Provider resolution. Default is local-only (Kokoro); the paid cloud
     // providers are kept in the code but only reachable when SUDO_TTS_CLOUD=1.
     let provider = options.provider;

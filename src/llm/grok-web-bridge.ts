@@ -80,7 +80,35 @@ export interface DownloadRequest {
   timeoutSec?: number;
 }
 
-export type GrokWebRequest = ProbeRequest | ImageRequest | VideoRequest | DownloadRequest;
+/** Transcribe audio on the seat-covered voice lane (statsig-free). */
+export interface VoiceSttRequest {
+  op: 'voice_stt';
+  /** base64-encoded audio bytes. */
+  audioBase64: string;
+  /** Container of the audio (e.g. "wav", "mp3", "ogg"). Default "wav". */
+  audioFormat?: string;
+  enhance?: boolean;
+  timeoutSec?: number;
+}
+
+/** Synthesise speech on the seat-covered voice lane (statsig-free). */
+export interface VoiceTtsRequest {
+  op: 'voice_tts';
+  text: string;
+  /** Optional Grok voice name; omit for the account default. */
+  voice?: string;
+  sanitize?: boolean;
+  enableAlignment?: boolean;
+  timeoutSec?: number;
+}
+
+export type GrokWebRequest =
+  | ProbeRequest
+  | ImageRequest
+  | VideoRequest
+  | DownloadRequest
+  | VoiceSttRequest
+  | VoiceTtsRequest;
 
 /**
  * Error classes the python side emits so the manager can react correctly
@@ -93,6 +121,7 @@ export type GrokWebErrorClass =
   | 'grpc_not_found' // 404 {"code":5} → wrong path, do NOT refresh
   | 'relogin' // 401 / login page → sso dead
   | 'no_images'
+  | 'no_audio' // voice_tts produced no audio frames (stale session?)
   | 'timeout'
   | 'stream_ended'
   | 'http_error'
@@ -124,6 +153,15 @@ export interface GrokWebResponse {
   path?: string;
   bytes?: number;
   ftyp?: boolean;
+  // voice_stt
+  text?: string;
+  words?: Array<{ word: string; startMs?: number; endMs?: number; alignScore?: number }>;
+  samplingTime?: number;
+  // voice_tts
+  audioBase64?: string;
+  audioFormat?: string;
+  sampleRate?: number;
+  durationMs?: number;
 }
 
 /** Injectable spawn seam — real child_process by default, mocked in tests. */

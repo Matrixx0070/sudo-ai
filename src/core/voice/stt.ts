@@ -156,6 +156,22 @@ export class SpeechToText {
       throw new TypeError('SpeechToText.transcribe: audioBuffer must be a non-empty Buffer');
     }
 
+    // Grok subscription voice lane (FREE, browserless) — gated by its OWN flag
+    // (SUDO_GROK_WEBSESSION), independent of the SUDO_STT_CLOUD paid-cloud flag.
+    // When the flag is off, fall through to the normal local/cloud resolution.
+    if (options.provider === 'grok') {
+      const grok = await import('../../llm/grok-voice.js');
+      if (grok.isGrokWebSessionEnabled()) {
+        const startMs = Date.now();
+        const r = await grok.transcribeGrokVoice(audioBuffer, {
+          audioFormat: inferFilename(audioBuffer).split('.').pop() ?? 'wav',
+        });
+        return { text: r.text, language: options.language ?? 'en', confidence: 1.0, durationMs: Date.now() - startMs };
+      }
+      log.warn('Grok STT requested but SUDO_GROK_WEBSESSION is off — using local/cloud resolution');
+      options = { ...options, provider: undefined };
+    }
+
     if (!this.available) {
       log.warn('Skipping transcription — local Whisper disabled and no cloud STT provider configured');
       return { text: '', language: 'en', confidence: 0, durationMs: 0 };

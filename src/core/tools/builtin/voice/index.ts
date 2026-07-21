@@ -34,12 +34,12 @@ const ttsTool: ToolDefinition = {
     },
     provider: {
       type: 'string',
-      description: 'TTS provider. Defaults to local "kokoro". Cloud providers (elevenlabs/xai/openai) only work when SUDO_TTS_CLOUD=1, otherwise they fall back to kokoro.',
-      enum: ['kokoro', 'elevenlabs', 'xai', 'openai'],
+      description: 'TTS provider. Defaults to local "kokoro". Cloud providers (elevenlabs/xai/openai) only work when SUDO_TTS_CLOUD=1. "grok" uses the owner\'s free Grok subscription voice (requires SUDO_GROK_WEBSESSION=1, owner-only); otherwise these fall back to kokoro.',
+      enum: ['kokoro', 'elevenlabs', 'xai', 'openai', 'grok'],
     },
     voice: {
       type: 'string',
-      description: 'Voice ID or name. Provider-specific (e.g. ElevenLabs voice ID, xAI "rex", OpenAI "alloy", Kokoro "af_heart").',
+      description: 'Voice ID or name. Provider-specific (e.g. ElevenLabs voice ID, xAI "rex", OpenAI "alloy", Kokoro "af_heart", Grok voice name).',
     },
     outputPath: {
       type: 'string',
@@ -49,13 +49,18 @@ const ttsTool: ToolDefinition = {
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const text = params['text'] as string | undefined;
-    const provider = params['provider'] as 'elevenlabs' | 'xai' | 'openai' | undefined;
+    const provider = params['provider'] as 'kokoro' | 'elevenlabs' | 'xai' | 'openai' | 'grok' | undefined;
     const voice = params['voice'] as string | undefined;
 
     logger.info({ session: ctx.sessionId, provider, textLen: text?.length }, 'voice.tts invoked');
 
     if (!text?.trim()) return { success: false, output: 'text is required.' };
     if (text.length > 4096) return { success: false, output: 'text must be 4096 characters or fewer.' };
+    // The Grok voice lane spends the owner's subscription seat — never let an
+    // explicitly-untrusted turn drive it.
+    if (provider === 'grok' && ctx.isOwner === false) {
+      return { success: false, output: 'The "grok" TTS provider is owner-only; this turn is not the owner.' };
+    }
 
     try {
       const { TextToSpeech } = await import('../../../voice/tts.js');
@@ -107,16 +112,27 @@ const sttTool: ToolDefinition = {
       description: 'Whisper model to use (default: whisper-1).',
       default: 'whisper-1',
     },
+    provider: {
+      type: 'string',
+      description: 'STT provider. Defaults to local "whisper-local". Cloud Whisper (groq/elevenlabs/openai) only works when SUDO_STT_CLOUD=1. "grok" uses the owner\'s free Grok subscription voice lane (requires SUDO_GROK_WEBSESSION=1, owner-only).',
+      enum: ['whisper-local', 'groq', 'elevenlabs', 'openai', 'grok'],
+    },
   },
 
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const audioPath = params['audioPath'] as string | undefined;
     const language = params['language'] as string | undefined;
     const model = params['model'] as string | undefined;
+    const provider = params['provider'] as 'whisper-local' | 'groq' | 'elevenlabs' | 'openai' | 'grok' | undefined;
 
-    logger.info({ session: ctx.sessionId, audioPath }, 'voice.stt invoked');
+    logger.info({ session: ctx.sessionId, audioPath, provider }, 'voice.stt invoked');
 
     if (!audioPath?.trim()) return { success: false, output: 'audioPath is required.' };
+    // The Grok voice lane spends the owner's subscription seat — never let an
+    // explicitly-untrusted turn drive it.
+    if (provider === 'grok' && ctx.isOwner === false) {
+      return { success: false, output: 'The "grok" STT provider is owner-only; this turn is not the owner.' };
+    }
 
     let audioBuffer: Buffer;
     try {
@@ -134,7 +150,7 @@ const sttTool: ToolDefinition = {
     try {
       const { SpeechToText } = await import('../../../voice/stt.js');
       const stt = new SpeechToText();
-      const result = await stt.transcribe(audioBuffer, { language, model });
+      const result = await stt.transcribe(audioBuffer, { language, model, provider });
 
       logger.info({ audioPath, textLen: result.text.length, language: result.language }, 'STT transcription complete');
       return {
