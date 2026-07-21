@@ -12,6 +12,16 @@ import type { Command } from 'commander';
 import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
 
+/**
+ * Reduce a server-supplied file name to a safe basename in the current
+ * directory — the download metadata's `fileName` is untrusted remote data, so a
+ * crafted `../../etc/x` or absolute path must never steer the write location.
+ */
+function safeDownloadName(fileName: string | undefined, fallback: string): string {
+  const base = fileName ? path.basename(fileName) : '';
+  return !base || base === '.' || base === '..' ? fallback : base;
+}
+
 function printError(prefix: string, err: unknown): void {
   const cls = (err as { errorClass?: string })?.errorClass;
   console.error(
@@ -53,7 +63,12 @@ export async function runGrokFilesDownload(
   const { downloadGrokFile } = await import('../../llm/grok-files.js');
   try {
     const { file, content } = await downloadGrokFile(fileMetadataId);
-    const out = path.resolve(opts.out ?? file.fileName ?? `${fileMetadataId}.bin`);
+    // Owner-supplied --out is honoured verbatim (explicit intent). Without it,
+    // fall back to a SANITISED basename of the server's fileName in cwd — never
+    // let untrusted remote metadata traverse out of the working directory.
+    const out = opts.out
+      ? path.resolve(opts.out)
+      : path.resolve(process.cwd(), safeDownloadName(file.fileName, `${fileMetadataId}.bin`));
     await writeFile(out, content);
     process.stdout.write(`wrote ${content.length} bytes -> ${out}\n`);
     return 0;
