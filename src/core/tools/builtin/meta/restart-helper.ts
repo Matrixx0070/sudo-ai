@@ -78,6 +78,18 @@ export interface ScheduledRestart {
  * synchronously — by the time pm2 bounces us, this process is gone.
  */
 export function scheduleDetachedRestart(reason: string, cwd: string = PROJECT_ROOT): ScheduledRestart {
+  // Kill-switch: block agent-initiated self-restarts. The agent bounces prod by
+  // calling meta.service-control/self-update/self-modify, all of which funnel here.
+  // Default OFF (unset → byte-identical behavior); operators set =1 in prod to stop
+  // unprompted restarts (they can still `pm2 restart` directly, which never calls this).
+  if (process.env['SUDO_BLOCK_AGENT_RESTART'] === '1') {
+    logger.warn({ reason }, 'Agent-initiated restart BLOCKED by policy (SUDO_BLOCK_AGENT_RESTART=1)');
+    return {
+      scheduled: false,
+      cmd: '',
+      error: 'Agent-initiated restart is disabled by policy (SUDO_BLOCK_AGENT_RESTART=1). An operator must restart via pm2 directly.',
+    };
+  }
   const { cmd, via } = resolveRestartCmd();
   if (via === 'manual') {
     logger.warn({ reason }, 'Self-restart unavailable on this platform (no pm2, no systemctl, no SUDO_RESTART_CMD)');

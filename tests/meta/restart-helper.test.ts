@@ -120,6 +120,53 @@ describe('restart-helper', () => {
     });
   });
 
+  describe('SUDO_BLOCK_AGENT_RESTART kill-switch', () => {
+    const savedBlock = process.env['SUDO_BLOCK_AGENT_RESTART'];
+
+    afterEach(() => {
+      if (savedBlock === undefined) delete process.env['SUDO_BLOCK_AGENT_RESTART'];
+      else process.env['SUDO_BLOCK_AGENT_RESTART'] = savedBlock;
+    });
+
+    it('flag set: blocks the restart, mentions the flag, and spawns nothing', () => {
+      process.env['SUDO_BLOCK_AGENT_RESTART'] = '1';
+      process.env['SUDO_RESTART_CMD'] = 'echo restart';
+
+      const result = scheduleDetachedRestart('x');
+
+      expect(result.scheduled).toBe(false);
+      expect(result.cmd).toBe('');
+      expect(result.error).toContain('SUDO_BLOCK_AGENT_RESTART=1');
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(execSyncMock).not.toHaveBeenCalled();
+    });
+
+    it('flag unset: schedules a restart exactly as before', () => {
+      delete process.env['SUDO_BLOCK_AGENT_RESTART'];
+      process.env['SUDO_RESTART_CMD'] = 'echo restart';
+      const unref = vi.fn();
+      spawnMock.mockReturnValue({ unref });
+
+      const result = scheduleDetachedRestart('x', '/tmp');
+
+      expect(result.scheduled).toBe(true);
+      expect(result.cmd).toBe('echo restart');
+      expect(spawnMock).toHaveBeenCalledOnce();
+    });
+
+    it('flag set to a non-"1" value does not block', () => {
+      process.env['SUDO_BLOCK_AGENT_RESTART'] = '0';
+      process.env['SUDO_RESTART_CMD'] = 'echo restart';
+      const unref = vi.fn();
+      spawnMock.mockReturnValue({ unref });
+
+      const result = scheduleDetachedRestart('x', '/tmp');
+
+      expect(result.scheduled).toBe(true);
+      expect(spawnMock).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('platform branches', () => {
     it('linux without pm2 still falls back to systemctl (unchanged)', () => {
       execSyncMock.mockImplementation(() => {
