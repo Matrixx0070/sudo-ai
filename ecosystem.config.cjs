@@ -118,6 +118,8 @@ module.exports = {
         // F88: real LLM goal evaluator; injected call rides brain's normal
         // failover (value is an activator + label — model not pinned by it).
         SUDO_GOAL_EVAL_MODEL: 'sudo/cheap',
+        // F86 capped live trial (2026-07-19): consensus-gated lesson apply; value from config/.env (dotenv-loaded at ecosystem eval).
+        SUDO_FLYWHEEL_APPLY: process.env['SUDO_FLYWHEEL_APPLY'] || '0',
         // Self-healing trust-tier sandbox: build image on boot if missing
         // (untrusted turns fail closed until built — better than failing forever).
         SUDO_SANDBOX_AUTOBUILD: '1',
@@ -160,6 +162,25 @@ module.exports = {
         // 500 restores far more conversation after a restart. Budget + compaction
         // bound what actually reaches the model.
         SUDO_HYDRATE_MESSAGE_LIMIT: process.env['SUDO_HYDRATE_MESSAGE_LIMIT'] || '500',
+
+        // Grok $30-seat flags. These belong here (pm2 env), NOT in
+        // config/sudo-ai.json5 — that file is schema-validated and has no `env`
+        // passthrough, so a top-level env block there fails boot with
+        // "Config validation failed: /env — Unexpected property". Relocated here
+        // 2026-07-22 after that exact crash-loop. WEBSESSION gates the free seat
+        // lanes (voice/rag/files/…); TELEGRAM_GROK_VOICE routes owner voice notes
+        // to grok's realtime agent; XAI_OAUTH_SUBSCRIPTION pins the seat proxy
+        // (default ON — never the metered api.x.ai) for run-code.
+        SUDO_TELEGRAM_GROK_VOICE: process.env['SUDO_TELEGRAM_GROK_VOICE'] || '1',
+        SUDO_GROK_WEBSESSION: process.env['SUDO_GROK_WEBSESSION'] || '1',
+        SUDO_XAI_OAUTH_SUBSCRIPTION: process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] || '1',
+
+        // Kill-switch: block the agent from restarting its own prod process
+        // unprompted. It was bouncing prod pursuing a stuck "enable grok voice"
+        // goal (guard stops the config CRASH, this stops the disruptive RESTART).
+        // All agent restart tools funnel through scheduleDetachedRestart(), which
+        // honors this flag. Operators still `pm2 restart` directly (bypasses it).
+        SUDO_BLOCK_AGENT_RESTART: process.env['SUDO_BLOCK_AGENT_RESTART'] || '1',
 
         // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
         // long drill turns OOM-crashed the ~4GB default heap (FATAL: JavaScript

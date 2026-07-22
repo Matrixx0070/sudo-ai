@@ -499,12 +499,77 @@ grokCmd
     process.exit(await runGrokVideo(prompt, a));
   });
 
+// Path A — realtime voice with grok's own voice agent over LiveKit (seat-covered)
+grokCmd
+  .command('voice <input>')
+  .description('One realtime voice turn with grok\'s voice agent over LiveKit — FREE on your subscription. Speaks <input> audio, saves the spoken reply. Needs SUDO_GROK_WEBSESSION=1')
+  .option('--seconds <n>', 'Seconds to capture the reply (default 12)', (v) => parseInt(v, 10))
+  .option('--out <path>', 'Where to write the reply WAV (default /tmp/grok-voice-reply-*.wav)')
+  .action(async (input: string, opts: { seconds?: number; out?: string }) => {
+    const { runGrokVoice } = await import('./commands/grok-voice.js');
+    process.exit(await runGrokVoice(input, opts));
+  });
+
+grokCmd
+  .command('converse <inputs...>')
+  .description('PERSISTENT multi-turn realtime conversation with grok\'s voice agent over one LiveKit connection (context persists). Speaks each input WAV; saves reply-<i>.wav. Needs SUDO_GROK_WEBSESSION=1')
+  .option('--out <prefix>', 'Reply path prefix (default /tmp/grok-converse-reply)')
+  .action(async (inputs: string[], opts: { out?: string }) => {
+    const { runGrokConverse } = await import('./commands/grok-voice.js');
+    process.exit(await runGrokConverse(inputs, opts));
+  });
+
 grokCmd
   .command('websession')
   .description('Grok web-session status (subscription-free media capture health)')
   .action(async () => {
     const { runGrokWebsessionStatus } = await import('./commands/grok.js');
     process.exit(await runGrokWebsessionStatus());
+  });
+
+// ---------------------------------------------------------------------------
+// voice — turn-based voice conversation (audio → STT → agent → TTS → audio)
+// ---------------------------------------------------------------------------
+
+const voiceCmd = program
+  .command('voice')
+  .description('Turn-based voice conversation utilities');
+
+// Hydrate config/.env so `--stt grok` / `--tts grok` honor SUDO_GROK_WEBSESSION
+// exactly like the daemon does (dotenv does not override already-set vars).
+voiceCmd.hook('preAction', () => {
+  loadDotenv({ path: path.resolve(PROJECT_ROOT, 'config', '.env'), quiet: true });
+});
+
+voiceCmd
+  .command('turn <audio>')
+  .description('Run one voice turn: transcribe <audio>, get an agent reply, synthesise it back to audio')
+  .option('--stt <provider>', 'STT provider: whisper-local (default), groq, elevenlabs, openai, grok')
+  .option('--tts <provider>', 'TTS provider: kokoro (default), elevenlabs, xai, openai, grok')
+  .option('--voice <name>', 'TTS voice override (provider-specific)')
+  .option('--language <code>', 'STT language hint (BCP-47, e.g. en)')
+  .option('--model <alias>', 'LLM alias for the reply (default sudo/cheap)')
+  .option('--out <path>', 'Where to write the reply audio (default: /tmp/sudo-ai-voice-turn-*.wav)')
+  .option('--echo', 'Skip the LLM — reply with the transcript itself (zero-spend pipeline check)')
+  .action(async (audio: string, opts: { stt?: string; tts?: string; voice?: string; language?: string; model?: string; out?: string; echo?: boolean }) => {
+    const { runVoiceTurnCli } = await import('./commands/voice.js');
+    process.exit(await runVoiceTurnCli(audio, opts));
+  });
+
+voiceCmd
+  .command('stream <audio>')
+  .description('Stream an audio file through the VAD session: segment utterances, run a turn per utterance, support barge-in (a live mic is the same pipeline with the frame source swapped)')
+  .option('--stt <provider>', 'STT provider (default whisper-local; grok for the free seat)')
+  .option('--tts <provider>', 'TTS provider (default kokoro; grok for the free seat)')
+  .option('--voice <name>', 'TTS voice override (provider-specific)')
+  .option('--language <code>', 'STT language hint (BCP-47, e.g. en)')
+  .option('--model <alias>', 'LLM alias for replies (default sudo/cheap)')
+  .option('--threshold <n>', 'VAD energy threshold 0..1 (default 0.02)', (v) => parseFloat(v))
+  .option('--out <path>', 'Output audio path prefix (default: /tmp/sudo-ai-voice-stream-*.wav)')
+  .option('--echo', 'Skip the LLM — reply with the transcript itself (zero-spend pipeline check)')
+  .action(async (audio: string, opts: { stt?: string; tts?: string; voice?: string; language?: string; model?: string; threshold?: number; out?: string; echo?: boolean }) => {
+    const { runVoiceStreamCli } = await import('./commands/voice.js');
+    process.exit(await runVoiceStreamCli(audio, opts));
   });
 
 // ---------------------------------------------------------------------------

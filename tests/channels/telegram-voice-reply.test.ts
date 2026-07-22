@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TelegramAdapter } from '../../src/core/channels/telegram.js';
+import { useGrokVoiceFor, grokRealtimeEnabledFor } from '../../src/core/channels/telegram-grok-voice.js';
 
 interface VoiceReplyInternals {
   _markVoiceReply(peerId: string): void;
@@ -52,5 +53,37 @@ describe('TelegramAdapter auto voice-reply marker', () => {
     const a = internals(new TelegramAdapter('TELEGRAM_BOT_TOKEN', ['1']));
     a._voiceReplyPending.set('peer-1', Date.now() - 1_000); // already expired
     expect(a._consumeVoiceReply('peer-1')).toBe(false);
+  });
+});
+
+describe('telegram grok voice gating (owner-only, flag-gated)', () => {
+  const OWNERS = new Set(['1']);
+  beforeEach(() => {
+    for (const k of ['SUDO_VOICE_GROK_DEFAULT', 'SUDO_TELEGRAM_GROK_VOICE', 'SUDO_GROK_WEBSESSION']) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of ['SUDO_VOICE_GROK_DEFAULT', 'SUDO_TELEGRAM_GROK_VOICE', 'SUDO_GROK_WEBSESSION']) delete process.env[k];
+  });
+
+  // SUDO_VOICE_GROK_DEFAULT: STT/TTS through the seat, sudo-ai brain (#904).
+  it('useGrokVoiceFor defaults OFF; routes an owner when both flags on; never a stranger', () => {
+    expect(useGrokVoiceFor(OWNERS, '1')).toBe(false);
+    process.env['SUDO_VOICE_GROK_DEFAULT'] = '1';
+    process.env['SUDO_GROK_WEBSESSION'] = '1';
+    expect(useGrokVoiceFor(OWNERS, '1')).toBe(true);
+    expect(useGrokVoiceFor(OWNERS, 1)).toBe(true); // numeric chat id
+    expect(useGrokVoiceFor(OWNERS, '999')).toBe(false); // non-owner
+    delete process.env['SUDO_GROK_WEBSESSION'];
+    expect(useGrokVoiceFor(OWNERS, '1')).toBe(false); // needs SUDO_GROK_WEBSESSION
+  });
+
+  // SUDO_TELEGRAM_GROK_VOICE: route the note to grok's OWN realtime voice agent.
+  it('grokRealtimeEnabledFor defaults OFF; owner-only; needs both flags', () => {
+    expect(grokRealtimeEnabledFor(OWNERS, '1')).toBe(false);
+    process.env['SUDO_TELEGRAM_GROK_VOICE'] = '1';
+    expect(grokRealtimeEnabledFor(OWNERS, '1')).toBe(false); // still needs SUDO_GROK_WEBSESSION
+    process.env['SUDO_GROK_WEBSESSION'] = '1';
+    expect(grokRealtimeEnabledFor(OWNERS, '1')).toBe(true);
+    expect(grokRealtimeEnabledFor(OWNERS, '999')).toBe(false); // non-owner never spends the seat
   });
 });

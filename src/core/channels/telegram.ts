@@ -40,6 +40,7 @@ import type { CommandContext } from '../commands/types.js';
 import type { HookContext, HookEvent } from '../hooks/index.js';
 import { rateLimiter } from './rate-limit.js';
 import { resolveEnvSecret } from '../secrets/secret-ref.js';
+import { useGrokVoiceFor, grokRealtimeEnabledFor, grokRealtimeVoiceReply } from './telegram-grok-voice.js';
 
 // ---------------------------------------------------------------------------
 // Hook emission support
@@ -601,7 +602,8 @@ export class TelegramAdapter implements ChannelAdapter {
       if (wantVoiceReply) {
         try {
           const tts = getTts();
-          const ttsResult = await tts.synthesize(text.trim().slice(0, 4000));
+          const gVoice = useGrokVoiceFor(this.ownerUsers, peerId) ? { provider: 'grok' as const } : {};
+          const ttsResult = await tts.synthesize(text.trim().slice(0, 4000), gVoice);
           if (ttsResult.audioBuffer && ttsResult.audioBuffer.length > 0) {
             const voiceFile = new InputFile(ttsResult.audioBuffer, 'voice.ogg');
             await this.bot.api.sendVoice(peerId, voiceFile, {
@@ -930,9 +932,18 @@ export class TelegramAdapter implements ChannelAdapter {
           return;
         }
 
-        // Transcribe
-        const stt = getStt();
-        const result = await stt.transcribe(downloaded.buffer);
+        // Owner realtime: route the note through grok's OWN voice agent (grok-as-agent).
+        if (grokRealtimeEnabledFor(this.ownerUsers, chatId)) {
+          const replyOgg = await grokRealtimeVoiceReply(downloaded.buffer);
+          try { if (existsSync(downloaded.path)) unlinkSync(downloaded.path); } catch { /* ignore */ }
+          if (replyOgg) {
+            if (processingMsgId) { try { await bot.api.deleteMessage(chatId, processingMsgId); } catch { /* ignore */ } }
+            await bot.api.sendVoice(chatId, new InputFile(replyOgg, 'voice.ogg'));
+            return;
+          }
+        }
+        const stt = getStt(); // owner voice may route STT through the free grok seat
+        const result = await stt.transcribe(downloaded.buffer, useGrokVoiceFor(this.ownerUsers, chatId) ? { provider: 'grok' } : {});
 
         // Clean up temp file
         try { if (existsSync(downloaded.path)) unlinkSync(downloaded.path); } catch { /* ignore */ }
@@ -980,7 +991,7 @@ export class TelegramAdapter implements ChannelAdapter {
       if (downloaded) {
         try {
           const stt = getStt();
-          const result = await stt.transcribe(downloaded.buffer);
+          const result = await stt.transcribe(downloaded.buffer, useGrokVoiceFor(this.ownerUsers, this._replyTargetOf(ctx)) ? { provider: 'grok' } : {});
           try { if (existsSync(downloaded.path)) unlinkSync(downloaded.path); } catch { /* ignore */ }
           if (result.text.trim()) {
             // Auto voice-out for audio notes too (consumed by send()).
