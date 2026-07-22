@@ -21,6 +21,8 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { Value } from '@sinclair/typebox/value';
+import { SudoConfigSchema } from '../../../config/schema.js';
 
 const logger = createLogger('meta.self-config');
 const CONFIG_PATH = path.resolve('config/sudo-ai.json5');
@@ -135,6 +137,16 @@ function readConfig(): Record<string, unknown> {
 }
 
 function writeConfig(config: Record<string, unknown>): void {
+  // Fail-closed guard: never persist a config that would fail boot validation
+  // (mirrors loader.ts). A bad write here crash-loops the next restart.
+  if (!Value.Check(SudoConfigSchema, config)) {
+    const errs = [...Value.Errors(SudoConfigSchema, config)]
+      .map((e) => `${e.path} — ${e.message}`).join('; ');
+    throw new Error(
+      `REFUSED: this change would make config/sudo-ai.json5 fail schema validation and crash the next boot. ${errs}. `
+        + 'SUDO_* env flags belong in ecosystem.config.cjs or config/.env, not config/sudo-ai.json5.',
+    );
+  }
   const json = JSON.stringify(config, null, 2);
   // Validate it round-trips cleanly
   JSON.parse(json);
