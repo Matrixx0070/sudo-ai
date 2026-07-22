@@ -255,9 +255,18 @@ const DEFAULT_PRICE: PriceRate = { inUsdPerM: 3.0, outUsdPerM: 15.0 };
 const SEAT_PROVIDERS = ['claude-oauth/', 'claude-oauth:'] as const;
 const SEAT_PRICE: PriceRate = { inUsdPerM: 0.0, outUsdPerM: 0.0 };
 
+/**
+ * True when a pricing key / transport route rides a flat-subscription seat.
+ * Shared with the policy layer's seat call-count ceiling so "priced at 0" and
+ * "counted against the seat ceiling" can never drift apart.
+ */
+export function isSeatKey(key: string): boolean {
+  return SEAT_PROVIDERS.some((p) => key.startsWith(p));
+}
+
 function priceFor(model: string): PriceRate {
   const resolved = resolveAlias(model);
-  if (SEAT_PROVIDERS.some((p) => resolved.startsWith(p) || model.startsWith(p))) return SEAT_PRICE;
+  if (isSeatKey(resolved) || isSeatKey(model)) return SEAT_PRICE;
   const direct = PRICE_TABLE[resolved] ?? PRICE_TABLE[model];
   if (direct) return direct;
   // Bare-model match (provider prefix differs, e.g. xai-oauth vs xai).

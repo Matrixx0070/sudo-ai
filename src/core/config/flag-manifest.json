@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 691,
+  "count": 692,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -526,6 +526,7 @@
     "SUDO_SEAL_REQUIRED",
     "SUDO_SEARCH_TIMEOUT_MS",
     "SUDO_SEARCH_WAIT_UNTIL",
+    "SUDO_SEAT_DAILY_CALL_LIMIT",
     "SUDO_SECCOMP_DISABLE",
     "SUDO_SECOND_OPINION",
     "SUDO_SECRETS_ALLOW_EXEC",
