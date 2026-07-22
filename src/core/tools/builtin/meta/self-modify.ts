@@ -38,6 +38,8 @@ import { isProtectedPath, PROTECTED_PATHS } from '../../../self-build/protected-
 import { scheduleDetachedRestart } from './restart-helper.js';
 import { PROJECT_ROOT, DATA_DIR } from '../../../shared/paths.js';
 import { reloadSkillsLive } from '../../../skills/live-reload.js';
+import { Value } from '@sinclair/typebox/value';
+import { SudoConfigSchema } from '../../../config/schema.js';
 const _require = createRequire(import.meta.url);
 
 /**
@@ -348,6 +350,18 @@ function doEditConfig(key: string, value: unknown): ToolResult {
   const leafKey = keys[keys.length - 1]!;
   const oldValue = obj[leafKey];
   obj[leafKey] = value;
+
+  // Fail-closed guard: never persist a config that would fail boot validation
+  // (mirrors loader.ts). A bad write here crash-loops the next restart.
+  if (!Value.Check(SudoConfigSchema, parsed)) {
+    const errs = [...Value.Errors(SudoConfigSchema, parsed)]
+      .map((e) => `${e.path} — ${e.message}`).join('; ');
+    return {
+      success: false,
+      output: `REFUSED: this edit would make config/sudo-ai.json5 fail schema validation and crash the next boot. ${errs}. `
+        + 'SUDO_* env flags belong in ecosystem.config.cjs or config/.env, not config/sudo-ai.json5.',
+    };
+  }
 
   // Write back as JSON5 with 2-space indent (drops comments unfortunately)
   const updated = JSON5.stringify(parsed, null, 2);
