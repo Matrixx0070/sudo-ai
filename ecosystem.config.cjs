@@ -161,6 +161,10 @@ module.exports = {
         // bound what actually reaches the model.
         SUDO_HYDRATE_MESSAGE_LIMIT: process.env['SUDO_HYDRATE_MESSAGE_LIMIT'] || '500',
 
+        // Block agent-initiated self-restarts (honored by scheduleDetachedRestart
+        // in restart-helper.ts). Operators still restart via `pm2 restart` directly.
+        SUDO_BLOCK_AGENT_RESTART: process.env['SUDO_BLOCK_AGENT_RESTART'] || '1',
+
         // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
         // long drill turns OOM-crashed the ~4GB default heap (FATAL: JavaScript
         // heap out of memory). 8GB gives headroom. Opus never hit this.

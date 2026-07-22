@@ -26,7 +26,7 @@ fi
 #   src/core/cognition/commitment-auditor.ts     — alignment stack
 #   src/core/cognition/trust-tier-tracker.ts     — alignment stack
 #   src/core/security/discordance-detector.ts    — alignment stack
-#   src/core/tools/builtin/meta/self-modify.ts   — self-modification tool
+#   src/core/tools/builtin/meta/                 — self-modification tooling (whole dir: config guard, restart kill-switch, service-control, self-update, self-modify)
 #   docs/SELFBUILD_CHARTER.md                    — operating mandate
 #   .githooks/                                   — these hook files themselves
 #   .git/                                        — git internals
@@ -35,7 +35,7 @@ fi
 #   package.json                                 — dep manifest
 #
 # NOTE: Keep this list in sync with protected-paths.ts.
-protected_re='^src/core/self-build/|^src/core/agent/(alignment-aggregator|veto-gate)\.ts$|^src/core/cognition/(mistake-auto-block-guard|commitment-auditor|trust-tier-tracker)\.ts$|^src/core/security/discordance-detector\.ts$|^src/core/tools/builtin/meta/self-modify\.ts$|^docs/SELFBUILD_CHARTER\.md$|^\.githooks/|^\.git/|^config/sudo-ai\.json5$|^ecosystem\.config\.cjs$|^package\.json$'
+protected_re='^src/core/self-build/|^src/core/agent/(alignment-aggregator|veto-gate)\.ts$|^src/core/cognition/(mistake-auto-block-guard|commitment-auditor|trust-tier-tracker)\.ts$|^src/core/security/discordance-detector\.ts$|^src/core/tools/builtin/meta/|^docs/SELFBUILD_CHARTER\.md$|^\.githooks/|^\.git/|^config/sudo-ai\.json5$|^ecosystem\.config\.cjs$|^package\.json$'
 
 blocked=$(git diff --cached --name-only | grep -E "$protected_re" || true)
 if [ -n "$blocked" ]; then
