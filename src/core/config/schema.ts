@@ -119,7 +119,7 @@ const ToolsSchema = Type.Object({
 // Cron
 // ---------------------------------------------------------------------------
 
-const CronJobSchema = Type.Object({
+export const CronJobSchema = Type.Object({
   id: Str(),
   schedule: Str({ description: 'Standard cron expression, e.g. 0 9 * * *' }),
   description: Type.String(),
