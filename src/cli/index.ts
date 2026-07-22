@@ -28,6 +28,7 @@ import { registerGrokMemory } from './commands/grok-memory.js';
 import { registerGrokSkills } from './commands/grok-skills.js';
 import { registerGrokMediaExtras } from './commands/grok-media-extras.js';
 import { registerGrokAutomations } from './commands/grok-automations.js';
+import { registerGrokWorkspaces } from './commands/grok-workspaces.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -514,12 +515,11 @@ grokCmd.command('converse <inputs...>')
 
 grokCmd.command('models').option('--limits <model>', 'Show rate limits for one model instead of the catalog')
   .description('Seat model catalog + tier defaults, FREE on your subscription (cookie lane). --limits <model> shows remaining/total query windows. Needs SUDO_GROK_WEBSESSION=1')
-  .action(async (opts: { limits?: string }) => process.exit(await (await import('./commands/grok-models.js')).runGrokModels(opts)));
-
+  .action(async (o: { limits?: string }) => process.exit(await (await import('./commands/grok-models.js')).runGrokModels(o)));
 registerGrokEmbeddings(grokCmd); registerGrokRag(grokCmd); // FREE embedding RAG collections + grounded doc RAG
 registerGrokFiles(grokCmd); // FREE persistent file upload/info/download (app-chat file lane)
 registerGrokMemory(grokCmd); registerGrokMediaExtras(grokCmd); // FREE memory read + video upscale/caption on the seat
-registerGrokAutomations(grokCmd); registerGrokSkills(grokCmd); // FREE automations/tasks + seat skills (owner-only)
+registerGrokAutomations(grokCmd); registerGrokSkills(grokCmd); registerGrokWorkspaces(grokCmd); // FREE automations + seat skills + READ-ONLY workspaces (owner-only)
 
 grokCmd.command('run-code').description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
   .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)').option('--code <code>', 'Inline code to execute').option('--file <path>', 'Read code from a file (else stdin)')
