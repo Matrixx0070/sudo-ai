@@ -95,7 +95,12 @@ describe('GW-2 ModelFailover feeds the monitor', () => {
 });
 
 describe('GW-2 config failover chain order (cost cliff)', () => {
-  it('cheap grok-4-fast tier precedes grok-4.5 in models.primary', () => {
+  // 2026-07-22 (Frank, NO-GO): grok is deliberately OFF models.primary — a
+  // redundant fallback now that wave-2 seat capabilities run through direct
+  // lanes, not the failover chain (see memory project-grok-provider). This
+  // guard stays for if/when grok is re-added: IF both tiers are present, the
+  // cheap cache-friendly tier must precede the expensive no-cache escalation.
+  it('cheap grok-4-fast tier precedes grok-4.5 in models.primary, when both are on-chain', () => {
     const cfgPath = path.resolve(__dirname, '../../config/sudo-ai.json5');
     const cfg = JSON5.parse(readFileSync(cfgPath, 'utf8')) as {
       models?: { primary?: Array<{ id: string }> };
@@ -103,8 +108,7 @@ describe('GW-2 config failover chain order (cost cliff)', () => {
     const ids = (cfg.models?.primary ?? []).map((m) => m.id);
     const fastIdx = ids.indexOf('xai-oauth/grok-4-fast-non-reasoning');
     const bigIdx = ids.indexOf('xai-oauth/grok-4.5');
-    expect(fastIdx).toBeGreaterThanOrEqual(0);
-    expect(bigIdx).toBeGreaterThanOrEqual(0);
+    if (fastIdx === -1 || bigIdx === -1) return; // grok off-chain — nothing to order
     expect(fastIdx).toBeLessThan(bigIdx);
   });
 });

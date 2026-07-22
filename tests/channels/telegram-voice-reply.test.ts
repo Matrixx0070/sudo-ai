@@ -15,6 +15,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { TelegramAdapter } from '../../src/core/channels/telegram.js';
 import { useGrokVoiceFor, grokRealtimeEnabledFor, grokRealtimeVoiceReply } from '../../src/core/channels/telegram-grok-voice.js';
+import { ffmpegAvailable } from './_ffmpeg-available.js';
 
 vi.mock('../../src/llm/grok-realtime-voice.js', () => ({
   grokRealtimeVoiceTurn: vi.fn(),
@@ -97,7 +98,7 @@ describe('telegram grok voice gating (owner-only, flag-gated)', () => {
   });
 });
 
-describe('grokRealtimeVoiceReply silence trim (real ffmpeg)', () => {
+describe.skipIf(!ffmpegAvailable())('grokRealtimeVoiceReply silence trim (real ffmpeg)', () => {
   const RATE = 16000;
 
   /** Mono 16-bit PCM WAV: `leadS` silence + `toneS` 440Hz tone + `tailS` silence. */
