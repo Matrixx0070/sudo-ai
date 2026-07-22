@@ -25,6 +25,7 @@ import { registerGrokEmbeddings } from './commands/grok-embeddings.js';
 import { registerGrokRag } from './commands/grok-rag.js';
 import { registerGrokFiles } from './commands/grok-files.js';
 import { registerGrokMemory } from './commands/grok-memory.js';
+import { registerGrokSkills } from './commands/grok-skills.js';
 import { registerGrokMediaExtras } from './commands/grok-media-extras.js';
 import { registerGrokAutomations } from './commands/grok-automations.js';
 
@@ -515,11 +516,10 @@ grokCmd.command('models').option('--limits <model>', 'Show rate limits for one m
   .description('Seat model catalog + tier defaults, FREE on your subscription (cookie lane). --limits <model> shows remaining/total query windows. Needs SUDO_GROK_WEBSESSION=1')
   .action(async (opts: { limits?: string }) => process.exit(await (await import('./commands/grok-models.js')).runGrokModels(opts)));
 
-registerGrokEmbeddings(grokCmd); // FREE managed-embedding RAG collections (statsig-free ingest/mgmt)
-registerGrokRag(grokCmd); // FREE grounded RAG over uploaded docs (app-chat file-attach)
+registerGrokEmbeddings(grokCmd); registerGrokRag(grokCmd); // FREE embedding RAG collections + grounded doc RAG
 registerGrokFiles(grokCmd); // FREE persistent file upload/info/download (app-chat file lane)
 registerGrokMemory(grokCmd); registerGrokMediaExtras(grokCmd); // FREE memory read + video upscale/caption on the seat
-registerGrokAutomations(grokCmd); // FREE automations/tasks (owner-only; create=one-time, LIVE at once)
+registerGrokAutomations(grokCmd); registerGrokSkills(grokCmd); // FREE automations/tasks + seat skills (owner-only)
 
 grokCmd.command('run-code').description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
   .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)').option('--code <code>', 'Inline code to execute').option('--file <path>', 'Read code from a file (else stdin)')
