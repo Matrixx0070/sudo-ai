@@ -24,8 +24,12 @@ export const PROTECTED_PATHS: readonly string[] = [
   'src/core/security/discordance-detector.ts',
   'src/core/cognition/trust-tier-tracker.ts',
 
-  // Tool that could restart/rebuild the process
-  'src/core/tools/builtin/meta/self-modify.ts',
+  // The agent's self-modification tooling — the whole directory is protected
+  // (self-modify, self-config schema guard, restart-helper kill-switch,
+  // service-control, self-update). The agent must never rewrite its own
+  // guardrail tooling: overwriting any of these with an un-gated version
+  // would let the next restart load code with the guards removed.
+  'src/core/tools/builtin/meta/',
 
   // Charter — agent must not rewrite its own operating mandate
   'docs/SELFBUILD_CHARTER.md',
