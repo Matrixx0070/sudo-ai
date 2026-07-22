@@ -86,6 +86,30 @@ def op_probe(req):
     return {"ok": True, "status": 200, "quota": _safe_json(r.text)}
 
 
+def op_seed(req):
+    """Fetch a fresh page seed — the <meta name^=gr> content baked into the grok
+    /imagine HTML — for the pure-Node (browserless) x-statsig-id minter. curl_cffi
+    GET (Chrome-impersonated, seat cookies) since grok.com sits behind Cloudflare.
+    The seed is a value, not a secret; the token is minted from it in Node."""
+    import re
+    from curl_cffi import requests as creq
+
+    r = creq.get(
+        GROK + "/imagine",
+        headers=base_headers(req),
+        impersonate="chrome",
+        timeout=req.get("timeoutSec", 30),
+    )
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, r.text)}
+    m = re.search(r'name="grok-site[^"]*"\s+content="([^"]+)"', r.text)
+    if not m:
+        m = re.search(r'<meta[^>]*content="([A-Za-z0-9+/]{62,68})"[^>]*>', r.text)
+    if not m:
+        return {"ok": False, "status": 200, "errorClass": "no_seed", "detail": "seed meta not present in HTML"}
+    return {"ok": True, "status": 200, "seed": m.group(1)}
+
+
 def op_image(req):
     import websocket  # websocket-client
 
@@ -396,8 +420,8 @@ def _safe_json(text):
         return {}
 
 
-OPS = {"probe": op_probe, "image": op_image, "video": op_video, "download": op_download,
-       "voice_stt": op_voice_stt, "voice_tts": op_voice_tts}
+OPS = {"probe": op_probe, "seed": op_seed, "image": op_image, "video": op_video,
+       "download": op_download, "voice_stt": op_voice_stt, "voice_tts": op_voice_tts}
 
 
 def main():
