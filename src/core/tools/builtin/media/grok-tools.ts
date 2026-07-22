@@ -8,8 +8,8 @@
  *     or drive the durable browser),
  *   - lazy: grok-web-media (and its browser/oracle stack) is dynamically imported inside
  *     execute() so the tool registry never pulls Playwright/ws at load time.
- * grok.com path only — never api.x.ai; the underlying lib never falls back to the
- * metered API, so these tools cannot spend money.
+ * grok.com path only — never the metered xAI API; the underlying lib never falls
+ * back to it, so these tools cannot spend money.
  */
 
 import { statSync } from 'node:fs';
