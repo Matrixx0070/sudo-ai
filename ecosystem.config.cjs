@@ -171,7 +171,12 @@ module.exports = {
         // lanes (voice/rag/files/…); TELEGRAM_GROK_VOICE routes owner voice notes
         // to grok's realtime agent; XAI_OAUTH_SUBSCRIPTION pins the seat proxy
         // (default ON — never the metered api.x.ai) for run-code.
-        SUDO_TELEGRAM_GROK_VOICE: process.env['SUDO_TELEGRAM_GROK_VOICE'] || '1',
+        // 2026-07-22 Frank: voice mode must act like Jarvis — sudo-ai's brain
+        // answers, grok is only the STT/TTS API (VOICE_GROK_DEFAULT on). The
+        // grok-as-agent realtime mode (TELEGRAM_GROK_VOICE) bypasses the brain,
+        // so it stays OFF unless explicitly re-enabled.
+        SUDO_TELEGRAM_GROK_VOICE: process.env['SUDO_TELEGRAM_GROK_VOICE'] || '0',
+        SUDO_VOICE_GROK_DEFAULT: process.env['SUDO_VOICE_GROK_DEFAULT'] || '1',
         SUDO_GROK_WEBSESSION: process.env['SUDO_GROK_WEBSESSION'] || '1',
         SUDO_XAI_OAUTH_SUBSCRIPTION: process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] || '1',
 
