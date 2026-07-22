@@ -711,5 +711,20 @@ module.exports = {
         SUDO_BRIDGE_JWT_TTL_MS: '3600000',
       },
     },
+
+    // Fable bot — Claude's own Telegram bot bridge (standalone; token in
+    // config/.env FABLE_BOT_TOKEN; brain = headless `claude -p` on Max OAuth).
+    {
+      name: 'fable-bot',
+      script: 'scripts/fable-bot/fable-bot.mjs',
+      cwd: CWD,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 5000,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      out_file: path.join(CWD, 'data/logs/fable-bot-out.log'),
+      error_file: path.join(CWD, 'data/logs/fable-bot-err.log'),
+    },
   ],
 };
