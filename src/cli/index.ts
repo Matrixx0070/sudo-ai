@@ -21,6 +21,14 @@ import { Command } from 'commander';
 import { config as loadDotenv } from 'dotenv';
 import { APP_VERSION } from '../core/shared/constants.js';
 import { PROJECT_ROOT } from '../core/shared/paths.js';
+import { registerGrokEmbeddings } from './commands/grok-embeddings.js';
+import { registerGrokRag } from './commands/grok-rag.js';
+import { registerGrokFiles } from './commands/grok-files.js';
+import { registerGrokMemory } from './commands/grok-memory.js';
+import { registerGrokSkills } from './commands/grok-skills.js';
+import { registerGrokMediaExtras } from './commands/grok-media-extras.js';
+import { registerGrokAutomations } from './commands/grok-automations.js';
+import { registerGrokWorkspaces } from './commands/grok-workspaces.js';
 
 // ---------------------------------------------------------------------------
 // Bundler path overrides — ESM bundle __dirname fix
@@ -458,13 +466,8 @@ grokCmd.hook('preAction', () => {
   loadDotenv({ path: path.resolve(PROJECT_ROOT, 'config', '.env'), quiet: true });
 });
 
-grokCmd
-  .command('status', { isDefault: true })
-  .description('Provider-management view across both Grok methods')
-  .action(async () => {
-    const { runGrokStatus } = await import('./commands/grok.js');
-    process.exit(await runGrokStatus());
-  });
+grokCmd.command('status', { isDefault: true }).description('Provider-management view across both Grok methods')
+  .action(async () => process.exit(await (await import('./commands/grok.js')).runGrokStatus()));
 
 // GW5 — subscription-free media on the captured Grok web session (flag: SUDO_GROK_WEBSESSION)
 grokCmd
@@ -500,32 +503,29 @@ grokCmd
   });
 
 // Path A — realtime voice with grok's own voice agent over LiveKit (seat-covered)
-grokCmd
-  .command('voice <input>')
+grokCmd.command('voice <input>')
   .description('One realtime voice turn with grok\'s voice agent over LiveKit — FREE on your subscription. Speaks <input> audio, saves the spoken reply. Needs SUDO_GROK_WEBSESSION=1')
-  .option('--seconds <n>', 'Seconds to capture the reply (default 12)', (v) => parseInt(v, 10))
-  .option('--out <path>', 'Where to write the reply WAV (default /tmp/grok-voice-reply-*.wav)')
-  .action(async (input: string, opts: { seconds?: number; out?: string }) => {
-    const { runGrokVoice } = await import('./commands/grok-voice.js');
-    process.exit(await runGrokVoice(input, opts));
-  });
+  .option('--seconds <n>', 'Seconds to capture the reply (default 12)', (v) => parseInt(v, 10)).option('--out <path>', 'Where to write the reply WAV (default /tmp/grok-voice-reply-*.wav)')
+  .action(async (input: string, opts: { seconds?: number; out?: string }) => process.exit(await (await import('./commands/grok-voice.js')).runGrokVoice(input, opts)));
 
-grokCmd
-  .command('converse <inputs...>')
+grokCmd.command('converse <inputs...>')
   .description('PERSISTENT multi-turn realtime conversation with grok\'s voice agent over one LiveKit connection (context persists). Speaks each input WAV; saves reply-<i>.wav. Needs SUDO_GROK_WEBSESSION=1')
   .option('--out <prefix>', 'Reply path prefix (default /tmp/grok-converse-reply)')
-  .action(async (inputs: string[], opts: { out?: string }) => {
-    const { runGrokConverse } = await import('./commands/grok-voice.js');
-    process.exit(await runGrokConverse(inputs, opts));
-  });
+  .action(async (inputs: string[], opts: { out?: string }) => process.exit(await (await import('./commands/grok-voice.js')).runGrokConverse(inputs, opts)));
 
-grokCmd
-  .command('websession')
-  .description('Grok web-session status (subscription-free media capture health)')
-  .action(async () => {
-    const { runGrokWebsessionStatus } = await import('./commands/grok.js');
-    process.exit(await runGrokWebsessionStatus());
-  });
+grokCmd.command('models').option('--limits <model>', 'Show rate limits for one model instead of the catalog')
+  .description('Seat model catalog + tier defaults, FREE on your subscription (cookie lane). --limits <model> shows remaining/total query windows. Needs SUDO_GROK_WEBSESSION=1')
+  .action(async (o: { limits?: string }) => process.exit(await (await import('./commands/grok-models.js')).runGrokModels(o)));
+registerGrokEmbeddings(grokCmd); registerGrokRag(grokCmd); // FREE embedding RAG collections + grounded doc RAG
+registerGrokFiles(grokCmd); // FREE persistent file upload/info/download (app-chat file lane)
+registerGrokMemory(grokCmd); registerGrokMediaExtras(grokCmd); // FREE memory read + video upscale/caption on the seat
+registerGrokAutomations(grokCmd); registerGrokSkills(grokCmd); registerGrokWorkspaces(grokCmd); // FREE automations + seat skills + READ-ONLY workspaces (owner-only)
+
+grokCmd.command('run-code').description('Run code in grok\'s server-side interpreter, FREE on your seat. Prints executed stdout/stderr (exit 1 on runtime error). Needs the xai-oauth seat.')
+  .option('--lang <lang>', 'Language: python only (sandbox is a Python REPL; others rejected)').option('--code <code>', 'Inline code to execute').option('--file <path>', 'Read code from a file (else stdin)')
+  .action(async (opts: { lang?: string; code?: string; file?: string }) => process.exit(await (await import('./commands/grok-runcode.js')).runGrokRunCode(opts)));
+
+grokCmd.command('websession').description('Grok web-session status (subscription-free media capture health)').action(async () => process.exit(await (await import('./commands/grok.js')).runGrokWebsessionStatus()));
 
 // ---------------------------------------------------------------------------
 // voice — turn-based voice conversation (audio → STT → agent → TTS → audio)

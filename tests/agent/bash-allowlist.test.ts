@@ -232,12 +232,52 @@ describe('isSafeServiceRestart', () => {
   });
   it('flag is off by default and requires exact "1"', () => {
     delete process.env.SUDO_EXEC_SAFE_RESTART;
+    delete process.env.SUDO_BLOCK_AGENT_RESTART; // ambient kill-switch must not skew this case
     expect(isServiceRestartFastPathEnabled()).toBe(false);
     process.env.SUDO_EXEC_SAFE_RESTART = 'true';
     expect(isServiceRestartFastPathEnabled()).toBe(false);
     process.env.SUDO_EXEC_SAFE_RESTART = '1';
     expect(isServiceRestartFastPathEnabled()).toBe(true);
     delete process.env.SUDO_EXEC_SAFE_RESTART;
+  });
+});
+
+describe('isServiceRestartFastPathEnabled — SUDO_BLOCK_AGENT_RESTART kill-switch wins', () => {
+  let savedSafe: string | undefined;
+  let savedBlock: string | undefined;
+  beforeEach(() => {
+    savedSafe = process.env.SUDO_EXEC_SAFE_RESTART;
+    savedBlock = process.env.SUDO_BLOCK_AGENT_RESTART;
+    delete process.env.SUDO_EXEC_SAFE_RESTART;
+    delete process.env.SUDO_BLOCK_AGENT_RESTART;
+  });
+  afterEach(() => {
+    if (savedSafe === undefined) delete process.env.SUDO_EXEC_SAFE_RESTART;
+    else process.env.SUDO_EXEC_SAFE_RESTART = savedSafe;
+    if (savedBlock === undefined) delete process.env.SUDO_BLOCK_AGENT_RESTART;
+    else process.env.SUDO_BLOCK_AGENT_RESTART = savedBlock;
+  });
+
+  it('SUDO_BLOCK_AGENT_RESTART=1 closes the fast-path even when SUDO_EXEC_SAFE_RESTART=1', () => {
+    process.env.SUDO_EXEC_SAFE_RESTART = '1';
+    process.env.SUDO_BLOCK_AGENT_RESTART = '1';
+    expect(isServiceRestartFastPathEnabled()).toBe(false);
+    // Mirrors the ApprovalManager gate (approval.ts): fast-path is consulted only
+    // when enabled — so `pm2 restart sudo-ai-v5` is NOT auto-allowed here.
+    const onFastPath =
+      isServiceRestartFastPathEnabled() && isSafeServiceRestart('pm2 restart sudo-ai-v5');
+    expect(onFastPath).toBe(false);
+  });
+
+  it('SUDO_EXEC_SAFE_RESTART=1 with the kill-switch unset stays enabled (unchanged)', () => {
+    process.env.SUDO_EXEC_SAFE_RESTART = '1';
+    expect(isServiceRestartFastPathEnabled()).toBe(true);
+  });
+
+  it('SUDO_EXEC_SAFE_RESTART unset stays disabled (unchanged)', () => {
+    expect(isServiceRestartFastPathEnabled()).toBe(false);
+    process.env.SUDO_BLOCK_AGENT_RESTART = '1';
+    expect(isServiceRestartFastPathEnabled()).toBe(false);
   });
 });
 
