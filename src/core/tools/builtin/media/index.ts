@@ -26,6 +26,7 @@ import { imageGenerateTool, imageEditAdvancedTool } from './image-tools.js';
 import { thumbnailGenerateTool } from './thumbnail-tool.js';
 import { videoEditTool, videoGenerateTool, videoToClipsTool } from './video-tools.js';
 import { shortsFactoryTool } from './factory-tools.js';
+import { grokImageTool, grokVideoTool } from './grok-tools.js';
 import { chartTool } from './tools/chart.js';
 import { qrTool } from './tools/qr.js';
 import { diagramTool } from './tools/diagram.js';
@@ -55,6 +56,8 @@ const MEDIA_TOOLS: ToolDefinition[] = [
   mathTool,
   animationTool,
   mermaidTool,
+  grokImageTool,
+  grokVideoTool,
 ];
 
 // ---------------------------------------------------------------------------

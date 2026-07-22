@@ -32,6 +32,7 @@
 
 import { createLogger } from '../core/shared/logger.js';
 import { classifyThrown, isRetryable, LLMPolicyError, type LLMErrorClass } from './errors.js';
+import { isSeatKey } from './limits.js';
 
 const log = createLogger('llm-policy');
 
@@ -271,13 +272,15 @@ interface SpendState {
   day: string;
   byCaller: Map<string, number>;
   total: number;
+  /** Calls on flat-subscription seat routes today (see seatCallLimit). */
+  seatCalls: number;
 }
 
 function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-const spend: SpendState = { day: todayKey(), byCaller: new Map(), total: 0 };
+const spend: SpendState = { day: todayKey(), byCaller: new Map(), total: 0, seatCalls: 0 };
 
 function rolloverSpend(): void {
   const today = todayKey();
@@ -285,8 +288,28 @@ function rolloverSpend(): void {
     spend.day = today;
     spend.byCaller.clear();
     spend.total = 0;
+    spend.seatCalls = 0;
     _budgetAlertedKeys.clear();
   }
+}
+
+/**
+ * Daily call-count ceiling for seat routes (claude-oauth). Seat calls are
+ * priced $0 (limits.ts), so the USD budget no longer bounds them — this is the
+ * runaway-loop backstop: it caps CALLS, not dollars. Generous by design
+ * (2026-07-22 peak was 418 calls/day). `SUDO_SEAT_DAILY_CALL_LIMIT` overrides;
+ * `0`/`off` disables. In-memory — a restart resets the count (acceptable for
+ * a backstop with 5x headroom).
+ */
+const SEAT_CALL_LIMIT_DEFAULT = 2000;
+
+function seatCallLimit(): number {
+  const raw = process.env['SUDO_SEAT_DAILY_CALL_LIMIT'];
+  if (raw === undefined) return SEAT_CALL_LIMIT_DEFAULT;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === '' || trimmed === 'off' || trimmed === '0') return Infinity;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : SEAT_CALL_LIMIT_DEFAULT;
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +318,7 @@ function rolloverSpend(): void {
 
 /** One exhaustion alert. Boot wires a sink (telemetry + owner notice). */
 export interface BudgetAlert {
-  verdict: 'caller_exceeded' | 'global_exceeded';
+  verdict: 'caller_exceeded' | 'global_exceeded' | 'seat_calls_exceeded';
   lane: 'user' | 'background';
   caller: string;
   route: string;
@@ -319,7 +342,7 @@ export function setBudgetAlertSink(sink: BudgetAlertSink | null): void {
 const _budgetAlertedKeys = new Set<string>();
 
 function emitBudgetAlert(
-  verdict: 'caller_exceeded' | 'global_exceeded',
+  verdict: BudgetAlert['verdict'],
   lane: 'user' | 'background',
   caller: string,
   route: string,
@@ -500,6 +523,27 @@ function preflight(
     }
   }
 
+  // Seat call-count ceiling: seat routes are priced $0, so the USD budget
+  // cannot bound them — cap raw calls/day instead. Same asymmetry as budgets:
+  // user lane degrades (never blocked), background lane fails closed.
+  if (isSeatKey(route)) {
+    rolloverSpend();
+    spend.seatCalls += 1;
+    if (spend.seatCalls > seatCallLimit()) {
+      if (priority === 'user') {
+        budgetDecision = 'degrade';
+        emitBudgetAlert('seat_calls_exceeded', 'user', caller, route);
+        log.warn({ route, caller, seatCalls: spend.seatCalls }, 'seat call ceiling exceeded — user call allowed, degrade alias one tier');
+      } else {
+        emitBudgetAlert('seat_calls_exceeded', 'background', caller, route);
+        throw new LLMPolicyError(
+          `[llm-policy] seat call ceiling exceeded (${spend.seatCalls}/day): ${caller} → ${route} skipped`,
+          { class: 'billing', route, retryable: false, skipped: true },
+        );
+      }
+    }
+  }
+
   // Circuit breaker.
   const gate = breakerGate(route, now);
   let wasProbe = gate === 'probe';
@@ -622,6 +666,7 @@ export function __resetPolicyState(): void {
   spend.day = todayKey();
   spend.byCaller.clear();
   spend.total = 0;
+  spend.seatCalls = 0;
   _budgetAlertedKeys.clear();
   _budgetAlertSink = null;
 }

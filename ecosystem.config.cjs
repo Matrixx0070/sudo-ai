@@ -118,6 +118,8 @@ module.exports = {
         // F88: real LLM goal evaluator; injected call rides brain's normal
         // failover (value is an activator + label — model not pinned by it).
         SUDO_GOAL_EVAL_MODEL: 'sudo/cheap',
+        // F86 capped live trial (2026-07-19): consensus-gated lesson apply; value from config/.env (dotenv-loaded at ecosystem eval).
+        SUDO_FLYWHEEL_APPLY: process.env['SUDO_FLYWHEEL_APPLY'] || '0',
         // Self-healing trust-tier sandbox: build image on boot if missing
         // (untrusted turns fail closed until built — better than failing forever).
         SUDO_SANDBOX_AUTOBUILD: '1',
@@ -161,8 +163,28 @@ module.exports = {
         // bound what actually reaches the model.
         SUDO_HYDRATE_MESSAGE_LIMIT: process.env['SUDO_HYDRATE_MESSAGE_LIMIT'] || '500',
 
-        // Block agent-initiated self-restarts (honored by scheduleDetachedRestart
-        // in restart-helper.ts). Operators still restart via `pm2 restart` directly.
+        // Grok $30-seat flags. These belong here (pm2 env), NOT in
+        // config/sudo-ai.json5 — that file is schema-validated and has no `env`
+        // passthrough, so a top-level env block there fails boot with
+        // "Config validation failed: /env — Unexpected property". Relocated here
+        // 2026-07-22 after that exact crash-loop. WEBSESSION gates the free seat
+        // lanes (voice/rag/files/…); TELEGRAM_GROK_VOICE routes owner voice notes
+        // to grok's realtime agent; XAI_OAUTH_SUBSCRIPTION pins the seat proxy
+        // (default ON — never the metered api.x.ai) for run-code.
+        // 2026-07-22 Frank: voice mode must act like Jarvis — sudo-ai's brain
+        // answers, grok is only the STT/TTS API (VOICE_GROK_DEFAULT on). The
+        // grok-as-agent realtime mode (TELEGRAM_GROK_VOICE) bypasses the brain,
+        // so it stays OFF unless explicitly re-enabled.
+        SUDO_TELEGRAM_GROK_VOICE: process.env['SUDO_TELEGRAM_GROK_VOICE'] || '0',
+        SUDO_VOICE_GROK_DEFAULT: process.env['SUDO_VOICE_GROK_DEFAULT'] || '1',
+        SUDO_GROK_WEBSESSION: process.env['SUDO_GROK_WEBSESSION'] || '1',
+        SUDO_XAI_OAUTH_SUBSCRIPTION: process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] || '1',
+
+        // Kill-switch: block the agent from restarting its own prod process
+        // unprompted. It was bouncing prod pursuing a stuck "enable grok voice"
+        // goal (guard stops the config CRASH, this stops the disruptive RESTART).
+        // All agent restart tools funnel through scheduleDetachedRestart(), which
+        // honors this flag. Operators still `pm2 restart` directly (bypasses it).
         SUDO_BLOCK_AGENT_RESTART: process.env['SUDO_BLOCK_AGENT_RESTART'] || '1',
 
         // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
@@ -688,6 +710,21 @@ module.exports = {
         SUDO_IDE_BRIDGE_DISABLE: '1',
         SUDO_BRIDGE_JWT_TTL_MS: '3600000',
       },
+    },
+
+    // Fable bot — Claude's own Telegram bot bridge (standalone; token in
+    // config/.env FABLE_BOT_TOKEN; brain = headless `claude -p` on Max OAuth).
+    {
+      name: 'fable-bot',
+      script: 'scripts/fable-bot/fable-bot.mjs',
+      cwd: CWD,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 5000,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      out_file: path.join(CWD, 'data/logs/fable-bot-out.log'),
+      error_file: path.join(CWD, 'data/logs/fable-bot-err.log'),
     },
   ],
 };

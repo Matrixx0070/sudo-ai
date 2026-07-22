@@ -32,10 +32,19 @@ export function grokRealtimeEnabledFor(ownerUsers: Set<string>, peerId: string |
   return ownerUsers.has(String(peerId));
 }
 
-/** Transcode a WAV buffer to an Ogg/Opus voice note (Telegram's native format). */
+/**
+ * Trim capture-window silence from both ends (the LiveKit client records a fixed
+ * window, so the raw WAV carries the agent's pre-speech lead-in and post-speech
+ * tail — 7s+ of silence on short replies). Small paddings keep speech unclipped.
+ */
+const SILENCE_TRIM =
+  'silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.2,' +
+  'areverse,silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.3,areverse';
+
+/** Transcode a WAV buffer to a silence-trimmed Ogg/Opus voice note (Telegram's native format). */
 function wavToOggOpus(wav: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-c:a', 'libopus', '-b:a', '32k', '-f', 'ogg', '-loglevel', 'error', 'pipe:1']);
+    const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-af', SILENCE_TRIM, '-c:a', 'libopus', '-b:a', '32k', '-f', 'ogg', '-loglevel', 'error', 'pipe:1']);
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     ff.stdout.on('data', (d: Buffer) => out.push(d));

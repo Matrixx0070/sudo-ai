@@ -13,7 +13,8 @@
  * automated deletion is memory surgery, combined-invariant 9: two-reader
  * consensus required; this module only reports their size), audit.db rows
  * (hash-chained — pruning would break chain verification; WAL-checkpoint
- * only), mind.db chunks (auto-dream owns that prune).
+ * only), mind.db chunks (auto-dream owns that prune), mind.db sessions /
+ * messages / feedback_memory (conversation history + memories — surgery).
  *
  * Kill-switch: SUDO_RETENTION_SWEEP=0. Every rule env-tunable; a rule with
  * days<=0 is skipped. Never throws — per-step try/catch, returns a report.
@@ -48,6 +49,15 @@ const TABLE_RULES: TableRule[] = [
   // Episodes: age-prune ONLY low-significance ones; significant episodes are kept forever.
   { dbFile: 'consciousness.db', table: 'episodes', tsCol: 'started_at', defaultDays: 90, envDays: 'SUDO_RETENTION_EPISODES_DAYS', extraWhere: 'significance < 0.8' },
   { dbFile: 'alignment-audit.db', table: 'alignment_audit', tsCol: 'computed_at', defaultDays: 90, envDays: 'SUDO_RETENTION_ALIGNMENT_AUDIT_DAYS' },
+  // mind.db growth (2026-07-22, 112MB): embedding_cache 43MB / cron_runs 30K
+  // rows / terminal task-queue orphans. Caches and run history are regenerable
+  // bookkeeping, NOT memories (invariant 9 untouched: sessions, messages,
+  // feedback_memory, chunks stay excluded). Terminal-only task prunes — a
+  // queued/running/blocked task is never deleted regardless of age.
+  { dbFile: 'mind.db', table: 'embedding_cache', tsCol: 'created_at', defaultDays: 45, envDays: 'SUDO_RETENTION_EMBED_CACHE_DAYS' },
+  { dbFile: 'mind.db', table: 'cron_runs', tsCol: 'ran_at', defaultDays: 90, envDays: 'SUDO_RETENTION_CRON_RUNS_DAYS' },
+  { dbFile: 'mind.db', table: 'task_queue', tsCol: 'COALESCE(completed_at, created_at)', defaultDays: 30, envDays: 'SUDO_RETENTION_TASKQUEUE_DAYS', extraWhere: "status IN ('completed','failed','cancelled')" },
+  { dbFile: 'mind.db', table: 'tasks', tsCol: 'COALESCE(finished_at, updated_at)', defaultDays: 30, envDays: 'SUDO_RETENTION_TASKS_DAYS', extraWhere: "status IN ('done','failed','cancelled')" },
 ];
 
 /** Size-capped rotate: file > capBytes → file.1 (previous .1 replaced). */

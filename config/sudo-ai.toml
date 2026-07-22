@@ -3,7 +3,7 @@
 
 [intelligence]
 default_model = "ollama/kimi-k2.6:cloud"
-fallback_model = "xai/grok-4-1-fast-non-reasoning"
+fallback_model = "ollama/glm-5.2:cloud"  # 2026-07-20 Frank: xAI removed (API-credit billing); was xai/grok-4-1-fast-non-reasoning
 temperature = 0.7
 max_tokens = 8192
 

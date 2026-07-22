@@ -27,6 +27,14 @@ const TICK_MS = 1_000 as const;
 const MAX_CONSECUTIVE_ERRORS = 10 as const;
 
 /**
+ * Cool-off before an auto-disabled job is re-enabled for probation. Without
+ * this, one long provider outage (e.g. "all model profiles in cooldown")
+ * permanently killed a job — enabled:false persisted, human-only recovery.
+ * On probation: one success resets errors, one failure re-quarantines.
+ */
+const AUTO_REENABLE_MS = 6 * 60 * 60 * 1000;
+
+/**
  * Exponential backoff delays (ms) applied between retries of a failing job.
  * Index is min(consecutiveErrors - 1, length - 1).
  */
@@ -212,6 +220,19 @@ export class CronScheduler {
 
   private async _tick(): Promise<void> {
     const now = new Date();
+
+    // Probation: re-enable jobs the scheduler itself disabled once the
+    // cool-off has passed. Manual disables (no autoDisabledAt) are untouched.
+    for (const job of this.store.list()) {
+      if (job.enabled || !job.autoDisabledAt) continue;
+      if (now.getTime() - new Date(job.autoDisabledAt).getTime() < AUTO_REENABLE_MS) continue;
+      this.store.patch(job.id, { enabled: true, autoDisabledAt: undefined });
+      log.warn(
+        { jobId: job.id, jobName: job.name, consecutiveErrors: job.consecutiveErrors },
+        'Auto-disabled cron job re-enabled for probation after cool-off',
+      );
+    }
+
     const jobs = this.store.list().filter((j) => j.enabled);
 
     for (const job of jobs) {
@@ -274,8 +295,10 @@ export class CronScheduler {
       this.store.patch(job.id, {
         lastRun: now.toISOString(),
         consecutiveErrors: newErrorCount,
-        // Auto-disable after too many consecutive failures.
+        // Auto-disable after too many consecutive failures; the probation
+        // sweep in _tick re-enables it after AUTO_REENABLE_MS.
         enabled: newErrorCount < MAX_CONSECUTIVE_ERRORS,
+        ...(newErrorCount >= MAX_CONSECUTIVE_ERRORS ? { autoDisabledAt: now.toISOString() } : {}),
       });
 
       this.store.appendRun({

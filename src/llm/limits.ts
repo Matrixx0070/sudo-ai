@@ -242,8 +242,31 @@ const PRICE_TABLE: Record<string, PriceRate> = {
 /** Conservative fallback when the model is unknown (ESTIMATE, mid-tier). */
 const DEFAULT_PRICE: PriceRate = { inUsdPerM: 3.0, outUsdPerM: 15.0 };
 
+/**
+ * Providers whose calls are covered by a flat subscription seat, never
+ * per-token metered — same rationale as the GX1 grok seat rows above: priced
+ * 0 so the budget counter never accrues phantom metered spend (2026-07-22:
+ * 418 claude-oauth calls ≈ "$51" of phantom spend blew the $50 daily cap and
+ * degraded/skipped free calls all afternoon). The durable gateway.db row
+ * still records token counts for telemetry; the budget bounds METERED spend.
+ */
+// The pricing key may be a `provider/model` id OR a transport route
+// (`claude-oauth:messages`) — match the provider under both separators.
+const SEAT_PROVIDERS = ['claude-oauth/', 'claude-oauth:'] as const;
+const SEAT_PRICE: PriceRate = { inUsdPerM: 0.0, outUsdPerM: 0.0 };
+
+/**
+ * True when a pricing key / transport route rides a flat-subscription seat.
+ * Shared with the policy layer's seat call-count ceiling so "priced at 0" and
+ * "counted against the seat ceiling" can never drift apart.
+ */
+export function isSeatKey(key: string): boolean {
+  return SEAT_PROVIDERS.some((p) => key.startsWith(p));
+}
+
 function priceFor(model: string): PriceRate {
   const resolved = resolveAlias(model);
+  if (isSeatKey(resolved) || isSeatKey(model)) return SEAT_PRICE;
   const direct = PRICE_TABLE[resolved] ?? PRICE_TABLE[model];
   if (direct) return direct;
   // Bare-model match (provider prefix differs, e.g. xai-oauth vs xai).
