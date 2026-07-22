@@ -38,8 +38,15 @@ export function isBashAllowlistFastPathEnabled(): boolean {
  * fast-path above and carries its own kill-switch. Enables the agent to
  * self-heal the daemon without a human prompt while keeping every other
  * mutating command gated.
+ *
+ * SUDO_BLOCK_AGENT_RESTART=1 (the #923 kill-switch) takes precedence: when the
+ * operator blocks agent-initiated restarts, this fast-path is closed too.
  */
 export function isServiceRestartFastPathEnabled(): boolean {
+  // Master kill-switch: if agent-initiated restarts are blocked (#923), the bash
+  // restart fast-path is closed too — otherwise `pm2 restart` via bash would
+  // bypass SUDO_BLOCK_AGENT_RESTART (which only gates scheduleDetachedRestart).
+  if (process.env['SUDO_BLOCK_AGENT_RESTART'] === '1') return false;
   return process.env['SUDO_EXEC_SAFE_RESTART'] === '1';
 }
 

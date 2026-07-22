@@ -21,6 +21,8 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { Value } from '@sinclair/typebox/value';
+import { SudoConfigSchema } from '../../../config/schema.js';
 
 const logger = createLogger('meta.self-config');
 const CONFIG_PATH = path.resolve('config/sudo-ai.json5');
@@ -135,6 +137,16 @@ function readConfig(): Record<string, unknown> {
 }
 
 function writeConfig(config: Record<string, unknown>): void {
+  // Fail-closed guard: never persist a config that would fail boot validation
+  // (mirrors loader.ts). A bad write here crash-loops the next restart.
+  if (!Value.Check(SudoConfigSchema, config)) {
+    const errs = [...Value.Errors(SudoConfigSchema, config)]
+      .map((e) => `${e.path} — ${e.message}`).join('; ');
+    throw new Error(
+      `REFUSED: this change would make config/sudo-ai.json5 fail schema validation and crash the next boot. ${errs}. `
+        + 'SUDO_* env flags belong in ecosystem.config.cjs or config/.env, not config/sudo-ai.json5.',
+    );
+  }
   const json = JSON.stringify(config, null, 2);
   // Validate it round-trips cleanly
   JSON.parse(json);
@@ -417,30 +429,41 @@ export const selfConfigTool: ToolDefinition = {
             return { success: false, output: 'cronJob must include name, schedule, and action fields.' };
           }
 
+          // Transform friendly input into the CronJobSchema config shape
+          // ({ id, schedule, description, enabled, task }) so the write passes
+          // the fail-closed SudoConfigSchema guard in writeConfig.
+          const job = {
+            id: String(cronJob['name']),
+            schedule: String(cronJob['schedule']),
+            description: cronJob['description'] !== undefined ? String(cronJob['description']) : String(cronJob['name']),
+            enabled: cronJob['enabled'] === undefined ? true : Boolean(cronJob['enabled']),
+            task: String(cronJob['action']),
+          };
+
           const config = readConfig();
           const cron = (config['cron'] ?? {}) as Record<string, unknown>;
           const jobs = (cron['jobs'] ?? []) as Record<string, unknown>[];
 
-          // Check for duplicate name
-          const existingIdx = jobs.findIndex(j => j['name'] === cronJob!['name']);
+          // Check for duplicate id
+          const existingIdx = jobs.findIndex(j => j['id'] === job.id);
           if (existingIdx !== -1) {
             return {
               success: false,
-              output: `Cron job named "${cronJob['name']}" already exists at index ${existingIdx}. Remove it first or use a different name.`,
+              output: `Cron job named "${job.id}" already exists at index ${existingIdx}. Remove it first or use a different name.`,
             };
           }
 
           const backupPath = createBackup();
-          jobs.push(cronJob);
+          jobs.push(job);
           cron['jobs'] = jobs;
           config['cron'] = cron;
           writeConfig(config);
 
-          logger.info({ cronJob: cronJob['name'] }, 'Cron job added');
+          logger.info({ cronJob: job.id }, 'Cron job added');
           return {
             success: true,
-            output: `Added cron job "${cronJob['name']}" (schedule: ${cronJob['schedule']}). Total jobs: ${jobs.length}\nBackup: ${backupPath}`,
-            data: { job: cronJob, totalJobs: jobs.length, backupPath },
+            output: `Added cron job "${job.id}" (schedule: ${job.schedule}). Total jobs: ${jobs.length}\nBackup: ${backupPath}`,
+            data: { job, totalJobs: jobs.length, backupPath },
             artifacts: [
               { path: CONFIG_PATH, action: 'modified' },
               { path: backupPath, action: 'created' },
@@ -471,12 +494,12 @@ export const selfConfigTool: ToolDefinition = {
           if (!isNaN(numIdx) && numIdx >= 0 && numIdx < jobs.length) {
             removeIdx = numIdx;
           } else {
-            // Try as name
-            removeIdx = jobs.findIndex(j => j['name'] === jobIdentifier);
+            // Try as name (stored as `id` in the config shape)
+            removeIdx = jobs.findIndex(j => j['id'] === jobIdentifier);
           }
 
           if (removeIdx === -1) {
-            const names = jobs.map((j, i) => `  ${i}: ${j['name'] ?? '(unnamed)'}`).join('\n');
+            const names = jobs.map((j, i) => `  ${i}: ${j['id'] ?? '(unnamed)'}`).join('\n');
             return {
               success: false,
               output: `Cron job "${jobIdentifier}" not found. Current jobs:\n${names}`,
@@ -489,10 +512,10 @@ export const selfConfigTool: ToolDefinition = {
           config['cron'] = cron;
           writeConfig(config);
 
-          logger.info({ removed: removed['name'] }, 'Cron job removed');
+          logger.info({ removed: removed['id'] }, 'Cron job removed');
           return {
             success: true,
-            output: `Removed cron job "${removed['name'] ?? `index ${removeIdx}`}". Remaining jobs: ${jobs.length}\nBackup: ${backupPath}`,
+            output: `Removed cron job "${removed['id'] ?? `index ${removeIdx}`}". Remaining jobs: ${jobs.length}\nBackup: ${backupPath}`,
             data: { removed, remainingJobs: jobs.length, backupPath },
             artifacts: [
               { path: CONFIG_PATH, action: 'modified' },
