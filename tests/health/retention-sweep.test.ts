@@ -37,6 +37,46 @@ function makeConsciousnessDb(): string {
   return p;
 }
 
+function makeMindDb(): string {
+  const p = path.join(dir, 'mind.db');
+  const db = new Database(p);
+  db.exec(`
+    CREATE TABLE embedding_cache (hash TEXT PRIMARY KEY, created_at TEXT);
+    CREATE TABLE cron_runs (id INTEGER PRIMARY KEY, ran_at TEXT);
+    CREATE TABLE task_queue (id TEXT PRIMARY KEY, status TEXT, created_at TEXT, completed_at TEXT);
+    CREATE TABLE tasks (id INTEGER PRIMARY KEY, status TEXT, finished_at TEXT, updated_at TEXT);
+  `);
+  db.prepare("INSERT INTO embedding_cache VALUES ('old', ?), ('new', ?)").run(OLD, NEW);
+  db.prepare('INSERT INTO cron_runs (ran_at) VALUES (?), (?)').run(OLD, NEW);
+  db.prepare(`INSERT INTO task_queue VALUES
+    ('old-cancelled', 'cancelled', ?, NULL),
+    ('old-created-fresh-done', 'completed', ?, ?),
+    ('old-queued', 'queued', ?, NULL),
+    ('new-completed', 'completed', ?, ?)`).run(OLD, OLD, NEW, OLD, NEW, NEW);
+  db.prepare("INSERT INTO tasks (status, finished_at, updated_at) VALUES ('done', ?, ?), ('running', ?, ?)").run(OLD, OLD, OLD, OLD);
+  db.close();
+  return p;
+}
+
+describe('runRetentionSweep — mind.db caches + terminal tasks', () => {
+  it('prunes old cache/run-history rows and ONLY terminal, truly-old tasks', () => {
+    makeMindDb();
+    const report = runRetentionSweep(dir);
+    expect(report.tablesPruned['mind.db:embedding_cache']).toBe(1);
+    expect(report.tablesPruned['mind.db:cron_runs']).toBe(1);
+    expect(report.tablesPruned['mind.db:task_queue']).toBe(1); // only old-cancelled
+    expect(report.tablesPruned['mind.db:tasks']).toBe(1);      // only the done one
+    const db = new Database(path.join(dir, 'mind.db'), { readonly: true });
+    const tq = db.prepare('SELECT id FROM task_queue ORDER BY id').all().map((r) => (r as { id: string }).id);
+    const taskStatuses = db.prepare('SELECT status FROM tasks').all().map((r) => (r as { status: string }).status);
+    db.close();
+    // Old-but-recently-completed kept (COALESCE uses completed_at); active tasks
+    // are NEVER pruned regardless of age.
+    expect(tq).toEqual(['new-completed', 'old-created-fresh-done', 'old-queued']);
+    expect(taskStatuses).toEqual(['running']);
+  });
+});
+
 describe('runRetentionSweep (F113/F114)', () => {
   it('prunes old rows but keeps recent + significant episodes', () => {
     makeConsciousnessDb();
