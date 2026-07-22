@@ -47,6 +47,16 @@ export interface ProbeRequest {
   op: 'probe';
   timeoutSec?: number;
 }
+
+/**
+ * Fetch a fresh page seed (`<meta name^=gr>` content) for the pure-Node
+ * browserless x-statsig-id minter (grok-statsig-mint.ts). The seed is a value,
+ * not a secret — the token is minted from it in Node.
+ */
+export interface SeedRequest {
+  op: 'seed';
+  timeoutSec?: number;
+}
 export interface ImageRequest {
   op: 'image';
   prompt: string;
@@ -104,6 +114,7 @@ export interface VoiceTtsRequest {
 
 export type GrokWebRequest =
   | ProbeRequest
+  | SeedRequest
   | ImageRequest
   | VideoRequest
   | DownloadRequest
@@ -121,6 +132,7 @@ export type GrokWebErrorClass =
   | 'grpc_not_found' // 404 {"code":5} → wrong path, do NOT refresh
   | 'relogin' // 401 / login page → sso dead
   | 'no_images'
+  | 'no_seed' // seed op: <meta name^=gr> not present in the fetched HTML
   | 'no_audio' // voice_tts produced no audio frames (stale session?)
   | 'timeout'
   | 'stream_ended'
@@ -143,6 +155,8 @@ export interface GrokWebResponse {
   detail?: string;
   // probe
   quota?: Record<string, { available: boolean; windowSizeSeconds: number }>;
+  // seed
+  seed?: string;
   // image
   images?: GrokWebImage[];
   // video

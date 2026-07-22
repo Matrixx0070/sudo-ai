@@ -182,6 +182,66 @@ function makeOracleMint(profileDir?: string): (reqPath: string, method: string) 
   };
 }
 
+/** True when the pure-Node browserless statsig fast-path is enabled. Default OFF. */
+export function isGrokStatsigBrowserlessEnabled(): boolean {
+  return process.env['SUDO_GROK_STATSIG_BROWSERLESS'] === '1';
+}
+
+type MintSession = { cookie: string; userAgent: string; profileDir?: string; statsigId?: string };
+
+/**
+ * Mint an x-statsig-id in PURE NODE (no browser): fetch a fresh page seed via the
+ * curl_cffi bridge, then derive the fingerprint + assemble the token locally
+ * (grok-statsig-mint.ts). Throws on any failure so the caller can fall back to the
+ * browser oracle. Reverse-engineered from module 4629918; verified byte-exact vs
+ * the live minter + the live anti-bot gate. See docs/OPUS_HANDOFF_PATHB_NODE_MINTER.md.
+ */
+async function mintStatsigBrowserless(
+  reqPath: string,
+  method: string,
+  session: MintSession,
+  deps: GrokMediaDeps,
+): Promise<string> {
+  const r = await deps.bridge({ op: 'seed' }, credsOf(session));
+  if (!r.ok || !r.seed) {
+    throw new Error(`seed fetch failed: ${r.errorClass ?? 'no seed'}${r.detail ? ` (${r.detail})` : ''}`);
+  }
+  const { mintStatsigFromSeed } = await import('./grok-statsig-mint.js');
+  return mintStatsigFromSeed(r.seed, reqPath, method, deps.now());
+}
+
+/**
+ * Statsig minter with a browserless FAST-PATH. When SUDO_GROK_STATSIG_BROWSERLESS
+ * is on, the FIRST mint of a request is done in pure Node (no browser launch);
+ * any failure — or a re-mint after a downstream 403 — falls back to the headed
+ * warm-browser oracle, which stays the default + authoritative path. Stateful per
+ * video request: `browserlessTried` ensures the 403-retry escalates to the oracle
+ * rather than re-minting the same (rejected) browserless token.
+ */
+function makeBrowserlessFirstMint(
+  session: MintSession,
+  deps: GrokMediaDeps,
+): (reqPath: string, method: string) => Promise<string> {
+  const oracleMint = makeOracleMint(session.profileDir);
+  let browserlessTried = false;
+  return async (reqPath: string, method: string): Promise<string> => {
+    if (isGrokStatsigBrowserlessEnabled() && !browserlessTried) {
+      browserlessTried = true;
+      try {
+        const token = await mintStatsigBrowserless(reqPath, method, session, deps);
+        log.info({ tokenLen: token.length }, 'grok statsig minted browserless (pure-Node fast-path)');
+        return token;
+      } catch (err) {
+        log.warn(
+          { detail: (err as Error).message },
+          'grok statsig browserless mint failed — falling back to the browser oracle',
+        );
+      }
+    }
+    return oracleMint(reqPath, method);
+  };
+}
+
 /** True when quota_info reports the video tier is out for the current window. */
 function videoQuotaExhausted(quota: Record<string, unknown>): boolean {
   const q = (quota['video720p'] ?? quota['video']) as Record<string, unknown> | undefined;
@@ -217,7 +277,7 @@ export async function generateGrokVideo(
   const quota = await quotaFor(deps, creds);
   if (videoQuotaExhausted(quota as Record<string, unknown>)) throw new GrokWebQuotaExhaustedError('video');
 
-  const mint = deps.mintStatsig ?? makeOracleMint(session.profileDir);
+  const mint = deps.mintStatsig ?? makeBrowserlessFirstMint(session, deps);
   const aspect = opts.aspectRatio ?? '9:16';
 
   const attempt = async (): Promise<import('./grok-web-bridge.js').GrokWebResponse> => {
