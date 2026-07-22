@@ -73,6 +73,13 @@ export interface CronJob {
   lastRun?: string;
   /** Number of consecutive failed runs since the last success. */
   consecutiveErrors: number;
+  /**
+   * Set when the SCHEDULER disabled this job after too many consecutive
+   * failures (absent on operator/manual disables). The scheduler re-enables
+   * such jobs for probation after a cool-off, so a transient outage can never
+   * permanently kill a job with a human as the only recovery path.
+   */
+  autoDisabledAt?: string;
 }
 
 // ---------------------------------------------------------------------------
