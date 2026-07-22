@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 686,
+  "count": 687,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -57,6 +57,7 @@
     "SUDO_BG_SHELL_BUFFER_BYTES",
     "SUDO_BG_SHELL_CPU_SECONDS",
     "SUDO_BG_SHELL_MAX_CONCURRENT",
+    "SUDO_BLOCK_AGENT_RESTART",
     "SUDO_BOT_NAME",
     "SUDO_BRAIN_CODE_TREE_SEARCH",
     "SUDO_BRAIN_CODE_TS_MIN_COMPLEXITY",
