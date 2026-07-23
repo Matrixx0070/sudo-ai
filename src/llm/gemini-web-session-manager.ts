@@ -32,6 +32,8 @@ import {
   extractDeepResearchStatusFromFrames,
   extractChatLatestModelText,
   buildBatchExecuteRequest,
+  DR_CAPABILITY_PROBES,
+  assessDeepResearchCapability,
   GEMINI_RPC,
   GeminiAuthError,
   type GeminiWebModelName,
@@ -328,6 +330,7 @@ export class GeminiWebSessionManager {
    * async workflow (a later slice). Throws if the turn yields no plan.
    */
   async generateDeepResearchPlan(prompt: string, opts?: { model?: GeminiWebModelName }): Promise<DeepResearchPlan> {
+    await this.assertDeepResearchCapable();
     const session = await this.ready();
     const frames = await this.fetchFrames(session, prompt, { model: opts?.model, deepResearch: true });
     const plan = extractDeepResearchPlanFromFrames(frames);
@@ -335,6 +338,26 @@ export class GeminiWebSessionManager {
       throw new Error('deep research turn returned no plan — DR may need an eligible account/model, or indices drifted');
     }
     return plan;
+  }
+
+  /**
+   * Probe whether this account is eligible for Deep Research (the three DR capability
+   * RPCs must return without a reject code). Returns which probes were rejected/absent.
+   */
+  async checkDeepResearchCapable(): Promise<{ capable: boolean; rejected: string[] }> {
+    const frames = await this.batchExecute(DR_CAPABILITY_PROBES.map((p) => ({ rpcid: p.rpcid, payload: p.payload })));
+    return assessDeepResearchCapability(frames);
+  }
+
+  /** Throw a clear error if the account is not Deep-Research eligible. */
+  private async assertDeepResearchCapable(): Promise<void> {
+    const { capable, rejected } = await this.checkDeepResearchCapable();
+    if (!capable) {
+      throw new GeminiAuthError(
+        `account not eligible for Deep Research (rejected/absent probes: ${rejected.join(', ') || 'none'}) — ` +
+          'Deep Research requires an eligible/Advanced Google account',
+      );
+    }
   }
 
   /** POST a batch of RPCs (Deep Research status, read-chat) and return parsed frames. */

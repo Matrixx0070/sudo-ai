@@ -38,6 +38,9 @@ export const GEMINI_ENDPOINTS = {
 export const GEMINI_RPC = {
   DEEP_RESEARCH_STATUS: 'kwDCne',
   READ_CHAT: 'hNvQHb',
+  DEEP_RESEARCH_BOOTSTRAP: 'ku4Jyf',
+  DEEP_RESEARCH_MODEL_STATE: 'qpEbW',
+  DEEP_RESEARCH_CAPS: 'aPya6c',
 } as const;
 
 /** Static headers the web app sends on the StreamGenerate POST. */
@@ -662,6 +665,44 @@ export function extractDeepResearchStatus(payload: unknown): DeepResearchStatus 
   const notes = collectResearchNotes(data, exclude);
 
   return { researchId, state, title, query, cid, notes, done, rawState };
+}
+
+/** DR capability probe RPCs + payloads (reference inspect_account_status). */
+export const DR_CAPABILITY_PROBES: { name: string; rpcid: string; payload: unknown }[] = [
+  { name: 'bootstrap', rpcid: GEMINI_RPC.DEEP_RESEARCH_BOOTSTRAP, payload: ['en', null, null, null, 4, null, null, [2, 4, 7, 15], null, [[5]]] },
+  { name: 'model_state', rpcid: GEMINI_RPC.DEEP_RESEARCH_MODEL_STATE, payload: [[[1, 4], [6, 6], [1, 15]]] },
+  { name: 'caps', rpcid: GEMINI_RPC.DEEP_RESEARCH_CAPS, payload: [] },
+];
+
+/**
+ * From batchexecute frames, the reject code for a given rpcid: the matching `wrb.fr`
+ * part's `[5][0]` (7 = rejected/ineligible). `present` is false if no part matched. Pure.
+ */
+export function extractRpcRejectCode(
+  frames: unknown[],
+  rpcid: string,
+): { present: boolean; rejectCode: number | null } {
+  for (const part of frames) {
+    if (getNested(part, [0]) !== 'wrb.fr') continue;
+    if (getNested(part, [1]) !== rpcid) continue;
+    const code = getNested(part, [5, 0]);
+    return { present: true, rejectCode: typeof code === 'number' ? code : null };
+  }
+  return { present: false, rejectCode: null };
+}
+
+/**
+ * Decide Deep Research eligibility from a capability-probe batchexecute response: all
+ * DR probes must be present with no reject code (reference `inspect_account_status`
+ * summary). Returns which probes were rejected/absent. Pure.
+ */
+export function assessDeepResearchCapability(frames: unknown[]): { capable: boolean; rejected: string[] } {
+  const rejected: string[] = [];
+  for (const p of DR_CAPABILITY_PROBES) {
+    const r = extractRpcRejectCode(frames, p.rpcid);
+    if (!r.present || r.rejectCode !== null) rejected.push(p.name);
+  }
+  return { capable: rejected.length === 0, rejected };
 }
 
 /** Walk a batchexecute response's frames → first Deep Research status found (or null). */

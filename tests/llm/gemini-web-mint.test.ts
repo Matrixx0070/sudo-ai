@@ -17,6 +17,8 @@ import {
   extractChatLatestModelText,
   buildBatchExecuteRequest,
   serializeRpc,
+  extractRpcRejectCode,
+  assessDeepResearchCapability,
   GEMINI_RPC,
   buildStreamGenerateRequest,
   buildModelHeader,
@@ -296,6 +298,35 @@ describe('deep research full workflow (batchexecute + status + read-chat)', () =
     const data = [{ '70': 2 }, [null, null, null, ['c_x'], ['T', 'Q']], 'immersive_entry_chip', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'];
     const s = extractDeepResearchStatusFromFrames(parseGeminiFrames(framePart(data)));
     expect(s?.done).toBe(true);
+  });
+
+  it('extractRpcRejectCode reads part[5][0] for the matching rpcid', () => {
+    const ok = ['wrb.fr', 'ku4Jyf', '{}', null, null, null];
+    const rej = ['wrb.fr', 'ku4Jyf', null, null, null, [7]];
+    expect(extractRpcRejectCode([ok], 'ku4Jyf')).toEqual({ present: true, rejectCode: null });
+    expect(extractRpcRejectCode([rej], 'ku4Jyf')).toEqual({ present: true, rejectCode: 7 });
+    expect(extractRpcRejectCode([], 'ku4Jyf')).toEqual({ present: false, rejectCode: null });
+  });
+
+  it('assessDeepResearchCapability: capable when all DR probes pass', () => {
+    const ok = (id: string) => ['wrb.fr', id, '{}', null, null, null];
+    const frames = [ok(GEMINI_RPC.DEEP_RESEARCH_BOOTSTRAP), ok(GEMINI_RPC.DEEP_RESEARCH_MODEL_STATE), ok(GEMINI_RPC.DEEP_RESEARCH_CAPS)];
+    expect(assessDeepResearchCapability(frames)).toEqual({ capable: true, rejected: [] });
+  });
+
+  it('assessDeepResearchCapability: not capable when a probe is rejected (code 7)', () => {
+    const ok = (id: string) => ['wrb.fr', id, '{}', null, null, null];
+    const rej = (id: string) => ['wrb.fr', id, null, null, null, [7]];
+    const frames = [rej(GEMINI_RPC.DEEP_RESEARCH_BOOTSTRAP), ok(GEMINI_RPC.DEEP_RESEARCH_MODEL_STATE), ok(GEMINI_RPC.DEEP_RESEARCH_CAPS)];
+    const r = assessDeepResearchCapability(frames);
+    expect(r.capable).toBe(false);
+    expect(r.rejected).toContain('bootstrap');
+  });
+
+  it('assessDeepResearchCapability: not capable when probes are absent', () => {
+    const r = assessDeepResearchCapability([]);
+    expect(r.capable).toBe(false);
+    expect(r.rejected).toEqual(['bootstrap', 'model_state', 'caps']);
   });
 
   it('extractChatLatestModelText pulls the newest model reply', () => {
