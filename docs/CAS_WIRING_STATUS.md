@@ -45,7 +45,7 @@ States: `TODO | IN_PROGRESS | BLOCKED(Q-n) | PR(#n) | MERGED(#n) | DEPLOYED | ME
 | CW6 | HomeostatCore (essential variables) | MERGED(#875)+DEPLOYED | #875 | — (sensing only; SUDO_HOMEOSTAT_* setpoint tuners) | CI green; merged-diff verified; live via deploy #4 (20:38Z) |
 | CW7 | Expectation logging + mismatch credit | PR(#TBD) | — | SUDO_CAS_AGENCY (default OFF) | agency-monitor + penalize + doom mismatch-weight; 7 tests; scope coder.*+system.exec |
 | CW8 | Eligibility traces (multi-step credit) | TODO | — | SUDO_CAS_AGENCY | — |
-| CW9 | loop.ts decomposition DESIGN (execution gated) | DESIGN DELIVERED (Q-2) | — | — | docs/F103_LOOP_DECOMPOSITION_DESIGN.md; execution gated on A-2 |
+| CW9 | loop.ts decomposition DESIGN (execution gated) | GO per A-2 (2026-07-23) — gated: record CW0/CW2/CW5 verdicts + merge CW7 first; flag-flip freeze during slices | — | — | docs/F103_LOOP_DECOMPOSITION_DESIGN.md; A-2 in CAS_WIRING_QA.md (slice order + parity plan approved; moves-only; parity break = same-session revert) |
 
 ## Audit re-verification (CW0, 2026-07-19)
 

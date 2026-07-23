@@ -52,7 +52,7 @@ Also binding, going forward: **"#864–866 merged red" is not precedent** — yo
 Sequence: repair PR → CI green → merge → rebase #867, merge on green → rebase #868, merge on green → proceed with the already-issued deploy + verification orders. Record the DASH-10 debt line in CAS_WIRING_STATUS.md under a "Main-repo debts surfaced by campaign" note so it survives for Frank's roadmap.
 
 
-## Q-2 [OPEN] 2026-07-19 — CW9 (design review)
+## Q-2 [ANSWERED] 2026-07-19 — CW9 (design review)
 
 **Question:** Does the `docs/F103_LOOP_DECOMPOSITION_DESIGN.md` decomposition plan (executive-vocabulary module map + pure-moves-first order + export-parity proof plan + risk register) have your GO to execute, and in the proposed slice order?
 
@@ -60,5 +60,18 @@ Sequence: repair PR → CI green → merge → rebase #867, merge on green → r
 
 **Options considered:** (A) GO as-designed; (B) GO but change slice order/boundaries; (C) HOLD — execution not yet warranted (campaign's remaining tail is measurement, not structure). Recommendation: your call — the design is complete and execution is a multi-PR effort that competes with the measurement-window closeouts; I lean (C)-until-windows-close then (A), but defer.
 
-### A-2 (Fable, <pending>)
-<pending>
+### A-2 (Fable, 2026-07-23)
+
+**Ruling: GO — your own lean ("C until windows close, then A"), now made binding, because the windows HAVE closed by date (CW0→07-20, CW2→07-22, CW5→07-23) while their verdicts sit unrecorded. Close the tail first, then execute in your proposed slice order.**
+
+Gates, in order — each is a precondition for the next:
+
+1. **Record the measurement verdicts before any decomposition PR.** CW0 final mean, CW2 verdict (tier distribution, user_rephrased vs 0.70%, cache-read vs 0.1512/0.2902, error-class subset), CW5 verdict (episodes/day vs 25–32 baseline, flood-guard). If any verdict is unhealthy, that revert/hold takes priority over CW9 and you file a Q-n. An elapsed window without a recorded verdict is an open liability, not a closed window.
+2. **Merge CW7 on full green** (it predates this work and is a small, independent diff). CW8 may proceed in parallel with CW9 slices or after — your call; it does not gate CW9.
+3. **Then execute CW9 as designed**: slice order 1(effect-recorder)→2(monitors)→3(context-assembly)→4(goal-intake)→5(dispatch/planning in 2–3 sub-PRs) is APPROVED as proposed. Pure-moves-first is correct; the parity-proof plan (prototype-surface golden + behavioral event-stream diff + extended hot-path test + max-lines ratchet + live smoke) is APPROVED and REQUIRED per slice — a slice merges only on full green AND parity evidence in the PR body.
+
+Binding constraints during execution:
+- **Flag-flip freeze for attribution hygiene:** no injection-affecting flag changes (CW4 arbiter flip, CW5/CW2 default changes, SUDO_CAS_AGENCY) between the first decomposition PR and the last. The CW4 flip decision happens either BEFORE slice 1 (if its Q-n is filed and GO'd first) or AFTER slice 5 — never mid-stream. A behavior change observed mid-decomposition must have exactly one candidate cause.
+- **Moves only, zero behavior change.** Any "while I'm here" improvement found during a move gets a TODO + ledger note, not a fix in the move PR (ship-small doctrine; ride-alongs stay out of mechanical slices).
+- **Any parity break = revert that slice same-session**, record it in the ledger (revert IS success, F85 precedent), and file a Q-n before retrying.
+- Green-means-green stands (per A-1); no slice merges red for any reason.
