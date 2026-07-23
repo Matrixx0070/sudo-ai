@@ -30,6 +30,14 @@ export const GEMINI_ENDPOINTS = {
     'https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate',
   /** POST here to rotate the __Secure-1PSIDTS cookie. */
   ROTATE_COOKIES: 'https://accounts.google.com/RotateCookies',
+  /** POST batched RPCs here (Deep Research status, read-chat, etc.). */
+  BATCH_EXEC: 'https://gemini.google.com/_/BardChatUi/data/batchexecute',
+} as const;
+
+/** Google RPC ids used by the batchexecute lane. */
+export const GEMINI_RPC = {
+  DEEP_RESEARCH_STATUS: 'kwDCne',
+  READ_CHAT: 'hNvQHb',
 } as const;
 
 /** Static headers the web app sends on the StreamGenerate POST. */
@@ -397,6 +405,10 @@ export interface DeepResearchPlan {
   modifyPrompt: string | null;
   rawState: number | null;
   responseText: string | null;
+  /** Conversation id (c_…) the plan turn created — needed to start/poll research. */
+  cid: string | null;
+  /** Conversation metadata to continue the chat when confirming the plan. */
+  metadata: unknown[];
 }
 
 const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
@@ -500,10 +512,15 @@ export function extractDeepResearchPlan(candidateData: unknown, fallbackText = '
     modifyPrompt,
     rawState,
     responseText: fallbackText || null,
+    cid: null,
+    metadata: [],
   };
 }
 
-/** Walk parsed frames and return the first Deep Research plan found (or null). Pure. */
+/**
+ * Walk parsed frames and return the first Deep Research plan found (or null), enriched
+ * with the conversation cid + metadata (from frame `[1]`) needed to confirm/poll it. Pure.
+ */
 export function extractDeepResearchPlanFromFrames(frames: unknown[]): DeepResearchPlan | null {
   for (const part of frames) {
     const innerStr = getNested(part, [2]);
@@ -514,15 +531,183 @@ export function extractDeepResearchPlanFromFrames(frames: unknown[]): DeepResear
     } catch {
       continue;
     }
+    const meta = getNested(pj, [1], []) as unknown[];
+    const cid = getNested(pj, [1, 0], null) as string | null;
     const candidates = getNested(pj, [4], []) as unknown[];
     if (!Array.isArray(candidates)) continue;
     for (const cand of candidates) {
       const text = getNested(cand, [1, 0], '');
       const plan = extractDeepResearchPlan(cand, typeof text === 'string' ? text : '');
-      if (plan) return plan;
+      if (plan) {
+        plan.cid = plan.cid ?? cid;
+        plan.metadata = Array.isArray(meta) ? meta : [];
+        return plan;
+      }
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// batchexecute lane: Deep Research status polling + read-chat (final report).
+// ---------------------------------------------------------------------------
+
+/** A single RPC to batch-execute. */
+export interface RpcCall {
+  rpcid: string;
+  /** JSON-serializable payload (serialized to a string in the request). */
+  payload: unknown;
+}
+
+/** Serialize one RPC to the batchexecute inner form `[rpcid, payload, null, "generic"]`. */
+export function serializeRpc(call: RpcCall): unknown[] {
+  return [call.rpcid, JSON.stringify(call.payload), null, 'generic'];
+}
+
+/** Options for {@link buildBatchExecuteRequest}. */
+export interface BatchExecuteOptions {
+  rpcs: RpcCall[];
+  accessToken: string;
+  buildLabel?: string | null;
+  sessionId?: string | null;
+  language?: string | null;
+  reqId?: number;
+  sourcePath?: string;
+}
+
+/** Build a batchexecute POST (params + form). Verbatim shape from reference _batch_execute. */
+export function buildBatchExecuteRequest(opts: BatchExecuteOptions): StreamGenerateRequest {
+  const language = opts.language || 'en';
+  const reqId = opts.reqId ?? Math.floor(10000 + Math.random() * 90000);
+  const params: Record<string, string> = {
+    rpcids: opts.rpcs.map((r) => r.rpcid).join(','),
+    hl: language,
+    _reqid: String(reqId),
+    rt: 'c',
+    'source-path': opts.sourcePath || '/app',
+  };
+  if (opts.buildLabel) params.bl = opts.buildLabel;
+  if (opts.sessionId) params['f.sid'] = opts.sessionId;
+
+  const headers: Record<string, string> = {
+    ...GEMINI_HEADERS,
+    // BATCH_EXEC model header + same-domain.
+    'x-goog-ext-525001261-jspb': '[1,null,null,null,null,null,null,null,[4]]',
+    'x-goog-ext-73010989-jspb': '[0]',
+  };
+
+  const form = {
+    at: opts.accessToken,
+    'f.req': JSON.stringify([opts.rpcs.map(serializeRpc)]),
+  };
+  return { url: GEMINI_ENDPOINTS.BATCH_EXEC, params, headers, form };
+}
+
+/** Status of a running Deep Research task. */
+export interface DeepResearchStatus {
+  researchId: string;
+  /** 'running' | 'awaiting_confirmation' | 'completed'. */
+  state: string;
+  title: string | null;
+  query: string | null;
+  cid: string | null;
+  notes: string[];
+  done: boolean;
+  rawState: number | null;
+}
+
+const CHAT_ID_RE = /\bc_[A-Za-z0-9_]+\b/;
+
+function collectResearchNotes(data: unknown, exclude: Set<string>): string[] {
+  const notes: string[] = [];
+  const seen = new Set<string>();
+  for (const it of iterNested(data)) {
+    if (typeof it !== 'string') continue;
+    const t = it.trim();
+    if (!t || exclude.has(t) || seen.has(t) || /^https?:\/\//.test(t) || t.length < 12) continue;
+    seen.add(t);
+    notes.push(t);
+    if (notes.length >= 12) break;
+  }
+  return notes;
+}
+
+/**
+ * Parse a Deep Research status payload (one part body from the kwDCne response). Port of
+ * the reference `extract_deep_research_status_payload`. Returns null if no research id.
+ * SCAFFOLD: DR status indices are version-brittle.
+ */
+export function extractDeepResearchStatus(payload: unknown): DeepResearchStatus | null {
+  const data =
+    Array.isArray(payload) && payload.length && Array.isArray(payload[0]) ? payload[0] : payload;
+  const researchId = findFirstMatch(data, UUID_RE);
+  if (!researchId) return null;
+
+  const t = getNested(data, [1, 4, 0]);
+  const title = typeof t === 'string' ? t : null;
+  const q = getNested(data, [1, 4, 1]);
+  const query = typeof q === 'string' ? q : null;
+  const c = getNested(data, [1, 3, 0]);
+  const cid = (typeof c === 'string' ? c : null) ?? findFirstMatch(data, CHAT_ID_RE);
+  const metaDict = findFirstDictKey(data, '70');
+  const rawState = metaDict && typeof metaDict['70'] === 'number' ? (metaDict['70'] as number) : null;
+
+  const markers: string[] = [];
+  for (const it of iterNested(data)) if (typeof it === 'string' && it) markers.push(it);
+  const done = markers.some((m) => m.includes('immersive_entry_chip'));
+  const awaiting = markers.some((m) => m.includes('deep_research_confirmation_content'));
+  const state = done ? 'completed' : awaiting ? 'awaiting_confirmation' : 'running';
+
+  const exclude = new Set([title, query, researchId, cid].filter((s): s is string => typeof s === 'string'));
+  const notes = collectResearchNotes(data, exclude);
+
+  return { researchId, state, title, query, cid, notes, done, rawState };
+}
+
+/** Walk a batchexecute response's frames → first Deep Research status found (or null). */
+export function extractDeepResearchStatusFromFrames(frames: unknown[]): DeepResearchStatus | null {
+  for (const part of frames) {
+    const bodyStr = getNested(part, [2]);
+    if (typeof bodyStr !== 'string') continue;
+    let body: unknown;
+    try {
+      body = JSON.parse(bodyStr);
+    } catch {
+      continue;
+    }
+    const status = extractDeepResearchStatus(body);
+    if (status) return status;
+  }
+  return null;
+}
+
+/**
+ * Extract the latest model response text from a READ_CHAT batchexecute response. Turns are
+ * newest-first, so the first model turn is the most recent reply. Port of the reference
+ * read_chat model-turn parse. Returns '' if none. SCAFFOLD: read-chat indices are brittle.
+ */
+export function extractChatLatestModelText(frames: unknown[]): string {
+  for (const part of frames) {
+    const bodyStr = getNested(part, [2]);
+    if (typeof bodyStr !== 'string') continue;
+    let body: unknown;
+    try {
+      body = JSON.parse(bodyStr);
+    } catch {
+      continue;
+    }
+    const turns = getNested(body, [0], []) as unknown[];
+    if (!Array.isArray(turns)) continue;
+    for (const turn of turns) {
+      const candidates = getNested(turn, [3, 0], []) as unknown[];
+      if (!Array.isArray(candidates)) continue;
+      for (const cand of candidates) {
+        const text = getNested(cand, [1, 0], '');
+        if (typeof text === 'string' && text) return text;
+      }
+    }
+  }
+  return '';
 }
 
 /** Options for {@link buildStreamGenerateRequest}. */
@@ -548,6 +733,8 @@ export interface StreamGenerateOptions {
   drToken?: string;
   /** Injectable DR uuid (inner[4]); defaults to a random hex uuid. */
   drUuid?: string;
+  /** Conversation metadata (inner[2]) to continue an existing chat (e.g. a DR plan). */
+  metadata?: unknown[];
 }
 
 /** A ready-to-send StreamGenerate request (caller performs the POST). */
@@ -576,7 +763,7 @@ export function buildStreamGenerateRequest(opts: StreamGenerateOptions): StreamG
   const inner: unknown[] = new Array(69).fill(null);
   inner[0] = messageContent;
   inner[1] = [language];
-  inner[2] = [...DEFAULT_METADATA];
+  inner[2] = opts.metadata && opts.metadata.length ? opts.metadata : [...DEFAULT_METADATA];
   inner[6] = [1];
   inner[7] = 1; // STREAMING_FLAG_INDEX
   inner[10] = 1;

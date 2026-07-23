@@ -12,6 +12,12 @@ import {
   extractMedia,
   extractDeepResearchPlan,
   extractDeepResearchPlanFromFrames,
+  extractDeepResearchStatus,
+  extractDeepResearchStatusFromFrames,
+  extractChatLatestModelText,
+  buildBatchExecuteRequest,
+  serializeRpc,
+  GEMINI_RPC,
   buildStreamGenerateRequest,
   buildModelHeader,
   mintGeminiWebSession,
@@ -230,6 +236,74 @@ describe('buildStreamGenerateRequest deep research', () => {
     expect(inner[49]).toBe(1);
     expect(inner[54]).toEqual([[[[[1]]]]]);
     expect(inner[55]).toEqual([[1]]);
+  });
+});
+
+describe('deep research full workflow (batchexecute + status + read-chat)', () => {
+  function framePart(bodyObj: unknown): string {
+    const part = [['wrb.fr', 'rpc', JSON.stringify(bodyObj)]];
+    const payload = JSON.stringify(part);
+    return `)]}'\n${payload.length}\n${payload}\n`;
+  }
+
+  it('serializeRpc emits [rpcid, payloadJson, null, "generic"]', () => {
+    expect(serializeRpc({ rpcid: 'x', payload: { a: 1 } })).toEqual(['x', '{"a":1}', null, 'generic']);
+  });
+
+  it('buildBatchExecuteRequest builds params + f.req', () => {
+    const req = buildBatchExecuteRequest({
+      rpcs: [{ rpcid: GEMINI_RPC.DEEP_RESEARCH_STATUS, payload: ['RID123'] }],
+      accessToken: 't',
+      buildLabel: 'bl',
+      sessionId: 'sid',
+      reqId: 7,
+    });
+    expect(req.url).toContain('/batchexecute');
+    expect(req.params).toMatchObject({ rpcids: 'kwDCne', _reqid: '7', rt: 'c', 'source-path': '/app', bl: 'bl', 'f.sid': 'sid' });
+    expect(req.form.at).toBe('t');
+    expect(JSON.parse(req.form['f.req'])).toEqual([[['kwDCne', '["RID123"]', null, 'generic']]]);
+  });
+
+  it('extractDeepResearchStatus parses id/title/query/cid/state/done', () => {
+    const data = [
+      { '70': 2 },
+      [null, null, null, ['c_abc123'], ['My Title', 'My Query']],
+      'immersive_entry_chip_x', // done marker
+      'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    ];
+    const s = extractDeepResearchStatus(data)!;
+    expect(s.researchId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(s.title).toBe('My Title');
+    expect(s.query).toBe('My Query');
+    expect(s.cid).toBe('c_abc123');
+    expect(s.state).toBe('completed');
+    expect(s.done).toBe(true);
+    expect(s.rawState).toBe(2);
+  });
+
+  it('extractDeepResearchStatus reports awaiting_confirmation', () => {
+    const data = [{}, [null, null, null, [], []], 'deep_research_confirmation_content', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'];
+    const s = extractDeepResearchStatus(data)!;
+    expect(s.state).toBe('awaiting_confirmation');
+    expect(s.done).toBe(false);
+  });
+
+  it('extractDeepResearchStatus returns null without a research id', () => {
+    expect(extractDeepResearchStatus([{}, [null]])).toBeNull();
+  });
+
+  it('extractDeepResearchStatusFromFrames finds status in a framed response', () => {
+    const data = [{ '70': 2 }, [null, null, null, ['c_x'], ['T', 'Q']], 'immersive_entry_chip', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'];
+    const s = extractDeepResearchStatusFromFrames(parseGeminiFrames(framePart(data)));
+    expect(s?.done).toBe(true);
+  });
+
+  it('extractChatLatestModelText pulls the newest model reply', () => {
+    // read-chat body: [ turns ]; turn[3][0] = [candidate]; candidate[1][0] = text.
+    const turn: unknown[] = [];
+    turn[3] = [[['RCID', ['the final report text']]]];
+    const body = [[turn]];
+    expect(extractChatLatestModelText(parseGeminiFrames(framePart(body)))).toBe('the final report text');
   });
 });
 

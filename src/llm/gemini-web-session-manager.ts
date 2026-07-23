@@ -29,6 +29,10 @@ import {
   extractCandidates,
   extractMedia,
   extractDeepResearchPlanFromFrames,
+  extractDeepResearchStatusFromFrames,
+  extractChatLatestModelText,
+  buildBatchExecuteRequest,
+  GEMINI_RPC,
   GeminiAuthError,
   type GeminiWebModelName,
   type GeminiCandidate,
@@ -37,6 +41,8 @@ import {
   type GeneratedMediaRef,
   type WebImageRef,
   type DeepResearchPlan,
+  type DeepResearchStatus,
+  type RpcCall,
 } from './gemini-web-mint.js';
 
 const log = createLogger('llm:gemini-web-session');
@@ -246,7 +252,7 @@ export class GeminiWebSessionManager {
   private async fetchFrames(
     session: GeminiWebSessionFile,
     prompt: string,
-    opts?: { model?: GeminiWebModelName; deepResearch?: boolean },
+    opts?: { model?: GeminiWebModelName; deepResearch?: boolean; metadata?: unknown[] },
   ): Promise<unknown[]> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const req = buildStreamGenerateRequest({
@@ -257,6 +263,7 @@ export class GeminiWebSessionManager {
         language: this.language ?? 'en',
         model: opts?.model,
         deepResearch: opts?.deepResearch,
+        metadata: opts?.metadata,
       });
       const url = `${req.url}?${new URLSearchParams(req.params).toString()}`;
       const res = await this.fetchImpl(url, {
@@ -328,6 +335,91 @@ export class GeminiWebSessionManager {
       throw new Error('deep research turn returned no plan — DR may need an eligible account/model, or indices drifted');
     }
     return plan;
+  }
+
+  /** POST a batch of RPCs (Deep Research status, read-chat) and return parsed frames. */
+  private async batchExecute(rpcs: RpcCall[]): Promise<unknown[]> {
+    const session = await this.ready();
+    const req = buildBatchExecuteRequest({
+      rpcs,
+      accessToken: this.token!,
+      buildLabel: this.buildLabel,
+      sessionId: this.sessionId,
+      language: this.language ?? 'en',
+    });
+    const url = `${req.url}?${new URLSearchParams(req.params).toString()}`;
+    const res = await this.fetchImpl(url, {
+      method: 'POST',
+      headers: this.headers(session, req.headers),
+      body: new URLSearchParams(req.form).toString(),
+    });
+    if (res.status !== 200) throw new GeminiAuthError(`batchexecute HTTP ${res.status}`);
+    return parseGeminiFrames(await res.text());
+  }
+
+  /** Confirm a Deep Research plan (a follow-up turn in the plan's conversation). */
+  async startDeepResearch(plan: DeepResearchPlan): Promise<void> {
+    const session = await this.ready();
+    await this.fetchFrames(session, plan.confirmPrompt || 'Start research', {
+      deepResearch: true,
+      metadata: plan.metadata,
+    });
+  }
+
+  /** Poll one Deep Research status update (or null). */
+  async getDeepResearchStatus(researchId: string): Promise<DeepResearchStatus | null> {
+    const frames = await this.batchExecute([
+      { rpcid: GEMINI_RPC.DEEP_RESEARCH_STATUS, payload: [researchId] },
+    ]);
+    return extractDeepResearchStatusFromFrames(frames);
+  }
+
+  /** Fetch the latest model reply text from a chat (READ_CHAT); '' if none/incomplete. */
+  async fetchLatestChatText(cid: string): Promise<string> {
+    const frames = await this.batchExecute([
+      { rpcid: GEMINI_RPC.READ_CHAT, payload: [cid, 5, null, 1, [1], [4], null, 1] },
+    ]);
+    return extractChatLatestModelText(frames);
+  }
+
+  /**
+   * Run a full Deep Research cycle headlessly: plan → confirm → poll to completion → fetch
+   * the final report. Long-running (minutes) and account-gated. Returns the plan, the
+   * status history, whether it completed, and the report text (may be '' if it timed out).
+   */
+  async runDeepResearch(
+    prompt: string,
+    opts?: {
+      model?: GeminiWebModelName;
+      pollIntervalMs?: number;
+      timeoutMs?: number;
+      onStatus?: (s: DeepResearchStatus) => void;
+    },
+  ): Promise<{ plan: DeepResearchPlan; statuses: DeepResearchStatus[]; done: boolean; reportText: string }> {
+    const plan = await this.generateDeepResearchPlan(prompt, { model: opts?.model });
+    await this.startDeepResearch(plan);
+
+    const pollIntervalMs = opts?.pollIntervalMs ?? 10_000;
+    const timeoutMs = opts?.timeoutMs ?? 600_000;
+    const statuses: DeepResearchStatus[] = [];
+    const start = Date.now();
+    let done = false;
+    if (plan.researchId) {
+      while (Date.now() - start < timeoutMs) {
+        const s = await this.getDeepResearchStatus(plan.researchId);
+        if (s) {
+          statuses.push(s);
+          opts?.onStatus?.(s);
+          if (s.done) {
+            done = true;
+            break;
+          }
+        }
+        await new Promise((r) => setTimeout(r, pollIntervalMs));
+      }
+    }
+    const reportText = plan.cid ? await this.fetchLatestChatText(plan.cid) : '';
+    return { plan, statuses, done, reportText };
   }
 }
 
