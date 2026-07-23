@@ -57,7 +57,9 @@ export function computeDhex(colorStr: string, transformStr: string): string {
 
 // SCAFFOLD: the 4 .r-gswh7 loading-spinner `d` paths are grok static assets,
 // byte-stable across every load observed but not guaranteed forever. If grok
-// reskins the spinner these change and minting breaks (403). Re-capture via
+// reskins the spinner these change and minting breaks (403). EARLY WARNING:
+// scripts/grok-web/statsig_canary.mjs diffs these against the live spinner on a
+// schedule and exits non-zero on drift — run it to pre-empt the 403. Re-capture via
 // scripts/grok-web/statsig_capture.mjs and refresh these + the test fixtures.
 // Selected by seed[5] % 4.
 const R_GSWH7_PATHS: readonly string[] = [
