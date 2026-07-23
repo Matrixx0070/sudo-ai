@@ -10,6 +10,8 @@ import {
   parseGeminiFrames,
   extractCandidates,
   extractMedia,
+  extractDeepResearchPlan,
+  extractDeepResearchPlanFromFrames,
   buildStreamGenerateRequest,
   buildModelHeader,
   mintGeminiWebSession,
@@ -162,6 +164,72 @@ describe('buildStreamGenerateRequest', () => {
     expect(req.params.bl).toBeUndefined();
     expect(req.params['f.sid']).toBeUndefined();
     expect(req.params._reqid).toBe('1');
+  });
+});
+
+describe('extractDeepResearchPlan', () => {
+  function planCandidate(): unknown[] {
+    const payload = [
+      'History of the Printing Press', // [0] title
+      [
+        [null, 'Step 1', 'survey origins'], // [1][0] -> query at [1][0][2]
+        [null, 'Step 2', 'trace spread'],
+      ],
+      'about 5 minutes', // [2] eta
+      ['Start this research?'], // [3][0] confirmPrompt
+      ['http://confirm.example'], // [4][0] confirmationUrl
+      ['You can modify the plan'], // [5] modifyPrompt (first string)
+    ];
+    const cand: unknown[] = ['RCID', ['plan intro text']];
+    cand[12] = { '56': payload, '70': 3 };
+    cand[13] = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'; // research id (uuid-shaped)
+    return cand;
+  }
+
+  it('parses title/query/steps/eta/confirm/url/modify/rawState/researchId', () => {
+    const plan = extractDeepResearchPlan(planCandidate());
+    expect(plan).not.toBeNull();
+    expect(plan!.title).toBe('History of the Printing Press');
+    expect(plan!.query).toBe('survey origins');
+    expect(plan!.steps).toEqual(['Step 1: survey origins', 'Step 2: trace spread']);
+    expect(plan!.etaText).toBe('about 5 minutes');
+    expect(plan!.confirmPrompt).toBe('Start this research?');
+    expect(plan!.confirmationUrl).toBe('http://confirm.example');
+    expect(plan!.modifyPrompt).toBe('You can modify the plan');
+    expect(plan!.rawState).toBe(3);
+    expect(plan!.researchId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+  });
+
+  it('returns null for a candidate with no plan block', () => {
+    expect(extractDeepResearchPlan(['RCID', ['just a normal reply']])).toBeNull();
+  });
+
+  it('finds the plan across framed response', () => {
+    const inner = [null, ['CID', 'RID'], null, null, [planCandidate()]];
+    const part = [['wrb.fr', null, JSON.stringify(inner)]];
+    const payload = JSON.stringify(part);
+    const frames = parseGeminiFrames(`)]}'\n${payload.length}\n${payload}\n`);
+    expect(extractDeepResearchPlanFromFrames(frames)?.title).toBe('History of the Printing Press');
+  });
+});
+
+describe('buildStreamGenerateRequest deep research', () => {
+  it('sets the DR inner fields when deepResearch is true', () => {
+    const req = buildStreamGenerateRequest({
+      prompt: 'research X',
+      accessToken: 't',
+      reqId: 1,
+      uuid: 'u',
+      deepResearch: true,
+      drToken: 'TOK',
+      drUuid: 'DRUUID',
+    });
+    const inner = JSON.parse(JSON.parse(req.form['f.req'])[1]);
+    expect(inner[3]).toBe('!TOK');
+    expect(inner[4]).toBe('DRUUID');
+    expect(inner[49]).toBe(1);
+    expect(inner[54]).toEqual([[[[[1]]]]]);
+    expect(inner[55]).toEqual([[1]]);
   });
 });
 

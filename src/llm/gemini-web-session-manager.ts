@@ -28,6 +28,7 @@ import {
   parseGeminiFrames,
   extractCandidates,
   extractMedia,
+  extractDeepResearchPlanFromFrames,
   GeminiAuthError,
   type GeminiWebModelName,
   type GeminiCandidate,
@@ -35,6 +36,7 @@ import {
   type GeneratedVideoRef,
   type GeneratedMediaRef,
   type WebImageRef,
+  type DeepResearchPlan,
 } from './gemini-web-mint.js';
 
 const log = createLogger('llm:gemini-web-session');
@@ -167,6 +169,21 @@ export class GeminiWebSessionManager {
     };
   }
 
+  // RotateCookies rejects the full cookie jar (HTTP 401) — send ONLY the two auth
+  // cookies, matching the reference. Used exclusively for the rotate POST.
+  private rotateHeaders(session: GeminiWebSessionFile): Record<string, string> {
+    const auth: Record<string, string> = {};
+    for (const k of ['__Secure-1PSID', '__Secure-1PSIDTS']) {
+      if (session.cookies[k]) auth[k] = session.cookies[k];
+    }
+    return {
+      'User-Agent': session.userAgent || DEFAULT_UA,
+      'Content-Type': 'application/json',
+      Origin: 'https://accounts.google.com',
+      Cookie: cookieHeaderFrom(auth),
+    };
+  }
+
   private markRelogin(session: GeminiWebSessionFile, reason: string): never {
     this.save({ ...session, needsRelogin: true });
     log.warn({ reason }, 'gemini web session needs re-login (human re-capture)');
@@ -180,7 +197,7 @@ export class GeminiWebSessionManager {
     this.lastRotateAt = now;
     const res = await this.fetchImpl(GEMINI_ENDPOINTS.ROTATE_COOKIES, {
       method: 'POST',
-      headers: this.headers(session, { 'Content-Type': 'application/json', Origin: 'https://accounts.google.com' }),
+      headers: this.rotateHeaders(session),
       body: '[000,"-0000000000000000000"]',
     });
     if (res.status === 401) this.markRelogin(session, 'rotate 401');
@@ -229,7 +246,7 @@ export class GeminiWebSessionManager {
   private async fetchFrames(
     session: GeminiWebSessionFile,
     prompt: string,
-    opts?: { model?: GeminiWebModelName },
+    opts?: { model?: GeminiWebModelName; deepResearch?: boolean },
   ): Promise<unknown[]> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const req = buildStreamGenerateRequest({
@@ -239,6 +256,7 @@ export class GeminiWebSessionManager {
         sessionId: this.sessionId,
         language: this.language ?? 'en',
         model: opts?.model,
+        deepResearch: opts?.deepResearch,
       });
       const url = `${req.url}?${new URLSearchParams(req.params).toString()}`;
       const res = await this.fetchImpl(url, {
@@ -295,6 +313,21 @@ export class GeminiWebSessionManager {
       media: m.flatMap((c) => c.generatedMedia),
       webImages: m.flatMap((c) => c.webImages),
     };
+  }
+
+  /**
+   * Request a Deep Research PLAN (the first, plan-proposal step) headlessly and return
+   * it. This is the plan only — approving/polling/fetching the final report is a further
+   * async workflow (a later slice). Throws if the turn yields no plan.
+   */
+  async generateDeepResearchPlan(prompt: string, opts?: { model?: GeminiWebModelName }): Promise<DeepResearchPlan> {
+    const session = await this.ready();
+    const frames = await this.fetchFrames(session, prompt, { model: opts?.model, deepResearch: true });
+    const plan = extractDeepResearchPlanFromFrames(frames);
+    if (!plan) {
+      throw new Error('deep research turn returned no plan — DR may need an eligible account/model, or indices drifted');
+    }
+    return plan;
   }
 }
 

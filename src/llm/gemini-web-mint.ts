@@ -19,7 +19,7 @@
  * This module is inert (unwired); nothing on the hot path imports it.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 
 /** gemini.google.com web endpoints. */
 export const GEMINI_ENDPOINTS = {
@@ -380,6 +380,151 @@ export function extractMedia(frames: unknown[]): GeminiMediaCandidate[] {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Deep Research plan parsing.
+// ---------------------------------------------------------------------------
+
+/** A Deep Research plan the model proposes before running (the first DR step). */
+export interface DeepResearchPlan {
+  researchId: string | null;
+  title: string | null;
+  query: string | null;
+  /** Human-readable "label: body" research steps. */
+  steps: string[];
+  etaText: string | null;
+  confirmPrompt: string | null;
+  confirmationUrl: string | null;
+  modifyPrompt: string | null;
+  rawState: number | null;
+  responseText: string | null;
+}
+
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+
+function* iterNested(data: unknown): Generator<unknown> {
+  yield data;
+  if (Array.isArray(data)) {
+    for (const it of data) yield* iterNested(it);
+  } else if (data !== null && typeof data === 'object') {
+    for (const it of Object.values(data as Record<string, unknown>)) yield* iterNested(it);
+  }
+}
+function findFirstMatch(data: unknown, re: RegExp): string | null {
+  for (const it of iterNested(data)) {
+    if (typeof it === 'string') {
+      const m = re.exec(it);
+      if (m) return m[0];
+    }
+  }
+  return null;
+}
+function findFirstDictKey(data: unknown, key: string): Record<string, unknown> | null {
+  for (const it of iterNested(data)) {
+    if (it !== null && typeof it === 'object' && !Array.isArray(it) && key in (it as object)) {
+      return it as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+function findFirstString(data: unknown, exclude: Set<string> = new Set()): string | null {
+  for (const it of iterNested(data)) {
+    if (typeof it === 'string' && it && !exclude.has(it)) return it;
+  }
+  return null;
+}
+
+/**
+ * Parse a Deep Research PLAN from a single candidate. Mirrors the reference
+ * `extract_deep_research_plan`: the plan lives in a nested object under key "56" (or
+ * "57"); title=[0], steps=[1] (each [label,body] at [1],[2]), query=[1][0][2],
+ * eta=[2], confirmPrompt=[3][0], confirmationUrl=[4][0], modifyPrompt=first string of
+ * [5]; rawState=meta["70"]. Returns null when no plan is present. Pure.
+ *
+ * SCAFFOLD: DR plan indices are version-brittle like the media block — re-verify
+ * against a live capture + the reference if a plan comes back null on a real DR turn.
+ */
+export function extractDeepResearchPlan(candidateData: unknown, fallbackText = ''): DeepResearchPlan | null {
+  let metaDict: Record<string, unknown> | null = null;
+  let payload: unknown[] | null = null;
+  for (const key of ['56', '57']) {
+    const md = findFirstDictKey(candidateData, key);
+    if (md && Array.isArray(md[key])) {
+      metaDict = md;
+      payload = md[key] as unknown[];
+      break;
+    }
+  }
+  if (!metaDict || !payload) return null;
+
+  const researchId = findFirstMatch(candidateData, UUID_RE);
+  const title = getNested(payload, [0]);
+  const titleStr = typeof title === 'string' ? title : null;
+
+  const steps: string[] = [];
+  const stepsPayload = getNested(payload, [1], []) as unknown[];
+  if (Array.isArray(stepsPayload)) {
+    for (const step of stepsPayload) {
+      if (!Array.isArray(step)) continue;
+      const label = typeof step[1] === 'string' ? step[1] : null;
+      const body = typeof step[2] === 'string' ? step[2] : null;
+      if (label && body) steps.push(`${label}: ${body}`);
+      else if (body) steps.push(body);
+      else if (label) steps.push(label);
+    }
+  }
+
+  const modifyPayload = getNested(payload, [5]);
+  const modifyPrompt = Array.isArray(modifyPayload) ? findFirstString(modifyPayload) : null;
+  const q = getNested(payload, [1, 0, 2]);
+  const query = typeof q === 'string' ? q : null;
+  const eta = getNested(payload, [2]);
+  const etaText = typeof eta === 'string' ? eta : null;
+  const cp = getNested(payload, [3, 0]);
+  const confirmPrompt = typeof cp === 'string' ? cp : null;
+  const cu = getNested(payload, [4, 0]);
+  const confirmationUrl = typeof cu === 'string' ? cu : null;
+  const rs = metaDict['70'];
+  const rawState = typeof rs === 'number' ? rs : null;
+
+  if (!(titleStr || query || steps.length || etaText || confirmPrompt || confirmationUrl || modifyPrompt)) {
+    return null;
+  }
+  return {
+    researchId,
+    title: titleStr,
+    query,
+    steps,
+    etaText,
+    confirmPrompt,
+    confirmationUrl,
+    modifyPrompt,
+    rawState,
+    responseText: fallbackText || null,
+  };
+}
+
+/** Walk parsed frames and return the first Deep Research plan found (or null). Pure. */
+export function extractDeepResearchPlanFromFrames(frames: unknown[]): DeepResearchPlan | null {
+  for (const part of frames) {
+    const innerStr = getNested(part, [2]);
+    if (typeof innerStr !== 'string') continue;
+    let pj: unknown;
+    try {
+      pj = JSON.parse(innerStr);
+    } catch {
+      continue;
+    }
+    const candidates = getNested(pj, [4], []) as unknown[];
+    if (!Array.isArray(candidates)) continue;
+    for (const cand of candidates) {
+      const text = getNested(cand, [1, 0], '');
+      const plan = extractDeepResearchPlan(cand, typeof text === 'string' ? text : '');
+      if (plan) return plan;
+    }
+  }
+  return null;
+}
+
 /** Options for {@link buildStreamGenerateRequest}. */
 export interface StreamGenerateOptions {
   prompt: string;
@@ -397,6 +542,12 @@ export interface StreamGenerateOptions {
   reqId?: number;
   /** Injectable for deterministic tests; defaults to a random UUID. */
   uuid?: string;
+  /** Request a Deep Research plan turn (sets the DR inner fields). */
+  deepResearch?: boolean;
+  /** Injectable DR nonce (inner[3]); defaults to a long random base64url token. */
+  drToken?: string;
+  /** Injectable DR uuid (inner[4]); defaults to a random hex uuid. */
+  drUuid?: string;
 }
 
 /** A ready-to-send StreamGenerate request (caller performs the POST). */
@@ -439,6 +590,15 @@ export function buildStreamGenerateRequest(opts: StreamGenerateOptions): StreamG
   inner[59] = uuid;
   inner[61] = [];
   inner[68] = 2;
+
+  if (opts.deepResearch) {
+    // DR nonce + selection flags, verbatim from reference client.py.
+    inner[3] = '!' + (opts.drToken ?? randomBytes(2600).toString('base64url'));
+    inner[4] = opts.drUuid ?? randomUUID().replace(/-/g, '');
+    inner[49] = 1;
+    inner[54] = [[[[[1]]]]];
+    inner[55] = [[1]];
+  }
 
   const params: Record<string, string> = { hl: language, _reqid: String(reqId), rt: 'c' };
   if (opts.buildLabel) params.bl = opts.buildLabel;
