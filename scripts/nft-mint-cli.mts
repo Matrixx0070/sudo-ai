@@ -44,6 +44,8 @@ interface MintArgs {
   model: string;
   name: string;
   system: string;
+  image?: string;
+  pin?: boolean;
   broadcast?: boolean;
   yes?: boolean;
   tokenUri?: string;
@@ -58,21 +60,30 @@ async function run(args: MintArgs): Promise<void> {
   const description = await generateContentSeat(args.prompt, { model: args.model, system: args.system });
   logEvent({ action: 'generate', model: args.model, prompt: args.prompt, chars: description.length });
 
-  // 2) Assemble metadata (the on-chain/off-chain JSON the token points at).
-  const metadata = {
+  // 2) Assemble the metadata JSON (the grok description IS the token's metadata).
+  const metadata: Record<string, unknown> = {
     name: args.name,
     description,
     attributes: [{ trait_type: 'prompt', value: args.prompt }],
     createdAt: new Date().toISOString(),
   };
+  if (args.image !== undefined && args.image !== '') metadata['image'] = args.image;
+
+  // tokenURI: an explicit --token-uri wins (e.g. a pre-pinned ipfs:// URI);
+  // otherwise embed the metadata inline as a self-describing data: URI so the
+  // grok description lives on-chain with no external pin/gateway dependency.
+  const tokenUri =
+    args.tokenUri ?? `data:application/json;base64,${Buffer.from(JSON.stringify(metadata)).toString('base64')}`;
 
   // 3) DRY RUN by default — show exactly what would happen, spend nothing.
   if (!args.broadcast) {
     console.log('\n=== DRY RUN (no broadcast) ===');
     console.log('metadata:', JSON.stringify(metadata, null, 2));
+    console.log('tokenURI:', tokenUri.length > 120 ? `${tokenUri.slice(0, 120)}… (${tokenUri.length} chars)` : tokenUri);
+    if (args.pin && !args.tokenUri) console.log('(--pin: on broadcast this metadata is pinned to IPFS via Pinata and the ipfs:// URI is minted instead)');
     console.log(`would mint ${quantity}× to ${args.to ?? '<--to required for broadcast>'} via ${process.env['MINT_FN_SIG'] ?? 'mint(address,string)'}`);
-    logEvent({ action: 'dry-run', to: args.to ?? null, quantity, name: args.name });
-    console.log('\nAdd --broadcast --yes (and env creds + --token-uri) to mint for real.');
+    logEvent({ action: 'dry-run', to: args.to ?? null, quantity, name: args.name, tokenUriKind: args.tokenUri ? 'explicit' : 'data-uri' });
+    console.log('\nAdd --broadcast --yes (+ env creds) to mint for real.');
     return;
   }
 
@@ -83,7 +94,6 @@ async function run(args: MintArgs): Promise<void> {
   const contractAddress = requireEnv('CONTRACT_ADDRESS');
   const mintFnSig = process.env['MINT_FN_SIG'] ?? 'mint(address,string)';
   if (!args.to) throw new Error('--to <address> is required to broadcast');
-  if (!args.tokenUri) throw new Error('--token-uri <uri> is required to broadcast (upload the metadata first, e.g. to IPFS)');
   const maxGasGwei = Number.parseFloat(args.maxGasGwei);
   if (!Number.isFinite(maxGasGwei) || maxGasGwei <= 0) throw new Error(`--max-gas-gwei must be a positive number (got ${args.maxGasGwei})`);
 
@@ -108,10 +118,21 @@ async function run(args: MintArgs): Promise<void> {
     throw new Error(`gas price ${Number(gasPrice) / 1e9} gwei exceeds --max-gas-gwei ${maxGasGwei} — aborting`);
   }
 
+  // Pin to real IPFS when requested (unless an explicit --token-uri already given).
+  let mintUri = tokenUri;
+  let uriKind = args.tokenUri ? 'explicit' : 'data-uri';
+  if (args.pin && args.tokenUri === undefined) {
+    const cid = await pinToPinata(metadata, args.name);
+    mintUri = `ipfs://${cid}`;
+    uriKind = 'ipfs-pinned';
+    logEvent({ action: 'pinned', service: 'pinata', cid, uri: mintUri });
+    console.log('pinned metadata to IPFS:', mintUri);
+  }
+
   const fnName = mintFnSig.slice(0, mintFnSig.indexOf('('));
-  logEvent({ action: 'broadcast-start', to: args.to, contract: contractAddress, fn: fnName, quantity, gasPriceGwei: Number(gasPrice) / 1e9 });
+  logEvent({ action: 'broadcast-start', to: args.to, contract: contractAddress, fn: fnName, quantity, gasPriceGwei: Number(gasPrice) / 1e9, tokenUriKind: uriKind, uriLen: mintUri.length });
   for (let i = 0; i < quantity; i++) {
-    const tx = await (contract[fnName] as (...a: unknown[]) => Promise<{ hash: string; wait: () => Promise<unknown> }>)(args.to, args.tokenUri);
+    const tx = await (contract[fnName] as (...a: unknown[]) => Promise<{ hash: string; wait: () => Promise<unknown> }>)(args.to, mintUri);
     await tx.wait();
     logEvent({ action: 'mint', index: i + 1, of: quantity, txHash: tx.hash });
     console.log(`minted ${i + 1}/${quantity}: ${tx.hash}`);
@@ -122,6 +143,20 @@ function requireEnv(name: string): string {
   const v = process.env[name];
   if (v === undefined || v === '') throw new Error(`missing required env ${name}`);
   return v;
+}
+
+/** Pin a JSON metadata object to IPFS via Pinata; returns the CID. JWT from PINATA_JWT (never logged). */
+async function pinToPinata(metadata: Record<string, unknown>, name: string): Promise<string> {
+  const jwt = requireEnv('PINATA_JWT');
+  const res = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt}` },
+    body: JSON.stringify({ pinataContent: metadata, pinataMetadata: { name } }),
+  });
+  if (!res.ok) throw new Error(`Pinata pin failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  const j = (await res.json()) as { IpfsHash?: string };
+  if (!j.IpfsHash) throw new Error('Pinata response missing IpfsHash');
+  return j.IpfsHash;
 }
 
 const program = new Command();
@@ -138,7 +173,9 @@ program
     'instruction constraining the output',
     'You write NFT descriptions. Reply with ONE vivid paragraph (max 60 words) describing the artwork. Output only the description — no code, no markup, no preamble.',
   )
-  .option('--token-uri <uri>', 'metadata URI to mint (required for --broadcast)')
+  .option('--image <url>', 'optional image URL added to the metadata')
+  .option('--pin', 'pin metadata to IPFS via Pinata (needs PINATA_JWT env) and mint the ipfs:// URI')
+  .option('--token-uri <uri>', 'override metadata URI (e.g. a pre-pinned ipfs://…); default embeds the description as a data: URI')
   .option('--broadcast', 'actually send the mint tx (spends real ETH)')
   .option('--yes', 'confirm broadcast (required with --broadcast)')
   .option('--max-gas-gwei <gwei>', 'refuse to broadcast above this gas price', '50')
