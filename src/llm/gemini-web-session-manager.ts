@@ -121,10 +121,23 @@ export class GeminiWebSessionManager {
   private language: string | null = null;
   private tokenAt = 0;
   private lastRotateAt = 0;
+  /** Optional browserless re-auth: returns a fresh google cookie map, or null. */
+  private reauthHook?: () => Promise<Record<string, string> | null>;
+  private reauthing = false;
 
-  constructor(opts?: { storePath?: string; fetchImpl?: SessionFetch }) {
+  constructor(opts?: {
+    storePath?: string;
+    fetchImpl?: SessionFetch;
+    reauthHook?: () => Promise<Record<string, string> | null>;
+  }) {
     this.storePath = opts?.storePath ?? DEFAULT_STORE_PATH;
     this.fetchImpl = opts?.fetchImpl ?? (globalThis.fetch as unknown as SessionFetch);
+    this.reauthHook = opts?.reauthHook;
+  }
+
+  /** Register a browserless re-auth hook (invoked once when the session is dead). */
+  setReauthHook(fn: () => Promise<Record<string, string> | null>): void {
+    this.reauthHook = fn;
   }
 
   /** Load the session file, or null if absent/invalid. */
@@ -170,6 +183,34 @@ export class GeminiWebSessionManager {
     };
   }
 
+  /**
+   * When the session is dead, attempt a browserless re-mint via the injected reauth hook
+   * (e.g. the gpsoauth master token). Returns the reloaded session on success, else null.
+   * Re-entrancy-guarded so a failing hook can't loop.
+   */
+  private async tryReauth(reason: string): Promise<GeminiWebSessionFile | null> {
+    if (!this.reauthHook || this.reauthing) return null;
+    this.reauthing = true;
+    try {
+      log.info({ reason }, 'gemini session dead — attempting browserless reauth');
+      const cookies = await this.reauthHook();
+      if (!cookies || !cookies['__Secure-1PSID']) {
+        log.warn({ reason }, 'reauth hook returned no usable cookies');
+        return null;
+      }
+      this.saveFromCookies(cookies); // fresh object clears needsRelogin
+      this.token = null;
+      this.tokenAt = 0;
+      log.info('gemini session auto-recovered via browserless reauth');
+      return this.load();
+    } catch (e) {
+      log.warn({ reason, err: (e as Error).message }, 'browserless reauth failed');
+      return null;
+    } finally {
+      this.reauthing = false;
+    }
+  }
+
   private headers(session: GeminiWebSessionFile, extra?: Record<string, string>): Record<string, string> {
     return {
       'User-Agent': session.userAgent || DEFAULT_UA,
@@ -210,7 +251,7 @@ export class GeminiWebSessionManager {
       headers: this.rotateHeaders(session),
       body: '[000,"-0000000000000000000"]',
     });
-    if (res.status === 401) this.markRelogin(session, 'rotate 401');
+    if (res.status === 401) return false; // dead 1PSID — let ready() attempt reauth/relogin
     const fresh = parse1PSIDTS(res.headers.getSetCookie?.() ?? []);
     if (!fresh) {
       log.debug({ status: res.status }, 'rotate returned no new 1PSIDTS');
@@ -242,14 +283,21 @@ export class GeminiWebSessionManager {
 
   /** Load the file, verify liveness, and ensure a token (rotate+retry once). */
   private async ready(): Promise<GeminiWebSessionFile> {
-    const session = this.load();
-    if (!session) throw new GeminiAuthError(`no gemini session file at ${this.storePath} — run capture-cookies first`);
-    if (session.needsRelogin) throw new GeminiAuthError('gemini session marked needs-relogin — re-capture cookies');
-    if (!(await this.ensureToken(session))) {
-      await this.rotate(session);
-      if (!(await this.ensureToken(session, true))) this.markRelogin(session, 'no SNlM0e after rotate');
+    let session = this.load();
+    if (!session || session.needsRelogin) {
+      const recovered = await this.tryReauth(session ? 'needs-relogin' : 'no session file');
+      if (recovered) session = recovered;
+      else if (!session)
+        throw new GeminiAuthError(`no gemini session file at ${this.storePath} — run capture-cookies first`);
+      else throw new GeminiAuthError('gemini session marked needs-relogin — re-capture cookies');
     }
-    return session;
+    if (await this.ensureToken(session)) return session;
+    await this.rotate(session);
+    if (await this.ensureToken(session, true)) return session;
+    // token still dead → try a browserless reauth before surrendering to human re-capture
+    const recovered = await this.tryReauth('no SNlM0e after rotate');
+    if (recovered && (await this.ensureToken(recovered, true))) return recovered;
+    this.markRelogin(session, 'no SNlM0e after rotate');
   }
 
   /** POST StreamGenerate and return the parsed frames; rotates+retries once on 401. */
@@ -456,7 +504,15 @@ export class GeminiWebSessionManager {
 let singleton: GeminiWebSessionManager | null = null;
 /** Process-wide manager over <DATA_DIR>/gemini-web-session.json, created lazily. */
 export function getGeminiWebSessionManager(): GeminiWebSessionManager {
-  if (!singleton) singleton = new GeminiWebSessionManager();
+  if (!singleton) {
+    singleton = new GeminiWebSessionManager();
+    // Self-heal: on a dead __Secure-1PSID, re-mint browserlessly via the gpsoauth master
+    // token (no-op if no seed exists). Lazy import keeps child_process out of the hot path.
+    singleton.setReauthHook(async () => {
+      const { mintGeminiCookiesViaGpsoauth } = await import('./gemini-gpsoauth-reauth.js');
+      return mintGeminiCookiesViaGpsoauth();
+    });
+  }
   return singleton;
 }
 

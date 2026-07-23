@@ -97,6 +97,37 @@ describe('generate (headless, from file)', () => {
     expect(mgr.status().needsRelogin).toBe(true);
   });
 
+  it('auto-recovers a dead session via the reauth hook (no re-login thrown)', async () => {
+    let live = false;
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return live ? res(200, APP_HTML) : res(200, '<html>logged out</html>');
+      if (url === GEMINI_ENDPOINTS.ROTATE_COOKIES) return res(200, '', []);
+      if (url.startsWith(GEMINI_ENDPOINTS.GENERATE)) return res(200, frameBody('pong'));
+      throw new Error(`unexpected url ${url}`);
+    });
+    // Browserless re-mint: supplies fresh cookies and restores the (mock) login.
+    mgr.setReauthHook(async () => {
+      live = true;
+      return { '__Secure-1PSID': 'fresh', '__Secure-1PSIDTS': 'ts' };
+    });
+    mgr.saveFromCookies({ '__Secure-1PSID': 'dead' }, 'UA/1');
+    const reply = await mgr.generate('hi');
+    expect(reply.text).toBe('pong');
+    expect(mgr.status().needsRelogin).toBeFalsy();
+  });
+
+  it('still marks needs-relogin when the reauth hook cannot recover', async () => {
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return res(200, '<html>logged out</html>');
+      if (url === GEMINI_ENDPOINTS.ROTATE_COOKIES) return res(200, '', []);
+      throw new Error(`unexpected url ${url}`);
+    });
+    mgr.setReauthHook(async () => null); // hook present but yields nothing
+    mgr.saveFromCookies({ '__Secure-1PSID': 'dead' }, 'UA/1');
+    await expect(mgr.generate('hi')).rejects.toBeInstanceOf(GeminiAuthError);
+    expect(mgr.status().needsRelogin).toBe(true);
+  });
+
   it('throws when there is no session file', async () => {
     const mgr = newManager(async () => res(200, ''));
     // no saveFromCookies -> no file
