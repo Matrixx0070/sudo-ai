@@ -15,6 +15,7 @@ import {
   extractDeepResearchStatus,
   extractDeepResearchStatusFromFrames,
   extractChatLatestModelText,
+  extractDeepResearchReportFromFrames,
   buildBatchExecuteRequest,
   serializeRpc,
   extractRpcRejectCode,
@@ -335,6 +336,38 @@ describe('deep research full workflow (batchexecute + status + read-chat)', () =
     turn[3] = [[['RCID', ['the final report text']]]];
     const body = [[turn]];
     expect(extractChatLatestModelText(parseGeminiFrames(framePart(body)))).toBe('the final report text');
+  });
+
+  // A completed research candidate: msg at [1][0], full report markdown at [30][0][4].
+  function completedTurn(msg: string, report: string, atFallback = false): unknown[] {
+    const cand: unknown[] = [];
+    cand[1] = [msg];
+    cand[30] = atFallback ? [[null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, [report]]] : [[null, null, null, null, report]];
+    const turn: unknown[] = [];
+    turn[3] = [[cand]];
+    return [[turn]];
+  }
+
+  it('extractDeepResearchReportFromFrames returns the report when the [30] block exists', () => {
+    const body = completedTurn("I've completed your research.", '# Final Report\nbody');
+    const r = extractDeepResearchReportFromFrames(parseGeminiFrames(framePart(body)));
+    expect(r.done).toBe(true);
+    expect(r.reportText).toBe('# Final Report\nbody');
+    expect(r.message).toBe("I've completed your research.");
+  });
+
+  it('extractDeepResearchReportFromFrames reads the [30][0][17][0] fallback location', () => {
+    const body = completedTurn('done', '# Report via fallback', true);
+    const r = extractDeepResearchReportFromFrames(parseGeminiFrames(framePart(body)));
+    expect(r.done).toBe(true);
+    expect(r.reportText).toBe('# Report via fallback');
+  });
+
+  it('extractDeepResearchReportFromFrames reports not-done while still running (no [30] block)', () => {
+    const turn: unknown[] = [];
+    turn[3] = [[[null, ['Researching websites...']]]];
+    const r = extractDeepResearchReportFromFrames(parseGeminiFrames(framePart([[turn]])));
+    expect(r).toEqual({ done: false, reportText: null, message: null });
   });
 });
 

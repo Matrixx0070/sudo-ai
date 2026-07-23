@@ -751,6 +751,52 @@ export function extractChatLatestModelText(frames: unknown[]): string {
   return '';
 }
 
+/** Deep Research completion state + final report, read from a READ_CHAT response. */
+export interface DeepResearchReport {
+  /** True once the research has finished and its report block exists. */
+  done: boolean;
+  /** The full report markdown (null while still running). */
+  reportText: string | null;
+  /** The completing turn's short chat message (e.g. "I've completed your research…"). */
+  message: string | null;
+}
+
+/**
+ * From a READ_CHAT response, the latest model turn's Deep Research report. A completed
+ * research materialises as an immersive report block on the candidate at index 30: the
+ * full markdown is `candidate[30][0][4]` (mirrored at `[30][0][17][0]`). While the task is
+ * still running that block is absent, so its presence IS the done signal — this account has
+ * no pollable research_id (kwDCne rejects the immersive id), so the chat is the source of
+ * truth. Candidate walk mirrors {@link extractChatLatestModelText}.
+ * SCAFFOLD: read-chat / immersive report indices are version-brittle. Pure.
+ */
+export function extractDeepResearchReportFromFrames(frames: unknown[]): DeepResearchReport {
+  for (const part of frames) {
+    const bodyStr = getNested(part, [2]);
+    if (typeof bodyStr !== 'string') continue;
+    let body: unknown;
+    try {
+      body = JSON.parse(bodyStr);
+    } catch {
+      continue;
+    }
+    const turns = getNested(body, [0], []) as unknown[];
+    if (!Array.isArray(turns)) continue;
+    for (const turn of turns) {
+      const candidates = getNested(turn, [3, 0], []) as unknown[];
+      if (!Array.isArray(candidates)) continue;
+      for (const cand of candidates) {
+        const report = getNested(cand, [30, 0, 4]) ?? getNested(cand, [30, 0, 17, 0]);
+        if (typeof report === 'string' && report) {
+          const msg = getNested(cand, [1, 0]);
+          return { done: true, reportText: report, message: typeof msg === 'string' ? msg : null };
+        }
+      }
+    }
+  }
+  return { done: false, reportText: null, message: null };
+}
+
 /** Options for {@link buildStreamGenerateRequest}. */
 export interface StreamGenerateOptions {
   prompt: string;

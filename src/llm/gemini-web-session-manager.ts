@@ -31,6 +31,7 @@ import {
   extractDeepResearchPlanFromFrames,
   extractDeepResearchStatusFromFrames,
   extractChatLatestModelText,
+  extractDeepResearchReportFromFrames,
   buildBatchExecuteRequest,
   DR_CAPABILITY_PROBES,
   assessDeepResearchCapability,
@@ -44,6 +45,7 @@ import {
   type WebImageRef,
   type DeepResearchPlan,
   type DeepResearchStatus,
+  type DeepResearchReport,
   type RpcCall,
 } from './gemini-web-mint.js';
 
@@ -406,9 +408,22 @@ export class GeminiWebSessionManager {
   }
 
   /**
-   * Run a full Deep Research cycle headlessly: plan → confirm → poll to completion → fetch
-   * the final report. Long-running (minutes) and account-gated. Returns the plan, the
-   * status history, whether it completed, and the report text (may be '' if it timed out).
+   * Read a chat's Deep Research report + completion state (READ_CHAT). The completed report
+   * materialises as an immersive block on the latest turn — this is the reliable completion
+   * signal, since the account has no pollable research_id (kwDCne rejects the immersive id).
+   */
+  async fetchDeepResearchReport(cid: string): Promise<DeepResearchReport> {
+    const frames = await this.batchExecute([
+      { rpcid: GEMINI_RPC.READ_CHAT, payload: [cid, 5, null, 1, [1], [4], null, 1] },
+    ]);
+    return extractDeepResearchReportFromFrames(frames);
+  }
+
+  /**
+   * Run a full Deep Research cycle headlessly: plan → confirm → poll the chat to completion
+   * → return the final report. Long-running (many minutes) and account-gated. Completion is
+   * detected from the chat's immersive report block (not kwDCne, which this account rejects);
+   * `reportText` is '' if it timed out before the report materialised.
    */
   async runDeepResearch(
     prompt: string,
@@ -416,33 +431,25 @@ export class GeminiWebSessionManager {
       model?: GeminiWebModelName;
       pollIntervalMs?: number;
       timeoutMs?: number;
-      onStatus?: (s: DeepResearchStatus) => void;
+      onProgress?: (r: DeepResearchReport) => void;
     },
-  ): Promise<{ plan: DeepResearchPlan; statuses: DeepResearchStatus[]; done: boolean; reportText: string }> {
+  ): Promise<{ plan: DeepResearchPlan; done: boolean; reportText: string; message: string | null }> {
     const plan = await this.generateDeepResearchPlan(prompt, { model: opts?.model });
     await this.startDeepResearch(plan);
 
-    const pollIntervalMs = opts?.pollIntervalMs ?? 10_000;
-    const timeoutMs = opts?.timeoutMs ?? 600_000;
-    const statuses: DeepResearchStatus[] = [];
+    const pollIntervalMs = opts?.pollIntervalMs ?? 15_000;
+    const timeoutMs = opts?.timeoutMs ?? 900_000;
     const start = Date.now();
-    let done = false;
-    if (plan.researchId) {
+    let report: DeepResearchReport = { done: false, reportText: null, message: null };
+    if (plan.cid) {
       while (Date.now() - start < timeoutMs) {
-        const s = await this.getDeepResearchStatus(plan.researchId);
-        if (s) {
-          statuses.push(s);
-          opts?.onStatus?.(s);
-          if (s.done) {
-            done = true;
-            break;
-          }
-        }
+        report = await this.fetchDeepResearchReport(plan.cid);
+        opts?.onProgress?.(report);
+        if (report.done) break;
         await new Promise((r) => setTimeout(r, pollIntervalMs));
       }
     }
-    const reportText = plan.cid ? await this.fetchLatestChatText(plan.cid) : '';
-    return { plan, statuses, done, reportText };
+    return { plan, done: report.done, reportText: report.reportText ?? '', message: report.message };
   }
 }
 
