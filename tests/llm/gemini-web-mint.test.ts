@@ -9,6 +9,7 @@ import {
   getNested,
   parseGeminiFrames,
   extractCandidates,
+  extractMedia,
   buildStreamGenerateRequest,
   buildModelHeader,
   mintGeminiWebSession,
@@ -72,6 +73,59 @@ describe('parseGeminiFrames + extractCandidates', () => {
   it('falls back to whole-body JSON when unframed (array returned as-is, not flattened)', () => {
     const frames = parseGeminiFrames(JSON.stringify([['a'], ['b']]));
     expect(frames).toEqual([['a'], ['b']]);
+  });
+});
+
+describe('extractMedia', () => {
+  // Build a candidate carrying a generated image, a generated video, and audio at the
+  // exact reference indices, then frame it like the server does.
+  function mediaFrameBody(): string {
+    const genImg: unknown[] = [];
+    genImg[0] = []; (genImg[0] as unknown[])[3] = [];
+    ((genImg[0] as unknown[])[3] as unknown[])[2] = 'a red circle'; // alt
+    ((genImg[0] as unknown[])[3] as unknown[])[3] = 'http://img/red.png'; // url
+    genImg[1] = ['IMG1']; // imageId at [1][0]
+
+    const vinfo: unknown[] = [];
+    vinfo[0] = []; (vinfo[0] as unknown[])[7] = ['http://vid/thumb.jpg', 'http://vid/clip.mp4'];
+
+    const md: unknown[] = [];
+    md[0] = []; (md[0] as unknown[])[1] = []; ((md[0] as unknown[])[1] as unknown[])[7] = ['mp3t', 'http://a/song.mp3'];
+    md[1] = []; (md[1] as unknown[])[1] = []; ((md[1] as unknown[])[1] as unknown[])[7] = ['mp4t', 'http://a/song.mp4'];
+
+    const cand12: unknown[] = [];
+    cand12[7] = [[genImg]]; // [12][7][0] = [genImg]
+    cand12[59] = [[[vinfo]]]; // [12][59][0][0][0] = vinfo
+    cand12[86] = md; // [12][86]
+
+    const cand: unknown[] = ['RCID', ['here is your image']];
+    cand[12] = cand12;
+
+    const inner = [null, ['CID', 'RID'], null, null, [cand]];
+    const part = [['wrb.fr', null, JSON.stringify(inner)]];
+    const payload = JSON.stringify(part);
+    return `)]}'\n${payload.length}\n${payload}\n`;
+  }
+
+  it('pulls generated image / video / audio at the reference indices', () => {
+    const media = extractMedia(parseGeminiFrames(mediaFrameBody()));
+    expect(media).toHaveLength(1);
+    const m = media[0];
+    expect(m.cid).toBe('CID');
+    expect(m.rcid).toBe('RCID');
+    expect(m.generatedImages).toEqual([{ url: 'http://img/red.png', alt: 'a red circle', imageId: 'IMG1' }]);
+    expect(m.generatedVideos).toEqual([{ url: 'http://vid/clip.mp4', thumbnail: 'http://vid/thumb.jpg' }]);
+    expect(m.generatedMedia).toEqual([
+      { url: 'http://a/song.mp4', thumbnail: 'mp4t', mp3Url: 'http://a/song.mp3', mp3Thumbnail: 'mp3t' },
+    ]);
+  });
+
+  it('returns nothing for a text-only candidate', () => {
+    const inner = [null, ['CID', 'RID'], null, null, [['RCID', ['just text']]]];
+    const part = [['wrb.fr', null, JSON.stringify(inner)]];
+    const payload = JSON.stringify(part);
+    const body = `)]}'\n${payload.length}\n${payload}\n`;
+    expect(extractMedia(parseGeminiFrames(body))).toEqual([]);
   });
 });
 

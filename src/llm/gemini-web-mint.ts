@@ -111,7 +111,13 @@ export function getNested(data: unknown, path: (number | string)[], fallback: un
   for (const key of path) {
     if (typeof key === 'number' && Array.isArray(cur) && key >= -cur.length && key < cur.length) {
       cur = cur[key < 0 ? cur.length + key : key];
-    } else if (typeof key === 'string' && cur !== null && typeof cur === 'object' && key in (cur as object)) {
+    } else if (
+      typeof key === 'string' &&
+      cur !== null &&
+      typeof cur === 'object' &&
+      !Array.isArray(cur) && // string keys address objects only (reference: dict-only)
+      key in (cur as object)
+    ) {
       cur = (cur as Record<string, unknown>)[key];
     } else {
       return fallback;
@@ -241,6 +247,134 @@ export function extractCandidates(frames: unknown[]): GeminiCandidate[] {
       const rcid = getNested(cand, [0], null) as string | null;
       const text = getNested(cand, [1, 0], '') as string;
       if (typeof text === 'string' && text) out.push({ cid, rid, rcid, text });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Media extraction (image / video / audio) — the free-multimodal payoff.
+// ---------------------------------------------------------------------------
+
+/** An image the model surfaced from the web. */
+export interface WebImageRef {
+  url: string;
+  alt: string;
+}
+/** An image the model generated (Imagen / Nano-Banana). */
+export interface GeneratedImageRef {
+  url: string;
+  alt: string;
+  imageId: string;
+}
+/** A video the model generated (Veo). */
+export interface GeneratedVideoRef {
+  url: string;
+  thumbnail: string;
+}
+/** Audio/music the model generated. */
+export interface GeneratedMediaRef {
+  /** mp4 url (video-with-audio), if any. */
+  url: string;
+  thumbnail: string;
+  mp3Url: string;
+  mp3Thumbnail: string;
+}
+/** Media grouped per reply candidate. */
+export interface GeminiMediaCandidate {
+  cid: string | null;
+  rid: string | null;
+  rcid: string | null;
+  webImages: WebImageRef[];
+  generatedImages: GeneratedImageRef[];
+  generatedVideos: GeneratedVideoRef[];
+  generatedMedia: GeneratedMediaRef[];
+}
+
+const asArray = (x: unknown): unknown[] => (Array.isArray(x) ? x : []);
+const asStr = (x: unknown): string => (typeof x === 'string' ? x : '');
+
+/**
+ * Extract generated/web media from parsed frames — the free image/video/audio payoff
+ * of the web seat over the API tier. Only candidates carrying media are returned.
+ * Pure.
+ *
+ * SCAFFOLD: these nested media indices are the MOST version-brittle part of the whole
+ * lane (they moved repeatedly across Bard→Gemini revisions). If media comes back empty
+ * on a live generation, re-verify against a captured response and the reference
+ * `_parse_candidate` (HanaokaYuzu/Gemini-API client.py). Verbatim map (2026-07-23):
+ *   web images       cand[12][1][*]      url [0][0][0], alt [0][4]
+ *   generated images cand[12][7][0][*] + cand[12][0]["8"][0][*]  url [0][3][3], alt [0][3][2], id [1][0]
+ *   generated videos cand[12][59][0][0][0]  -> [0][7] = [thumb, url]
+ *   generated media  cand[12][86]           -> [0][1][7]=mp3 [thumb,url], [1][1][7]=mp4 [thumb,url]
+ */
+export function extractMedia(frames: unknown[]): GeminiMediaCandidate[] {
+  const out: GeminiMediaCandidate[] = [];
+  for (const part of frames) {
+    const innerStr = getNested(part, [2]);
+    if (typeof innerStr !== 'string') continue;
+    let pj: unknown;
+    try {
+      pj = JSON.parse(innerStr);
+    } catch {
+      continue;
+    }
+    const cid = getNested(pj, [1, 0], null) as string | null;
+    const rid = getNested(pj, [1, 1], null) as string | null;
+    const candidates = getNested(pj, [4], []) as unknown[];
+    if (!Array.isArray(candidates)) continue;
+
+    for (const cand of candidates) {
+      const rcid = getNested(cand, [0], null) as string | null;
+
+      const webImages: WebImageRef[] = [];
+      for (const w of asArray(getNested(cand, [12, 1], []))) {
+        const url = getNested(w, [0, 0, 0]);
+        if (typeof url === 'string' && url) webImages.push({ url, alt: asStr(getNested(w, [0, 4], '')) });
+      }
+
+      const generatedImages: GeneratedImageRef[] = [];
+      const genImgData = [
+        ...asArray(getNested(cand, [12, 7, 0], [])),
+        ...asArray(getNested(cand, [12, 0, '8', 0], [])),
+      ];
+      for (const g of genImgData) {
+        const url = getNested(g, [0, 3, 3]);
+        if (typeof url === 'string' && url) {
+          generatedImages.push({
+            url,
+            alt: asStr(getNested(g, [0, 3, 2], '')),
+            imageId: asStr(getNested(g, [1, 0], '')),
+          });
+        }
+      }
+
+      const generatedVideos: GeneratedVideoRef[] = [];
+      const videoInfo = getNested(cand, [12, 59, 0, 0, 0], []);
+      if (Array.isArray(videoInfo) && videoInfo.length) {
+        const urls = getNested(videoInfo, [0, 7], []);
+        if (Array.isArray(urls) && urls.length >= 2) {
+          generatedVideos.push({ url: String(urls[1]), thumbnail: String(urls[0]) });
+        }
+      }
+
+      const generatedMedia: GeneratedMediaRef[] = [];
+      const mediaData = getNested(cand, [12, 86], []);
+      if (Array.isArray(mediaData) && mediaData.length) {
+        const mp3 = getNested(mediaData, [0, 1, 7], []);
+        const mp4 = getNested(mediaData, [1, 1, 7], []);
+        const mp3ok = Array.isArray(mp3) && mp3.length >= 2;
+        const mp4ok = Array.isArray(mp4) && mp4.length >= 2;
+        const mp3Thumbnail = mp3ok ? String((mp3 as unknown[])[0]) : '';
+        const mp3Url = mp3ok ? String((mp3 as unknown[])[1]) : '';
+        const thumbnail = mp4ok ? String((mp4 as unknown[])[0]) : '';
+        const url = mp4ok ? String((mp4 as unknown[])[1]) : '';
+        if (mp3Url || url) generatedMedia.push({ url, thumbnail, mp3Url, mp3Thumbnail });
+      }
+
+      if (webImages.length || generatedImages.length || generatedVideos.length || generatedMedia.length) {
+        out.push({ cid, rid, rcid, webImages, generatedImages, generatedVideos, generatedMedia });
+      }
     }
   }
   return out;

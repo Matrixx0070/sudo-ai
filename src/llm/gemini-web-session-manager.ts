@@ -27,9 +27,14 @@ import {
   buildStreamGenerateRequest,
   parseGeminiFrames,
   extractCandidates,
+  extractMedia,
   GeminiAuthError,
   type GeminiWebModelName,
   type GeminiCandidate,
+  type GeneratedImageRef,
+  type GeneratedVideoRef,
+  type GeneratedMediaRef,
+  type WebImageRef,
 } from './gemini-web-mint.js';
 
 const log = createLogger('llm:gemini-web-session');
@@ -208,21 +213,24 @@ export class GeminiWebSessionManager {
     return true;
   }
 
-  /**
-   * Generate a reply headlessly from the persisted cookies. Rotates 1PSIDTS and retries
-   * once on an auth failure; marks needs-relogin if the login itself is dead.
-   */
-  async generate(prompt: string, opts?: { model?: GeminiWebModelName }): Promise<GeminiWebReply> {
+  /** Load the file, verify liveness, and ensure a token (rotate+retry once). */
+  private async ready(): Promise<GeminiWebSessionFile> {
     const session = this.load();
     if (!session) throw new GeminiAuthError(`no gemini session file at ${this.storePath} — run capture-cookies first`);
     if (session.needsRelogin) throw new GeminiAuthError('gemini session marked needs-relogin — re-capture cookies');
-
-    // Ensure a token; on failure rotate once then retry.
     if (!(await this.ensureToken(session))) {
       await this.rotate(session);
       if (!(await this.ensureToken(session, true))) this.markRelogin(session, 'no SNlM0e after rotate');
     }
+    return session;
+  }
 
+  /** POST StreamGenerate and return the parsed frames; rotates+retries once on 401. */
+  private async fetchFrames(
+    session: GeminiWebSessionFile,
+    prompt: string,
+    opts?: { model?: GeminiWebModelName },
+  ): Promise<unknown[]> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const req = buildStreamGenerateRequest({
         prompt,
@@ -244,13 +252,49 @@ export class GeminiWebSessionManager {
         continue;
       }
       if (res.status !== 200) throw new GeminiAuthError(`StreamGenerate HTTP ${res.status}`);
-      const cands = extractCandidates(parseGeminiFrames(await res.text()));
-      if (!cands.length) {
-        throw new Error('gemini StreamGenerate 200 but no reply candidates — reply indices may have drifted');
-      }
-      return cands[0]!;
+      return parseGeminiFrames(await res.text());
     }
     throw new GeminiAuthError('gemini generate failed after retry');
+  }
+
+  /**
+   * Generate a text reply headlessly from the persisted cookies. Rotates 1PSIDTS and
+   * retries once on an auth failure; marks needs-relogin if the login itself is dead.
+   */
+  async generate(prompt: string, opts?: { model?: GeminiWebModelName }): Promise<GeminiWebReply> {
+    const session = await this.ready();
+    const cands = extractCandidates(await this.fetchFrames(session, prompt, opts));
+    if (!cands.length) {
+      throw new Error('gemini StreamGenerate 200 but no reply candidates — reply indices may have drifted');
+    }
+    return cands[0]!;
+  }
+
+  /**
+   * Generate and return any text + generated media (images/videos/audio) — the free
+   * multimodal payoff of the web seat. Media may be empty (text-only replies).
+   */
+  async generateMedia(
+    prompt: string,
+    opts?: { model?: GeminiWebModelName },
+  ): Promise<{
+    text: string;
+    images: GeneratedImageRef[];
+    videos: GeneratedVideoRef[];
+    media: GeneratedMediaRef[];
+    webImages: WebImageRef[];
+  }> {
+    const session = await this.ready();
+    const frames = await this.fetchFrames(session, prompt, opts);
+    const text = extractCandidates(frames)[0]?.text ?? '';
+    const m = extractMedia(frames);
+    return {
+      text,
+      images: m.flatMap((c) => c.generatedImages),
+      videos: m.flatMap((c) => c.generatedVideos),
+      media: m.flatMap((c) => c.generatedMedia),
+      webImages: m.flatMap((c) => c.webImages),
+    };
   }
 }
 
