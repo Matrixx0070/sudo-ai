@@ -2049,10 +2049,10 @@ async function boot(): Promise<void> {
               streamSink = await createBufferedEditSink(
                 (placeholder: string) => telegram.sendForStream(replyTo, placeholder),
                 (id: string | number, text: string) => telegram.editText(replyTo, id, text),
-                // maxChars clamps BEFORE same-text suppression so the sink
-                // and Telegram's 4096-char editMessageText cap agree on the
-                // wire body — preventing duplicate edits whose only delta
-                // is past Telegram's truncation point (verifier HIGH #3).
+                // maxChars clamps intermediate streaming edits only (so progressive
+                // updates stay under Telegram's 4096 cap). finalize() passes
+                // the FULL body; telegram.editText chunks overflow and sends
+                // follow-ups so the tail is never silently dropped.
                 { intervalMs: 800, maxChars: 4080, placeholder: '…', label: `telegram:${msg.peerId}` },
               );
               onEvent = (ev) => {
