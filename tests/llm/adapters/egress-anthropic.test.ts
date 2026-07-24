@@ -206,6 +206,40 @@ describe('egressAnthropic — rolling conversation-history cache', () => {
     expect(tools[tools.length - 1]).toMatchObject({ cache_control: { type: 'ephemeral' } });
     expect(lastMsgLastBlock(body)).toMatchObject({ cache_control: { type: 'ephemeral' } });
   });
+
+  it('SUDO_ANTHROPIC_CACHE_TTL=1h adds ttl to ALL THREE breakpoints (uniform TTL — ordering rule)', () => {
+    const prev = process.env['SUDO_ANTHROPIC_CACHE_TTL'];
+    process.env['SUDO_ANTHROPIC_CACHE_TTL'] = '1h';
+    try {
+      const system = `STATIC\n${DYNAMIC_BOUNDARY_MARKER}\ndyn`;
+      const body = egressAnthropic(baseIR({
+        messages: convo,
+        system,
+        tools: [{ name: 't1', input_schema: { type: 'object' } }],
+        max_tokens: 10,
+      }));
+      const oneHour = { cache_control: { type: 'ephemeral', ttl: '1h' } };
+      expect((body['system'] as Array<Record<string, unknown>>)[0]).toMatchObject(oneHour);
+      const tools = body['tools'] as Array<Record<string, unknown>>;
+      expect(tools[tools.length - 1]).toMatchObject(oneHour);
+      expect(lastMsgLastBlock(body)).toMatchObject(oneHour);
+    } finally {
+      if (prev === undefined) delete process.env['SUDO_ANTHROPIC_CACHE_TTL'];
+      else process.env['SUDO_ANTHROPIC_CACHE_TTL'] = prev;
+    }
+  });
+
+  it('unrecognized SUDO_ANTHROPIC_CACHE_TTL value falls back to the 5m default (no ttl key)', () => {
+    const prev = process.env['SUDO_ANTHROPIC_CACHE_TTL'];
+    process.env['SUDO_ANTHROPIC_CACHE_TTL'] = '30m';
+    try {
+      const body = egressAnthropic(baseIR({ messages: convo, max_tokens: 10 }));
+      expect(lastMsgLastBlock(body)).toEqual({ type: 'text', text: 'second', cache_control: { type: 'ephemeral' } });
+    } finally {
+      if (prev === undefined) delete process.env['SUDO_ANTHROPIC_CACHE_TTL'];
+      else process.env['SUDO_ANTHROPIC_CACHE_TTL'] = prev;
+    }
+  });
 });
 
 describe('parseAnthropicResponse', () => {
