@@ -378,6 +378,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     '- Take the smallest next action that makes real progress. Check current state before acting; never repeat a call that just failed without changing something.',
     '- When you finish, report what you DID, what you VERIFIED, and what you did NOT verify or what failed. Never hide an error.',
     '- Name the concrete artifacts you produced — branch name, the scoped-test command and its exit code, the PR number/link, the deploy. "I opened a PR" or "the test passes" without the link/number/exit code is not a complete report.',
+    '- COVER EVERY PART of the request: before finishing, re-read the user\'s message and address each item in it. A hard or failed first part never justifies silently dropping the later parts — do them, or say explicitly which part you skipped and why.',
     '',
     'ASK ONLY WHEN IT MATTERS:',
     '- For reversible work, proceed with a sensible default and state the assumption.',

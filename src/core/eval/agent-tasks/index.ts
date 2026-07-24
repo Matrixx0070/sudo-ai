@@ -9,6 +9,7 @@ import { divideBugTask } from './divide-bug.js';
 import { implementFromSpecTask } from './implement-from-spec.js';
 import { jsBugFixTask } from './js-bug-fix.js';
 import { multiFileRenameTask } from './multi-file-rename.js';
+import { multipartCompletenessTask } from './multipart-completeness.js';
 import { slugifyEdgesTask } from './slugify-edges.js';
 import { stackTraceDebugTask } from './stack-trace-debug.js';
 
@@ -18,6 +19,7 @@ export {
   implementFromSpecTask,
   jsBugFixTask,
   multiFileRenameTask,
+  multipartCompletenessTask,
   slugifyEdgesTask,
   stackTraceDebugTask,
 };
@@ -31,6 +33,7 @@ export const ALL_AGENT_TASKS: AgentBenchTask[] = [
   stackTraceDebugTask,
   deadCodeCleanupTask,
   slugifyEdgesTask,
+  multipartCompletenessTask,
 ];
 
 /** Lookup table by task id. */
