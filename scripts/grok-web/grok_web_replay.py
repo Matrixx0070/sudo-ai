@@ -420,8 +420,67 @@ def _safe_json(text):
         return {}
 
 
+def op_chat(req):
+    """Text chat on the FREE grok.com web lane (SSO cookies + oracle statsig),
+    NOT cli-chat-proxy — never bills the developer API. Streams the app-chat
+    response and assembles the final assistant text. modelName selects the web
+    model (grok-4 default). Returns {ok, text, reasoning, modelHash}."""
+    from curl_cffi import requests as creq
+    if not req.get("statsigId"):
+        return {"ok": False, "errorClass": "statsig", "detail": "x-statsig-id required"}
+    if not req.get("message"):
+        return {"ok": False, "errorClass": "bad_request", "detail": "message required"}
+    H = {**base_headers(req), "Content-Type": "application/json"}
+    body = {
+        "temporary": bool(req.get("temporary", True)),
+        "modelName": req.get("modelName", "grok-4"),
+        "message": req["message"],
+        "fileAttachments": [], "imageAttachments": [],
+        "disableSearch": bool(req.get("disableSearch", True)),
+        "enableImageGeneration": False, "returnImageBytes": False,
+        "enableImageStreaming": False, "imageGenerationCount": 0,
+        "forceConcise": False, "toolOverrides": req.get("toolOverrides", {}),
+        "enableSideBySide": False, "sendFinalMetadata": True,
+        "isReasoning": bool(req.get("isReasoning", False)),
+        "responseMetadata": {"experiments": []},
+    }
+    if req.get("systemPromptName"):
+        body["systemPromptName"] = req["systemPromptName"]
+    vh = {**H, "x-statsig-id": req["statsigId"], "x-xai-request-id": str(uuid.uuid4())}
+    r = creq.post(GROK + "/rest/app-chat/conversations/new", impersonate="chrome",
+                  headers=vh, data=json.dumps(body), stream=True, timeout=req.get("timeoutSec", 120))
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, r.text),
+                "bodyHead": (r.text or "")[:300]}
+    text_parts, reasoning_parts, model_hash, final_msg = [], [], None, None
+    for line in r.iter_lines():
+        if not line:
+            continue
+        st = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else line
+        try:
+            resp = json.loads(st).get("result", {}).get("response", {})
+        except ValueError:
+            continue
+        if not isinstance(resp, dict):
+            continue
+        if resp.get("llmInfo", {}).get("modelHash"):
+            model_hash = resp["llmInfo"]["modelHash"]
+        tok = resp.get("token")
+        if isinstance(tok, str) and tok:
+            if resp.get("isThinking"):
+                reasoning_parts.append(tok)
+            elif resp.get("messageTag") != "header":
+                text_parts.append(tok)
+        mr = resp.get("modelResponse")
+        if isinstance(mr, dict) and isinstance(mr.get("message"), str):
+            final_msg = mr["message"]
+    text = final_msg if final_msg is not None else "".join(text_parts)
+    return {"ok": True, "status": 200, "text": text,
+            "reasoning": "".join(reasoning_parts), "modelHash": model_hash}
+
+
 OPS = {"probe": op_probe, "seed": op_seed, "image": op_image, "video": op_video,
-       "download": op_download, "voice_stt": op_voice_stt, "voice_tts": op_voice_tts}
+       "download": op_download, "voice_stt": op_voice_stt, "voice_tts": op_voice_tts, "chat": op_chat}
 
 
 def main():
