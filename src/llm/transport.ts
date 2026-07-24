@@ -120,6 +120,20 @@ const GROK_CLI_DEFAULT_VERSION = '0.2.22';
  * safe default. Set SUDO_XAI_OAUTH_SUBSCRIPTION=0 (or false/off/no) to fall
  * back to the legacy metered endpoint.
  */
+/**
+ * Hard money guard: refuse EVERY xai / xai-oauth text-lane call when
+ * SUDO_XAI_TEXT_BLOCK=1. Added 2026-07-24 after console.x.ai proved the
+ * cli-chat-proxy "seat" lane bills real API credits ("Grok Build" ~$8.42 in
+ * ~2.5h of grok-4.5 brain traffic; credit balance $0 → month-end invoice).
+ * Default OFF (unset) so tests/other deployments are unaffected; prod sets it
+ * in config/.env. SSO web-session lanes (media/voice/embeddings/rag) are
+ * cookie-based, never touch this transport, and remain available.
+ */
+function xaiTextBlocked(): boolean {
+  const v = process.env['SUDO_XAI_TEXT_BLOCK']?.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+
 function xaiSubscriptionProxyEnabled(): boolean {
   const v = process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'];
   if (v === undefined) return true;
@@ -211,6 +225,14 @@ function resolveRoute(alias: string): ResolvedRoute {
   const provider = resolved.slice(0, slash);
   const modelId = resolved.slice(slash + 1);
   const modelGeneration = modelGenerationOf(resolved);
+
+  if ((provider === 'xai' || provider === 'xai-oauth') && xaiTextBlocked()) {
+    throw invalidRequest(
+      `xai text lane blocked (SUDO_XAI_TEXT_BLOCK=1): cli-chat-proxy bills API credits ` +
+        `(console.x.ai proof 2026-07-24) — refused "${resolved}". Free grok stays available ` +
+        `via the SSO web-session lanes (media/voice/embeddings/rag).`,
+    );
+  }
 
   if (provider === 'anthropic' || provider === 'claude-oauth') {
     // claude-oauth uses the SAME api.anthropic.com base as anthropic — the
