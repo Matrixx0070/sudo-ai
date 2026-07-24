@@ -41,6 +41,10 @@ export const GEMINI_RPC = {
   DEEP_RESEARCH_BOOTSTRAP: 'ku4Jyf',
   DEEP_RESEARCH_MODEL_STATE: 'qpEbW',
   DEEP_RESEARCH_CAPS: 'aPya6c',
+  // Seat read methods (live-probed 2026-07-23; names from the app's own /Service.Method).
+  LIST_CONVERSATIONS: 'MaZiqc',
+  CHECK_FEATURE_QUOTA: 'VxUbXb', // CheckModeFeatureQuota — carries limit/refill times
+  GET_USER_STATUS: 'otAQ7b', // BardFrontendService.GetUserStatus — feature flags/entitlements
 } as const;
 
 /** Static headers the web app sends on the StreamGenerate POST. */
@@ -795,6 +799,101 @@ export function extractDeepResearchReportFromFrames(frames: unknown[]): DeepRese
     }
   }
   return { done: false, reportText: null, message: null };
+}
+
+/** A conversation reference from ListConversations. */
+export interface ConversationRef {
+  cid: string;
+  title: string;
+}
+
+/**
+ * Parse a ListConversations (MaZiqc) batchexecute response into {cid,title} entries. The
+ * body's entry list is at `[2]`, each entry `[cid, title, …]` with a `c_`-prefixed id.
+ * Live-verified 2026-07-23 (returned 50 real conversations). SCAFFOLD: indices brittle. Pure.
+ */
+export function extractConversationListFromFrames(frames: unknown[]): ConversationRef[] {
+  for (const part of frames) {
+    if (getNested(part, [1]) !== GEMINI_RPC.LIST_CONVERSATIONS) continue;
+    const bodyStr = getNested(part, [2]);
+    if (typeof bodyStr !== 'string') continue;
+    let body: unknown;
+    try {
+      body = JSON.parse(bodyStr);
+    } catch {
+      continue;
+    }
+    const entries = getNested(body, [2], []) as unknown[];
+    if (!Array.isArray(entries)) continue;
+    const out: ConversationRef[] = [];
+    for (const e of entries) {
+      const cid = getNested(e, [0]);
+      const title = getNested(e, [1]);
+      if (typeof cid === 'string' && /^c_/.test(cid) && typeof title === 'string') {
+        out.push({ cid, title });
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
+/** One feature's quota + refill time, from CheckModeFeatureQuota. */
+export interface FeatureQuota {
+  /** Numeric feature id (Google's mode/feature enum). */
+  feature: number;
+  /** When the limit refills, epoch milliseconds. */
+  resetsAt: number;
+  /** The counter value the server returned for this feature (used/remaining — server-defined). */
+  count: number;
+  /** Server label template (e.g. "Limit resets {REFILL_TIME}"). */
+  label: string;
+}
+
+/**
+ * Parse a CheckModeFeatureQuota (VxUbXb) response into per-feature quota entries. The entry
+ * list is at body `[2]`, each entry `[feature, [resetSec, ns], count, label, flags]`.
+ * Live-verified 2026-07-23. SCAFFOLD: indices brittle. Pure.
+ */
+export function extractFeatureQuotaFromFrames(frames: unknown[]): FeatureQuota[] {
+  const body = extractRpcBodyFromFrames(frames, GEMINI_RPC.CHECK_FEATURE_QUOTA);
+  const entries = getNested(body, [2], []) as unknown[];
+  if (!Array.isArray(entries)) return [];
+  const out: FeatureQuota[] = [];
+  for (const e of entries) {
+    const feature = getNested(e, [0]);
+    const resetSec = getNested(e, [1, 0]);
+    const count = getNested(e, [2]);
+    const label = getNested(e, [3]);
+    if (typeof feature === 'number') {
+      out.push({
+        feature,
+        resetsAt: typeof resetSec === 'number' ? resetSec * 1000 : 0,
+        count: typeof count === 'number' ? count : 0,
+        label: typeof label === 'string' ? label : '',
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Return the parsed body of the first batchexecute part matching `rpcid` (or null). Generic
+ * passthrough for reads whose response shape is opaque (e.g. GetUserStatus = 25 anonymous
+ * positional fields with no nameable schema). Pure.
+ */
+export function extractRpcBodyFromFrames(frames: unknown[], rpcid: string): unknown {
+  for (const part of frames) {
+    if (getNested(part, [0]) !== 'wrb.fr' || getNested(part, [1]) !== rpcid) continue;
+    const bodyStr = getNested(part, [2]);
+    if (typeof bodyStr !== 'string') return null;
+    try {
+      return JSON.parse(bodyStr);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 /** Options for {@link buildStreamGenerateRequest}. */

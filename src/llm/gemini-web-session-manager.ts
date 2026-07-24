@@ -32,6 +32,9 @@ import {
   extractDeepResearchStatusFromFrames,
   extractChatLatestModelText,
   extractDeepResearchReportFromFrames,
+  extractConversationListFromFrames,
+  extractRpcBodyFromFrames,
+  extractFeatureQuotaFromFrames,
   buildBatchExecuteRequest,
   DR_CAPABILITY_PROBES,
   assessDeepResearchCapability,
@@ -46,6 +49,8 @@ import {
   type DeepResearchPlan,
   type DeepResearchStatus,
   type DeepResearchReport,
+  type ConversationRef,
+  type FeatureQuota,
   type RpcCall,
 } from './gemini-web-mint.js';
 
@@ -453,6 +458,57 @@ export class GeminiWebSessionManager {
       { rpcid: GEMINI_RPC.READ_CHAT, payload: [cid, 5, null, 1, [1], [4], null, 1] },
     ]);
     return extractChatLatestModelText(frames);
+  }
+
+  /** List all conversations on the seat (cid + title). Live-proven read (MaZiqc, payload []). */
+  async listConversations(): Promise<ConversationRef[]> {
+    const frames = await this.batchExecute([{ rpcid: GEMINI_RPC.LIST_CONVERSATIONS, payload: [] }]);
+    return extractConversationListFromFrames(frames);
+  }
+
+  /**
+   * Export the seat's chat history: every conversation's {cid,title}, and (with readText,
+   * default true) the latest model text of each via READ_CHAT. Sequential with a small gap
+   * to avoid rate limits; `limit` caps how many chats are read (default 50).
+   */
+  async exportHistory(
+    opts?: { limit?: number; readText?: boolean; gapMs?: number },
+  ): Promise<Array<ConversationRef & { text?: string }>> {
+    const convos = await this.listConversations();
+    const readText = opts?.readText ?? true;
+    const limit = opts?.limit ?? 50;
+    const gapMs = opts?.gapMs ?? 400;
+    if (!readText) return convos;
+    const out: Array<ConversationRef & { text?: string }> = [];
+    for (const c of convos.slice(0, limit)) {
+      let text: string | undefined;
+      try {
+        text = await this.fetchLatestChatText(c.cid);
+      } catch (e) {
+        log.debug({ cid: c.cid, err: (e as Error).message }, 'exportHistory: read-chat failed');
+      }
+      out.push({ ...c, text });
+      await new Promise((r) => setTimeout(r, gapMs));
+    }
+    // conversations beyond the limit are returned without text
+    for (const c of convos.slice(limit)) out.push(c);
+    return out;
+  }
+
+  /** Read the seat's per-feature quota + refill times (CheckModeFeatureQuota), typed. */
+  async checkFeatureQuota(): Promise<FeatureQuota[]> {
+    const frames = await this.batchExecute([{ rpcid: GEMINI_RPC.CHECK_FEATURE_QUOTA, payload: [] }]);
+    return extractFeatureQuotaFromFrames(frames);
+  }
+
+  /**
+   * Read the seat's user status / feature flags / entitlements (GetUserStatus). Returns the
+   * RAW parsed body: it is ~25 anonymous positional fields with no nameable schema, so a
+   * typed shape would be invented rather than derived — left raw on purpose.
+   */
+  async getUserStatus(): Promise<unknown> {
+    const frames = await this.batchExecute([{ rpcid: GEMINI_RPC.GET_USER_STATUS, payload: [] }]);
+    return extractRpcBodyFromFrames(frames, GEMINI_RPC.GET_USER_STATUS);
   }
 
   /**

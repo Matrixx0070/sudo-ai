@@ -145,6 +145,51 @@ describe('generate (headless, from file)', () => {
   });
 });
 
+describe('seat reads', () => {
+  // batchexecute frame: )]}'-prefixed, length-prefixed, part = ['wrb.fr', rpcid, JSON(body)].
+  function batchFrame(rpcid: string, body: unknown): string {
+    const payload = JSON.stringify([['wrb.fr', rpcid, JSON.stringify(body)]]);
+    return `)]}'\n${payload.length}\n${payload}\n`;
+  }
+
+  it('listConversations returns cid+title entries', async () => {
+    const body = [null, 'tok', [['c_1', 'Alpha'], ['c_2', 'Beta']]];
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return res(200, APP_HTML);
+      if (url.startsWith(GEMINI_ENDPOINTS.BATCH_EXEC)) return res(200, batchFrame('MaZiqc', body));
+      throw new Error(`unexpected url ${url}`);
+    });
+    mgr.saveFromCookies({ '__Secure-1PSID': 'psid' }, 'UA/1');
+    expect(await mgr.listConversations()).toEqual([
+      { cid: 'c_1', title: 'Alpha' },
+      { cid: 'c_2', title: 'Beta' },
+    ]);
+  });
+
+  it('checkFeatureQuota returns typed per-feature quota entries', async () => {
+    const body = [null, null, [[5, [1785221642, 0], 1, 'Limit resets {REFILL_TIME}', [1]]]];
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return res(200, APP_HTML);
+      if (url.startsWith(GEMINI_ENDPOINTS.BATCH_EXEC)) return res(200, batchFrame('VxUbXb', body));
+      throw new Error(`unexpected url ${url}`);
+    });
+    mgr.saveFromCookies({ '__Secure-1PSID': 'psid' }, 'UA/1');
+    expect(await mgr.checkFeatureQuota()).toEqual([
+      { feature: 5, resetsAt: 1785221642000, count: 1, label: 'Limit resets {REFILL_TIME}' },
+    ]);
+  });
+
+  it('getUserStatus returns the raw parsed body', async () => {
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return res(200, APP_HTML);
+      if (url.startsWith(GEMINI_ENDPOINTS.BATCH_EXEC)) return res(200, batchFrame('otAQ7b', [1, [true, false]]));
+      throw new Error(`unexpected url ${url}`);
+    });
+    mgr.saveFromCookies({ '__Secure-1PSID': 'psid' }, 'UA/1');
+    expect(await mgr.getUserStatus()).toEqual([1, [true, false]]);
+  });
+});
+
 describe('status', () => {
   it('reports disconnected with no file, connected after capture', async () => {
     const mgr = newManager(async () => res(200, ''));
