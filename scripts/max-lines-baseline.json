@@ -158,6 +158,8 @@
   "src/llm/adapters/egress-xai-responses.ts": 442,
   "src/llm/claude-oauth-manager.ts": 681,
   "src/llm/client.ts": 492,
+  "src/llm/gemini-web-mint.ts": 1040,
+  "src/llm/gemini-web-session-manager.ts": 582,
   "src/llm/grok-statsig-oracle.ts": 666,
   "src/llm/logging.ts": 571,
   "src/llm/policy.ts": 628,

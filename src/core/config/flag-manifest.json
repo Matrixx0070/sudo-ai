@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 694,
+  "count": 695,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -19,6 +19,7 @@
     "SUDO_AI_VAULT_KEY",
     "SUDO_ALIASES",
     "SUDO_ALLOW_CONTRADICTORY_CONFIG",
+    "SUDO_ANTHROPIC_CACHE_TTL",
     "SUDO_ARSENAL_V2_AUTO_REVERT",
     "SUDO_ARSENAL_V2_CASCADE",
     "SUDO_ARSENAL_V2_CORR_METHOD",

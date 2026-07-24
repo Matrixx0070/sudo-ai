@@ -82,6 +82,21 @@ function bareModelId(resolved: string): string {
 }
 
 /**
+ * Cache breakpoint marker for every cache_control site in this adapter.
+ * SUDO_ANTHROPIC_CACHE_TTL=1h opts into Anthropic's extended-TTL cache
+ * (write 2x vs 1.25x, read 0.1x either way) — pays off when call gaps
+ * cluster in the 5m–60m band. All three breakpoints must share one TTL:
+ * Anthropic requires longer-TTL breakpoints to precede shorter ones, and a
+ * uniform value sidesteps the ordering rule entirely. Any value other than
+ * '1h' (or unset) = today's 5-minute default.
+ */
+function cacheControl(): Rec {
+  return process.env['SUDO_ANTHROPIC_CACHE_TTL'] === '1h'
+    ? { type: 'ephemeral', ttl: '1h' }
+    : { type: 'ephemeral' };
+}
+
+/**
  * Split ir.system at the dynamic boundary: static prefix carries the
  * cache_control breakpoint, the dynamic remainder is uncached. No boundary
  * (or nothing above it) → single uncached block.
@@ -90,7 +105,7 @@ function systemBlocks(system: string): Rec[] {
   const idx = system.indexOf(DYNAMIC_BOUNDARY_MARKER);
   if (idx <= 0) return [{ type: 'text', text: system }];
   return [
-    { type: 'text', text: system.slice(0, idx), cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: system.slice(0, idx), cache_control: cacheControl() },
     { type: 'text', text: system.slice(idx) },
   ];
 }
@@ -120,7 +135,7 @@ function markHistoryForCache(messages: Array<{ role: string; content: Rec[] }>):
   const i = last.content.length - 1;
   const block = last.content[i]!;
   if (block['type'] === 'thinking') return;
-  last.content[i] = { ...block, cache_control: { type: 'ephemeral' } };
+  last.content[i] = { ...block, cache_control: cacheControl() };
 }
 
 function imageBlockOut(block: IRImageBlock): Rec {
@@ -207,7 +222,7 @@ export function egressAnthropic(ir: IRRequest): Rec {
     // cache_control on the LAST tool caches the whole tools array
     // (same discipline as markLastToolForCache in prompt-cache-discipline).
     const last = tools[tools.length - 1]!;
-    tools[tools.length - 1] = { ...last, cache_control: { type: 'ephemeral' } };
+    tools[tools.length - 1] = { ...last, cache_control: cacheControl() };
     body['tools'] = tools;
   }
 
