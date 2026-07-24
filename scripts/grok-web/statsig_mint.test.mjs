@@ -2,7 +2,7 @@
 // Run: node scripts/grok-web/statsig_mint.test.mjs
 import assert from 'node:assert';
 import crypto from 'node:crypto';
-import { computeDhex, dhexFromFingerprint, computeR, mintStatsig, mintStatsigFromSeed, deriveFingerprint, STATSIG_SALT } from './statsig_mint.mjs';
+import { computeDhex, dhexFromFingerprint, computeR, mintStatsig, mintStatsigFromSeed, deriveFingerprint, STATSIG_SALT, R_GSWH7_PATHS, compareSpinnerPaths } from './statsig_mint.mjs';
 
 let pass = 0, fail = 0;
 const t = (name, fn) => { try { fn(); console.log('PASS', name); pass++; } catch (e) { console.log('FAIL', name, '::', e.message); fail++; } };
@@ -83,6 +83,47 @@ t('mintStatsigFromSeed end-to-end', () => {
   const msg = `POST!/rest/app-chat/conversations/new!${r}${STATSIG_SALT}${deriveFingerprint(seed).dHex}`;
   const sha16 = crypto.createHash('sha256').update(Buffer.from(msg, 'utf8')).digest().subarray(0, 16);
   assert.strictEqual(payload.subarray(52, 68).toString('hex'), sha16.toString('hex'));
+});
+
+// --- compareSpinnerPaths: the spinner-drift canary comparator (pure) ---
+// All 4 shipped paths present across live reads => spinner unchanged, all buckets matched.
+t('compareSpinnerPaths all-known => ok, 4 buckets', () => {
+  const r = compareSpinnerPaths([...R_GSWH7_PATHS]);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.matchedBuckets, [0, 1, 2, 3]);
+  assert.deepStrictEqual(r.missingBuckets, []);
+  assert.strictEqual(r.unknownLive.length, 0);
+  assert.strictEqual(r.spinnerSeen, 4);
+});
+// A live spinner-shaped path we don't recognise => DRIFT (reskin), and it is named.
+t('compareSpinnerPaths reskin => not ok, names the new path', () => {
+  const drifted = 'M 10,30 C 1,2 3,4 5,6 h 7 s 8,9 10,11'; // spinner-prefixed but unknown
+  const r = compareSpinnerPaths([R_GSWH7_PATHS[0], R_GSWH7_PATHS[1], drifted]);
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(r.unknownLive, [drifted]);
+  assert.deepStrictEqual(r.matchedBuckets, [0, 1]);
+});
+// Page icons / non-spinner `d` reads are ignored (never a false positive).
+t('compareSpinnerPaths ignores non-spinner paths', () => {
+  const r = compareSpinnerPaths(['M 5,5 h 10 v 10', 'M0 0L1 1Z', 'M 12,3 a 4 4 0 1 0 8 0']);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.spinnerSeen, 0);
+  assert.strictEqual(r.unknownLive.length, 0);
+});
+// Duplicate reads of the same known path collapse (dedup); ok, single bucket.
+t('compareSpinnerPaths dedups repeated reads', () => {
+  const r = compareSpinnerPaths([R_GSWH7_PATHS[2], R_GSWH7_PATHS[2], R_GSWH7_PATHS[2]]);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.spinnerSeen, 1);
+  assert.deepStrictEqual(r.matchedBuckets, [2]);
+  assert.deepStrictEqual(r.missingBuckets, [0, 1, 3]);
+});
+// Empty input is inconclusive-shaped (ok=true but nothing seen); caller handles exit 2.
+t('compareSpinnerPaths empty => ok true, spinnerSeen 0', () => {
+  const r = compareSpinnerPaths([]);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.spinnerSeen, 0);
+  assert.strictEqual(r.sampled, 0);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
