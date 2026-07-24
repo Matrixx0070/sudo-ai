@@ -54,6 +54,9 @@ const MODEL_LIMITS: Record<string, AliasLimits> = {
   'xai/grok-3-fast': { context_window: 131_072, max_output: 16_384 },
 
   // xai-oauth subscription proxy (GX1) — served by cli-chat-proxy.grok.com.
+  // grok-4.5: 500K context per the live seat /v1/models (2026-07-24). Brain
+  // output stays governed by config/sudo-ai.json5 maxOutputTokens (8192).
+  'xai-oauth/grok-4.5': { context_window: 500_000, max_output: 32_768 },
   'xai-oauth/grok-build': { context_window: 512_000, max_output: 32_768 },
   'xai-oauth/grok-composer-2.5-fast': { context_window: 200_000, max_output: 32_768 },
 

@@ -9,18 +9,11 @@
   },
   models: {
     primary: [
-      // 2026-07-24 Frank: Grok $30-seat is the PRIMARY brain, set in first place.
-      // Rides the seat proxy (SUDO_XAI_OAUTH_SUBSCRIPTION=1 → cli-chat-proxy.grok.com,
-      // never metered api.x.ai). Seat is personalOnly: untrusted/background callers are
-      // refused and fail over to claude-fable-5 below (brain-bridge: the throw IS the
-      // failover signal). Token auto-refreshes via xai-oauth-manager. Remove this entry
-      // to revert to claude-fable-5 primary.
-      {
-        id: 'xai-oauth/grok-4.5',
-        contextWindow: 200000,
-        maxOutputTokens: 8192,
-        temperature: 0.7,
-      },
+      // 2026-07-24 EMERGENCY REVERT: grok-4.5 REMOVED from primary. Console.x.ai
+      // PROVED the cli-chat-proxy OAuth lane bills API credits as "Grok Build"
+      // (~$8.42 in ~2.5h of grok-primary traffic on Jul 24) — it is NOT covered
+      // by the $30 seat, despite SUDO_XAI_OAUTH_SUBSCRIPTION=1. Do not re-add
+      // without a live billing check on console.x.ai usage (Group by API Type).
       {
         id: 'claude-oauth/claude-fable-5',
         contextWindow: 200000,
