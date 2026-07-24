@@ -157,6 +157,10 @@ module.exports = {
         SUDO_MAX_CONTEXT_TOKENS: process.env['SUDO_MAX_CONTEXT_TOKENS'] || '200000',
         SUDO_FORK_THRESHOLD_CHARS: process.env['SUDO_FORK_THRESHOLD_CHARS'] || '600000',
         SUDO_FORK_MESSAGE_COUNT: process.env['SUDO_FORK_MESSAGE_COUNT'] || '250',
+        // 1h Anthropic prompt-cache TTL (PR #932): agent-call gaps cluster in the
+        // 5m-60m band, so the 2x write premium nets out cheaper than 5m cold
+        // restarts. Set to '5m' (or anything else) to revert to the default TTL.
+        SUDO_ANTHROPIC_CACHE_TTL: process.env['SUDO_ANTHROPIC_CACHE_TTL'] || '1h',
         // Messages reloaded into the working set on a cold reload (restart/eviction).
         // Code default 100 (~7-8 turns once per-turn system blocks are counted);
         // 500 restores far more conversation after a restart. Budget + compaction
