@@ -226,6 +226,40 @@ describe('coerceJsonSchemaPrimitives (unit)', () => {
     expect(dig(coerceJsonSchemaPrimitives(allowed.schema, allowed.params)['root'], 5)).toBe(5);
   });
 
+  it('parses stringified JSON for declared object/array members (2026-07-24 browser.scrape incident class)', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        selectors: { type: 'object' },
+        operations: { type: 'array', items: { type: 'object', properties: { width: { type: 'number' } } } },
+      },
+    };
+    const out = coerceJsonSchemaPrimitives(schema, {
+      selectors: '{"scores": ".score"}',
+      operations: '[{"width": "300"}]',
+    });
+    expect(out['selectors']).toEqual({ scores: '.score' });
+    // Nested declared primitives inside the parsed value coerce too.
+    expect(out['operations']).toEqual([{ width: 300 }]);
+  });
+
+  it('leaves stringified JSON alone on shape mismatch, malformed input, or string-admitting unions', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        selectors: { type: 'object' },
+        loose: { type: ['object', 'string'] },
+      },
+    };
+    const out = coerceJsonSchemaPrimitives(schema, {
+      selectors: '["array", "not", "object"]',
+      loose: '{"stays": "a-string"}',
+    });
+    expect(out['selectors']).toBe('["array", "not", "object"]');
+    expect(out['loose']).toBe('{"stays": "a-string"}');
+    expect(coerceJsonSchemaPrimitives(schema, { selectors: '{"a": ' })['selectors']).toBe('{"a": ');
+  });
+
   it('self-referential schema cannot loop past the cap', () => {
     const spec: Record<string, unknown> = { type: 'object' };
     spec['properties'] = { k: spec };

@@ -105,6 +105,19 @@ export const scrapeTool: ToolDefinition = {
         };
       }
 
+      // No selectors + text/html would loop zero times and report a
+      // 0-field "success" — the silent no-op behind the 2026-07-24 HN
+      // incident. Fail with directions instead.
+      if (Object.keys(selectors).length === 0) {
+        return {
+          success: false,
+          output:
+            'browser.scrape: no selectors provided. Pass selectors as an OBJECT map of ' +
+            'field→CSS-selector (e.g. {"titles": ".titleline"}), or use extractAs:"links" / ' +
+            '"table" for whole-page extraction without selectors.',
+        };
+      }
+
       // Selector-based extraction
       for (const [key, selector] of Object.entries(selectors)) {
         const fullSelector = containerSelector ? `${containerSelector} ${selector}` : selector;

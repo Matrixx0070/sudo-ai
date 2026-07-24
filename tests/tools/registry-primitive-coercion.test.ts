@@ -243,3 +243,53 @@ describe('registry.execute applies primitive coercion', () => {
     expect(received.params?.['label']).toBe('false'); // string param untouched
   });
 });
+
+describe('stringified object/array coercion (2026-07-24 browser.scrape incident)', () => {
+  const objTool: ToolDefinition = {
+    name: 'test.object-probe',
+    description: 'declared object + array params',
+    category: 'meta' as ToolDefinition['category'],
+    parameters: {
+      selectors: { type: 'object', description: 'field→selector map', properties: {} },
+      ops: {
+        type: 'array',
+        description: 'operations',
+        items: { type: 'object', description: 'op', properties: { width: { type: 'number', description: 'w' } } },
+      },
+      note: { type: 'string', description: 'declared string' },
+    },
+    async execute(): Promise<ToolResult> { return { success: true, output: 'ok', data: {} }; },
+  };
+
+  it('parses a stringified object for a declared object param (the incident payload)', () => {
+    const out = coerceDeclaredPrimitives(objTool, {
+      selectors: '{"scores": ".score", "titles": ".titleline"}',
+    });
+    expect(out['selectors']).toEqual({ scores: '.score', titles: '.titleline' });
+  });
+
+  it('parses a stringified array AND coerces nested declared primitives inside it', () => {
+    const out = coerceDeclaredPrimitives(objTool, { ops: '[{"width": "300"}]' });
+    expect(out['ops']).toEqual([{ width: 300 }]);
+  });
+
+  it('leaves non-JSON strings on object params untouched (tool validates)', () => {
+    const out = coerceDeclaredPrimitives(objTool, { selectors: 'div.title' });
+    expect(out['selectors']).toBe('div.title');
+  });
+
+  it('leaves malformed JSON untouched', () => {
+    const out = coerceDeclaredPrimitives(objTool, { selectors: '{"a": ' });
+    expect(out['selectors']).toBe('{"a": ');
+  });
+
+  it('does NOT parse JSON-looking strings on declared string params', () => {
+    const out = coerceDeclaredPrimitives(objTool, { note: '{"keep": "as-string"}' });
+    expect(out['note']).toBe('{"keep": "as-string"}');
+  });
+
+  it('rejects shape mismatch: array string on object param stays a string', () => {
+    const out = coerceDeclaredPrimitives(objTool, { selectors: '["not", "a", "map"]' });
+    expect(out['selectors']).toBe('["not", "a", "map"]');
+  });
+});
