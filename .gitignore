@@ -182,3 +182,5 @@ brain-enc.key
 
 # GW2 grok-web replay bridge (python is the only impl lane; not a secret)
 !scripts/grok-web/*.py
+# gemini-web gpsoauth mint bridge (curl_cffi python; not a secret)
+!scripts/gemini-web/*.py

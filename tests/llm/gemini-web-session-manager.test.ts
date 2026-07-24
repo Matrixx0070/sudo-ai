@@ -97,6 +97,37 @@ describe('generate (headless, from file)', () => {
     expect(mgr.status().needsRelogin).toBe(true);
   });
 
+  it('auto-recovers a dead session via the reauth hook (no re-login thrown)', async () => {
+    let live = false;
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return live ? res(200, APP_HTML) : res(200, '<html>logged out</html>');
+      if (url === GEMINI_ENDPOINTS.ROTATE_COOKIES) return res(200, '', []);
+      if (url.startsWith(GEMINI_ENDPOINTS.GENERATE)) return res(200, frameBody('pong'));
+      throw new Error(`unexpected url ${url}`);
+    });
+    // Browserless re-mint: supplies fresh cookies and restores the (mock) login.
+    mgr.setReauthHook(async () => {
+      live = true;
+      return { '__Secure-1PSID': 'fresh', '__Secure-1PSIDTS': 'ts' };
+    });
+    mgr.saveFromCookies({ '__Secure-1PSID': 'dead' }, 'UA/1');
+    const reply = await mgr.generate('hi');
+    expect(reply.text).toBe('pong');
+    expect(mgr.status().needsRelogin).toBeFalsy();
+  });
+
+  it('still marks needs-relogin when the reauth hook cannot recover', async () => {
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return res(200, '<html>logged out</html>');
+      if (url === GEMINI_ENDPOINTS.ROTATE_COOKIES) return res(200, '', []);
+      throw new Error(`unexpected url ${url}`);
+    });
+    mgr.setReauthHook(async () => null); // hook present but yields nothing
+    mgr.saveFromCookies({ '__Secure-1PSID': 'dead' }, 'UA/1');
+    await expect(mgr.generate('hi')).rejects.toBeInstanceOf(GeminiAuthError);
+    expect(mgr.status().needsRelogin).toBe(true);
+  });
+
   it('throws when there is no session file', async () => {
     const mgr = newManager(async () => res(200, ''));
     // no saveFromCookies -> no file
@@ -111,6 +142,51 @@ describe('generate (headless, from file)', () => {
     });
     mgr.saveFromCookies({ '__Secure-1PSID': 'psid' }, 'UA/1');
     await expect(mgr.generate('hi')).rejects.toThrow(/reply indices may have drifted/);
+  });
+});
+
+describe('seat reads', () => {
+  // batchexecute frame: )]}'-prefixed, length-prefixed, part = ['wrb.fr', rpcid, JSON(body)].
+  function batchFrame(rpcid: string, body: unknown): string {
+    const payload = JSON.stringify([['wrb.fr', rpcid, JSON.stringify(body)]]);
+    return `)]}'\n${payload.length}\n${payload}\n`;
+  }
+
+  it('listConversations returns cid+title entries', async () => {
+    const body = [null, 'tok', [['c_1', 'Alpha'], ['c_2', 'Beta']]];
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return res(200, APP_HTML);
+      if (url.startsWith(GEMINI_ENDPOINTS.BATCH_EXEC)) return res(200, batchFrame('MaZiqc', body));
+      throw new Error(`unexpected url ${url}`);
+    });
+    mgr.saveFromCookies({ '__Secure-1PSID': 'psid' }, 'UA/1');
+    expect(await mgr.listConversations()).toEqual([
+      { cid: 'c_1', title: 'Alpha' },
+      { cid: 'c_2', title: 'Beta' },
+    ]);
+  });
+
+  it('checkFeatureQuota returns typed per-feature quota entries', async () => {
+    const body = [null, null, [[5, [1785221642, 0], 1, 'Limit resets {REFILL_TIME}', [1]]]];
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return res(200, APP_HTML);
+      if (url.startsWith(GEMINI_ENDPOINTS.BATCH_EXEC)) return res(200, batchFrame('VxUbXb', body));
+      throw new Error(`unexpected url ${url}`);
+    });
+    mgr.saveFromCookies({ '__Secure-1PSID': 'psid' }, 'UA/1');
+    expect(await mgr.checkFeatureQuota()).toEqual([
+      { feature: 5, resetsAt: 1785221642000, count: 1, label: 'Limit resets {REFILL_TIME}' },
+    ]);
+  });
+
+  it('getUserStatus returns the raw parsed body', async () => {
+    const mgr = newManager(async (url) => {
+      if (url === GEMINI_ENDPOINTS.INIT) return res(200, APP_HTML);
+      if (url.startsWith(GEMINI_ENDPOINTS.BATCH_EXEC)) return res(200, batchFrame('otAQ7b', [1, [true, false]]));
+      throw new Error(`unexpected url ${url}`);
+    });
+    mgr.saveFromCookies({ '__Secure-1PSID': 'psid' }, 'UA/1');
+    expect(await mgr.getUserStatus()).toEqual([1, [true, false]]);
   });
 });
 

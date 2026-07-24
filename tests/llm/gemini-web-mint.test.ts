@@ -16,6 +16,9 @@ import {
   extractDeepResearchStatusFromFrames,
   extractChatLatestModelText,
   extractDeepResearchReportFromFrames,
+  extractConversationListFromFrames,
+  extractRpcBodyFromFrames,
+  extractFeatureQuotaFromFrames,
   buildBatchExecuteRequest,
   serializeRpc,
   extractRpcRejectCode,
@@ -368,6 +371,35 @@ describe('deep research full workflow (batchexecute + status + read-chat)', () =
     turn[3] = [[[null, ['Researching websites...']]]];
     const r = extractDeepResearchReportFromFrames(parseGeminiFrames(framePart([[turn]])));
     expect(r).toEqual({ done: false, reportText: null, message: null });
+  });
+
+  it('extractConversationListFromFrames parses cid+title entries (skips non-cid rows)', () => {
+    const body = [null, 'tok', [['c_abc', 'First chat', 1], ['c_def', 'Second'], ['notacid', 'skip']]];
+    const frames = [['wrb.fr', 'MaZiqc', JSON.stringify(body)]];
+    expect(extractConversationListFromFrames(frames)).toEqual([
+      { cid: 'c_abc', title: 'First chat' },
+      { cid: 'c_def', title: 'Second' },
+    ]);
+    expect(extractConversationListFromFrames([['wrb.fr', 'other', '[]']])).toEqual([]);
+  });
+
+  it('extractRpcBodyFromFrames returns the parsed body for the matching rpcid, else null', () => {
+    const frames = [['wrb.fr', 'otAQ7b', JSON.stringify([1, [false, true]])]];
+    expect(extractRpcBodyFromFrames(frames, 'otAQ7b')).toEqual([1, [false, true]]);
+    expect(extractRpcBodyFromFrames(frames, 'zzzzzz')).toBeNull();
+  });
+
+  it('extractFeatureQuotaFromFrames parses per-feature quota + reset time (sec->ms)', () => {
+    const body = [null, null, [
+      [5, [1785221642, 282376000], 1, 'Limit resets {REFILL_TIME}', [1]],
+      [27, [1700000000, 0], 3, 'lbl', [1]],
+    ]];
+    const frames = [['wrb.fr', 'VxUbXb', JSON.stringify(body)]];
+    expect(extractFeatureQuotaFromFrames(frames)).toEqual([
+      { feature: 5, resetsAt: 1785221642000, count: 1, label: 'Limit resets {REFILL_TIME}' },
+      { feature: 27, resetsAt: 1700000000000, count: 3, label: 'lbl' },
+    ]);
+    expect(extractFeatureQuotaFromFrames([['wrb.fr', 'other', '[]']])).toEqual([]);
   });
 });
 
