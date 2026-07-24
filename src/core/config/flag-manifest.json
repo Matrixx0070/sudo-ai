@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 693,
+  "count": 694,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -335,6 +335,7 @@
     "SUDO_GROK_ORACLE_HEADLESS",
     "SUDO_GROK_ORACLE_IDLE_MS",
     "SUDO_GROK_REFUSAL_DETECT_DISABLE",
+    "SUDO_GROK_SESSION_KEEPALIVE",
     "SUDO_GROK_STATSIG_BROWSERLESS",
     "SUDO_GROK_WARM_BROWSER",
     "SUDO_GROK_WARM_CHROMIUM",
