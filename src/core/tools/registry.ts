@@ -94,6 +94,25 @@ function coerceValue(spec: ParamSpec, v: unknown, depth: number): { changed: boo
         if (Number.isFinite(n)) return { changed: true, value: n };
       }
     }
+    // Stringified JSON offered for a declared object/array member: models
+    // routinely serialize nested args (live victim 2026-07-24: browser.scrape
+    // selectors:"{\"scores\": \".score\"}" — silently dropped to {} → 0-field
+    // "success"). Parse only when the shape matches the declaration; anything
+    // unparseable passes through for the tool's own validation.
+    if (spec.type === 'object' || spec.type === 'array') {
+      const trimmed = v.trim();
+      const wantArray = spec.type === 'array';
+      if (trimmed.startsWith(wantArray ? '[' : '{')) {
+        try {
+          const parsed: unknown = JSON.parse(trimmed);
+          if (wantArray ? Array.isArray(parsed) : (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed))) {
+            // Recurse so nested declared primitives inside the parsed value
+            // ("width":"300") get the same treatment.
+            return { changed: true, value: coerceValue(spec, parsed, depth + 1).value };
+          }
+        } catch { /* not JSON — leave for the tool to reject */ }
+      }
+    }
     return { changed: false, value: v };
   }
   if (spec.type === 'array' && spec.items && Array.isArray(v)) {
@@ -166,6 +185,21 @@ function coerceJsonValue(schema: unknown, v: unknown, depth: number): { changed:
         if (Number.isFinite(n) && (types.includes('number') || Number.isInteger(n))) {
           return { changed: true, value: n };
         }
+      }
+    }
+    // Stringified JSON for a declared object/array — same defect class as the
+    // ToolDefinition path above (see coerceValue); explicit declared type only.
+    if (types.includes('object') || types.includes('array')) {
+      const trimmed = v.trim();
+      const wantArray = types.includes('array') && !types.includes('object');
+      if (trimmed.startsWith(wantArray ? '[' : '{') || (types.includes('array') && trimmed.startsWith('['))) {
+        try {
+          const parsed: unknown = JSON.parse(trimmed);
+          const isObj = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+          if ((types.includes('object') && isObj) || (types.includes('array') && Array.isArray(parsed))) {
+            return { changed: true, value: coerceJsonValue(schema, parsed, depth + 1).value };
+          }
+        } catch { /* not JSON — leave for downstream validation */ }
       }
     }
     return { changed: false, value: v };
