@@ -248,6 +248,17 @@ export async function runGrokCode(
     );
   }
 
+  // Money guard (2026-07-24): the cli-chat-proxy lane bills real API credits
+  // (console.x.ai "Grok Build" spend proof) — honor the same hard block the
+  // transport enforces, since this call fetches the proxy directly.
+  const blockV = process.env['SUDO_XAI_TEXT_BLOCK']?.trim().toLowerCase();
+  if (blockV === '1' || blockV === 'true' || blockV === 'on' || blockV === 'yes') {
+    throw new GrokRunCodeError(
+      'disabled',
+      'grok run-code refused: SUDO_XAI_TEXT_BLOCK=1 — the cli-chat-proxy lane bills API credits (console.x.ai proof 2026-07-24).',
+    );
+  }
+
   const deps = opts.deps ?? defaultDeps();
   const token = await deps.getAccessToken();
   if (token === null || token === '') {
