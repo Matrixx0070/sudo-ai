@@ -89,6 +89,60 @@ function chunkText(text: string, limit: number): string[] {
   return chunks;
 }
 
+/**
+ * Chunk text so that AFTER MarkdownV2 escaping each piece still fits in
+ * TELEGRAM_CHUNK_LIMIT. Worst-case escape doubles length (every char special),
+ * so we start at limit/2 and grow until the escaped form would overflow.
+ * Falls back to plain chunkText if the unescaped text is already short.
+ */
+function chunkTextForMarkdownV2(text: string, limit: number = TELEGRAM_CHUNK_LIMIT): string[] {
+  if (escapeMarkdownV2(text).length <= limit) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (escapeMarkdownV2(remaining).length <= limit) {
+      chunks.push(remaining);
+      break;
+    }
+    // Binary-search the largest prefix whose escaped form fits in `limit`.
+    let lo = 1;
+    let hi = Math.min(remaining.length, limit);
+    let best = 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      // Avoid splitting a UTF-16 surrogate pair.
+      let cut = mid;
+      if (cut < remaining.length) {
+        const c = remaining.charCodeAt(cut - 1);
+        if (c >= 0xd800 && c <= 0xdbff) cut -= 1;
+      }
+      if (cut < 1) {
+        lo = mid + 1;
+        continue;
+      }
+      const candidate = remaining.slice(0, cut);
+      if (escapeMarkdownV2(candidate).length <= limit) {
+        best = cut;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    // Prefer a newline break inside the safe window when possible.
+    const window = remaining.slice(0, best);
+    const breakAt = window.lastIndexOf('\n');
+    let cut = breakAt > best * 0.5 ? breakAt : best;
+    if (cut < remaining.length) {
+      const c = remaining.charCodeAt(cut - 1);
+      if (c >= 0xd800 && c <= 0xdbff) cut -= 1;
+    }
+    if (cut < 1) cut = best; // hard floor — never stall
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut).trimStart();
+  }
+  return chunks;
+}
+
 /** Directory where incoming Telegram photos are saved. */
 const UPLOAD_DIR = join(DATA_DIR, 'uploads');
 
@@ -635,7 +689,13 @@ export class TelegramAdapter implements ChannelAdapter {
       // are stripped before the empty check — `String.prototype.trim()` does not
       // remove them and Telegram 400s on `text must be non-empty`.
       if (text.replace(/[​-‍⁠﻿]/g, '').trim().length > 0) {
-        const chunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
+        // MarkdownV2 escaping can roughly double length; size chunks so the
+        // escaped form still fits under TELEGRAM_CHUNK_LIMIT. Plain/HTML
+        // paths use the raw limit.
+        const chunks =
+          parseMode === 'markdown'
+            ? chunkTextForMarkdownV2(text, TELEGRAM_CHUNK_LIMIT)
+            : chunkText(text, TELEGRAM_CHUNK_LIMIT);
 
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
@@ -650,7 +710,9 @@ export class TelegramAdapter implements ChannelAdapter {
                 ...(i === 0 ? replyParams : {}),
               });
             } catch {
-              // MarkdownV2 failed — send as plain text (never lose a message)
+              // MarkdownV2 failed — send as plain text (never lose a message).
+              // Re-chunk the plain form in case the original chunk was sized
+              // for escaped length and is still under the raw limit (it is).
               log.debug({ peerId }, 'MarkdownV2 send failed — falling back to plain text');
               await this.bot.api.sendMessage(peerId, chunk, {
                 ...(i === 0 ? replyParams : {}),
@@ -673,11 +735,16 @@ export class TelegramAdapter implements ChannelAdapter {
       }
     } catch (err) {
       log.error({ peerId, err }, 'Telegram send failed');
-      // Last resort: try sending plain text without any formatting
+      // Last resort: send the FULL message as plain text, properly chunked.
+      // Never silently drop the tail with a single substring(0, 4096).
       try {
         if (this.bot && text.replace(/[​-‍⁠﻿]/g, '').trim()) {
-          await this.bot.api.sendMessage(peerId, text.substring(0, TELEGRAM_CHUNK_LIMIT));
-          log.info({ peerId }, 'Sent plain text fallback after error');
+          const fallbackChunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
+          for (const chunk of fallbackChunks) {
+            if (!chunk) continue;
+            await this.bot.api.sendMessage(peerId, chunk);
+          }
+          log.info({ peerId, chunks: fallbackChunks.length }, 'Sent plain text fallback after error');
         }
       } catch { /* truly failed */ }
       throw new ChannelError('Failed to send Telegram message', 'channel_send_failed', {
@@ -725,9 +792,18 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!Number.isFinite(msgIdNum)) {
       throw new ChannelError('messageId must parse to a finite integer', 'channel_invalid_peer', { messageId });
     }
-    // Telegram hard-caps message bodies at 4096 chars; longer edits 400.
-    const clamped = text.length > 4096 ? text.slice(0, 4080) + '\n…[truncated]' : text;
-    await this.bot.api.editMessageText(peerId, msgIdNum, clamped);
+    // Telegram hard-caps message bodies at 4096 chars. Edit the first chunk
+    // in place, then send any overflow as follow-up messages so the tail is
+    // never silently dropped (the previous slice(0, 4080)+"[truncated]" path
+    // was the main source of cut-off replies in streaming mode).
+    const chunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
+    const first = chunks[0] ?? '';
+    await this.bot.api.editMessageText(peerId, msgIdNum, first);
+    for (let i = 1; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (!chunk) continue;
+      await this.bot.api.sendMessage(peerId, chunk);
+    }
   }
 
   /**
@@ -738,7 +814,9 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!this.bot || !this._isConnected) {
       return this.send(peerId, text);
     }
-    const chunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
+    // Size chunks for MarkdownV2 escape headroom so escaped form never
+    // exceeds TELEGRAM_CHUNK_LIMIT (same bug class as send()).
+    const chunks = chunkTextForMarkdownV2(text, TELEGRAM_CHUNK_LIMIT);
     // Send all but last chunk as plain text
     for (let i = 0; i < chunks.length - 1; i++) {
       const chunk = chunks[i];

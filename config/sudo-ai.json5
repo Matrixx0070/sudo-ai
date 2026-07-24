@@ -9,6 +9,18 @@
   },
   models: {
     primary: [
+      // 2026-07-24 Frank: Grok $30-seat is the PRIMARY brain, set in first place.
+      // Rides the seat proxy (SUDO_XAI_OAUTH_SUBSCRIPTION=1 → cli-chat-proxy.grok.com,
+      // never metered api.x.ai). Seat is personalOnly: untrusted/background callers are
+      // refused and fail over to claude-fable-5 below (brain-bridge: the throw IS the
+      // failover signal). Token auto-refreshes via xai-oauth-manager. Remove this entry
+      // to revert to claude-fable-5 primary.
+      {
+        id: 'xai-oauth/grok-4.5',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+        temperature: 0.7,
+      },
       {
         id: 'claude-oauth/claude-fable-5',
         contextWindow: 200000,

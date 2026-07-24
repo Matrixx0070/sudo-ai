@@ -184,7 +184,7 @@ describe('maxChars truncation', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('clamps buffer body to maxChars with a [truncated] marker', async () => {
+  it('clamps intermediate streaming edits to maxChars with a [truncated] marker', async () => {
     const t = fakeTransport();
     const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, maxChars: 64 });
     sink.chunk('x'.repeat(500));
@@ -193,6 +193,24 @@ describe('maxChars truncation', () => {
     expect(edited.length).toBeLessThanOrEqual(64);
     expect(edited).toContain('[truncated]');
     expect(edited.startsWith('x')).toBe(true);
+  });
+
+  it('finalize passes the FULL body without clamping so the channel can chunk overflow', async () => {
+    const t = fakeTransport();
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, maxChars: 64 });
+    const full = 'y'.repeat(500);
+    sink.chunk(full);
+    await vi.advanceTimersByTimeAsync(150);
+    // Intermediate edit was clamped.
+    expect((t.edits[0]?.text ?? '').length).toBeLessThanOrEqual(64);
+    vi.useRealTimers();
+    await sink.finalize(full);
+    // Final edit must be the unclamped full body — channel edit() is
+    // responsible for chunking (telegram.editText sends overflow as follow-ups).
+    const finalEdit = t.edits[t.edits.length - 1]?.text ?? '';
+    expect(finalEdit).toBe(full);
+    expect(finalEdit.length).toBe(500);
+    expect(finalEdit).not.toContain('[truncated]');
   });
 });
 

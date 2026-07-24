@@ -68,8 +68,10 @@ export interface BufferedEditSinkOptions {
   /** Placeholder text shown immediately, before any chunks arrive. */
   placeholder?: string;
   /**
-   * Optional max chars per edit body — channels with their own limits
-   * (Telegram: 4096) can truncate-with-marker before the API call.
+   * Optional max chars for intermediate streaming edits — channels with
+   * their own limits (Telegram: 4096) truncate-with-marker during the
+   * progressive update phase. finalize() never clamps; the channel
+   * edit() impl is expected to chunk overflow itself.
    */
   maxChars?: number;
   /**
@@ -143,6 +145,14 @@ export async function createBufferedEditSink(
   let cancelled = false;
   let finalized = false;
 
+  /**
+   * Intermediate streaming edits must fit a single channel message
+   * (Telegram: 4096). Truncate with a marker so progressive updates stay
+   * under the cap. finalize() deliberately does NOT clamp — the channel
+   * edit() impl (e.g. telegram.editText) is responsible for chunking the
+   * full body and sending overflow as follow-up messages so the tail is
+   * never silently dropped.
+   */
   function clampForChannel(text: string): string {
     if (text.length <= maxChars) return text;
     return text.slice(0, maxChars - 16) + '\n…[truncated]';
@@ -213,7 +223,10 @@ export async function createBufferedEditSink(
         try { await inFlight; } catch { /* already logged */ }
       }
       if (messageId === null) return;
-      const target = clampForChannel(finalText ?? buffer);
+      // Pass the FULL final body to edit() — do NOT clamp. Channel adapters
+      // (telegram.editText) chunk overflow and send follow-up messages so the
+      // tail is never silently dropped with a [truncated] marker.
+      const target = finalText ?? buffer;
       if (target === lastEditedText) return;
       // Defense-in-depth: an empty final edit makes Telegram throw
       // `400: message text is empty` (a content-filter/phantom turn hits this).
