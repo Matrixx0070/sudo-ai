@@ -1727,6 +1727,43 @@ async function boot(): Promise<void> {
           log.warn({ err: String(err) }, 'retention sweep wiring failed — continuing');
         }
 
+        // Grok web-session keep-alive: the `sso` credential is an opaque server-side
+        // session_id (no client-readable exp) whose lifetime is reset by activity, so
+        // an idle session eventually dies → a human must re-run `grok websession setup`.
+        // Nothing else touches the session on a schedule (every feature probes only
+        // on-demand), so a quiet stretch with no grok usage can let it lapse. A tiny
+        // periodic probe (the free quota_info GET — no tokens, no spend) keeps the
+        // session_id warm so the human login approaches never. probe() NOT
+        // ensureHealthy(): keep-alive must never launch a browser refresh — it only
+        // touches the session and reports health. Guarded by SUDO_GROK_WEBSESSION;
+        // kill-switch SUDO_GROK_SESSION_KEEPALIVE=0.
+        if (process.env['SUDO_GROK_WEBSESSION'] === '1' && process.env['SUDO_GROK_SESSION_KEEPALIVE'] !== '0') {
+          try {
+            const { getGrokWebSessionManager } = await import('./llm/grok-web-session-manager.js');
+            const keepAlive = async (): Promise<void> => {
+              try {
+                const r = await getGrokWebSessionManager().probe();
+                if (r.ok) {
+                  log.info({ status: r.status }, 'grok web-session keep-alive: session warm');
+                } else if (r.errorClass === 'relogin') {
+                  log.error('grok web-session keep-alive: sso dead — run `sudo-ai grok websession setup` to reconnect');
+                } else {
+                  log.warn({ errorClass: r.errorClass, detail: r.detail }, 'grok web-session keep-alive: probe not ok (transient)');
+                }
+              } catch (err) {
+                log.warn({ err: String(err) }, 'grok web-session keep-alive: probe threw — continuing');
+              }
+            };
+            setTimeout(() => void keepAlive(), 60_000).unref?.();
+            const keepAliveTimer = setInterval(() => void keepAlive(), 12 * 60 * 60 * 1000);
+            keepAliveTimer.unref?.();
+            registerShutdown(() => clearInterval(keepAliveTimer));
+            log.info('Grok web-session keep-alive scheduled (boot+60s, then every 12h) — SUDO_GROK_SESSION_KEEPALIVE=0 disables');
+          } catch (err) {
+            log.warn({ err: String(err) }, 'grok web-session keep-alive wiring failed — continuing');
+          }
+        }
+
         // Repair flywheel (REPORT-ONLY, Phase A): periodically mine trace failures
         // for addressable/learnable clusters and flag system-bug failure signatures
         // (e.g. the read-file guard depth bug it surfaced). No behavior change — it
