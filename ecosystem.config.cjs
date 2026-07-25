@@ -189,6 +189,19 @@ module.exports = {
         SUDO_GROK_STATSIG_BROWSERLESS: process.env['SUDO_GROK_STATSIG_BROWSERLESS'] || '1',
         SUDO_XAI_OAUTH_SUBSCRIPTION: process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] || '1',
 
+        // grok-web-mcp (ADR 0001) — FREE grok brain with NATIVE tool-calling.
+        // DEFAULT OFF: flipping SUDO_GROK_WEB_MCP=1 stands up the hardened public
+        // MCP server (readonly allowlist below) fronted by Caddy at PUBLIC_URL and
+        // registers+connects the grok connector, enabling the grok-web-mcp/grok-4
+        // lane. To enable: set SUDO_MCP_PUBLIC_TOKEN (a secret — NOT in this file;
+        // prefer a *_REF), then SUDO_GROK_WEB_MCP=1, then restart. Alias is NOT in
+        // models.primary[] yet, so enabling alone won't route brain traffic to it.
+        SUDO_GROK_WEB_MCP: process.env['SUDO_GROK_WEB_MCP'] || '0',
+        SUDO_MCP_PUBLIC_URL: process.env['SUDO_MCP_PUBLIC_URL'] || 'https://mcp.sudoapi.shop',
+        SUDO_MCP_PUBLIC_PORT: process.env['SUDO_MCP_PUBLIC_PORT'] || '18899',
+        SUDO_GROK_WEB_MCP_TOOLS:
+          process.env['SUDO_GROK_WEB_MCP_TOOLS'] || 'git.status,meta.search-tools,github.list_prs,github.pr_status',
+
         // Kill-switch: block the agent from restarting its own prod process
         // unprompted. It was bouncing prod pursuing a stuck "enable grok voice"
         // goal (guard stops the config CRASH, this stops the disruptive RESTART).

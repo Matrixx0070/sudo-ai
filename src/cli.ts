@@ -648,6 +648,58 @@ async function boot(): Promise<void> {
     }
   })();
 
+  // -------------------------------------------------------------------------
+  // 4.4b grok-web-mcp boundary (ADR 0001) — FREE grok brain with native tools.
+  //   Stands up the hardened public MCP server (readonly allowlist) and
+  //   registers + per-user CONNECTS + discovers the grok connector so the
+  //   `grok-web-mcp/grok-4` lane can drive readonly tools server-side. Fully
+  //   flag-gated (SUDO_GROK_WEB_MCP=1) and requires SUDO_MCP_PUBLIC_TOKEN +
+  //   SUDO_MCP_PUBLIC_URL (the internet-reachable origin a reverse proxy fronts
+  //   the loopback server with, e.g. https://mcp.sudoapi.shop). Default OFF.
+  //   Fire-and-forget + fail-open: grok network calls must never stall or crash
+  //   boot; on failure the lane stays unavailable and the brain fails over.
+  // -------------------------------------------------------------------------
+  if (process.env['SUDO_GROK_WEB_MCP'] === '1') {
+    const mcpToken = process.env['SUDO_MCP_PUBLIC_TOKEN'];
+    const mcpPublicUrl = process.env['SUDO_MCP_PUBLIC_URL'];
+    if (!mcpToken || !mcpPublicUrl) {
+      log.warn('grok-web-mcp boundary: SUDO_MCP_PUBLIC_TOKEN and SUDO_MCP_PUBLIC_URL are required — lane disabled');
+    } else {
+      void (async () => {
+        try {
+          const { startGrokMcpBoundary } = await import('./core/gateway/grok-mcp-bootstrap.js');
+          const boundary = await startGrokMcpBoundary({
+            registry,
+            exposedTools:
+              process.env['SUDO_GROK_WEB_MCP_TOOLS'] ?? 'git.status,meta.search-tools,github.list_prs,github.pr_status',
+            publicBaseUrl: mcpPublicUrl,
+            token: mcpToken,
+            teamId: process.env['SUDO_GROK_TEAM_ID'] ?? '56504cd4-01d0-49a9-9a6b-88ebbc2b36c7',
+            connectorName: process.env['SUDO_GROK_WEB_MCP_CONNECTOR_NAME'] ?? 'sudo-ai-brain',
+            port: Number(process.env['SUDO_MCP_PUBLIC_PORT'] ?? '18899'),
+            hooks,
+          });
+          log.info(
+            { connectorId: boundary.connectorId, tools: boundary.tools.map((t) => t.name) },
+            'grok-web-mcp boundary online',
+          );
+          registerShutdown(async () => {
+            try {
+              await boundary.stop();
+            } catch (err) {
+              log.warn({ err: String(err) }, 'grok-web-mcp boundary stop failed');
+            }
+          });
+        } catch (err: unknown) {
+          log.warn(
+            { err: err instanceof Error ? err.message : String(err) },
+            'grok-web-mcp boundary failed to start — lane unavailable, brain fails over',
+          );
+        }
+      })();
+    }
+  }
+
   // Category coverage guard: every enabled tool's category must be routable by
   // ToolRouter's CATEGORY_MAP, otherwise the tool is invisible to the model
   // (reachable only via tool.search) — the exact bug class fixed by hand for
