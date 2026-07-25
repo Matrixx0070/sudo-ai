@@ -25,6 +25,8 @@ export interface AgentConfig {
 export interface AgentState {
   /** ID of the session this run is attached to. */
   sessionId: string;
+  /** Unique id for this run/turn (AL1.2 telemetry join key: llm_calls/tool_calls.turn_id). */
+  turnId?: string;
   /** Current tool-call iteration count. */
   iteration: number;
   /** True while the inner tool-call loop is running. */
