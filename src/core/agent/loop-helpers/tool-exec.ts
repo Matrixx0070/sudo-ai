@@ -17,7 +17,7 @@ import {
 import { isOutboundToolName, markCommittedOutbound } from '../committed-outbound.js';
 import { ToolError } from '../../shared/errors.js';
 // gw-refactor Phase 5: fail-open outcome stamp onto the session's last gateway trace.
-import { markOutcomeForSession } from '../../../llm/logging.js';
+import { markOutcomeForSession, recordToolCallSafe } from '../../../llm/logging.js';
 import { PermissionManager } from '../permissions.js';
 import { clampToolOutput } from '../tool-output-clamp.js';
 import { enrichToolError, isToolErrorHintsEnabled } from '../../tools/error-formatter.js';
@@ -491,6 +491,9 @@ async function executeSingleToolCall(
   // Recovery-reader: the error string of a failed call, used to look up a
   // prior-failure prevention hint just before the final return.
   let callError: string | undefined;
+  // AL1.2: one tool_calls row per execution (fail-open, gated like the
+  // gateway call log). Turn/step come from the ambient loop-step context.
+  const toolCallStartedAt = performance.now();
   try {
     const safeArgs = (tc.arguments && typeof tc.arguments === 'object' && !Array.isArray(tc.arguments))
       ? tc.arguments
@@ -505,6 +508,12 @@ async function executeSingleToolCall(
     // SkillDiscovery, TraceStore, after:tool-call) don't re-guess it from the output string.
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: result.success, args: tc.arguments ?? {} });
     log.info({ tool: tc.name, success: result.success }, 'Tool call completed');
+    recordToolCallSafe({
+      sessionId: ctx.sessionId,
+      tool: tc.name,
+      latencyMs: Math.round(performance.now() - toolCallStartedAt),
+      outcome: result.success ? 'success' : 'error',
+    });
     guardedRecordFeedback(feedbackMemory, true, tc.name, tc.arguments ?? {}, resultContent || 'success', ctx.sessionId);
     // A tool can report failure via its authoritative `success` flag without throwing.
     if (!result.success) callError = resultContent;
@@ -531,6 +540,12 @@ async function executeSingleToolCall(
     resultContent = `Error executing tool ${tc.name}: ${String(err)}`;
     emit({ type: 'tool-result', name: tc.name, result: resultContent, toolId: tc.id, success: false, args: tc.arguments ?? {} });
     log.error({ tool: tc.name, err }, 'Tool call failed');
+    recordToolCallSafe({
+      sessionId: ctx.sessionId,
+      tool: tc.name,
+      latencyMs: Math.round(performance.now() - toolCallStartedAt),
+      outcome: 'error',
+    });
     guardedRecordFeedback(feedbackMemory, false, tc.name, tc.arguments ?? {}, resultContent || String(err), ctx.sessionId);
     callError = resultContent;
   }

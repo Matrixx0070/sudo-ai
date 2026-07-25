@@ -19,7 +19,8 @@ import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError, LLMError } from '../shared/errors.js';
 // gw-refactor Phase 5: outcome signals onto the session's last gateway trace.
 // Both helpers are fail-open (never throw) and gated by SUDO_GATEWAY_LOG=0.
-import { markOutcomeForSession, isLikelyRephrase } from '../../llm/logging.js';
+import { markOutcomeForSession, isLikelyRephrase, runWithLoopStep } from '../../llm/logging.js';
+import { randomUUID } from 'node:crypto';
 import { clearCommittedOutbound, hasCommittedOutbound } from './committed-outbound.js';
 import { drainQueueForSession } from '../agents/session-bus.js';
 import {
@@ -1088,6 +1089,7 @@ export class AgentLoop extends AgentLoopInjections {
 
     const state: AgentState = {
       sessionId,
+      turnId: randomUUID(),
       iteration: 0,
       isProcessing: false,
       isCompacting: false,
@@ -2545,18 +2547,23 @@ export class AgentLoop extends AgentLoopInjections {
         const brainCallStartedAt = performance.now();
         let response: BrainResponse;
         try {
-          response = await this.brain.call({
-            messages: trimmed,
-            source: 'agent',
-            // gw-cutover Phase 2: session→trace correlation for IR-served calls
-            // (noteTraceForSession → markOutcomeForSession). Legacy path ignores it.
-            sessionId: state.sessionId,
-            model: effectiveModel,
-            tools: _routedTools,
-            ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),
-            ...(opts?.promptProfile && opts.promptProfile !== 'main' ? { promptProfile: opts.promptProfile } : {}),
-            race: opts?.race,
-          }, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts);
+          // AL1.2: ambient turn/step correlation — the gateway call log stamps
+          // llm_calls rows made inside this scope with {session, turn, step}.
+          response = await runWithLoopStep(
+            { sessionId: state.sessionId, turnId: state.turnId ?? '', stepN: state.iteration },
+            () => this.brain.call({
+              messages: trimmed,
+              source: 'agent',
+              // gw-cutover Phase 2: session→trace correlation for IR-served calls
+              // (noteTraceForSession → markOutcomeForSession). Legacy path ignores it.
+              sessionId: state.sessionId,
+              model: effectiveModel,
+              tools: _routedTools,
+              ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),
+              ...(opts?.promptProfile && opts.promptProfile !== 'main' ? { promptProfile: opts.promptProfile } : {}),
+              race: opts?.race,
+            }, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts),
+          );
         } catch (brainErr) {
           // Context overflow: the prompt is too long for the model and every
           // same-family failover profile would reject it identically (brain
@@ -3183,7 +3190,12 @@ export class AgentLoop extends AgentLoopInjections {
             const _preventionLookup = process.env['SUDO_FAILURE_PREVENTION_HINT'] === '1' && this._toolOutcomeLearner
               ? (t: string, e: string): string | null => this._toolOutcomeLearner!.checkPreventionRulesForError(t, e)
               : undefined;
-            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass, _preventionLookup);
+            // AL1.2: same ambient turn/step scope as the brain.call above, so
+            // tool_calls rows land on the iteration that issued the batch.
+            await runWithLoopStep(
+              { sessionId: state.sessionId, turnId: state.turnId ?? '', stepN: state.iteration },
+              () => executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass, _preventionLookup),
+            );
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
 

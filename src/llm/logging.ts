@@ -21,6 +21,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -71,6 +72,65 @@ export interface LLMCallRecord {
   costUsd?: number;
   /** Downstream outcome; usually stamped later via {@link GatewayCallLog.markOutcome}. */
   outcome?: string;
+  /** Session the call belongs to (AL1.2). Filled from the ambient loop-step context when omitted. */
+  sessionId?: string;
+  /** Agent-loop turn id (one AgentLoop.run invocation). Ambient-filled when omitted. */
+  turnId?: string;
+  /** Loop iteration number within the turn. Ambient-filled when omitted. */
+  stepN?: number;
+  /** Tool whose execution this call served, when applicable. Ambient-filled when omitted. */
+  tool?: string;
+}
+
+/**
+ * One tool execution, as handed to {@link recordToolCall}. Tool executions get
+ * their own `tool_calls` table (same DB, same module — NOT a second log path):
+ * they are loop steps, not LLM calls, and stuffing them into `llm_calls` would
+ * corrupt that table's per-call cost/token semantics.
+ */
+export interface ToolCallRecord {
+  sessionId: string;
+  tool: string;
+  latencyMs: number;
+  /** 'success' | 'error' | 'denied' — free text, mirrors llm_calls.outcome. */
+  outcome: string;
+  /** Ambient-filled from the loop-step context when omitted. */
+  turnId?: string;
+  stepN?: number;
+  ts?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Loop-step context (AL1.2) — ambient turn/step correlation
+// ---------------------------------------------------------------------------
+
+/** Identifies the loop iteration an LLM/tool call is serving. */
+export interface LoopStepContext {
+  sessionId: string;
+  turnId: string;
+  stepN: number;
+  tool?: string;
+}
+
+/**
+ * AsyncLocalStorage rather than a module global so concurrent sessions (and
+ * background callers like cognitive-stream firing mid-iteration on their own
+ * async paths) can never be stamped with another turn's context.
+ */
+const _loopStepStorage = new AsyncLocalStorage<LoopStepContext>();
+
+/**
+ * Run `fn` with an ambient loop-step context; every {@link GatewayCallLog.record}
+ * and {@link recordToolCall} inside it inherits {sessionId, turnId, stepN}.
+ * Fail-open: a broken context must never block the wrapped call.
+ */
+export function runWithLoopStep<T>(ctx: LoopStepContext, fn: () => T): T {
+  return _loopStepStorage.run(ctx, fn);
+}
+
+/** The ambient loop-step context, or undefined outside a wrapped scope. */
+export function currentLoopStep(): LoopStepContext | undefined {
+  return _loopStepStorage.getStore();
 }
 
 // ---------------------------------------------------------------------------
@@ -119,9 +179,33 @@ const DDL_TABLE = `
     tokens_out          INTEGER,
     tokens_cached       INTEGER,
     cost_usd            REAL,
-    outcome             TEXT
+    outcome             TEXT,
+    session_id          TEXT,
+    turn_id             TEXT,
+    step_n              INTEGER,
+    tool                TEXT
   )
 `;
+
+/** Tool executions — one row per tool call, keyed to the same turn/step ids. */
+const DDL_TOOL_CALLS = `
+  CREATE TABLE IF NOT EXISTS tool_calls (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT    NOT NULL,
+    session_id  TEXT    NOT NULL,
+    turn_id     TEXT,
+    step_n      INTEGER,
+    tool        TEXT    NOT NULL,
+    latency_ms  INTEGER,
+    outcome     TEXT
+  )
+`;
+const DDL_IDX_TOOL_TS      = `CREATE INDEX IF NOT EXISTS idx_tool_calls_ts      ON tool_calls(ts)`;
+const DDL_IDX_TOOL_SESSION = `CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id)`;
+const DDL_IDX_TOOL_TURN    = `CREATE INDEX IF NOT EXISTS idx_tool_calls_turn    ON tool_calls(turn_id)`;
+// Turn-join index for llm_calls — created AFTER the column migration (legacy
+// DBs lack turn_id until then), same staging as DDL_IDX_CONTENT.
+const DDL_IDX_TURN         = `CREATE INDEX IF NOT EXISTS idx_llm_calls_turn     ON llm_calls(turn_id)`;
 
 const DDL_IDX_TS          = `CREATE INDEX IF NOT EXISTS idx_llm_calls_ts          ON llm_calls(ts)`;
 const DDL_IDX_CALLER      = `CREATE INDEX IF NOT EXISTS idx_llm_calls_caller      ON llm_calls(caller)`;
@@ -137,6 +221,10 @@ const DDL_IDX_CONTENT     = `CREATE INDEX IF NOT EXISTS idx_llm_calls_content   
  */
 const COLUMN_MIGRATIONS: ReadonlyArray<{ column: string; ddl: string }> = [
   { column: 'content_sha256', ddl: 'ALTER TABLE llm_calls ADD COLUMN content_sha256 TEXT' },
+  { column: 'session_id',     ddl: 'ALTER TABLE llm_calls ADD COLUMN session_id TEXT' },
+  { column: 'turn_id',        ddl: 'ALTER TABLE llm_calls ADD COLUMN turn_id TEXT' },
+  { column: 'step_n',         ddl: 'ALTER TABLE llm_calls ADD COLUMN step_n INTEGER' },
+  { column: 'tool',           ddl: 'ALTER TABLE llm_calls ADD COLUMN tool TEXT' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -325,7 +413,10 @@ export class GatewayCallLog {
   // -------------------------------------------------------------------------
 
   private _applyDdl(): void {
-    for (const stmt of [DDL_TABLE, DDL_IDX_TS, DDL_IDX_CALLER, DDL_IDX_ERROR_CLASS]) {
+    for (const stmt of [
+      DDL_TABLE, DDL_IDX_TS, DDL_IDX_CALLER, DDL_IDX_ERROR_CLASS,
+      DDL_TOOL_CALLS, DDL_IDX_TOOL_TS, DDL_IDX_TOOL_SESSION, DDL_IDX_TOOL_TURN,
+    ]) {
       try {
         this.db.exec(stmt);
       } catch (err) {
@@ -357,14 +448,17 @@ export class GatewayCallLog {
       }
     }
 
-    // content_sha256 index — created here, after the column migration guarantees
-    // the column exists on legacy DBs (a fresh DDL_TABLE already has it).
-    try {
-      this.db.exec(DDL_IDX_CONTENT);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes('already exists')) {
-        logger.warn({ err: msg }, 'content index DDL warning');
+    // content_sha256 + turn_id indexes — created here, after the column
+    // migration guarantees the columns exist on legacy DBs (a fresh
+    // DDL_TABLE already has them).
+    for (const stmt of [DDL_IDX_CONTENT, DDL_IDX_TURN]) {
+      try {
+        this.db.exec(stmt);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('already exists')) {
+          logger.warn({ err: msg }, 'post-migration index DDL warning');
+        }
       }
     }
   }
@@ -400,17 +494,22 @@ export class GatewayCallLog {
       // caller, route, tokens, cost, latency, content_sha256 fingerprint, outcome —
       // is operational metadata and still recorded so budgets/dedup keep working.
       const zdrBlocked = isZDRBlocked('session_persistence');
+
+      // AL1.2: correlate this call to the loop iteration it serves. Explicit
+      // entry fields win; the ambient loop-step context fills the rest.
+      const loopStep = currentLoopStep();
+
       this.db.prepare(`
         INSERT OR REPLACE INTO llm_calls
           (trace_id, ts, caller, purpose, alias, route, priority,
            ir_request, ir_response, wire_payload_sha256, content_sha256, error_class,
            latency_ms, ttft_ms, tokens_in, tokens_out, tokens_cached,
-           cost_usd, outcome)
+           cost_usd, outcome, session_id, turn_id, step_n, tool)
         VALUES
           (:trace_id, :ts, :caller, :purpose, :alias, :route, :priority,
            :ir_request, :ir_response, :wire_payload_sha256, :content_sha256, :error_class,
            :latency_ms, :ttft_ms, :tokens_in, :tokens_out, :tokens_cached,
-           :cost_usd, :outcome)
+           :cost_usd, :outcome, :session_id, :turn_id, :step_n, :tool)
       `).run({
         trace_id:            entry.traceId,
         ts:                  entry.ts ?? new Date().toISOString(),
@@ -431,6 +530,10 @@ export class GatewayCallLog {
         tokens_cached:       entry.tokensCached ?? null,
         cost_usd:            entry.costUsd ?? null,
         outcome:             entry.outcome ?? null,
+        session_id:          entry.sessionId ?? loopStep?.sessionId ?? null,
+        turn_id:             entry.turnId ?? loopStep?.turnId ?? null,
+        step_n:              entry.stepN ?? loopStep?.stepN ?? null,
+        tool:                entry.tool ?? loopStep?.tool ?? null,
       });
 
       this._maybePrune();
@@ -454,6 +557,35 @@ export class GatewayCallLog {
       logger.warn(
         { traceId, err: err instanceof Error ? err.message : String(err) },
         'GatewayCallLog.markOutcome failed',
+      );
+    }
+  }
+
+  /**
+   * Persist one tool execution (AL1.2). Same write-failure contract as
+   * record(): never throws, never blocks the tool path. Turn/step fall back
+   * to the ambient loop-step context.
+   */
+  recordToolCall(entry: ToolCallRecord): void {
+    try {
+      const loopStep = currentLoopStep();
+      this.db.prepare(`
+        INSERT INTO tool_calls (ts, session_id, turn_id, step_n, tool, latency_ms, outcome)
+        VALUES (:ts, :session_id, :turn_id, :step_n, :tool, :latency_ms, :outcome)
+      `).run({
+        ts:         entry.ts ?? new Date().toISOString(),
+        session_id: entry.sessionId,
+        turn_id:    entry.turnId ?? loopStep?.turnId ?? null,
+        step_n:     entry.stepN ?? loopStep?.stepN ?? null,
+        tool:       entry.tool,
+        latency_ms: entry.latencyMs,
+        outcome:    entry.outcome,
+      });
+      this._maybePrune();
+    } catch (err) {
+      logger.warn(
+        { tool: entry.tool, err: err instanceof Error ? err.message : String(err) },
+        'GatewayCallLog.recordToolCall failed',
       );
     }
   }
@@ -523,9 +655,10 @@ export class GatewayCallLog {
     try {
       const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
       const info = this.db.prepare(`DELETE FROM llm_calls WHERE ts < :cutoff`).run({ cutoff });
-      const deleted = info.changes ?? 0;
+      const toolInfo = this.db.prepare(`DELETE FROM tool_calls WHERE ts < :cutoff`).run({ cutoff });
+      const deleted = (info.changes ?? 0) + (toolInfo.changes ?? 0);
       if (deleted > 0) {
-        logger.info({ deleted, retentionDays, cutoff }, 'Pruned old llm_calls rows');
+        logger.info({ deleted, retentionDays, cutoff }, 'Pruned old llm_calls/tool_calls rows');
       }
       return deleted;
     } catch (err) {
@@ -565,6 +698,29 @@ export function getGatewayCallLog(dbPath?: string): GatewayCallLog {
     _instance = new GatewayCallLog(dbPath);
   }
   return _instance;
+}
+
+/**
+ * Fire-and-forget tool-execution row (AL1.2). Same gating idiom as
+ * client.ts recordGatewayCall: SUDO_GATEWAY_LOG=0 disables; skipped under
+ * vitest unless SUDO_GATEWAY_LOG_TEST=1; fully try/caught — a logging bug
+ * can never break a tool call.
+ */
+let _toolLogWarned = false;
+export function recordToolCallSafe(entry: ToolCallRecord): void {
+  try {
+    if (!gatewayLogEnabled()) return;
+    if (process.env['VITEST'] && process.env['SUDO_GATEWAY_LOG_TEST'] !== '1') return;
+    getGatewayCallLog().recordToolCall(entry);
+  } catch (err) {
+    if (!_toolLogWarned) {
+      _toolLogWarned = true;
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'recordToolCallSafe failed (fail-open, warn once)',
+      );
+    }
+  }
 }
 
 /** Test hook: drop the singleton so the next getGatewayCallLog() re-creates it. */
