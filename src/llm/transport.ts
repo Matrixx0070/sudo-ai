@@ -86,6 +86,7 @@ import { sanitizeOAuthToolName } from '../core/brain/tool-schema-compat.js';
 import { resolveThinkingBudget } from '../core/brain/thinking-inject.js';
 import { getCustomProviderWireConfig } from './custom-providers.js';
 import { isGrokWebRoute, callGrokWebIR } from './grok-web-provider.js';
+import { isGrokWebMcpRoute, callGrokWebMcpIR } from './grok-web-mcp-provider.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('llm-transport');
@@ -672,13 +673,57 @@ async function callGrokWebBrainTurn(
   }
 }
 
+/**
+ * Local dispatch for the free grok.com app-chat lane WITH native MCP
+ * tool-calling (ADR 0001). Flag-gated (SUDO_GROK_WEB_MCP=1, default OFF). grok
+ * drives the tool loop server-side against sudo-ai's public MCP server and
+ * returns a final answer, so this is one llm_calls row, cost 0; thrown lane
+ * errors (rate-limit, connector-not-ready) propagate to the failover chain.
+ */
+async function callGrokWebMcpBrainTurn(
+  ir: IRRequest,
+  traceId: string,
+  startedAt: number,
+): Promise<IRResponse> {
+  const base: LLMCallRecord = {
+    traceId,
+    caller: ir.caller,
+    purpose: ir.purpose || 'callIR',
+    alias: ir.alias,
+    route: 'grok-web-mcp:chat',
+    priority: ir.priority,
+    irRequest: ir,
+  };
+  if (process.env['SUDO_GROK_WEB_MCP'] !== '1') {
+    recordCall({ ...base, errorClass: 'invalid_request', latencyMs: Date.now() - startedAt });
+    throw invalidRequest('grok-web-mcp lane is disabled — set SUDO_GROK_WEB_MCP=1 to enable.');
+  }
+  try {
+    const res = await callGrokWebMcpIR({ ...ir, trace_id: traceId });
+    recordCall({ ...base, irResponse: res, costUsd: 0, latencyMs: Date.now() - startedAt });
+    return res;
+  } catch (err) {
+    recordCall({
+      ...base,
+      errorClass: err instanceof LLMPolicyError ? err.class : classifyThrownSafe(err),
+      latencyMs: Date.now() - startedAt,
+    });
+    throw err;
+  }
+}
+
 export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<IRResponse> {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const startedAt = Date.now();
   const traceId = ir.trace_id !== '' ? ir.trace_id : randomUUID();
 
-  // Local provider: the free grok.com app-chat lane (no wire path). Handled
-  // before prepareWireCall since it has no baseURL/egress adapter.
+  // Local providers: the free grok.com app-chat lanes (no wire path). Handled
+  // before prepareWireCall since they have no baseURL/egress adapter. The MCP
+  // (native-tools) alias is checked first — `grok-web-mcp/` is not a `grok-web/`
+  // prefix, but keep the tool lane explicit and independently revertible.
+  if (isGrokWebMcpRoute(ir.alias)) {
+    return callGrokWebMcpBrainTurn(ir, traceId, startedAt);
+  }
   if (isGrokWebRoute(ir.alias)) {
     return callGrokWebBrainTurn(ir, traceId, startedAt);
   }

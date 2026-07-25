@@ -448,6 +448,13 @@ def op_chat(req):
         # Managed-embedding collection search: grok auto-invokes the collectionsSearch
         # rag tool over these collections and grounds the answer on them.
         body["collectionIds"] = req["collectionIds"]
+    if req.get("connectorIds"):
+        # NATIVE MCP tool-calling: grok's backend calls the registered MCP
+        # connector's server directly (no persona/prompt-emulation fight —
+        # native tools are sanctioned). enabledConnectorIds mirrors connectorIds
+        # unless the caller wants some registered-but-not-enabled-this-turn.
+        body["connectorIds"] = req["connectorIds"]
+        body["enabledConnectorIds"] = req.get("enabledConnectorIds", req["connectorIds"])
     if req.get("systemPromptName"):
         body["systemPromptName"] = req["systemPromptName"]
     vh = {**H, "x-statsig-id": req["statsigId"], "x-xai-request-id": str(uuid.uuid4())}
@@ -457,10 +464,18 @@ def op_chat(req):
         return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, r.text),
                 "bodyHead": (r.text or "")[:300]}
     text_parts, reasoning_parts, model_hash, final_msg = [], [], None, None
+    # Raw-frame tool-invocation markers — objective proof grok NATIVELY called a
+    # tool (server-side), as opposed to narrating/hallucinating tool use in text.
+    tool_markers = []
+    MARKER_KEYS = ("toolResults", "mcpToolCall", "mcpToolResult", "toolCall",
+                   "toolResponse", "connectorId", "citationResults", "webSearchResults")
     for line in r.iter_lines():
         if not line:
             continue
         st = line.decode("utf-8", "replace") if isinstance(line, (bytes, bytearray)) else line
+        for k in MARKER_KEYS:
+            if f'"{k}"' in st and k not in tool_markers:
+                tool_markers.append(k)
         try:
             resp = json.loads(st).get("result", {}).get("response", {})
         except ValueError:
@@ -480,11 +495,98 @@ def op_chat(req):
             final_msg = mr["message"]
     text = final_msg if final_msg is not None else "".join(text_parts)
     return {"ok": True, "status": 200, "text": text,
-            "reasoning": "".join(reasoning_parts), "modelHash": model_hash}
+            "reasoning": "".join(reasoning_parts), "modelHash": model_hash,
+            "toolMarkers": tool_markers}
+
+
+def op_mcp_connector_create(req):
+    """Register (or idempotently re-fetch) an MCP connector on the team scope —
+    cookie-only, statsig-FREE. serverUrl must be an internet-reachable HTTPS
+    endpoint (grok's BACKEND calls it directly, not the browser). Team scope is
+    REQUIRED on Business seats (CONNECTOR_SCOPE_USER -> 403; ORGANIZATION -> 403
+    "not a member"). mcpConfig.isEnabled MUST be true (defaults false)."""
+    from curl_cffi import requests as creq
+    H = {**base_headers(req), "Content-Type": "application/json"}
+    body = {
+        "name": req["name"],
+        "connectorType": "CONNECTOR_TYPE_MCP",
+        "scope": "CONNECTOR_SCOPE_TEAM",
+        "scopeId": req["teamId"],
+        "allowedUserIds": [],
+        "connectorConfig": {
+            "mcpConfig": {
+                "serverUrl": req["serverUrl"],
+                "requiresOauth": False,
+                "isEnabled": True,
+            }
+        },
+    }
+    r = creq.post(GROK + "/rest/connectors/create", impersonate="chrome", headers=H,
+                  data=json.dumps(body), timeout=req.get("timeoutSec", 30))
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, r.text),
+                "bodyHead": (r.text or "")[:300]}
+    data = _safe_json(r.text)
+    return {"ok": True, "status": 200, "connectorId": data.get("connectorId") or data.get("id")}
+
+
+def op_mcp_connect(req):
+    """Per-user 'Connect' — mark an MCP connector authValid:true for the CALLING
+    USER. This is the step grok's UI 'Connect' button performs and the piece a
+    team-scope connectors/create does NOT do: without it grok's model refuses the
+    connector's tools in chat ('I don't have that tool'). For requiresOauth:false
+    MCP servers, POST /rest/oauth/auth-url returns an EMPTY authUrl and the side
+    effect is the connector flips to Connected (list-v2 authValid:true). Cookie-
+    only, statsig-FREE. (RE'd 2026-07-25 by real-browser network capture.)"""
+    from curl_cffi import requests as creq
+    H = {**base_headers(req), "Content-Type": "application/json"}
+    body = {"redirectUrl": "https://grok.com/connectors-oauth-exchange-code/",
+            "connectorId": req["connectorId"],
+            "scope": "CONNECTOR_SCOPE_TEAM",
+            "scopeId": req["teamId"]}
+    r = creq.post(GROK + "/rest/oauth/auth-url", impersonate="chrome", headers=H,
+                  data=json.dumps(body), timeout=req.get("timeoutSec", 30))
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, r.text),
+                "bodyHead": (r.text or "")[:300]}
+    data = _safe_json(r.text)
+    return {"ok": True, "status": 200, "authUrl": data.get("authUrl", ""),
+            "oauthCookie": data.get("oauthCookie", "")}
+
+
+def op_mcp_discover(req):
+    """List the tools an already-registered MCP connector exposes."""
+    from curl_cffi import requests as creq
+    H = {**base_headers(req), "Content-Type": "application/json"}
+    body = {"scope": "CONNECTOR_SCOPE_TEAM", "scopeId": req["teamId"],
+            "connectorIds": [req["connectorId"]], "admin": True}
+    r = creq.post(GROK + "/rest/mcp/discovered-tools/list", impersonate="chrome", headers=H,
+                  data=json.dumps(body), timeout=req.get("timeoutSec", 30))
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, r.text),
+                "bodyHead": (r.text or "")[:300]}
+    data = _safe_json(r.text)
+    return {"ok": True, "status": 200, "mcpTools": data.get("mcpTools", [])}
+
+
+def op_mcp_connector_remove(req):
+    """Deregister an MCP connector (cleanup)."""
+    from curl_cffi import requests as creq
+    H = {**base_headers(req), "Content-Type": "application/json"}
+    body = {"id": req["connectorId"], "scope": "CONNECTOR_SCOPE_TEAM", "scopeId": req["teamId"]}
+    r = creq.post(GROK + "/rest/connectors/remove", impersonate="chrome", headers=H,
+                  data=json.dumps(body), timeout=req.get("timeoutSec", 30))
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "errorClass": classify(r.status_code, r.text),
+                "bodyHead": (r.text or "")[:300]}
+    return {"ok": True, "status": 200}
 
 
 OPS = {"probe": op_probe, "seed": op_seed, "image": op_image, "video": op_video,
-       "download": op_download, "voice_stt": op_voice_stt, "voice_tts": op_voice_tts, "chat": op_chat}
+       "download": op_download, "voice_stt": op_voice_stt, "voice_tts": op_voice_tts, "chat": op_chat,
+       "mcp_connector_create": op_mcp_connector_create, "mcp_connect": op_mcp_connect,
+       "mcp_discover": op_mcp_discover,
+       "mcp_connector_remove": op_mcp_connector_remove}
 
 
 def main():

@@ -124,6 +124,8 @@ export interface GrokChatResult {
   /** Reasoning stream, when isReasoning was requested. */
   reasoning?: string;
   modelHash?: string;
+  /** Raw-frame markers proving a tool was NATIVELY invoked server-side. */
+  toolMarkers?: string[];
 }
 
 export interface GrokMediaDeps {
@@ -483,6 +485,8 @@ export async function chatGrokWeb(
     timeoutSec?: number;
     /** Managed-embedding collections to ground on (collectionsSearch). */
     collectionIds?: string[];
+    /** Registered MCP connector ids — grok NATIVELY calls their tools server-side. */
+    connectorIds?: string[];
     deps?: GrokMediaDeps;
   } = {},
 ): Promise<GrokChatResult> {
@@ -508,6 +512,7 @@ export async function chatGrokWeb(
       disableSearch: opts.disableSearch ?? true,
       ...(opts.isReasoning ? { isReasoning: true } : {}),
       ...(opts.collectionIds ? { collectionIds: opts.collectionIds } : {}),
+      ...(opts.connectorIds ? { connectorIds: opts.connectorIds } : {}),
       ...(opts.timeoutSec ? { timeoutSec: opts.timeoutSec } : {}),
     };
     return deps.bridge(req, { ...creds, statsigId });
@@ -549,6 +554,7 @@ export async function chatGrokWeb(
   const out: GrokChatResult = { text: r.text };
   if (r.reasoning) out.reasoning = r.reasoning;
   if (r.modelHash) out.modelHash = r.modelHash;
+  if (r.toolMarkers && r.toolMarkers.length) out.toolMarkers = r.toolMarkers;
   return out;
 }
 

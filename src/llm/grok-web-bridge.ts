@@ -135,6 +135,54 @@ export interface ChatRequest {
   toolOverrides?: Record<string, unknown>;
   /** Managed-embedding collections to search (grok invokes collectionsSearch). */
   collectionIds?: string[];
+  /** Registered MCP connector ids to attach — grok NATIVELY calls their tools
+   * server-side (no persona/prompt-emulation fight). See McpConnectorCreateRequest. */
+  connectorIds?: string[];
+  /** Defaults to connectorIds when omitted. */
+  enabledConnectorIds?: string[];
+  timeoutSec?: number;
+}
+
+/**
+ * Register (idempotent by name+scope) an MCP connector on the team scope.
+ * `serverUrl` MUST be an internet-reachable HTTPS endpoint — grok's BACKEND
+ * calls it directly, not the browser. Cookie-only, statsig-FREE.
+ */
+export interface McpConnectorCreateRequest {
+  op: 'mcp_connector_create';
+  name: string;
+  teamId: string;
+  serverUrl: string;
+  timeoutSec?: number;
+}
+
+/**
+ * Per-user "Connect" — flip a registered MCP connector to authValid:true for the
+ * calling user (what grok's UI Connect button does). REQUIRED: without it grok's
+ * model refuses the connector's tools in chat, even though team-scope create +
+ * discovery succeed. For requiresOauth:false MCP servers this is a no-redirect
+ * side-effecting call. Cookie-only, statsig-FREE.
+ */
+export interface McpConnectRequest {
+  op: 'mcp_connect';
+  teamId: string;
+  connectorId: string;
+  timeoutSec?: number;
+}
+
+/** List the tools an already-registered MCP connector exposes. */
+export interface McpDiscoverRequest {
+  op: 'mcp_discover';
+  teamId: string;
+  connectorId: string;
+  timeoutSec?: number;
+}
+
+/** Deregister an MCP connector (cleanup). */
+export interface McpConnectorRemoveRequest {
+  op: 'mcp_connector_remove';
+  teamId: string;
+  connectorId: string;
   timeoutSec?: number;
 }
 
@@ -146,7 +194,11 @@ export type GrokWebRequest =
   | DownloadRequest
   | VoiceSttRequest
   | VoiceTtsRequest
-  | ChatRequest;
+  | ChatRequest
+  | McpConnectorCreateRequest
+  | McpConnectRequest
+  | McpDiscoverRequest
+  | McpConnectorRemoveRequest;
 
 /**
  * Error classes the python side emits so the manager can react correctly
@@ -206,6 +258,13 @@ export interface GrokWebResponse {
   // chat — `text` (reused above) is the assistant reply
   reasoning?: string;
   modelHash?: string;
+  /** Raw-frame markers proving a tool was NATIVELY invoked server-side
+   * (e.g. 'mcpToolResult', 'toolResults') — objective, not text-narration. */
+  toolMarkers?: string[];
+  // mcp_connector_create
+  connectorId?: string;
+  // mcp_discover
+  mcpTools?: Array<{ name: string; remoteName?: string; title?: string; description?: string; jsonSchema?: unknown }>;
 }
 
 /** Injectable spawn seam — real child_process by default, mocked in tests. */

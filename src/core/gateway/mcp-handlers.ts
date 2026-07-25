@@ -113,15 +113,23 @@ export interface HandlerContext {
   getClientInfo: () => { name: string; version: string } | null;
   setAuth: (info: { name: string; version: string }) => void;
   isTokenValid: (provided: string | undefined) => boolean;
+  /**
+   * Optional F18 injection gate on tool-call ARGS. On the public HTTP boundary
+   * the args are authored by an external model (grok's cloud) and are untrusted;
+   * this synchronous gate scores the serialized args and returns `block:true` to
+   * refuse execution. Injected by the public server; unset for stdio (the pipe
+   * has a single trusted owner, so no per-call arg screening is needed there).
+   */
+  inspectArgs?: (serializedArgs: string) => { block: boolean; reason?: string };
 }
 
 // ---------------------------------------------------------------------------
 // initialize
 // ---------------------------------------------------------------------------
 
-const MCP_PROTOCOL_VERSION = '2024-11-05';
-const SERVER_NAME = 'sudo-ai-mcp';
-const SERVER_VERSION = '1.0.0';
+export const MCP_PROTOCOL_VERSION = '2024-11-05';
+export const SERVER_NAME = 'sudo-ai-mcp';
+export const SERVER_VERSION = '1.0.0';
 
 export function handleInitialize(
   id: string | number | null,
@@ -230,6 +238,17 @@ export async function handleToolsCall(
   if (validationError !== null) {
     writeResponse(out, errorResponse(id, -32602, validationError));
     return;
+  }
+
+  // F18 injection gate on ARGS (public boundary only — args are external-model
+  // text). Refuse before execution; never echo the payload back to the caller.
+  if (ctx.inspectArgs) {
+    const verdict = ctx.inspectArgs(JSON.stringify(rawArgs));
+    if (verdict.block) {
+      log.warn({ toolName, reason: verdict.reason }, 'mcp: tool args rejected by injection gate');
+      writeResponse(out, errorResponse(id, -32602, 'Tool arguments rejected'));
+      return;
+    }
   }
 
   // Emit hook.
