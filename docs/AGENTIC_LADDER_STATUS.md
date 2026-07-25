@@ -70,10 +70,10 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 
 ## Build queue (priority order from audit evidence)
 
-1. AL7.4 judge-independence assert + tests — IN PROGRESS (Fable, 2026-07-25)
-2. AL2.4 crash-resume (derive startIndex from completedSteps + dedupe; kill-mid-run test) — OPEN
-3. AL1.2 telemetry columns (additive llm_calls migration: turn_id/step_n/tool + tool-exec rows) — OPEN
-4. AL2.3 step contract (retryPolicy/budget/structured error) + fail-loud condition validation — OPEN
+1. AL7.4 judge-independence — DONE (PR #938 merged; checkJudgeIndependence/resolveJudgeRoute + runGate HOLD; 24/24 tests)
+2. AL2.4 crash-resume — DONE (PR #939 merged; settled-prefix resume + dedupe in lobster.ts, queue readJournal pickup; 92/92, repro-first)
+3. AL1.2 telemetry — DONE (PR #940 merged + ratchet-fix PR #941; llm_calls +session_id/turn_id/step_n/tool, tool_calls table, ALS loop-step context wrapping brain.call+executeToolCalls; 650/650 llm + 1433/1433 agent. LIVE-ROW PROOF PENDING deploy — verify a prod llm_calls row carries turn_id/step_n after next restart)
+4. AL2.3 step contract (retryPolicy/budget/structured error) + fail-loud condition validation — IN PROGRESS (Fable, 2026-07-25)
 5. AL7.1 remainder: scrape-0-fields + empty-reply + doom-loop-FP as agent-tasks; held-out fail-open → fail-closed-for-background; bench dashboard tab — OPEN
 6. AL1.1 invariant test file (throwing-tool message, changed-args doom-loop negative, halt report) — OPEN
 7. AL2.2 determinism test — OPEN
@@ -83,6 +83,7 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 (unchanged items remain OPEN as listed in the spec; statuses above override)
 
 ## Decisions
+- 2026-07-25 | check:arch max-lines ratchet NEVER raises a violating file's baseline (its --write hint is misleading; ratchet() keeps old base) — growing a tracked file past +10% requires a SPLIT. logging.ts split → loop-step-context.ts/persist-redact.ts/rephrase-heuristic.ts (PR #941, after #940 broke main's CI on this) | Fable | process rule: read every check line as `pass` before merging.
 - 2026-07-25 | Executor = Fable (not Opus) | Frank | his call, plan change.
 - 2026-07-25 | Campaign workspace = /root/ladder-clone; prod checkout stays on other sessions' branches | Fable | dont-touch-live-branch rule.
 - 2026-07-25 | F103/CW9 decomposition GO granted (was "gated on Fable GO") — but sequenced AFTER build-queue items 1-7; at minimum monitors.ts+dispatch.ts before AL3 node reuse | Fable | AL1 audit shows all 5 modules unbuilt; graph executor needs the step-executor seam.
