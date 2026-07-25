@@ -21,14 +21,11 @@
  */
 
 import Database from 'better-sqlite3';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../core/shared/logger.js';
 import { DATA_DIR } from '../core/shared/paths.js';
-import { redactDeep } from '../core/shared/redact.js';
-import { redactSecrets } from '../core/federation/federation-error-sanitizer.js';
 import { isZDRBlocked } from '../core/privacy/zdr-mode.js';
 import { contentFingerprint } from './cache/canonical.js';
 import type { IRRequest } from '../../shared-types/ir/v1.js';
@@ -82,56 +79,12 @@ export interface LLMCallRecord {
   tool?: string;
 }
 
-/**
- * One tool execution, as handed to {@link recordToolCall}. Tool executions get
- * their own `tool_calls` table (same DB, same module — NOT a second log path):
- * they are loop steps, not LLM calls, and stuffing them into `llm_calls` would
- * corrupt that table's per-call cost/token semantics.
- */
-export interface ToolCallRecord {
-  sessionId: string;
-  tool: string;
-  latencyMs: number;
-  /** 'success' | 'error' | 'denied' — free text, mirrors llm_calls.outcome. */
-  outcome: string;
-  /** Ambient-filled from the loop-step context when omitted. */
-  turnId?: string;
-  stepN?: number;
-  ts?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Loop-step context (AL1.2) — ambient turn/step correlation
-// ---------------------------------------------------------------------------
-
-/** Identifies the loop iteration an LLM/tool call is serving. */
-export interface LoopStepContext {
-  sessionId: string;
-  turnId: string;
-  stepN: number;
-  tool?: string;
-}
-
-/**
- * AsyncLocalStorage rather than a module global so concurrent sessions (and
- * background callers like cognitive-stream firing mid-iteration on their own
- * async paths) can never be stamped with another turn's context.
- */
-const _loopStepStorage = new AsyncLocalStorage<LoopStepContext>();
-
-/**
- * Run `fn` with an ambient loop-step context; every {@link GatewayCallLog.record}
- * and {@link recordToolCall} inside it inherits {sessionId, turnId, stepN}.
- * Fail-open: a broken context must never block the wrapped call.
- */
-export function runWithLoopStep<T>(ctx: LoopStepContext, fn: () => T): T {
-  return _loopStepStorage.run(ctx, fn);
-}
-
-/** The ambient loop-step context, or undefined outside a wrapped scope. */
-export function currentLoopStep(): LoopStepContext | undefined {
-  return _loopStepStorage.getStore();
-}
+// AL1.2 loop-step context lives in ./loop-step-context.ts (agent code sets it
+// without importing this DB module). Re-exported here so telemetry consumers
+// keep a single import surface.
+import { currentLoopStep, type ToolCallRecord } from './loop-step-context.js';
+export { runWithLoopStep, currentLoopStep } from './loop-step-context.js';
+export type { LoopStepContext, ToolCallRecord } from './loop-step-context.js';
 
 // ---------------------------------------------------------------------------
 // Retention
@@ -227,45 +180,9 @@ const COLUMN_MIGRATIONS: ReadonlyArray<{ column: string; ddl: string }> = [
   { column: 'tool',           ddl: 'ALTER TABLE llm_calls ADD COLUMN tool TEXT' },
 ];
 
-// ---------------------------------------------------------------------------
-// Redaction
-// ---------------------------------------------------------------------------
-
-/**
- * Two-layer redaction for IR payloads before persist:
- *   1. redactDeep — replaces values under sensitive-looking KEYS
- *      (token/secret/key/password/auth/…) with '<redacted>'.
- *   2. redactSecrets — pattern-scrubs every remaining string LEAF
- *      (Bearer tokens, API keys, connection strings, private IPs, …).
- * Cycle-safe and depth-capped via redactDeep's own guards; the leaf pass
- * mirrors its depth cap.
- */
-function redactForPersist(input: unknown): unknown {
-  return redactStringLeaves(redactDeep(input));
-}
-
-function redactStringLeaves(input: unknown, depth = 0): unknown {
-  if (depth > 8) return input;
-  if (typeof input === 'string') return redactSecrets(input);
-  if (input === null || input === undefined || typeof input !== 'object') return input;
-  if (Array.isArray(input)) return input.map((v) => redactStringLeaves(v, depth + 1));
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-    out[k] = redactStringLeaves(v, depth + 1);
-  }
-  return out;
-}
-
-/** JSON-serialize a redacted IR payload; undefined → NULL column. */
-function toJsonColumn(value: unknown): string | null {
-  if (value === undefined) return null;
-  try {
-    return JSON.stringify(redactForPersist(value)) ?? null;
-  } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'IR serialization failed');
-    return null;
-  }
-}
+// Redaction-before-persist helpers live in ./persist-redact.ts (pure, no DB).
+import { toJsonColumn } from './persist-redact.js';
+export { redactForPersist } from './persist-redact.js';
 
 // ---------------------------------------------------------------------------
 // Hashing
@@ -341,33 +258,8 @@ export function __resetSessionTraces(): void {
   _sessionTraces.clear();
 }
 
-// ---------------------------------------------------------------------------
-// Rephrase heuristic (Phase 5 outcome signal)
-// ---------------------------------------------------------------------------
-
-/** Jaccard similarity of the lowercase word sets of two strings (0–1). */
-export function jaccardWordSimilarity(a: string, b: string): number {
-  const ta = new Set(a.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-  const tb = new Set(b.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-  if (ta.size === 0 || tb.size === 0) return 0;
-  let inter = 0;
-  for (const t of ta) if (tb.has(t)) inter++;
-  const union = ta.size + tb.size - inter;
-  return union === 0 ? 0 : inter / union;
-}
-
-/**
- * Conservative, dependency-free "user rephrased the same ask" heuristic:
- * both messages must be non-trivial (>10 chars trimmed) and share >0.6 of
- * their word vocabulary (Jaccard on word sets). Deliberately cheap — runs on
- * the message-intake hot path. A distinct follow-up question shares far less
- * vocabulary; short acks ("ok", "thanks") are excluded by the length guard.
- */
-export function isLikelyRephrase(prev: string, next: string): boolean {
-  if (typeof prev !== 'string' || typeof next !== 'string') return false;
-  if (prev.trim().length <= 10 || next.trim().length <= 10) return false;
-  return jaccardWordSimilarity(prev, next) > 0.6;
-}
+// Rephrase heuristic (Phase 5 outcome signal) lives in ./rephrase-heuristic.ts.
+export { jaccardWordSimilarity, isLikelyRephrase } from './rephrase-heuristic.js';
 
 // ---------------------------------------------------------------------------
 // GatewayCallLog
