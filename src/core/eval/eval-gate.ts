@@ -43,10 +43,76 @@ export interface GateOutcome {
   verdict: RegressionVerdict | null;
   /** Markdown report suitable for a PR comment. */
   markdown: string;
-  /** Process exit code: 0 = pass / no-baseline, 1 = regression. */
+  /** Process exit code: 0 = pass / no-baseline, 1 = regression or hold. */
   exitCode: number;
   /** True when no baseline existed — the run establishes one rather than gating. */
   baselineMissing: boolean;
+  /**
+   * True when the gate HELD instead of judging: an LLM-judge-scored run whose
+   * judge route is not independent of the route under test. A held run never
+   * passes and never updates the baseline — it needs human review.
+   */
+  held?: boolean;
+  /** Human-readable reason the gate held. Present iff `held` is true. */
+  holdReason?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Judge independence (agentic-ladder AL7.4; CLAUDE.md invariant 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Declares how a run was scored when an LLM judge was involved. Verifier-only
+ * runs (exec / string verifiers) omit this entirely — independence only binds
+ * when a model grades another model's output.
+ */
+export interface JudgeDeclaration {
+  /** Route id of the judge model (e.g. "claude-oauth/claude-fable-5"). */
+  judgeRoute: string;
+  /** Route id of the model/route whose outputs were judged. */
+  candidateRoute: string;
+}
+
+export interface JudgeIndependenceResult {
+  ok: boolean;
+  /** Set when !ok — why the gate must hold. */
+  reason?: string;
+}
+
+/** Route ids compare case-insensitively after trimming; empty = undeclared. */
+function normalizeRoute(route: string): string {
+  return route.trim().toLowerCase();
+}
+
+/**
+ * The judge must be a route distinct from the route under test — never the
+ * student, never the author of the answers judged. An undeclared judge or
+ * candidate route also fails: independence must be provable, not assumed.
+ */
+export function checkJudgeIndependence(judge: JudgeDeclaration): JudgeIndependenceResult {
+  const judgeRoute = normalizeRoute(judge.judgeRoute);
+  const candidateRoute = normalizeRoute(judge.candidateRoute);
+  if (!judgeRoute || !candidateRoute) {
+    return { ok: false, reason: 'judge or candidate route undeclared — independence unprovable' };
+  }
+  if (judgeRoute === candidateRoute) {
+    return { ok: false, reason: `judge route "${judge.judgeRoute}" is the route under test` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Pick an independent judge route from the available routes, or null when none
+ * exists — in which case the caller must HOLD for human review, never fall back
+ * to self-judging.
+ */
+export function resolveJudgeRoute(candidateRoute: string, availableRoutes: string[]): string | null {
+  const candidate = normalizeRoute(candidateRoute);
+  for (const route of availableRoutes) {
+    const normalized = normalizeRoute(route);
+    if (normalized && normalized !== candidate) return route;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,8 +235,24 @@ export function runGate(opts: {
   baseline: RunSummary | null;
   current: RunSummary;
   thresholds?: RegressionThresholds;
+  /** Required whenever an LLM judge scored the run; omit for verifier-only runs. */
+  judge?: JudgeDeclaration;
 }): GateOutcome {
-  const { baseline, current, thresholds } = opts;
+  const { baseline, current, thresholds, judge } = opts;
+
+  if (judge) {
+    const independence = checkJudgeIndependence(judge);
+    if (!independence.ok) {
+      return {
+        verdict: null,
+        markdown: renderHoldMarkdown(current, independence.reason!),
+        exitCode: 1,
+        baselineMissing: baseline === null,
+        held: true,
+        holdReason: independence.reason,
+      };
+    }
+  }
 
   if (!baseline) {
     return {
@@ -188,6 +270,19 @@ export function runGate(opts: {
     exitCode: verdict.isRegression ? 1 : 0,
     baselineMissing: false,
   };
+}
+
+/** Markdown for a held run — judge independence violated, human review required. */
+function renderHoldMarkdown(current: RunSummary, reason: string): string {
+  return [
+    '## Eval Gate — ⛔ HOLD (judge independence)',
+    '',
+    `Run \`${current.label ?? current.runId}\` was scored by an LLM judge that is not`,
+    'independent of the route under test. The gate holds for human review; the run',
+    'neither passes nor updates the baseline.',
+    '',
+    `**Reason:** ${reason}`,
+  ].join('\n');
 }
 
 /** Markdown for the first run, when there is nothing to compare against. */
