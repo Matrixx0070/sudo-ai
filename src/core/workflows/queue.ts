@@ -43,7 +43,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { TaskQueue, type EnqueueInput, type TaskPriority } from '../orchestration/task-queue.js';
 import { TaskExecutor, type TaskHandler } from '../orchestration/executor.js';
-import { loadWorkflow, runWorkflow } from './lobster.js';
+import { loadWorkflow, readJournal, runWorkflow } from './lobster.js';
 import type { Workflow, WorkflowRunState, WorkflowStep } from './lobster.js';
 import { createLogger } from '../shared/logger.js';
 import { WORKSPACE_DIR, DATA_DIR } from '../shared/paths.js';
@@ -284,6 +284,23 @@ function buildWorkflowHandler(registry: ToolRegistry, ctx: ToolContext): TaskHan
     const toolExecutor = buildToolExecutor(registry, ctx);
     const approvalCallback = async (): Promise<boolean> => true;
 
+    // Crash recovery (AL2.4): a retry of a task that already ran leaves a
+    // journal behind. Resume from it — the engine skips the settled prefix —
+    // instead of re-running completed steps. The journal must match this
+    // task's runId AND the enqueue-time source hash; anything else is a
+    // different (or stale) run and we start fresh.
+    let resumeState: WorkflowRunState | undefined;
+    if (journalPath) {
+      const prior = await readJournal(journalPath);
+      if (prior && prior.runId === runId && prior.sourceSha256 === sourceHash) {
+        resumeState = prior.state;
+        log.info(
+          { taskId: task.id, runId, settledSteps: prior.state.completedSteps.length },
+          'Resuming queued workflow from crash journal',
+        );
+      }
+    }
+
     // signal is checked once before dispatch; the engine itself has no
     // cancel hook so a mid-run abort cannot interrupt runWorkflow. See the
     // file header "Cancellation" note — slice-5 concern.
@@ -294,6 +311,7 @@ function buildWorkflowHandler(registry: ToolRegistry, ctx: ToolContext): TaskHan
       maxParallel: readMaxParallel(),
       runId,
       ...(journalPath ? { journalPath } : {}),
+      ...(resumeState ? { resumeState } : {}),
       sourceSha256: sourceHash,
     });
 

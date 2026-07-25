@@ -387,6 +387,109 @@ steps:
     });
   });
 
+  describe('crash resume (AL2.4)', () => {
+    // A crash-time journal has completed steps but NO pendingStepIndex (that
+    // is only set at approval pauses). Resume must skip the settled prefix
+    // instead of re-running from step 0 and duplicating results.
+    const threeSteps: Workflow = {
+      name: 'crash-test',
+      steps: [
+        { id: 'one', command: 'echo one' },
+        { id: 'two', command: 'echo two' },
+        { id: 'three', command: 'echo three' },
+      ],
+    };
+
+    it('resumes after the settled prefix without re-running or duplicating completed steps', async () => {
+      const crashState: WorkflowRunState = {
+        workflowName: 'crash-test',
+        startedAt: new Date().toISOString(),
+        completedSteps: [
+          { id: 'one', status: 'success', stdout: 'one\n', exitCode: 0, durationMs: 5 },
+        ],
+        // no pendingStepIndex — the run died mid-flight, not at a gate
+      };
+
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('two\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('three\n', '', 0) as ReturnType<typeof spawn>);
+
+      const finalState = await runWorkflow(threeSteps, { resumeState: crashState });
+
+      // 'one' must not re-spawn; 'two' and 'three' run; exactly one result per step.
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(finalState.completedSteps.map((s) => s.id)).toEqual(['one', 'two', 'three']);
+      expect(finalState.completedSteps.map((s) => s.status)).toEqual([
+        'success',
+        'success',
+        'success',
+      ]);
+    });
+
+    it('re-runs a step recorded as failure (failure is not settled) and drops the stale entry', async () => {
+      const crashState: WorkflowRunState = {
+        workflowName: 'crash-test',
+        startedAt: new Date().toISOString(),
+        completedSteps: [
+          { id: 'one', status: 'success', stdout: 'one\n', exitCode: 0, durationMs: 5 },
+          { id: 'two', status: 'failure', stderr: 'boom', exitCode: 1, durationMs: 5 },
+        ],
+      };
+
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('two\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('three\n', '', 0) as ReturnType<typeof spawn>);
+
+      const finalState = await runWorkflow(threeSteps, { resumeState: crashState });
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(finalState.completedSteps.map((s) => s.id)).toEqual(['one', 'two', 'three']);
+      expect(finalState.completedSteps.filter((s) => s.id === 'two')).toHaveLength(1);
+      expect(finalState.completedSteps[1]?.status).toBe('success');
+    });
+
+    it('drops out-of-order settled entries beyond the resume point (mid-fan-out crash)', async () => {
+      // 'three' settled but 'two' did not (parallel block crash): resume at
+      // 'two', re-running 'three' too so exactly one result per step remains.
+      const crashState: WorkflowRunState = {
+        workflowName: 'crash-test',
+        startedAt: new Date().toISOString(),
+        completedSteps: [
+          { id: 'one', status: 'success', stdout: 'one\n', exitCode: 0, durationMs: 5 },
+          { id: 'three', status: 'success', stdout: 'stale\n', exitCode: 0, durationMs: 5 },
+        ],
+      };
+
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('two\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('three\n', '', 0) as ReturnType<typeof spawn>);
+
+      const finalState = await runWorkflow(threeSteps, { resumeState: crashState });
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(finalState.completedSteps.map((s) => s.id)).toEqual(['one', 'two', 'three']);
+      expect(finalState.completedSteps.filter((s) => s.id === 'three')).toHaveLength(1);
+      expect(finalState.completedSteps[2]?.stdout).toBe('three\n');
+    });
+
+    it('a fully-settled crash journal completes without spawning anything', async () => {
+      const crashState: WorkflowRunState = {
+        workflowName: 'crash-test',
+        startedAt: new Date().toISOString(),
+        completedSteps: [
+          { id: 'one', status: 'success', stdout: 'one\n', exitCode: 0, durationMs: 5 },
+          { id: 'two', status: 'success', stdout: 'two\n', exitCode: 0, durationMs: 5 },
+          { id: 'three', status: 'skipped', durationMs: 0 },
+        ],
+      };
+
+      const finalState = await runWorkflow(threeSteps, { resumeState: crashState });
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(finalState.completedSteps).toHaveLength(3);
+    });
+  });
+
   // -------------------------------------------------------------------------
   // 7. Security: interpreter commands are rejected
   // -------------------------------------------------------------------------
