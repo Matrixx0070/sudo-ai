@@ -259,3 +259,141 @@ describe('generateGrokVideo — browserless statsig fast-path (SUDO_GROK_STATSIG
     expect(bridge.mock.calls.some((c) => (c[0] as { op: string }).op === 'seed')).toBe(false);
   });
 });
+
+describe('chatGrokWeb (free app-chat lane — statsig discipline)', () => {
+  it('mints statsig, passes it on the chat request, and returns the reply', async () => {
+    const { chatGrokWeb } = await import('../../src/llm/grok-web-media.js');
+    let minted = 0;
+    const bridge = vi.fn(async (req: { op: string }) => {
+      if (req.op === 'chat')
+        return { ok: true, status: 200, text: 'FREE-LANE-OK', modelHash: 'H', reasoning: 'r' };
+      return { ok: false };
+    });
+    const r = await chatGrokWeb('hi', {
+      deps: {
+        manager: fakeManager(),
+        bridge: bridge as never,
+        now: () => 1,
+        mintStatsig: async () => {
+          minted++;
+          return 'S'.repeat(94);
+        },
+      },
+    });
+    expect(minted).toBe(1);
+    expect(r.text).toBe('FREE-LANE-OK');
+    expect(r.modelHash).toBe('H');
+    const chatCall = bridge.mock.calls.find((c) => (c[0] as { op: string }).op === 'chat');
+    expect((chatCall![1] as { statsigId?: string }).statsigId).toBe('S'.repeat(94));
+    // temporary + disableSearch default true (free, no history, no web search)
+    expect((chatCall![0] as { temporary?: boolean }).temporary).toBe(true);
+    expect((chatCall![0] as { disableSearch?: boolean }).disableSearch).toBe(true);
+  });
+
+  it('persistent 403 anti-bot → re-mints each attempt, then a clear error (never metered fallback)', async () => {
+    const { chatGrokWeb } = await import('../../src/llm/grok-web-media.js');
+    let minted = 0;
+    const bridge = vi.fn(async (req: { op: string }) => {
+      if (req.op === 'chat') return { ok: false, status: 403, errorClass: 'statsig', detail: 'anti-bot' };
+      return { ok: false };
+    });
+    await expect(
+      chatGrokWeb('x', {
+        deps: {
+          manager: fakeManager(),
+          bridge: bridge as never,
+          now: () => 1,
+          mintStatsig: async () => {
+            minted++;
+            return 'S'.repeat(94);
+          },
+        },
+      }),
+    ).rejects.toThrow(/anti-bot|spend money/i);
+    expect(minted).toBe(3); // fresh mint per attempt, 3 attempts
+  });
+});
+
+describe('chatGrokWeb robustness', () => {
+  it('retries a flaky (empty-token) mint until it yields a valid statsig', async () => {
+    const { chatGrokWeb } = await import('../../src/llm/grok-web-media.js');
+    let mintCalls = 0;
+    const bridge = vi.fn(async (req: { op: string }) =>
+      req.op === 'chat' ? { ok: true, status: 200, text: 'OK' } : { ok: false },
+    );
+    const r = await chatGrokWeb('hi', {
+      deps: {
+        manager: fakeManager(),
+        bridge: bridge as never,
+        now: () => 1,
+        // first two mints return '' (oracle flake), third returns a real token
+        mintStatsig: async () => {
+          mintCalls++;
+          return mintCalls < 3 ? '' : 'x'.repeat(94);
+        },
+      },
+    });
+    expect(r.text).toBe('OK');
+    expect(mintCalls).toBe(3); // two empties retried, third valid
+    const chatCall = bridge.mock.calls.find((c) => (c[0] as { op: string }).op === 'chat');
+    expect((chatCall![1] as { statsigId?: string }).statsigId).toBe('x'.repeat(94));
+  });
+
+  it('throws GrokWebRateLimitedError (failover signal) on 429', async () => {
+    const { chatGrokWeb, GrokWebRateLimitedError } = await import('../../src/llm/grok-web-media.js');
+    const bridge = vi.fn(async (req: { op: string }) =>
+      req.op === 'chat' ? { ok: false, status: 429, detail: 'pool exhausted' } : { ok: false },
+    );
+    await expect(
+      chatGrokWeb('hi', {
+        deps: { manager: fakeManager(), bridge: bridge as never, now: () => 1, mintStatsig: async () => 'x'.repeat(94) },
+      }),
+    ).rejects.toBeInstanceOf(GrokWebRateLimitedError);
+  });
+
+  it('re-mints and retries on 403, succeeding on a later attempt', async () => {
+    const { chatGrokWeb } = await import('../../src/llm/grok-web-media.js');
+    let n = 0;
+    const bridge = vi.fn(async (req: { op: string }) => {
+      if (req.op !== 'chat') return { ok: false };
+      n++;
+      return n < 2 ? { ok: false, status: 403, errorClass: 'statsig' } : { ok: true, status: 200, text: 'OK2' };
+    });
+    const r = await chatGrokWeb('hi', {
+      deps: { manager: fakeManager(), bridge: bridge as never, now: () => 1, mintStatsig: async () => 'x'.repeat(94) },
+    });
+    expect(r.text).toBe('OK2');
+    expect(n).toBe(2);
+  });
+});
+
+describe('grokWebComplete (IR brain primitive)', () => {
+  it('returns an IR tool_use block when grok emits a tool call', async () => {
+    const { grokWebComplete } = await import('../../src/llm/grok-web-media.js');
+    const bridge = vi.fn(async (req: { op: string }) =>
+      req.op === 'chat'
+        ? { ok: true, status: 200, text: '<tool_call>{"name":"f","arguments":{"a":1}}</tool_call>' }
+        : { ok: false },
+    );
+    const blocks = await grokWebComplete(
+      [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      [{ name: 'f', input_schema: { type: 'object' } }],
+      { deps: { manager: fakeManager(), bridge: bridge as never, now: () => 1, mintStatsig: async () => 'x'.repeat(94) } },
+    );
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: 'tool_use', name: 'f', input: { a: 1 } });
+  });
+
+  it('returns an IR text block for a final answer', async () => {
+    const { grokWebComplete } = await import('../../src/llm/grok-web-media.js');
+    const bridge = vi.fn(async (req: { op: string }) =>
+      req.op === 'chat' ? { ok: true, status: 200, text: 'the answer' } : { ok: false },
+    );
+    const blocks = await grokWebComplete(
+      [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      [],
+      { deps: { manager: fakeManager(), bridge: bridge as never, now: () => 1, mintStatsig: async () => 'x'.repeat(94) } },
+    );
+    expect(blocks[0]).toEqual({ type: 'text', text: 'the answer' });
+  });
+});

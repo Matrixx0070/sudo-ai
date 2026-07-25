@@ -39,7 +39,7 @@ const HARD_TIMEOUT_MS = 180_000;
 export interface GrokWebCreds {
   cookie: string;
   userAgent: string;
-  /** Required for op=video only. */
+  /** Required for op=video and op=chat (app-chat anti-bot header). */
   statsigId?: string;
 }
 
@@ -112,6 +112,32 @@ export interface VoiceTtsRequest {
   timeoutSec?: number;
 }
 
+/**
+ * Text chat on the FREE grok.com web (app-chat) lane — the door the
+ * mobile/desktop/web apps use, drawn from the SuperGrok *weekly pool* (NOT
+ * cli-chat-proxy's daily free bucket, NOT the metered API). Requires a freshly
+ * minted x-statsig-id (statsig on creds). The prompt-emulated tool layer
+ * (grok-web-tools.ts) builds `message` and parses the reply.
+ */
+export interface ChatRequest {
+  op: 'chat';
+  /** Full turn message (system tool-instructions + rendered transcript). */
+  message: string;
+  /** Web model id; default 'grok-4' on the python side. */
+  modelName?: string;
+  /** Do not persist the conversation server-side. Default true. */
+  temporary?: boolean;
+  /** Grok's own web search tool. Default true here = OFF (disableSearch). */
+  disableSearch?: boolean;
+  /** Request the reasoning stream. Default false. */
+  isReasoning?: boolean;
+  /** Grok-native tool toggles (web/code/etc.) — NOT sudo-ai tools. */
+  toolOverrides?: Record<string, unknown>;
+  /** Managed-embedding collections to search (grok invokes collectionsSearch). */
+  collectionIds?: string[];
+  timeoutSec?: number;
+}
+
 export type GrokWebRequest =
   | ProbeRequest
   | SeedRequest
@@ -119,7 +145,8 @@ export type GrokWebRequest =
   | VideoRequest
   | DownloadRequest
   | VoiceSttRequest
-  | VoiceTtsRequest;
+  | VoiceTtsRequest
+  | ChatRequest;
 
 /**
  * Error classes the python side emits so the manager can react correctly
@@ -176,6 +203,9 @@ export interface GrokWebResponse {
   audioFormat?: string;
   sampleRate?: number;
   durationMs?: number;
+  // chat — `text` (reused above) is the assistant reply
+  reasoning?: string;
+  modelHash?: string;
 }
 
 /** Injectable spawn seam — real child_process by default, mocked in tests. */

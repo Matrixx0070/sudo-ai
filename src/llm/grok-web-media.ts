@@ -25,8 +25,16 @@ import {
 } from './grok-web-session-manager.js';
 import { wireGrokWebRefresher } from './grok-web-capture.js';
 import { callGrokWebBridge, type GrokWebCreds } from './grok-web-bridge.js';
+import { buildChatMessage, parseGrokReply } from './grok-web-tools.js';
+import { getGrokStatsigPool, demoteGrokBrowserlessStatsig } from './grok-statsig-pool.js';
+import type { IRMessage, IRTool, IRContentBlock } from '../../shared-types/ir/v1.js';
 
 const log = createLogger('llm:grok-web-media');
+
+/** The app-chat conversations path is the only statsig-gated endpoint. */
+const APP_CHAT_NEW = '/rest/app-chat/conversations/new';
+/** Minimum plausible x-statsig-id length; the oracle intermittently yields ''. */
+const MIN_STATSIG_LEN = 80;
 
 /** Where generated media lands by default. */
 const MEDIA_DIR = path.join(DATA_DIR, 'grok-web-media');
@@ -74,6 +82,48 @@ export interface GrokVideoResult {
   /** Local path of the downloaded mp4 (undefined if the download step failed). */
   file?: string;
   videoId?: string;
+}
+
+/**
+ * Raised when the free lane returns 429 — the SuperGrok weekly pool ceiling or
+ * the ~40/2h burst throttle. Distinct from other failures so the brain router
+ * can FAIL OVER (to another model) rather than retry a lane that won't recover
+ * until reset. Never triggers a metered-API fallback.
+ */
+export class GrokWebRateLimitedError extends Error {
+  readonly code = 'GROK_WEBSESSION_RATE_LIMITED';
+  readonly shouldFailover = true;
+  constructor(lane: string) {
+    super(
+      `Grok ${lane} lane is rate-limited (429) — SuperGrok weekly pool or 2h burst ` +
+        `throttle. Fail over to another model; do not retry until reset.`,
+    );
+    this.name = 'GrokWebRateLimitedError';
+  }
+}
+
+export interface GrokVoiceTtsResult {
+  /** base64-encoded audio. */
+  audioBase64: string;
+  /** Container, e.g. "wav". */
+  audioFormat: string;
+  sampleRate?: number;
+  durationMs?: number;
+}
+
+export interface GrokVoiceSttResult {
+  /** Transcribed text. */
+  text: string;
+  words?: Array<{ word: string; startMs?: number; endMs?: number; alignScore?: number }>;
+}
+
+export interface GrokChatResult {
+  /** Final assistant text (may be a prompt-emulated <tool_call> block — the
+   * caller's grok-web-tools parser decides tool_use vs final answer). */
+  text: string;
+  /** Reasoning stream, when isReasoning was requested. */
+  reasoning?: string;
+  modelHash?: string;
 }
 
 export interface GrokMediaDeps {
@@ -242,6 +292,32 @@ function makeBrowserlessFirstMint(
   };
 }
 
+/**
+ * Mint a statsig token for the app-chat endpoint, retrying when the underlying
+ * minter throws OR returns an empty/too-short token (the warm-browser oracle
+ * intermittently yields '' on a cold/navigating page). Each retry re-invokes
+ * the injected mint, which itself escalates browserless→oracle. Throws only
+ * after `attempts` genuinely-failed mints — callers treat that as a transient
+ * lane failure, never a metered-API fallback.
+ */
+async function mintValidatedStatsig(
+  mint: (reqPath: string, method: string) => Promise<string>,
+  attempts = 4,
+): Promise<string> {
+  let lastLen = 0;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const tok = await mint(APP_CHAT_NEW, 'POST');
+      if (tok && tok.length >= MIN_STATSIG_LEN) return tok;
+      lastLen = tok ? tok.length : 0;
+      log.warn({ attempt: i + 1, len: lastLen }, 'statsig mint returned short/empty token — retrying');
+    } catch (err) {
+      log.warn({ attempt: i + 1, detail: (err as Error).message }, 'statsig mint threw — retrying');
+    }
+  }
+  throw new Error(`statsig mint failed after ${attempts} attempts (last token len ${lastLen})`);
+}
+
 /** True when quota_info reports the video tier is out for the current window. */
 function videoQuotaExhausted(quota: Record<string, unknown>): boolean {
   const q = (quota['video720p'] ?? quota['video']) as Record<string, unknown> | undefined;
@@ -326,6 +402,181 @@ export async function generateGrokVideo(
   }
   log.info('grok-web video generated (oracle lane)');
   return out;
+}
+
+/**
+ * Synthesize speech on the seat-covered voice lane (statsig-FREE — no anti-bot
+ * mint needed, unlike chat/video). Returns base64 audio + format. Draws the
+ * subscription voice quota; never the metered API.
+ */
+export async function synthesizeGrokVoice(
+  text: string,
+  opts: { voice?: string; sanitize?: boolean; enableAlignment?: boolean; timeoutSec?: number; deps?: GrokMediaDeps } = {},
+): Promise<GrokVoiceTtsResult> {
+  const deps = opts.deps ?? defaultDeps();
+  const session = await ready(deps);
+  const r = await deps.bridge(
+    {
+      op: 'voice_tts',
+      text,
+      ...(opts.voice ? { voice: opts.voice } : {}),
+      ...(opts.sanitize !== undefined ? { sanitize: opts.sanitize } : {}),
+      ...(opts.enableAlignment !== undefined ? { enableAlignment: opts.enableAlignment } : {}),
+      ...(opts.timeoutSec ? { timeoutSec: opts.timeoutSec } : {}),
+    },
+    credsOf(session),
+  );
+  if (!r.ok || typeof r.audioBase64 !== 'string') {
+    throw new Error(`Grok voice TTS failed: ${r.errorClass ?? 'no audio'}${r.detail ? ` (${r.detail})` : ''}`);
+  }
+  const out: GrokVoiceTtsResult = { audioBase64: r.audioBase64, audioFormat: r.audioFormat ?? 'wav' };
+  if (r.sampleRate !== undefined) out.sampleRate = r.sampleRate;
+  if (r.durationMs !== undefined) out.durationMs = r.durationMs;
+  return out;
+}
+
+/**
+ * Transcribe audio on the seat-covered voice lane (statsig-FREE). `audioBase64`
+ * is the base64 of the raw audio bytes; `audioFormat` its container.
+ */
+export async function transcribeGrokVoice(
+  audioBase64: string,
+  opts: { audioFormat?: string; enhance?: boolean; timeoutSec?: number; deps?: GrokMediaDeps } = {},
+): Promise<GrokVoiceSttResult> {
+  const deps = opts.deps ?? defaultDeps();
+  const session = await ready(deps);
+  const r = await deps.bridge(
+    {
+      op: 'voice_stt',
+      audioBase64,
+      ...(opts.audioFormat ? { audioFormat: opts.audioFormat } : {}),
+      ...(opts.enhance !== undefined ? { enhance: opts.enhance } : {}),
+      ...(opts.timeoutSec ? { timeoutSec: opts.timeoutSec } : {}),
+    },
+    credsOf(session),
+  );
+  if (!r.ok || typeof r.text !== 'string') {
+    throw new Error(`Grok voice STT failed: ${r.errorClass ?? 'no text'}${r.detail ? ` (${r.detail})` : ''}`);
+  }
+  const out: GrokVoiceSttResult = { text: r.text };
+  if (r.words) out.words = r.words;
+  return out;
+}
+
+/**
+ * Text chat on the FREE grok.com app-chat lane — the door the mobile/desktop/web
+ * apps use, drawn from the SuperGrok *weekly pool* (NOT cli-chat-proxy's daily
+ * free bucket, NOT the metered API). Mirrors generateGrokVideo's statsig
+ * discipline: mints a FRESH x-statsig-id per attempt (chat is anti-bot-protected
+ * exactly like video — the gap that made chat 403 without a mint), re-mints ONCE
+ * on a 403, and NEVER falls back to the metered api.x.ai. `message` is built by
+ * the caller (grok-web-tools.buildChatMessage) and the reply parsed by
+ * grok-web-tools.parseGrokReply; this function only handles session + statsig +
+ * transport. Returns raw model text — quarantine before it drives control flow.
+ */
+export async function chatGrokWeb(
+  message: string,
+  opts: {
+    modelName?: string;
+    disableSearch?: boolean;
+    isReasoning?: boolean;
+    timeoutSec?: number;
+    /** Managed-embedding collections to ground on (collectionsSearch). */
+    collectionIds?: string[];
+    deps?: GrokMediaDeps;
+  } = {},
+): Promise<GrokChatResult> {
+  const deps = opts.deps ?? defaultDeps();
+  const session = await ready(deps);
+  const creds = credsOf(session);
+  // Real path: pull a fresh single-use token from the API-level pool (pre-minted
+  // ahead of demand, oracle-backed). Tests inject deps.mintStatsig → validate it
+  // directly (no pool, so mint-count assertions stay exact).
+  const injectedMint = deps.mintStatsig;
+  const acquireStatsig: () => Promise<string> = injectedMint
+    ? () => mintValidatedStatsig(injectedMint)
+    : () => getGrokStatsigPool().acquire();
+
+  const send = async (): Promise<import('./grok-web-bridge.js').GrokWebResponse> => {
+    // Fresh, validated, single-use token per send; never store/replay it.
+    const statsigId = await acquireStatsig();
+    const req = {
+      op: 'chat' as const,
+      message,
+      modelName: opts.modelName ?? 'grok-4',
+      temporary: true,
+      disableSearch: opts.disableSearch ?? true,
+      ...(opts.isReasoning ? { isReasoning: true } : {}),
+      ...(opts.collectionIds ? { collectionIds: opts.collectionIds } : {}),
+      ...(opts.timeoutSec ? { timeoutSec: opts.timeoutSec } : {}),
+    };
+    return deps.bridge(req, { ...creds, statsigId });
+  };
+
+  // Up to 3 sends, each with a FRESH single-use statsig. A 403/statsig means the
+  // token was stale/rejected → re-mint and retry. A 429 is the pool/burst
+  // throttle → surface for failover (won't recover on retry). Other errors: stop.
+  let r: import('./grok-web-bridge.js').GrokWebResponse | undefined;
+  for (let i = 0; i < 3; i++) {
+    r = await send();
+    if (r.ok && typeof r.text === 'string') break;
+    if (r.status === 429) throw new GrokWebRateLimitedError('chat');
+    if (r.errorClass === 'statsig' || r.status === 403) {
+      log.info({ attempt: i + 1 }, 'grok-web chat: 403/statsig — re-minting');
+      continue;
+    }
+    break; // non-retryable error class
+  }
+  if (!r || !r.ok || typeof r.text !== 'string') {
+    if (r && r.status === 429) throw new GrokWebRateLimitedError('chat');
+    if (r && (r.errorClass === 'statsig' || r.status === 403)) {
+      // Persistent anti-bot 403 after fresh (pooled) mints: if browserless was in
+      // play, the pure-Node algorithm may have drifted → demote to the oracle so
+      // the next turns self-heal to browser-backed minting (drift canary alerts).
+      if (!injectedMint && process.env['SUDO_GROK_STATSIG_BROWSERLESS'] === '1') {
+        demoteGrokBrowserlessStatsig();
+      }
+      throw new Error(
+        'Grok chat: request rejected by anti-bot rules even after fresh mints. ' +
+          'Not falling back to the metered xAI API (that would spend money) — try again shortly.',
+      );
+    }
+    throw new Error(
+      `Grok web chat failed: ${r?.errorClass ?? 'no text'}${r?.detail ? ` (${r.detail})` : ''}`,
+    );
+  }
+
+  const out: GrokChatResult = { text: r.text };
+  if (r.reasoning) out.reasoning = r.reasoning;
+  if (r.modelHash) out.modelHash = r.modelHash;
+  return out;
+}
+
+/**
+ * One brain turn on the FREE app-chat lane, IR-shaped. Given IR messages + the
+ * tool roster, returns the assistant's IR content blocks — either a single
+ * `tool_use` block (grok chose a tool) or a `text` block (final answer). This is
+ * the primitive sudo-ai's own ReACT loop calls per model step: sudo-ai executes
+ * the tool and calls again, so this does NOT loop internally (that is
+ * runGrokWebToolLoop, for standalone use). Model text is raw/external — the
+ * caller quarantines before it drives control flow.
+ */
+export async function grokWebComplete(
+  messages: readonly IRMessage[],
+  tools: readonly IRTool[],
+  opts: { modelName?: string; system?: string; timeoutSec?: number; deps?: GrokMediaDeps } = {},
+): Promise<IRContentBlock[]> {
+  const message = buildChatMessage(messages, tools, opts.system);
+  const r = await chatGrokWeb(message, {
+    modelName: opts.modelName ?? 'grok-4',
+    ...(opts.timeoutSec ? { timeoutSec: opts.timeoutSec } : {}),
+    ...(opts.deps ? { deps: opts.deps } : {}),
+  });
+  const parsed = parseGrokReply(r.text);
+  if (parsed.kind === 'tool_use') {
+    return [{ type: 'tool_use', id: parsed.id, name: parsed.name, input: parsed.input }];
+  }
+  return [{ type: 'text', text: parsed.text }];
 }
 
 export { GrokWebReloginRequiredError };

@@ -21,11 +21,16 @@ import {
 // seed (base64 <meta name^=gr> content) -> the exact dHex the live browser minter
 // produced. Covers all 4 spinner buckets, a currentTime==0 (identity) case, and
 // an easing-overshoot (color-clamp) case.
+// Re-captured 2026-07-25 after grok's spinner+algorithm drift (docs/STATSIG_RERE_2026-07-25.md):
+// segment seed[21]%16, currentTime (seed[4]%16)*(seed[14]%16)*(seed[7]%16). dHex verified 16/16
+// vs the live minter source + a pure-Node token that PASSED the live anti-bot gate (HTTP 200).
 const FP_CASES: Array<[string, string]> = [
-  ['zGcIAVbd8I1DldqMZQjmWCf+GbDsxzCkZMy1geYQrI0Ndy2ds9O1SHmvrQGWzpO6', '4f7146100100'],
-  ['+3zO4g695EsZA3VeeESCqew2ILS3Eso2b2oPGPQ86WEqkkrAKvN4kcJFKJIx6E82', '2e3fa50e3d70a3d70a3d8075c28f5c28f5c4075c28f5c28f5c40e3d70a3d70a3d800'],
-  ['nNxvy9H8ijJ8Cvvp7HSuLo9SQRZiLIubl5Xule/rVJG4A2ya3dI0F33iMFDZiGqU', 'bfff00f851eb851eb8503ae147ae147ae203ae147ae147ae20f851eb851eb8500'],
-  ['rLIbQqc65BToJN9kCzQOyfmC+qmVC0Uq1LwK4FH0XqM6+wyo8Ch98CwuP+EI9nR8', '7bb42e100100'],
+  ['k3Ucu7ukq81Pp04oTpUp+fTX1bAGrl92mRX3XU5yG6ZALnPOPphBzKPU4oj+B2Fm', '324a780570a3d70a3d70c0f0a3d70a3d70a0f0a3d70a3d70a0570a3d70a3d70c00'],
+  ['VTmxqAQ0Mdmluk0f2U4sCTmlueDZBfYd4rDlL+QSiVj3lgiX2LiopFpEH/qbKM65', 'e02b80100100'],
+  ['mzAunRQlIMVINBGTN7uIbFwsZnHJubVZLBvf9cIvfdpi81gSW+qBPfPCRoDxo3iZ', '7bec91101999999999999a01999999999999a100'],
+  ['d/cVvW5s3BEWeawTXqxL/c2toHu20hC0FYbmgDe1fvOepoaVUpgiKrGdSRM7S5ck', 'a144210fd70a3d70a3d702147ae147ae14802147ae147ae1480fd70a3d70a3d700'],
+  ['BE+kI8bFeXGQXVQyF1xG4Ym8VEmPJyO1jWNTc9edGGzEEXIPACF+l5+Hrc+w3Lnp', '7c22bd10147ae147ae147b0147ae147ae147b100'],
+  ['4LPnNuQu9nLnjlf8lReNAJdJ9gHdxW+ytJlgu8zMuSJfly98TrTpaGy3xIe2qjyh', 'cf78d710028f5c28f5c28f60028f5c28f5c28f6100'],
 ];
 
 describe('deriveFingerprint (pure seed -> dHex, byte-exact vs live minter)', () => {

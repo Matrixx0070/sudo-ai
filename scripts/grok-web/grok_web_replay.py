@@ -444,6 +444,10 @@ def op_chat(req):
         "isReasoning": bool(req.get("isReasoning", False)),
         "responseMetadata": {"experiments": []},
     }
+    if req.get("collectionIds"):
+        # Managed-embedding collection search: grok auto-invokes the collectionsSearch
+        # rag tool over these collections and grounds the answer on them.
+        body["collectionIds"] = req["collectionIds"]
     if req.get("systemPromptName"):
         body["systemPromptName"] = req["systemPromptName"]
     vh = {**H, "x-statsig-id": req["statsigId"], "x-xai-request-id": str(uuid.uuid4())}

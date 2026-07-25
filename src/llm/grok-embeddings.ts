@@ -212,3 +212,37 @@ export async function listGrokDocuments(
 }
 
 export { GrokWebReloginRequiredError, GrokWebDisabledError, isGrokWebSessionEnabled };
+
+// ---------------------------------------------------------------------------
+// Search (statsig-gated collectionsSearch — the retrieval half).
+// ---------------------------------------------------------------------------
+
+export interface GrokCollectionSearchResult {
+  /** grok's grounded answer, retrieved from the collection(s). */
+  answer: string;
+  modelHash?: string;
+}
+
+/**
+ * Search a managed-embedding collection: grok runs the `collectionsSearch` rag
+ * tool over `collectionId` and grounds its answer on the retrieved chunks.
+ * Statsig-gated (hits app-chat conversations/new with `collectionIds`) → uses
+ * the pooled pure-Node mint. `query` is the natural-language question.
+ */
+export async function searchGrokCollection(
+  collectionId: string,
+  query: string,
+  opts: { modelName?: string; timeoutSec?: number } = {},
+): Promise<GrokCollectionSearchResult> {
+  if (!collectionId?.trim()) throw new TypeError('searchGrokCollection: collectionId required');
+  if (!query?.trim()) throw new TypeError('searchGrokCollection: query required');
+  const { chatGrokWeb } = await import('./grok-web-media.js');
+  const r = await chatGrokWeb(query, {
+    modelName: opts.modelName ?? 'grok-4',
+    collectionIds: [collectionId],
+    ...(opts.timeoutSec ? { timeoutSec: opts.timeoutSec } : {}),
+  });
+  const out: GrokCollectionSearchResult = { answer: r.text };
+  if (r.modelHash) out.modelHash = r.modelHash;
+  return out;
+}

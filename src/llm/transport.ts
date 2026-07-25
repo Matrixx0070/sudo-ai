@@ -85,6 +85,7 @@ import { sha256Hex, type LLMCallRecord } from './logging.js';
 import { sanitizeOAuthToolName } from '../core/brain/tool-schema-compat.js';
 import { resolveThinkingBudget } from '../core/brain/thinking-inject.js';
 import { getCustomProviderWireConfig } from './custom-providers.js';
+import { isGrokWebRoute, callGrokWebIR } from './grok-web-provider.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('llm-transport');
@@ -631,10 +632,56 @@ function parseByFamily(family: Family, json: unknown, traceId: string): IRRespon
  * authed fetch → parsed IRResponse. Provider lies (200-garbage, refusals) are
  * RETURNED as stop_reason 'error' + extra; only transport-level failures throw.
  */
+/**
+ * Local dispatch for the free grok.com app-chat lane. Flag-gated
+ * (SUDO_GROK_WEB_BRAIN=1, default OFF): when a `grok-web/*` model is configured
+ * but the flag is off, fail as invalid_request so nothing silently changes.
+ * Logs exactly one llm_calls row (success or failure) like the wire path; a
+ * thrown lane error (rate-limit / mint fail) propagates so the brain's failover
+ * chain advances to the next configured model.
+ */
+async function callGrokWebBrainTurn(
+  ir: IRRequest,
+  traceId: string,
+  startedAt: number,
+): Promise<IRResponse> {
+  const base: LLMCallRecord = {
+    traceId,
+    caller: ir.caller,
+    purpose: ir.purpose || 'callIR',
+    alias: ir.alias,
+    route: 'grok-web:chat',
+    priority: ir.priority,
+    irRequest: ir,
+  };
+  if (process.env['SUDO_GROK_WEB_BRAIN'] !== '1') {
+    recordCall({ ...base, errorClass: 'invalid_request', latencyMs: Date.now() - startedAt });
+    throw invalidRequest('grok-web brain lane is disabled — set SUDO_GROK_WEB_BRAIN=1 to enable.');
+  }
+  try {
+    const res = await callGrokWebIR({ ...ir, trace_id: traceId });
+    recordCall({ ...base, irResponse: res, costUsd: 0, latencyMs: Date.now() - startedAt });
+    return res;
+  } catch (err) {
+    recordCall({
+      ...base,
+      errorClass: err instanceof LLMPolicyError ? err.class : classifyThrownSafe(err),
+      latencyMs: Date.now() - startedAt,
+    });
+    throw err;
+  }
+}
+
 export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<IRResponse> {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const startedAt = Date.now();
   const traceId = ir.trace_id !== '' ? ir.trace_id : randomUUID();
+
+  // Local provider: the free grok.com app-chat lane (no wire path). Handled
+  // before prepareWireCall since it has no baseURL/egress adapter.
+  if (isGrokWebRoute(ir.alias)) {
+    return callGrokWebBrainTurn(ir, traceId, startedAt);
+  }
 
   // Route + body resolution failures are invalid_request throws; log them too
   // (one row per callIR, success or failure).
