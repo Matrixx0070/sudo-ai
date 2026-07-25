@@ -15,12 +15,11 @@
       //   SUDO_GROK_WEB_BRAIN=1 + SUDO_GROK_STATSIG_BROWSERLESS=1 + SUDO_GROK_WEBSESSION=1.
       // The claude chain below is the INSTANT fallback (drift/session-expiry/pool-exhaustion
       // all degrade to it). Revert: drop this entry -> claude-fable-5 becomes primary.
-      {
-        id: 'grok-web/grok-4',
-        contextWindow: 131072,
-        maxOutputTokens: 8192,
-        temperature: 0.7,
-      },
+      // grok-web/grok-4 REVERTED from primary 2026-07-25: the consumer app-chat persona
+      // does NOT reliably emit prompt-emulated <tool_call> for real agent turns — it
+      // narrates tool use ("browser executing…") instead of calling tools. Fine for TEXT,
+      // broken for AGENTIC/tool tasks. Bring back only via NATIVE tool-calling (MCP
+      // connectors), not prompt-emulation. Provider stays wired for explicit grok-web/* use.
       {
         id: 'claude-oauth/claude-fable-5',
         contextWindow: 200000,
@@ -62,7 +61,7 @@
     // so they don't burn the shared SuperGrok weekly pool / 2h burst throttle — grok's
     // budget is reserved for user-facing turns (primary). premium = grok for important turns.
     cheap: 'claude-oauth/claude-fable-5',
-    premium: 'grok-web/grok-4',
+    premium: 'claude-oauth/claude-fable-5',
     embedding: {
       id: 'openai/text-embedding-3-small',
       dims: 1536,
