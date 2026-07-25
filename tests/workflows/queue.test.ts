@@ -10,7 +10,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
+import { createHash } from 'crypto';
 import os from 'os';
 import path from 'path';
 import type { ToolContext, ToolResult } from '../../src/core/tools/types.js';
@@ -132,6 +133,65 @@ steps:
     const task = wq.taskQueue.getTask(res.taskId);
     expect(task?.status).toBe('completed');
     expect(calls).toEqual(['stub.alpha', 'stub.beta']);
+  });
+
+  it('resumes from a crash journal on dispatch (AL2.4) — settled steps do not re-run', async () => {
+    const calls: string[] = [];
+    const { registry } = stubRegistry(async (name) => {
+      calls.push(name);
+      return { success: true, output: `out:${name}` };
+    });
+
+    const wq = initWorkflowQueue({
+      registry,
+      ctx,
+      dbPath: MIND_DB,
+      maxConcurrent: 1,
+      pollIntervalMs: 100,
+    });
+
+    writeWorkflow(
+      'q-resume.yaml',
+      `name: q-resume
+steps:
+  - id: a
+    type: tool
+    command: stub.alpha
+  - id: b
+    type: tool
+    command: stub.beta
+`,
+    );
+
+    // Seed a crash-time journal: step 'a' settled, no pendingStepIndex, keyed
+    // to the runId and source hash the dispatch handler will compute.
+    const sourceText = readFileSync(path.join(workflowsBase, 'q-resume.yaml'), 'utf8');
+    const sourceSha256 = createHash('sha256').update(sourceText, 'utf8').digest('hex');
+    const runId = 'crash-run-al24';
+    const journalDir = path.join(path.dirname(workflowsBase), 'journals');
+    mkdirSync(journalDir, { recursive: true });
+    writeFileSync(
+      path.join(journalDir, `${runId}.json`),
+      JSON.stringify({
+        runId,
+        sourceSha256,
+        version: 1,
+        state: {
+          workflowName: 'q-resume',
+          startedAt: new Date().toISOString(),
+          completedSteps: [
+            { id: 'a', status: 'success', stdout: 'out:stub.alpha', exitCode: 0, durationMs: 1 },
+          ],
+        },
+      }),
+      'utf8',
+    );
+
+    const res = await wq.enqueueWorkflow({ file: 'q-resume.yaml', runId, journalDir });
+    await waitFor(() => wq.taskQueue.getTask(res.taskId)?.status === 'completed');
+
+    // Only the unfinished step ran.
+    expect(calls).toEqual(['stub.beta']);
   });
 
   it('refuses to enqueue a workflow with approval gates when autoApprove is not set', async () => {
