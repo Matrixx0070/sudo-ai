@@ -62,6 +62,27 @@ export interface GrokMcpBoundary {
 
 const ENV_CONNECTOR_ID = 'SUDO_GROK_WEB_MCP_CONNECTOR_ID';
 
+/**
+ * Filter a requested CSV allowlist to tools ACTUALLY registered + readonly at
+ * this boot. Some tools register conditionally (env/feature-gated) or are
+ * config-disabled, so a hard fail on one absent name would take down the whole
+ * boundary. Dropping = LESS exposure = fail-safe. Pure + exported for testing.
+ */
+export function resolveBoundaryAllowlist(
+  registry: ToolRegistry,
+  exposedTools: string,
+): { valid: string[]; dropped: string[] } {
+  const requested = exposedTools.split(',').map((s) => s.trim()).filter(Boolean);
+  const valid: string[] = [];
+  const dropped: string[] = [];
+  for (const name of requested) {
+    const def = registry.get(name);
+    if (def && def.safety === 'readonly') valid.push(name);
+    else dropped.push(name);
+  }
+  return { valid, dropped };
+}
+
 function defaultLifecycle(): GrokMcpLifecycle {
   return {
     create: createGrokMcpConnector,
@@ -79,10 +100,23 @@ export async function startGrokMcpBoundary(opts: GrokMcpBoundaryOptions): Promis
   const lc = opts.lifecycle ?? defaultLifecycle();
   const serverUrl = `${opts.publicBaseUrl.replace(/\/+$/, '')}/mcp/${opts.token}/rpc`;
 
+  // Filter to tools present + readonly at boot (see resolveBoundaryAllowlist).
+  // The security primitive (mcp-public-server) still enforces strictly on what
+  // it receives; only genuinely-present readonly tools ever reach it.
+  const { valid, dropped } = resolveBoundaryAllowlist(opts.registry, opts.exposedTools);
+  if (dropped.length > 0) {
+    log.warn({ dropped, kept: valid }, 'grok-web-mcp: dropped unregistered/non-readonly tools from the allowlist');
+  }
+  if (valid.length === 0) {
+    throw new Error(
+      `grok-web-mcp: none of the allowlisted tools are registered+readonly at boot (requested: ${opts.exposedTools})`,
+    );
+  }
+
   // Construction enforces the readonly allowlist (throws before we touch grok).
   const server: McpPublicServer = createMcpPublicServer({
     token: opts.token,
-    exposedTools: opts.exposedTools,
+    exposedTools: valid.join(','),
     registry: opts.registry,
     ...(opts.hooks ? { hooks: opts.hooks } : {}),
     ...(opts.port ? { port: opts.port } : {}),
