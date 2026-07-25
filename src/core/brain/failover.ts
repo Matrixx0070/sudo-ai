@@ -116,12 +116,13 @@ export class ModelFailover {
       const provider = modelString.slice(0, slashIndex) as ModelProfile['provider'];
       const modelId = modelString.slice(slashIndex + 1);
 
-      // 'xai-oauth' is served ONLY by the IR transport (src/llm/transport.ts) —
-      // legacy getModel() has no such provider and keeps throwing for it, which
-      // is fine: brain routes xai-oauth/ models through the transport
-      // unconditionally (F97: every model is IR-served). Rejecting it HERE crash-looped
-      // prod when it was added to models.primary (2026-07-14 incident).
-      const validProviders = ['xai', 'openai', 'anthropic', 'claude-oauth', 'xai-oauth', 'google', 'groq', 'mistral', 'deepseek', 'ollama', 'together'];
+      // 'xai-oauth' and 'grok-web' are served ONLY by the IR transport
+      // (src/llm/transport.ts) — legacy getModel() has no such provider and keeps
+      // throwing for them, which is fine: brain routes them through the transport
+      // unconditionally (F97: every model is IR-served; grok-web/* short-circuits in
+      // callIR before the wire path). Rejecting them HERE crash-looped prod when
+      // xai-oauth was added to models.primary (2026-07-14) and grok-web (2026-07-25).
+      const validProviders = ['xai', 'openai', 'anthropic', 'claude-oauth', 'xai-oauth', 'grok-web', 'google', 'groq', 'mistral', 'deepseek', 'ollama', 'together'];
       if (!validProviders.includes(provider)) {
         throw new LLMError(
           `Unknown provider "${provider}" in model string "${modelString}"`,

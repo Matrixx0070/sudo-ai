@@ -182,6 +182,11 @@ module.exports = {
         SUDO_TELEGRAM_GROK_VOICE: process.env['SUDO_TELEGRAM_GROK_VOICE'] || '0',
         SUDO_VOICE_GROK_DEFAULT: process.env['SUDO_VOICE_GROK_DEFAULT'] || '1',
         SUDO_GROK_WEBSESSION: process.env['SUDO_GROK_WEBSESSION'] || '1',
+        // FREE grok brain on the app-chat weekly-pool lane (grok-web/* provider).
+        // WEB_BRAIN routes grok-web/* in transport.callIR; STATSIG_BROWSERLESS mints
+        // the anti-bot token PURE-NODE (curl seed -> mintStatsigFromSeed, no browser).
+        SUDO_GROK_WEB_BRAIN: process.env['SUDO_GROK_WEB_BRAIN'] || '1',
+        SUDO_GROK_STATSIG_BROWSERLESS: process.env['SUDO_GROK_STATSIG_BROWSERLESS'] || '1',
         SUDO_XAI_OAUTH_SUBSCRIPTION: process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] || '1',
 
         // Kill-switch: block the agent from restarting its own prod process

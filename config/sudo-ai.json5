@@ -9,6 +9,18 @@
   },
   models: {
     primary: [
+      // 2026-07-25: FREE grok brain via the app-chat WEEKLY-pool lane (grok-web provider,
+      // pure-Node statsig — NOT the metered cli-chat-proxy, which bills real money). grok-4
+      // = Expert = the seat's frontier model. Requires (ecosystem.config.cjs):
+      //   SUDO_GROK_WEB_BRAIN=1 + SUDO_GROK_STATSIG_BROWSERLESS=1 + SUDO_GROK_WEBSESSION=1.
+      // The claude chain below is the INSTANT fallback (drift/session-expiry/pool-exhaustion
+      // all degrade to it). Revert: drop this entry -> claude-fable-5 becomes primary.
+      {
+        id: 'grok-web/grok-4',
+        contextWindow: 131072,
+        maxOutputTokens: 8192,
+        temperature: 0.7,
+      },
       {
         id: 'claude-oauth/claude-fable-5',
         contextWindow: 200000,
@@ -46,8 +58,11 @@
       maxOutputTokens: 8192,
       temperature: 0.7,
     },
+    // cheap = claude: high-frequency background tasks (goal-eval, etc.) stay OFF grok
+    // so they don't burn the shared SuperGrok weekly pool / 2h burst throttle — grok's
+    // budget is reserved for user-facing turns (primary). premium = grok for important turns.
     cheap: 'claude-oauth/claude-fable-5',
-    premium: 'claude-oauth/claude-fable-5',
+    premium: 'grok-web/grok-4',
     embedding: {
       id: 'openai/text-embedding-3-small',
       dims: 1536,
