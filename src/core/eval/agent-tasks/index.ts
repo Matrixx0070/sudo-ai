@@ -10,6 +10,8 @@ import { implementFromSpecTask } from './implement-from-spec.js';
 import { jsBugFixTask } from './js-bug-fix.js';
 import { multiFileRenameTask } from './multi-file-rename.js';
 import { multipartCompletenessTask } from './multipart-completeness.js';
+import { repeatedToolCallsTask } from './repeated-tool-calls.js';
+import { scrapeZeroFieldsTask } from './scrape-zero-fields.js';
 import { slugifyEdgesTask } from './slugify-edges.js';
 import { stackTraceDebugTask } from './stack-trace-debug.js';
 
@@ -20,6 +22,8 @@ export {
   jsBugFixTask,
   multiFileRenameTask,
   multipartCompletenessTask,
+  repeatedToolCallsTask,
+  scrapeZeroFieldsTask,
   slugifyEdgesTask,
   stackTraceDebugTask,
 };
@@ -34,6 +38,9 @@ export const ALL_AGENT_TASKS: AgentBenchTask[] = [
   deadCodeCleanupTask,
   slugifyEdgesTask,
   multipartCompletenessTask,
+  // AL7.1: prod-failure regression classes (2026-07 incidents) as bench tasks.
+  repeatedToolCallsTask,
+  scrapeZeroFieldsTask,
 ];
 
 /** Lookup table by task id. */
