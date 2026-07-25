@@ -21,10 +21,6 @@ const log = createLogger('workflows:executor');
 // Constants
 // ---------------------------------------------------------------------------
 
-const STEP_ID_RE = /^[a-z0-9_-]+$/;
-const DANGEROUS_RE = /\$\(|`|\|/;
-// Extended check: also blocks shell metacharacters when validating stdin
-const STDIN_DANGEROUS_RE = /\$\(|`|\||;|&|>|<|\n/;
 
 /** Field of a StepResult that the template engine is allowed to expand to text. */
 const TEMPLATE_FIELDS: ReadonlySet<keyof StepResult> = new Set<keyof StepResult>([
@@ -49,121 +45,34 @@ const PREV_RE = /\{\{prev\}\}/g;
 
 const MAX_OUTPUT = 10 * 1024 * 1024; // 10 MB per stream
 
-/** Shell interpreters that must not appear as the command binary. */
-const BLOCKED_INTERPRETERS = new Set([
-  'bash', 'sh', 'dash', 'zsh', 'ksh', 'fish',
-  'python', 'python3', 'perl', 'ruby', 'node', 'deno',
-  'php', 'lua', 'tclsh', 'awk',
-]);
 
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
+// Validation moved to ./validate.ts (max-lines ratchet split); re-exported for API compat.
+import { DANGEROUS_RE } from './validate.js';
+export { validateStep, validateWorkflow, validateCondition, MAX_RETRY_ATTEMPTS } from './validate.js';
 
 /**
- * Validate a single WorkflowStep.
- * Throws with a descriptive message on the first violation found.
+ * Retry wrapper (AL2.3): re-run a failing step up to retry.max_attempts,
+ * linear backoff (backoff_ms * completed attempts). Only the final attempt's
+ * result is recorded — intermediate failures are logged, not persisted.
  */
-export function validateStep(step: WorkflowStep): void {
-  if (!step.id || !STEP_ID_RE.test(step.id)) {
-    throw new Error(`Invalid step id "${step.id}": must match /^[a-z0-9_-]+$/`);
-  }
-  if (!step.command || typeof step.command !== 'string') {
-    throw new Error(`Step "${step.id}": command must be a non-empty string`);
-  }
-  if (DANGEROUS_RE.test(step.command)) {
-    throw new Error(
-      `Step "${step.id}": command contains forbidden characters (\`$(\`, backticks, or \`|\`)`,
+export async function withStepRetry(
+  step: WorkflowStep,
+  run: (step: WorkflowStep) => Promise<StepResult>,
+): Promise<StepResult> {
+  const maxAttempts = step.retry?.max_attempts ?? 1;
+  const backoffMs = step.retry?.backoff_ms ?? 0;
+  let result = await run(step);
+  for (let attempt = 2; attempt <= maxAttempts && result.status === 'failure'; attempt++) {
+    if (backoffMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, backoffMs * (attempt - 1)));
+    }
+    log.warn(
+      { stepId: step.id, attempt, maxAttempts, lastExitCode: result.exitCode },
+      'Step failed — retrying',
     );
+    result = await run(step);
   }
-
-  // Reject shell interpreters as the command binary. This also runs for
-  // `type: 'tool'` steps (where command is a tool name, not a shell command);
-  // that is harmless — real tool names are `category.action` and never match an
-  // interpreter — and keeps the guard uniform. A non-existent tool name would
-  // fail honestly at registry.execute() time, not here.
-  const firstToken = step.command.split(/\s+/)[0] ?? '';
-  const bin = path.basename(firstToken);
-  if (BLOCKED_INTERPRETERS.has(bin)) {
-    throw new Error(
-      `Step "${step.id}": interpreter commands are not allowed (got "${bin}")`,
-    );
-  }
-
-  // Validate stdin: allow the literal '{{prev}}' placeholder; reject shell
-  // metacharacters otherwise. Tool steps are exempt — their stdin carries JSON
-  // args parsed and handed to a host tool (registry.execute), so it never
-  // reaches a shell and the injection guard does not apply.
-  if (step.type !== 'tool' && step.stdin !== undefined && step.stdin !== '{{prev}}') {
-    if (STDIN_DANGEROUS_RE.test(step.stdin)) {
-      throw new Error(
-        `Step "${step.id}": stdin contains forbidden characters (shell metacharacters are not allowed)`,
-      );
-    }
-  }
-
-  if (step.timeout !== undefined && (typeof step.timeout !== 'number' || step.timeout <= 0)) {
-    throw new Error(`Step "${step.id}": timeout must be a positive number`);
-  }
-
-  // parallel_group and phase are mutually exclusive: each step picks ONE
-  // fan-out scope. Mixing the two would conflate peer-group semantics with
-  // barrier-stage semantics and break the unambiguous "what does this step
-  // belong to" mental model the scheduler relies on.
-  if (step.parallel_group !== undefined && step.phase !== undefined) {
-    throw new Error(
-      `Step "${step.id}": parallel_group "${step.parallel_group}" and phase "${step.phase}" ` +
-        'cannot both be set on the same step — pick one fan-out scope',
-    );
-  }
-
-  // Members of a fan-out (parallel_group OR phase) may not use {{prev}} —
-  // fan-out has no defined intra-member ordering, so "the previous step" is
-  // ambiguous. Authors must reference a specific upstream id via
-  // {{steps.<id>.<field>}} against a step outside the fan-out. Approval gates
-  // are also forbidden for the same reason: their resume token semantics
-  // assume a single ordered step, not a settled fan-out.
-  const fanOutLabel =
-    step.parallel_group !== undefined
-      ? { kind: 'parallel_group', value: step.parallel_group }
-      : step.phase !== undefined
-        ? { kind: 'phase', value: step.phase }
-        : null;
-  if (fanOutLabel) {
-    if (step.command.includes('{{prev}}') || (step.stdin ?? '').includes('{{prev}}')) {
-      throw new Error(
-        `Step "${step.id}": {{prev}} is forbidden inside ${fanOutLabel.kind} "${fanOutLabel.value}" — ` +
-          'use explicit {{steps.<id>.<field>}} against a step outside the fan-out',
-      );
-    }
-    if (step.approval === true) {
-      throw new Error(
-        `Step "${step.id}": approval gates are not supported inside ${fanOutLabel.kind} "${fanOutLabel.value}"`,
-      );
-    }
-  }
-}
-
-/**
- * Validate a Workflow object.
- * Throws on the first structural or security violation.
- */
-export function validateWorkflow(wf: Workflow): void {
-  if (!wf.name || typeof wf.name !== 'string') {
-    throw new Error('Workflow must have a non-empty string "name"');
-  }
-  if (!Array.isArray(wf.steps) || wf.steps.length === 0) {
-    throw new Error(`Workflow "${wf.name}": must have at least one step`);
-  }
-
-  const seenIds = new Set<string>();
-  for (const step of wf.steps) {
-    validateStep(step);
-    if (seenIds.has(step.id)) {
-      throw new Error(`Workflow "${wf.name}": duplicate step id "${step.id}"`);
-    }
-    seenIds.add(step.id);
-  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import {
   execShell,
   renderTemplate,
   assertRenderedCommandSafe,
+  withStepRetry,
 } from './executor.js';
 import type { AccessorMap } from './executor.js';
 import { createLogger } from '../shared/logger.js';
@@ -138,6 +139,16 @@ import type {
  * @returns Parsed and validated Workflow object.
  * @throws On file read errors, YAML parse failures, or validation violations.
  */
+/** Coerce a raw YAML `retry` block to the typed shape; validateStep rejects bad values. */
+function parseRetry(raw: unknown): WorkflowStep['retry'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  return {
+    max_attempts: Number(o['max_attempts']),
+    ...(o['backoff_ms'] !== undefined ? { backoff_ms: Number(o['backoff_ms']) } : {}),
+  };
+}
+
 export async function loadWorkflow(
   filePath: string,
   options?: { basePath?: string },
@@ -198,6 +209,7 @@ export async function loadWorkflow(
         approval: rs['approval'] === true || rs['approval'] === 'true',
         condition: rs['condition'] !== undefined ? String(rs['condition']) : undefined,
         timeout: rs['timeout'] !== undefined ? Number(rs['timeout']) : undefined,
+        retry: parseRetry(rs['retry']),
         parallel_group:
           rs['parallel_group'] !== undefined ? String(rs['parallel_group']) : undefined,
         phase: rs['phase'] !== undefined ? String(rs['phase']) : undefined,
@@ -440,7 +452,7 @@ export async function runWorkflow(
       while (cursor < dispatchable.length) {
         const idx = cursor++;
         const member = dispatchable[idx]!;
-        const r = await executeStep(member);
+        const r = await withStepRetry(member, executeStep);
         results.set(member.id, r);
         log.info(
           {
@@ -556,7 +568,7 @@ export async function runWorkflow(
       log.info({ stepId: first.id }, 'Approval granted — continuing');
     }
 
-    const result = await executeStep(first);
+    const result = await withStepRetry(first, executeStep);
     log.info(
       { stepId: result.id, status: result.status, exitCode: result.exitCode, durationMs: result.durationMs },
       'Step completed',
