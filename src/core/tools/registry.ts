@@ -26,6 +26,12 @@ import { NativeToolCorrection } from './native-tool-correction.js';
 
 const logger = createLogger('tool-registry');
 
+// MCP tool calls previously had NO timeout at all — a wedged remote MCP
+// server (or a hung network call inside its handler) hung the calling turn
+// indefinitely. SUDO_MCP_TOOL_TIMEOUT_MS overrides; MCP round-trips can be
+// slower than in-process native tools (default 30s) so this defaults higher.
+const MCP_TOOL_TIMEOUT_MS = Number(process.env['SUDO_MCP_TOOL_TIMEOUT_MS'] ?? 120_000);
+
 /**
  * Coerce a tool-call `arguments` value into a plain object. The LLM/JSON
  * boundary (and weak models that double-encode) can deliver `arguments` as a
@@ -53,6 +59,29 @@ function normalizeToolArgs(raw: unknown): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Race a tool call against a hard deadline. Unlike a cooperative
+ * AbortController (which only helps if the callee checks `signal`), this
+ * makes the OUTER await settle at `ms` regardless of what the callee does —
+ * a tool/adapter that ignores its abort signal (network call not wired with
+ * `{signal}`, a wedged remote MCP server, ...) can no longer hang the calling
+ * turn forever. The orphaned call keeps running in the background; only the
+ * caller stops waiting on it.
+ *
+ * Root cause this closes: a hung tool call previously blocked its whole
+ * per-peer turn queue (KeyedAsyncQueue / MessageCoalescer both serialize with
+ * no timeout of their own), so one wedged call silenced a chat indefinitely.
+ */
+function raceWithHardTimeout<T>(promise: Promise<T>, ms: number, timeoutError: () => Error): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(timeoutError()), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
 
 /**
  * Coerce string-typed primitive arguments to their declared types per the
@@ -816,7 +845,17 @@ export class ToolRegistry {
     try {
       logger.debug({ tool: name, params }, 'Executing tool');
       const start = Date.now();
-      const result = await tool.execute(params, toolCtx);
+      // Hard backstop alongside the cooperative controller.signal above: a
+      // tool whose implementation doesn't check `signal` (e.g. a fetch not
+      // wired with `{signal}`, a blocking child process) would otherwise
+      // hang this await forever even though `timedOut` got set. Race against
+      // a grace period past the soft timeout so a well-behaved tool that
+      // reacts to the abort still gets to return its own timeout result.
+      const result = await raceWithHardTimeout(
+        tool.execute(params, toolCtx),
+        timeout + 5_000,
+        () => new ToolError(`Tool timed out after ${timeout}ms (hard deadline): ${name}`, 'tool_timeout', { name, timeout }),
+      );
       const durationMs = Date.now() - start;
       logger.info(
         { tool: name, success: result.success, durationMs },
@@ -935,7 +974,11 @@ export class ToolRegistry {
 
     try {
       const start = Date.now();
-      const { content } = await adapter.callTool(name, args);
+      const { content } = await raceWithHardTimeout(
+        adapter.callTool(name, args),
+        MCP_TOOL_TIMEOUT_MS,
+        () => new ToolError(`MCP tool timed out after ${MCP_TOOL_TIMEOUT_MS}ms: ${name}`, 'tool_timeout', { name, timeout: MCP_TOOL_TIMEOUT_MS }),
+      );
       const durationMs = Date.now() - start;
       logger.info({ tool: name, durationMs }, 'MCP tool executed');
       return { success: true, output: content };
