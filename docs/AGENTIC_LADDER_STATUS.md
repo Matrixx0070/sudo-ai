@@ -77,7 +77,8 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 5. AL7.1 remainder — MOSTLY DONE (PR #943 merged; agent tasks scrape-zero-fields + repeated-tool-calls registered; #751 empty-reply = harness rule in AgentBenchRunner; evaluateDraftGate fail-closed; 146/146 eval tests. LEFT OPEN: bench dashboard tab; live nightly execution of the new tasks unverified until the cron fires)
 6. AL1.1 invariant test file (throwing-tool message, changed-args doom-loop negative, halt report) — DONE (PR #944 merged; both CI checks SUCCESS; 6 new tests, 124/124 combined, tsc 0, ratchet 0)
 7. AL2.2 determinism test — DONE (same PR #944)
-8. Then AL3.1/3.2 graph engine → AL4.2-4.5 → AL5.2-5.5 → AL6.2-6.5 (per spec order)
+8. AL3.1/3.2 graph engine — DONE (PR #946 merged, both CI checks pass; graph-types.ts pure-data schema + validation, graph-predicates.ts JSONLogic-subset data predicates, graph-executor.ts topological scheduler with bounded concurrency/quorum-cancel/declared loops/halt-graph default; AL3.4 golden graphs diamond/quorum/loop + concurrency high-water proof, 17 new tests, 124/124 combined; SUDO_AL_GRAPH_CONCURRENCY registered in flag manifest. LEFT OPEN: AL3.3 prune-branch policy, AL3.5 YAML→graph compilation)
+9. Then AL3.3 prune-branch + AL3.5 YAML compile → AL4.2-4.5 → AL5.2-5.5 → AL6.2-6.5 (per spec order)
 
 ## Work items
 (unchanged items remain OPEN as listed in the spec; statuses above override)
