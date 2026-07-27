@@ -641,12 +641,16 @@ export class ToolRegistry {
   }
 
   /**
-   * Return only tools that are currently enabled.
+   * Return only tools that are currently enabled AND agent-visible.
    *
-   * @returns Snapshot array of enabled {@link ToolDefinition} instances.
+   * Excludes `hiddenFromAgent` tools — they exist solely as an external entry
+   * point (the MCP boundary reaches them via {@link listAll} / `get` / `execute`)
+   * and must never enter the agent's own tool menu or LLM schema.
+   *
+   * @returns Snapshot array of enabled, agent-visible {@link ToolDefinition} instances.
    */
   listEnabled(): ToolDefinition[] {
-    return [...this.tools.values()].filter((t) => !this.disabled.has(t.name));
+    return [...this.tools.values()].filter((t) => !this.disabled.has(t.name) && t.hiddenFromAgent !== true);
   }
 
   // -------------------------------------------------------------------------

@@ -51,6 +51,12 @@ export interface GrokMcpBoundaryOptions {
   port?: number;
   hooks?: HookManager;
   lifecycle?: GrokMcpLifecycle;
+  /**
+   * OPTIONAL single full-control tool (agent.command) exposed past the
+   * readonly-only rule so Grok app-chat can DRIVE the agent, not just query it.
+   * Absent = strictly-readonly boundary (default). See mcp-public-server.ts.
+   */
+  commandTool?: string;
 }
 
 export interface GrokMcpBoundary {
@@ -107,9 +113,17 @@ export async function startGrokMcpBoundary(opts: GrokMcpBoundaryOptions): Promis
   if (dropped.length > 0) {
     log.warn({ dropped, kept: valid }, 'grok-web-mcp: dropped unregistered/non-readonly tools from the allowlist');
   }
-  if (valid.length === 0) {
+  const commandTool = opts.commandTool?.trim() || undefined;
+  // A boundary with no readonly tools is fine IFF the full-control command tool
+  // is present — that alone is a complete "drive the agent" surface.
+  if (valid.length === 0 && !commandTool) {
     throw new Error(
       `grok-web-mcp: none of the allowlisted tools are registered+readonly at boot (requested: ${opts.exposedTools})`,
+    );
+  }
+  if (commandTool && !opts.registry.get(commandTool)) {
+    throw new Error(
+      `grok-web-mcp: commandTool "${commandTool}" is not registered — is SUDO_GROK_WEB_MCP_COMMAND=1 set so agent.command loads?`,
     );
   }
 
@@ -118,6 +132,7 @@ export async function startGrokMcpBoundary(opts: GrokMcpBoundaryOptions): Promis
     token: opts.token,
     exposedTools: valid.join(','),
     registry: opts.registry,
+    ...(commandTool ? { commandTool } : {}),
     ...(opts.hooks ? { hooks: opts.hooks } : {}),
     ...(opts.port ? { port: opts.port } : {}),
   });

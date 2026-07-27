@@ -112,6 +112,16 @@ export interface ToolDefinition {
    */
   safety?: 'readonly' | 'destructive';
   /**
+   * When `true`, the tool is hidden from the AGENT's own tool menu: it is
+   * excluded from {@link ToolRegistry.listEnabled} (and therefore from
+   * getSchemaForLLM / the router's candidate set), so the model never sees or
+   * calls it during a normal turn. It remains fully registered and reachable
+   * via {@link ToolRegistry.listAll} / `get` / `execute` — i.e. via the external
+   * MCP boundary. Use for tools that exist ONLY as an external entry point
+   * (e.g. agent.command, the grok-web-mcp full-control lane).
+   */
+  hiddenFromAgent?: boolean;
+  /**
    * Maximum wall-clock time in milliseconds before the call is aborted.
    * Defaults to 30 000 ms.
    */

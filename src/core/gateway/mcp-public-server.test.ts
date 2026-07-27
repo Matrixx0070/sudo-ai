@@ -80,6 +80,62 @@ describe('mcp-public-server startup guards (fail closed)', () => {
   });
 });
 
+describe('mcp-public-server commandTool exception (full-control lane)', () => {
+  it('allows ONE blessed non-readonly commandTool past the readonly-only rule', () => {
+    const registry = registryWith(readonlyTool('system.probe'), destructiveTool('agent.command'));
+    expect(() =>
+      createMcpPublicServer({ token: TOKEN, exposedTools: 'system.probe', registry, commandTool: 'agent.command' }),
+    ).not.toThrow();
+  });
+
+  it('starts with ONLY the commandTool and an empty readonly allowlist', () => {
+    const registry = registryWith(destructiveTool('agent.command'));
+    expect(() =>
+      createMcpPublicServer({ token: TOKEN, exposedTools: '', registry, commandTool: 'agent.command' }),
+    ).not.toThrow();
+  });
+
+  it('still refuses a NON-command destructive tool in the readonly allowlist', () => {
+    const registry = registryWith(destructiveTool('system.rm'), destructiveTool('agent.command'));
+    expect(() =>
+      createMcpPublicServer({ token: TOKEN, exposedTools: 'system.rm', registry, commandTool: 'agent.command' }),
+    ).toThrow(/not readonly/);
+  });
+
+  it('refuses an unregistered commandTool', () => {
+    const registry = registryWith(readonlyTool('system.probe'));
+    expect(() =>
+      createMcpPublicServer({ token: TOKEN, exposedTools: 'system.probe', registry, commandTool: 'agent.command' }),
+    ).toThrow(/commandTool "agent.command" is not registered/);
+  });
+
+  it('serves the commandTool over the wire alongside readonly tools', async () => {
+    let ran = '';
+    const cmd: ToolDefinition = {
+      ...destructiveTool('agent.command'),
+      // hiddenFromAgent must NOT hide it from the external MCP boundary.
+      hiddenFromAgent: true,
+      parameters: { instruction: { type: 'string', description: 'cmd', required: true } },
+      async execute(params) { ran = String(params['instruction']); return { success: true, output: `did:${ran}` }; },
+    };
+    const registry = registryWith(readonlyTool('system.probe'), cmd);
+    const server = createMcpPublicServer({
+      token: TOKEN, exposedTools: 'system.probe', registry, commandTool: 'agent.command', port: 18992,
+    });
+    await server.start();
+    try {
+      const list = await (await rpc(server, 'tools/list', {})).json();
+      const names = list.result.tools.map((t: { name: string }) => t.name).sort();
+      expect(names).toEqual(['agent_command', 'system_probe']);
+      const ok = await (await rpc(server, 'tools/call', { name: 'agent_command', arguments: { instruction: 'do the thing' } })).json();
+      expect(ok.result.content[0].text).toBe('did:do the thing');
+      expect(ran).toBe('do the thing');
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe('mcp-public-server live boundary', () => {
   let server: McpPublicServer | null = null;
   afterEach(async () => {

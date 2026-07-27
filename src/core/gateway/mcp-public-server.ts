@@ -54,6 +54,15 @@ export interface McpPublicServerOptions {
   port?: number;
   /** Deterministic injection-score threshold for refusing tool args. Default 0.5. */
   argsRiskThreshold?: number;
+  /**
+   * OPTIONAL single "command" tool exempt from the readonly-only rule — the one
+   * blessed full-control entry point (agent.command) that runs a full owner-tier
+   * turn. Everything ELSE in the allowlist must still be readonly. Must be a
+   * registered tool; it is added to the exposed allowlist automatically. Absent
+   * (the default) = the boundary is strictly readonly, byte-for-byte as before.
+   * Enabling this is a deliberate, loud security expansion (see the start log).
+   */
+  commandTool?: string;
 }
 
 export interface McpPublicServer {
@@ -69,9 +78,14 @@ export interface McpPublicServer {
  * Validate the allowlist against the registry, enforcing readonly-only. Throws
  * (fail-closed) on an empty list, an unknown tool, or a non-readonly tool.
  */
-function resolveReadonlyAllowlist(exposedTools: string, registry: ToolRegistry): Set<string> {
-  const exposedSet = buildExposedSet(exposedTools);
-  if (!exposedSet || exposedSet.size === 0) {
+function resolveReadonlyAllowlist(
+  exposedTools: string,
+  registry: ToolRegistry,
+  commandTool?: string,
+): Set<string> {
+  const exposedSet = buildExposedSet(exposedTools) ?? new Set<string>();
+  const command = commandTool?.trim() || undefined;
+  if (exposedSet.size === 0 && !command) {
     throw new Error(
       'mcp-public-server refuses to start: an explicit non-empty tool allowlist is required ' +
         '(the "all non-destructive" default is forbidden on the public boundary).',
@@ -85,9 +99,17 @@ function resolveReadonlyAllowlist(exposedTools: string, registry: ToolRegistry):
     if (def.safety !== 'readonly') {
       throw new Error(
         `mcp-public-server: tool "${name}" is not readonly (safety=${String(def.safety)}); ` +
-          'only readonly tools may be exposed to the external MCP boundary.',
+          'only readonly tools may be exposed to the external MCP boundary. ' +
+          'A single full-control tool may be exposed via the explicit commandTool option instead.',
       );
     }
+  }
+  // The one blessed command tool bypasses readonly-only, but must be registered.
+  if (command) {
+    if (!registry.get(command)) {
+      throw new Error(`mcp-public-server: commandTool "${command}" is not registered`);
+    }
+    exposedSet.add(command);
   }
   return exposedSet;
 }
@@ -96,7 +118,8 @@ export function createMcpPublicServer(opts: McpPublicServerOptions): McpPublicSe
   if (!opts.token || opts.token.trim() === '') {
     throw new Error('mcp-public-server cannot start: token is empty');
   }
-  const exposedSet = resolveReadonlyAllowlist(opts.exposedTools, opts.registry);
+  const commandTool = opts.commandTool?.trim() || undefined;
+  const exposedSet = resolveReadonlyAllowlist(opts.exposedTools, opts.registry, commandTool);
   const port = opts.port ?? DEFAULT_PORT;
   const token = opts.token;
   const threshold = opts.argsRiskThreshold ?? DEFAULT_ARGS_RISK_THRESHOLD;
@@ -158,10 +181,17 @@ export function createMcpPublicServer(opts: McpPublicServerOptions): McpPublicSe
         });
       });
       running = true;
-      log.info(
-        { port, tools: [...exposedSet], tokenPrefix: token.slice(0, 4) },
-        'MCP public server listening (readonly allowlist, loopback + proxy ingress)',
-      );
+      if (commandTool) {
+        log.warn(
+          { port, commandTool, readonlyTools: [...exposedSet].filter((t) => t !== commandTool), tokenPrefix: token.slice(0, 4) },
+          'MCP public server listening with a FULL-CONTROL command tool exposed — the capability token grants owner-tier control of this agent',
+        );
+      } else {
+        log.info(
+          { port, tools: [...exposedSet], tokenPrefix: token.slice(0, 4) },
+          'MCP public server listening (readonly allowlist, loopback + proxy ingress)',
+        );
+      }
     },
 
     async stop(): Promise<void> {

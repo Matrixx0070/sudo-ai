@@ -123,6 +123,7 @@ import { forgeTool } from './forge.js';
 import { feedbackTool } from './feedback.js';
 import { selfImproveTool } from './self-improve.js';
 import { sessionsSpawnTool } from './sessions-spawn.js';
+import { agentCommandTool } from './agent-command.js';
 import { sessionsSendTool } from './sessions-send.js';
 import { sessionsPipelineTool } from './sessions-pipeline.js';
 import { memorySearchTool } from './memory-search.js';
@@ -717,6 +718,15 @@ export function registerMetaTools(registry: ToolRegistry): void {
   logger.info({ count: tools.length, skippedLegacy: skipped }, 'Registering meta tools');
   for (const tool of tools) {
     registry.register(tool);
+  }
+  // agent.command — the full-control grok-web-mcp entry point. Registered ONLY
+  // when the command lane is explicitly enabled (SUDO_GROK_WEB_MCP_COMMAND=1),
+  // because it is safety:'destructive' and exists solely so the external MCP
+  // boundary can drive a full owner-tier turn. Off by default = never on the
+  // agent's own tool menu, never on the wire.
+  if (process.env['SUDO_GROK_WEB_MCP_COMMAND'] === '1') {
+    registry.register(agentCommandTool);
+    logger.warn('agent.command registered — full-control grok-web-mcp lane is ENABLED');
   }
   // Meta search, install, and synthesize tools
   registerSearchTools(registry);

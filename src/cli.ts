@@ -678,6 +678,10 @@ async function boot(): Promise<void> {
             connectorName: process.env['SUDO_GROK_WEB_MCP_CONNECTOR_NAME'] ?? 'sudo-ai-brain',
             port: Number(process.env['SUDO_MCP_PUBLIC_PORT'] ?? '18899'),
             hooks,
+            // Full-control lane: expose agent.command so Grok app-chat can DRIVE
+            // the whole agent (owner tier), not just query readonly tools. The
+            // tool is only registered when this same flag is set (meta/index.ts).
+            ...(process.env['SUDO_GROK_WEB_MCP_COMMAND'] === '1' ? { commandTool: 'agent.command' } : {}),
           });
           log.info(
             { connectorId: boundary.connectorId, tools: boundary.tools.map((t) => t.name) },
