@@ -57,7 +57,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IRRequest, IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
 import { resolveAlias, modelGenerationOf } from './aliases.js';
-import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL, XAI_CLI_PROXY_RESPONSES_URL } from './endpoints.js';
+import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL, XAI_CLI_PROXY_RESPONSES_URL, GOOGLE_OPENAI_COMPAT_URL } from './endpoints.js';
 import { getProviderApiKey, recordGatewayCall, type ProviderKeyName } from './client.js';
 import { egressAnthropic, parseAnthropicResponse } from './adapters/egress-anthropic.js';
 import { egressOpenAI, parseOpenAIResponse } from './adapters/egress-openai.js';
@@ -79,7 +79,6 @@ import { estimateCostUsd } from './limits.js';
 import {
   streamIR as createSSEMachine,
   type IRStreamEvent,
-  type IRStreamMachine,
 } from './adapters/stream.js';
 import { sha256Hex, type LLMCallRecord } from './logging.js';
 import { sanitizeOAuthToolName } from '../core/brain/tool-schema-compat.js';
@@ -87,6 +86,13 @@ import { resolveThinkingBudget } from '../core/brain/thinking-inject.js';
 import { getCustomProviderWireConfig } from './custom-providers.js';
 import { isGrokWebRoute, callGrokWebIR } from './grok-web-provider.js';
 import { isGrokWebMcpRoute, callGrokWebMcpIR } from './grok-web-mcp-provider.js';
+import {
+  createSSEParser,
+  reverseEventToolName,
+  createResponseAccumulator,
+  feedChunk,
+  type LiveStream,
+} from './transport-stream.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('llm-transport');
@@ -193,7 +199,7 @@ export interface CallIROptions {
 // Route resolution
 // ---------------------------------------------------------------------------
 
-type Family = 'anthropic' | 'openai' | 'xai-responses';
+export type Family = 'anthropic' | 'openai' | 'xai-responses';
 
 interface ResolvedRoute {
   family: Family;
@@ -273,6 +279,12 @@ function resolveRoute(alias: string): ResolvedRoute {
   } else if (provider === 'ollama') {
     const env = process.env['OLLAMA_URL']?.trim();
     baseURL = (env !== undefined && env !== '' ? env : OLLAMA_DEFAULT_URL).replace(/\/+$/, '');
+  } else if (provider === 'google') {
+    // custom-providers.ts documents this as an unserved gap since F97 — Google
+    // was never given a real wire path, so every "google/*" call (text or
+    // vision) failed and got misclassified as a generic transient/overload
+    // error. Gemini's OpenAI-compat surface fixes this with zero new deps.
+    baseURL = GOOGLE_OPENAI_COMPAT_URL;
   } else {
     const custom = getCustomProviderWireConfig(provider);
     if (custom !== null) {
@@ -401,6 +413,11 @@ async function authHeaders(r: ResolvedRoute, apiKeyOverride?: string): Promise<R
   if (r.provider === 'ollama') {
     // Keyless local / cloud-key optional — matches legacy providers.ts.
     return { Authorization: `Bearer ${process.env['OLLAMA_API_KEY'] ?? 'ollama'}` };
+  }
+  if (r.provider === 'google') {
+    const key = getProviderApiKey('google');
+    if (key === null) throw invalidRequest('google: API key not configured', r.route);
+    return { Authorization: `Bearer ${key}` };
   }
   if (OPENAI_COMPAT_BUILTINS.has(r.provider)) {
     const key = getProviderApiKey(r.provider as ProviderKeyName);
@@ -907,158 +924,6 @@ export function __recordCallForBudgetTest(entry: LLMCallRecord): void {
 // ---------------------------------------------------------------------------
 // streamIR — SSE byte-stream transport (gw-cutover Phase 1)
 // ---------------------------------------------------------------------------
-
-/**
- * Incremental SSE frame parser: bytes → `data:` payload strings.
- * - Frames are separated by a blank line; \r\n, \n and \r line ends accepted.
- * - Comment lines (`: keepalive`) and non-data fields (`event:`, `id:`,
- *   `retry:`) are ignored — Anthropic repeats the event type inside the data
- *   JSON, so the `event:` field carries no extra information.
- * - Multiple `data:` lines in one frame are joined with '\n' (SSE spec).
- * - A trailing '\r' at the end of a chunk is held back until the next chunk
- *   so a \r\n split across chunk boundaries never yields a phantom line.
- */
-function createSSEParser(): { feed(chunk: Uint8Array): string[] } {
-  const decoder = new TextDecoder();
-  let buf = '';
-  let dataLines: string[] = [];
-
-  function handleLine(line: string, out: string[]): void {
-    if (line === '') {
-      // Blank line = end of frame; dispatch accumulated data (if any).
-      if (dataLines.length > 0) {
-        out.push(dataLines.join('\n'));
-        dataLines = [];
-      }
-      return;
-    }
-    if (line.startsWith(':')) return; // comment / keepalive
-    const colon = line.indexOf(':');
-    const field = colon === -1 ? line : line.slice(0, colon);
-    if (field !== 'data') return; // event:/id:/retry: ignored
-    let value = colon === -1 ? '' : line.slice(colon + 1);
-    if (value.startsWith(' ')) value = value.slice(1);
-    dataLines.push(value);
-  }
-
-  return {
-    feed(chunk: Uint8Array): string[] {
-      buf += decoder.decode(chunk, { stream: true });
-      const out: string[] = [];
-      let start = 0;
-      while (start < buf.length) {
-        const nl = buf.indexOf('\n', start);
-        const cr = buf.indexOf('\r', start);
-        let end: number;
-        let next: number;
-        if (cr !== -1 && (nl === -1 || cr < nl)) {
-          if (cr === buf.length - 1) break; // might be half of a \r\n — wait
-          end = cr;
-          next = buf[cr + 1] === '\n' ? cr + 2 : cr + 1;
-        } else if (nl !== -1) {
-          end = nl;
-          next = nl + 1;
-        } else {
-          break; // no complete line yet
-        }
-        handleLine(buf.slice(start, end), out);
-        start = next;
-      }
-      buf = buf.slice(start);
-      return out;
-    },
-  };
-}
-
-/** claude-oauth reverse map applied to yielded tool events (mirrors callIR). */
-function reverseEventToolName(ev: IRStreamEvent, nameMap: Map<string, string>): IRStreamEvent {
-  if (nameMap.size === 0) return ev;
-  if ((ev.type === 'tool_use_start' || ev.type === 'tool_use_end') && nameMap.has(ev.name)) {
-    return { ...ev, name: nameMap.get(ev.name)! };
-  }
-  return ev;
-}
-
-/**
- * Rebuild an IRResponse from the yielded event stream so the llm_calls row
- * stores the same full ir_response callIR would have (observability parity).
- */
-function createResponseAccumulator(traceId: string): {
-  add(ev: IRStreamEvent): void;
-  terminal: { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null;
-  toIRResponse(partialUsage?: IRUsage): IRResponse;
-} {
-  const blocks: IRResponse['blocks'] = [];
-  const acc = {
-    terminal: null as { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null,
-    add(ev: IRStreamEvent): void {
-      if (ev.type === 'text_delta') {
-        const last = blocks[blocks.length - 1];
-        if (last !== undefined && last.type === 'text') last.text += ev.text;
-        else blocks.push({ type: 'text', text: ev.text });
-      } else if (ev.type === 'tool_use_end') {
-        blocks.push({ type: 'tool_use', id: ev.id, name: ev.name, input: ev.input });
-      } else if (ev.type === 'message_end') {
-        acc.terminal = { stop_reason: ev.stop_reason, usage: ev.usage };
-      }
-    },
-    toIRResponse(partialUsage?: IRUsage): IRResponse {
-      return {
-        blocks,
-        // Consumer abandoned the stream before the terminal event →
-        // stop_reason 'error' on the partial (mirror brain's partial-usage
-        // billing philosophy: record what is known, never invent success) —
-        // with the machine's last-known usage snapshot, not zeros.
-        stop_reason: acc.terminal?.stop_reason ?? 'error',
-        usage: acc.terminal?.usage ?? partialUsage ?? { in: 0, out: 0, cached_in: 0 },
-        trace_id: traceId,
-      };
-    },
-  };
-  return acc;
-}
-
-/** Live state handed from the policy-wrapped attempt to the yield loop. */
-interface LiveStream {
-  reader: ReadableStreamDefaultReader<Uint8Array>;
-  machine: IRStreamMachine;
-  parser: ReturnType<typeof createSSEParser>;
-  /** Events emitted during the attempt (first batch, possibly terminal). */
-  buffered: IRStreamEvent[];
-  /** Reader exhausted during the attempt. */
-  readerDone: boolean;
-  /** In-band terminal seen ([DONE] / anthropic message_stop / error event). */
-  cleanTerminal: boolean;
-  /** The terminal message_end came from a truncation flush (RULE 4 audit). */
-  truncated: boolean;
-}
-
-/** Feed one byte chunk through parser+machine. Mutates `live` bookkeeping. */
-function feedChunk(live: LiveStream, chunk: Uint8Array, family: Family): IRStreamEvent[] {
-  const out: IRStreamEvent[] = [];
-  for (const payload of live.parser.feed(chunk)) {
-    if (live.machine.terminated) break; // single-use: never push past terminal
-    if (family !== 'anthropic' && payload.trim() === '[DONE]') {
-      // xai-responses: response.completed is the in-band terminal — a
-      // trailing [DONE] (if the endpoint sends one) makes end() a no-op.
-      // OpenAI trailing-usage contract: the transport calls machine.end() at
-      // [DONE]; a trailing usage chunk after finish_reason has already
-      // emitted the terminal message_end, in which case end() is a no-op.
-      live.cleanTerminal = true;
-      out.push(...live.machine.end());
-      continue;
-    }
-    let json: unknown;
-    try {
-      json = JSON.parse(payload);
-    } catch {
-      continue; // non-JSON data payload — ignore (defensive)
-    }
-    out.push(...live.machine.push(json));
-    if (live.machine.terminated) live.cleanTerminal = true; // in-band terminal
-  }
-  return out;
-}
 
 /**
  * One STREAMING IR call: same route/auth/body construction as callIR plus
