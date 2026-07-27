@@ -282,7 +282,14 @@ describe('AgentLoop — max iterations guard', () => {
     const sandboxManager = createMockSandboxManager();
     const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 3 }, undefined, undefined, undefined, undefined, sandboxManager);
 
-    await expect(loop.run('test-session-id', 'loop forever')).rejects.toThrow(PipelineError);
+    // Pin the legacy throw contract: SUDO_MAX_ITER_FALLBACK=0 disables the
+    // graceful fallback reply (default-on; covered by max-iter-fallback.test.ts).
+    process.env['SUDO_MAX_ITER_FALLBACK'] = '0';
+    try {
+      await expect(loop.run('test-session-id', 'loop forever')).rejects.toThrow(PipelineError);
+    } finally {
+      delete process.env['SUDO_MAX_ITER_FALLBACK'];
+    }
   });
 
   it('throws PipelineError with code pipeline_max_iterations when limit reached', async () => {
@@ -296,10 +303,16 @@ describe('AgentLoop — max iterations guard', () => {
     const sandboxManager = createMockSandboxManager();
     const loop = new AgentLoop(mockBrain, mockTools, mockSessions, { maxIterations: 2 }, undefined, undefined, undefined, undefined, sandboxManager);
 
+    // Pin the legacy throw contract (see above); expect.assertions guards
+    // against the catch block silently never running.
+    expect.assertions(1);
+    process.env['SUDO_MAX_ITER_FALLBACK'] = '0';
     try {
       await loop.run('test-session-id', 'loop');
     } catch (e) {
       expect((e as PipelineError).code).toBe('pipeline_max_iterations');
+    } finally {
+      delete process.env['SUDO_MAX_ITER_FALLBACK'];
     }
   });
 });

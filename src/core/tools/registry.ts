@@ -64,7 +64,10 @@ function normalizeToolArgs(raw: unknown): Record<string, unknown> {
  * type:'boolean' member convert. Numbers: only a trimmed string that parses
  * to a FINITE number on a declared type:'number' member converts ("500",
  * "-1.5", "2e3"); anything else ("", "5px", "NaN", "Infinity") passes
- * through untouched for the tool's own validation to reject. Undeclared
+ * through untouched for the tool's own validation to reject. Strings on a
+ * declared type:'string' member with an `enum` list canonicalize
+ * case/whitespace variants to the exact enum entry when the match is
+ * unambiguous (see {@link coerceEnumString}); no fuzzy matching. Undeclared
  * members are never touched. Returns the original object (and reuses
  * original nested arrays/objects) when nothing needs coercion. Tools
  * carrying a raw JSON `inputSchema` instead of `parameters` (MCP-style)
@@ -81,11 +84,35 @@ const MAX_COERCE_DEPTH = 6;
 
 type ParamSpec = ToolDefinition['parameters'][string];
 
+/**
+ * Canonicalize a string against a declared enum list: an off-enum string that
+ * matches exactly ONE entry after trimming and case-folding coerces to that
+ * canonical entry (" High " → "high"). Deliberately NOT fuzzy — no
+ * edit-distance / prefix matching; an ambiguous or unmatched value passes
+ * through untouched for the tool's own enum validation to reject.
+ */
+function coerceEnumString(enumValues: readonly unknown[], v: string): { changed: boolean; value: unknown } {
+  if (enumValues.includes(v)) return { changed: false, value: v };
+  const norm = v.trim().toLowerCase();
+  let match: string | undefined;
+  for (const e of enumValues) {
+    if (typeof e !== 'string' || e.trim().toLowerCase() !== norm) continue;
+    if (match !== undefined) return { changed: false, value: v }; // ambiguous — hands off
+    match = e;
+  }
+  return match !== undefined ? { changed: true, value: match } : { changed: false, value: v };
+}
+
 function coerceValue(spec: ParamSpec, v: unknown, depth: number): { changed: boolean; value: unknown } {
   if (depth >= MAX_COERCE_DEPTH) return { changed: false, value: v };
   if (typeof v === 'string') {
     if (spec.type === 'boolean' && (v === 'true' || v === 'false')) {
       return { changed: true, value: v === 'true' };
+    }
+    // Declared string enum: canonicalize case/whitespace variants (models
+    // routinely emit "High" for enum:["high",...]) — never fuzzy-match.
+    if (spec.type === 'string' && Array.isArray(spec.enum)) {
+      return coerceEnumString(spec.enum, v);
     }
     if (spec.type === 'number') {
       const trimmed = v.trim();
@@ -172,6 +199,15 @@ function coerceJsonValue(schema: unknown, v: unknown, depth: number): { changed:
   const s = schema as Record<string, unknown>;
   const types = jsonSchemaTypes(s);
   if (typeof v === 'string') {
+    // Declared enum: canonicalize case/whitespace variants to the enum entry
+    // (see coerceEnumString). Runs before the admits-string hands-off rule —
+    // a declared enum IS the intended value set, so an off-enum spelling is
+    // the same defect class as "true" on a boolean.
+    const enumValues = s['enum'];
+    if (Array.isArray(enumValues) && (types.length === 0 || types.includes('string'))) {
+      const r = coerceEnumString(enumValues, v);
+      if (r.changed) return r;
+    }
     // A type union that admits string means the string may be the intended
     // value — hands off. Coercion needs an explicit declared primitive type.
     if (types.includes('string')) return { changed: false, value: v };
@@ -245,7 +281,9 @@ function coerceJsonValue(schema: unknown, v: unknown, depth: number): { changed:
  * map. Same contract: only parseable strings (per Number(), which also
  * admits hex/binary forms — parity with the ParamSpec walker) on explicitly
  * declared boolean/number/integer members convert; integer members
- * additionally require an integral value; a declared type union that admits
+ * additionally require an integral value; string members carrying an `enum`
+ * canonicalize unambiguous case/whitespace variants to the enum entry
+ * (never fuzzy); a declared type union that admits
  * `string` disables coercion for that member; undeclared members and
  * tuple-form items are never touched, and combinator/$ref members
  * (anyOf/oneOf/allOf) are never interpreted — though declared
