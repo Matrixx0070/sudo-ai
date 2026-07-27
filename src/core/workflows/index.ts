@@ -17,3 +17,25 @@ export type {
 } from './lobster.js';
 
 export { loadWorkflow, runWorkflow } from './lobster.js';
+
+// AL3 graph engine (graph-types + graph-executor)
+export type {
+  GraphNode,
+  GraphEdge,
+  WorkflowGraph,
+  GraphNodeKind,
+  MergeConfig,
+} from './graph-types.js';
+export { validateGraph, MAX_LOOP_ITERATIONS } from './graph-types.js';
+export type { GraphPredicate, PredicateContext } from './graph-predicates.js';
+export { evaluatePredicate, evaluatePredicateBool, validatePredicate } from './graph-predicates.js';
+export type {
+  GraphNodeExecutor,
+  GraphNodeResult,
+  GraphRunOptions,
+  GraphRunReport,
+  GraphTraceEntry,
+  NodeInput,
+  NodeOutcome,
+} from './graph-executor.js';
+export { runGraph } from './graph-executor.js';
