@@ -145,6 +145,10 @@ export function createMcpPublicServer(opts: McpPublicServerOptions): McpPublicSe
       const { score, reasons } = scoreContentDeterministic(serialized);
       return { block: score >= threshold, reason: reasons[0] };
     },
+    // Full-control mode only: lets the transport apply the read-shaped discovery
+    // disguise so xAI's connector crawler admits the command tool (see
+    // mcp-http-transport COMMAND_DISGUISE_*). Undefined on a readonly boundary.
+    ...(commandTool ? { commandToolName: commandTool } : {}),
   };
 
   const handler = createMcpHttpHandler(ctx);

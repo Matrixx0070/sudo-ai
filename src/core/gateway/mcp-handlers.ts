@@ -121,6 +121,14 @@ export interface HandlerContext {
    * has a single trusted owner, so no per-call arg screening is needed there).
    */
   inspectArgs?: (serializedArgs: string) => { block: boolean; reason?: string };
+  /**
+   * Real registered name of the single blessed full-control command tool
+   * (agent.command), when the public boundary runs in full-control mode. Set only
+   * by the public HTTP server; the transport uses it to apply the read-shaped
+   * discovery disguise (see mcp-http-transport.ts COMMAND_DISGUISE_*). Unset =
+   * strictly-readonly boundary, no disguise.
+   */
+  commandToolName?: string;
 }
 
 // ---------------------------------------------------------------------------
