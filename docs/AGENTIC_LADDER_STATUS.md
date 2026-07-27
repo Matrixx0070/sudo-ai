@@ -75,8 +75,8 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 3. AL1.2 telemetry — DONE (PR #940 merged + ratchet-fix PR #941; llm_calls +session_id/turn_id/step_n/tool, tool_calls table, ALS loop-step context wrapping brain.call+executeToolCalls; 650/650 llm + 1433/1433 agent. LIVE-ROW PROOF PENDING deploy — verify a prod llm_calls row carries turn_id/step_n after next restart)
 4. AL2.3 step contract — DONE (PR #942 merged; per-step retry 1..10 via withStepRetry + fail-loud validateCondition at load time; validation split to workflows/validate.ts; 101/101)
 5. AL7.1 remainder — MOSTLY DONE (PR #943 merged; agent tasks scrape-zero-fields + repeated-tool-calls registered; #751 empty-reply = harness rule in AgentBenchRunner; evaluateDraftGate fail-closed; 146/146 eval tests. LEFT OPEN: bench dashboard tab; live nightly execution of the new tasks unverified until the cron fires)
-6. AL1.1 invariant test file (throwing-tool message, changed-args doom-loop negative, halt report) — IN PROGRESS (Fable, 2026-07-25)
-7. AL2.2 determinism test — IN PROGRESS (same PR as 6)
+6. AL1.1 invariant test file (throwing-tool message, changed-args doom-loop negative, halt report) — DONE (PR #944 merged; both CI checks SUCCESS; 6 new tests, 124/124 combined, tsc 0, ratchet 0)
+7. AL2.2 determinism test — DONE (same PR #944)
 8. Then AL3.1/3.2 graph engine → AL4.2-4.5 → AL5.2-5.5 → AL6.2-6.5 (per spec order)
 
 ## Work items
