@@ -116,10 +116,15 @@ describe('AL1.1(d) — max-iterations halt is typed and reportable', () => {
     const loop = new AgentLoop(brain, tools, sessions, { maxIterations: 3 }, undefined, undefined, undefined, undefined, sandboxManager);
 
     let thrown: unknown;
+    // Pin the legacy throw contract: SUDO_MAX_ITER_FALLBACK=0 disables the
+    // graceful fallback reply (default-on; covered by max-iter-fallback.test.ts).
+    process.env['SUDO_MAX_ITER_FALLBACK'] = '0';
     try {
       await loop.run('test-session-id', 'loop forever');
     } catch (err) {
       thrown = err;
+    } finally {
+      delete process.env['SUDO_MAX_ITER_FALLBACK'];
     }
     expect(thrown).toBeInstanceOf(PipelineError);
     const pe = thrown as PipelineError;

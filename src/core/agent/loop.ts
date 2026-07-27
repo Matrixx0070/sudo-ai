@@ -3557,7 +3557,31 @@ export class AgentLoop extends AgentLoopInjections {
         if (this.auditTrail) {
           try { recordRecovery(this.auditTrail, { mistake: msg, learned: 'pipeline_max_iterations', commitment: 'guard against this failure mode', ttl_days: 30 }); } catch { /* non-fatal */ }
         }
-        throw new PipelineError(msg, 'pipeline_max_iterations', { sessionId: state.sessionId, maxIterations });
+        // Graceful degradation at the hard cap: finish the turn with a fallback
+        // reply instead of surfacing a hard PipelineError to the user — same
+        // shape as the consecutive-tool-iteration cap above (prefer the model's
+        // own last text, else the canned LoopGuard reply). Kill-switch:
+        // SUDO_MAX_ITER_FALLBACK=0 restores the legacy throw.
+        if (process.env['SUDO_MAX_ITER_FALLBACK'] === '0') {
+          throw new PipelineError(msg, 'pipeline_max_iterations', { sessionId: state.sessionId, maxIterations });
+        }
+        log.warn({ sessionId: state.sessionId, maxIterations }, 'Max iterations reached — finishing turn with fallback reply instead of throwing');
+        if (!finalText.trim()) {
+          let lastAssistantText = '';
+          for (let i = session.messages.length - 1; i >= 0; i--) {
+            const m = session.messages[i];
+            // Only consider text produced THIS turn — stop at the turn's user
+            // message so we never resurrect a previous turn's final reply.
+            if (m?.role === 'user') break;
+            if (m?.role === 'assistant' && typeof m.content === 'string' && m.content.trim().length > 0) {
+              lastAssistantText = m.content;
+              break;
+            }
+          }
+          finalText = lastAssistantText || buildLoopFallbackReply(session.messages);
+          session.messages.push({ role: 'assistant', content: finalText });
+          emit({ type: 'message', content: finalText });
+        }
       }
     } finally {
       state.isProcessing = false;

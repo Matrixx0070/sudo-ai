@@ -1726,6 +1726,22 @@ async function boot(): Promise<void> {
         } catch (err) {
           log.warn({ err: String(err) }, 'retention sweep wiring failed — continuing');
         }
+        // Uploads TTL GC — data/uploads/ (Telegram media + browser uploads)
+        // otherwise grows forever. Boot pass (detached) + daily.
+        // SUDO_UPLOADS_TTL_DAYS=0 disables.
+        try {
+          const { runUploadsSweep } = await import('./core/health/uploads-sweep.js');
+          setTimeout(() => {
+            try { runUploadsSweep(); } catch (err) { log.warn({ err: String(err) }, 'uploads sweep (boot) failed'); }
+          }, 60_000).unref?.();
+          const uploadsSweepTimer = setInterval(() => {
+            try { runUploadsSweep(); } catch (err) { log.warn({ err: String(err) }, 'uploads sweep failed'); }
+          }, 24 * 60 * 60 * 1000);
+          uploadsSweepTimer.unref?.();
+          registerShutdown(() => clearInterval(uploadsSweepTimer));
+        } catch (err) {
+          log.warn({ err: String(err) }, 'uploads sweep wiring failed — continuing');
+        }
 
         // Grok web-session keep-alive: the `sso` credential is an opaque server-side
         // session_id (no client-readable exp) whose lifetime is reset by activity, so
