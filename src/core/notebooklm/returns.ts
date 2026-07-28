@@ -16,6 +16,7 @@ import type { AuditTrail } from '../security/audit-trail.js';
 import type { DriveClient } from '../gdrive/client.js';
 import type { ChunkStoreLike, StructuredStoreLike } from '../gdrive/brain-serializer.js';
 import { inspectContent, type InspectOptions } from '../gdrive/quarantine.js';
+import { checkCanaryPayload, loadCanaryConfig, tripCanary } from '../gdrive/canary.js';
 import { chunkText } from '../gdrive/inbox.js';
 import { sha256Hex } from '../gdrive/manifest.js';
 import { emitGdriveAudit } from '../gdrive/audit.js';
@@ -140,6 +141,17 @@ export async function processReturnsOnce(deps: ReturnsDeps): Promise<ReturnsSwee
     } catch (err) {
       log.warn({ name: file.name, err: String(err) }, 'return download failed — retry next sweep');
       continue;
+    }
+
+    // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): canary check on EVERY
+    // return (default route included) before any model reads it. A hit means
+    // our seeded/watermarked content is being replayed — trip + hold + abort.
+    const canaryHit = checkCanaryPayload(content, loadCanaryConfig());
+    if (canaryHit) {
+      tripCanary(deps.audit, canaryHit, `nlm-return:${file.name}`);
+      await deps.client.filesUpdate(file.id, { addParents: heldId, removeParents: returnsId });
+      result.held.push(file.name);
+      return result;
     }
 
     // QUARANTINE ALWAYS — before any model (incl. a special route) reads it.

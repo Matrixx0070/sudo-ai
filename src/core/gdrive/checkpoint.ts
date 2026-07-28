@@ -110,6 +110,11 @@ export async function runCheckpoint(deps: CheckpointDeps): Promise<PushResult> {
         uploaded: result.uploadedBlobs,
         skipped: result.skippedBlobs,
         filteredZone0: result.filteredZone0,
+        // Audit item 8 (DRIVE_SECURITY_AUDIT_2026-07-28): per-blob zone is
+        // recorded explicitly, not just inferable from the .enc suffix.
+        zone1Blobs: result.manifest.entries.filter((e) => e.zone === 1).length,
+        zone2Blobs: result.manifest.entries.filter((e) => e.zone === 2).length,
+        blobZones: result.manifest.entries.slice(0, 50).map((e) => `${e.blob.split('/').pop()}:z${e.zone}`),
       },
     });
     return result;

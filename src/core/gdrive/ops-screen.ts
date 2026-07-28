@@ -25,9 +25,24 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import type { AuditTrail } from '../security/audit-trail.js';
+import { emitGdriveAudit } from './audit.js';
 import { classifyZone, type Zone } from './zones.js';
 
 const log = createLogger('gdrive:ops-screen');
+
+// ---------------------------------------------------------------------------
+// Audit seam (audit item 8): ops modules don't all carry an AuditTrail, so
+// the runtime injects its trail here once; every FLAGGED screen then lands a
+// tamper-evident `gdrive.ops-screen` row (context + redactions + zone).
+// Fail-open by design — a missing trail never blocks an ops job.
+// ---------------------------------------------------------------------------
+
+let opsScreenAudit: AuditTrail | null = null;
+
+export function setOpsScreenAudit(trail: AuditTrail | null): void {
+  opsScreenAudit = trail;
+}
 
 /**
  * Independent secrets patterns. Deliberately overlaps ZONE1_PATTERNS in
@@ -91,6 +106,14 @@ export function screenOpsUpload(text: string, context: string): OpsScreenResult 
   }
   if (zone !== 2) {
     log.warn({ context, zone }, 'ops upload: content still classifies zone-sensitive after redaction — uploading redacted text; review the source job');
+  }
+  if (flagged) {
+    emitGdriveAudit(opsScreenAudit, {
+      job: 'ops-screen',
+      outcome: 'success',
+      durationMs: 0,
+      detail: { context, redactions: hits, zone },
+    });
   }
   return { text: redacted, redactions: hits, zone, flagged };
 }
