@@ -26,6 +26,21 @@ export { AGENT_ROLES, ROLE_NAMES, getRole } from './roles.js';
 // Messenger
 export { AgentMessenger } from './messenger.js';
 
+// AL5.2 role contracts (enforced at spawn/message time)
+export {
+  getContract,
+  assertSpawnAllowed,
+  assertMessageAllowed,
+  assertToolAllowed,
+  assertKnowledgeScope,
+  GLOBAL_MAX_SPAWN_DEPTH,
+} from './contracts.js';
+export type { RoleContract } from './contracts.js';
+
+// AL5.3 contract-net negotiation over the messenger
+export { postOffer, submitBid, collectBids, awardTask } from './negotiation.js';
+export type { TaskOffer, TaskBid, TaskAward, CollectedBids } from './negotiation.js';
+
 // Spawner
 export { AgentSpawner } from './spawner.js';
 

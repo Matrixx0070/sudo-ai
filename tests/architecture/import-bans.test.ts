@@ -37,6 +37,15 @@ const BANS: ImportBan[] = [
     fromDirs: ['src/core/channels'],
     pattern: /(from|import\s*\()\s*['"][^'"]*\/llm\/transport/,
   },
+  {
+    // AL5.4 shared-knowledge discipline (invariant 5): cross-agent knowledge
+    // flows through the memory API, never via direct internal imports. The
+    // sanctioned surface is the barrel (memory/index) and the write-guard
+    // (memory/injection-scanner); everything else is internals.
+    name: 'agent modules must not import memory internals directly',
+    fromDirs: ['src/core/agents', 'src/core/swarm'],
+    pattern: /(from|import\s*\()\s*['"][^'"]*\/memory\/(?!index\b|injection-scanner\b)/,
+  },
 ];
 
 function* walk(dir: string): Generator<string> {
