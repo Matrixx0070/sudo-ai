@@ -23,6 +23,7 @@ import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
 import type { StructuredStoreLike } from './brain-serializer.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:dead-ends');
 
@@ -152,9 +153,10 @@ export async function uploadDeadEnds(client: DriveClient, folders: FolderIdMap):
   for (const d of listDeadEnds('confirmed')) {
     const name = `${d.id}.json`;
     if (remote.has(name)) continue;
+    // P1 egress screen (audit item 3): summary/context/cause are free text.
     await client.filesCreate(
       { name, parents: [folderId] },
-      { mimeType: 'application/json', body: JSON.stringify(d, null, 2) },
+      { mimeType: 'application/json', body: screenOpsUpload(JSON.stringify(d, null, 2), 'dead-ends:mirror').text },
     );
     uploaded++;
   }

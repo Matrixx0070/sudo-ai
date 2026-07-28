@@ -13,6 +13,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import { inspectContent, type InspectOptions } from './quarantine.js';
+import { screenOpsUpload } from './ops-screen.js';
 import { checkCanaryPayload, loadCanaryConfig, tripCanary } from './canary.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
@@ -59,9 +60,11 @@ export async function exportDecisionPacket(
   if (!folderId) throw new Error('second-opinion: ops/review-queue folder id missing');
   if (!ID_RE.test(packet.id)) throw new Error(`second-opinion: invalid packet id "${packet.id}"`);
   assertNoConclusion(packet);
+  // P1 egress screen (audit item 3): decision packets carry free-text evidence.
+  const screened = screenOpsUpload(JSON.stringify(packet, null, 2), 'second-opinion:packet');
   const created = await client.filesCreate(
     { name: `${packet.id}.packet.json`, parents: [folderId] },
-    { mimeType: 'application/json', body: JSON.stringify(packet, null, 2) },
+    { mimeType: 'application/json', body: screened.text },
   );
   return created.id;
 }
@@ -85,9 +88,11 @@ export async function writeDissent(
       `the strongest case AGAINST the implied course of action, risks the decider may have missed, and what evidence would change your mind. ` +
       `Packet:\n${packetJson}`,
   );
+  // P1 egress screen (audit item 3): the memo is LLM output — redact secrets.
+  const screenedMemo = screenOpsUpload(memo.slice(0, 20_000), 'second-opinion:dissent');
   const created = await client.filesCreate(
     { name: `${packetId}.dissent.md`, parents: [folderId] },
-    { mimeType: 'text/markdown', body: memo.slice(0, 20_000) },
+    { mimeType: 'text/markdown', body: screenedMemo.text },
   );
   return created.id;
 }
@@ -190,9 +195,14 @@ export async function resolveDissent(
 ): Promise<void> {
   const folderId = folders['ops/review-queue'];
   if (!folderId) return;
+  // P1 egress screen (audit item 3): rationale is free text.
+  const screenedRes = screenOpsUpload(
+    JSON.stringify({ ...resolution, at: new Date().toISOString() }, null, 2),
+    'second-opinion:resolution',
+  );
   await client.filesCreate(
     { name: `${packetId}.resolution.json`, parents: [folderId] },
-    { mimeType: 'application/json', body: JSON.stringify({ ...resolution, at: new Date().toISOString() }, null, 2) },
+    { mimeType: 'application/json', body: screenedRes.text },
   );
   emitGdriveAudit(audit, {
     job: 'second-opinion',

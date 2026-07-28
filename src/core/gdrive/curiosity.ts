@@ -23,6 +23,7 @@ import { inspectContent, type InspectorBrainCall } from './quarantine.js';
 import { chunkText } from './inbox.js';
 import { loadBeliefs, saveBeliefs, upsertBelief } from './beliefs.js';
 import { isGdrivePaused } from './canary.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:curiosity');
 
@@ -121,9 +122,10 @@ export async function drainCuriosity(
     // SAME quarantine as any inbox file (F18) — self-research is untrusted.
     const verdict = await inspectContent(output, deps.inspectorBrain ? { brainCall: deps.inspectorBrain } : {});
     const name = `curiosity-${item.id}.txt`;
+    // P1 egress screen (audit item 3): research output is external text.
     await client.filesCreate(
       { name, parents: [curiosityFolder] },
-      { mimeType: 'text/plain', body: `Q: ${item.question}\n\n${output}` },
+      { mimeType: 'text/plain', body: screenOpsUpload(`Q: ${item.question}\n\n${output}`, 'curiosity:drain').text },
     );
     if (verdict.verdict === 'hold') {
       result.held.push(item.id);

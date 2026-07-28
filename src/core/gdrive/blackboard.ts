@@ -15,6 +15,7 @@ import { dataPath } from '../shared/paths.js';
 import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:blackboard');
 
@@ -67,7 +68,11 @@ export async function writeMyStatus(
     claims: params.claims ?? [],
     discoveries: (params.discoveries ?? []).slice(-20),
   };
-  const media = { mimeType: 'application/json', body: JSON.stringify(me, null, 2) };
+  // P1 egress screen (audit item 3): status/discoveries are free text.
+  const media = {
+    mimeType: 'application/json',
+    body: screenOpsUpload(JSON.stringify(me, null, 2), 'blackboard:status').text,
+  };
 
   let fileId: string | null = null;
   try {

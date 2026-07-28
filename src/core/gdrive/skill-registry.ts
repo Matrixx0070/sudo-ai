@@ -22,6 +22,7 @@ import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
 import { appendEvalRow } from './scorecard.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:skill-registry');
 
@@ -150,7 +151,12 @@ export async function promoteCandidate(
 
   const stableFolder = folders['skills/stable'];
   if (!stableFolder) throw new Error('skill-registry: skills/stable folder id missing');
-  const artifact = await client.filesDownload(candidate.artifactFileId);
+  // P1 egress screen (audit item 3): candidate artifacts are model-authored
+  // free text; redact secrets before promotion (upload + local mirror match).
+  const artifact = screenOpsUpload(
+    await client.filesDownload(candidate.artifactFileId),
+    'skill-registry:promote',
+  ).text;
   const name = `${candidate.candidateId}.md`;
   const media = { mimeType: 'text/markdown', body: artifact };
   const existing = (await client.listChildren(stableFolder)).find((f) => f.name === name);
@@ -183,7 +189,11 @@ export async function rollbackSkill(
   const revisions = await client.revisionsList(file.id);
   if (revisions.length < 2) return false;
   const previous = revisions[revisions.length - 2]!;
-  const content = await client.revisionsGetContent(file.id, previous.id!);
+  // P1 egress screen (audit item 3): the restored revision is re-uploaded.
+  const content = screenOpsUpload(
+    await client.revisionsGetContent(file.id, previous.id!),
+    'skill-registry:rollback',
+  ).text;
   await client.filesUpdate(file.id, {}, { mimeType: 'text/markdown', body: content });
   mkdirSync(stableSkillsDir(), { recursive: true });
   writeFileSync(join(stableSkillsDir(), `${skillName}.md`), content, { mode: 0o600 });

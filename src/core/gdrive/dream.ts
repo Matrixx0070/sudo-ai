@@ -34,6 +34,7 @@ import { listHeldQuarantine } from './report.js';
 import { chunkText } from './inbox.js';
 import { emitGdriveAudit } from './audit.js';
 import { isGdrivePaused } from './canary.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:dream');
 
@@ -188,11 +189,15 @@ export async function runDreamCycle(deps: DreamDeps): Promise<DreamReport> {
     const opsFolder = deps.folders['ops/reports'];
     if (opsFolder) {
       const name = `open-questions-${now.toISOString().slice(0, 10)}.json`;
-      const body = JSON.stringify(
-        { generatedAt: now.toISOString(), questions: report.openQuestions, ranked: scored },
-        null,
-        2,
-      );
+      // P1 egress screen (audit item 3): open questions carry free text.
+      const body = screenOpsUpload(
+        JSON.stringify(
+          { generatedAt: now.toISOString(), questions: report.openQuestions, ranked: scored },
+          null,
+          2,
+        ),
+        'dream:agenda',
+      ).text;
       const existing = (await deps.client.listChildren(opsFolder)).find((f) => f.name === name);
       if (existing) await deps.client.filesUpdate(existing.id, {}, { mimeType: 'application/json', body });
       else await deps.client.filesCreate({ name, parents: [opsFolder] }, { mimeType: 'application/json', body });

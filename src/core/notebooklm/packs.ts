@@ -73,16 +73,28 @@ export async function exportIncidentPack(
   ].join('\n');
   const { redacted, hits } = redactSecrets(rendered);
 
-  const timeline = bundle.events.map((e, i) => `${i + 1}. ${safeStr(e).slice(0, 200)}`).join('\n');
-  const config = [
-    `runId: ${bundle.runId}`,
-    `sessionId: ${bundle.sessionId}`,
-    `outcome: ${bundle.outcome}`,
-    `manifestCounter: ${bundle.manifestCounter ?? 'n/a'}`,
-    `configSnapshotHash: ${bundle.configSnapshotHash ?? 'n/a'}`,
-    `llmCalls: ${bundle.llmCalls.length}`,
-    `traces: ${bundle.traces.length}`,
-  ].join('\n');
+  // Audit item 4 (DRIVE_SECURITY_AUDIT_2026-07-28): timeline + config docs
+  // are built from the SAME zone-1 bundle events as the transcript — they get
+  // the same mandatory declassification screen, and their hits are audited.
+  const timelineScreen = redactSecrets(
+    bundle.events.map((e, i) => `${i + 1}. ${safeStr(e).slice(0, 200)}`).join('\n'),
+  );
+  const timeline = timelineScreen.redacted;
+  const configScreen = redactSecrets(
+    [
+      `runId: ${bundle.runId}`,
+      `sessionId: ${bundle.sessionId}`,
+      `outcome: ${bundle.outcome}`,
+      `manifestCounter: ${bundle.manifestCounter ?? 'n/a'}`,
+      // Truncated for display: a full 64-hex hash would (correctly) trip the
+      // hex_secret_64 redactor; 16 chars keeps provenance without the match.
+      `configSnapshotHash: ${bundle.configSnapshotHash?.slice(0, 16) ?? 'n/a'}`,
+      `llmCalls: ${bundle.llmCalls.length}`,
+      `traces: ${bundle.traces.length}`,
+    ].join('\n'),
+  );
+  const config = configScreen.redacted;
+  const totalHits = hits + timelineScreen.hits + configScreen.hits;
 
   const idTag = bundleId.replace(/[^\w-]/g, '_').slice(0, 40);
   const docsToWrite: Array<{ name: string; body: string }> = [
@@ -102,10 +114,10 @@ export async function exportIncidentPack(
     outcome: 'success',
     durationMs: 0,
     filesTouched: written.map((w) => w.fileId),
-    detail: { bundleId, redactionHits: hits, declassified: 'transcript-text-only' },
+    detail: { bundleId, redactionHits: totalHits, declassified: 'transcript-text-only' },
   });
-  log.info({ bundleId, redactionHits: hits }, 'incident pack exported (redacted)');
-  return { bundleId, docs: written, redactionHits: hits };
+  log.info({ bundleId, redactionHits: totalHits }, 'incident pack exported (redacted)');
+  return { bundleId, docs: written, redactionHits: totalHits };
 }
 
 function safeStr(v: unknown): string {
