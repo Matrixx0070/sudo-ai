@@ -3771,6 +3771,11 @@ async function boot(): Promise<void> {
     const { registerRetentionRecheckCron } = await import('./core/self-improvement/retention-recheck-cron.js');
     registerRetentionRecheckCron(cronScheduler);
 
+    // AL10.6: monthly frontier scan — registered flag-OFF
+    // (SUDO_AL_FRONTIER=1 to enable); proposal engine only, never builds.
+    const { registerFrontierScanCron } = await import('./core/self-improvement/frontier-miners.js');
+    registerFrontierScanCron(cronScheduler);
+
     // F90: AutoBugFix Modules C+D (auto-fix PR creation + deploy watch).
 
     // Fully dormant unless SUDO_AUTOBUGFIX=1; per-module kill-switches
