@@ -25,8 +25,18 @@ export type {
   PipelineStage,
   StageResult,
 } from './pipeline.js';
-export { promptPlugin, workflowGraphPlugin, toolPlugin, codePatchPlugin } from './pipeline-plugins.js';
-export type { ToolArtifactPayload } from './pipeline-plugins.js';
+export { promptPlugin, workflowGraphPlugin, toolPlugin, codePatchPlugin, pipelineChangePlugin } from './pipeline-plugins.js';
+export type { ToolArtifactPayload, PipelineChangePayload } from './pipeline-plugins.js';
+
+// AL9.1 pipeline manifest (versioned pipeline config; SUDO_AL_META gates meta-proposals)
+export {
+  CURRENT_MANIFEST,
+  validateManifest,
+  isVersionIncrease,
+  findWeakenings,
+  parseSemver,
+} from './pipeline-manifest.js';
+export type { PipelineManifest } from './pipeline-manifest.js';
 
 // AL8.4 retention ledger + quarterly re-check (flag-OFF cron)
 export { RetentionLedger } from './retention-ledger.js';
