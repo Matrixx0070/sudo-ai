@@ -16,6 +16,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { getSharedResolver, type PolicyResolver } from '../agent/policy-resolver.js';
 import { runGraph } from '../workflows/graph-executor.js';
 import type { WorkflowGraph } from '../workflows/graph-types.js';
 import type { GraphRunOptions, GraphRunReport } from '../workflows/graph-run-types.js';
@@ -53,6 +54,12 @@ export interface GovernedRunOptions {
   dailyUsdSpent?: () => number;
   /** Alert seam — fired once when the run pauses on budget. Errors are logged, never thrown. */
   alert?: (info: BudgetAlert) => void | Promise<void>;
+  /**
+   * AL6.2 knob migration: budget-pressure signals stream into this resolver
+   * (default: the shared one) as the run spends — decisions are LOGGED ONLY;
+   * nothing here applies them (AL6.5 shadow-first, unpromoted policy).
+   */
+  policyResolver?: PolicyResolver;
 }
 
 /**
@@ -86,13 +93,26 @@ export async function runGovernedGraph(options: GovernedRunOptions): Promise<Gra
     return false;
   };
 
+  // AL6.2: stream budget pressure into the policy seam (signal + logged
+  // decision only — application waits for AL6.5 promotion).
+  const resolver = options.policyResolver ?? getSharedResolver();
+  const emitPressure = (): void => {
+    if (budget?.maxRunSpend) {
+      resolver.resolve({ budgetPressure: Math.min(1, spent / budget.maxRunSpend) });
+    }
+  };
+  emitPressure();
+
   const report = await runGraph(graph, {
     executors: options.executors,
     maxConcurrency: options.maxConcurrency,
     resume,
     pause,
     onEvent: (event) => {
-      if (event.type === 'node' && event.spend) spent += event.spend;
+      if (event.type === 'node' && event.spend) {
+        spent += event.spend;
+        emitPressure();
+      }
       store.persistEvent(runId, event);
     },
   });

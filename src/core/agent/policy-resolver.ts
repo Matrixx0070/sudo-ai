@@ -187,3 +187,44 @@ export class PolicyResolver {
     return decision;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Shared instance — the seam hot-path knobs route through (AL6.2 migration).
+// Sinks (e.g. PolicyDecisionLog.createSink()) attach at boot; every attached
+// sink receives every decision.
+// ---------------------------------------------------------------------------
+
+let sharedResolver: PolicyResolver | undefined;
+const sharedSinks: Array<(entry: PolicyDecisionEntry) => void> = [];
+
+export function getSharedResolver(): PolicyResolver {
+  if (!sharedResolver) {
+    sharedResolver = new PolicyResolver({
+      onDecision: (entry) => {
+        for (const sink of sharedSinks) {
+          try {
+            sink(entry);
+          } catch (err) {
+            log.warn({ err: err instanceof Error ? err.message : String(err) }, 'shared decision sink failed');
+          }
+        }
+      },
+    });
+  }
+  return sharedResolver;
+}
+
+/** Attach a persistence/telemetry sink to the shared resolver. Returns detach. */
+export function attachSharedDecisionSink(sink: (entry: PolicyDecisionEntry) => void): () => void {
+  sharedSinks.push(sink);
+  return () => {
+    const i = sharedSinks.indexOf(sink);
+    if (i >= 0) sharedSinks.splice(i, 1);
+  };
+}
+
+/** Test seam: drop the singleton + sinks so env/threshold changes take effect. */
+export function _resetSharedResolverForTests(): void {
+  sharedResolver = undefined;
+  sharedSinks.length = 0;
+}
