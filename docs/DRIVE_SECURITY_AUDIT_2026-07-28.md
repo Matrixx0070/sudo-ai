@@ -87,6 +87,28 @@ dissent memo that reaches the decider uninspected, or serve a tampered deep-free
 - Hot-path core: agent/llm/memory/brain ban enforced twice (dedicated + architecture test), dynamic
   imports included; sync failures never block the loop.
 
+## Repair status (2026-07-28, follow-up PRs)
+
+- P0 (items 1-2): PR #962 (merged).
+- P1 (items 3-6): PR #964 — shared `screenOpsUpload` at all ops upload lanes (signed
+  manifest bodies exempt from mutation, documented in `ops-screen.ts`), F43 timeline/config
+  redaction, deep-freeze re-hash + canary + inspection on recall, `prepareBlobs` zone
+  re-classification (more restrictive wins).
+- P2 (items 7-9): PR #966 — canary in mirror/curiosity/NLM-default-return lanes, pause gates
+  at mirror/comments/changes/blackboard/checkpoint entries, per-blob zone in checkpoint audit
+  rows + ops-screen audit seam, F5 reads upgraded to full deterministic `inspectContent`
+  with a refusal on hold.
+- P3 (items 10, 13): PR (this one) — import-ban regexes catch barrel imports (tools/channels
+  exemption documented, F5 import is deliberate); `keys.ts` rejects >32-byte keys instead of
+  silently truncating.
+- Item 11 (index-snapshot direct sqlite write): accepted as-is per the audit's own "low"
+  rating (mitigated by HMAC+keys); no change.
+- Item 12 (consecutive-failure circuit breaker on sync jobs): **DEFERRED** — a cross-job
+  failure counter needs shared state + alert routing that doesn't exist yet; the failure mode
+  is noisy-but-bounded (per-call backoff in `backoff.ts` already caps retry pressure, and
+  failures land in audit rows + the daily report's "What failed" section). Revisit if a sync
+  job is ever observed hot-looping.
+
 ## Decision (as reviewed by Fable, delegated authority — assessment only, no code changed)
 Architecture: APPROVED. Implementation: **conditional** — the P0 pair should land before the next
 deliberate re-enable ceremony of `SUDO_GDRIVE` on a box whose Drive folder is shared or reachable by
