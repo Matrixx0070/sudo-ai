@@ -331,7 +331,7 @@ export async function runGdriveCommentsJob(): Promise<void> {
   const rt = await getGdriveRuntime();
   const { pollComments } = await import('./comments.js');
   const structured = await import('../memory/structured-memory.js');
-  await pollComments({
+  const commentsResult = await pollComments({
     client: rt.client,
     structured: {
       listMemories: () => structured.listMemories(),
@@ -339,7 +339,12 @@ export async function runGdriveCommentsJob(): Promise<void> {
     },
     principalEmails: principalEmails(),
     serviceAccountEmail: await saEmail(rt.config.credentialsPath),
+    inspect: inspectorBrain ? { brainCall: inspectorBrain } : {},
+    audit: rt.audit,
   });
+  if (commentsResult.held || commentsResult.aborted) {
+    log.warn(commentsResult, 'comments sweep: held/aborted items need human review');
+  }
 }
 
 /** Cron entry (nightly): regenerate the brain atlas (F30). */

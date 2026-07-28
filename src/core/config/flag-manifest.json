@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 704,
+  "count": 705,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -311,6 +311,7 @@
     "SUDO_GDRIVE_CHANGES_MS",
     "SUDO_GDRIVE_CHECKPOINT_MS",
     "SUDO_GDRIVE_COMMENTS_MS",
+    "SUDO_GDRIVE_COMMENTS_TRUST_ANONYMOUS",
     "SUDO_GDRIVE_CURIOSITY_BUDGET",
     "SUDO_GDRIVE_CURIOSITY_CRON",
     "SUDO_GDRIVE_DREAM_CRON",
