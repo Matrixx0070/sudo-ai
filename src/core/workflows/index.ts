@@ -39,3 +39,5 @@ export type {
   NodeOutcome,
 } from './graph-executor.js';
 export { runGraph } from './graph-executor.js';
+export { compileWorkflowToGraph, createStepNodeExecutors } from './graph-compile.js';
+export type { StepNodeExecutorOptions } from './graph-compile.js';

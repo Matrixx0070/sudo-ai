@@ -54,6 +54,14 @@ export interface GraphNode {
   budget?: { maxTokens?: number; maxMs?: number };
   /** Per-node retry policy — AL2.3 semantics (bounded attempts, linear backoff). */
   retry?: { max_attempts: number; backoff_ms?: number };
+  /**
+   * Failure policy (AL3.3). `halt-graph` (default) stops all new dispatches.
+   * `prune-branch` cancels only this node's downstream subgraph: dependents
+   * become `pruned`, sibling branches keep running, `all` merges fed by a
+   * pruned arm prune too, and quorum merges degrade to the surviving arms.
+   * The final report names every pruned node — no silent truncation.
+   */
+  onFailure?: 'halt-graph' | 'prune-branch';
 }
 
 export interface GraphEdge {
@@ -109,6 +117,14 @@ function validateNode(node: GraphNode): void {
     }
     if (node.kind === 'gate' || node.kind === 'merge' || node.kind === 'branch') {
       throw new Error(`Node "${node.id}": retry is only valid on agent/tool nodes (got kind "${node.kind}")`);
+    }
+  }
+  if (node.onFailure !== undefined) {
+    if (node.onFailure !== 'halt-graph' && node.onFailure !== 'prune-branch') {
+      throw new Error(`Node "${node.id}": onFailure must be "halt-graph" or "prune-branch"`);
+    }
+    if (node.kind === 'merge' || node.kind === 'branch') {
+      throw new Error(`Node "${node.id}": onFailure is only valid on executable nodes (got kind "${node.kind}")`);
     }
   }
   if (node.budget !== undefined) {

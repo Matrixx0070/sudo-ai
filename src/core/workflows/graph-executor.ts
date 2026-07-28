@@ -26,80 +26,27 @@ import { evaluatePredicateBool, type PredicateContext } from './graph-predicates
 
 const log = createLogger('workflows:graph');
 
-// ---------------------------------------------------------------------------
-// Public execution types
-// ---------------------------------------------------------------------------
-
-export type GraphNodeStatus =
-  | 'pending'
-  | 'running'
-  | 'success'
-  | 'failure'
-  | 'skipped'
-  | 'cancelled';
-
-/** Outcome an injected executor returns for one node execution. */
-export interface NodeOutcome {
-  success: boolean;
-  /** JSON-ish value downstream predicates and inputs see. */
-  output?: unknown;
-  error?: string;
-}
-
-/** One upstream value delivered to a node — active inbound edges, in edge order. */
-export interface NodeInput {
-  fromNodeId: string;
-  output: unknown;
-}
-
-/**
- * Injected execution seam for agent / tool / gate nodes. The signal fires when
- * the scheduler cancels the node (quorum loser); executors should abandon work
- * cooperatively — the scheduler discards the outcome either way.
- */
-export type GraphNodeExecutor = (
-  node: GraphNode,
-  inputs: NodeInput[],
-  signal: AbortSignal,
-) => Promise<NodeOutcome>;
-
-export interface GraphTraceEntry {
-  nodeId: string;
-  event: 'start' | 'success' | 'failure' | 'skipped' | 'cancelled' | 'loop-reset';
-  /** Execution count for this node at the time of the event (0 = never ran). */
-  iteration: number;
-}
-
-export interface GraphNodeResult {
-  id: string;
-  status: Exclude<GraphNodeStatus, 'pending' | 'running'>;
-  output?: unknown;
-  error?: string;
-  durationMs: number;
-  iteration: number;
-}
-
-export interface GraphRunReport {
-  graphName: string;
-  startedAt: string;
-  /** 'halted' when any node failed (halt-graph policy); 'success' otherwise. */
-  status: 'success' | 'halted';
-  /** Terminal results in settle order — one entry per node execution/skip/cancel. */
-  results: GraphNodeResult[];
-  trace: GraphTraceEntry[];
-  failedNodes: string[];
-  cancelledNodes: string[];
-  skippedNodes: string[];
-  /** Times each declared loop edge fired, keyed "from->to". */
-  loopIterations: Record<string, number>;
-}
-
-export interface GraphRunOptions {
-  /** Execution seams by node kind. A missing seam fails that node honestly. */
-  executors: Partial<Record<'agent' | 'tool' | 'gate', GraphNodeExecutor>>;
-  /** Max concurrent agent/tool/gate executions. Default env SUDO_AL_GRAPH_CONCURRENCY or 4. */
-  maxConcurrency?: number;
-}
+// Public execution types live in ./graph-run-types.ts (max-lines ratchet
+// split); re-exported here so consumers may import from either module.
+import type {
+  GraphNodeResult,
+  GraphNodeStatus,
+  GraphRunOptions,
+  GraphRunReport,
+  GraphTraceEntry,
+  NodeInput,
+  NodeOutcome,
+} from './graph-run-types.js';
+export type {
+  GraphNodeExecutor,
+  GraphNodeResult,
+  GraphNodeStatus,
+  GraphRunOptions,
+  GraphRunReport,
+  GraphTraceEntry,
+  NodeInput,
+  NodeOutcome,
+} from './graph-run-types.js';
 
 function defaultConcurrency(): number {
   const raw = Number(process.env['SUDO_AL_GRAPH_CONCURRENCY']);
@@ -137,12 +84,14 @@ export async function runGraph(
 
   const iterOf = (id: string): number => executionCount.get(id) ?? 0;
 
+  const TERMINAL: ReadonlySet<GraphNodeStatus> = new Set([
+    'success', 'failure', 'skipped', 'cancelled', 'pruned',
+  ]);
+
   const predicateContext = (): PredicateContext => {
     const ctx: PredicateContext = {};
     for (const [id, s] of state) {
-      if (s === 'success' || s === 'failure' || s === 'skipped' || s === 'cancelled') {
-        ctx[id] = { status: s, output: outputs.get(id) };
-      }
+      if (TERMINAL.has(s)) ctx[id] = { status: s, output: outputs.get(id) };
     }
     return ctx;
   };
@@ -151,10 +100,15 @@ export async function runGraph(
     state.get(e.from) === 'success' &&
     (e.condition === undefined || evaluatePredicateBool(e.condition, predicateContext()));
 
-  const isResolved = (e: GraphEdge): boolean => {
-    const s = state.get(e.from);
-    return s === 'success' || s === 'failure' || s === 'skipped' || s === 'cancelled';
-  };
+  const isResolved = (e: GraphEdge): boolean => TERMINAL.has(state.get(e.from)!);
+
+  /** AL3.3 blame rule: a dead input caused by a failed/pruned source prunes
+   * the dependent; condition-routing and skips merely skip it. */
+  const blamed = (edges: GraphEdge[]): boolean =>
+    edges.some((e) => {
+      const s = state.get(e.from);
+      return s === 'failure' || s === 'pruned';
+    });
 
   const record = (
     id: string,
@@ -302,13 +256,15 @@ export async function runGraph(
           }
           if (resolved.length === inbound.length) {
             // Barrier ('all'): every inbound settled; succeed on the active
-            // subset (a branch may have routed some arms away), skip when none.
-            // Quorum reaching here means the quorum is impossible → skip.
-            if (cfg.mode === 'all' && active.length >= 1) {
+            // subset when arms were merely condition-routed away, but a
+            // failed/pruned arm breaks the barrier → the merge prunes (AL3.3;
+            // quorum is the declared way to tolerate arm loss). A quorum
+            // reaching here is impossible to meet → pruned/skipped by blame.
+            if (cfg.mode === 'all' && active.length >= 1 && !blamed(inbound)) {
               record(node.id, 'success', { output: active.map((e) => outputs.get(e.from)) });
               queueLoopFirings(node.id);
             } else {
-              record(node.id, 'skipped');
+              record(node.id, blamed(inbound) ? 'pruned' : 'skipped');
             }
             progress = true;
           }
@@ -318,7 +274,9 @@ export async function runGraph(
         // Non-merge: at most one inbound edge (validated). Sources are ready immediately.
         if (inbound.length > 0 && resolved.length < inbound.length) continue;
         if (inbound.length > 0 && active.length === 0) {
-          record(node.id, 'skipped'); // upstream failed/skipped or condition routed away
+          // Dead inputs: pruned when a failed/pruned upstream caused it,
+          // skipped when a condition routed away or upstream was skipped.
+          record(node.id, blamed(inbound) ? 'pruned' : 'skipped');
           progress = true;
           continue;
         }
@@ -369,8 +327,16 @@ export async function runGraph(
         error: settled.outcome.error ?? 'node failed',
         durationMs: settled.durationMs,
       });
-      halted = true; // AL3.3 default policy: halt-graph
-      log.warn({ graph: graph.name, nodeId: settled.nodeId }, 'Node failed — halting graph');
+      const policy =
+        graph.nodes.find((n) => n.id === settled.nodeId)?.onFailure ?? 'halt-graph';
+      if (policy === 'prune-branch') {
+        // AL3.3: dependents prune via the blame rule on the next schedule pass;
+        // sibling branches keep running.
+        log.warn({ graph: graph.name, nodeId: settled.nodeId }, 'Node failed — pruning its branch');
+      } else {
+        halted = true; // AL3.3 default policy: halt-graph
+        log.warn({ graph: graph.name, nodeId: settled.nodeId }, 'Node failed — halting graph');
+      }
     }
   }
 
@@ -382,15 +348,17 @@ export async function runGraph(
 
   const byStatus = (want: GraphNodeResult['status']): string[] =>
     [...new Set(results.filter((r) => r.status === want).map((r) => r.id))];
+  const failedNodes = byStatus('failure');
   return {
     graphName: graph.name,
     startedAt,
-    status: halted ? 'halted' : 'success',
+    status: halted ? 'halted' : failedNodes.length > 0 ? 'partial' : 'success',
     results,
     trace,
-    failedNodes: byStatus('failure'),
+    failedNodes,
     cancelledNodes: byStatus('cancelled'),
     skippedNodes: byStatus('skipped'),
+    prunedNodes: byStatus('pruned'),
     loopIterations: Object.fromEntries(loopFired),
   };
 }
