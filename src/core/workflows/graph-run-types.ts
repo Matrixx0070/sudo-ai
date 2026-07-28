@@ -16,7 +16,8 @@ export type GraphNodeStatus =
   | 'failure'
   | 'skipped'
   | 'cancelled'
-  | 'pruned';
+  | 'pruned'
+  | 'awaiting_approval';
 
 /** Outcome an injected executor returns for one node execution. */
 export interface NodeOutcome {
@@ -26,6 +27,13 @@ export interface NodeOutcome {
   error?: string;
   /** Tokens spent by this execution — accumulated onto the run's budget_spent (AL4.2; limits enforced by the AL4.5 governor). */
   spend?: number;
+  /**
+   * AL4.4 gate parking: success=false + park=true parks the RUN — the node
+   * records `awaiting_approval`, no new work dispatches, in-flight settles,
+   * and the report status is 'awaiting_approval' (resumable once the durable
+   * approval artifact is decided). Only gate executors should set this.
+   */
+  park?: boolean;
 }
 
 /** One upstream value delivered to a node — active inbound edges, in edge order. */
@@ -47,7 +55,7 @@ export type GraphNodeExecutor = (
 
 export interface GraphTraceEntry {
   nodeId: string;
-  event: 'start' | 'success' | 'failure' | 'skipped' | 'cancelled' | 'pruned' | 'loop-reset';
+  event: Exclude<GraphNodeStatus, 'pending' | 'running'> | 'start' | 'loop-reset';
   /** Execution count for this node at the time of the event (0 = never ran). */
   iteration: number;
 }
@@ -67,9 +75,11 @@ export interface GraphRunReport {
   /**
    * 'halted' — a node failed under the default halt-graph policy;
    * 'partial' — failures occurred but every one was prune-branch, so the
-   * surviving branches completed; 'success' — no failures.
+   * surviving branches completed; 'awaiting_approval' — a gate parked the
+   * run (resume after the durable approval artifact is decided);
+   * 'success' — no failures.
    */
-  status: 'success' | 'partial' | 'halted';
+  status: 'success' | 'partial' | 'halted' | 'awaiting_approval';
   /** Terminal results in settle order — one entry per node execution/skip/cancel/prune. */
   results: GraphNodeResult[];
   trace: GraphTraceEntry[];
