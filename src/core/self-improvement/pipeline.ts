@@ -28,6 +28,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import type { AgentConfigProposal } from '../shared/wave10-types.js';
+import type { AdoptionRecord } from './retention-ledger.js';
 
 const log = createLogger('self-improvement:pipeline');
 
@@ -87,9 +88,10 @@ export interface PipelineDeps {
   };
   /**
    * AL8.5 quarantine seam over PR-bound text (compose with the F18
-   * inspector at the call site). ABSENT → the quarantine stage HOLDS.
+   * inspector via pipeline-wiring.f18Quarantine, or supply your own).
+   * ABSENT → the quarantine stage HOLDS. Sync or async.
    */
-  quarantine?: (text: string) => { ok: boolean; detail: string };
+  quarantine?: (text: string) => { ok: boolean; detail: string } | Promise<{ ok: boolean; detail: string }>;
   /** PR opener (review-pr pattern). ABSENT → held at the pr stage. */
   openPr?: (draft: ImprovementDraft, evidence: string) => Promise<{ url: string }>;
   /** Per-day proposal-count budget (invariant 10). Required. */
@@ -203,7 +205,7 @@ export async function runImprovementPipeline(
   }
   let q: { ok: boolean; detail: string };
   try {
-    q = deps.quarantine(evidence + '\n' + draft.title + '\n' + draft.rationale);
+    q = await deps.quarantine(evidence + '\n' + draft.title + '\n' + draft.rationale);
   } catch (err) {
     q = { ok: false, detail: `inspector threw: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -231,11 +233,21 @@ export async function runImprovementPipeline(
  * ProposalStore.markApplied throws unless the proposal was human-approved
  * first (via the existing /v1/admin/learning routes) — the approval artifact
  * must exist before an adoption can be recorded (invariant 8).
+ *
+ * With `retention`, the adoption also lands an AL8.4 retention-ledger row —
+ * markApplied runs FIRST, so an unapproved merge writes no retention row.
  */
 export function recordHumanMerge(
   store: Pick<PipelineDeps['store'], 'markApplied'>,
   proposalId: string,
+  retention?: {
+    ledger: { recordAdoption(rec: AdoptionRecord): unknown };
+    adoption: Omit<AdoptionRecord, 'proposalId'>;
+  },
 ): void {
   store.markApplied(proposalId);
-  log.info({ proposalId }, 'improvement adoption recorded (human-merged + approved)');
+  if (retention) {
+    retention.ledger.recordAdoption({ proposalId, ...retention.adoption });
+  }
+  log.info({ proposalId, retained: Boolean(retention) }, 'improvement adoption recorded (human-merged + approved)');
 }
