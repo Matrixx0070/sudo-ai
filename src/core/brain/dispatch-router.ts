@@ -209,6 +209,7 @@ export class DispatchRouter {
         model: input.primaryModel,
         reason: 'dispatch-router error — failing open to primary model for capability preservation',
         cheapUsed: false,
+        intent: 'unknown',
         noveltyScore: 0,
         cacheHit: false,
         selfPromotionBlocked: false,
@@ -275,6 +276,7 @@ export class DispatchRouter {
         model: input.primaryModel,
         reason: `novelty score ${noveltyScore.toFixed(3)} >= threshold — principal-task fidelity preserved`,
         cheapUsed: false,
+        intent: baseResult.intent, // classification stands; the override is capability policy
       };
       log.debug({ noveltyScore }, 'DispatchRouter: novelty override — routing to primary model');
     }
@@ -293,6 +295,7 @@ export class DispatchRouter {
         model: input.primaryModel,
         reason: 'sub-agent self-promotion to cheap model blocked — capability reservation',
         cheapUsed: false,
+        intent: finalResult.intent, // classification stands; the block is capability policy
       };
       selfPromotionBlocked = true;
       log.info({ agentRole: input.agentRole }, 'DispatchRouter: anti-self-promotion guard triggered — fast-path denied for non-allowlisted role');
