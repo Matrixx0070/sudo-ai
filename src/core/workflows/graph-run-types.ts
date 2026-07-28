@@ -77,9 +77,12 @@ export interface GraphRunReport {
    * 'partial' — failures occurred but every one was prune-branch, so the
    * surviving branches completed; 'awaiting_approval' — a gate parked the
    * run (resume after the durable approval artifact is decided);
-   * 'success' — no failures.
+   * 'paused' — the pause seam stopped dispatch (e.g. AL4.5 budget governor);
+   * resumable exactly like a park; 'success' — no failures.
    */
-  status: 'success' | 'partial' | 'halted' | 'awaiting_approval';
+  status: 'success' | 'partial' | 'halted' | 'awaiting_approval' | 'paused';
+  /** Set when status is 'paused' — the reason the pause seam returned. */
+  pauseReason?: string;
   /** Terminal results in settle order — one entry per node execution/skip/cancel/prune. */
   results: GraphNodeResult[];
   trace: GraphTraceEntry[];
@@ -126,4 +129,11 @@ export interface GraphRunOptions {
   onEvent?: (event: GraphPersistEvent) => void;
   /** Seed settled state from a prior run (validate hash before building this — see GraphRunStore.loadResumeState). */
   resume?: GraphResumeState;
+  /**
+   * Pause seam (AL4.5): polled before dispatching new work. Return a reason
+   * string to stop dispatch — in-flight nodes settle, the run reports
+   * 'paused' with that reason, and the state is resumable. Return false to
+   * keep running. Never a hard crash losing state.
+   */
+  pause?: () => false | string;
 }

@@ -223,6 +223,14 @@ export class GraphRunStore {
     return row ? rowToApproval(row) : undefined;
   }
 
+  /** Recent runs with status + spend — the Telemetry per-run spend surface. */
+  listRuns(limit = 50): GraphRunRecord[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM graph_runs ORDER BY started_at DESC LIMIT ?`)
+      .all(limit) as GraphRunRow[];
+    return rows.map(rowToRun);
+  }
+
   /** Pending artifacts across runs — the operator's approval inbox. */
   listPendingApprovals(): GraphApprovalRecord[] {
     const rows = this.db

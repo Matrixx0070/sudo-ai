@@ -18,7 +18,13 @@ import type { GraphNodeResult } from '../workflows/graph-run-types.js';
 // Types (re-exported via graph-run-store.ts)
 // ---------------------------------------------------------------------------
 
-export type GraphRunStatus = 'running' | 'success' | 'partial' | 'halted' | 'awaiting_approval';
+export type GraphRunStatus =
+  | 'running'
+  | 'success'
+  | 'partial'
+  | 'halted'
+  | 'awaiting_approval'
+  | 'paused';
 
 export type GraphApprovalStatus = 'pending' | 'approved' | 'denied';
 
@@ -125,7 +131,7 @@ export function initGraphRunSchema(db: Database): void {
       graph_name      TEXT NOT NULL,
       graph_hash      TEXT NOT NULL,
       status          TEXT NOT NULL DEFAULT 'running'
-                      CHECK (status IN ('running','success','partial','halted','awaiting_approval')),
+                      CHECK (status IN ('running','success','partial','halted','awaiting_approval','paused')),
       budget_spent    REAL NOT NULL DEFAULT 0,
       loop_iterations TEXT NOT NULL DEFAULT '{}',
       started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
