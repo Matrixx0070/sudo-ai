@@ -24,8 +24,13 @@ afterEach(() => {
 });
 
 describe('F108 forge kill-switch', () => {
-  it('defaults ON to preserve behaviour; SUDO_FORGE=0 disables', () => {
-    expect(forgeEnabled({})).toBe(true);
+  // AL8.0 R2 (2026-07-28): default flipped ON→OFF. The F108-era default
+  // preserved behaviour at kill-switch introduction; the Campaign-4 audit
+  // found forge's reviewer/security stage outputs are DISCARDED and its
+  // generated files land unsandboxed, so forge now matches every other
+  // self-authoring surface: opt-IN via SUDO_FORGE=1.
+  it('defaults OFF (opt-in); SUDO_FORGE=1 enables, 0/unset disable', () => {
+    expect(forgeEnabled({})).toBe(false);
     expect(forgeEnabled({ SUDO_FORGE: '1' })).toBe(true);
     expect(forgeEnabled({ SUDO_FORGE: '0' })).toBe(false);
   });
