@@ -41,6 +41,10 @@ export type { RoleContract } from './contracts.js';
 export { postOffer, submitBid, collectBids, awardTask } from './negotiation.js';
 export type { TaskOffer, TaskBid, TaskAward, CollectedBids } from './negotiation.js';
 
+// AL5.5 salvage — success-rate agent selection (swarm stays quarantined)
+export { AgentPerfTracker } from './agent-stats.js';
+export type { AgentOutcome } from './agent-stats.js';
+
 // Spawner
 export { AgentSpawner } from './spawner.js';
 
