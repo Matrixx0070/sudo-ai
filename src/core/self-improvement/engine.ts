@@ -359,9 +359,13 @@ export async function runSelfImprovement(options: {
         return false;
       }
     } catch (err) {
+      // AL8.0 R1: fail-CLOSED, matching evaluateDraftGate — a broken gate
+      // blocks the change instead of waving it through. A gate that cannot
+      // evaluate is a gate that holds (invariant 8: no-eval never means
+      // no-gate on an autonomous apply path).
       log.warn({ proposalId, err: String(err) },
-        'HeldOutGate evaluation failed — allowing improvement by default');
-      return true;
+        'HeldOutGate evaluation failed — blocking improvement (fail-closed)');
+      return false;
     }
   }
 

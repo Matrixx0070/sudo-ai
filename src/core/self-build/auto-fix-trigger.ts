@@ -433,8 +433,10 @@ export class AutoFixTrigger {
     );
 
     if (!this.mindDb) {
-      // No database — allow (fail-open for rate limit check)
-      return true;
+      // AL8.0 R4: no database means the rate limit CANNOT be checked — an
+      // autonomous PR-opening path with an unverifiable limiter fails closed.
+      log.warn('_canProceedThisHour: no mind.db — blocking (fail-closed)');
+      return false;
     }
 
     try {
@@ -448,9 +450,10 @@ export class AutoFixTrigger {
       const count = result?.count ?? 0;
       return count < maxPerHour;
     } catch (err) {
+      // AL8.0 R4: an unqueryable rate log blocks rather than admits.
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn({ err: msg }, '_canProceedThisHour: query failed — allowing');
-      return true; // Fail-open
+      log.warn({ err: msg }, '_canProceedThisHour: query failed — blocking (fail-closed)');
+      return false;
     }
   }
 

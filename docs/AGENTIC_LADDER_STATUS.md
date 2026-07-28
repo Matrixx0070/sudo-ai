@@ -144,6 +144,8 @@ Sidecars: improvement-loop.ts = vestigial in-memory insight buffer (report-only)
 - R5 rollbacks discarded by meta.self-improve caller → at minimum surface them in the tool output.
 - (Deferred to AL8.2 proper: sandbox for generated code; F18 quarantine on PR bodies; wiring HeldOutGate into the live caller; proposal-count budget.)
 
+27. **AL8.0 REPAIRS — DONE** (PR pending): R1 shouldApply → fail-CLOSED (engine.ts, matches evaluateDraftGate; direct test deferred to AL8.2 gate-wiring — the path is unreachable today); R2 SUDO_FORGE flipped opt-OUT→opt-IN (forge-budget.ts; REVERSES the F108-era default-ON-to-preserve-behaviour choice on new Campaign-4 evidence — discarded reviewer/security output + unsandboxed writes; capability preserved, test pin updated with rationale; **prod note: if Frank wants forge, set SUDO_FORGE=1 in ecosystem.config.cjs**); R3 path-guard direct tests (8 cases incl. symlink traversal, not-yet-existing files, mode gate, escape hatch, destructive-action list); R4 autofix rate limit fail-CLOSED on missing/broken DB (3 white-box pins); R5 meta.self-improve now surfaces engine rollback records in tool output.
+
 ## AL6.1 adaptive-signal inventory (2026-07-28, Fable)
 
 | # | Signal | Where it flows today | What it changes | Logged? |
