@@ -20,6 +20,7 @@
 
 import { createLogger } from '../shared/index.js';
 import type { AgentMessenger } from './messenger.js';
+import type { AgentPerfTracker } from './agent-stats.js';
 import type { AgentRoleName } from './types.js';
 
 const log = createLogger('agents:negotiation');
@@ -118,29 +119,45 @@ export function collectBids(messenger: AgentMessenger, offer: TaskOffer): Collec
 }
 
 /**
- * Award the offer to the best collected bid: highest confidence, ties broken
- * by lower estimatedCost, then agentId (deterministic). Broadcasts the award
- * and logs it. Returns null when no eligible bids exist — the offerer
- * decides the fallback (do it itself, re-offer, or escalate).
+ * Award the offer to the best collected bid. Without stats: highest
+ * confidence, ties broken by lower estimatedCost, then agentId
+ * (deterministic — unchanged AL5.3 semantics). With an AgentPerfTracker
+ * (AL5.5 salvage): each bid's confidence is weighted by the bidder's
+ * Laplace-smoothed success rate (score = confidence × rate; unknown agents
+ * ride the neutral 0.5 prior, so a track record breaks equal-confidence
+ * ties toward the proven agent). Broadcasts the award and logs it. Returns
+ * null when no eligible bids exist — the offerer decides the fallback.
+ *
+ * Award OUTCOMES feed back via stats.record({agentId, role, success}) when
+ * the task settles — that loop is what makes the rate real.
  */
-export function awardTask(messenger: AgentMessenger, offer: TaskOffer): TaskAward | null {
+export function awardTask(
+  messenger: AgentMessenger,
+  offer: TaskOffer,
+  options: { stats?: AgentPerfTracker } = {},
+): TaskAward | null {
   const { bids, rejected } = collectBids(messenger, offer);
   if (bids.length === 0) {
     log.warn({ taskId: offer.taskId, rejected }, 'No eligible bids — nothing to award');
     return null;
   }
+  const score = (b: TaskBid): number =>
+    options.stats ? b.confidence * options.stats.successRate(b.agentId) : b.confidence;
   const best = [...bids].sort(
     (a, b) =>
-      b.confidence - a.confidence ||
+      score(b) - score(a) ||
       a.estimatedCost - b.estimatedCost ||
       a.agentId.localeCompare(b.agentId),
   )[0]!;
+  const rateNote = options.stats
+    ? ` × rate ${options.stats.successRate(best.agentId).toFixed(2)}`
+    : '';
   const award: TaskAward = {
     taskId: offer.taskId,
     winnerAgentId: best.agentId,
     winnerRole: best.role,
     reason:
-      `confidence ${best.confidence} @ ~${best.estimatedCost} tokens ` +
+      `confidence ${best.confidence}${rateNote} @ ~${best.estimatedCost} tokens ` +
       `(beat ${bids.length - 1} other bid(s); ${rejected} rejected)`,
   };
   messenger.send({ from: offer.from, to: 'all', type: 'award', content: JSON.stringify(award) });
