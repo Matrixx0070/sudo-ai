@@ -89,7 +89,46 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 17. AL5.4 shared-knowledge discipline — DONE (same PR #953; import-bans.test.ts gains 'agent modules must not import memory internals directly' over src/core/agents + src/core/swarm; sanctioned surface = memory/index barrel + memory/injection-scanner guard; green at introduction)
 18. **AL5.5 swarm decision — RECOMMENDATION FILED, FRANK GATE.** Campaign-0 + AL5 build evidence: swarm/swarm-manager.ts is a bookkeeping simulation (rows, no execution), already quarantined behind SUDO_ENABLE_LEGACY_META_TOOLS; its shareKnowledge writes a private swarm_knowledge table BYPASSING the memory API (invariant-5 hazard if ever enabled) — now also caught by the AL5.4 import ban if it were rewired. RECOMMENDATION (never-drop rule — no deletion): (a) keep quarantined as-is; (b) salvage getBestAgent success-rate scoring (swarm-manager.ts:164-185) as the AL5.3 award function's future signal source + per-agent perf stats as an AL6 signal; (c) swarm_knowledge writes must migrate to the memory API before any revive. **Merge-vs-revive → Frank's call; no action until GO.**
 19. AL5.1 live two-agent drive — OPEN (needs a deliberate live-verify slot: spawns real LLM calls = real spend, and Frank's no-autonomous-spend posture applies; module verdicts already filed by Campaign 0. When GO'd: orchestrator spawns researcher+builder, ≥2 messages via bus, delegated sub-check, result through memory API, message log cited)
-20. Then AL6.2-6.5 (per spec order)
+20. AL6.2-6.5 core — DONE (PR pending; agent/policy-resolver.ts = the single seam {route hint, maxRetries, concurrency, reasoningDepth, deferBackground} with EVERY decision logged with its inputs (log + injectable sink; sink failures never break the path); AL6.3 load-shed latch w/ enter/exit hysteresis (SUDO_AL_LOAD_HIGH/LOW default 8/3, SUDO_AL_BUDGET_HIGH/LOW 0.9/0.7), flap test green; AL6.4 classifyIntent extracted from cheap-model-router with behavior preserved (21 existing router tests untouched-green), classification now logged + carried on ChooseModelResult.intent = evaluable; AL6.5 SUDO_AL_POLICY_SHADOW=1 shadow mechanics: computed+logged+marked-not-applied. LEFT OPEN: knob migration (7 knobs → thin per-knob delegation PRs, no behavior change each), decision-log sqlite persistence, and PROMOTION — needs ≥3 days prod shadow traffic; comparison query below)
+21. Then AL7 leftovers (bench dashboard tab) / AL8+ FRANK GATES (per spec order)
+
+## AL6.1 adaptive-signal inventory (2026-07-28, Fable)
+
+| # | Signal | Where it flows today | What it changes | Logged? |
+|---|--------|---------------------|-----------------|---------|
+| 1 | EMA tool bias | tool-router.ts:618-638 (boot attachment UNVERIFIED per audit) | tool selection ordering | no (in-memory EMA) |
+| 2 | Failure-learner hints | flag OFF in prod | prompt hints on repeated failures | n/a (off) |
+| 3 | Latency/success history | api_call_log (billing CostTracker) | nothing automatically — reporting only | yes (sqlite) |
+| 4 | Budget pressure | llm/policy.ts daily USD caps + billing checkBudget | user lane degrades alias; background fail-closed; alerts | partially (alerts; enforcement counters in-memory) |
+| 5 | User-intent class | cheap-model-router on-path | cheap-vs-primary model per turn | **NOW yes** (AL6.4: log line + ChooseModelResult.intent) |
+| 6 | Episodic recall | memory retrieval (ON) | context assembly per turn | via memory logs |
+| 7 | Window size / cache affinity | SUDO_AGENT_WINDOW_SIZE=200 (ON) | context window trimming | no (static env) |
+
+Resolver seam status: signals 4+5 have first-class PolicySignals fields (budgetPressure, intent) + queueDepth/recentFailureRate; 1/2/6/7 remain per-knob migrations (thin delegation, one PR each, no behavior change — per AL6.2 migration rule).
+
+## AL6.5 shadow-vs-live comparison query (written; RUN pending ≥3 days prod shadow traffic)
+
+Once the decision sink persists to sqlite (`policy_decisions(at, intent, route_hint, shadow, applied_model, session_id, turn_id)` — persistence PR next), compare against AL1.2's llm_calls:
+
+```sql
+-- Would the shadow policy have degraded success/latency?  Buckets:
+--   AGREE  = shadow route == applied route (no-op)
+--   CHEAPER= shadow said cheap, live used primary  → savings candidate
+--   RISKIER= shadow said reasoning, live used cheap → quality-risk candidate
+SELECT bucket, COUNT(*) n,
+       AVG(lc.outcome = 'ok') AS success_rate,
+       AVG(lc.latency_ms)     AS avg_latency_ms
+FROM (
+  SELECT pd.turn_id,
+         CASE WHEN pd.route_hint = lc_route.tier THEN 'AGREE'
+              WHEN pd.route_hint = 'cheap' THEN 'CHEAPER' ELSE 'RISKIER' END AS bucket
+  FROM policy_decisions pd JOIN llm_calls lc_route USING (turn_id)
+  WHERE pd.shadow = 1 AND pd.at >= datetime('now', '-3 days')
+) b JOIN llm_calls lc USING (turn_id)
+GROUP BY bucket;
+-- Promotion rule (gw-refactor precedent, shadow 0/303): promote only if the
+-- CHEAPER bucket's success_rate is within 1pp of AGREE's and RISKIER is ~empty.
+```
 
 ## AL4.1 orchestration audit (2026-07-28, Fable — verdict table)
 
