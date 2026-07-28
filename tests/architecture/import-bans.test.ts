@@ -22,15 +22,22 @@ interface ImportBan {
  * that keeps them green. Extend it, never loosen it.
  */
 const BANS: ImportBan[] = [
+  // Audit item 10 (DRIVE_SECURITY_AUDIT_2026-07-28): the gdrive/notebooklm
+  // patterns also catch BARREL imports ('../gdrive', '../gdrive.js',
+  // '../gdrive/index.js') — the old `/gdrive\//` form needed a trailing
+  // slash and missed them. Deliberately NOT extended to src/core/tools or
+  // src/core/channels: the F5 user-file tool imports gdrive BY DESIGN (the
+  // one gated, agent-callable Drive surface — spec invariant 2 exception);
+  // adding those dirs would ban a sanctioned capability.
   {
     name: 'hot-path must not import core/gdrive',
     fromDirs: ['src/core/agent', 'src/llm', 'src/core/memory', 'src/core/brain'],
-    pattern: /(from|import\s*\()\s*['"][^'"]*\/gdrive\//,
+    pattern: /(from|import\s*\()\s*['"][^'"]*\/gdrive(\/|\.js|['"])/,
   },
   {
     name: 'hot-path must not import core/notebooklm',
     fromDirs: ['src/core/agent', 'src/llm', 'src/core/memory', 'src/core/brain'],
-    pattern: /(from|import\s*\()\s*['"][^'"]*\/notebooklm\//,
+    pattern: /(from|import\s*\()\s*['"][^'"]*\/notebooklm(\/|\.js|['"])/,
   },
   {
     name: 'channels must not import the LLM transport directly',
@@ -76,14 +83,20 @@ describe('GW-12 import bans (source tree)', () => {
 });
 
 describe('GW-12 import-ban checker catches a planted violation', () => {
-  const pattern = /(from|import\s*\()\s*['"][^'"]*\/gdrive\//;
+  const pattern = /(from|import\s*\()\s*['"][^'"]*\/gdrive(\/|\.js|['"])/;
   it('flags a fixture that imports the banned path', () => {
     const fixtures = [
       { path: 'clean.ts', text: "import { x } from '../shared/util.js';" },
       { path: 'bad.ts', text: "import { mirror } from '../gdrive/mirror.js';" },
       { path: 'bad-dynamic.ts', text: "const m = await import('../gdrive/runtime.js');" },
+      // Audit item 10: barrel imports must be caught too.
+      { path: 'bad-barrel.ts', text: "import * as g from '../gdrive';" },
+      { path: 'bad-barrel-js.ts', text: "import * as g from '../core/gdrive.js';" },
+      { path: 'bad-barrel-index.ts', text: "const g = await import('../gdrive/index.js');" },
     ];
-    expect(findOffenders(fixtures, pattern).sort()).toEqual(['bad-dynamic.ts', 'bad.ts']);
+    expect(findOffenders(fixtures, pattern).sort()).toEqual([
+      'bad-barrel-index.ts', 'bad-barrel-js.ts', 'bad-barrel.ts', 'bad-dynamic.ts', 'bad.ts',
+    ]);
   });
   it('passes a clean fixture set', () => {
     const fixtures = [{ path: 'a.ts', text: "import { y } from '../llm/client.js';" }];

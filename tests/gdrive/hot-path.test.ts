@@ -25,7 +25,12 @@ describe('gdrive hot-path isolation', () => {
     for (const dir of HOT_PATH_DIRS) {
       for (const file of walk(dir)) {
         const src = readFileSync(file, 'utf-8');
-        if (/from\s+['"][^'"]*\/gdrive\//.test(src) || /import\s*\(\s*['"][^'"]*\/gdrive\//.test(src)) {
+        // Audit item 10 (DRIVE_SECURITY_AUDIT_2026-07-28): also catch barrel
+        // imports ('../gdrive', '../gdrive.js') — the old pattern required a
+        // trailing slash. src/core/tools + src/core/channels stay OUT of the
+        // banned dirs on purpose: the F5 user-file tool imports gdrive by
+        // design (spec invariant 2 exception).
+        if (/from\s+['"][^'"]*\/gdrive(\/|\.js|['"])/.test(src) || /import\s*\(\s*['"][^'"]*\/gdrive(\/|\.js|['"])/.test(src)) {
           offenders.push(file);
         }
       }

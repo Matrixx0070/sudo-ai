@@ -35,6 +35,15 @@ describe('brain keys (F17/F29 fail-fast)', () => {
     expect(() => loadHmacKey({ BRAIN_HMAC_KEY_PATH: p })).toThrow(/32/);
   });
 
+  // Audit item 13 (DRIVE_SECURITY_AUDIT_2026-07-28): long keys used to be
+  // silently truncated to 32 bytes by the zone crypto — refuse instead.
+  it('rejects over-long keys instead of silently truncating', () => {
+    const p = keyFile('long.key', randomBytes(64).toString('hex'));
+    expect(() => loadHmacKey({ BRAIN_HMAC_KEY_PATH: p })).toThrow(/truncation refused/);
+    const pe = keyFile('long-enc.key', randomBytes(48).toString('hex'));
+    expect(() => loadEncKey({ BRAIN_ENC_KEY_PATH: pe })).toThrow(/truncation refused/);
+  });
+
   it('rejects group/world-readable key files', () => {
     const p = keyFile('lax.key', randomBytes(32).toString('hex'), 0o644);
     expect(() => loadHmacKey({ BRAIN_HMAC_KEY_PATH: p })).toThrow(/0600/);

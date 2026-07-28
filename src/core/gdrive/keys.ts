@@ -23,6 +23,11 @@ export interface BrainKeys {
 }
 
 const MIN_KEY_BYTES = 32;
+/** Audit item 13 (DRIVE_SECURITY_AUDIT_2026-07-28): the zone crypto uses
+ * exactly 32 bytes (`key.subarray(0, 32)` in zones.ts). A longer key file
+ * used to be SILENTLY truncated — an operator who generated a 64-byte key
+ * believed they had more entropy than was in use. Reject instead. */
+const MAX_KEY_BYTES = 32;
 
 function loadKeyFile(path: string, envName: string): Buffer {
   let raw: string;
@@ -38,6 +43,12 @@ function loadKeyFile(path: string, envName: string): Buffer {
   if (key.length < MIN_KEY_BYTES) {
     throw new GdriveConfigError(
       `${envName} key is ${key.length} bytes; need >= ${MIN_KEY_BYTES} — regenerate with "openssl rand -hex 32"`,
+    );
+  }
+  if (key.length > MAX_KEY_BYTES) {
+    throw new GdriveConfigError(
+      `${envName} key is ${key.length} bytes; only the first ${MAX_KEY_BYTES} would be used ` +
+        `(silent truncation refused) — regenerate with exactly "openssl rand -hex 32"`,
     );
   }
   try {
