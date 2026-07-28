@@ -26,6 +26,8 @@ import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
 import { sha256Hex } from './manifest.js';
+import { inspectContent } from './quarantine.js';
+import { checkCanaryPayload, loadCanaryConfig, tripCanary } from './canary.js';
 
 const log = createLogger('gdrive:deep-freeze');
 
@@ -187,13 +189,38 @@ export function recallFrozen(
   return { cached: null, prefetching: true };
 }
 
-/** Awaitable prefetch (the background half of recallFrozen; tests await it). */
+/**
+ * Awaitable prefetch (the background half of recallFrozen; tests await it).
+ *
+ * Audit item 5 (DRIVE_SECURITY_AUDIT_2026-07-28): the stub id IS the sha256
+ * of the payload (content-addressed), so recalled bytes are re-hashed and
+ * verified before anything is cached or served — a tampered blob is refused
+ * with a warning, never served. Recalled text also runs the F19 canary check
+ * and the F18 deterministic inspection; a canary hit trips the alarm, a
+ * quarantine hold refuses the recall (the payload stays cold for review).
+ */
 export async function prefetchFrozen(
   client: DriveClient,
   stub: FreezeStub,
   opts: { cacheCap?: number } = {},
 ): Promise<string> {
-  const text = await client.filesDownload(stub.driveFileId, { lane: 'background' });
+  const wire = await client.filesDownloadRaw(stub.driveFileId, { lane: 'background' });
+  const actual = sha256Hex(wire);
+  if (actual !== stub.id) {
+    log.warn({ id: stub.id, actual, driveFileId: stub.driveFileId }, 'deep-freeze recall REFUSED — sha256 mismatch (blob tampered on Drive)');
+    throw new Error(`deep-freeze: sha256 mismatch for ${stub.id} — refusing tampered blob`);
+  }
+  const text = wire.toString('utf-8');
+  const canaryHit = checkCanaryPayload(text, loadCanaryConfig());
+  if (canaryHit) {
+    tripCanary(null, canaryHit, `deep-freeze:${stub.id}`);
+    throw new Error(`deep-freeze: recalled blob tripped canary "${canaryHit.label}" — recall aborted`);
+  }
+  const verdict = await inspectContent(text, {}); // deterministic layer, never fails open
+  if (verdict.verdict === 'hold') {
+    log.warn({ id: stub.id, riskScore: verdict.riskScore, reasons: verdict.reasons }, 'deep-freeze recall HELD by quarantine — not cached, not served');
+    throw new Error(`deep-freeze: recalled blob held by quarantine (risk ${verdict.riskScore.toFixed(2)})`);
+  }
   mkdirSync(freezeCacheDir(), { recursive: true });
   writeFileSync(cachePathFor(stub.id), text, { mode: 0o600 });
   enforceLru(opts.cacheCap ?? DEFAULT_CACHE_CAP);

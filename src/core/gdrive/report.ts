@@ -11,6 +11,7 @@
 import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:report');
 
@@ -108,7 +109,9 @@ export async function publishDailyReport(
 ): Promise<DailyReportResult> {
   const reportsFolder = folders['ops/reports'];
   if (!reportsFolder) throw new Error('gdrive report: ops/reports folder id missing');
-  const markdown = buildDailyReport(inputs);
+  // P1 egress screen (audit item 3): audit metadata / error strings can carry
+  // secrets — redact before the Doc leaves the process.
+  const markdown = screenOpsUpload(buildDailyReport(inputs), 'report:daily').text;
   const name = `daily-${inputs.date}`;
   // One Doc per day: update in place when today's already exists (re-runs).
   const existing = (await client.listChildren(reportsFolder)).find((f) => f.name === name);

@@ -105,6 +105,15 @@ describe('F43 incident pack — zone-1 bundle leak test', () => {
     expect(transcript.content).not.toContain('AKIASECRETSECRET1234');
     expect(transcript.content).not.toContain('hunter2secret');
     expect(transcript.content).toContain('[REDACTED');
+    // Audit item 4 (DRIVE_SECURITY_AUDIT_2026-07-28): the timeline + config
+    // docs are built from the SAME zone-1 events — they must be redacted too
+    // (previously only the transcript was screened; this pins the repair).
+    const timeline = [...docs.values()].find((d) => d.name.includes('timeline'))!;
+    expect(timeline.content).not.toContain('AKIASECRETSECRET1234');
+    expect(timeline.content).toContain('[REDACTED');
+    const config = [...docs.values()].find((d) => d.name.includes('config'))!;
+    expect(config.content).not.toContain('AKIASECRETSECRET1234');
+    expect(config.content).not.toContain('hunter2secret');
   });
 });
 

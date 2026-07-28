@@ -14,6 +14,7 @@ import { loadVersionedManifest } from './migrations.js';
 import { buildManifest, type BrainManifest } from './manifest.js';
 import { MANIFEST_FILE_NAME } from './blob-store.js';
 import { loadBrainState, saveBrainState } from './checkpoint.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:forks');
 
@@ -45,7 +46,12 @@ export async function forkBrain(
     },
     keys.hmacKey,
   );
-  const body = JSON.stringify({ ...fork, policyNote }, null, 2);
+  // P1 egress screen (audit item 3): policyNote is the only free-text field.
+  // The signed manifest body itself is EXEMPT from redaction — mutating it
+  // would break the HMAC signature, and its sha256 hex entries would
+  // false-positive the hex_secret_64 pattern (see ops-screen.ts header).
+  const screenedNote = policyNote ? screenOpsUpload(policyNote, 'forks:policyNote').text : policyNote;
+  const body = JSON.stringify({ ...fork, policyNote: screenedNote }, null, 2);
   const existing = (await client.listChildren(forksFolder)).find((f) => f.name === `${name}.json`);
   const id = existing
     ? (await client.filesUpdate(existing.id, {}, { mimeType: 'application/json', body }), existing.id)
