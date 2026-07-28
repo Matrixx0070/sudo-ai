@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 706,
+  "count": 707,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -22,6 +22,7 @@
     "SUDO_ALLOW_CONTRADICTORY_CONFIG",
     "SUDO_AL_BUDGET_HIGH",
     "SUDO_AL_BUDGET_LOW",
+    "SUDO_AL_FRONTIER",
     "SUDO_AL_GRAPH_CONCURRENCY",
     "SUDO_AL_LOAD_HIGH",
     "SUDO_AL_LOAD_LOW",

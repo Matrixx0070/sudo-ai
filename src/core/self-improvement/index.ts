@@ -46,3 +46,18 @@ export { registerRetentionRecheckCron, RETENTION_RECHECK_JOB_NAME } from './rete
 // AL9.3 generation ledger (derived scorecard) + AL9.4 eval self-expansion (additive-only)
 export { buildGenerationScorecard, EvalExpansionQueue } from './generation-ledger.js';
 export type { GenerationRow, GenerationScorecard, CandidateEvalCase } from './generation-ledger.js';
+
+// AL10 frontier engine (proposal engine ONLY — suggests, never builds; scanners flag-OFF)
+export { FrontierLedger } from './frontier-ledger.js';
+export type { FrontierEntry, FrontierEntryInput, FrontierSource } from './frontier-ledger.js';
+export {
+  mineSignals,
+  mineFailureClusters,
+  mineEvalSaturation,
+  mineAbstractions,
+  draftAdr,
+  buildReviewPack,
+  registerFrontierScanCron,
+  FRONTIER_SCAN_JOB_NAME,
+} from './frontier-miners.js';
+export type { BenchSuiteResult, GraphSummarySeam } from './frontier-miners.js';
