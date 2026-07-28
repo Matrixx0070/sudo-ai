@@ -29,10 +29,11 @@
 import { createLogger } from '../shared/logger.js';
 import type { AgentConfigProposal } from '../shared/wave10-types.js';
 import type { AdoptionRecord } from './retention-ledger.js';
+import { CURRENT_MANIFEST, type PipelineManifest } from './pipeline-manifest.js';
 
 const log = createLogger('self-improvement:pipeline');
 
-export type ArtifactType = 'prompt' | 'workflow-graph' | 'tool' | 'code-patch';
+export type ArtifactType = 'prompt' | 'workflow-graph' | 'tool' | 'code-patch' | 'pipeline-change';
 
 /** A candidate improvement, before it becomes a stored proposal. */
 export interface ImprovementDraft {
@@ -96,6 +97,13 @@ export interface PipelineDeps {
   openPr?: (draft: ImprovementDraft, evidence: string) => Promise<{ url: string }>;
   /** Per-day proposal-count budget (invariant 10). Required. */
   budget: { maxPerDay: number };
+  /**
+   * AL9.1 pinned pipeline manifest (default CURRENT_MANIFEST). Every proposal
+   * is stamped with THIS manifest's version at propose time, and its bench
+   * bar reads from it — later manifest changes never apply retroactively
+   * (AL9.5 independence ordering).
+   */
+  manifest?: PipelineManifest;
   /** Test seam for the day key; defaults to the current UTC date. */
   dayKey?: () => string;
 }
@@ -117,6 +125,7 @@ export async function runImprovementPipeline(
   deps: PipelineDeps,
 ): Promise<PipelineOutcome> {
   const stages: StageResult[] = [];
+  const manifest = deps.manifest ?? CURRENT_MANIFEST;
   const held = (proposalId?: string): PipelineOutcome => ({ proposalId, stages, status: 'held' });
   const push = (stage: PipelineStage, ok: boolean, detail: string): boolean => {
     stages.push({ stage, ok, detail });
@@ -150,7 +159,15 @@ export async function runImprovementPipeline(
       id: proposalId,
       agentId: `pipeline:${draft.type}`,
       rationale: draft.rationale,
-      delta: { artifactType: draft.type, title: draft.title, evalPlan: draft.evalPlan, payload: draft.payload },
+      delta: {
+        artifactType: draft.type,
+        title: draft.title,
+        evalPlan: draft.evalPlan,
+        payload: draft.payload,
+        // AL9.5: the manifest ACTIVE AT PROPOSAL TIME — validation bars for
+        // this artifact come from here, never from a later manifest.
+        manifestVersion: manifest.version,
+      },
       traceQuality: 0,
       traceCount: 0,
       status: 'pending',
@@ -186,7 +203,11 @@ export async function runImprovementPipeline(
     const evalResult = await deps.gate.evaluate(proposalId, {
       params: { description: `${draft.type}: ${draft.title}`, evalPlan: draft.evalPlan },
     });
-    if (!push('bench', evalResult.passed, `passRate ${evalResult.passRate.toFixed(3)}`)) {
+    // AL9.1: the adoption bar comes from the PINNED manifest (v1.0.0 bar = 0,
+    // i.e. gate verdict only — a pure extraction of pre-manifest behavior).
+    const meetsBar = evalResult.passed && evalResult.passRate >= manifest.adoption.minPassRate;
+    if (!push('bench', meetsBar,
+      `passRate ${evalResult.passRate.toFixed(3)} (bar ${manifest.adoption.minPassRate} @ manifest ${manifest.version})`)) {
       return held(proposalId);
     }
   } catch (err) {

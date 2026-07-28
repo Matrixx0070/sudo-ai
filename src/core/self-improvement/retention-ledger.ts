@@ -128,6 +128,14 @@ export class RetentionLedger {
     return this.getById(Number(info.lastInsertRowid))!;
   }
 
+  /** Evidence lookup for AL9.2 meta-proposals (citations must exist). */
+  getByProposalId(proposalId: string): RetentionRow | undefined {
+    const r = this.db
+      .prepare(`SELECT * FROM improvement_retention WHERE proposal_id = ?`)
+      .get(proposalId) as RawRow | undefined;
+    return r ? toRow(r) : undefined;
+  }
+
   getById(id: number): RetentionRow | undefined {
     const r = this.db.prepare(`SELECT * FROM improvement_retention WHERE id = ?`).get(id) as RawRow | undefined;
     return r ? toRow(r) : undefined;

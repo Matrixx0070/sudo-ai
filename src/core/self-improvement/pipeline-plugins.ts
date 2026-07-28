@@ -18,6 +18,13 @@
 
 import { validateGraph, validateGraphRoutes, type WorkflowGraph } from '../workflows/index.js';
 import type { ArtifactPlugin, ImprovementDraft } from './pipeline.js';
+import {
+  CURRENT_MANIFEST,
+  findWeakenings,
+  isVersionIncrease,
+  validateManifest,
+  type PipelineManifest,
+} from './pipeline-manifest.js';
 
 const MAX_PROMPT_CHARS = 20_000;
 
@@ -25,7 +32,11 @@ const MAX_PROMPT_CHARS = 20_000;
 export function promptPlugin(deps: {
   /** Injection scanner seam (e.g. memory/injection-scanner scanMemoryContent). */
   scan?: (text: string) => { ok: boolean; detail: string };
+  /** AL9.1: bars read from the pinned manifest (default CURRENT — unchanged behavior). */
+  manifest?: PipelineManifest;
 }): ArtifactPlugin {
+  const m = deps.manifest ?? CURRENT_MANIFEST;
+  const maxChars = m.validators.maxPromptChars ?? MAX_PROMPT_CHARS;
   return {
     type: 'prompt',
     async validate(draft: ImprovementDraft) {
@@ -33,13 +44,93 @@ export function promptPlugin(deps: {
       if (typeof text !== 'string' || text.trim().length === 0) {
         return { ok: false, detail: 'prompt payload must be a non-empty string' };
       }
-      if (text.length > MAX_PROMPT_CHARS) {
-        return { ok: false, detail: `prompt exceeds ${MAX_PROMPT_CHARS} chars (${text.length})` };
+      if (text.length > maxChars) {
+        return { ok: false, detail: `prompt exceeds ${maxChars} chars (${text.length}) — bar from manifest ${m.version}` };
       }
-      if (!deps.scan) {
+      if (m.validators.requireInjectionScan && !deps.scan) {
         return { ok: false, detail: 'no injection scanner wired — an unscanned prompt is unvalidated (fail-closed)' };
       }
-      return deps.scan(text);
+      return deps.scan ? deps.scan(text) : { ok: true, detail: 'scan waived by manifest (human-authored manifest change)' };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AL9.2 meta-artifact: pipeline-change
+// ---------------------------------------------------------------------------
+
+/** Payload shape for AL9.2 meta-proposals — a full candidate manifest + evidence. */
+export interface PipelineChangePayload {
+  targetManifest: PipelineManifest;
+  evidence: {
+    /** Retention-ledger proposal ids the change cites — must EXIST. */
+    retentionProposalIds: string[];
+    summary: string;
+  };
+}
+
+/**
+ * AL9.2: the system may propose changes to its OWN pipeline manifest — with
+ * strictly MORE gating than any other artifact:
+ *   - SUDO_AL_META=1 required (default OFF — AL9.6 rung gate, fail-closed);
+ *   - target must be a STRICT semver increase over the running manifest;
+ *   - the never-weaken rule is structural: a machine proposal that lowers
+ *     bars, drops eval suites, or loosens validators is REFUSED — weakening
+ *     is a human-authored PR only (AL9.4);
+ *   - evidence must cite ≥1 retention-ledger row that actually exists
+ *     (AL9.3 lineage: manifest changes argue from recorded outcomes);
+ *   - meta-proposals are ALWAYS human-merged. No auto-merge class exists for
+ *     pipeline-change, ever — and the pipeline itself has no merge capability.
+ */
+export function pipelineChangePlugin(deps: {
+  /** Retention-ledger read surface (evidence verification). */
+  retention?: { getByProposalId(proposalId: string): unknown | undefined };
+  /** The running manifest (default CURRENT_MANIFEST). */
+  base?: PipelineManifest;
+} = {}): ArtifactPlugin {
+  return {
+    type: 'pipeline-change',
+    async validate(draft: ImprovementDraft) {
+      if (process.env['SUDO_AL_META'] !== '1') {
+        return { ok: false, detail: 'AL9 meta-proposals are gated OFF (SUDO_AL_META != 1) — rung not activated (AL9.6)' };
+      }
+      const base = deps.base ?? CURRENT_MANIFEST;
+      const p = draft.payload as Partial<PipelineChangePayload> | undefined;
+      if (!p?.targetManifest || !p.evidence) {
+        return { ok: false, detail: 'pipeline-change payload must be { targetManifest, evidence }' };
+      }
+      try {
+        validateManifest(p.targetManifest as PipelineManifest);
+      } catch (err) {
+        return { ok: false, detail: `target manifest invalid: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      if (!isVersionIncrease(base.version, p.targetManifest.version)) {
+        return { ok: false, detail: `target version ${p.targetManifest.version} is not a strict increase over running ${base.version}` };
+      }
+      const weakenings = findWeakenings(base, p.targetManifest as PipelineManifest);
+      if (weakenings.length > 0) {
+        return {
+          ok: false,
+          detail: `never-weaken: machine proposals may not weaken the pipeline (${weakenings.join('; ')}) — weakening is a human-authored PR only`,
+        };
+      }
+      const ids = p.evidence.retentionProposalIds ?? [];
+      if (ids.length === 0 || !p.evidence.summary?.trim()) {
+        return { ok: false, detail: 'meta-proposals must cite retention-ledger evidence (ids + summary)' };
+      }
+      if (!deps.retention) {
+        return { ok: false, detail: 'no retention-ledger seam wired — uncited evidence cannot be verified (fail-closed)' };
+      }
+      const missing = ids.filter((id) => deps.retention!.getByProposalId(id) === undefined);
+      if (missing.length > 0) {
+        return { ok: false, detail: `cited retention rows do not exist: ${missing.join(', ')}` };
+      }
+      return {
+        ok: true,
+        detail:
+          `manifest ${base.version} → ${p.targetManifest.version} validated; ${ids.length} ledger citation(s). ` +
+          'META: human merge only — no auto-merge class exists for pipeline-change, ever.',
+      };
     },
   };
 }
