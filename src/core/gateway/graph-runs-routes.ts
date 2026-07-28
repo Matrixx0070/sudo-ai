@@ -24,6 +24,8 @@ export interface GraphRunsRoutesDeps {
     listRuns(limit?: number): unknown[];
     listPendingApprovals(): unknown[];
   };
+  /** AL9.3: generational scorecard provider (optional — 404 when absent). Sync or async. */
+  generations?: () => unknown | Promise<unknown>;
 }
 
 function extractBearer(req: IncomingMessage): string {
@@ -78,6 +80,19 @@ export function registerGraphRunsRoutes(
       }
       if (pathname === '/v1/admin/graph-runs/approvals') {
         sendJson(res, 200, { pending: deps.store.listPendingApprovals() });
+        return;
+      }
+      if (pathname === '/v1/admin/graph-runs/generations') {
+        if (!deps.generations) {
+          sendError(res, 404, 'generational scorecard not wired');
+          return;
+        }
+        Promise.resolve(deps.generations())
+          .then((scorecard) => sendJson(res, 200, { scorecard }))
+          .catch((err) => {
+            log.warn({ err: err instanceof Error ? err.message : String(err) }, 'generations provider failed');
+            sendError(res, 500, 'Internal error');
+          });
         return;
       }
       sendError(res, 404, 'Not found');

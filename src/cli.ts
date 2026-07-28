@@ -4713,7 +4713,26 @@ async function boot(): Promise<void> {
         alignmentAutoRemediator,
         skillOptimizationStore: wave13SkillOptimizationStore,
         bench: wave10BenchStore ? { benchStore: wave10BenchStore } : undefined,
-        graphRuns: graphRunStore ? { store: graphRunStore } : undefined,
+        graphRuns: graphRunStore
+          ? {
+              store: graphRunStore,
+              // AL9.3: generational scorecard derived from proposals + retention.
+              generations: wave10ProposalStore
+                ? async () => {
+                    const { buildGenerationScorecard, RetentionLedger } = await import('./core/self-improvement/index.js');
+                    const retention = new RetentionLedger('data/proposals.db');
+                    try {
+                      return buildGenerationScorecard({
+                        proposals: wave10ProposalStore!.list({ limit: 1000, offset: 0 }).data,
+                        retention: retention.list(),
+                      });
+                    } finally {
+                      retention.close();
+                    }
+                  }
+                : undefined,
+            }
+          : undefined,
         learning: wave10ProposalStore ? { proposalStore: wave10ProposalStore } : undefined,
         savings: { costTracker },
         // C1: Wire compare route via brain.chat() shim.

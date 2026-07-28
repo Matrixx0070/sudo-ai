@@ -42,3 +42,7 @@ export type { PipelineManifest } from './pipeline-manifest.js';
 export { RetentionLedger } from './retention-ledger.js';
 export type { AdoptionRecord, RetentionRow } from './retention-ledger.js';
 export { registerRetentionRecheckCron, RETENTION_RECHECK_JOB_NAME } from './retention-recheck-cron.js';
+
+// AL9.3 generation ledger (derived scorecard) + AL9.4 eval self-expansion (additive-only)
+export { buildGenerationScorecard, EvalExpansionQueue } from './generation-ledger.js';
+export type { GenerationRow, GenerationScorecard, CandidateEvalCase } from './generation-ledger.js';

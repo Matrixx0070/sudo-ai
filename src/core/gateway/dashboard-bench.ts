@@ -22,6 +22,7 @@ export const BENCH_PANEL_HTML = `
   <div id="bench-runs" class="panel-sub">Loading bench runs&hellip;</div>
   <div id="graph-runs" class="panel-sub" style="margin-top:12px">Loading graph runs&hellip;</div>
   <div id="graph-approvals" class="panel-sub" style="margin-top:12px"></div>
+  <div id="al9-generations" class="panel-sub" style="margin-top:12px"></div>
   <button id="bench-reload" style="margin-top:10px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer">Reload</button>
 </div>`;
 
@@ -72,6 +73,12 @@ function loadBenchPanel(){
     var runs = (data && data.runs) || [];
     alSection('graph-runs', 'Graph runs (per-run spend)',
       alRowsTable(runs, alPickCols(runs, ['runId','graphName','status','budgetSpent','startedAt'])));
+  });
+  apiFetch('/v1/admin/graph-runs/generations', function(err, data){
+    if(err){ alSection('al9-generations', 'Generations (AL9.3)', '<span style="color:#8b949e">unavailable</span>'); return; }
+    var gens = (data && data.scorecard && data.scorecard.generations) || [];
+    alSection('al9-generations', 'Generations (manifest lineage)',
+      alRowsTable(gens, alPickCols(gens, ['manifestVersion','proposals','adopted','meanScoreDelta','flagged'])));
   });
   apiFetch('/v1/admin/graph-runs/approvals', function(err, data){
     if(err){ alSection('graph-approvals', 'Pending gate approvals', '<span style="color:#8b949e">unavailable</span>'); return; }
