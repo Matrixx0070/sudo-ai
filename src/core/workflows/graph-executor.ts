@@ -17,6 +17,7 @@
 
 import { createLogger } from '../shared/logger.js';
 import {
+  downstreamOf,
   mergeConfigOf,
   type GraphEdge,
   type GraphNode,
@@ -78,6 +79,7 @@ export async function runGraph(
   const trace: GraphTraceEntry[] = [];
   const results: GraphNodeResult[] = [];
   let halted = false;
+  let parked = false; // AL4.4: a gate parked the run (awaiting_approval)
 
   interface Settled { nodeId: string; outcome: NodeOutcome; durationMs: number }
   const inFlight = new Map<string, Promise<Settled>>();
@@ -85,7 +87,7 @@ export async function runGraph(
   const iterOf = (id: string): number => executionCount.get(id) ?? 0;
 
   const TERMINAL: ReadonlySet<GraphNodeStatus> = new Set([
-    'success', 'failure', 'skipped', 'cancelled', 'pruned',
+    'success', 'failure', 'skipped', 'cancelled', 'pruned', 'awaiting_approval',
   ]);
 
   const predicateContext = (): PredicateContext => {
@@ -134,20 +136,7 @@ export async function runGraph(
   };
 
   /** Downstream subgraph of `start` via non-loop edges, inclusive — the loop body. */
-  const resetSetOf = (start: string): Set<string> => {
-    const seen = new Set<string>([start]);
-    const stack = [start];
-    while (stack.length > 0) {
-      const cur = stack.pop()!;
-      for (const e of graph.edges) {
-        if (e.loop === undefined && e.from === cur && !seen.has(e.to)) {
-          seen.add(e.to);
-          stack.push(e.to);
-        }
-      }
-    }
-    return seen;
-  };
+  const resetSetOf = (start: string): Set<string> => downstreamOf(graph, start);
 
   /** Fire eligible loop back-edges whose reset subgraph has fully settled. */
   const tryFireLoops = (): boolean => {
@@ -351,6 +340,17 @@ export async function runGraph(
         spend: settled.outcome.spend,
       });
       queueLoopFirings(settled.nodeId);
+    } else if (settled.outcome.park) {
+      // AL4.4 gate park: run stops dispatching (like halt) but the node and
+      // run record awaiting_approval — resumable once the artifact is decided.
+      record(settled.nodeId, 'awaiting_approval', {
+        error: settled.outcome.error,
+        durationMs: settled.durationMs,
+        spend: settled.outcome.spend,
+      });
+      halted = true;
+      parked = true;
+      log.info({ graph: graph.name, nodeId: settled.nodeId }, 'Gate parked — awaiting approval');
     } else {
       record(settled.nodeId, 'failure', {
         error: settled.outcome.error ?? 'node failed',
@@ -382,7 +382,9 @@ export async function runGraph(
   return {
     graphName: graph.name,
     startedAt,
-    status: halted ? 'halted' : failedNodes.length > 0 ? 'partial' : 'success',
+    status: parked ? 'awaiting_approval'
+      : halted ? 'halted'
+      : failedNodes.length > 0 ? 'partial' : 'success',
     results,
     trace,
     failedNodes,

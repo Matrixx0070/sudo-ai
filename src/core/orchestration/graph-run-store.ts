@@ -27,8 +27,11 @@ import type {
 import {
   computeGraphHash,
   initGraphRunSchema,
+  rowToApproval,
   rowToNode,
   rowToRun,
+  type GraphApprovalRecord,
+  type GraphApprovalRow,
   type GraphRunNodeRecord,
   type GraphRunNodeRow,
   type GraphRunRecord,
@@ -36,7 +39,13 @@ import {
 } from './graph-run-schema.js';
 
 export { computeGraphHash } from './graph-run-schema.js';
-export type { GraphRunRecord, GraphRunNodeRecord, GraphRunStatus } from './graph-run-schema.js';
+export type {
+  GraphApprovalRecord,
+  GraphApprovalStatus,
+  GraphRunRecord,
+  GraphRunNodeRecord,
+  GraphRunStatus,
+} from './graph-run-schema.js';
 
 const log = createLogger('orchestration:graph-run-store');
 
@@ -171,6 +180,55 @@ export class GraphRunStore {
       })),
       loopIterations: run.loopIterations,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // AL4.4 durable approval artifacts — the harness-enforced gate evidence.
+  // A gate node succeeds ONLY when an 'approved' row exists; absence parks
+  // the run. No-human never means no-gate.
+  // -------------------------------------------------------------------------
+
+  /** Create the pending artifact if none exists. Returns true when newly created. */
+  requestApproval(runId: string, nodeId: string, note?: string): boolean {
+    const info = this.db
+      .prepare(
+        `INSERT INTO graph_run_approvals (run_id, node_id, note) VALUES (?, ?, ?)
+         ON CONFLICT (run_id, node_id) DO NOTHING`,
+      )
+      .run(runId, nodeId, note ?? null);
+    return info.changes > 0;
+  }
+
+  /** Decide a pending artifact. Throws if none exists or it is already decided. */
+  resolveApproval(runId: string, nodeId: string, approved: boolean, decidedBy: string, note?: string): void {
+    const info = this.db
+      .prepare(
+        `UPDATE graph_run_approvals
+         SET status = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), decided_by = ?,
+             note = COALESCE(?, note)
+         WHERE run_id = ? AND node_id = ? AND status = 'pending'`,
+      )
+      .run(approved ? 'approved' : 'denied', decidedBy, note ?? null, runId, nodeId);
+    if (info.changes === 0) {
+      throw new Error(
+        `GraphRunStore: no pending approval for run "${runId}" node "${nodeId}" (missing or already decided)`,
+      );
+    }
+  }
+
+  getApproval(runId: string, nodeId: string): GraphApprovalRecord | undefined {
+    const row = this.db
+      .prepare(`SELECT * FROM graph_run_approvals WHERE run_id = ? AND node_id = ?`)
+      .get(runId, nodeId) as GraphApprovalRow | undefined;
+    return row ? rowToApproval(row) : undefined;
+  }
+
+  /** Pending artifacts across runs — the operator's approval inbox. */
+  listPendingApprovals(): GraphApprovalRecord[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM graph_run_approvals WHERE status = 'pending' ORDER BY requested_at`)
+      .all() as GraphApprovalRow[];
+    return rows.map(rowToApproval);
   }
 
   close(): void {

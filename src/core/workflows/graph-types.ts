@@ -157,6 +157,25 @@ export function mergeConfigOf(node: GraphNode, inboundCount: number): MergeConfi
   return cfg;
 }
 
+/**
+ * Downstream subgraph of `start` via non-loop edges, inclusive. Used by the
+ * executor as a declared loop's reset body (the back-edge target's subtree).
+ */
+export function downstreamOf(graph: WorkflowGraph, start: string): Set<string> {
+  const seen = new Set<string>([start]);
+  const stack = [start];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    for (const e of graph.edges) {
+      if (e.loop === undefined && e.from === cur && !seen.has(e.to)) {
+        seen.add(e.to);
+        stack.push(e.to);
+      }
+    }
+  }
+  return seen;
+}
+
 /** True when `target` is reachable from `start` following non-loop edges. */
 function reaches(start: string, target: string, adjacency: Map<string, string[]>): boolean {
   const seen = new Set<string>([start]);

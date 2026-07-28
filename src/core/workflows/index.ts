@@ -43,3 +43,5 @@ export type {
 export { runGraph } from './graph-executor.js';
 export { compileWorkflowToGraph, createStepNodeExecutors } from './graph-compile.js';
 export type { StepNodeExecutorOptions } from './graph-compile.js';
+export { resolveNodeRoute, validateGraphRoutes, createRoutedAgentExecutor } from './graph-routing.js';
+export type { ResolvedNodeRoute, RoutedCallContext, RoutedAgentExecutorOptions } from './graph-routing.js';
