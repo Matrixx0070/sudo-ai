@@ -83,6 +83,13 @@ export interface SpawnConfig {
    * warn log.
    */
   resumeFromAgentId?: string;
+  /**
+   * AL5.2 delegation enforcement: identifies the AGENT (not the operator)
+   * requesting this spawn. When set, the spawner checks the parent role's
+   * delegation rights and the global spawn-depth ceiling before spawning.
+   * Omitted = orchestrator/operator-initiated spawn (depth 0, unrestricted).
+   */
+  spawnedBy?: { role: AgentRoleName; depth: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -118,8 +125,18 @@ export interface AgentInstance {
 // Inter-agent messaging
 // ---------------------------------------------------------------------------
 
-/** Category of an inter-agent message. */
-export type AgentMessageType = 'context' | 'result' | 'error' | 'directive';
+/**
+ * Category of an inter-agent message. 'task-offer' / 'bid' / 'award' are the
+ * AL5.3 contract-net negotiation types (JSON payloads in `content`).
+ */
+export type AgentMessageType =
+  | 'context'
+  | 'result'
+  | 'error'
+  | 'directive'
+  | 'task-offer'
+  | 'bid'
+  | 'award';
 
 /** A message passed between agents or from the orchestrator. */
 export interface AgentMessage {
