@@ -12,6 +12,8 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { inspectContent, type InspectOptions } from './quarantine.js';
+import { checkCanaryPayload, loadCanaryConfig, tripCanary } from './canary.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
 import { emitGdriveAudit } from './audit.js';
@@ -102,7 +104,13 @@ export async function awaitDissent(
   client: DriveClient,
   folders: FolderIdMap,
   packetId: string,
-  opts: { timeoutMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+  opts: {
+    timeoutMs?: number;
+    pollMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    /** F18 inspector options ({} = deterministic-only, never fails open). */
+    inspect?: InspectOptions;
+  } = {},
 ): Promise<SecondOpinionOutcome> {
   const folderId = folders['ops/review-queue'];
   if (!folderId) throw new Error('second-opinion: ops/review-queue folder id missing');
@@ -118,7 +126,32 @@ export async function awaitDissent(
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const memoFile = (await client.listChildren(folderId)).find((f) => f.name === `${packetId}.dissent.md`);
-    if (memoFile) return { action: 'dissent-ready', memo: await client.filesDownload(memoFile.id) };
+    if (memoFile) {
+      // P0 repair (DRIVE_SECURITY_AUDIT_2026-07-28): the memo is EXTERNAL
+      // text from a Drive folder — anyone with write access there could have
+      // planted or tampered it. Canary + F18 quarantine run before it ever
+      // reaches the deciding agent's context; a hit/hold ESCALATES to the
+      // human instead of returning the memo. Never auto-proceed, never
+      // surface uninspected text to the decider.
+      const memo = await client.filesDownload(memoFile.id);
+      const canaryHit = checkCanaryPayload(memo, loadCanaryConfig());
+      if (canaryHit) {
+        tripCanary(null, canaryHit, `second-opinion:${packetId}`);
+        return { action: 'escalate', reason: `dissent memo tripped canary "${canaryHit.label}" — human review required` };
+      }
+      const verdict = await inspectContent(memo, opts.inspect ?? {});
+      if (verdict.verdict === 'hold') {
+        log.warn(
+          { packetId, riskScore: verdict.riskScore, reasons: verdict.reasons },
+          'dissent memo HELD by quarantine — escalating to human, memo withheld from decider',
+        );
+        return {
+          action: 'escalate',
+          reason: `dissent memo held by quarantine (risk ${verdict.riskScore.toFixed(2)}: ${verdict.reasons.join(', ')}) — human review required`,
+        };
+      }
+      return { action: 'dissent-ready', memo };
+    }
     if (Date.now() >= deadline) {
       log.warn({ packetId }, 'second opinion timed out — ESCALATING to human, not proceeding');
       return { action: 'escalate', reason: `no dissent memo within ${timeoutMs}ms — human review required` };

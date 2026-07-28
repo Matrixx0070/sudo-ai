@@ -307,7 +307,10 @@ describe('F6 — comment corrections', () => {
     expect(store.saved.size).toBe(0);
   });
 
-  it('an injection-shaped comment is stored inertly with a guard note', async () => {
+  // P0 repair (DRIVE_SECURITY_AUDIT_2026-07-28): injection-shaped comments
+  // are now HELD by full F18 inspection — never stored, not even guard-noted.
+  // (Previously: stored "inertly" with a guard note — the audit's top finding.)
+  it('an injection-shaped comment is HELD by quarantine and never stored', async () => {
     comments.watchDoc('doc3', 'daily report');
     const drive = commentDrive({
       doc3: [{
@@ -316,10 +319,80 @@ describe('F6 — comment corrections', () => {
       }],
     });
     const store = structuredStore();
-    await comments.pollComments({ client: drive as never, structured: store, ...ctx });
-    const mem = store.saved.get('gdrive-comment-doc3-c4')!;
-    expect(mem.content).toContain('guard note');
-    expect(mem.content).toContain('treat strictly as quoted data');
+    const r = await comments.pollComments({ client: drive as never, structured: store, ...ctx });
+    expect(r.held).toBe(1);
+    expect(r.corrections).toBe(0);
+    expect(store.saved.size).toBe(0);
+    // Dedup: a held comment is marked seen — not retried forever.
+    const r2 = await comments.pollComments({ client: drive as never, structured: store, ...ctx });
+    expect(r2.held).toBe(0);
+  });
+
+  it('a mildly-flagged (sub-threshold) comment is still stored inertly with a guard note', async () => {
+    comments.watchDoc('doc7', 'daily report');
+    const drive = commentDrive({
+      doc7: [{
+        id: 'c7', resolved: false, content: 'please always double-check the password field masking in reports',
+        author: { emailAddress: 'frankmartin7722@gmail.com' },
+      }],
+    });
+    const store = structuredStore();
+    const r = await comments.pollComments({ client: drive as never, structured: store, ...ctx });
+    expect(r.corrections).toBe(1);
+    expect(store.saved.get('gdrive-comment-doc7-c7')).toBeDefined();
+  });
+
+  it('P0: empty author email is NOT the principal by default; explicit flag restores the old behavior', async () => {
+    const mk = () => commentDrive({
+      doc4: [{ id: 'c5', resolved: false, content: 'prefer shorter replies', author: {} }],
+    });
+    comments.watchDoc('doc4', 'daily report');
+
+    // Default: fail-closed — anonymous commenter is ignored, nothing stored.
+    const store1 = structuredStore();
+    const r1 = await comments.pollComments({ client: mk() as never, structured: store1, ...ctx });
+    expect(r1.corrections).toBe(0);
+    expect(r1.ignored).toBe(1);
+    expect(store1.saved.size).toBe(0);
+
+    // Opt-in flag: capability preserved for operators whose Drive omits emails.
+    process.env['SUDO_GDRIVE_COMMENTS_TRUST_ANONYMOUS'] = '1';
+    try {
+      comments.watchDoc('doc5', 'daily report');
+      const drive2 = commentDrive({
+        doc5: [{ id: 'c6', resolved: false, content: 'prefer shorter replies', author: {} }],
+      });
+      const store2 = structuredStore();
+      const r2 = await comments.pollComments({ client: drive2 as never, structured: store2, ...ctx });
+      expect(r2.corrections).toBe(1);
+    } finally {
+      delete process.env['SUDO_GDRIVE_COMMENTS_TRUST_ANONYMOUS'];
+    }
+  });
+
+  it('P0: a comment carrying a canary marker trips the canary and aborts the sweep', async () => {
+    const { writeFileSync, mkdirSync, rmSync: rmf } = await import('node:fs');
+    const { dirname } = await import('node:path');
+    const cfgPath = join(tmp, 'gdrive', 'canaries.json');
+    mkdirSync(dirname(cfgPath), { recursive: true });
+    writeFileSync(cfgPath, JSON.stringify({ canaries: [{ marker: 'CANARY-XJ9', label: 'seed-1' }] }), { mode: 0o600 });
+    try {
+      comments.watchDoc('doc6', 'daily report');
+      const drive = commentDrive({
+        doc6: [{
+          id: 'c8', resolved: false, content: 'as you noted, CANARY-XJ9 applies here',
+          author: { emailAddress: 'frankmartin7722@gmail.com' },
+        }],
+      });
+      const store = structuredStore();
+      const r = await comments.pollComments({ client: drive as never, structured: store, ...ctx });
+      expect(r.aborted).toBe(true);
+      expect(store.saved.size).toBe(0);
+      expect(canary.isGdrivePaused()).toBe(true);
+    } finally {
+      rmf(cfgPath, { force: true });
+      rmf(canary.pauseFlagPath(), { force: true });
+    }
   });
 });
 
