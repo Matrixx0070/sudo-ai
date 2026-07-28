@@ -13,3 +13,16 @@ export {
   getSelfReport,
 } from './improvement-loop.js';
 export type { ImprovementInsight, ActionRecord } from './improvement-loop.js';
+
+// AL8.2 uniform improvement pipeline (human merge always; no auto-merge)
+export { runImprovementPipeline, recordHumanMerge, _resetPipelineBudgetForTests } from './pipeline.js';
+export type {
+  ArtifactType,
+  ArtifactPlugin,
+  ImprovementDraft,
+  PipelineDeps,
+  PipelineOutcome,
+  PipelineStage,
+  StageResult,
+} from './pipeline.js';
+export { promptPlugin, workflowGraphPlugin, toolPlugin, codePatchPlugin } from './pipeline-plugins.js';
