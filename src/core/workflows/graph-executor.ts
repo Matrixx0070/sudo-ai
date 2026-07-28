@@ -17,12 +17,12 @@
 
 import { createLogger } from '../shared/logger.js';
 import {
-  downstreamOf,
   mergeConfigOf,
   type GraphEdge,
   type GraphNode,
   type WorkflowGraph,
 } from './graph-types.js';
+import { createLoopMachinery } from './graph-loops.js';
 import { evaluatePredicateBool, type PredicateContext } from './graph-predicates.js';
 
 const log = createLogger('workflows:graph');
@@ -74,12 +74,12 @@ export async function runGraph(
   let seq = 0;
   const controllers = new Map<string, AbortController>();
   const loopFired = new Map<string, number>(loopEdges.map((e) => [`${e.from}->${e.to}`, 0]));
-  const pendingLoopFirings: GraphEdge[] = [];
 
   const trace: GraphTraceEntry[] = [];
   const results: GraphNodeResult[] = [];
   let halted = false;
   let parked = false; // AL4.4: a gate parked the run (awaiting_approval)
+  let pauseReason: string | undefined; // AL4.5: pause seam stopped dispatch
 
   interface Settled { nodeId: string; outcome: NodeOutcome; durationMs: number }
   const inFlight = new Map<string, Promise<Settled>>();
@@ -135,40 +135,11 @@ export async function runGraph(
     options.onEvent?.({ type: 'node', result, spend: extra.spend });
   };
 
-  /** Downstream subgraph of `start` via non-loop edges, inclusive — the loop body. */
-  const resetSetOf = (start: string): Set<string> => downstreamOf(graph, start);
-
-  /** Fire eligible loop back-edges whose reset subgraph has fully settled. */
-  const tryFireLoops = (): boolean => {
-    let fired = false;
-    for (const e of [...pendingLoopFirings]) {
-      const body = resetSetOf(e.to);
-      if ([...body].some((id) => state.get(id) === 'running')) continue; // wait for stragglers
-      pendingLoopFirings.splice(pendingLoopFirings.indexOf(e), 1);
-      const key = `${e.from}->${e.to}`;
-      loopFired.set(key, (loopFired.get(key) ?? 0) + 1);
-      for (const id of body) {
-        state.set(id, 'pending');
-        outputs.delete(id);
-      }
-      trace.push({ nodeId: e.to, event: 'loop-reset', iteration: loopFired.get(key)! });
-      options.onEvent?.({ type: 'loop', edge: key, iteration: loopFired.get(key)! });
-      log.info({ graph: graph.name, edge: key, iteration: loopFired.get(key) }, 'Loop edge fired');
-      fired = true;
-    }
-    return fired;
-  };
-
-  /** After a node succeeds, queue loop firings for its eligible back-edges. */
-  const queueLoopFirings = (nodeId: string): void => {
-    for (const e of loopEdges) {
-      if (e.from !== nodeId) continue;
-      const key = `${e.from}->${e.to}`;
-      if ((loopFired.get(key) ?? 0) >= (e.loop?.maxIterations ?? 0)) continue;
-      if (e.condition !== undefined && !evaluatePredicateBool(e.condition, predicateContext())) continue;
-      pendingLoopFirings.push(e);
-    }
-  };
+  // Declared-loop machinery — split to graph-loops.ts (max-lines ratchet).
+  const { tryFireLoops, queueLoopFirings } = createLoopMachinery({
+    graph, state, outputs, loopFired, trace, predicateContext,
+    onEvent: options.onEvent,
+  });
 
   /** Cancel a quorum loser: abort if running, record terminal 'cancelled'. */
   const cancelNode = (id: string): void => {
@@ -322,7 +293,15 @@ export async function runGraph(
   const startedAt = new Date().toISOString();
 
   while (true) {
-    if (!halted) schedule();
+    if (!halted && pauseReason === undefined) {
+      const reason = options.pause?.();
+      if (reason) {
+        pauseReason = reason;
+        log.warn({ graph: graph.name, reason }, 'Run paused — dispatch stopped, in-flight settling');
+      } else {
+        schedule();
+      }
+    }
     if (inFlight.size === 0) break;
     const settled = await Promise.race(inFlight.values());
     // A cancelled node's promise may settle late — its terminal state already
@@ -383,8 +362,10 @@ export async function runGraph(
     graphName: graph.name,
     startedAt,
     status: parked ? 'awaiting_approval'
+      : pauseReason !== undefined ? 'paused'
       : halted ? 'halted'
       : failedNodes.length > 0 ? 'partial' : 'success',
+    pauseReason,
     results,
     trace,
     failedNodes,
