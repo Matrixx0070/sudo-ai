@@ -24,6 +24,8 @@ export interface NodeOutcome {
   /** JSON-ish value downstream predicates and inputs see. */
   output?: unknown;
   error?: string;
+  /** Tokens spent by this execution — accumulated onto the run's budget_spent (AL4.2; limits enforced by the AL4.5 governor). */
+  spend?: number;
 }
 
 /** One upstream value delivered to a node — active inbound edges, in edge order. */
@@ -80,9 +82,38 @@ export interface GraphRunReport {
   loopIterations: Record<string, number>;
 }
 
+/**
+ * Persistence event stream (AL4.2). Emitted synchronously by the executor
+ * after every terminal node record and every loop-edge firing, so a durable
+ * store loses at most the in-flight nodes on a crash.
+ */
+export type GraphPersistEvent =
+  | { type: 'node'; result: GraphNodeResult; spend?: number }
+  | { type: 'loop'; edge: string; iteration: number };
+
+/**
+ * Resume seed (AL4.2): the latest per-node terminal state of a prior run.
+ * Successful nodes seed as settled (their outputs feed downstream without
+ * re-execution); every other status re-runs — a recorded failure is a fact
+ * about that attempt, not the world (AL2.4 semantics).
+ */
+export interface GraphResumeState {
+  nodes: Array<{
+    id: string;
+    status: Exclude<GraphNodeStatus, 'pending' | 'running'>;
+    output?: unknown;
+    iteration: number;
+  }>;
+  loopIterations: Record<string, number>;
+}
+
 export interface GraphRunOptions {
   /** Execution seams by node kind. A missing seam fails that node honestly. */
   executors: Partial<Record<'agent' | 'tool' | 'gate', GraphNodeExecutor>>;
   /** Max concurrent agent/tool/gate executions. Default env SUDO_AL_GRAPH_CONCURRENCY or 4. */
   maxConcurrency?: number;
+  /** Durable-store seam: called synchronously per terminal record / loop firing. */
+  onEvent?: (event: GraphPersistEvent) => void;
+  /** Seed settled state from a prior run (validate hash before building this — see GraphRunStore.loadResumeState). */
+  resume?: GraphResumeState;
 }

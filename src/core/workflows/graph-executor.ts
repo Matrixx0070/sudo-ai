@@ -113,7 +113,7 @@ export async function runGraph(
   const record = (
     id: string,
     status: GraphNodeResult['status'],
-    extra: { output?: unknown; error?: string; durationMs?: number } = {},
+    extra: { output?: unknown; error?: string; durationMs?: number; spend?: number } = {},
   ): void => {
     state.set(id, status);
     if (status === 'success') {
@@ -121,14 +121,16 @@ export async function runGraph(
       settleSeq.set(id, seq++);
     }
     trace.push({ nodeId: id, event: status, iteration: iterOf(id) });
-    results.push({
+    const result: GraphNodeResult = {
       id,
       status,
       output: extra.output,
       error: extra.error,
       durationMs: extra.durationMs ?? 0,
       iteration: iterOf(id),
-    });
+    };
+    results.push(result);
+    options.onEvent?.({ type: 'node', result, spend: extra.spend });
   };
 
   /** Downstream subgraph of `start` via non-loop edges, inclusive — the loop body. */
@@ -161,6 +163,7 @@ export async function runGraph(
         outputs.delete(id);
       }
       trace.push({ nodeId: e.to, event: 'loop-reset', iteration: loopFired.get(key)! });
+      options.onEvent?.({ type: 'loop', edge: key, iteration: loopFired.get(key)! });
       log.info({ graph: graph.name, edge: key, iteration: loopFired.get(key) }, 'Loop edge fired');
       fired = true;
     }
@@ -298,6 +301,31 @@ export async function runGraph(
     }
   };
 
+  // AL4.2 resume: seed successful nodes as settled (outputs feed downstream
+  // without re-execution); every other recorded status re-runs. Seeded nodes
+  // are NOT re-emitted into results/trace/onEvent — the report of a resumed
+  // run covers only this run's work; the store holds the merged history.
+  if (options.resume) {
+    for (const [key, count] of Object.entries(options.resume.loopIterations)) {
+      if (loopFired.has(key)) loopFired.set(key, count);
+    }
+    for (const n of options.resume.nodes) {
+      if (!state.has(n.id)) continue; // hash check upstream makes this unreachable
+      executionCount.set(n.id, n.iteration);
+      if (n.status === 'success') {
+        state.set(n.id, 'success');
+        outputs.set(n.id, n.output);
+        settleSeq.set(n.id, seq++);
+      }
+    }
+    // Re-evaluate loop edges off seeded successes so a crash between a loop
+    // source settling and its firing still converges (counters are restored,
+    // so already-recorded firings never double-fire past maxIterations).
+    for (const n of options.resume.nodes) {
+      if (n.status === 'success' && state.get(n.id) === 'success') queueLoopFirings(n.id);
+    }
+  }
+
   log.info(
     { graph: graph.name, nodes: graph.nodes.length, edges: graph.edges.length, maxConcurrency },
     'Running graph',
@@ -320,12 +348,14 @@ export async function runGraph(
       record(settled.nodeId, 'success', {
         output: settled.outcome.output,
         durationMs: settled.durationMs,
+        spend: settled.outcome.spend,
       });
       queueLoopFirings(settled.nodeId);
     } else {
       record(settled.nodeId, 'failure', {
         error: settled.outcome.error ?? 'node failed',
         durationMs: settled.durationMs,
+        spend: settled.outcome.spend,
       });
       const policy =
         graph.nodes.find((n) => n.id === settled.nodeId)?.onFailure ?? 'halt-graph';
