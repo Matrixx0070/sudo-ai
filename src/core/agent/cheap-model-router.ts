@@ -13,6 +13,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { getSharedResolver } from './policy-resolver.js';
 
 const log = createLogger('agent:cheap-model-router');
 
@@ -161,10 +162,13 @@ export function classifyIntent(
 /**
  * Decide which model to use for the upcoming brain call.
  *
- * Returns the cheap model only when the intent classifies as conversational
- * (all guards pass: length, word count, no code block / URL / complexity
- * keyword / recent tool calls / attachments). Anything else — including
- * empty text — rides the primary model. Conservative by design.
+ * AL6.2 knob migration (thin delegation, NO behavior change): every routed
+ * turn now calls through the SHARED PolicyResolver — the decision is logged
+ * and persisted, which is exactly the shadow data the AL6.5 promotion query
+ * needs from live traffic. APPLICATION stays on the legacy rule
+ * (conversational → cheap) until the shadow log earns promotion; a resolver
+ * decision that diverges (e.g. load-shed cheap-routing) is logged as a
+ * divergence, never applied here.
  */
 export function chooseModel(input: ChooseModelInput): ChooseModelResult {
   const { primaryModel, cheapModel } = input;
@@ -173,7 +177,16 @@ export function chooseModel(input: ChooseModelInput): ChooseModelResult {
   // AL6.4: classification logged and evaluable (one line per routed turn).
   log.info({ intent, reason, cheapEligible: intent === 'conversational' }, 'intent classified');
 
-  if (intent !== 'conversational') {
+  const decision = getSharedResolver().resolve({ intent });
+  const cheapUsed = intent === 'conversational'; // legacy rule until promotion
+  if ((decision.route === 'cheap') !== cheapUsed) {
+    log.info(
+      { resolverRoute: decision.route, legacyCheap: cheapUsed, reasons: decision.reasons },
+      'policy resolver diverged from legacy routing — legacy applied (policy unpromoted)',
+    );
+  }
+
+  if (!cheapUsed) {
     log.debug({ reason }, 'cheap-model-router: primary model selected');
     return { model: primaryModel, reason, cheapUsed: false, intent };
   }
