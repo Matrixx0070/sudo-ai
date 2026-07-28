@@ -135,6 +135,9 @@ import { createReAnchorEmitter } from './core/cognition/re-anchor-emitter.js';
 import { AlignmentAutoRemediator } from './core/cognition/alignment-autoremediator.js';
 import { detectHardware } from './core/config/hardware-detect.js';
 import { BenchStore } from './core/eval/bench-store.js';
+import { GraphRunStore } from './core/orchestration/graph-run-store.js';
+import { attachSharedDecisionSink } from './core/agent/policy-resolver.js';
+import { PolicyDecisionLog } from './core/agent/policy-decision-log.js';
 import { ProposalStore } from './core/learning/proposal-store.js';
 import { scoreComplexity } from './core/agent/complexity-scorer.js';
 import { SkillDiscovery } from './core/learning/skill-discovery.js';
@@ -4607,6 +4610,25 @@ async function boot(): Promise<void> {
         log.warn({ err: String(benchErr) }, 'Wave 10: BenchStore failed to initialise — bench routes will be unavailable');
       }
 
+      // AL4.2/AL4.5: graph-run state store — read-only telemetry surface for
+      // the dashboard's Graph Runs panel. Same fail-open rule as BenchStore.
+      let graphRunStore: GraphRunStore | undefined;
+      try {
+        graphRunStore = new GraphRunStore('data/mind.db');
+        log.info('AL4: GraphRunStore initialised at data/mind.db');
+      } catch (graphRunsErr: unknown) {
+        log.warn({ err: String(graphRunsErr) }, 'AL4: GraphRunStore failed to initialise — graph-runs routes will be unavailable');
+      }
+
+      // AL6.2: persist every policy decision to gateway.db (policy_decisions
+      // beside llm_calls — the AL6.5 shadow-comparison data). Fail-open.
+      try {
+        attachSharedDecisionSink(new PolicyDecisionLog().createSink());
+        log.info('AL6: policy decision log attached (gateway.db policy_decisions)');
+      } catch (pdlErr: unknown) {
+        log.warn({ err: String(pdlErr) }, 'AL6: PolicyDecisionLog failed to attach — decisions log-only');
+      }
+
       let wave10ProposalStore: ProposalStore | undefined;
       try {
         wave10ProposalStore = new ProposalStore('data/proposals.db');
@@ -4686,6 +4708,7 @@ async function boot(): Promise<void> {
         alignmentAutoRemediator,
         skillOptimizationStore: wave13SkillOptimizationStore,
         bench: wave10BenchStore ? { benchStore: wave10BenchStore } : undefined,
+        graphRuns: graphRunStore ? { store: graphRunStore } : undefined,
         learning: wave10ProposalStore ? { proposalStore: wave10ProposalStore } : undefined,
         savings: { costTracker },
         // C1: Wire compare route via brain.chat() shim.

@@ -28,6 +28,8 @@ import { registerFederationErrorRoutes } from './federation-error-routes.js';
 import type { FederationErrorRoutesDeps } from './federation-error-types.js';
 import { registerBenchRoutes } from './bench-routes.js';
 import type { BenchRoutesDeps } from './bench-routes.js';
+import { registerGraphRunsRoutes } from './graph-runs-routes.js';
+import type { GraphRunsRoutesDeps } from './graph-runs-routes.js';
 import { registerLearningRoutes } from './learning-routes.js';
 import { registerCanvasRoutes } from './canvas-routes.js';
 import { registerCanvasAdminRoutes } from './canvas-admin-routes.js';
@@ -248,6 +250,8 @@ export interface HttpApiDeps {
   };
   /** Optional — bench routes. If absent, /v1/admin/bench/* routes are not registered. */
   bench?: BenchRoutesDeps;
+  /** Optional — graph-run telemetry routes (AL4.2/AL4.5). Absent = not registered. */
+  graphRuns?: GraphRunsRoutesDeps;
   /** Optional — learning routes. If absent, /v1/admin/learning/* routes are not registered. */
   learning?: LearningRoutesDeps;
   /** Optional — savings routes. If absent, /v1/savings is not registered. */
@@ -500,9 +504,12 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
   if (deps.errorIngestor && deps.tokenPool) {
     registerFederationErrorRoutes(server, { errorIngestor: deps.errorIngestor, tokenPool: deps.tokenPool, fedAuth: deps.fedAuth ?? (() => false) }, tokenBuf);
   }
-  // Bench + learning routes
+  // Bench + graph-runs + learning routes
   if (deps.bench) {
     registerBenchRoutes(server, deps.bench, tokenBuf);
+  }
+  if (deps.graphRuns) {
+    registerGraphRunsRoutes(server, deps.graphRuns, tokenBuf);
   }
   if (deps.learning) {
     registerLearningRoutes(server, deps.learning, tokenBuf);
