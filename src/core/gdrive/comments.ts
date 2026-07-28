@@ -22,7 +22,7 @@ import type { DriveClient } from './client.js';
 import type { AuditTrail } from '../security/audit-trail.js';
 import type { StructuredStoreLike } from './brain-serializer.js';
 import { inspectContent, scoreContentDeterministic, type InspectOptions } from './quarantine.js';
-import { checkCanaryPayload, loadCanaryConfig, tripCanary } from './canary.js';
+import { checkCanaryPayload, loadCanaryConfig, tripCanary, isGdrivePaused } from './canary.js';
 
 const log = createLogger('gdrive:comments');
 
@@ -94,6 +94,12 @@ export interface CommentsPollResult {
 const MAX_COMMENT_CHARS = 4_000;
 
 export async function pollComments(deps: CommentsDeps): Promise<CommentsPollResult> {
+  // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): a tripped canary halts
+  // the comments channel too — no Drive I/O while paused.
+  if (isGdrivePaused()) {
+    log.warn('gdrive PAUSED — comments poll skipped');
+    return { corrections: 0, ignored: 0, held: 0 };
+  }
   const watched = loadWatchedDocs();
   const principals = new Set(deps.principalEmails.map((e) => e.toLowerCase()));
   const sa = deps.serviceAccountEmail.toLowerCase();

@@ -86,7 +86,14 @@ describe('F67 embassy inbound route', () => {
     const { marker } = await embassy.publishEmbassyPack(drive as never, RF, { id: 'p9', title: 'T', body: DISTILLATE }, { approved: true });
     drive.add('F67.distillate.2026-07-17.md', 'FLD-ret', `interesting note ${marker} more text`);
     const { res, chunks } = await sweep(drive);
-    expect(res.routed).toEqual([{ file: 'F67.distillate.2026-07-17.md', route: 'embassy-canary-tripped' }]);
+    // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): the returns sweep now
+    // canary-checks EVERY return BEFORE any route runs, so the watermarked
+    // file is HELD + the sweep aborts before the embassy route's own canary
+    // handling ('embassy-canary-tripped') is reached. Same F19 trip, strictly
+    // earlier — and the file lands in held/ for human review.
+    expect(res.held).toEqual(['F67.distillate.2026-07-17.md']);
+    expect(res.routed).toEqual([]);
+    expect(canary.isGdrivePaused()).toBe(true);
     expect(chunks).toHaveLength(0); // never ingested
   });
 

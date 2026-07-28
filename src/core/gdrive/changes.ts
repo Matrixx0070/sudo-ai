@@ -14,6 +14,7 @@ import { dataPath } from '../shared/paths.js';
 import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
 import { loadBeliefs, saveBeliefs, flagSourceChanged, flagSourceDeleted } from './beliefs.js';
+import { isGdrivePaused } from './canary.js';
 
 const log = createLogger('gdrive:changes');
 
@@ -44,6 +45,11 @@ export interface ChangesSweepResult {
 /** One changes-feed sweep. First run just anchors the token (no backfill). */
 export async function runChangesSweep(client: DriveClient): Promise<ChangesSweepResult> {
   const result: ChangesSweepResult = { changes: 0, staledBeliefs: [], orphanedBeliefs: [] };
+  // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): honor the pause flag.
+  if (isGdrivePaused()) {
+    log.warn('gdrive PAUSED — changes sweep skipped');
+    return result;
+  }
   let token = loadChangesToken();
   if (!token) {
     token = await client.changesGetStartPageToken();

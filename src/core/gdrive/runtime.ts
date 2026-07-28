@@ -55,6 +55,10 @@ async function initRuntime(): Promise<GdriveRuntime> {
     const map = await ensureFolderTree(client, config.rootFolderId!);
     return { result: map, filesTouched: Object.values(map) };
   });
+  // Audit item 8 (DRIVE_SECURITY_AUDIT_2026-07-28): flagged ops-upload
+  // screens land tamper-evident audit rows through this seam.
+  const { setOpsScreenAudit } = await import('./ops-screen.js');
+  setOpsScreenAudit(audit);
   log.info({ folders: Object.keys(folders).length }, 'gdrive runtime initialized');
   return { config, client, folders, audit };
 }
@@ -115,6 +119,13 @@ async function buildCheckpointDeps(): Promise<import('./checkpoint.js').Checkpoi
 /** Cron entry: push a brain checkpoint (F2 write-behind mirror). */
 export async function runGdriveCheckpointJob(): Promise<void> {
   if (!isGdriveEnabled()) return;
+  // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): a tripped canary pauses
+  // the checkpoint push too, not just ingestion.
+  const { isGdrivePaused } = await import('./canary.js');
+  if (isGdrivePaused()) {
+    log.warn('gdrive PAUSED — checkpoint job skipped');
+    return;
+  }
   const { runCheckpoint } = await import('./checkpoint.js');
   const deps = await buildCheckpointDeps();
   const result = await runCheckpoint(deps);
