@@ -95,6 +95,54 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 23. **AL5.5 — DECIDED: MERGE-SALVAGE** (2026-07-28, decided by Fable under Frank's delegated authority — chat: "Go ahead i will allow you make decisions behalf of frank"). Executed (PR #957 merged, both CI checks pass): agents/agent-stats.ts AgentPerfTracker lifts the swarm's ONE proven idea (getBestAgent: success_rate DESC, tasks_completed DESC) into the live layer — Laplace-smoothed rates (unknown agent = neutral 0.5 prior), bestAgent() preserves the salvaged ordering, failureRate() feeds AL6 PolicySignals.recentFailureRate. awardTask gains optional stats: score = confidence × smoothed rate (without stats: byte-identical legacy semantics, test-pinned). IN-MEMORY BY DESIGN — the swarm's private sqlite table was the invariant-5 hazard; durable stats must ride the memory API. swarm/ stays quarantined UNTOUCHED (never-drop); revive remains off the table unless a new need appears, and swarm_knowledge→memory-API migration is the precondition if it ever does.
 24. Decisions under the same delegation: (a) Campaign-0's "held-out gate fail-OPEN at engine.ts:271" is a STALE finding — already repaired in #943 (evaluateDraftGate fail-closed, verified in-tree 2026-07-28); (b) AL8-10 capability builds stay HELD — the spec's own order requires the Campaign-4 audit first; a general delegation is not a substitute for that process step; (c) AL5.1 live drive SCHEDULED into the post-deploy live-verify slot (clone has no prod creds; prod checkout owned by another session) — batch with AL1.2 live-row proof.
 25. Remaining: prod-dependent (deploy → AL1.2 live rows + policy_decisions persistence + panel live-verify + AL5.1 live drive → AL6.5 shadow promotion after ≥3d) / Campaign-4 AL8 audit → then AL8-10 per spec order.
+26. **CAMPAIGN 4 / AL8.1 AUDIT — DONE** (2026-07-28, two parallel read-only audits; full verdicts below). CORRECTION to item 24(a): the fail-open finding was only HALF-stale — #943 fixed `evaluateDraftGate` (fail-closed) but the generic `shouldApply` helper (engine.ts:361-365) is STILL fail-OPEN ("allowing improvement by default" on eval error). Currently unreachable in prod (no caller passes a heldOutGate) but a live landmine for AL8.2.
+
+## Campaign 4 — AL8.1 audit verdicts (2026-07-28, Fable, read-only)
+
+### Improvement loop (self-improvement/) — live data flow
+```
+TRIGGER: meta.self-improve tool call ONLY (manual; "weekly cron" in engine.ts:4 is a comment — no cron exists)
+  → detectPatterns (pattern-detector.ts:73, mind.db: failing tools/feedback/routing/cron/health)
+  → GENERATE: LEARNINGS.md block (real, engine.ts:368-392 → system-prompt.ts:732 injection)
+              routing-hint drafts → data/improvement-drafts/ (WRITE-ONLY, nothing reads back)
+              AutoResearch prose (DEAD in live wiring — caller passes brain:undefined, self-improve.ts:195)
+  → VALIDATE: HeldOutGate seam EXISTS but the only caller NEVER passes one (self-improve.ts:197) → all shouldApply()==true unvalidated
+              evaluateDraftGate fail-CLOSED (#943) but unreachable; shouldApply (engine.ts:338-366) fail-OPEN — inconsistent
+  → ADOPT: LEARNINGS.md persists + prompt-injects WITHOUT validation (the loop's one real mutation)
+  → ROLLBACK: ImprovementRollback produced, DISCARDED by caller (self-improve.ts:203); no revert fn anywhere — dead structure
+```
+Sidecars: improvement-loop.ts = vestigial in-memory insight buffer (report-only). ProposalStore: generate LIVE (AgentConfigEvolver, cli.ts:4645-4673) → human HTTP approve (learning-routes.ts) → **markApplied has ZERO callers — apply stage missing entirely**. code-evolver: English proposals only, insert-only status, no apply action. Best-in-repo contract = repair-flywheel lessons (two-reader consensus + canary + budgets, invariant-9-shaped) — flag-OFF (SUDO_FLYWHEEL_APPLY).
+
+### Self-build (autobugfix) — two loops
+- **Loop A (self-build tick)**: cron 30min gated SUDO_SELF_BUILD_MODE (OFF) → 7 sequential fail-fast gates (kill-switch, halt latch, alignment ≥0.6, $20/day budget FAIL-CLOSED, MistakeAutoBlockGuard, branch=self-build, clean tree) → agent writes REAL code → deterministic validation (protected-path diff w/ symlinks, tsc, full vitest + test-count non-regression) → commit to self-build branch + post-commit re-verify (escalating revert→reset+halt) → human-review PR (SUDO_SELF_BUILD_OPEN_PR, OFF; review-pr.ts opens PRs, is NOT a reviewer). The strongest existing generate→validate→retain path.
+- **Loop B (autobugfix)**: issue-poll 5min gated SUDO_AUTOBUGFIX (OFF) → opens TEXT-ONLY PRs (no patch is ever generated — "Suggested Fix" prose); human merge → DeploymentHook AUTO-DEPLOYS (local lint+test → pm2 reload; git reset rollback on CI fail; NO post-deploy rollback).
+
+### Artifact-type verdicts (AL8.2 gap map)
+| Artifact | Generate | Validate | Retain | Verdict |
+|---|---|---|---|---|
+| Prompt | LEARNINGS.md + self-eval directives | seam unwired; shouldApply fail-open | auto-persists UNVALIDATED (directives OFF) | adopt-without-validate |
+| Workflow/config | AgentConfigEvolver LIVE | human approve only, no eval | markApplied: 0 callers | apply stage MISSING |
+| Tool | forge writes TS to src/generated; workshop = markdown skills only | forge reviewer/security output DISCARDED | nothing loads forge output; workshop can't register executable tools | MISSING by construction |
+| Code patch | Loop A real (flag-OFF); Loop B text-only | Loop A tsc+vitest on HOST (no sandbox) | human merge + auto-deploy | strongest, but unsandboxed |
+
+### AL8.5 boundary inventory
+| Boundary | Status |
+|---|---|
+| protected-paths frozen list | EXISTS-TESTED (incl. alignment stack, meta tools, config, .git) |
+| orchestrator 3-layer path defense | EXISTS-TESTED |
+| path-guard.ts tool-layer block | EXISTS-**UNTESTED** directly; no-op outside self-build mode; SUDO_SELFBUILD_ALLOW_PROTECTED bypass |
+| sandbox for generated code pre-merge | **MISSING** — tsc/vitest run on host; forge writes to disk unsandboxed; trust-tier wired to skills only |
+| per-day budgets | PARTIAL — Loop A $20 fail-closed; forge $2/run $10/day tested; autofix 1/hr FAIL-OPEN on DB error; no proposal-count budget |
+| F18 quarantine on generated PR text | **MISSING** — auto-fix + review-pr bodies embed raw issue/agent text |
+| kill-switches | EXISTS-TESTED (all four) |
+
+### Risk register → AL8.0 repair list (repairs BEFORE any AL8.2 build; decided under delegated authority)
+- R1 shouldApply fail-open (engine.ts:361-365) → align to fail-closed like evaluateDraftGate.
+- R2 **SUDO_FORGE default-ON** (forge-budget.ts:22, `!== '0'`) with reviewer/security stages whose output is DISCARDED and unsandboxed writes to src/generated → flip to opt-IN (capability preserved, never-drop honored; posture matches every other self-build flag).
+- R3 path-guard.ts direct tests (currently the only untested boundary).
+- R4 autofix rate-limit fail-open on DB error → fail-closed.
+- R5 rollbacks discarded by meta.self-improve caller → at minimum surface them in the tool output.
+- (Deferred to AL8.2 proper: sandbox for generated code; F18 quarantine on PR bodies; wiring HeldOutGate into the live caller; proposal-count budget.)
 
 ## AL6.1 adaptive-signal inventory (2026-07-28, Fable)
 
