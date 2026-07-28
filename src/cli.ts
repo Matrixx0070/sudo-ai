@@ -3766,6 +3766,11 @@ async function boot(): Promise<void> {
 
     registerSelfBuildCron(cronScheduler, selfBuildDepsRef);
 
+    // AL8.4: quarterly retention re-check — registered flag-OFF
+    // (SUDO_AL8_RETENTION_RECHECK=1 to enable); flags are for human review.
+    const { registerRetentionRecheckCron } = await import('./core/self-improvement/retention-recheck-cron.js');
+    registerRetentionRecheckCron(cronScheduler);
+
     // F90: AutoBugFix Modules C+D (auto-fix PR creation + deploy watch).
 
     // Fully dormant unless SUDO_AUTOBUGFIX=1; per-module kill-switches

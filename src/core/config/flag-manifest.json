@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 703,
+  "count": 704,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -17,6 +17,7 @@
     "SUDO_AI_PREFIX",
     "SUDO_AI_ROOT",
     "SUDO_AI_VAULT_KEY",
+    "SUDO_AL8_RETENTION_RECHECK",
     "SUDO_ALIASES",
     "SUDO_ALLOW_CONTRADICTORY_CONFIG",
     "SUDO_AL_BUDGET_HIGH",

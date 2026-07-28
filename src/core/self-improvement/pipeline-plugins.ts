@@ -64,16 +64,63 @@ export function workflowGraphPlugin(): ArtifactPlugin {
   };
 }
 
-/** Tool artifacts: refused until the AL8.3 skill-package vehicle exists. */
-export function toolPlugin(): ArtifactPlugin {
+/** Payload shape for AL8.3 tool artifacts — a versioned skill package draft. */
+export interface ToolArtifactPayload {
+  skillName: string;
+  version: string;
+  markdown: string;
+  /** Tool categories the skill routes to — each must be in CATEGORY_MAP. */
+  categories?: string[];
+}
+
+/**
+ * Tool artifacts (AL8.3): the Spec-9 skill package IS the delivery vehicle —
+ * validation runs the SAME SkillWorkshop gate that apply() re-runs on merge
+ * (injection scan, workspace-tier capability pinning, path confinement), and
+ * adoption ships as a versioned package with lockfile pin + .versions
+ * rollback. The CATEGORY_MAP gotcha is a contract here: declared tool
+ * categories must exist in the router map or the artifact is refused —
+ * an unroutable category is a tool nobody can call.
+ */
+export function toolPlugin(deps: {
+  /** SkillWorkshop.gate seam (validate WITHOUT applying). */
+  workshopGate?: (p: { skillName: string; version: string; markdown: string }) => { ok: boolean; reasons: string[] };
+  /** CATEGORY_MAP membership check (tool-router) for declared categories. */
+  knownCategory?: (category: string) => boolean;
+} = {}): ArtifactPlugin {
   return {
     type: 'tool',
-    async validate() {
+    async validate(draft: ImprovementDraft) {
+      const p = draft.payload as Partial<ToolArtifactPayload> | undefined;
+      if (!p || typeof p.skillName !== 'string' || !p.skillName.trim() ||
+          typeof p.version !== 'string' || !p.version.trim() ||
+          typeof p.markdown !== 'string' || !p.markdown.trim()) {
+        return { ok: false, detail: 'tool payload must be a skill package {skillName, version, markdown}' };
+      }
+      if (!deps.workshopGate) {
+        return { ok: false, detail: 'no SkillWorkshop gate wired — an ungated skill package is unvalidated (fail-closed)' };
+      }
+      const gate = deps.workshopGate({ skillName: p.skillName, version: p.version, markdown: p.markdown });
+      if (!gate.ok) {
+        return { ok: false, detail: `workshop gate refused: ${gate.reasons.join('; ')}` };
+      }
+      const categories = p.categories ?? [];
+      if (categories.length > 0) {
+        if (!deps.knownCategory) {
+          return { ok: false, detail: 'categories declared but no CATEGORY_MAP checker wired (fail-closed)' };
+        }
+        const unknown = categories.filter((c) => !deps.knownCategory!(c));
+        if (unknown.length > 0) {
+          return {
+            ok: false,
+            detail: `unroutable tool categories (missing CATEGORY_MAP entry — the textproc gotcha): ${unknown.join(', ')}`,
+          };
+        }
+      }
       return {
-        ok: false,
-        detail:
-          'tool artifact delivery lands with AL8.3 (versioned skill package + capability-registry entry); ' +
-          'the pipeline refuses tool artifacts until that vehicle exists — no unvalidated registration path',
+        ok: true,
+        detail: `skill package "${p.skillName}"@${p.version} cleared the workshop gate` +
+          (categories.length ? `; categories routable: ${categories.join(', ')}` : ''),
       };
     },
   };

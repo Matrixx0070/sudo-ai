@@ -160,8 +160,12 @@ describe('AL8.2 artifact plugins', () => {
     expect(r.detail).toMatch(/model strings are forbidden/);
   });
 
-  it('tool: refused until AL8.3; code-patch: sandbox validator mandatory', async () => {
-    expect((await toolPlugin().validate(draft('tool', {}))).detail).toMatch(/AL8\.3/);
+  it('tool: fail-closed without the workshop gate; code-patch: sandbox validator mandatory', async () => {
+    const bare = await toolPlugin().validate(
+      draft('tool', { skillName: 'gen-tool', version: '1.0.0', markdown: '# skill' }),
+    );
+    expect(bare.ok).toBe(false);
+    expect(bare.detail).toMatch(/no SkillWorkshop gate wired/);
     expect((await codePatchPlugin({}).validate(draft('code-patch', 'diff'))).detail).toMatch(/sandbox/);
     const sandboxed = codePatchPlugin({
       sandboxValidate: async () => ({ ok: true, detail: 'built+tested in tier sandbox' }),

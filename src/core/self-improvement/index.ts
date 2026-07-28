@@ -26,3 +26,9 @@ export type {
   StageResult,
 } from './pipeline.js';
 export { promptPlugin, workflowGraphPlugin, toolPlugin, codePatchPlugin } from './pipeline-plugins.js';
+export type { ToolArtifactPayload } from './pipeline-plugins.js';
+
+// AL8.4 retention ledger + quarterly re-check (flag-OFF cron)
+export { RetentionLedger } from './retention-ledger.js';
+export type { AdoptionRecord, RetentionRow } from './retention-ledger.js';
+export { registerRetentionRecheckCron, RETENTION_RECHECK_JOB_NAME } from './retention-recheck-cron.js';
