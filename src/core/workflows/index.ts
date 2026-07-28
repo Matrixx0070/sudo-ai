@@ -32,12 +32,14 @@ export { evaluatePredicate, evaluatePredicateBool, validatePredicate } from './g
 export type {
   GraphNodeExecutor,
   GraphNodeResult,
+  GraphPersistEvent,
+  GraphResumeState,
   GraphRunOptions,
   GraphRunReport,
   GraphTraceEntry,
   NodeInput,
   NodeOutcome,
-} from './graph-executor.js';
+} from './graph-run-types.js';
 export { runGraph } from './graph-executor.js';
 export { compileWorkflowToGraph, createStepNodeExecutors } from './graph-compile.js';
 export type { StepNodeExecutorOptions } from './graph-compile.js';

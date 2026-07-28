@@ -30,3 +30,7 @@ export type {
 
 export { TaskExecutor } from './executor.js';
 export type { TaskHandler, ExecutorOptions } from './executor.js';
+
+// AL4.2 graph-run state store (durable graph runs beside the task queue)
+export { GraphRunStore, computeGraphHash } from './graph-run-store.js';
+export type { GraphRunRecord, GraphRunNodeRecord, GraphRunStatus } from './graph-run-store.js';

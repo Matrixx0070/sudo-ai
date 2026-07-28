@@ -79,7 +79,29 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 7. AL2.2 determinism test — DONE (same PR #944)
 8. AL3.1/3.2 graph engine — DONE (PR #946 merged, both CI checks pass; graph-types.ts pure-data schema + validation, graph-predicates.ts JSONLogic-subset data predicates, graph-executor.ts topological scheduler with bounded concurrency/quorum-cancel/declared loops/halt-graph default; AL3.4 golden graphs diamond/quorum/loop + concurrency high-water proof, 17 new tests, 124/124 combined; SUDO_AL_GRAPH_CONCURRENCY registered in flag manifest)
 9. AL3.3 + AL3.5 — DONE (PR #949 merged, both CI checks pass; onFailure prune-branch w/ blame rule + 'partial' status + prunedNodes report, 'all' merges prune on broken barrier while quorum degrades; graph-compile.ts compileWorkflowToGraph + createStepNodeExecutors adapter reusing linear primitives, legacy conditions keep skip-and-continue semantics, retry lifted to node, approval→gate; run types split to graph-run-types.ts for ratchet; regression = same YAML fixtures identical through runWorkflow AND compile+runGraph; 8 new tests, 132/132 combined. AL3 RUNG COMPLETE. Note: gate nodes can't pause until AL4.2 durable state — callback-less gates fail honestly)
-10. Then AL4.2-4.5 (graph-run state store, route-per-node, human-approval gate nodes, resource governor) → AL5.2-5.5 → AL6.2-6.5 (per spec order)
+10. AL4.1 audit — DONE (verdict table above; every concern exists piecemeal, nothing graph-aware; approval fail-open headless + no per-run budget = the two sharpest gaps)
+11. AL4.2 graph-run state store — DONE (PR pending; orchestration/graph-run-{schema,store}.ts: graph_runs + graph_run_nodes tables per task-queue conventions, canonical graph hash, budget_spent accumulator, loop counters; executor onEvent persistence + resume seeding seams in graph-run-types/graph-executor; diamond crash-resume test proves settled nodes never re-run, failures re-run, outputs round-trip sqlite, edited-graph resume refuses)
+12. Then AL4.3 route-per-node → AL4.4 approval gates (fail-CLOSED headless, durable artifact) → AL4.5 resource governor → AL5.2-5.5 → AL6.2-6.5 (per spec order)
+
+## AL4.1 orchestration audit (2026-07-28, Fable — verdict table)
+
+Six concerns × existing modules. Legend: ✔ covered, ◐ partial, ✗ absent.
+
+| Module | Scheduling | Routing | Durable state | Resources/budget | Retries | Approval | Graph-aware |
+|---|---|---|---|---|---|---|---|
+| `orchestration/` task-queue+executor | ◐ priority FIFO + dependsOn gating, 5s poll | ✗ (handler-name routing only) | ✔ sqlite `task_queue` (mind.db) | ◐ maxConcurrent 4 + per-task timeout; no budgets | ✔ maxRetries, no backoff (caller-managed); committed_outbound gates side-effect retries | ✗ | NO |
+| `scheduling/` SmartScheduler | ✔ cron + optimal-time + cooldowns | ✗ | ✔ sqlite `smart_schedule` | ✗ | ✗ (cooldowns only) | ✗ | NO |
+| `cron/` CronScheduler+store | ✔ at/every/cron, 1s tick (croner) | ✗ | ✔ json `data/cron/jobs.json` + runs.jsonl | ✗ | ✔ exp backoff + auto-disable after 10 fails | ✗ | NO |
+| `agent/cloud-tasks` + `background-agent` | ✗ fire-and-forget | ✗ | ✗ in-memory Maps ONLY | ✗ (uncapped) | ✗ | ✗ | NO |
+| `agent/approval` + `autonomy/approval-matrix` | ✗ | ✗ | ◐ rules durable (sqlite `approval_rules`); pending approval IN-MEMORY, 60s timeout | ✗ | ✗ | ✔ requestApproval(...)→Promise<boolean>, per-channel senders, tier classify | NO |
+| `agent/cheap-model-router` + `src/llm/` aliases+policy | ◐ priority lanes + per-caller caps | ✔ `sudo/*` aliases (resolveAlias) + degradeAlias ladder + heuristic downgrade | ◐ day-spend seedable from gateway.db, else in-memory | ✔ daily USD budgets (user degrades, background fail-closed) | ✔ runWithPolicy 3 attempts + breaker | ✗ | NO |
+| `billing/` CostTracker | ✗ | ✗ | ✔ sqlite `api_call_log` ledger | ◐ per-DAY budget check only — NO per-run primitive, no run_id column | ✗ | ✗ | NO |
+
+**Verdict (expected finding confirmed):** every concern exists somewhere, nothing composes them around a *graph run* — `src/core/workflows/` imports none of these modules and vice versa. Wiring gaps that define AL4.2-4.5:
+- **State (AL4.2 — now BUILT):** graph runs were memory-only → `orchestration/graph-run-{schema,store}.ts` + executor onEvent/resume seams.
+- **Routing (AL4.3):** graph node config should carry `{alias: 'sudo/mid'|'sudo/cheap'|…, priority}` resolved via `resolveAlias` + wrapped in `runWithPolicy` (caller `workflow:<graph>:<node>`) — never model strings.
+- **Approval (AL4.4):** ApprovalManager's pending approvals are in-memory with a hard 60s timeout and headless AUTO-APPROVE (fail-open!) — a durable gate needs a persisted AWAITING_APPROVAL artifact on the graph-run row and must fail CLOSED headless.
+- **Budgets (AL4.5):** per-day exists twice (billing reporting, llm/policy enforcement); per-RUN exists nowhere — `api_call_log` has no run attribution; graph_runs.budget_spent (AL4.2) is the accumulator the governor should enforce against.
 
 ## Work items
 (unchanged items remain OPEN as listed in the spec; statuses above override)
