@@ -215,3 +215,47 @@ describe('same-text suppression', () => {
     expect(t.edits).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// status updates (activity-timeline card) + messageId exposure
+// ---------------------------------------------------------------------------
+
+describe('status() and messageId', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('exposes the opened messageId (and null on failed open)', async () => {
+    const t = fakeTransport();
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100 });
+    expect(sink.messageId).toBe('msg-100');
+    const failed = await createBufferedEditSink(fakeTransport({ failOpen: true }).open, t.edit, {});
+    expect(failed.messageId).toBeNull();
+  });
+
+  it('status() edits the placeholder while no content has arrived', async () => {
+    const t = fakeTransport();
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, placeholder: '…' });
+    sink.status('⠹ running • 3s\n✓ web.search');
+    await vi.advanceTimersByTimeAsync(150);
+    expect(t.edits[0]?.text).toBe('⠹ running • 3s\n✓ web.search');
+  });
+
+  it('content chunks win over status: later status() calls are ignored', async () => {
+    const t = fakeTransport();
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100 });
+    sink.chunk('Real reply text');
+    await vi.advanceTimersByTimeAsync(150);
+    sink.status('⠹ running • 9s');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(t.edits.map((e) => e.text)).toEqual(['Real reply text']);
+  });
+
+  it('finalize still lands the canonical text after status updates', async () => {
+    const t = fakeTransport();
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100 });
+    sink.status('⠹ working');
+    await vi.advanceTimersByTimeAsync(150);
+    await sink.finalize('Final answer');
+    expect(t.edits.at(-1)?.text).toBe('Final answer');
+  });
+});

@@ -2542,27 +2542,69 @@ export class AgentLoop extends AgentLoopInjections {
               .slice(-3)
               .map(m => m.toolName),
           );
+
+          // Pending-image rescue: the router scores only the LATEST user
+          // message, so a vague follow-up ("check again", "look at it") that
+          // doesn't repeat "image"/"photo" gets no browser.vision even though
+          // an unresolved image upload sits a few turns back. Force it in
+          // whenever a recent [Image/Photo attached...] hint (telegram.ts /
+          // web.ts) hasn't yet been followed by a browser.vision call.
+          if (!_routedTools.some((t) => t.function?.name === 'browser.vision')) {
+            const recent = session.messages.slice(-8);
+            const lastVisionCallIdx = recent
+              .map((m) => m.role === 'tool' && (m as { toolName?: string }).toolName === 'browser.vision')
+              .lastIndexOf(true);
+            const hasUnresolvedImageHint = recent.some(
+              (m, i) =>
+                i > lastVisionCallIdx &&
+                m.role === 'user' &&
+                /\[(image|photo)\s+attached\b/i.test(String(m.content ?? '')),
+            );
+            if (hasUnresolvedImageHint) {
+              const visionSchema = this.toolRouter.routeAllowlist(['browser.vision'])[0];
+              if (visionSchema) _routedTools = [..._routedTools, visionSchema];
+            }
+          }
         }
 
         const brainCallStartedAt = performance.now();
+        // SUDO_BRAIN_STREAM (default ON, =0 disables): forward live text
+        // deltas from the brain's solo call paths as stream-chunk events so
+        // channel UIs (Telegram working bubble, web SPA) show text as it
+        // generates. `_streamedDelta` accumulates what was already emitted so
+        // the round-trip content emit below sends only the unstreamed tail.
+        let _streamedDelta = '';
+        const brainReq = {
+          messages: trimmed,
+          source: 'agent',
+          // gw-cutover Phase 2: session→trace correlation for IR-served calls
+          // (noteTraceForSession → markOutcomeForSession). Legacy path ignores it.
+          sessionId: state.sessionId,
+          model: effectiveModel,
+          tools: _routedTools,
+          ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),
+          ...(opts?.promptProfile && opts.promptProfile !== 'main' ? { promptProfile: opts.promptProfile } : {}),
+          race: opts?.race,
+        };
+        if (process.env['SUDO_BRAIN_STREAM'] !== '0') {
+          (brainReq as { _onTextDelta?: (text: string) => void })._onTextDelta = (t: string): void => {
+            if (typeof t !== 'string' || t.length === 0) return;
+            _streamedDelta += t;
+            emit({ type: 'stream-chunk', chunk: t });
+          };
+        }
         let response: BrainResponse;
         try {
           // AL1.2: ambient turn/step correlation — the gateway call log stamps
           // llm_calls rows made inside this scope with {session, turn, step}.
+          // MERGE NOTE: main inlined the request literal here; we pass the
+          // hoisted `brainReq` instead because it carries the `_onTextDelta`
+          // streaming hook attached above (SUDO_BRAIN_STREAM). The literal was
+          // field-identical to brainReq, so this keeps both behaviours —
+          // inlining it again would silently kill token streaming.
           response = await runWithLoopStep(
             { sessionId: state.sessionId, turnId: state.turnId ?? '', stepN: state.iteration },
-            () => this.brain.call({
-              messages: trimmed,
-              source: 'agent',
-              // gw-cutover Phase 2: session→trace correlation for IR-served calls
-              // (noteTraceForSession → markOutcomeForSession). Legacy path ignores it.
-              sessionId: state.sessionId,
-              model: effectiveModel,
-              tools: _routedTools,
-              ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),
-              ...(opts?.promptProfile && opts.promptProfile !== 'main' ? { promptProfile: opts.promptProfile } : {}),
-              race: opts?.race,
-            }, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts),
+            () => this.brain.call(brainReq, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts),
           );
         } catch (brainErr) {
           // Context overflow: the prompt is too long for the model and every
@@ -2779,7 +2821,18 @@ export class AgentLoop extends AgentLoopInjections {
           };
           session.messages.push(assistantMsg);
 
-          if (response.content) emit({ type: 'stream-chunk', chunk: response.content });
+          // Emit only what live deltas did NOT already stream this round-trip.
+          // Prefix mismatch (post-processing rewrote the text, or a poisoned
+          // failover stream) → emit nothing more; the channel's finalize()
+          // lands the canonical reply regardless.
+          if (response.content) {
+            const chunkTail = _streamedDelta.length === 0
+              ? response.content
+              : response.content.startsWith(_streamedDelta)
+                ? response.content.slice(_streamedDelta.length)
+                : '';
+            if (chunkTail) emit({ type: 'stream-chunk', chunk: chunkTail });
+          }
 
           // Epistemic gate: classify rationale confidence before tool dispatch.
           // Ordering is intentional: REPLAN fires BEFORE loop-guard so a blocked
@@ -2894,7 +2947,13 @@ export class AgentLoop extends AgentLoopInjections {
               emit({ type: 'error', error: doomAbort });
               log.error({ tool: tc.name, sessionId: state.sessionId }, 'DoomLoop abort triggered');
               session.messages.push({ role: 'system', content: doomAbort });
-              finalText = `I stopped because a doom loop was detected: ${doomResult.reason ?? 'cross-turn repetition exceeded threshold'}`;
+              // User-facing text stays plain-language — the raw detector
+              // reason (tool name, effective count, threshold numbers) is
+              // internal debugging detail already captured in the system
+              // message above and telemetryEvent, not something a chat user
+              // needs dumped at them.
+              const doomTool = doomResult.telemetryEvent?.toolName ?? tc.name;
+              finalText = `I kept retrying the same step (${doomTool}) without getting anywhere new, so I stopped instead of looping forever. Want me to try a different approach?`;
               session.messages.push({ role: 'assistant', content: finalText });
               try { this._feedbackTierManager?.recordDoomLoop(); } catch { /* fail-open */ }
               guardAborted = true;

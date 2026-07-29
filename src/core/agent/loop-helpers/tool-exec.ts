@@ -42,6 +42,28 @@ import type {
 
 const log = createLogger('agent:loop');
 
+// Defense-in-depth backstop, NOT the primary timeout mechanism (that lives in
+// ToolRegistry.execute / _executeMCPTool, which race each call against its own
+// tighter deadline). This exists so a hung tool call can never again wedge a
+// peer's entire message queue forever: KeyedAsyncQueue and MessageCoalescer
+// both serialize turns per-peer with no timeout of their own, so one stuck
+// call previously silenced a chat indefinitely (see incident: a research
+// turn's tool call hung with no bound anywhere in the stack, and every
+// message sent afterward queued behind a promise that would never settle).
+// Set comfortably above the registry's own caps (30s native + 5s grace /
+// 120s MCP) so it only fires if that inner protection is ever bypassed.
+const TOOL_CALL_HARD_TIMEOUT_MS = Number(process.env['SUDO_TOOL_CALL_HARD_TIMEOUT_MS'] ?? 150_000);
+
+function raceWithHardTimeout<T>(promise: Promise<T>, ms: number, timeoutError: () => Error): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(timeoutError()), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 /**
  * Run the slice-3 critic and emit a structured hook event. Never throws —
  * critic-internal failures are reported as `verify_gate_critic_error` so a
@@ -498,7 +520,11 @@ async function executeSingleToolCall(
     const safeArgs = (tc.arguments && typeof tc.arguments === 'object' && !Array.isArray(tc.arguments))
       ? tc.arguments
       : {};
-    const result = await toolRegistry.execute(tc.name, safeArgs, ctx);
+    const result = await raceWithHardTimeout(
+      toolRegistry.execute(tc.name, safeArgs, ctx),
+      TOOL_CALL_HARD_TIMEOUT_MS,
+      () => new ToolError(`Tool call exceeded hard deadline of ${TOOL_CALL_HARD_TIMEOUT_MS}ms: ${tc.name}`, 'tool_timeout', { name: tc.name, timeout: TOOL_CALL_HARD_TIMEOUT_MS }),
+    );
     // Central size cap before the output re-enters the model context — guards
     // against a single un-truncated tool result (large scrape/MCP/file) blowing
     // up context. The clamped string is what the model sees AND what the trace

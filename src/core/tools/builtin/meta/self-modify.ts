@@ -394,11 +394,11 @@ function doBuild(): ToolResult {
 
 export { restartCommand } from './restart-helper.js';
 
-function doRestart(): ToolResult {
+function doRestart(verifiedBuildTest = false): ToolResult {
   if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
     return { success: false, output: 'meta.self-modify restart is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
-  const result = scheduleDetachedRestart('meta.self-modify restart', PROJECT_ROOT);
+  const result = scheduleDetachedRestart('meta.self-modify restart', PROJECT_ROOT, { verifiedBuildTest });
   logMod('restart', result.scheduled ? `scheduled: ${result.cmd}` : `FAILED to schedule: ${result.error}`);
   if (!result.scheduled) {
     return { success: false, output: `Failed to schedule restart: ${result.error}`, data: { cmd: result.cmd } };
@@ -438,8 +438,11 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
     };
   }
 
-  // Step 4: Restart
-  const restartResult = doRestart();
+  // Step 4: Restart — build and tests both just passed above in this same
+  // call, so this is the one path allowed to opt into the gated-restart
+  // exception (still requires the operator to have set SUDO_ALLOW_GATED_RESTART=1;
+  // see restart-helper.ts).
+  const restartResult = doRestart(true);
 
   return {
     success: restartResult.success,

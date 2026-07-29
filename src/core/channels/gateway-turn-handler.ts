@@ -25,6 +25,8 @@ import { getSteerBuffer } from '../agent/steer-buffer.js';
 import { getQueueModeStore, decideQueueMode } from './queue-modes.js';
 import type { MessageHandler, UnifiedMessage } from './types.js';
 import type { JournalEvent } from '../sessions/journal-types.js';
+import type { AgentEvent } from '../agent/types.js';
+import { progress } from '../gateway/progress.js';
 
 const log = createLogger('channels:gateway-turn');
 
@@ -36,7 +38,7 @@ export interface GatewayTurnDeps {
     peerQueue: { enqueue(key: string, fn: () => Promise<void>): Promise<void> };
   };
   /** The agent loop. */
-  agentLoop: { run(sessionId: string, text: string, onEvent: undefined, opts: { race: boolean; caller?: { isOwner?: boolean; channel?: string; peerId?: string } }): Promise<{ text?: string } | null> };
+  agentLoop: { run(sessionId: string, text: string, onEvent: ((ev: AgentEvent) => void) | undefined, opts: { race: boolean; caller?: { isOwner?: boolean; channel?: string; peerId?: string } }): Promise<{ text?: string } | null> };
   /** Run-generation guard so a reply after /reset is dropped. */
   runGenerations: { current(key: string): number; isStale(key: string, gen: number): boolean };
   /** Deliver the reply (and error text) to the channel. */
@@ -61,6 +63,46 @@ export interface GatewayTurnDeps {
 }
 
 const DEFAULT_ERROR = 'Something went wrong. Please try again.';
+
+/**
+ * Bridge the agent loop's per-turn AgentEvent stream onto the shared progress
+ * broadcaster, keyed by the conversation key (`channel:peerId`). Channels that
+ * render a live activity timeline (e.g. Telegram's SUDO_TG_PROGRESS working
+ * message) subscribe on that key; with no subscribers every emit is a no-op,
+ * so this is a pure observability seam with no behaviour change.
+ */
+function createProgressBridge(convKey: string): (ev: AgentEvent) => void {
+  let lastStreamMs = 0;
+  return (ev: AgentEvent): void => {
+    try {
+      switch (ev.type) {
+        case 'tool-call':
+          progress.toolCall(convKey, ev.name);
+          break;
+        case 'tool-result':
+          progress.toolResult(convKey, ev.name, ev.success !== false);
+          break;
+        case 'message':
+          progress.thinking(convKey);
+          break;
+        case 'stream-chunk': {
+          // Throttle: chunk events arrive per-token; 1/s is plenty for a UI.
+          const now = Date.now();
+          if (now - lastStreamMs >= 1000) {
+            lastStreamMs = now;
+            progress.streaming(convKey, 0, '');
+          }
+          break;
+        }
+        case 'error':
+          progress.error(convKey, ev.error);
+          break;
+        default:
+          break;
+      }
+    } catch { /* progress is best-effort — never disturb the turn */ }
+  };
+}
 
 export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler {
   const serialize = deps.serialize !== false;
@@ -93,10 +135,11 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
       // Bind the Feature 1 caller identity to THIS turn so ToolContext carries
       // isOwner for owner-only tool gating — covers every router channel
       // (telegram/signal/slack/…), not just web. Turn-scoped (no shared registry).
-      const result = await deps.agentLoop.run(String(session.id), msg.text ?? '', undefined, {
+      const result = await deps.agentLoop.run(String(session.id), msg.text ?? '', createProgressBridge(convKey), {
         race: true,
         caller: { isOwner: msg.isOwner === true, channel: msg.channel, peerId: msg.peerId },
       });
+      progress.complete(convKey, 0);
       if (deps.runGenerations.isStale(convKey, runGen)) {
         log.info({ channel: msg.channel, peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
         return;

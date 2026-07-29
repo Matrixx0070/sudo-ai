@@ -22,6 +22,16 @@ export const PROVIDER_BASE_URLS = {
 
 export type ProviderHost = keyof typeof PROVIDER_BASE_URLS;
 
+/**
+ * Google's OpenAI-compatible chat-completions surface (distinct from the
+ * native `PROVIDER_BASE_URLS.google` used by GOOGLE_MODELS_URL). The IR
+ * transport (transport.ts) speaks openai/anthropic wire shapes only — this
+ * lets `google/*` models ride the same openai-compat path as xai/groq/deepseek
+ * instead of the unimplemented native Gemini shape (custom-providers.ts's
+ * documented "google adapter fails per-call" gap).
+ */
+export const GOOGLE_OPENAI_COMPAT_URL = `${PROVIDER_BASE_URLS.google}/openai`;
+
 // ---- chat / completions --------------------------------------------------
 export const XAI_CHAT_COMPLETIONS_URL = `${PROVIDER_BASE_URLS.xai}/chat/completions`;
 /** xAI Responses-style endpoint — the metered developer API (api-key `xai`

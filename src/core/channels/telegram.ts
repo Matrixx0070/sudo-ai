@@ -11,7 +11,7 @@
  *  - Graceful start / stop lifecycle.
  */
 
-import { Bot, type Context, GrammyError, InputFile, InlineKeyboard } from 'grammy';
+import { Bot, type Context, GrammyError, InputFile, InputMediaBuilder, InlineKeyboard } from 'grammy';
 import type { Update as TelegramUpdate } from 'grammy/types';
 import { saveFeedback, addNoteToFeedback } from '../feedback/store.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
@@ -54,40 +54,29 @@ export interface HookEmitterLike {
 const log = createLogger('channels:telegram');
 
 /** Maximum characters per Telegram message (platform limit). */
-const TELEGRAM_CHUNK_LIMIT = 4096;
+import { chunkText, TELEGRAM_CHUNK_LIMIT, MD_SOURCE_CHUNK_LIMIT } from './long-reply.js';
+import { renderMdWithinLimit } from './telegram-format.js';
+import {
+  handleRunControlCallback,
+  makeReasonKeyboard,
+  wantsReasonKeyboard,
+  RegenGuard,
+  type RegenerateRequest,
+  type RegenReasonCode,
+} from './telegram-run-controls.js';
+import { getRunRegistry } from '../agent/run-registry.js';
 
 /**
- * Escape a string for Telegram MarkdownV2 format.
- * Characters that must be escaped: _ * [ ] ( ) ~ ` > # + - = | { } . !
+ * Update types requested from getUpdates.
+ *
+ * Telegram delivers ONLY the types listed here — anything omitted is dropped
+ * server-side and never reaches the bot. `callback_query` was missing until
+ * 2026-07-29, which silently made EVERY inline button dead on arrival (the
+ * 👍👎⏭ feedback keyboard, TX1 Stop, TX3 Details): the buttons rendered, taps
+ * were accepted by the client, and the updates were discarded before polling.
+ * Any new interactive surface must add its update type here.
  */
-function escapeMarkdownV2(text: string): string {
-  return text.replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
-}
-
-/**
- * Split text into chunks of at most `limit` characters, splitting on
- * newlines where possible to avoid mid-sentence breaks.
- */
-function chunkText(text: string, limit: number): string[] {
-  if (text.length <= limit) return [text];
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    const slice = remaining.slice(0, limit);
-    const breakAt = slice.lastIndexOf('\n');
-    let cut = breakAt > limit * 0.5 ? breakAt : limit;
-    // CH-5: don't split a UTF-16 surrogate pair at the boundary — that mangles an
-    // emoji into two U+FFFD replacement chars. Move the whole pair to the next chunk.
-    if (cut < remaining.length) {
-      const c = remaining.charCodeAt(cut - 1);
-      if (c >= 0xd800 && c <= 0xdbff) cut -= 1;
-    }
-    chunks.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut).trimStart();
-  }
-  if (remaining.length > 0) chunks.push(remaining);
-  return chunks;
-}
+export const POLL_ALLOWED_UPDATES = ['message', 'callback_query'] as const;
 
 /** Directory where incoming Telegram photos are saved. */
 const UPLOAD_DIR = join(DATA_DIR, 'uploads');
@@ -248,6 +237,9 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly allowedUsers: Set<string>;
   /** GW-6: original (owner) allowlist — only these may run /pair admin commands. */
   private readonly ownerUsers: Set<string>;
+  /** TX2 — regeneration seam (set from cli.ts) + one-regen-per-feedbackId guard. */
+  private _onRegenerate: ((req: RegenerateRequest) => void | Promise<void>) | null = null;
+  private readonly _regenGuard = new RegenGuard();
   /** GW-6: DM admission posture for unknown senders (TELEGRAM_DM_POLICY). */
   private readonly dmPolicy: 'allowlist' | 'pairing' | 'open';
   private readonly tokenEnvKey: string;
@@ -312,6 +304,20 @@ export class TelegramAdapter implements ChannelAdapter {
 
   get isConnected(): boolean {
     return this._isConnected;
+  }
+
+  /** Is this user id on the owner list (constructor allowlist, not pairing-admitted)? */
+  isOwnerUser(userId: string): boolean {
+    return this.ownerUsers.has(userId);
+  }
+
+  /**
+   * TX2 (`SUDO_TG_BAD_REGEN=1`) — injectable regeneration seam. The adapter
+   * cannot reach the agent loop; cli.ts sets this to run a bounded revision
+   * turn and edit the rejected reply in place. Null → 👎 keeps legacy behavior.
+   */
+  setRegenerateHandler(handler: (req: RegenerateRequest) => void | Promise<void>): void {
+    this._onRegenerate = handler;
   }
 
   /** The bot's @username once authenticated; null before start() completes. */
@@ -497,7 +503,8 @@ export class TelegramAdapter implements ChannelAdapter {
       log.info('Poll loop starting fetch cycle');
       while (!abort.signal.aborted) {
         try {
-          const url = `${baseUrl}/getUpdates?offset=${this._pollOffset}&timeout=30&allowed_updates=["message"]`;
+          const url = `${baseUrl}/getUpdates?offset=${this._pollOffset}&timeout=30`
+            + `&allowed_updates=${encodeURIComponent(JSON.stringify(POLL_ALLOWED_UPDATES))}`;
           let res: Response;
           try {
             res = await fetch(url, { signal: abort.signal });
@@ -535,7 +542,12 @@ export class TelegramAdapter implements ChannelAdapter {
           const updates = data.result ?? [];
           for (const update of updates) {
             this._pollOffset = update.update_id + 1;
-            if (!update.message) continue;
+            // Dispatch messages AND callback queries (inline-button taps).
+            // A `!update.message` guard here silently dropped every button
+            // tap even once allowed_updates requested them — the second half
+            // of the 2026-07-29 dead-button bug. Keep this in sync with
+            // POLL_ALLOWED_UPDATES.
+            if (!update.message && !update.callback_query) continue;
 
             try {
               if (this.bot) {
@@ -635,23 +647,28 @@ export class TelegramAdapter implements ChannelAdapter {
       // are stripped before the empty check — `String.prototype.trim()` does not
       // remove them and Telegram 400s on `text must be non-empty`.
       if (text.replace(/[​-‍⁠﻿]/g, '').trim().length > 0) {
-        const chunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
+        // Markdown chunks are budgeted BELOW the wire cap: rendering adds tag
+        // characters (~7% on bold-heavy prose), so a 4096-char source chunk
+        // renders past Telegram's limit. Splitting earlier keeps every
+        // character (more messages) instead of truncating one.
+        const chunks = chunkText(text, parseMode === 'markdown' ? MD_SOURCE_CHUNK_LIMIT : TELEGRAM_CHUNK_LIMIT);
 
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
           if (!chunk) continue;
 
-          // Try MarkdownV2 first, fall back to plain text on failure
+          // Render markdown → Telegram HTML (bold/code/headings display
+          // properly instead of literal ** markers); plain-text fallback on
+          // any rejection so a message is never lost.
           if (parseMode === 'markdown') {
             try {
-              const escaped = escapeMarkdownV2(chunk);
-              await this.bot.api.sendMessage(peerId, escaped, {
-                parse_mode: 'MarkdownV2',
+              const html = renderMdWithinLimit(chunk, { collapse: options?.collapse === true });
+              await this.bot.api.sendMessage(peerId, html, {
+                parse_mode: 'HTML',
                 ...(i === 0 ? replyParams : {}),
               });
-            } catch {
-              // MarkdownV2 failed — send as plain text (never lose a message)
-              log.debug({ peerId }, 'MarkdownV2 send failed — falling back to plain text');
+            } catch (htmlErr) {
+              log.warn({ peerId, err: String(htmlErr) }, 'HTML send failed — falling back to plain text');
               await this.bot.api.sendMessage(peerId, chunk, {
                 ...(i === 0 ? replyParams : {}),
               });
@@ -714,7 +731,7 @@ export class TelegramAdapter implements ChannelAdapter {
    * text is the caller's responsibility — Telegram returns HTTP 400 on a
    * noop edit, which the BufferedEditSink already prevents.
    */
-  async editText(peerId: string, messageId: string | number, text: string): Promise<void> {
+  async editText(peerId: string, messageId: string | number, text: string, opts?: { format?: 'plain' | 'md' | 'md-collapse'; keyboard?: InlineKeyboard }): Promise<void> {
     if (!this.bot || !this._isConnected) {
       throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
     }
@@ -727,7 +744,111 @@ export class TelegramAdapter implements ChannelAdapter {
     }
     // Telegram hard-caps message bodies at 4096 chars; longer edits 400.
     const clamped = text.length > 4096 ? text.slice(0, 4080) + '\n…[truncated]' : text;
-    await this.bot.api.editMessageText(peerId, msgIdNum, clamped);
+    // format:'md' renders markdown → HTML (mid-stream partials are safe: the
+    // converter leaves unbalanced markers as literal text); 'md-collapse'
+    // additionally folds the tail into an expandable blockquote ("Read
+    // More"). Plain retry on 400 either way.
+    // TX1: editMessageText REPLACES reply_markup (absent → removed), so a
+    // working card that carries a Stop button must re-send it on every edit.
+    const markup = opts?.keyboard ? { reply_markup: opts.keyboard } : {};
+    if (opts?.format === 'md' || opts?.format === 'md-collapse') {
+      try {
+        // Fit the RENDERED html to Telegram's cap — tag expansion on a
+        // source-clamped body used to overflow and 400, silently degrading
+        // the message to plain text (literal ** markers).
+        const html = renderMdWithinLimit(clamped, { collapse: opts.format === 'md-collapse' });
+        await this.bot.api.editMessageText(peerId, msgIdNum, html, { parse_mode: 'HTML', ...markup });
+        return;
+      } catch (htmlErr) {
+        // Never silent: a swallowed 400 here is exactly what hid the
+        // literal-asterisk regression in prod.
+        log.warn({ peerId, err: String(htmlErr) }, 'editText HTML render/edit failed — falling back to plain');
+      }
+    }
+    await this.bot.api.editMessageText(peerId, msgIdNum, clamped, { ...markup });
+  }
+
+  /**
+   * Attach an InlineKeyboard to an EXISTING message (gap #19 follow-up).
+   * Lets the feedback keyboard ride on the finalized streamed reply instead
+   * of a separate junk '⋯' message.
+   */
+  async editReplyMarkup(peerId: string, messageId: string | number, keyboard: InlineKeyboard): Promise<void> {
+    if (!this.bot || !this._isConnected) {
+      throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
+    }
+    const msgIdNum = typeof messageId === 'number' ? messageId : parseInt(String(messageId), 10);
+    if (!Number.isFinite(msgIdNum)) {
+      throw new ChannelError('messageId must parse to a finite integer', 'channel_invalid_peer', { messageId });
+    }
+    await this.bot.api.editMessageReplyMarkup(peerId, msgIdNum, { reply_markup: keyboard });
+  }
+
+  /**
+   * Best-effort delete of a working/placeholder message (never throws) so
+   * error paths can clean up their status card instead of littering the chat.
+   */
+  async deleteMessageSafe(peerId: string, messageId: string | number): Promise<void> {
+    try {
+      const msgIdNum = typeof messageId === 'number' ? messageId : parseInt(String(messageId), 10);
+      if (!Number.isFinite(msgIdNum)) return;
+      await this.bot?.api.deleteMessage(peerId, msgIdNum);
+    } catch { /* best effort */ }
+  }
+
+  /**
+   * TX6: best-effort pin of a message (never throws — the pinned live
+   * status card degrades to an unpinned message if the bot lacks pin
+   * rights). Silent notification so pinning never buzzes the owner.
+   */
+  async pinMessageSafe(peerId: string, messageId: string | number): Promise<void> {
+    try {
+      const msgIdNum = typeof messageId === 'number' ? messageId : parseInt(String(messageId), 10);
+      if (!Number.isFinite(msgIdNum)) return;
+      await this.bot?.api.pinChatMessage(peerId, msgIdNum, { disable_notification: true });
+    } catch { /* best effort */ }
+  }
+
+  /**
+   * TX11: send the browser-viewport photo bubble (first screencast frame).
+   * Returns the message id (base-10 string, like sendForStream) so the
+   * viewport can edit it in place. PRIVACY: callers must only target an
+   * OWNER DM — enforced upstream in cli.ts (owner + chatType 'dm' gate).
+   */
+  async sendPhotoForStream(peerId: string, photo: Buffer, caption?: string): Promise<string> {
+    if (!this.bot || !this._isConnected) {
+      throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
+    }
+    if (!peerId) {
+      throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
+    }
+    const sent = await this.bot.api.sendPhoto(
+      peerId,
+      new InputFile(photo, 'viewport.jpg'),
+      caption ? { caption: caption.slice(0, 1024) } : {},
+    );
+    return String(sent.message_id);
+  }
+
+  /**
+   * TX11: swap a fresh screencast frame into the EXISTING viewport photo
+   * bubble via editMessageMedia. Only works on a message that already
+   * carries media (a text message can never become a photo — which is why
+   * the viewport is a separate bubble, not the working card).
+   */
+  async editPhotoInPlace(peerId: string, messageId: string | number, photo: Buffer, caption?: string): Promise<void> {
+    if (!this.bot || !this._isConnected) {
+      throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
+    }
+    const msgIdNum = typeof messageId === 'number' ? messageId : parseInt(String(messageId), 10);
+    if (!Number.isFinite(msgIdNum)) {
+      throw new ChannelError('messageId must parse to a finite integer', 'channel_invalid_peer', { messageId });
+    }
+    await this.bot.api.editMessageMedia(
+      peerId,
+      msgIdNum,
+      InputMediaBuilder.photo(new InputFile(photo, 'viewport.jpg'), caption ? { caption: caption.slice(0, 1024) } : {}),
+    );
   }
 
   /**
@@ -738,27 +859,29 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!this.bot || !this._isConnected) {
       return this.send(peerId, text);
     }
-    const chunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
-    // Send all but last chunk as plain text
+    // Source budget leaves room for markdown→HTML tag expansion (see
+    // MD_SOURCE_CHUNK_LIMIT); rendering is fitted to the wire cap as a backstop.
+    const chunks = chunkText(text, MD_SOURCE_CHUNK_LIMIT);
+    // Send all but last chunk without the keyboard
     for (let i = 0; i < chunks.length - 1; i++) {
       const chunk = chunks[i];
       if (!chunk) continue;
       try {
-        const escaped = escapeMarkdownV2(chunk);
-        await this.bot.api.sendMessage(peerId, escaped, { parse_mode: 'MarkdownV2' });
-      } catch {
+        await this.bot.api.sendMessage(peerId, renderMdWithinLimit(chunk), { parse_mode: 'HTML' });
+      } catch (htmlErr) {
+        log.warn({ peerId, err: String(htmlErr) }, 'sendWithKeyboard HTML chunk failed — plain fallback');
         await this.bot.api.sendMessage(peerId, chunk);
       }
     }
     // Last chunk gets the keyboard
     const lastChunk = chunks[chunks.length - 1] ?? text.slice(0, 100);
     try {
-      const escaped = escapeMarkdownV2(lastChunk);
-      await this.bot.api.sendMessage(peerId, escaped, {
-        parse_mode: 'MarkdownV2',
+      await this.bot.api.sendMessage(peerId, renderMdWithinLimit(lastChunk), {
+        parse_mode: 'HTML',
         reply_markup: keyboard,
       });
-    } catch {
+    } catch (htmlErr) {
+      log.warn({ peerId, err: String(htmlErr) }, 'sendWithKeyboard HTML final failed — plain fallback');
       try {
         await this.bot.api.sendMessage(peerId, lastChunk, { reply_markup: keyboard });
       } catch {
@@ -781,7 +904,8 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!peerId) {
       throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
     }
-    await this._sendMedia(peerId, attachment, {});
+    // TX4: pass the artifact caption through (Telegram caps captions at 1024).
+    await this._sendMedia(peerId, attachment, attachment.caption ? { caption: attachment.caption.slice(0, 1024) } : {});
   }
 
   // ---------------------------------------------------------------------------
@@ -794,9 +918,85 @@ export class TelegramAdapter implements ChannelAdapter {
     bot.command('help', (ctx) => this._handleCommand(ctx, 'help'));
     bot.command('status', (ctx) => this._handleCommand(ctx, 'status'));
 
-    // Feedback inline keyboard callbacks  fb:{rating}:{feedbackId}
+    // Inline keyboard callbacks. One grammy handler (an early-returning
+    // middleware without next() swallows later ones): TX1 stop taps and TX2
+    // reason taps dispatch first, then the fb:{rating}:{feedbackId} feedback taps.
     bot.on('callback_query:data', async (ctx) => {
       const data = ctx.callbackQuery.data ?? '';
+
+      // TX1 (⏹ Stop) / TX2 (👎 reasons) — flag-gated, owner-only inside.
+      if (data.startsWith('tx1:') || data.startsWith('tx2:')) {
+        const cbMsg = ctx.callbackQuery.message;
+        await handleRunControlCallback(
+          {
+            data,
+            fromId: String(ctx.from.id),
+            ...(ctx.chat?.id !== undefined ? { chatId: String(ctx.chat.id) } : {}),
+            ...(cbMsg?.message_id !== undefined ? { messageId: cbMsg.message_id } : {}),
+            ...(cbMsg && 'text' in cbMsg && typeof cbMsg.text === 'string' ? { messageText: cbMsg.text } : {}),
+            answer: async (text?: string) => { await ctx.answerCallbackQuery(text ? { text, show_alert: false } : {}); },
+            editReplyMarkup: async (kb) => { await ctx.editMessageReplyMarkup({ reply_markup: kb }); },
+          },
+          {
+            isOwner: (id) => this.ownerUsers.has(id),
+            getActiveRun: (runKey) => getRunRegistry().get(runKey),
+            guard: this._regenGuard,
+            onRegenerate: this._onRegenerate,
+            recordReason: (feedbackId: string, code: RegenReasonCode) => {
+              // Store convention (see fb: handler below): link rows carry the
+              // feedbackId in session_id + a typed task_summary marker.
+              saveFeedback({
+                session_id: feedbackId,
+                channel: 'telegram',
+                task_summary: `regen-requested:${feedbackId}`,
+                task_type: 'general',
+                rating: 'skip',
+                notes: `tx2 reason=${code}`,
+              });
+            },
+          },
+        );
+        return;
+      }
+
+      // TX3 (SUDO_TG_DETAIL_TOGGLE=1, default OFF): per-turn working-card
+      // detail toggle  tx3:t:{token}. Owner-only; the token maps to the live
+      // turn's render state via the working-card-state registry.
+      if (data.startsWith('tx3:')) {
+        try {
+          const uid = String(ctx.from?.id ?? '');
+          if (process.env['SUDO_TG_DETAIL_TOGGLE'] !== '1' || !this.ownerUsers.has(uid)) {
+            await ctx.answerCallbackQuery({ text: 'Not available.', show_alert: false });
+            return;
+          }
+          const { parseTx3CallbackData, buildWorkingCardRows } = await import('./working-card-keyboard.js');
+          const token = parseTx3CallbackData(data);
+          if (!token) {
+            await ctx.answerCallbackQuery({ text: 'Invalid toggle data.', show_alert: false });
+            return;
+          }
+          const { toggleWorkingCardDetail } = await import('./working-card-state.js');
+          const next = toggleWorkingCardDetail(token);
+          if (next === null) {
+            await ctx.answerCallbackQuery({ text: 'This turn has finished.', show_alert: false });
+            return;
+          }
+          // Refresh the button labels (cosmetic). Prefer the turn owner's
+          // full-set builder so a shared card keeps its ⏹ Stop button too.
+          try {
+            const { getWorkingCardRows } = await import('./working-card-state.js');
+            const rows = getWorkingCardRows(token) ?? buildWorkingCardRows({ detail: { token, detailNow: next } });
+            const kb = new InlineKeyboard(rows.map((r) => r.map((b) => ({ text: b.text, callback_data: b.callbackData }))));
+            await ctx.editMessageReplyMarkup({ reply_markup: kb });
+          } catch { /* label refresh best-effort — toggle already applied */ }
+          await ctx.answerCallbackQuery({ text: next ? '🔎 Step detail on' : '▪ Compact view', show_alert: false });
+        } catch (err) {
+          log.warn({ err: String(err) }, 'TX3 detail-toggle callback failed');
+          try { await ctx.answerCallbackQuery({ text: 'Could not toggle.', show_alert: false }); } catch { /* noop */ }
+        }
+        return;
+      }
+
       if (!data.startsWith('fb:')) return;
 
       const parts = data.split(':');
@@ -819,19 +1019,32 @@ export class TelegramAdapter implements ChannelAdapter {
           notes: `updated from callback: ${feedbackId}`,
         });
 
-        // Remove the keyboard from the original message
+        // TX2 (SUDO_TG_BAD_REGEN=1): an owner 👎 swaps in the one-tap reason
+        // keyboard (Wrong / Too long / Missed the point / Skip reasons) instead
+        // of removing the keyboard; the reason tap triggers the regeneration.
+        const offerReasons = wantsReasonKeyboard({
+          rating: rating,
+          isOwnerUser: this.ownerUsers.has(String(ctx.from.id)),
+          hasRegenHandler: this._onRegenerate !== null,
+        });
+
+        // Remove (or for TX2 bad: replace) the keyboard on the original message
         try {
-          await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+          await ctx.editMessageReplyMarkup({ reply_markup: offerReasons ? makeReasonKeyboard(feedbackId) : undefined });
         } catch { /* message too old or already edited */ }
 
         if (rating === 'good') {
           await ctx.answerCallbackQuery({ text: '👍 Got it — great to know!', show_alert: false });
         } else if (rating === 'bad') {
-          await ctx.answerCallbackQuery({ text: '👎 Noted — I\'ll do better. Reply with what was wrong.', show_alert: false });
-          // Send a follow-up asking for notes
-          try {
-            await ctx.reply('What was wrong? (Reply to this message with details — I\'ll learn from it)');
-          } catch { /* non-fatal */ }
+          if (offerReasons) {
+            await ctx.answerCallbackQuery({ text: '👎 Noted — what was wrong?', show_alert: false });
+          } else {
+            await ctx.answerCallbackQuery({ text: '👎 Noted — I\'ll do better. Reply with what was wrong.', show_alert: false });
+            // Send a follow-up asking for notes
+            try {
+              await ctx.reply('What was wrong? (Reply to this message with details — I\'ll learn from it)');
+            } catch { /* non-fatal */ }
+          }
         } else {
           await ctx.answerCallbackQuery({ text: '⏭️ Skipped', show_alert: false });
         }
@@ -861,9 +1074,11 @@ export class TelegramAdapter implements ChannelAdapter {
           : undefined;
 
         if (savedPath) {
-          textWithHint = caption
-            ? `${caption}\n[Image attached: ${savedPath}. Use browser.vision to analyze it if needed.]`
-            : `[Image attached: ${savedPath}. Use browser.vision to analyze it if needed.]`;
+          const hint = `[Image attached at ${savedPath}. To see it you MUST call the tool ` +
+            `browser.vision with imagePath="${savedPath}" — do NOT use browser.navigate, ` +
+            `system.exec, or read the file yourself; those cannot see images and are sandboxed ` +
+            `away from this path. browser.vision is the only working way to view it.]`;
+          textWithHint = caption ? `${caption}\n${hint}` : hint;
           media.push({
             type: 'image',
             mimeType: 'image/jpeg',
@@ -1193,6 +1408,15 @@ export class TelegramAdapter implements ChannelAdapter {
       meta: { peerId: userId, text: msg.text, mediaCount: media.length },
     });
 
+    // Instant acknowledgment: react 👀 to the user's message the moment the
+    // turn starts (SUDO_TG_REACT_ACK=0 disables). One cheap API call; the
+    // user sees uptake before the working card even appears.
+    if (process.env['SUDO_TG_REACT_ACK'] !== '0' && ctx.message?.message_id != null) {
+      this.bot?.api
+        .setMessageReaction(chatId, ctx.message.message_id, [{ type: 'emoji', emoji: '👀' }])
+        .catch(() => { /* reactions unavailable in some chats — non-fatal */ });
+    }
+
     // Show typing indicator immediately and keep refreshing every 4s while processing.
     // Telegram's typing status disappears after ~5s so we must re-send it.
     const sendTyping = () => {
@@ -1271,13 +1495,20 @@ export class TelegramAdapter implements ChannelAdapter {
 
     // BO11/S13: optional progressive-edit working message (SUDO_TG_PROGRESS=1,
     // default OFF → typing-only behavior unchanged). Edits ONE message in place
-    // with phase + live elapsed + the model/context chip, using the shared
-    // live-state formatter. Whimsy verbs surface on the waiting phase when
-    // SUDO_WHIMSY=1. Fully best-effort: any failure degrades to typing-only.
+    // as a live activity timeline: spinner + phase + elapsed + model/context
+    // chip, then one line per agent tool step (fed by the gateway turn
+    // handler's progress bridge on the `telegram:<peerId>` key). Whimsy verbs
+    // surface on the waiting phase when SUDO_WHIMSY=1. SUDO_TG_PROGRESS_KEEP=1
+    // leaves a collapsed "✅ Done • Ns • k steps" summary instead of deleting.
+    // Fully best-effort: any failure degrades to typing-only.
+    // When channel streaming is on (SUDO_STREAM_CHANNELS, prod default), the
+    // stream sink's placeholder IS the live activity card (cli.ts wires the
+    // timeline into it) — rendering a second card here would double-bubble.
     let stopProgress: (() => void) | null = null;
-    if (process.env['SUDO_TG_PROGRESS'] === '1') {
+    if (process.env['SUDO_TG_PROGRESS'] === '1' && process.env['SUDO_STREAM_CHANNELS'] === '0') {
       try {
-        const { formatTelegramWorking, formatModelContextChip } = await import('./live-state.js');
+        const { formatModelContextChip } = await import('./live-state.js');
+        const { ActivityTimeline } = await import('./activity-timeline.js');
         const { collectStatusCard, getStatusSources } = await import('../commands/builtin/status-card.js');
         let chip: string | undefined;
         try {
@@ -1285,21 +1516,41 @@ export class TelegramAdapter implements ChannelAdapter {
           chip = formatModelContextChip(card.model, card.context);
         } catch { /* chip best-effort */ }
         const startMs = Date.now();
-        const workingId = await this.sendForStream(
-          chatId,
-          formatTelegramWorking({ phase: 'waiting', elapsedMs: 0, ...(chip ? { chip } : {}), tick: 0 }),
-        );
+        const timeline = new ActivityTimeline();
         let tick = 0;
+        const timelineDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
+        const renderNow = (): string =>
+          timeline.render({ nowMs: Date.now(), startMs, tick, detail: timelineDetail, ...(chip ? { chip } : {}), verbIndex: tick });
+        // Initial send is plain text (sendForStream has no parse mode) — strip
+        // the bold markers there; every subsequent edit renders md → HTML.
+        const workingId = await this.sendForStream(chatId, renderNow().replace(/\*\*/g, ''));
+
+        // Edit throttle: the 3s tick keeps elapsed live; tool events request a
+        // prompt refresh but never closer than 2s apart (Telegram edit limits).
+        let lastEditMs = Date.now();
+        const pushEdit = (minGapMs: number): void => {
+          const now = Date.now();
+          if (now - lastEditMs < minGapMs) return;
+          lastEditMs = now;
+          void this.editText(chatId, workingId, renderNow(), { format: 'md' }).catch(() => { /* noop/closed edit */ });
+        };
+        const unsubTimeline = progress.subscribe(`telegram:${userId}`, (ev: ProgressEvent) => {
+          timeline.onProgress(ev, Date.now());
+          if (ev.type === 'tool_call' || ev.type === 'tool_result') pushEdit(2000);
+        });
         const iv = setInterval(() => {
           tick++;
-          const elapsedMs = Date.now() - startMs;
-          const phase = elapsedMs < 3000 ? ('waiting' as const) : ('running' as const);
-          const line = formatTelegramWorking({ phase, elapsedMs, ...(chip ? { chip } : {}), verbIndex: tick, tick });
-          void this.editText(chatId, workingId, line).catch(() => { /* noop/closed edit */ });
+          pushEdit(0);
         }, 3000);
         stopProgress = () => {
           clearInterval(iv);
-          void this.bot?.api.deleteMessage(chatId, Number(workingId)).catch(() => { /* best effort */ });
+          unsubTimeline();
+          if (process.env['SUDO_TG_PROGRESS_KEEP'] === '1' && timeline.hasActivity) {
+            void this.editText(chatId, workingId, timeline.renderFinal({ nowMs: Date.now(), startMs }))
+              .catch(() => { /* best effort */ });
+          } else {
+            void this.bot?.api.deleteMessage(chatId, Number(workingId)).catch(() => { /* best effort */ });
+          }
         };
       } catch { /* progressive edit is best-effort */ }
     }

@@ -11,6 +11,14 @@ import { resolveActivePage } from './active-page.js';
 type ExtractAs = 'text' | 'html' | 'links' | 'table';
 const VALID_MODES: ExtractAs[] = ['text', 'html', 'links', 'table'];
 
+// Playwright's locator.innerText()/innerHTML() default to a ~30s actionability
+// wait when a selector matches nothing, and the per-key loop below used to
+// swallow that into a bare `null` via `.catch(() => null)` — a model guessing
+// wrong CSS selectors burned ~30s PER WRONG GUESS with no signal about which
+// selector failed, and the tool still reported `success: true`. This bounds
+// each lookup to a short, fail-fast window instead of Playwright's default.
+const SELECTOR_LOOKUP_TIMEOUT_MS = 5_000;
+
 export const scrapeTool: ToolDefinition = {
   name: 'browser.scrape',
   description:
@@ -118,44 +126,71 @@ export const scrapeTool: ToolDefinition = {
         };
       }
 
-      // Selector-based extraction
+      // Selector-based extraction. failedKeys tracks which field selectors
+      // matched nothing, so the caller (model) gets an honest, actionable
+      // signal instead of a "success" full of silent nulls.
+      const failedKeys: string[] = [];
       for (const [key, selector] of Object.entries(selectors)) {
         const fullSelector = containerSelector ? `${containerSelector} ${selector}` : selector;
 
-        switch (extractAs) {
-          case 'text':
-            results[key] = await page.locator(fullSelector).first().innerText().catch(() => null);
-            break;
-          case 'html':
-            results[key] = await page.locator(fullSelector).first().innerHTML().catch(() => null);
-            break;
-          case 'links':
-            results[key] = await page.evaluate((sel: string) =>
-              Array.from(document.querySelectorAll(sel)).map((a) => ({
-                text: (a as HTMLAnchorElement).textContent?.trim() ?? '',
-                href: (a as HTMLAnchorElement).href,
-              })),
-            fullSelector);
-            break;
-          case 'table':
-            results[key] = await page.evaluate((sel: string) => {
-              const el = document.querySelector(sel);
-              if (!el) return null;
-              return Array.from(el.querySelectorAll('tr')).map((row) =>
-                Array.from(row.querySelectorAll('td,th')).map(
-                  (cell) => (cell as HTMLElement).textContent?.trim() ?? '',
-                ),
-              );
-            }, fullSelector);
-            break;
+        try {
+          switch (extractAs) {
+            case 'text':
+              results[key] = await page.locator(fullSelector).first()
+                .innerText({ timeout: SELECTOR_LOOKUP_TIMEOUT_MS });
+              break;
+            case 'html':
+              results[key] = await page.locator(fullSelector).first()
+                .innerHTML({ timeout: SELECTOR_LOOKUP_TIMEOUT_MS });
+              break;
+            case 'links':
+              results[key] = await page.evaluate((sel: string) =>
+                Array.from(document.querySelectorAll(sel)).map((a) => ({
+                  text: (a as HTMLAnchorElement).textContent?.trim() ?? '',
+                  href: (a as HTMLAnchorElement).href,
+                })),
+              fullSelector);
+              break;
+            case 'table':
+              results[key] = await page.evaluate((sel: string) => {
+                const el = document.querySelector(sel);
+                if (!el) return null;
+                return Array.from(el.querySelectorAll('tr')).map((row) =>
+                  Array.from(row.querySelectorAll('td,th')).map(
+                    (cell) => (cell as HTMLElement).textContent?.trim() ?? '',
+                  ),
+                );
+              }, fullSelector);
+              break;
+          }
+        } catch {
+          // text/html: selector matched nothing (or stayed hidden) within the
+          // lookup timeout. links/table use page.evaluate, which never throws
+          // for a non-matching selector (querySelector[All] just returns
+          // empty/null), so this branch is reached only by the locator paths.
+          results[key] = null;
+          failedKeys.push(key);
         }
       }
 
-      ctxLog.info({ tool: 'browser.scrape', extractAs, keys: Object.keys(results) }, 'Scrape complete');
+      const totalKeys = Object.keys(results).length;
+      const allFailed = failedKeys.length === totalKeys;
+      const output = allFailed
+        ? `browser.scrape: none of the ${totalKeys} selector(s) matched an element: ` +
+          `${failedKeys.join(', ')}. Take a browser.snapshot to see real selectors before retrying.`
+        : failedKeys.length > 0
+          ? `Extracted ${totalKeys - failedKeys.length}/${totalKeys} fields (mode: ${extractAs}). ` +
+            `No match for: ${failedKeys.join(', ')}.`
+          : `Extracted ${totalKeys} fields (mode: ${extractAs}).`;
+
+      ctxLog.info(
+        { tool: 'browser.scrape', extractAs, keys: Object.keys(results), failedKeys },
+        'Scrape complete',
+      );
       return {
-        success: true,
-        output: `Extracted ${Object.keys(results).length} fields (mode: ${extractAs}).`,
-        data: { results, url: page.url() },
+        success: !allFailed,
+        output,
+        data: { results, url: page.url(), failedKeys },
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

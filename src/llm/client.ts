@@ -120,7 +120,13 @@ export type ProviderKeyName = keyof typeof PROVIDER_KEY_ENVS;
  * null when unset. Outside `src/llm/` nothing reads provider key envs.
  */
 export function getProviderApiKey(name: ProviderKeyName): string | null {
-  return process.env[PROVIDER_KEY_ENVS[name]]?.trim() || null;
+  const key = process.env[PROVIDER_KEY_ENVS[name]]?.trim();
+  if (key) return key;
+  // google's declared env is GEMINI_API_KEY, but config/sudo-ai.json5's
+  // auth.google.envKey (and the deployed .env) use GOOGLE_API_KEY — accept
+  // either so the wire-up doesn't silently find no key under the older name.
+  if (name === 'google') return process.env['GOOGLE_API_KEY']?.trim() || null;
+  return null;
 }
 
 // ---------------------------------------------------------------------------

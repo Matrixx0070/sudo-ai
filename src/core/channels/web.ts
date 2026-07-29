@@ -700,7 +700,11 @@ export class WebAdapter implements ChannelAdapter {
 
     const isImage = env.mime.startsWith('image/');
     const label = isImage ? 'Image' : 'File';
-    const visionHint = isImage ? ' Use browser.vision to analyze it if needed.' : '';
+    const visionHint = isImage
+      ? ` To see it you MUST call the tool browser.vision with imagePath="${savedPath}" — do NOT ` +
+        'use browser.navigate, system.exec, or read the file yourself; those cannot see images ' +
+        'and are sandboxed away from this path. browser.vision is the only working way to view it.'
+      : '';
     const caption = env.caption?.trim() ?? '';
     const textWithHint = caption
       ? `${caption}\n[${label} attached: ${savedPath}.${visionHint}]`

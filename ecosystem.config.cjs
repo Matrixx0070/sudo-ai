@@ -109,8 +109,12 @@ module.exports = {
 
         // Re-enabled 2026-07-17 (F81 census: 'off' left cost monitoring blind).
         // Alerting guardrails only — never hard-block. Normal burn ~$57/day.
+        // 2026-07-26: SUDO_DAILY_LLM_BUDGET_USD was $50, below normal ~$57/day
+        // burn, so it hard-blocked EVERY background call (including the
+        // ollama fallback) once coder.arsenal alone spent $46+ in a day.
+        // Raised to match SUDO_DAILY_BUDGET_USD so it stops tripping daily.
         SUDO_DAILY_BUDGET_USD: '100',
-        SUDO_DAILY_LLM_BUDGET_USD: '50',
+        SUDO_DAILY_LLM_BUDGET_USD: '100',
 
         // ---- 2026-07-18 safe activations (Frank-approved) ----
         // F89: runner only executes operator-created standing orders (idle otherwise).
@@ -182,7 +186,33 @@ module.exports = {
         SUDO_TELEGRAM_GROK_VOICE: process.env['SUDO_TELEGRAM_GROK_VOICE'] || '0',
         SUDO_VOICE_GROK_DEFAULT: process.env['SUDO_VOICE_GROK_DEFAULT'] || '1',
         SUDO_GROK_WEBSESSION: process.env['SUDO_GROK_WEBSESSION'] || '1',
+        // FREE grok brain on the app-chat weekly-pool lane (grok-web/* provider).
+        // WEB_BRAIN routes grok-web/* in transport.callIR; STATSIG_BROWSERLESS mints
+        // the anti-bot token PURE-NODE (curl seed -> mintStatsigFromSeed, no browser).
+        SUDO_GROK_WEB_BRAIN: process.env['SUDO_GROK_WEB_BRAIN'] || '1',
+        SUDO_GROK_STATSIG_BROWSERLESS: process.env['SUDO_GROK_STATSIG_BROWSERLESS'] || '1',
         SUDO_XAI_OAUTH_SUBSCRIPTION: process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] || '1',
+
+        // grok-web-mcp (ADR 0001) — FREE grok brain with NATIVE tool-calling.
+        // DEFAULT OFF: flipping SUDO_GROK_WEB_MCP=1 stands up the hardened public
+        // MCP server (readonly allowlist below) fronted by Caddy at PUBLIC_URL and
+        // registers+connects the grok connector, enabling the grok-web-mcp/grok-4
+        // lane. To enable: set SUDO_MCP_PUBLIC_TOKEN (a secret — NOT in this file;
+        // prefer a *_REF), then SUDO_GROK_WEB_MCP=1, then restart. Alias is NOT in
+        // models.primary[] yet, so enabling alone won't route brain traffic to it.
+        SUDO_GROK_WEB_MCP: process.env['SUDO_GROK_WEB_MCP'] || '0',
+        SUDO_MCP_PUBLIC_URL: process.env['SUDO_MCP_PUBLIC_URL'] || 'https://mcp.sudoapi.shop',
+        SUDO_MCP_PUBLIC_PORT: process.env['SUDO_MCP_PUBLIC_PORT'] || '18899',
+        SUDO_GROK_WEB_MCP_TOOLS:
+          process.env['SUDO_GROK_WEB_MCP_TOOLS'] || 'git.status,meta.search-tools,github.list_prs,github.pr_status',
+        // FULL-CONTROL lane (DEFAULT OFF). Flip SUDO_GROK_WEB_MCP_COMMAND=1 to
+        // register the agent.command tool AND expose it past the readonly-only
+        // rule as the single blessed commandTool, so Grok app-chat can DRIVE the
+        // whole agent at OWNER tier (restart, self-modify, email — everything),
+        // not just query readonly tools. The MCP capability token then grants
+        // full control of this agent: keep SUDO_MCP_PUBLIC_TOKEN secret + rotate.
+        // Budgets: SUDO_GROK_COMMAND_MAX_PER_DAY (200), SUDO_GROK_COMMAND_MAX_IN_FLIGHT (2).
+        SUDO_GROK_WEB_MCP_COMMAND: process.env['SUDO_GROK_WEB_MCP_COMMAND'] || '0',
 
         // Kill-switch: block the agent from restarting its own prod process
         // unprompted. It was bouncing prod pursuing a stuck "enable grok voice"
@@ -190,6 +220,15 @@ module.exports = {
         // All agent restart tools funnel through scheduleDetachedRestart(), which
         // honors this flag. Operators still `pm2 restart` directly (bypasses it).
         SUDO_BLOCK_AGENT_RESTART: process.env['SUDO_BLOCK_AGENT_RESTART'] || '1',
+
+        // Narrow, opt-in exception to the kill-switch above: default OFF. When
+        // '1', meta.self-modify's full-cycle action (edit -> build -> test ->
+        // restart) may restart even with SUDO_BLOCK_AGENT_RESTART=1, but ONLY
+        // because it just watched build+test pass in that same call — the
+        // standalone `restart` action and every other restart path (self-update,
+        // service-control) stay fully blocked regardless of this flag. Flip to
+        // '1' only after deciding you trust build+test-gated self-restart.
+        SUDO_ALLOW_GATED_RESTART: process.env['SUDO_ALLOW_GATED_RESTART'] || '0',
 
         // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
         // long drill turns OOM-crashed the ~4GB default heap (FATAL: JavaScript
@@ -593,6 +632,22 @@ module.exports = {
         SUDO_CHANNEL_COMMANDS: process.env['SUDO_CHANNEL_COMMANDS'] || '1',
         SUDO_STREAM_CHANNELS: process.env['SUDO_STREAM_CHANNELS'] || '1',
         SUDO_MSG_COALESCE: process.env['SUDO_MSG_COALESCE'] || '1',
+        // TX1-TX6 Telegram UX (docs/TELEGRAM_UX_ROADMAP.md; each has =0 kill):
+        SUDO_TG_STOP_BUTTON: process.env['SUDO_TG_STOP_BUTTON'] || '1',
+        SUDO_TG_BAD_REGEN: process.env['SUDO_TG_BAD_REGEN'] || '1',
+        SUDO_TG_DETAIL_TOGGLE: process.env['SUDO_TG_DETAIL_TOGGLE'] || '1',
+        SUDO_TG_ARTIFACTS: process.env['SUDO_TG_ARTIFACTS'] || '1',
+        SUDO_TG_STREAM_FOLD: process.env['SUDO_TG_STREAM_FOLD'] || '1',
+        SUDO_TG_STATUS_PIN: process.env['SUDO_TG_STATUS_PIN'] || '1',
+        // TX11 live browser viewport (owner-DM only; =0 kill):
+        SUDO_TG_BROWSER_VIEW: process.env['SUDO_TG_BROWSER_VIEW'] || '1',
+        // Viewport bubble is deleted at turn end (Frank's call 2026-07-29 —
+        // cleaner chat); set SUDO_TG_BROWSER_VIEW_KEEP=1 to keep the final frame.
+        SUDO_TG_BROWSER_VIEW_KEEP: process.env['SUDO_TG_BROWSER_VIEW_KEEP'] || '0',
+        // TX1 steering leg: mid-run owner messages steer the active turn
+        // instead of queueing behind it (GW-5 machinery, queue mode 'steer').
+        SUDO_MIDRUN_STEER: process.env['SUDO_MIDRUN_STEER'] || '1',
+        SUDO_QUEUE_MODE_DEFAULT: process.env['SUDO_QUEUE_MODE_DEFAULT'] || 'steer',
         SUDO_WHATSAPP_ENABLE: process.env['SUDO_WHATSAPP_ENABLE'] || '1',
         SUDO_FLEET_REGISTRAR_MODE: process.env['SUDO_FLEET_REGISTRAR_MODE'] || '1',
         // Autonomy: background goal pursuit via WakeSleepCycle over GoalEngineV2

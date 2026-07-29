@@ -25,7 +25,13 @@ vi.mock('@huggingface/transformers', () => ({
 
 const spawnMock = vi.fn();
 
-vi.mock('node:child_process', () => ({
+// PARTIAL mock: only `spawn` is faked. The rest of node:child_process must stay
+// real — unrelated modules reachable from this test's import graph (e.g.
+// browser/anti-detect.ts does `promisify(execFile)` at module load, pulled in
+// via llm/grok-web-capture.ts) resolve their own exports from here, and a
+// whole-module replacement makes them throw "No export is defined on the mock".
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 

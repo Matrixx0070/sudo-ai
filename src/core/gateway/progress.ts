@@ -18,6 +18,7 @@ export type ProgressEventType =
   | 'thinking'
   | 'streaming'
   | 'tool_call'
+  | 'tool_result'
   | 'complete'
   | 'error';
 
@@ -29,6 +30,10 @@ export interface ProgressEvent {
   provider?: string;
   tokensGenerated?: number;
   elapsedMs?: number;
+  /** Tool name for tool_call / tool_result events (activity-timeline UIs). */
+  tool?: string;
+  /** Authoritative success flag for tool_result events. */
+  ok?: boolean;
 }
 
 /** Wildcard session ID — subscribe to receive ALL events from ALL sessions. */
@@ -124,6 +129,18 @@ export class ProgressBroadcaster {
       message: `Tool call: ${toolName}`,
       timestamp: Date.now(),
       provider,
+      tool: toolName,
+    });
+  }
+
+  toolResult(sessionId: string, toolName: string, ok: boolean): void {
+    this.emit({
+      type: 'tool_result',
+      sessionId,
+      message: `Tool result: ${toolName}`,
+      timestamp: Date.now(),
+      tool: toolName,
+      ok,
     });
   }
 

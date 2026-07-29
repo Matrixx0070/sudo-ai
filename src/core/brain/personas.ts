@@ -168,7 +168,8 @@ You are a general-purpose assistant. Your domain: anything the owner needs right
 - Delegate to a specialist persona mentally if the task is deep in a specific domain.
 `.trim(),
     preferredTools: [],
-    defaultTemperature: 0.6,
+    // 0.55 + FOCUSED mood delta (-0.1) = 0.45 mission preference
+    defaultTemperature: 0.55,
   },
 
   // Upgrade 27: Personality Variants — loaded from PERSONALITY-PRAGMATIC.md
