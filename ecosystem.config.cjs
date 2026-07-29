@@ -641,6 +641,9 @@ module.exports = {
         SUDO_TG_STATUS_PIN: process.env['SUDO_TG_STATUS_PIN'] || '1',
         // TX11 live browser viewport (owner-DM only; =0 kill):
         SUDO_TG_BROWSER_VIEW: process.env['SUDO_TG_BROWSER_VIEW'] || '1',
+        // Viewport bubble is deleted at turn end (Frank's call 2026-07-29 —
+        // cleaner chat); set SUDO_TG_BROWSER_VIEW_KEEP=1 to keep the final frame.
+        SUDO_TG_BROWSER_VIEW_KEEP: process.env['SUDO_TG_BROWSER_VIEW_KEEP'] || '0',
         // TX1 steering leg: mid-run owner messages steer the active turn
         // instead of queueing behind it (GW-5 machinery, queue mode 'steer').
         SUDO_MIDRUN_STEER: process.env['SUDO_MIDRUN_STEER'] || '1',
