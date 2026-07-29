@@ -31,6 +31,33 @@ export interface AliasLimits {
 /** Conservative fallback for anything we do not recognize. */
 export const DEFAULT_LIMITS: AliasLimits = { context_window: 128_000, max_output: 8192 };
 
+/**
+ * Output-token floor for reasoning models on the OpenAI-compatible wire.
+ *
+ * These models emit `reasoning` tokens BEFORE `content`. Below this floor the
+ * whole budget is consumed by thinking and the response returns
+ * `content:'' finish_reason:'length'` — a truncation that is indistinguishable
+ * downstream from a dead provider. Measured 2026-07-29: glm-5.2:cloud at
+ * max_tokens 64 produced 213-252 reasoning tokens and EMPTY content on 5/5 raw
+ * calls; at 2048 it answered every time. 1024 clears the observed reasoning
+ * length with room for a real answer.
+ */
+export const REASONING_MIN_OUTPUT_TOKENS = 1024;
+
+/**
+ * Models that spend output budget on reasoning before content. Matched on the
+ * bare model id so `ollama/glm-5.2:cloud` and a future `glm-5.3:cloud` both
+ * hit it. Deliberately a prefix/substring list rather than exact ids — new
+ * point releases must not silently fall back to the non-reasoning path.
+ */
+const REASONING_MODEL_MARKERS = ['glm-', 'deepseek-r', 'qwq', 'kimi-k2', 'o1-', 'o3-', 'o4-'] as const;
+
+/** True when the model emits reasoning tokens ahead of content. */
+export function isReasoningModel(model: string): boolean {
+  const bare = bareModel(resolveAlias(model)).toLowerCase();
+  return REASONING_MODEL_MARKERS.some((m) => bare.startsWith(m) || bare.includes(`/${m}`));
+}
+
 // ---------------------------------------------------------------------------
 // Fallback table
 // ---------------------------------------------------------------------------
