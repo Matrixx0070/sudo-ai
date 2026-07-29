@@ -253,7 +253,7 @@ export async function hybridSearch(
   localEmbedder?: LocalEmbedderLike,
 ): Promise<SearchResult[]> {
   const {
-    query,
+    query: rawQuery,
     maxResults    = 6,
     minScore      = 0.35,
     vectorWeight  = 0.7,
@@ -264,6 +264,14 @@ export async function hybridSearch(
     mmrLambda     = 0.7,
     pathFilter,
   } = options;
+
+  // 2026-07-29 wedge guard: a session-fork summary once arrived here as a
+  // 712KB "query". Both retrieval lanes are bounded-signal — the embedder
+  // truncates at its model context and BM25 gains nothing past a few dozen
+  // terms — but the FTS5 OR-of-prefix-terms expression built from unbounded
+  // text is SUPERLINEAR in SQLite (measured 6.5s at 150KB, minutes at 712KB)
+  // and runs synchronously on the event loop. Clamp once at the chokepoint.
+  const query = rawQuery.length > MAX_QUERY_CHARS ? rawQuery.slice(0, MAX_QUERY_CHARS) : rawQuery;
 
   const candidateN = maxResults * 4;
 
@@ -454,10 +462,30 @@ export async function hybridSearch(
 // ---------------------------------------------------------------------------
 
 /**
+ * Hard cap on the query text hybridSearch will consider. Retrieval signal is
+ * bounded (embedding model context; BM25 term saturation), so anything past
+ * this is pure cost — including the 2026-07-29 event-loop wedge where a 712KB
+ * fork-summary prompt became a ~110k-term FTS5 query that pinned the daemon
+ * at 100% CPU for 9+ minutes.
+ */
+export const MAX_QUERY_CHARS = 2000;
+
+/**
+ * Max unique prefix terms in the generated FTS5 MATCH expression. Each term is
+ * a separate index scan; relevance saturates long before cost does.
+ */
+export const MAX_FTS_TOKENS = 64;
+
+/**
  * Sanitise a natural-language query string for FTS5 MATCH syntax.
  * FTS5 uses a subset of special characters; unbalanced quotes or operators
  * will throw. We escape double-quotes and wrap the whole query in phrase
  * mode to avoid operator interpretation.
+ *
+ * The output is BOUNDED: tokens are deduplicated and capped at
+ * {@link MAX_FTS_TOKENS} — each OR'd prefix term is a separate FTS5 index
+ * scan, and an unbounded expression is superlinear in query size (the
+ * 2026-07-29 wedge).
  */
 export function sanitiseFtsQuery(raw: string): string {
   // Remove characters that break FTS5 MATCH: parentheses, unbalanced quotes
@@ -467,8 +495,9 @@ export function sanitiseFtsQuery(raw: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Wrap each token as a prefix term so partial words match
-  const tokens = cleaned.split(' ').filter(Boolean);
+  // Wrap each token as a prefix term so partial words match; dedupe (repeats
+  // add scans, not relevance) and cap the term count.
+  const tokens = [...new Set(cleaned.split(' ').filter(Boolean))].slice(0, MAX_FTS_TOKENS);
   if (tokens.length === 0) return '""';
 
   // Use OR between tokens for broad recall; prefix * for partial matching
