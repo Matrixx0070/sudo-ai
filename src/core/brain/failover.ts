@@ -88,6 +88,16 @@ const MAX_RETRY_AFTER_MS = 3_600_000; // 1 hour
 /** Structured classification of an ErrorCategory for retry strategy + observability. */
 export type ErrorClass = 'transient' | 'billing' | 'permanent' | 'auth' | 'other';
 
+/**
+ * ADR 0003: account-scoped error classes propagate cooldowns across the
+ * credential failure domain (= provider). Default ON; SUDO_FAILOVER_DOMAINS=0
+ * restores strictly per-profile behavior. Read at call time so a runtime env
+ * flip (and tests) take effect without restart.
+ */
+function domainPropagationEnabled(): boolean {
+  return process.env['SUDO_FAILOVER_DOMAINS'] !== '0';
+}
+
 /** Optional inputs to recordError(). */
 export interface RecordErrorOptions {
   /** Server-provided Retry-After in ms (parsed from the response header/body), if any. */
@@ -170,6 +180,9 @@ export class ModelFailover {
         cooldownUntil: 0,
         consecutiveErrors: 0,
         disabled: false,
+        // ADR 0003: every credential is per-provider today, so the provider IS
+        // the failure domain.
+        domain: provider,
       };
 
       this.profiles.set(modelString, profile);
@@ -230,10 +243,12 @@ export class ModelFailover {
       // it until a manual recordSuccess, defeating the point of "last resort".
       if (isLastResort) {
         profile.cooldownUntil = now + LAST_RESORT_COOLDOWN_CAP_MS;
+        profile.cooldownClass = 'auth';
         log.warn(
           { profileId, category },
           'Last-resort profile hit a permanent-category error — short cooldown instead of disabling',
         );
+        this._propagateToDomain(profile, 'auth', errorCount, saltedOpts, now);
         return;
       }
       profile.disabled = true;
@@ -241,32 +256,42 @@ export class ModelFailover {
         { profileId, category },
         'Profile permanently disabled due to auth_permanent error',
       );
+      // ADR 0003: the credential is shared — park (don't disable) the domain
+      // siblings so the chain skips straight to the next domain without
+      // burning a wire call each, while staying self-healing if the 403 was
+      // model-scoped or the account block lifts.
+      this._propagateToDomain(profile, 'auth', errorCount, saltedOpts, now);
       return;
     }
 
     if (BILLING_CATEGORIES.has(category)) {
       const cooldownMs = capCooldown(this._cooldownMs(BILLING_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
+      profile.cooldownClass = 'billing';
       log.warn(
         { profileId, category, errClass: 'billing', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs, cooldownUntil: profile.cooldownUntil },
         'Billing cooldown applied',
       );
+      this._propagateToDomain(profile, 'billing', errorCount, saltedOpts, now);
       return;
     }
 
     if (AUTH_CATEGORIES.has(category)) {
       const cooldownMs = capCooldown(this._cooldownMs(AUTH_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
+      profile.cooldownClass = 'auth';
       log.warn(
         { profileId, category, errClass: 'auth', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
         'Auth cooldown applied — token invalid/expired; parking profile until re-auth (fallback serves)',
       );
+      this._propagateToDomain(profile, 'auth', errorCount, saltedOpts, now);
       return;
     }
 
     if (TRANSIENT_CATEGORIES.has(category)) {
       const cooldownMs = capCooldown(this._cooldownMs(TRANSIENT_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
+      profile.cooldownClass = 'transient';
       log.warn(
         { profileId, category, errClass: 'transient', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
         'Transient cooldown applied',
@@ -278,10 +303,53 @@ export class ModelFailover {
     // Apply a short transient cooldown (first slot) to avoid hammering.
     const cooldownMs = capCooldown(this._cooldownMs(TRANSIENT_COOLDOWN, 1, saltedOpts));
     profile.cooldownUntil = now + cooldownMs;
+    profile.cooldownClass = 'other';
     log.warn(
       { profileId, category, errClass: 'other', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
       'Non-categorized error — short cooldown applied',
     );
+  }
+
+  /**
+   * ADR 0003: park every OTHER profile in the erroring profile's credential
+   * domain on an account-scoped cooldown. The cooldown escalates with the
+   * SOURCE profile's consecutive-error count (the evidence is about the shared
+   * credential, not the sibling models — siblings' own error counters are not
+   * touched), never shortens an existing cooldown, and respects the
+   * last-resort cap. Disabled siblings are left alone.
+   */
+  private _propagateToDomain(
+    source: ModelProfile,
+    errClass: 'auth' | 'billing',
+    errorCount: number,
+    opts: RecordErrorOptions,
+    now: number,
+  ): void {
+    if (!domainPropagationEnabled()) return;
+    const schedule = errClass === 'billing' ? BILLING_COOLDOWN : AUTH_COOLDOWN;
+    const affected: string[] = [];
+    for (const sibling of this.profiles.values()) {
+      if (sibling.domain !== source.domain || sibling.id === source.id || sibling.disabled) continue;
+      // Per-sibling seed so propagated cooldowns stay de-synchronized.
+      let hash = 0;
+      for (let i = 0; i < sibling.id.length; i++) {
+        hash = ((hash * 31) + sibling.id.charCodeAt(i)) >>> 0;
+      }
+      let ms = this._cooldownMs(schedule, errorCount, { ...opts, profileSeed: opts.rng ? opts.profileSeed : hash });
+      if (LAST_RESORT_MODEL_IDS.has(sibling.id)) ms = Math.min(ms, LAST_RESORT_COOLDOWN_CAP_MS);
+      const until = now + ms;
+      if (until > sibling.cooldownUntil) {
+        sibling.cooldownUntil = until;
+        sibling.cooldownClass = errClass;
+        affected.push(sibling.id);
+      }
+    }
+    if (affected.length > 0) {
+      log.warn(
+        { domain: source.domain, sourceProfileId: source.id, errClass, errorCount, affectedProfiles: affected },
+        'Account-scoped error — cooldown propagated across credential domain',
+      );
+    }
   }
 
   /**
@@ -338,12 +406,35 @@ export class ModelFailover {
     const hadErrors = profile.consecutiveErrors > 0;
     profile.consecutiveErrors = 0;
     profile.cooldownUntil = 0;
+    delete profile.cooldownClass;
     profile.lastUsed = Date.now();
 
     if (hadErrors) {
       log.info({ profileId }, 'Profile recovered — error count reset');
     } else {
       log.debug({ profileId }, 'Success recorded');
+    }
+
+    // ADR 0003: a working call proves the shared credential works — clear
+    // domain siblings' ACCOUNT-scoped cooldowns (auth/billing). Transient
+    // cooldowns are evidence about those models, not the credential, and
+    // disabled profiles stay disabled (per-profile, permanent, as before).
+    if (domainPropagationEnabled()) {
+      const recovered: string[] = [];
+      for (const sibling of this.profiles.values()) {
+        if (sibling.domain !== profile.domain || sibling.id === profile.id || sibling.disabled) continue;
+        if (sibling.cooldownUntil > 0 && (sibling.cooldownClass === 'auth' || sibling.cooldownClass === 'billing')) {
+          sibling.cooldownUntil = 0;
+          delete sibling.cooldownClass;
+          recovered.push(sibling.id);
+        }
+      }
+      if (recovered.length > 0) {
+        log.info(
+          { domain: profile.domain, sourceProfileId: profile.id, recoveredProfiles: recovered },
+          'Domain success — account-scoped cooldowns cleared across credential domain',
+        );
+      }
     }
   }
 
@@ -447,6 +538,7 @@ export class ModelFailover {
       if (!profile.disabled && (profile.cooldownUntil > 0 || profile.consecutiveErrors > 0)) {
         profile.cooldownUntil = 0;
         profile.consecutiveErrors = 0;
+        delete profile.cooldownClass;
         count++;
       }
     }
