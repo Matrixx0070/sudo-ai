@@ -639,6 +639,8 @@ module.exports = {
         SUDO_TG_ARTIFACTS: process.env['SUDO_TG_ARTIFACTS'] || '1',
         SUDO_TG_STREAM_FOLD: process.env['SUDO_TG_STREAM_FOLD'] || '1',
         SUDO_TG_STATUS_PIN: process.env['SUDO_TG_STATUS_PIN'] || '1',
+        // TX11 live browser viewport (owner-DM only; =0 kill):
+        SUDO_TG_BROWSER_VIEW: process.env['SUDO_TG_BROWSER_VIEW'] || '1',
         // TX1 steering leg: mid-run owner messages steer the active turn
         // instead of queueing behind it (GW-5 machinery, queue mode 'steer').
         SUDO_MIDRUN_STEER: process.env['SUDO_MIDRUN_STEER'] || '1',
