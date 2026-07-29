@@ -11,8 +11,8 @@ real Telegram surface (cite evidence), not just green tests.
 | TX2 | 👎 regenerates (v2 in place) | OPEN | feedback store + ids exist |
 | TX3 | Per-turn detail toggle | OPEN | |
 | TX4 | Inline artifacts | OPEN | rich-output suite exists |
-| TX5 | Stream into the fold | OPEN | |
-| TX6 | Pinned live status card | OPEN | folds HEALTH alerts (disk-88% spam precedent) |
+| TX5 | Stream into the fold | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_STREAM_FOLD=1`; `stream-fold.ts` latch decider wired into the cli sink edit callback; status renders never fold; `SUDO_TG_READMORE=0` master-off; 12 unit tests |
+| TX6 | Pinned live status card | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_STATUS_PIN=1`; `status-pin.ts` controller (owner-DM card, data/status-pin.json persistence, 60s cadence + run/health event bumps, ≥15s min-gap); non-critical HEALTH alerts fold into the card, critical failures still bubble; 14 unit tests |
 | TX7 | Morning digest | OPEN | |
 | TX8 | Provenance footer | OPEN | superseded long-term by TX28 |
 | TX9 | Mission Control (forum topics, living mission card) | OPEN | |

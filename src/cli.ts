@@ -2103,9 +2103,17 @@ async function boot(): Promise<void> {
           if (process.env['SUDO_STREAM_CHANNELS'] !== '0') {
             try {
               const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
+              // TX5 (SUDO_TG_STREAM_FOLD=1, default OFF): once streamed content
+              // passes the Read More threshold, mid-stream edits render
+              // 'md-collapse' so the bubble stays compact while writing. Latch
+              // per message (no md↔md-collapse flicker); status renders (empty
+              // buffer) never fold. Flag off → always 'md' (byte-identical).
+              const { createStreamFoldLatch, resolveStreamFoldOptions } = await import('./core/channels/stream-fold.js');
+              const foldFormat = createStreamFoldLatch(resolveStreamFoldOptions(process.env));
               streamSink = await createBufferedEditSink(
                 (placeholder: string) => telegram.sendForStream(replyTo, placeholder),
-                (id: string | number, text: string) => telegram.editText(replyTo, id, text, { format: 'md' }),
+                (id: string | number, text: string) =>
+                  telegram.editText(replyTo, id, text, { format: foldFormat(text, (streamSink?.bufferLength ?? 0) === 0) }),
                 // maxChars clamps BEFORE same-text suppression so the sink
                 // and Telegram's 4096-char editMessageText cap agree on the
                 // wire body — preventing duplicate edits whose only delta
@@ -5227,6 +5235,83 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 9.6b TX6 — pinned live status card (SUDO_TG_STATUS_PIN=1, default OFF)
+  // -------------------------------------------------------------------------
+  // One pinned, continuously-edited "◉ Sudo-Ai" message in the owner DM:
+  // activity (run-registry), cron summary, today's spend vs budget (ledger
+  // telemetry only — zero LLM calls), last health incident. Message id
+  // persists in data/status-pin.json across restarts. Flag OFF → this whole
+  // block is inert and prod behavior is byte-identical.
+  let statusPinController: import('./core/channels/status-pin.js').StatusPinController | null = null;
+  let statusPinShouldBubble: ((severity: 'high' | 'critical', kind: 'failure' | 'recovery') => boolean) | null = null;
+  if (process.env['SUDO_TG_STATUS_PIN'] === '1' && telegramNotifier) {
+    try {
+      const { createStatusPinController, shouldBubbleHealthAlert } = await import('./core/channels/status-pin.js');
+      const { DATA_DIR } = await import('./core/shared/paths.js');
+      const { getRunRegistry } = await import('./core/agent/run-registry.js');
+      const tg = telegramNotifier;
+      const pinChatId = (process.env['TELEGRAM_CHAT_ID'] ?? '').split(',')[0]?.trim()
+        || config.channels?.telegram?.allowedUsers?.[0];
+      if (pinChatId) {
+        statusPinShouldBubble = shouldBubbleHealthAlert;
+        const registry = getRunRegistry();
+        statusPinController = createStatusPinController({
+          chatId: pinChatId,
+          stateFile: path.join(DATA_DIR, 'status-pin.json'),
+          // Initial send is plain text (sendForStream has no parse mode) —
+          // strip bold markers; the first md-rendered edit restores them.
+          send: (chatId, text) => tg.sendForStream(chatId, text.replace(/\*\*/g, '')),
+          edit: (chatId, id, text) => tg.editText(chatId, id, text, { format: 'md' }),
+          pin: (chatId, id) => tg.pinMessageSafe(chatId, id),
+          collect: async () => {
+            const runs = registry.list();
+            const oldest = runs.reduce<(typeof runs)[number] | null>(
+              (a, r) => (!a || r.startedAt < a.startedAt ? r : a), null,
+            );
+            let enabledCount = 0;
+            let failingCount = 0;
+            let lastFailureName: string | undefined;
+            try {
+              for (const j of cronStore.list()) {
+                if (j.enabled) enabledCount++;
+                if (j.consecutiveErrors > 0) { failingCount++; lastFailureName = j.name; }
+              }
+            } catch { /* cron read best-effort */ }
+            let todayUsd: number | null = null;
+            try {
+              const { getGatewayCallLog } = await import('./llm/logging.js');
+              todayUsd = getGatewayCallLog().daySpend().total;
+            } catch { /* ledger best-effort */ }
+            let budgetUsd: number | null = null;
+            for (const key of ['SUDO_DAILY_LLM_BUDGET_USD', 'SUDO_LLM_GLOBAL_BUDGET_USD']) {
+              const n = Number(process.env[key]);
+              if (Number.isFinite(n) && n > 0) { budgetUsd = n; break; }
+            }
+            let model: string | undefined;
+            try { model = (brain as { getModel?: () => string }).getModel?.(); } catch { /* best-effort */ }
+            return {
+              activity: {
+                activeCount: runs.length,
+                ...(oldest ? { oldestKey: oldest.key, oldestStartedAtMs: oldest.startedAt } : {}),
+              },
+              cron: { enabledCount, failingCount, ...(lastFailureName ? { lastFailureName } : {}) },
+              spend: { todayUsd, budgetUsd, ...(model ? { model } : {}) },
+            };
+          },
+        });
+        // Event-driven refresh on run start/end (min-gap throttled inside).
+        registry.setObserver(() => statusPinController?.bump('run-change'));
+        await statusPinController.start();
+        registerShutdown(() => statusPinController?.stop());
+        log.info({ chatId: pinChatId }, 'TX6: pinned live status card enabled (SUDO_TG_STATUS_PIN=1)');
+      }
+    } catch (err) {
+      statusPinController = null;
+      log.warn({ err: String(err) }, 'TX6: status-pin wiring failed — continuing without');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 9.7 Health Watchdog
   // -------------------------------------------------------------------------
   try {
@@ -5236,6 +5321,15 @@ async function boot(): Promise<void> {
     // through the proactive notifier; HealthAlertPolicy inside the watchdog
     // handles cooldown/threshold so this never spams per 60s tick.
     watchdog.setAlertSink((severity, check, kind) => {
+      // TX6: with the pinned status card live, every alert lands on the card
+      // (latest incident line + count); non-critical alerts fold there INSTEAD
+      // of sending a new bubble. Severity-critical failures always still
+      // bubble (never silently swallowed). Flag off → statusPinController is
+      // null and this path is byte-identical to before.
+      if (statusPinController) {
+        statusPinController.recordHealthAlert(severity, check.name, check.message, kind);
+        if (statusPinShouldBubble && !statusPinShouldBubble(severity, kind)) return;
+      }
       proactiveNotifier.notify(
         'alert',
         kind === 'recovery' ? `HEALTH RECOVERED: ${check.name}` : `HEALTH ${severity.toUpperCase()}: ${check.name}`,

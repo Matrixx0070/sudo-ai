@@ -739,6 +739,19 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /**
+   * TX6: best-effort pin of a message (never throws — the pinned live
+   * status card degrades to an unpinned message if the bot lacks pin
+   * rights). Silent notification so pinning never buzzes the owner.
+   */
+  async pinMessageSafe(peerId: string, messageId: string | number): Promise<void> {
+    try {
+      const msgIdNum = typeof messageId === 'number' ? messageId : parseInt(String(messageId), 10);
+      if (!Number.isFinite(msgIdNum)) return;
+      await this.bot?.api.pinChatMessage(peerId, msgIdNum, { disable_notification: true });
+    } catch { /* best effort */ }
+  }
+
+  /**
    * Send a message with a Telegram InlineKeyboard attached.
    * Falls back to plain send if keyboard fails.
    */
