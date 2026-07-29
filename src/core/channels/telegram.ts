@@ -66,6 +66,18 @@ import {
 } from './telegram-run-controls.js';
 import { getRunRegistry } from '../agent/run-registry.js';
 
+/**
+ * Update types requested from getUpdates.
+ *
+ * Telegram delivers ONLY the types listed here — anything omitted is dropped
+ * server-side and never reaches the bot. `callback_query` was missing until
+ * 2026-07-29, which silently made EVERY inline button dead on arrival (the
+ * 👍👎⏭ feedback keyboard, TX1 Stop, TX3 Details): the buttons rendered, taps
+ * were accepted by the client, and the updates were discarded before polling.
+ * Any new interactive surface must add its update type here.
+ */
+export const POLL_ALLOWED_UPDATES = ['message', 'callback_query'] as const;
+
 /** Directory where incoming Telegram photos are saved. */
 const UPLOAD_DIR = join(DATA_DIR, 'uploads');
 
@@ -491,7 +503,8 @@ export class TelegramAdapter implements ChannelAdapter {
       log.info('Poll loop starting fetch cycle');
       while (!abort.signal.aborted) {
         try {
-          const url = `${baseUrl}/getUpdates?offset=${this._pollOffset}&timeout=30&allowed_updates=["message"]`;
+          const url = `${baseUrl}/getUpdates?offset=${this._pollOffset}&timeout=30`
+            + `&allowed_updates=${encodeURIComponent(JSON.stringify(POLL_ALLOWED_UPDATES))}`;
           let res: Response;
           try {
             res = await fetch(url, { signal: abort.signal });
@@ -529,7 +542,12 @@ export class TelegramAdapter implements ChannelAdapter {
           const updates = data.result ?? [];
           for (const update of updates) {
             this._pollOffset = update.update_id + 1;
-            if (!update.message) continue;
+            // Dispatch messages AND callback queries (inline-button taps).
+            // A `!update.message` guard here silently dropped every button
+            // tap even once allowed_updates requested them — the second half
+            // of the 2026-07-29 dead-button bug. Keep this in sync with
+            // POLL_ALLOWED_UPDATES.
+            if (!update.message && !update.callback_query) continue;
 
             try {
               if (this.bot) {
