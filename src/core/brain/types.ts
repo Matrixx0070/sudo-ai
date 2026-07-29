@@ -225,6 +225,18 @@ export interface ModelProfile {
   disabled: boolean;
   /** Unix ms timestamp of the last force-rescue (cooldown zeroed). Guards against concurrent thundering-herd rescues. */
   lastRescuedAt?: number;
+  /**
+   * Credential failure domain (ADR 0003). Profiles sharing one credential —
+   * today exactly the provider — rise and fall together for account-scoped
+   * errors (auth/billing/permanent).
+   */
+  domain: string;
+  /**
+   * Why the current cooldown was applied. Account-scoped classes
+   * ('auth'/'billing') are cleared domain-wide on a domain sibling's success;
+   * model-scoped ones ('transient'/'other') are not. Unset when not cooling.
+   */
+  cooldownClass?: 'transient' | 'billing' | 'auth' | 'other';
 }
 
 // ---------------------------------------------------------------------------

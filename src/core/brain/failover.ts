@@ -11,8 +11,18 @@ import { categorizeError, LLMError } from '../shared/errors.js';
 import { TRANSIENT_COOLDOWN, BILLING_COOLDOWN, AUTH_COOLDOWN } from '../shared/constants.js';
 import { createLogger } from '../shared/logger.js';
 import type { ModelProfile, ErrorCategory } from './types.js';
+import {
+  capLastResort,
+  computeCooldownMs,
+  profileSeedFor,
+  LAST_RESORT_MODEL_IDS,
+  LAST_RESORT_COOLDOWN_CAP_MS,
+  type RecordErrorOptions,
+} from './failover-cooldown.js';
+import { propagateDomainCooldown, clearDomainAccountCooldowns } from './failover-domains.js';
 
 export type { ErrorCategory };
+export type { RecordErrorOptions };
 
 const log = createLogger('brain:failover');
 
@@ -28,23 +38,6 @@ const NON_VISION_MODEL_IDS: ReadonlySet<string> = new Set([
   'ollama/deepseek-v4-pro:cloud',
   'ollama/kimi-k2.7-code:cloud',
 ]);
-
-/**
- * Absolute last-resort profile(s) for the cron heartbeat / background ticks.
- * A 2026-07-25 incident had system.heartbeat report "all profiles exhausted"
- * for 4+ hours because the primary + fallback chain all hit cooldown/disable
- * at once with nothing left to retry sooner than their normal (up to 30min
- * auth / 10min billing) backoff ceilings. This model gets a much shorter,
- * fixed cooldown cap instead of an unlimited exemption — it's a BILLED
- * ollama:cloud model (~$0.057/call, see project history), so a true never-
- * cooldown exemption during a real outage would mean paying for a retry
- * every tick indefinitely. A 60s cap bounds that cost while still giving the
- * heartbeat a provider to retry against within a minute instead of hours.
- */
-const LAST_RESORT_MODEL_IDS: ReadonlySet<string> = new Set([
-  'ollama/glm-5.2:cloud',
-]);
-const LAST_RESORT_COOLDOWN_CAP_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Transient vs billing category sets
@@ -68,35 +61,11 @@ const PERMANENT_CATEGORIES = new Set<ErrorCategory>(['auth_permanent']);
  */
 const AUTH_CATEGORIES = new Set<ErrorCategory>(['auth']);
 
-/**
- * Additive jitter applied to scheduled cooldowns: the final wait is
- * base .. base*(1+JITTER_RATIO). Jitter only ever LENGTHENS the wait, so we
- * never retry sooner than the schedule, while still de-synchronizing retries
- * across profiles to avoid a thundering-herd storm.
- */
-const JITTER_RATIO = 0.2;
-
 /** Minimum gap between force-rescues of the same profile (thundering-herd guard). */
 const MIN_RESCUE_INTERVAL_MS = 30_000;
 
-/**
- * Hard cap on a server-provided Retry-After, so a pathological/huge value can't
- * wedge a model out of rotation indefinitely.
- */
-const MAX_RETRY_AFTER_MS = 3_600_000; // 1 hour
-
 /** Structured classification of an ErrorCategory for retry strategy + observability. */
 export type ErrorClass = 'transient' | 'billing' | 'permanent' | 'auth' | 'other';
-
-/** Optional inputs to recordError(). */
-export interface RecordErrorOptions {
-  /** Server-provided Retry-After in ms (parsed from the response header/body), if any. */
-  retryAfterMs?: number;
-  /** Injectable RNG for deterministic tests. Defaults to Math.random. */
-  rng?: () => number;
-  /** Per-profile salt derived from profileId hash to de-sync jitter across simultaneously-failing profiles. */
-  profileSeed?: number;
-}
 
 // ---------------------------------------------------------------------------
 // ModelFailover class
@@ -170,6 +139,9 @@ export class ModelFailover {
         cooldownUntil: 0,
         consecutiveErrors: 0,
         disabled: false,
+        // ADR 0003: every credential is per-provider today, so the provider IS
+        // the failure domain.
+        domain: provider,
       };
 
       this.profiles.set(modelString, profile);
@@ -214,15 +186,11 @@ export class ModelFailover {
     const now = Date.now();
 
     // Derive a per-profile phase from profileId to de-sync jitter across concurrent failures
-    let _phash = 0;
-    for (let i = 0; i < profileId.length; i++) {
-      _phash = ((_phash * 31) + profileId.charCodeAt(i)) >>> 0;
-    }
-    const profileSeed = opts.profileSeed ?? _phash;
+    const profileSeed = opts.profileSeed ?? profileSeedFor(profileId);
     const saltedOpts = { ...opts, profileSeed };
 
     const isLastResort = LAST_RESORT_MODEL_IDS.has(profileId);
-    const capCooldown = (ms: number): number => isLastResort ? Math.min(ms, LAST_RESORT_COOLDOWN_CAP_MS) : ms;
+    const capCooldown = (ms: number): number => capLastResort(profileId, ms);
 
     if (PERMANENT_CATEGORIES.has(category)) {
       // Last-resort never permanently disables — an auth_permanent misfire on
@@ -230,10 +198,12 @@ export class ModelFailover {
       // it until a manual recordSuccess, defeating the point of "last resort".
       if (isLastResort) {
         profile.cooldownUntil = now + LAST_RESORT_COOLDOWN_CAP_MS;
+        profile.cooldownClass = 'auth';
         log.warn(
           { profileId, category },
           'Last-resort profile hit a permanent-category error — short cooldown instead of disabling',
         );
+        propagateDomainCooldown(this.profiles.values(), profile, 'auth', errorCount, saltedOpts, now);
         return;
       }
       profile.disabled = true;
@@ -241,32 +211,42 @@ export class ModelFailover {
         { profileId, category },
         'Profile permanently disabled due to auth_permanent error',
       );
+      // ADR 0003: the credential is shared — park (don't disable) the domain
+      // siblings so the chain skips straight to the next domain without
+      // burning a wire call each, while staying self-healing if the 403 was
+      // model-scoped or the account block lifts.
+      propagateDomainCooldown(this.profiles.values(), profile, 'auth', errorCount, saltedOpts, now);
       return;
     }
 
     if (BILLING_CATEGORIES.has(category)) {
-      const cooldownMs = capCooldown(this._cooldownMs(BILLING_COOLDOWN, errorCount, saltedOpts));
+      const cooldownMs = capCooldown(computeCooldownMs(BILLING_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
+      profile.cooldownClass = 'billing';
       log.warn(
         { profileId, category, errClass: 'billing', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs, cooldownUntil: profile.cooldownUntil },
         'Billing cooldown applied',
       );
+      propagateDomainCooldown(this.profiles.values(), profile, 'billing', errorCount, saltedOpts, now);
       return;
     }
 
     if (AUTH_CATEGORIES.has(category)) {
-      const cooldownMs = capCooldown(this._cooldownMs(AUTH_COOLDOWN, errorCount, saltedOpts));
+      const cooldownMs = capCooldown(computeCooldownMs(AUTH_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
+      profile.cooldownClass = 'auth';
       log.warn(
         { profileId, category, errClass: 'auth', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
         'Auth cooldown applied — token invalid/expired; parking profile until re-auth (fallback serves)',
       );
+      propagateDomainCooldown(this.profiles.values(), profile, 'auth', errorCount, saltedOpts, now);
       return;
     }
 
     if (TRANSIENT_CATEGORIES.has(category)) {
-      const cooldownMs = capCooldown(this._cooldownMs(TRANSIENT_COOLDOWN, errorCount, saltedOpts));
+      const cooldownMs = capCooldown(computeCooldownMs(TRANSIENT_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
+      profile.cooldownClass = 'transient';
       log.warn(
         { profileId, category, errClass: 'transient', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
         'Transient cooldown applied',
@@ -276,39 +256,13 @@ export class ModelFailover {
 
     // format / model_not_found / session_expired / auth (non-permanent):
     // Apply a short transient cooldown (first slot) to avoid hammering.
-    const cooldownMs = capCooldown(this._cooldownMs(TRANSIENT_COOLDOWN, 1, saltedOpts));
+    const cooldownMs = capCooldown(computeCooldownMs(TRANSIENT_COOLDOWN, 1, saltedOpts));
     profile.cooldownUntil = now + cooldownMs;
+    profile.cooldownClass = 'other';
     log.warn(
       { profileId, category, errClass: 'other', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
       'Non-categorized error — short cooldown applied',
     );
-  }
-
-  /**
-   * Compute a cooldown for the given schedule + consecutive error count.
-   *
-   * Applies additive jitter (never shorter than the base schedule) to avoid
-   * synchronized retry storms, then honors a server Retry-After when it asks us
-   * to wait LONGER than our own schedule (capped at MAX_RETRY_AFTER_MS).
-   */
-  private _cooldownMs(
-    schedule: readonly number[],
-    errorCount: number,
-    opts: RecordErrorOptions,
-  ): number {
-    const idx = Math.min(Math.max(errorCount - 1, 0), schedule.length - 1);
-    const base = schedule[idx];
-    const rng = opts.rng ?? Math.random;
-    const rVal = Math.max(0, Math.min(1, rng()));
-    // Only mix profileSeed phase when using the default RNG — injected RNGs (tests) control jitter exactly.
-    const phase = (!opts.rng && opts.profileSeed !== undefined) ? ((opts.profileSeed >>> 0) % 1000) / 1000 : 0;
-    // Additive jitter: base .. base*(1 + JITTER_RATIO). Never below base.
-    let ms = base + base * JITTER_RATIO * Math.max(0, Math.min(1, rVal + phase));
-    // Respect a longer server-provided Retry-After (capped).
-    if (typeof opts.retryAfterMs === 'number' && opts.retryAfterMs > ms) {
-      ms = Math.min(opts.retryAfterMs, MAX_RETRY_AFTER_MS);
-    }
-    return Math.round(ms);
   }
 
   /**
@@ -338,6 +292,7 @@ export class ModelFailover {
     const hadErrors = profile.consecutiveErrors > 0;
     profile.consecutiveErrors = 0;
     profile.cooldownUntil = 0;
+    delete profile.cooldownClass;
     profile.lastUsed = Date.now();
 
     if (hadErrors) {
@@ -345,6 +300,10 @@ export class ModelFailover {
     } else {
       log.debug({ profileId }, 'Success recorded');
     }
+
+    // ADR 0003: a working call proves the shared credential works — clear the
+    // domain siblings' account-scoped cooldowns.
+    clearDomainAccountCooldowns(this.profiles.values(), profile);
   }
 
   // ---------------------------------------------------------------------------
@@ -447,6 +406,7 @@ export class ModelFailover {
       if (!profile.disabled && (profile.cooldownUntil > 0 || profile.consecutiveErrors > 0)) {
         profile.cooldownUntil = 0;
         profile.consecutiveErrors = 0;
+        delete profile.cooldownClass;
         count++;
       }
     }

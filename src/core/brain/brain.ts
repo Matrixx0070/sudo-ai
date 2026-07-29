@@ -1861,6 +1861,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       cooldownUntil: 0,
       consecutiveErrors: 0,
       disabled: false,
+      domain: provider,
     };
   }
 
