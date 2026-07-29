@@ -283,3 +283,41 @@ describe('createStatusPinController', () => {
     expect(f.edits.length).toBe(before);
   });
 });
+
+/**
+ * 2026-07-29: three of four brain profiles were down for hours — an Anthropic
+ * ORG-level OAuth 403 (permanently disabled) plus 429 quota walls on google and
+ * openai — with ollama/glm-5.2 carrying everything alone, one blip from total
+ * outage. The pinned card reported "Cron: 24 active · all green" throughout.
+ * Cron health was visible; the thing that actually takes the product down was
+ * not. Diagnosis needed a 90-second probe nobody thought to run for hours.
+ */
+describe('renderStatusPinCard — brain chain health', () => {
+  it('stays quiet when every provider is healthy', () => {
+    const out = renderStatusPinCard(snap({ brain: { profileCount: 4, availableCount: 4, disabledCount: 0, coolingCount: 0 } }));
+    expect(out).toContain('🧠 Brain: 4/4 providers');
+    expect(out).not.toContain('⚠️');
+  });
+
+  it('shows the real shape of the 2026-07-29 outage', () => {
+    const out = renderStatusPinCard(snap({ brain: { profileCount: 4, availableCount: 1, disabledCount: 1, coolingCount: 2 } }));
+    expect(out).toContain('🧠 Brain: ⚠️ 1/4 available');
+    expect(out).toContain('1 disabled');
+    expect(out).toContain('2 cooling');
+  });
+
+  it('screams when nothing can serve', () => {
+    const out = renderStatusPinCard(snap({ brain: { profileCount: 4, availableCount: 0, disabledCount: 3, coolingCount: 1 } }));
+    expect(out).toContain('🔴 NO provider available');
+    expect(out).toContain('3 disabled');
+  });
+
+  it('is omitted entirely when no brain snapshot is supplied (back-compat)', () => {
+    expect(renderStatusPinCard(snap())).not.toContain('🧠 Brain');
+  });
+
+  it('brain health is rendered ABOVE cron — outage beats housekeeping', () => {
+    const out = renderStatusPinCard(snap({ brain: { profileCount: 4, availableCount: 0, disabledCount: 4, coolingCount: 0 } }));
+    expect(out.indexOf('🧠 Brain')).toBeLessThan(out.indexOf('⏰ Cron'));
+  });
+});

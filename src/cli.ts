@@ -5735,6 +5735,30 @@ async function boot(): Promise<void> {
               },
               cron: { enabledCount, failingCount, ...(lastFailureName ? { lastFailureName } : {}) },
               spend: { todayUsd, budgetUsd, ...(model ? { model } : {}) },
+              // Brain chain health. Best-effort and duck-typed: an older brain
+              // without getFailoverStatus() simply omits the line.
+              ...(() => {
+                try {
+                  const profiles = (brain as { getFailoverStatus?: () => { disabled: boolean; cooldownUntil: number }[] })
+                    .getFailoverStatus?.();
+                  if (!profiles || profiles.length === 0) return {};
+                  const nowMs = Date.now();
+                  let disabledCount = 0;
+                  let coolingCount = 0;
+                  for (const p of profiles) {
+                    if (p.disabled) disabledCount++;
+                    else if (p.cooldownUntil > nowMs) coolingCount++;
+                  }
+                  return {
+                    brain: {
+                      profileCount: profiles.length,
+                      availableCount: profiles.length - disabledCount - coolingCount,
+                      disabledCount,
+                      coolingCount,
+                    },
+                  };
+                } catch { return {}; }
+              })(),
             };
           },
         });

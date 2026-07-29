@@ -70,6 +70,26 @@ export interface StatusPinSnapshot {
     /** Failure alerts folded into the card since boot. */
     foldedCount: number;
   };
+  /**
+   * Brain failover chain health. Optional so existing callers/tests keep
+   * working; omitted = the line is not rendered.
+   *
+   * 2026-07-29: three of four profiles were down for hours (an Anthropic
+   * org-level OAuth 403 → permanently disabled, plus 429 quota walls on google
+   * and openai) with ollama/glm-5.2 carrying everything alone. Nothing surfaced
+   * it — the pinned card cheerfully reported "Cron: 24 active · all green"
+   * while the brain was one blip from total outage. Cron health was visible;
+   * the thing that actually takes the product down was not.
+   */
+  brain?: {
+    profileCount: number;
+    /** Neither disabled nor cooling — profiles that can serve right now. */
+    availableCount: number;
+    /** Permanently disabled (auth_permanent, e.g. a 403 permission block). */
+    disabledCount: number;
+    /** In cooldown (rate limits, transient errors). */
+    coolingCount: number;
+  };
 }
 
 function ago(nowMs: number, thenMs: number): string {
@@ -93,6 +113,24 @@ export function renderStatusPinCard(s: StatusPinSnapshot): string {
     lines.push(`🔶 working${oldest}${extra}`);
   } else {
     lines.push('🟢 idle');
+  }
+
+  // Brain chain — ABOVE cron deliberately: a dead chain is a total outage,
+  // a failing cron job is not. Silent when every profile is healthy so the
+  // card stays quiet in the normal case.
+  if (s.brain) {
+    const b = s.brain;
+    const parts: string[] = [];
+    if (b.disabledCount > 0) parts.push(`${b.disabledCount} disabled`);
+    if (b.coolingCount > 0) parts.push(`${b.coolingCount} cooling`);
+    if (b.availableCount === 0) {
+      lines.push(`🧠 Brain: 🔴 NO provider available (${parts.join(', ') || `0/${b.profileCount}`})`);
+    } else if (parts.length > 0) {
+      const warn = b.availableCount === 1 ? '⚠️ ' : '';
+      lines.push(`🧠 Brain: ${warn}${b.availableCount}/${b.profileCount} available — ${parts.join(', ')}`);
+    } else {
+      lines.push(`🧠 Brain: ${b.availableCount}/${b.profileCount} providers`);
+    }
   }
 
   // Background / cron
