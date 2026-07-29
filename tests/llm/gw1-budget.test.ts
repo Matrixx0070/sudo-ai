@@ -229,17 +229,21 @@ describe('GW-1 budget never blocks free calls', () => {
     expect(outcome.budgetDecision).toBe('ok');
   });
 
-  it('an UNSTATED estimate (defaults to 0) also passes over-cap', async () => {
+  it('an UNSTATED estimate is NOT free — unknown cost blocks conservatively over-cap', async () => {
+    // First version of this fix treated undefined like explicit $0 and
+    // silently disabled the gate for every un-estimated caller (caught by
+    // policy.test.ts). Unknown cost keeps the old blocking semantics.
     process.env['SUDO_DAILY_LLM_BUDGET_USD'] = '100';
     initDaySpendFromHistory({ day: TODAY, total: 500, byCaller: new Map() });
-    const outcome = await runWithPolicy<string>({
-      route: 'ollama:chat',
-      caller: 'consciousness',
-      priority: 'background',
-      attempt: async () => 'ok',
-      sleep: instantSleep,
-    });
-    expect(outcome.value).toBe('ok');
+    await expect(
+      runWithPolicy<string>({
+        route: 'ollama:chat',
+        caller: 'consciousness',
+        priority: 'background',
+        attempt: async () => 'ok',
+        sleep: instantSleep,
+      }),
+    ).rejects.toMatchObject({ skipped: true });
   });
 
   it('a METERED background call over the cap still fails closed — the cap keeps its teeth', async () => {
