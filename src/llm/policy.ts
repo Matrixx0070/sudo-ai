@@ -453,6 +453,19 @@ type BudgetVerdict = 'ok' | 'caller_exceeded' | 'global_exceeded';
 function budgetVerdict(caller: string, estimate: number): BudgetVerdict {
   rolloverSpend();
   const key = callerKey(caller);
+  // A USD budget bounds DOLLARS, so it only gates calls that would ADD
+  // dollars. A $0-estimate call (seat routes: claude-oauth, ollama) cannot
+  // increase spend — refusing it serves no budget purpose and converts a
+  // spend cap into an availability failure.
+  //
+  // 2026-07-29, twice in one day: (1) mispriced ollama phantom-spent the cap
+  // and this gate then refused the genuinely-free claude-oauth seat; (2) after
+  // the pricing fix, the ledger still carried ~$101 of the morning's phantom
+  // cost, the boot seed re-poisoned spend.total, and EVERY route — including
+  // $0 seats — was refused for all non-agent-loop callers. Total outage,
+  // logged as "500 overloaded", zero marginal dollars at stake either time.
+  // Runaway $0 call VOLUME is bounded separately by the seat call ceiling.
+  if (estimate <= 0) return 'ok';
   if (spend.total + estimate > globalBudget() && key !== 'agent-loop') {
     return 'global_exceeded';
   }
