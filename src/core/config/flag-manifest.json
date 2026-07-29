@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 746,
+  "count": 747,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -247,6 +247,7 @@
     "SUDO_EXEC_SAFE_RESTART",
     "SUDO_FAILOVER_BACKOFF_CAP_MS",
     "SUDO_FAILOVER_BACKOFF_DISABLE",
+    "SUDO_FAILOVER_DOMAINS",
     "SUDO_FAILOVER_MAX_ATTEMPTS",
     "SUDO_FAILURE_LEARNER_DB",
     "SUDO_FAILURE_PREVENTION_HINT",
