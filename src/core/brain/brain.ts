@@ -1011,7 +1011,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         if (category === 'context_overflow') {
           throw new LLMError('Context window exceeded — prompt too long for the model', 'llm_context_overflow', { observedTokens: extractOverflowTokenCount(body ?? '') });
         }
-        log.warn({ attempt, profileId: profile.id, status, category, retryAfterMs }, 'LLM call failed — trying next profile');
+        // errBody is load-bearing observability: extractErrorDetails DEFAULTS
+        // status to 500 when the thrown error carries none, and 500 maps to
+        // "overloaded" — so without the body, a permanent 403, a parse error
+        // and a real capacity blip all log identically. 2026-07-29 that
+        // masking cost hours: an org-level OAuth block and empty-content
+        // truncations both spent the day logged as transient "overloaded".
+        log.warn({ attempt, profileId: profile.id, status, category, retryAfterMs, errBody: (body ?? (err instanceof Error ? err.message : String(err))).slice(0, 220) }, 'LLM call failed — trying next profile');
         this.failover.recordError(profile.id, category, { retryAfterMs });
         // Non-streaming timeout = no output produced → count toward the breaker.
         if (category === 'timeout') {
