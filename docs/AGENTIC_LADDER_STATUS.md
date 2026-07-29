@@ -8,7 +8,7 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 
 | Rung | Title | Audit verdict (Campaign 0, 2026-07-25) | Build status |
 |------|-------|---------------|--------------|
-| AL1  | Loop Engineering | PARTIAL — loop/doom-loop/compaction/empty-reply PROVEN-IN-TEST; telemetry + budget-halt gaps | BUILT (#940-#944; live-row proof post-deploy) |
+| AL1  | Loop Engineering | PARTIAL — loop/doom-loop/compaction/empty-reply PROVEN-IN-TEST; telemetry + budget-halt gaps | BUILT (#940-#944); **AL1.2 LIVE-PROVEN 2026-07-29** — see Post-deploy proofs |
 | AL2  | Workflow Engineering | PARTIAL — 87/87 tests; halt semantics + per-step journal proven; crash-resume broken | BUILT (#939, #942) |
 | AL3  | Graph Engineering | MISSING (confirmed greenfield; reuse fan-out pool + TaskQueue.dependsOn) | COMPLETE (#946, #949) |
 | AL4  | Orchestration Engineering | PARTIAL — 205/205 tests; six concerns exist as islands; zero budget/approval composition | COMPLETE (#950-#952) |
@@ -228,6 +228,46 @@ Six concerns × existing modules. Legend: ✔ covered, ◐ partial, ✗ absent.
 
 ## Work items
 (unchanged items remain OPEN as listed in the spec; statuses above override)
+
+## Post-deploy proofs (2026-07-29 — the deploy finally happened)
+
+Prod had been **84 commits behind main** on `feat/grok-web-chat-brain`, so every
+AL PR (#938–#968) was merged but NOT running. PR #970 merged main into that
+branch; prod pulled to `63e1cf73` and restarted at 10:04 UTC.
+
+- **AL1.2 llm_calls live rows — DONE, LIVE-PROVEN.** A real agent turn at
+  10:23:19–10:23:28 UTC wrote 7 `llm_calls` rows carrying
+  `session_id=F8yiglN05awRQerdrl8v2`, `turn_id=b95de9f1-ccd3-49e5-91bb-ef8083601e95`,
+  `step_n=1`. Before the deploy every row had these NULL. This also proves the
+  merge's `runWithLoopStep` wrapper is executing in production.
+  NOTE: background/cognitive-stream calls still write NULL turn_id — expected,
+  they don't run inside a loop-step scope. Only agent turns are correlated.
+- **Boot wiring — DONE.** `graph_runs`, `graph_run_nodes`, `graph_run_approvals`
+  created in `data/mind.db` on first boot of the new code (AL4.2 store wired at
+  cli boot). Gateway listening on :18900.
+- **Flag posture confirmed live:** `SUDO_AL_META` and `SUDO_AL_FRONTIER` absent
+  from `ecosystem.config.cjs` → default OFF, matching the 2026-07-29 shelve
+  decision. `SUDO_AL8_RETENTION_RECHECK` likewise OFF.
+
+STILL OPEN post-deploy: `policy_decisions` persistence rows, Bench & Graph Runs
+panel live-verify, AL5.1 live two-agent drive, AL8 four-artifact pipeline drive,
+AL6.5 shadow promotion (needs ≥3 days of shadow traffic from 2026-07-29).
+
+### Deploy gotchas worth keeping
+- `pm2 startOrRestart ecosystem.config.cjs` starts **every** app in the file,
+  including `sudo-ai-v5-staging`, which was deliberately down. It has a Telegram
+  polling kill-switch (shared bot token → 409) so it won't steal updates, but it
+  DOES run duplicate crons against prod data. Stopped again after the deploy.
+- `SUDO_XAI_TEXT_BLOCK` is **not** in `ecosystem.config.cjs` — it lives in
+  `config/.env` (gitignored, so no branch operation can change it) and currently
+  reads `0`, i.e. the money guard is OFF. Harmless at present because the chain
+  is `ollama/glm-5.2:cloud` → `claude-oauth/claude-fable-5` with no xai lane, but
+  it is not the protection the ledger/memory implied.
+- A `[CRITICAL] HEALTH CRITICAL: brain_liveness` alert fired at 10:05, one minute
+  after restart (liveness probe timed out at 30s while providers were cold). It
+  self-resolved; turns at 10:21 and 10:28 both succeeded. A provider-unavailable
+  message had also appeared at 09:45, BEFORE the deploy — pre-existing flakiness,
+  not caused by the merge.
 
 ## Decisions
 - 2026-07-25 | check:arch max-lines ratchet NEVER raises a violating file's baseline (its --write hint is misleading; ratchet() keeps old base) — growing a tracked file past +10% requires a SPLIT. logging.ts split → loop-step-context.ts/persist-redact.ts/rephrase-heuristic.ts (PR #941, after #940 broke main's CI on this) | Fable | process rule: read every check line as `pass` before merging.
