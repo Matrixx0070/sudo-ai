@@ -38,6 +38,7 @@ import type { IRRequest, IRResponse, IRUsage } from '../../shared-types/ir/v1.js
 import type { IRStreamEvent } from './adapters/stream.js';
 import { brainRequestToIR, type ShadowBrainRequest } from './shadow.js';
 import { callIR, streamIR, type CallIROptions } from './transport.js';
+import { createResponseAccumulator } from './transport.js';
 import { LLMPolicyError } from './errors.js';
 
 // ---------------------------------------------------------------------------
@@ -166,19 +167,59 @@ export interface BrainTransportCall {
  * failover catch classifies + cooldowns the profile and advances (F97: there
  * is no legacy fallback; the throw IS the failover signal).
  */
+/** callTransportForBrain options: transport options + the live-delta seam. */
+export interface BrainCallOptions extends CallIROptions {
+  /**
+   * Live text-delta forwarder (UI liveness — Telegram/web working bubbles).
+   * When set, the attempt runs over streamIR and the accumulated response is
+   * returned in the exact non-streaming shape (tool_use blocks included). A
+   * streaming failure BEFORE the first delta falls back to one buffered
+   * callIR so enabling deltas is never a reliability regression; after the
+   * first delta the failure propagates (brain's failover owns it).
+   */
+  onTextDelta?: (text: string) => void;
+}
+
 export async function callTransportForBrain(
   request: ShadowBrainRequest,
   modelId: string,
-  opts: CallIROptions = {},
+  opts: BrainCallOptions = {},
 ): Promise<BrainTransportCall> {
-  const ir = toBrainIR(request, modelId, 'brain.call');
-  const res = await callIR(ir, { ...opts, noRetry: true });
-  if (res.stop_reason === 'error') {
-    throw new LLMPolicyError(
-      `[brain-bridge] IR response stop_reason 'error' for ${modelId} — failing the attempt over`,
-      { class: 'provider_bug', retryable: false },
-    );
+  const { onTextDelta, ...irOpts } = opts;
+  const throwOnErrorStop = (res: IRResponse): void => {
+    if (res.stop_reason === 'error') {
+      throw new LLMPolicyError(
+        `[brain-bridge] IR response stop_reason 'error' for ${modelId} — failing the attempt over`,
+        { class: 'provider_bug', retryable: false },
+      );
+    }
+  };
+
+  if (onTextDelta) {
+    const ir = toBrainIR(request, modelId, 'brain.call');
+    const acc = createResponseAccumulator(ir.trace_id);
+    let sawDelta = false;
+    try {
+      for await (const ev of streamIR(ir, { ...irOpts, noRetry: true })) {
+        acc.add(ev);
+        if (ev.type === 'text_delta' && ev.text) {
+          sawDelta = true;
+          try { onTextDelta(ev.text); } catch { /* UI seam must never fail the call */ }
+        }
+      }
+      const res = acc.toIRResponse();
+      throwOnErrorStop(res);
+      return { result: irResponseToBrainResult(res, modelId), traceId: ir.trace_id };
+    } catch (err) {
+      if (sawDelta) throw err; // partial text already shown — surface to failover
+      // Nothing streamed: fall through to one buffered attempt (a provider /
+      // route without SSE support must not fail a call that used to succeed).
+    }
   }
+
+  const ir = toBrainIR(request, modelId, 'brain.call');
+  const res = await callIR(ir, { ...irOpts, noRetry: true });
+  throwOnErrorStop(res);
   return { result: irResponseToBrainResult(res, modelId), traceId: ir.trace_id };
 }
 

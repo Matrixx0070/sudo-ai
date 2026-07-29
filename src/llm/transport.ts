@@ -869,7 +869,7 @@ function reverseEventToolName(ev: IRStreamEvent, nameMap: Map<string, string>): 
  * Rebuild an IRResponse from the yielded event stream so the llm_calls row
  * stores the same full ir_response callIR would have (observability parity).
  */
-function createResponseAccumulator(traceId: string): {
+export function createResponseAccumulator(traceId: string): {
   add(ev: IRStreamEvent): void;
   terminal: { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null;
   toIRResponse(partialUsage?: IRUsage): IRResponse;

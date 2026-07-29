@@ -30,7 +30,8 @@ describe('createGatewayTurnHandler', () => {
     const d = baseDeps();
     await createGatewayTurnHandler(d)(msg());
     // caller identity is bound to the turn (isOwner false — msg has no isOwner).
-    expect(d.agentLoop.run).toHaveBeenCalledWith('sess-1', 'hello', undefined, {
+    // onEvent is the progress bridge (activity-timeline seam), always supplied.
+    expect(d.agentLoop.run).toHaveBeenCalledWith('sess-1', 'hello', expect.any(Function), {
       race: true,
       caller: { isOwner: false, channel: 'discord', peerId: 'p1' },
     });
@@ -40,10 +41,37 @@ describe('createGatewayTurnHandler', () => {
   it('threads isOwner=true when the message is from the owner', async () => {
     const d = baseDeps();
     await createGatewayTurnHandler(d)({ ...msg(), isOwner: true });
-    expect(d.agentLoop.run).toHaveBeenCalledWith('sess-1', 'hello', undefined, {
+    expect(d.agentLoop.run).toHaveBeenCalledWith('sess-1', 'hello', expect.any(Function), {
       race: true,
       caller: { isOwner: true, channel: 'discord', peerId: 'p1' },
     });
+  });
+
+  it('bridges agent events onto the progress broadcaster keyed by channel:peerId', async () => {
+    const { progress } = await import('../../src/core/gateway/progress.js');
+    const seen: Array<{ type: string; tool?: string; ok?: boolean }> = [];
+    const unsub = progress.subscribe('discord:p1', (ev) => seen.push({ type: ev.type, tool: ev.tool, ok: ev.ok }));
+    try {
+      const d = baseDeps({
+        agentLoop: {
+          run: vi.fn(async (_s: string, _t: string, onEvent?: (ev: unknown) => void) => {
+            onEvent?.({ type: 'tool-call', name: 'web.search', args: {}, toolId: 't1' });
+            onEvent?.({ type: 'tool-result', name: 'web.search', result: 'ok', toolId: 't1', success: true });
+            onEvent?.({ type: 'tool-result', name: 'web.fetch', result: 'nope', toolId: 't2', success: false });
+            return { text: 'the reply' };
+          }) as unknown as GatewayTurnDeps['agentLoop']['run'],
+        },
+      });
+      await createGatewayTurnHandler(d)(msg());
+      expect(seen).toEqual([
+        { type: 'tool_call', tool: 'web.search', ok: undefined },
+        { type: 'tool_result', tool: 'web.search', ok: true },
+        { type: 'tool_result', tool: 'web.fetch', ok: false },
+        { type: 'complete', tool: undefined, ok: undefined },
+      ]);
+    } finally {
+      unsub();
+    }
   });
 
   it('drops a stale reply after a mid-turn /reset', async () => {

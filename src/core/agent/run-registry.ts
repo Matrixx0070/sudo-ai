@@ -32,6 +32,7 @@ export interface ActiveRun {
 export class RunRegistry {
   private readonly runs = new Map<string, ActiveRun>();
   private readonly now: () => number;
+  private observer: (() => void) | null = null;
 
   constructor(now: () => number = Date.now) { this.now = now; }
 
@@ -44,17 +45,35 @@ export class RunRegistry {
   /** Number of runs in flight (all sessions). */
   get activeCount(): number { return this.runs.size; }
 
+  /** Snapshot of all runs currently in flight (TX6 status card). */
+  list(): ActiveRun[] { return [...this.runs.values()]; }
+
+  /**
+   * TX6: observe run-set changes (begin/end) — e.g. to refresh the pinned
+   * status card. Single slot; pass null to clear. Observer errors are
+   * swallowed so telemetry can never break the run lifecycle.
+   */
+  setObserver(cb: (() => void) | null): void { this.observer = cb; }
+
+  private notifyObserver(): void {
+    try { this.observer?.(); } catch { /* observer must never break runs */ }
+  }
+
   /** Register a run start. Returns the ActiveRun record. */
   beginRun(fields: { key: string; sessionId: string; tier: SteerTier; abort?: (reason: string) => void }): ActiveRun {
     const run: ActiveRun = { ...fields, startedAt: this.now() };
     this.runs.set(fields.key, run);
     log.debug({ key: fields.key, tier: fields.tier }, 'run registered');
+    this.notifyObserver();
     return run;
   }
 
   /** Mark a run finished. Safe to call for an unknown key. */
   endRun(key: string): void {
-    if (this.runs.delete(key)) log.debug({ key }, 'run ended');
+    if (this.runs.delete(key)) {
+      log.debug({ key }, 'run ended');
+      this.notifyObserver();
+    }
   }
 }
 

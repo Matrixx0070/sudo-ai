@@ -65,6 +65,7 @@ import { getRunRegistry } from './core/agent/run-registry.js';
 import { getRunLanes } from './core/agent/run-lanes.js';
 import { getSteerBuffer } from './core/agent/steer-buffer.js';
 import { getQueueModeStore, decideQueueMode } from './core/channels/queue-modes.js';
+import { makeStopKeyboard, renderStoppedCard, buildRegenInstruction } from './core/channels/telegram-run-controls.js';
 import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
 import { normalizeReplyText } from './core/channels/empty-reply.js';
@@ -2036,12 +2037,40 @@ async function boot(): Promise<void> {
         // Hoisted out of the try-block so the outer catch can cancel it
         // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=0 this stays null
         // and the byte-identical non-streaming send path runs.
-        let streamSink: { chunk(t: string): void; finalize(t: string): Promise<void>; cancel(): Promise<void> } | null = null;
+        let streamSink: import('./core/channels/stream-sink.js').StreamSink | null = null;
+        // TX1 (SUDO_TG_STOP_BUTTON=1, default OFF): register the run in the
+        // run-registry so the working-card ⏹ Stop callback (telegram.ts) and
+        // mid-run steering can find/abort it. Hoisted for the finally below.
+        const tx1StopOn = process.env['SUDO_TG_STOP_BUTTON'] === '1';
+        const turnStartedAt = Date.now();
+        let runKeyRegistered: string | null = null;
+        let steerSessionId: string | null = null;
+        let stopRequested = false;
+        let workingKeyboard: ReturnType<typeof makeStopKeyboard> | null = null;
+        let timelineSteps: () => number = () => 0;
         try {
           const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
           log.info({ sessionId: String(session.id) }, 'Session resolved');
+          steerSessionId = String(session.id);
+
+          if (tx1StopOn) {
+            getRunRegistry().beginRun({
+              key: convKey,
+              sessionId: String(session.id),
+              tier: telegram.isOwnerUser(msg.peerId) ? 'owner' : 'untrusted',
+              // TX1 abort seam: signals the loop's steering channel. The loop
+              // honors abort at the NEXT ITERATION BOUNDARY (post-tool /
+              // pre-model-call — loop.ts steering block), not instantly: an
+              // in-flight model call or tool finishes first, then the turn ends.
+              abort: (reason) => {
+                stopRequested = true;
+                steeringChannel.signal(String(session.id), { action: 'abort', payload: reason });
+              },
+            });
+            runKeyRegistered = convKey;
+          }
 
           // Surface consciousness context for logging/debugging; the loop reads it via onInteractionStart.
           if (consciousness) {
@@ -2062,21 +2091,153 @@ async function boot(): Promise<void> {
           // optional on the 'stream-chunk' variant of the discriminated
           // union and the narrow is what we filter on (verifier HIGH #1).
           let onEvent: import('./core/agent/types.js').AgentEventHandler | undefined;
+          let stopStatusTicker: (() => void) | null = null;
+          // TX3: unregister hook for the per-turn detail-toggle registry.
+          let tx3Cleanup: (() => Promise<void>) | null = null;
+          let tx3Token: string | null = null;
+          // Per-turn card render mode (TX3 toggles it; env is the initial default).
+          let turnDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
           if (process.env['SUDO_STREAM_CHANNELS'] !== '0') {
             try {
               const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
+              // TX5 (SUDO_TG_STREAM_FOLD=1, default OFF): once streamed content
+              // passes the Read More threshold, mid-stream edits render
+              // 'md-collapse' so the bubble stays compact while writing. Latch
+              // per message (no md↔md-collapse flicker); status renders (empty
+              // buffer) never fold. Flag off → always 'md' (byte-identical).
+              const { createStreamFoldLatch, resolveStreamFoldOptions } = await import('./core/channels/stream-fold.js');
+              const foldFormat = createStreamFoldLatch(resolveStreamFoldOptions(process.env));
               streamSink = await createBufferedEditSink(
                 (placeholder: string) => telegram.sendForStream(replyTo, placeholder),
-                (id: string | number, text: string) => telegram.editText(replyTo, id, text),
+                // TX5 fold decision + TX1 keyboard re-send combined: editMessageText
+                // replaces reply_markup, so while the Stop button rides the working
+                // card every edit must re-send it (workingKeyboard is nulled before
+                // the final reply edit); the format latches to 'md-collapse' once
+                // streamed content passes the Read More threshold.
+                (id: string | number, text: string) =>
+                  telegram.editText(replyTo, id, text, {
+                    format: foldFormat(text, (streamSink?.bufferLength ?? 0) === 0),
+                    ...(workingKeyboard ? { keyboard: workingKeyboard } : {}),
+                  }),
                 // maxChars clamps BEFORE same-text suppression so the sink
                 // and Telegram's 4096-char editMessageText cap agree on the
                 // wire body — preventing duplicate edits whose only delta
                 // is past Telegram's truncation point (verifier HIGH #3).
                 { intervalMs: 800, maxChars: 4080, placeholder: '…', label: `telegram:${msg.peerId}` },
               );
+              // TX1+TX3 unified keyboard: one row carrying whichever of ⏹ Stop
+              // and the detail toggle are enabled. Rebuilt whenever detail
+              // state changes so every sink edit re-sends the CURRENT set
+              // (editMessageText replaces reply_markup). tx3Token is filled by
+              // the TX3 block below when that flag is on.
+              const rebuildWorkingKeyboard = async (): Promise<void> => {
+                const { buildWorkingCardRows } = await import('./core/channels/working-card-keyboard.js');
+                const { InlineKeyboard } = await import('grammy');
+                const rows = buildWorkingCardRows({
+                  ...(tx1StopOn ? { stop: { token: convKey } } : {}),
+                  ...(tx3Token ? { detail: { token: tx3Token, detailNow: turnDetail } } : {}),
+                });
+                workingKeyboard = rows.length > 0
+                  ? new InlineKeyboard(rows.map((r) => r.map((b) => ({ text: b.text, callback_data: b.callbackData }))))
+                  : null;
+              };
+              // TX1: put the ⏹ Stop button on the working card right away
+              // (owner-gated at tap time in the telegram.ts callback handler).
+              if (tx1StopOn && streamSink.messageId !== null) {
+                await rebuildWorkingKeyboard();
+                if (workingKeyboard) {
+                  try { await telegram.editReplyMarkup(replyTo, streamSink.messageId, workingKeyboard); } catch { /* button is cosmetic */ }
+                }
+              }
+              // Live activity-timeline card (SUDO_TG_TIMELINE=0 opts out): the
+              // placeholder shows spinner + phase + elapsed + per-tool steps
+              // until the first content chunk arrives, then streamed text wins.
+              // One bubble: status → streaming text → final reply.
+              let feedStatus: ((ev: import('./core/agent/types.js').AgentEvent) => void) | null = null;
+              if (process.env['SUDO_TG_TIMELINE'] !== '0') {
+                try {
+                  const { ActivityTimeline } = await import('./core/channels/activity-timeline.js');
+                  // Model/context chip is opt-in (SUDO_TG_PROGRESS_CHIP=1): the
+                  // raw route string + a 0% context readout reads as debug noise
+                  // in an otherwise clean status card.
+                  let chip: string | undefined;
+                  if (process.env['SUDO_TG_PROGRESS_CHIP'] === '1') {
+                    try {
+                      const { formatModelContextChip } = await import('./core/channels/live-state.js');
+                      const { collectStatusCard, getStatusSources } = await import('./core/commands/builtin/status-card.js');
+                      const card = await collectStatusCard({ ...(getStatusSources() ?? {}) });
+                      chip = formatModelContextChip(card.model, card.context);
+                    } catch { /* chip best-effort */ }
+                  }
+                  const timeline = new ActivityTimeline();
+                  timelineSteps = () => timeline.stepCount; // TX1 stopped-card step count
+                  const startMs = Date.now();
+                  let tick = 0;
+                  // TX3: `turnDetail` is per-turn mutable; SUDO_TG_TIMELINE_DETAIL
+                  // stays the initial default, the tx3: callback flips it live.
+                  // turnDetail hoisted to turn scope (shared with the TX1+TX3 keyboard).
+                  const pushStatus = (): void => {
+                    streamSink?.status(timeline.render({ nowMs: Date.now(), startMs, tick, detail: turnDetail, ...(chip ? { chip } : {}), verbIndex: tick }));
+                  };
+                  feedStatus = (ev): void => {
+                    const now = Date.now();
+                    if (ev.type === 'tool-call') timeline.onProgress({ type: 'tool_call', sessionId: '', message: '', timestamp: now, tool: ev.name }, now);
+                    else if (ev.type === 'tool-result') timeline.onProgress({ type: 'tool_result', sessionId: '', message: '', timestamp: now, tool: ev.name, ok: ev.success !== false }, now);
+                    else if (ev.type === 'message') timeline.onProgress({ type: 'thinking', sessionId: '', message: '', timestamp: now }, now);
+                    else return;
+                    pushStatus();
+                  };
+                  pushStatus();
+                  const ticker = setInterval(() => { tick++; pushStatus(); }, 3000);
+                  stopStatusTicker = () => clearInterval(ticker);
+                  // TX3 (SUDO_TG_DETAIL_TOGGLE=1, default OFF): attach a
+                  // Details/Compact inline button to the working card; the
+                  // adapter's tx3: callback flips `turnDetail` via the
+                  // working-card-state registry and pushStatus re-renders
+                  // through the sink's existing edit throttle.
+                  if (process.env['SUDO_TG_DETAIL_TOGGLE'] === '1' && streamSink.messageId !== null) {
+                    try {
+                      const { registerWorkingCard, unregisterWorkingCard } = await import('./core/channels/working-card-state.js');
+                      const { buildWorkingCardRows } = await import('./core/channels/working-card-keyboard.js');
+                      const { InlineKeyboard } = await import('grammy');
+                      const token = registerWorkingCard({
+                        getDetail: () => turnDetail,
+                        setDetail: (d: boolean) => {
+                          turnDetail = d;
+                          // Keep the combined keyboard's labels current for the
+                          // next sink edit (fire-and-forget; label is cosmetic).
+                          void rebuildWorkingKeyboard().catch(() => { /* noop */ });
+                        },
+                        rerender: () => { pushStatus(); },
+                        // Adapter toggle-refresh re-sends the FULL current set
+                        // (Stop + Details) instead of a detail-only keyboard.
+                        buildRows: () => buildWorkingCardRows({
+                          ...(tx1StopOn ? { stop: { token: convKey } } : {}),
+                          detail: { token, detailNow: turnDetail },
+                        }),
+                      });
+                      tx3Token = token;
+                      await rebuildWorkingKeyboard();
+                      const cardMsgId = streamSink.messageId;
+                      if (workingKeyboard) await telegram.editReplyMarkup(replyTo, cardMsgId, workingKeyboard);
+                      tx3Cleanup = async (): Promise<void> => {
+                        unregisterWorkingCard(token);
+                        tx3Token = null;
+                        // Clear the toggle button (awaited so it cannot race
+                        // the feedback keyboard attached moments later).
+                        await telegram.editReplyMarkup(replyTo, cardMsgId, new InlineKeyboard()).catch(() => { /* cosmetic */ });
+                      };
+                    } catch (tx3Err) {
+                      log.debug({ err: String(tx3Err) }, 'TX3: detail-toggle attach failed — card stays buttonless');
+                    }
+                  }
+                } catch { /* timeline is best-effort — plain placeholder remains */ }
+              }
               onEvent = (ev) => {
                 if (ev.type === 'stream-chunk') {
                   streamSink!.chunk(ev.chunk);
+                } else {
+                  feedStatus?.(ev);
                 }
               };
             } catch (sinkErr) {
@@ -2085,9 +2246,47 @@ async function boot(): Promise<void> {
               onEvent = undefined;
             }
           }
-          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', onEvent, { race: true });
+          let result: Awaited<ReturnType<typeof finalAgentLoop.run>>;
+          try {
+            result = await finalAgentLoop.run(String(session.id), msg.text ?? '', onEvent, { race: true });
+          } finally {
+            stopStatusTicker?.();
+            // TX1: the run is over — final edits (reply text / stopped card)
+            // must not carry the Stop button anymore.
+            workingKeyboard = null;
+            if (tx3Cleanup) await tx3Cleanup(); // TX3: turn over — token invalid, button removed
+          }
+          // TX1: the ⏹ tap aborted the run (the loop stopped at its iteration
+          // boundary and returned abort boilerplate). Finalize the card to a
+          // stopped summary and suppress the reply delivery entirely.
+          if (stopRequested) {
+            const stoppedCard = renderStoppedCard({ elapsedMs: Date.now() - turnStartedAt, steps: timelineSteps() });
+            if (streamSink) {
+              await streamSink.cancel();
+              if (streamSink.messageId !== null) {
+                await telegram.editText(replyTo, streamSink.messageId, stoppedCard)
+                  .catch(() => { /* card is cosmetic — last status edit stays */ });
+              }
+            } else {
+              try { await telegram.send(replyTo, stoppedCard); } catch { /* best effort */ }
+            }
+            try {
+              const nowTs = new Date().toISOString();
+              await dualSessionManager.appendEvent(String(session.id), { ts: nowTs, sessionId: String(session.id), type: 'message', role: 'user', content: msg.text ?? '' });
+              await dualSessionManager.appendEvent(String(session.id), { ts: nowTs, sessionId: String(session.id), type: 'message', role: 'assistant', content: stoppedCard });
+            } catch { /* journal append is non-fatal */ }
+            log.info({ peerId: msg.peerId }, 'TX1: run stopped by owner — working card finalized');
+            return;
+          }
           if (runGenerations.isStale(convKey, runGen)) {
-            if (streamSink) await streamSink.cancel();
+            if (streamSink) {
+              await streamSink.cancel();
+              // No content was ever streamed → the bubble is a status card; delete
+              // it rather than leaving a frozen spinner in the chat.
+              if (streamSink.bufferLength === 0 && streamSink.messageId !== null) {
+                await telegram.deleteMessageSafe(replyTo, streamSink.messageId);
+              }
+            }
             log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
             return;
           }
@@ -2127,6 +2326,29 @@ async function boot(): Promise<void> {
             'Agent reply ready',
           );
 
+          // TX4 (SUDO_TG_ARTIFACTS=1, default OFF): plan inline delivery for
+          // rendered artifacts — a caption per artifact (max 3, ≤5MB each) and
+          // a decision to fold raw data in the reply behind "Read More".
+          // Fail-open: any error keeps the existing caption-less delivery.
+          let artifactCaptions: Map<string, string> | null = null;
+          let artifactFold = false;
+          if (process.env['SUDO_TG_ARTIFACTS'] === '1' && attachments.length > 0) {
+            try {
+              const { planInlineArtifacts } = await import('./core/channels/inline-artifacts.js');
+              const { statSync } = await import('node:fs');
+              const candidates = attachments.map((a) => {
+                let bytes: number | undefined;
+                try { bytes = statSync(a.path).size; } catch { /* size gate fails closed for this file */ }
+                return { path: a.path, type: a.type, filename: a.filename, bytes };
+              });
+              const artPlan = planInlineArtifacts(candidates, replyText);
+              artifactCaptions = artPlan.captions;
+              artifactFold = artPlan.foldData;
+            } catch (artErr) {
+              log.debug({ err: String(artErr) }, 'TX4: inline-artifact planning failed — plain delivery');
+            }
+          }
+
           // Send file attachments before the text reply (images, screenshots, etc.)
           if (attachments.length > 0) {
             const { readFileSync, existsSync } = await import('node:fs');
@@ -2137,6 +2359,7 @@ async function boot(): Promise<void> {
                   continue;
                 }
                 const buffer = readFileSync(att.path);
+                const artifactCaption = artifactCaptions?.get(att.path);
                 await telegram.sendMedia(replyTo, {
                   type: att.type,
                   mimeType: att.type === 'image' ? 'image/png'
@@ -2145,6 +2368,7 @@ async function boot(): Promise<void> {
                     : 'application/octet-stream',
                   buffer,
                   filename: att.filename ?? att.path.split('/').pop() ?? 'file',
+                  ...(artifactCaption ? { caption: artifactCaption } : {}),
                 });
                 log.info({ peerId: msg.peerId, path: att.path, type: att.type }, 'Attachment sent to Telegram');
               } catch (attErr) {
@@ -2160,27 +2384,97 @@ async function boot(): Promise<void> {
           // also editing inline-keyboard state — simpler to keep the keyboard
           // on its own message).
           const isSubstantialReply = (replyText.length > 80);
+          // Long-reply handling: past one bubble the reply is split into
+          // newline-boundary chunks; past SUDO_TG_FILE_THRESHOLD chars
+          // (default 12000, 0 = never) it ships as an attached .md file with
+          // a short preview — no more `…[truncated]` data loss.
+          const { planLongReply } = await import('./core/channels/long-reply.js');
+          const fileThresholdEnv = Number(process.env['SUDO_TG_FILE_THRESHOLD']);
+          const plan = planLongReply(replyText, Number.isFinite(fileThresholdEnv) ? { fileThreshold: fileThresholdEnv } : {});
+          const sendReplyDocument = async (): Promise<void> => {
+            const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+            await telegram.sendMedia(replyTo, {
+              type: 'document',
+              mimeType: 'text/markdown',
+              buffer: Buffer.from(replyText, 'utf8'),
+              filename: `reply-${stamp}.md`,
+            });
+          };
+          const makeKeyboard = () => createFeedbackKeyboard(
+            String(session.id),
+            (msg.text ?? replyText).slice(0, 120),
+            'telegram',
+          ).keyboard;
+
+          // "Read More": long bodies collapse their tail into an expandable
+          // blockquote (SUDO_TG_READMORE=0 disables; min chars via
+          // SUDO_TG_READMORE_MIN, default 900) so long replies stay one
+          // compact bubble instead of a wall of text.
+          const readMoreMinEnv = Number(process.env['SUDO_TG_READMORE_MIN']);
+          const readMoreMin = Number.isFinite(readMoreMinEnv) && readMoreMinEnv > 0 ? readMoreMinEnv : 900;
+          const readMoreOn = process.env['SUDO_TG_READMORE'] !== '0';
           if (streamSink) {
-            await streamSink.finalize(replyText);
-            if (isSubstantialReply) {
-              const { keyboard } = createFeedbackKeyboard(
-                String(session.id),
-                (msg.text ?? replyText).slice(0, 120),
-                'telegram',
-              );
-              try {
-                await telegram.sendWithKeyboard(replyTo, '⋯', keyboard);
-              } catch (kbErr) {
-                log.warn({ err: String(kbErr) }, 'gap #19: feedback keyboard follow-up failed');
+            // First body (full reply / first chunk / file preview) lands as the
+            // final edit of the working bubble; overflow follows as new messages.
+            const firstBody = plan.chunks[0] ?? replyText;
+            await streamSink.finalize(firstBody);
+            // The sink's finalize renders plain 'md'; a long single-bubble reply
+            // gets ONE follow-up edit that folds its tail behind "Read More".
+            // TX4: a reply whose raw data is already carried by a delivered
+            // artifact folds too, even below the length threshold.
+            if (readMoreOn && plan.mode === 'single' && (firstBody.length > readMoreMin || artifactFold) && streamSink.messageId !== null) {
+              await telegram.editText(replyTo, streamSink.messageId, firstBody, { format: 'md-collapse' })
+                .catch(() => { /* collapse is cosmetic — md render already landed */ });
+            }
+            // Set when the feedback keyboard already rode the last overflow
+            // bubble, so it is not also attached to the first one.
+            let keyboardDelivered = false;
+            if (plan.mode === 'file') {
+              await sendReplyDocument();
+            } else if (plan.mode === 'chunks') {
+              // Overflow bubbles arrive collapsed — the first bubble carries the
+              // readable start; the rest expand on demand. The feedback keyboard
+              // rides the LAST bubble (where the reader actually finishes); on
+              // the first bubble it scrolls far out of view on a long reply.
+              const overflow = plan.chunks.slice(1);
+              for (let ci = 0; ci < overflow.length; ci++) {
+                const chunk = overflow[ci]!;
+                const isLastChunk = ci === overflow.length - 1;
+                if (isLastChunk && isSubstantialReply) {
+                  try {
+                    await telegram.sendWithKeyboard(replyTo, chunk, makeKeyboard());
+                    keyboardDelivered = true;
+                  } catch (kbErr) {
+                    log.warn({ err: String(kbErr) }, 'feedback keyboard on final chunk failed — sending plain');
+                    await telegram.send(replyTo, chunk, readMoreOn ? { collapse: true } : {});
+                  }
+                } else {
+                  await telegram.send(replyTo, chunk, readMoreOn ? { collapse: true } : {});
+                }
               }
             }
+            if (isSubstantialReply && !keyboardDelivered) {
+              // Attach the keyboard to the finalized reply message itself —
+              // editMessageReplyMarkup works fine on an edited message; the old
+              // separate '⋯' carrier message littered the chat permanently.
+              try {
+                if (streamSink.messageId !== null) {
+                  await telegram.editReplyMarkup(replyTo, streamSink.messageId, makeKeyboard());
+                } else {
+                  await telegram.sendWithKeyboard(replyTo, '⋯', makeKeyboard());
+                }
+              } catch (kbErr) {
+                log.warn({ err: String(kbErr) }, 'gap #19: feedback keyboard attach failed');
+              }
+            }
+          } else if (plan.mode === 'file') {
+            await maybeGuardedSend('telegram', replyTo, replyText, async () => {
+              if (isSubstantialReply) await telegram.sendWithKeyboard(replyTo, plan.chunks[0] ?? replyText, makeKeyboard());
+              else await telegram.send(replyTo, plan.chunks[0] ?? replyText);
+              await sendReplyDocument();
+            });
           } else if (isSubstantialReply) {
-            const { keyboard } = createFeedbackKeyboard(
-              String(session.id),
-              (msg.text ?? replyText).slice(0, 120),
-              'telegram',
-            );
-            await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.sendWithKeyboard(replyTo, replyText, keyboard));
+            await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.sendWithKeyboard(replyTo, replyText, makeKeyboard()));
           } else {
             await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.send(replyTo, replyText));
           }
@@ -2193,6 +2487,11 @@ async function boot(): Promise<void> {
           // edited again after the error has surfaced (verifier HIGH #2).
           if (streamSink) {
             try { await streamSink.cancel(); } catch { /* already-warned */ }
+            // Status-only card (no streamed content) → delete it so the error
+            // message below isn't preceded by a frozen spinner bubble.
+            if (streamSink.bufferLength === 0 && streamSink.messageId !== null) {
+              await telegram.deleteMessageSafe(replyTo, streamSink.messageId);
+            }
           }
           // Send decline feedback option
           try {
@@ -2207,6 +2506,27 @@ async function boot(): Promise<void> {
               keyboard,
             );
           } catch { try { await telegram.send(replyTo, sanitizeUserFacingError(err)); } catch {} }
+        } finally {
+          // TX1: unregister the run and drop any steer that landed after the
+          // loop's final boundary drain (mirrors gateway-turn-handler MEDIUM-1 —
+          // an orphaned steer must not leak into the NEXT run for this session).
+          if (runKeyRegistered !== null) {
+            getRunRegistry().endRun(runKeyRegistered);
+            // A ⏹ tap that landed AFTER the loop's last boundary check leaves
+            // its abort signal unconsumed — clear it so it can't kill the NEXT
+            // turn on this session (no-op when the loop already consumed it).
+            if (stopRequested && steerSessionId !== null) {
+              steeringChannel.clearSteering(steerSessionId);
+            }
+            if (steerSessionId !== null && process.env['SUDO_MIDRUN_STEER'] === '1') {
+              const buf = getSteerBuffer();
+              const orphaned = buf.size(steerSessionId);
+              if (orphaned > 0) {
+                buf.clear(steerSessionId);
+                log.debug({ peerId: msg.peerId, discarded: orphaned }, 'TX1/GW-5: discarded orphaned steer(s) at run end');
+              }
+            }
+          }
         }
       });
 
@@ -2251,6 +2571,43 @@ async function boot(): Promise<void> {
         }
       }
 
+      // TX1 mid-run steering (SUDO_TG_STOP_BUTTON=1 AND SUDO_MIDRUN_STEER=1):
+      // if a run is active for this peer, decide steer/followup/interrupt via
+      // the GW-5 queue-mode machinery instead of blindly queueing a new turn.
+      // Deliberately BEFORE the coalescer: a coalesced batch is delivered after
+      // the debounce window as a brand-new turn, by which point the steer
+      // opportunity is gone (the loop drains the buffer at iteration
+      // boundaries DURING the run) — and mixing a to-be-steered message into a
+      // batched followup would double-deliver it. Registered slash commands
+      // were already intercepted inside the adapter, so isCommand is false
+      // here. NOTE: actual steering additionally requires the GW-5 queue mode
+      // to resolve to 'steer' (SUDO_QUEUE_MODE_DEFAULT=steer or a per-session
+      // override) — identical semantics to gateway-turn-handler.ts.
+      if (process.env['SUDO_TG_STOP_BUTTON'] === '1' && process.env['SUDO_MIDRUN_STEER'] === '1') {
+        const convKey = `${msg.channel}:${msg.peerId}`;
+        const active = getRunRegistry().get(convKey);
+        if (active) {
+          const decision = decideQueueMode({
+            mode: getQueueModeStore().resolve(msg.channel, msg.peerId),
+            activeRun: true,
+            isMedia: (msg.media?.length ?? 0) > 0,
+            isCommand: false,
+            runTier: active.tier,
+            msgTier: telegram.isOwnerUser(msg.peerId) ? 'owner' : 'untrusted',
+          });
+          if (decision.action === 'steer') {
+            getSteerBuffer().push(active.sessionId, msg.text ?? '', decision.tier);
+            log.info({ peerId: msg.peerId, tier: decision.tier }, 'TX1/GW-5: message steered into the active run (not queued as a new turn)');
+            return;
+          }
+          if (decision.action === 'interrupt' && active.abort) {
+            active.abort('interrupted by a newer message');
+            // fall through — the replacement turn queues behind the aborting run.
+          }
+          // followup / collect → fall through to the normal coalescer/queue path.
+        }
+      }
+
       if (telegramCoalescer) {
         telegramCoalescer.push(msg);
       } else {
@@ -2266,6 +2623,51 @@ async function boot(): Promise<void> {
     // the shared block above, before the channel sections).
     telegram.setCommandRegistry(commandRegistry, makeCommandContext);
     log.info('CommandRegistry wired to Telegram adapter');
+
+    // TX2 (SUDO_TG_BAD_REGEN=1, default OFF): 👎 + reason → ONE bounded
+    // revision turn, edited into the rejected reply in place (`↻ v2` tail) with
+    // a fresh feedback keyboard. The adapter enforces the flag, owner gate and
+    // the one-regen-per-feedbackId guard before invoking this seam; here we
+    // serialize on the peer queue (never overlapping a live turn — a regen
+    // queued mid-turn simply waits its turn) and skip when a run is active
+    // right now so a stale rejection can't preempt fresh work.
+    telegram.setRegenerateHandler(async (req) => {
+      const convKey = `telegram:${req.peerId}`;
+      if (getRunRegistry().isActive(convKey)) {
+        log.info({ peerId: req.peerId, feedbackId: req.feedbackId }, 'TX2: regen skipped — a turn is active for this peer');
+        return;
+      }
+      await dualSessionManager.peerQueue.enqueue(req.peerId, async () => {
+        try {
+          const session = await dualSessionManager.getOrCreate('telegram', req.peerId);
+          const instruction = buildRegenInstruction({ originalText: req.originalText, reason: req.reason });
+          const result = await finalAgentLoop.run(String(session.id), instruction, undefined, { race: true });
+          const revised = normalizeReplyText(result?.text, false);
+          // Telegram edit cap is 4096 — leave room for the version tail.
+          const body = `${revised.length > 3900 ? `${revised.slice(0, 3900)}…` : revised}\n\n↻ v2`;
+          await telegram.editText(req.chatId, req.messageId, body, { format: 'md' });
+          try {
+            const kb = createFeedbackKeyboard(String(session.id), revised.slice(0, 120), 'telegram').keyboard;
+            await telegram.editReplyMarkup(req.chatId, req.messageId, kb);
+          } catch { /* fresh keyboard is best-effort */ }
+          // Link the outcome to the original feedback row (store convention:
+          // follow-up row keyed by the feedbackId in session_id).
+          try {
+            saveFeedback({
+              session_id: req.feedbackId,
+              channel: 'telegram',
+              task_summary: `regen-complete:${req.feedbackId}`,
+              task_type: 'general',
+              rating: 'skip',
+              notes: `tx2 v2 delivered${req.reason ? ` (reason: ${req.reason})` : ''}`,
+            });
+          } catch { /* outcome row is best-effort */ }
+          log.info({ peerId: req.peerId, feedbackId: req.feedbackId }, 'TX2: regenerated reply edited in place');
+        } catch (err) {
+          log.warn({ err: String(err), peerId: req.peerId, feedbackId: req.feedbackId }, 'TX2: regeneration turn failed');
+        }
+      });
+    });
 
     await telegram.start();
     registerShutdown(() => telegram.stop());
@@ -5129,6 +5531,83 @@ async function boot(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
+  // 9.6b TX6 — pinned live status card (SUDO_TG_STATUS_PIN=1, default OFF)
+  // -------------------------------------------------------------------------
+  // One pinned, continuously-edited "◉ Sudo-Ai" message in the owner DM:
+  // activity (run-registry), cron summary, today's spend vs budget (ledger
+  // telemetry only — zero LLM calls), last health incident. Message id
+  // persists in data/status-pin.json across restarts. Flag OFF → this whole
+  // block is inert and prod behavior is byte-identical.
+  let statusPinController: import('./core/channels/status-pin.js').StatusPinController | null = null;
+  let statusPinShouldBubble: ((severity: 'high' | 'critical', kind: 'failure' | 'recovery') => boolean) | null = null;
+  if (process.env['SUDO_TG_STATUS_PIN'] === '1' && telegramNotifier) {
+    try {
+      const { createStatusPinController, shouldBubbleHealthAlert } = await import('./core/channels/status-pin.js');
+      const { DATA_DIR } = await import('./core/shared/paths.js');
+      const { getRunRegistry } = await import('./core/agent/run-registry.js');
+      const tg = telegramNotifier;
+      const pinChatId = (process.env['TELEGRAM_CHAT_ID'] ?? '').split(',')[0]?.trim()
+        || config.channels?.telegram?.allowedUsers?.[0];
+      if (pinChatId) {
+        statusPinShouldBubble = shouldBubbleHealthAlert;
+        const registry = getRunRegistry();
+        statusPinController = createStatusPinController({
+          chatId: pinChatId,
+          stateFile: path.join(DATA_DIR, 'status-pin.json'),
+          // Initial send is plain text (sendForStream has no parse mode) —
+          // strip bold markers; the first md-rendered edit restores them.
+          send: (chatId, text) => tg.sendForStream(chatId, text.replace(/\*\*/g, '')),
+          edit: (chatId, id, text) => tg.editText(chatId, id, text, { format: 'md' }),
+          pin: (chatId, id) => tg.pinMessageSafe(chatId, id),
+          collect: async () => {
+            const runs = registry.list();
+            const oldest = runs.reduce<(typeof runs)[number] | null>(
+              (a, r) => (!a || r.startedAt < a.startedAt ? r : a), null,
+            );
+            let enabledCount = 0;
+            let failingCount = 0;
+            let lastFailureName: string | undefined;
+            try {
+              for (const j of cronStore.list()) {
+                if (j.enabled) enabledCount++;
+                if (j.consecutiveErrors > 0) { failingCount++; lastFailureName = j.name; }
+              }
+            } catch { /* cron read best-effort */ }
+            let todayUsd: number | null = null;
+            try {
+              const { getGatewayCallLog } = await import('./llm/logging.js');
+              todayUsd = getGatewayCallLog().daySpend().total;
+            } catch { /* ledger best-effort */ }
+            let budgetUsd: number | null = null;
+            for (const key of ['SUDO_DAILY_LLM_BUDGET_USD', 'SUDO_LLM_GLOBAL_BUDGET_USD']) {
+              const n = Number(process.env[key]);
+              if (Number.isFinite(n) && n > 0) { budgetUsd = n; break; }
+            }
+            let model: string | undefined;
+            try { model = (brain as { getModel?: () => string }).getModel?.(); } catch { /* best-effort */ }
+            return {
+              activity: {
+                activeCount: runs.length,
+                ...(oldest ? { oldestKey: oldest.key, oldestStartedAtMs: oldest.startedAt } : {}),
+              },
+              cron: { enabledCount, failingCount, ...(lastFailureName ? { lastFailureName } : {}) },
+              spend: { todayUsd, budgetUsd, ...(model ? { model } : {}) },
+            };
+          },
+        });
+        // Event-driven refresh on run start/end (min-gap throttled inside).
+        registry.setObserver(() => statusPinController?.bump('run-change'));
+        await statusPinController.start();
+        registerShutdown(() => statusPinController?.stop());
+        log.info({ chatId: pinChatId }, 'TX6: pinned live status card enabled (SUDO_TG_STATUS_PIN=1)');
+      }
+    } catch (err) {
+      statusPinController = null;
+      log.warn({ err: String(err) }, 'TX6: status-pin wiring failed — continuing without');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 9.7 Health Watchdog
   // -------------------------------------------------------------------------
   try {
@@ -5138,6 +5617,15 @@ async function boot(): Promise<void> {
     // through the proactive notifier; HealthAlertPolicy inside the watchdog
     // handles cooldown/threshold so this never spams per 60s tick.
     watchdog.setAlertSink((severity, check, kind) => {
+      // TX6: with the pinned status card live, every alert lands on the card
+      // (latest incident line + count); non-critical alerts fold there INSTEAD
+      // of sending a new bubble. Severity-critical failures always still
+      // bubble (never silently swallowed). Flag off → statusPinController is
+      // null and this path is byte-identical to before.
+      if (statusPinController) {
+        statusPinController.recordHealthAlert(severity, check.name, check.message, kind);
+        if (statusPinShouldBubble && !statusPinShouldBubble(severity, kind)) return;
+      }
       proactiveNotifier.notify(
         'alert',
         kind === 'recovery' ? `HEALTH RECOVERED: ${check.name}` : `HEALTH ${severity.toUpperCase()}: ${check.name}`,

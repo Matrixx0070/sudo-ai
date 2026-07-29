@@ -2545,24 +2545,38 @@ export class AgentLoop extends AgentLoopInjections {
         }
 
         const brainCallStartedAt = performance.now();
+        // SUDO_BRAIN_STREAM (default ON, =0 disables): forward live text deltas
+        // from the brain's solo call paths as stream-chunk events so channel UIs
+        // (Telegram working bubble, web SPA) show text as it generates.
+        // `_streamedDelta` accumulates what was already emitted so the
+        // round-trip content emit below sends only the unstreamed tail.
+        let _streamedDelta = '';
+        const brainReq = {
+          messages: trimmed,
+          source: 'agent',
+          // gw-cutover Phase 2: session→trace correlation for IR-served calls
+          // (noteTraceForSession → markOutcomeForSession). Legacy path ignores it.
+          sessionId: state.sessionId,
+          model: effectiveModel,
+          tools: _routedTools,
+          ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),
+          ...(opts?.promptProfile && opts.promptProfile !== 'main' ? { promptProfile: opts.promptProfile } : {}),
+          race: opts?.race,
+        };
+        if (process.env['SUDO_BRAIN_STREAM'] !== '0') {
+          (brainReq as { _onTextDelta?: (text: string) => void })._onTextDelta = (t: string): void => {
+            if (typeof t !== 'string' || t.length === 0) return;
+            _streamedDelta += t;
+            emit({ type: 'stream-chunk', chunk: t });
+          };
+        }
         let response: BrainResponse;
         try {
           // AL1.2: ambient turn/step correlation — the gateway call log stamps
           // llm_calls rows made inside this scope with {session, turn, step}.
           response = await runWithLoopStep(
             { sessionId: state.sessionId, turnId: state.turnId ?? '', stepN: state.iteration },
-            () => this.brain.call({
-              messages: trimmed,
-              source: 'agent',
-              // gw-cutover Phase 2: session→trace correlation for IR-served calls
-              // (noteTraceForSession → markOutcomeForSession). Legacy path ignores it.
-              sessionId: state.sessionId,
-              model: effectiveModel,
-              tools: _routedTools,
-              ...(_slimHeartbeatActive ? { promptMode: 'slim-heartbeat' as const } : {}),
-              ...(opts?.promptProfile && opts.promptProfile !== 'main' ? { promptProfile: opts.promptProfile } : {}),
-              race: opts?.race,
-            }, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts),
+            () => this.brain.call(brainReq, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts),
           );
         } catch (brainErr) {
           // Context overflow: the prompt is too long for the model and every
@@ -2779,7 +2793,18 @@ export class AgentLoop extends AgentLoopInjections {
           };
           session.messages.push(assistantMsg);
 
-          if (response.content) emit({ type: 'stream-chunk', chunk: response.content });
+          // Emit only what live deltas did NOT already stream this round-trip.
+          // Prefix mismatch (post-processing rewrote the text, or a poisoned
+          // failover stream) → emit nothing more; the channel's finalize()
+          // lands the canonical reply regardless.
+          if (response.content) {
+            const chunkTail = _streamedDelta.length === 0
+              ? response.content
+              : response.content.startsWith(_streamedDelta)
+                ? response.content.slice(_streamedDelta.length)
+                : '';
+            if (chunkTail) emit({ type: 'stream-chunk', chunk: chunkTail });
+          }
 
           // Epistemic gate: classify rationale confidence before tool dispatch.
           // Ordering is intentional: REPLAN fires BEFORE loop-guard so a blocked
