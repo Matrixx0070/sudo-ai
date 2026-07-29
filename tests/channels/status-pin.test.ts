@@ -320,4 +320,38 @@ describe('renderStatusPinCard — brain chain health', () => {
     const out = renderStatusPinCard(snap({ brain: { profileCount: 4, availableCount: 0, disabledCount: 4, coolingCount: 0 } }));
     expect(out.indexOf('🧠 Brain')).toBeLessThan(out.indexOf('⏰ Cron'));
   });
+
+  // ADR 0003: slot counts overstate redundancy (4 of 6 prod slots share ONE
+  // Anthropic credential). The card reports failure DOMAINS when supplied.
+  it('renders domain counts when supplied', () => {
+    const out = renderStatusPinCard(snap({
+      brain: { profileCount: 6, availableCount: 6, disabledCount: 0, coolingCount: 0, domainCount: 3, domainsUpCount: 3 },
+    }));
+    expect(out).toContain('🧠 Brain: 6/6 providers · domains 3/3');
+  });
+
+  it('warns on ONE domain up even when several slots look available', () => {
+    // 2026-07-29 shape: glm + a cooling-but-technically-back gemini slot could
+    // read "2 available" while every serving profile sat in one credential
+    // domain away from total outage.
+    const out = renderStatusPinCard(snap({
+      brain: { profileCount: 6, availableCount: 2, disabledCount: 1, coolingCount: 3, domainCount: 3, domainsUpCount: 1 },
+    }));
+    expect(out).toContain('⚠️');
+    expect(out).toContain('· domains 1/3');
+  });
+
+  it('does NOT warn when 2+ domains are up despite degraded slots', () => {
+    const out = renderStatusPinCard(snap({
+      brain: { profileCount: 6, availableCount: 2, disabledCount: 4, coolingCount: 0, domainCount: 3, domainsUpCount: 2 },
+    }));
+    expect(out).toContain('4 disabled');
+    expect(out).not.toContain('⚠️');
+  });
+
+  it('falls back to slot-count warning when domain info is absent (back-compat)', () => {
+    const out = renderStatusPinCard(snap({ brain: { profileCount: 4, availableCount: 1, disabledCount: 1, coolingCount: 2 } }));
+    expect(out).toContain('⚠️ 1/4 available');
+    expect(out).not.toContain('· domains');
+  });
 });

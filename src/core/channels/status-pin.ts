@@ -89,6 +89,15 @@ export interface StatusPinSnapshot {
     disabledCount: number;
     /** In cooldown (rate limits, transient errors). */
     coolingCount: number;
+    /**
+     * ADR 0003 credential failure domains (profiles sharing one credential).
+     * Slot counts overstate redundancy — 4 of 6 prod slots share ONE Anthropic
+     * credential — so the card reports domains when the brain supplies them.
+     * Optional: an older brain without profile.domain simply omits the counts.
+     */
+    domainCount?: number;
+    /** Domains with at least one profile able to serve right now. */
+    domainsUpCount?: number;
   };
 }
 
@@ -123,13 +132,18 @@ export function renderStatusPinCard(s: StatusPinSnapshot): string {
     const parts: string[] = [];
     if (b.disabledCount > 0) parts.push(`${b.disabledCount} disabled`);
     if (b.coolingCount > 0) parts.push(`${b.coolingCount} cooling`);
+    const domains = b.domainCount != null && b.domainsUpCount != null
+      ? ` · domains ${b.domainsUpCount}/${b.domainCount}`
+      : '';
     if (b.availableCount === 0) {
-      lines.push(`🧠 Brain: 🔴 NO provider available (${parts.join(', ') || `0/${b.profileCount}`})`);
+      lines.push(`🧠 Brain: 🔴 NO provider available (${parts.join(', ') || `0/${b.profileCount}`})${domains}`);
     } else if (parts.length > 0) {
-      const warn = b.availableCount === 1 ? '⚠️ ' : '';
-      lines.push(`🧠 Brain: ${warn}${b.availableCount}/${b.profileCount} available — ${parts.join(', ')}`);
+      // One failure DOMAIN left = one credential from total outage, even when
+      // several slots look available; fall back to slot count without domain info.
+      const warn = (b.domainsUpCount ?? b.availableCount) === 1 ? '⚠️ ' : '';
+      lines.push(`🧠 Brain: ${warn}${b.availableCount}/${b.profileCount} available — ${parts.join(', ')}${domains}`);
     } else {
-      lines.push(`🧠 Brain: ${b.availableCount}/${b.profileCount} providers`);
+      lines.push(`🧠 Brain: ${b.availableCount}/${b.profileCount} providers${domains}`);
     }
   }
 
