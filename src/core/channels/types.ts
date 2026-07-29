@@ -52,6 +52,11 @@ export interface MediaAttachment {
   buffer?: Buffer;
   /** Original filename if the platform provides one. */
   filename?: string;
+  /**
+   * Optional caption shown with the media (TX4 inline artifacts). Adapters
+   * that support captions attach it; others may ignore it.
+   */
+  caption?: string;
 }
 
 // ---------------------------------------------------------------------------

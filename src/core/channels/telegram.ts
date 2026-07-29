@@ -829,7 +829,8 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!peerId) {
       throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
     }
-    await this._sendMedia(peerId, attachment, {});
+    // TX4: pass the artifact caption through (Telegram caps captions at 1024).
+    await this._sendMedia(peerId, attachment, attachment.caption ? { caption: attachment.caption.slice(0, 1024) } : {});
   }
 
   // ---------------------------------------------------------------------------
@@ -880,6 +881,42 @@ export class TelegramAdapter implements ChannelAdapter {
             },
           },
         );
+        return;
+      }
+
+      // TX3 (SUDO_TG_DETAIL_TOGGLE=1, default OFF): per-turn working-card
+      // detail toggle  tx3:t:{token}. Owner-only; the token maps to the live
+      // turn's render state via the working-card-state registry.
+      if (data.startsWith('tx3:')) {
+        try {
+          const uid = String(ctx.from?.id ?? '');
+          if (process.env['SUDO_TG_DETAIL_TOGGLE'] !== '1' || !this.ownerUsers.has(uid)) {
+            await ctx.answerCallbackQuery({ text: 'Not available.', show_alert: false });
+            return;
+          }
+          const { parseTx3CallbackData, buildWorkingCardRows } = await import('./working-card-keyboard.js');
+          const token = parseTx3CallbackData(data);
+          if (!token) {
+            await ctx.answerCallbackQuery({ text: 'Invalid toggle data.', show_alert: false });
+            return;
+          }
+          const { toggleWorkingCardDetail } = await import('./working-card-state.js');
+          const next = toggleWorkingCardDetail(token);
+          if (next === null) {
+            await ctx.answerCallbackQuery({ text: 'This turn has finished.', show_alert: false });
+            return;
+          }
+          // Refresh the button label to advertise the NEXT state (cosmetic).
+          try {
+            const rows = buildWorkingCardRows({ detail: { token, detailNow: next } });
+            const kb = new InlineKeyboard(rows.map((r) => r.map((b) => ({ text: b.text, callback_data: b.callbackData }))));
+            await ctx.editMessageReplyMarkup({ reply_markup: kb });
+          } catch { /* label refresh best-effort — toggle already applied */ }
+          await ctx.answerCallbackQuery({ text: next ? '🔎 Step detail on' : '▪ Compact view', show_alert: false });
+        } catch (err) {
+          log.warn({ err: String(err) }, 'TX3 detail-toggle callback failed');
+          try { await ctx.answerCallbackQuery({ text: 'Could not toggle.', show_alert: false }); } catch { /* noop */ }
+        }
         return;
       }
 

@@ -2129,6 +2129,8 @@ async function boot(): Promise<void> {
           // union and the narrow is what we filter on (verifier HIGH #1).
           let onEvent: import('./core/agent/types.js').AgentEventHandler | undefined;
           let stopStatusTicker: (() => void) | null = null;
+          // TX3: unregister hook for the per-turn detail-toggle registry.
+          let tx3Cleanup: (() => Promise<void>) | null = null;
           if (process.env['SUDO_STREAM_CHANNELS'] !== '0') {
             try {
               const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
@@ -2187,9 +2189,11 @@ async function boot(): Promise<void> {
                   timelineSteps = () => timeline.stepCount; // TX1 stopped-card step count
                   const startMs = Date.now();
                   let tick = 0;
-                  const timelineDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
+                  // TX3: `turnDetail` is per-turn mutable; SUDO_TG_TIMELINE_DETAIL
+                  // stays the initial default, the tx3: callback flips it live.
+                  let turnDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
                   const pushStatus = (): void => {
-                    streamSink?.status(timeline.render({ nowMs: Date.now(), startMs, tick, detail: timelineDetail, ...(chip ? { chip } : {}), verbIndex: tick }));
+                    streamSink?.status(timeline.render({ nowMs: Date.now(), startMs, tick, detail: turnDetail, ...(chip ? { chip } : {}), verbIndex: tick }));
                   };
                   feedStatus = (ev): void => {
                     const now = Date.now();
@@ -2202,6 +2206,35 @@ async function boot(): Promise<void> {
                   pushStatus();
                   const ticker = setInterval(() => { tick++; pushStatus(); }, 3000);
                   stopStatusTicker = () => clearInterval(ticker);
+                  // TX3 (SUDO_TG_DETAIL_TOGGLE=1, default OFF): attach a
+                  // Details/Compact inline button to the working card; the
+                  // adapter's tx3: callback flips `turnDetail` via the
+                  // working-card-state registry and pushStatus re-renders
+                  // through the sink's existing edit throttle.
+                  if (process.env['SUDO_TG_DETAIL_TOGGLE'] === '1' && streamSink.messageId !== null) {
+                    try {
+                      const { registerWorkingCard, unregisterWorkingCard } = await import('./core/channels/working-card-state.js');
+                      const { buildWorkingCardRows } = await import('./core/channels/working-card-keyboard.js');
+                      const { InlineKeyboard } = await import('grammy');
+                      const token = registerWorkingCard({
+                        getDetail: () => turnDetail,
+                        setDetail: (d: boolean) => { turnDetail = d; },
+                        rerender: () => { pushStatus(); },
+                      });
+                      const rows = buildWorkingCardRows({ detail: { token, detailNow: turnDetail } });
+                      const kb = new InlineKeyboard(rows.map((r) => r.map((b) => ({ text: b.text, callback_data: b.callbackData }))));
+                      const cardMsgId = streamSink.messageId;
+                      await telegram.editReplyMarkup(replyTo, cardMsgId, kb);
+                      tx3Cleanup = async (): Promise<void> => {
+                        unregisterWorkingCard(token);
+                        // Clear the toggle button (awaited so it cannot race
+                        // the feedback keyboard attached moments later).
+                        await telegram.editReplyMarkup(replyTo, cardMsgId, new InlineKeyboard()).catch(() => { /* cosmetic */ });
+                      };
+                    } catch (tx3Err) {
+                      log.debug({ err: String(tx3Err) }, 'TX3: detail-toggle attach failed — card stays buttonless');
+                    }
+                  }
                 } catch { /* timeline is best-effort — plain placeholder remains */ }
               }
               onEvent = (ev) => {
@@ -2225,6 +2258,7 @@ async function boot(): Promise<void> {
             // TX1: the run is over — final edits (reply text / stopped card)
             // must not carry the Stop button anymore.
             workingKeyboard = null;
+            if (tx3Cleanup) await tx3Cleanup(); // TX3: turn over — token invalid, button removed
           }
           // TX1: the ⏹ tap aborted the run (the loop stopped at its iteration
           // boundary and returned abort boilerplate). Finalize the card to a
@@ -2296,6 +2330,29 @@ async function boot(): Promise<void> {
             'Agent reply ready',
           );
 
+          // TX4 (SUDO_TG_ARTIFACTS=1, default OFF): plan inline delivery for
+          // rendered artifacts — a caption per artifact (max 3, ≤5MB each) and
+          // a decision to fold raw data in the reply behind "Read More".
+          // Fail-open: any error keeps the existing caption-less delivery.
+          let artifactCaptions: Map<string, string> | null = null;
+          let artifactFold = false;
+          if (process.env['SUDO_TG_ARTIFACTS'] === '1' && attachments.length > 0) {
+            try {
+              const { planInlineArtifacts } = await import('./core/channels/inline-artifacts.js');
+              const { statSync } = await import('node:fs');
+              const candidates = attachments.map((a) => {
+                let bytes: number | undefined;
+                try { bytes = statSync(a.path).size; } catch { /* size gate fails closed for this file */ }
+                return { path: a.path, type: a.type, filename: a.filename, bytes };
+              });
+              const artPlan = planInlineArtifacts(candidates, replyText);
+              artifactCaptions = artPlan.captions;
+              artifactFold = artPlan.foldData;
+            } catch (artErr) {
+              log.debug({ err: String(artErr) }, 'TX4: inline-artifact planning failed — plain delivery');
+            }
+          }
+
           // Send file attachments before the text reply (images, screenshots, etc.)
           if (attachments.length > 0) {
             const { readFileSync, existsSync } = await import('node:fs');
@@ -2306,6 +2363,7 @@ async function boot(): Promise<void> {
                   continue;
                 }
                 const buffer = readFileSync(att.path);
+                const artifactCaption = artifactCaptions?.get(att.path);
                 await telegram.sendMedia(replyTo, {
                   type: att.type,
                   mimeType: att.type === 'image' ? 'image/png'
@@ -2314,6 +2372,7 @@ async function boot(): Promise<void> {
                     : 'application/octet-stream',
                   buffer,
                   filename: att.filename ?? att.path.split('/').pop() ?? 'file',
+                  ...(artifactCaption ? { caption: artifactCaption } : {}),
                 });
                 log.info({ peerId: msg.peerId, path: att.path, type: att.type }, 'Attachment sent to Telegram');
               } catch (attErr) {
@@ -2365,7 +2424,9 @@ async function boot(): Promise<void> {
             await streamSink.finalize(firstBody);
             // The sink's finalize renders plain 'md'; a long single-bubble reply
             // gets ONE follow-up edit that folds its tail behind "Read More".
-            if (readMoreOn && plan.mode === 'single' && firstBody.length > readMoreMin && streamSink.messageId !== null) {
+            // TX4: a reply whose raw data is already carried by a delivered
+            // artifact folds too, even below the length threshold.
+            if (readMoreOn && plan.mode === 'single' && (firstBody.length > readMoreMin || artifactFold) && streamSink.messageId !== null) {
               await telegram.editText(replyTo, streamSink.messageId, firstBody, { format: 'md-collapse' })
                 .catch(() => { /* collapse is cosmetic — md render already landed */ });
             }
