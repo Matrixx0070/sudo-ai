@@ -28,7 +28,7 @@ import {
   readFileSync, writeFileSync, existsSync,
   mkdirSync, copyFileSync, statSync, lstatSync, renameSync, readdirSync, unlinkSync, mkdtempSync, realpathSync, rmSync,
 } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -1106,6 +1106,17 @@ export const arsenalTool: ToolDefinition = {
       else reportLines.push(aiText); // fallback: show full AI response
     }
 
+    // Dry run that produced edits: surface them. Without this the caller gets
+    // NOTHING actionable — the AI-text branch above is skipped whenever
+    // edits.length > 0 on a mutating mode, and `applyResult.applied` is empty
+    // because nothing was written. The proposal was computed and dropped.
+    // (KAIROS self-repair runs exactly this path every tick.)
+    if (!shouldApply && parsed.edits.length > 0) {
+      reportLines.push(`## Proposed Edits — DRY RUN (${parsed.edits.length} file(s), nothing written)`);
+      for (const e of parsed.edits) reportLines.push(`  ~ ${e.filePath}`);
+      reportLines.push('');
+    }
+
     // Edit results
     if (applyResult.applied.length > 0) {
       reportLines.push('## Files Modified');
@@ -1168,6 +1179,9 @@ export const arsenalTool: ToolDefinition = {
         typesClean: afterTsc?.clean ?? null,
         editsFound: parsed.edits.length,
         editsApplied: applyResult.applied.length,
+        // The actual proposed content on a dry run, so a caller can persist or
+        // review it. Empty when edits were applied (they're on disk instead).
+        proposedEdits: shouldApply ? [] : parsed.edits.map((e) => ({ filePath: e.filePath, content: e.content })),
       },
     };
   },
@@ -1178,6 +1192,53 @@ export const arsenalTool: ToolDefinition = {
  * Allows KAIROS to call arsenal "refactor" or "fix" on detected large_file or codebase_degraded.
  * Stub ctx for direct use (PROJECT_ROOT guard preserved).
  */
+/** A refactor/fix proposal KAIROS computed but deliberately did not apply. */
+export interface KairosProposal {
+  /** The observation that triggered the repair (KAIROS task text). */
+  task: string;
+  mode: 'fix' | 'refactor';
+  /** Human-readable arsenal report. */
+  report: string;
+  /** Proposed file contents — the work product that used to be discarded. */
+  edits: { filePath: string; content: string }[];
+}
+
+/**
+ * Injected sink for KAIROS dry-run proposals. Default no-op keeps arsenal free
+ * of any store import (this module is reachable from the tool registry; the
+ * repo's rule is injected-callback seams, never direct plumbing). cli.ts wires
+ * it to the ProposalStore at boot.
+ */
+let kairosProposalSink: ((p: KairosProposal) => void) | undefined;
+
+export function setKairosProposalSink(sink: ((p: KairosProposal) => void) | undefined): void {
+  kairosProposalSink = sink;
+}
+
+/**
+ * Last persisted observation. KAIROS re-fires the SAME observation every tick
+ * (its remedy is dry-run, so the condition never clears), which would otherwise
+ * write ~288 identical proposals/day. Persist a proposal only when the
+ * observation actually changed.
+ */
+let lastProposalKey = '';
+
+export function _resetKairosProposalDedupeForTests(): void {
+  lastProposalKey = '';
+}
+
+/**
+ * True when this observation differs from the last one persisted (and latches
+ * it). Pure-ish and exported so the dedupe rule is testable without driving a
+ * full arsenal run through a live model.
+ */
+export function shouldPersistKairosProposal(task: string, mode: 'fix' | 'refactor'): boolean {
+  const key = createHash('sha256').update(`${mode}\n${task}`).digest('hex');
+  if (key === lastProposalKey) return false;
+  lastProposalKey = key;
+  return true;
+}
+
 export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
   // Security: sanitize task — reject prompt-injection markers
   if (task.includes('<<<') || task.includes('>>>') || task.includes('SYSTEM:')) {
@@ -1197,6 +1258,25 @@ export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor'
       logger,
     };
     const result = await arsenalTool.execute({ task, mode, applyEdits: false }, ctx);
+
+    // Land the dry-run work product instead of dropping it. Deduped on the
+    // observation text: KAIROS repeats an unchanged observation every tick.
+    const edits = ((result.data as { proposedEdits?: { filePath: string; content: string }[] } | undefined)
+      ?.proposedEdits) ?? [];
+    if (kairosProposalSink && edits.length > 0) {
+      if (shouldPersistKairosProposal(task, mode)) {
+        try {
+          kairosProposalSink({ task, mode, report: String(result.output || ''), edits });
+          logger.info({ mode, files: edits.length }, 'KAIROS proposal persisted for review');
+        } catch (sinkErr) {
+          // A failing sink must never break the repair tick.
+          logger.warn({ err: sinkErr instanceof Error ? sinkErr.message : String(sinkErr) }, 'KAIROS proposal sink failed (non-fatal)');
+        }
+      } else {
+        logger.debug({ mode }, 'KAIROS proposal skipped — observation unchanged since last persist');
+      }
+    }
+
     return { success: !!result.success, output: String(result.output || '').slice(0, 300) };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
