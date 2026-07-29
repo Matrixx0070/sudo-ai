@@ -26,6 +26,12 @@ export interface WorkingCardEntry {
    * throttle (e.g. `streamSink.status(timeline.render(...))`). Must not throw.
    */
   rerender: () => void;
+  /**
+   * Optional: build the card's CURRENT full keyboard rows (integration seam —
+   * when TX1's Stop button shares the card, the adapter's toggle refresh must
+   * re-send BOTH buttons, and only the turn owner knows the full set).
+   */
+  buildRows?: () => import('./working-card-keyboard.js').WorkingCardButton[][];
 }
 
 /**
@@ -72,6 +78,20 @@ export function toggleWorkingCardDetail(token: string): boolean | null {
     /* rerender is best-effort — state already flipped */
   }
   return next;
+}
+
+/**
+ * The card's current full keyboard rows from the turn owner's builder, or
+ * null when the turn is gone / no builder was registered.
+ */
+export function getWorkingCardRows(token: string): import('./working-card-keyboard.js').WorkingCardButton[][] | null {
+  const entry = registry.get(token);
+  if (!entry?.buildRows) return null;
+  try {
+    return entry.buildRows();
+  } catch {
+    return null;
+  }
 }
 
 /** Remove a card at end of turn. Idempotent. */

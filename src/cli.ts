@@ -2131,6 +2131,9 @@ async function boot(): Promise<void> {
           let stopStatusTicker: (() => void) | null = null;
           // TX3: unregister hook for the per-turn detail-toggle registry.
           let tx3Cleanup: (() => Promise<void>) | null = null;
+          let tx3Token: string | null = null;
+          // Per-turn card render mode (TX3 toggles it; env is the initial default).
+          let turnDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
           if (process.env['SUDO_STREAM_CHANNELS'] !== '0') {
             try {
               const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
@@ -2159,11 +2162,29 @@ async function boot(): Promise<void> {
                 // is past Telegram's truncation point (verifier HIGH #3).
                 { intervalMs: 800, maxChars: 4080, placeholder: '…', label: `telegram:${msg.peerId}` },
               );
+              // TX1+TX3 unified keyboard: one row carrying whichever of ⏹ Stop
+              // and the detail toggle are enabled. Rebuilt whenever detail
+              // state changes so every sink edit re-sends the CURRENT set
+              // (editMessageText replaces reply_markup). tx3Token is filled by
+              // the TX3 block below when that flag is on.
+              const rebuildWorkingKeyboard = async (): Promise<void> => {
+                const { buildWorkingCardRows } = await import('./core/channels/working-card-keyboard.js');
+                const { InlineKeyboard } = await import('grammy');
+                const rows = buildWorkingCardRows({
+                  ...(tx1StopOn ? { stop: { token: convKey } } : {}),
+                  ...(tx3Token ? { detail: { token: tx3Token, detailNow: turnDetail } } : {}),
+                });
+                workingKeyboard = rows.length > 0
+                  ? new InlineKeyboard(rows.map((r) => r.map((b) => ({ text: b.text, callback_data: b.callbackData }))))
+                  : null;
+              };
               // TX1: put the ⏹ Stop button on the working card right away
               // (owner-gated at tap time in the telegram.ts callback handler).
               if (tx1StopOn && streamSink.messageId !== null) {
-                workingKeyboard = makeStopKeyboard(convKey);
-                try { await telegram.editReplyMarkup(replyTo, streamSink.messageId, workingKeyboard); } catch { /* button is cosmetic */ }
+                await rebuildWorkingKeyboard();
+                if (workingKeyboard) {
+                  try { await telegram.editReplyMarkup(replyTo, streamSink.messageId, workingKeyboard); } catch { /* button is cosmetic */ }
+                }
               }
               // Live activity-timeline card (SUDO_TG_TIMELINE=0 opts out): the
               // placeholder shows spinner + phase + elapsed + per-tool steps
@@ -2191,7 +2212,7 @@ async function boot(): Promise<void> {
                   let tick = 0;
                   // TX3: `turnDetail` is per-turn mutable; SUDO_TG_TIMELINE_DETAIL
                   // stays the initial default, the tx3: callback flips it live.
-                  let turnDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
+                  // turnDetail hoisted to turn scope (shared with the TX1+TX3 keyboard).
                   const pushStatus = (): void => {
                     streamSink?.status(timeline.render({ nowMs: Date.now(), startMs, tick, detail: turnDetail, ...(chip ? { chip } : {}), verbIndex: tick }));
                   };
@@ -2218,15 +2239,27 @@ async function boot(): Promise<void> {
                       const { InlineKeyboard } = await import('grammy');
                       const token = registerWorkingCard({
                         getDetail: () => turnDetail,
-                        setDetail: (d: boolean) => { turnDetail = d; },
+                        setDetail: (d: boolean) => {
+                          turnDetail = d;
+                          // Keep the combined keyboard's labels current for the
+                          // next sink edit (fire-and-forget; label is cosmetic).
+                          void rebuildWorkingKeyboard().catch(() => { /* noop */ });
+                        },
                         rerender: () => { pushStatus(); },
+                        // Adapter toggle-refresh re-sends the FULL current set
+                        // (Stop + Details) instead of a detail-only keyboard.
+                        buildRows: () => buildWorkingCardRows({
+                          ...(tx1StopOn ? { stop: { token: convKey } } : {}),
+                          detail: { token, detailNow: turnDetail },
+                        }),
                       });
-                      const rows = buildWorkingCardRows({ detail: { token, detailNow: turnDetail } });
-                      const kb = new InlineKeyboard(rows.map((r) => r.map((b) => ({ text: b.text, callback_data: b.callbackData }))));
+                      tx3Token = token;
+                      await rebuildWorkingKeyboard();
                       const cardMsgId = streamSink.messageId;
-                      await telegram.editReplyMarkup(replyTo, cardMsgId, kb);
+                      if (workingKeyboard) await telegram.editReplyMarkup(replyTo, cardMsgId, workingKeyboard);
                       tx3Cleanup = async (): Promise<void> => {
                         unregisterWorkingCard(token);
+                        tx3Token = null;
                         // Clear the toggle button (awaited so it cannot race
                         // the feedback keyboard attached moments later).
                         await telegram.editReplyMarkup(replyTo, cardMsgId, new InlineKeyboard()).catch(() => { /* cosmetic */ });

@@ -906,9 +906,11 @@ export class TelegramAdapter implements ChannelAdapter {
             await ctx.answerCallbackQuery({ text: 'This turn has finished.', show_alert: false });
             return;
           }
-          // Refresh the button label to advertise the NEXT state (cosmetic).
+          // Refresh the button labels (cosmetic). Prefer the turn owner's
+          // full-set builder so a shared card keeps its ⏹ Stop button too.
           try {
-            const rows = buildWorkingCardRows({ detail: { token, detailNow: next } });
+            const { getWorkingCardRows } = await import('./working-card-state.js');
+            const rows = getWorkingCardRows(token) ?? buildWorkingCardRows({ detail: { token, detailNow: next } });
             const kb = new InlineKeyboard(rows.map((r) => r.map((b) => ({ text: b.text, callback_data: b.callbackData }))));
             await ctx.editMessageReplyMarkup({ reply_markup: kb });
           } catch { /* label refresh best-effort — toggle already applied */ }

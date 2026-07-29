@@ -13,7 +13,8 @@
  * callback_data: b.callbackData }))))`).
  *
  * Callback-data prefixes (Telegram caps callback_data at 64 bytes):
- *   - TX1 stop:   `tx1:s:<token>`  (reserved here; wired by the TX1 feature)
+ *   - TX1 stop:   `tx1:stop:<runKey>` (must match telegram-run-controls
+ *     STOP_CALLBACK_PREFIX — the live tx1: handler parses that format)
  *   - TX3 detail: `tx3:t:<token>`  (token from working-card-state registry)
  */
 
@@ -57,7 +58,8 @@ export function parseTx3CallbackData(data: string): string | null {
 export function buildWorkingCardRows(opts: WorkingCardKeyboardOptions): WorkingCardButton[][] {
   const row: WorkingCardButton[] = [];
   if (opts.stop) {
-    row.push({ text: '⏹ Stop', callbackData: `tx1:s:${opts.stop.token}` });
+    // Format owned by telegram-run-controls (STOP_CALLBACK_PREFIX).
+    row.push({ text: '⏹ Stop', callbackData: `tx1:stop:${opts.stop.token}` });
   }
   if (opts.detail) {
     row.push({

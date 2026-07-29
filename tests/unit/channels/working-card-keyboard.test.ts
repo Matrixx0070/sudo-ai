@@ -34,7 +34,7 @@ describe('working-card-keyboard', () => {
       detail: { token: 'tok2', detailNow: false },
     });
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.map((b) => b.callbackData)).toEqual(['tx1:s:run1', 'tx3:t:tok2']);
+    expect(rows[0]!.map((b) => b.callbackData)).toEqual(['tx1:stop:run1', 'tx3:t:tok2']);
     expect(rows[0]![0]!.text).toContain('Stop');
   });
 
