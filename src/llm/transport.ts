@@ -75,7 +75,7 @@ import {
   type LLMErrorClass,
 } from './errors.js';
 import { runWithPolicy, recordSpend } from './policy.js';
-import { estimateCostUsd, isReasoningModel, REASONING_MIN_OUTPUT_TOKENS } from './limits.js';
+import { estimateCostUsd, estimateTokens, isReasoningModel, REASONING_MIN_OUTPUT_TOKENS } from './limits.js';
 import {
   streamIR as createSSEMachine,
   type IRStreamEvent,
@@ -807,6 +807,14 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
       route: r.route,
       caller: ir.caller,
       priority: ir.priority,
+      // Pre-flight USD estimate — REQUIRED for the budget gate to mean
+      // anything. Before this the transport passed nothing, so budgetVerdict
+      // always saw `undefined`: the gate blocked EVERYTHING once over cap
+      // (2026-07-29 outage — $0 seat routes refused on a phantom-poisoned
+      // day-total) and, after the first fix, gated NOTHING. An explicit 0
+      // (seat routes) is provably free and passes; a metered estimate keeps
+      // the cap's teeth. Output term uses max_tokens = worst-case cost.
+      estimateCostUsd: estimateCostUsd(`${r.provider}/${r.modelId}`, estimateTokens(ir), ir.max_tokens ?? 0),
       ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
       ...(opts.rng !== undefined ? { rng: opts.rng } : {}),
       ...(opts.noRetry === true ? { maxAttempts: 1 } : {}),

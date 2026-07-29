@@ -450,27 +450,28 @@ export function isGlobalBudgetEnforced(): boolean {
 
 type BudgetVerdict = 'ok' | 'caller_exceeded' | 'global_exceeded';
 
-function budgetVerdict(caller: string, estimate: number): BudgetVerdict {
+function budgetVerdict(caller: string, estimate: number | undefined): BudgetVerdict {
   rolloverSpend();
   const key = callerKey(caller);
-  // A USD budget bounds DOLLARS, so it only gates calls that would ADD
-  // dollars. A $0-estimate call (seat routes: claude-oauth, ollama) cannot
-  // increase spend — refusing it serves no budget purpose and converts a
-  // spend cap into an availability failure.
+  // A USD budget bounds DOLLARS, so a call PROVABLY costing $0 (an explicit
+  // 0 estimate — seat routes: claude-oauth, ollama) is never gated: it cannot
+  // add spend, and refusing it converts a spend cap into an availability
+  // failure. 2026-07-29, twice in one day, that pattern took the product down
+  // ("global budget exceeded: chat → claude-oauth:messages skipped" on a
+  // $101.61 phantom-poisoned day-total, zero marginal dollars at stake).
   //
-  // 2026-07-29, twice in one day: (1) mispriced ollama phantom-spent the cap
-  // and this gate then refused the genuinely-free claude-oauth seat; (2) after
-  // the pricing fix, the ledger still carried ~$101 of the morning's phantom
-  // cost, the boot seed re-poisoned spend.total, and EVERY route — including
-  // $0 seats — was refused for all non-agent-loop callers. Total outage,
-  // logged as "500 overloaded", zero marginal dollars at stake either time.
-  // Runaway $0 call VOLUME is bounded separately by the seat call ceiling.
-  if (estimate <= 0) return 'ok';
-  if (spend.total + estimate > globalBudget() && key !== 'agent-loop') {
+  // An ABSENT estimate is NOT free — unknown cost is treated conservatively
+  // under the old blocking semantics (test-pinned in policy.test.ts). The
+  // distinction matters because the first version of this fix used
+  // `estimate <= 0`, which silently disabled the gate for every un-estimated
+  // caller. Runaway $0 VOLUME stays bounded by the seat call ceiling.
+  if (estimate !== undefined && estimate <= 0) return 'ok';
+  const est = estimate ?? 0;
+  if (spend.total + est > globalBudget() && key !== 'agent-loop') {
     return 'global_exceeded';
   }
   const cap = budgetsFromEnv()[key];
-  if (typeof cap === 'number' && cap >= 0 && (spend.byCaller.get(key) ?? 0) + estimate > cap) {
+  if (typeof cap === 'number' && cap >= 0 && (spend.byCaller.get(key) ?? 0) + est > cap) {
     return 'caller_exceeded';
   }
   return 'ok';
@@ -521,7 +522,7 @@ function preflight(
   // and returns 'degrade' so the caller drops the alias one tier. A BACKGROUND
   // call fails closed. Either way, exhaustion emits ONE throttled alert.
   let budgetDecision: BudgetDecision = 'ok';
-  const verdict = budgetVerdict(caller, opts.estimateCostUsd ?? 0);
+  const verdict = budgetVerdict(caller, opts.estimateCostUsd);
   if (verdict !== 'ok') {
     if (priority === 'user') {
       budgetDecision = 'degrade';
