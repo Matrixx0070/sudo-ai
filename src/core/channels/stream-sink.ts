@@ -83,6 +83,14 @@ export interface StreamSink {
   /** Append a chunk of generated text to the buffer. */
   chunk(text: string): void;
   /**
+   * Update the placeholder with live status text (e.g. an activity-timeline
+   * card) — shown only while no real content chunks have arrived. Once the
+   * first chunk lands, content wins and status updates are ignored.
+   */
+  status(text: string): void;
+  /** The channel message id of the placeholder, null if open() failed. */
+  readonly messageId: string | number | null;
+  /**
    * Flush the final text with a single edit, regardless of the debounce
    * window. Returns once the final edit has settled (or failed silently).
    */
@@ -136,6 +144,7 @@ export async function createBufferedEditSink(
   }
 
   let buffer = '';
+  let statusText = '';
   let lastEditedText = placeholder;
   let lastEditAt = 0;
   let inFlight: Promise<void> | null = null;
@@ -153,7 +162,7 @@ export async function createBufferedEditSink(
     if (inFlight) return; // serialise edits
     if (messageId === null) return;
 
-    const text = clampForChannel(buffer || placeholder);
+    const text = clampForChannel(buffer || statusText || placeholder);
     if (text === lastEditedText) return; // noop suppression
 
     const targetText = text;
@@ -202,6 +211,17 @@ export async function createBufferedEditSink(
       schedule();
     },
 
+    status(text: string): void {
+      if (cancelled || finalized) return;
+      if (!text || buffer.length > 0) return; // content wins over status
+      statusText = text;
+      schedule();
+    },
+
+    get messageId(): string | number | null {
+      return messageId;
+    },
+
     async finalize(finalText: string): Promise<void> {
       if (cancelled || finalized) return;
       finalized = true;
@@ -248,8 +268,10 @@ export async function createBufferedEditSink(
 function makeNoopSink(): StreamSink {
   return {
     chunk(): void { /* noop */ },
+    status(): void { /* noop */ },
     async finalize(): Promise<void> { /* noop */ },
     async cancel(): Promise<void> { /* noop */ },
+    get messageId(): string | number | null { return null; },
     get bufferLength(): number { return 0; },
   };
 }

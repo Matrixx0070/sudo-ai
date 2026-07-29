@@ -16,6 +16,36 @@ export type { ErrorCategory };
 
 const log = createLogger('brain:failover');
 
+/**
+ * Model IDs whose provider endpoint rejects/mishandles multimodal image
+ * input. Sending them an image previously wasn't skipped — it was tried,
+ * errored with an uncategorized "format" failure, and cooled the profile
+ * down, which also degraded its plain-text reliability for unrelated
+ * callers. getNextProfile({ requireVision: true }) skips these instead.
+ */
+const NON_VISION_MODEL_IDS: ReadonlySet<string> = new Set([
+  'ollama/glm-5.2:cloud',
+  'ollama/deepseek-v4-pro:cloud',
+  'ollama/kimi-k2.7-code:cloud',
+]);
+
+/**
+ * Absolute last-resort profile(s) for the cron heartbeat / background ticks.
+ * A 2026-07-25 incident had system.heartbeat report "all profiles exhausted"
+ * for 4+ hours because the primary + fallback chain all hit cooldown/disable
+ * at once with nothing left to retry sooner than their normal (up to 30min
+ * auth / 10min billing) backoff ceilings. This model gets a much shorter,
+ * fixed cooldown cap instead of an unlimited exemption — it's a BILLED
+ * ollama:cloud model (~$0.057/call, see project history), so a true never-
+ * cooldown exemption during a real outage would mean paying for a retry
+ * every tick indefinitely. A 60s cap bounds that cost while still giving the
+ * heartbeat a provider to retry against within a minute instead of hours.
+ */
+const LAST_RESORT_MODEL_IDS: ReadonlySet<string> = new Set([
+  'ollama/glm-5.2:cloud',
+]);
+const LAST_RESORT_COOLDOWN_CAP_MS = 60_000;
+
 // ---------------------------------------------------------------------------
 // Transient vs billing category sets
 // ---------------------------------------------------------------------------
@@ -191,7 +221,21 @@ export class ModelFailover {
     const profileSeed = opts.profileSeed ?? _phash;
     const saltedOpts = { ...opts, profileSeed };
 
+    const isLastResort = LAST_RESORT_MODEL_IDS.has(profileId);
+    const capCooldown = (ms: number): number => isLastResort ? Math.min(ms, LAST_RESORT_COOLDOWN_CAP_MS) : ms;
+
     if (PERMANENT_CATEGORIES.has(category)) {
+      // Last-resort never permanently disables — an auth_permanent misfire on
+      // the one model the heartbeat is guaranteed to have would otherwise park
+      // it until a manual recordSuccess, defeating the point of "last resort".
+      if (isLastResort) {
+        profile.cooldownUntil = now + LAST_RESORT_COOLDOWN_CAP_MS;
+        log.warn(
+          { profileId, category },
+          'Last-resort profile hit a permanent-category error — short cooldown instead of disabling',
+        );
+        return;
+      }
       profile.disabled = true;
       log.error(
         { profileId, category },
@@ -201,7 +245,7 @@ export class ModelFailover {
     }
 
     if (BILLING_CATEGORIES.has(category)) {
-      const cooldownMs = this._cooldownMs(BILLING_COOLDOWN, errorCount, saltedOpts);
+      const cooldownMs = capCooldown(this._cooldownMs(BILLING_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
       log.warn(
         { profileId, category, errClass: 'billing', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs, cooldownUntil: profile.cooldownUntil },
@@ -211,7 +255,7 @@ export class ModelFailover {
     }
 
     if (AUTH_CATEGORIES.has(category)) {
-      const cooldownMs = this._cooldownMs(AUTH_COOLDOWN, errorCount, saltedOpts);
+      const cooldownMs = capCooldown(this._cooldownMs(AUTH_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
       log.warn(
         { profileId, category, errClass: 'auth', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
@@ -221,7 +265,7 @@ export class ModelFailover {
     }
 
     if (TRANSIENT_CATEGORIES.has(category)) {
-      const cooldownMs = this._cooldownMs(TRANSIENT_COOLDOWN, errorCount, saltedOpts);
+      const cooldownMs = capCooldown(this._cooldownMs(TRANSIENT_COOLDOWN, errorCount, saltedOpts));
       profile.cooldownUntil = now + cooldownMs;
       log.warn(
         { profileId, category, errClass: 'transient', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
@@ -232,7 +276,7 @@ export class ModelFailover {
 
     // format / model_not_found / session_expired / auth (non-permanent):
     // Apply a short transient cooldown (first slot) to avoid hammering.
-    const cooldownMs = this._cooldownMs(TRANSIENT_COOLDOWN, 1, saltedOpts);
+    const cooldownMs = capCooldown(this._cooldownMs(TRANSIENT_COOLDOWN, 1, saltedOpts));
     profile.cooldownUntil = now + cooldownMs;
     log.warn(
       { profileId, category, errClass: 'other', errorCount, cooldownMs, retryAfterMs: opts.retryAfterMs },
@@ -315,13 +359,18 @@ export class ModelFailover {
    * the profile whose cooldown expires soonest, so the system can retry
    * instead of being completely dead until timers elapse.
    *
+   * @param opts.requireVision - when true, profiles in {@link NON_VISION_MODEL_IDS}
+   *   are excluded entirely (never tried, never force-rescued) instead of
+   *   being attempted and cooled down on a predictable format error.
    * @returns The selected ModelProfile, or null when ALL profiles are permanently disabled.
    */
-  getNextProfile(): ModelProfile | null {
+  getNextProfile(opts?: { requireVision?: boolean }): ModelProfile | null {
     const now = Date.now();
+    const visionOk = (p: ModelProfile): boolean =>
+      !opts?.requireVision || !NON_VISION_MODEL_IDS.has(p.id);
 
     const available = Array.from(this.profiles.values())
-      .filter((p) => !p.disabled && p.cooldownUntil <= now)
+      .filter((p) => !p.disabled && p.cooldownUntil <= now && visionOk(p))
       .sort((a, b) => a.priority - b.priority);
 
     if (available.length === 0) {
@@ -329,7 +378,7 @@ export class ModelFailover {
       // Check if any non-disabled profiles exist — if so, force-reset the one
       // with the shortest remaining cooldown so we can attempt a retry.
       const cooledDown = Array.from(this.profiles.values())
-        .filter((p) => !p.disabled && p.cooldownUntil > now)
+        .filter((p) => !p.disabled && p.cooldownUntil > now && visionOk(p))
         .sort((a, b) => a.cooldownUntil - b.cooldownUntil);
 
       if (cooledDown.length > 0) {

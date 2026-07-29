@@ -109,8 +109,12 @@ module.exports = {
 
         // Re-enabled 2026-07-17 (F81 census: 'off' left cost monitoring blind).
         // Alerting guardrails only — never hard-block. Normal burn ~$57/day.
+        // 2026-07-26: SUDO_DAILY_LLM_BUDGET_USD was $50, below normal ~$57/day
+        // burn, so it hard-blocked EVERY background call (including the
+        // ollama fallback) once coder.arsenal alone spent $46+ in a day.
+        // Raised to match SUDO_DAILY_BUDGET_USD so it stops tripping daily.
         SUDO_DAILY_BUDGET_USD: '100',
-        SUDO_DAILY_LLM_BUDGET_USD: '50',
+        SUDO_DAILY_LLM_BUDGET_USD: '100',
 
         // ---- 2026-07-18 safe activations (Frank-approved) ----
         // F89: runner only executes operator-created standing orders (idle otherwise).
@@ -201,6 +205,14 @@ module.exports = {
         SUDO_MCP_PUBLIC_PORT: process.env['SUDO_MCP_PUBLIC_PORT'] || '18899',
         SUDO_GROK_WEB_MCP_TOOLS:
           process.env['SUDO_GROK_WEB_MCP_TOOLS'] || 'git.status,meta.search-tools,github.list_prs,github.pr_status',
+        // FULL-CONTROL lane (DEFAULT OFF). Flip SUDO_GROK_WEB_MCP_COMMAND=1 to
+        // register the agent.command tool AND expose it past the readonly-only
+        // rule as the single blessed commandTool, so Grok app-chat can DRIVE the
+        // whole agent at OWNER tier (restart, self-modify, email — everything),
+        // not just query readonly tools. The MCP capability token then grants
+        // full control of this agent: keep SUDO_MCP_PUBLIC_TOKEN secret + rotate.
+        // Budgets: SUDO_GROK_COMMAND_MAX_PER_DAY (200), SUDO_GROK_COMMAND_MAX_IN_FLIGHT (2).
+        SUDO_GROK_WEB_MCP_COMMAND: process.env['SUDO_GROK_WEB_MCP_COMMAND'] || '0',
 
         // Kill-switch: block the agent from restarting its own prod process
         // unprompted. It was bouncing prod pursuing a stuck "enable grok voice"
@@ -208,6 +220,15 @@ module.exports = {
         // All agent restart tools funnel through scheduleDetachedRestart(), which
         // honors this flag. Operators still `pm2 restart` directly (bypasses it).
         SUDO_BLOCK_AGENT_RESTART: process.env['SUDO_BLOCK_AGENT_RESTART'] || '1',
+
+        // Narrow, opt-in exception to the kill-switch above: default OFF. When
+        // '1', meta.self-modify's full-cycle action (edit -> build -> test ->
+        // restart) may restart even with SUDO_BLOCK_AGENT_RESTART=1, but ONLY
+        // because it just watched build+test pass in that same call — the
+        // standalone `restart` action and every other restart path (self-update,
+        // service-control) stay fully blocked regardless of this flag. Flip to
+        // '1' only after deciding you trust build+test-gated self-restart.
+        SUDO_ALLOW_GATED_RESTART: process.env['SUDO_ALLOW_GATED_RESTART'] || '0',
 
         // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
         // long drill turns OOM-crashed the ~4GB default heap (FATAL: JavaScript

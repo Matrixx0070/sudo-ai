@@ -127,6 +127,17 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       'look up', 'find online', 'find info', 'what is', 'how much',
       'latest', 'current price', 'pricing', 'check online', 'look online',
       'any news', 'news about', 'trending',
+      // Image/photo viewing (browser.vision) — a bare "image"/"photo" is too
+      // generic (shared with media-generation tools), so these are specific
+      // viewing/checking phrases plus the tool's own name ("vision").
+      'vision', 'photo', 'picture', 'screenshot i sent', 'image i sent',
+      'photo i sent', 'attached image', 'attached photo', 'image attached',
+      'photo attached', 'see the image', 'see the photo', 'view the image',
+      'view the photo', 'check the image', 'check the photo',
+      'analyze the image', 'analyze the photo', 'analyze this image',
+      'analyze this photo', 'describe the image', 'describe the photo',
+      'look at the image', 'look at the photo', 'what does the image show',
+      'what is in the image', 'read the image', 'check image',
     ],
     patterns: [
       /https?:\/\//i,
@@ -135,13 +146,17 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
       /open\s+(the\s+)?site/i,
       /search\s+(for|about|online)/i,
       /\b(google|bing|search)\b/i,
+      /\b(see|view|check|analyz\w*|describ\w*|read)\b.{0,20}\b(image|photo|picture|screenshot)\b/i,
     ],
     priority: 9,
-    // Raised 8→14: the browser category has 22 tools, but the core browsing
-    // WORKFLOW needs several together (snapshot, click, type, wait, network,
-    // console, history, navigate). At 8 the perception/recovery tools were
-    // routinely ranked out. 14 lets the workflow travel together on browsing turns.
-    maxFromCategory: 14,
+    // Raised 8→14→18: the browser category now has 25 tools. At 14,
+    // browser.vision (registration position #15) was cut on relevance ties —
+    // a generic-phrasing follow-up like "check image now" has no literal
+    // tool-name/description word for the within-category ranker to score, so
+    // it lost the tiebreak to earlier-registered browsing tools every time.
+    // 18 gives headroom for the whole browsing workflow (snapshot, click,
+    // type, wait, network, console, history, navigate) plus vision.
+    maxFromCategory: 18,
   },
   coder: {
     keywords: [

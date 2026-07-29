@@ -111,6 +111,22 @@ function section(content: string): string {
   return content ? `${content}\n\n` : '';
 }
 
+// Model-agnostic identity lock. Non-Claude fallback models (xai-oauth/grok-4.5,
+// ollama/glm-5.2:cloud, etc.) don't inherit Claude's system-prompt adherence —
+// a base "Grok" identity leaked through on a real production turn (denied being
+// SUDO-AI, replied in Punjabi, fabricated answers) because IDENTITY.md alone
+// wasn't forceful enough for those providers. This is intentionally blunt and
+// goes first, before SOUL.md/IDENTITY.md's narrative framing, since weaker
+// instruction-followers weight early, short, imperative text most reliably.
+const IDENTITY_LOCK = [
+  'HARD IDENTITY RULES (apply regardless of which underlying model is answering this turn):',
+  '- You are SUDO-AI. Not Grok, not Claude, not any other assistant name — SUDO-AI, full stop.',
+  '- Never reveal, confirm, or speculate about the underlying model/provider. If asked what model you are, answer "SUDO-AI" and nothing else.',
+  '- Never deny being SUDO-AI.',
+  '- Reply in the same language the owner used in their message. Never switch language unless the owner switches first.',
+  '- Never fabricate an answer to sound complete. If a tool failed or you don\'t know, say so plainly.',
+].join('\n');
+
 function sectionWithHeader(header: string, content: string): string {
   return content ? `## ${header}\n\n${content}\n\n` : '';
 }
@@ -466,6 +482,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     const reduced: string[] = [];
     // Identity files: 'cron' keeps them, 'subagent' drops them.
     if (allowIdentity) {
+      reduced.push(section(IDENTITY_LOCK));
       reduced.push(section(soulContent));
       reduced.push(section(identityContent));
       reduced.push(section(userContent));
@@ -497,6 +514,10 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
 
   // Assemble in order.
   const parts: string[] = [];
+
+  // 0. Identity lock — model-agnostic, goes before the narrative SOUL/IDENTITY
+  // framing (see IDENTITY_LOCK comment for why this must come first).
+  parts.push(section(IDENTITY_LOCK));
 
   // 1. SOUL.md
   parts.push(section(soulContent));

@@ -366,3 +366,55 @@ describe('streamTransportForBrain', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// callTransportForBrain — onTextDelta live-streaming mode (SUDO_BRAIN_STREAM)
+// ---------------------------------------------------------------------------
+
+describe('callTransportForBrain onTextDelta', () => {
+  it('forwards live deltas and returns the accumulated non-streaming result shape', async () => {
+    const { fetchImpl, calls } = mockFetch([{ stream: () => sseStream(STREAM_OK_CHUNKS) }]);
+    const deltas: string[] = [];
+    const { result } = await callTransportForBrain(baseRequest(), MODEL, {
+      fetchImpl,
+      onTextDelta: (t) => deltas.push(t),
+    });
+    expect(deltas).toEqual(['Hel', 'lo.']);
+    expect(result.text).toBe('Hello.');
+    expect(result.finishReason).toBe('stop');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toContain('"stream":true');
+  });
+
+  it('falls back to one buffered call when streaming fails before any delta', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      { status: 500, json: { error: 'no sse for you' } },
+      { status: 200, json: OPENAI_TEXT_WIRE },
+    ]);
+    const deltas: string[] = [];
+    const { result } = await callTransportForBrain(baseRequest(), MODEL, {
+      fetchImpl,
+      sleep: noSleep,
+      onTextDelta: (t) => deltas.push(t),
+    });
+    expect(deltas).toEqual([]);
+    expect(result.text).toBe('Hello back.');
+    expect(calls.length).toBeGreaterThanOrEqual(2); // failed stream + buffered retry
+  });
+
+  it('a throwing onTextDelta callback never fails the call', async () => {
+    const { fetchImpl } = mockFetch([{ stream: () => sseStream(STREAM_OK_CHUNKS) }]);
+    const { result } = await callTransportForBrain(baseRequest(), MODEL, {
+      fetchImpl,
+      onTextDelta: () => { throw new Error('UI died'); },
+    });
+    expect(result.text).toBe('Hello.');
+  });
+
+  it('without onTextDelta the buffered path is byte-identical (stream:false)', async () => {
+    const { fetchImpl, calls } = mockFetch([{ status: 200, json: OPENAI_TEXT_WIRE }]);
+    const { result } = await callTransportForBrain(baseRequest(), MODEL, { fetchImpl });
+    expect(result.text).toBe('Hello back.');
+    expect(calls[0]!.body).not.toContain('"stream":true');
+  });
+});

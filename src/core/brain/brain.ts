@@ -841,6 +841,30 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // consensus + failover path below — never a reliability regression.
     // Kill-switch: SUDO_SMART_ROUTE_DISABLE=1
     // -------------------------------------------------------------------------
+    // SUDO_BRAIN_STREAM: live text-delta seam threaded by the agent loop as a
+    // transient request field (BO2b `_volatileTailBlock` precedent). Solo call
+    // sites only (fast-path + sequential failover); consensus fan-out never
+    // streams. Sticky poison: once ANY attempt streamed deltas and then
+    // failed, later attempts stop forwarding — otherwise the retry's text
+    // would append after the failed attempt's partial in the UI buffer (the
+    // channel's finalize() still lands the canonical reply either way).
+    const _rawOnDelta = (request as { _onTextDelta?: (text: string) => void })._onTextDelta;
+    const _deltaState = { sawDelta: false, poisoned: false };
+    // undefined (not {}) when absent — solo sites then call _callSingleModel
+    // with the original 5-arg shape (pinned by race-killswitch tests).
+    const _soloDeltaOpts: { onTextDelta: (text: string) => void } | undefined = _rawOnDelta
+      ? {
+          onTextDelta: (t: string): void => {
+            if (_deltaState.poisoned) return;
+            _deltaState.sawDelta = true;
+            _rawOnDelta(t);
+          },
+        }
+      : undefined;
+    const _poisonDeltasOnFailure = (): void => {
+      if (_deltaState.sawDelta) _deltaState.poisoned = true;
+    };
+
     const fastRoute = this._smartRoute(request);
     if (fastRoute) {
       log.info(
@@ -849,12 +873,15 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       );
       try {
         const profile = this._syntheticProfile(fastRoute.model);
-        const resp = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+        const resp = _soloDeltaOpts
+          ? await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens, _soloDeltaOpts)
+          : await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
         return {
           ...resp,
           routing: this._trace({ path: fastRoute.kind, reason: fastRoute.reason, activeModel: resp.model, costUSD: resp.usage.estimatedCost }),
         };
       } catch (err) {
+        _poisonDeltasOnFailure();
         log.warn(
           { model: fastRoute.model, err: String(err) },
           'Smart-route fast-path failed — falling through to consensus + failover',
@@ -875,7 +902,12 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // straight to sequential failover (Phase 2). Use when token cost matters
     // more than answer quality (e.g. background cognitive ticks, KAIROS).
     // -------------------------------------------------------------------------
-    const cloudProfiles = this.failover.getCloudProfiles();
+    // getCloudProfiles() returns the Ollama ":cloud" profiles (glm-5.2,
+    // deepseek-v4-pro, etc.) — none are vision-capable, so an image request
+    // skips this consensus race entirely and goes straight to the
+    // requireVision-guarded sequential failover below.
+    const _isImageRequest = request.inputModalities?.includes('image') === true;
+    const cloudProfiles = _isImageRequest ? [] : this.failover.getCloudProfiles();
     const consensusDisabled = process.env['SUDO_BRAIN_CONSENSUS_DISABLE'] === '1';
     if (cloudProfiles.length > 0 && !consensusDisabled) {
       log.info({ cloudCount: cloudProfiles.length, models: cloudProfiles.map(p => p.id) }, 'Querying cloud models for consensus');
@@ -945,15 +977,18 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     // Phase 2: Sequential fallback through remaining models.
     // -------------------------------------------------------------------------
     const _failoverStartedAt = Date.now(); // Phase 5: latency for the terminal-failure gateway-log row
+    const _requireVision = request.inputModalities?.includes('image') === true;
     for (let attempt = 0; attempt < MAX_FAILOVER_ATTEMPTS; attempt++) {
-      const profile = this.failover.getNextProfile();
+      const profile = this.failover.getNextProfile({ requireVision: _requireVision });
 
       if (!profile) {
         throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt });
       }
 
       try {
-        const result = await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+        const result = _soloDeltaOpts
+          ? await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens, _soloDeltaOpts)
+          : await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
         this.idleBreaker.recordDurableProgress();
         return {
           ...result,
@@ -966,6 +1001,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           }),
         };
       } catch (err) {
+        _poisonDeltasOnFailure();
         lastError = err;
         const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
         const category = this.failover.categorizeError(status, body);
@@ -1046,8 +1082,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       throw new LLMError(this.idleBreaker.reason(), 'llm_idle_circuit_open', this.idleBreaker.snapshot());
     }
 
+    const _streamRequireVision = request.inputModalities?.includes('image') === true;
     for (let attempt = 0; attempt < MAX_FAILOVER_ATTEMPTS; attempt++) {
-      const profile = this.failover.getNextProfile();
+      const profile = this.failover.getNextProfile({ requireVision: _streamRequireVision });
 
       if (!profile) {
         throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt });
@@ -1313,6 +1350,10 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     systemPrompt: string,
     temperature: number,
     maxTokens: number,
+    // Live text-delta seam (SUDO_BRAIN_STREAM). Passed ONLY by the solo call
+    // sites (smart-route fast-path, sequential failover) — never by consensus
+    // fan-out, where parallel models would interleave garbage into one UI.
+    callOpts?: { onTextDelta?: (text: string) => void },
   ): Promise<BrainResponse> {
     let modelId: string;
     // ALWAYS use the profile's model ID. The caller (cloud racing / failover loop)
@@ -1368,7 +1409,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       tools: request.tools,
       ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
     };
-    const irCall = await this._callIRWithKeyRotation(profile, irRequestBase, modelId);
+    const irCall = await this._callIRWithKeyRotation(profile, irRequestBase, modelId, callOpts);
     const _irTraceId = irCall.traceId;
     // Session→trace correlation: markOutcomeForSession lands on the
     // transport's llm_calls row for this call.
@@ -1565,6 +1606,13 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
   private _smartRoute(
     request: BrainRequest,
   ): { model: string; reason: string; complexity: number; kind: RoutingPath } | null {
+    // Image requests never take the fast path — it can pick a cheap/cache-
+    // affinity model with no vision-capability check (unlike the failover
+    // loop's requireVision guard), which previously sent images straight to
+    // text-only ollama models and errored with an HTTP 400 "does not support
+    // image input". Falling through to the normal consensus + failover path
+    // means the requireVision filter always applies for image turns.
+    if (request.inputModalities?.includes('image')) return null;
     // -----------------------------------------------------------------------
     // Per-session cache affinity (opt-in; default OFF => byte-identical routing).
     // When enabled for a conversational session, stick to ONE provider so its
@@ -1671,23 +1719,27 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     profile: ModelProfile,
     irRequest: Parameters<typeof callTransportForBrain>[0],
     modelId: string,
+    callOpts?: { onTextDelta?: (text: string) => void },
   ): Promise<BrainTransportCall> {
+    // Preserve the no-options call shape when no delta seam is attached
+    // (rotation-exempt tests pin `calls[0][2] === undefined`).
+    const deltaOpts = callOpts?.onTextDelta ? { onTextDelta: callOpts.onTextDelta } : undefined;
     // ModelProfile.provider is typed narrower than runtime reality (profiles
     // carry claude-oauth / xai-oauth / ollama / custom names too) — widen.
     const provider: string = profile.provider;
     if (isCustomProvider(provider) || provider === 'claude-oauth' || provider === 'xai-oauth' || provider === 'ollama') {
-      return callTransportForBrain(irRequest, modelId);
+      return deltaOpts ? callTransportForBrain(irRequest, modelId, deltaOpts) : callTransportForBrain(irRequest, modelId);
     }
     const keyCount = this._ensureRotationKeys(provider);
     if (keyCount < 2) {
-      return callTransportForBrain(irRequest, modelId);
+      return deltaOpts ? callTransportForBrain(irRequest, modelId, deltaOpts) : callTransportForBrain(irRequest, modelId);
     }
     let lastErr: unknown;
     for (let k = 0; k < keyCount; k++) {
       const key = this.authRotation.getNextKey(provider);
       if (!key) break;
       try {
-        const res = await callTransportForBrain(irRequest, modelId, { apiKeyOverride: key.apiKey });
+        const res = await callTransportForBrain(irRequest, modelId, { apiKeyOverride: key.apiKey, ...(deltaOpts ?? {}) });
         this.authRotation.reportSuccess(provider, key.keyId);
         return res;
       } catch (err) {

@@ -2073,7 +2073,7 @@ async function boot(): Promise<void> {
         // Hoisted out of the try-block so the outer catch can cancel it
         // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=0 this stays null
         // and the byte-identical non-streaming send path runs.
-        let streamSink: { chunk(t: string): void; finalize(t: string): Promise<void>; cancel(): Promise<void> } | null = null;
+        let streamSink: import('./core/channels/stream-sink.js').StreamSink | null = null;
         try {
           const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
@@ -2099,21 +2099,63 @@ async function boot(): Promise<void> {
           // optional on the 'stream-chunk' variant of the discriminated
           // union and the narrow is what we filter on (verifier HIGH #1).
           let onEvent: import('./core/agent/types.js').AgentEventHandler | undefined;
+          let stopStatusTicker: (() => void) | null = null;
           if (process.env['SUDO_STREAM_CHANNELS'] !== '0') {
             try {
               const { createBufferedEditSink } = await import('./core/channels/stream-sink.js');
               streamSink = await createBufferedEditSink(
                 (placeholder: string) => telegram.sendForStream(replyTo, placeholder),
-                (id: string | number, text: string) => telegram.editText(replyTo, id, text),
+                (id: string | number, text: string) => telegram.editText(replyTo, id, text, { format: 'md' }),
                 // maxChars clamps BEFORE same-text suppression so the sink
                 // and Telegram's 4096-char editMessageText cap agree on the
                 // wire body — preventing duplicate edits whose only delta
                 // is past Telegram's truncation point (verifier HIGH #3).
                 { intervalMs: 800, maxChars: 4080, placeholder: '…', label: `telegram:${msg.peerId}` },
               );
+              // Live activity-timeline card (SUDO_TG_TIMELINE=0 opts out): the
+              // placeholder shows spinner + phase + elapsed + per-tool steps
+              // until the first content chunk arrives, then streamed text wins.
+              // One bubble: status → streaming text → final reply.
+              let feedStatus: ((ev: import('./core/agent/types.js').AgentEvent) => void) | null = null;
+              if (process.env['SUDO_TG_TIMELINE'] !== '0') {
+                try {
+                  const { ActivityTimeline } = await import('./core/channels/activity-timeline.js');
+                  // Model/context chip is opt-in (SUDO_TG_PROGRESS_CHIP=1): the
+                  // raw route string + a 0% context readout reads as debug noise
+                  // in an otherwise clean status card.
+                  let chip: string | undefined;
+                  if (process.env['SUDO_TG_PROGRESS_CHIP'] === '1') {
+                    try {
+                      const { formatModelContextChip } = await import('./core/channels/live-state.js');
+                      const { collectStatusCard, getStatusSources } = await import('./core/commands/builtin/status-card.js');
+                      const card = await collectStatusCard({ ...(getStatusSources() ?? {}) });
+                      chip = formatModelContextChip(card.model, card.context);
+                    } catch { /* chip best-effort */ }
+                  }
+                  const timeline = new ActivityTimeline();
+                  const startMs = Date.now();
+                  let tick = 0;
+                  const pushStatus = (): void => {
+                    streamSink?.status(timeline.render({ nowMs: Date.now(), startMs, tick, ...(chip ? { chip } : {}), verbIndex: tick }));
+                  };
+                  feedStatus = (ev): void => {
+                    const now = Date.now();
+                    if (ev.type === 'tool-call') timeline.onProgress({ type: 'tool_call', sessionId: '', message: '', timestamp: now, tool: ev.name }, now);
+                    else if (ev.type === 'tool-result') timeline.onProgress({ type: 'tool_result', sessionId: '', message: '', timestamp: now, tool: ev.name, ok: ev.success !== false }, now);
+                    else if (ev.type === 'message') timeline.onProgress({ type: 'thinking', sessionId: '', message: '', timestamp: now }, now);
+                    else return;
+                    pushStatus();
+                  };
+                  pushStatus();
+                  const ticker = setInterval(() => { tick++; pushStatus(); }, 3000);
+                  stopStatusTicker = () => clearInterval(ticker);
+                } catch { /* timeline is best-effort — plain placeholder remains */ }
+              }
               onEvent = (ev) => {
                 if (ev.type === 'stream-chunk') {
                   streamSink!.chunk(ev.chunk);
+                } else {
+                  feedStatus?.(ev);
                 }
               };
             } catch (sinkErr) {
@@ -2122,9 +2164,21 @@ async function boot(): Promise<void> {
               onEvent = undefined;
             }
           }
-          const result = await finalAgentLoop.run(String(session.id), msg.text ?? '', onEvent, { race: true });
+          let result: Awaited<ReturnType<typeof finalAgentLoop.run>>;
+          try {
+            result = await finalAgentLoop.run(String(session.id), msg.text ?? '', onEvent, { race: true });
+          } finally {
+            stopStatusTicker?.();
+          }
           if (runGenerations.isStale(convKey, runGen)) {
-            if (streamSink) await streamSink.cancel();
+            if (streamSink) {
+              await streamSink.cancel();
+              // No content was ever streamed → the bubble is a status card; delete
+              // it rather than leaving a frozen spinner in the chat.
+              if (streamSink.bufferLength === 0 && streamSink.messageId !== null) {
+                await telegram.deleteMessageSafe(replyTo, streamSink.messageId);
+              }
+            }
             log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
             return;
           }
@@ -2197,27 +2251,61 @@ async function boot(): Promise<void> {
           // also editing inline-keyboard state — simpler to keep the keyboard
           // on its own message).
           const isSubstantialReply = (replyText.length > 80);
+          // Long-reply handling: past one bubble the reply is split into
+          // newline-boundary chunks; past SUDO_TG_FILE_THRESHOLD chars
+          // (default 12000, 0 = never) it ships as an attached .md file with
+          // a short preview — no more `…[truncated]` data loss.
+          const { planLongReply } = await import('./core/channels/long-reply.js');
+          const fileThresholdEnv = Number(process.env['SUDO_TG_FILE_THRESHOLD']);
+          const plan = planLongReply(replyText, Number.isFinite(fileThresholdEnv) ? { fileThreshold: fileThresholdEnv } : {});
+          const sendReplyDocument = async (): Promise<void> => {
+            const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+            await telegram.sendMedia(replyTo, {
+              type: 'document',
+              mimeType: 'text/markdown',
+              buffer: Buffer.from(replyText, 'utf8'),
+              filename: `reply-${stamp}.md`,
+            });
+          };
+          const makeKeyboard = () => createFeedbackKeyboard(
+            String(session.id),
+            (msg.text ?? replyText).slice(0, 120),
+            'telegram',
+          ).keyboard;
+
           if (streamSink) {
-            await streamSink.finalize(replyText);
-            if (isSubstantialReply) {
-              const { keyboard } = createFeedbackKeyboard(
-                String(session.id),
-                (msg.text ?? replyText).slice(0, 120),
-                'telegram',
-              );
-              try {
-                await telegram.sendWithKeyboard(replyTo, '⋯', keyboard);
-              } catch (kbErr) {
-                log.warn({ err: String(kbErr) }, 'gap #19: feedback keyboard follow-up failed');
+            // First body (full reply / first chunk / file preview) lands as the
+            // final edit of the working bubble; overflow follows as new messages.
+            await streamSink.finalize(plan.chunks[0] ?? replyText);
+            if (plan.mode === 'file') {
+              await sendReplyDocument();
+            } else if (plan.mode === 'chunks') {
+              for (const chunk of plan.chunks.slice(1)) {
+                await telegram.send(replyTo, chunk);
               }
             }
+            if (isSubstantialReply) {
+              // Attach the keyboard to the finalized reply message itself —
+              // editMessageReplyMarkup works fine on an edited message; the old
+              // separate '⋯' carrier message littered the chat permanently.
+              try {
+                if (streamSink.messageId !== null) {
+                  await telegram.editReplyMarkup(replyTo, streamSink.messageId, makeKeyboard());
+                } else {
+                  await telegram.sendWithKeyboard(replyTo, '⋯', makeKeyboard());
+                }
+              } catch (kbErr) {
+                log.warn({ err: String(kbErr) }, 'gap #19: feedback keyboard attach failed');
+              }
+            }
+          } else if (plan.mode === 'file') {
+            await maybeGuardedSend('telegram', replyTo, replyText, async () => {
+              if (isSubstantialReply) await telegram.sendWithKeyboard(replyTo, plan.chunks[0] ?? replyText, makeKeyboard());
+              else await telegram.send(replyTo, plan.chunks[0] ?? replyText);
+              await sendReplyDocument();
+            });
           } else if (isSubstantialReply) {
-            const { keyboard } = createFeedbackKeyboard(
-              String(session.id),
-              (msg.text ?? replyText).slice(0, 120),
-              'telegram',
-            );
-            await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.sendWithKeyboard(replyTo, replyText, keyboard));
+            await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.sendWithKeyboard(replyTo, replyText, makeKeyboard()));
           } else {
             await maybeGuardedSend('telegram', replyTo, replyText, () => telegram.send(replyTo, replyText));
           }
@@ -2230,6 +2318,11 @@ async function boot(): Promise<void> {
           // edited again after the error has surfaced (verifier HIGH #2).
           if (streamSink) {
             try { await streamSink.cancel(); } catch { /* already-warned */ }
+            // Status-only card (no streamed content) → delete it so the error
+            // message below isn't preceded by a frozen spinner bubble.
+            if (streamSink.bufferLength === 0 && streamSink.messageId !== null) {
+              await telegram.deleteMessageSafe(replyTo, streamSink.messageId);
+            }
           }
           // Send decline feedback option
           try {

@@ -77,18 +77,44 @@ export interface ScheduledRestart {
  * the user) then restarts the service. Success cannot be confirmed
  * synchronously — by the time pm2 bounces us, this process is gone.
  */
-export function scheduleDetachedRestart(reason: string, cwd: string = PROJECT_ROOT): ScheduledRestart {
+export interface RestartOpts {
+  /**
+   * Set ONLY by callers that just ran build+test in THIS same invocation and
+   * watched both pass (currently: meta.self-modify's full-cycle action).
+   * Never a user-suppliable parameter — there is no tool input path that lets
+   * an agent claim this without actually having run the verification.
+   */
+  verifiedBuildTest?: boolean;
+}
+
+/**
+ * Kill-switch #923 (SUDO_BLOCK_AGENT_RESTART) stays the default-ON master
+ * switch — it exists because the agent bounced prod pursuing a stuck goal,
+ * and unprompted restarts stay blocked by default. The ONE narrow exception:
+ * an operator can opt into SUDO_ALLOW_GATED_RESTART=1 (default OFF) to let
+ * full-cycle's restart through specifically when it just verified build+test
+ * passed in this call — not a general bypass, since verifiedBuildTest can only
+ * be set by that one code path, never by agent-controlled tool parameters.
+ */
+function gatedRestartAllowed(opts?: RestartOpts): boolean {
+  return process.env['SUDO_ALLOW_GATED_RESTART'] === '1' && opts?.verifiedBuildTest === true;
+}
+
+export function scheduleDetachedRestart(reason: string, cwd: string = PROJECT_ROOT, opts?: RestartOpts): ScheduledRestart {
   // Kill-switch: block agent-initiated self-restarts. The agent bounces prod by
   // calling meta.service-control/self-update/self-modify, all of which funnel here.
   // Default OFF (unset → byte-identical behavior); operators set =1 in prod to stop
   // unprompted restarts (they can still `pm2 restart` directly, which never calls this).
-  if (process.env['SUDO_BLOCK_AGENT_RESTART'] === '1') {
+  if (process.env['SUDO_BLOCK_AGENT_RESTART'] === '1' && !gatedRestartAllowed(opts)) {
     logger.warn({ reason }, 'Agent-initiated restart BLOCKED by policy (SUDO_BLOCK_AGENT_RESTART=1)');
     return {
       scheduled: false,
       cmd: '',
       error: 'Agent-initiated restart is disabled by policy (SUDO_BLOCK_AGENT_RESTART=1). An operator must restart via pm2 directly.',
     };
+  }
+  if (process.env['SUDO_BLOCK_AGENT_RESTART'] === '1') {
+    logger.info({ reason }, 'Agent-initiated restart ALLOWED via SUDO_ALLOW_GATED_RESTART (build+test verified this cycle)');
   }
   const { cmd, via } = resolveRestartCmd();
   if (via === 'manual') {
