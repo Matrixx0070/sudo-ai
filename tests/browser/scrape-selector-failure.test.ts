@@ -84,7 +84,9 @@ describe('browser.scrape — honest failure signal on non-matching selectors', (
 
     const res = await scrapeTool.execute({ selectors: { price: '.price' } }, ctx);
     expect(res.success).toBe(true);
-    expect(res.output).toBe('Extracted 1 fields (mode: text).');
+    expect(res.output).toContain('Extracted 1 fields (mode: text).');
+    // The VALUE must be in output — the model never sees result.data.
+    expect(res.output).toContain('price: Bronze — $9/mo');
     expect((res.data as { failedKeys: string[] }).failedKeys).toEqual([]);
   });
 });
@@ -167,7 +169,61 @@ describe('browser.scrape — selector-less whole-page read', () => {
 
     const res = await scrapeTool.execute({ selectors: { price: '.price' } }, ctx);
     expect(res.success).toBe(true);
-    expect(res.output).toBe('Extracted 1 fields (mode: text).');
+    expect(res.output).toContain('Extracted 1 fields (mode: text).');
     expect(page.evaluate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 2026-07-29, the bug underneath the Apollo 11 miss: a SUCCESSFUL scrape
+ * returned exactly "Extracted 1 fields (mode: text)." — 32 chars, matching the
+ * logged resultLen — while the scraped text sat in data.results. The agent loop
+ * feeds the model result.output and nothing else (tool-exec.ts:532 clamps
+ * result.output; result.data never reaches it), so the model saw a success with
+ * no content, said so, and answered from the page title instead.
+ * A tool that succeeds while showing the caller nothing is worse than one that
+ * fails: the failure is at least visible.
+ */
+describe('browser.scrape — extracted values reach the model', () => {
+  it('a successful scrape is never just the summary line', async () => {
+    const goodLocator = makeLocator('resolve');
+    const page = { locator: vi.fn().mockReturnValue(goodLocator), url: () => 'https://example.com' };
+    vi.mocked(resolveActivePage).mockResolvedValue(page as never);
+
+    const res = await scrapeTool.execute({ selectors: { plan: '.plan' } }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).not.toBe('Extracted 1 fields (mode: text).');
+    expect(res.output.length).toBeGreaterThan(32);
+    expect(res.output).toContain('Bronze — $9/mo');
+  });
+
+  it('partial success shows the values that DID match, not just the failures', async () => {
+    const innerText = vi.fn()
+      .mockResolvedValueOnce('July 16, 1969')
+      .mockRejectedValueOnce(new Error('Timeout 5000ms exceeded waiting for locator'));
+    const page = {
+      locator: vi.fn().mockReturnValue({ first: () => ({ innerText, innerHTML: vi.fn() }) }),
+      url: () => 'https://en.wikipedia.org/wiki/Apollo_11',
+    };
+    vi.mocked(resolveActivePage).mockResolvedValue(page as never);
+
+    const res = await scrapeTool.execute({ selectors: { launched: '.launch', crew: '.nope' } }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toContain('launched: July 16, 1969');
+    expect(res.output).toContain('No match for: crew');
+  });
+
+  it('an oversized field is truncated per-field, not dropped', async () => {
+    const innerText = vi.fn().mockResolvedValue('y'.repeat(9_000));
+    const page = {
+      locator: vi.fn().mockReturnValue({ first: () => ({ innerText, innerHTML: vi.fn() }) }),
+      url: () => 'https://example.com',
+    };
+    vi.mocked(resolveActivePage).mockResolvedValue(page as never);
+
+    const res = await scrapeTool.execute({ selectors: { body: '.body' } }, ctx);
+    expect(res.success).toBe(true);
+    expect(res.output).toContain('(truncated)');
+    expect(res.output.length).toBeLessThan(6_000);
   });
 });

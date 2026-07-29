@@ -26,6 +26,9 @@ const SELECTOR_LOOKUP_TIMEOUT_MS = 5_000;
  */
 const MAX_WHOLE_PAGE_CHARS = 40_000;
 
+/** Per-field cap when rendering extracted values into the tool output. */
+const MAX_FIELD_CHARS = 4_000;
+
 export const scrapeTool: ToolDefinition = {
   name: 'browser.scrape',
   description:
@@ -241,13 +244,32 @@ export const scrapeTool: ToolDefinition = {
 
       const totalKeys = Object.keys(results).length;
       const allFailed = failedKeys.length === totalKeys;
+
+      // THE EXTRACTED VALUES MUST BE IN `output`. The agent loop feeds the
+      // model `result.output` and NOTHING else (loop-helpers/tool-exec.ts:532
+      // clamps result.output; result.data never reaches the model). This
+      // summary line used to be the entire result — 2026-07-29 a successful
+      // scrape returned exactly "Extracted 1 fields (mode: text)." (32 chars,
+      // matching the logged resultLen) while the scraped text sat unreachable
+      // in data.results. The model correctly reported that the scrape returned
+      // nothing, then answered from the page title instead. A tool that
+      // succeeds but shows the caller nothing is worse than one that fails.
+      const renderValue = (v: unknown): string => {
+        if (v === null || v === undefined) return '(no match)';
+        const s = typeof v === 'string' ? v : JSON.stringify(v);
+        return s.length > MAX_FIELD_CHARS ? `${s.slice(0, MAX_FIELD_CHARS)}… (truncated)` : s;
+      };
+      const renderedFields = Object.entries(results)
+        .map(([k, v]) => `${k}: ${renderValue(v)}`)
+        .join('\n');
+
       const output = allFailed
         ? `browser.scrape: none of the ${totalKeys} selector(s) matched an element: ` +
           `${failedKeys.join(', ')}. Take a browser.snapshot to see real selectors before retrying.`
         : failedKeys.length > 0
           ? `Extracted ${totalKeys - failedKeys.length}/${totalKeys} fields (mode: ${extractAs}). ` +
-            `No match for: ${failedKeys.join(', ')}.`
-          : `Extracted ${totalKeys} fields (mode: ${extractAs}).`;
+            `No match for: ${failedKeys.join(', ')}.\n\n${renderedFields}`
+          : `Extracted ${totalKeys} fields (mode: ${extractAs}).\n\n${renderedFields}`;
 
       ctxLog.info(
         { tool: 'browser.scrape', extractAs, keys: Object.keys(results), failedKeys },
