@@ -201,3 +201,59 @@ it('LLMPolicyError carries skipped flag', () => {
   const e = new LLMPolicyError('x', { class: 'billing', route: 'r', retryable: false, skipped: true });
   expect(e.skipped).toBe(true);
 });
+
+/**
+ * 2026-07-29, twice in one day, the USD cap became a total outage:
+ * (1) mispriced ollama phantom-spent the cap, and the gate then refused the
+ *     genuinely-free claude-oauth seat ("global budget exceeded: health →
+ *     claude-oauth:messages skipped");
+ * (2) after the pricing fix, the ledger still carried ~$101 of morning phantom
+ *     cost, the boot seed re-poisoned spend.total, and EVERY route — including
+ *     $0 seat routes — was refused for all non-agent-loop callers.
+ * A dollar budget must only gate calls that would ADD dollars. $0-call VOLUME
+ * is bounded separately by the seat call-count ceiling.
+ */
+describe('GW-1 budget never blocks free calls', () => {
+  it('a $0-estimate background call runs even when spend is over the cap', async () => {
+    process.env['SUDO_DAILY_LLM_BUDGET_USD'] = '100';
+    initDaySpendFromHistory({ day: TODAY, total: 101.61, byCaller: new Map([['chat', 101.61]]) });
+    const outcome = await runWithPolicy<string>({
+      route: 'claude-oauth:messages',
+      caller: 'chat',
+      priority: 'background',
+      estimateCostUsd: 0,
+      attempt: async () => 'ok',
+      sleep: instantSleep,
+    });
+    expect(outcome.value).toBe('ok');
+    expect(outcome.budgetDecision).toBe('ok');
+  });
+
+  it('an UNSTATED estimate (defaults to 0) also passes over-cap', async () => {
+    process.env['SUDO_DAILY_LLM_BUDGET_USD'] = '100';
+    initDaySpendFromHistory({ day: TODAY, total: 500, byCaller: new Map() });
+    const outcome = await runWithPolicy<string>({
+      route: 'ollama:chat',
+      caller: 'consciousness',
+      priority: 'background',
+      attempt: async () => 'ok',
+      sleep: instantSleep,
+    });
+    expect(outcome.value).toBe('ok');
+  });
+
+  it('a METERED background call over the cap still fails closed — the cap keeps its teeth', async () => {
+    process.env['SUDO_DAILY_LLM_BUDGET_USD'] = '100';
+    initDaySpendFromHistory({ day: TODAY, total: 101.61, byCaller: new Map() });
+    await expect(
+      runWithPolicy<string>({
+        route: 'google:chat',
+        caller: 'chat',
+        priority: 'background',
+        estimateCostUsd: 0.01,
+        attempt: async () => 'ok',
+        sleep: instantSleep,
+      }),
+    ).rejects.toMatchObject({ skipped: true });
+  });
+});
