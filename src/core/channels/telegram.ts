@@ -11,7 +11,7 @@
  *  - Graceful start / stop lifecycle.
  */
 
-import { Bot, type Context, GrammyError, InputFile, InlineKeyboard } from 'grammy';
+import { Bot, type Context, GrammyError, InputFile, InputMediaBuilder, InlineKeyboard } from 'grammy';
 import type { Update as TelegramUpdate } from 'grammy/types';
 import { saveFeedback, addNoteToFeedback } from '../feedback/store.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
@@ -807,6 +807,48 @@ export class TelegramAdapter implements ChannelAdapter {
       if (!Number.isFinite(msgIdNum)) return;
       await this.bot?.api.pinChatMessage(peerId, msgIdNum, { disable_notification: true });
     } catch { /* best effort */ }
+  }
+
+  /**
+   * TX11: send the browser-viewport photo bubble (first screencast frame).
+   * Returns the message id (base-10 string, like sendForStream) so the
+   * viewport can edit it in place. PRIVACY: callers must only target an
+   * OWNER DM — enforced upstream in cli.ts (owner + chatType 'dm' gate).
+   */
+  async sendPhotoForStream(peerId: string, photo: Buffer, caption?: string): Promise<string> {
+    if (!this.bot || !this._isConnected) {
+      throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
+    }
+    if (!peerId) {
+      throw new ChannelError('peerId must not be empty', 'channel_invalid_peer', { peerId });
+    }
+    const sent = await this.bot.api.sendPhoto(
+      peerId,
+      new InputFile(photo, 'viewport.jpg'),
+      caption ? { caption: caption.slice(0, 1024) } : {},
+    );
+    return String(sent.message_id);
+  }
+
+  /**
+   * TX11: swap a fresh screencast frame into the EXISTING viewport photo
+   * bubble via editMessageMedia. Only works on a message that already
+   * carries media (a text message can never become a photo — which is why
+   * the viewport is a separate bubble, not the working card).
+   */
+  async editPhotoInPlace(peerId: string, messageId: string | number, photo: Buffer, caption?: string): Promise<void> {
+    if (!this.bot || !this._isConnected) {
+      throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
+    }
+    const msgIdNum = typeof messageId === 'number' ? messageId : parseInt(String(messageId), 10);
+    if (!Number.isFinite(msgIdNum)) {
+      throw new ChannelError('messageId must parse to a finite integer', 'channel_invalid_peer', { messageId });
+    }
+    await this.bot.api.editMessageMedia(
+      peerId,
+      msgIdNum,
+      InputMediaBuilder.photo(new InputFile(photo, 'viewport.jpg'), caption ? { caption: caption.slice(0, 1024) } : {}),
+    );
   }
 
   /**

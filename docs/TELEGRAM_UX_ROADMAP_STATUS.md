@@ -17,7 +17,7 @@ real Telegram surface (cite evidence), not just green tests.
 | TX8 | Provenance footer | OPEN | superseded long-term by TX28 |
 | TX9 | Mission Control (forum topics, living mission card) | OPEN | |
 | TX10 | Checkpoint approval protocol | OPEN | prerequisite for TX19/TX24/TX26 |
-| TX11 | Live browser screenshots in card | OPEN | editMessageMedia; ~3s cadence |
+| TX11 | Live browser screenshots in card | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_BROWSER_VIEW=1` (+ `SUDO_TG_BROWSER_VIEW_KEEP=1` keeps the final frame). Separate photo "viewport bubble" edited via editMessageMedia at ~3s — a text card can NEVER become media, so it cannot be the working card itself. Frames reuse `screencastManager` (the /admin MJPEG source): an already-active cast is reused and never stopped; only a cast we started is torn down. Unchanged frames skipped (sha1) to dodge "message is not modified". PRIVACY: owner + DM only. 16 unit tests |
 | TX12 | Video-note debrief | OPEN | Playwright video + TTS + ffmpeg |
 | TX13 | Generative Telegram UI (A2UI mapping) | OPEN | |
 | TX14 | Visible memory (🧠 used, /memory card) | OPEN | invariant 9 applies to surgery |

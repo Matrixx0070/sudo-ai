@@ -2075,6 +2075,10 @@ async function boot(): Promise<void> {
         // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=0 this stays null
         // and the byte-identical non-streaming send path runs.
         let streamSink: import('./core/channels/stream-sink.js').StreamSink | null = null;
+        // TX11 (SUDO_TG_BROWSER_VIEW=1, default OFF): live browser viewport —
+        // a separate photo bubble refreshed from the CDP screencast while
+        // browser.* tools run. Hoisted for teardown in the outer finally.
+        let browserViewport: import('./core/channels/browser-viewport.js').BrowserViewport | null = null;
         // TX1 (SUDO_TG_STOP_BUTTON=1, default OFF): register the run in the
         // run-registry so the working-card ⏹ Stop callback (telegram.ts) and
         // mid-run steering can find/abort it. Hoisted for the finally below.
@@ -2281,6 +2285,48 @@ async function boot(): Promise<void> {
               log.warn({ err: String(sinkErr) }, 'gap #19: stream sink construction failed — falling back to batched send');
               streamSink = null;
               onEvent = undefined;
+            }
+          }
+          // TX11 (SUDO_TG_BROWSER_VIEW=1, default OFF): live browser viewport.
+          // PRIVACY GUARD (non-negotiable): the agent's browser may hold
+          // logged-in sessions and sensitive pages — the viewport is created
+          // ONLY for an OWNER user AND ONLY in a DM (never groups, never
+          // non-owner peers). Everything downstream is best-effort/fail-open:
+          // a screenshot problem never fails or slows the turn.
+          if (process.env['SUDO_TG_BROWSER_VIEW'] === '1'
+              && telegram.isOwnerUser(msg.peerId) && msg.chatType === 'dm') {
+            try {
+              const { BrowserViewport } = await import('./core/channels/browser-viewport.js');
+              const { screencastManager } = await import('./core/tools/builtin/browser/screencast-manager.js');
+              const { BrowserManager } = await import('./core/tools/builtin/browser/browser-manager.js');
+              browserViewport = new BrowserViewport({
+                allowed: true, // owner + DM verified above
+                keepFinal: process.env['SUDO_TG_BROWSER_VIEW_KEEP'] === '1',
+                screencast: {
+                  isActive: (n) => screencastManager.isActive(n),
+                  start: (n, o) => screencastManager.start(n, o),
+                  stop: (n) => screencastManager.stop(n),
+                  latestFrame: (n) => screencastManager.latestFrame(n),
+                  pageUrl: (n) => { try { return screencastManager.getPage(n)?.url() ?? null; } catch { return null; } },
+                },
+                listRunning: () => BrowserManager.getInstance().list().map((i) => i.name),
+                sendPhoto: (frame, caption) => telegram.sendPhotoForStream(replyTo, frame, caption),
+                editPhoto: (id, frame, caption) => telegram.editPhotoInPlace(replyTo, id, frame, caption),
+                deleteMessage: (id) => telegram.deleteMessageSafe(replyTo, id),
+                onError: (ctxLabel, e) => log.debug({ err: String(e), ctxLabel }, 'TX11: viewport best-effort failure'),
+              });
+              // Chain onto the existing event handler (works with or without
+              // the stream sink) — first browser.* tool arms the viewport.
+              const prevOnEvent = onEvent;
+              onEvent = (ev) => {
+                if (ev.type === 'tool-call' && ev.name.startsWith('browser.')) {
+                  browserViewport?.onBrowserTool((ev.args as Record<string, unknown>)['browser']);
+                }
+                prevOnEvent?.(ev);
+              };
+            } catch (vpErr) {
+              log.debug({ err: String(vpErr) }, 'TX11: viewport setup failed — turn continues without it');
+              browserViewport = null;
             }
           }
           let result: Awaited<ReturnType<typeof finalAgentLoop.run>>;
@@ -2544,6 +2590,13 @@ async function boot(): Promise<void> {
             );
           } catch { try { await telegram.send(replyTo, sanitizeUserFacingError(err)); } catch {} }
         } finally {
+          // TX11: viewport teardown — stop the refresh loop, stop the
+          // screencast ONLY if the viewport started it (an admin /admin watch
+          // keeps running), delete the photo bubble unless
+          // SUDO_TG_BROWSER_VIEW_KEEP=1. finish() is idempotent + never throws.
+          if (browserViewport) {
+            try { await browserViewport.finish(); } catch { /* best effort */ }
+          }
           // TX1: unregister the run and drop any steer that landed after the
           // loop's final boundary drain (mirrors gateway-turn-handler MEDIUM-1 —
           // an orphaned steer must not leak into the NEXT run for this session).
