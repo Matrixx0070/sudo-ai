@@ -19,12 +19,27 @@ const VALID_MODES: ExtractAs[] = ['text', 'html', 'links', 'table'];
 // each lookup to a short, fail-fast window instead of Playwright's default.
 const SELECTOR_LOOKUP_TIMEOUT_MS = 5_000;
 
+/**
+ * Cap on selector-less whole-page extraction. Long enough for a full article
+ * (the Apollo 11 page is ~90k chars) without letting one scrape blow the
+ * context window; the output says when it truncated and how to narrow.
+ */
+const MAX_WHOLE_PAGE_CHARS = 40_000;
+
+/** Per-field cap when rendering extracted values into the tool output. */
+const MAX_FIELD_CHARS = 4_000;
+
 export const scrapeTool: ToolDefinition = {
   name: 'browser.scrape',
   description:
-    'Extract data from the current browser page. Provide a map of key→CSS-selector pairs to ' +
-    'extract multiple fields. extractAs controls output format: text (inner text), html (innerHTML), ' +
-    'links (href list), table (2D array of cell text).',
+    'Extract data from the current browser page. ' +
+    'To READ THE PAGE (e.g. answer a question about an article), call it with NO selectors — ' +
+    'that returns the whole page text. Do NOT guess CSS selectors for a page you have not ' +
+    'inspected; take a browser.snapshot first if you need specific fields. ' +
+    'Provide a map of key→CSS-selector pairs only to extract known structured fields. ' +
+    'extractAs controls output format: text (inner text, default), html (innerHTML), ' +
+    'links (href list), table (2D array of cell text). ' +
+    'containerSelector scopes extraction to one section.',
   category: 'browser',
   timeout: 30_000,
   parameters: {
@@ -113,9 +128,63 @@ export const scrapeTool: ToolDefinition = {
         };
       }
 
-      // No selectors + text/html would loop zero times and report a
-      // 0-field "success" — the silent no-op behind the 2026-07-24 HN
-      // incident. Fail with directions instead.
+      // No selectors + text/html: extract the WHOLE PAGE, the same way links
+      // and table already do in this position.
+      //
+      // This used to hard-fail with "pass selectors", which closed the only
+      // honest answer to "what does this page say" — no tool returned page
+      // prose (browser.snapshot returns an ARIA/YAML tree for FINDING
+      // selectors, not content). A model asked to read an article therefore
+      // had to INVENT CSS selectors for a page it cannot see. 2026-07-29:
+      // asked for the Apollo 11 launch date it guessed the selector
+      // `launchDate`, matched nothing, and answered from the page title
+      // instead — a correct answer on no evidence, which is the dangerous
+      // failure mode, not the visible one.
+      //
+      // NOT a return of the 2026-07-24 silent no-op: that reported a 0-field
+      // extraction as success. This returns real content and still fails
+      // loudly when the page genuinely has none.
+      if (Object.keys(selectors).length === 0 && (extractAs === 'text' || extractAs === 'html')) {
+        const root = containerSelector ?? 'body';
+        const whole = await page.evaluate(
+          ([sel, mode]) => {
+            const el = document.querySelector(sel);
+            if (!el) return null;
+            return mode === 'html' ? el.innerHTML : (el as HTMLElement).innerText;
+          },
+          [root, extractAs] as [string, string],
+        );
+        if (whole === null) {
+          return { success: false, output: `browser.scrape: containerSelector "${root}" matched no element.` };
+        }
+        const text = whole.trim();
+        if (text === '') {
+          return {
+            success: false,
+            output:
+              `browser.scrape: "${root}" contained no ${extractAs}. The page may still be loading ` +
+              '(browser.wait) or render inside an iframe.',
+          };
+        }
+        const truncated = text.length > MAX_WHOLE_PAGE_CHARS;
+        const body = truncated ? text.slice(0, MAX_WHOLE_PAGE_CHARS) : text;
+        ctxLog.info(
+          { tool: 'browser.scrape', extractAs, wholePage: true, chars: text.length, truncated },
+          'Scrape complete (whole page)',
+        );
+        return {
+          success: true,
+          output:
+            `Extracted ${text.length} chars of ${extractAs} from "${root}"` +
+            (truncated ? ` (truncated to ${MAX_WHOLE_PAGE_CHARS} — pass selectors or containerSelector to narrow)` : '') +
+            `:\n\n${body}`,
+          data: { text: body, chars: text.length, truncated, url: page.url() },
+        };
+      }
+
+      // links/table with no selectors are handled above. Anything else would
+      // loop zero times and report a 0-field "success" — the silent no-op
+      // behind the 2026-07-24 HN incident. Fail with directions instead.
       if (Object.keys(selectors).length === 0) {
         return {
           success: false,
@@ -175,13 +244,32 @@ export const scrapeTool: ToolDefinition = {
 
       const totalKeys = Object.keys(results).length;
       const allFailed = failedKeys.length === totalKeys;
+
+      // THE EXTRACTED VALUES MUST BE IN `output`. The agent loop feeds the
+      // model `result.output` and NOTHING else (loop-helpers/tool-exec.ts:532
+      // clamps result.output; result.data never reaches the model). This
+      // summary line used to be the entire result — 2026-07-29 a successful
+      // scrape returned exactly "Extracted 1 fields (mode: text)." (32 chars,
+      // matching the logged resultLen) while the scraped text sat unreachable
+      // in data.results. The model correctly reported that the scrape returned
+      // nothing, then answered from the page title instead. A tool that
+      // succeeds but shows the caller nothing is worse than one that fails.
+      const renderValue = (v: unknown): string => {
+        if (v === null || v === undefined) return '(no match)';
+        const s = typeof v === 'string' ? v : JSON.stringify(v);
+        return s.length > MAX_FIELD_CHARS ? `${s.slice(0, MAX_FIELD_CHARS)}… (truncated)` : s;
+      };
+      const renderedFields = Object.entries(results)
+        .map(([k, v]) => `${k}: ${renderValue(v)}`)
+        .join('\n');
+
       const output = allFailed
         ? `browser.scrape: none of the ${totalKeys} selector(s) matched an element: ` +
           `${failedKeys.join(', ')}. Take a browser.snapshot to see real selectors before retrying.`
         : failedKeys.length > 0
           ? `Extracted ${totalKeys - failedKeys.length}/${totalKeys} fields (mode: ${extractAs}). ` +
-            `No match for: ${failedKeys.join(', ')}.`
-          : `Extracted ${totalKeys} fields (mode: ${extractAs}).`;
+            `No match for: ${failedKeys.join(', ')}.\n\n${renderedFields}`
+          : `Extracted ${totalKeys} fields (mode: ${extractAs}).\n\n${renderedFields}`;
 
       ctxLog.info(
         { tool: 'browser.scrape', extractAs, keys: Object.keys(results), failedKeys },
