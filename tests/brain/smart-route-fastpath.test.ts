@@ -17,6 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Brain } from '../../src/core/brain/brain.js';
+import { ModelFailover } from '../../src/core/brain/failover.js';
 import type { ModelProfile } from '../../src/core/brain/types.js';
 
 const PRIMARY = 'ollama/deepseek-v4-pro:cloud'; // === DEFAULT_MODEL for Brain(null)
@@ -155,5 +156,145 @@ describe('Brain smart-route fast-path (cost-optimizer + dispatch-router)', () =>
     expect(usedIds).toContain(CHEAP);
     expect(getCloudProfiles).toHaveBeenCalled();
     expect(res.model).not.toBe(CHEAP);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fast-path <-> failover-registry integration (ADR 0003 tie-in).
+// Previously the fast-path used a synthetic profile and NEVER consulted or fed
+// the registry — every smart-routed turn re-burned a wire call on a credential
+// the registry already knew was dead (live-observed 2026-07-29: one fable 403
+// per turn while the Anthropic org block was active).
+// ---------------------------------------------------------------------------
+describe('Brain smart-route fast-path — failover registry integration', () => {
+  const PRIMARY_R = 'ollama/deepseek-v4-pro:cloud'; // === DEFAULT_MODEL for Brain(null)
+  const CHEAP_R = 'claude-oauth/claude-fable-5';
+  const SIBLING_R = 'claude-oauth/claude-haiku-4-5-20251001';
+
+  const ENV_KEYS = ['SUDO_CHEAP_MODEL', 'SUDO_SMART_ROUTE_DISABLE', 'SUDO_BRAIN_CONSENSUS_DISABLE', 'SUDO_FAILOVER_DOMAINS'];
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const k of ENV_KEYS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+    process.env['SUDO_CHEAP_MODEL'] = CHEAP_R;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  const FORBIDDEN_403 = Object.assign(new Error('HTTP 403 permission_error'), {
+    statusCode: 403,
+    responseBody:
+      '{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization."}}',
+  });
+
+  function makeBrainWithRegistry(chain: string[]) {
+    const brain = new Brain(null);
+    const failover = new ModelFailover(chain);
+    (brain as unknown as { failover: ModelFailover }).failover = failover;
+    // Empty cloud set → consensus is skipped and the sequential failover walk
+    // (real getNextProfile over the real registry) serves the fall-through.
+    (failover as unknown as { getCloudProfiles: () => ModelProfile[] }).getCloudProfiles = vi
+      .fn()
+      .mockReturnValue([]);
+    const callSingleModel = vi.fn().mockImplementation(async (p: ModelProfile) => {
+      if (p.id === CHEAP_R) throw FORBIDDEN_403;
+      return {
+        content: `response-from-${p.id}`,
+        toolCalls: [],
+        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30, estimatedCost: 0 },
+        model: p.id,
+        finishReason: 'stop' as const,
+      };
+    });
+    (brain as unknown as { _callSingleModel: unknown })._callSingleModel = callSingleModel;
+    return { brain, failover, callSingleModel };
+  }
+
+  it('FASTPATH-6: a disabled registered target is skipped without a wire call', async () => {
+    const { brain, failover, callSingleModel } = makeBrainWithRegistry([PRIMARY_R, CHEAP_R]);
+    failover.recordError(CHEAP_R, 'auth_permanent', { rng: () => 0 });
+
+    const res = await brain.call({ messages: [{ role: 'user', content: 'hi' }] });
+
+    const usedIds = callSingleModel.mock.calls.map((c) => (c[0] as ModelProfile).id);
+    expect(usedIds).not.toContain(CHEAP_R);
+    expect(res.model).toBe(PRIMARY_R);
+  });
+
+  it('FASTPATH-7: a cooling registered target is skipped without a wire call', async () => {
+    const { brain, failover, callSingleModel } = makeBrainWithRegistry([PRIMARY_R, CHEAP_R]);
+    failover.recordError(CHEAP_R, 'auth', { rng: () => 0 });
+
+    const res = await brain.call({ messages: [{ role: 'user', content: 'hi' }] });
+
+    const usedIds = callSingleModel.mock.calls.map((c) => (c[0] as ModelProfile).id);
+    expect(usedIds).not.toContain(CHEAP_R);
+    expect(res.model).toBe(PRIMARY_R);
+  });
+
+  it('FASTPATH-8: a fast-path 403 on a registered target disables it and parks its domain (ADR 0003)', async () => {
+    const { brain, failover, callSingleModel } = makeBrainWithRegistry([PRIMARY_R, CHEAP_R, SIBLING_R]);
+
+    const res = await brain.call({ messages: [{ role: 'user', content: 'hi' }] });
+
+    // The turn still succeeded via fall-through.
+    expect(res.model).toBe(PRIMARY_R);
+    // Fast-path attempted the cheap target once…
+    const usedIds = callSingleModel.mock.calls.map((c) => (c[0] as ModelProfile).id);
+    expect(usedIds).toContain(CHEAP_R);
+    // …and the registry learned from it: target disabled, domain sibling parked.
+    const status = new Map(failover.getStatus().map((p) => [p.id, p]));
+    expect(status.get(CHEAP_R)!.disabled).toBe(true);
+    expect(status.get(SIBLING_R)!.cooldownClass).toBe('auth');
+    expect(failover.getCooldownRemaining(SIBLING_R)).toBeGreaterThan(0);
+  });
+
+  it('FASTPATH-9: fast-path success on a registered target records recordSuccess', async () => {
+    const { brain, failover, callSingleModel } = makeBrainWithRegistry([PRIMARY_R, CHEAP_R]);
+    callSingleModel.mockImplementation(async (p: ModelProfile) => ({
+      content: `response-from-${p.id}`,
+      toolCalls: [],
+      usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30, estimatedCost: 0 },
+      model: p.id,
+      finishReason: 'stop' as const,
+    }));
+    const successSpy = vi.spyOn(failover, 'recordSuccess');
+
+    const res = await brain.call({ messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(res.model).toBe(CHEAP_R);
+    expect(successSpy).toHaveBeenCalledWith(CHEAP_R);
+  });
+
+  it('FASTPATH-10: an UNREGISTERED (synthetic) target never touches the registry', async () => {
+    process.env['SUDO_CHEAP_MODEL'] = 'xai/grok-3-mini'; // not in the chain
+    const { brain, failover, callSingleModel } = makeBrainWithRegistry([PRIMARY_R]);
+    callSingleModel.mockImplementation(async (p: ModelProfile) => {
+      if (p.id === 'xai/grok-3-mini') throw FORBIDDEN_403;
+      return {
+        content: `response-from-${p.id}`,
+        toolCalls: [],
+        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30, estimatedCost: 0 },
+        model: p.id,
+        finishReason: 'stop' as const,
+      };
+    });
+    const errorSpy = vi.spyOn(failover, 'recordError');
+    const successSpy = vi.spyOn(failover, 'recordSuccess');
+
+    const res = await brain.call({ messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(res.model).toBe(PRIMARY_R);
+    expect(errorSpy).not.toHaveBeenCalledWith('xai/grok-3-mini', expect.anything(), expect.anything());
+    expect(successSpy).not.toHaveBeenCalledWith('xai/grok-3-mini');
   });
 });
