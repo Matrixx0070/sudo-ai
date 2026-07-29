@@ -113,8 +113,14 @@ module.exports = {
         // burn, so it hard-blocked EVERY background call (including the
         // ollama fallback) once coder.arsenal alone spent $46+ in a day.
         // Raised to match SUDO_DAILY_BUDGET_USD so it stops tripping daily.
-        SUDO_DAILY_BUDGET_USD: '100',
-        SUDO_DAILY_LLM_BUDGET_USD: '100',
+        // 2026-07-29: $100 -> $150 (Frank-directed). Same day the pricing bug
+        // booked ~$101 of PHANTOM ollama cost into the ledger and the boot
+        // seed re-tripped the cap on every restart; $150 gives headroom over
+        // today's poisoned day-total. Note the cap no longer gates $0-estimate
+        // seat calls at all (policy.ts budgetVerdict) — it bounds METERED
+        // spend only.
+        SUDO_DAILY_BUDGET_USD: '150',
+        SUDO_DAILY_LLM_BUDGET_USD: '150',
 
         // ---- 2026-07-18 safe activations (Frank-approved) ----
         // F89: runner only executes operator-created standing orders (idle otherwise).
