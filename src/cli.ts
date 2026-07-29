@@ -5158,6 +5158,40 @@ async function boot(): Promise<void> {
         log.warn({ err: String(proposalErr) }, 'Wave 10: ProposalStore failed to initialise — learning routes will be unavailable');
       }
 
+      // KAIROS self-repair runs arsenal as a DRY RUN every tick (applyEdits:false,
+      // deliberately — an unsupervised agent must not edit prod code). Until now
+      // the refactor it produced was computed at full token cost and then
+      // dropped: the report suppresses the AI text once edits exist, and nothing
+      // read `parsed.edits`. Land it as a pending ProposalStore row instead so it
+      // rides the EXISTING human approve/reject routes (/v1/admin/learning)
+      // rather than a write-only sink. Deduped inside arsenal on the observation
+      // text — KAIROS repeats an unchanged observation every tick.
+      if (wave10ProposalStore) {
+        const proposalStoreForKairos = wave10ProposalStore;
+        const { setKairosProposalSink } = await import('./core/tools/builtin/coder/arsenal.js');
+        setKairosProposalSink((p) => {
+          const now = new Date().toISOString();
+          proposalStoreForKairos.save({
+            id: `kairos-${randomUUID()}`,
+            agentId: `kairos:${p.mode}`,
+            rationale: p.task.slice(0, 2000),
+            delta: {
+              artifactType: 'code-patch',
+              source: 'kairos-self-repair',
+              files: p.edits.map((e) => e.filePath),
+              edits: p.edits,
+              report: p.report.slice(0, 8000),
+            },
+            traceQuality: 0,
+            traceCount: 0,
+            status: 'pending',
+            createdAt: now,
+            updatedAt: now,
+          });
+        });
+        log.info('KAIROS dry-run proposals persist to ProposalStore for human review');
+      }
+
       // -----------------------------------------------------------------------
       // SkillOptimizer full init (AgentConfigEvolver + SkillOptimizer).
       // SkillDiscovery + SkillOptimizationStore were pre-initialised at 6.45.
