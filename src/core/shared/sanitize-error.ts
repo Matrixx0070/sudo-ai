@@ -41,6 +41,28 @@ export function sanitizeUserFacingError(err: unknown, maxLen = 200): string {
     return 'The AI provider is temporarily unresponsive. Please try again in a minute.';
   }
   if (code === 'llm_all_attempts_failed' || code === 'llm_all_profiles_exhausted') {
+    // Do NOT claim "temporary" without checking. A permanently-disabled profile
+    // (403 auth_permanent — e.g. an org-level OAuth block) never recovers by
+    // waiting, and "try again shortly" sends the user into a retry loop instead
+    // of their provider settings. 2026-07-29: three of four profiles were
+    // permanently blocked or quota-walled for hours behind this exact sentence.
+    const d = (err as { details?: Record<string, unknown> } | null)?.details;
+    const disabled = typeof d?.['disabledCount'] === 'number' ? d['disabledCount'] : 0;
+    const cooling = typeof d?.['coolingCount'] === 'number' ? d['coolingCount'] : 0;
+    const total = typeof d?.['profileCount'] === 'number' ? d['profileCount'] : 0;
+    const soonestMs = typeof d?.['soonestRetryMs'] === 'number' ? d['soonestRetryMs'] : 0;
+
+    if (disabled > 0) {
+      const scope = total > 0 && disabled >= total ? 'Every' : `${disabled} of ${total}`;
+      return (
+        `No AI provider is available. ${scope} configured provider${disabled === 1 ? ' is' : 's are'} ` +
+        'permanently disabled (auth or permission failure) — that needs a configuration fix, not a retry.'
+      );
+    }
+    if (cooling > 0) {
+      const secs = Math.max(1, Math.ceil(soonestMs / 1000));
+      return `All AI providers are rate-limited right now. The soonest is available again in about ${secs}s.`;
+    }
     return 'The AI providers are all temporarily unavailable. Please try again shortly.';
   }
 

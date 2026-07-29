@@ -982,7 +982,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       const profile = this.failover.getNextProfile({ requireVision: _requireVision });
 
       if (!profile) {
-        throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt });
+        throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt, ...this._chainSnapshot() });
       }
 
       try {
@@ -1087,7 +1087,7 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
       const profile = this.failover.getNextProfile({ requireVision: _streamRequireVision });
 
       if (!profile) {
-        throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt });
+        throw new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', { attempt, ...this._chainSnapshot() });
       }
 
       const modelId = profile.id;
@@ -1885,6 +1885,39 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
    * The real status lives inside the lastError/errors array as an APICallError
    * with a `statusCode` property.
    */
+  /**
+   * Why the chain is empty, in a shape the user-facing sanitizer can render.
+   *
+   * Without this, "all profiles exhausted" is always reported to the user as
+   * TEMPORARY. 2026-07-29: an Anthropic organization-level OAuth block (403,
+   * auth_permanent → permanently disabled) plus 429 quota walls on google and
+   * openai left ollama/glm-5.2 as the only working profile, and every failure
+   * still read "The AI providers are all temporarily unavailable. Please try
+   * again shortly." None of it was temporary and no amount of retrying could
+   * fix it — the honest message is the difference between a user waiting and
+   * a user checking their provider config.
+   */
+  private _chainSnapshot(): { disabledCount: number; coolingCount: number; profileCount: number; soonestRetryMs: number } {
+    const now = Date.now();
+    let disabledCount = 0;
+    let coolingCount = 0;
+    let soonest = Number.POSITIVE_INFINITY;
+    const all = this.failover.getStatus();
+    for (const p of all) {
+      if (p.disabled) { disabledCount++; continue; }
+      if (p.cooldownUntil > now) {
+        coolingCount++;
+        soonest = Math.min(soonest, p.cooldownUntil - now);
+      }
+    }
+    return {
+      disabledCount,
+      coolingCount,
+      profileCount: all.length,
+      soonestRetryMs: Number.isFinite(soonest) ? soonest : 0,
+    };
+  }
+
   private static extractErrorDetails(err: unknown): { status: number; body: string | undefined; retryAfterMs: number | undefined } {
     // Collect every node in the SDK's error wrapping. The real APICallError
     // (carrying statusCode + responseBody) can be the error itself, nested

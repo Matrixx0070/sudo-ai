@@ -55,3 +55,45 @@ describe('sanitizeUserFacingError', () => {
     expect(typeof sanitizeUserFacingError(null)).toBe('string');
   });
 });
+
+/**
+ * 2026-07-29: three of four brain profiles were down for hours — an Anthropic
+ * ORGANISATION-level OAuth block (403 → auth_permanent → permanently disabled)
+ * plus 429 quota walls on google and openai — and every failure told the user
+ * "The AI providers are all temporarily unavailable. Please try again shortly."
+ * None of it was temporary and retrying could never fix it. The message has to
+ * distinguish "wait" from "go fix your config".
+ */
+describe('sanitizeUserFacingError — exhausted chain tells the truth', () => {
+  const exhausted = (details: Record<string, unknown>): LLMError =>
+    new LLMError('All model profiles are exhausted or in cooldown', 'llm_all_profiles_exhausted', details);
+
+  it('permanently disabled profiles are NOT described as temporary', () => {
+    const msg = sanitizeUserFacingError(exhausted({ disabledCount: 3, coolingCount: 0, profileCount: 4, soonestRetryMs: 0 }));
+    expect(msg).not.toMatch(/temporar/i);
+    expect(msg).not.toMatch(/try again shortly/i);
+    expect(msg).toMatch(/3 of 4/);
+    expect(msg).toMatch(/configuration fix/i);
+  });
+
+  it('says "Every" when the whole chain is permanently disabled', () => {
+    const msg = sanitizeUserFacingError(exhausted({ disabledCount: 4, profileCount: 4 }));
+    expect(msg).toMatch(/Every configured providers are permanently disabled/i);
+  });
+
+  it('rate-limited chains stay "wait", with the actual wait', () => {
+    const msg = sanitizeUserFacingError(exhausted({ disabledCount: 0, coolingCount: 2, profileCount: 3, soonestRetryMs: 45_000 }));
+    expect(msg).toMatch(/rate-limited/i);
+    expect(msg).toMatch(/45s/);
+  });
+
+  it('a permanent failure outranks a cooldown — config beats waiting', () => {
+    const msg = sanitizeUserFacingError(exhausted({ disabledCount: 1, coolingCount: 2, profileCount: 3, soonestRetryMs: 5_000 }));
+    expect(msg).toMatch(/permanently disabled/i);
+    expect(msg).not.toMatch(/rate-limited/i);
+  });
+
+  it('falls back to the legacy copy when no chain detail is attached', () => {
+    expect(sanitizeUserFacingError(exhausted({}))).toMatch(/temporarily unavailable/i);
+  });
+});
