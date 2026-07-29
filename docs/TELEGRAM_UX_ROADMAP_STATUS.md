@@ -36,7 +36,45 @@ real Telegram surface (cite evidence), not just green tests.
 | TX27 | Institutional memory report | OPEN | |
 | TX28 | Tap-to-verify provenance | OPEN | pairs with verifiability ladder |
 
-Open operational debt: branch `feat/grok-web-chat-brain` unpushed; disk 89%.
+Open operational debt: disk 89%. (Branch-unpushed debt CLEARED 2026-07-29 —
+pushed, merged to main via #970, prod deployed to `63e1cf73`.)
+
+## Post-merge re-verification (2026-07-29, after the 84-commit main merge)
+
+Prod ran 84 commits behind main until 2026-07-29. Because TX1–TX11 have **no
+automated coverage**, the tier was re-proven live on the real Telegram surface
+after the deploy, driven over CDP against Frank's Telegram Web session.
+
+**Token streaming (P0) — RE-PROVEN.** This was the merge's one dangerous
+conflict: main wrapped the brain call in `runWithLoopStep` while INLINING the
+request literal, which would have silently dropped the `_onTextDelta` hook the
+branch attaches to a hoisted `brainReq`. Resolved as a union. Proof — the reply
+bubble's text sampled every 400ms:
+
+```
++2414ms  len= 35   ✢ Thinking … 0s   [Stop] [Details]
++4424ms  len= 29   "The deep"        [Stop] [Details]   <- partial text mid-stream
++5634ms  len=734   full paragraph
++6036ms  len=736   + Good/Bad/Skip keyboard
+```
+
+An 8-character fragment at 4.4s that became 734 chars at 5.6s. Had streaming
+broken, the bubble would have jumped from `✢ Thinking` straight to the full text
+with no intermediate state. **`tsc` and all 12,166 tests pass either way — only
+this sampling distinguishes them.**
+
+Re-proven in the same trace/screenshot: TX1 Stop, TX3 Details, the P0 working
+card with pulse glyph + elapsed timer, the 👀 ack, the feedback keyboard riding
+the LAST bubble, and TX6's pinned live status card (`◉ Sudo-Ai — live status
+🔶 working — telegram:8087386717 · 52s ⏰ Cron: 24 active · all gre…`).
+
+Verification recipe (reusable): launch Chrome `--user-data-dir=/root/chrome_profile
+--remote-debugging-port=9222` on `DISPLAY=:10`, then drive raw CDP from Node 22
+(global `WebSocket` + `Runtime.evaluate`). GOTCHAS: playwright's
+`connectOverCDP` hangs against this profile and its `browser.close()` kills the
+whole browser; the chrome-devtools MCP drives its own dead instance; the real
+message box is `.input-message-input[data-peer-id]` (the bare selector matches a
+hidden fake that swallows clicks); web.telegram.org/k/ needs ~10–20s to hydrate.
 
 ## Platform fixes found while verifying TX1-TX6 (2026-07-29)
 
