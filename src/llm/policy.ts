@@ -294,7 +294,7 @@ function rolloverSpend(): void {
 }
 
 /**
- * Daily call-count ceiling for seat routes (claude-oauth). Seat calls are
+ * Daily call-count ceiling for seat routes (claude-oauth, ollama). Seat calls are
  * priced $0 (limits.ts), so the USD budget no longer bounds them — this is the
  * runaway-loop backstop: it caps CALLS, not dollars. Generous by design
  * (2026-07-22 peak was 418 calls/day). `SUDO_SEAT_DAILY_CALL_LIMIT` overrides;
