@@ -119,6 +119,11 @@ export interface SendOptions {
   parseMode?: 'markdown' | 'html' | 'plain';
   /** If true, synthesise text to speech and send as a voice note (Telegram only). */
   voiceReply?: boolean;
+  /**
+   * Collapse the tail of a long message into an expandable "Read More"
+   * blockquote (Telegram only; applies to markdown-rendered sends).
+   */
+  collapse?: boolean;
 }
 
 // ---------------------------------------------------------------------------

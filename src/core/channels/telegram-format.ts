@@ -47,6 +47,40 @@ function convertProse(escaped: string): string {
   return t;
 }
 
+/** Default visible-head budget for collapsed rendering (chars of source md). */
+export const DEFAULT_READMORE_HEAD = 480;
+
+/**
+ * Render markdown as Telegram HTML with the tail collapsed into an
+ * expandable blockquote ("Read More" in clients, Bot API 7.3+). The head
+ * stays fully visible; the split prefers a paragraph boundary, then a line
+ * break, then a word break near `headChars`. Texts not meaningfully longer
+ * than the head render uncollapsed. Fenced code blocks are never split —
+ * a fence straddling the boundary pushes the split before it.
+ */
+export function mdToTelegramHtmlCollapsed(text: string, headChars: number = DEFAULT_READMORE_HEAD): string {
+  const body = typeof text === 'string' ? text : String(text ?? '');
+  const min = Math.max(1, headChars);
+  // Not worth a collapse unless the hidden part is substantial.
+  if (body.length <= min * 1.5) return mdToTelegramHtml(body);
+
+  const window = body.slice(0, Math.floor(min * 1.3));
+  let cut = window.lastIndexOf('\n\n');
+  if (cut < min * 0.4) cut = window.lastIndexOf('\n');
+  if (cut < min * 0.4) cut = window.lastIndexOf(' ');
+  if (cut < min * 0.4) cut = min;
+  // Never split inside a ``` fence: unbalanced fence count in the head means
+  // the boundary landed inside a code block — retreat to before its opener.
+  const headCandidate = body.slice(0, cut);
+  if ((headCandidate.match(/```/g) ?? []).length % 2 === 1) {
+    cut = headCandidate.lastIndexOf('```');
+  }
+  const head = body.slice(0, cut).trimEnd();
+  const rest = body.slice(cut).replace(/^\s+/, '');
+  if (!head || !rest) return mdToTelegramHtml(body);
+  return `${mdToTelegramHtml(head)}\n<blockquote expandable>${mdToTelegramHtml(rest)}</blockquote>`;
+}
+
 /**
  * Render markdown text as Telegram HTML (parse_mode: 'HTML').
  * Fenced code blocks become <pre>; everything else goes through the

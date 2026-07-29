@@ -2274,15 +2274,31 @@ async function boot(): Promise<void> {
             'telegram',
           ).keyboard;
 
+          // "Read More": long bodies collapse their tail into an expandable
+          // blockquote (SUDO_TG_READMORE=0 disables; min chars via
+          // SUDO_TG_READMORE_MIN, default 900) so long replies stay one
+          // compact bubble instead of a wall of text.
+          const readMoreMinEnv = Number(process.env['SUDO_TG_READMORE_MIN']);
+          const readMoreMin = Number.isFinite(readMoreMinEnv) && readMoreMinEnv > 0 ? readMoreMinEnv : 900;
+          const readMoreOn = process.env['SUDO_TG_READMORE'] !== '0';
           if (streamSink) {
             // First body (full reply / first chunk / file preview) lands as the
             // final edit of the working bubble; overflow follows as new messages.
-            await streamSink.finalize(plan.chunks[0] ?? replyText);
+            const firstBody = plan.chunks[0] ?? replyText;
+            await streamSink.finalize(firstBody);
+            // The sink's finalize renders plain 'md'; a long single-bubble reply
+            // gets ONE follow-up edit that folds its tail behind "Read More".
+            if (readMoreOn && plan.mode === 'single' && firstBody.length > readMoreMin && streamSink.messageId !== null) {
+              await telegram.editText(replyTo, streamSink.messageId, firstBody, { format: 'md-collapse' })
+                .catch(() => { /* collapse is cosmetic — md render already landed */ });
+            }
             if (plan.mode === 'file') {
               await sendReplyDocument();
             } else if (plan.mode === 'chunks') {
+              // Overflow bubbles arrive collapsed — the first bubble carries the
+              // readable start; the rest expand on demand.
               for (const chunk of plan.chunks.slice(1)) {
-                await telegram.send(replyTo, chunk);
+                await telegram.send(replyTo, chunk, readMoreOn ? { collapse: true } : {});
               }
             }
             if (isSubstantialReply) {

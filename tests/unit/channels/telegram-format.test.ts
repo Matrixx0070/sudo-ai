@@ -54,3 +54,49 @@ describe('mdToTelegramHtml', () => {
     expect(mdToTelegramHtml(123 as unknown as string)).toBe('123');
   });
 });
+
+describe('mdToTelegramHtmlCollapsed (Read More)', () => {
+  const P = (n: number, seed = 'lorem ipsum dolor sit amet '): string =>
+    Array.from({ length: n }, (_, i) => `Paragraph ${i}. ${seed.repeat(8)}`).join('\n\n');
+
+  it('renders short texts uncollapsed', async () => {
+    const { mdToTelegramHtmlCollapsed } = await import('../../../src/core/channels/telegram-format.js');
+    const out = mdToTelegramHtmlCollapsed('short **bold** text', 480);
+    expect(out).toBe('short <b>bold</b> text');
+    expect(out).not.toContain('blockquote');
+  });
+
+  it('folds the tail into an expandable blockquote at a paragraph boundary', async () => {
+    const { mdToTelegramHtmlCollapsed } = await import('../../../src/core/channels/telegram-format.js');
+    const out = mdToTelegramHtmlCollapsed(P(8), 480);
+    expect(out).toContain('<blockquote expandable>');
+    expect(out.endsWith('</blockquote>')).toBe(true);
+    const visible = out.slice(0, out.indexOf('<blockquote'));
+    expect(visible).toContain('Paragraph 0.');
+    expect(visible).not.toContain('Paragraph 7.');
+    // Head ends cleanly at a paragraph boundary — no mid-word cut.
+    expect(visible.trimEnd().endsWith('amet')).toBe(true);
+  });
+
+  it('never splits inside a fenced code block', async () => {
+    const { mdToTelegramHtmlCollapsed } = await import('../../../src/core/channels/telegram-format.js');
+    const text = `intro line\n\n\`\`\`\n${'code line\n'.repeat(60)}\`\`\`\n\ntail paragraph`;
+    const out = mdToTelegramHtmlCollapsed(text, 200);
+    // The whole <pre> block must live on one side of the fold.
+    const visible = out.slice(0, out.indexOf('<blockquote'));
+    expect((visible.match(/<pre>/g) ?? []).length).toBe((visible.match(/<\/pre>/g) ?? []).length);
+  });
+
+  it('renders markdown on both sides of the fold', async () => {
+    const { mdToTelegramHtmlCollapsed } = await import('../../../src/core/channels/telegram-format.js');
+    const text = `**head bold**\n\n${'filler '.repeat(100)}\n\n## Tail heading\n\nmore ${'x'.repeat(200)}`;
+    const out = mdToTelegramHtmlCollapsed(text, 300);
+    expect(out).toContain('<b>head bold</b>');
+    expect(out).toContain('<b>Tail heading</b>');
+  });
+
+  it('is total on junk input', async () => {
+    const { mdToTelegramHtmlCollapsed } = await import('../../../src/core/channels/telegram-format.js');
+    expect(mdToTelegramHtmlCollapsed(undefined as unknown as string)).toBe('');
+  });
+});

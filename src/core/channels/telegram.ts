@@ -55,7 +55,7 @@ const log = createLogger('channels:telegram');
 
 /** Maximum characters per Telegram message (platform limit). */
 import { chunkText, TELEGRAM_CHUNK_LIMIT } from './long-reply.js';
-import { mdToTelegramHtml } from './telegram-format.js';
+import { mdToTelegramHtml, mdToTelegramHtmlCollapsed } from './telegram-format.js';
 
 /** Directory where incoming Telegram photos are saved. */
 const UPLOAD_DIR = join(DATA_DIR, 'uploads');
@@ -614,7 +614,8 @@ export class TelegramAdapter implements ChannelAdapter {
           // any rejection so a message is never lost.
           if (parseMode === 'markdown') {
             try {
-              await this.bot.api.sendMessage(peerId, mdToTelegramHtml(chunk), {
+              const html = options?.collapse === true ? mdToTelegramHtmlCollapsed(chunk) : mdToTelegramHtml(chunk);
+              await this.bot.api.sendMessage(peerId, html, {
                 parse_mode: 'HTML',
                 ...(i === 0 ? replyParams : {}),
               });
@@ -682,7 +683,7 @@ export class TelegramAdapter implements ChannelAdapter {
    * text is the caller's responsibility — Telegram returns HTTP 400 on a
    * noop edit, which the BufferedEditSink already prevents.
    */
-  async editText(peerId: string, messageId: string | number, text: string, opts?: { format?: 'plain' | 'md' }): Promise<void> {
+  async editText(peerId: string, messageId: string | number, text: string, opts?: { format?: 'plain' | 'md' | 'md-collapse' }): Promise<void> {
     if (!this.bot || !this._isConnected) {
       throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
     }
@@ -696,10 +697,13 @@ export class TelegramAdapter implements ChannelAdapter {
     // Telegram hard-caps message bodies at 4096 chars; longer edits 400.
     const clamped = text.length > 4096 ? text.slice(0, 4080) + '\n…[truncated]' : text;
     // format:'md' renders markdown → HTML (mid-stream partials are safe: the
-    // converter leaves unbalanced markers as literal text); plain retry on 400.
-    if (opts?.format === 'md') {
+    // converter leaves unbalanced markers as literal text); 'md-collapse'
+    // additionally folds the tail into an expandable blockquote ("Read
+    // More"). Plain retry on 400 either way.
+    if (opts?.format === 'md' || opts?.format === 'md-collapse') {
       try {
-        await this.bot.api.editMessageText(peerId, msgIdNum, mdToTelegramHtml(clamped), { parse_mode: 'HTML' });
+        const html = opts.format === 'md-collapse' ? mdToTelegramHtmlCollapsed(clamped) : mdToTelegramHtml(clamped);
+        await this.bot.api.editMessageText(peerId, msgIdNum, html, { parse_mode: 'HTML' });
         return;
       } catch { /* fall through to plain */ }
     }
