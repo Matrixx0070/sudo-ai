@@ -54,8 +54,8 @@ export interface HookEmitterLike {
 const log = createLogger('channels:telegram');
 
 /** Maximum characters per Telegram message (platform limit). */
-import { chunkText, TELEGRAM_CHUNK_LIMIT } from './long-reply.js';
-import { mdToTelegramHtml, mdToTelegramHtmlCollapsed } from './telegram-format.js';
+import { chunkText, TELEGRAM_CHUNK_LIMIT, MD_SOURCE_CHUNK_LIMIT } from './long-reply.js';
+import { renderMdWithinLimit } from './telegram-format.js';
 import {
   handleRunControlCallback,
   makeReasonKeyboard,
@@ -629,7 +629,11 @@ export class TelegramAdapter implements ChannelAdapter {
       // are stripped before the empty check — `String.prototype.trim()` does not
       // remove them and Telegram 400s on `text must be non-empty`.
       if (text.replace(/[​-‍⁠﻿]/g, '').trim().length > 0) {
-        const chunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
+        // Markdown chunks are budgeted BELOW the wire cap: rendering adds tag
+        // characters (~7% on bold-heavy prose), so a 4096-char source chunk
+        // renders past Telegram's limit. Splitting earlier keeps every
+        // character (more messages) instead of truncating one.
+        const chunks = chunkText(text, parseMode === 'markdown' ? MD_SOURCE_CHUNK_LIMIT : TELEGRAM_CHUNK_LIMIT);
 
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
@@ -640,13 +644,13 @@ export class TelegramAdapter implements ChannelAdapter {
           // any rejection so a message is never lost.
           if (parseMode === 'markdown') {
             try {
-              const html = options?.collapse === true ? mdToTelegramHtmlCollapsed(chunk) : mdToTelegramHtml(chunk);
+              const html = renderMdWithinLimit(chunk, { collapse: options?.collapse === true });
               await this.bot.api.sendMessage(peerId, html, {
                 parse_mode: 'HTML',
                 ...(i === 0 ? replyParams : {}),
               });
-            } catch {
-              log.debug({ peerId }, 'HTML send failed — falling back to plain text');
+            } catch (htmlErr) {
+              log.warn({ peerId, err: String(htmlErr) }, 'HTML send failed — falling back to plain text');
               await this.bot.api.sendMessage(peerId, chunk, {
                 ...(i === 0 ? replyParams : {}),
               });
@@ -731,10 +735,17 @@ export class TelegramAdapter implements ChannelAdapter {
     const markup = opts?.keyboard ? { reply_markup: opts.keyboard } : {};
     if (opts?.format === 'md' || opts?.format === 'md-collapse') {
       try {
-        const html = opts.format === 'md-collapse' ? mdToTelegramHtmlCollapsed(clamped) : mdToTelegramHtml(clamped);
+        // Fit the RENDERED html to Telegram's cap — tag expansion on a
+        // source-clamped body used to overflow and 400, silently degrading
+        // the message to plain text (literal ** markers).
+        const html = renderMdWithinLimit(clamped, { collapse: opts.format === 'md-collapse' });
         await this.bot.api.editMessageText(peerId, msgIdNum, html, { parse_mode: 'HTML', ...markup });
         return;
-      } catch { /* fall through to plain */ }
+      } catch (htmlErr) {
+        // Never silent: a swallowed 400 here is exactly what hid the
+        // literal-asterisk regression in prod.
+        log.warn({ peerId, err: String(htmlErr) }, 'editText HTML render/edit failed — falling back to plain');
+      }
     }
     await this.bot.api.editMessageText(peerId, msgIdNum, clamped, { ...markup });
   }
@@ -788,25 +799,29 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!this.bot || !this._isConnected) {
       return this.send(peerId, text);
     }
-    const chunks = chunkText(text, TELEGRAM_CHUNK_LIMIT);
+    // Source budget leaves room for markdown→HTML tag expansion (see
+    // MD_SOURCE_CHUNK_LIMIT); rendering is fitted to the wire cap as a backstop.
+    const chunks = chunkText(text, MD_SOURCE_CHUNK_LIMIT);
     // Send all but last chunk without the keyboard
     for (let i = 0; i < chunks.length - 1; i++) {
       const chunk = chunks[i];
       if (!chunk) continue;
       try {
-        await this.bot.api.sendMessage(peerId, mdToTelegramHtml(chunk), { parse_mode: 'HTML' });
-      } catch {
+        await this.bot.api.sendMessage(peerId, renderMdWithinLimit(chunk), { parse_mode: 'HTML' });
+      } catch (htmlErr) {
+        log.warn({ peerId, err: String(htmlErr) }, 'sendWithKeyboard HTML chunk failed — plain fallback');
         await this.bot.api.sendMessage(peerId, chunk);
       }
     }
     // Last chunk gets the keyboard
     const lastChunk = chunks[chunks.length - 1] ?? text.slice(0, 100);
     try {
-      await this.bot.api.sendMessage(peerId, mdToTelegramHtml(lastChunk), {
+      await this.bot.api.sendMessage(peerId, renderMdWithinLimit(lastChunk), {
         parse_mode: 'HTML',
         reply_markup: keyboard,
       });
-    } catch {
+    } catch (htmlErr) {
+      log.warn({ peerId, err: String(htmlErr) }, 'sendWithKeyboard HTML final failed — plain fallback');
       try {
         await this.bot.api.sendMessage(peerId, lastChunk, { reply_markup: keyboard });
       } catch {

@@ -21,11 +21,23 @@
 export const TELEGRAM_CHUNK_LIMIT = 4096;
 
 /**
- * Default per-chunk limit for multi-bubble delivery. Deliberately under the
- * 4096 wire cap so a chunk survives the stream sink's 4080 clamp and any
- * marker suffixes without re-truncation.
+ * Default per-chunk limit for multi-bubble delivery — a budget on the MARKDOWN
+ * SOURCE, deliberately well under the 4096 wire cap.
+ *
+ * Markdown→HTML rendering inflates length (`**bold**` → `<b>…</b>`, headings,
+ * links): a bold-heavy 4090-char source measured 4373 rendered chars, which
+ * Telegram rejects with a 400 — degrading the message to plain text with
+ * literal `**markers**` (prod regression, 2026-07-29). ~12% headroom keeps the
+ * rendered body inside the cap for realistic prose; `renderMdWithinLimit` is
+ * the backstop for pathological density.
  */
-export const DEFAULT_CHUNK_LIMIT = 4000;
+export const DEFAULT_CHUNK_LIMIT = 3600;
+
+/**
+ * Source-chunk budget for markdown sends inside the adapter (same reasoning as
+ * {@link DEFAULT_CHUNK_LIMIT}); plain-text sends still use the full wire cap.
+ */
+export const MD_SOURCE_CHUNK_LIMIT = 3600;
 
 /** Default char count above which a reply ships as a file (≈4+ bubbles). */
 export const DEFAULT_FILE_THRESHOLD = 12_000;

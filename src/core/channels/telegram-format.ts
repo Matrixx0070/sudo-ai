@@ -15,6 +15,12 @@
  * (only generated tags can 400, so fallback should be rare).
  */
 
+/**
+ * Telegram's hard cap on a message body — counted on the WIRE text, i.e. the
+ * rendered HTML including tags, not the markdown source.
+ */
+export const TELEGRAM_HTML_LIMIT = 4096;
+
 /** Escape the three characters Telegram's HTML parse mode reserves. */
 export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -45,6 +51,56 @@ function convertProse(escaped: string): string {
   // Restore stashed code spans.
   t = t.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => codeSpans[Number(i)] ?? '');
   return t;
+}
+
+/** Cut `md` to at most `budget` chars on a paragraph → line → word boundary. */
+function cutAtBoundary(md: string, budget: number): string {
+  if (budget >= md.length) return md;
+  const window = md.slice(0, Math.max(1, budget));
+  const floor = budget * 0.6;
+  let cut = window.lastIndexOf('\n\n');
+  if (cut < floor) cut = window.lastIndexOf('\n');
+  if (cut < floor) cut = window.lastIndexOf(' ');
+  if (cut < floor) cut = window.length;
+  return md.slice(0, cut).trimEnd();
+}
+
+/**
+ * Render markdown → Telegram HTML that is GUARANTEED to fit `limit` rendered
+ * characters.
+ *
+ * Rendering inflates length: `**bold**` (8 source chars) becomes `<b>…</b>`
+ * (7 chars of tags), headings and links more. A source body clamped to 4096
+ * therefore routinely renders past Telegram's 4096 wire cap → HTTP 400 →
+ * callers fall back to plain text and the user sees literal `**markers**`
+ * (observed in prod 2026-07-29). Budgeting on the source is not sound; this
+ * function measures the RENDERED output and shrinks the source until it fits,
+ * cutting on paragraph/line/word boundaries and marking the elision.
+ *
+ * Total: never throws; worst case returns escaped, hard-truncated text.
+ */
+export function renderMdWithinLimit(
+  text: string,
+  opts: { limit?: number; collapse?: boolean } = {},
+): string {
+  const md = typeof text === 'string' ? text : String(text ?? '');
+  const limit = opts.limit ?? TELEGRAM_HTML_LIMIT;
+  const render = (s: string): string => (opts.collapse ? mdToTelegramHtmlCollapsed(s) : mdToTelegramHtml(s));
+  try {
+    let budget = md.length;
+    // Each pass measures the real rendered length and trims the overshoot
+    // (plus 10% headroom, since trimming can also drop a closing tag).
+    for (let pass = 0; pass < 12; pass++) {
+      const source = budget >= md.length ? md : `${cutAtBoundary(md, budget)}\n…`;
+      const html = render(source);
+      if (html.length <= limit) return html;
+      const overshoot = html.length - limit;
+      budget = Math.max(1, budget - Math.max(24, Math.ceil(overshoot * 1.1)));
+    }
+    return escapeHtml(md.slice(0, Math.max(0, limit - 1)));
+  } catch {
+    return escapeHtml(md.slice(0, Math.max(0, limit - 1)));
+  }
 }
 
 /** Default visible-head budget for collapsed rendering (chars of source md). */

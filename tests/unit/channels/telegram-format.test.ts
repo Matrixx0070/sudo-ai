@@ -100,3 +100,56 @@ describe('mdToTelegramHtmlCollapsed (Read More)', () => {
     expect(mdToTelegramHtmlCollapsed(undefined as unknown as string)).toBe('');
   });
 });
+
+describe('renderMdWithinLimit (wire-cap fitting — prod regression 2026-07-29)', () => {
+  // A bold-heavy report body: markdown source under the cap, HTML over it.
+  const boldHeavy = (targetLen: number): string => {
+    const para = (i: number) =>
+      `## Section ${i}\n\n**Key market shifts:** everything went agentic. **Pricing:** usage-based billing. **Benchmarks:** SWE-bench near 96%.\n`;
+    let md = '';
+    for (let i = 0; md.length < targetLen; i++) md += para(i);
+    return md.slice(0, targetLen);
+  };
+
+  it('REGRESSION: raw rendering of a source-clamped body exceeds the wire cap', async () => {
+    const { mdToTelegramHtml, TELEGRAM_HTML_LIMIT } = await import('../../../src/core/channels/telegram-format.js');
+    const md = boldHeavy(4090); // under Telegram's 4096 as SOURCE
+    expect(mdToTelegramHtml(md).length).toBeGreaterThan(TELEGRAM_HTML_LIMIT); // the bug
+  });
+
+  it('fits the rendered html inside the cap and keeps real formatting', async () => {
+    const { renderMdWithinLimit, TELEGRAM_HTML_LIMIT } = await import('../../../src/core/channels/telegram-format.js');
+    const out = renderMdWithinLimit(boldHeavy(4090));
+    expect(out.length).toBeLessThanOrEqual(TELEGRAM_HTML_LIMIT);
+    expect(out).toContain('<b>'); // still HTML, NOT a plain-text fallback
+    expect(out).not.toContain('**'); // no literal markers survive
+  });
+
+  it('fits the collapsed variant too', async () => {
+    const { renderMdWithinLimit, TELEGRAM_HTML_LIMIT } = await import('../../../src/core/channels/telegram-format.js');
+    const out = renderMdWithinLimit(boldHeavy(4090), { collapse: true });
+    expect(out.length).toBeLessThanOrEqual(TELEGRAM_HTML_LIMIT);
+    expect(out).toContain('<blockquote expandable>');
+  });
+
+  it('leaves already-fitting text untouched (no elision marker)', async () => {
+    const { renderMdWithinLimit } = await import('../../../src/core/channels/telegram-format.js');
+    expect(renderMdWithinLimit('short **bold** text')).toBe('short <b>bold</b> text');
+  });
+
+  it('survives pathological density and junk input', async () => {
+    const { renderMdWithinLimit, TELEGRAM_HTML_LIMIT } = await import('../../../src/core/channels/telegram-format.js');
+    const dense = Array.from({ length: 900 }, (_, i) => `**b${i}**`).join(' ');
+    expect(renderMdWithinLimit(dense).length).toBeLessThanOrEqual(TELEGRAM_HTML_LIMIT);
+    expect(renderMdWithinLimit(undefined as unknown as string)).toBe('');
+    expect(renderMdWithinLimit('x'.repeat(50_000)).length).toBeLessThanOrEqual(TELEGRAM_HTML_LIMIT);
+  });
+
+  it('markdown chunk budgets leave headroom for tag expansion', async () => {
+    const { DEFAULT_CHUNK_LIMIT, MD_SOURCE_CHUNK_LIMIT } = await import('../../../src/core/channels/long-reply.js');
+    const { mdToTelegramHtml, TELEGRAM_HTML_LIMIT } = await import('../../../src/core/channels/telegram-format.js');
+    expect(MD_SOURCE_CHUNK_LIMIT).toBeLessThan(TELEGRAM_HTML_LIMIT);
+    // A full-size chunk of realistic bold-heavy prose must render inside the cap.
+    expect(mdToTelegramHtml(boldHeavy(DEFAULT_CHUNK_LIMIT)).length).toBeLessThanOrEqual(TELEGRAM_HTML_LIMIT);
+  });
+});
