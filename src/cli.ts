@@ -2463,16 +2463,34 @@ async function boot(): Promise<void> {
               await telegram.editText(replyTo, streamSink.messageId, firstBody, { format: 'md-collapse' })
                 .catch(() => { /* collapse is cosmetic — md render already landed */ });
             }
+            // Set when the feedback keyboard already rode the last overflow
+            // bubble, so it is not also attached to the first one.
+            let keyboardDelivered = false;
             if (plan.mode === 'file') {
               await sendReplyDocument();
             } else if (plan.mode === 'chunks') {
               // Overflow bubbles arrive collapsed — the first bubble carries the
-              // readable start; the rest expand on demand.
-              for (const chunk of plan.chunks.slice(1)) {
-                await telegram.send(replyTo, chunk, readMoreOn ? { collapse: true } : {});
+              // readable start; the rest expand on demand. The feedback keyboard
+              // rides the LAST bubble (where the reader actually finishes); on
+              // the first bubble it scrolls far out of view on a long reply.
+              const overflow = plan.chunks.slice(1);
+              for (let ci = 0; ci < overflow.length; ci++) {
+                const chunk = overflow[ci]!;
+                const isLastChunk = ci === overflow.length - 1;
+                if (isLastChunk && isSubstantialReply) {
+                  try {
+                    await telegram.sendWithKeyboard(replyTo, chunk, makeKeyboard());
+                    keyboardDelivered = true;
+                  } catch (kbErr) {
+                    log.warn({ err: String(kbErr) }, 'feedback keyboard on final chunk failed — sending plain');
+                    await telegram.send(replyTo, chunk, readMoreOn ? { collapse: true } : {});
+                  }
+                } else {
+                  await telegram.send(replyTo, chunk, readMoreOn ? { collapse: true } : {});
+                }
               }
             }
-            if (isSubstantialReply) {
+            if (isSubstantialReply && !keyboardDelivered) {
               // Attach the keyboard to the finalized reply message itself —
               // editMessageReplyMarkup works fine on an edited message; the old
               // separate '⋯' carrier message littered the chat permanently.
