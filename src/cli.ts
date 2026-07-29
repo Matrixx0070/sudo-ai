@@ -5739,15 +5739,29 @@ async function boot(): Promise<void> {
               // without getFailoverStatus() simply omits the line.
               ...(() => {
                 try {
-                  const profiles = (brain as { getFailoverStatus?: () => { disabled: boolean; cooldownUntil: number }[] })
+                  const profiles = (brain as { getFailoverStatus?: () => { disabled: boolean; cooldownUntil: number; domain?: string }[] })
                     .getFailoverStatus?.();
                   if (!profiles || profiles.length === 0) return {};
                   const nowMs = Date.now();
                   let disabledCount = 0;
                   let coolingCount = 0;
+                  // ADR 0003: report credential failure domains, not just slots —
+                  // 4 of 6 prod slots share one Anthropic credential, so slot
+                  // counts overstate redundancy. Only when every profile carries
+                  // a domain (older brains without the field omit the counts).
+                  const domainsAll = new Set<string>();
+                  const domainsUp = new Set<string>();
+                  let allHaveDomain = true;
                   for (const p of profiles) {
+                    const up = !p.disabled && p.cooldownUntil <= nowMs;
                     if (p.disabled) disabledCount++;
                     else if (p.cooldownUntil > nowMs) coolingCount++;
+                    if (typeof p.domain === 'string' && p.domain) {
+                      domainsAll.add(p.domain);
+                      if (up) domainsUp.add(p.domain);
+                    } else {
+                      allHaveDomain = false;
+                    }
                   }
                   return {
                     brain: {
@@ -5755,6 +5769,9 @@ async function boot(): Promise<void> {
                       availableCount: profiles.length - disabledCount - coolingCount,
                       disabledCount,
                       coolingCount,
+                      ...(allHaveDomain && domainsAll.size > 0
+                        ? { domainCount: domainsAll.size, domainsUpCount: domainsUp.size }
+                        : {}),
                     },
                   };
                 } catch { return {}; }
