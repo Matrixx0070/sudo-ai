@@ -30,3 +30,21 @@ export type {
 
 export { TaskExecutor } from './executor.js';
 export type { TaskHandler, ExecutorOptions } from './executor.js';
+
+// AL4.2 graph-run state store (durable graph runs beside the task queue)
+export { GraphRunStore, computeGraphHash } from './graph-run-store.js';
+export type {
+  GraphApprovalRecord,
+  GraphApprovalStatus,
+  GraphRunRecord,
+  GraphRunNodeRecord,
+  GraphRunStatus,
+} from './graph-run-store.js';
+
+// AL4.4 human-approval gate executor (durable artifact, fail-closed)
+export { createApprovalGateExecutor } from './graph-approval.js';
+export type { ApprovalGateOptions, GateNotification } from './graph-approval.js';
+
+// AL4.5 resource governor (per-run + per-day budgets; pause resumable, alert)
+export { runGovernedGraph } from './graph-governor.js';
+export type { GraphRunBudget, GovernedRunOptions, BudgetAlert } from './graph-governor.js';

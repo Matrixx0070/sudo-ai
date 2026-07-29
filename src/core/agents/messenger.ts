@@ -9,7 +9,8 @@
 
 import { genId } from '../shared/index.js';
 import { createLogger } from '../shared/index.js';
-import type { AgentMessage, AgentMessageType } from './types.js';
+import { assertMessageAllowed } from './contracts.js';
+import type { AgentMessage, AgentMessageType, AgentRoleName } from './types.js';
 
 const log = createLogger('agents:messenger');
 
@@ -41,7 +42,13 @@ export class AgentMessenger {
     to: string;
     type: AgentMessageType;
     content: string;
+    /** AL5.2: when BOTH role fields are set, message rights are enforced. */
+    fromRole?: AgentRoleName;
+    toRole?: AgentRoleName;
   }): AgentMessage {
+    if (params.fromRole && params.toRole) {
+      assertMessageAllowed(params.fromRole, params.toRole);
+    }
     const message: AgentMessage = {
       id: genId(),
       from: params.from,
@@ -121,7 +128,10 @@ export class AgentMessenger {
     const lines = relevant.map((m) => {
       const label = m.type === 'result' ? 'RESULT' :
                     m.type === 'error'  ? 'ERROR'  :
-                    m.type === 'directive' ? 'DIRECTIVE' : 'CONTEXT';
+                    m.type === 'directive' ? 'DIRECTIVE' :
+                    m.type === 'task-offer' ? 'TASK OFFER' :
+                    m.type === 'bid' ? 'BID' :
+                    m.type === 'award' ? 'AWARD' : 'CONTEXT';
       return `[${label} from ${m.from}]:\n${m.content}`;
     });
 

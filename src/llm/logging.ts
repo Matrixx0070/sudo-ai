@@ -26,8 +26,6 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../core/shared/logger.js';
 import { DATA_DIR } from '../core/shared/paths.js';
-import { redactDeep } from '../core/shared/redact.js';
-import { redactSecrets } from '../core/federation/federation-error-sanitizer.js';
 import { isZDRBlocked } from '../core/privacy/zdr-mode.js';
 import { contentFingerprint } from './cache/canonical.js';
 import type { IRRequest } from '../../shared-types/ir/v1.js';
@@ -71,7 +69,22 @@ export interface LLMCallRecord {
   costUsd?: number;
   /** Downstream outcome; usually stamped later via {@link GatewayCallLog.markOutcome}. */
   outcome?: string;
+  /** Session the call belongs to (AL1.2). Filled from the ambient loop-step context when omitted. */
+  sessionId?: string;
+  /** Agent-loop turn id (one AgentLoop.run invocation). Ambient-filled when omitted. */
+  turnId?: string;
+  /** Loop iteration number within the turn. Ambient-filled when omitted. */
+  stepN?: number;
+  /** Tool whose execution this call served, when applicable. Ambient-filled when omitted. */
+  tool?: string;
 }
+
+// AL1.2 loop-step context lives in ./loop-step-context.ts (agent code sets it
+// without importing this DB module). Re-exported here so telemetry consumers
+// keep a single import surface.
+import { currentLoopStep, type ToolCallRecord } from './loop-step-context.js';
+export { runWithLoopStep, currentLoopStep } from './loop-step-context.js';
+export type { LoopStepContext, ToolCallRecord } from './loop-step-context.js';
 
 // ---------------------------------------------------------------------------
 // Retention
@@ -119,9 +132,33 @@ const DDL_TABLE = `
     tokens_out          INTEGER,
     tokens_cached       INTEGER,
     cost_usd            REAL,
-    outcome             TEXT
+    outcome             TEXT,
+    session_id          TEXT,
+    turn_id             TEXT,
+    step_n              INTEGER,
+    tool                TEXT
   )
 `;
+
+/** Tool executions — one row per tool call, keyed to the same turn/step ids. */
+const DDL_TOOL_CALLS = `
+  CREATE TABLE IF NOT EXISTS tool_calls (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT    NOT NULL,
+    session_id  TEXT    NOT NULL,
+    turn_id     TEXT,
+    step_n      INTEGER,
+    tool        TEXT    NOT NULL,
+    latency_ms  INTEGER,
+    outcome     TEXT
+  )
+`;
+const DDL_IDX_TOOL_TS      = `CREATE INDEX IF NOT EXISTS idx_tool_calls_ts      ON tool_calls(ts)`;
+const DDL_IDX_TOOL_SESSION = `CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id)`;
+const DDL_IDX_TOOL_TURN    = `CREATE INDEX IF NOT EXISTS idx_tool_calls_turn    ON tool_calls(turn_id)`;
+// Turn-join index for llm_calls — created AFTER the column migration (legacy
+// DBs lack turn_id until then), same staging as DDL_IDX_CONTENT.
+const DDL_IDX_TURN         = `CREATE INDEX IF NOT EXISTS idx_llm_calls_turn     ON llm_calls(turn_id)`;
 
 const DDL_IDX_TS          = `CREATE INDEX IF NOT EXISTS idx_llm_calls_ts          ON llm_calls(ts)`;
 const DDL_IDX_CALLER      = `CREATE INDEX IF NOT EXISTS idx_llm_calls_caller      ON llm_calls(caller)`;
@@ -137,47 +174,15 @@ const DDL_IDX_CONTENT     = `CREATE INDEX IF NOT EXISTS idx_llm_calls_content   
  */
 const COLUMN_MIGRATIONS: ReadonlyArray<{ column: string; ddl: string }> = [
   { column: 'content_sha256', ddl: 'ALTER TABLE llm_calls ADD COLUMN content_sha256 TEXT' },
+  { column: 'session_id',     ddl: 'ALTER TABLE llm_calls ADD COLUMN session_id TEXT' },
+  { column: 'turn_id',        ddl: 'ALTER TABLE llm_calls ADD COLUMN turn_id TEXT' },
+  { column: 'step_n',         ddl: 'ALTER TABLE llm_calls ADD COLUMN step_n INTEGER' },
+  { column: 'tool',           ddl: 'ALTER TABLE llm_calls ADD COLUMN tool TEXT' },
 ];
 
-// ---------------------------------------------------------------------------
-// Redaction
-// ---------------------------------------------------------------------------
-
-/**
- * Two-layer redaction for IR payloads before persist:
- *   1. redactDeep — replaces values under sensitive-looking KEYS
- *      (token/secret/key/password/auth/…) with '<redacted>'.
- *   2. redactSecrets — pattern-scrubs every remaining string LEAF
- *      (Bearer tokens, API keys, connection strings, private IPs, …).
- * Cycle-safe and depth-capped via redactDeep's own guards; the leaf pass
- * mirrors its depth cap.
- */
-function redactForPersist(input: unknown): unknown {
-  return redactStringLeaves(redactDeep(input));
-}
-
-function redactStringLeaves(input: unknown, depth = 0): unknown {
-  if (depth > 8) return input;
-  if (typeof input === 'string') return redactSecrets(input);
-  if (input === null || input === undefined || typeof input !== 'object') return input;
-  if (Array.isArray(input)) return input.map((v) => redactStringLeaves(v, depth + 1));
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-    out[k] = redactStringLeaves(v, depth + 1);
-  }
-  return out;
-}
-
-/** JSON-serialize a redacted IR payload; undefined → NULL column. */
-function toJsonColumn(value: unknown): string | null {
-  if (value === undefined) return null;
-  try {
-    return JSON.stringify(redactForPersist(value)) ?? null;
-  } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'IR serialization failed');
-    return null;
-  }
-}
+// Redaction-before-persist helpers live in ./persist-redact.ts (pure, no DB).
+import { toJsonColumn } from './persist-redact.js';
+export { redactForPersist } from './persist-redact.js';
 
 // ---------------------------------------------------------------------------
 // Hashing
@@ -253,33 +258,8 @@ export function __resetSessionTraces(): void {
   _sessionTraces.clear();
 }
 
-// ---------------------------------------------------------------------------
-// Rephrase heuristic (Phase 5 outcome signal)
-// ---------------------------------------------------------------------------
-
-/** Jaccard similarity of the lowercase word sets of two strings (0–1). */
-export function jaccardWordSimilarity(a: string, b: string): number {
-  const ta = new Set(a.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-  const tb = new Set(b.toLowerCase().match(/[a-z0-9]+/g) ?? []);
-  if (ta.size === 0 || tb.size === 0) return 0;
-  let inter = 0;
-  for (const t of ta) if (tb.has(t)) inter++;
-  const union = ta.size + tb.size - inter;
-  return union === 0 ? 0 : inter / union;
-}
-
-/**
- * Conservative, dependency-free "user rephrased the same ask" heuristic:
- * both messages must be non-trivial (>10 chars trimmed) and share >0.6 of
- * their word vocabulary (Jaccard on word sets). Deliberately cheap — runs on
- * the message-intake hot path. A distinct follow-up question shares far less
- * vocabulary; short acks ("ok", "thanks") are excluded by the length guard.
- */
-export function isLikelyRephrase(prev: string, next: string): boolean {
-  if (typeof prev !== 'string' || typeof next !== 'string') return false;
-  if (prev.trim().length <= 10 || next.trim().length <= 10) return false;
-  return jaccardWordSimilarity(prev, next) > 0.6;
-}
+// Rephrase heuristic (Phase 5 outcome signal) lives in ./rephrase-heuristic.ts.
+export { jaccardWordSimilarity, isLikelyRephrase } from './rephrase-heuristic.js';
 
 // ---------------------------------------------------------------------------
 // GatewayCallLog
@@ -325,7 +305,10 @@ export class GatewayCallLog {
   // -------------------------------------------------------------------------
 
   private _applyDdl(): void {
-    for (const stmt of [DDL_TABLE, DDL_IDX_TS, DDL_IDX_CALLER, DDL_IDX_ERROR_CLASS]) {
+    for (const stmt of [
+      DDL_TABLE, DDL_IDX_TS, DDL_IDX_CALLER, DDL_IDX_ERROR_CLASS,
+      DDL_TOOL_CALLS, DDL_IDX_TOOL_TS, DDL_IDX_TOOL_SESSION, DDL_IDX_TOOL_TURN,
+    ]) {
       try {
         this.db.exec(stmt);
       } catch (err) {
@@ -357,14 +340,17 @@ export class GatewayCallLog {
       }
     }
 
-    // content_sha256 index — created here, after the column migration guarantees
-    // the column exists on legacy DBs (a fresh DDL_TABLE already has it).
-    try {
-      this.db.exec(DDL_IDX_CONTENT);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes('already exists')) {
-        logger.warn({ err: msg }, 'content index DDL warning');
+    // content_sha256 + turn_id indexes — created here, after the column
+    // migration guarantees the columns exist on legacy DBs (a fresh
+    // DDL_TABLE already has them).
+    for (const stmt of [DDL_IDX_CONTENT, DDL_IDX_TURN]) {
+      try {
+        this.db.exec(stmt);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('already exists')) {
+          logger.warn({ err: msg }, 'post-migration index DDL warning');
+        }
       }
     }
   }
@@ -400,17 +386,22 @@ export class GatewayCallLog {
       // caller, route, tokens, cost, latency, content_sha256 fingerprint, outcome —
       // is operational metadata and still recorded so budgets/dedup keep working.
       const zdrBlocked = isZDRBlocked('session_persistence');
+
+      // AL1.2: correlate this call to the loop iteration it serves. Explicit
+      // entry fields win; the ambient loop-step context fills the rest.
+      const loopStep = currentLoopStep();
+
       this.db.prepare(`
         INSERT OR REPLACE INTO llm_calls
           (trace_id, ts, caller, purpose, alias, route, priority,
            ir_request, ir_response, wire_payload_sha256, content_sha256, error_class,
            latency_ms, ttft_ms, tokens_in, tokens_out, tokens_cached,
-           cost_usd, outcome)
+           cost_usd, outcome, session_id, turn_id, step_n, tool)
         VALUES
           (:trace_id, :ts, :caller, :purpose, :alias, :route, :priority,
            :ir_request, :ir_response, :wire_payload_sha256, :content_sha256, :error_class,
            :latency_ms, :ttft_ms, :tokens_in, :tokens_out, :tokens_cached,
-           :cost_usd, :outcome)
+           :cost_usd, :outcome, :session_id, :turn_id, :step_n, :tool)
       `).run({
         trace_id:            entry.traceId,
         ts:                  entry.ts ?? new Date().toISOString(),
@@ -431,6 +422,10 @@ export class GatewayCallLog {
         tokens_cached:       entry.tokensCached ?? null,
         cost_usd:            entry.costUsd ?? null,
         outcome:             entry.outcome ?? null,
+        session_id:          entry.sessionId ?? loopStep?.sessionId ?? null,
+        turn_id:             entry.turnId ?? loopStep?.turnId ?? null,
+        step_n:              entry.stepN ?? loopStep?.stepN ?? null,
+        tool:                entry.tool ?? loopStep?.tool ?? null,
       });
 
       this._maybePrune();
@@ -454,6 +449,35 @@ export class GatewayCallLog {
       logger.warn(
         { traceId, err: err instanceof Error ? err.message : String(err) },
         'GatewayCallLog.markOutcome failed',
+      );
+    }
+  }
+
+  /**
+   * Persist one tool execution (AL1.2). Same write-failure contract as
+   * record(): never throws, never blocks the tool path. Turn/step fall back
+   * to the ambient loop-step context.
+   */
+  recordToolCall(entry: ToolCallRecord): void {
+    try {
+      const loopStep = currentLoopStep();
+      this.db.prepare(`
+        INSERT INTO tool_calls (ts, session_id, turn_id, step_n, tool, latency_ms, outcome)
+        VALUES (:ts, :session_id, :turn_id, :step_n, :tool, :latency_ms, :outcome)
+      `).run({
+        ts:         entry.ts ?? new Date().toISOString(),
+        session_id: entry.sessionId,
+        turn_id:    entry.turnId ?? loopStep?.turnId ?? null,
+        step_n:     entry.stepN ?? loopStep?.stepN ?? null,
+        tool:       entry.tool,
+        latency_ms: entry.latencyMs,
+        outcome:    entry.outcome,
+      });
+      this._maybePrune();
+    } catch (err) {
+      logger.warn(
+        { tool: entry.tool, err: err instanceof Error ? err.message : String(err) },
+        'GatewayCallLog.recordToolCall failed',
       );
     }
   }
@@ -523,9 +547,10 @@ export class GatewayCallLog {
     try {
       const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
       const info = this.db.prepare(`DELETE FROM llm_calls WHERE ts < :cutoff`).run({ cutoff });
-      const deleted = info.changes ?? 0;
+      const toolInfo = this.db.prepare(`DELETE FROM tool_calls WHERE ts < :cutoff`).run({ cutoff });
+      const deleted = (info.changes ?? 0) + (toolInfo.changes ?? 0);
       if (deleted > 0) {
-        logger.info({ deleted, retentionDays, cutoff }, 'Pruned old llm_calls rows');
+        logger.info({ deleted, retentionDays, cutoff }, 'Pruned old llm_calls/tool_calls rows');
       }
       return deleted;
     } catch (err) {
@@ -565,6 +590,29 @@ export function getGatewayCallLog(dbPath?: string): GatewayCallLog {
     _instance = new GatewayCallLog(dbPath);
   }
   return _instance;
+}
+
+/**
+ * Fire-and-forget tool-execution row (AL1.2). Same gating idiom as
+ * client.ts recordGatewayCall: SUDO_GATEWAY_LOG=0 disables; skipped under
+ * vitest unless SUDO_GATEWAY_LOG_TEST=1; fully try/caught — a logging bug
+ * can never break a tool call.
+ */
+let _toolLogWarned = false;
+export function recordToolCallSafe(entry: ToolCallRecord): void {
+  try {
+    if (!gatewayLogEnabled()) return;
+    if (process.env['VITEST'] && process.env['SUDO_GATEWAY_LOG_TEST'] !== '1') return;
+    getGatewayCallLog().recordToolCall(entry);
+  } catch (err) {
+    if (!_toolLogWarned) {
+      _toolLogWarned = true;
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'recordToolCallSafe failed (fail-open, warn once)',
+      );
+    }
+  }
 }
 
 /** Test hook: drop the singleton so the next getGatewayCallLog() re-creates it. */

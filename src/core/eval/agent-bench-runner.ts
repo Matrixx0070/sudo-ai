@@ -130,12 +130,18 @@ export class AgentBenchRunner {
         ? createHash('sha256').update(agentText).digest('hex')
         : '';
 
+      // AL7.1 harness rule (#751 empty-reply class): an empty/whitespace final
+      // reply is never a pass, regardless of workspace state — the prod
+      // incident was exactly "work done, user got silence". Applies to every
+      // task so the nightly bench catches a normalization regression.
+      const emptyReply = agentText.trim().length === 0;
+
       const result: AgentBenchResult = {
         taskId: task.id,
         model: deps.modelLabel ?? 'unknown',
-        passed: verdict.passed,
-        score: verdict.score,
-        detail: verdict.detail,
+        passed: verdict.passed && !emptyReply,
+        score: emptyReply ? 0 : verdict.score,
+        detail: emptyReply ? `empty final reply (#751 class); verifier said: ${verdict.detail}` : verdict.detail,
         agentText,
         wallTimeMs,
         costUsd,

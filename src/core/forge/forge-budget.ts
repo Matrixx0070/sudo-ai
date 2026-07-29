@@ -17,9 +17,16 @@
  * other on-demand spend surfaces; it is intentionally not a cross-process ledger.
  */
 
-/** Kill-switch: forge runs unless SUDO_FORGE is explicitly set to '0'. */
+/**
+ * Opt-IN gate (AL8.0 R2): forge runs only when SUDO_FORGE=1, matching the
+ * posture of every other self-authoring surface (SELF_BUILD_MODE, AUTOBUGFIX,
+ * SKILL_WORKSHOP — all opt-in). Flipped from opt-out because the Campaign-4
+ * audit found forge's reviewer/security stage outputs are discarded and its
+ * generated files land unsandboxed — capability preserved, default posture
+ * hardened. Legacy '0' still reads as disabled.
+ */
 export function forgeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env['SUDO_FORGE'] !== '0';
+  return env['SUDO_FORGE'] === '1';
 }
 
 /** Parse a USD/token cap. Unset → default; 'off'/'none'/'' → Infinity (disabled). */

@@ -12,6 +12,9 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { inspectContent, type InspectOptions } from './quarantine.js';
+import { screenOpsUpload } from './ops-screen.js';
+import { checkCanaryPayload, loadCanaryConfig, tripCanary } from './canary.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
 import { emitGdriveAudit } from './audit.js';
@@ -57,9 +60,11 @@ export async function exportDecisionPacket(
   if (!folderId) throw new Error('second-opinion: ops/review-queue folder id missing');
   if (!ID_RE.test(packet.id)) throw new Error(`second-opinion: invalid packet id "${packet.id}"`);
   assertNoConclusion(packet);
+  // P1 egress screen (audit item 3): decision packets carry free-text evidence.
+  const screened = screenOpsUpload(JSON.stringify(packet, null, 2), 'second-opinion:packet');
   const created = await client.filesCreate(
     { name: `${packet.id}.packet.json`, parents: [folderId] },
-    { mimeType: 'application/json', body: JSON.stringify(packet, null, 2) },
+    { mimeType: 'application/json', body: screened.text },
   );
   return created.id;
 }
@@ -83,9 +88,11 @@ export async function writeDissent(
       `the strongest case AGAINST the implied course of action, risks the decider may have missed, and what evidence would change your mind. ` +
       `Packet:\n${packetJson}`,
   );
+  // P1 egress screen (audit item 3): the memo is LLM output — redact secrets.
+  const screenedMemo = screenOpsUpload(memo.slice(0, 20_000), 'second-opinion:dissent');
   const created = await client.filesCreate(
     { name: `${packetId}.dissent.md`, parents: [folderId] },
-    { mimeType: 'text/markdown', body: memo.slice(0, 20_000) },
+    { mimeType: 'text/markdown', body: screenedMemo.text },
   );
   return created.id;
 }
@@ -102,7 +109,13 @@ export async function awaitDissent(
   client: DriveClient,
   folders: FolderIdMap,
   packetId: string,
-  opts: { timeoutMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+  opts: {
+    timeoutMs?: number;
+    pollMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    /** F18 inspector options ({} = deterministic-only, never fails open). */
+    inspect?: InspectOptions;
+  } = {},
 ): Promise<SecondOpinionOutcome> {
   const folderId = folders['ops/review-queue'];
   if (!folderId) throw new Error('second-opinion: ops/review-queue folder id missing');
@@ -118,7 +131,32 @@ export async function awaitDissent(
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const memoFile = (await client.listChildren(folderId)).find((f) => f.name === `${packetId}.dissent.md`);
-    if (memoFile) return { action: 'dissent-ready', memo: await client.filesDownload(memoFile.id) };
+    if (memoFile) {
+      // P0 repair (DRIVE_SECURITY_AUDIT_2026-07-28): the memo is EXTERNAL
+      // text from a Drive folder — anyone with write access there could have
+      // planted or tampered it. Canary + F18 quarantine run before it ever
+      // reaches the deciding agent's context; a hit/hold ESCALATES to the
+      // human instead of returning the memo. Never auto-proceed, never
+      // surface uninspected text to the decider.
+      const memo = await client.filesDownload(memoFile.id);
+      const canaryHit = checkCanaryPayload(memo, loadCanaryConfig());
+      if (canaryHit) {
+        tripCanary(null, canaryHit, `second-opinion:${packetId}`);
+        return { action: 'escalate', reason: `dissent memo tripped canary "${canaryHit.label}" — human review required` };
+      }
+      const verdict = await inspectContent(memo, opts.inspect ?? {});
+      if (verdict.verdict === 'hold') {
+        log.warn(
+          { packetId, riskScore: verdict.riskScore, reasons: verdict.reasons },
+          'dissent memo HELD by quarantine — escalating to human, memo withheld from decider',
+        );
+        return {
+          action: 'escalate',
+          reason: `dissent memo held by quarantine (risk ${verdict.riskScore.toFixed(2)}: ${verdict.reasons.join(', ')}) — human review required`,
+        };
+      }
+      return { action: 'dissent-ready', memo };
+    }
     if (Date.now() >= deadline) {
       log.warn({ packetId }, 'second opinion timed out — ESCALATING to human, not proceeding');
       return { action: 'escalate', reason: `no dissent memo within ${timeoutMs}ms — human review required` };
@@ -157,9 +195,14 @@ export async function resolveDissent(
 ): Promise<void> {
   const folderId = folders['ops/review-queue'];
   if (!folderId) return;
+  // P1 egress screen (audit item 3): rationale is free text.
+  const screenedRes = screenOpsUpload(
+    JSON.stringify({ ...resolution, at: new Date().toISOString() }, null, 2),
+    'second-opinion:resolution',
+  );
   await client.filesCreate(
     { name: `${packetId}.resolution.json`, parents: [folderId] },
-    { mimeType: 'application/json', body: JSON.stringify({ ...resolution, at: new Date().toISOString() }, null, 2) },
+    { mimeType: 'application/json', body: screenedRes.text },
   );
   emitGdriveAudit(audit, {
     job: 'second-opinion',

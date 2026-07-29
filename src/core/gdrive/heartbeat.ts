@@ -14,6 +14,7 @@ import { dirname } from 'node:path';
 import { dataPath } from '../shared/paths.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 export const HEARTBEAT_FILE_NAME = 'heartbeat.json';
 
@@ -54,7 +55,9 @@ export function buildHeartbeatBody(now: Date = new Date()): HeartbeatBody {
 export async function writeHeartbeat(client: DriveClient, folders: FolderIdMap): Promise<string> {
   const opsId = folders['ops'];
   if (!opsId) throw new Error('gdrive heartbeat: ops folder id missing — bootstrap first');
-  const body = JSON.stringify(buildHeartbeatBody(), null, 2);
+  // P1 egress screen (audit item 3): mechanical fields, but hostname/env can
+  // surprise — screen like every other ops upload.
+  const body = screenOpsUpload(JSON.stringify(buildHeartbeatBody(), null, 2), 'heartbeat').text;
   const media = { mimeType: 'application/json', body };
 
   const cached = loadCachedFileId();

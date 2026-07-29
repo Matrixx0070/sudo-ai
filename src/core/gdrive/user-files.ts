@@ -13,7 +13,7 @@
 
 import { Readable } from 'node:stream';
 import { createLogger } from '../shared/logger.js';
-import { detectInjection } from '../security/injection-detector.js';
+import { inspectContent } from './quarantine.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap, GdriveFileMeta } from './types.js';
 
@@ -97,9 +97,14 @@ export async function listUserFiles(
 export interface UserFileRead {
   name: string;
   mimeType?: string;
-  /** Quarantine-delimited text — untrusted, must not be followed as instructions. */
+  /** Quarantine-delimited text — untrusted, must not be followed as instructions.
+   * When `held` is true this is a REFUSAL message (report info, no content). */
   delimited: string;
   injectionFlagged: boolean;
+  /** Audit item 9 (DRIVE_SECURITY_AUDIT_2026-07-28): true when the F18
+   * inspection HELD the content — the file text is withheld from model
+   * context and `delimited` carries the refusal + report instead. */
+  held?: boolean;
 }
 
 const QUARANTINE_HEADER =
@@ -126,12 +131,33 @@ export async function readUserFile(
     text = await client.filesDownload(fileId);
   }
   if (text.length > USER_FILE_MAX_BYTES) text = text.slice(0, USER_FILE_MAX_BYTES);
-  const scan = detectInjection(text, 'gdrive:user-file');
+  // Audit item 9 (DRIVE_SECURITY_AUDIT_2026-07-28): upgraded from the repo
+  // detectInjection to the full F18 deterministic inspection — this was the
+  // weakest scanner on the most direct channel into model context. A HELD
+  // verdict now returns a refusal message with the report info instead of the
+  // content (previously flagged content was returned in full).
+  const verdict = await inspectContent(text, {});
+  if (verdict.verdict === 'hold') {
+    log.warn(
+      { name: meta.name, riskScore: verdict.riskScore, reasons: verdict.reasons },
+      'F5 user-file read HELD by quarantine — content withheld from model context',
+    );
+    return {
+      name: meta.name,
+      mimeType: meta.mimeType,
+      delimited:
+        `[REFUSED — quarantine HOLD] The file "${meta.name}" was flagged as likely prompt injection ` +
+        `(risk ${verdict.riskScore.toFixed(2)}: ${verdict.reasons.slice(0, 6).join(', ')}). ` +
+        `Its content was NOT loaded. If this file is trusted, the operator can review it directly in Drive.`,
+      injectionFlagged: true,
+      held: true,
+    };
+  }
   return {
     name: meta.name,
     mimeType: meta.mimeType,
     delimited: `${QUARANTINE_HEADER}\n"""\n${text}\n"""`,
-    injectionFlagged: scan.detected,
+    injectionFlagged: verdict.deterministicScore > 0,
   };
 }
 

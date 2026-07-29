@@ -196,12 +196,26 @@ describe('GET /v1/admin/dashboard', () => {
   // growth fails CI immediately, while the pre-existing regression stays on
   // the books instead of blocking unrelated work.
   // Ruling: docs/CAS_WIRING_QA.md Q-1/A-1 (2026-07-19).
-  it('DASH-10: response body does not grow past the 2026-07-19 ratchet ceiling (debt: 30KB target)', async () => {
+  it('DASH-10: response body does not grow past the 2026-07-28 ratchet ceiling (debt: 30KB target)', async () => {
     const srv = await startServer(minimalDeps(), makeTokenBuf(VALID_TOKEN));
     servers.push(srv);
     const { body } = await rawGet(`${srv.baseUrl}/v1/admin/dashboard`, { token: VALID_TOKEN });
-    const RATCHET_CEILING_BYTES = 54_272; // measured 53,128B on 2026-07-19 + ~2%
+    // EXPLICIT (not silent) raise 2026-07-28: +3,588B is the deliberate
+    // Bench & Graph Runs panel (dashboard-bench.ts — AL7.1 bench render +
+    // AL4.5 per-run spend telemetry, ledger items). Prior ceiling 54,272
+    // (measured 53,128B on 2026-07-19). The 30KB target stays on the books
+    // as documented debt; any growth beyond this feature still fails CI.
+    const RATCHET_CEILING_BYTES = 57_856; // measured 56,716B on 2026-07-28 + ~2%
     expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(RATCHET_CEILING_BYTES);
+  });
+
+  it('DASH-16: response contains the Bench & Graph Runs panel + script', async () => {
+    const srv = await startServer(minimalDeps(), makeTokenBuf(VALID_TOKEN));
+    servers.push(srv);
+    const { body } = await rawGet(`${srv.baseUrl}/v1/admin/dashboard`, { token: VALID_TOKEN });
+    expect(body).toContain('Bench &amp; Graph Runs');
+    expect(body).toContain('id="graph-runs"');
+    expect(body).toContain('loadBenchPanel');
   });
 
   // DASH-11: CSP header present

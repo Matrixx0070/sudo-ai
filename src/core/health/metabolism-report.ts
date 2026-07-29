@@ -34,6 +34,7 @@ export const LOOP_REGISTRY: ReadonlyArray<LoopInfo> = [
   { name: 'kairos', module: 'consciousness/kairos', cadence: '5m system watch', llm: false, gate: 'SUDO_KAIROS!=0; autonomous unless SUDO_KAIROS_AUTONOMOUS=0' },
   { name: 'watchdog', module: 'health/watchdog', cadence: '60s', llm: false, gate: 'always-on' },
   { name: 'retention-sweep', module: 'health/retention-sweep', cadence: 'boot+daily', llm: false, gate: 'SUDO_RETENTION_SWEEP!=0' },
+  { name: 'uploads-sweep', module: 'health/uploads-sweep', cadence: 'boot+daily', llm: false, gate: 'SUDO_UPLOADS_TTL_DAYS>0 (default 30)' },
   { name: 'self-test', module: 'health/self-test', cadence: 'nightly 03:30', llm: false, gate: 'SUDO_SELFTEST_DISABLE!=1' },
   { name: 'autonomy-wake-sleep', module: 'autonomy/wake-sleep-cycle', cadence: '5m tick', llm: true, gate: 'SUDO_AUTONOMY_V1=1' },
   { name: 'world-state-monitor', module: 'autonomy/world-state-monitor', cadence: '120s', llm: false, gate: 'SUDO_WORLD_STATE_MONITOR!=0 (goals need =1)' },

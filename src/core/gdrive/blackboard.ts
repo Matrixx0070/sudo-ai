@@ -15,6 +15,8 @@ import { dataPath } from '../shared/paths.js';
 import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
+import { screenOpsUpload } from './ops-screen.js';
+import { isGdrivePaused } from './canary.js';
 
 const log = createLogger('gdrive:blackboard');
 
@@ -67,7 +69,16 @@ export async function writeMyStatus(
     claims: params.claims ?? [],
     discoveries: (params.discoveries ?? []).slice(-20),
   };
-  const media = { mimeType: 'application/json', body: JSON.stringify(me, null, 2) };
+  // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): no Drive I/O while paused.
+  if (isGdrivePaused()) {
+    log.warn('gdrive PAUSED — blackboard status write skipped');
+    return me;
+  }
+  // P1 egress screen (audit item 3): status/discoveries are free text.
+  const media = {
+    mimeType: 'application/json',
+    body: screenOpsUpload(JSON.stringify(me, null, 2), 'blackboard:status').text,
+  };
 
   let fileId: string | null = null;
   try {
@@ -100,6 +111,8 @@ export async function writeMyStatus(
 export async function readPeers(client: DriveClient, folders: FolderIdMap): Promise<BlackboardStatus[]> {
   const folderId = folders['tasks/blackboard'];
   if (!folderId) return [];
+  // Audit item 7: no Drive I/O while paused.
+  if (isGdrivePaused()) return [];
   const mine = getInstanceId();
   const peers: BlackboardStatus[] = [];
   for (const f of await client.listChildren(folderId)) {

@@ -18,6 +18,7 @@ import { dataPath } from '../shared/paths.js';
 import { contentWords } from './error-atlas.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:case-law');
 
@@ -51,7 +52,8 @@ export async function proposePrecedent(
     id: input.id, situation: input.situation, ruling: input.ruling, rationale: input.rationale,
     status: 'proposed', createdAt: (input.now ?? (() => new Date()))().toISOString(), proposedBy: getInstanceId(),
   };
-  const body = JSON.stringify(rec, null, 2);
+  // P1 egress screen (audit item 3): situation/ruling/rationale are free text.
+  const body = screenOpsUpload(JSON.stringify(rec, null, 2), 'case-law:proposal').text;
   const name = `${input.id}.json`;
   const existing = (await client.listChildren(folderId)).find((f) => f.name === name);
   const id = existing

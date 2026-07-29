@@ -59,7 +59,7 @@ vi.mock('child_process', async (importOriginal) => {
 // Now import the module under test (after mocking)
 import { loadWorkflow, runWorkflow } from '../../src/core/workflows/lobster.js';
 import type { Workflow, WorkflowRunState, ToolStepExecutor, WorkflowJournal } from '../../src/core/workflows/lobster.js';
-import { validateStep, execShell, renderTemplate } from '../../src/core/workflows/executor.js';
+import { validateStep, validateWorkflow, execShell, renderTemplate } from '../../src/core/workflows/executor.js';
 import { spawn } from 'child_process';
 
 const spawnMock = vi.mocked(spawn);
@@ -384,6 +384,210 @@ steps:
 
       expect(state.resumeToken).toBeDefined();
       expect(state.pendingStepIndex).toBe(1);
+    });
+  });
+
+  describe('crash resume (AL2.4)', () => {
+    // A crash-time journal has completed steps but NO pendingStepIndex (that
+    // is only set at approval pauses). Resume must skip the settled prefix
+    // instead of re-running from step 0 and duplicating results.
+    const threeSteps: Workflow = {
+      name: 'crash-test',
+      steps: [
+        { id: 'one', command: 'echo one' },
+        { id: 'two', command: 'echo two' },
+        { id: 'three', command: 'echo three' },
+      ],
+    };
+
+    it('resumes after the settled prefix without re-running or duplicating completed steps', async () => {
+      const crashState: WorkflowRunState = {
+        workflowName: 'crash-test',
+        startedAt: new Date().toISOString(),
+        completedSteps: [
+          { id: 'one', status: 'success', stdout: 'one\n', exitCode: 0, durationMs: 5 },
+        ],
+        // no pendingStepIndex — the run died mid-flight, not at a gate
+      };
+
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('two\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('three\n', '', 0) as ReturnType<typeof spawn>);
+
+      const finalState = await runWorkflow(threeSteps, { resumeState: crashState });
+
+      // 'one' must not re-spawn; 'two' and 'three' run; exactly one result per step.
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(finalState.completedSteps.map((s) => s.id)).toEqual(['one', 'two', 'three']);
+      expect(finalState.completedSteps.map((s) => s.status)).toEqual([
+        'success',
+        'success',
+        'success',
+      ]);
+    });
+
+    it('re-runs a step recorded as failure (failure is not settled) and drops the stale entry', async () => {
+      const crashState: WorkflowRunState = {
+        workflowName: 'crash-test',
+        startedAt: new Date().toISOString(),
+        completedSteps: [
+          { id: 'one', status: 'success', stdout: 'one\n', exitCode: 0, durationMs: 5 },
+          { id: 'two', status: 'failure', stderr: 'boom', exitCode: 1, durationMs: 5 },
+        ],
+      };
+
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('two\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('three\n', '', 0) as ReturnType<typeof spawn>);
+
+      const finalState = await runWorkflow(threeSteps, { resumeState: crashState });
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(finalState.completedSteps.map((s) => s.id)).toEqual(['one', 'two', 'three']);
+      expect(finalState.completedSteps.filter((s) => s.id === 'two')).toHaveLength(1);
+      expect(finalState.completedSteps[1]?.status).toBe('success');
+    });
+
+    it('drops out-of-order settled entries beyond the resume point (mid-fan-out crash)', async () => {
+      // 'three' settled but 'two' did not (parallel block crash): resume at
+      // 'two', re-running 'three' too so exactly one result per step remains.
+      const crashState: WorkflowRunState = {
+        workflowName: 'crash-test',
+        startedAt: new Date().toISOString(),
+        completedSteps: [
+          { id: 'one', status: 'success', stdout: 'one\n', exitCode: 0, durationMs: 5 },
+          { id: 'three', status: 'success', stdout: 'stale\n', exitCode: 0, durationMs: 5 },
+        ],
+      };
+
+      spawnMock
+        .mockImplementationOnce(() => makeSpawnMock('two\n', '', 0) as ReturnType<typeof spawn>)
+        .mockImplementationOnce(() => makeSpawnMock('three\n', '', 0) as ReturnType<typeof spawn>);
+
+      const finalState = await runWorkflow(threeSteps, { resumeState: crashState });
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(finalState.completedSteps.map((s) => s.id)).toEqual(['one', 'two', 'three']);
+      expect(finalState.completedSteps.filter((s) => s.id === 'three')).toHaveLength(1);
+      expect(finalState.completedSteps[2]?.stdout).toBe('three\n');
+    });
+
+    it('a fully-settled crash journal completes without spawning anything', async () => {
+      const crashState: WorkflowRunState = {
+        workflowName: 'crash-test',
+        startedAt: new Date().toISOString(),
+        completedSteps: [
+          { id: 'one', status: 'success', stdout: 'one\n', exitCode: 0, durationMs: 5 },
+          { id: 'two', status: 'success', stdout: 'two\n', exitCode: 0, durationMs: 5 },
+          { id: 'three', status: 'skipped', durationMs: 0 },
+        ],
+      };
+
+      const finalState = await runWorkflow(threeSteps, { resumeState: crashState });
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(finalState.completedSteps).toHaveLength(3);
+    });
+  });
+
+  describe('step contract (AL2.3)', () => {
+    describe('fail-loud condition validation', () => {
+      const base = (condition: string): Workflow => ({
+        name: 'cond-test',
+        steps: [
+          { id: 'first', command: 'echo first' },
+          { id: 'second', command: 'echo second', condition },
+        ],
+      });
+
+      it('accepts a valid condition referencing a prior step', () => {
+        expect(() => validateWorkflow(base('steps.first.exitCode === 0'))).not.toThrow();
+      });
+
+      it('rejects a condition referencing an UNKNOWN step id at validate time', () => {
+        expect(() => validateWorkflow(base('steps.frist.exitCode === 0'))).toThrow(/unknown step/i);
+      });
+
+      it('rejects a condition referencing a LATER step (forward reference)', () => {
+        const wf: Workflow = {
+          name: 'cond-fwd',
+          steps: [
+            { id: 'a', command: 'echo a', condition: 'steps.b.exitCode === 0' },
+            { id: 'b', command: 'echo b' },
+          ],
+        };
+        expect(() => validateWorkflow(wf)).toThrow(/unknown step|prior/i);
+      });
+
+      it('rejects a malformed operator at validate time (previously warn+silent-skip)', () => {
+        expect(() => validateWorkflow(base('steps.first.exitCode == 0'))).toThrow(/operator/i);
+      });
+
+      it('rejects a truncated expression (missing rhs)', () => {
+        expect(() => validateWorkflow(base('steps.first.exitCode ==='))).toThrow();
+      });
+
+      it('still allows bare-word and quoted literals (back-compat)', () => {
+        expect(() => validateWorkflow(base('steps.first.status === success'))).not.toThrow();
+        expect(() => validateWorkflow(base("steps.first.status === 'success'"))).not.toThrow();
+      });
+    });
+
+    describe('per-step retry', () => {
+      it('re-runs a failing step up to max_attempts and records only the final result', async () => {
+        spawnMock
+          .mockImplementationOnce(() => makeSpawnMock('', 'boom', 1) as ReturnType<typeof spawn>)
+          .mockImplementationOnce(() => makeSpawnMock('ok\n', '', 0) as ReturnType<typeof spawn>);
+
+        const wf: Workflow = {
+          name: 'retry-test',
+          steps: [{ id: 'flaky', command: 'echo hi', retry: { max_attempts: 3 } }],
+        };
+
+        const state = await runWorkflow(wf);
+        expect(spawnMock).toHaveBeenCalledTimes(2);
+        expect(state.completedSteps).toHaveLength(1);
+        expect(state.completedSteps[0]?.status).toBe('success');
+        expect(state.completedSteps[0]?.stdout).toBe('ok\n');
+      });
+
+      it('halts loudly after exhausting max_attempts', async () => {
+        spawnMock
+          .mockImplementationOnce(() => makeSpawnMock('', 'boom1', 1) as ReturnType<typeof spawn>)
+          .mockImplementationOnce(() => makeSpawnMock('', 'boom2', 1) as ReturnType<typeof spawn>);
+
+        const wf: Workflow = {
+          name: 'retry-exhaust',
+          steps: [
+            { id: 'flaky', command: 'echo hi', retry: { max_attempts: 2 } },
+            { id: 'never', command: 'echo no' },
+          ],
+        };
+
+        const state = await runWorkflow(wf);
+        expect(spawnMock).toHaveBeenCalledTimes(2);
+        expect(state.completedSteps).toHaveLength(1);
+        expect(state.completedSteps[0]?.status).toBe('failure');
+        expect(state.completedSteps[0]?.stderr).toBe('boom2'); // last attempt's error
+      });
+
+      it('validateStep rejects bad retry shapes and retry on approval gates', () => {
+        expect(() =>
+          validateStep({ id: 's', command: 'echo x', retry: { max_attempts: 0 } }),
+        ).toThrow(/max_attempts/);
+        expect(() =>
+          validateStep({ id: 's', command: 'echo x', retry: { max_attempts: 2.5 } }),
+        ).toThrow(/max_attempts/);
+        expect(() =>
+          validateStep({ id: 's', command: 'echo x', retry: { max_attempts: 99 } }),
+        ).toThrow(/max_attempts/);
+        expect(() =>
+          validateStep({ id: 's', command: 'echo x', retry: { max_attempts: 2, backoff_ms: -1 } }),
+        ).toThrow(/backoff_ms/);
+        expect(() =>
+          validateStep({ id: 's', command: 'echo x', approval: true, retry: { max_attempts: 2 } }),
+        ).toThrow(/approval/);
+      });
     });
   });
 

@@ -19,6 +19,7 @@ import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
 import type { FolderIdMap } from './types.js';
 import { inspectContent, type InspectOptions } from './quarantine.js';
+import { checkCanaryPayload, loadCanaryConfig, tripCanary, isGdrivePaused } from './canary.js';
 import { loadBeliefs, saveBeliefs, flagSourceChanged } from './beliefs.js';
 import { emitGdriveAudit } from './audit.js';
 import type { AuditTrail } from '../security/audit-trail.js';
@@ -111,6 +112,8 @@ export interface MirrorSweepResult {
   changed: string[];
   flaggedBeliefs: string[];
   held: string[];
+  /** True when a canary trip aborted the sweep (audit item 7). */
+  aborted?: boolean;
 }
 
 /** One mirror sweep, budget-bounded. */
@@ -126,6 +129,12 @@ export async function runMirrorSweep(
   } = {},
 ): Promise<MirrorSweepResult> {
   const result: MirrorSweepResult = { fetched: [], changed: [], flaggedBeliefs: [], held: [] };
+  // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): a tripped canary pauses
+  // ALL Drive I/O, not just ingestion — mirror halts too.
+  if (isGdrivePaused()) {
+    log.warn('gdrive PAUSED — mirror sweep skipped');
+    return result;
+  }
   const config = opts.config ?? loadMirrorConfig();
   if (!config.refs.length) return result;
   const mirrorFolder = folders['knowledge/mirror'];
@@ -150,6 +159,17 @@ export async function runMirrorSweep(
       continue;
     }
     result.fetched.push(ref.name);
+
+    // Audit item 7: mirror content is Drive-bound external text — canary
+    // check like every other ingress lane. A hit trips F19 and aborts.
+    const canaryHit = checkCanaryPayload(text, loadCanaryConfig());
+    if (canaryHit) {
+      tripCanary(audit, canaryHit, `mirror:${ref.name}`);
+      result.aborted = true;
+      saveState(state);
+      return result;
+    }
+
     const contentSha = sha(text);
     if (contentSha === refState.contentSha) continue; // unchanged
 

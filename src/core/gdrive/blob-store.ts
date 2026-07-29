@@ -31,7 +31,7 @@ import {
   type EntryCategory,
   type ManifestEntry,
 } from './manifest.js';
-import { encryptZone1, decryptZone1, type Zone } from './zones.js';
+import { encryptZone1, decryptZone1, classifyZone, type Zone } from './zones.js';
 import type { BrainKeys } from './keys.js';
 
 const log = createLogger('gdrive:blob-store');
@@ -123,13 +123,26 @@ export function prepareBlobs(
   const prepared: PreparedBlob[] = [];
   let filteredZone0 = 0;
   for (const input of inputs) {
-    if (input.zone === 0) {
+    // Audit item 6 (DRIVE_SECURITY_AUDIT_2026-07-28): the caller's zone label
+    // was assigned at snapshot time and could be stale/wrong. Re-classify the
+    // ACTUAL bytes at the egress point and take the MORE RESTRICTIVE of the
+    // two (lower zone = more restrictive) — a mislabeled zone-2 blob whose
+    // content matches ZONE1_PATTERNS gets encrypted anyway.
+    const fresh = classifyZone(input.content.toString('utf-8'));
+    const zone = Math.min(input.zone, fresh) as Zone;
+    if (zone !== input.zone) {
+      log.warn(
+        { logicalPath: input.logicalPath, labeled: input.zone, fresh },
+        'zone label overridden by fresh classification at egress (more restrictive wins)',
+      );
+    }
+    if (zone === 0) {
       filteredZone0++;
       continue;
     }
     let wire: Buffer;
     let suffix = '';
-    if (input.zone === 1) {
+    if (zone === 1) {
       if (!keys.encKey) {
         throw new Error(
           `gdrive blob-store: zone-1 item "${input.logicalPath}" but BRAIN_ENC_KEY_PATH not configured`,
@@ -147,7 +160,7 @@ export function prepareBlobs(
         logicalPath: input.logicalPath,
         blob: `memory/blobs/${hash}${suffix}`,
         sha256: hash,
-        zone: input.zone,
+        zone,
         bytes: wire.length,
         category: input.category,
       },

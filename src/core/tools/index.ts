@@ -34,8 +34,6 @@ export type { ToolMetadata, ToolProfile } from './base-tool.js';
 export { ToolDiscovery } from './tool-discovery.js';
 export { SchemaPatcher } from './schema-patcher.js';
 export type { PatchContext, PatchResult } from './schema-patcher.js';
-export { ToolParallelism } from './tool-parallelism.js';
-export type { ToolCallGroup, ParallelResult } from './tool-parallelism.js';
 
 // Community-driven: Task Completion Verifier (fixes phantom completion)
 export { CompletionVerifier } from './completion-verifier.js';

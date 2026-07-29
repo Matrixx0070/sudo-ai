@@ -24,6 +24,15 @@ export interface WorkflowStep {
   /** Execution timeout in milliseconds — process is killed on expiry. */
   timeout?: number;
   /**
+   * Per-step retry policy (AL2.3). A failing attempt (non-zero exit / tool
+   * failure) re-runs up to `max_attempts` total, with linear backoff of
+   * `backoff_ms * attempt` between attempts. Only the FINAL attempt's result
+   * is recorded. Forbidden on approval gates (a gate has no retry semantics).
+   * Retrying a step with external side effects re-fires them — authors opt in
+   * per step, exactly so that is a deliberate choice.
+   */
+  retry?: { max_attempts: number; backoff_ms?: number };
+  /**
    * Fan-out marker (slice 2). Consecutive steps that share the same
    * `parallel_group` label run concurrently — bounded by a per-engine semaphore
    * (default 4, env `SUDO_WORKFLOWS_MAX_PARALLEL`). The group's runtime ends

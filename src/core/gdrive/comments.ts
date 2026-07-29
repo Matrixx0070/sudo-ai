@@ -19,8 +19,10 @@ import { dirname } from 'node:path';
 import { dataPath } from '../shared/paths.js';
 import { createLogger } from '../shared/logger.js';
 import type { DriveClient } from './client.js';
+import type { AuditTrail } from '../security/audit-trail.js';
 import type { StructuredStoreLike } from './brain-serializer.js';
-import { scoreContentDeterministic } from './quarantine.js';
+import { inspectContent, scoreContentDeterministic, type InspectOptions } from './quarantine.js';
+import { checkCanaryPayload, loadCanaryConfig, tripCanary, isGdrivePaused } from './canary.js';
 
 const log = createLogger('gdrive:comments');
 
@@ -74,20 +76,35 @@ export interface CommentsDeps {
   structured: StructuredStoreLike;
   principalEmails: string[];
   serviceAccountEmail: string;
+  /** F18 inspector options (runtime injects the LLM reader; {} = deterministic-only, never fails open). */
+  inspect?: InspectOptions;
+  /** Tamper-evident audit trail for canary trips (runtime passes its trail). */
+  audit?: AuditTrail | null;
 }
 
 export interface CommentsPollResult {
   corrections: number;
   ignored: number;
+  /** Comments HELD by quarantine — never stored, surfaced via logs/audit for human review. */
+  held: number;
+  /** True when a canary trip aborted the sweep. */
+  aborted?: boolean;
 }
 
 const MAX_COMMENT_CHARS = 4_000;
 
 export async function pollComments(deps: CommentsDeps): Promise<CommentsPollResult> {
+  // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): a tripped canary halts
+  // the comments channel too — no Drive I/O while paused.
+  if (isGdrivePaused()) {
+    log.warn('gdrive PAUSED — comments poll skipped');
+    return { corrections: 0, ignored: 0, held: 0 };
+  }
   const watched = loadWatchedDocs();
   const principals = new Set(deps.principalEmails.map((e) => e.toLowerCase()));
   const sa = deps.serviceAccountEmail.toLowerCase();
-  const result: CommentsPollResult = { corrections: 0, ignored: 0 };
+  const result: CommentsPollResult = { corrections: 0, ignored: 0, held: 0 };
+  const canaryConfig = loadCanaryConfig();
   const seen = new Set(watched.seen);
   let dirty = false;
 
@@ -107,11 +124,16 @@ export async function pollComments(deps: CommentsDeps): Promise<CommentsPollResu
       if (isSelf) continue;
 
       // F16 logic: only the principal's comments become corrections.
-      // NOTE: Drive often omits author email; `me` distinguishes the SA, and
-      // an empty email on a doc only the principal can comment on is accepted
-      // when exactly one principal is configured AND the doc is ours.
+      // P0 repair (DRIVE_SECURITY_AUDIT_2026-07-28): an EMPTY author email is
+      // no longer auto-accepted as the principal — that let any commenter
+      // whose email Drive omits write directive-weight memories. Drive does
+      // often omit emails, so the old behavior survives behind an explicit
+      // operator opt-in (fail-closed by default, capability preserved):
+      //   SUDO_GDRIVE_COMMENTS_TRUST_ANONYMOUS=1
+      const trustAnonymous = process.env['SUDO_GDRIVE_COMMENTS_TRUST_ANONYMOUS'] === '1';
       const isPrincipal =
-        principals.has(authorEmail) || (authorEmail === '' && principals.size >= 1 && !isSelf);
+        principals.has(authorEmail) ||
+        (authorEmail === '' && trustAnonymous && principals.size >= 1 && !isSelf);
       if (!isPrincipal) {
         result.ignored++;
         seen.add(`${doc.fileId}:${id}`);
@@ -129,8 +151,33 @@ export async function pollComments(deps: CommentsDeps): Promise<CommentsPollResu
       const marker = markerMatch ? markerMatch[1]!.toUpperCase() : undefined;
       const body = marker ? raw.slice(markerMatch![0].length) : raw;
 
-      // Guard-delimit: corrections are data. A comment that itself scores as
-      // an injection is stored with the risk noted, quoted inertly.
+      // P0 repair: canary check — a comment carrying a planted canary marker
+      // means someone is replaying our seeded content; trip + abort the sweep
+      // (same posture as the inbox lane).
+      const canaryHit = checkCanaryPayload(body, canaryConfig);
+      if (canaryHit) {
+        tripCanary(deps.audit ?? null, canaryHit, `drive-comment:${doc.fileId}:${id}`);
+        result.aborted = true;
+        return result;
+      }
+
+      // P0 repair: full F18 inspection (deterministic + LLM reader when
+      // wired), with a REAL hold path — held comments are NEVER stored, not
+      // even guard-delimited. Previously flagged content was stored anyway.
+      const verdict = await inspectContent(body, deps.inspect ?? {});
+      if (verdict.verdict === 'hold') {
+        log.warn(
+          { fileId: doc.fileId, commentId: id, riskScore: verdict.riskScore, reasons: verdict.reasons },
+          'comment HELD by quarantine — not stored; human review required',
+        );
+        result.held++;
+        seen.add(`${doc.fileId}:${id}`);
+        dirty = true;
+        continue;
+      }
+
+      // Guard-delimit: corrections are data. Residual sub-threshold risk is
+      // still noted so the memory reads as quoted data.
       const risk = scoreContentDeterministic(body);
       const directive = /\b(never|always|don't|do not|stop|prefer|use|avoid)\b/i.test(body);
       const correctionId = `gdrive-comment-${doc.fileId}-${id}`;

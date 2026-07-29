@@ -20,6 +20,7 @@ import {
   execShell,
   renderTemplate,
   assertRenderedCommandSafe,
+  withStepRetry,
 } from './executor.js';
 import type { AccessorMap } from './executor.js';
 import { createLogger } from '../shared/logger.js';
@@ -61,6 +62,29 @@ function resolveStdin(
  * doesn't kill an in-progress workflow run; the in-memory state is the source
  * of truth, the journal is for crash recovery only.
  */
+/**
+ * Read a run journal back from disk. Returns null — never throws — on an
+ * absent, torn, or wrong-version file, so callers degrade to a fresh run.
+ * Callers must still verify runId/sourceSha256 match before resuming.
+ */
+export async function readJournal(journalPath: string): Promise<WorkflowJournal | null> {
+  let raw: string;
+  try {
+    raw = await readFile(journalPath, 'utf8');
+  } catch {
+    return null; // ENOENT etc. — no journal
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<WorkflowJournal>;
+    if (!parsed || parsed.version !== 1) return null;
+    if (!parsed.runId || !parsed.sourceSha256 || !parsed.state) return null;
+    if (!Array.isArray(parsed.state.completedSteps)) return null;
+    return parsed as WorkflowJournal;
+  } catch {
+    return null; // malformed JSON — treat as no journal
+  }
+}
+
 async function writeJournal(
   journalPath: string,
   payload: WorkflowJournal,
@@ -115,6 +139,16 @@ import type {
  * @returns Parsed and validated Workflow object.
  * @throws On file read errors, YAML parse failures, or validation violations.
  */
+/** Coerce a raw YAML `retry` block to the typed shape; validateStep rejects bad values. */
+function parseRetry(raw: unknown): WorkflowStep['retry'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  return {
+    max_attempts: Number(o['max_attempts']),
+    ...(o['backoff_ms'] !== undefined ? { backoff_ms: Number(o['backoff_ms']) } : {}),
+  };
+}
+
 export async function loadWorkflow(
   filePath: string,
   options?: { basePath?: string },
@@ -175,6 +209,7 @@ export async function loadWorkflow(
         approval: rs['approval'] === true || rs['approval'] === 'true',
         condition: rs['condition'] !== undefined ? String(rs['condition']) : undefined,
         timeout: rs['timeout'] !== undefined ? Number(rs['timeout']) : undefined,
+        retry: parseRetry(rs['retry']),
         parallel_group:
           rs['parallel_group'] !== undefined ? String(rs['parallel_group']) : undefined,
         phase: rs['phase'] !== undefined ? String(rs['phase']) : undefined,
@@ -248,7 +283,24 @@ export async function runWorkflow(
     });
   };
 
-  const startIndex = resumeState?.pendingStepIndex ?? 0;
+  // Approval pauses record pendingStepIndex; a crash-time journal does not.
+  // For crash resume, derive the start index as the longest prefix of steps
+  // already settled (success/skipped — a recorded failure re-runs), and drop
+  // stale entries at/beyond that point (failed attempts, mid-fan-out
+  // stragglers) so re-execution appends exactly one result per step.
+  let startIndex = resumeState?.pendingStepIndex ?? 0;
+  if (resumeState && resumeState.pendingStepIndex === undefined) {
+    const settledIds = new Set(
+      runState.completedSteps
+        .filter((s) => s.status === 'success' || s.status === 'skipped')
+        .map((s) => s.id),
+    );
+    while (startIndex < workflow.steps.length && settledIds.has(workflow.steps[startIndex]!.id)) {
+      startIndex++;
+    }
+    const rerunIds = new Set(workflow.steps.slice(startIndex).map((s) => s.id));
+    runState.completedSteps = runState.completedSteps.filter((s) => !rerunIds.has(s.id));
+  }
 
   /** Build the accessor map used by the condition evaluator. */
   function buildStepsMap(): AccessorMap {
@@ -400,7 +452,7 @@ export async function runWorkflow(
       while (cursor < dispatchable.length) {
         const idx = cursor++;
         const member = dispatchable[idx]!;
-        const r = await executeStep(member);
+        const r = await withStepRetry(member, executeStep);
         results.set(member.id, r);
         log.info(
           {
@@ -516,7 +568,7 @@ export async function runWorkflow(
       log.info({ stepId: first.id }, 'Approval granted — continuing');
     }
 
-    const result = await executeStep(first);
+    const result = await withStepRetry(first, executeStep);
     log.info(
       { stepId: result.id, status: result.status, exitCode: result.exitCode, durationMs: result.durationMs },
       'Step completed',

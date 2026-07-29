@@ -22,7 +22,8 @@ import type { ChunkStoreLike, StructuredStoreLike } from './brain-serializer.js'
 import { inspectContent, type InspectorBrainCall } from './quarantine.js';
 import { chunkText } from './inbox.js';
 import { loadBeliefs, saveBeliefs, upsertBelief } from './beliefs.js';
-import { isGdrivePaused } from './canary.js';
+import { isGdrivePaused, checkCanaryPayload, loadCanaryConfig, tripCanary } from './canary.js';
+import { screenOpsUpload } from './ops-screen.js';
 
 const log = createLogger('gdrive:curiosity');
 
@@ -118,12 +119,22 @@ export async function drainCuriosity(
     buf.drainedToday++;
     buf.questions.shift();
 
+    // Audit item 7 (DRIVE_SECURITY_AUDIT_2026-07-28): research output is
+    // external model text — canary check like every other ingress lane.
+    const canaryHit = checkCanaryPayload(output, loadCanaryConfig());
+    if (canaryHit) {
+      tripCanary(null, canaryHit, `curiosity:${item.id}`);
+      save(buf);
+      return result; // drain aborted; pause flag now halts future runs
+    }
+
     // SAME quarantine as any inbox file (F18) — self-research is untrusted.
     const verdict = await inspectContent(output, deps.inspectorBrain ? { brainCall: deps.inspectorBrain } : {});
     const name = `curiosity-${item.id}.txt`;
+    // P1 egress screen (audit item 3): research output is external text.
     await client.filesCreate(
       { name, parents: [curiosityFolder] },
-      { mimeType: 'text/plain', body: `Q: ${item.question}\n\n${output}` },
+      { mimeType: 'text/plain', body: screenOpsUpload(`Q: ${item.question}\n\n${output}`, 'curiosity:drain').text },
     );
     if (verdict.verdict === 'hold') {
       result.held.push(item.id);

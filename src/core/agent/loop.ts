@@ -19,7 +19,8 @@ import * as proactiveNotifier from '../awareness/proactive-notifier.js';
 import { PipelineError, LLMError } from '../shared/errors.js';
 // gw-refactor Phase 5: outcome signals onto the session's last gateway trace.
 // Both helpers are fail-open (never throw) and gated by SUDO_GATEWAY_LOG=0.
-import { markOutcomeForSession, isLikelyRephrase } from '../../llm/logging.js';
+import { markOutcomeForSession, isLikelyRephrase, runWithLoopStep } from '../../llm/logging.js';
+import { randomUUID } from 'node:crypto';
 import { clearCommittedOutbound, hasCommittedOutbound } from './committed-outbound.js';
 import { drainQueueForSession } from '../agents/session-bus.js';
 import {
@@ -1088,6 +1089,7 @@ export class AgentLoop extends AgentLoopInjections {
 
     const state: AgentState = {
       sessionId,
+      turnId: randomUUID(),
       iteration: 0,
       isProcessing: false,
       isCompacting: false,
@@ -2593,7 +2595,17 @@ export class AgentLoop extends AgentLoopInjections {
         }
         let response: BrainResponse;
         try {
-          response = await this.brain.call(brainReq, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts);
+          // AL1.2: ambient turn/step correlation — the gateway call log stamps
+          // llm_calls rows made inside this scope with {session, turn, step}.
+          // MERGE NOTE: main inlined the request literal here; we pass the
+          // hoisted `brainReq` instead because it carries the `_onTextDelta`
+          // streaming hook attached above (SUDO_BRAIN_STREAM). The literal was
+          // field-identical to brainReq, so this keeps both behaviours —
+          // inlining it again would silently kill token streaming.
+          response = await runWithLoopStep(
+            { sessionId: state.sessionId, turnId: state.turnId ?? '', stepN: state.iteration },
+            () => this.brain.call(brainReq, swarmRescueCallOpts(swarmRescueActive) ?? _codeTreeOpts),
+          );
         } catch (brainErr) {
           // Context overflow: the prompt is too long for the model and every
           // same-family failover profile would reject it identically (brain
@@ -3237,7 +3249,12 @@ export class AgentLoop extends AgentLoopInjections {
             const _preventionLookup = process.env['SUDO_FAILURE_PREVENTION_HINT'] === '1' && this._toolOutcomeLearner
               ? (t: string, e: string): string | null => this._toolOutcomeLearner!.checkPreventionRulesForError(t, e)
               : undefined;
-            await executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass, _preventionLookup);
+            // AL1.2: same ambient turn/step scope as the brain.call above, so
+            // tool_calls rows land on the iteration that issued the batch.
+            await runWithLoopStep(
+              { sessionId: state.sessionId, turnId: state.turnId ?? '', stepN: state.iteration },
+              () => executeToolCalls(activeToolCalls, session, state, emit, this.toolRegistry, this.security ?? undefined, this.brain, this.hooks, this.sandboxManager, this._feedbackMemory, this._verifyGate, this._groundingChecker, this._groundingBlockEnabled, this._criticPass, _preventionLookup),
+            );
             try { this.trustTierTracker?.recordOutcome({ timestamp: Date.now(), kind: 'success' }); } catch {}
             state.consecutiveReplans = 0; // reset on successful (non-REPLAN) tool execution
 
@@ -3599,7 +3616,31 @@ export class AgentLoop extends AgentLoopInjections {
         if (this.auditTrail) {
           try { recordRecovery(this.auditTrail, { mistake: msg, learned: 'pipeline_max_iterations', commitment: 'guard against this failure mode', ttl_days: 30 }); } catch { /* non-fatal */ }
         }
-        throw new PipelineError(msg, 'pipeline_max_iterations', { sessionId: state.sessionId, maxIterations });
+        // Graceful degradation at the hard cap: finish the turn with a fallback
+        // reply instead of surfacing a hard PipelineError to the user — same
+        // shape as the consecutive-tool-iteration cap above (prefer the model's
+        // own last text, else the canned LoopGuard reply). Kill-switch:
+        // SUDO_MAX_ITER_FALLBACK=0 restores the legacy throw.
+        if (process.env['SUDO_MAX_ITER_FALLBACK'] === '0') {
+          throw new PipelineError(msg, 'pipeline_max_iterations', { sessionId: state.sessionId, maxIterations });
+        }
+        log.warn({ sessionId: state.sessionId, maxIterations }, 'Max iterations reached — finishing turn with fallback reply instead of throwing');
+        if (!finalText.trim()) {
+          let lastAssistantText = '';
+          for (let i = session.messages.length - 1; i >= 0; i--) {
+            const m = session.messages[i];
+            // Only consider text produced THIS turn — stop at the turn's user
+            // message so we never resurrect a previous turn's final reply.
+            if (m?.role === 'user') break;
+            if (m?.role === 'assistant' && typeof m.content === 'string' && m.content.trim().length > 0) {
+              lastAssistantText = m.content;
+              break;
+            }
+          }
+          finalText = lastAssistantText || buildLoopFallbackReply(session.messages);
+          session.messages.push({ role: 'assistant', content: finalText });
+          emit({ type: 'message', content: finalText });
+        }
       }
     } finally {
       state.isProcessing = false;

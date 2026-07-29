@@ -13,6 +13,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { getSharedResolver } from './policy-resolver.js';
 
 const log = createLogger('agent:cheap-model-router');
 
@@ -86,6 +87,14 @@ export interface ChooseModelResult {
   reason: string;
   /** `true` when the cheap model was selected. */
   cheapUsed: boolean;
+  /** AL6.4: the intent class behind the decision — logged and evaluable. */
+  intent: 'conversational' | 'agentic' | 'unknown';
+}
+
+/** AL6.4 classification result — the routing heuristic's verdict as data. */
+export interface IntentClassification {
+  intent: 'conversational' | 'agentic' | 'unknown';
+  reason: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,69 +120,76 @@ function recentHistoryHasToolCalls(history: HistoryMessage[], lookback: number):
 // ---------------------------------------------------------------------------
 
 /**
- * Decide which model to use for the upcoming brain call.
- *
- * Returns the cheap model only when ALL conditions are satisfied:
- * - text length <= MAX_CHARS
- * - word count <= MAX_WORDS
- * - no fenced code block
- * - no URL
- * - no complexity keyword
- * - no recent tool calls in history
- * - no attachments
- *
- * Any single failing condition returns the primary model.
+ * AL6.4: classify the turn's intent using the SAME guards that have always
+ * driven the routing decision — extracted as data so the classification is
+ * logged and evaluable (a misroute becomes an AL7 eval case). `chooseModel`
+ * delegates here; behavior and reason strings are unchanged.
  */
-export function chooseModel(input: ChooseModelInput): ChooseModelResult {
-  const { userText, history, primaryModel, cheapModel, hasAttachments = false } = input;
+export function classifyIntent(
+  input: Pick<ChooseModelInput, 'userText' | 'history' | 'hasAttachments'>,
+): IntentClassification {
+  const { userText, history, hasAttachments = false } = input;
 
-  const primary = (reason: string): ChooseModelResult => {
-    log.debug({ reason }, 'cheap-model-router: primary model selected');
-    return { model: primaryModel, reason, cheapUsed: false };
-  };
-
-  // Guard: empty text is treated as complex (defensive).
   if (!userText || userText.trim().length === 0) {
-    return primary('empty user text — defaulting to primary');
+    return { intent: 'unknown', reason: 'empty user text — defaulting to primary' };
   }
-
-  // Guard: character length.
   if (userText.length > MAX_CHARS) {
-    return primary(`text length ${userText.length} > ${MAX_CHARS} chars`);
+    return { intent: 'agentic', reason: `text length ${userText.length} > ${MAX_CHARS} chars` };
   }
-
-  // Guard: word count.
   const words = wordCount(userText);
   if (words > MAX_WORDS) {
-    return primary(`word count ${words} > ${MAX_WORDS}`);
+    return { intent: 'agentic', reason: `word count ${words} > ${MAX_WORDS}` };
   }
-
-  // Guard: fenced code block.
   if (CODE_BLOCK_RE.test(userText)) {
-    return primary('message contains a code block');
+    return { intent: 'agentic', reason: 'message contains a code block' };
   }
-
-  // Guard: URL.
   if (URL_RE.test(userText)) {
-    return primary('message contains a URL');
+    return { intent: 'agentic', reason: 'message contains a URL' };
   }
-
-  // Guard: complexity keyword.
   const kw = userText.match(COMPLEXITY_KEYWORDS);
   if (kw) {
-    return primary(`complexity keyword detected: "${kw[0]}"`);
+    return { intent: 'agentic', reason: `complexity keyword detected: "${kw[0]}"` };
   }
-
-  // Guard: recent tool calls in history (agentic task in progress).
   if (recentHistoryHasToolCalls(history, HISTORY_TOOL_CALL_LOOKBACK)) {
-    return primary('recent tool calls detected in history — agentic task in progress');
+    return { intent: 'agentic', reason: 'recent tool calls detected in history — agentic task in progress' };
   }
-
-  // Guard: attachments present on this turn.
   if (hasAttachments) {
-    return primary('turn has attachments');
+    return { intent: 'agentic', reason: 'turn has attachments' };
+  }
+  return { intent: 'conversational', reason: 'simple conversational turn' };
+}
+
+/**
+ * Decide which model to use for the upcoming brain call.
+ *
+ * AL6.2 knob migration (thin delegation, NO behavior change): every routed
+ * turn now calls through the SHARED PolicyResolver — the decision is logged
+ * and persisted, which is exactly the shadow data the AL6.5 promotion query
+ * needs from live traffic. APPLICATION stays on the legacy rule
+ * (conversational → cheap) until the shadow log earns promotion; a resolver
+ * decision that diverges (e.g. load-shed cheap-routing) is logged as a
+ * divergence, never applied here.
+ */
+export function chooseModel(input: ChooseModelInput): ChooseModelResult {
+  const { primaryModel, cheapModel } = input;
+  const { intent, reason } = classifyIntent(input);
+
+  // AL6.4: classification logged and evaluable (one line per routed turn).
+  log.info({ intent, reason, cheapEligible: intent === 'conversational' }, 'intent classified');
+
+  const decision = getSharedResolver().resolve({ intent });
+  const cheapUsed = intent === 'conversational'; // legacy rule until promotion
+  if ((decision.route === 'cheap') !== cheapUsed) {
+    log.info(
+      { resolverRoute: decision.route, legacyCheap: cheapUsed, reasons: decision.reasons },
+      'policy resolver diverged from legacy routing — legacy applied (policy unpromoted)',
+    );
   }
 
-  log.debug({ words, chars: userText.length, cheapModel }, 'cheap-model-router: cheap model selected');
-  return { model: cheapModel, reason: 'simple conversational turn', cheapUsed: true };
+  if (!cheapUsed) {
+    log.debug({ reason }, 'cheap-model-router: primary model selected');
+    return { model: primaryModel, reason, cheapUsed: false, intent };
+  }
+  log.debug({ chars: input.userText.length, cheapModel }, 'cheap-model-router: cheap model selected');
+  return { model: cheapModel, reason, cheapUsed: true, intent };
 }

@@ -171,6 +171,30 @@ export interface ImprovementRollback {
   appliedAt: string;
 }
 
+/**
+ * Gate one AutoResearch draft through the HeldOutGate (AL7.1). Fail-CLOSED:
+ * this is an autonomous background path applying draft patches, so a broken
+ * gate blocks the change instead of waving it through (matches the llm policy
+ * layer's background=fail-closed posture). Exported for direct unit testing —
+ * driving the full engine needs a populated mind.db.
+ */
+export async function evaluateDraftGate(
+  heldOutGate: Pick<HeldOutGate, 'evaluate'>,
+  proposalId: string,
+  policyAction: PolicyAction,
+  toolName: string,
+): Promise<boolean> {
+  try {
+    const evalResult = await heldOutGate.evaluate(proposalId, policyAction);
+    if (evalResult.passed) return true;
+    log.warn({ tool: toolName, passRate: evalResult.passRate.toFixed(3) }, 'HeldOutGate rejected AutoResearch draft — skipping');
+    return false;
+  } catch (err) {
+    log.warn({ tool: toolName, err: String(err) }, 'HeldOutGate eval failed for AutoResearch — blocking (fail-closed)');
+    return false;
+  }
+}
+
 export async function runSelfImprovement(options: {
   trigger?: string;
   windowDays?: number;
@@ -253,26 +277,20 @@ export async function runSelfImprovement(options: {
               // Phase 2: gate AutoResearch draft patches through HeldOutGate.
               const draftProposalId = `auto-research-${tool.name}-${Date.now()}`;
               const draftShouldApply = options.heldOutGate
-                ? await (async () => {
-                    try {
-                      const policyAction: PolicyAction = { params: { description: `AutoResearch for ${tool.name}` } };
-                      const evalResult = await options.heldOutGate!.evaluate(draftProposalId, policyAction);
-                      if (evalResult.passed) {
-                        rollbacks.push({
-                          proposalId: draftProposalId,
-                          action: { type: 'draft_patch', description: `AutoResearch ran for recurring failure domain: ${tool.name}`, applied: true },
-                          appliedAt: new Date().toISOString(),
-                        });
-                        return true;
-                      }
-                      log.warn({ tool: tool.name, passRate: evalResult.passRate.toFixed(3) }, 'HeldOutGate rejected AutoResearch draft — skipping');
-                      return false;
-                    } catch (err) {
-                      log.warn({ tool: tool.name, err: String(err) }, 'HeldOutGate eval failed for AutoResearch — allowing by default');
-                      return true;
-                    }
-                  })()
+                ? await evaluateDraftGate(
+                    options.heldOutGate,
+                    draftProposalId,
+                    { params: { description: `AutoResearch for ${tool.name}` } },
+                    tool.name,
+                  )
                 : true;
+              if (draftShouldApply && options.heldOutGate) {
+                rollbacks.push({
+                  proposalId: draftProposalId,
+                  action: { type: 'draft_patch', description: `AutoResearch ran for recurring failure domain: ${tool.name}`, applied: true },
+                  appliedAt: new Date().toISOString(),
+                });
+              }
               actions.push({
                 type: 'draft_patch',
                 description: `AutoResearch ran for recurring failure domain: ${tool.name}`,
@@ -341,9 +359,13 @@ export async function runSelfImprovement(options: {
         return false;
       }
     } catch (err) {
+      // AL8.0 R1: fail-CLOSED, matching evaluateDraftGate — a broken gate
+      // blocks the change instead of waving it through. A gate that cannot
+      // evaluate is a gate that holds (invariant 8: no-eval never means
+      // no-gate on an autonomous apply path).
       log.warn({ proposalId, err: String(err) },
-        'HeldOutGate evaluation failed — allowing improvement by default');
-      return true;
+        'HeldOutGate evaluation failed — blocking improvement (fail-closed)');
+      return false;
     }
   }
 

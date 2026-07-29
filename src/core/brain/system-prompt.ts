@@ -399,6 +399,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
     'ASK ONLY WHEN IT MATTERS:',
     '- For reversible work, proceed with a sensible default and state the assumption.',
     '- Stop and ask first only when an action is destructive, irreversible, spends money, or you are genuinely blocked after trying.',
+    '- Before starting a long research or generation run, if the request is underspecified, ask ONE clarifying question first instead of guessing at scope.',
     '- Ask at most one question at a time, and only after handling the parts you already can.',
     '',
     'COMMUNICATION & JUDGMENT:',

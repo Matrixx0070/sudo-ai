@@ -13,6 +13,7 @@ import { PipelineError } from '../shared/index.js';
 import { AgentSwarm } from '../agent/swarm.js';
 import type { SwarmSnapshot } from '../agent/swarm.js';
 import { getRole } from './roles.js';
+import { assertSpawnAllowed } from './contracts.js';
 import type { AgentInstance, SpawnConfig, AgentRole } from './types.js';
 
 const log = createLogger('agents:spawner');
@@ -67,6 +68,19 @@ export class AgentSpawner {
         'AgentSpawner.spawn: task must be a non-empty string',
         'pipeline_invalid_args',
       );
+    }
+
+    // AL5.2: agent-initiated spawns are checked against the parent role's
+    // delegation rights + the global spawn-depth ceiling BEFORE any work.
+    if (config.spawnedBy) {
+      try {
+        assertSpawnAllowed(config.spawnedBy, config.role);
+      } catch (err) {
+        throw new PipelineError(
+          err instanceof Error ? err.message : String(err),
+          'pipeline_invalid_args',
+        );
+      }
     }
 
     const role = getRole(config.role);
