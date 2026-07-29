@@ -252,7 +252,21 @@ const DEFAULT_PRICE: PriceRate = { inUsdPerM: 3.0, outUsdPerM: 15.0 };
  */
 // The pricing key may be a `provider/model` id OR a transport route
 // (`claude-oauth:messages`) — match the provider under both separators.
-const SEAT_PROVIDERS = ['claude-oauth/', 'claude-oauth:'] as const;
+//
+// `ollama/` added 2026-07-29. Ollama Cloud is a flat Pro subscription with
+// session + weekly quotas — verified on the live account page: Extra-usage
+// balance $0 with auto-reload OFF, so it CANNOT bill; when quota runs out
+// calls fail (5xx/429) and failover handles them. Previously only the bare
+// `ollama/llama3.2` sat in PRICE_TABLE, so every `:cloud` model
+// (kimi-k2.7-code:cloud, glm-5.2:cloud) missed both the table and this list
+// and fell through to DEFAULT_PRICE — accounted at Claude-Sonnet rates
+// ($3/$15 per M). That booked ~$0.73 per 80k-in/32k-out call and ~$473 of
+// PHANTOM spend in five days, which tripped SUDO_DAILY_LLM_BUDGET_USD daily
+// and then blocked the genuinely-free claude-oauth seat as well — turning a
+// spend cap into a total product outage. Seat classification also subjects
+// ollama to the policy layer's call-count ceiling, which is the brake that
+// actually matches a quota-based plan (dollars never bounded it).
+const SEAT_PROVIDERS = ['claude-oauth/', 'claude-oauth:', 'ollama/', 'ollama:'] as const;
 const SEAT_PRICE: PriceRate = { inUsdPerM: 0.0, outUsdPerM: 0.0 };
 
 /**
