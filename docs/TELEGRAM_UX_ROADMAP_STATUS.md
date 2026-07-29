@@ -7,12 +7,12 @@ real Telegram surface (cite evidence), not just green tests.
 | ID | Title | Status | Evidence / notes |
 |----|-------|--------|------------------|
 | P0 | Foundation (card, streaming, md→HTML, long-reply, Read More, 👀 ack) | **DONE** | Commits a96b467c, 621d6237, 6ae966bc; live-verified via Telegram Web on display :10, 2026-07-29 (weather turn, 26k report → .md, DNS Read More) |
-| TX1 | Stop/Steer on working card | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_STOP_BUTTON` (default OFF). cli Telegram path now beginRun/endRun on the run-registry; ⏹ Stop button on the working card (`tx1:stop:<runKey>`, owner-only) aborts via the steering channel — honored at the loop's next ITERATION BOUNDARY (post-tool/pre-model-call), not instantly; card finalizes to `⏹ Stopped • 40s • 3 steps`. Steering: with `SUDO_MIDRUN_STEER=1` (+ GW-5 queue mode resolving to `steer`) mid-run inbound text is pushed to the steer buffer BEFORE the coalescer. New `src/core/channels/telegram-run-controls.ts`; 34 new tests. NOT live-verified |
-| TX2 | 👎 regenerates (v2 in place) | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_BAD_REGEN` (default OFF). Owner 👎 swaps the keyboard for one-tap reasons (Wrong / Too long / Missed the point / Skip reasons; `tx2:reason:<feedbackId>:<code>`); a reason tap triggers ONE bounded revision turn (RegenGuard, peer-queue-serialized, skipped while a run is active), edits the reply in place with a `↻ v2` tail + fresh feedback keyboard. Outcome linked via follow-up feedback rows (`regen-requested:` / `regen-complete:` keyed by feedbackId in session_id). Seam: `telegram.setRegenerateHandler` wired from cli.ts. NOT live-verified |
-| TX3 | Per-turn detail toggle | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_DETAIL_TOGGLE=1`; working-card-keyboard.ts (shared w/ TX1) + working-card-state.ts registry + `tx3:` callback in telegram.ts; SUDO_TG_TIMELINE_DETAIL stays the initial default; 13 unit tests |
-| TX4 | Inline artifacts | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_ARTIFACTS=1`; real gap = artifacts already render+deliver but caption-less and raw data stays as prose → inline-artifacts.ts plans captions (max 3, ≤5MB each) + md-collapse data fold; MediaAttachment.caption passthrough; 16 unit tests |
-| TX5 | Stream into the fold | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_STREAM_FOLD=1`; `stream-fold.ts` latch decider wired into the cli sink edit callback; status renders never fold; `SUDO_TG_READMORE=0` master-off; 12 unit tests |
-| TX6 | Pinned live status card | **BUILT** (flag-off, awaiting live verify) | `SUDO_TG_STATUS_PIN=1`; `status-pin.ts` controller (owner-DM card, data/status-pin.json persistence, 60s cadence + run/health event bumps, ≥15s min-gap); non-critical HEALTH alerts fold into the card, critical failures still bubble; 14 unit tests |
+| TX1 | Stop/Steer on working card | **DONE** (live-verified) | `SUDO_TG_STOP_BUTTON=1` in prod. Verified 2026-07-29 on Telegram Web + Frank on phone: taps produced `⏹ Stopped • 27s • 1 step`, `• 31s • 5 steps`, `• 1m 21s • 9 steps`; abort honored at the loop iteration boundary; reply suppressed. Steer leg (SUDO_MIDRUN_STEER=1, queue mode `steer`) enabled but NOT separately live-proven |
+| TX2 | 👎 regenerates (v2 in place) | **DONE** (live-verified) | `SUDO_TG_BAD_REGEN=1`. Verified 2026-07-29: 👎 → toast "Noted — what was wrong?" + reason keyboard (Wrong/Too long/Missed the point/Skip) → "Too long" → reply edited IN PLACE, materially shorter, `↻ v2` marker, fresh feedback keyboard. Regen prompt de-`[system]`-ised (tripped our own injection detector) |
+| TX3 | Per-turn detail toggle | **DONE** (live-verified) | `SUDO_TG_DETAIL_TOGGLE=1`. Verified 2026-07-29: toast "🔎 Step detail on", label flipped to ▪ Compact, card switched to the live step list (`✓ browser › fetch · 2s`, `✗ browser › fetch · 1s`, `… +2 earlier steps`) |
+| TX4 | Inline artifacts | **PARTIAL** (captions live-verified) | `SUDO_TG_ARTIFACTS=1`. Verified: PDF artifact delivered with caption "ai coding assistants comparison 2026". Data-fold path not separately exercised live |
+| TX5 | Stream into the fold | **PARTIAL** (fold live-verified) | `SUDO_TG_STREAM_FOLD=1`. Read More blockquotes render + expand correctly on long replies; mid-stream latch (fold engaging DURING the stream) not isolated live |
+| TX6 | Pinned live status card | **DONE** (live-verified) | `SUDO_TG_STATUS_PIN=1`. Pinned card live in owner DM: `🟢 idle · Cron 24 active · Today $66/$100 · no incidents`, self-updating; HEALTH alerts fold with a ×N counter instead of new bubbles |
 | TX7 | Morning digest | OPEN | |
 | TX8 | Provenance footer | OPEN | superseded long-term by TX28 |
 | TX9 | Mission Control (forum topics, living mission card) | OPEN | |
@@ -36,5 +36,19 @@ real Telegram surface (cite evidence), not just green tests.
 | TX27 | Institutional memory report | OPEN | |
 | TX28 | Tap-to-verify provenance | OPEN | pairs with verifiability ladder |
 
-Open operational debt noted at roadmap creation: branch `feat/grok-web-chat-brain`
-unpushed (3 UX commits + grok-lane work); disk 89% (HEALTH alert firing).
+Open operational debt: branch `feat/grok-web-chat-brain` unpushed; disk 89%.
+
+## Platform fixes found while verifying TX1-TX6 (2026-07-29)
+
+- **Dead inline buttons (all of them, for months).** The custom poll loop
+  requested `allowed_updates=["message"]` AND skipped updates without
+  `.message`, so no `callback_query` ever reached the bot — the 👍👎⏭
+  feedback keyboard was decorative and TX1/TX3 inherited the dead path.
+  Fixed: `POLL_ALLOWED_UPDATES` + dispatch guard (`0d428754`), 4 regression tests.
+- **Literal `**bold**` in long replies.** Budgets counted markdown SOURCE while
+  Telegram counts the RENDERED body; a 4090-char source rendered to 4373 chars
+  → 400 → silent plain-text fallback. Fixed: `renderMdWithinLimit` +
+  `MD_SOURCE_CHUNK_LIMIT`/`DEFAULT_CHUNK_LIMIT` 3600 (`08d10990`); the
+  HTML-failure catches now log instead of swallowing.
+- **Feedback keyboard on the wrong bubble.** On chunked replies it rode the
+  first bubble (scrolled out of view); now rides the last (`767fb177`).

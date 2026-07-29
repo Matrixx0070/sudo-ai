@@ -162,7 +162,10 @@ export function buildRegenInstruction(input: { originalText: string; reason: str
   const reason = (input.reason ?? '').trim();
   const withReason = reason && reason !== REGEN_REASON_LABELS.skip ? ` Reason: ${reason}.` : '';
   return [
-    `[system] The owner rejected your previous reply (👎).${withReason}`,
+    // Phrased as a plain owner instruction: a `[system]`-style prefix here trips
+    // our OWN prompt-injection detector (fake_system_tag, severity high, seen
+    // live 2026-07-29) and pollutes security telemetry with false positives.
+    `I'm rejecting your previous reply (👎).${withReason}`,
     'Rejected reply:',
     '"""',
     original || '(original text unavailable)',
