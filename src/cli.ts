@@ -65,6 +65,7 @@ import { getRunRegistry } from './core/agent/run-registry.js';
 import { getRunLanes } from './core/agent/run-lanes.js';
 import { getSteerBuffer } from './core/agent/steer-buffer.js';
 import { getQueueModeStore, decideQueueMode } from './core/channels/queue-modes.js';
+import { makeStopKeyboard, renderStoppedCard, buildRegenInstruction } from './core/channels/telegram-run-controls.js';
 import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
 import { normalizeReplyText } from './core/channels/empty-reply.js';
@@ -2074,11 +2075,39 @@ async function boot(): Promise<void> {
         // (verifier HIGH #2). When SUDO_STREAM_CHANNELS=0 this stays null
         // and the byte-identical non-streaming send path runs.
         let streamSink: import('./core/channels/stream-sink.js').StreamSink | null = null;
+        // TX1 (SUDO_TG_STOP_BUTTON=1, default OFF): register the run in the
+        // run-registry so the working-card ⏹ Stop callback (telegram.ts) and
+        // mid-run steering can find/abort it. Hoisted for the finally below.
+        const tx1StopOn = process.env['SUDO_TG_STOP_BUTTON'] === '1';
+        const turnStartedAt = Date.now();
+        let runKeyRegistered: string | null = null;
+        let steerSessionId: string | null = null;
+        let stopRequested = false;
+        let workingKeyboard: ReturnType<typeof makeStopKeyboard> | null = null;
+        let timelineSteps: () => number = () => 0;
         try {
           const convKey = `${msg.channel}:${msg.peerId}`;
           const runGen = runGenerations.current(convKey);
           const session = await dualSessionManager.getOrCreate(msg.channel, msg.peerId);
           log.info({ sessionId: String(session.id) }, 'Session resolved');
+          steerSessionId = String(session.id);
+
+          if (tx1StopOn) {
+            getRunRegistry().beginRun({
+              key: convKey,
+              sessionId: String(session.id),
+              tier: telegram.isOwnerUser(msg.peerId) ? 'owner' : 'untrusted',
+              // TX1 abort seam: signals the loop's steering channel. The loop
+              // honors abort at the NEXT ITERATION BOUNDARY (post-tool /
+              // pre-model-call — loop.ts steering block), not instantly: an
+              // in-flight model call or tool finishes first, then the turn ends.
+              abort: (reason) => {
+                stopRequested = true;
+                steeringChannel.signal(String(session.id), { action: 'abort', payload: reason });
+              },
+            });
+            runKeyRegistered = convKey;
+          }
 
           // Surface consciousness context for logging/debugging; the loop reads it via onInteractionStart.
           if (consciousness) {
@@ -2112,14 +2141,28 @@ async function boot(): Promise<void> {
               const foldFormat = createStreamFoldLatch(resolveStreamFoldOptions(process.env));
               streamSink = await createBufferedEditSink(
                 (placeholder: string) => telegram.sendForStream(replyTo, placeholder),
+                // TX5 fold decision + TX1 keyboard re-send combined: editMessageText
+                // replaces reply_markup, so while the Stop button rides the working
+                // card every edit must re-send it (workingKeyboard is nulled before
+                // the final reply edit); the format latches to 'md-collapse' once
+                // streamed content passes the Read More threshold.
                 (id: string | number, text: string) =>
-                  telegram.editText(replyTo, id, text, { format: foldFormat(text, (streamSink?.bufferLength ?? 0) === 0) }),
+                  telegram.editText(replyTo, id, text, {
+                    format: foldFormat(text, (streamSink?.bufferLength ?? 0) === 0),
+                    ...(workingKeyboard ? { keyboard: workingKeyboard } : {}),
+                  }),
                 // maxChars clamps BEFORE same-text suppression so the sink
                 // and Telegram's 4096-char editMessageText cap agree on the
                 // wire body — preventing duplicate edits whose only delta
                 // is past Telegram's truncation point (verifier HIGH #3).
                 { intervalMs: 800, maxChars: 4080, placeholder: '…', label: `telegram:${msg.peerId}` },
               );
+              // TX1: put the ⏹ Stop button on the working card right away
+              // (owner-gated at tap time in the telegram.ts callback handler).
+              if (tx1StopOn && streamSink.messageId !== null) {
+                workingKeyboard = makeStopKeyboard(convKey);
+                try { await telegram.editReplyMarkup(replyTo, streamSink.messageId, workingKeyboard); } catch { /* button is cosmetic */ }
+              }
               // Live activity-timeline card (SUDO_TG_TIMELINE=0 opts out): the
               // placeholder shows spinner + phase + elapsed + per-tool steps
               // until the first content chunk arrives, then streamed text wins.
@@ -2141,6 +2184,7 @@ async function boot(): Promise<void> {
                     } catch { /* chip best-effort */ }
                   }
                   const timeline = new ActivityTimeline();
+                  timelineSteps = () => timeline.stepCount; // TX1 stopped-card step count
                   const startMs = Date.now();
                   let tick = 0;
                   const timelineDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
@@ -2178,6 +2222,31 @@ async function boot(): Promise<void> {
             result = await finalAgentLoop.run(String(session.id), msg.text ?? '', onEvent, { race: true });
           } finally {
             stopStatusTicker?.();
+            // TX1: the run is over — final edits (reply text / stopped card)
+            // must not carry the Stop button anymore.
+            workingKeyboard = null;
+          }
+          // TX1: the ⏹ tap aborted the run (the loop stopped at its iteration
+          // boundary and returned abort boilerplate). Finalize the card to a
+          // stopped summary and suppress the reply delivery entirely.
+          if (stopRequested) {
+            const stoppedCard = renderStoppedCard({ elapsedMs: Date.now() - turnStartedAt, steps: timelineSteps() });
+            if (streamSink) {
+              await streamSink.cancel();
+              if (streamSink.messageId !== null) {
+                await telegram.editText(replyTo, streamSink.messageId, stoppedCard)
+                  .catch(() => { /* card is cosmetic — last status edit stays */ });
+              }
+            } else {
+              try { await telegram.send(replyTo, stoppedCard); } catch { /* best effort */ }
+            }
+            try {
+              const nowTs = new Date().toISOString();
+              await dualSessionManager.appendEvent(String(session.id), { ts: nowTs, sessionId: String(session.id), type: 'message', role: 'user', content: msg.text ?? '' });
+              await dualSessionManager.appendEvent(String(session.id), { ts: nowTs, sessionId: String(session.id), type: 'message', role: 'assistant', content: stoppedCard });
+            } catch { /* journal append is non-fatal */ }
+            log.info({ peerId: msg.peerId }, 'TX1: run stopped by owner — working card finalized');
+            return;
           }
           if (runGenerations.isStale(convKey, runGen)) {
             if (streamSink) {
@@ -2362,6 +2431,27 @@ async function boot(): Promise<void> {
               keyboard,
             );
           } catch { try { await telegram.send(replyTo, sanitizeUserFacingError(err)); } catch {} }
+        } finally {
+          // TX1: unregister the run and drop any steer that landed after the
+          // loop's final boundary drain (mirrors gateway-turn-handler MEDIUM-1 —
+          // an orphaned steer must not leak into the NEXT run for this session).
+          if (runKeyRegistered !== null) {
+            getRunRegistry().endRun(runKeyRegistered);
+            // A ⏹ tap that landed AFTER the loop's last boundary check leaves
+            // its abort signal unconsumed — clear it so it can't kill the NEXT
+            // turn on this session (no-op when the loop already consumed it).
+            if (stopRequested && steerSessionId !== null) {
+              steeringChannel.clearSteering(steerSessionId);
+            }
+            if (steerSessionId !== null && process.env['SUDO_MIDRUN_STEER'] === '1') {
+              const buf = getSteerBuffer();
+              const orphaned = buf.size(steerSessionId);
+              if (orphaned > 0) {
+                buf.clear(steerSessionId);
+                log.debug({ peerId: msg.peerId, discarded: orphaned }, 'TX1/GW-5: discarded orphaned steer(s) at run end');
+              }
+            }
+          }
         }
       });
 
@@ -2406,6 +2496,43 @@ async function boot(): Promise<void> {
         }
       }
 
+      // TX1 mid-run steering (SUDO_TG_STOP_BUTTON=1 AND SUDO_MIDRUN_STEER=1):
+      // if a run is active for this peer, decide steer/followup/interrupt via
+      // the GW-5 queue-mode machinery instead of blindly queueing a new turn.
+      // Deliberately BEFORE the coalescer: a coalesced batch is delivered after
+      // the debounce window as a brand-new turn, by which point the steer
+      // opportunity is gone (the loop drains the buffer at iteration
+      // boundaries DURING the run) — and mixing a to-be-steered message into a
+      // batched followup would double-deliver it. Registered slash commands
+      // were already intercepted inside the adapter, so isCommand is false
+      // here. NOTE: actual steering additionally requires the GW-5 queue mode
+      // to resolve to 'steer' (SUDO_QUEUE_MODE_DEFAULT=steer or a per-session
+      // override) — identical semantics to gateway-turn-handler.ts.
+      if (process.env['SUDO_TG_STOP_BUTTON'] === '1' && process.env['SUDO_MIDRUN_STEER'] === '1') {
+        const convKey = `${msg.channel}:${msg.peerId}`;
+        const active = getRunRegistry().get(convKey);
+        if (active) {
+          const decision = decideQueueMode({
+            mode: getQueueModeStore().resolve(msg.channel, msg.peerId),
+            activeRun: true,
+            isMedia: (msg.media?.length ?? 0) > 0,
+            isCommand: false,
+            runTier: active.tier,
+            msgTier: telegram.isOwnerUser(msg.peerId) ? 'owner' : 'untrusted',
+          });
+          if (decision.action === 'steer') {
+            getSteerBuffer().push(active.sessionId, msg.text ?? '', decision.tier);
+            log.info({ peerId: msg.peerId, tier: decision.tier }, 'TX1/GW-5: message steered into the active run (not queued as a new turn)');
+            return;
+          }
+          if (decision.action === 'interrupt' && active.abort) {
+            active.abort('interrupted by a newer message');
+            // fall through — the replacement turn queues behind the aborting run.
+          }
+          // followup / collect → fall through to the normal coalescer/queue path.
+        }
+      }
+
       if (telegramCoalescer) {
         telegramCoalescer.push(msg);
       } else {
@@ -2421,6 +2548,51 @@ async function boot(): Promise<void> {
     // the shared block above, before the channel sections).
     telegram.setCommandRegistry(commandRegistry, makeCommandContext);
     log.info('CommandRegistry wired to Telegram adapter');
+
+    // TX2 (SUDO_TG_BAD_REGEN=1, default OFF): 👎 + reason → ONE bounded
+    // revision turn, edited into the rejected reply in place (`↻ v2` tail) with
+    // a fresh feedback keyboard. The adapter enforces the flag, owner gate and
+    // the one-regen-per-feedbackId guard before invoking this seam; here we
+    // serialize on the peer queue (never overlapping a live turn — a regen
+    // queued mid-turn simply waits its turn) and skip when a run is active
+    // right now so a stale rejection can't preempt fresh work.
+    telegram.setRegenerateHandler(async (req) => {
+      const convKey = `telegram:${req.peerId}`;
+      if (getRunRegistry().isActive(convKey)) {
+        log.info({ peerId: req.peerId, feedbackId: req.feedbackId }, 'TX2: regen skipped — a turn is active for this peer');
+        return;
+      }
+      await dualSessionManager.peerQueue.enqueue(req.peerId, async () => {
+        try {
+          const session = await dualSessionManager.getOrCreate('telegram', req.peerId);
+          const instruction = buildRegenInstruction({ originalText: req.originalText, reason: req.reason });
+          const result = await finalAgentLoop.run(String(session.id), instruction, undefined, { race: true });
+          const revised = normalizeReplyText(result?.text, false);
+          // Telegram edit cap is 4096 — leave room for the version tail.
+          const body = `${revised.length > 3900 ? `${revised.slice(0, 3900)}…` : revised}\n\n↻ v2`;
+          await telegram.editText(req.chatId, req.messageId, body, { format: 'md' });
+          try {
+            const kb = createFeedbackKeyboard(String(session.id), revised.slice(0, 120), 'telegram').keyboard;
+            await telegram.editReplyMarkup(req.chatId, req.messageId, kb);
+          } catch { /* fresh keyboard is best-effort */ }
+          // Link the outcome to the original feedback row (store convention:
+          // follow-up row keyed by the feedbackId in session_id).
+          try {
+            saveFeedback({
+              session_id: req.feedbackId,
+              channel: 'telegram',
+              task_summary: `regen-complete:${req.feedbackId}`,
+              task_type: 'general',
+              rating: 'skip',
+              notes: `tx2 v2 delivered${req.reason ? ` (reason: ${req.reason})` : ''}`,
+            });
+          } catch { /* outcome row is best-effort */ }
+          log.info({ peerId: req.peerId, feedbackId: req.feedbackId }, 'TX2: regenerated reply edited in place');
+        } catch (err) {
+          log.warn({ err: String(err), peerId: req.peerId, feedbackId: req.feedbackId }, 'TX2: regeneration turn failed');
+        }
+      });
+    });
 
     await telegram.start();
     registerShutdown(() => telegram.stop());

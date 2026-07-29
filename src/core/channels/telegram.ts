@@ -56,6 +56,15 @@ const log = createLogger('channels:telegram');
 /** Maximum characters per Telegram message (platform limit). */
 import { chunkText, TELEGRAM_CHUNK_LIMIT } from './long-reply.js';
 import { mdToTelegramHtml, mdToTelegramHtmlCollapsed } from './telegram-format.js';
+import {
+  handleRunControlCallback,
+  makeReasonKeyboard,
+  wantsReasonKeyboard,
+  RegenGuard,
+  type RegenerateRequest,
+  type RegenReasonCode,
+} from './telegram-run-controls.js';
+import { getRunRegistry } from '../agent/run-registry.js';
 
 /** Directory where incoming Telegram photos are saved. */
 const UPLOAD_DIR = join(DATA_DIR, 'uploads');
@@ -216,6 +225,9 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly allowedUsers: Set<string>;
   /** GW-6: original (owner) allowlist — only these may run /pair admin commands. */
   private readonly ownerUsers: Set<string>;
+  /** TX2 — regeneration seam (set from cli.ts) + one-regen-per-feedbackId guard. */
+  private _onRegenerate: ((req: RegenerateRequest) => void | Promise<void>) | null = null;
+  private readonly _regenGuard = new RegenGuard();
   /** GW-6: DM admission posture for unknown senders (TELEGRAM_DM_POLICY). */
   private readonly dmPolicy: 'allowlist' | 'pairing' | 'open';
   private readonly tokenEnvKey: string;
@@ -280,6 +292,20 @@ export class TelegramAdapter implements ChannelAdapter {
 
   get isConnected(): boolean {
     return this._isConnected;
+  }
+
+  /** Is this user id on the owner list (constructor allowlist, not pairing-admitted)? */
+  isOwnerUser(userId: string): boolean {
+    return this.ownerUsers.has(userId);
+  }
+
+  /**
+   * TX2 (`SUDO_TG_BAD_REGEN=1`) — injectable regeneration seam. The adapter
+   * cannot reach the agent loop; cli.ts sets this to run a bounded revision
+   * turn and edit the rejected reply in place. Null → 👎 keeps legacy behavior.
+   */
+  setRegenerateHandler(handler: (req: RegenerateRequest) => void | Promise<void>): void {
+    this._onRegenerate = handler;
   }
 
   /** The bot's @username once authenticated; null before start() completes. */
@@ -683,7 +709,7 @@ export class TelegramAdapter implements ChannelAdapter {
    * text is the caller's responsibility — Telegram returns HTTP 400 on a
    * noop edit, which the BufferedEditSink already prevents.
    */
-  async editText(peerId: string, messageId: string | number, text: string, opts?: { format?: 'plain' | 'md' | 'md-collapse' }): Promise<void> {
+  async editText(peerId: string, messageId: string | number, text: string, opts?: { format?: 'plain' | 'md' | 'md-collapse'; keyboard?: InlineKeyboard }): Promise<void> {
     if (!this.bot || !this._isConnected) {
       throw new ChannelError('Telegram adapter is not connected', 'channel_not_connected', { peerId });
     }
@@ -700,14 +726,17 @@ export class TelegramAdapter implements ChannelAdapter {
     // converter leaves unbalanced markers as literal text); 'md-collapse'
     // additionally folds the tail into an expandable blockquote ("Read
     // More"). Plain retry on 400 either way.
+    // TX1: editMessageText REPLACES reply_markup (absent → removed), so a
+    // working card that carries a Stop button must re-send it on every edit.
+    const markup = opts?.keyboard ? { reply_markup: opts.keyboard } : {};
     if (opts?.format === 'md' || opts?.format === 'md-collapse') {
       try {
         const html = opts.format === 'md-collapse' ? mdToTelegramHtmlCollapsed(clamped) : mdToTelegramHtml(clamped);
-        await this.bot.api.editMessageText(peerId, msgIdNum, html, { parse_mode: 'HTML' });
+        await this.bot.api.editMessageText(peerId, msgIdNum, html, { parse_mode: 'HTML', ...markup });
         return;
       } catch { /* fall through to plain */ }
     }
-    await this.bot.api.editMessageText(peerId, msgIdNum, clamped);
+    await this.bot.api.editMessageText(peerId, msgIdNum, clamped, { ...markup });
   }
 
   /**
@@ -813,9 +842,47 @@ export class TelegramAdapter implements ChannelAdapter {
     bot.command('help', (ctx) => this._handleCommand(ctx, 'help'));
     bot.command('status', (ctx) => this._handleCommand(ctx, 'status'));
 
-    // Feedback inline keyboard callbacks  fb:{rating}:{feedbackId}
+    // Inline keyboard callbacks. One grammy handler (an early-returning
+    // middleware without next() swallows later ones): TX1 stop taps and TX2
+    // reason taps dispatch first, then the fb:{rating}:{feedbackId} feedback taps.
     bot.on('callback_query:data', async (ctx) => {
       const data = ctx.callbackQuery.data ?? '';
+
+      // TX1 (⏹ Stop) / TX2 (👎 reasons) — flag-gated, owner-only inside.
+      if (data.startsWith('tx1:') || data.startsWith('tx2:')) {
+        const cbMsg = ctx.callbackQuery.message;
+        await handleRunControlCallback(
+          {
+            data,
+            fromId: String(ctx.from.id),
+            ...(ctx.chat?.id !== undefined ? { chatId: String(ctx.chat.id) } : {}),
+            ...(cbMsg?.message_id !== undefined ? { messageId: cbMsg.message_id } : {}),
+            ...(cbMsg && 'text' in cbMsg && typeof cbMsg.text === 'string' ? { messageText: cbMsg.text } : {}),
+            answer: async (text?: string) => { await ctx.answerCallbackQuery(text ? { text, show_alert: false } : {}); },
+            editReplyMarkup: async (kb) => { await ctx.editMessageReplyMarkup({ reply_markup: kb }); },
+          },
+          {
+            isOwner: (id) => this.ownerUsers.has(id),
+            getActiveRun: (runKey) => getRunRegistry().get(runKey),
+            guard: this._regenGuard,
+            onRegenerate: this._onRegenerate,
+            recordReason: (feedbackId: string, code: RegenReasonCode) => {
+              // Store convention (see fb: handler below): link rows carry the
+              // feedbackId in session_id + a typed task_summary marker.
+              saveFeedback({
+                session_id: feedbackId,
+                channel: 'telegram',
+                task_summary: `regen-requested:${feedbackId}`,
+                task_type: 'general',
+                rating: 'skip',
+                notes: `tx2 reason=${code}`,
+              });
+            },
+          },
+        );
+        return;
+      }
+
       if (!data.startsWith('fb:')) return;
 
       const parts = data.split(':');
@@ -838,19 +905,32 @@ export class TelegramAdapter implements ChannelAdapter {
           notes: `updated from callback: ${feedbackId}`,
         });
 
-        // Remove the keyboard from the original message
+        // TX2 (SUDO_TG_BAD_REGEN=1): an owner 👎 swaps in the one-tap reason
+        // keyboard (Wrong / Too long / Missed the point / Skip reasons) instead
+        // of removing the keyboard; the reason tap triggers the regeneration.
+        const offerReasons = wantsReasonKeyboard({
+          rating: rating,
+          isOwnerUser: this.ownerUsers.has(String(ctx.from.id)),
+          hasRegenHandler: this._onRegenerate !== null,
+        });
+
+        // Remove (or for TX2 bad: replace) the keyboard on the original message
         try {
-          await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+          await ctx.editMessageReplyMarkup({ reply_markup: offerReasons ? makeReasonKeyboard(feedbackId) : undefined });
         } catch { /* message too old or already edited */ }
 
         if (rating === 'good') {
           await ctx.answerCallbackQuery({ text: '👍 Got it — great to know!', show_alert: false });
         } else if (rating === 'bad') {
-          await ctx.answerCallbackQuery({ text: '👎 Noted — I\'ll do better. Reply with what was wrong.', show_alert: false });
-          // Send a follow-up asking for notes
-          try {
-            await ctx.reply('What was wrong? (Reply to this message with details — I\'ll learn from it)');
-          } catch { /* non-fatal */ }
+          if (offerReasons) {
+            await ctx.answerCallbackQuery({ text: '👎 Noted — what was wrong?', show_alert: false });
+          } else {
+            await ctx.answerCallbackQuery({ text: '👎 Noted — I\'ll do better. Reply with what was wrong.', show_alert: false });
+            // Send a follow-up asking for notes
+            try {
+              await ctx.reply('What was wrong? (Reply to this message with details — I\'ll learn from it)');
+            } catch { /* non-fatal */ }
+          }
         } else {
           await ctx.answerCallbackQuery({ text: '⏭️ Skipped', show_alert: false });
         }
