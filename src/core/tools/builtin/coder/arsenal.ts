@@ -1223,8 +1223,30 @@ export function setKairosProposalSink(sink: ((p: KairosProposal) => void) | unde
  */
 let lastProposalKey = '';
 
+/**
+ * Last observation we ATTEMPTED to analyse. Deliberately separate state from
+ * `lastProposalKey`: that one latches when a proposal is PERSISTED (only when
+ * edits came back). Sharing one key would latch on attempt and then make the
+ * persist check always return false, silently dropping every proposal.
+ */
+let lastAttemptedKey = '';
+
 export function _resetKairosProposalDedupeForTests(): void {
   lastProposalKey = '';
+  lastAttemptedKey = '';
+}
+
+/**
+ * True when this observation has not been analysed yet (and latches it). Gates
+ * the LLM call itself, not just persistence — an unchanged observation yields
+ * an identical analysis we already hold, at ~80k input + 32,768 output tokens
+ * a tick.
+ */
+export function isNewKairosObservation(task: string, mode: 'fix' | 'refactor'): boolean {
+  const key = createHash('sha256').update(`${mode}\n${task}`).digest('hex');
+  if (key === lastAttemptedKey) return false;
+  lastAttemptedKey = key;
+  return true;
 }
 
 /**
@@ -1244,6 +1266,21 @@ export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor'
   if (task.includes('<<<') || task.includes('>>>') || task.includes('SYSTEM:')) {
     logger.warn({ task }, 'KAIROS: task rejected (contains injection markers)');
     return { success: false, output: 'error: task contains invalid markers' };
+  }
+
+  // Skip an observation already analysed. KAIROS re-fires the same one every
+  // ~5 min because its only remedy is a dry run, which by construction cannot
+  // clear its own trigger — so re-running just reproduces a proposal we hold.
+  // 2026-07-29 this cost 6.5M input tokens/day (~31% of ALL ollama use, 164
+  // calls at ~80k in / 32,768 out). Fine when ollama was one profile of many;
+  // not once an org-level OAuth 403 removed every claude-oauth profile and left
+  // ollama load-bearing for the brain at 89.3% weekly quota — the repair loop
+  // was competing with the user turns it exists to protect. A CHANGED
+  // observation still runs immediately (37 oversized files -> 36 is a new key);
+  // SUDO_KAIROS_REPEAT_REPAIR=1 restores re-run-every-tick.
+  if (process.env['SUDO_KAIROS_REPEAT_REPAIR'] !== '1' && !isNewKairosObservation(task, mode)) {
+    logger.debug({ mode }, 'KAIROS: observation unchanged since last analysis — skipping repeat repair');
+    return { success: true, output: 'skipped: observation unchanged since the last analysis' };
   }
 
   // KAIROS self-repair hook. Real dry-run call (applyEdits:false) to avoid side effects in background tick.

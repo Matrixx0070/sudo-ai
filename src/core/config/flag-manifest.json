@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 745,
+  "count": 746,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -401,6 +401,7 @@
     "SUDO_KAIROS_ARSENAL_TRIGGER_DISABLE",
     "SUDO_KAIROS_AUTONOMOUS",
     "SUDO_KAIROS_DRY_RUN",
+    "SUDO_KAIROS_REPEAT_REPAIR",
     "SUDO_KEY_ROTATION_DB_PATH",
     "SUDO_KEY_ROTATION_DISABLE",
     "SUDO_KEY_ROTATION_MIN_INTERVAL_MS",

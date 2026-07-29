@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   setKairosProposalSink,
   shouldPersistKairosProposal,
+  isNewKairosObservation,
   _resetKairosProposalDedupeForTests,
   type KairosProposal,
 } from '../../../src/core/tools/builtin/coder/arsenal.js';
@@ -82,5 +83,50 @@ describe('KAIROS proposal sink seam', () => {
     };
     expect(proposal.edits[0]!.content).toContain('export const a = 1;');
     expect(proposal.edits[0]!.filePath).toBe('src/a.ts');
+  });
+});
+
+/**
+ * 2026-07-29, second half of the story. Making the dry-run output LAND stopped
+ * the waste of the result, not the waste of the call: KAIROS still re-ran an
+ * identical analysis every ~5 minutes because its only remedy (a dry run)
+ * cannot clear the condition that triggers it.
+ *
+ * coder.arsenal burned 6.5M input tokens that day — ~31% of ALL ollama
+ * consumption, 164 calls at ~80k in / 32,768 out. Tolerable when ollama was one
+ * profile among several; not once an org-level OAuth 403 removed every
+ * claude-oauth profile and left ollama load-bearing for the brain, with weekly
+ * quota at 89.3% and four days to reset. The repair loop was competing for
+ * quota with the user turns it exists to protect.
+ */
+describe('KAIROS repeat-observation latch (gates the CALL, not just the write)', () => {
+  beforeEach(() => {
+    _resetKairosProposalDedupeForTests();
+    setKairosProposalSink(undefined);
+  });
+
+  it('analyses a new observation', () => {
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
+  });
+
+  it('skips the identical observation on every subsequent tick', () => {
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
+    // 12 ticks/hour × 24h is the real cadence; all of it is now skipped.
+    for (let tick = 0; tick < 288; tick++) {
+      expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(false);
+    }
+  });
+
+  it('a CHANGED observation still runs immediately — capability preserved', () => {
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(false);
+    expect(isNewKairosObservation(OBS_B, 'refactor')).toBe(true);
+  });
+
+  it('attempt and persist latches are INDEPENDENT — sharing one would drop every proposal', () => {
+    // Attempt latches first; persist must still see this observation as new,
+    // or the proposal computed on this very tick would never be written.
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
+    expect(shouldPersistKairosProposal(OBS_A, 'refactor')).toBe(true);
   });
 });
