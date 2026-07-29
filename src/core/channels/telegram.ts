@@ -1197,6 +1197,15 @@ export class TelegramAdapter implements ChannelAdapter {
       meta: { peerId: userId, text: msg.text, mediaCount: media.length },
     });
 
+    // Instant acknowledgment: react 👀 to the user's message the moment the
+    // turn starts (SUDO_TG_REACT_ACK=0 disables). One cheap API call; the
+    // user sees uptake before the working card even appears.
+    if (process.env['SUDO_TG_REACT_ACK'] !== '0' && ctx.message?.message_id != null) {
+      this.bot?.api
+        .setMessageReaction(chatId, ctx.message.message_id, [{ type: 'emoji', emoji: '👀' }])
+        .catch(() => { /* reactions unavailable in some chats — non-fatal */ });
+    }
+
     // Show typing indicator immediately and keep refreshing every 4s while processing.
     // Telegram's typing status disappears after ~5s so we must re-send it.
     const sendTyping = () => {
@@ -1298,9 +1307,12 @@ export class TelegramAdapter implements ChannelAdapter {
         const startMs = Date.now();
         const timeline = new ActivityTimeline();
         let tick = 0;
+        const timelineDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
         const renderNow = (): string =>
-          timeline.render({ nowMs: Date.now(), startMs, tick, ...(chip ? { chip } : {}), verbIndex: tick });
-        const workingId = await this.sendForStream(chatId, renderNow());
+          timeline.render({ nowMs: Date.now(), startMs, tick, detail: timelineDetail, ...(chip ? { chip } : {}), verbIndex: tick });
+        // Initial send is plain text (sendForStream has no parse mode) — strip
+        // the bold markers there; every subsequent edit renders md → HTML.
+        const workingId = await this.sendForStream(chatId, renderNow().replace(/\*\*/g, ''));
 
         // Edit throttle: the 3s tick keeps elapsed live; tool events request a
         // prompt refresh but never closer than 2s apart (Telegram edit limits).
@@ -1309,7 +1321,7 @@ export class TelegramAdapter implements ChannelAdapter {
           const now = Date.now();
           if (now - lastEditMs < minGapMs) return;
           lastEditMs = now;
-          void this.editText(chatId, workingId, renderNow()).catch(() => { /* noop/closed edit */ });
+          void this.editText(chatId, workingId, renderNow(), { format: 'md' }).catch(() => { /* noop/closed edit */ });
         };
         const unsubTimeline = progress.subscribe(`telegram:${userId}`, (ev: ProgressEvent) => {
           timeline.onProgress(ev, Date.now());

@@ -2135,8 +2135,9 @@ async function boot(): Promise<void> {
                   const timeline = new ActivityTimeline();
                   const startMs = Date.now();
                   let tick = 0;
+                  const timelineDetail = process.env['SUDO_TG_TIMELINE_DETAIL'] === '1';
                   const pushStatus = (): void => {
-                    streamSink?.status(timeline.render({ nowMs: Date.now(), startMs, tick, ...(chip ? { chip } : {}), verbIndex: tick }));
+                    streamSink?.status(timeline.render({ nowMs: Date.now(), startMs, tick, detail: timelineDetail, ...(chip ? { chip } : {}), verbIndex: tick }));
                   };
                   feedStatus = (ev): void => {
                     const now = Date.now();

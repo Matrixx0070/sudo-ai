@@ -34,6 +34,33 @@ const PHASE_LABELS: Readonly<Record<WorkPhase, string>> = {
   streaming: 'Writing…',
 };
 
+/**
+ * Semantic headline for a tool, by prefix — "Searching the web" reads like a
+ * capable assistant; "browser.search" reads like a stack trace. First match
+ * wins; unmatched tools fall back to "Working".
+ */
+const TOOL_HEADLINES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/search/i, 'Searching the web'],
+  [/^(web|browser|http|fetch|scrape)/i, 'Reading a page'],
+  [/^(memory|recall|journal|session)/i, 'Recalling memory'],
+  [/^(file|doc|document|textproc|upload)/i, 'Preparing a document'],
+  [/^(code|run|exec|python|shell|sandbox)/i, 'Running code'],
+  [/^(image|banana|draw|art|photo|vision)/i, 'Working with images'],
+  [/^(chart|data|viz)/i, 'Building a chart'],
+  [/^(email|gmail|send|message|telegram)/i, 'Sending a message'],
+  [/^(schedule|cron|remind)/i, 'Scheduling'],
+];
+
+/** Thinking-phase headlines rotate slowly so a long silence still feels alive. */
+const THINKING_HEADLINES: readonly string[] = ['Thinking', 'Reflecting on context', 'Reasoning it through'];
+
+function headlineForTool(tool: string): string {
+  for (const [re, label] of TOOL_HEADLINES) {
+    if (re.test(tool)) return label;
+  }
+  return 'Working';
+}
+
 /** Pulse glyph for a tick. Wraps; safe for any integer. */
 function pulseFrame(tick: number): string {
   const n = PULSE_FRAMES.length;
@@ -152,16 +179,47 @@ export class ActivityTimeline {
     return lines;
   }
 
+  /** The newest still-open step, if any. */
+  private currentStep(): TimelineStep | undefined {
+    const last = this.steps[this.steps.length - 1];
+    return last !== undefined && last.endMs === undefined ? last : undefined;
+  }
+
   /**
-   * The live working card: spinner header + optional model/context chip +
-   * step timeline. Same inputs as live-state's formatTelegramWorking so the
-   * caller's tick loop drives both identically.
+   * The live working card. Default is the compact "assistant card" (rendered
+   * through the md→HTML path, so ** is real bold):
+   *
+   *   ✻ **Searching the web**
+   *
+   *   12s · web › search…
+   *
+   * `detail: true` renders the full step timeline instead (one line per tool
+   * with ✓/✗ and durations — SUDO_TG_TIMELINE_DETAIL=1 surfaces it).
    */
-  render(input: { nowMs: number; startMs: number; tick: number; chip?: string; verbIndex?: number; whimsy?: boolean }): string {
+  render(input: { nowMs: number; startMs: number; tick: number; chip?: string; detail?: boolean; verbIndex?: number; whimsy?: boolean }): string {
     const secs = elapsedSeconds(input.nowMs - input.startMs);
-    const parts: string[] = [`${pulseFrame(input.tick)} ${PHASE_LABELS[this.phase]} ${fmtElapsed(secs)}`];
-    if (input.chip && input.chip.trim()) parts.push(input.chip.trim());
-    parts.push(...this.stepLines(input.nowMs));
+    const parts: string[] = [];
+
+    if (input.detail) {
+      parts.push(`${pulseFrame(input.tick)} ${PHASE_LABELS[this.phase]} ${fmtElapsed(secs)}`);
+      if (input.chip && input.chip.trim()) parts.push(input.chip.trim());
+      parts.push(...this.stepLines(input.nowMs));
+    } else {
+      const current = this.currentStep();
+      const headline =
+        this.phase === 'streaming'
+          ? 'Writing the reply'
+          : current !== undefined
+            ? headlineForTool(current.tool)
+            : THINKING_HEADLINES[Math.floor(secs / 8) % THINKING_HEADLINES.length]!;
+      const done = this.steps.filter((s) => s.endMs !== undefined).length;
+      let meta = fmtElapsed(secs);
+      if (current !== undefined) meta += ` · ${current.tool}…`;
+      else if (done > 0) meta += ` · ${done} step${done === 1 ? '' : 's'} done`;
+      parts.push(`${pulseFrame(input.tick)} **${headline}**`, '', meta);
+      if (input.chip && input.chip.trim()) parts.push(input.chip.trim());
+    }
+
     const text = parts.join('\n');
     return text.length > MAX_RENDER_CHARS ? `${text.slice(0, MAX_RENDER_CHARS - 1)}…` : text;
   }
