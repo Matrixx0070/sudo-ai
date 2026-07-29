@@ -75,7 +75,7 @@ import {
   type LLMErrorClass,
 } from './errors.js';
 import { runWithPolicy, recordSpend } from './policy.js';
-import { estimateCostUsd } from './limits.js';
+import { estimateCostUsd, isReasoningModel, REASONING_MIN_OUTPUT_TOKENS } from './limits.js';
 import {
   streamIR as createSSEMachine,
   type IRStreamEvent,
@@ -593,6 +593,30 @@ function prepareWireCall(ir: IRRequest, stream: boolean, traceId: string): Prepa
     // wire wants the bare id, so strip the prefix HERE, exactly once.
     body = egressOpenAI(ir);
     body['model'] = r.modelId;
+    // Reasoning models on the OpenAI-compat wire spend their output budget on
+    // `reasoning` BEFORE emitting `content`. With a small max_tokens the whole
+    // budget goes to thinking and the reply comes back
+    // `content:'' finish_reason:'length'` — a truncation, but indistinguishable
+    // downstream from "the provider returned nothing".
+    //
+    // 2026-07-29 this took the product down for a day. ollama/glm-5.2:cloud was
+    // the ONLY live profile (all four claude-oauth profiles 403'd on an
+    // org-level OAuth block, gemini 429'd), and small-budget callers got empty
+    // content 8/10 calls — reproduced 5/5 on the raw wire at max_tokens 64
+    // (reasoning 213-252 tokens, content always ''). Each empty was treated as
+    // a provider failure, burned the whole failover chain, and surfaced as
+    // "The AI providers are all temporarily unavailable". The brain-liveness
+    // probe (tier 'fast', no explicit maxTokens) hit it every cycle and
+    // reported "no provider is answering" — it was manufacturing the outage it
+    // reported.
+    //
+    // The Anthropic branch above already solves this via resolveThinkingBudget
+    // bumping max_tokens for the thinking budget. This is its OpenAI-compat
+    // mirror: guarantee content has room to exist.
+    const askedMax = typeof body['max_tokens'] === 'number' ? body['max_tokens'] : 0;
+    if (isReasoningModel(r.modelId) && askedMax > 0 && askedMax < REASONING_MIN_OUTPUT_TOKENS) {
+      body['max_tokens'] = REASONING_MIN_OUTPUT_TOKENS;
+    }
     if (stream) {
       body['stream'] = true;
       // Without this, OpenAI-compat streams omit usage entirely and every
