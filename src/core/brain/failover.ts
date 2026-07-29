@@ -417,6 +417,16 @@ export class ModelFailover {
   // Inspection
   // ---------------------------------------------------------------------------
 
+  /** Whether a profile id is registered in the failover registry. */
+  isRegistered(profileId: string): boolean {
+    return this.profiles.has(profileId);
+  }
+
+  /** Whether a registered profile is permanently disabled. False for unknown ids. */
+  isDisabled(profileId: string): boolean {
+    return this.profiles.get(profileId)?.disabled ?? false;
+  }
+
   /**
    * Whether a given profile is currently in cooldown.
    *

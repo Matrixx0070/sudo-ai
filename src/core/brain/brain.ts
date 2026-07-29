@@ -866,7 +866,16 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
     };
 
     const fastRoute = this._smartRoute(request);
-    if (fastRoute) {
+    // Consult the failover registry before dialing: a fast-path target that is
+    // registered and currently disabled or cooling (e.g. the whole credential
+    // domain parked by ADR 0003 propagation) is a known-dead wire call — skip
+    // straight to consensus + failover instead of burning it every turn.
+    if (fastRoute && (this.failover.isDisabled(fastRoute.model) || this.failover.isCooledDown(fastRoute.model))) {
+      log.info(
+        { model: fastRoute.model, reason: fastRoute.reason },
+        'Smart-route fast-path target parked in failover registry — skipping to consensus + failover',
+      );
+    } else if (fastRoute) {
       log.info(
         { model: fastRoute.model, complexity: fastRoute.complexity, reason: fastRoute.reason },
         'Smart-route fast-path selected — bypassing consensus for a simple turn',
@@ -876,6 +885,9 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
         const resp = _soloDeltaOpts
           ? await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens, _soloDeltaOpts)
           : await this._callSingleModel(profile, request, systemPrompt, temperature, maxTokens);
+        // Feed registered targets' outcomes into the registry so cooldown reset
+        // and ADR 0003 domain recovery learn from fast-path evidence too.
+        if (this.failover.isRegistered(fastRoute.model)) this.failover.recordSuccess(fastRoute.model);
         return {
           ...resp,
           routing: this._trace({ path: fastRoute.kind, reason: fastRoute.reason, activeModel: resp.model, costUSD: resp.usage.estimatedCost }),
@@ -886,9 +898,15 @@ You have ${toolSummaries.length} tools available. When the user asks you to DO s
           { model: fastRoute.model, err: String(err) },
           'Smart-route fast-path failed — falling through to consensus + failover',
         );
-        // Intentionally no recordError(): the cheap target may be a synthetic
-        // profile unknown to the failover registry; the standard path below
-        // owns recovery and cooldown for the registered models.
+        // Registered targets: record the failure so cooldowns + ADR 0003 domain
+        // propagation see fast-path evidence (previously every turn re-burned a
+        // wire call on a credential the registry already knew was dead).
+        // Synthetic targets unknown to the registry are skipped on purpose.
+        if (this.failover.isRegistered(fastRoute.model)) {
+          const { status, body, retryAfterMs } = Brain.extractErrorDetails(err);
+          const category = this.failover.categorizeError(status, body);
+          this.failover.recordError(fastRoute.model, category, { retryAfterMs });
+        }
       }
     }
 
