@@ -632,6 +632,17 @@ module.exports = {
         SUDO_CHANNEL_COMMANDS: process.env['SUDO_CHANNEL_COMMANDS'] || '1',
         SUDO_STREAM_CHANNELS: process.env['SUDO_STREAM_CHANNELS'] || '1',
         SUDO_MSG_COALESCE: process.env['SUDO_MSG_COALESCE'] || '1',
+        // TX1-TX6 Telegram UX (docs/TELEGRAM_UX_ROADMAP.md; each has =0 kill):
+        SUDO_TG_STOP_BUTTON: process.env['SUDO_TG_STOP_BUTTON'] || '1',
+        SUDO_TG_BAD_REGEN: process.env['SUDO_TG_BAD_REGEN'] || '1',
+        SUDO_TG_DETAIL_TOGGLE: process.env['SUDO_TG_DETAIL_TOGGLE'] || '1',
+        SUDO_TG_ARTIFACTS: process.env['SUDO_TG_ARTIFACTS'] || '1',
+        SUDO_TG_STREAM_FOLD: process.env['SUDO_TG_STREAM_FOLD'] || '1',
+        SUDO_TG_STATUS_PIN: process.env['SUDO_TG_STATUS_PIN'] || '1',
+        // TX1 steering leg: mid-run owner messages steer the active turn
+        // instead of queueing behind it (GW-5 machinery, queue mode 'steer').
+        SUDO_MIDRUN_STEER: process.env['SUDO_MIDRUN_STEER'] || '1',
+        SUDO_QUEUE_MODE_DEFAULT: process.env['SUDO_QUEUE_MODE_DEFAULT'] || 'steer',
         SUDO_WHATSAPP_ENABLE: process.env['SUDO_WHATSAPP_ENABLE'] || '1',
         SUDO_FLEET_REGISTRAR_MODE: process.env['SUDO_FLEET_REGISTRAR_MODE'] || '1',
         // Autonomy: background goal pursuit via WakeSleepCycle over GoalEngineV2
