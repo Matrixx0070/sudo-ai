@@ -85,6 +85,7 @@
   "src/core/learning/trace-store.ts": 679,
   "src/core/memory/auto-dream.ts": 686,
   "src/core/memory/db.ts": 771,
+  "src/core/memory/embeddings.ts": 448,
   "src/core/memory/hybrid-search.ts": 477,
   "src/core/memory/injection-scanner.ts": 430,
   "src/core/memory/schema.ts": 585,
