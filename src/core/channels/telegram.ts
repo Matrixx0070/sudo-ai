@@ -918,6 +918,18 @@ export class TelegramAdapter implements ChannelAdapter {
     bot.command('start', (ctx) => this._handleCommand(ctx, 'start'));
     bot.command('help', (ctx) => this._handleCommand(ctx, 'help'));
     bot.command('status', (ctx) => this._handleCommand(ctx, 'status'));
+    // TX25: /soul — read-only identity card (owner-only; frozen surfaces).
+    bot.command('soul', async (ctx) => {
+      const uid = String(ctx.from?.id ?? '');
+      if (!this.ownerUsers.has(uid)) return;
+      try {
+        const { buildSoulCard } = await import('./soul-card.js');
+        const { WORKSPACE_DIR } = await import('../shared/paths.js');
+        await this.send(String(ctx.chat.id), await buildSoulCard(WORKSPACE_DIR), { parseMode: 'markdown' });
+      } catch (err) {
+        log.warn({ err: String(err) }, 'TX25 /soul card failed');
+      }
+    });
 
     // Inline keyboard callbacks. One grammy handler (an early-returning
     // middleware without next() swallows later ones): TX1 stop taps and TX2
