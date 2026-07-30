@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 750,
+  "count": 751,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -726,6 +726,7 @@
     "SUDO_VERIFY_GATE_MIN_SAMPLES",
     "SUDO_VERIFY_GATE_THRESHOLD",
     "SUDO_VETO_AUTO_TUNE",
+    "SUDO_VETO_FAILOPEN_HIGH",
     "SUDO_VOICE_GROK_DEFAULT",
     "SUDO_VSCODE_EXTENSION",
     "SUDO_WASM_SANDBOX",

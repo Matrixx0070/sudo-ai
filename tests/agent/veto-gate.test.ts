@@ -196,12 +196,20 @@ describe('runVetoGate', () => {
     expect(spyFetcher).not.toHaveBeenCalled();
   });
 
-  it('case 11: HIGH risk + all models throw → fail-open { decision: "APPROVE" }', async () => {
+  it('case 11: HIGH risk + all models throw → fails CLOSED (risk-tiered posture)', async () => {
     const input: VetoInput = { toolName: 'writeConfig', args: { content: 'x' } };
     const result = await runVetoGate(input, throwingFetcher());
-    expect(result.decision).toBe('APPROVE');
+    expect(result.decision).toBe('VETO');
     expect(result.risk).toBe('HIGH');
-    expect(result.reason).toContain('failing open');
+    expect(result.reason).toContain('fails closed');
+  });
+
+  it('case 11b: MEDIUM risk + all models throw → keeps the audited fail-open', async () => {
+    const input: VetoInput = { toolName: 'getUser', args: { limit: 9999 } };
+    const result = await runVetoGate(input, throwingFetcher());
+    expect(result.decision).toBe('APPROVE');
+    expect(result.risk).toBe('MEDIUM');
+    expect(result.failedOpen).toBe(true);
   });
 
   it('MEDIUM risk with mixed votes — majority VETO → decision VETO', async () => {
@@ -263,10 +271,11 @@ describe('runVetoGate', () => {
   // M3: failedOpen flag
   // -------------------------------------------------------------------------
 
-  it('M3-1: fail-open sets failedOpen=true on VetoResult', async () => {
-    const input: VetoInput = { toolName: 'writeConfig', args: { content: 'x' } };
-    const result = await runVetoGate(input, throwingFetcher());
-    expect(result.failedOpen).toBe(true);
+  it('M3-1: MEDIUM-tier fail-open sets failedOpen=true; HIGH fail-closed does not', async () => {
+    const medium = await runVetoGate({ toolName: 'getUser', args: { limit: 9999 } }, throwingFetcher());
+    expect(medium.failedOpen).toBe(true);
+    const high = await runVetoGate({ toolName: 'writeConfig', args: { content: 'x' } }, throwingFetcher());
+    expect(high.failedOpen).toBeUndefined(); // fails closed — marker reserved for audited fail-open
   });
 
   it('M3-2: normal APPROVE does NOT set failedOpen', async () => {
