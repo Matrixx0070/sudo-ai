@@ -19,9 +19,9 @@ describe('G-JUDGE — judge route independence', () => {
     expect(isIndependentJudge('xai/grok-4', 'xai/grok-4')).toBe(false); // identical
   });
 
-  it('the default judge is anthropic (distinct from the xai cheap/mid tier)', () => {
+  it('the default judge is claude-oauth (distinct from the xai cheap/mid tier)', () => {
     delete process.env['LLM_ALIAS_JUDGE'];
-    expect(providerOf(resolveJudgeModel())).toBe('anthropic');
+    expect(providerOf(resolveJudgeModel())).toBe('claude-oauth');
   });
 
   it('LLM_ALIAS_JUDGE overrides the judge model', () => {
@@ -30,17 +30,17 @@ describe('G-JUDGE — judge route independence', () => {
   });
 
   it('judgeFor returns the judge when independent of all routes under test', () => {
-    delete process.env['LLM_ALIAS_JUDGE']; // anthropic default
+    delete process.env['LLM_ALIAS_JUDGE']; // claude-oauth default
     const v = judgeFor(['sudo/cheap', 'sudo/mid']); // both xai
     expect(v.available).toBe(true);
-    if (v.available) expect(providerOf(v.judgeModel)).toBe('anthropic');
+    if (v.available) expect(providerOf(v.judgeModel)).toBe('claude-oauth');
   });
 
   it('judgeFor HOLDS for human review when the judge shares a provider with a route under test', () => {
-    delete process.env['LLM_ALIAS_JUDGE']; // anthropic default
-    // Concrete anthropic route — same provider as the judge → not independent.
-    // (sudo/frontier no longer works as the fixture: it moved to claude-oauth.)
-    const v = judgeFor(['sudo/cheap', 'anthropic/claude-opus-4-8']);
+    delete process.env['LLM_ALIAS_JUDGE']; // claude-oauth default
+    // sudo/frontier resolves to claude-oauth/claude-opus-5 — same provider as
+    // the claude-oauth judge → not independent → HOLD.
+    const v = judgeFor(['sudo/cheap', 'sudo/frontier']);
     expect(v.available).toBe(false);
     if (!v.available) expect(v.reason).toMatch(/not independent|human review/);
   });

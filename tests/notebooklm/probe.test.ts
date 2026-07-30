@@ -87,9 +87,9 @@ async function selfRun(overrides: Record<string, string>, route: string): Promis
 
 describe('E4 comparator — judge independence gate (G-JUDGE)', () => {
   it('HOLDS for human review when the student shares the judge provider', async () => {
-    delete process.env['LLM_ALIAS_JUDGE']; // anthropic default judge
-    // Concrete anthropic student route (sudo/frontier moved to claude-oauth).
-    const run = await selfRun({ q1: 'x', q2: 'y' }, 'anthropic/claude-opus-4-8');
+    delete process.env['LLM_ALIAS_JUDGE']; // claude-oauth default judge
+    // sudo/frontier = claude-oauth/claude-opus-5 — shares the judge's provider.
+    const run = await selfRun({ q1: 'x', q2: 'y' }, 'sudo/frontier');
     const cmp = await compareProbe({ set: SET, selfRun: run, externalAnswers: new Map(), judge: async () => { throw new Error('judge must not be called'); } });
     expect(cmp.held).toBe(true);
     if (cmp.held) expect(cmp.reason).toMatch(/not independent|human review/);
