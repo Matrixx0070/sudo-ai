@@ -645,6 +645,21 @@ module.exports = {
         SUDO_TG_ARTIFACTS: process.env['SUDO_TG_ARTIFACTS'] || '1',
         SUDO_TG_STREAM_FOLD: process.env['SUDO_TG_STREAM_FOLD'] || '1',
         SUDO_TG_STATUS_PIN: process.env['SUDO_TG_STATUS_PIN'] || '1',
+        // TX7/9/10-consumers/13/19/25/28 activations (Frank GO 2026-07-30,
+        // "ACTIVE FLAGS AND CONTINUE"; each has =0 kill):
+        SUDO_TG_MISSION_CONTROL: process.env['SUDO_TG_MISSION_CONTROL'] || '1',
+        SUDO_TG_MORNING_DIGEST: process.env['SUDO_TG_MORNING_DIGEST'] || '1',
+        SUDO_TG_GENUI: process.env['SUDO_TG_GENUI'] || '1',
+        SUDO_TG_PROVENANCE: process.env['SUDO_TG_PROVENANCE'] || '1',
+        // TX19 nightly gated self-improve → deploy card. Deploy taps only
+        // record approval (AL8.6 auto-merge=NO); applying stays manual.
+        SUDO_TX19_OVERNIGHT: process.env['SUDO_TX19_OVERNIGHT'] || '1',
+        // AL1 per-run spend halt (#990). $5: well above any legit turn seen in
+        // the ledger, far below a runaway loop's burn. Frank may retune.
+        SUDO_AGENT_RUN_MAX_USD: process.env['SUDO_AGENT_RUN_MAX_USD'] || '5',
+        // AL9/AL10 (Frank GO'd in chat 2026-07-28; memos in the ledger):
+        SUDO_AL_META: process.env['SUDO_AL_META'] || '1',
+        SUDO_AL_FRONTIER: process.env['SUDO_AL_FRONTIER'] || '1',
         // TX11 live browser viewport (owner-DM only; =0 kill):
         SUDO_TG_BROWSER_VIEW: process.env['SUDO_TG_BROWSER_VIEW'] || '1',
         // Viewport bubble is deleted at turn end (Frank's call 2026-07-29 —
