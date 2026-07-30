@@ -32,6 +32,7 @@ const MODEL_COSTS: ModelCost[] = [
   { model: 'ollama/deepseek-v4-pro:cloud', inputPer1k: 0, outputPer1k: 0, avgLatencyMs: 1000, capability: 7  },
   { model: 'xai/grok-4-0709',             inputPer1k: 2.0, outputPer1k: 6.0, avgLatencyMs: 1500, capability: 10 },
   { model: 'anthropic/claude-sonnet-4-5',  inputPer1k: 3.0, outputPer1k: 15.0, avgLatencyMs: 1800, capability: 9  },
+  { model: 'anthropic/claude-opus-5',      inputPer1k: 5.0, outputPer1k: 25.0, avgLatencyMs: 2500, capability: 10 },
 ];
 
 // ---------------------------------------------------------------------------

@@ -57,6 +57,8 @@ export const COST_RATES: Record<string, CostRate> = {
   'openai/gpt-4o-mini': { inputPerM: 0.15, outputPerM: 0.6 },
   'openai/o3': { inputPerM: 10.0, outputPerM: 40.0 },
   // Anthropic
+  'anthropic/claude-opus-5': { inputPerM: 5.0, outputPerM: 25.0 },
+  'anthropic/claude-sonnet-5': { inputPerM: 3.0, outputPerM: 15.0 },
   'anthropic/claude-opus-4-8': { inputPerM: 5.0, outputPerM: 25.0 },
   'anthropic/claude-opus-4-7': { inputPerM: 5.0, outputPerM: 25.0 },
   'anthropic/claude-opus-4-6': { inputPerM: 5.0, outputPerM: 25.0 },

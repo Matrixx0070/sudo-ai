@@ -143,6 +143,9 @@ function rotateBackups(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): void {
 // hits the free-tier quota. They only burned a failed attempt (and, for sonnet,
 // the ~45s headers-timeout) before failover, so arsenal succeeded 0× all day.
 const MODEL_CASCADE = [
+  // 2026-07-30: opus-5 first — live-proven on the OAuth seat; opus-4-8 kept
+  // as failover (it still auth-flakes intermittently on the new account).
+  { model: 'claude-oauth/claude-opus-5',   label: 'Claude Opus 5 (OAuth)'   },
   { model: 'claude-oauth/claude-opus-4-8', label: 'Claude Opus 4.8 (OAuth)' },
   { model: 'ollama/kimi-k2.7-code:cloud',  label: 'Kimi K2.7 Code (Ollama)' },
   { model: 'openai/o4-mini',               label: 'OpenAI o4-mini'          },

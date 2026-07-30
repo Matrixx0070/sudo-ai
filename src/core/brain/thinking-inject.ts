@@ -20,8 +20,11 @@ const DEFAULT_MODEL_MAX = 32000;
 /** Default thinking budget (matches the max effort preset) before clamping. */
 const DEFAULT_BUDGET = 32768;
 
-/** opus-4-8 and later opus-4-x (the models that unlock high thinking budgets). */
-const OPUS_THINKING_RE = /^claude-opus-4-(8|9|[1-9][0-9]+)/;
+/** opus-4-8+ and opus-5+ (the models that unlock high thinking budgets).
+ * 2026-07-30: claude-opus-5 live-proven on the OAuth lane to accept BOTH
+ * {type:'enabled',budget_tokens} and {type:'adaptive'} (200 + thinking blocks);
+ * the enabled+budget shape stays for injection parity with opus-4-8. */
+const OPUS_THINKING_RE = /^claude-opus-(4-(8|9|[1-9][0-9]+)|[5-9]\b|[1-9][0-9]+\b)/;
 
 export interface ThinkingEnv {
   /** SUDO_THINKING_DISABLE — "1" disables injection entirely. */

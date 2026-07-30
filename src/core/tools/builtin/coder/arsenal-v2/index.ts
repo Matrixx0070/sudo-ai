@@ -72,7 +72,8 @@ const SUPPORTED_MODES: readonly ArsenalV2Mode[] = ['fix', 'build', 'refactor', '
  * (undici HeadersTimeoutError), so they surfaced as "arsenal: model failed".
  * Don't use a claude-oauth Sonnet id here.
  */
-const DEFAULT_MODEL = 'claude-oauth/claude-opus-4-8';
+// 2026-07-30: bumped to opus-5 (live-proven on the OAuth seat).
+const DEFAULT_MODEL = 'claude-oauth/claude-opus-5';
 
 interface TscResult {
   clean: boolean;
