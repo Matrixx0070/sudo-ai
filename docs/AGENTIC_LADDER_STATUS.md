@@ -9,12 +9,12 @@ Executor change 2026-07-25: Frank reassigned the campaign from Opus to Fable (th
 | Rung | Title | Audit verdict (Campaign 0, 2026-07-25) | Build status |
 |------|-------|---------------|--------------|
 | AL1  | Loop Engineering | PARTIAL — loop/doom-loop/compaction/empty-reply PROVEN-IN-TEST; telemetry + budget-halt gaps | BUILT (#940-#944); **AL1.2 LIVE-PROVEN 2026-07-29** — see Post-deploy proofs |
-| AL2  | Workflow Engineering | PARTIAL — 87/87 tests; halt semantics + per-step journal proven; crash-resume broken | BUILT (#939, #942) |
+| AL2  | Workflow Engineering | BUILT — halt semantics + per-step journal proven; crash-resume FIXED (#939 settled-prefix resume; 103/103 workflows tests 2026-07-30); park→owner-notify seam added (#995 onApprovalPause) | BUILT (#939, #942, #995) |
 | AL3  | Graph Engineering | MISSING (confirmed greenfield; reuse fan-out pool + TaskQueue.dependsOn) | COMPLETE (#946, #949) |
 | AL4  | Orchestration Engineering | PARTIAL — 205/205 tests; six concerns exist as islands; zero budget/approval composition | COMPLETE (#950-#952) |
 | AL5  | Multi-Agent Systems | PARTIAL — 83/83 tests; sessions.send real; roles advisory-only; 2 of 3 message paths dead | BUILT (#953, #957; AL5.1 live drive post-deploy) |
 | AL6  | Adaptive Systems | PARTIAL — 7 live signals, no policy-resolver seam, decisions unlogged | BUILT (#954-#956; shadow promotion post-deploy) |
-| AL7  | Self-Optimizing | PARTIAL — bench+baseline+nightly CI exist; judge-independence MISSING; held-out gate fail-open | BUILT (#938, #943, #956) |
+| AL7  | Self-Optimizing | BUILT — held-out gate now fail-CLOSED end-to-end (#988 2026-07-30: absent gate blocks; prod caller wires real gate); judge-independence still the open sub-item | BUILT (#938, #943, #956, #988) |
 | AL8  | Self-Improving | audited 2026-07-28 (items 26-27) | BUILT (#958-#961; live drive post-deploy; AL8.6 no-auto-merge memo) |
 | AL9  | Recursive Self-Improvement | — | BUILT flag-OFF (#963, #965; SUDO_AL_META=0; AL9.6 memo filed) |
 | AL10 | Open-Ended Evolution | — | BUILT flag-OFF (#968; proposal engine only; SUDO_AL_FRONTIER=0; AL10.6 memo filed) |
@@ -278,3 +278,17 @@ AL6.5 shadow promotion (needs ≥3 days of shadow traffic from 2026-07-29).
 
 ## Open questions for Fable
 File in `docs/AGENTIC_LADDER_QA.md` (create on first question). None open — Fable is executing directly.
+
+
+## 2026-07-30 — All-roadmaps completion run (Fable, autonomous)
+
+Gap fixes landed (each PR green-CI, merged, deployed):
+- **#988** AL7: absent HeldOutGate fails CLOSED on the self-improvement apply path; meta tool wires a real gate over traces.db (NOGATE-1..4).
+- **#989** AL4.4: headless approvals DENY (SUDO_APPROVAL_HEADLESS_ALLOW=1 dev opt-in); runGovernedGraph fires the alert seam on awaiting_approval (PARK-1..3, HEADLESS-1..3).
+- **#995** AL4.4 lobster half: onApprovalPause seam — parked runs reach the owner via proactiveNotifier (PAUSE-1..4).
+- **#990** AL1: SUDO_AGENT_RUN_MAX_USD per-run spend halt, graceful fallback, default OFF (SPEND-1..5). Activation = operator env.
+- **#991** VetoGate: HIGH/CRITICAL fail CLOSED on total model outage; MEDIUM keeps audited fail-open (POSTURE-1..4).
+
+Post-deploy proofs executed: policy_decisions = 356 live rows (AL6 decision logging PROVEN); shadow-resolver activity present. Drive-dependent proofs (blob-GC sweep, AL8 live drive) blocked on the SUDO_GDRIVE re-enable ceremony (Frank).
+
+Open sub-items: AL7 judge-independence wiring; AL4 governor composition into the live workflow engine (A2b — both engines now alert on park; lobster is the live path).

@@ -326,12 +326,12 @@ Phase 7 evidence: 10 new tests — both-gates promotion + rollback, packet
 conclusion-refusal + dissent flow + timeout-escalation, fork/adopt signature
 chain, exemplar zone-1 exclusion, curiosity budget/quarantine/pause.
 
-Phase 7 deferrals (final open items, all operator-facing):
-- `sudo-ai gdrive` CLI subcommands (status/bisect/knew-at/resume) — libraries
-  are tested; commander wiring is a small follow-up slice.
-- F35 loop-side auto-hibernation calls (library complete).
-- F5 (gated user-file tool) was never in any phase plan — the only F# with no
-  implementation; needs its own slice if wanted.
+Phase 7 deferrals — ALL SHIPPED post-roadmap in #785 (this section was stale;
+verified in-code 2026-07-30: src/cli/commands/gdrive.ts, F35 hooks at
+loop.ts:153/189, F5 tool at src/core/tools/builtin/gdrive/):
+- `sudo-ai gdrive` CLI subcommands — shipped.
+- F35 loop-side auto-hibernation calls — shipped (injected-callback seam).
+- F5 gated user-file tool — shipped (owner-only, refuses memory tree).
 
 ## LIVE ROLLOUT — 2026-07-17 (real Drive, real brain)
 
