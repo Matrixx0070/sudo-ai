@@ -32,6 +32,7 @@ const AVAILABLE_MODELS = [
   { id: 'ollama/deepseek-v4-pro:cloud', label: 'ollama/deepseek-v4-pro:cloud (recommended — cloud)' },
   { id: 'xai/grok-4-0709',            label: 'xai/grok-4-0709 (premium, max capability)' },
   { id: 'xai/grok-4-1-fast-non-reasoning', label: 'xai/grok-4-1-fast (fast + cheap)' },
+  { id: 'claude-oauth/claude-opus-5',  label: 'claude-oauth/claude-opus-5 (Claude seat, most capable)' },
   { id: 'anthropic/claude-sonnet-4-5', label: 'anthropic/claude-sonnet-4-5 (balanced)' },
   { id: 'openai/gpt-4o',               label: 'openai/gpt-4o (OpenAI flagship)' },
   { id: 'google/gemini-2.0-flash',     label: 'google/gemini-2.0-flash (efficient)' },

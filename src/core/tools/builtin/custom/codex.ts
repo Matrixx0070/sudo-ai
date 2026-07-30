@@ -52,6 +52,7 @@ const PROVIDER_CASCADE: ProviderOption[] = [
   { model: 'xai/grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning',maxTokens: 32768 },
   { model: 'xai/grok-4-1-fast-reasoning',  label: 'Grok Fast Reasoning',maxTokens: 16384 },
   { model: 'openai/o4-mini',               label: 'OpenAI o4-mini',     maxTokens: 16384 },
+  { model: 'claude-oauth/claude-sonnet-5', label: 'Claude Sonnet 5 (OAuth)', maxTokens: 8192 }, // live-proven 2026-07-30
   { model: 'claude-oauth/claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5 (OAuth)', maxTokens: 8192 },
   { model: 'google/gemini-2.5-flash',      label: 'Gemini 2.5 Flash',   maxTokens: 8192  },
   { model: 'groq/llama-3.3-70b-versatile', label: 'Groq Llama 3.3 70B', maxTokens: 8192  },

@@ -32,6 +32,7 @@ const BACKUP_DIR = path.join(PROJECT_ROOT, 'data', 'arsenal-backups');
 const SWARM_MODELS = [
   { model: 'xai/grok-4-0709',             label: 'Grok 4 (2M ctx)'     },
   { model: 'xai/grok-4-1-fast-reasoning', label: 'Grok Fast Reasoning'  },
+  { model: 'claude-oauth/claude-sonnet-5', label: 'Claude Sonnet 5 (OAuth)' }, // live-proven 2026-07-30
   { model: 'claude-oauth/claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5 (OAuth)' },
   { model: 'google/gemini-2.5-flash',     label: 'Gemini 2.5 Flash'     },
 ];

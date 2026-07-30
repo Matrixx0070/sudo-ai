@@ -43,6 +43,15 @@ const log = createLogger('brain:thinking-budget');
 
 /** Default thinking budgets for known models. */
 const DEFAULT_MODEL_BUDGETS: Record<string, ModelThinkingBudget> = {
+  'anthropic/claude-opus-5': {
+    model: 'anthropic/claude-opus-5',
+    minTokens: 0,
+    maxTokens: 65536,
+    defaultTokens: 16384,
+    supportsInterleaved: true,
+    supportsExtended: true,
+    costMultiplier: 1.0,
+  },
   'anthropic/claude-opus-4-8': {
     model: 'anthropic/claude-opus-4-8',
     minTokens: 0,
