@@ -135,6 +135,13 @@ export interface RunOptions {
    */
   approvalCallback?: (step: WorkflowStep, runState: WorkflowRunState) => Promise<boolean>;
   /**
+   * AL4.4: fired ONCE when an approval gate pauses the run (state already
+   * persisted, resumeToken assigned). A parked run that notifies nobody is a
+   * silent stall — this seam lets the caller surface it (owner DM, card).
+   * Errors are swallowed; the pause itself never depends on the sink.
+   */
+  onApprovalPause?: (info: { workflowName: string; stepId: string; resumeToken: string }) => void;
+  /**
    * Dispatches `type: 'tool'` steps to the host tool registry. When omitted,
    * tool steps record an honest failure instead of executing.
    */

@@ -50,6 +50,7 @@ import { createLogger } from '../../../shared/logger.js';
 import { clampToolOutput } from '../../../shared/head-tail-buffer.js';
 import { WORKSPACE_DIR, DATA_DIR } from '../../../shared/paths.js';
 import { loadWorkflow, runWorkflow } from '../../../workflows/lobster.js';
+import * as proactiveNotifier from '../../../awareness/proactive-notifier.js';
 import type {
   Workflow,
   WorkflowRunState,
@@ -469,6 +470,17 @@ export const runWorkflowTool: ToolDefinition = {
         ...(resumeState ? { resumeState } : {}),
         ...(finalJournalPath ? { journalPath: finalJournalPath } : {}),
         sourceSha256: sourceHash,
+        // AL4.4: a paused run must reach the owner, not sit silently in the
+        // journal. Rides the proactive-notifier → channel-adapter path (same
+        // lane as health alerts), so it lands as an owner DM when wired.
+        onApprovalPause: ({ workflowName, stepId, resumeToken }) => {
+          proactiveNotifier.notify(
+            'alert',
+            `Workflow paused: ${workflowName}`,
+            `Approval gate at step "${stepId}" parked the run. Resume with meta.run-workflow { resumeRunId: "${effectiveRunId}", resumeToken: "${resumeToken}" } after deciding.`,
+            'high',
+          );
+        },
       });
     } catch (err) {
       return {
