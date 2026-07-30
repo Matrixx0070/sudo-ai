@@ -486,6 +486,27 @@ export async function runVetoGate(
   try {
     consensusResult = await queryAllModels(prompt, withTimeout(fetcher, VETO_TIMEOUT_MS));
   } catch (err) {
+    // Risk-tiered failure posture (invariant 8). MEDIUM keeps the deliberate
+    // fail-open so a provider outage cannot brick everyday tooling. HIGH and
+    // CRITICAL fail CLOSED — a call the classifier already deems dangerous
+    // proceeding with ZERO review is the exact event this gate exists to
+    // stop, and during a total model outage the agent cannot produce useful
+    // replies anyway. SUDO_VETO_FAILOPEN_HIGH=1 restores the old blanket
+    // fail-open for both tiers.
+    const failClosedTier = (risk === 'HIGH' || risk === 'CRITICAL')
+      && process.env['SUDO_VETO_FAILOPEN_HIGH'] !== '1';
+    if (failClosedTier) {
+      log.warn(
+        { err: String(err), tool: input.toolName, risk },
+        'VetoGate: queryAllModels threw — failing CLOSED (VETO) for HIGH/CRITICAL risk',
+      );
+      return {
+        decision: 'VETO',
+        risk,
+        reason: 'All models failed — HIGH/CRITICAL risk fails closed without review',
+        failedOpen: false,
+      };
+    }
     log.warn(
       { err: String(err), tool: input.toolName, risk },
       'VetoGate: queryAllModels threw — failing open (APPROVE)',
