@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 759,
+  "count": 760,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -234,6 +234,7 @@
     "SUDO_EMBED_CIRCUIT",
     "SUDO_EMBED_CIRCUIT_COOLDOWN_MS",
     "SUDO_EMBED_CIRCUIT_THRESHOLD",
+    "SUDO_EMBED_MODEL",
     "SUDO_EMBED_QUERY_DEGRADE",
     "SUDO_EMPTY_STOP_GUARD",
     "SUDO_ENABLE_LEGACY_META_TOOLS",
