@@ -196,14 +196,26 @@ export class ApprovalManager {
     const approvalId = genId();
     const sender = this.senders.get(channel);
 
-    // Headless / no sender registered → auto-approve with a warning.
+    // Headless / no sender registered: DENY by default (invariant 8 — an
+    // approval that cannot reach an approver is an approval that holds; the
+    // old auto-approve made "no channel wired" silently equal "yes"). Dev
+    // convenience is an explicit opt-IN: SUDO_APPROVAL_HEADLESS_ALLOW=1
+    // restores the auto-approve for local CLI runs.
     if (!sender) {
+      if (process.env['SUDO_APPROVAL_HEADLESS_ALLOW'] === '1') {
+        log.warn(
+          { toolName, channel, params, riskScore: clampedRisk },
+          'No approval sender — auto-approving (SUDO_APPROVAL_HEADLESS_ALLOW=1)',
+        );
+        void this._emitHook('tool:approved', toolName, params, clampedRisk);
+        return true;
+      }
       log.warn(
         { toolName, channel, params, riskScore: clampedRisk },
-        'No approval sender for channel — auto-approving (headless mode)',
+        'No approval sender for channel — DENYING (fail-closed; set SUDO_APPROVAL_HEADLESS_ALLOW=1 for headless auto-approve)',
       );
-      void this._emitHook('tool:approved', toolName, params, clampedRisk);
-      return true;
+      void this._emitHook('tool:denied', toolName, params, clampedRisk);
+      return false;
     }
 
     const paramsStr = JSON.stringify(params, null, 2);
