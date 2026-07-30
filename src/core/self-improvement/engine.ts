@@ -276,6 +276,8 @@ export async function runSelfImprovement(options: {
                 'AutoResearch findings generated');
               // Phase 2: gate AutoResearch draft patches through HeldOutGate.
               const draftProposalId = `auto-research-${tool.name}-${Date.now()}`;
+              // Invariant 8: an absent gate blocks the autonomous draft apply
+              // (fail-closed), same as shouldApply below.
               const draftShouldApply = options.heldOutGate
                 ? await evaluateDraftGate(
                     options.heldOutGate,
@@ -283,7 +285,7 @@ export async function runSelfImprovement(options: {
                     { params: { description: `AutoResearch for ${tool.name}` } },
                     tool.name,
                   )
-                : true;
+                : false;
               if (draftShouldApply && options.heldOutGate) {
                 rollbacks.push({
                   proposalId: draftProposalId,
@@ -334,9 +336,16 @@ export async function runSelfImprovement(options: {
   // --- STEP 3: APPLY ---
 
   /** Helper: evaluate an improvement through the HeldOutGate before applying.
-   *  Returns true if the improvement should be applied (gate passed or no gate). */
+   *  Returns true only when a gate is wired AND it passes. An ABSENT gate
+   *  blocks the apply (invariant 8: this is an autonomous apply path — no
+   *  gate configured never means no gate; matches pipeline.ts "no HeldOutGate
+   *  wired — a proposal that cannot be benched cannot proceed"). */
   async function shouldApply(proposalId: string, description: string): Promise<boolean> {
-    if (!options.heldOutGate) return true;
+    if (!options.heldOutGate) {
+      log.warn({ proposalId, description },
+        'No HeldOutGate wired — improvement NOT applied (fail-closed; wire a gate to apply)');
+      return false;
+    }
 
     // Derive a lightweight PolicyAction from the improvement description.
     const policyAction: PolicyAction = { params: { description } };
