@@ -85,6 +85,9 @@ const MODEL_LIMITS: Record<string, AliasLimits> = {
   'xai-oauth/grok-composer-2.5-fast': { context_window: 200_000, max_output: 32_768 },
 
   // Anthropic — 200K context; 32000 output (DEFAULT_MODEL_MAX, thinking-inject.ts).
+  // claude-opus-5: served on the Claude OAuth lane; 200K context assumed
+  // (conservative — matches every other Anthropic entry) until confirmed.
+  'anthropic/claude-opus-5': { context_window: 200_000, max_output: 32_000 },
   'anthropic/claude-opus-4-8': { context_window: 200_000, max_output: 32_000 },
   'anthropic/claude-opus-4-7': { context_window: 200_000, max_output: 32_000 },
   'anthropic/claude-opus-4-6': { context_window: 200_000, max_output: 32_000 },
