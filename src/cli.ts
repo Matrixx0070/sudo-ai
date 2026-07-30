@@ -2080,6 +2080,33 @@ async function boot(): Promise<void> {
     }
     if (chatApprovals) approvalManager.registerSender('telegram', telegram);
 
+    // TX10: checkpoint protocol — persisted decision artifacts, owner-tap
+    // unblocking (invariant 8). Sender DMs the owner with one button per
+    // option; taps route back via the tx10: callback branch in telegram.ts.
+    try {
+      const cpOwner = (process.env['TELEGRAM_CHAT_ID'] ?? '').split(',')[0]?.trim()
+        || config.channels?.telegram?.allowedUsers?.[0];
+      const { CheckpointProtocol } = await import('./core/channels/checkpoint-protocol.js');
+      const { initCheckpointProtocol } = await import('./core/channels/checkpoint-registry.js');
+      const { InlineKeyboard: CpKeyboard } = await import('grammy');
+      const cpProto = new CheckpointProtocol(
+        path.join(DATA_DIR, 'checkpoints.db'),
+        cpOwner
+          ? async ({ kind, question, buttons }) => {
+              const kb = new CpKeyboard(buttons.map((b) => [{ text: b.text, callback_data: b.callbackData }]));
+              await telegram.sendWithKeyboard(cpOwner, `🛂 Checkpoint — ${kind}
+
+${question}`, kb);
+            }
+          : undefined,
+      );
+      initCheckpointProtocol(cpProto);
+      registerShutdown(() => cpProto.close());
+      log.info({ owner: cpOwner ?? '(none)' }, 'TX10: checkpoint protocol initialised');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'TX10 checkpoint protocol init failed — checkpoints will HOLD');
+    }
+
     // Serialized per-peer: enqueue so concurrent messages from the same user
     // never overlap on the same session (prevents race conditions). Resolves
     // when the turn fully completes (reply sent) — the coalescer's

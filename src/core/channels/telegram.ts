@@ -56,6 +56,7 @@ const log = createLogger('channels:telegram');
 /** Maximum characters per Telegram message (platform limit). */
 import { chunkText, TELEGRAM_CHUNK_LIMIT, MD_SOURCE_CHUNK_LIMIT } from './long-reply.js';
 import { renderMdWithinLimit } from './telegram-format.js';
+import { getCheckpointProtocol } from './checkpoint-registry.js';
 import {
   handleRunControlCallback,
   makeReasonKeyboard,
@@ -956,6 +957,21 @@ export class TelegramAdapter implements ChannelAdapter {
             },
           },
         );
+        return;
+      }
+
+      // TX10 checkpoint taps  tx10:cp:{id}:{optIdx}. Owner-only; the decision
+      // artifact persists BEFORE the waiter unblocks (invariant 8). Stale or
+      // double taps are acknowledged but ignored by the protocol.
+      if (data.startsWith('tx10:')) {
+        if (!this.ownerUsers.has(String(ctx.from.id))) {
+          await ctx.answerCallbackQuery({ text: 'Owner only.', show_alert: false });
+          return;
+        }
+        const proto = getCheckpointProtocol();
+        const handled = proto ? proto.handleCallback(data, String(ctx.from.id)) : false;
+        await ctx.answerCallbackQuery({ text: handled ? 'Recorded ✅' : 'Checkpoint unavailable/decided.', show_alert: false });
+        try { await ctx.editMessageReplyMarkup({ reply_markup: undefined }); } catch { /* keyboard may be gone */ }
         return;
       }
 
