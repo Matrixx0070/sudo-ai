@@ -563,9 +563,7 @@ export async function runWorkflow(
         runState.completedSteps.push({ id: first.id, status: 'awaiting_approval', durationMs: 0 });
         await persist();
         log.info({ stepId: first.id, resumeToken: token }, 'Workflow paused — awaiting approval');
-        // AL4.4: state persisted — the park must reach a human; sink is fail-open.
-        try { onApprovalPause?.({ workflowName: workflow.name, stepId: first.id, resumeToken: token }); }
-        catch (e) { log.warn({ stepId: first.id, err: String(e) }, 'onApprovalPause sink threw — pause persisted'); }
+        try { onApprovalPause?.({ workflowName: workflow.name, stepId: first.id, resumeToken: token }); } catch (e) { log.warn({ stepId: first.id, err: String(e) }, 'onApprovalPause sink threw — pause persisted'); }
         return runState;
       }
       log.info({ stepId: first.id }, 'Approval granted — continuing');
