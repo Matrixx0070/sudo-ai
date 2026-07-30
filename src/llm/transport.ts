@@ -57,6 +57,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IRRequest, IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
 import { resolveAlias, modelGenerationOf } from './aliases.js';
+import { ANTHROPIC_FAST_MODE_BETA, fastModeApplies, stripSpeedFromWireBody } from './fast-mode.js';
 import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL, XAI_CLI_PROXY_RESPONSES_URL, GOOGLE_OPENAI_COMPAT_URL } from './endpoints.js';
 import { getProviderApiKey, recordGatewayCall, type ProviderKeyName } from './client.js';
 import { egressAnthropic, parseAnthropicResponse } from './adapters/egress-anthropic.js';
@@ -350,7 +351,9 @@ async function authHeaders(r: ResolvedRoute, apiKeyOverride?: string): Promise<R
     return {
       Authorization: `Bearer ${token}`,
       'anthropic-version': ANTHROPIC_VERSION,
-      'anthropic-beta': ANTHROPIC_OAUTH_BETA,
+      'anthropic-beta': fastModeApplies(r.provider, r.modelId)
+        ? `${ANTHROPIC_OAUTH_BETA},${ANTHROPIC_FAST_MODE_BETA}`
+        : ANTHROPIC_OAUTH_BETA,
     };
   }
 
@@ -587,6 +590,8 @@ function prepareWireCall(ir: IRRequest, stream: boolean, traceId: string): Prepa
       }
     }
     if (stream) body['stream'] = true;
+    // Fast mode: same $0 seat, up to ~2.5x output tok/s. Strictly model-gated.
+    if (fastModeApplies(r.provider, r.modelId)) body['speed'] = 'fast';
     if (r.provider === 'claude-oauth') nameMap = applyOAuthBodyContract(body);
   } else {
     // egressOpenAI keeps the full provider/model string (verified) — the
@@ -802,6 +807,10 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
     wirePayloadSha256: sha256Hex(wireBody),
   };
 
+  // Fast mode has its OWN rate limit: a 429 on a fast attempt degrades THIS
+  // call to standard speed instead of burning the failover chain.
+  let fastDegraded = false;
+
   try {
     const { value } = await runWithPolicy<{ res: IRResponse; errorClass: LLMErrorClass | null }>({
       route: r.route,
@@ -824,6 +833,12 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
           ...extraHeaders,
           ...(await authHeaders(r, opts.apiKeyOverride)),
         };
+        const useFast = fastModeApplies(r.provider, r.modelId) && !fastDegraded;
+        const attemptBody = useFast ? wireBody : stripSpeedFromWireBody(wireBody);
+        if (!useFast && typeof headers['anthropic-beta'] === 'string') {
+          headers['anthropic-beta'] = headers['anthropic-beta']
+            .split(',').filter((b) => b.trim() !== ANTHROPIC_FAST_MODE_BETA).join(',');
+        }
         // F97: overall per-attempt deadline (replaces the legacy layer's
         // headers/body-idle guards on the buffered path). Abort → 'timeout'.
         const timeoutMs = opts.timeoutMs ?? Number(process.env['SUDO_LLM_CALL_TIMEOUT_MS'] ?? 600_000);
@@ -835,12 +850,13 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
           response = await fetchImpl(r.url, {
             method: 'POST',
             headers,
-            body: wireBody,
+            body: attemptBody,
             signal: ctx.signal !== undefined ? AbortSignal.any([ctx.signal, deadline.signal]) : deadline.signal,
           });
 
           if (!response.ok) {
             const text = await response.text().catch(() => '');
+            if (response.status === 429 && useFast) fastDegraded = true;
             throw httpPolicyError(r, response.status, text);
           }
 

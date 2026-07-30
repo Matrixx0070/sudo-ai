@@ -296,7 +296,7 @@ describe('callIR — claude-oauth', () => {
     expect(calls[0]!.url).toBe('https://api.anthropic.com/v1/messages');
     expect(calls[0]!.headers['authorization']).toBe('Bearer oauth-test-token');
     expect(calls[0]!.headers['anthropic-version']).toBe('2023-06-01');
-    expect(calls[0]!.headers['anthropic-beta']).toBe('oauth-2025-04-20');
+    expect(calls[0]!.headers['anthropic-beta']).toBe('oauth-2025-04-20,fast-mode-2026-02-01'); // fast mode appends for fast-capable opus models
     expect(calls[0]!.headers['x-api-key']).toBeUndefined();
 
     const body = JSON.parse(calls[0]!.body) as { model: string; system: Array<{ text: string }> };
