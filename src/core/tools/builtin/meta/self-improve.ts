@@ -13,6 +13,8 @@ import path from 'node:path';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { runSelfImprovement, detectPatterns } from '../../../self-improvement/index.js';
+import { HeldOutGate } from '../../../learning/held-out-gate.js';
+import { TraceStore } from '../../../learning/trace-store.js';
 import { DATA_DIR } from '../../../shared/paths.js';
 
 const logger = createLogger('meta.self-improve');
@@ -194,10 +196,19 @@ export const selfImproveTool: ToolDefinition = {
       // No direct brain reference needed — pattern detector works standalone
       const brainInterface = undefined;
 
+      // Invariant 8: the engine fail-closes without a gate, so wire the real
+      // HeldOutGate here — improvements apply only when they pass held-out
+      // evaluation over recorded traces. A gate that cannot evaluate (missing
+      // traces.db, no held-out data) HOLDS the change; it never waves it
+      // through.
+      const gateStore = new TraceStore(path.join(DATA_DIR, 'traces.db'));
+      const heldOutGate = new HeldOutGate(gateStore);
+
       const result = await runSelfImprovement({
         trigger,
         windowDays,
         brain: brainInterface,
+        heldOutGate,
       });
 
       return {
