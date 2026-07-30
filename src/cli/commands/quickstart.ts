@@ -255,6 +255,8 @@ export async function runQuickstart(
     if (added.length > 0) console.log(`  Wrote env defaults to config/.env: ${added.join(', ')}`);
     console.log(`\n  Non-interactive setup — wrote default config to: ${configPath}`);
     console.log(`  Agent: ${DEFAULT_ANSWERS.agentName} | model: ${DEFAULT_ANSWERS.defaultModel} | preset: ${DEFAULT_ANSWERS.preset}`);
+    const { printOllamaHint } = await import('./quickstart-ollama.js');
+    await printOllamaHint();
     console.log('  Next: add API keys to config/.env, then re-run `sudo-ai quickstart` interactively or `sudo-ai start`.\n');
     return;
   }
@@ -263,11 +265,11 @@ export async function runQuickstart(
 
   try {
     // Step 1: Agent name
-    console.log('\n  Step 1/5: Agent name');
+    console.log('\n  Step 1/6: Agent name');
     const agentName = await promptWithDefault(rl, '  What should your agent be named?', 'SUDO-AI');
 
     // Step 2: Model choice
-    console.log('\n  Step 2/5: Model selection');
+    console.log('\n  Step 2/6: Model selection');
     console.log('  Available models:');
     AVAILABLE_MODELS.forEach((m, i) => {
       console.log(`    ${i + 1}. ${m.label}`);
@@ -278,14 +280,14 @@ export async function runQuickstart(
     console.log(`  Selected: ${defaultModel}`);
 
     // Step 3: Telegram
-    console.log('\n  Step 3/5: Telegram channel');
+    console.log('\n  Step 3/6: Telegram channel');
     const enableTelegram = await promptYesNo(rl, '  Enable Telegram integration?', false);
     if (enableTelegram) {
       console.log('  Set TELEGRAM_BOT_TOKEN in config/.env to complete Telegram setup.');
     }
 
     // Step 4: Preset
-    console.log('\n  Step 4/5: Configuration preset');
+    console.log('\n  Step 4/6: Configuration preset');
     console.log('  Available presets:');
     Object.entries(PRESET_DESCRIPTIONS).forEach(([name, desc]) => {
       console.log(`    ${name.padEnd(12)} — ${desc}`);
@@ -296,8 +298,13 @@ export async function runQuickstart(
       : 'chat';
     console.log(`  Selected preset: ${preset}`);
 
-    // Step 5: Run doctor
-    console.log('\n  Step 5/5: Health check');
+    // Step 5: Local embeddings (Ollama one-click)
+    console.log('\n  Step 5/6: Local embeddings (Ollama)');
+    const { offerOllamaSetup } = await import('./quickstart-ollama.js');
+    await offerOllamaSetup(rl, promptYesNo);
+
+    // Step 6: Run doctor
+    console.log('\n  Step 6/6: Health check');
     const runDoctorNow = await promptYesNo(rl, '  Run sudo-ai doctor now?', true);
 
     // Write config

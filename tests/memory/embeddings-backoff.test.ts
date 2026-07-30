@@ -66,7 +66,7 @@ describe('EmbeddingService transient-failure backoff', () => {
       .mockResolvedValueOnce(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    const svc = new EmbeddingService(db);
+    const svc = new EmbeddingService(db, 'text-embedding-3-small');
     const vec = await svc.embed('hello world');
 
     expect(vec).toBeInstanceOf(Float32Array);
@@ -81,7 +81,7 @@ describe('EmbeddingService transient-failure backoff', () => {
       .mockResolvedValueOnce(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    const svc = new EmbeddingService(db);
+    const svc = new EmbeddingService(db, 'text-embedding-3-small');
     const vec = await svc.embed('retry me');
     expect(vec).toBeInstanceOf(Float32Array);
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -93,7 +93,7 @@ describe('EmbeddingService transient-failure backoff', () => {
       .mockResolvedValueOnce(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    const svc = new EmbeddingService(db);
+    const svc = new EmbeddingService(db, 'text-embedding-3-small');
     const vec = await svc.embed('network blip');
     expect(vec).toBeInstanceOf(Float32Array);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -103,7 +103,7 @@ describe('EmbeddingService transient-failure backoff', () => {
     const fetchMock = vi.fn().mockResolvedValue(errResponse(429));
     vi.stubGlobal('fetch', fetchMock);
 
-    const svc = new EmbeddingService(db);
+    const svc = new EmbeddingService(db, 'text-embedding-3-small');
     await expect(svc.embed('always limited')).rejects.toThrow(/API error 429/);
     // BACKOFF_MAX_ATTEMPTS = 4
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -113,7 +113,7 @@ describe('EmbeddingService transient-failure backoff', () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    const svc = new EmbeddingService(db);
+    const svc = new EmbeddingService(db, 'text-embedding-3-small');
     const vec = await svc.embed('first try');
     expect(vec).toBeInstanceOf(Float32Array);
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -124,7 +124,7 @@ describe('EmbeddingService transient-failure backoff', () => {
     const fetchMock = vi.fn().mockResolvedValue(errResponse(429));
     vi.stubGlobal('fetch', fetchMock);
 
-    const svc = new EmbeddingService(db);
+    const svc = new EmbeddingService(db, 'text-embedding-3-small');
     await expect(svc.embed('no retries')).rejects.toThrow(/API error 429/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

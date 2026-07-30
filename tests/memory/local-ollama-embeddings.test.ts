@@ -14,7 +14,7 @@ import os from 'os';
 import { mkdirSync, rmSync } from 'fs';
 import { embed, embeddingsAvailable } from '../../src/llm/client.js';
 import { MindDB } from '../../src/core/memory/db.js';
-import { EmbeddingService } from '../../src/core/memory/embeddings.js';
+import { EmbeddingService, __resetLocalLane } from '../../src/core/memory/embeddings.js';
 import { MindDBVectorStore } from '../../src/core/memory/vector-backfill.js';
 
 const ENV_KEYS = ['OPENAI_API_KEY', 'LLM_BASE_URL', 'SUDO_EMBED_MODEL'] as const;
@@ -124,6 +124,75 @@ describe('MindDBVectorStore — chunks_vec_768 whitelist', () => {
     } finally {
       db.close();
       rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('local lane fast-fail (Ollama offline)', () => {
+  let tmpDir: string;
+  let db: MindDB;
+
+  beforeEach(() => {
+    __resetLocalLane();
+    tmpDir = path.join(os.tmpdir(), `sudo-ff-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tmpDir, { recursive: true });
+    db = new MindDB(path.join(tmpDir, 'mind.db'));
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    __resetLocalLane();
+  });
+
+  it('a connection failure fails fast (single attempt, no backoff) and marks the lane offline', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed: ECONNREFUSED'));
+    vi.stubGlobal('fetch', fetchMock);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const svc = new EmbeddingService(db, 'ollama/nomic-embed-text');
+    expect(svc.isAvailable).toBe(true);
+    const t0 = Date.now();
+    await expect(svc.embed('hello')).rejects.toThrow();
+    expect(Date.now() - t0).toBeLessThan(400); // no 500ms+ backoff sleeps
+    expect(fetchMock).toHaveBeenCalledTimes(1); // no retries against a dead daemon
+    expect(svc.isAvailable).toBe(false); // offline window open — callers degrade instantly
+    expect(warnSpy).toHaveBeenCalledTimes(1); // install hint, once per episode
+    warnSpy.mockRestore();
+  });
+
+  it('a later success closes the offline episode', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed: ECONNREFUSED'))
+      .mockResolvedValue(okEmbeddingResponse(768));
+    vi.stubGlobal('fetch', fetchMock);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env['SUDO_EMBED_LOCAL_RETRY_MS'] = '0'; // recheck immediately
+    try {
+      const svc = new EmbeddingService(db, 'ollama/nomic-embed-text');
+      await expect(svc.embed('hello')).rejects.toThrow();
+      const v = await svc.embed('hello again');
+      expect(v).not.toBeNull();
+      expect(v!.length).toBe(768);
+      expect(svc.isAvailable).toBe(true);
+    } finally {
+      delete process.env['SUDO_EMBED_LOCAL_RETRY_MS'];
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('openai lane retry behaviour is untouched by the local fast-fail', async () => {
+    process.env['OPENAI_API_KEY'] = 'test-key';
+    process.env['SUDO_EMBED_BACKOFF_BASE_MS'] = '1';
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const svc = new EmbeddingService(db, 'text-embedding-3-small');
+      await expect(svc.embed('hello')).rejects.toThrow();
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(1); // still retries
+    } finally {
+      delete process.env['OPENAI_API_KEY'];
+      delete process.env['SUDO_EMBED_BACKOFF_BASE_MS'];
     }
   });
 });
