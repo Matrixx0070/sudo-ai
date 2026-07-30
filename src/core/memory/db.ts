@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { initializeSchema, initializeVecTable, initializeVecTableLocal } from './schema.js';
+import { initializeSchema, initializeVecTable, initializeVecTable768, initializeVecTableLocal } from './schema.js';
 import { guardMemoryWrite, type MessageRole } from './injection-scanner.js';
 import type { MemoryChunk } from './types.js';
 
@@ -214,6 +214,7 @@ export class MindDB {
       // Local fallback vector space (384-dim) — additive, independent of
       // chunks_vec; populated by the backfill when OpenAI embeddings are down.
       initializeVecTableLocal(this.db);
+      initializeVecTable768(this.db);
       console.info(`[MindDB] sqlite-vec loaded (${vecPath}) — vector search enabled`);
       return true;
     } catch (err) {

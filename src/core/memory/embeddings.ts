@@ -15,8 +15,20 @@ import { createHash } from 'node:crypto';
 import { embed as llmEmbed, embeddingsAvailable } from '../../llm/client.js';
 import type { MindDB } from './db.js';
 
-/** Default model — 1536 dimensions, cheap and accurate */
-const DEFAULT_MODEL = 'text-embedding-3-small';
+/**
+ * Default model — the LOCAL Ollama lane (nomic-embed-text, 768-dim): served by
+ * the on-box Ollama daemon, zero cost, no API key, no egress. 2026-07-30 Frank
+ * request: sudo-ai runs its own embeddings; the paid OpenAI lane
+ * (text-embedding-3-small, 1536-dim) stays available as an explicit override
+ * (SUDO_EMBED_MODEL=text-embedding-3-small) — capability kept, not dropped.
+ */
+const DEFAULT_MODEL = process.env['SUDO_EMBED_MODEL'] ?? 'ollama/nomic-embed-text';
+
+/** Known embedding widths per model (fallback 1536 = the OpenAI legacy space). */
+const MODEL_DIMS: Record<string, number> = {
+  'ollama/nomic-embed-text': 768,
+  'text-embedding-3-small': 1536,
+};
 
 /** Maximum texts per batch request (OpenAI allows up to 2048, we use a safe limit) */
 const BATCH_SIZE = 100;
@@ -97,6 +109,8 @@ export class EmbeddingService {
   private readonly apiAvailable: boolean;
   /** When false (SUDO_EMBED_BACKOFF=0), make a single attempt — the old behaviour. */
   private readonly backoffEnabled: boolean;
+  /** Embedding width of the active model (drives vec-table selection). */
+  readonly dims: number;
   /** Base backoff delay in ms (SUDO_EMBED_BACKOFF_BASE_MS overrides; tests use 1). */
   private readonly backoffBaseMs: number;
   /** When false (SUDO_EMBED_CIRCUIT=0), never open the quota circuit-breaker. */
@@ -113,7 +127,8 @@ export class EmbeddingService {
   constructor(db: MindDB, model = DEFAULT_MODEL) {
     this.db    = db;
     this.model = model;
-    this.apiAvailable = embeddingsAvailable();
+    this.dims  = MODEL_DIMS[model] ?? 1536;
+    this.apiAvailable = embeddingsAvailable(model);
     this.backoffEnabled = process.env['SUDO_EMBED_BACKOFF'] !== '0';
     const baseMs = Number(process.env['SUDO_EMBED_BACKOFF_BASE_MS']);
     this.backoffBaseMs = Number.isFinite(baseMs) && baseMs >= 0 ? baseMs : BACKOFF_DEFAULT_BASE_MS;
@@ -124,7 +139,7 @@ export class EmbeddingService {
     this.circuitCooldownMs = Number.isFinite(cd) && cd >= 0 ? cd : CIRCUIT_DEFAULT_COOLDOWN_MS;
 
     if (!this.apiAvailable) {
-      console.warn('[EmbeddingService] OPENAI_API_KEY not set — running in BM25-only mode');
+      console.warn('[EmbeddingService] no embeddings route (no local ollama model configured and OPENAI_API_KEY unset) — running in BM25-only mode');
     }
   }
 

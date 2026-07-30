@@ -29,7 +29,7 @@ import { callIR } from './transport.js';
 import { brainRequestToIR, type ShadowBrainRequest } from './shadow.js';
 import { classifyThrown } from './errors.js';
 import { getGatewayCallLog, sha256Hex, type LLMCallRecord } from './logging.js';
-import { OPENAI_EMBEDDINGS_URL, PROVIDER_BASE_URLS, PROVIDER_HOSTNAMES } from './endpoints.js';
+import { OLLAMA_EMBEDDINGS_URL, OPENAI_EMBEDDINGS_URL, PROVIDER_BASE_URLS, PROVIDER_HOSTNAMES } from './endpoints.js';
 
 const log = createLogger('llm-client');
 
@@ -152,11 +152,18 @@ export async function llmFetch(url: string, init: RequestInit, meta: CallMeta): 
 }
 
 // ---------------------------------------------------------------------------
-// embed — the embeddings choke point (hybrid RAG, 1536-dim)
+// embed — the embeddings choke point (hybrid RAG)
 // ---------------------------------------------------------------------------
 
-/** True when an embeddings route exists (gateway configured or OpenAI key present). */
-export function embeddingsAvailable(): boolean {
+/**
+ * True when an embeddings route exists for the given model. `ollama/*` models
+ * are served by the local Ollama daemon (no key, no gateway) and are always
+ * considered routable — a dead daemon surfaces as a normal embed() network
+ * error, which callers' degrade paths already handle. Other models need the
+ * gateway or an OpenAI key, unchanged.
+ */
+export function embeddingsAvailable(model?: string): boolean {
+  if (model !== undefined && resolveAlias(model).startsWith('ollama/')) return true;
   return Boolean(gatewayBaseUrl() ?? getProviderApiKey('openai'));
 }
 
@@ -177,11 +184,15 @@ export async function embed(
   opts: { model?: string } = {},
 ): Promise<EmbedResult> {
   const m = requireMeta(meta, 'embed');
-  const model = resolveAlias(opts.model ?? 'sudo/embed').replace(/^openai\//, '');
-  const gw = gatewayBaseUrl();
-  const url = gw ? `${gw}/embeddings` : OPENAI_EMBEDDINGS_URL;
-  const key = gw ? gatewayKey() : getProviderApiKey('openai');
-  if (!key) throw new Error('[llm-client] embed: no API key configured');
+  const resolved = resolveAlias(opts.model ?? 'sudo/embed');
+  // Local Ollama lane (self-hosted, zero-cost): OpenAI-compatible wire on
+  // localhost, no auth, never routed through the gateway.
+  const isOllama = resolved.startsWith('ollama/');
+  const model = resolved.replace(/^(openai|ollama)\//, '');
+  const gw = isOllama ? null : gatewayBaseUrl();
+  const url = isOllama ? OLLAMA_EMBEDDINGS_URL : gw ? `${gw}/embeddings` : OPENAI_EMBEDDINGS_URL;
+  const key = isOllama ? null : gw ? gatewayKey() : getProviderApiKey('openai');
+  if (!isOllama && !key) throw new Error('[llm-client] embed: no API key configured');
 
   // Phase 5 gateway log. ir_request stores {input_count, model} ONLY —
   // embedding inputs are bulky and private, never persisted.
@@ -192,7 +203,7 @@ export async function embed(
     caller: m.caller,
     purpose: m.purpose || 'embed',
     alias: opts.model ?? 'sudo/embed',
-    route: gw ? 'gateway:embeddings' : 'openai:embeddings',
+    route: isOllama ? 'ollama:embeddings' : gw ? 'gateway:embeddings' : 'openai:embeddings',
     irRequest: { input_count: texts.length, model },
   };
 
@@ -200,7 +211,7 @@ export async function embed(
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
       body: JSON.stringify({ model, input: texts, encoding_format: 'float' }),
     });
 
