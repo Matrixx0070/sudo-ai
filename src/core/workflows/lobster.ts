@@ -244,7 +244,7 @@ export async function runWorkflow(
   workflow: Workflow,
   options: RunOptions = {},
 ): Promise<WorkflowRunState> {
-  const { resumeState, approvalCallback, toolExecutor, journalPath, sourceSha256 } = options;
+  const { resumeState, approvalCallback, toolExecutor, journalPath, sourceSha256, onApprovalPause } = options;
   const maxParallel = Math.max(1, options.maxParallel ?? 4);
 
   if (journalPath !== undefined && !sourceSha256) {
@@ -563,6 +563,7 @@ export async function runWorkflow(
         runState.completedSteps.push({ id: first.id, status: 'awaiting_approval', durationMs: 0 });
         await persist();
         log.info({ stepId: first.id, resumeToken: token }, 'Workflow paused — awaiting approval');
+        try { onApprovalPause?.({ workflowName: workflow.name, stepId: first.id, resumeToken: token }); } catch (e) { log.warn({ stepId: first.id, err: String(e) }, 'onApprovalPause sink threw — pause persisted'); }
         return runState;
       }
       log.info({ stepId: first.id }, 'Approval granted — continuing');
