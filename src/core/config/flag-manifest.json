@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 757,
+  "count": 758,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -669,6 +669,7 @@
     "SUDO_TG_PROGRESS",
     "SUDO_TG_PROGRESS_CHIP",
     "SUDO_TG_PROGRESS_KEEP",
+    "SUDO_TG_PROVENANCE",
     "SUDO_TG_REACT_ACK",
     "SUDO_TG_READMORE",
     "SUDO_TG_READMORE_MIN",
