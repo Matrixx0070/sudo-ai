@@ -160,13 +160,13 @@ describe('judge independence (invariant 7): judge route ≠ author route', () =>
     let seenRoute = '';
     const chat = async (route: string) => { seenRoute = route; return { text: 'AGREE looks safe', tokensIn: 50, tokensOut: 10 }; };
     const reader = consensus.makeJudgeConsensusReader(chat);
-    // author sudo/mid → xai/*, default judge sudo/judge → anthropic/* → independent.
+    // author sudo/mid → xai/*, default judge sudo/judge → claude-oauth/* → independent.
     const v = await reader({ lessonId: 'l', tool: 't', hint: 'h', baselineFailRate: 0.5, canaryFailRate: 0.2, canaryCalls: 100, authorRoute: 'sudo/mid' });
     expect(v.available).toBe(true);
     if (v.available) {
       expect(consensus.judgeIndependenceOk('sudo/mid')).toBe(true);
-      // chat was called with the JUDGE route (anthropic), not the xai author route.
-      expect(seenRoute.split('/')[0]).toBe('anthropic');
+      // chat was called with the JUDGE route (claude-oauth), not the xai author route.
+      expect(seenRoute.split('/')[0]).toBe('claude-oauth');
       expect(v.judgeRoute).toBe(seenRoute);
       expect(v.judgeRoute.split('/')[0]).not.toBe('xai'); // author (sudo/mid) is xai
       expect(v.agree).toBe(true);
@@ -176,10 +176,10 @@ describe('judge independence (invariant 7): judge route ≠ author route', () =>
   it('HOLDS (unavailable) when the author shares the judge provider — no self-grading', async () => {
     const chat = async () => ({ text: 'AGREE', tokensIn: 1, tokensOut: 1 });
     const reader = consensus.makeJudgeConsensusReader(chat);
-    // Force the author onto the same provider as the default judge (anthropic).
-    const v = await reader({ lessonId: 'l', tool: 't', hint: 'h', baselineFailRate: 0.5, canaryFailRate: 0.2, canaryCalls: 100, authorRoute: 'anthropic/claude-opus-4-8' });
+    // Force the author onto the same provider as the default judge (claude-oauth).
+    const v = await reader({ lessonId: 'l', tool: 't', hint: 'h', baselineFailRate: 0.5, canaryFailRate: 0.2, canaryCalls: 100, authorRoute: 'claude-oauth/claude-opus-5' });
     expect(v.available).toBe(false);
-    expect(consensus.judgeIndependenceOk('anthropic/claude-opus-4-8')).toBe(false);
+    expect(consensus.judgeIndependenceOk('claude-oauth/claude-opus-5')).toBe(false);
   });
 });
 

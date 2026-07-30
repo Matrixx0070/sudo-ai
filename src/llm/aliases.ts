@@ -39,11 +39,14 @@ const DEFAULTS: Record<SudoAlias, string> = {
   'sudo/frontier': 'claude-oauth/claude-opus-5',
   'sudo/embed': 'openai/text-embedding-3-small',
   'sudo/vision': 'xai/grok-4-fast',
-  // Default judge = a cheap anthropic route, deliberately a DIFFERENT provider
-  // from the xai-heavy cheap/mid tier so it's independent of the usual routes
-  // under test. Override with LLM_ALIAS_JUDGE. When the judge shares a provider
-  // with the route under test, the gate holds for human review (see judge.ts).
-  'sudo/judge': 'anthropic/claude-haiku-4-5-20251001',
+  // Default judge = cheap haiku on the Claude OAuth seat (2026-07-30: moved off
+  // the anthropic/ API-key lane, which is dead in prod — no ANTHROPIC_API_KEY;
+  // Frank accepted the trade). Still a different provider from the xai/ollama
+  // tiers, so it stays independent for those routes; for claude-oauth routes
+  // under test the G-JUDGE gate now holds for human review (see judge.ts) —
+  // that is invariant 7 working as designed, not a regression. Override with
+  // LLM_ALIAS_JUDGE.
+  'sudo/judge': 'claude-oauth/claude-haiku-4-5-20251001',
 };
 
 /** Env override key for an alias: sudo/frontier → LLM_ALIAS_FRONTIER. */
