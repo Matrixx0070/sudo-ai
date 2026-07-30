@@ -78,14 +78,18 @@ export class MindDBVectorStore implements ChunkVectorStore {
    * @param raw   - The better-sqlite3 handle (sqlite-vec loaded).
    * @param table - vec0 table to target. Whitelisted to the two known index
    *   tables so the interpolated name can never be attacker-controlled:
-   *   'chunks_vec' (OpenAI 1536-dim, default) or 'chunks_vec_local' (local 384).
+   *   'chunks_vec' (OpenAI 1536-dim, default), 'chunks_vec_768' (local Ollama
+   *   nomic-embed-text), or 'chunks_vec_local' (MiniLM 384).
    */
   constructor(
     private readonly raw: import('better-sqlite3').Database,
-    table: 'chunks_vec' | 'chunks_vec_local' = 'chunks_vec',
+    table: 'chunks_vec' | 'chunks_vec_768' | 'chunks_vec_local' = 'chunks_vec',
   ) {
     // Defensive whitelist — the value is interpolated into DDL/DML below.
-    this.table = table === 'chunks_vec_local' ? 'chunks_vec_local' : 'chunks_vec';
+    this.table =
+      table === 'chunks_vec_local' ? 'chunks_vec_local'
+      : table === 'chunks_vec_768' ? 'chunks_vec_768'
+      : 'chunks_vec';
   }
 
   existingChunkIds(): Set<number> {

@@ -281,14 +281,19 @@ export async function hybridSearch(
   // -------------------------------------------------------------------------
   // Step 1: Vector search (conditional)
   //
-  // Two embedding spaces, NEVER mixed (cross-model vectors aren't comparable):
-  //   • OpenAI 1536-dim → chunks_vec        (primary, when key + circuit OK)
-  //   • local  384-dim  → chunks_vec_local  (fallback, when OpenAI is down)
-  // Prefer OpenAI; use the local space only when OpenAI yields no query vector
-  // (no key / circuit-open / embed failed). Neither usable → BM25-only.
+  // Three embedding spaces, NEVER mixed (cross-model vectors aren't comparable):
+  //   • primary EmbeddingService space → chunks_vec_768 (local Ollama, 768) or
+  //     chunks_vec (OpenAI 1536) — selected by the service's dims
+  //   • MiniLM 384 → chunks_vec_local (fallback, when the primary is down)
+  // Prefer the primary; use the MiniLM space only when the primary yields no
+  // query vector (unavailable / embed failed). Neither usable → BM25-only.
   // -------------------------------------------------------------------------
 
-  const openaiUsable = db.vecLoaded && embeddings.isAvailable;
+  const primaryUsable = db.vecLoaded && embeddings.isAvailable;
+  // The primary service's table follows its embedding width (768 = local
+  // Ollama space; anything else = the legacy OpenAI 1536 space).
+  const primaryTable = embeddings.dims === 768 ? ('chunks_vec_768' as const) : ('chunks_vec' as const);
+  const openaiUsable = primaryUsable;
   const local        = localEmbedder ?? new LocalEmbeddingProvider();
   const localUsable  = db.vecLoaded && local.isAvailable;
 
@@ -300,15 +305,15 @@ export async function hybridSearch(
     // for the OpenAI leg.
     const degradeOnEmbedFailure = process.env['SUDO_EMBED_QUERY_DEGRADE'] !== '0';
     let queryVec: Float32Array | null = null;
-    let vecTable: 'chunks_vec' | 'chunks_vec_local' = 'chunks_vec';
+    let vecTable: 'chunks_vec' | 'chunks_vec_768' | 'chunks_vec_local' = primaryTable;
 
-    // Primary: OpenAI space.
+    // Primary: the EmbeddingService's own space.
     if (openaiUsable) {
       try {
         queryVec = await embeddings.embed(query);
       } catch (err) {
         if (!degradeOnEmbedFailure) throw err;
-        log.debug({ err: String(err) }, 'hybrid-search: OpenAI query embedding failed — trying local/BM25');
+        log.debug({ err: String(err) }, 'hybrid-search: primary query embedding failed — trying local/BM25');
         queryVec = null;
       }
     }
@@ -320,7 +325,7 @@ export async function hybridSearch(
         if (lv) {
           queryVec = lv;
           vecTable = 'chunks_vec_local';
-          log.debug('hybrid-search: using LOCAL embedding space (OpenAI unavailable)');
+          log.debug('hybrid-search: using MiniLM fallback space (primary unavailable)');
         }
       } catch (err) {
         log.debug({ err: String(err) }, 'hybrid-search: local query embedding failed — degrading to BM25-only');

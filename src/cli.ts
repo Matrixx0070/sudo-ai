@@ -3530,10 +3530,12 @@ ${question}`, kb);
         // per run and self-healing — clears the backlog over successive dreams.
         if (isVectorBackfillEnabled() && db.vecLoaded) {
           try {
+            const emb = new EmbeddingService(db);
             const res = await backfillChunkVectors(
               db,
-              new EmbeddingService(db),
-              new MindDBVectorStore(db.db),
+              emb,
+              new MindDBVectorStore(db.db, emb.dims === 768 ? 'chunks_vec_768' : 'chunks_vec'),
+              { expectedDim: emb.dims },
             );
             log.info({ jobId: job.id, ...res }, 'Vector backfill pass complete');
           } catch (vbErr) {

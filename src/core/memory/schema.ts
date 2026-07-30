@@ -574,6 +574,18 @@ export function initializeVecTable(db: Database): void {
  *
  * @param db - An open better-sqlite3 Database instance with sqlite-vec loaded.
  */
+export function initializeVecTable768(db: Database): void {
+  // 768-dim space for the local Ollama lane (nomic-embed-text). Additive third
+  // space next to chunks_vec (OpenAI 1536) and chunks_vec_local (MiniLM 384);
+  // cross-model vectors are never comparable, so each space is queried alone.
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec_768 USING vec0(
+      chunk_id  INTEGER PRIMARY KEY,
+      embedding FLOAT[768]
+    )
+  `);
+}
+
 export function initializeVecTableLocal(db: Database): void {
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec_local USING vec0(

@@ -65,9 +65,11 @@
     // budget is reserved for user-facing turns (primary). premium = grok for important turns.
     cheap: 'claude-oauth/claude-fable-5',
     premium: 'claude-oauth/claude-fable-5',
+    // 2026-07-30: embeddings run on the LOCAL Ollama lane (zero cost, no key).
+    // OpenAI 1536 lane remains available via SUDO_EMBED_MODEL override.
     embedding: {
-      id: 'openai/text-embedding-3-small',
-      dims: 1536,
+      id: 'ollama/nomic-embed-text',
+      dims: 768,
     },
   },
   auth: {

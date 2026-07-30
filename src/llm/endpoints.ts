@@ -51,6 +51,12 @@ export const OPENAI_CHAT_COMPLETIONS_URL = `${PROVIDER_BASE_URLS.openai}/chat/co
 
 // ---- embeddings ----------------------------------------------------------
 export const OPENAI_EMBEDDINGS_URL = `${PROVIDER_BASE_URLS.openai}/embeddings`;
+/**
+ * Local Ollama embeddings (OpenAI-compatible wire) — the self-hosted, zero-cost
+ * embedding lane (nomic-embed-text 768-dim by default). Localhost, no auth,
+ * no egress. OLLAMA_BASE_URL overrides the host for non-default installs.
+ */
+export const OLLAMA_EMBEDDINGS_URL = `${process.env['OLLAMA_BASE_URL'] ?? 'http://127.0.0.1:11434'}/v1/embeddings`;
 
 // ---- image generation ----------------------------------------------------
 export const OPENAI_IMAGES_URL = `${PROVIDER_BASE_URLS.openai}/images/generations`;

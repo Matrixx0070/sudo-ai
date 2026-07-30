@@ -98,6 +98,7 @@ const MODEL_LIMITS: Record<string, AliasLimits> = {
   'openai/gpt-4o': { context_window: 128_000, max_output: 16_384 },
   'openai/gpt-4o-mini': { context_window: 128_000, max_output: 16_384 },
   'openai/text-embedding-3-small': { context_window: 8_191, max_output: 0 },
+  'ollama/nomic-embed-text': { context_window: 8_192, max_output: 0 },
 
   // Local
   'ollama/llama3.2': { context_window: 128_000, max_output: 8_192 },
