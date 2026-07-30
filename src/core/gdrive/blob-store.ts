@@ -84,7 +84,7 @@ function saveManifestFileId(fileId: string): void {
   writeFileSync(p, JSON.stringify({ fileId }), { mode: 0o600 });
 }
 
-async function resolveManifestFile(
+export async function resolveManifestFile(
   client: DriveClient,
   folders: FolderIdMap,
 ): Promise<string | null> {
