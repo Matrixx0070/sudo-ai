@@ -478,6 +478,24 @@ export async function visionIR(req: VisionIRRequestLite): Promise<{ text: string
   }
 
   const errors: string[] = [];
+
+  // Claude OAuth seat leg (2026-07-31): vision is live-proven on the Max seat
+  // and seat-covered ($0 marginal), so it runs FIRST; xai/openai stay as
+  // metered failovers. Implementation lives in vision-claude-oauth.ts.
+  {
+    const { tryClaudeOAuthVision } = await import('./vision-claude-oauth.js');
+    const seat = await tryClaudeOAuthVision({
+      imageUrl: req.imageUrl,
+      prompt: req.prompt,
+      ...(req.maxTokens !== undefined ? { maxTokens: req.maxTokens } : {}),
+    });
+    if (seat.ok) {
+      recordVisionSuccess('claude-oauth:vision', seat.text);
+      return { text: seat.text };
+    }
+    errors.push(`[llm-client] vision ${seat.reason}`);
+  }
+
   const xaiKey = getProviderApiKey('xai');
   if (xaiKey) {
     try {
