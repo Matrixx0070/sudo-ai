@@ -478,6 +478,59 @@ export async function visionIR(req: VisionIRRequestLite): Promise<{ text: string
   }
 
   const errors: string[] = [];
+
+  // Claude OAuth seat leg (2026-07-31): vision is live-proven on the Max seat
+  // (image blocks on the Messages API, oauth-2025-04-20). Seat-covered ($0
+  // marginal) so it goes FIRST; xai/openai stay as metered failovers. Skipped
+  // cleanly when the seat has no usable token. SUDO_VISION_CLAUDE_MODEL
+  // overrides the default haiku (any vision-capable claude id).
+  try {
+    const { getClaudeOAuthManager } = await import('./claude-oauth-manager.js');
+    const cMgr = getClaudeOAuthManager();
+    let cTok = cMgr.getAccessToken();
+    if (!cTok) { await cMgr.refreshToken().catch(() => false); cTok = cMgr.getAccessToken(); }
+    if (cTok) {
+      const cModel = process.env['SUDO_VISION_CLAUDE_MODEL'] ?? 'claude-haiku-4-5-20251001';
+      // data: URL → base64 source block; anything else → url source block.
+      const dataMatch = /^data:([^;,]+);base64,(.+)$/.exec(req.imageUrl);
+      const imageBlock = dataMatch
+        ? { type: 'image', source: { type: 'base64', media_type: dataMatch[1], data: dataMatch[2] } }
+        : { type: 'image', source: { type: 'url', url: req.imageUrl } };
+      const cBody: Record<string, unknown> = {
+        model: cModel,
+        max_tokens: req.maxTokens ?? 1024,
+        messages: [{ role: 'user', content: [imageBlock, { type: 'text', text: req.prompt }] }],
+      };
+      const { applyOAuthBodyContract } = await import('./transport.js');
+      applyOAuthBodyContract(cBody);
+      const cRes = await fetch(`${PROVIDER_BASE_URLS.anthropic}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cTok}`,
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'oauth-2025-04-20',
+        },
+        body: JSON.stringify(cBody),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (cRes.ok) {
+        const cJson = (await cRes.json()) as { content?: Array<{ type: string; text?: string }> };
+        const cText = (cJson.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
+        if (cText.length > 0) {
+          recordVisionSuccess('claude-oauth:vision', cText);
+          return { text: cText };
+        }
+        errors.push('[llm-client] vision claude-oauth: empty text');
+      } else {
+        const t = await cRes.text().catch(() => '');
+        errors.push(`[llm-client] vision claude-oauth failed: ${cRes.status} ${t.slice(0, 200)}`);
+      }
+    }
+  } catch (err) {
+    errors.push(`[llm-client] vision claude-oauth leg error: ${String(err).slice(0, 200)}`);
+  }
+
   const xaiKey = getProviderApiKey('xai');
   if (xaiKey) {
     try {
