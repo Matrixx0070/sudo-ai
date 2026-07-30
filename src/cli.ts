@@ -5918,6 +5918,41 @@ ${question}`, kb);
   }
 
   // -------------------------------------------------------------------------
+  // 9.6d TX19 — overnight self-improvement + deploy card (SUDO_TX19_OVERNIGHT=1)
+  // -------------------------------------------------------------------------
+  // Nightly bounded self-improvement run (HeldOutGate-enforced — #988 fail-
+  // closed) → TX10 deploy-card checkpoint. "Deploy" is an approval ARTIFACT
+  // only; nothing auto-applies (AL8.6 auto-merge=NO). Flag OFF → inert.
+  try {
+    const t19 = await import('./core/channels/overnight-improve.js');
+    if (t19.overnightImproveEnabled()) {
+      const engine = async () => {
+        const { runSelfImprovement } = await import('./core/self-improvement/index.js');
+        const { HeldOutGate } = await import('./core/learning/held-out-gate.js');
+        const { TraceStore } = await import('./core/learning/trace-store.js');
+        const gate = new HeldOutGate(new TraceStore(path.join(DATA_DIR, 'traces.db')));
+        const r = await runSelfImprovement({ trigger: 'tx19-overnight', heldOutGate: gate });
+        return { healthScore: r.healthScore, summary: r.summary, actions: r.actions.map((a) => ({ type: a.type, description: a.description, applied: a.applied })) };
+      };
+      const scheduleTx19 = (): NodeJS.Timeout => {
+        const now = new Date();
+        const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), t19.overnightHourUtc(), 0, 0));
+        if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+        return setTimeout(() => {
+          void t19.runOvernightCycle(engine, new Date().toISOString().slice(0, 10))
+            .catch((err) => log.warn({ err: String(err) }, 'TX19: cycle crashed'))
+            .finally(() => { tx19Timer = scheduleTx19(); });
+        }, next.getTime() - now.getTime());
+      };
+      let tx19Timer = scheduleTx19();
+      registerShutdown(() => clearTimeout(tx19Timer));
+      log.info({ hourUtc: t19.overnightHourUtc() }, 'TX19: overnight self-improvement scheduled (SUDO_TX19_OVERNIGHT=1)');
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'TX19: overnight wiring failed — continuing without');
+  }
+
+  // -------------------------------------------------------------------------
   // 9.7 Health Watchdog
   // -------------------------------------------------------------------------
   try {

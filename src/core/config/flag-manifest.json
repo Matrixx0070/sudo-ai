@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 755,
+  "count": 757,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -702,6 +702,8 @@
     "SUDO_TUI_REQUEST_TIMEOUT_MS",
     "SUDO_TUI_TEST",
     "SUDO_TWO_TIER_COMPACT",
+    "SUDO_TX19_HOUR_UTC",
+    "SUDO_TX19_OVERNIGHT",
     "SUDO_UNIVERSAL_NEGATIVE_GUARD",
     "SUDO_UPDATE_",
     "SUDO_UPDATE_AUTO_APPLY",
