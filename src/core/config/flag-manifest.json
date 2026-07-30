@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 754,
+  "count": 755,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -663,6 +663,7 @@
     "SUDO_TG_DETAIL_TOGGLE",
     "SUDO_TG_DIGEST_HOUR_UTC",
     "SUDO_TG_FILE_THRESHOLD",
+    "SUDO_TG_GENUI",
     "SUDO_TG_MISSION_CONTROL",
     "SUDO_TG_MORNING_DIGEST",
     "SUDO_TG_PROGRESS",

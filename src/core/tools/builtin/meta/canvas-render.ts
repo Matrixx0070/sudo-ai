@@ -49,6 +49,16 @@ export const canvasRenderTool: ToolDefinition = {
     try {
       const r = await pushCanvasToSession(ctx.sessionId, validation.payload);
       if (!r.ok) {
+        // TX13: not a web session — try the Telegram generative-UI sink
+        // (SUDO_TG_GENUI=1). Same validated payload, same action vocabulary.
+        const { tryTelegramCanvasRender } = await import('../../../channels/telegram-genui.js');
+        const tg = await tryTelegramCanvasRender(ctx.sessionId, validation.payload);
+        if (tg.ok) {
+          logger.info({ session: ctx.sessionId }, 'canvas.render delivered via Telegram (TX13)');
+          return { success: true, output: 'canvas.render: rendered to the Telegram chat (text + buttons).' };
+        }
+      }
+      if (!r.ok) {
         return { success: false, output: `canvas.render: not delivered — ${r.reason}. Fall back to a text summary.` };
       }
       logger.info({ session: ctx.sessionId, components: validation.payload.components.length }, 'canvas.render pushed');
