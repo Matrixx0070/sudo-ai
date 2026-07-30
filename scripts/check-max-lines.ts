@@ -105,7 +105,10 @@ function main(): void {
     for (const v of violations) {
       console.error(`  ${v.file}: ${v.lines} lines (baseline ${v.baseline}, limit ${v.limit})`);
     }
-    console.error('Split the file, or if the growth is justified run: npx tsx scripts/check-max-lines.ts --write');
+    // NOTE: --write NEVER clears a violation (ratchet() keeps the old baseline
+    // for violating files by design — debt only ratchets down). The old hint
+    // said otherwise and misled sessions twice (#971).
+    console.error('Split the file to get back under the limit. (--write cannot bless growth: it only tightens shrunk baselines and seeds new files.)');
     process.exit(1);
   }
   // Auto-tighten baseline when files shrank (keeps the ratchet moving down).
