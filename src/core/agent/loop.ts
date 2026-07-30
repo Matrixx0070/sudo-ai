@@ -2154,6 +2154,16 @@ export class AgentLoop extends AgentLoopInjections {
     // Per-turn cap on context-overflow → compact → retry cycles, so a prompt that
     // stays oversized even after compaction can't spin the loop forever.
     let overflowRecoveries = 0;
+    // AL1 spend halt (invariant 10): cumulative estimated USD for THIS run.
+    // SUDO_AGENT_RUN_MAX_USD unset/<=0 = no cap (mechanism ships flag-off;
+    // the operator sets the ceiling). A breach exits the loop at the next
+    // safe boundary and finishes the turn through the same graceful fallback
+    // as max-iterations — never a hard throw mid-turn, and the current
+    // response's tool calls still complete before the halt.
+    let runSpendUsd = 0;
+    let spendCapBreached = false;
+    const _runMaxUsdRaw = Number(process.env['SUDO_AGENT_RUN_MAX_USD']);
+    const runMaxUsd = Number.isFinite(_runMaxUsdRaw) && _runMaxUsdRaw > 0 ? _runMaxUsdRaw : 0;
     const MAX_OVERFLOW_RECOVERIES = 3;
     // P0: bound how many times GoalStopDetector may force continuation, so a
     // persistent 'incomplete' verdict can never produce an unbounded loop
@@ -2173,6 +2183,18 @@ export class AgentLoop extends AgentLoopInjections {
 
     try {
       while (state.iteration < maxIterations) {
+        // AL1 spend halt: checked at the iteration boundary so the previous
+        // iteration's tool results are already in the session — the fallback
+        // reply can then be the model's own last text.
+        if (runMaxUsd > 0 && runSpendUsd >= runMaxUsd) {
+          spendCapBreached = true;
+          log.warn(
+            { sessionId: state.sessionId, runSpendUsd: Number(runSpendUsd.toFixed(6)), runMaxUsd, iteration: state.iteration },
+            'Run spend cap reached — halting loop, finishing turn with fallback reply',
+          );
+          emit({ type: 'error', error: `Run spend cap reached ($${runSpendUsd.toFixed(4)} >= $${runMaxUsd})` });
+          break;
+        }
         state.iteration++;
 
         // Steering: honor an in-process abort/inject/reprioritize at the safe
@@ -2642,6 +2664,9 @@ export class AgentLoop extends AgentLoopInjections {
           },
           'Brain call completed',
         );
+
+        // AL1 spend halt: accumulate the run's estimated USD (0 for free lanes).
+        runSpendUsd += response.usage?.estimatedCost ?? 0;
 
         // Phase 2: TraceStore — record brain call (fail-open).
         try {
@@ -3610,21 +3635,23 @@ export class AgentLoop extends AgentLoopInjections {
         break;
       }
 
-      if (state.iteration >= maxIterations) {
-        const msg = `Agent loop reached max iterations (${maxIterations})`;
+      if (state.iteration >= maxIterations || spendCapBreached) {
+        const msg = spendCapBreached
+          ? `Agent run spend cap reached ($${runSpendUsd.toFixed(4)} >= $${runMaxUsd})`
+          : `Agent loop reached max iterations (${maxIterations})`;
         emit({ type: 'error', error: msg });
         if (this.auditTrail) {
-          try { recordRecovery(this.auditTrail, { mistake: msg, learned: 'pipeline_max_iterations', commitment: 'guard against this failure mode', ttl_days: 30 }); } catch { /* non-fatal */ }
+          try { recordRecovery(this.auditTrail, { mistake: msg, learned: spendCapBreached ? 'pipeline_spend_cap' : 'pipeline_max_iterations', commitment: 'guard against this failure mode', ttl_days: 30 }); } catch { /* non-fatal */ }
         }
         // Graceful degradation at the hard cap: finish the turn with a fallback
         // reply instead of surfacing a hard PipelineError to the user — same
         // shape as the consecutive-tool-iteration cap above (prefer the model's
         // own last text, else the canned LoopGuard reply). Kill-switch:
         // SUDO_MAX_ITER_FALLBACK=0 restores the legacy throw.
-        if (process.env['SUDO_MAX_ITER_FALLBACK'] === '0') {
+        if (process.env['SUDO_MAX_ITER_FALLBACK'] === '0' && !spendCapBreached) {
           throw new PipelineError(msg, 'pipeline_max_iterations', { sessionId: state.sessionId, maxIterations });
         }
-        log.warn({ sessionId: state.sessionId, maxIterations }, 'Max iterations reached — finishing turn with fallback reply instead of throwing');
+        log.warn({ sessionId: state.sessionId, maxIterations, spendCapBreached }, `${spendCapBreached ? 'Spend cap' : 'Max iterations'} reached — finishing turn with fallback reply instead of throwing`);
         if (!finalText.trim()) {
           let lastAssistantText = '';
           for (let i = session.messages.length - 1; i >= 0; i--) {
