@@ -108,6 +108,36 @@ function sha256Hex(text: string): string {
 }
 
 /** Validate one index entry; returns the reasons it is malformed (empty = ok). */
+/**
+ * Normalise the OPTIONAL display fields of a registry entry in place. The
+ * index is third-party-published external data: an unquoted YAML number in a
+ * publisher's tag list arrives as a JSON number (live 2026-07-30: two skills
+ * shipped `tags: [..., 1099, ...]`), and every consumer that calls
+ * `.toLowerCase()` on it crashes (RepairFlywheel-flagged `skill.search
+ * failed: t.toLowerCase is not a function`, recurring since 07-12). Display
+ * junk must degrade, not crash and not reject the whole index: string/number/
+ * boolean primitives are stringified (publisher intent for `1099` is "1099"),
+ * everything else is dropped; a non-string description is discarded.
+ */
+export function normaliseEntryDisplayFields(entry: RegistrySkillEntry): void {
+  const toStrings = (v: unknown): string[] | undefined => {
+    if (v === undefined || v === null) return undefined;
+    if (!Array.isArray(v)) return undefined;
+    return v
+      .filter((t) => typeof t === 'string' || typeof t === 'number' || typeof t === 'boolean')
+      .map((t) => String(t));
+  };
+  const tags = toStrings(entry.tags as unknown);
+  if (tags === undefined) delete entry.tags;
+  else entry.tags = tags;
+  const caps = toStrings(entry.capabilities as unknown);
+  if (caps === undefined) delete entry.capabilities;
+  else entry.capabilities = caps;
+  if (entry.description !== undefined && typeof entry.description !== 'string') delete entry.description;
+  if (entry.changelog !== undefined && typeof entry.changelog !== 'string') delete entry.changelog;
+  if (entry.author !== undefined && typeof entry.author !== 'string') delete entry.author;
+}
+
 export function validateEntry(e: unknown): string[] {
   const reasons: string[] = [];
   const entry = e as Partial<RegistrySkillEntry> | null;
@@ -146,6 +176,7 @@ export class SkillRegistryClient {
         }
         const bad = parsed.skills.flatMap((s) => validateEntry(s).map((r) => `${(s as { name?: string })?.name ?? '?'}: ${r}`));
         if (bad.length > 0) throw new Error(`malformed entries — ${bad.join('; ')}`);
+        for (const entry of parsed.skills) normaliseEntryDisplayFields(entry);
         log.info({ sourceUrl: url, skillCount: parsed.skills.length }, 'Skill registry index fetched');
         return { index: parsed, sourceUrl: url };
       } catch (err) {
