@@ -31,7 +31,12 @@ const DEFAULTS: Record<SudoAlias, string> = {
   'sudo/local': 'ollama/llama3.2',
   'sudo/cheap': 'xai/grok-4-fast-non-reasoning',
   'sudo/mid': 'xai/grok-4-fast-reasoning',
-  'sudo/frontier': 'anthropic/claude-opus-4-8',
+  // 2026-07-30: frontier → claude-opus-5 on the Claude OAuth seat (Frank
+  // request). The old anthropic/ API-key lane was dead in prod (no
+  // ANTHROPIC_API_KEY); the OAuth lane is the proven credential. Generation
+  // bump opus-4 → opus-5: the F64 succession gate fires when NotebookLM is
+  // enabled (currently flag-off in prod).
+  'sudo/frontier': 'claude-oauth/claude-opus-5',
   'sudo/embed': 'openai/text-embedding-3-small',
   'sudo/vision': 'xai/grok-4-fast',
   // Default judge = a cheap anthropic route, deliberately a DIFFERENT provider

@@ -40,7 +40,7 @@ describe('resolveAlias', () => {
     expect(resolveAlias('sudo/local')).toBe('ollama/llama3.2');
     expect(resolveAlias('sudo/cheap')).toBe('xai/grok-4-fast-non-reasoning');
     expect(resolveAlias('sudo/mid')).toBe('xai/grok-4-fast-reasoning');
-    expect(resolveAlias('sudo/frontier')).toBe('anthropic/claude-opus-4-8');
+    expect(resolveAlias('sudo/frontier')).toBe('claude-oauth/claude-opus-5');
     expect(resolveAlias('sudo/embed')).toBe('openai/text-embedding-3-small');
     expect(resolveAlias('sudo/vision')).toBe('xai/grok-4-fast');
   });
@@ -60,7 +60,7 @@ describe('resolveAlias', () => {
 
   it('a blank env override is ignored (falls back to the default)', () => {
     process.env['LLM_ALIAS_FRONTIER'] = '   ';
-    expect(resolveAlias('sudo/frontier')).toBe('anthropic/claude-opus-4-8');
+    expect(resolveAlias('sudo/frontier')).toBe('claude-oauth/claude-opus-5');
   });
 
   it('env override values are trimmed', () => {

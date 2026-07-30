@@ -34,10 +34,10 @@ function baseRequest(messages: IRMessage[]): IRRequest {
 }
 
 describe('getAliasLimits', () => {
-  it('returns table values for a known alias (sudo/frontier → opus 200K/32000)', () => {
+  it('returns table values for a known alias (sudo/frontier → opus-5 1M/128000)', () => {
     expect(getAliasLimits('sudo/frontier')).toEqual({
-      context_window: 200_000,
-      max_output: 32_000,
+      context_window: 1_000_000,
+      max_output: 128_000,
     });
   });
 
@@ -89,13 +89,13 @@ describe('getAliasLimits', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ data: [{ id: 'anthropic/claude-opus-4-8', context_window: 500_000 }] }),
+        json: async () => ({ data: [{ id: 'claude-oauth/claude-opus-5', context_window: 500_000 }] }),
       }),
     );
     await refreshAliasLimitsFromGateway();
     expect(getAliasLimits('sudo/frontier')).toEqual({
       context_window: 500_000,
-      max_output: 32_000, // fallback preserved
+      max_output: 128_000, // fallback preserved
     });
   });
 
@@ -105,8 +105,8 @@ describe('getAliasLimits', () => {
     const updated = await refreshAliasLimitsFromGateway();
     expect(updated).toBe(0);
     expect(getAliasLimits('sudo/frontier')).toEqual({
-      context_window: 200_000,
-      max_output: 32_000,
+      context_window: 1_000_000,
+      max_output: 128_000,
     });
   });
 

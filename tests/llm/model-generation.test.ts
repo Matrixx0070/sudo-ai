@@ -26,7 +26,7 @@ describe('G-MODELGEN — modelGenerationOf', () => {
 
   it('currentModelGeneration follows the frontier alias + its env override', () => {
     delete process.env['LLM_ALIAS_FRONTIER'];
-    expect(currentModelGeneration()).toBe('anthropic/opus-4'); // default frontier = opus-4-8
+    expect(currentModelGeneration()).toBe('claude-oauth/opus-5'); // default frontier = claude-oauth/claude-opus-5
     process.env['LLM_ALIAS_FRONTIER'] = 'anthropic/claude-opus-5';
     expect(currentModelGeneration()).toBe('anthropic/opus-5');
   });

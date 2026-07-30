@@ -85,9 +85,9 @@ const MODEL_LIMITS: Record<string, AliasLimits> = {
   'xai-oauth/grok-composer-2.5-fast': { context_window: 200_000, max_output: 32_768 },
 
   // Anthropic — 200K context; 32000 output (DEFAULT_MODEL_MAX, thinking-inject.ts).
-  // claude-opus-5: served on the Claude OAuth lane; 200K context assumed
-  // (conservative — matches every other Anthropic entry) until confirmed.
-  'anthropic/claude-opus-5': { context_window: 200_000, max_output: 32_000 },
+  // claude-opus-5: 1M context / 128K output — confirmed live via GET
+  // /v1/models/claude-opus-5 (2026-07-30) and platform.claude.com models table.
+  'anthropic/claude-opus-5': { context_window: 1_000_000, max_output: 128_000 },
   'anthropic/claude-opus-4-8': { context_window: 200_000, max_output: 32_000 },
   'anthropic/claude-opus-4-7': { context_window: 200_000, max_output: 32_000 },
   'anthropic/claude-opus-4-6': { context_window: 200_000, max_output: 32_000 },
@@ -111,7 +111,7 @@ const ALIAS_LIMITS: Record<SudoAlias, AliasLimits> = {
   'sudo/local': MODEL_LIMITS['ollama/llama3.2']!,
   'sudo/cheap': MODEL_LIMITS['xai/grok-4-fast-non-reasoning']!,
   'sudo/mid': MODEL_LIMITS['xai/grok-4-fast-reasoning']!,
-  'sudo/frontier': MODEL_LIMITS['anthropic/claude-opus-4-8']!,
+  'sudo/frontier': MODEL_LIMITS['anthropic/claude-opus-5']!,
   'sudo/embed': MODEL_LIMITS['openai/text-embedding-3-small']!,
   'sudo/vision': MODEL_LIMITS['xai/grok-4-fast']!,
   'sudo/judge': MODEL_LIMITS['anthropic/claude-haiku-4-5-20251001']!,
@@ -257,7 +257,9 @@ const PRICE_TABLE: Record<string, PriceRate> = {
   // gateway.db row still records real token counts for telemetry.
   'xai-oauth/grok-build': { inUsdPerM: 0.0, outUsdPerM: 0.0 },
   'xai-oauth/grok-composer-2.5-fast': { inUsdPerM: 0.0, outUsdPerM: 0.0 },
-  // Anthropic
+  // Anthropic (claude-oauth/* routes are seat-classified above and never
+  // reach this table; these rows cover the API-key lane).
+  'anthropic/claude-opus-5': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
   'anthropic/claude-opus-4-8': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
   'anthropic/claude-opus-4-7': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
   'anthropic/claude-haiku-4-5-20251001': { inUsdPerM: 1.0, outUsdPerM: 5.0 },
