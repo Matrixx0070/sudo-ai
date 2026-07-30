@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 758,
+  "count": 759,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -316,6 +316,7 @@
     "SUDO_GDRIVE_AUTOHIBERNATE",
     "SUDO_GDRIVE_AUTOHIBERNATE_EVERY",
     "SUDO_GDRIVE_BLACKBOARD_MS",
+    "SUDO_GDRIVE_BLOB_GC",
     "SUDO_GDRIVE_CHANGES_MS",
     "SUDO_GDRIVE_CHECKPOINT_MS",
     "SUDO_GDRIVE_COMMENTS_MS",

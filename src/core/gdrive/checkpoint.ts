@@ -99,6 +99,16 @@ export async function runCheckpoint(deps: CheckpointDeps): Promise<PushResult> {
     } catch (chronErr) {
       log.warn({ err: String(chronErr) }, 'chronicle append failed (checkpoint still recorded)');
     }
+    // Blob-GC rider (audit weak point: renamed blobs linger until swept).
+    // Fail-closed inside runBlobGc; never fails the checkpoint.
+    try {
+      const { runBlobGc } = await import('./blob-gc.js');
+      const gc = await runBlobGc(deps.client, deps.folders, deps.keys);
+      if (gc.ran && gc.trashed > 0) log.info({ trashed: gc.trashed }, 'checkpoint blob-gc trashed stale blobs');
+    } catch (gcErr) {
+      log.warn({ err: String(gcErr) }, 'checkpoint blob-gc rider failed (checkpoint unaffected)');
+    }
+
     emitGdriveAudit(deps.audit, {
       job: 'checkpoint',
       outcome: 'success',
