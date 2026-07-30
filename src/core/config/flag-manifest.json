@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 750,
+  "count": 751,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
