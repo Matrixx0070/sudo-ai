@@ -80,6 +80,35 @@ interface EmbedCircuitState {
 }
 const embedCircuit: EmbedCircuitState = { consecutive429: 0, openUntil: 0, loggedOpen: false };
 
+/**
+ * Offline-lane state for the LOCAL Ollama embedder (2026-07-30). A
+ * connection-refused against 127.0.0.1:11434 means the daemon isn't installed
+ * or isn't running — retrying within the same call can never help, and without
+ * this gate every retrieval on an Ollama-less machine paid ~3.5s of backoff
+ * before degrading. On the first network failure the lane goes OFFLINE for a
+ * short cooldown (default 60s, SUDO_EMBED_LOCAL_RETRY_MS overrides) so
+ * isAvailable fails fast; the periodic recheck means installing Ollama
+ * mid-session recovers within a minute. One warn per offline episode carries
+ * the install hint.
+ */
+const LOCAL_OFFLINE_DEFAULT_COOLDOWN_MS = 60_000;
+interface LocalLaneState {
+  offlineUntil: number;
+  logged: boolean;
+}
+const localLane: LocalLaneState = { offlineUntil: 0, logged: false };
+
+/** Test-only: reset the shared local-lane state between cases. */
+export function __resetLocalLane(): void {
+  localLane.offlineUntil = 0;
+  localLane.logged = false;
+}
+
+function localLaneCooldownMs(): number {
+  const v = Number(process.env['SUDO_EMBED_LOCAL_RETRY_MS']);
+  return Number.isFinite(v) && v >= 0 ? v : LOCAL_OFFLINE_DEFAULT_COOLDOWN_MS;
+}
+
 /** Test-only: reset the shared circuit between cases. */
 export function __resetEmbedCircuit(): void {
   embedCircuit.consecutive429 = 0;
@@ -149,6 +178,9 @@ export class EmbeddingService {
     // throws immediately, so callers gating on isAvailable would otherwise pay one
     // wasted exception per query for the whole cooldown window (RAG-7).
     if (!this.apiAvailable) return false;
+    // Local Ollama lane: while the daemon is known-offline, fail fast so
+    // hybrid-search drops straight to MiniLM/BM25 with zero added latency.
+    if (this.model.startsWith('ollama/') && localLane.offlineUntil > Date.now()) return false;
     return !this.circuitEnabled || embedCircuit.openUntil <= Date.now();
   }
 
@@ -261,8 +293,13 @@ export class EmbeddingService {
           { model: this.model },
         );
 
-        // A success closes the circuit / resets the consecutive-429 counter.
+        // A success closes the circuit / resets the consecutive-429 counter,
+        // and ends any local-lane offline episode (daemon is back).
         this._recordEmbedSuccess();
+        if (this.model.startsWith('ollama/')) {
+          localLane.offlineUntil = 0;
+          localLane.logged = false;
+        }
 
         // embed() already returns vectors sorted by input index.
         return result.embeddings.map((embedding) => new Float32Array(embedding));
@@ -285,8 +322,22 @@ export class EmbeddingService {
           throw new Error(`[EmbeddingService] API error ${status}: ${body}`);
         }
 
-        // Network-level failure (DNS, connection reset, etc.) — retryable.
+        // Network-level failure (DNS, connection reset, etc.).
         lastNetworkError = err;
+        // Local Ollama lane: connection failure = daemon absent/stopped.
+        // Retrying can't help inside this call — open the offline window,
+        // hint once, and fail fast so the caller degrades immediately.
+        if (this.model.startsWith('ollama/')) {
+          localLane.offlineUntil = Date.now() + localLaneCooldownMs();
+          if (!localLane.logged) {
+            localLane.logged = true;
+            console.warn(
+              '[EmbeddingService] Ollama not reachable — retrieval degrades to built-in MiniLM/BM25. ' +
+              'For best local embeddings install Ollama (https://ollama.com/download) and run: ollama pull nomic-embed-text',
+            );
+          }
+          throw err;
+        }
         if (attempt < maxAttempts) {
           await this._sleep(this._backoffDelayMs(attempt));
           continue;
