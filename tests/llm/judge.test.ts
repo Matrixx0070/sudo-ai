@@ -38,8 +38,9 @@ describe('G-JUDGE — judge route independence', () => {
 
   it('judgeFor HOLDS for human review when the judge shares a provider with a route under test', () => {
     delete process.env['LLM_ALIAS_JUDGE']; // anthropic default
-    // sudo/frontier is anthropic — same provider as the judge → not independent.
-    const v = judgeFor(['sudo/cheap', 'sudo/frontier']);
+    // Concrete anthropic route — same provider as the judge → not independent.
+    // (sudo/frontier no longer works as the fixture: it moved to claude-oauth.)
+    const v = judgeFor(['sudo/cheap', 'anthropic/claude-opus-4-8']);
     expect(v.available).toBe(false);
     if (!v.available) expect(v.reason).toMatch(/not independent|human review/);
   });
