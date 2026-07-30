@@ -52,6 +52,22 @@ export const FORK_SUMMARY_MAX_CHARS: number = (() => {
   return Number.isInteger(raw) && raw >= 2000 ? raw : 8000;
 })();
 
+/**
+ * Cap on the serialised transcript fed to the fork-summary LLM call. Sessions
+ * on rarely-used channels accumulate between turns (fork only triggers on the
+ * NEXT agent call), so an idle channel can present hundreds of messages at
+ * once — 2026-07-29 a 699-message/1.2MB http session produced a 712KB fork
+ * prompt (the trigger for that day's RAG FTS event-loop wedge, plus real token
+ * cost and a summary the model can't do justice to). The serialisation keeps
+ * the TAIL (most recent context wins); dropped messages are counted in a
+ * header line, and extractIdentifiers still scans the FULL raw history so
+ * concrete identifiers survive the cut. Tunable via SUDO_FORK_INPUT_CHARS.
+ */
+export const FORK_INPUT_MAX_CHARS: number = (() => {
+  const raw = Number(process.env['SUDO_FORK_INPUT_CHARS']);
+  return Number.isInteger(raw) && raw >= 20_000 ? raw : 150_000;
+})();
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -154,10 +170,23 @@ export function extractIdentifiers(messages: BrainMessage[], cap = 40): string[]
 }
 
 async function buildForkSummary(brain: ForkBrain, messages: BrainMessage[]): Promise<string> {
-  const serialised = messages
+  const parts = messages
     .filter(m => m.role !== 'system' || !m.content.startsWith('[AutoCompact'))
-    .map(m => `[${m.role.toUpperCase()}]\n${(m.content ?? '').slice(0, 2000)}`)
-    .join('\n\n---\n\n');
+    .map(m => `[${m.role.toUpperCase()}]\n${(m.content ?? '').slice(0, 2000)}`);
+  // Tail-biased char budget (FORK_INPUT_MAX_CHARS): keep the most recent
+  // messages whole; count what fell off so the summariser knows.
+  const kept: string[] = [];
+  let used = 0;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    used += parts[i].length + 7; // + separator
+    if (kept.length > 0 && used > FORK_INPUT_MAX_CHARS) break;
+    kept.unshift(parts[i]);
+  }
+  const dropped = parts.length - kept.length;
+  const serialised =
+    (dropped > 0
+      ? `[NOTE: the ${dropped} oldest messages were omitted for size — the EXTRACTED IDENTIFIERS below still cover the full history.]\n\n---\n\n`
+      : '') + kept.join('\n\n---\n\n');
 
   // Anti-telephone-game: pin facts carried from a prior fork so repeated forks
   // don't erode them. Bounded — they compete within the same char budget, so

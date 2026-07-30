@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 747,
+  "count": 748,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -296,6 +296,7 @@
     "SUDO_FORGE_BUDGET_USD_PER_RUN",
     "SUDO_FORGE_USD_PER_1K_TOKENS",
     "SUDO_FORK_CONTEXT",
+    "SUDO_FORK_INPUT_CHARS",
     "SUDO_FORK_MESSAGE_COUNT",
     "SUDO_FORK_SUMMARY_CHARS",
     "SUDO_FORK_THRESHOLD_CHARS",
