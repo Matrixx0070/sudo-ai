@@ -23,7 +23,7 @@ describe('VetoGate failure posture on total model outage', () => {
     const result = await runVetoGate({ toolName: 'writeConfig', args: { path: '/etc/x' } }, throwingFetcher);
     expect(['HIGH', 'CRITICAL']).toContain(result.risk);
     expect(result.decision).toBe('VETO');
-    expect(result.failedOpen).toBe(false);
+    expect(result.failedOpen).toBeUndefined(); // marker reserved for audited fail-open
   });
 
   it('POSTURE-2: MEDIUM risk keeps the deliberate fail-open (APPROVE, audited)', async () => {

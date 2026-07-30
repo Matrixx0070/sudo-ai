@@ -500,11 +500,12 @@ export async function runVetoGate(
         { err: String(err), tool: input.toolName, risk },
         'VetoGate: queryAllModels threw — failing CLOSED (VETO) for HIGH/CRITICAL risk',
       );
+      // failedOpen is a literal-true marker for audited fail-open events —
+      // this branch fails CLOSED, so the marker is simply absent.
       return {
         decision: 'VETO',
         risk,
         reason: 'All models failed — HIGH/CRITICAL risk fails closed without review',
-        failedOpen: false,
       };
     }
     log.warn(
