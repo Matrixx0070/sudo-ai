@@ -5819,6 +5819,89 @@ ${question}`, kb);
   }
 
   // -------------------------------------------------------------------------
+  // 9.6c TX7 — morning digest (SUDO_TG_MORNING_DIGEST=1, default OFF)
+  // -------------------------------------------------------------------------
+  // One owner DM at SUDO_TG_DIGEST_HOUR_UTC (default 07:00 UTC): spend, cron
+  // health, brain domains, active missions, checkpoints waiting on the owner.
+  // Store reads only — ZERO llm calls. Self-managed daily timer (cron jobs
+  // run agent prompts; the digest must never burn a turn).
+  try {
+    const digestMod = await import('./core/channels/morning-digest.js');
+    if (digestMod.morningDigestEnabled()) {
+      const digestChatId = (process.env['TELEGRAM_CHAT_ID'] ?? '').split(',')[0]?.trim()
+        || config.channels?.telegram?.allowedUsers?.[0];
+      if (digestChatId) {
+        const runDigest = async (): Promise<void> => {
+          try {
+            const snap = digestMod.buildDigestSnapshot({
+              spend: () => {
+                let budgetUsd: number | null = null;
+                for (const key of ['SUDO_DAILY_LLM_BUDGET_USD', 'SUDO_LLM_GLOBAL_BUDGET_USD']) {
+                  const n = Number(process.env[key]);
+                  if (Number.isFinite(n) && n > 0) { budgetUsd = n; break; }
+                }
+                let todayUsd: number | null = null;
+                try {
+                  const { getGatewayCallLog } = require('./llm/logging.js') as typeof import('./llm/logging.js');
+                  todayUsd = getGatewayCallLog().daySpend().total;
+                } catch { /* ledger best-effort */ }
+                return { todayUsd, budgetUsd };
+              },
+              cron: () => {
+                let enabledCount = 0; let failingCount = 0; let lastFailureName: string | undefined;
+                for (const j of cronStore.list()) {
+                  if (j.enabled) enabledCount++;
+                  if (j.consecutiveErrors > 0) { failingCount++; lastFailureName = j.name; }
+                }
+                return { enabledCount, failingCount, ...(lastFailureName ? { lastFailureName } : {}) };
+              },
+              brain: () => {
+                const profiles = (brain as { getFailoverStatus?: () => { disabled: boolean; cooldownUntil: number; domain?: string }[] }).getFailoverStatus?.();
+                if (!profiles || profiles.length === 0) return null;
+                const nowMs = Date.now();
+                let disabledCount = 0; let coolingCount = 0;
+                const all = new Set<string>(); const up = new Set<string>();
+                for (const pr of profiles) {
+                  const ok = !pr.disabled && pr.cooldownUntil <= nowMs;
+                  if (pr.disabled) disabledCount++; else if (pr.cooldownUntil > nowMs) coolingCount++;
+                  if (typeof pr.domain === 'string' && pr.domain) { all.add(pr.domain); if (ok) up.add(pr.domain); }
+                }
+                return all.size > 0 ? { domainsUp: up.size, domainCount: all.size, disabledCount, coolingCount } : null;
+              },
+              missions: () => {
+                const { MissionControl } = require('./core/channels/mission-control.js') as typeof import('./core/channels/mission-control.js');
+                const mc = new MissionControl(path.join(DATA_DIR, 'missions.db'));
+                try { return mc.getActive().map((m: { title: string; status: string }) => ({ title: m.title, status: m.status })); }
+                finally { mc.close(); }
+              },
+              pendingCheckpoints: () => {
+                const { getCheckpointProtocol } = require('./core/channels/checkpoint-registry.js') as typeof import('./core/channels/checkpoint-registry.js');
+                return (getCheckpointProtocol()?.getPending() ?? []).map((c) => ({ kind: c.kind, question: c.question }));
+              },
+            }, new Date(Date.now() - 86_400_000).toISOString().slice(0, 10));
+            if (!telegramNotifier) throw new Error('telegram adapter unavailable');
+            await telegramNotifier.send(digestChatId, digestMod.renderMorningDigest(snap), { parseMode: 'markdown' });
+            log.info({ chatId: digestChatId }, 'TX7: morning digest sent');
+          } catch (err) {
+            log.warn({ err: String(err) }, 'TX7: morning digest run failed');
+          }
+        };
+        const scheduleNext = (): NodeJS.Timeout => {
+          const now = new Date();
+          const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), digestMod.digestHourUtc(), 0, 0));
+          if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+          return setTimeout(() => { void runDigest().finally(() => { digestTimer = scheduleNext(); }); }, next.getTime() - now.getTime());
+        };
+        let digestTimer = scheduleNext();
+        registerShutdown(() => clearTimeout(digestTimer));
+        log.info({ chatId: digestChatId, hourUtc: digestMod.digestHourUtc() }, 'TX7: morning digest scheduled (SUDO_TG_MORNING_DIGEST=1)');
+      }
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'TX7: morning digest wiring failed — continuing without');
+  }
+
+  // -------------------------------------------------------------------------
   // 9.7 Health Watchdog
   // -------------------------------------------------------------------------
   try {
