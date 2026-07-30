@@ -52,7 +52,9 @@ export interface GovernedRunOptions {
    * (pauses immediately) rather than running unmetered.
    */
   dailyUsdSpent?: () => number;
-  /** Alert seam — fired once when the run pauses on budget. Errors are logged, never thrown. */
+  /** Alert seam — fired once when the run pauses on budget OR parks on an
+   *  approval gate (AL4.4: a parked run that notifies nobody is a silent
+   *  stall). Errors are logged, never thrown. */
   alert?: (info: BudgetAlert) => void | Promise<void>;
   /**
    * AL6.2 knob migration: budget-pressure signals stream into this resolver
@@ -134,6 +136,26 @@ export async function runGovernedGraph(options: GovernedRunOptions): Promise<Gra
         { runId, err: err instanceof Error ? err.message : String(err) },
         'Budget alert sink failed — run state is already persisted',
       );
+    }
+  }
+
+  // AL4.4: a gate park is a decision waiting on a HUMAN — surfacing it is part
+  // of the gate (invariant 8: the harness must make the artifact reach the
+  // approver, not assume someone polls the store). Same seam as budget pauses;
+  // state is already persisted, so a failing sink never strands the run.
+  if (report.status === 'awaiting_approval' && alert) {
+    const parkedNode = report.results.find((r) => r.status === 'awaiting_approval')?.id ?? 'unknown';
+    const info: BudgetAlert = {
+      runId,
+      graphName: graph.name,
+      reason: `approval gate parked at node "${parkedNode}" — resume the run once the decision artifact is recorded`,
+      spent,
+    };
+    try {
+      await alert(info);
+    } catch (err) {
+      log.warn({ runId, err: String(err) },
+        'Gate-park alert sink failed — run state is already persisted');
     }
   }
   if (report.status === 'paused') {

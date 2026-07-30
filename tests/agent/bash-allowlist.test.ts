@@ -13,15 +13,24 @@ import {
 import { ApprovalManager } from '../../src/core/agent/approval.js';
 
 const FLAG = 'SUDO_BASH_ALLOWLIST_FASTPATH';
+// AL4.4 flipped headless approvals to fail-closed; the fall-through tests
+// below use headless auto-approve as SCAFFOLDING (their subject is the
+// allowlist fastpath), so they opt back in explicitly.
+const HEADLESS_FLAG = 'SUDO_APPROVAL_HEADLESS_ALLOW';
 
 let saved: string | undefined;
+let savedHeadless: string | undefined;
 beforeEach(() => {
   saved = process.env[FLAG];
   delete process.env[FLAG];
+  savedHeadless = process.env[HEADLESS_FLAG];
+  process.env[HEADLESS_FLAG] = '1';
 });
 afterEach(() => {
   if (saved === undefined) delete process.env[FLAG];
   else process.env[FLAG] = saved;
+  if (savedHeadless === undefined) delete process.env[HEADLESS_FLAG];
+  else process.env[HEADLESS_FLAG] = savedHeadless;
 });
 
 describe('isBashAllowlistFastPathEnabled', () => {
