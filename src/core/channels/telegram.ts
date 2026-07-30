@@ -1000,6 +1000,19 @@ export class TelegramAdapter implements ChannelAdapter {
         return;
       }
 
+      // TX28 provenance taps  tx28:p:{sessionId} → toast, no chat message.
+      if (data.startsWith('tx28:')) {
+        const uid = String(ctx.from?.id ?? '');
+        const { provenanceEnabled, parseProvenanceCallback, lookupProvenance, renderProvenanceToast } = await import('./provenance.js');
+        if (!provenanceEnabled() || !this._isAllowed(uid)) { await ctx.answerCallbackQuery({ text: 'Not available.', show_alert: false }); return; }
+        const sid = parseProvenanceCallback(data);
+        const { DATA_DIR } = await import('../shared/paths.js');
+        const path = await import('node:path');
+        const row = sid ? lookupProvenance(path.join(DATA_DIR, 'traces.db'), sid) : null;
+        await ctx.answerCallbackQuery({ text: renderProvenanceToast(row), show_alert: true });
+        return;
+      }
+
       // TX3 (SUDO_TG_DETAIL_TOGGLE=1, default OFF): per-turn working-card
       // detail toggle  tx3:t:{token}. Owner-only; the token maps to the live
       // turn's render state via the working-card-state registry.

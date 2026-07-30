@@ -2545,11 +2545,18 @@ ${question}`, kb);
               filename: `reply-${stamp}.md`,
             });
           };
-          const makeKeyboard = () => createFeedbackKeyboard(
-            String(session.id),
-            (msg.text ?? replyText).slice(0, 120),
-            'telegram',
-          ).keyboard;
+          const makeKeyboard = () => {
+            const kb = createFeedbackKeyboard(
+              String(session.id),
+              (msg.text ?? replyText).slice(0, 120),
+              'telegram',
+            ).keyboard;
+            // TX28: tap-to-verify provenance — one 🔍 button, toast-only.
+            if (process.env['SUDO_TG_PROVENANCE'] === '1') {
+              kb.row().text('🔍', `tx28:p:${String(session.id)}`.slice(0, 64));
+            }
+            return kb;
+          };
 
           // "Read More": long bodies collapse their tail into an expandable
           // blockquote (SUDO_TG_READMORE=0 disables; min chars via
