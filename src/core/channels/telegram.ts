@@ -987,6 +987,19 @@ export class TelegramAdapter implements ChannelAdapter {
         return;
       }
 
+      // TX13 generative-UI taps  tx13:a:{token} → typed [CANVAS EVENT] fed
+      // back as an inbound message (same wire format as the web bridge).
+      if (data.startsWith('tx13:')) {
+        const uid = String(ctx.from?.id ?? '');
+        if (!this._isAllowed(uid)) { await ctx.answerCallbackQuery({ text: 'Not available.', show_alert: false }); return; }
+        const { resolveTx13Callback, canvasEventText, telegramGenuiEnabled } = await import('./telegram-genui.js');
+        const resolved = telegramGenuiEnabled() ? resolveTx13Callback(data) : null;
+        if (!resolved) { await ctx.answerCallbackQuery({ text: 'Expired.', show_alert: false }); return; }
+        await ctx.answerCallbackQuery({ text: '▶️', show_alert: false });
+        await this._handleInbound(ctx, canvasEventText(resolved.actionId), []);
+        return;
+      }
+
       // TX3 (SUDO_TG_DETAIL_TOGGLE=1, default OFF): per-turn working-card
       // detail toggle  tx3:t:{token}. Owner-only; the token maps to the live
       // turn's render state via the working-card-state registry.

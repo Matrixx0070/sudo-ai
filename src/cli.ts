@@ -2103,6 +2103,22 @@ ${question}`, kb);
       initCheckpointProtocol(cpProto);
       registerShutdown(() => cpProto.close());
       log.info({ owner: cpOwner ?? '(none)' }, 'TX10: checkpoint protocol initialised');
+
+      // TX13: generative-UI sink — canvas.render on a Telegram session lands
+      // as text + inline keyboard (SUDO_TG_GENUI=1; inert otherwise).
+      const { setTelegramGenuiSink } = await import('./core/channels/telegram-genui.js');
+      setTelegramGenuiSink({
+        resolvePeer: async (sessionId: string) => {
+          try {
+            const sess = await dualSessionManager.get(sessionId);
+            return sess && sess.channel === 'telegram' ? sess.peerId : null;
+          } catch { return null; }
+        },
+        send: async (peerId, render) => {
+          const kb = new CpKeyboard(render.buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.callbackData }))));
+          await telegram.sendWithKeyboard(peerId, render.text, kb);
+        },
+      });
     } catch (err) {
       log.warn({ err: String(err) }, 'TX10 checkpoint protocol init failed — checkpoints will HOLD');
     }
