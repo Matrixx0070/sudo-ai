@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 766,
+  "count": 767,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -548,6 +548,7 @@
     "SUDO_RETENTION_TASKQUEUE_DAYS",
     "SUDO_RETENTION_TASKS_DAYS",
     "SUDO_RETENTION_THOUGHTS_DAYS",
+    "SUDO_REWIND",
     "SUDO_ROTATE_BROWSER_AUDIT_MB",
     "SUDO_ROTATE_CRON_RUNS_MB",
     "SUDO_ROTATE_EXEC_AUDIT_MB",
