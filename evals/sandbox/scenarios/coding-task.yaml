@@ -1,0 +1,26 @@
+id: coding-task
+version: "1"
+title: Fix a broken JS file so it runs
+taskType: coding
+prompt: |
+  The file {workspace}/add.js has a bug that stops it from running. Fix the file
+  in place so `node add.js` runs cleanly and prints the sum. Do not rename it.
+fixtures:
+  - path: add.js
+    content: |
+      function add(a, b) {
+        retrun a + b;
+      }
+      console.log('SUM=' + add(2, 3));
+grading:
+  checks:
+    - type: commandExitZero
+      command: node add.js
+    - type: fileContains
+      path: add.js
+      substring: return
+budgets:
+  maxUsd: 0.5
+  maxSteps: 15
+  maxWallMs: 300000
+isolation: runc
