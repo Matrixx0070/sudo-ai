@@ -1218,51 +1218,22 @@ export function setKairosProposalSink(sink: ((p: KairosProposal) => void) | unde
   kairosProposalSink = sink;
 }
 
-/**
- * Last persisted observation. KAIROS re-fires the SAME observation every tick
- * (its remedy is dry-run, so the condition never clears), which would otherwise
- * write ~288 identical proposals/day. Persist a proposal only when the
- * observation actually changed.
- */
-let lastProposalKey = '';
+// KAIROS repair-loop dedupe latch + per-day budget live in kairos-repair-gate.ts;
+// re-exported here so existing callers/tests keep one import surface.
+export {
+  normalizeKairosObservation,
+  isNewKairosObservation,
+  shouldPersistKairosProposal,
+  consumeKairosRepairBudget,
+  _resetKairosProposalDedupeForTests,
+  _simulateKairosRestartForTests,
+} from './kairos-repair-gate.js';
+import {
+  isNewKairosObservation,
+  shouldPersistKairosProposal,
+  consumeKairosRepairBudget,
+} from './kairos-repair-gate.js';
 
-/**
- * Last observation we ATTEMPTED to analyse. Deliberately separate state from
- * `lastProposalKey`: that one latches when a proposal is PERSISTED (only when
- * edits came back). Sharing one key would latch on attempt and then make the
- * persist check always return false, silently dropping every proposal.
- */
-let lastAttemptedKey = '';
-
-export function _resetKairosProposalDedupeForTests(): void {
-  lastProposalKey = '';
-  lastAttemptedKey = '';
-}
-
-/**
- * True when this observation has not been analysed yet (and latches it). Gates
- * the LLM call itself, not just persistence — an unchanged observation yields
- * an identical analysis we already hold, at ~80k input + 32,768 output tokens
- * a tick.
- */
-export function isNewKairosObservation(task: string, mode: 'fix' | 'refactor'): boolean {
-  const key = createHash('sha256').update(`${mode}\n${task}`).digest('hex');
-  if (key === lastAttemptedKey) return false;
-  lastAttemptedKey = key;
-  return true;
-}
-
-/**
- * True when this observation differs from the last one persisted (and latches
- * it). Pure-ish and exported so the dedupe rule is testable without driving a
- * full arsenal run through a live model.
- */
-export function shouldPersistKairosProposal(task: string, mode: 'fix' | 'refactor'): boolean {
-  const key = createHash('sha256').update(`${mode}\n${task}`).digest('hex');
-  if (key === lastProposalKey) return false;
-  lastProposalKey = key;
-  return true;
-}
 
 export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
   // Security: sanitize task — reject prompt-injection markers
@@ -1284,6 +1255,15 @@ export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor'
   if (process.env['SUDO_KAIROS_REPEAT_REPAIR'] !== '1' && !isNewKairosObservation(task, mode)) {
     logger.debug({ mode }, 'KAIROS: observation unchanged since last analysis — skipping repeat repair');
     return { success: true, output: 'skipped: observation unchanged since the last analysis' };
+  }
+
+  // Invariant-10 budget: a NEW observation still only runs while today's
+  // budget lasts. Checked after the dedupe gate so unchanged-observation skips
+  // never consume budget.
+  const budget = consumeKairosRepairBudget();
+  if (!budget.allowed) {
+    logger.info({ mode, used: budget.used, max: budget.max }, 'KAIROS: daily repair budget exhausted — skipping until next UTC day');
+    return { success: true, output: `skipped: daily repair budget exhausted (${budget.used}/${budget.max})` };
   }
 
   // KAIROS self-repair hook. Real dry-run call (applyEdits:false) to avoid side effects in background tick.
