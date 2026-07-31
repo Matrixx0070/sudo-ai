@@ -27,9 +27,10 @@
  * persisted workspace, not the replay run's fresh one.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
+import { createLogger } from '../../shared/logger.js';
 import { parseIRResponse, type IRResponse } from '../../../../shared-types/ir/v1.js';
 import { setIRInterceptor } from '../../../llm/ir-interceptor.js';
 import { LLMPolicyError } from '../../../llm/errors.js';
@@ -38,6 +39,8 @@ import { grade, type CheckOutcome, type ScoreVector } from './graders.js';
 import { readJournal, type JournalEvent } from './run-journal.js';
 import { runEval, type EvalRunOptions, type EvalRunReport } from './eval-runner.js';
 import { loadScenarioFile, validateScenario, type Scenario, type GradingCheck } from './scenario.js';
+
+const log = createLogger('eval:replay');
 
 // ---------------------------------------------------------------------------
 // L1: transport-level IR interceptor fed from replay.db
@@ -212,5 +215,15 @@ export async function replayL1(
   }
   const { scenarioPath, ...runOpts } = opts;
   const scenario = loadRunScenario(runDir, scenarioPath);
-  return runEval(scenario, { ...runOpts, replayDb });
+  // Path remap source: recorded tool params reference the ORIGINAL run's
+  // workspace; the runner exports it (with the replay run's workspace as the
+  // target) so the eval gate rewrites params and live tools never touch the
+  // archived original. Sanity-checked below via mtime.
+  const originalWorkspace = resolve(runDir, 'workspace');
+  const mtimeBefore = existsSync(originalWorkspace) ? statSync(originalWorkspace).mtimeMs : undefined;
+  const report = await runEval(scenario, { ...runOpts, replayDb, replayPathFrom: originalWorkspace });
+  if (mtimeBefore !== undefined && statSync(originalWorkspace).mtimeMs !== mtimeBefore) {
+    log.warn({ runDir }, 'L1 replay: original workspace mtime changed — path remap may have leaked a write');
+  }
+  return report;
 }

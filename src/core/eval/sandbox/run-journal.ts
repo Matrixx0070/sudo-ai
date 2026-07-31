@@ -17,6 +17,7 @@ export type JournalEventType =
   | 'tool.result'
   | 'policy.decision'
   | 'fault.injected'
+  | 'replay.path-remap'
   | 'budget.exhausted'
   | 'resource.sample'
   | 'run.end'

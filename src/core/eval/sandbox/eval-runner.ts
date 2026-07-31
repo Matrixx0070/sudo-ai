@@ -112,6 +112,13 @@ export interface EvalRunOptions {
    * still run LIVE; a divergence FAILS the run, never a live call).
    */
   replayDb?: string;
+  /**
+   * L1 replay: the ORIGINAL run's workspace path. Exported to the child as
+   * SUDO_EVAL_REPLAY_PATH_FROM (with this run's workspace as _TO) so the eval
+   * gate remaps recorded absolute paths and live tools act on the replay
+   * workspace, never the archived original.
+   */
+  replayPathFrom?: string;
   /** Injected judge deps for tests (see judge.ts). */
   judge?: JudgeDeps;
 }
@@ -261,6 +268,10 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
   if (mock) extraEnv['MOCK_SERVICE_URL'] = mock.url;
   if (scenario.isolation === 'runsc') extraEnv['SUDO_SANDBOX_DOCKER_RUNTIME'] = 'runsc';
   if (opts.replayDb !== undefined) extraEnv['SUDO_EVAL_REPLAY_DB'] = opts.replayDb;
+  if (opts.replayPathFrom !== undefined) {
+    extraEnv['SUDO_EVAL_REPLAY_PATH_FROM'] = opts.replayPathFrom;
+    extraEnv['SUDO_EVAL_REPLAY_PATH_TO'] = workspaceDir;
+  }
   const env = buildEvalEnv(scenario, extraEnv);
 
   const executor = opts.executor ?? spawnTurnExecutor;

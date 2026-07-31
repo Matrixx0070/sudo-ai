@@ -38,11 +38,14 @@ async function main(): Promise<void> {
     installReplayInterceptor(replayDb);
   }
 
+  const remapFrom = process.env["SUDO_EVAL_REPLAY_PATH_FROM"];
+  const remapTo = process.env['SUDO_EVAL_REPLAY_PATH_TO'];
   activateEvalGate({
     runId: process.env['SUDO_EVAL_RUN_ID'] ?? 'unknown',
     policy: scenario.policy ?? {},
     journal: new RunJournal(journalPath),
     ...(scenario.faults !== undefined ? { faults: scenario.faults } : {}),
+    ...(remapFrom && remapTo ? { pathRemap: { from: remapFrom, to: remapTo } } : {}),
   });
 
   // --- bootstrap (mirrors agent-bench-runner.ts bootstrapRealAgentLoop) ---
