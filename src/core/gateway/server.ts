@@ -182,6 +182,17 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
+  // Unified event system routes (core/events/api.ts): same hang-guard as the
+  // web routes above — before initEventSystem attaches its sibling listener
+  // (late in boot), falling through would leave the socket open forever.
+  if (pathname.startsWith('/v1/events') || pathname.startsWith('/v1/webhook-endpoints')) {
+    if (isGatewayRouteOwnerAttached('events')) return; // events api listener responds
+    log.warn({ requestId, url }, 'Events route requested before the event system attached (still booting, or SUDO_EVENTS=0)');
+    res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '15' });
+    res.end(JSON.stringify({ error: { message: 'Event system not attached yet — daemon still booting, or SUDO_EVENTS=0.', type: 'gateway_error' } }));
+    return;
+  }
+
   if (
     pathname.startsWith('/v1/admin') ||
     pathname.startsWith('/v1/sessions') ||
@@ -192,8 +203,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     pathname.startsWith('/v1/registry') ||
     pathname.startsWith('/v1/canvas') ||   // A2UI canvas event route (registered via server.on('request'))
     pathname.startsWith('/v1/hooks') ||    // Inbound webhooks (Spec 4, per-hook secret; registered via server.on('request'))
-    pathname.startsWith('/v1/events') ||   // Unified event system: log, deliveries, dashboard (core/events/api.ts)
-    pathname.startsWith('/v1/webhook-endpoints') ||   // Outbound webhook endpoint CRUD (core/events/api.ts)
+
     (ADMIN_API_ON && pathname.startsWith('/api/admin')) ||   // opt-in admin REST API (SUDO_ADMIN_API=1), token-gated by api/admin/register.ts
     pathname.startsWith('/v1/federation/') ||   // Federation routes (registered via server.on('request'))
     pathname.startsWith('/.well-known') ||   // agentskills.io discovery (public no-auth)
