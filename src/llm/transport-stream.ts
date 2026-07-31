@@ -11,6 +11,7 @@
  */
 
 import type { IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
+import type { LLMCallRecord } from './logging.js';
 import type { IRStreamEvent, IRStreamMachine } from './adapters/stream.js';
 import type { Family } from './transport.js';
 
@@ -135,6 +136,21 @@ export function createResponseAccumulator(traceId: string): {
     },
   };
   return acc;
+}
+
+/**
+ * Lift a provider-reported price out of the recorded IRResponse onto the
+ * llm_calls row. xAI returns the authoritative per-call cost as
+ * cost_in_usd_ticks (mapped to IRResponse.cost_usd by its adapter); it beats
+ * our token-count estimate, which returns 0 for an unpriced model — that is
+ * precisely how the METERED cli-chat-proxy lane logged as free.
+ *
+ * No provider price → entry untouched, so the estimator still runs. Never
+ * collapse "no price" into 0.
+ */
+export function withProviderCost(entry: LLMCallRecord): LLMCallRecord {
+  const cost = (entry.irResponse as IRResponse | undefined)?.cost_usd;
+  return typeof cost === 'number' ? { ...entry, costUsd: cost } : entry;
 }
 
 /** Live state handed from the policy-wrapped attempt to the yield loop. */

@@ -97,7 +97,7 @@ import {
   createSSEParser,
   reverseEventToolName,
   createResponseAccumulator,
-  feedChunk,
+  feedChunk, withProviderCost,
   type LiveStream,
 } from './transport-stream.js';
 import { getIRInterceptor } from './ir-interceptor.js';
@@ -930,11 +930,6 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
       tokensIn: value.res.usage.in,
       tokensOut: value.res.usage.out,
       tokensCached: value.res.usage.cached_in,
-      // A provider-reported price beats our token-count estimate: xAI returns
-      // the authoritative per-call cost (see parseCostUsd in the xai-responses
-      // adapter). Without this the estimate wins by default, and an unpriced
-      // model estimates to 0 — which is how a metered lane reads as free.
-      ...(typeof value.res.cost_usd === 'number' ? { costUsd: value.res.cost_usd } : {}),
     });
     return value.res;
   } catch (err) {
@@ -963,7 +958,7 @@ function recordCall(entry: LLMCallRecord): void {
     // provider didn't hand us a real cost, so (a) gateway.db has a cost floor
     // for boot-time day-spend derivation and (b) the in-memory budget counter
     // in policy.ts actually accrues. Real provider cost, when present, wins.
-    const enriched = withEstimatedCost(entry);
+    const enriched = withEstimatedCost(withProviderCost(entry));
     recordGatewayCall(enriched);
     // Feed the asymmetric budget counter. Guard on >0 so error rows (no tokens)
     // never move the needle; recordCall is the single per-call choke point
@@ -1231,9 +1226,8 @@ export async function* streamIR(
       // Provider closed its SSE stream without the documented terminal event.
       errorClass = 'provider_bug';
     }
-    const streamed = acc.toIRResponse();
     writeRow({
-      irResponse: streamed,
+      irResponse: acc.toIRResponse(),
       ...(errorClass !== undefined ? { errorClass } : {}),
       ...(terminal !== null
         ? {
@@ -1242,8 +1236,6 @@ export async function* streamIR(
             tokensCached: terminal.usage.cached_in,
           }
         : {}),
-      // Provider-reported price wins over the token estimate (see recordCall).
-      ...(typeof streamed.cost_usd === 'number' ? { costUsd: streamed.cost_usd } : {}),
     });
   } finally {
     // Consumer break / early return: abort the underlying fetch and still
@@ -1274,13 +1266,11 @@ export async function* streamIR(
     } catch {
       /* observer failures never break stream cleanup */
     }
-    const abandoned = acc.toIRResponse(partial);
     writeRow({
-      irResponse: abandoned,
+      irResponse: acc.toIRResponse(partial),
       tokensIn: partial.in,
       tokensOut: partial.out,
       tokensCached: partial.cached_in,
-      ...(typeof abandoned.cost_usd === 'number' ? { costUsd: abandoned.cost_usd } : {}),
     });
   }
 }
