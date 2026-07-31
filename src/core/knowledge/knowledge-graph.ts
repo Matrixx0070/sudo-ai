@@ -17,6 +17,8 @@ import type { KnowledgeNode, KnowledgeEdge } from './types.js';
 import { SCHEMA_SQL, rowToNode, rowToEdge, migrateTemporalColumns } from './kg-schema.js';
 import type { NodeRow, EdgeRow } from './kg-schema.js';
 
+import { eventBus } from '../events/bus.js';
+
 const log = createLogger('knowledge-graph');
 
 // ---------------------------------------------------------------------------
@@ -59,6 +61,8 @@ export class KnowledgeGraph {
 
     const id = info.lastInsertRowid as number;
     log.info({ id, type, title }, 'Node added');
+    // Event bus: metadata only — node CONTENT never rides the event lane.
+    eventBus.publish('memory.created', { memory_type: 'knowledge-node', node_id: id, node_type: type, title });
     return this._getNodeOrThrow(id);
   }
 
