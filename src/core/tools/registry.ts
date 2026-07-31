@@ -19,6 +19,7 @@ import {
   type ToolSchema,
 } from './types.js';
 import { createLogger } from '../shared/logger.js';
+import { snapshotBeforeTool } from '../rewind/index.js';
 import { ToolError } from '../shared/errors.js';
 import type { MCPAdapter, MCPAdapterLike, MCPToolDef } from './mcp-adapter.js';
 import { isReadOnlyTool } from '../agent/plan-mode-gate.js';
@@ -866,6 +867,16 @@ export class ToolRegistry {
     // every later balance call (`"0500".toFixed` throws). Coerce strictly
     // parseable strings on declared boolean/number params, nothing else.
     params = coerceDeclaredPrimitives(tool, params);
+
+    // Rewind (2026-07-31): snapshot any file this call is about to mutate,
+    // BEFORE it runs. One interception here covers every current and future
+    // file-mutating tool. Fail-open by contract — a rewind problem must never
+    // block the user's actual work. Disable with SUDO_REWIND=0.
+    try {
+      snapshotBeforeTool(name, params, ctx.sessionId ?? 'unknown');
+    } catch (err) {
+      logger.debug({ err: String(err), tool: name }, 'rewind snapshot skipped');
+    }
 
     const timeout = tool.timeout ?? 30_000;
     const controller = new AbortController();
