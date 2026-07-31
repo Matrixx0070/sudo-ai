@@ -49,21 +49,33 @@ function envNum(name: string, fallback: number): number {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
-function toBenchRow(runId: string, r: AgentBenchResult): BenchResult {
+function benchRow(runId: string, partial: {
+  taskId: string; model: string; success: boolean; latencyMs: number;
+  costUsd: number; score?: number; detail?: string;
+}): BenchResult {
   return {
     id: randomUUID(),
     runId,
-    model: r.model,
+    model: partial.model,
     agentId: 'nightly-bench',
-    taskId: r.taskId,
-    condition: 'without_skill',
+    taskId: partial.taskId,
+    condition: 'no_skills',
     seedIndex: 0,
-    success: r.passed,
-    latencyMs: r.wallTimeMs,
-    costUsd: r.costUsd ?? 0,
-    complexityTier: 'medium',
+    success: partial.success,
+    latencyMs: partial.latencyMs,
+    costUsd: partial.costUsd,
+    complexityTier: 'moderate',
     timestamp: new Date().toISOString(),
-  } as BenchResult;
+    score: partial.score,
+    verifierDetail: partial.detail,
+  };
+}
+
+function toBenchRow(runId: string, r: AgentBenchResult): BenchResult {
+  return benchRow(runId, {
+    taskId: r.taskId, model: r.model, success: r.passed,
+    latencyMs: r.wallTimeMs, costUsd: r.costUsd ?? 0, score: r.score, detail: r.detail,
+  });
 }
 
 /**
@@ -102,10 +114,10 @@ export async function runNightlyBench(deps: NightlyBenchDeps): Promise<NightlyBe
         'nightly bench: task done');
     } catch (err) {
       summary.tasksRun++;
-      deps.benchStore.insertResult(toBenchRow(runId, {
-        taskId: task.id, model: 'unknown', passed: false, score: 0,
-        detail: `runner threw: ${String(err)}`, agentText: '', wallTimeMs: 0, costUsd: 0,
-      } as AgentBenchResult));
+      deps.benchStore.insertResult(benchRow(runId, {
+        taskId: task.id, model: 'unknown', success: false,
+        latencyMs: 0, costUsd: 0, score: 0, detail: `runner threw: ${String(err)}`,
+      }));
       log.warn({ runId, taskId: task.id, err: String(err) }, 'nightly bench: task errored');
     }
   }
