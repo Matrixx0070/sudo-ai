@@ -23,6 +23,47 @@ const CheckSchema = Type.Union([
   Type.Object({ type: Type.Literal('toolCalled'), name: Type.String() }, { additionalProperties: false }),
   Type.Object({ type: Type.Literal('toolNotCalled'), name: Type.String() }, { additionalProperties: false }),
   Type.Object({ type: Type.Literal('canaryClean') }, { additionalProperties: false }),
+  // Phase 2: counts policy.decision deny events in the journal — scenarios can
+  // permit 0–1 probing attempts but fail on repeated non-compliance.
+  Type.Object({ type: Type.Literal('maxDeniedAttempts'), max: Type.Integer({ minimum: 0 }) }, { additionalProperties: false }),
+]);
+
+// ---------------------------------------------------------------------------
+// Fault injection (Phase 2) — applied at the eval gate, per-tool per-run
+// ---------------------------------------------------------------------------
+
+const FaultSchema = Type.Object(
+  {
+    /** Tool name or namespace glob ("system.*"), same matching as policy rules. */
+    tool: Type.String({ minLength: 1 }),
+    kind: Type.Union([
+      Type.Literal('deny'),
+      Type.Literal('delay'),
+      Type.Literal('error'),
+      Type.Literal('corrupt'),
+    ]),
+    /** Skip the first N matching calls before injecting. Default 0. */
+    afterNCalls: Type.Optional(Type.Integer({ minimum: 0 })),
+    /** Cap on total injections for this fault. Default unlimited. */
+    count: Type.Optional(Type.Integer({ minimum: 1 })),
+    delayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    errorMessage: Type.Optional(Type.String()),
+    /** Replacement output for kind 'corrupt'. Default empty string. */
+    corruptWith: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+/**
+ * A deny rule is either a plain tool name / glob (Phase 1), or a conditional
+ * rule that denies only when the JSON-serialized params match the regex.
+ */
+const DenyRuleSchema = Type.Union([
+  Type.String(),
+  Type.Object(
+    { tool: Type.String({ minLength: 1 }), whenParamsMatch: Type.String({ minLength: 1 }) },
+    { additionalProperties: false },
+  ),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -51,7 +92,7 @@ const ScenarioSchema = Type.Object(
         tools: Type.Optional(Type.Object(
           {
             allow: Type.Optional(Type.Array(Type.String())),
-            deny: Type.Optional(Type.Array(Type.String())),
+            deny: Type.Optional(Type.Array(DenyRuleSchema)),
           },
           { additionalProperties: false },
         )),
@@ -75,10 +116,12 @@ const ScenarioSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+    /** Fault injectors applied at the eval gate (Phase 2). */
+    faults: Type.Optional(Type.Array(FaultSchema)),
     /** Path to a mind.db snapshot to seed persistent memory. Absent = clean state. */
     persistentMemory: Type.Optional(Type.String()),
-    // 'runsc' is validated + recorded here but only ENFORCED in Phase 2 (gVisor
-    // runtime class per ADR-0007) — Phase 1 runs everything under runc.
+    // 'runsc' = gVisor runtime class (ADR-0007 Phase 2). Enforced fail-closed by
+    // eval-runner: the run ABORTS if the Docker runsc runtime is unavailable.
     isolation: Type.Optional(Type.Union([Type.Literal('runc'), Type.Literal('runsc')])),
     /** Unreliable-service fault script: local mock HTTP server (mock-service.ts). */
     mockService: Type.Optional(Type.Object(
@@ -95,6 +138,8 @@ const ScenarioSchema = Type.Object(
 export type Scenario = Static<typeof ScenarioSchema>;
 export type ScenarioPolicy = NonNullable<Scenario['policy']>;
 export type GradingCheck = Static<typeof CheckSchema>;
+export type ScenarioFault = Static<typeof FaultSchema>;
+export type DenyRule = Static<typeof DenyRuleSchema>;
 
 export type ScenarioValidation =
   | { ok: true; scenario: Scenario }

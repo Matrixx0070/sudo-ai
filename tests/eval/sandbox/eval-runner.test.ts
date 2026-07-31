@@ -165,3 +165,121 @@ describe('runEval', () => {
     }
   });
 });
+
+describe('runEval — Phase 2 (budgets, runsc, metering)', () => {
+  it('plumbs budgets.maxUsd into SUDO_AGENT_RUN_MAX_USD in the child env', async () => {
+    let seenEnv: Record<string, string> = {};
+    await runEval(
+      scenario({ budgets: { maxUsd: 0.25, maxSteps: 5, maxWallMs: 30_000 }, grading: { checks: [{ type: 'outputContains', substring: 'x' }] } }),
+      {
+        executor: async (args) => { seenEnv = args.env; return { text: 'x', steps: 0 }; },
+        evalRunsRoot: root,
+        benchDbPath: benchDb,
+      },
+    );
+    expect(seenEnv['SUDO_AGENT_RUN_MAX_USD']).toBe('0.25');
+  });
+
+  it('spendCapBreached → budget.exhausted journalled + never a pass', async () => {
+    const report = await runEval(
+      scenario({ grading: { checks: [{ type: 'outputContains', substring: 'x' }] } }),
+      {
+        executor: async () => ({ text: 'x', steps: 2, usd: 0.11, spendCapBreached: true }),
+        evalRunsRoot: root,
+        benchDbPath: benchDb,
+      },
+    );
+    expect(report.passed).toBe(false);
+    const ev = readJournal(report.journalPath).find((e) => e.type === 'budget.exhausted')!;
+    expect(ev['budget']).toBe('maxUsd');
+    expect(ev['maxUsd']).toBe(0.1);
+  });
+
+  it('no breach → no budget.exhausted event', async () => {
+    const report = await runEval(
+      scenario({ grading: { checks: [{ type: 'outputContains', substring: 'x' }] } }),
+      {
+        executor: async () => ({ text: 'x', steps: 1, usd: 0.01 }),
+        evalRunsRoot: root,
+        benchDbPath: benchDb,
+      },
+    );
+    expect(report.passed).toBe(true);
+    expect(readJournal(report.journalPath).some((e) => e.type === 'budget.exhausted')).toBe(false);
+  });
+
+  it('actual spend read from the run-local gateway.db llm_calls overrides turn.usd', async () => {
+    const report = await runEval(
+      scenario({ grading: { checks: [{ type: 'outputContains', substring: 'x' }] } }),
+      {
+        executor: async (args) => {
+          // simulate the child writing its own gateway.db under DATA_DIR
+          const Database = (await import('better-sqlite3')).default;
+          const db = new Database(path.join(args.dataDir, 'gateway.db'));
+          db.exec('CREATE TABLE llm_calls (id INTEGER PRIMARY KEY, cost_usd REAL)');
+          db.prepare('INSERT INTO llm_calls (cost_usd) VALUES (?), (?), (NULL)').run(0.03, 0.02);
+          db.close();
+          return { text: 'x', steps: 1, usd: 0.5 };
+        },
+        evalRunsRoot: root,
+        benchDbPath: benchDb,
+      },
+    );
+    expect(report.turn.usd).toBeCloseTo(0.05, 10);
+    expect(report.scores.efficiency.usd).toBeCloseTo(0.05, 10);
+  });
+
+  it("isolation runsc: aborts fail-closed when the runtime is missing", async () => {
+    await expect(
+      runEval(scenario({ isolation: 'runsc' }), {
+        executor: async () => { throw new Error('executor must never run'); },
+        evalRunsRoot: root,
+        benchDbPath: benchDb,
+        runtimeProbe: async () => false,
+      }),
+    ).rejects.toThrow(/runsc.*unavailable|unavailable.*runsc/);
+  });
+
+  it('isolation runsc: available runtime → SUDO_SANDBOX_DOCKER_RUNTIME=runsc in child env', async () => {
+    let seenEnv: Record<string, string> = {};
+    await runEval(
+      scenario({ isolation: 'runsc', grading: { checks: [{ type: 'outputContains', substring: 'x' }] } }),
+      {
+        executor: async (args) => { seenEnv = args.env; return { text: 'x', steps: 0 }; },
+        evalRunsRoot: root,
+        benchDbPath: benchDb,
+        runtimeProbe: async (rt) => rt === 'runsc',
+      },
+    );
+    expect(seenEnv['SUDO_SANDBOX_DOCKER_RUNTIME']).toBe('runsc');
+  });
+
+  it('runc scenarios never set the runtime override and never probe', async () => {
+    let probed = false;
+    let seenEnv: Record<string, string> = {};
+    await runEval(
+      scenario({ isolation: 'runc', grading: { checks: [{ type: 'outputContains', substring: 'x' }] } }),
+      {
+        executor: async (args) => { seenEnv = args.env; return { text: 'x', steps: 0 }; },
+        evalRunsRoot: root,
+        benchDbPath: benchDb,
+        runtimeProbe: async () => { probed = true; return true; },
+      },
+    );
+    expect(probed).toBe(false);
+    expect(seenEnv['SUDO_SANDBOX_DOCKER_RUNTIME']).toBeUndefined();
+  });
+
+  it('turn resource metrics land in scores.efficiency', async () => {
+    const report = await runEval(
+      scenario({ grading: { checks: [{ type: 'outputContains', substring: 'x' }] } }),
+      {
+        executor: async () => ({ text: 'x', steps: 1, peakRssMb: 42.5, cpuSecs: 1.2 }),
+        evalRunsRoot: root,
+        benchDbPath: benchDb,
+      },
+    );
+    expect(report.scores.efficiency.peakRssMb).toBe(42.5);
+    expect(report.scores.efficiency.cpuSecs).toBe(1.2);
+  });
+});

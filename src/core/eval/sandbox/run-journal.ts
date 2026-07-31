@@ -16,6 +16,9 @@ export type JournalEventType =
   | 'tool.call'
   | 'tool.result'
   | 'policy.decision'
+  | 'fault.injected'
+  | 'budget.exhausted'
+  | 'resource.sample'
   | 'run.end'
   | 'scores';
 

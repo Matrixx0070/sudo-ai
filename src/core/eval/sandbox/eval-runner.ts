@@ -14,10 +14,12 @@
  * (env-scrub.ts) with DATA_DIR pointed at the run's private data/ dir.
  */
 
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
+import Database from 'better-sqlite3';
 import { createLogger } from '../../shared/logger.js';
 import { PROJECT_ROOT, dataPath } from '../../shared/paths.js';
 import { BenchStore } from '../bench-store.js';
@@ -27,8 +29,40 @@ import { buildEvalEnv } from './env-scrub.js';
 import { grade, type ScoreVector } from './graders.js';
 import { startMockService, type MockServiceHandle } from './mock-service.js';
 import { RunJournal, readJournal } from './run-journal.js';
+import { startResourceSampler } from './resource-sampler.js';
 
 const log = createLogger('eval:sandbox-runner');
+const execFileAsync = promisify(execFile);
+
+// ---------------------------------------------------------------------------
+// gVisor runtime probe (isolation: 'runsc') — fail-closed
+// ---------------------------------------------------------------------------
+
+const runtimeProbeCache = new Map<string, boolean>();
+
+/**
+ * True iff the Docker daemon advertises the named runtime. Cached per process
+ * (installed runtimes don't change mid-session). Any probe failure → false —
+ * a runsc scenario then ABORTS rather than silently downgrading isolation.
+ */
+export async function dockerRuntimeAvailable(runtime: string): Promise<boolean> {
+  const cached = runtimeProbeCache.get(runtime);
+  if (cached !== undefined) return cached;
+  let available = false;
+  try {
+    const { stdout } = await execFileAsync(
+      process.env['SUDO_DOCKER_BIN'] || 'docker',
+      ['info', '--format', '{{json .Runtimes}}'],
+      { timeout: 15_000 },
+    );
+    const runtimes = JSON.parse(String(stdout).trim() || '{}') as Record<string, unknown>;
+    available = Object.hasOwn(runtimes, runtime);
+  } catch {
+    available = false;
+  }
+  runtimeProbeCache.set(runtime, available);
+  return available;
+}
 
 // ---------------------------------------------------------------------------
 // Turn executor seam (tests inject a stub; default spawns the tsx child)
@@ -40,6 +74,10 @@ export interface EvalTurnResult {
   usd?: number;
   timedOut?: boolean;
   error?: string;
+  /** The agent loop's SUDO_AGENT_RUN_MAX_USD halt fired inside the child. */
+  spendCapBreached?: boolean;
+  peakRssMb?: number;
+  cpuSecs?: number;
 }
 
 export interface TurnExecutorArgs {
@@ -64,6 +102,8 @@ export interface EvalRunOptions {
   benchDbPath?: string;
   /** Root for run dirs. Default: <PROJECT_ROOT>/data/eval-runs. */
   evalRunsRoot?: string;
+  /** Injected runtime probe for tests. Default: dockerRuntimeAvailable. */
+  runtimeProbe?: (runtime: string) => Promise<boolean>;
 }
 
 export interface EvalRunReport {
@@ -91,6 +131,12 @@ export const spawnTurnExecutor: TurnExecutor = (args) => {
       stdio: ['ignore', 'inherit', 'inherit'],
     });
 
+    // Resource metering (Phase 2): sample the child's process tree while it
+    // runs; each sample lands in the run journal as `resource.sample`.
+    const sampler = child.pid !== undefined
+      ? startResourceSampler({ pid: child.pid, journal: new RunJournal(args.journalPath) })
+      : null;
+
     let timedOut = false;
     const killTimer = setTimeout(() => {
       timedOut = true;
@@ -100,6 +146,7 @@ export const spawnTurnExecutor: TurnExecutor = (args) => {
 
     child.on('exit', (code) => {
       clearTimeout(killTimer);
+      const resources = sampler?.stop();
       let parsed: Partial<EvalTurnResult> = {};
       try {
         if (existsSync(resultPath)) parsed = JSON.parse(readFileSync(resultPath, 'utf-8'));
@@ -109,6 +156,11 @@ export const spawnTurnExecutor: TurnExecutor = (args) => {
         steps: typeof parsed.steps === 'number' ? parsed.steps : 0,
       };
       if (typeof parsed.usd === 'number') out.usd = parsed.usd;
+      if (parsed.spendCapBreached === true) out.spendCapBreached = true;
+      if (resources !== undefined) {
+        out.peakRssMb = resources.peakRssMb;
+        out.cpuSecs = resources.cpuSecs;
+      }
       if (timedOut) { out.timedOut = true; out.error = `wall-clock budget exhausted (${args.scenario.budgets.maxWallMs}ms)`; }
       else if (code !== 0) out.error = parsed.error ?? `eval turn child exited ${code}`;
       else if (typeof parsed.error === 'string') out.error = parsed.error;
@@ -122,6 +174,17 @@ export const spawnTurnExecutor: TurnExecutor = (args) => {
 // ---------------------------------------------------------------------------
 
 export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Promise<EvalRunReport> {
+  // gVisor escalation tier (isolation: 'runsc') is FAIL-CLOSED: if the runtime
+  // is not available the run aborts here — never a silent downgrade to runc.
+  if (scenario.isolation === 'runsc') {
+    const probe = opts.runtimeProbe ?? dockerRuntimeAvailable;
+    if (!(await probe('runsc'))) {
+      throw new Error(
+        `scenario '${scenario.id}' requires isolation 'runsc' but the Docker runsc (gVisor) runtime is unavailable — aborting run (fail-closed, no silent isolation downgrade)`,
+      );
+    }
+  }
+
   const runId = `${scenario.id}-${Date.now()}-${randomBytes(4).toString('hex')}`;
   const root = opts.evalRunsRoot ?? join(PROJECT_ROOT, 'data', 'eval-runs');
   const runDir = join(root, runId);
@@ -180,8 +243,13 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
     SUDO_EVAL_RESULT: join(runDir, 'result.json'),
     SUDO_EVAL_WORKSPACE: workspaceDir,
     SUDO_EVAL_MAX_STEPS: String(scenario.budgets.maxSteps),
+    // budgets.maxUsd rides the agent loop's own per-run spend halt (AL1,
+    // loop.ts): the child breaks the loop at the next iteration boundary once
+    // cumulative estimated USD reaches the cap.
+    SUDO_AGENT_RUN_MAX_USD: String(scenario.budgets.maxUsd),
   };
   if (mock) extraEnv['MOCK_SERVICE_URL'] = mock.url;
+  if (scenario.isolation === 'runsc') extraEnv['SUDO_SANDBOX_DOCKER_RUNTIME'] = 'runsc';
   const env = buildEvalEnv(scenario, extraEnv);
 
   const executor = opts.executor ?? spawnTurnExecutor;
@@ -193,9 +261,22 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
     if (mock) await mock.close();
   }
   // Budgets: maxWallMs enforced by the executor's kill timer; maxSteps by the
-  // child's maxIterations. maxUsd is validated in the manifest but not
-  // enforceable cheaply across the process boundary yet.
-  // SCAFFOLD: Phase 2 — join the child's llm_calls rows for per-run USD enforcement.
+  // child's maxIterations; maxUsd by SUDO_AGENT_RUN_MAX_USD in the child loop.
+  // Actual spend comes from the RUN's own gateway.db (the child logged its
+  // llm_calls there) — real even when the child crashed mid-turn.
+  const actualUsd = readActualSpendUsd(join(dataDir, 'gateway.db'));
+  if (actualUsd !== undefined) turn.usd = actualUsd;
+
+  const spendCapFired =
+    turn.spendCapBreached === true || /run spend cap reached/i.test(turn.error ?? '');
+  if (spendCapFired) {
+    journal.append({
+      type: 'budget.exhausted',
+      budget: 'maxUsd',
+      maxUsd: scenario.budgets.maxUsd,
+      ...(turn.usd !== undefined ? { usd: turn.usd } : {}),
+    });
+  }
 
   journal.append({
     type: 'run.end',
@@ -216,9 +297,11 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
     wallMs: Date.now() - wallStart,
     steps: turn.steps,
     ...(turn.usd !== undefined ? { usd: turn.usd } : {}),
+    ...(turn.peakRssMb !== undefined ? { peakRssMb: turn.peakRssMb } : {}),
+    ...(turn.cpuSecs !== undefined ? { cpuSecs: turn.cpuSecs } : {}),
   });
   // A turn that errored or blew a budget is never a pass, whatever the checks say.
-  if (turn.error !== undefined) scores.success = false;
+  if (turn.error !== undefined || spendCapFired) scores.success = false;
   journal.append({ type: 'scores', ...scoresForJournal(scores) });
 
   persistToBench(scenario, runId, scores, turn, opts.benchDbPath);
@@ -237,8 +320,31 @@ function scoresForJournal(s: ScoreVector): Record<string, unknown> {
     checksTotal: s.checksTotal,
     efficiency: s.efficiency,
     policyViolations: s.policyViolations,
+    deniedToolAttempts: s.deniedToolAttempts,
     checks: s.checkOutcomes.map((o) => ({ type: o.check.type, passed: o.passed, detail: o.detail })),
   };
+}
+
+/**
+ * Sum cost_usd over the run-local gateway.db llm_calls ledger (the child wrote
+ * it under the run's private DATA_DIR). undefined = no ledger / unreadable —
+ * the caller then keeps the child's own cost-tracker figure, if any.
+ */
+function readActualSpendUsd(gatewayDbPath: string): number | undefined {
+  if (!existsSync(gatewayDbPath)) return undefined;
+  try {
+    const db = new Database(gatewayDbPath, { readonly: true });
+    try {
+      const row = db
+        .prepare(`SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM llm_calls`)
+        .get() as { usd: number };
+      return Math.max(0, row.usd);
+    } finally {
+      db.close();
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 function persistToBench(

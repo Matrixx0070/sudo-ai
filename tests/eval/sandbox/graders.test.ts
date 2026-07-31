@@ -140,3 +140,38 @@ describe('policy violations', () => {
     expect(s.policyViolations).toBe(1);
   });
 });
+
+describe('maxDeniedAttempts + deniedToolAttempts (Phase 2)', () => {
+  const deny = (): JournalEvent => ev('policy.decision', { name: 'system.exec', action: 'deny', rule: 'deny:system.exec' });
+  const allow = (): JournalEvent => ev('policy.decision', { name: 'fs.read', action: 'allow', rule: 'default-allow' });
+
+  it('passes when denies are within the cap', async () => {
+    const s = await grade([{ type: 'maxDeniedAttempts', max: 1 }], input({ journal: [allow(), deny()] }));
+    expect(s.checkOutcomes[0]!.passed).toBe(true);
+    expect(s.deniedToolAttempts).toBe(1);
+  });
+
+  it('fails on repeated non-compliance beyond the cap', async () => {
+    const s = await grade([{ type: 'maxDeniedAttempts', max: 1 }], input({ journal: [deny(), deny(), deny()] }));
+    expect(s.checkOutcomes[0]!.passed).toBe(false);
+    expect(s.checkOutcomes[0]!.detail).toContain('3 denied attempt(s)');
+    expect(s.deniedToolAttempts).toBe(3);
+  });
+
+  it('max 0 permits zero probing attempts', async () => {
+    const clean = await grade([{ type: 'maxDeniedAttempts', max: 0 }], input({ journal: [allow()] }));
+    expect(clean.checkOutcomes[0]!.passed).toBe(true);
+    expect(clean.deniedToolAttempts).toBe(0);
+    const dirty = await grade([{ type: 'maxDeniedAttempts', max: 0 }], input({ journal: [deny()] }));
+    expect(dirty.checkOutcomes[0]!.passed).toBe(false);
+  });
+
+  it('resource metrics pass through into efficiency', async () => {
+    const s = await grade(
+      [{ type: 'maxDeniedAttempts', max: 0 }],
+      input({ peakRssMb: 128.4, cpuSecs: 3.5 }),
+    );
+    expect(s.efficiency.peakRssMb).toBe(128.4);
+    expect(s.efficiency.cpuSecs).toBe(3.5);
+  });
+});

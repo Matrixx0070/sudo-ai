@@ -883,10 +883,16 @@ export class ToolRegistry {
     // THIS process AND SUDO_EVAL=1 (same contract as the rewind hook above).
     // On deny, the agent under test gets a normal error ToolResult — a policy
     // denial is a graded event, not a harness crash.
-    const evalDecision = evalGateBeforeTool(name, params);
+    const evalDecision = await evalGateBeforeTool(name, params);
     if (evalDecision.action === 'deny') {
       logger.warn({ tool: name, reason: evalDecision.reason }, 'eval-policy denied tool');
       return { success: false, output: `eval-policy: ${evalDecision.reason}` };
+    }
+    if (evalDecision.action === 'error') {
+      // Injected fault (ADR-0007 Phase 2): the tool never runs; the agent
+      // under test sees an ordinary failed ToolResult.
+      logger.warn({ tool: name, message: evalDecision.message }, 'eval fault injected (error)');
+      return { success: false, output: evalDecision.message };
     }
 
     const timeout = tool.timeout ?? 30_000;
@@ -925,8 +931,9 @@ export class ToolRegistry {
         { tool: name, success: result.success, durationMs },
         'Tool execution completed',
       );
-      evalGateAfterTool(name, result);
-      return result;
+      // Identity pass-through outside an eval run; a 'corrupt' fault may
+      // replace a successful result's output (ADR-0007 Phase 2).
+      return evalGateAfterTool(name, result);
     } catch (error) {
       // Distinguish OUR timeout from an upstream-signal abort: only the timer
       // sets `timedOut`. Reporting an upstream cancel as `tool_timeout` (with a

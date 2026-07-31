@@ -218,6 +218,13 @@ export function buildDockerArgs(
 
   const args: string[] = ['run', '--rm', '--init'];
 
+  // Optional container runtime override (e.g. 'runsc' for gVisor). Generic env
+  // plumbing: a caller needing stronger isolation sets
+  // SUDO_SANDBOX_DOCKER_RUNTIME in this process's env; unset = daemon default
+  // (runc). An unknown runtime makes `docker run` fail — fail-closed.
+  const runtime = process.env['SUDO_SANDBOX_DOCKER_RUNTIME'];
+  if (runtime) args.push('--runtime', runtime);
+
   // --- Container hardening (Feature 8) ---------------------------------------
   // Drop ALL Linux capabilities and forbid privilege escalation (setuid/setgid
   // binaries, file capabilities). An untrusted turn keeps none of root's powers
