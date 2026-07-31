@@ -11,7 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IRRequest } from '../../shared-types/ir/v1.js';
 import { callIR } from '../../src/llm/transport.js';
-import { fastModeApplies, stripSpeedFromWireBody } from '../../src/llm/fast-mode.js';
+import {
+  fastModeApplies,
+  stripSpeedFromWireBody,
+  resetFastModeCache,
+  isFastModeCreditsError,
+} from '../../src/llm/fast-mode.js';
 import { __resetPolicyState } from '../../src/llm/policy.js';
 
 const oauthMock = {
@@ -47,7 +52,10 @@ interface Captured {
 }
 
 /** fetchImpl that records each attempt; `statuses` drives per-attempt status. */
-function mockFetch(statuses: number[] = [200]): { fetchImpl: typeof fetch; cap: Captured } {
+function mockFetch(
+  statuses: number[] = [200],
+  errBody = 'rate limited',
+): { fetchImpl: typeof fetch; cap: Captured } {
   const cap: Captured = { bodies: [], betas: [] };
   let i = 0;
   const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
@@ -56,7 +64,7 @@ function mockFetch(statuses: number[] = [200]): { fetchImpl: typeof fetch; cap: 
     cap.betas.push(h['anthropic-beta'] ?? '');
     const status = statuses[Math.min(i, statuses.length - 1)] ?? 200;
     i += 1;
-    if (status !== 200) return new Response('rate limited', { status });
+    if (status !== 200) return new Response(errBody, { status });
     return new Response(JSON.stringify(WIRE), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
   return { fetchImpl, cap };
@@ -64,6 +72,7 @@ function mockFetch(statuses: number[] = [200]): { fetchImpl: typeof fetch; cap: 
 
 beforeEach(() => {
   __resetPolicyState();
+  resetFastModeCache();
   delete process.env['SUDO_FAST_MODE'];
 });
 
@@ -124,6 +133,42 @@ describe('callIR — fast mode on the wire', () => {
     const { fetchImpl, cap } = mockFetch();
     await callIR(baseIR('claude-oauth/claude-opus-5'), { fetchImpl, noRetry: true });
     expect(JSON.parse(cap.bodies[0]!).speed).toBeUndefined();
+  });
+
+  it('CREDITS-1: a credits-429 retries naked in the SAME call even under noRetry', async () => {
+    const credits = '{"type":"error","error":{"type":"rate_limit_error","message":"Usage credits are required for fast mode."}}';
+    const { fetchImpl, cap } = mockFetch([429, 200], credits);
+    const res = await callIR(baseIR('claude-oauth/claude-opus-5'), { fetchImpl, noRetry: true });
+    expect(res.stop_reason).not.toBe('error');
+    expect(cap.bodies).toHaveLength(2);
+    expect(JSON.parse(cap.bodies[0]!).speed).toBe('fast');
+    expect(JSON.parse(cap.bodies[1]!).speed).toBeUndefined();
+    expect(cap.betas[1]).not.toContain('fast-mode');
+  });
+
+  it('CREDITS-2: after a credits-429, the NEXT call skips fast entirely (sticky TTL)', async () => {
+    const credits = 'Usage credits are required for fast mode.';
+    const first = mockFetch([429, 200], credits);
+    await callIR(baseIR('claude-oauth/claude-opus-5'), { fetchImpl: first.fetchImpl, noRetry: true });
+    const second = mockFetch([200]);
+    await callIR(baseIR('claude-oauth/claude-opus-5'), { fetchImpl: second.fetchImpl, noRetry: true });
+    expect(second.cap.bodies).toHaveLength(1);
+    expect(JSON.parse(second.cap.bodies[0]!).speed).toBeUndefined();
+    expect(second.cap.betas[0]).not.toContain('fast-mode');
+  });
+
+  it('CREDITS-3: a generic 429 under noRetry does NOT naked-retry (goes to failover)', async () => {
+    const { fetchImpl, cap } = mockFetch([429], 'rate limited');
+    await expect(
+      callIR(baseIR('claude-oauth/claude-opus-5'), { fetchImpl, noRetry: true }),
+    ).rejects.toThrow(/429/);
+    expect(cap.bodies).toHaveLength(1);
+  });
+
+  it('CREDITS-4: isFastModeCreditsError matches only the credits variant', () => {
+    expect(isFastModeCreditsError(429, 'Usage credits are required for fast mode.')).toBe(true);
+    expect(isFastModeCreditsError(429, 'rate limited')).toBe(false);
+    expect(isFastModeCreditsError(400, 'fast mode')).toBe(false);
   });
 
   it('a 429 on the fast attempt degrades the retry to standard speed', async () => {

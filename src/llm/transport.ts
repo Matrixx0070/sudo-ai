@@ -57,7 +57,13 @@
 import { randomUUID } from 'node:crypto';
 import type { IRRequest, IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
 import { resolveAlias, modelGenerationOf } from './aliases.js';
-import { ANTHROPIC_FAST_MODE_BETA, fastModeApplies, stripSpeedFromWireBody } from './fast-mode.js';
+import {
+  ANTHROPIC_FAST_MODE_BETA,
+  fastModeApplies,
+  stripSpeedFromWireBody,
+  isFastModeCreditsError,
+  markFastModeUnavailable,
+} from './fast-mode.js';
 import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL, XAI_CLI_PROXY_RESPONSES_URL, GOOGLE_OPENAI_COMPAT_URL } from './endpoints.js';
 import { getProviderApiKey, recordGatewayCall, type ProviderKeyName } from './client.js';
 import { egressAnthropic, parseAnthropicResponse } from './adapters/egress-anthropic.js';
@@ -856,8 +862,31 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
 
           if (!response.ok) {
             const text = await response.text().catch(() => '');
-            if (response.status === 429 && useFast) fastDegraded = true;
-            throw httpPolicyError(r, response.status, text);
+            if (useFast && isFastModeCreditsError(response.status, text)) {
+              // Credits-metered fast mode: mark sticky (subsequent calls skip
+              // `speed` for a TTL) AND re-issue naked in THIS attempt — the
+              // brain path runs noRetry, so the policy layer never re-enters.
+              markFastModeUnavailable(`${r.provider}/${r.modelId}`);
+              fastDegraded = true;
+              const nakedHeaders = { ...headers };
+              if (typeof nakedHeaders['anthropic-beta'] === 'string') {
+                nakedHeaders['anthropic-beta'] = nakedHeaders['anthropic-beta']
+                  .split(',').filter((b) => b.trim() !== ANTHROPIC_FAST_MODE_BETA).join(',');
+              }
+              response = await fetchImpl(r.url, {
+                method: 'POST',
+                headers: nakedHeaders,
+                body: stripSpeedFromWireBody(attemptBody),
+                signal: ctx.signal !== undefined ? AbortSignal.any([ctx.signal, deadline.signal]) : deadline.signal,
+              });
+              if (!response.ok) {
+                const t2 = await response.text().catch(() => '');
+                throw httpPolicyError(r, response.status, t2);
+              }
+            } else {
+              if (response.status === 429 && useFast) fastDegraded = true;
+              throw httpPolicyError(r, response.status, text);
+            }
           }
 
           // 200: parse defensively — non-JSON bodies fall through to the
