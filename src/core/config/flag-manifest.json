@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 779,
+  "count": 781,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -768,6 +768,8 @@
     "SUDO_WHISPER_MODEL",
     "SUDO_WHISPER_STT",
     "SUDO_WORKFLOWS",
+    "SUDO_WORKFLOWS_GRAPH",
+    "SUDO_WORKFLOWS_GRAPH_DAILY_USD",
     "SUDO_WORKFLOWS_MAX_PARALLEL",
     "SUDO_WORKFLOWS_QUEUE",
     "SUDO_WORKFLOWS_QUEUE_CONCURRENT",

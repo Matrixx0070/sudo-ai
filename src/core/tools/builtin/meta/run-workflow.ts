@@ -460,6 +460,39 @@ export const runWorkflowTool: ToolDefinition = {
     const effectiveRunId = resumeState?.runId ?? (resumeRunId !== '' ? resumeRunId : cryptoRandomUUID());
     const finalJournalPath = journalDir ? journalFile(journalDir, effectiveRunId) : undefined;
 
+    // A2b: governed graph lane (SUDO_WORKFLOWS_GRAPH=1, default OFF). Same
+    // YAML compiled to a graph and run under AL4 governance — durable state
+    // in mind.db, optional daily USD ceiling, owner alert on park/pause.
+    // Resume = re-invoke with resumeRunId (settled nodes seed from the store).
+    if (process.env['SUDO_WORKFLOWS_GRAPH'] === '1') {
+      try {
+        const { runGovernedLaneForTool } = await import('../../../workflows/governed-run.js');
+        const { getCostTracker } = await import('../../../billing/cost-tracker.js');
+        return await runGovernedLaneForTool(workflow, {
+          runId: effectiveRunId,
+          toolExecutor,
+          // Linear signature carries runState; the graph gate decision doesn't
+          // (state lives in the AL4.2 store). Callback never reads arg 2.
+          approvalCallback: (step) => approvalCallback(step, undefined as unknown as WorkflowRunState),
+          maxParallel: readMaxParallel(),
+          dailyUsdSpent: () => getCostTracker().getTodayCost().total,
+          alert: ({ graphName, reason, runId: alertRunId }) => {
+            proactiveNotifier.notify(
+              'alert',
+              `Workflow parked: ${graphName}`,
+              `${reason}. Resume with meta.run-workflow { resumeRunId: "${alertRunId}" } once resolved.`,
+              'high',
+            );
+          },
+        });
+      } catch (err) {
+        return {
+          success: false,
+          output: `meta.run-workflow[graph]: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
     let finalState: WorkflowRunState;
     try {
       finalState = await runWorkflow(workflow, {
