@@ -6,6 +6,7 @@
  */
 
 import type { PersonaType } from './types.js';
+import { getCustomStyle, loadCustomStyles } from './custom-styles.js';
 
 // ---------------------------------------------------------------------------
 // Persona descriptor shape
@@ -235,17 +236,43 @@ You are consistent, reliable, and kind.
  */
 export function getPersona(persona: PersonaType): PersonaDescriptor {
   const descriptor = PERSONAS[persona];
-  if (!descriptor) {
-    throw new TypeError(`Unknown persona type: "${String(persona)}"`);
+  if (descriptor) return descriptor;
+  // Fall back to a disk-defined style before failing.
+  const custom = getCustomStyle(String(persona));
+  if (custom) {
+    return {
+      type: custom.name as PersonaType,
+      label: custom.label,
+      systemBlock: custom.systemBlock,
+      preferredTools: [],
+      defaultTemperature: custom.temperature,
+    };
   }
-  return descriptor;
+  throw new TypeError(`Unknown persona type: "${String(persona)}"`);
 }
 
 /**
  * Return all persona descriptors as an array, sorted alphabetically by type.
  */
 export function listPersonas(): PersonaDescriptor[] {
-  return Object.values(PERSONAS).sort((a, b) => a.type.localeCompare(b.type));
+  const builtins = Object.values(PERSONAS);
+  // Disk-defined styles (workspace/styles/*.md) appear alongside the built-ins,
+  // so /persona and every existing consumer picks them up with no extra wiring.
+  // Built-ins win on a name collision: a stray file can never shadow a shipped
+  // persona.
+  const names = new Set(builtins.map((p) => p.type as string));
+  const custom: PersonaDescriptor[] = [];
+  for (const c of loadCustomStyles()) {
+    if (names.has(c.name)) continue;
+    custom.push({
+      type: c.name as PersonaType,
+      label: c.label,
+      systemBlock: c.systemBlock,
+      preferredTools: [],
+      defaultTemperature: c.temperature,
+    });
+  }
+  return [...builtins, ...custom].sort((a, b) => a.type.localeCompare(b.type));
 }
 
 /**
