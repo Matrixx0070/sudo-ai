@@ -18,6 +18,8 @@ import { createLogger } from '../shared/logger.js';
 import type { MindDB } from './db.js';
 import type { EmbeddingService } from './embeddings.js';
 import { LocalEmbeddingProvider } from './local-embeddings.js';
+export { mergeHybridResults } from './hybrid-fusion.js';
+import { mergeHybridResults } from './hybrid-fusion.js';
 import type { MemoryChunk, SearchOptions, SearchResult } from './types.js';
 
 const log = createLogger('memory:hybrid-search');
@@ -87,39 +89,6 @@ export function applyTemporalDecay(
  * @param vectorWeight  - Blend weight for vector score (default: 0.7)
  * @param textWeight    - Blend weight for BM25 score (default: 0.3)
  */
-export function mergeHybridResults(
-  vectorResults: SearchResult[],
-  bm25Results: SearchResult[],
-  vectorWeight = 0.7,
-  textWeight = 0.3,
-): SearchResult[] {
-  const merged = new Map<number, { chunk: MemoryChunk; vecScore: number; bm25Score: number }>();
-
-  for (const r of vectorResults) {
-    merged.set(r.chunk.id, { chunk: r.chunk, vecScore: r.score, bm25Score: 0 });
-  }
-  for (const r of bm25Results) {
-    const existing = merged.get(r.chunk.id);
-    if (existing) {
-      existing.bm25Score = r.score;
-    } else {
-      merged.set(r.chunk.id, { chunk: r.chunk, vecScore: 0, bm25Score: r.score });
-    }
-  }
-
-  return Array.from(merged.values()).map(({ chunk, vecScore, bm25Score }) => ({
-    chunk,
-    // Blend only when BOTH sources contributed. A single-source match uses its
-    // raw [0,1] score — otherwise a strong BM25-exclusive hit (vecScore=0) scores
-    // textWeight*bm25 ≤ 0.3, always below the default minScore 0.35, and is
-    // silently dropped even though it's an exact keyword match (RAG-1).
-    score: vecScore > 0 && bm25Score > 0
-      ? vectorWeight * vecScore + textWeight * bm25Score
-      : Math.max(vecScore, bm25Score),
-    matchType: 'hybrid' as const,
-  }));
-}
-
 /**
  * Maximal Marginal Relevance re-ranking.
  *
