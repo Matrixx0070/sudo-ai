@@ -58,6 +58,17 @@ export const OPENAI_EMBEDDINGS_URL = `${PROVIDER_BASE_URLS.openai}/embeddings`;
  */
 export const OLLAMA_EMBEDDINGS_URL = `${process.env['OLLAMA_BASE_URL'] ?? 'http://127.0.0.1:11434'}/v1/embeddings`;
 
+// ---- speech-to-text (Claude Max seat, WebSocket) --------------------------
+/**
+ * Claude seat STT stream — the WebSocket lane the Claude Code CLI uses,
+ * authenticated with the same OAuth token (Deepgram Nova-3 behind it).
+ * A function (not a const) so VOICE_STREAM_BASE_URL is honoured at call time.
+ */
+export function claudeSeatSttWsUrl(): string {
+  const base = (process.env['VOICE_STREAM_BASE_URL'] ?? 'wss://api.anthropic.com').replace(/\/+$/, '');
+  return `${base}/api/ws/speech_to_text/voice_stream`;
+}
+
 // ---- image generation ----------------------------------------------------
 export const OPENAI_IMAGES_URL = `${PROVIDER_BASE_URLS.openai}/images/generations`;
 
