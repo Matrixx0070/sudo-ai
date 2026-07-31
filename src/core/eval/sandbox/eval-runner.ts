@@ -264,8 +264,11 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
   // child's maxIterations; maxUsd by SUDO_AGENT_RUN_MAX_USD in the child loop.
   // Actual spend comes from the RUN's own gateway.db (the child logged its
   // llm_calls there) — real even when the child crashed mid-turn.
+  // OAuth-seat routes log NULL cost_usd (no marginal dollar cost — live-proven:
+  // claude-oauth:messages rows sum to nothing in prod gateway.db), so a zero
+  // ledger sum must not clobber the child cost-tracker's estimate.
   const actualUsd = readActualSpendUsd(join(dataDir, 'gateway.db'));
-  if (actualUsd !== undefined) turn.usd = actualUsd;
+  if (actualUsd !== undefined && actualUsd > 0) turn.usd = actualUsd;
 
   const spendCapFired =
     turn.spendCapBreached === true || /run spend cap reached/i.test(turn.error ?? '');
