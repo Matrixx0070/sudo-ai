@@ -1,6 +1,11 @@
 /**
  * @file create.ts
  * @description docx.create — Creates a DOCX document with title and sections using the docx npm package.
+ *
+ * Richer formatting (2026-07-31): a section may carry `bullets` (a real Word
+ * bulleted list) and/or `table` (a real Word table with a header row) in
+ * addition to plain paragraphs. Backwards compatible — `paragraphs` alone still
+ * works exactly as before; a section is valid if it has ANY of the three.
  */
 
 import { mkdir, writeFile, stat } from 'node:fs/promises';
@@ -50,6 +55,19 @@ export const docxCreateTool: ToolDefinition = {
             description: 'Array of paragraph text strings.',
             items: { type: 'string', description: 'Paragraph text.' },
           },
+          bullets: {
+            type: 'array',
+            description: 'Optional bulleted list rendered after the paragraphs.',
+            items: { type: 'string', description: 'Bullet text.' },
+          },
+          table: {
+            type: 'object',
+            description: 'Optional table rendered after the bullets (header row + data rows).',
+            properties: {
+              headers: { type: 'array', description: 'Header cell texts.', items: { type: 'string', description: 'Header cell.' } },
+              rows: { type: 'array', description: 'Rows, each an array of cell texts.', items: { type: 'array', description: 'One row.', items: { type: 'string', description: 'Cell text.' } } },
+            },
+          },
         },
       },
     },
@@ -78,12 +96,16 @@ export const docxCreateTool: ToolDefinition = {
       return { success: false, output: 'sections array is required and must not be empty.' };
     }
 
-    type SectionDef = { heading?: string; paragraphs: string[] };
+    type TableDef = { headers?: string[]; rows?: string[][] };
+    type SectionDef = { heading?: string; paragraphs?: string[]; bullets?: string[]; table?: TableDef };
     const sections = rawSections as SectionDef[];
 
     for (const sec of sections) {
-      if (!Array.isArray(sec.paragraphs) || sec.paragraphs.length === 0) {
-        return { success: false, output: 'Each section must have at least one paragraph.' };
+      const hasParas = Array.isArray(sec.paragraphs) && sec.paragraphs.length > 0;
+      const hasBullets = Array.isArray(sec.bullets) && sec.bullets.length > 0;
+      const hasTable = Array.isArray(sec.table?.rows) && (sec.table?.rows?.length ?? 0) > 0;
+      if (!hasParas && !hasBullets && !hasTable) {
+        return { success: false, output: 'Each section must have at least one paragraph, bullet, or table row.' };
       }
     }
 
@@ -97,9 +119,13 @@ export const docxCreateTool: ToolDefinition = {
         HeadingLevel,
         Packer,
         AlignmentType,
+        Table,
+        TableRow,
+        TableCell,
+        WidthType,
       } = await import('docx');
 
-      const children: InstanceType<typeof Paragraph>[] = [];
+      const children: Array<InstanceType<typeof Paragraph> | InstanceType<typeof Table>> = [];
 
       // Title
       children.push(
@@ -125,13 +151,51 @@ export const docxCreateTool: ToolDefinition = {
         }
 
         // Paragraphs
-        for (const paraText of sec.paragraphs) {
+        for (const paraText of sec.paragraphs ?? []) {
           children.push(
             new Paragraph({
               children: [new TextRun({ text: String(paraText) })],
               spacing: { after: 120 },
             }),
           );
+        }
+
+        // Bulleted list (real Word bullets, not "- " text)
+        for (const bullet of sec.bullets ?? []) {
+          children.push(
+            new Paragraph({
+              children: [new TextRun({ text: String(bullet) })],
+              bullet: { level: 0 },
+              spacing: { after: 80 },
+            }),
+          );
+        }
+
+        // Table with a bold header row
+        const tbl = sec.table;
+        if (Array.isArray(tbl?.rows) && tbl.rows.length > 0) {
+          const rows: InstanceType<typeof TableRow>[] = [];
+          if (Array.isArray(tbl.headers) && tbl.headers.length > 0) {
+            rows.push(
+              new TableRow({
+                tableHeader: true,
+                children: tbl.headers.map((h) => new TableCell({
+                  children: [new Paragraph({ children: [new TextRun({ text: String(h), bold: true })] })],
+                })),
+              }),
+            );
+          }
+          for (const row of tbl.rows) {
+            rows.push(
+              new TableRow({
+                children: (Array.isArray(row) ? row : []).map((cell) => new TableCell({
+                  children: [new Paragraph({ children: [new TextRun({ text: String(cell) })] })],
+                })),
+              }),
+            );
+          }
+          children.push(new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } }));
+          children.push(new Paragraph({ text: '', spacing: { after: 120 } }));
         }
       }
 

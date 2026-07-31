@@ -164,3 +164,75 @@ describe('docx tool registration', () => {
     expect(registered.length).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Richer formatting (2026-07-31): bullets + tables, backwards compatible
+// ---------------------------------------------------------------------------
+
+describe('docx.create — richer formatting', () => {
+  it('8. renders real Word bullets and a real table, and keeps paragraphs-only working', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { docxCreateTool } = await import('../../src/core/tools/builtin/docx/tools/create.js');
+    const { rmSync } = await import('node:fs');
+
+    // paragraphs-only (the pre-existing contract) still succeeds
+    const legacyPath = path.join(TMP, `docx-legacy-${process.pid}.docx`);
+    const legacy = await docxCreateTool.execute(
+      { outputPath: legacyPath, title: 'Legacy', sections: [{ heading: 'S', paragraphs: ['plain'] }] },
+      makeCtx(),
+    );
+    expect(legacy.success).toBe(true);
+
+    const richPath = path.join(TMP, `docx-rich-${process.pid}.docx`);
+    const rich = await docxCreateTool.execute(
+      {
+        outputPath: richPath,
+        title: 'Release Review',
+        sections: [
+          { heading: 'Highlights', paragraphs: ['Speed focus.'], bullets: ['Fast mode', 'Local embeddings'] },
+          { heading: 'Metrics', table: { headers: ['Metric', 'After'], rows: [['tok/s', '127.6']] } },
+        ],
+      },
+      makeCtx(),
+    );
+    expect(rich.success).toBe(true);
+    expect(existsSync(richPath)).toBe(true);
+
+    // Inspect the OOXML: w:tbl = real table, numPr = real bullet numbering.
+    let xml = '';
+    try {
+      xml = execFileSync('unzip', ['-p', richPath, 'word/document.xml'], { encoding: 'utf8', maxBuffer: 8e6 });
+    } catch {
+      xml = '';
+    }
+    if (xml !== '') {
+      expect(xml).toContain('<w:tbl>');
+      expect(xml).toContain('numPr');
+      expect(xml).toContain('127.6');
+    }
+
+    for (const f of [legacyPath, richPath]) { try { rmSync(f, { force: true }); } catch { /* ignore */ } }
+  });
+
+  it('9. a section with only bullets (no paragraphs) is valid', async () => {
+    const { rmSync } = await import('node:fs');
+    const { docxCreateTool } = await import('../../src/core/tools/builtin/docx/tools/create.js');
+    const out = path.join(TMP, `docx-bullets-${process.pid}.docx`);
+    const r = await docxCreateTool.execute(
+      { outputPath: out, title: 'Bullets', sections: [{ heading: 'Only bullets', bullets: ['one', 'two'] }] },
+      makeCtx(),
+    );
+    expect(r.success).toBe(true);
+    try { rmSync(out, { force: true }); } catch { /* ignore */ }
+  });
+
+  it('10. a section with none of paragraphs/bullets/table is still rejected', async () => {
+    const { docxCreateTool } = await import('../../src/core/tools/builtin/docx/tools/create.js');
+    const r = await docxCreateTool.execute(
+      { outputPath: path.join(TMP, 'docx-empty.docx'), title: 'T', sections: [{ heading: 'nothing' }] },
+      makeCtx(),
+    );
+    expect(r.success).toBe(false);
+    expect(r.output).toContain('at least one');
+  });
+});

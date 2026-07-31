@@ -27,6 +27,7 @@ export const FILE_ATTACHMENT_TOOLS = new Set<string>([
   'document.pdf-extract-pages', // → extracted page-range PDF
   'document.slides', // → slide-deck PDF
   'docx.create', // → Word document
+  'pptx.create', // → PowerPoint .pptx deck
   'spreadsheet.create', // → Excel .xlsx workbook
   'spreadsheet.pivot', // → Excel .xlsx pivot table
   'data.chart', // → rendered chart PNG
