@@ -14,6 +14,7 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import Database from 'better-sqlite3';
 import type { HealthCheck } from './watchdog.js';
@@ -364,4 +365,48 @@ export async function checkConsciousness(lastCount: number): Promise<{ check: He
     count,
     check: { name, status: 'healthy', message: `${count} thoughts total${grew ? ' (growing)' : ' (stable)'}`, lastCheck: ts },
   };
+}
+
+// ---------------------------------------------------------------------------
+// 9. Dependency freshness (stale node_modules after an ff-deploy)
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect a lockfile/node_modules divergence. Deploys here are ff-only + pm2
+ * restart — `pnpm install` is a manual step, so a merged PR that adds a
+ * dependency leaves the runtime broken until someone installs (2026-07-31:
+ * pptxgenjs was absent for days, pptx.create failed live, and the nightly
+ * self-test alert went unheeded). pnpm keeps an exact copy of the lockfile it
+ * last installed at node_modules/.pnpm/lock.yaml — a byte-hash mismatch with
+ * the repo's pnpm-lock.yaml is a precise, mtime-proof staleness signal.
+ *
+ * Paths are injectable for tests; production callers use the defaults.
+ */
+export async function checkDepsFreshness(
+  lockfilePath = path.join(ROOT, 'pnpm-lock.yaml'),
+  installedCopyPath = path.join(ROOT, 'node_modules', '.pnpm', 'lock.yaml'),
+): Promise<HealthCheck> {
+  const ts   = new Date().toISOString();
+  const name = 'deps_freshness';
+
+  try {
+    if (!fs.existsSync(lockfilePath)) {
+      return { name, status: 'degraded', message: 'pnpm-lock.yaml missing — cannot verify dependency freshness', lastCheck: ts };
+    }
+    if (!fs.existsSync(installedCopyPath)) {
+      return { name, status: 'degraded', message: 'node_modules/.pnpm/lock.yaml missing — install state unknown (run pnpm install --frozen-lockfile)', lastCheck: ts };
+    }
+    const hash = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+    if (hash(lockfilePath) !== hash(installedCopyPath)) {
+      return {
+        name,
+        status: 'critical',
+        message: 'node_modules is STALE vs pnpm-lock.yaml — a merged dependency change was never installed; tools may fail at runtime. Fix: pnpm install --frozen-lockfile && pm2 restart sudo-ai-v5 fable-bot',
+        lastCheck: ts,
+      };
+    }
+    return { name, status: 'healthy', message: 'node_modules matches pnpm-lock.yaml', lastCheck: ts };
+  } catch (err) {
+    return { name, status: 'degraded', message: `deps freshness check failed: ${String(err)}`, lastCheck: ts };
+  }
 }

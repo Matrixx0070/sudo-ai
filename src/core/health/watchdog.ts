@@ -29,6 +29,7 @@ import {
   checkTelegram,
   checkLogs,
   checkConsciousness,
+  checkDepsFreshness,
 } from './checks.js';
 import { checkCacheDupRate } from '../../llm/cache/dup-watch.js';
 import { checkCacheHitRate } from '../../llm/cache/hit-rate.js';
@@ -198,6 +199,7 @@ export class Watchdog {
       { name: 'consciousness_stream', run: () => this._runConsciousnessCheck() },
       { name: 'cache_dup_rate', run: () => checkCacheDupRate() },
       { name: 'cache_hit_rate', run: () => checkCacheHitRate() },
+      { name: 'deps_freshness', run: () => checkDepsFreshness() },
     ];
     // Real brain-liveness probe (actually drives a call) — only when a probe
     // was attached. checkBrain() above only sees key PRESENCE; this catches an
