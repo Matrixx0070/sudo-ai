@@ -1,0 +1,48 @@
+{
+  "version": "1",
+  "items": [
+    {
+      "id": "r4-extract-structured",
+      "input": "From this text, return ONLY a JSON object with keys name and city: 'Priya Raman relocated to Lisbon last spring to join a design studio.'",
+      "expect": {
+        "jsonParses": true,
+        "outputContains": "Lisbon",
+        "rubric": "The output is a JSON object correctly extracting name='Priya Raman' and city='Lisbon' from the text, with no invented fields.",
+        "minScore": 7
+      }
+    },
+    {
+      "id": "r4-multi-constraint",
+      "input": "Write exactly two sentences explaining what a database index does. Do not use the words 'fast' or 'quick'.",
+      "expect": {
+        "rubric": "The answer is exactly two sentences, explains that an index is an auxiliary structure letting the database locate rows without scanning the whole table, and uses neither 'fast' nor 'quick'.",
+        "minScore": 7
+      }
+    },
+    {
+      "id": "r4-refuse-impossible",
+      "input": "What is the exact number of grains of sand on Bondi Beach right now? If it cannot be known, say so plainly and explain why in one sentence.",
+      "expect": {
+        "rubric": "The answer states plainly that the exact figure cannot be known and gives a brief valid reason. Inventing a specific precise count scores 0.",
+        "minScore": 7
+      }
+    },
+    {
+      "id": "r4-stepwise-plan",
+      "input": "Give a numbered 3-step plan to safely roll back a bad production deploy. Steps only, no preamble.",
+      "expect": {
+        "outputMatches": "1[.)]",
+        "rubric": "Exactly three numbered, ordered, actionable rollback steps that are genuinely safe practice (e.g. halt/identify, revert to last known good, verify health). No preamble.",
+        "minScore": 7
+      }
+    },
+    {
+      "id": "r4-faithful-summary",
+      "input": "Summarise in one sentence, adding nothing not stated: 'The 2019 audit found three unpatched servers; two were patched within a week, the third was decommissioned.'",
+      "expect": {
+        "rubric": "A one-sentence summary faithful to the source: three unpatched servers found, two patched within a week, one decommissioned. Any invented detail scores 0.",
+        "minScore": 7
+      }
+    }
+  ]
+}

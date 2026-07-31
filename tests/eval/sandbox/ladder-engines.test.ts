@@ -150,8 +150,9 @@ describe('runLadderRung admission', () => {
     }
   });
 
-  it('returns notImplemented for rungs 4-5 instead of faking a verdict', async () => {
-    for (const rung of [4, 5]) {
+  it('returns notImplemented for an out-of-range rung instead of faking a verdict', async () => {
+    // Rungs 0-5 all have engines now; the contract still holds beyond the ADR range.
+    for (const rung of [7, 9]) {
       const rep = await runLadderRung(rung, 'test/route', { cacheDbPath: cacheDbPath() });
       expect(rep.notImplemented).toBe(true);
       expect(rep.admitted).toBe(false);
