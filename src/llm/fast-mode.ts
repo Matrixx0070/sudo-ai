@@ -31,7 +31,54 @@ const FAST_MODE_MODEL_RE = /^claude-opus-(5|4-8|4-7)\b/;
 export function fastModeApplies(provider: string, modelId: string): boolean {
   if (process.env['SUDO_FAST_MODE'] === '0') return false;
   if (provider !== 'claude-oauth') return false;
-  return FAST_MODE_MODEL_RE.test(modelId);
+  if (!FAST_MODE_MODEL_RE.test(modelId)) return false;
+  return fastModeAvailable(`${provider}/${modelId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Sticky degrade (2026-07-31). The seat started answering fast-mode requests
+// with 429 "Usage credits are required for fast mode". The original degrade
+// relied on the policy layer re-entering the attempt — dead under the brain
+// path's `noRetry: true` (maxAttempts 1), which took opus-5 down behind
+// failover. Now a credits-429 marks the (provider/model) fast-unavailable for
+// a TTL, so subsequent calls skip `speed` entirely and recover by themselves
+// when credits appear / the ban lifts. SUDO_FAST_MODE_RETRY_MS tunes the TTL.
+// ---------------------------------------------------------------------------
+
+const fastUnavailableUntil = new Map<string, number>();
+
+function fastModeRetryMs(): number {
+  const n = Number.parseInt(process.env['SUDO_FAST_MODE_RETRY_MS'] ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : 30 * 60_000;
+}
+
+/** True unless a recent credits-429 marked this provider/model unavailable. */
+export function fastModeAvailable(key: string, now: number = Date.now()): boolean {
+  const until = fastUnavailableUntil.get(key);
+  if (until === undefined) return true;
+  if (now >= until) {
+    fastUnavailableUntil.delete(key);
+    return true;
+  }
+  return false;
+}
+
+export function markFastModeUnavailable(key: string, now: number = Date.now()): void {
+  fastUnavailableUntil.set(key, now + fastModeRetryMs());
+}
+
+/** Test seam. */
+export function resetFastModeCache(): void {
+  fastUnavailableUntil.clear();
+}
+
+/**
+ * The credits-metering refusal, distinct from an ordinary rate limit — only
+ * this variant triggers the sticky degrade + same-call naked retry (a real
+ * rate limit would 429 the naked retry too and must go to failover instead).
+ */
+export function isFastModeCreditsError(status: number, body: string): boolean {
+  return status === 429 && /fast.mode/i.test(body);
 }
 
 /** Remove `speed` from a serialized wire body (the fast-mode 429 degrade). */

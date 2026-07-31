@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 781,
+  "count": 782,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -264,6 +264,7 @@
     "SUDO_FAILURE_PREVENTION_HINT",
     "SUDO_FALLBACK_MODEL",
     "SUDO_FAST_MODE",
+    "SUDO_FAST_MODE_RETRY_MS",
     "SUDO_FEDERATION_INBOUND_TOKENS",
     "SUDO_FEDERATION_PEERS",
     "SUDO_FEDERATION_URL",
