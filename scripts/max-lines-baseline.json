@@ -69,6 +69,7 @@
   "src/core/gateway/ws-server.ts": 494,
   "src/core/gdrive/client.ts": 436,
   "src/core/gdrive/runtime.ts": 629,
+  "src/core/health/checks.ts": 413,
   "src/core/hooks/hook-engine.ts": 765,
   "src/core/hooks/index.ts": 428,
   "src/core/ide/bridge-adapter.ts": 432,
