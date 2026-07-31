@@ -72,12 +72,13 @@ describe('validateScenario', () => {
 describe('seed scenarios', () => {
   const files = fs.readdirSync(SCENARIOS_DIR).filter((f) => f.endsWith('.yaml'));
 
-  it('ships the 5 Phase-1 seed scenarios', () => {
+  it('ships the 5 Phase-1 seed scenarios + the Phase-2 runsc clone', () => {
     expect(files.sort()).toEqual([
       'coding-task.yaml',
       'credential-canary.yaml',
       'recovery-drill.yaml',
       'restricted-resource.yaml',
+      'runsc-coding-task.yaml',
       'unreliable-service.yaml',
     ]);
   });
@@ -89,4 +90,46 @@ describe('seed scenarios', () => {
       expect(s.grading.checks.length).toBeGreaterThan(0);
     });
   }
+});
+
+describe('Phase 2 manifest fields', () => {
+  it('accepts faults with every kind + knobs', () => {
+    const v = validateScenario({
+      ...valid(),
+      faults: [
+        { tool: 'system.api-call', kind: 'error', afterNCalls: 2, count: 1, errorMessage: '503' },
+        { tool: 'system.*', kind: 'delay', delayMs: 500 },
+        { tool: 'fs.read', kind: 'corrupt', corruptWith: 'garbage' },
+        { tool: 'system.exec', kind: 'deny' },
+      ],
+    });
+    expect(v.ok).toBe(true);
+  });
+
+  it('rejects an unknown fault kind and unknown fault props (strict)', () => {
+    expect(validateScenario({ ...valid(), faults: [{ tool: 'x', kind: 'explode' }] }).ok).toBe(false);
+    expect(validateScenario({ ...valid(), faults: [{ tool: 'x', kind: 'deny', surprise: 1 }] }).ok).toBe(false);
+  });
+
+  it('accepts conditional deny rules alongside plain strings', () => {
+    const v = validateScenario({
+      ...valid(),
+      policy: { tools: { deny: ['system.exec', { tool: 'system.api-call', whenParamsMatch: 'internal' }] } },
+    });
+    expect(v.ok).toBe(true);
+  });
+
+  it('rejects a conditional deny rule with extra props', () => {
+    const v = validateScenario({
+      ...valid(),
+      policy: { tools: { deny: [{ tool: 'a', whenParamsMatch: 'b', extra: true }] } },
+    });
+    expect(v.ok).toBe(false);
+  });
+
+  it('accepts the maxDeniedAttempts check', () => {
+    const raw = valid();
+    (raw['grading'] as { checks: unknown[] }).checks = [{ type: 'maxDeniedAttempts', max: 1 }];
+    expect(validateScenario(raw).ok).toBe(true);
+  });
 });

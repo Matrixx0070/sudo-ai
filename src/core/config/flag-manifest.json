@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 797,
+  "count": 798,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -585,6 +585,7 @@
     "SUDO_SANDBOX_ALLOW_UNCONFINED",
     "SUDO_SANDBOX_AUTOBUILD",
     "SUDO_SANDBOX_DISABLE",
+    "SUDO_SANDBOX_DOCKER_RUNTIME",
     "SUDO_SANDBOX_EGRESS_ALLOWLIST",
     "SUDO_SANDBOX_NETWORK",
     "SUDO_SANDBOX_TIER_ROUTING",

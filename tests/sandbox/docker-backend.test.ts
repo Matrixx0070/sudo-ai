@@ -155,3 +155,25 @@ describe('dockerBackend.run', () => {
     }
   });
 });
+
+describe('runtime override (SUDO_SANDBOX_DOCKER_RUNTIME)', () => {
+  afterEach(() => { delete process.env['SUDO_SANDBOX_DOCKER_RUNTIME']; });
+
+  it('unset → no --runtime flag (daemon default runc)', () => {
+    delete process.env['SUDO_SANDBOX_DOCKER_RUNTIME'];
+    const args = buildDockerArgs({ command: 'true', workspaceDir: '/tmp/ws', policy }, env, config);
+    expect(args).not.toContain('--runtime');
+  });
+
+  it('set → --runtime <value> is passed to docker run', () => {
+    process.env['SUDO_SANDBOX_DOCKER_RUNTIME'] = 'runsc';
+    const args = buildDockerArgs({ command: 'true', workspaceDir: '/tmp/ws', policy }, env, config);
+    expect(args[args.indexOf('--runtime') + 1]).toBe('runsc');
+  });
+
+  it('empty string → treated as unset', () => {
+    process.env['SUDO_SANDBOX_DOCKER_RUNTIME'] = '';
+    const args = buildDockerArgs({ command: 'true', workspaceDir: '/tmp/ws', policy }, env, config);
+    expect(args).not.toContain('--runtime');
+  });
+});

@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     runId: process.env['SUDO_EVAL_RUN_ID'] ?? 'unknown',
     policy: scenario.policy ?? {},
     journal: new RunJournal(journalPath),
+    ...(scenario.faults !== undefined ? { faults: scenario.faults } : {}),
   });
 
   // --- bootstrap (mirrors agent-bench-runner.ts bootstrapRealAgentLoop) ---
@@ -81,12 +82,18 @@ async function main(): Promise<void> {
   const sessionId = String(session.id);
 
   let steps = 0;
-  const onEvent = (event: { type: string }): void => {
+  let spendCapBreached = false;
+  const onEvent = (event: { type: string; error?: string }): void => {
     if (event.type === 'tool-call') steps += 1;
+    // The loop's SUDO_AGENT_RUN_MAX_USD halt surfaces as an error EVENT, then
+    // finishes the turn gracefully — so the breach is only visible here.
+    if (event.type === 'error' && String(event.error ?? '').includes('Run spend cap reached')) {
+      spendCapBreached = true;
+    }
   };
 
   const costBefore = costTracker.getTodayCost().total;
-  const out: { text: string; steps: number; usd?: number; error?: string } = { text: '', steps: 0 };
+  const out: { text: string; steps: number; usd?: number; error?: string; spendCapBreached?: boolean } = { text: '', steps: 0 };
   try {
     const result = await (agentLoop as unknown as {
       run(
@@ -104,6 +111,7 @@ async function main(): Promise<void> {
   }
   out.steps = steps;
   out.usd = Math.max(0, costTracker.getTodayCost().total - costBefore);
+  if (spendCapBreached) out.spendCapBreached = true;
 
   fs.writeFileSync(resultPath, JSON.stringify(out, null, 2));
   process.exit(0);
