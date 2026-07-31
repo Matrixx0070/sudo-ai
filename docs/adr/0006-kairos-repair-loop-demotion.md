@@ -1,7 +1,10 @@
 # ADR-0006: Demote the KAIROS→arsenal repair loop from timer-driven to demand-driven
 
-Status: **Proposed** (awaiting Frank GO — removes a standing autonomous capability, so it is
-explicitly NOT executed with the mitigations PR that references it)
+Status: **Accepted** — Frank GO 2026-07-31 ("Go on ADR-0006"), Alternative B.
+Implemented behind `SUDO_KAIROS_REPAIR_DEMAND_ONLY` (timer demotion) +
+`SUDO_KAIROS_WEEKLY_DIGEST` / `SUDO_KAIROS_DIGEST_CRON` (weekly budgeted digest
+→ `kairos/digest-<date>` git branch). Pending-proposal triage:
+`scripts/adr0006-triage-proposals.mts`.
 
 Date: 2026-07-31
 

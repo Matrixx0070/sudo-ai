@@ -119,6 +119,18 @@ export function shouldPersistKairosProposal(task: string, mode: 'fix' | 'refacto
 }
 
 /**
+ * ADR-0006: the timer-driven repair loop is demoted to demand-driven. When
+ * SUDO_KAIROS_REPAIR_DEMAND_ONLY=1 the KAIROS tick still OBSERVES (large-file
+ * and tsc checks are cheap and deterministic) but never fires the ~80k-token
+ * arsenal analysis on its own; the analysis runs only on owner command
+ * (coder.arsenal) or from the weekly digest cron, which calls the arsenal
+ * tool directly and so bypasses this gate by construction.
+ */
+export function isKairosRepairDemandOnly(): boolean {
+  return process.env['SUDO_KAIROS_REPAIR_DEMAND_ONLY'] === '1';
+}
+
+/**
  * Per-day run budget for the KAIROS repair loop (CLAUDE.md invariant 10:
  * every recurring background job declares budgets). Counts pipeline RUNS that
  * passed the dedupe gate, per UTC day, persisted across restarts. Returns true
