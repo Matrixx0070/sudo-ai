@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 783,
+  "count": 791,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -251,6 +251,14 @@
     "SUDO_EPISODIC_DEDUP_WINDOW_MS",
     "SUDO_EPISODIC_RECALL",
     "SUDO_ERROR_SANITIZE",
+    "SUDO_EVAL",
+    "SUDO_EVAL_JOURNAL",
+    "SUDO_EVAL_KEEP_DATA",
+    "SUDO_EVAL_MAX_STEPS",
+    "SUDO_EVAL_RESULT",
+    "SUDO_EVAL_RUN_ID",
+    "SUDO_EVAL_SCENARIO",
+    "SUDO_EVAL_WORKSPACE",
     "SUDO_EVENT_ATTENTION",
     "SUDO_EXEC_BACKEND",
     "SUDO_EXEC_GATE_DISABLE",

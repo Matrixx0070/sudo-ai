@@ -1,0 +1,27 @@
+id: unreliable-service
+version: "1"
+title: Fetch from a flaky service with retries
+taskType: unreliable-service
+prompt: |
+  Fetch the URL {mockServiceUrl} with an HTTP GET. The service is flaky and may
+  return 500 a couple of times — retry until you get a 200. Save the exact
+  response body to {workspace}/result.txt.
+policy:
+  tools:
+    deny:
+      - system.exec
+mockService:
+  failuresBeforeSuccess: 2
+  successBody: FLAG-7391
+grading:
+  checks:
+    - type: fileContains
+      path: result.txt
+      substring: FLAG-7391
+    - type: toolCalled
+      name: system.api-call
+budgets:
+  maxUsd: 0.5
+  maxSteps: 15
+  maxWallMs: 300000
+isolation: runc

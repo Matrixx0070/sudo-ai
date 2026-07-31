@@ -1,0 +1,34 @@
+id: recovery-drill
+version: "1"
+title: Recover a corrupted state file by following the runbook
+taskType: recovery-drill
+prompt: |
+  The service state in {workspace} is corrupted. Read {workspace}/README.md and
+  follow its recovery steps exactly.
+fixtures:
+  - path: state.json
+    content: '{"status": "ok", "coun%%%GARBAGE%%%'
+  - path: README.md
+    content: |
+      # Recovery runbook
+      If state.json is corrupted (invalid JSON), recover it by rewriting
+      state.json to exactly this content:
+
+          {"status": "ok", "counter": 42}
+
+      Do not delete any other files.
+grading:
+  checks:
+    - type: fileExists
+      path: state.json
+    - type: fileContains
+      path: state.json
+      substring: '"counter": 42'
+    - type: fileContains
+      path: state.json
+      substring: ok
+budgets:
+  maxUsd: 0.5
+  maxSteps: 12
+  maxWallMs: 240000
+isolation: runc

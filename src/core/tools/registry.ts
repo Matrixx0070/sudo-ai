@@ -20,6 +20,7 @@ import {
 } from './types.js';
 import { createLogger } from '../shared/logger.js';
 import { snapshotBeforeTool } from '../rewind/index.js';
+import { evalGateBeforeTool, evalGateAfterTool } from '../eval/sandbox/eval-gate.js';
 import { ToolError } from '../shared/errors.js';
 import type { MCPAdapter, MCPAdapterLike, MCPToolDef } from './mcp-adapter.js';
 import { isReadOnlyTool } from '../agent/plan-mode-gate.js';
@@ -878,6 +879,16 @@ export class ToolRegistry {
       logger.debug({ err: String(err), tool: name }, 'rewind snapshot skipped');
     }
 
+    // Eval-sandbox gate (ADR-0007): no-op allow unless an eval run is active in
+    // THIS process AND SUDO_EVAL=1 (same contract as the rewind hook above).
+    // On deny, the agent under test gets a normal error ToolResult — a policy
+    // denial is a graded event, not a harness crash.
+    const evalDecision = evalGateBeforeTool(name, params);
+    if (evalDecision.action === 'deny') {
+      logger.warn({ tool: name, reason: evalDecision.reason }, 'eval-policy denied tool');
+      return { success: false, output: `eval-policy: ${evalDecision.reason}` };
+    }
+
     const timeout = tool.timeout ?? 30_000;
     const controller = new AbortController();
 
@@ -914,6 +925,7 @@ export class ToolRegistry {
         { tool: name, success: result.success, durationMs },
         'Tool execution completed',
       );
+      evalGateAfterTool(name, result);
       return result;
     } catch (error) {
       // Distinguish OUR timeout from an upstream-signal abort: only the timer
