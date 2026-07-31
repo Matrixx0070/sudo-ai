@@ -67,6 +67,11 @@ export interface BrowserInstance {
   ephemeral?: boolean;
   /** Whether this instance is CDP-connected (external browser we must not wipe/kill). */
   cdp?: boolean;
+  /** Display mode this instance was ACTUALLY launched with. A cached instance
+   *  whose mode differs from a new request must be relaunched, never reused —
+   *  silently returning a headless context for a headed request made the
+   *  browser invisible to the owner while still reporting success. */
+  headless?: boolean;
 }
 
 /** Per-instance launch state for crash recovery + ephemeral wipe (not exposed on BrowserInstance). */
@@ -250,8 +255,23 @@ export class BrowserManager {
   async launch(name: string, headless = true, autoRestart = false, allowOwnerOnly = false): Promise<BrowserInstance> {
     const existing = this.instances.get(name);
     if (existing) {
-      log.info({ name }, 'Returning cached browser instance');
-      return existing;
+      // A CDP-attached instance is an external browser we did not launch — its
+      // display mode is not ours to change, so reuse it as-is.
+      const cachedHeadless = existing.cdp ? headless : (existing.headless ?? true);
+      if (cachedHeadless === headless) {
+        log.info({ name, headless }, 'Returning cached browser instance');
+        return existing;
+      }
+      // Mode mismatch: the caller asked for headed and we hold a headless
+      // context (or vice-versa). Reusing it would report success while the
+      // owner sees nothing on screen. Close and relaunch in the asked-for mode.
+      log.warn(
+        { name, cachedHeadless, requestedHeadless: headless },
+        'Cached browser instance has wrong display mode — relaunching',
+      );
+      await this.close(name).catch((e: unknown) =>
+        log.error({ name, err: String(e) }, 'Failed closing mismatched browser instance'),
+      );
     }
 
     const entry = getProfileEntry(name);
@@ -317,6 +337,7 @@ export class BrowserManager {
       trust: entry.trust,
       ownerOnly: entry.ownerOnly,
       ephemeral: entry.ephemeral,
+      headless,
     };
 
     this.instances.set(name, instance);
@@ -609,13 +630,20 @@ export const browserManagerTool: ToolDefinition = {
         browserAudit('launch', { profile: name, trust: instance.trust, ephemeral: instance.ephemeral, ownerOnly: instance.ownerOnly, sessionId: ctx.sessionId });
         ctxLog.info({ tool: 'browser.launch', name, autoRestart }, 'Browser launched');
         const persist = instance.ephemeral ? 'ephemeral (wiped on close)' : 'durable (persists across restarts)';
+        // Report the mode the instance is ACTUALLY in, never the requested one —
+        // an echoed request parameter is not evidence the window exists.
+        const actualHeadless = instance.cdp ? headless : (instance.headless ?? headless);
+        const modeNote = actualHeadless === headless
+          ? ''
+          : ` (NOTE: requested headless=${headless} but instance is headless=${actualHeadless})`;
         return {
           success: true,
           output:
-            `Browser profile "${name}" launched (headless=${headless}, ${persist}, trust=${instance.trust ?? 'low'})` +
-            `${autoRestart ? ', auto-restart on' : ''}. userDataDir: ${instance.profileDir}`,
+            `Browser profile "${name}" launched (headless=${actualHeadless}, ${persist}, trust=${instance.trust ?? 'low'})` +
+            `${autoRestart ? ', auto-restart on' : ''}. userDataDir: ${instance.profileDir}${modeNote}`,
           data: {
-            name, profileDir: instance.profileDir, headless, autoRestart,
+            name, profileDir: instance.profileDir, headless: actualHeadless,
+            requestedHeadless: headless, autoRestart,
             trust: instance.trust, ownerOnly: instance.ownerOnly, ephemeral: instance.ephemeral,
           },
         };
