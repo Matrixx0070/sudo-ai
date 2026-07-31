@@ -3506,6 +3506,22 @@ ${question}`, kb);
         }
         return;
       }
+      if (payload.event === 'kairos-digest:run') {
+        // ADR-0006 weekly repair digest — the demand-driven replacement for
+        // the timer-driven KAIROS→arsenal loop. Budgets live in the repair
+        // gate (per-day) + digest module (per-run). Fail-soft.
+        try {
+          const { runKairosWeeklyDigest, defaultWeeklyDigestDeps } = await import('./core/consciousness/kairos-weekly-digest.js');
+          const summary = await runKairosWeeklyDigest({
+            ...(await defaultWeeklyDigestDeps()),
+            notify: (title, body) => { proactiveNotifier.notify('alert', title, body, 'medium'); },
+          });
+          log.info({ jobId: job.id, ...summary }, 'KAIROS weekly digest completed');
+        } catch (digestErr) {
+          log.warn({ err: String(digestErr) }, 'KAIROS weekly digest failed');
+        }
+        return;
+      }
       if (payload.event === 'dream:run') {
         if (autoDream) {
           try {
@@ -3912,6 +3928,34 @@ ${question}`, kb);
     }
   } catch (err) {
     log.warn({ err: String(err) }, 'Nightly bench scheduling failed');
+  }
+
+  // ADR-0006 weekly KAIROS repair digest (SUDO_KAIROS_WEEKLY_DIGEST=1; expr
+  // via SUDO_KAIROS_DIGEST_CRON, default Sunday 05:00 UTC — after the 04:00
+  // bench window). Budgets: per-day SUDO_KAIROS_REPAIR_MAX_PER_DAY inside the
+  // repair gate. Flag off → any existing job is disabled, not orphaned.
+  try {
+    const digestJobId = 'weekly-kairos-digest';
+    if (process.env['SUDO_KAIROS_WEEKLY_DIGEST'] === '1') {
+      cronStore.upsert({
+        id: digestJobId,
+        name: 'Weekly KAIROS Repair Digest',
+        enabled: true,
+        schedule: { kind: 'cron', expr: process.env['SUDO_KAIROS_DIGEST_CRON'] || '0 5 * * 0', tz: 'UTC' },
+        payload: { kind: 'systemEvent', event: 'kairos-digest:run' },
+        sessionTarget: 'isolated',
+        consecutiveErrors: 0,
+      });
+      log.info({ jobId: digestJobId }, 'Weekly KAIROS digest scheduled');
+    } else {
+      const existing = cronStore.get(digestJobId);
+      if (existing?.enabled) {
+        cronStore.upsert({ ...existing, enabled: false });
+        log.info({ jobId: digestJobId }, 'Weekly KAIROS digest disabled (flag off)');
+      }
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Weekly KAIROS digest scheduling failed');
   }
 
   // Nightly capability self-test — executes a curated slice of the builtin

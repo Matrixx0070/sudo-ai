@@ -23,6 +23,8 @@ import {
   isNewKairosObservation,
   normalizeKairosObservation,
   consumeKairosRepairBudget,
+  isKairosRepairDemandOnly,
+  triggerKAIROSRepair,
   _resetKairosProposalDedupeForTests,
   _simulateKairosRestartForTests,
   type KairosProposal,
@@ -239,5 +241,43 @@ describe('KAIROS per-day repair budget (invariant 10)', () => {
   it('invalid values fall back to the default', () => {
     process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'] = 'banana';
     expect(consumeKairosRepairBudget().max).toBe(4);
+  });
+});
+
+/**
+ * 2026-07-31, ADR-0006 (Frank GO). The timer-driven loop is demoted to
+ * demand-driven: with SUDO_KAIROS_REPAIR_DEMAND_ONLY=1 the KAIROS tick may
+ * observe but never fires the ~80k-token analysis. The check sits FIRST in
+ * triggerKAIROSRepair so demand-only ticks consume no latch state and no
+ * budget — a later flag flip must see the observation as genuinely new.
+ */
+describe('ADR-0006 demand-only demotion', () => {
+  beforeEach(() => {
+    _resetKairosProposalDedupeForTests(TMP_LATCH);
+    setKairosProposalSink(undefined);
+    delete process.env['SUDO_KAIROS_REPAIR_DEMAND_ONLY'];
+  });
+
+  it('flag off → not demand-only (current prod default until activation)', () => {
+    expect(isKairosRepairDemandOnly()).toBe(false);
+  });
+
+  it('demand-only skips the autonomous run without touching a model', async () => {
+    process.env['SUDO_KAIROS_REPAIR_DEMAND_ONLY'] = '1';
+    const res = await triggerKAIROSRepair(OBS_A, 'refactor');
+    expect(res.success).toBe(true);
+    expect(res.output).toContain('demand-only');
+  });
+
+  it('demand-only consumes neither latch nor budget', async () => {
+    process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'] = '1';
+    process.env['SUDO_KAIROS_REPAIR_DEMAND_ONLY'] = '1';
+    await triggerKAIROSRepair(OBS_A, 'refactor');
+    delete process.env['SUDO_KAIROS_REPAIR_DEMAND_ONLY'];
+    delete process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'];
+    // After the flag flips back, the same observation is still NEW and the
+    // full budget is still available.
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
+    expect(consumeKairosRepairBudget().used).toBe(1);
   });
 });

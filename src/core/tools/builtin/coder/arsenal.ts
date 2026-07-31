@@ -1225,6 +1225,7 @@ export {
   isNewKairosObservation,
   shouldPersistKairosProposal,
   consumeKairosRepairBudget,
+  isKairosRepairDemandOnly,
   _resetKairosProposalDedupeForTests,
   _simulateKairosRestartForTests,
 } from './kairos-repair-gate.js';
@@ -1232,10 +1233,18 @@ import {
   isNewKairosObservation,
   shouldPersistKairosProposal,
   consumeKairosRepairBudget,
+  isKairosRepairDemandOnly,
 } from './kairos-repair-gate.js';
 
 
 export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
+  // ADR-0006 demand-only demotion: the timer tick may observe but not spend.
+  // Checked first so demand-only mode consumes no latch state and no budget.
+  if (isKairosRepairDemandOnly()) {
+    logger.debug({ mode }, 'KAIROS: repair loop is demand-only (ADR-0006) — observation recorded, no autonomous analysis');
+    return { success: true, output: 'skipped: demand-only mode (ADR-0006) — run coder.arsenal on demand or await the weekly digest' };
+  }
+
   // Security: sanitize task — reject prompt-injection markers
   if (task.includes('<<<') || task.includes('>>>') || task.includes('SYSTEM:')) {
     logger.warn({ task }, 'KAIROS: task rejected (contains injection markers)');
