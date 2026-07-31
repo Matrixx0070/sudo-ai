@@ -6052,6 +6052,11 @@ ${question}`, kb);
         kind === 'recovery' ? 'medium' : severity === 'critical' ? 'critical' : 'high',
       );
     });
+    // ADR-0004: engine-mediated heals disclose to the owner (flag-gated by
+    // SUDO_SELF_HEAL inside the engine; this wiring is inert when OFF).
+    watchdog.setHealNotifier((title, message) => {
+      proactiveNotifier.notify('alert', title, message, 'medium');
+    });
     // Real brain-liveness probe: actually drive a trivial fast-tier call and
     // assert a reply, so an invalid-key / all-providers-dead outage (which the
     // env-presence checkBrain misses) alerts to the operator. Throttled to one

@@ -34,6 +34,7 @@ import {
 import { checkCacheDupRate } from '../../llm/cache/dup-watch.js';
 import { checkCacheHitRate } from '../../llm/cache/hit-rate.js';
 import { fixLogRotation, fixDiskSpace, fixMemory } from './fixes.js';
+import { SelfHealEngine, type HealNotifier } from './selfheal.js';
 import { ErrorReporter, ErrorSeverity } from './error-reporter.js';
 import { HealthAlertPolicy } from './alert-policy.js';
 
@@ -101,6 +102,8 @@ export class Watchdog {
   private errorReporter: ErrorReporter | null = null;
   private alertSink: AlertSink | null = null;
   private brainLivenessCheck: (() => Promise<HealthCheck>) | null = null;
+  /** ADR-0004 self-heal engine — flag-off passthrough, so legacy fixes are unchanged. */
+  private selfHeal = new SelfHealEngine();
   private alertPolicy = new HealthAlertPolicy({
     cooldownMs: parsePositiveInt(process.env['SUDO_HEALTH_ALERT_COOLDOWN_MS'], 2_700_000),
     // Unchanged still-broken states remind at most daily (2026-07-18 anti-spam fix).
@@ -183,6 +186,12 @@ export class Watchdog {
     log.info('Alert sink attached to Watchdog');
   }
 
+  /** ADR-0004: owner-disclosure seam for engine-mediated heals (flag-gated). */
+  setHealNotifier(fn: HealNotifier): void {
+    this.selfHeal.setNotifier(fn);
+    log.info('Self-heal notifier attached to Watchdog');
+  }
+
   // -------------------------------------------------------------------------
   // Internal — run all checks
   // -------------------------------------------------------------------------
@@ -191,11 +200,11 @@ export class Watchdog {
     const runners: Array<{ name: string; run: () => Promise<HealthCheck> }> = [
       { name: 'brain', run: () => checkBrain() },
       { name: 'databases', run: () => checkDatabases() },
-      { name: 'disk_space', run: () => checkDiskSpace(fixDiskSpace) },
-      { name: 'memory', run: () => checkMemory(fixMemory) },
+      { name: 'disk_space', run: () => checkDiskSpace(this.selfHeal.guard('disk-gc', 'fixDiskSpace', fixDiskSpace)) },
+      { name: 'memory', run: () => checkMemory(this.selfHeal.guard('memory-gc', 'fixMemory', fixMemory)) },
       { name: 'api_keys', run: () => checkApiKeys() },
       { name: 'telegram_polling', run: () => checkTelegram() },
-      { name: 'log_file', run: () => checkLogs(fixLogRotation) },
+      { name: 'log_file', run: () => checkLogs(this.selfHeal.guard('log-rotation', 'fixLogRotation', fixLogRotation)) },
       { name: 'consciousness_stream', run: () => this._runConsciousnessCheck() },
       { name: 'cache_dup_rate', run: () => checkCacheDupRate() },
       { name: 'cache_hit_rate', run: () => checkCacheHitRate() },

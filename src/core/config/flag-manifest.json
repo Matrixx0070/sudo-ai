@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 776,
+  "count": 779,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -601,6 +601,9 @@
     "SUDO_SELF_BUILD_MODE",
     "SUDO_SELF_BUILD_OPEN_PR",
     "SUDO_SELF_EVAL_ADOPT",
+    "SUDO_SELF_HEAL",
+    "SUDO_SELF_HEAL_CATEGORIES",
+    "SUDO_SELF_HEAL_MAX_PER_DAY",
     "SUDO_SELF_VERIFY",
     "SUDO_SEMANTIC_COMPACT",
     "SUDO_SEMANTIC_PLAN_TIMEOUT_MS",
