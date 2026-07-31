@@ -18,7 +18,7 @@
 
 import type { Dispatcher } from 'undici';
 import { createLogger } from '../shared/logger.js';
-import { validateDomain } from './domain-validator.js';
+import { validateDomain, isCloudMetadataHost } from './domain-validator.js';
 import { getPinnedDispatcher, isDnsPinningEnabled } from './ssrf-dns-pin.js';
 
 const log = createLogger('security:web-fetch');
@@ -71,13 +71,16 @@ const MAX_REDIRECTS = 5;
 export function isOriginAllowlisted(url: URL | string): boolean {
   const raw = process.env['SUDO_TOOL_FETCH_ALLOW_ORIGINS'];
   if (!raw) return false;
-  let origin: string;
+  let parsed: URL;
   try {
-    origin = (typeof url === 'string' ? new URL(url) : url).origin;
+    parsed = typeof url === 'string' ? new URL(url) : url;
   } catch {
     return false;
   }
-  return raw.split(',').map((s) => s.trim()).filter(Boolean).includes(origin);
+  // Cloud metadata is never allowlistable, however the env is set — this
+  // escape valve must not become an instance-credential theft door.
+  if (isCloudMetadataHost(parsed.hostname)) return false;
+  return raw.split(',').map((s) => s.trim()).filter(Boolean).includes(parsed.origin);
 }
 
 /**

@@ -31,14 +31,30 @@ const log = createLogger('security:domain');
  * Cloud metadata endpoints and loopback addresses blocked by exact hostname
  * string match. Brackets are stripped before comparison.
  */
+/**
+ * Cloud metadata endpoints — the SSRF crown jewels (instance credentials).
+ * These are NEVER allowlistable: `isOriginAllowlisted` (web-fetch-guard)
+ * refuses them even when an operator names them explicitly, so the escape
+ * valve for known-local services can never become a credential-theft door.
+ */
+export const CLOUD_METADATA_HOSTS = new Set<string>([
+  '169.254.169.254',            // AWS / Azure / GCP IMDS (IPv4)
+  'fd00:ec2::254',              // AWS IMDS (IPv6)
+  'metadata.google.internal',   // GCP metadata
+  'metadata.goog',              // GCP metadata alternate
+  'metadata.azure.com',         // Azure metadata
+]);
+
+/** True when the hostname is a cloud metadata endpoint (brackets stripped). */
+export function isCloudMetadataHost(hostname: string): boolean {
+  return CLOUD_METADATA_HOSTS.has(hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.+$/, ''));
+}
+
 const BLOCKED_EXACT_HOSTS = new Set<string>([
   'localhost',
   '127.0.0.1',
   '0.0.0.0',
-  '169.254.169.254',            // AWS / Azure / GCP IMDS (IPv4)
-  'metadata.google.internal',   // GCP metadata
-  'metadata.goog',              // GCP metadata alternate
-  'metadata.azure.com',         // Azure metadata
+  ...CLOUD_METADATA_HOSTS,
   '::1',                        // IPv6 loopback
   '::',                         // IPv6 unspecified
   '0:0:0:0:0:0:0:1',           // IPv6 loopback (full form)

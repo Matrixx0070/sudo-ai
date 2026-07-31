@@ -18,6 +18,7 @@ import {
   validateDomain,
   setDomainPermission,
   getDomainPermission,
+  isCloudMetadataHost,
 } from '../../src/core/security/domain-validator.js';
 import {
   guardFetch,
@@ -651,5 +652,33 @@ describe('guardFetch — multi-trailing-dot bypass', () => {
 describe('validateDomain — IPv6 unspecified full form', () => {
   it('blocks 0:0:0:0:0:0:0:0 (IPv6 unspecified full form)', () => {
     expect(validateDomain('0:0:0:0:0:0:0:0').allowed).toBe(false);
+  });
+});
+
+describe('cloud metadata is never allowlistable', () => {
+  const KEY = 'SUDO_TOOL_FETCH_ALLOW_ORIGINS';
+  const prev = process.env[KEY];
+  afterEach(() => {
+    if (prev === undefined) delete process.env[KEY];
+    else process.env[KEY] = prev;
+  });
+
+  it('refuses metadata origins even when explicitly allowlisted', () => {
+    process.env[KEY] = 'http://169.254.169.254,http://metadata.google.internal';
+    expect(isOriginAllowlisted('http://169.254.169.254/latest/meta-data/')).toBe(false);
+    expect(isOriginAllowlisted('http://metadata.google.internal/computeMetadata/v1/')).toBe(false);
+    expect(guardFetch('http://169.254.169.254/latest/meta-data/').allowed).toBe(false);
+  });
+
+  it('still allows a non-metadata allowlisted loopback origin', () => {
+    process.env[KEY] = 'http://127.0.0.1:39807';
+    expect(isOriginAllowlisted('http://127.0.0.1:39807/x')).toBe(true);
+    expect(guardFetch('http://127.0.0.1:39807/x').allowed).toBe(true);
+  });
+
+  it('isCloudMetadataHost normalizes brackets, case, and trailing dots', () => {
+    expect(isCloudMetadataHost('METADATA.GOOGLE.INTERNAL.')).toBe(true);
+    expect(isCloudMetadataHost('[fd00:ec2::254]')).toBe(true);
+    expect(isCloudMetadataHost('example.com')).toBe(false);
   });
 });
