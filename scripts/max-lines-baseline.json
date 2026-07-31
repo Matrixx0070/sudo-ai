@@ -37,6 +37,7 @@
   "src/core/channels/email.ts": 882,
   "src/core/channels/github-issues.ts": 542,
   "src/core/channels/router.ts": 529,
+  "src/core/channels/status-pin.ts": 407,
   "src/core/channels/telegram.ts": 1606,
   "src/core/channels/web.ts": 756,
   "src/core/cognition/commitment-resolution-tracker.ts": 423,
