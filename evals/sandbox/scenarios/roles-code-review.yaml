@@ -46,7 +46,7 @@ grading:
       path: REVIEW.md
       substring: "VERDICT:"
 budgets:
-  maxUsd: 0.9
+  maxUsd: 1.5
   maxSteps: 16
   maxWallMs: 480000
 isolation: runc
