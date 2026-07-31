@@ -10,6 +10,7 @@
 import type { Server as HttpServer } from 'node:http';
 import type { WebSocketServer } from 'ws';
 import { createLogger } from '../shared/logger.js';
+import { markGatewayRouteOwnerAttached, markGatewayRouteOwnerDetached } from '../gateway/server.js';
 import { registerEventsApi } from './api.js';
 import { eventBus } from './bus.js';
 import { initProgressBridge } from './progress-bridge.js';
@@ -41,12 +42,14 @@ export function initEventSystem(opts: { httpServer: HttpServer; wss?: WebSocketS
   worker.start();
 
   registerEventsApi(opts.httpServer, { store, worker });
+  markGatewayRouteOwnerAttached('events'); // lifts server.ts's 503 boot guard
   const stopProgress = initProgressBridge(eventBus);
   const stopWs = opts.wss ? initWsBridge(opts.wss, eventBus) : null;
 
   log.info('event system attached (bus + webhook worker + WS fan-out + REST/dashboard)');
   return {
     stop: () => {
+      markGatewayRouteOwnerDetached('events');
       worker.stop();
       stopProgress();
       stopWs?.();
