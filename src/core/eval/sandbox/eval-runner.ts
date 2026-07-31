@@ -275,7 +275,14 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
     // cumulative estimated USD reaches the cap.
     SUDO_AGENT_RUN_MAX_USD: String(scenario.budgets.maxUsd),
   };
-  if (mock) extraEnv['MOCK_SERVICE_URL'] = mock.url;
+  if (mock) {
+    extraEnv['MOCK_SERVICE_URL'] = mock.url;
+    // The mock service binds loopback, which the SSRF guard blanket-blocks.
+    // Allowlist EXACTLY this run's mock origin in the child (scheme+host+port
+    // exact match; redirects still re-validated per hop) so system.api-call
+    // can reach the scenario's own service without weakening any other target.
+    extraEnv['SUDO_TOOL_FETCH_ALLOW_ORIGINS'] = new URL(mock.url).origin;
+  }
   if (scenario.isolation === 'runsc') extraEnv['SUDO_SANDBOX_DOCKER_RUNTIME'] = 'runsc';
   if (opts.replayDb !== undefined) extraEnv['SUDO_EVAL_REPLAY_DB'] = opts.replayDb;
   if (opts.replayPathFrom !== undefined) {

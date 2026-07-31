@@ -22,8 +22,38 @@ import {
 import {
   guardFetch,
   safeFetch,
+  isOriginAllowlisted,
   SSRFBlockedRedirectError,
 } from '../../src/core/security/web-fetch-guard.js';
+
+// ---------------------------------------------------------------------------
+// Exact-origin allowlist (SUDO_TOOL_FETCH_ALLOW_ORIGINS)
+// ---------------------------------------------------------------------------
+
+describe('guardFetch — exact-origin allowlist (SUDO_TOOL_FETCH_ALLOW_ORIGINS)', () => {
+  afterEach(() => { delete process.env['SUDO_TOOL_FETCH_ALLOW_ORIGINS']; });
+
+  it('unset (prod default): loopback stays blocked', () => {
+    expect(guardFetch('http://127.0.0.1:39807/').allowed).toBe(false);
+    expect(isOriginAllowlisted('http://127.0.0.1:39807/')).toBe(false);
+  });
+
+  it('an exactly-allowlisted origin passes; any other port/host/scheme stays blocked', () => {
+    process.env['SUDO_TOOL_FETCH_ALLOW_ORIGINS'] = 'http://127.0.0.1:39807';
+    expect(guardFetch('http://127.0.0.1:39807/path?q=1').allowed).toBe(true);
+    expect(guardFetch('http://127.0.0.1:39808/').allowed).toBe(false);   // other port
+    expect(guardFetch('http://localhost:39807/').allowed).toBe(false);   // other host
+    expect(guardFetch('https://127.0.0.1:39807/').allowed).toBe(false);  // other scheme
+    expect(guardFetch('http://169.254.169.254/').allowed).toBe(false);   // metadata untouched
+  });
+
+  it('supports a comma-separated list and trims entries', () => {
+    process.env['SUDO_TOOL_FETCH_ALLOW_ORIGINS'] = 'http://127.0.0.1:1234 , http://127.0.0.1:5678';
+    expect(guardFetch('http://127.0.0.1:1234/').allowed).toBe(true);
+    expect(guardFetch('http://127.0.0.1:5678/x').allowed).toBe(true);
+    expect(guardFetch('http://127.0.0.1:9999/').allowed).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // IPv6 bracket bypass

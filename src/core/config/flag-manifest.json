@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 804,
+  "count": 805,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -730,6 +730,7 @@
     "SUDO_TOOL_CONCURRENCY",
     "SUDO_TOOL_EMPTY_RETRY_DISABLE",
     "SUDO_TOOL_ERROR_HINTS",
+    "SUDO_TOOL_FETCH_ALLOW_ORIGINS",
     "SUDO_TOOL_FETCH_GUARD_DISABLE",
     "SUDO_TOOL_LEARNING_DISABLE",
     "SUDO_TOOL_OUTCOME_LEARNER",

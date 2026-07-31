@@ -60,6 +60,27 @@ const MAX_REDIRECTS = 5;
 // ---------------------------------------------------------------------------
 
 /**
+ * Exact-origin allowlist (SUDO_TOOL_FETCH_ALLOW_ORIGINS, comma-separated,
+ * e.g. "http://127.0.0.1:39807"). Narrow escape valve for KNOWN local
+ * services that the blanket private-host block would refuse — the eval
+ * sandbox (ADR-0007) sets it for its own loopback mock service. Origin
+ * (scheme+host+port) must match exactly; redirects are re-validated per hop,
+ * so an allowlisted origin cannot bounce the fetch somewhere blocked.
+ * Unset (prod default) = no-op. Read per call — turn/run-scoped by env.
+ */
+export function isOriginAllowlisted(url: URL | string): boolean {
+  const raw = process.env['SUDO_TOOL_FETCH_ALLOW_ORIGINS'];
+  if (!raw) return false;
+  let origin: string;
+  try {
+    origin = (typeof url === 'string' ? new URL(url) : url).origin;
+  } catch {
+    return false;
+  }
+  return raw.split(',').map((s) => s.trim()).filter(Boolean).includes(origin);
+}
+
+/**
  * Validate a URL before fetching it.
  *
  * Checks the protocol and delegates domain validation to `validateDomain`.
@@ -89,6 +110,12 @@ export function guardFetch(url: string): FetchGuardResult {
     const reason = `Blocked protocol: ${parsed.protocol}`;
     log.warn({ url, domain, protocol: parsed.protocol }, `web-fetch-guard: ${reason}`);
     return { allowed: false, url, domain, reason };
+  }
+
+  // Exact-origin allowlist — see isOriginAllowlisted.
+  if (isOriginAllowlisted(parsed)) {
+    log.info({ url, origin: parsed.origin }, 'web-fetch-guard: origin explicitly allowlisted');
+    return { allowed: true, url, domain };
   }
 
   // Validate domain (blocks internal IPs, cloud-metadata, deny-listed domains).
@@ -127,17 +154,24 @@ export async function safeFetch(url: string, options?: RequestInit): Promise<Res
   // every Location header before following it.
   const fetchOptions: UndiciRequestInit = { ...options, redirect: 'manual' };
 
-  // DNS-pin the socket to a validated address so a hostname that passes the
-  // string check cannot rebind to a private/metadata IP at connect time.
-  // Skipped if the caller supplied its own dispatcher or pinning is disabled.
-  if (isDnsPinningEnabled() && !(options as UndiciRequestInit | undefined)?.dispatcher) {
-    fetchOptions.dispatcher = getPinnedDispatcher();
-  }
+  const callerDispatcher = (options as UndiciRequestInit | undefined)?.dispatcher;
 
   let currentUrl = url;
   let hops = 0;
 
   while (true) {
+    // DNS-pin the socket to a validated address so a hostname that passes the
+    // string check cannot rebind to a private/metadata IP at connect time.
+    // Skipped if the caller supplied its own dispatcher or pinning is disabled.
+    // Recomputed per hop: an explicitly allowlisted origin (its address is
+    // blocked by design — e.g. the eval mock on loopback) connects unpinned,
+    // but any redirect hop to a NON-allowlisted origin is pinned again.
+    if (isDnsPinningEnabled() && !callerDispatcher && !isOriginAllowlisted(currentUrl)) {
+      fetchOptions.dispatcher = getPinnedDispatcher();
+    } else {
+      delete fetchOptions.dispatcher;
+      if (callerDispatcher) fetchOptions.dispatcher = callerDispatcher;
+    }
     const response = await fetch(currentUrl, fetchOptions);
 
     // Non-redirect: return immediately.

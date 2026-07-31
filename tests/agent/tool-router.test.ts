@@ -56,6 +56,24 @@ describe('ToolRouter — github category routing', () => {
   });
 });
 
+describe('ToolRouter — explicit tool-name mention force-routing', () => {
+  const tools = [...TOOLS, { name: 'system.api-call', category: 'system' }];
+  const router = new ToolRouter(fakeRegistry(tools) as never);
+  const names = (msg: string): string[] => router.route(msg).map((s) => s.function.name);
+
+  it('a tool literally named in the message is always offered', () => {
+    // eval-sandbox finding (ADR-0007, unreliable-service): the prompt said
+    // "use the system.api-call tool" but no keyword routed it.
+    const n = names('fetch the url with an http get; use the system.api-call tool and save the body');
+    expect(n).toContain('system.api-call');
+  });
+
+  it('a bare un-dotted fragment does not force-route', () => {
+    const n = names('write an article about api-call conventions in cats');
+    expect(n).not.toContain('system.api-call');
+  });
+});
+
 describe('ToolRouter — routeAllowlistGlob (webhook sandbox)', () => {
   const router = new ToolRouter(fakeRegistry(TOOLS) as never);
   const names = (patterns: string[], deny?: string[]): string[] =>
