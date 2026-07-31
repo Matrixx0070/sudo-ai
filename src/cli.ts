@@ -5232,7 +5232,7 @@ ${question}`, kb);
       // REST/dashboard (/v1/events, /v1/webhook-endpoints). SUDO_EVENTS=0 disables.
       try {
         const { initEventSystem } = await import('./core/events/index.js');
-        const eventSystem = initEventSystem({ httpServer: gatewayServer, wss: wsRpcServer });
+        const eventSystem = initEventSystem({ httpServer: gatewayServer, wss: wsRpcServer, hookManager: hooks });
         if (eventSystem) {
           registerShutdown(() => eventSystem.stop());
           console.log('[boot] Event system attached (bus + webhooks + realtime fan-out)');

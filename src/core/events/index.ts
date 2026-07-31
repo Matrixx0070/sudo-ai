@@ -9,10 +9,12 @@
 
 import type { Server as HttpServer } from 'node:http';
 import type { WebSocketServer } from 'ws';
+import type { HookManager } from '../hooks/index.js';
 import { createLogger } from '../shared/logger.js';
 import { markGatewayRouteOwnerAttached, markGatewayRouteOwnerDetached } from '../gateway/server.js';
 import { registerEventsApi } from './api.js';
 import { eventBus } from './bus.js';
+import { initHookBridge } from './hook-bridge.js';
 import { initProgressBridge } from './progress-bridge.js';
 import { getEventStore } from './store.js';
 import { DeliveryWorker } from './worker.js';
@@ -32,7 +34,7 @@ export interface EventSystemHandle {
 }
 
 /** Wire the whole event system onto a running gateway. Call once at boot. */
-export function initEventSystem(opts: { httpServer: HttpServer; wss?: WebSocketServer }): EventSystemHandle | null {
+export function initEventSystem(opts: { httpServer: HttpServer; wss?: WebSocketServer; hookManager?: HookManager }): EventSystemHandle | null {
   if (!eventsEnabled()) {
     log.info('event system disabled (SUDO_EVENTS=0)');
     return null;
@@ -44,6 +46,7 @@ export function initEventSystem(opts: { httpServer: HttpServer; wss?: WebSocketS
   registerEventsApi(opts.httpServer, { store, worker });
   markGatewayRouteOwnerAttached('events'); // lifts server.ts's 503 boot guard
   const stopProgress = initProgressBridge(eventBus);
+  const stopHooks = opts.hookManager ? initHookBridge(opts.hookManager, eventBus) : null;
   const stopWs = opts.wss ? initWsBridge(opts.wss, eventBus) : null;
 
   log.info('event system attached (bus + webhook worker + WS fan-out + REST/dashboard)');
@@ -52,6 +55,7 @@ export function initEventSystem(opts: { httpServer: HttpServer; wss?: WebSocketS
       markGatewayRouteOwnerDetached('events');
       worker.stop();
       stopProgress();
+      stopHooks?.();
       stopWs?.();
     },
   };

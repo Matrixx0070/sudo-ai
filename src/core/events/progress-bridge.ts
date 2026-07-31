@@ -40,8 +40,6 @@ export function initProgressBridge(bus: EventBus = eventBus): () => void {
     const data = base(e);
     switch (e.type) {
       case 'start':
-        // Idempotency: one session.started per (session, timestamp-second).
-        bus.publish('session.started', data, { channels, idempotencyKey: `session.started:${e.sessionId}:${Math.floor(e.timestamp / 1000)}` });
         bus.publish('session.status', { ...data, status: 'started' }, { channels });
         break;
       case 'thinking':
@@ -50,20 +48,14 @@ export function initProgressBridge(bus: EventBus = eventBus): () => void {
       case 'streaming':
         bus.publish('session.output.delta', data, { channels });
         break;
-      case 'tool_call':
-        bus.publish('tool.started', data, { channels });
-        break;
-      case 'tool_result':
-        bus.publish(e.ok === false ? 'tool.failed' : 'tool.completed', data, { channels });
-        break;
       case 'complete':
-        bus.publish('message.completed', data, { channels });
         bus.publish('session.output.completed', data, { channels });
         break;
       case 'error':
-        bus.publish('message.failed', { ...data, error: e.message }, { channels });
         bus.publish('session.error', { ...data, error: e.message }, { channels });
         break;
+      default:
+        break; // tool_call/tool_result: persistent lifecycle — hook-bridge owns them
     }
   });
 }
