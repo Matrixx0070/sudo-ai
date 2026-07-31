@@ -199,7 +199,8 @@ async function notifyTelegram(message: string, botToken: string, chatId: string)
 // Health checks
 // ---------------------------------------------------------------------------
 
-async function checkCodebaseHealth(): Promise<KairosObservation[]> {
+/** Exported for the ADR-0006 weekly digest — same observation, on-demand caller. */
+export async function checkCodebaseHealth(): Promise<KairosObservation[]> {
   const obs: KairosObservation[] = [];
   if (!existsSync(TSC)) return obs;
   try {
@@ -236,7 +237,8 @@ async function checkCodebaseHealth(): Promise<KairosObservation[]> {
   return obs;
 }
 
-async function checkLargeFiles(): Promise<KairosObservation[]> {
+/** Exported for the ADR-0006 weekly digest — same observation, on-demand caller. */
+export async function checkLargeFiles(): Promise<KairosObservation[]> {
   const obs: KairosObservation[] = [];
   const THRESHOLD = 750;
   try {
