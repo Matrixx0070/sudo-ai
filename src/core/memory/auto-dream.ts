@@ -32,6 +32,12 @@ const COLLECT_HOURS = 24;
 const COLLECT_LIMIT = 1000;
 const PRUNE_DAYS = 30;
 const MAX_FACT_LENGTH = 500;
+
+/**
+ * Phase-2 sentinel the synthesis prompt uses to flag durable facts; stripped
+ * before storage, mapped to chunks.is_evergreen (decay exemption).
+ */
+export const EVERGREEN_SENTINEL = 'EVERGREEN:';
 const MAX_MEMORY_FILE_BYTES = 50 * 1024; // 50 KB
 
 /**
@@ -343,8 +349,8 @@ export class AutoDream {
 Transcript:
 ${transcript}
 
-Output a JSON array of strings — one string per fact. Example:
-["User prefers concise responses", "Project uses ESM modules", "Error on tool X is often due to missing config"]
+Output a JSON array of strings — one string per fact. Prefix a fact with "EVERGREEN: " ONLY when it is durable — a lasting preference, configuration, convention, or invariant that stays true regardless of date (NOT status snapshots, metrics, incidents, or anything tied to a specific day). Example:
+["EVERGREEN: User prefers concise responses", "Project uses ESM modules", "Error on tool X is often due to missing config"]
 
 Output ONLY the JSON array, nothing else.`;
 
@@ -368,7 +374,18 @@ Output ONLY the JSON array, nothing else.`;
 
     let stored = 0;
     for (const fact of facts) {
-      const factTrimmed = fact.trim();
+      // "EVERGREEN: " sentinel → durable fact, exempt from temporal decay.
+      // is_evergreen was a dead capability (0 of 649 corpus facts carried it),
+      // so decay half-lived EVERY fact — measured as the bulk of the RAG
+      // recall gap. Sentinel-in-string keeps the output contract a plain
+      // string array (no schema change to parse).
+      // Sentinel matched without a trailing space: the parse step above trims
+      // each fact, so a degenerate "EVERGREEN: " arrives as "EVERGREEN:".
+      const isEvergreen = fact.trimStart().startsWith(EVERGREEN_SENTINEL);
+      const factTrimmed = (isEvergreen
+        ? fact.trimStart().slice(EVERGREEN_SENTINEL.length)
+        : fact
+      ).trim();
       if (!factTrimmed) continue;
 
       const hash = sha256(factTrimmed);
@@ -403,7 +420,7 @@ Output ONLY the JSON array, nothing else.`;
           path: 'memory/auto-dream',
           source: 'learning',
           hash,
-          is_evergreen: 0,
+          is_evergreen: isEvergreen ? 1 : 0,
         });
         stored++;
 

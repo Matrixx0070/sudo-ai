@@ -125,7 +125,14 @@ export class RAGEngine {
           maxResults: maxChunks,
           minScore: 0.2,
           temporalDecay: true,
-          halfLifeDays: 30,
+          // 30 → 90 (2026-07-31, measured on the paraphrase harness): with a
+          // 30d half-life and ZERO evergreen facts in the corpus, decay alone
+          // was the whole gap between this path (20%/50% recall@1/@5) and raw
+          // hybrid (28%/63%). 90d recovers 25%/60% (MRR .318→.372) while
+          // keeping freshness ordering; durable facts additionally become
+          // decay-exempt via is_evergreen (auto-dream marks them since the
+          // same change).
+          halfLifeDays: 90,
           mmr: true,
           mmrLambda: 0.7,
         },
