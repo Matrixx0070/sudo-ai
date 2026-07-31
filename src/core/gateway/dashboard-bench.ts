@@ -20,6 +20,7 @@ export const BENCH_PANEL_HTML = `
 <div class="section-head" style="margin-top:20px">Bench &amp; Graph Runs</div>
 <div id="bench-panel" class="wide-panel">
   <div id="bench-runs" class="panel-sub">Loading bench runs&hellip;</div>
+  <div id="eval-sandbox-runs" class="panel-sub" style="margin-top:12px">Loading eval-sandbox runs&hellip;</div>
   <div id="graph-runs" class="panel-sub" style="margin-top:12px">Loading graph runs&hellip;</div>
   <div id="graph-approvals" class="panel-sub" style="margin-top:12px"></div>
   <div id="al9-generations" class="panel-sub" style="margin-top:12px"></div>
@@ -67,6 +68,12 @@ function loadBenchPanel(){
     var runs = (data && data.runs) || [];
     alSection('bench-runs', 'Bench runs (last ' + Math.min(runs.length, 10) + ' of ' + runs.length + ')',
       alRowsTable(runs, alPickCols(runs, ['runId','startedAt','model','condition','passRate','score','tasks'])));
+  });
+  apiFetch('/v1/admin/bench/eval-sandbox', function(err, data){
+    if(err){ alSection('eval-sandbox-runs', 'Eval sandbox (ADR-0007)', '<span style="color:#8b949e">unavailable (' + esc(err.message) + ')</span>'); return; }
+    var runs = (data && data.runs) || [];
+    alSection('eval-sandbox-runs', 'Eval sandbox runs (last ' + Math.min(runs.length, 10) + ' of ' + runs.length + ')',
+      alRowsTable(runs, alPickCols(runs, ['scenario','passed','score','costUsd','wallMs','when','runDir'])));
   });
   apiFetch('/v1/admin/graph-runs', function(err, data){
     if(err){ alSection('graph-runs', 'Graph runs', '<span style="color:#8b949e">unavailable (' + esc(err.message) + ')</span>'); return; }

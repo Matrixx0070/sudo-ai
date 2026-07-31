@@ -199,6 +199,77 @@ describe('POST /v1/admin/bench/run', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Eval-sandbox section (ADR-0007 Phase 4)
+// ---------------------------------------------------------------------------
+
+describe('GET /v1/admin/bench/eval-sandbox', () => {
+  let srv: TestServer;
+  let store: BenchStore;
+
+  beforeEach(async () => {
+    store = new BenchStore(makeTempDb());
+    srv   = await startServer(store);
+  });
+
+  afterEach(async () => {
+    await srv.close();
+    store.close();
+  });
+
+  it('returns only agentId=eval-sandbox rows, shaped for the dashboard', async () => {
+    store.insertResult({
+      id: 'eval-sandbox-run-a', runId: 'run-a', model: 'unknown', agentId: 'eval-sandbox',
+      taskId: 'roles-code-review', condition: 'no_skills', seedIndex: 0,
+      success: true, latencyMs: 1200, costUsd: 0.05, complexityTier: 'simple',
+      timestamp: new Date().toISOString(), score: 1, wallTimeMs: 1200,
+    });
+    store.insertResult({
+      id: randomUUID(), runId: 'run-b', model: 'x', agentId: 'other-agent',
+      taskId: 'task-hello', condition: 'no_skills', seedIndex: 0,
+      success: true, latencyMs: 10, costUsd: 0, complexityTier: 'simple',
+      timestamp: new Date().toISOString(),
+    });
+
+    const { status, body } = await doRequest(srv.port, 'GET', '/v1/admin/bench/eval-sandbox');
+    expect(status).toBe(200);
+    const runs = (body as { runs: Array<Record<string, unknown>> }).runs;
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      runId: 'run-a',
+      scenario: 'roles-code-review',
+      passed: true,
+      score: 1,
+      costUsd: 0.05,
+      wallMs: 1200,
+      runDir: 'data/eval-runs/run-a',
+    });
+    expect(typeof runs[0]!['when']).toBe('string');
+  });
+
+  it('requires auth like the other bench routes', async () => {
+    const TOKEN = 'super-secret-token-that-is-32char!!';
+    const s2 = new BenchStore(makeTempDb());
+    const v2 = await startServer(s2, TOKEN);
+    expect((await doRequest(v2.port, 'GET', '/v1/admin/bench/eval-sandbox')).status).toBe(401);
+    expect((await doRequest(v2.port, 'GET', '/v1/admin/bench/eval-sandbox', TOKEN)).status).toBe(200);
+    await v2.close();
+    s2.close();
+  });
+});
+
+describe('dashboard bench panel — eval-sandbox section (smoke)', () => {
+  it('panel markup and script include the eval-sandbox section', async () => {
+    const { BENCH_PANEL_HTML, BENCH_SCRIPT } = await import('../../src/core/gateway/dashboard-bench.js');
+    expect(BENCH_PANEL_HTML).toContain('id="eval-sandbox-runs"');
+    expect(BENCH_SCRIPT).toContain("apiFetch('/v1/admin/bench/eval-sandbox'");
+    expect(BENCH_SCRIPT).toContain('runDir');
+    // survives nesting in the parent template literal (dashboard-html contract)
+    expect(BENCH_SCRIPT.includes('`')).toBe(false);
+    expect(BENCH_SCRIPT.includes('${')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Auth tests
 // ---------------------------------------------------------------------------
 

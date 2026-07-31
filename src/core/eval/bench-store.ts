@@ -77,6 +77,8 @@ export interface BenchResultFilter {
   runId?: string;
   model?: string;
   condition?: SkillCondition;
+  /** e.g. 'eval-sandbox' — the eval-sandbox dashboard section filters on this. */
+  agentId?: string;
   limit?: number;
 }
 
@@ -139,13 +141,14 @@ export class BenchStore {
 
   /** List results with optional filtering. Default limit: 100. */
   listResults(filter: BenchResultFilter = {}): BenchResult[] {
-    const { runId, model, condition, limit = 100 } = filter;
+    const { runId, model, condition, agentId, limit = 100 } = filter;
     const clauses: string[] = [];
     const params: unknown[] = [];
 
     if (runId)     { clauses.push('run_id = ?');    params.push(runId); }
     if (model)     { clauses.push('model = ?');     params.push(model); }
     if (condition) { clauses.push('condition = ?'); params.push(condition); }
+    if (agentId)   { clauses.push('agent_id = ?');  params.push(agentId); }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql   = `SELECT * FROM bench_results ${where} ORDER BY timestamp DESC LIMIT ?`;

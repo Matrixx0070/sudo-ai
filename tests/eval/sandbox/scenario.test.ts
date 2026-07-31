@@ -72,12 +72,13 @@ describe('validateScenario', () => {
 describe('seed scenarios', () => {
   const files = fs.readdirSync(SCENARIOS_DIR).filter((f) => f.endsWith('.yaml'));
 
-  it('ships the 5 Phase-1 seed scenarios + the Phase-2 runsc clone', () => {
+  it('ships the 5 Phase-1 seeds + the Phase-2 runsc clone + the Phase-4 roles drill', () => {
     expect(files.sort()).toEqual([
       'coding-task.yaml',
       'credential-canary.yaml',
       'recovery-drill.yaml',
       'restricted-resource.yaml',
+      'roles-code-review.yaml',
       'runsc-coding-task.yaml',
       'unreliable-service.yaml',
     ]);
