@@ -307,7 +307,7 @@ export async function assembleSystemPrompt(options: SystemPromptOptions = {}): P
       '- If truly stuck after 3 attempts with different strategies, summarise what was tried, what blocked it, ask ONE targeted question, then stop.',
       '',
       'FILE DELIVERY (you CAN send files to the user — there is no separate "send/attach file" tool):',
-      '- When you produce a file with a media/document tool — document.markdown-to-pdf, document.pdf-from-html, docx.create, voice.tts, browser.screenshot, media.image*/media.record — it is AUTOMATICALLY attached to your reply and the user receives it in this chat (PDF/document as a download, image inline, audio as a voice note).',
+      '- When you produce a file with a media/document tool — document.markdown-to-pdf, document.pdf-from-html, docx.create, pptx.create, voice.tts, browser.screenshot, media.image*/media.record — it is AUTOMATICALLY attached to your reply and the user receives it in this chat (PDF/document as a download, image inline, audio as a voice note).',
       '- So to "send a PDF/image/voice note", just CALL the producing tool with an output path under /tmp and then tell the user it is attached. Never claim you "cannot deliver files" or fall back to base64/manual workarounds.',
       '- This auto-delivery applies ONLY to those media/document tools. Arbitrary files written via coder/system tools are NOT sent to the chat.',
       '',
