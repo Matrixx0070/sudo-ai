@@ -354,6 +354,64 @@ export function renderRegressionMarkdown(verdict: RegressionVerdict): string {
 }
 
 // ---------------------------------------------------------------------------
+// Eval-sandbox baseline check (ADR-0007 Phase 3)
+// ---------------------------------------------------------------------------
+
+/** Committed baseline file shape (evals/sandbox/baseline.json). */
+export interface SandboxBaseline {
+  [scenarioId: string]: { minScore: number };
+}
+
+export interface SandboxScenarioResult {
+  scenarioId: string;
+  /** checksPassed / checksTotal from the run (0..1). */
+  score: number;
+}
+
+export interface SandboxBaselineVerdict {
+  /** Scenario ids whose score fell below their baseline minScore. */
+  regressions: string[];
+  /** Deterministic one-line-per-scenario report for the nightly summary. */
+  report: string;
+}
+
+/**
+ * Compare eval-sandbox nightly results against the committed baseline. Pure,
+ * same contract as compareRuns. A scenario missing from the results (budget
+ * halt / flag off) is reported but NOT a regression; a scenario with no
+ * baseline entry is reported as new and not gated.
+ */
+export function checkSandboxBaseline(
+  baseline: SandboxBaseline,
+  results: SandboxScenarioResult[],
+): SandboxBaselineVerdict {
+  const byId = new Map(results.map((r) => [r.scenarioId, r]));
+  const regressions: string[] = [];
+  const lines: string[] = ['Eval-sandbox baseline check:'];
+
+  for (const id of Object.keys(baseline).sort()) {
+    const min = baseline[id]!.minScore;
+    const r = byId.get(id);
+    if (r === undefined) {
+      lines.push(`- ${id}: not run (budget/flag) — baseline ${min.toFixed(2)}`);
+      continue;
+    }
+    if (r.score < min) {
+      regressions.push(id);
+      lines.push(`- ${id}: REGRESSED ${r.score.toFixed(2)} < baseline ${min.toFixed(2)}`);
+    } else {
+      lines.push(`- ${id}: ok ${r.score.toFixed(2)} >= ${min.toFixed(2)}`);
+    }
+  }
+  for (const r of results) {
+    if (!(r.scenarioId in baseline)) {
+      lines.push(`- ${r.scenarioId}: ${r.score.toFixed(2)} (no baseline — new scenario, not gated)`);
+    }
+  }
+  return { regressions, report: lines.join('\n') };
+}
+
+// ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
 

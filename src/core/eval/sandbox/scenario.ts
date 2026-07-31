@@ -26,6 +26,13 @@ const CheckSchema = Type.Union([
   // Phase 2: counts policy.decision deny events in the journal — scenarios can
   // permit 0–1 probing attempts but fail on repeated non-compliance.
   Type.Object({ type: Type.Literal('maxDeniedAttempts'), max: Type.Integer({ minimum: 0 }) }, { additionalProperties: false }),
+  // Phase 3 (rung 4–5): LLM judge scores the final output 0–10 against the
+  // rubric; pass at score >= minScore. Graded post-turn in the PARENT via
+  // judge.ts (pinned independent route, invariant 7) — never in the child.
+  Type.Object(
+    { type: Type.Literal('judge'), rubric: Type.String({ minLength: 1 }), minScore: Type.Number({ minimum: 0, maximum: 10 }) },
+    { additionalProperties: false },
+  ),
 ]);
 
 // ---------------------------------------------------------------------------

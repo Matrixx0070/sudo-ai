@@ -19,20 +19,41 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { PROJECT_ROOT } from '../shared/paths.js';
 import { AgentBenchRunner } from './agent-bench-runner.js';
 import { ALL_AGENT_TASKS } from './agent-tasks/index.js';
 import type { AgentBenchResult } from './agent-bench-types.js';
+import { checkSandboxBaseline, type SandboxBaseline, type SandboxScenarioResult } from './bench-regression.js';
 import type { BenchStore } from './bench-store.js';
 import type { BenchResult } from '../shared/wave10-types.js';
+import type { EvalRunReport } from './sandbox/eval-runner.js';
+import type { Scenario } from './sandbox/scenario.js';
 
 const log = createLogger('eval:bench-nightly');
+
+/** Stop starting new eval-sandbox scenarios when remaining budget < this. */
+const EVAL_SWEEP_BUDGET_FLOOR_USD = 0.5;
+
+export interface NightlyEvalSandboxDeps {
+  /** Scenario manifest dir. Default: evals/sandbox/scenarios/. */
+  scenarioDir?: string;
+  /** Committed baseline file. Default: evals/sandbox/baseline.json. */
+  baselinePath?: string;
+  /** Injected scenario runner for tests. Default: sandbox runEval (results
+   * land in bench.db via the runner itself). */
+  run?: (scenario: Scenario) => Promise<EvalRunReport>;
+}
 
 export interface NightlyBenchDeps {
   runner: AgentBenchRunner;
   benchStore: BenchStore;
   /** Fire-and-forget owner alert (e.g. proactive notifier). */
   notify?: (title: string, body: string) => void;
+  /** Eval-sandbox sweep seams (ADR-0007 Phase 3). */
+  evalSandbox?: NightlyEvalSandboxDeps;
 }
 
 export interface NightlyBenchSummary {
@@ -42,6 +63,13 @@ export interface NightlyBenchSummary {
   passed: number;
   totalCostUsd: number;
   budgetHalted: boolean;
+  /** Eval-sandbox sweep (SUDO_EVAL_NIGHTLY=1; 0 when the flag is off). */
+  evalScenariosRun: number;
+  evalScenariosSkipped: number;
+  /** Scenario ids that fell below the committed baseline minScore. */
+  evalRegressions: string[];
+  /** Baseline-check report appended to the nightly report ('' when no sweep). */
+  evalReport: string;
 }
 
 function envNum(name: string, fallback: number): number {
@@ -92,6 +120,7 @@ export async function runNightlyBench(deps: NightlyBenchDeps): Promise<NightlyBe
   const tasks = ALL_AGENT_TASKS.slice(0, maxTasks);
   const summary: NightlyBenchSummary = {
     runId, tasksRun: 0, tasksSkipped: 0, passed: 0, totalCostUsd: 0, budgetHalted: false,
+    evalScenariosRun: 0, evalScenariosSkipped: 0, evalRegressions: [], evalReport: '',
   };
 
   log.info({ runId, tasks: tasks.length, maxUsd }, 'nightly bench starting');
@@ -122,6 +151,24 @@ export async function runNightlyBench(deps: NightlyBenchDeps): Promise<NightlyBe
     }
   }
 
+  // Eval-sandbox sweep (ADR-0007 Phase 3): flag-gated, rides the SAME
+  // SUDO_BENCH_NIGHTLY_MAX_USD accounting as the agent tasks above. Fail-soft.
+  if (process.env['SUDO_EVAL_NIGHTLY'] === '1') {
+    try {
+      await runEvalSandboxSweep(deps.evalSandbox ?? {}, summary, maxUsd);
+    } catch (err) {
+      log.warn({ runId, err: String(err) }, 'nightly bench: eval-sandbox sweep failed');
+    }
+    if (deps.notify && summary.evalRegressions.length > 0) {
+      try {
+        deps.notify(
+          `Nightly eval-sandbox: ${summary.evalRegressions.length} regression(s)`,
+          `${summary.evalRegressions.join(', ')} fell below baseline\n${summary.evalReport}`,
+        );
+      } catch { /* notifier failure never breaks the bench */ }
+    }
+  }
+
   const passRate = summary.tasksRun > 0 ? summary.passed / summary.tasksRun : 0;
   log.info({ ...summary, passRate: +passRate.toFixed(2) }, 'nightly bench complete');
 
@@ -135,4 +182,68 @@ export async function runNightlyBench(deps: NightlyBenchDeps): Promise<NightlyBe
     } catch { /* notifier failure never breaks the bench */ }
   }
   return summary;
+}
+
+/**
+ * Run every scenario in evals/sandbox/scenarios/ through the sandbox runner,
+ * within the nightly USD budget: stop STARTING new scenarios once remaining
+ * budget drops below {@link EVAL_SWEEP_BUDGET_FLOOR_USD}. Bench rows land in
+ * bench.db via the runner; this only tracks spend + the baseline comparison.
+ */
+async function runEvalSandboxSweep(
+  evalDeps: NightlyEvalSandboxDeps,
+  summary: NightlyBenchSummary,
+  maxUsd: number,
+): Promise<void> {
+  const scenarioDir = evalDeps.scenarioDir ?? join(PROJECT_ROOT, 'evals', 'sandbox', 'scenarios');
+  const baselinePath = evalDeps.baselinePath ?? join(PROJECT_ROOT, 'evals', 'sandbox', 'baseline.json');
+  if (!existsSync(scenarioDir)) {
+    log.warn({ scenarioDir }, 'eval-sandbox sweep: scenario dir missing — skipping');
+    return;
+  }
+  const files = readdirSync(scenarioDir).filter((f) => /\.(ya?ml|json)$/.test(f)).sort();
+
+  // Lazy imports keep sandbox module load off every runNightlyBench call site.
+  const { loadScenarioFile } = await import('./sandbox/scenario.js');
+  const run = evalDeps.run ?? (await import('./sandbox/eval-runner.js')).runEval;
+
+  const results: SandboxScenarioResult[] = [];
+  for (const [i, file] of files.entries()) {
+    if (maxUsd - summary.totalCostUsd < EVAL_SWEEP_BUDGET_FLOOR_USD) {
+      summary.budgetHalted = true;
+      summary.evalScenariosSkipped = files.length - i;
+      log.warn(
+        { spent: summary.totalCostUsd, maxUsd, skipped: summary.evalScenariosSkipped },
+        'eval-sandbox sweep: budget floor reached — halting gracefully',
+      );
+      break;
+    }
+    try {
+      const scenario = loadScenarioFile(join(scenarioDir, file));
+      const report = await run(scenario);
+      summary.evalScenariosRun++;
+      summary.totalCostUsd += report.turn.usd ?? 0;
+      results.push({
+        scenarioId: scenario.id,
+        score: report.scores.checksTotal > 0 ? report.scores.checksPassed / report.scores.checksTotal : 0,
+      });
+      log.info({ scenarioId: scenario.id, passed: report.passed, usd: report.turn.usd }, 'eval-sandbox sweep: scenario done');
+    } catch (err) {
+      // A scenario that cannot run scores 0 — the baseline check should alarm.
+      summary.evalScenariosRun++;
+      results.push({ scenarioId: file.replace(/\.(ya?ml|json)$/, ''), score: 0 });
+      log.warn({ file, err: String(err) }, 'eval-sandbox sweep: scenario errored');
+    }
+  }
+
+  let baseline: SandboxBaseline = {};
+  try {
+    if (existsSync(baselinePath)) baseline = JSON.parse(readFileSync(baselinePath, 'utf-8')) as SandboxBaseline;
+    else log.warn({ baselinePath }, 'eval-sandbox sweep: baseline file missing — no regression gate');
+  } catch (err) {
+    log.warn({ baselinePath, err: String(err) }, 'eval-sandbox sweep: unreadable baseline — no regression gate');
+  }
+  const verdict = checkSandboxBaseline(baseline, results);
+  summary.evalRegressions = verdict.regressions;
+  summary.evalReport = verdict.report;
 }
