@@ -60,6 +60,15 @@ async function gate(command: string, sessionId: string): Promise<{ ok: true } | 
   };
 }
 
+/** Ceiling on a blocking poll — a wedged process must never hold a turn open. */
+const MAX_WAIT_MS = 120_000;
+/** Granularity of the blocking wait; small enough to feel immediate. */
+const POLL_STEP_MS = 150;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 const startTool: ToolDefinition = {
   name: 'system.shell.start',
   description:
@@ -137,11 +146,22 @@ const pollTool: ToolDefinition = {
   description:
     'Read NEW stdout/stderr from a background shell since your last poll, plus its status '
     + '(running|exited|killed) and exit code. Output beyond the buffer cap is dropped oldest-first '
-    + '(reported as missedBytes). Requires SUDO_BG_SHELL=1.',
+    + '(reported as missedBytes). Pass waitMs to BLOCK until there is new output or the shell exits '
+    + '(up to that many ms) instead of returning immediately — prefer this over calling poll in a '
+    + 'loop, which wastes a turn per check. Requires SUDO_BG_SHELL=1.',
   category: 'system',
-  timeout: 10_000,
+  // Must exceed MAX_WAIT_MS so a legitimate long wait is never killed by the
+  // tool-level deadline before it can return what it collected.
+  timeout: MAX_WAIT_MS + 10_000,
   parameters: {
     shellId: { type: 'string', required: true, description: 'The shellId returned by system.shell.start.' },
+    waitMs: {
+      type: 'number',
+      required: false,
+      description:
+        `Block up to this many ms (max ${MAX_WAIT_MS}) waiting for new output or exit. `
+        + 'Omit or 0 for an immediate, non-blocking read.',
+    },
   },
   async execute(params: Record<string, unknown>): Promise<ToolResult> {
     const shellId = params['shellId'];
@@ -152,7 +172,29 @@ const pollTool: ToolDefinition = {
     if (!handle) {
       return { success: false, output: `system.shell.poll: no such shell ${shellId} (unknown or reaped).`, data: {} };
     }
-    const { stdout, stderr, missed } = registry.readNew(handle);
+
+    // Blocking wait (opt-in): return as soon as there IS something to report —
+    // new bytes or an exit — rather than making the caller burn a turn per
+    // check. Bounded by MAX_WAIT_MS so a wedged process can never hold a turn
+    // open indefinitely.
+    const rawWait = params['waitMs'];
+    const waitMs = typeof rawWait === 'number' && Number.isFinite(rawWait)
+      ? Math.max(0, Math.min(MAX_WAIT_MS, Math.floor(rawWait)))
+      : 0;
+    let waited = 0;
+    let first = registry.readNew(handle);
+    while (
+      waitMs > 0
+      && waited < waitMs
+      && handle.status === 'running'
+      && first.stdout === '' && first.stderr === '' && first.missed === 0
+    ) {
+      const step = Math.min(POLL_STEP_MS, waitMs - waited);
+      await sleep(step);
+      waited += step;
+      first = registry.readNew(handle);
+    }
+    const { stdout, stderr, missed } = first;
     const parts: string[] = [];
     if (stdout) parts.push(stdout);
     if (stderr) parts.push(stderr);
@@ -161,7 +203,7 @@ const pollTool: ToolDefinition = {
     return {
       success: true,
       output: `[${handle.status}${handle.exitCode !== null ? ` exit=${handle.exitCode}` : ''}]\n${body || '(no new output)'}`,
-      data: { status: handle.status, exitCode: handle.exitCode, stdout, stderr, missedBytes: missed },
+      data: { status: handle.status, exitCode: handle.exitCode, stdout, stderr, missedBytes: missed, waitedMs: waited },
     };
   },
 };
