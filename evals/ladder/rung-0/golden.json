@@ -1,0 +1,27 @@
+[
+  {
+    "id": "r0-nonempty",
+    "input": "Reply with a short one-sentence greeting.",
+    "expect": { "nonEmpty": true }
+  },
+  {
+    "id": "r0-pong",
+    "input": "Reply with exactly the single word: pong",
+    "expect": { "outputContains": "pong" }
+  },
+  {
+    "id": "r0-echo-marker",
+    "input": "Repeat back exactly this marker and nothing else: SUDO-LADDER-R0",
+    "expect": { "outputContains": "SUDO-LADDER-R0" }
+  },
+  {
+    "id": "r0-arithmetic",
+    "input": "What is 2+2? Answer with just the number.",
+    "expect": { "outputMatches": "\\b4\\b" }
+  },
+  {
+    "id": "r0-json-object",
+    "input": "Return a JSON object with a single key \"status\" whose value is \"ok\". Output only the JSON, no prose, no code fences.",
+    "expect": { "jsonParses": true, "outputContains": "\"status\"" }
+  }
+]

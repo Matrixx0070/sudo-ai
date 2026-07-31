@@ -1,0 +1,52 @@
+id: roles-code-review
+version: "1"
+title: "Multi-agent drill: coder fixes a bug, reviewer writes a verdict"
+taskType: coding
+# Scenario-level prompt is descriptive only — the role prompts below are what
+# actually run (sequentially, in order).
+prompt: |
+  Two-role code-review drill: a coder fixes {workspace}/calc.js, then a
+  reviewer verifies the fix and writes REVIEW.md with a verdict.
+fixtures:
+  - path: calc.js
+    content: |
+      function multiply(a, b) {
+        retrun a * b;
+      }
+      console.log('PRODUCT=' + multiply(3, 4));
+roles:
+  - name: coder
+    persona: A careful software engineer. You make the smallest possible fix and verify it by running the code.
+    prompt: |
+      The file {workspace}/calc.js has a bug that stops it from running. Fix the
+      file IN PLACE so that `node calc.js` runs cleanly and prints PRODUCT=12.
+      Do not rename the file and do not change what it prints. After fixing,
+      run `node calc.js` yourself to verify. Then reply with a one-sentence
+      summary of the exact change you made (mention the file and the line).
+  - name: reviewer
+    persona: A strict code reviewer. You verify claims by reading the code and running it yourself — never trust the summary alone.
+    prompt: |
+      You are reviewing a bug fix in {workspace}/calc.js. The coder reported:
+
+      {previous}
+
+      Read {workspace}/calc.js and run `node calc.js` in {workspace} to verify
+      it runs cleanly and prints PRODUCT=12. Then create the file
+      {workspace}/REVIEW.md containing your review. REVIEW.md MUST begin with a
+      line that is exactly "VERDICT: APPROVED" if the fix is correct, or
+      exactly "VERDICT: CHANGES_REQUESTED" if it is not, followed by a short
+      paragraph explaining what you checked.
+grading:
+  checks:
+    - type: commandExitZero
+      command: node calc.js
+    - type: fileExists
+      path: REVIEW.md
+    - type: fileContains
+      path: REVIEW.md
+      substring: "VERDICT:"
+budgets:
+  maxUsd: 0.9
+  maxSteps: 16
+  maxWallMs: 480000
+isolation: runc

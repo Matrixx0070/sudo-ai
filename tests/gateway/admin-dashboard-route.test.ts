@@ -205,7 +205,12 @@ describe('GET /v1/admin/dashboard', () => {
     // AL4.5 per-run spend telemetry, ledger items). Prior ceiling 54,272
     // (measured 53,128B on 2026-07-19). The 30KB target stays on the books
     // as documented debt; any growth beyond this feature still fails CI.
-    const RATCHET_CEILING_BYTES = 57_856; // measured 56,716B on 2026-07-28 + ~2%
+    //
+    // EXPLICIT raise 2026-07-31: +1,148B is the deliberate eval-sandbox
+    // section of the bench panel (ADR-0007 Phase 4, dashboard-bench.ts —
+    // latest eval-sandbox runs + runDir). Prior ceiling 57,856 (measured
+    // 56,716B on 2026-07-28). The 30KB target remains documented debt.
+    const RATCHET_CEILING_BYTES = 59_008; // measured 57,864B on 2026-07-31 + ~2%
     expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(RATCHET_CEILING_BYTES);
   });
 

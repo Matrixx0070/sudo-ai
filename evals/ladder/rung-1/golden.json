@@ -1,0 +1,27 @@
+[
+  {
+    "id": "r1-single-call-name",
+    "input": "You have a tool named echo_marker that takes {text: string}. Call it with the text SUDO-LADDER-R1. Do not answer in prose.",
+    "expect": { "toolCalled": "echo_marker", "paramsInclude": { "text": "SUDO-LADDER-R1" } }
+  },
+  {
+    "id": "r1-required-params",
+    "input": "You have a tool named create_note that takes {title: string, body: string} (both required). Create a note titled Ladder with body rung one check.",
+    "expect": { "toolCalled": "create_note", "paramsInclude": { "title": "Ladder" }, "paramTypes": { "title": "string", "body": "string" } }
+  },
+  {
+    "id": "r1-number-not-string",
+    "input": "You have a tool named set_timeout_ms that takes {ms: number}. Set the timeout to 1500 milliseconds.",
+    "expect": { "toolCalled": "set_timeout_ms", "paramsInclude": { "ms": 1500 }, "paramTypes": { "ms": "number" } }
+  },
+  {
+    "id": "r1-boolean-flag",
+    "input": "You have a tool named toggle_feature that takes {name: string, enabled: boolean}. Enable the feature named streaming.",
+    "expect": { "toolCalled": "toggle_feature", "paramsInclude": { "name": "streaming", "enabled": true }, "paramTypes": { "enabled": "boolean" } }
+  },
+  {
+    "id": "r1-nested-object",
+    "input": "You have a tool named http_request that takes {url: string, options: {method: string, headers: object}}. GET https://example.com/status with header Accept: application/json.",
+    "expect": { "toolCalled": "http_request", "paramsInclude": { "url": "https://example.com/status" }, "paramTypes": { "options": "object" } }
+  }
+]

@@ -20,6 +20,7 @@ export type JournalEventType =
   | 'replay.path-remap'
   | 'budget.exhausted'
   | 'resource.sample'
+  | 'role.turn'
   | 'run.end'
   | 'scores';
 

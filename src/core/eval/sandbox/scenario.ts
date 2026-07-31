@@ -74,6 +74,21 @@ const DenyRuleSchema = Type.Union([
 ]);
 
 // ---------------------------------------------------------------------------
+// Multi-agent roles (Phase 4) — sequential role turns inside ONE sandboxed run
+// ---------------------------------------------------------------------------
+
+const RoleSchema = Type.Object(
+  {
+    name: Type.String({ minLength: 1 }),
+    /** Optional persona preamble prepended to the role's turn message. */
+    persona: Type.Optional(Type.String({ minLength: 1 })),
+    /** Supports {workspace} and {previous} (previous role's final text, 8KB cap). */
+    prompt: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+// ---------------------------------------------------------------------------
 // Scenario manifest
 // ---------------------------------------------------------------------------
 
@@ -130,6 +145,15 @@ const ScenarioSchema = Type.Object(
     // 'runsc' = gVisor runtime class (ADR-0007 Phase 2). Enforced fail-closed by
     // eval-runner: the run ABORTS if the Docker runsc runtime is unavailable.
     isolation: Type.Optional(Type.Union([Type.Literal('runc'), Type.Literal('runsc')])),
+    /**
+     * Multi-agent role scenario (Phase 4): when present, the run executes one
+     * untrusted turn PER ROLE, sequentially in manifest order, each in its own
+     * session of the run-local SessionManager. `prompt` above then serves only
+     * as the scenario description; each role's own prompt is what runs.
+     * Budgets stay whole-run: maxSteps is divided ceil(maxSteps/roles.length)
+     * per role turn; wall/usd caps are unchanged.
+     */
+    roles: Type.Optional(Type.Array(RoleSchema, { minItems: 2, maxItems: 4 })),
     /** Unreliable-service fault script: local mock HTTP server (mock-service.ts). */
     mockService: Type.Optional(Type.Object(
       {
@@ -143,6 +167,7 @@ const ScenarioSchema = Type.Object(
 );
 
 export type Scenario = Static<typeof ScenarioSchema>;
+export type ScenarioRole = Static<typeof RoleSchema>;
 export type ScenarioPolicy = NonNullable<Scenario['policy']>;
 export type GradingCheck = Static<typeof CheckSchema>;
 export type ScenarioFault = Static<typeof FaultSchema>;

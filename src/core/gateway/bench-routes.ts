@@ -5,6 +5,7 @@
  * Endpoints:
  *   GET  /v1/admin/bench          — C5: list recent bench run summaries
  *   GET  /v1/admin/bench/results  — C6: list BenchResult rows with optional filter
+ *   GET  /v1/admin/bench/eval-sandbox — ADR-0007 P4: latest eval-sandbox runs
  *   POST /v1/admin/bench/run      — C7: enqueue a new async bench run
  *
  * Auth: timing-safe Bearer token (same pattern as skills/routes.ts).
@@ -163,6 +164,33 @@ function handleListRuns(res: ServerResponse, deps: BenchRoutesDeps): void {
   }
 }
 
+/**
+ * GET /v1/admin/bench/eval-sandbox — latest eval-sandbox runs (ADR-0007
+ * Phase 4). Same bench.db, filtered to agentId='eval-sandbox'; each row adds
+ * the runDir path (data/eval-runs/<runId>) for the dashboard section.
+ */
+function handleEvalSandboxRuns(req: IncomingMessage, res: ServerResponse, deps: BenchRoutesDeps): void {
+  const qs = parseQs(req.url ?? '');
+  const limit = Math.min(parseInt(qs['limit'] ?? '20', 10) || 20, 200);
+  try {
+    const rows = deps.benchStore.listResults({ agentId: 'eval-sandbox', limit });
+    const runs = rows.map((r) => ({
+      runId: r.runId,
+      scenario: r.taskId,
+      passed: r.success,
+      score: r.score,
+      costUsd: r.costUsd,
+      wallMs: r.wallTimeMs,
+      when: r.timestamp,
+      runDir: `data/eval-runs/${r.runId}`,
+    }));
+    sendJson(res, 200, { runs });
+  } catch (err) {
+    log.error({ err: String(err) }, 'bench-routes: eval-sandbox listResults failed');
+    sendError(res, 500, 'Internal server error');
+  }
+}
+
 /** GET /v1/admin/bench/results — list results with filter */
 function handleListResults(req: IncomingMessage, res: ServerResponse, deps: BenchRoutesDeps): void {
   const qs = parseQs(req.url ?? '');
@@ -275,6 +303,11 @@ export function registerBenchRoutes(server: HttpServer, deps: BenchRoutesDeps, t
       return;
     }
 
+    if (method === 'GET' && pathname === '/v1/admin/bench/eval-sandbox') {
+      handleEvalSandboxRuns(req, res, deps);
+      return;
+    }
+
     if (method === 'GET' && pathname === '/v1/admin/bench/results') {
       handleListResults(req, res, deps);
       return;
@@ -291,5 +324,5 @@ export function registerBenchRoutes(server: HttpServer, deps: BenchRoutesDeps, t
     sendError(res, 404, 'Not found');
   });
 
-  log.info('Bench routes registered (GET /v1/admin/bench, GET /v1/admin/bench/results, POST /v1/admin/bench/run)');
+  log.info('Bench routes registered (GET /v1/admin/bench, GET /v1/admin/bench/results, GET /v1/admin/bench/eval-sandbox, POST /v1/admin/bench/run)');
 }

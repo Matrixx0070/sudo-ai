@@ -248,9 +248,19 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
   journal.append({ type: 'prompt', text: prompt });
 
   // Child needs the manifest (policy for the in-child gate) — with the prompt
-  // already substituted so placeholders never reach the model.
+  // already substituted so placeholders never reach the model. Role prompts get
+  // {mockServiceUrl} here; {workspace}/{previous} are per-turn substitutions
+  // done in the child (roles.ts buildRoleMessage).
   const scenarioPath = join(runDir, 'scenario.json');
-  writeFileSync(scenarioPath, JSON.stringify({ ...scenario, prompt }, null, 2));
+  const substitutedRoles = scenario.roles?.map((r) => ({
+    ...r,
+    prompt: r.prompt.replace(/\{mockServiceUrl\}/g, mock?.url ?? ''),
+  }));
+  writeFileSync(scenarioPath, JSON.stringify({
+    ...scenario,
+    prompt,
+    ...(substitutedRoles !== undefined ? { roles: substitutedRoles } : {}),
+  }, null, 2));
 
   const extraEnv: Record<string, string> = {
     DATA_DIR: dataDir,
