@@ -1120,6 +1120,11 @@ export class AgentLoop extends AgentLoopInjections {
 
     // Hook: session:start
     void this.hooks?.emit('session:start', { event: 'session:start', sessionId, channel: session?.channel });
+    // Hook: on:message — inbound user message accepted into the turn. The event
+    // existed in the HookEvent union but nothing ever emitted it; the events
+    // hook-bridge subscribes to it for message.created (metadata only — it
+    // strips the text). Same fire-and-forget pattern as session:start.
+    void this.hooks?.emit('on:message', { event: 'on:message', sessionId, channel: session?.channel, message });
 
     // Security check: prompt injection detection.
     // We do NOT block the message — instead we inject a warning into session context
