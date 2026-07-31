@@ -13,21 +13,33 @@
  * and the sink seam.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import path from 'node:path';
+import os from 'node:os';
+import { mkdtempSync, rmSync } from 'node:fs';
 import {
   setKairosProposalSink,
   shouldPersistKairosProposal,
   isNewKairosObservation,
+  normalizeKairosObservation,
+  consumeKairosRepairBudget,
   _resetKairosProposalDedupeForTests,
+  _simulateKairosRestartForTests,
   type KairosProposal,
 } from '../../../src/core/tools/builtin/coder/arsenal.js';
+
+// Latch state now persists to disk; point it at a temp file so tests never
+// create <repo>/data/ (which flips the cw6-homeostat suite).
+const TMP_DIR = mkdtempSync(path.join(os.tmpdir(), 'kairos-latch-'));
+const TMP_LATCH = path.join(TMP_DIR, 'latch.json');
+afterAll(() => rmSync(TMP_DIR, { recursive: true, force: true }));
 
 const OBS_A = 'KAIROS: 37 file(s) exceed 750 lines:\nsrc/core/agent/loop.ts (3556 lines)';
 const OBS_B = 'KAIROS: 36 file(s) exceed 750 lines:\nsrc/core/agent/loop.ts (3556 lines)';
 
 describe('KAIROS proposal dedupe', () => {
   beforeEach(() => {
-    _resetKairosProposalDedupeForTests();
+    _resetKairosProposalDedupeForTests(TMP_LATCH);
     setKairosProposalSink(undefined);
   });
 
@@ -58,7 +70,7 @@ describe('KAIROS proposal dedupe', () => {
 
 describe('KAIROS proposal sink seam', () => {
   beforeEach(() => {
-    _resetKairosProposalDedupeForTests();
+    _resetKairosProposalDedupeForTests(TMP_LATCH);
     setKairosProposalSink(undefined);
   });
 
@@ -101,7 +113,7 @@ describe('KAIROS proposal sink seam', () => {
  */
 describe('KAIROS repeat-observation latch (gates the CALL, not just the write)', () => {
   beforeEach(() => {
-    _resetKairosProposalDedupeForTests();
+    _resetKairosProposalDedupeForTests(TMP_LATCH);
     setKairosProposalSink(undefined);
   });
 
@@ -128,5 +140,104 @@ describe('KAIROS repeat-observation latch (gates the CALL, not just the write)',
     // or the proposal computed on this very tick would never be written.
     expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
     expect(shouldPersistKairosProposal(OBS_A, 'refactor')).toBe(true);
+  });
+});
+
+/**
+ * 2026-07-31, third half of the story. The 07-29 latch was a module-level
+ * variable: every daemon restart wiped it and re-ran the full ~80k-token
+ * pipeline for an UNCHANGED observation. Live-proven: six restarts in one
+ * morning → six full re-runs, one minute after each. The latch now persists
+ * to disk and the key ignores pure drift (line counts, tsc positions).
+ */
+describe('KAIROS latch survives restarts (disk persistence)', () => {
+  beforeEach(() => {
+    _resetKairosProposalDedupeForTests(TMP_LATCH);
+    setKairosProposalSink(undefined);
+  });
+
+  it('an unchanged observation stays latched across a restart', () => {
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
+    _simulateKairosRestartForTests(); // memory gone, file stays
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(false);
+  });
+
+  it('the persist latch also survives a restart', () => {
+    expect(shouldPersistKairosProposal(OBS_A, 'refactor')).toBe(true);
+    _simulateKairosRestartForTests();
+    expect(shouldPersistKairosProposal(OBS_A, 'refactor')).toBe(false);
+  });
+
+  it('a genuinely new observation still runs after a restart — capability preserved', () => {
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
+    _simulateKairosRestartForTests();
+    expect(isNewKairosObservation(OBS_B, 'refactor')).toBe(true);
+  });
+});
+
+describe('KAIROS observation normalization (drift-proof dedupe key)', () => {
+  beforeEach(() => {
+    _resetKairosProposalDedupeForTests(TMP_LATCH);
+  });
+
+  it('line-count drift in a listed file does NOT re-key the observation', () => {
+    const drifted = OBS_A.replace('(3556 lines)', '(3557 lines)');
+    expect(isNewKairosObservation(OBS_A, 'refactor')).toBe(true);
+    expect(isNewKairosObservation(drifted, 'refactor')).toBe(false);
+  });
+
+  it('tsc position drift does NOT re-key a fix observation', () => {
+    const errA = 'KAIROS: 3 error(s)\nsrc/x.ts(123,4): error TS2345: nope';
+    const errB = 'KAIROS: 3 error(s)\nsrc/x.ts(125,9): error TS2345: nope';
+    expect(isNewKairosObservation(errA, 'fix')).toBe(true);
+    expect(isNewKairosObservation(errB, 'fix')).toBe(false);
+  });
+
+  it('a changed FILE COUNT still re-keys — kairos truncates the list, the count is real signal', () => {
+    expect(normalizeKairosObservation(OBS_A)).not.toBe(normalizeKairosObservation(OBS_B));
+  });
+
+  it('a changed error code still re-keys', () => {
+    const errA = 'src/x.ts(1,1): error TS2345: nope';
+    const errB = 'src/x.ts(1,1): error TS7006: nope';
+    expect(isNewKairosObservation(errA, 'fix')).toBe(true);
+    expect(isNewKairosObservation(errB, 'fix')).toBe(true);
+  });
+});
+
+describe('KAIROS per-day repair budget (invariant 10)', () => {
+  beforeEach(() => {
+    _resetKairosProposalDedupeForTests(TMP_LATCH);
+    delete process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'];
+  });
+
+  it('allows the default 4 runs then blocks', () => {
+    for (let i = 1; i <= 4; i++) {
+      expect(consumeKairosRepairBudget()).toEqual({ allowed: true, used: i, max: 4 });
+    }
+    expect(consumeKairosRepairBudget().allowed).toBe(false);
+  });
+
+  it('honors the env override', () => {
+    process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'] = '1';
+    expect(consumeKairosRepairBudget().allowed).toBe(true);
+    expect(consumeKairosRepairBudget().allowed).toBe(false);
+  });
+
+  it('0 is a kill switch', () => {
+    process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'] = '0';
+    expect(consumeKairosRepairBudget().allowed).toBe(false);
+  });
+
+  it('the spent budget survives a restart', () => {
+    process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'] = '1';
+    expect(consumeKairosRepairBudget().allowed).toBe(true);
+    _simulateKairosRestartForTests();
+    expect(consumeKairosRepairBudget().allowed).toBe(false);
+  });
+
+  it('invalid values fall back to the default', () => {
+    process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'] = 'banana';
+    expect(consumeKairosRepairBudget().max).toBe(4);
   });
 });

@@ -1219,24 +1219,79 @@ export function setKairosProposalSink(sink: ((p: KairosProposal) => void) | unde
 }
 
 /**
- * Last persisted observation. KAIROS re-fires the SAME observation every tick
- * (its remedy is dry-run, so the condition never clears), which would otherwise
- * write ~288 identical proposals/day. Persist a proposal only when the
- * observation actually changed.
+ * Dedupe + budget state for the KAIROS repair loop. Persisted to disk because
+ * the in-memory-only latch re-ran the full ~80k-token pipeline after EVERY
+ * daemon restart for an unchanged observation (live-proven 2026-07-31: six
+ * restarts → six full re-runs, one minute after each). Fail-open on IO errors:
+ * a broken latch file degrades to the old in-memory behaviour, never blocks.
  */
-let lastProposalKey = '';
+interface KairosLatchState {
+  attemptedKey: string;
+  proposalKey: string;
+  /** UTC day (YYYY-MM-DD) the run counter belongs to. */
+  day: string;
+  runsToday: number;
+}
+
+let latchFile = path.join(PROJECT_ROOT, 'data', 'kairos-repair-latch.json');
+let latch: KairosLatchState | null = null;
+
+function loadLatch(): KairosLatchState {
+  if (latch) return latch;
+  latch = { attemptedKey: '', proposalKey: '', day: '', runsToday: 0 };
+  try {
+    if (existsSync(latchFile)) {
+      const raw = JSON.parse(readFileSync(latchFile, 'utf-8')) as Partial<KairosLatchState>;
+      if (typeof raw.attemptedKey === 'string') latch.attemptedKey = raw.attemptedKey;
+      if (typeof raw.proposalKey === 'string') latch.proposalKey = raw.proposalKey;
+      if (typeof raw.day === 'string') latch.day = raw.day;
+      if (typeof raw.runsToday === 'number' && raw.runsToday >= 0) latch.runsToday = raw.runsToday;
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'KAIROS latch file unreadable — starting fresh (fail-open)');
+  }
+  return latch;
+}
+
+function saveLatch(): void {
+  if (!latch) return;
+  try {
+    mkdirSync(path.dirname(latchFile), { recursive: true });
+    writeFileSync(latchFile, JSON.stringify(latch));
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'KAIROS latch file write failed — dedupe stays in-memory (fail-open)');
+  }
+}
+
+/** Test hook: drop in-memory state but KEEP the latch file — simulates a daemon restart. */
+export function _simulateKairosRestartForTests(): void {
+  latch = null;
+}
+
+export function _resetKairosProposalDedupeForTests(file?: string): void {
+  latch = null;
+  if (file) latchFile = file;
+  try { if (existsSync(latchFile)) unlinkSync(latchFile); } catch { /* test-only best effort */ }
+}
 
 /**
- * Last observation we ATTEMPTED to analyse. Deliberately separate state from
- * `lastProposalKey`: that one latches when a proposal is PERSISTED (only when
- * edits came back). Sharing one key would latch on attempt and then make the
- * persist check always return false, silently dropping every proposal.
+ * Strip volatile counters from a KAIROS observation so the dedupe key tracks
+ * WHAT is flagged (mode + file set / error codes), not cosmetic drift. Without
+ * this, one line added to any of 37 oversized files re-keyed the observation
+ * and re-analysed all 37 from scratch.
  */
-let lastAttemptedKey = '';
+export function normalizeKairosObservation(task: string): string {
+  // Strip per-file line counts and tsc positions (pure drift), but KEEP the
+  // "N file(s)" / "N error(s)" counts: kairos truncates the listed files, so
+  // the count is the only signal when a file outside the visible list is
+  // added or removed — a genuinely new observation that must still run.
+  return task
+    .replace(/\(\d+ lines\)/g, '(lines)')      // "loop.ts (3679 lines)" — line counts drift
+    .replace(/\((\d+),(\d+)\)/g, '(pos)');      // "file.ts(123,4): error TS…" — positions drift
+}
 
-export function _resetKairosProposalDedupeForTests(): void {
-  lastProposalKey = '';
-  lastAttemptedKey = '';
+function observationKey(task: string, mode: 'fix' | 'refactor'): string {
+  return createHash('sha256').update(`${mode}\n${normalizeKairosObservation(task)}`).digest('hex');
 }
 
 /**
@@ -1246,22 +1301,49 @@ export function _resetKairosProposalDedupeForTests(): void {
  * a tick.
  */
 export function isNewKairosObservation(task: string, mode: 'fix' | 'refactor'): boolean {
-  const key = createHash('sha256').update(`${mode}\n${task}`).digest('hex');
-  if (key === lastAttemptedKey) return false;
-  lastAttemptedKey = key;
+  const state = loadLatch();
+  const key = observationKey(task, mode);
+  if (key === state.attemptedKey) return false;
+  state.attemptedKey = key;
+  saveLatch();
   return true;
 }
 
 /**
  * True when this observation differs from the last one persisted (and latches
- * it). Pure-ish and exported so the dedupe rule is testable without driving a
- * full arsenal run through a live model.
+ * it). Deliberately separate state from the attempted latch: that one latches
+ * on ATTEMPT; sharing one key would make the persist check always return
+ * false, silently dropping every proposal.
  */
 export function shouldPersistKairosProposal(task: string, mode: 'fix' | 'refactor'): boolean {
-  const key = createHash('sha256').update(`${mode}\n${task}`).digest('hex');
-  if (key === lastProposalKey) return false;
-  lastProposalKey = key;
+  const state = loadLatch();
+  const key = observationKey(task, mode);
+  if (key === state.proposalKey) return false;
+  state.proposalKey = key;
+  saveLatch();
   return true;
+}
+
+/**
+ * Per-day run budget for the KAIROS repair loop (CLAUDE.md invariant 10:
+ * every recurring background job declares budgets). Counts pipeline RUNS that
+ * passed the dedupe gate, per UTC day, persisted across restarts. Returns true
+ * and increments when a run is allowed. SUDO_KAIROS_REPAIR_MAX_PER_DAY:
+ * default 4; 0 blocks all runs (kill switch); invalid/negative → default.
+ */
+export function consumeKairosRepairBudget(): { allowed: boolean; used: number; max: number } {
+  const raw = Number.parseInt(process.env['SUDO_KAIROS_REPAIR_MAX_PER_DAY'] ?? '', 10);
+  const max = Number.isFinite(raw) && raw >= 0 ? raw : 4;
+  const state = loadLatch();
+  const today = new Date().toISOString().slice(0, 10);
+  if (state.day !== today) {
+    state.day = today;
+    state.runsToday = 0;
+  }
+  if (state.runsToday >= max) return { allowed: false, used: state.runsToday, max };
+  state.runsToday += 1;
+  saveLatch();
+  return { allowed: true, used: state.runsToday, max };
 }
 
 export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor' = 'refactor'): Promise<{ success: boolean; output: string }> {
@@ -1284,6 +1366,15 @@ export async function triggerKAIROSRepair(task: string, mode: 'fix' | 'refactor'
   if (process.env['SUDO_KAIROS_REPEAT_REPAIR'] !== '1' && !isNewKairosObservation(task, mode)) {
     logger.debug({ mode }, 'KAIROS: observation unchanged since last analysis — skipping repeat repair');
     return { success: true, output: 'skipped: observation unchanged since the last analysis' };
+  }
+
+  // Invariant-10 budget: a NEW observation still only runs while today's
+  // budget lasts. Checked after the dedupe gate so unchanged-observation skips
+  // never consume budget.
+  const budget = consumeKairosRepairBudget();
+  if (!budget.allowed) {
+    logger.info({ mode, used: budget.used, max: budget.max }, 'KAIROS: daily repair budget exhausted — skipping until next UTC day');
+    return { success: true, output: `skipped: daily repair budget exhausted (${budget.used}/${budget.max})` };
   }
 
   // KAIROS self-repair hook. Real dry-run call (applyEdits:false) to avoid side effects in background tick.
