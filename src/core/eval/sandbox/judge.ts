@@ -91,7 +91,15 @@ const JUDGE_SYSTEM =
   'You are an evaluation judge. Score the ASSISTANT OUTPUT against the RUBRIC on a 0-10 scale ' +
   '(0 = complete failure, 10 = flawless). Respond with ONLY a JSON object: {"score": <number>, "reason": "<one sentence>"}.';
 
-async function defaultCallJudge(judgeModel: string, system: string, user: string): Promise<JudgeCallResult> {
+/**
+ * The one place an eval judge call is made. Exported so the ladder's judged
+ * rungs (4/5) reuse this transport path instead of forking a second one.
+ */
+export async function callJudgeRoute(
+  judgeModel: string,
+  system: string,
+  user: string,
+): Promise<JudgeCallResult> {
   const { callIR } = await import('../../../llm/transport.js');
   const res = await callIR({
     alias: judgeModel,
@@ -161,7 +169,7 @@ export async function gradeJudgeChecks(
     return { outcomes, holdReason };
   }
 
-  const callJudge = deps.callJudge ?? defaultCallJudge;
+  const callJudge = deps.callJudge ?? callJudgeRoute;
   const maxUsd = judgeBudgetUsd();
   let spentUsd = 0;
 

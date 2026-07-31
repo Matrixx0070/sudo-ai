@@ -1,0 +1,33 @@
+{
+  "version": "1",
+  "items": [
+    {
+      "id": "r5-factual-stable",
+      "input": "In one short sentence: what problem does a write-ahead log solve in a database?",
+      "expect": {
+        "minScore": 8
+      }
+    },
+    {
+      "id": "r5-arith-stable",
+      "input": "A shop sells pens at 3 for $4.50. What does one pen cost? Answer with just the amount.",
+      "expect": {
+        "minScore": 8
+      }
+    },
+    {
+      "id": "r5-definition-stable",
+      "input": "In one short sentence, define idempotency in the context of HTTP methods.",
+      "expect": {
+        "minScore": 8
+      }
+    },
+    {
+      "id": "r5-classification-stable",
+      "input": "Is the following log line an ERROR or INFO? Answer with one word. 'connection reset by peer while streaming response'",
+      "expect": {
+        "minScore": 8
+      }
+    }
+  ]
+}

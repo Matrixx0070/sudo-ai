@@ -77,8 +77,8 @@ describe('runLadderRung', () => {
     expect(rep.passed).toBe(0);
   });
 
-  it('reports notImplemented (never a fake verdict) for unimplemented rungs', async () => {
-    const rep = await runLadderRung(4, 'any/route', { noCache: true });
+  it('reports notImplemented (never a fake verdict) for an out-of-range rung', async () => {
+    const rep = await runLadderRung(7, 'any/route', { noCache: true });
     expect(rep.notImplemented).toBe(true);
     expect(rep.admitted).toBe(false);
     expect(rep.reason).toMatch(/not implemented/i);

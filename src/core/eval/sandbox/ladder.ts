@@ -24,6 +24,15 @@ import { isEmptyReply } from '../../channels/empty-reply.js';
 import type { IRContentBlock, IRTool } from '../../../../shared-types/ir/v1.js';
 import { gradeRung0, gradeRung1, gradeRung2, type GradeOutcome } from './ladder-graders.js';
 import { gradeRung3, type SandboxExec } from './ladder-rung3.js';
+import {
+  consistencyK,
+  gradeRung4,
+  gradeRung5,
+  judgeHoldReason,
+  judgeIsIndependent,
+  type JudgeCall,
+} from './ladder-judged.js';
+import { evalJudgeModel } from './judge.js';
 
 const log = createLogger('eval:ladder');
 
@@ -57,7 +66,10 @@ export const RUNG_THRESHOLDS: Record<number, { passRate: number; minN: number }>
 };
 
 /** Rungs with a code-graded engine implemented here. */
-export const IMPLEMENTED_RUNGS = [0, 1, 2, 3] as const;
+export const IMPLEMENTED_RUNGS = [0, 1, 2, 3, 4, 5] as const;
+
+/** Rungs graded by an LLM judge — subject to invariant-7 independence. */
+export const JUDGED_RUNGS = [4, 5] as const;
 
 export interface LadderItemResult {
   id: string;
@@ -81,6 +93,10 @@ export interface LadderRungReport {
   /** Why admission was refused despite the pass rate (e.g. thin sample). */
   reason?: string;
   notImplemented?: boolean;
+  /** Invariant 7: judged rung refused because no independent judge exists. */
+  judgeHeld?: boolean;
+  /** Judge route used (judged rungs only). */
+  judgeModel?: string;
   haltedOnBudget?: boolean;
   spentUsd: number;
   results: LadderItemResult[];
@@ -250,6 +266,10 @@ export interface LadderRunOptions {
   noCache?: boolean;
   /** Injected sandbox executor for rung 3 (tests). Default: hardened Docker. */
   sandboxExec?: SandboxExec;
+  /** Injected judge call for rungs 4/5 (tests). Default: the pinned judge route. */
+  judgeCall?: JudgeCall;
+  /** Override the pinned judge model (tests). Default: evalJudgeModel(). */
+  judgeModel?: string;
 }
 
 async function defaultCallRoute(route: string, item: GoldenItem): Promise<LadderCallResult> {
@@ -272,6 +292,7 @@ async function gradeItem(
   item: GoldenItem,
   call: LadderCallResult,
   sandboxExec?: SandboxExec,
+  judge: { model: string; call?: JudgeCall } = { model: '' },
 ): Promise<GradeOutcome> {
   if (call.stopReason === 'error') {
     return { passed: false, detail: 'route returned stop_reason=error' };
@@ -289,6 +310,9 @@ async function gradeItem(
     return sandboxExec === undefined
       ? gradeRung3(item.expect, textOf())
       : gradeRung3(item.expect, textOf(), sandboxExec);
+  }
+  if (rung === 4) {
+    return gradeRung4(item.expect, textOf(), judge.model, judge.call);
   }
   // Rung 0 uses the delivery layer's OWN emptiness predicate (isEmptyReply —
   // the #751 content-filter empty-STRING class). Deliberately NOT
@@ -316,13 +340,26 @@ export async function runLadderRung(
   const threshold = RUNG_THRESHOLDS[rung] ?? { passRate: 1, minN: 1 };
 
   if (!(IMPLEMENTED_RUNGS as readonly number[]).includes(rung)) {
-    // ADR-0002: rungs 2-5 need math/tolerance, sandboxed-unit-test and judged
-    // engines — later slices. Never fake a verdict for them.
+    // Never fake a verdict for a rung with no engine.
     return {
       rung, route, goldenSetVersion: '', n: 0, passed: 0, failed: 0, passRate: 0,
       threshold: threshold.passRate, minN: threshold.minN, admitted: false,
       reason: `rung ${rung} grading engine not implemented (ADR-0002 later slice)`,
       notImplemented: true, spentUsd: 0, results: [],
+    };
+  }
+
+  // INVARIANT 7 (CLAUDE.md): a judged rung needs a judge independent of the
+  // route under test. A ladder run grades ONE route, so independence is a
+  // property of the RUN — if it fails, the whole rung HOLDS. We refuse before
+  // spending a cent: grading your own homework is not a verdict.
+  const judgeModel = opts.judgeModel ?? evalJudgeModel();
+  if ((JUDGED_RUNGS as readonly number[]).includes(rung) && !judgeIsIndependent(judgeModel, route)) {
+    return {
+      rung, route, goldenSetVersion: '', n: 0, passed: 0, failed: 0, passRate: 0,
+      threshold: threshold.passRate, minN: threshold.minN, admitted: false,
+      reason: judgeHoldReason(judgeModel, route),
+      judgeHeld: true, judgeModel, spentUsd: 0, results: [],
     };
   }
 
@@ -344,9 +381,36 @@ export async function runLadderRung(
       }
       let outcome: GradeOutcome;
       try {
-        const res = await call(route, item);
-        spentUsd += estimateCostUsd(route, res.usage.in, res.usage.out);
-        outcome = await gradeItem(rung, item, res, opts.sandboxExec);
+        if (rung === 5) {
+          // Self-consistency needs k INDEPENDENT samples of the same prompt.
+          const k = consistencyK();
+          const samples: string[] = [];
+          for (let s = 0; s < k; s++) {
+            const res = await call(route, item);
+            spentUsd += estimateCostUsd(route, res.usage.in, res.usage.out);
+            samples.push(
+              res.blocks
+                .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+                .map((b) => b.text)
+                .join('\n'),
+            );
+          }
+          const judged = await gradeRung5(item.expect, samples, judgeModel, opts.judgeCall);
+          if (judged.judgeUsage !== undefined) {
+            spentUsd += estimateCostUsd(judgeModel, judged.judgeUsage.in, judged.judgeUsage.out);
+          }
+          outcome = judged;
+        } else {
+          const res = await call(route, item);
+          spentUsd += estimateCostUsd(route, res.usage.in, res.usage.out);
+          const graded = await gradeItem(rung, item, res, opts.sandboxExec, {
+            model: judgeModel,
+            ...(opts.judgeCall !== undefined ? { call: opts.judgeCall } : {}),
+          });
+          const usage = (graded as { judgeUsage?: { in: number; out: number } }).judgeUsage;
+          if (usage !== undefined) spentUsd += estimateCostUsd(judgeModel, usage.in, usage.out);
+          outcome = graded;
+        }
       } catch (err) {
         // A failed call is a FAILED item, not a crashed run: an unreachable or
         // erroring route is exactly what admission must refuse.
@@ -378,6 +442,7 @@ export async function runLadderRung(
     rung, route, goldenSetVersion: set.version, n, passed, failed, passRate,
     threshold: threshold.passRate, minN: threshold.minN, admitted,
     ...(reason !== undefined ? { reason } : {}),
+    ...((JUDGED_RUNGS as readonly number[]).includes(rung) ? { judgeModel } : {}),
     ...(haltedOnBudget ? { haltedOnBudget: true } : {}),
     spentUsd, results,
   };

@@ -61,6 +61,7 @@
   "src/core/dashboard/dashboard-server.ts": 878,
   "src/core/eval/bench-regression.ts": 438,
   "src/core/eval/sandbox/eval-runner.ts": 452,
+  "src/core/eval/sandbox/ladder.ts": 452,
   "src/core/events/store.ts": 443,
   "src/core/federation/audit-chain-sync.ts": 418,
   "src/core/federation/federation-error-ingestor.ts": 411,
