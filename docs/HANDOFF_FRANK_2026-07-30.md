@@ -1,5 +1,24 @@
 # Handoff — everything that needs FRANK (2026-07-30, all-roadmaps run)
 
+## 2026-07-31 DELEGATION EXECUTED (Frank: "I will allow you make all decisions on this doc")
+
+Fable decided + executed every decidable item. Decision record:
+
+| Item | Decision | Outcome |
+|---|---|---|
+| SUDO_SEMANTIC_COMPACT (auto-DELETE dups, invariant-9 tension) | **RETIRED (=0)** | #1024 write-time gate covers new dups without surgery |
+| Retroactive twin cleanup | **EXECUTED via two-reader consensus** (scripts/memory-consensus-batch.mts, PR #1029) | 91 superseded (audit-preserving), 23 escalations skipped; retrieval: raw hybrid 28/63→35/68, RAG path 20/50→26/53 |
+| Retroactive evergreen marking | **EXECUTED via same consensus batch** | 221 facts marked durable (decay-exempt), 38 escalations skipped |
+| Nightly AgentBench cron | **BUILT + ACTIVATED** (PR #1029, SUDO_BENCH_NIGHTLY=1, 04:00 UTC) | budgets: $2/run, 10 tasks, alert <70% pass; first results in bench.db after tonight |
+| SUDO_AGENT_RUN_MAX_USD / TG flags / TX19 / AL_META / AL_FRONTIER / FLYWHEEL_APPLY / GDRIVE / GW-5 / GW-11 | already ACTIVE in prod (stale list) | verified via pm2 env 2026-07-31 |
+| PRs #969 / #936 / #836 | already closed/merged (stale list) | verified via gh |
+| Escape hatches | left alone as instructed | — |
+
+Pre-surgery backup: /root/eval-scratch/mind-pre-consensus.db. Consensus report artifacts: data/consensus-batch-*.json (escalations listed for optional human review — no action required).
+
+STILL PHYSICALLY YOURS (accounts/devices, cannot be delegated to me):
+Anthropic org OAuth console flip; OpenAI billing; GCP setup for Drive drills; TX22 bot tokens; TELEGRAM_MISSION_GROUP_ID supergroup; phone-side TG taps.
+
 All autonomously-completable roadmap work is done (ledger below). Every item
 here needs your account, your money, your tokens, or your explicit GO — per
 the invariants none of it was self-approved.
