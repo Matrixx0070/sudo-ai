@@ -6,7 +6,8 @@
  *   1. Generate query embedding (if sqlite-vec loaded and API key available)
  *   2. Vector search: top N*4 candidates from chunks_vec via cosine distance
  *   3. BM25 search:  top N*4 candidates from chunks_fts via FTS5 rank
- *   4. Merge results with configurable vector/text weights
+ *   4. Merge results — weighted RRF sets the ORDER, calibrated score keeps
+ *      the minScore gate (see hybrid-fusion.ts)
  *   5. Apply temporal decay to non-evergreen chunks (optional)
  *   6. Apply MMR re-ranking for diversity (optional)
  *   7. Filter by minScore, apply pathFilter, return top N
@@ -19,6 +20,8 @@ import type { MindDB } from './db.js';
 import type { EmbeddingService } from './embeddings.js';
 import { LocalEmbeddingProvider } from './local-embeddings.js';
 export { mergeHybridResults } from './hybrid-fusion.js';
+export { mmrRerank } from './mmr-rerank.js';
+import { mmrRerank } from './mmr-rerank.js';
 import { mergeHybridResults } from './hybrid-fusion.js';
 import type { MemoryChunk, SearchOptions, SearchResult } from './types.js';
 
@@ -75,76 +78,6 @@ export function applyTemporalDecay(
   return score * Math.exp(-lambda * ageInDays);
 }
 
-/**
- * Merge vector and BM25 result sets using a weighted reciprocal rank fusion
- * that respects explicit scores from both sources.
- *
- * For each unique chunk ID that appears in either list:
- *   finalScore = vectorWeight * vectorScore + textWeight * bm25Score
- *
- * If a chunk only appears in one list its other-side score is 0.
- *
- * @param vectorResults - Results from vector search with .score in [0,1]
- * @param bm25Results   - Results from BM25 search with .score in [0,1]
- * @param vectorWeight  - Blend weight for vector score (default: 0.7)
- * @param textWeight    - Blend weight for BM25 score (default: 0.3)
- */
-/**
- * Maximal Marginal Relevance re-ranking.
- *
- * Iteratively selects the next result that maximises:
- *   lambda * similarity(result, query) - (1-lambda) * max_similarity(result, selected)
- *
- * Because we don't store full embedding vectors in the result set, we use
- * normalised relevance scores as a proxy for query similarity and a
- * score-overlap heuristic for inter-result similarity.
- *
- * @param results - Sorted (highest score first) result set
- * @param lambda  - 1.0 = pure relevance, 0.0 = pure diversity (default: 0.7)
- */
-export function mmrRerank(results: SearchResult[], lambda = 0.7): SearchResult[] {
-  if (results.length <= 1) return results;
-
-  const selected: SearchResult[] = [];
-  const remaining = [...results];
-
-  // Greedy MMR selection
-  while (remaining.length > 0 && selected.length < results.length) {
-    let bestIdx = 0;
-    let bestMmrScore = -Infinity;
-
-    for (let i = 0; i < remaining.length; i++) {
-      const candidate = remaining[i]!;
-
-      // Proxy for max similarity to already-selected set:
-      // use 1 - (score gap), bounded to [0,1].
-      const maxSimilarityToSelected =
-        selected.length === 0
-          ? 0
-          : Math.max(
-              ...selected.map((s) =>
-                // Simple score-proximity heuristic: chunks with similar
-                // relevance scores are assumed to be similar in content.
-                1 - Math.min(1, Math.abs(candidate.score - s.score)),
-              ),
-            );
-
-      const mmrScore =
-        lambda * candidate.score - (1 - lambda) * maxSimilarityToSelected;
-
-      if (mmrScore > bestMmrScore) {
-        bestMmrScore = mmrScore;
-        bestIdx = i;
-      }
-    }
-
-    selected.push(remaining[bestIdx]!);
-    remaining.splice(bestIdx, 1);
-  }
-
-  return selected;
-}
-
 // ---------------------------------------------------------------------------
 // Vector search helpers
 // ---------------------------------------------------------------------------
@@ -191,6 +124,11 @@ function rowToChunk(row: ChunkRow): MemoryChunk {
     createdAt:   row.created_at,
     updatedAt:   row.updated_at,
   };
+}
+
+/** Session-metadata plumbing rows — see the exclusion note in Step 2. */
+function isSessionMetaPath(path: string): boolean {
+  return path.startsWith('session:') && path.endsWith(':meta');
 }
 
 function chunkAgeInDays(chunk: MemoryChunk): number {
@@ -350,6 +288,12 @@ export async function hybridSearch(
       .get({ id: fr.rowid });
     if (!row) continue;
     if (row.superseded_by != null) continue; // retired by contradiction resolution
+    // Session-metadata JSON blobs (session:<id>:meta) are plumbing read via
+    // direct path lookups (SessionManager / admin handlers), never meaningful
+    // semantic-search answers — vector-backfill already excludes them. Left in,
+    // they are ~27% of the FTS corpus and burn BM25 candidate slots on JSON
+    // key/id noise.
+    if (isSessionMetaPath(row.path)) continue;
     if (pathFilter && !row.path.startsWith(pathFilter)) continue;
 
     bm25Results.push({
@@ -387,7 +331,14 @@ export async function hybridSearch(
     results = results.map((r) => {
       if (r.chunk.isEvergreen) return r;
       const age = chunkAgeInDays(r.chunk);
-      return { ...r, score: applyTemporalDecay(r.score, age, halfLifeDays) };
+      // Decay is a pure multiplier — apply it to BOTH keys so age demotes a
+      // chunk in the RRF ordering exactly as it does in the score gate.
+      const factor = applyTemporalDecay(1, age, halfLifeDays);
+      return {
+        ...r,
+        score: r.score * factor,
+        ...(r.rankScore !== undefined ? { rankScore: r.rankScore * factor } : {}),
+      };
     });
   }
 
@@ -401,7 +352,15 @@ export async function hybridSearch(
   if (epistemicAdjuster) {
     results = results.map((r) => {
       try {
-        return { ...r, score: epistemicAdjuster(r.chunk.path, r.score) };
+        const adjusted = epistemicAdjuster(r.chunk.path, r.score);
+        // Propagate the adjuster's relative effect onto the RRF ordering key,
+        // so provenance demotes/promotes rank as well as the gate score.
+        const factor = r.score > 0 ? adjusted / r.score : 1;
+        return {
+          ...r,
+          score: adjusted,
+          ...(r.rankScore !== undefined ? { rankScore: r.rankScore * factor } : {}),
+        };
       } catch {
         return r;
       }
@@ -412,9 +371,13 @@ export async function hybridSearch(
   // Step 5: Score filter + sort
   // -------------------------------------------------------------------------
 
+  // Gate on the calibrated score (absolute quality — minScore semantics are
+  // unchanged for every caller), but ORDER by the RRF key when present: the
+  // raw scores of the two engines are incommensurable, so sorting by them
+  // structurally favours BM25 (see hybrid-fusion.ts).
   results = results
     .filter((r) => r.score >= minScore)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => (b.rankScore ?? b.score) - (a.rankScore ?? a.score));
 
   // -------------------------------------------------------------------------
   // Step 6: MMR diversity re-ranking

@@ -60,6 +60,13 @@ export interface SearchResult {
   score: number;
   /** Which search path produced this result */
   matchType: 'vector' | 'bm25' | 'hybrid';
+  /**
+   * Ordinal ranking key from reciprocal-rank fusion (hybrid results only).
+   * ONLY meaningful relative to other results of the same search — not a
+   * calibrated quality number. When present, ordering uses this; the
+   * calibrated `score` keeps its role as the absolute minScore gate.
+   */
+  rankScore?: number;
 }
 
 /**

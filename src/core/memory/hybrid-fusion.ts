@@ -17,28 +17,51 @@ import type { MemoryChunk, SearchResult } from './types.js';
  */
 const AGREEMENT_BONUS = 0.1;
 
+/**
+ * RRF dampening constant (Cormack et al. 2009 default). Controls how fast a
+ * result's franchise decays with its rank within its own engine's list.
+ */
+const RRF_K = 60;
+
 export function mergeHybridResults(
   vectorResults: SearchResult[],
   bm25Results: SearchResult[],
   vectorWeight = 0.7,
   textWeight = 0.3,
 ): SearchResult[] {
-  const merged = new Map<number, { chunk: MemoryChunk; vecScore: number; bm25Score: number }>();
+  const merged = new Map<number, {
+    chunk: MemoryChunk; vecScore: number; bm25Score: number; rrf: number;
+  }>();
 
-  for (const r of vectorResults) {
-    merged.set(r.chunk.id, { chunk: r.chunk, vecScore: r.score, bm25Score: 0 });
-  }
-  for (const r of bm25Results) {
+  // The two engines' absolute scores are INCOMMENSURABLE: BM25's
+  // relevance/(1+relevance) clusters in 0.67–0.95 while cosine-derived vector
+  // scores cluster in 0.4–0.7 for related-but-not-verbatim text. One list
+  // sorted by those numbers lets BM25 outrank dense STRUCTURALLY (measured:
+  // hybrid ≈ BM25-alone on paraphrase queries — dense had no vote). Ordering
+  // therefore uses reciprocal-rank fusion, which only consumes each engine's
+  // own ranking; the calibrated score below survives solely as the absolute
+  // minScore gate.
+  const byScoreDesc = (a: SearchResult, b: SearchResult): number => b.score - a.score;
+  [...vectorResults].sort(byScoreDesc).forEach((r, rank) => {
+    merged.set(r.chunk.id, {
+      chunk: r.chunk, vecScore: r.score, bm25Score: 0,
+      rrf: vectorWeight / (RRF_K + rank + 1),
+    });
+  });
+  [...bm25Results].sort(byScoreDesc).forEach((r, rank) => {
+    const contribution = textWeight / (RRF_K + rank + 1);
     const existing = merged.get(r.chunk.id);
     if (existing) {
       existing.bm25Score = r.score;
+      existing.rrf += contribution;
     } else {
-      merged.set(r.chunk.id, { chunk: r.chunk, vecScore: 0, bm25Score: r.score });
+      merged.set(r.chunk.id, { chunk: r.chunk, vecScore: 0, bm25Score: r.score, rrf: contribution });
     }
-  }
+  });
 
-  return Array.from(merged.values()).map(({ chunk, vecScore, bm25Score }) => ({
+  return Array.from(merged.values()).map(({ chunk, vecScore, bm25Score, rrf }) => ({
     chunk,
+    rankScore: rrf,
     // A single-source match keeps its raw [0,1] score — otherwise a strong
     // BM25-exclusive hit (vecScore=0) scores textWeight*bm25 ≤ 0.3, below the
     // default minScore 0.35, and is silently dropped despite being an exact
