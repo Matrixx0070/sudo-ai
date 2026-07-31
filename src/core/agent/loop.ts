@@ -83,6 +83,7 @@ import { DoomLoopDetector } from './doom-loop.js';
 import { AgencyMonitor, captureExpectation } from './agency-monitor.js';
 import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
 import { StuckDetector, looksLikeToolError } from './stuck-detector.js';
+import { isPolicyDenial, TurnPolicyDenialTracker } from './policy-denial.js';
 import { isSwarmRescueEnabled, getSwarmRescueStrategy, swarmRescueCallOpts } from './swarm-rescue.js';
 import { generateIntelligenceBrief } from './intelligence-brief.js';
 import { shouldFork, forkSession } from '../sessions/session-fork.js';
@@ -2154,6 +2155,12 @@ export class AgentLoop extends AgentLoopInjections {
     const swarmRescueStrategy = getSwarmRescueStrategy();
     let swarmRescueActive = false;
 
+    // Policy-denial escalation (first eval-sandbox finding, ADR-0007): a
+    // policy denial is not a transient error — retrying cannot succeed.
+    // Turn-scoped tracker: 1st denial of a tool → system nudge; 2nd denial of
+    // the SAME tool → drop it from the schema for the rest of THIS turn.
+    const policyDenials = new TurnPolicyDenialTracker();
+
     // P0: track total tool calls across inner loop iterations for LazinessNudge.
     let _innerLoopToolCallCount = 0;
     // Per-turn cap on context-overflow → compact → retry cycles, so a prompt that
@@ -2591,6 +2598,20 @@ export class AgentLoop extends AgentLoopInjections {
               const visionSchema = this.toolRouter.routeAllowlist(['browser.vision'])[0];
               if (visionSchema) _routedTools = [..._routedTools, visionSchema];
             }
+          }
+        }
+
+        // Policy-denial schema removal (turn-scoped): a tool denied by policy
+        // twice this turn is withheld from the schema for the remaining
+        // iterations, so the model physically cannot re-select it.
+        if (policyDenials.removedTools.size > 0) {
+          const _beforeCount = _routedTools.length;
+          _routedTools = _routedTools.filter((t) => !policyDenials.removedTools.has(t.function?.name ?? ''));
+          if (_routedTools.length !== _beforeCount) {
+            log.warn(
+              { sessionId: state.sessionId, removed: [...policyDenials.removedTools], iteration: state.iteration },
+              'Policy-denied tools withheld from turn schema',
+            );
           }
         }
 
@@ -3455,6 +3476,28 @@ export class AgentLoop extends AgentLoopInjections {
               }
             } catch { /* fail-open */ }
             throw toolErr;
+          }
+
+          // Policy-denial escalation (general mechanism, always on): scan the
+          // tool results that just landed for policy denials. First denial of
+          // a tool this turn → nudge; second denial of the SAME tool → remove
+          // it from the schema for the rest of this turn (filter above).
+          for (let _pdi = _stuckPreCount; _pdi < session.messages.length; _pdi++) {
+            const _pdm = session.messages[_pdi] as { role: string; content: unknown; toolName?: string } | undefined;
+            if (!_pdm || _pdm.role !== 'tool' || typeof _pdm.toolName !== 'string') continue;
+            const _pdc = typeof _pdm.content === 'string' ? _pdm.content : JSON.stringify(_pdm.content);
+            if (!isPolicyDenial(_pdc)) continue;
+            const _pdVerdict = policyDenials.record(_pdm.toolName);
+            if (_pdVerdict === 'nudge') {
+              const nudge = `[PolicyDenial] Tool '${_pdm.toolName}' is unavailable by policy for this task. Do not retry it — choose a different tool to accomplish the goal.`;
+              session.messages.push({ role: 'system', content: nudge });
+              log.warn({ sessionId: state.sessionId, tool: _pdm.toolName }, 'Policy denial — nudge injected');
+            } else if (_pdVerdict === 'remove') {
+              const removedMsg = `[PolicyDenial] Tool '${_pdm.toolName}' was denied by policy twice this turn and has been removed from your available tools for the rest of this turn. Use a different tool.`;
+              session.messages.push({ role: 'system', content: removedMsg });
+              emit({ type: 'error', error: removedMsg });
+              log.warn({ sessionId: state.sessionId, tool: _pdm.toolName }, 'Policy denial — tool removed from turn schema');
+            }
           }
 
           // StuckDetector: result-aware repeated-error detection (opt-in via

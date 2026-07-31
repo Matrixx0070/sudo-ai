@@ -700,6 +700,22 @@ export class ToolRouter {
       }
     }
 
+    // Step 4b: explicit mention — a registered tool literally NAMED in the
+    // message is always offered. Live eval-sandbox finding (ADR-0007,
+    // unreliable-service): the prompt said "use the system.api-call tool" but
+    // no category keyword routed it, so the model was told to use a tool it
+    // was never shown and reported it as nonexistent. Dotted names only —
+    // every registered tool is namespace.dotted, and the dot makes a mention
+    // unambiguous (a bare "exec" never force-routes system.exec).
+    for (const [name, schema] of schemasByName) {
+      if (selectedNames.has(name) || !name.includes('.')) continue;
+      if (normalised.includes(name.toLowerCase())) {
+        result.push(schema);
+        selectedNames.add(name);
+        log.debug({ tool: name }, 'Explicitly mentioned tool force-routed');
+      }
+    }
+
     // Step 5: continuity — add recently used tools
     let continuitySlotsUsed = 0;
     for (const recentName of recentToolNames) {
