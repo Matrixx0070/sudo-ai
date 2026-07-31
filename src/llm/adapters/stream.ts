@@ -42,7 +42,15 @@ export type IRStreamEvent =
       input: Record<string, unknown>;
       parse_error?: string;
     }
-  | { type: 'message_end'; stop_reason: IRResponse['stop_reason']; usage: IRUsage }
+  // cost_usd: the provider's own authoritative price for the call, when it
+  // sends one (xAI today). Optional — absent means "no provider price", which
+  // the recorder reads as "fall back to the token estimate", NOT as "free".
+  | {
+      type: 'message_end';
+      stop_reason: IRResponse['stop_reason'];
+      usage: IRUsage;
+      cost_usd?: number;
+    }
   | { type: 'stream_error'; error: string };
 
 export interface IRStreamMachine {

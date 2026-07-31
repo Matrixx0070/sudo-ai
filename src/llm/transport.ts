@@ -97,7 +97,7 @@ import {
   createSSEParser,
   reverseEventToolName,
   createResponseAccumulator,
-  feedChunk,
+  feedChunk, withProviderCost,
   type LiveStream,
 } from './transport-stream.js';
 import { getIRInterceptor } from './ir-interceptor.js';
@@ -958,7 +958,7 @@ function recordCall(entry: LLMCallRecord): void {
     // provider didn't hand us a real cost, so (a) gateway.db has a cost floor
     // for boot-time day-spend derivation and (b) the in-memory budget counter
     // in policy.ts actually accrues. Real provider cost, when present, wins.
-    const enriched = withEstimatedCost(entry);
+    const enriched = withEstimatedCost(withProviderCost(entry));
     recordGatewayCall(enriched);
     // Feed the asymmetric budget counter. Guard on >0 so error rows (no tokens)
     // never move the needle; recordCall is the single per-call choke point

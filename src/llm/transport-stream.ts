@@ -11,6 +11,7 @@
  */
 
 import type { IRResponse, IRUsage } from '../../shared-types/ir/v1.js';
+import type { LLMCallRecord } from './logging.js';
 import type { IRStreamEvent, IRStreamMachine } from './adapters/stream.js';
 import type { Family } from './transport.js';
 
@@ -96,7 +97,11 @@ export function createResponseAccumulator(traceId: string): {
 } {
   const blocks: IRResponse['blocks'] = [];
   const acc = {
-    terminal: null as { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null,
+    terminal: null as {
+      stop_reason: IRResponse['stop_reason'];
+      usage: IRUsage;
+      cost_usd?: number;
+    } | null,
     add(ev: IRStreamEvent): void {
       if (ev.type === 'text_delta') {
         const last = blocks[blocks.length - 1];
@@ -105,11 +110,15 @@ export function createResponseAccumulator(traceId: string): {
       } else if (ev.type === 'tool_use_end') {
         blocks.push({ type: 'tool_use', id: ev.id, name: ev.name, input: ev.input });
       } else if (ev.type === 'message_end') {
-        acc.terminal = { stop_reason: ev.stop_reason, usage: ev.usage };
+        acc.terminal = {
+          stop_reason: ev.stop_reason,
+          usage: ev.usage,
+          ...(ev.cost_usd !== undefined ? { cost_usd: ev.cost_usd } : {}),
+        };
       }
     },
     toIRResponse(partialUsage?: IRUsage): IRResponse {
-      return {
+      const res: IRResponse = {
         blocks,
         // Consumer abandoned the stream before the terminal event →
         // stop_reason 'error' on the partial (mirror brain's partial-usage
@@ -119,9 +128,29 @@ export function createResponseAccumulator(traceId: string): {
         usage: acc.terminal?.usage ?? partialUsage ?? { in: 0, out: 0, cached_in: 0 },
         trace_id: traceId,
       };
+      // Carry the provider's own price to the ledger row. An abandoned stream
+      // has no terminal → no cost_usd → the recorder estimates rather than
+      // asserting the call was free.
+      if (acc.terminal?.cost_usd !== undefined) res.cost_usd = acc.terminal.cost_usd;
+      return res;
     },
   };
   return acc;
+}
+
+/**
+ * Lift a provider-reported price out of the recorded IRResponse onto the
+ * llm_calls row. xAI returns the authoritative per-call cost as
+ * cost_in_usd_ticks (mapped to IRResponse.cost_usd by its adapter); it beats
+ * our token-count estimate, which returns 0 for an unpriced model — that is
+ * precisely how the METERED cli-chat-proxy lane logged as free.
+ *
+ * No provider price → entry untouched, so the estimator still runs. Never
+ * collapse "no price" into 0.
+ */
+export function withProviderCost(entry: LLMCallRecord): LLMCallRecord {
+  const cost = (entry.irResponse as IRResponse | undefined)?.cost_usd;
+  return typeof cost === 'number' ? { ...entry, costUsd: cost } : entry;
 }
 
 /** Live state handed from the policy-wrapped attempt to the yield loop. */
