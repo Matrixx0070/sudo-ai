@@ -96,6 +96,10 @@ const METHOD_SCOPES: Record<string, OperatorScope> = {
   'cron.remove': 'operator.write',
   'secrets.reload': 'operator.admin',
   'secrets.resolve': 'operator.admin',
+  // Realtime event fan-out (core/events/ws-bridge.ts) — read-only per-connection state.
+  'events.subscribe': 'operator.read',
+  'events.unsubscribe': 'operator.read',
+  'events.presence': 'operator.read',
 };
 
 /** A per-connection event sequencer (see RpcEvent). */
