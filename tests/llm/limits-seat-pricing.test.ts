@@ -51,3 +51,36 @@ describe('estimateCostUsd seat pricing', () => {
     expect(estimateCostUsd('mystery/model-x', M, 0)).toBe(3);
   });
 });
+
+/**
+ * The INVERSE failure: a genuinely METERED lane priced at $0.
+ *
+ * `xai-oauth/grok-build` was priced 0/0 on the premise that the cli-chat-proxy
+ * lane was seat-covered. That premise was disproven live on 2026-07-31 — the
+ * proxy meters on BOTH principals of the account (`grok-4.5` resolves
+ * server-side to `grok-4.5-build`, service_tier "default", cost_in_usd_ticks
+ * 7_444_000 on the SuperGrok-bearing team), and `grok-4.5-build-free` 404s.
+ * A $0 price told the budget counter the model was free, so no dollar ceiling
+ * ever bound it: console.x.ai showed $161.27 invoiced over 30 days.
+ *
+ * Seat pricing must stay $0; metered pricing must NOT.
+ */
+describe('metered xai-oauth models are not priced free', () => {
+  for (const model of ['xai-oauth/grok-build', 'xai-oauth/grok-composer-2.5-fast']) {
+    it(`${model} accrues non-zero estimated spend`, () => {
+      expect(estimateCostUsd(model, M, 0)).toBeGreaterThan(0);
+      expect(estimateCostUsd(model, 0, M)).toBeGreaterThan(0);
+    });
+  }
+
+  it('grok-build matches the grok-4.5 rate it actually resolves to', () => {
+    expect(estimateCostUsd('xai-oauth/grok-build', M, M)).toBe(
+      estimateCostUsd('xai-oauth/grok-4.5', M, M),
+    );
+  });
+
+  it('genuinely seat-covered routes stay $0 (no regression from the fix)', () => {
+    expect(estimateCostUsd('claude-oauth/claude-opus-5', M, M)).toBe(0);
+    expect(estimateCostUsd('ollama/llama3.2', M, M)).toBe(0);
+  });
+});

@@ -252,12 +252,22 @@ const PRICE_TABLE: Record<string, PriceRate> = {
   'xai/grok-4.5': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
   'xai-oauth/grok-4.5': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
   'xai/grok-3-fast': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
-  // xai-oauth subscription proxy (GX1) — SEAT-COVERED, not per-token metered.
-  // Priced at 0 so the in-memory budget counter never accrues phantom metered
-  // spend for a call the Grok subscription already paid for; the durable
-  // gateway.db row still records real token counts for telemetry.
-  'xai-oauth/grok-build': { inUsdPerM: 0.0, outUsdPerM: 0.0 },
-  'xai-oauth/grok-composer-2.5-fast': { inUsdPerM: 0.0, outUsdPerM: 0.0 },
+  // xai-oauth subscription proxy (GX1). These were priced 0 on the premise that
+  // the lane was SEAT-COVERED. **That premise was DISPROVEN live 2026-07-31:**
+  // cli-chat-proxy meters on BOTH principals of this account — `grok-4.5`
+  // resolves server-side to `grok-4.5-build` and returned service_tier 'default'
+  // with cost_in_usd_ticks 7_444_000 (~$0.0074) on the SuperGrok-bearing team
+  // (56504cd4), 6_724_000 on the personal one. `grok-4.5-build-free` now 404s
+  // ("your team ... does not have access to it"). A $0 price told the budget
+  // counter this metered model was free, so nothing bounded it — console shows
+  // $161.27 invoiced over 30d.
+  //
+  // Priced at xAI's published grok-4.5 rate. Pre-flight ESTIMATE only, and a
+  // known FLOOR: observed effective cost runs ~3-4x this (reasoning tokens are
+  // billed but excluded from output_tokens). The authoritative figure is the
+  // provider's own cost_in_usd_ticks, recorded per call since PR #1052.
+  'xai-oauth/grok-build': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
+  'xai-oauth/grok-composer-2.5-fast': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
   // Anthropic (claude-oauth/* routes are seat-classified above and never
   // reach this table; these rows cover the API-key lane).
   'anthropic/claude-opus-5': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
