@@ -15,6 +15,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { eventBus } from '../events/bus.js';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -303,6 +304,14 @@ export class MindDB {
       model:      opts.model       ?? null,
       is_evergreen: opts.isEvergreen ? 1 : 0,
     });
+
+    // Event bus: only NEW 'learning' chunks (real facts) — conversation/file
+    // bulk chunking would be noise, and chunk TEXT never rides the event lane.
+    if (source === 'learning') {
+      eventBus.publish('memory.created', {
+        memory_type: 'learning-chunk', chunk_id: Number(info.lastInsertRowid), path,
+      });
+    }
 
     return rowToChunk(
       this.db
