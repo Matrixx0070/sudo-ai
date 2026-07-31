@@ -91,6 +91,7 @@ import { AuditTrail } from './core/security/audit-trail.js';
 import { AutoUpdateManager } from './core/update/update-manager.js';
 import { DEFAULT_UPDATE_CONFIG, readUpdateEnvOverrides } from './core/update/update-manager-types.js';
 import { AutoDream } from './core/memory/auto-dream.js';
+import { makeNearDupFinder, recordReDerivation } from './core/memory/near-dup.js';
 import { flushBeforeCompaction } from './core/memory/compaction-flush.js';
 import { InMemorySteeringChannel } from './core/agent/steering.js';
 import { loadMarkdownSkills, parseSkillRoots } from './core/skills/markdown-loader.js';
@@ -4836,11 +4837,22 @@ ${question}`, kb);
       }
     }
 
+    // SUDO_MEMORY_NEAR_DUP=1 arms write-time near-dup admission control for
+    // dream facts (measured 2026-07-31: 41% of learning facts had a ≥0.95
+    // twin). Default OFF; local embeds only, $0. See near-dup.ts.
+    const nearDupDeps = process.env['SUDO_MEMORY_NEAR_DUP'] === '1'
+      ? {
+          find: makeNearDupFinder(db, chunkEmbeddings),
+          recordReDerivation: (chunkId: number) => recordReDerivation(db, chunkId),
+        }
+      : undefined;
+
     autoDream = new AutoDream(
       async (prompt: string) => brain.chat([{ role: 'user', content: prompt }]),
       db.db,
       undefined,
       resolveFactContradiction,
+      nearDupDeps,
     );
 
     // Wire the programmatic pre-compaction flush: persist salient conversation

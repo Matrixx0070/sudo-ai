@@ -17,6 +17,13 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { PATHS } from '../shared/constants.js';
+import type { NearDupFinder } from './near-dup.js';
+
+/** Injected near-dup admission seam: finder + re-derivation recorder. */
+export interface NearDupDeps {
+  find: NearDupFinder;
+  recordReDerivation: (chunkId: number) => void;
+}
 
 const log = createLogger('memory:auto-dream');
 
@@ -180,18 +187,27 @@ export class AutoDream {
    * never blocks the dream. See chunk-contradiction.ts.
    */
   private readonly onFactStored?: (chunkId: number) => Promise<void>;
+  /**
+   * Optional write-time near-duplicate admission control (see near-dup.ts).
+   * When the finder reports an active ≥threshold twin, the fact is NOT
+   * inserted; the twin's applied_count is bumped instead. Injected — absent
+   * (flag off / no embeddings) every fact is admitted as before.
+   */
+  private readonly nearDup?: NearDupDeps;
 
   constructor(
     brainCall: (prompt: string) => Promise<string>,
     db: Database.Database,
     hookManager?: HookManager,
     onFactStored?: (chunkId: number) => Promise<void>,
+    nearDup?: NearDupDeps,
   ) {
     if (typeof brainCall !== 'function') throw new TypeError('brainCall must be a function');
     this.brainCall = brainCall;
     this.db = db;
     this.hookManager = hookManager;
     this.onFactStored = onFactStored;
+    this.nearDup = nearDup;
   }
 
   // -------------------------------------------------------------------------
@@ -363,6 +379,21 @@ Output ONLY the JSON array, nothing else.`;
           .get({ hash });
 
         if (existing) continue;
+
+        // Near-dup admission control (opt-in): a ≥threshold-similar ACTIVE
+        // fact already covers this one — record the re-derivation on the twin
+        // instead of adding a redundant row. Fail-open: finder errors admit.
+        if (this.nearDup) {
+          const twin = await this.nearDup.find(factTrimmed);
+          if (twin) {
+            this.nearDup.recordReDerivation(twin.chunkId);
+            log.info(
+              { twinId: twin.chunkId, similarity: Number(twin.similarity.toFixed(4)) },
+              'Phase 2: near-dup fact suppressed — re-derivation recorded on twin',
+            );
+            continue;
+          }
+        }
 
         const info = this.db.prepare(`
           INSERT INTO chunks (text, path, source, hash, is_evergreen)
