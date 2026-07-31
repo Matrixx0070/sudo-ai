@@ -77,6 +77,23 @@ const authAttemptLimiter = new SlidingWindowLimiter({
 /** GW-8: process-wide idempotency cache for mutating RPC methods. */
 const idempotency = new IdempotencyStore();
 
+// ---------------------------------------------------------------------------
+// Connection-scoped methods (events.* fan-out — see core/events/ws-bridge.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * A handler that needs the live socket (per-connection subscription state),
+ * unlike router handlers which only see params. Consulted before the router.
+ */
+export type ConnectionMethodFn = (ws: WebSocket, clientId: string, params: unknown) => Promise<unknown>;
+
+const connectionMethods = new Map<string, ConnectionMethodFn>();
+
+/** Register a connection-scoped RPC method (e.g. events.subscribe). */
+export function registerConnectionMethod(name: string, fn: ConnectionMethodFn): void {
+  connectionMethods.set(name, fn);
+}
+
 /** Increment the count for an IP; return false if it would exceed the cap. */
 function trackIpConnect(ip: string): boolean {
   const current = ipConnectionCounts.get(ip) ?? 0;
@@ -422,6 +439,20 @@ export function attachWsRpc(
           sendResponse(ws, { id, error: { code: -32602, message: `idempotencyKey required for mutating method ${method}` } });
           return;
         }
+      }
+
+      // 2c. Connection-scoped methods (events.subscribe/…) — they need the
+      // live socket for per-connection state, so they bypass the router.
+      const connFn = connectionMethods.get(method);
+      if (connFn !== undefined) {
+        connFn(ws, clientId, params).then((result) => {
+          sendResponse(ws, { id, result });
+        }).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error({ clientId, id, method, err: msg }, 'connection-scoped handler threw');
+          sendResponse(ws, { id, error: { code: -32603, message: 'Internal server error' } });
+        });
+        return;
       }
 
       // 3. Route to handler (async, errors caught below)

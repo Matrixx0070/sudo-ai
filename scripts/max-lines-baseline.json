@@ -59,6 +59,7 @@
   "src/core/dashboard/dashboard-html.ts": 563,
   "src/core/dashboard/dashboard-routes.ts": 1134,
   "src/core/dashboard/dashboard-server.ts": 878,
+  "src/core/events/store.ts": 443,
   "src/core/federation/audit-chain-sync.ts": 418,
   "src/core/federation/federation-error-ingestor.ts": 411,
   "src/core/files/routes.ts": 428,

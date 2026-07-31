@@ -5218,7 +5218,7 @@ ${question}`, kb);
   // -------------------------------------------------------------------------
   try {
     if (gatewayServer) {
-      attachWsRpc({
+      const wsRpcServer = attachWsRpc({
         httpServer: gatewayServer,
         sessionManager: dualSessionManager,
         toolRegistry: registry,
@@ -5227,6 +5227,19 @@ ${question}`, kb);
         hookManager: hooks,
       }, { secret: process.env['GATEWAY_SECRET'] });
       console.log('[boot] WebSocket RPC attached to gateway');
+
+      // Unified event system: bus -> webhook delivery worker + WS fan-out +
+      // REST/dashboard (/v1/events, /v1/webhook-endpoints). SUDO_EVENTS=0 disables.
+      try {
+        const { initEventSystem } = await import('./core/events/index.js');
+        const eventSystem = initEventSystem({ httpServer: gatewayServer, wss: wsRpcServer });
+        if (eventSystem) {
+          registerShutdown(() => eventSystem.stop());
+          console.log('[boot] Event system attached (bus + webhooks + realtime fan-out)');
+        }
+      } catch (evErr: unknown) {
+        log.warn({ err: String(evErr) }, 'Event system failed to initialize — continuing without it');
+      }
 
       // Attach OpenAI-compatible HTTP API (auth gating is handled inside attachHttpApi
       // via GATEWAY_TOKEN env var; when unset, all requests are accepted).

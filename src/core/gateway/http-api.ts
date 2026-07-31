@@ -573,7 +573,11 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
         // generic guard rejects the browser's WEB_CHAT_TOKEN bearer with 401
         // while canvas-routes still injects the event — a two-responder race
         // that masks success as a 401 and risks headers-already-sent.
-        pathname.startsWith('/v1/canvas')
+        pathname.startsWith('/v1/canvas') ||
+        // Unified event system (core/events/api.ts) runs its own token gate;
+        // its dashboard HTML route is deliberately tokenless (loopback-bound).
+        pathname.startsWith('/v1/events') ||
+        pathname.startsWith('/v1/webhook-endpoints')
       ) {
         return;
       }
