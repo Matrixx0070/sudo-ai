@@ -27,6 +27,7 @@ import type { BenchResult } from '../../shared/wave10-types.js';
 import type { Scenario } from './scenario.js';
 import { buildEvalEnv } from './env-scrub.js';
 import { grade, type ScoreVector } from './graders.js';
+import { gradeJudgeChecks, mergeJudgeOutcomes, routesServedFromReplayDb, type JudgeCheck, type JudgeDeps } from './judge.js';
 import { startMockService, type MockServiceHandle } from './mock-service.js';
 import { RunJournal, readJournal } from './run-journal.js';
 import { startResourceSampler } from './resource-sampler.js';
@@ -104,6 +105,22 @@ export interface EvalRunOptions {
   evalRunsRoot?: string;
   /** Injected runtime probe for tests. Default: dockerRuntimeAvailable. */
   runtimeProbe?: (runtime: string) => Promise<boolean>;
+  /**
+   * L1 replay (Phase 3): path to a preserved replay.db. Exported to the child
+   * as SUDO_EVAL_REPLAY_DB — eval-turn-entry installs the transport-level IR
+   * interceptor and every LLM response is served from the recording (tools
+   * still run LIVE; a divergence FAILS the run, never a live call).
+   */
+  replayDb?: string;
+  /**
+   * L1 replay: the ORIGINAL run's workspace path. Exported to the child as
+   * SUDO_EVAL_REPLAY_PATH_FROM (with this run's workspace as _TO) so the eval
+   * gate remaps recorded absolute paths and live tools act on the replay
+   * workspace, never the archived original.
+   */
+  replayPathFrom?: string;
+  /** Injected judge deps for tests (see judge.ts). */
+  judge?: JudgeDeps;
 }
 
 export interface EvalRunReport {
@@ -250,6 +267,11 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
   };
   if (mock) extraEnv['MOCK_SERVICE_URL'] = mock.url;
   if (scenario.isolation === 'runsc') extraEnv['SUDO_SANDBOX_DOCKER_RUNTIME'] = 'runsc';
+  if (opts.replayDb !== undefined) extraEnv['SUDO_EVAL_REPLAY_DB'] = opts.replayDb;
+  if (opts.replayPathFrom !== undefined) {
+    extraEnv['SUDO_EVAL_REPLAY_PATH_FROM'] = opts.replayPathFrom;
+    extraEnv['SUDO_EVAL_REPLAY_PATH_TO'] = workspaceDir;
+  }
   const env = buildEvalEnv(scenario, extraEnv);
 
   const executor = opts.executor ?? spawnTurnExecutor;
@@ -260,6 +282,13 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
   } finally {
     if (mock) await mock.close();
   }
+  // Phase 3 replay substrate: preserve the child's gateway.db (ir_request /
+  // ir_response for every LLM call — the gw-refactor ledger) as
+  // <runDir>/replay.db BEFORE the data/ teardown. Always, cheap; journal +
+  // replay.db together are the full replay input.
+  const replayDbPath = join(runDir, 'replay.db');
+  await preserveReplayDb(join(dataDir, 'gateway.db'), replayDbPath);
+
   // Budgets: maxWallMs enforced by the executor's kill timer; maxSteps by the
   // child's maxIterations; maxUsd by SUDO_AGENT_RUN_MAX_USD in the child loop.
   // Actual spend comes from the RUN's own gateway.db (the child logged its
@@ -291,7 +320,11 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
   });
 
   const events = readJournal(journalPath);
-  const scores = await grade(scenario.grading.checks, {
+  // Judge checks (rung 4–5) are split out and graded post-turn in THIS parent
+  // process (judge.ts); the code grader sees only the mechanical checks.
+  const codeChecks = scenario.grading.checks.filter((c) => c.type !== 'judge');
+  const judgeChecks = scenario.grading.checks.filter((c): c is JudgeCheck => c.type === 'judge');
+  const scores = await grade(codeChecks, {
     workspaceDir,
     output: turn.text,
     journal: events,
@@ -303,6 +336,16 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
     ...(turn.peakRssMb !== undefined ? { peakRssMb: turn.peakRssMb } : {}),
     ...(turn.cpuSecs !== undefined ? { cpuSecs: turn.cpuSecs } : {}),
   });
+  if (judgeChecks.length > 0) {
+    // Invariant 7 ground truth: which routes served the turn comes from the
+    // child's own llm_calls ledger (preserved replay.db), never self-report.
+    const judged = await gradeJudgeChecks(
+      judgeChecks,
+      { prompt, output: turn.text, routesServed: routesServedFromReplayDb(replayDbPath) },
+      opts.judge ?? {},
+    );
+    mergeJudgeOutcomes(scores, judged);
+  }
   // A turn that errored or blew a budget is never a pass, whatever the checks say.
   if (turn.error !== undefined || spendCapFired) scores.success = false;
   journal.append({ type: 'scores', ...scoresForJournal(scores) });
@@ -324,8 +367,34 @@ function scoresForJournal(s: ScoreVector): Record<string, unknown> {
     efficiency: s.efficiency,
     policyViolations: s.policyViolations,
     deniedToolAttempts: s.deniedToolAttempts,
-    checks: s.checkOutcomes.map((o) => ({ type: o.check.type, passed: o.passed, detail: o.detail })),
+    ...(s.holdReason !== undefined ? { holdReason: s.holdReason } : {}),
+    checks: s.checkOutcomes.map((o) => ({
+      type: o.check.type,
+      passed: o.passed,
+      detail: o.detail,
+      ...(o.held === true ? { held: true } : {}),
+    })),
   };
+}
+
+/**
+ * Copy the run-local gateway.db to <runDir>/replay.db. Uses the SQLite backup
+ * API (WAL-safe — a SIGKILLed child may leave an uncheckpointed -wal file that
+ * a raw file copy would lose), falling back to copyFileSync. Best-effort: a
+ * turn with zero LLM calls has no ledger and no replay.db.
+ */
+async function preserveReplayDb(gatewayDbPath: string, replayDbPath: string): Promise<void> {
+  if (!existsSync(gatewayDbPath)) return;
+  try {
+    const db = new Database(gatewayDbPath, { readonly: true });
+    try {
+      await db.backup(replayDbPath);
+    } finally {
+      db.close();
+    }
+  } catch {
+    try { copyFileSync(gatewayDbPath, replayDbPath); } catch { /* best-effort */ }
+  }
 }
 
 /**

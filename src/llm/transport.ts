@@ -100,6 +100,7 @@ import {
   feedChunk,
   type LiveStream,
 } from './transport-stream.js';
+import { getIRInterceptor } from './ir-interceptor.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('llm-transport');
@@ -765,6 +766,8 @@ async function callGrokWebMcpBrainTurn(
 }
 
 export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<IRResponse> {
+  const intercept = getIRInterceptor(); // optional seam (ir-interceptor.ts) — inert when unset
+  if (intercept !== null) return intercept(ir);
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const startedAt = Date.now();
   const traceId = ir.trace_id !== '' ? ir.trace_id : randomUUID();
@@ -1022,6 +1025,10 @@ export async function* streamIR(
   ir: IRRequest,
   opts: CallIROptions = {},
 ): AsyncGenerator<IRStreamEvent, void, undefined> {
+  if (getIRInterceptor() !== null) {
+    // Fail-closed: an intercepted process must NEVER reach a live wire call (replay is buffered-only).
+    throw new LLMPolicyError('[llm-transport] streamIR refused while an IR interceptor is installed — use callIR', { class: 'invalid_request', retryable: false });
+  }
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const startedAt = Date.now();
   const traceId = ir.trace_id !== '' ? ir.trace_id : randomUUID();

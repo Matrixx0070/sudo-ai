@@ -894,6 +894,11 @@ export class ToolRegistry {
       logger.warn({ tool: name, message: evalDecision.message }, 'eval fault injected (error)');
       return { success: false, output: evalDecision.message };
     }
+    if (evalDecision.params !== undefined) {
+      // L1 replay path remap (ADR-0007 Phase 3): the gate rewrote the recorded
+      // trajectory's absolute paths to the replay run's workspace — run with those.
+      params = evalDecision.params;
+    }
 
     const timeout = tool.timeout ?? 30_000;
     const controller = new AbortController();

@@ -29,7 +29,7 @@ function fakeStore(): { store: BenchStore; rows: unknown[] } {
 
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
-  for (const k of ['SUDO_BENCH_NIGHTLY_MAX_TASKS', 'SUDO_BENCH_NIGHTLY_MAX_USD', 'SUDO_BENCH_NIGHTLY_ALERT_BELOW']) {
+  for (const k of ['SUDO_BENCH_NIGHTLY_MAX_TASKS', 'SUDO_BENCH_NIGHTLY_MAX_USD', 'SUDO_BENCH_NIGHTLY_ALERT_BELOW', 'SUDO_EVAL_NIGHTLY']) {
     saved[k] = process.env[k];
     delete process.env[k];
   }
@@ -79,5 +79,137 @@ describe('runNightlyBench', () => {
     const { store } = fakeStore();
     const s = await runNightlyBench({ runner: fakeRunner({ passed: true, costUsd: 0 }), benchStore: store });
     expect(s.tasksRun).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Eval-sandbox nightly sweep (ADR-0007 Phase 3)
+// ---------------------------------------------------------------------------
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import type { EvalRunReport } from '../../src/core/eval/sandbox/eval-runner.js';
+import type { Scenario } from '../../src/core/eval/sandbox/scenario.js';
+
+const SCENARIO_YAML = (id: string): string => `
+id: ${id}
+version: '1'
+title: sweep fixture ${id}
+taskType: coding
+prompt: do the thing
+grading:
+  checks:
+    - type: outputContains
+      substring: done
+budgets:
+  maxUsd: 0.05
+  maxSteps: 2
+  maxWallMs: 1000
+`;
+
+function fakeEvalReport(scenario: Scenario, score: number, usd = 0.01): EvalRunReport {
+  return {
+    runId: `fake-${scenario.id}`,
+    scenarioId: scenario.id,
+    passed: score >= 1,
+    scores: {
+      success: score >= 1, checksPassed: Math.round(score), checksTotal: 1,
+      efficiency: { wallMs: 5, steps: 1 }, policyViolations: 0, deniedToolAttempts: 0, checkOutcomes: [],
+    },
+    journalPath: '', workspaceDir: '',
+    turn: { text: 'done', steps: 1, usd },
+  };
+}
+
+describe('runNightlyBench eval-sandbox sweep', () => {
+  let dir: string;
+  const savedSweep: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-sweep-'));
+    fs.mkdirSync(path.join(dir, 'scenarios'));
+    for (const id of ['s-alpha', 's-beta']) {
+      fs.writeFileSync(path.join(dir, 'scenarios', `${id}.yaml`), SCENARIO_YAML(id));
+    }
+    fs.writeFileSync(path.join(dir, 'baseline.json'), JSON.stringify({
+      's-alpha': { minScore: 1.0 },
+      's-beta': { minScore: 0.0 },
+    }));
+    savedSweep['SUDO_EVAL_NIGHTLY'] = process.env['SUDO_EVAL_NIGHTLY'];
+    delete process.env['SUDO_EVAL_NIGHTLY'];
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    const v = savedSweep['SUDO_EVAL_NIGHTLY'];
+    if (v === undefined) delete process.env['SUDO_EVAL_NIGHTLY']; else process.env['SUDO_EVAL_NIGHTLY'] = v;
+  });
+
+  function sweepDeps(run: (s: Scenario) => Promise<EvalRunReport>) {
+    return {
+      scenarioDir: path.join(dir, 'scenarios'),
+      baselinePath: path.join(dir, 'baseline.json'),
+      run,
+    };
+  }
+
+  it('flag off (default): no scenarios run, runner never called', async () => {
+    const { store } = fakeStore();
+    const run = vi.fn(async (sc: Scenario) => fakeEvalReport(sc, 1));
+    const s = await runNightlyBench({
+      runner: fakeRunner({ passed: true, costUsd: 0 }), benchStore: store,
+      evalSandbox: sweepDeps(run),
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(s.evalScenariosRun).toBe(0);
+    expect(s.evalReport).toBe('');
+  });
+
+  it('flag on: runs every scenario and reports against the baseline (no regressions)', async () => {
+    process.env['SUDO_EVAL_NIGHTLY'] = '1';
+    const { store } = fakeStore();
+    const s = await runNightlyBench({
+      runner: fakeRunner({ passed: true, costUsd: 0 }), benchStore: store,
+      evalSandbox: sweepDeps(async (sc) => fakeEvalReport(sc, 1)),
+    });
+    expect(s.evalScenariosRun).toBe(2);
+    expect(s.evalRegressions).toEqual([]);
+    expect(s.evalReport).toContain('s-alpha: ok');
+  });
+
+  it('flags a regression when a scenario scores below its baseline minScore', async () => {
+    process.env['SUDO_EVAL_NIGHTLY'] = '1';
+    const { store } = fakeStore();
+    const notify = vi.fn();
+    const s = await runNightlyBench({
+      runner: fakeRunner({ passed: true, costUsd: 0 }), benchStore: store, notify,
+      evalSandbox: sweepDeps(async (sc) => fakeEvalReport(sc, sc.id === 's-alpha' ? 0 : 1)),
+    });
+    expect(s.evalRegressions).toEqual(['s-alpha']);
+    expect(s.evalReport).toContain('s-alpha: REGRESSED');
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining('regression'),
+      expect.stringContaining('s-alpha'),
+    );
+  });
+
+  it('respects the $0.50 budget floor: stops starting scenarios when remaining budget is low', async () => {
+    process.env['SUDO_EVAL_NIGHTLY'] = '1';
+    process.env['SUDO_BENCH_NIGHTLY_MAX_USD'] = '2';
+    process.env['SUDO_BENCH_NIGHTLY_MAX_TASKS'] = '2';
+    const { store } = fakeStore();
+    const run = vi.fn(async (sc: Scenario) => fakeEvalReport(sc, 1));
+    // Agent tasks burn 1.6 of the $2 cap → remaining 0.4 < 0.5 floor.
+    const s = await runNightlyBench({
+      runner: fakeRunner({ passed: true, costUsd: 0.8 }), benchStore: store,
+      evalSandbox: sweepDeps(run),
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(s.evalScenariosRun).toBe(0);
+    expect(s.evalScenariosSkipped).toBe(2);
+    expect(s.budgetHalted).toBe(true);
+    // Skipped scenarios are reported, not regressed.
+    expect(s.evalRegressions).toEqual([]);
+    expect(s.evalReport).toContain('not run (budget/flag)');
   });
 });

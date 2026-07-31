@@ -29,11 +29,23 @@ async function main(): Promise<void> {
 
   const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf-8')) as Scenario;
 
+  // L1 replay mode (Phase 3): serve every LLM response from the recorded
+  // ledger via the transport IR interceptor. Installed BEFORE the bootstrap so
+  // no code path can reach a live wire call; a divergence throws instead.
+  const replayDb = process.env['SUDO_EVAL_REPLAY_DB'];
+  if (replayDb !== undefined && replayDb !== '') {
+    const { installReplayInterceptor } = await import('./replay.js');
+    installReplayInterceptor(replayDb);
+  }
+
+  const remapFrom = process.env["SUDO_EVAL_REPLAY_PATH_FROM"];
+  const remapTo = process.env['SUDO_EVAL_REPLAY_PATH_TO'];
   activateEvalGate({
     runId: process.env['SUDO_EVAL_RUN_ID'] ?? 'unknown',
     policy: scenario.policy ?? {},
     journal: new RunJournal(journalPath),
     ...(scenario.faults !== undefined ? { faults: scenario.faults } : {}),
+    ...(remapFrom && remapTo ? { pathRemap: { from: remapFrom, to: remapTo } } : {}),
   });
 
   // --- bootstrap (mirrors agent-bench-runner.ts bootstrapRealAgentLoop) ---

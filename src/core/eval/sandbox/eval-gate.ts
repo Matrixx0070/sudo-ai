@@ -23,10 +23,19 @@ export interface EvalRunContext {
   policy: ScenarioPolicy;
   journal: RunJournal;
   faults?: ScenarioFault[];
+  /**
+   * L1 replay path remap (Phase 3): the recorded trajectory's tool_use params
+   * carry the ORIGINAL run's absolute workspace path; without a remap, live
+   * tools during replay would mutate the archived original workspace while
+   * graders check the replay run's fresh one. When set, every string param is
+   * deep-rewritten `from` → `to` before execution.
+   */
+  pathRemap?: { from: string; to: string };
 }
 
 export type GateDecision =
-  | { action: 'allow' }
+  /** `params`, when present, are the transformed params the tool must run with. */
+  | { action: 'allow'; params?: Record<string, unknown> }
   | { action: 'deny'; reason: string }
   /** Injected fault: the tool never runs; the agent sees a failed ToolResult. */
   | { action: 'error'; message: string };
@@ -54,6 +63,53 @@ export function deactivateEvalGate(): void {
 
 export function evalGateActive(): boolean {
   return activeRun !== null && process.env['SUDO_EVAL'] === '1';
+}
+
+/**
+ * Deep-rewrite every string leaf, replacing ALL occurrences of `from` with
+ * `to` — recursively through plain objects and arrays; non-string leaves are
+ * untouched. Returns the (possibly new) value and the replacement count.
+ * Exported for tests.
+ */
+export function remapStringsDeep(value: unknown, from: string, to: string): { value: unknown; count: number } {
+  if (from === '') return { value, count: 0 };
+  if (typeof value === 'string') {
+    const parts = value.split(from);
+    if (parts.length > 1) return { value: parts.join(to), count: parts.length - 1 };
+    // Tolerant pass: the LLM ledger REDACTS token-like strings at persist time
+    // (live-proven: replay.db ir_response holds "coding-ta[REDACTED]/workspace"),
+    // so an exact match can miss. Match the same path SHAPE with the run-id
+    // segment wildcarded, still anchored on the full parent prefix.
+    const shape = from.match(/^(.*)\/[^/]+\/(workspace)$/);
+    if (shape !== null) {
+      const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`${esc(shape[1]!)}/[^/]+/${shape[2]!}`, 'g');
+      let count = 0;
+      const replaced = value.replace(re, () => { count += 1; return to; });
+      if (count > 0) return { value: replaced, count };
+    }
+    return { value, count: 0 };
+  }
+  if (Array.isArray(value)) {
+    let count = 0;
+    const out = value.map((v) => {
+      const r = remapStringsDeep(v, from, to);
+      count += r.count;
+      return r.value;
+    });
+    return count > 0 ? { value: out, count } : { value, count: 0 };
+  }
+  if (value !== null && typeof value === 'object') {
+    let count = 0;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const r = remapStringsDeep(v, from, to);
+      count += r.count;
+      out[k] = r.value;
+    }
+    return count > 0 ? { value: out, count } : { value, count: 0 };
+  }
+  return { value, count: 0 };
 }
 
 /** Exact name or namespace glob ("fs.*") match, mirroring the loop's allowlist style. */
@@ -133,6 +189,27 @@ export async function evalGateBeforeTool(
 ): Promise<GateDecision> {
   if (activeRun === null || process.env['SUDO_EVAL'] !== '1') return ALLOW;
 
+  // L1 replay path remap: rewrite the ORIGINAL run's workspace path to the
+  // replay run's workspace in every string param, BEFORE policy matching,
+  // journaling, and execution. Inert when no mapping is set.
+  let remappedParams: Record<string, unknown> | undefined;
+  const remap = activeRun.pathRemap;
+  if (remap !== undefined) {
+    try {
+      const r = remapStringsDeep(params ?? {}, remap.from, remap.to);
+      if (r.count > 0) {
+        remappedParams = r.value as Record<string, unknown>;
+        params = remappedParams;
+        try {
+          activeRun.journal.append({ type: 'replay.path-remap', name, replacements: r.count });
+        } catch { /* journaling never blocks the remap */ }
+      }
+    } catch { /* fail-open: run with the original params */ }
+  }
+
+  const allowDecision: GateDecision =
+    remappedParams !== undefined ? { action: 'allow', params: remappedParams } : ALLOW;
+
   let paramsJson = '{}';
   try {
     paramsJson = JSON.stringify(params ?? {});
@@ -140,7 +217,7 @@ export async function evalGateBeforeTool(
     /* unserializable params — conditional deny rules just won't match */
   }
 
-  let decision: GateDecision = ALLOW;
+  let decision: GateDecision = allowDecision;
   let matchedRule = '';
   try {
     const tools = activeRun.policy.tools;
@@ -153,7 +230,7 @@ export async function evalGateBeforeTool(
       decision = { action: 'deny', reason: `tool '${name}' is not on the scenario allow list` };
     }
   } catch {
-    return ALLOW;
+    return allowDecision;
   }
 
   // Journaling is best-effort and must not change the decision either way.
@@ -189,9 +266,9 @@ export async function evalGateBeforeTool(
       await sleep(fault.delayMs ?? 1000);
     }
   } catch {
-    return ALLOW;
+    return allowDecision;
   }
-  return ALLOW;
+  return allowDecision;
 }
 
 /**

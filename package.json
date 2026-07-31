@@ -80,6 +80,7 @@
     "check:max-lines": "tsx scripts/check-max-lines.ts",
     "check:flags": "tsx scripts/gen-flag-manifest.ts --check",
     "eval:run": "tsx scripts/eval-run.mts",
+    "eval:replay": "tsx scripts/eval-replay.mts",
     "check:arch": "pnpm check:max-lines && pnpm check:flags && vitest run tests/architecture",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
