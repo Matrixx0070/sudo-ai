@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 805,
+  "count": 806,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -256,6 +256,7 @@
     "SUDO_EVAL_JUDGE_MAX_USD",
     "SUDO_EVAL_JUDGE_ROUTE",
     "SUDO_EVAL_KEEP_DATA",
+    "SUDO_EVAL_LADDER_MAX_USD",
     "SUDO_EVAL_MAX_STEPS",
     "SUDO_EVAL_NIGHTLY",
     "SUDO_EVAL_REPLAY_DB",

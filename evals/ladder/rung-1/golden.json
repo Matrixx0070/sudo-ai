@@ -1,27 +1,107 @@
-[
-  {
-    "id": "r1-single-call-name",
-    "input": "You have a tool named echo_marker that takes {text: string}. Call it with the text SUDO-LADDER-R1. Do not answer in prose.",
-    "expect": { "toolCalled": "echo_marker", "paramsInclude": { "text": "SUDO-LADDER-R1" } }
-  },
-  {
-    "id": "r1-required-params",
-    "input": "You have a tool named create_note that takes {title: string, body: string} (both required). Create a note titled Ladder with body rung one check.",
-    "expect": { "toolCalled": "create_note", "paramsInclude": { "title": "Ladder" }, "paramTypes": { "title": "string", "body": "string" } }
-  },
-  {
-    "id": "r1-number-not-string",
-    "input": "You have a tool named set_timeout_ms that takes {ms: number}. Set the timeout to 1500 milliseconds.",
-    "expect": { "toolCalled": "set_timeout_ms", "paramsInclude": { "ms": 1500 }, "paramTypes": { "ms": "number" } }
-  },
-  {
-    "id": "r1-boolean-flag",
-    "input": "You have a tool named toggle_feature that takes {name: string, enabled: boolean}. Enable the feature named streaming.",
-    "expect": { "toolCalled": "toggle_feature", "paramsInclude": { "name": "streaming", "enabled": true }, "paramTypes": { "enabled": "boolean" } }
-  },
-  {
-    "id": "r1-nested-object",
-    "input": "You have a tool named http_request that takes {url: string, options: {method: string, headers: object}}. GET https://example.com/status with header Accept: application/json.",
-    "expect": { "toolCalled": "http_request", "paramsInclude": { "url": "https://example.com/status" }, "paramTypes": { "options": "object" } }
-  }
-]
+{
+  "version": "2",
+  "items": [
+    {
+      "id": "r1-single-call-name",
+      "input": "Call the echo_marker tool with the text SUDO-LADDER-R1. Do not answer in prose.",
+      "tools": [
+        {
+          "name": "echo_marker",
+          "description": "Echo a marker string back.",
+          "input_schema": {
+            "type": "object",
+            "properties": { "text": { "type": "string" } },
+            "required": ["text"]
+          }
+        }
+      ],
+      "expect": { "toolCalled": "echo_marker", "paramsInclude": { "text": "SUDO-LADDER-R1" } }
+    },
+    {
+      "id": "r1-required-params",
+      "input": "Create a note titled Ladder with body rung one check.",
+      "tools": [
+        {
+          "name": "create_note",
+          "description": "Create a note.",
+          "input_schema": {
+            "type": "object",
+            "properties": { "title": { "type": "string" }, "body": { "type": "string" } },
+            "required": ["title", "body"]
+          }
+        }
+      ],
+      "expect": {
+        "toolCalled": "create_note",
+        "paramsInclude": { "title": "Ladder" },
+        "paramTypes": { "title": "string", "body": "string" }
+      }
+    },
+    {
+      "id": "r1-number-not-string",
+      "input": "Set the timeout to 1500 milliseconds.",
+      "tools": [
+        {
+          "name": "set_timeout_ms",
+          "description": "Set a timeout in milliseconds.",
+          "input_schema": {
+            "type": "object",
+            "properties": { "ms": { "type": "number" } },
+            "required": ["ms"]
+          }
+        }
+      ],
+      "expect": {
+        "toolCalled": "set_timeout_ms",
+        "paramsInclude": { "ms": 1500 },
+        "paramTypes": { "ms": "number" }
+      }
+    },
+    {
+      "id": "r1-boolean-flag",
+      "input": "Enable the feature named streaming.",
+      "tools": [
+        {
+          "name": "toggle_feature",
+          "description": "Enable or disable a named feature.",
+          "input_schema": {
+            "type": "object",
+            "properties": { "name": { "type": "string" }, "enabled": { "type": "boolean" } },
+            "required": ["name", "enabled"]
+          }
+        }
+      ],
+      "expect": {
+        "toolCalled": "toggle_feature",
+        "paramsInclude": { "name": "streaming", "enabled": true },
+        "paramTypes": { "enabled": "boolean" }
+      }
+    },
+    {
+      "id": "r1-nested-object",
+      "input": "Perform a GET request to https://example.com/status with the header Accept: application/json.",
+      "tools": [
+        {
+          "name": "http_request",
+          "description": "Make an HTTP request.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string" },
+              "options": {
+                "type": "object",
+                "properties": { "method": { "type": "string" }, "headers": { "type": "object" } }
+              }
+            },
+            "required": ["url", "options"]
+          }
+        }
+      ],
+      "expect": {
+        "toolCalled": "http_request",
+        "paramsInclude": { "url": "https://example.com/status" },
+        "paramTypes": { "options": "object" }
+      }
+    }
+  ]
+}
