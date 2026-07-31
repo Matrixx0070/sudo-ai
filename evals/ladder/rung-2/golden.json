@@ -1,0 +1,45 @@
+{
+  "version": "1",
+  "items": [
+    {
+      "id": "r2-arith-multi-step",
+      "input": "Compute (17 * 23) - 91. Reply with only the number.",
+      "expect": { "answer": 300, "tolerance": 0 }
+    },
+    {
+      "id": "r2-percentage",
+      "input": "What is 12.5% of 840? Reply with only the number.",
+      "expect": { "answer": 105, "tolerance": 0 }
+    },
+    {
+      "id": "r2-division-decimal",
+      "input": "Divide 7 by 8 and give the decimal. Reply with only the number.",
+      "expect": { "answer": 0.875, "tolerance": 0.0001 }
+    },
+    {
+      "id": "r2-unit-conversion",
+      "input": "How many centimetres are in 3.5 metres? Reply with only the number.",
+      "expect": { "answer": 350, "tolerance": 0 }
+    },
+    {
+      "id": "r2-compound-units",
+      "input": "A car travels 150 km in 2.5 hours. What is its average speed in km/h? Reply with only the number.",
+      "expect": { "answer": 60, "tolerance": 0 }
+    },
+    {
+      "id": "r2-negative-result",
+      "input": "Compute 45 - 118. Reply with only the number.",
+      "expect": { "answer": -73, "tolerance": 0 }
+    },
+    {
+      "id": "r2-sqrt-tolerance",
+      "input": "What is the square root of 2, to four decimal places? Reply with only the number.",
+      "expect": { "answer": 1.4142, "tolerance": 0.0002 }
+    },
+    {
+      "id": "r2-order-of-operations",
+      "input": "Compute 6 + 4 * 3 ** 2. Reply with only the number.",
+      "expect": { "answer": 42, "tolerance": 0 }
+    }
+  ]
+}

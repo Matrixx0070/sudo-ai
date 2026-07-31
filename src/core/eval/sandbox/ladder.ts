@@ -22,7 +22,7 @@ import { PROJECT_ROOT, dataPath } from '../../shared/paths.js';
 import { estimateCostUsd } from '../../../llm/limits.js';
 import { isEmptyReply } from '../../channels/empty-reply.js';
 import type { IRContentBlock, IRTool } from '../../../../shared-types/ir/v1.js';
-import { gradeRung0, gradeRung1, type GradeOutcome } from './ladder-graders.js';
+import { gradeRung0, gradeRung1, gradeRung2, type GradeOutcome } from './ladder-graders.js';
 
 const log = createLogger('eval:ladder');
 
@@ -56,7 +56,7 @@ export const RUNG_THRESHOLDS: Record<number, { passRate: number; minN: number }>
 };
 
 /** Rungs with a code-graded engine implemented here. */
-export const IMPLEMENTED_RUNGS = [0, 1] as const;
+export const IMPLEMENTED_RUNGS = [0, 1, 2] as const;
 
 export interface LadderItemResult {
   id: string;
@@ -269,6 +269,12 @@ function gradeItem(rung: number, item: GoldenItem, call: LadderCallResult): Grad
     return { passed: false, detail: 'route returned stop_reason=error' };
   }
   if (rung === 1) return gradeRung1(item.expect, call.blocks);
+  const textOf = (): string =>
+    call.blocks
+      .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+  if (rung === 2) return gradeRung2(item.expect, textOf());
   // Rung 0 uses the delivery layer's OWN emptiness predicate (isEmptyReply —
   // the #751 content-filter empty-STRING class). Deliberately NOT
   // normalizeReplyText: that substitutes a fallback message for an empty
