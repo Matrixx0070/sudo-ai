@@ -503,7 +503,7 @@ describe('streamIR — claude-oauth', () => {
     );
 
     expect(calls[0]!.headers['authorization']).toBe('Bearer oauth-test-token');
-    expect(calls[0]!.headers['anthropic-beta']).toBe('oauth-2025-04-20');
+    expect(calls[0]!.headers['anthropic-beta']).toBe('oauth-2025-04-20,fast-mode-2026-02-01'); // fast mode appends for fast-capable opus models
     const body = JSON.parse(calls[0]!.body) as { stream: boolean; system: Array<{ text: string }>; tools: Array<{ name: string }> };
     expect(body.stream).toBe(true);
     expect(body.system[0]!.text).toBe("You are Claude Code, Anthropic's official CLI for Claude.");
