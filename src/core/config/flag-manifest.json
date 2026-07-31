@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 763,
+  "count": 765,
   "flags": [
     "SUDO_ACP_MODEL",
     "SUDO_ACP_PERSIST",
@@ -643,7 +643,9 @@
     "SUDO_SSRF_HOST_GATE",
     "SUDO_STANDING_ORDERS",
     "SUDO_STREAM_CHANNELS",
+    "SUDO_STT_CLAUDE_SEAT",
     "SUDO_STT_CLOUD",
+    "SUDO_STT_SEAT_MAX_SEC",
     "SUDO_STUCK_DETECTOR",
     "SUDO_STUCK_DETECTOR_ABORT_THRESHOLD",
     "SUDO_STUCK_DETECTOR_WARN_THRESHOLD",
