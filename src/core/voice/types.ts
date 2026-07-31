@@ -31,7 +31,7 @@ export interface STTOptions {
    * 'grok' routes to the user's Grok subscription voice lane (free, browserless)
    * and requires SUDO_GROK_WEBSESSION=1.
    */
-  provider?: 'whisper-local' | 'groq' | 'elevenlabs' | 'openai' | 'grok';
+  provider?: 'whisper-local' | 'groq' | 'elevenlabs' | 'openai' | 'grok' | 'claude-seat';
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
  * Default is the local Whisper ONNX provider (offline, key-free, on-device).
  * Cloud providers are opt-in and only reachable when SUDO_STT_CLOUD=1:
  *   1. Groq      (GROQ_API_KEY)       — FREE 28,800 sec/day, fastest
+ *   1b. Claude seat (OAuth token)     — FREE + key-free, but ~1x real time
  *   2. ElevenLabs (ELEVENLABS_API_KEY) — scribe_v1
  *   3. OpenAI    (OPENAI_API_KEY)      — paid, fallback
  *
@@ -172,6 +173,23 @@ export class SpeechToText {
       options = { ...options, provider: undefined };
     }
 
+    // Claude Max seat lane (FREE, seat-covered, Deepgram Nova-3 behind
+    // Anthropic's WebSocket STT). Gated by its OWN flag like the grok lane —
+    // it needs no API key. Explicit request path; the cloud chain below also
+    // prefers it over the paid providers.
+    if (options.provider === 'claude-seat') {
+      const seat = await import('./stt-claude-seat.js');
+      const startMs = Date.now();
+      const r = await seat.transcribeOnClaudeSeat(audioBuffer, {
+        ...(options.language !== undefined ? { language: options.language } : {}),
+      });
+      if (r.ok && r.text) {
+        return { text: r.text, language: options.language ?? 'en', confidence: 1.0, durationMs: Date.now() - startMs };
+      }
+      log.warn({ reason: r.reason }, 'Claude seat STT unavailable — using local/cloud resolution');
+      options = { ...options, provider: undefined };
+    }
+
     if (!this.available) {
       log.warn('Skipping transcription — local Whisper disabled and no cloud STT provider configured');
       return { text: '', language: 'en', confidence: 0, durationMs: 0 };
@@ -219,6 +237,25 @@ export class SpeechToText {
         );
       } catch (err) {
         log.warn({ err: String(err) }, 'Groq STT failed — trying ElevenLabs fallback');
+      }
+    }
+
+    // Claude seat: FREE and key-free, but it is a live-dictation endpoint that
+    // must be fed at ~real time (a 30s note takes ~30s), so it sits AFTER the
+    // faster-than-real-time providers and BEFORE the paid ones. For a user with
+    // no API keys at all this is the working free lane. Never throws.
+    {
+      const seat = await import('./stt-claude-seat.js');
+      if (seat.seatSttEnabled()) {
+        const startMs = Date.now();
+        const r = await seat.transcribeOnClaudeSeat(audioBuffer, {
+          ...(options.language !== undefined ? { language: options.language } : {}),
+        });
+        if (r.ok && r.text) {
+          log.info({ durationMs: Date.now() - startMs }, 'Claude seat STT succeeded (free lane)');
+          return { text: r.text, language: options.language ?? 'en', confidence: 1.0, durationMs: Date.now() - startMs };
+        }
+        log.debug({ reason: r.reason }, 'Claude seat STT did not produce a transcript — trying keyed providers');
       }
     }
 

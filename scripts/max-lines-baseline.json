@@ -152,6 +152,7 @@
   "src/core/tools/registry.ts": 1072,
   "src/core/tools/tool-discovery.ts": 488,
   "src/core/update/update-manager.ts": 457,
+  "src/core/voice/stt.ts": 410,
   "src/core/workflows/lobster.ts": 537,
   "src/core/workflows/queue.ts": 509,
   "src/core/workspace/injector.ts": 438,
