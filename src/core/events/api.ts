@@ -65,11 +65,16 @@ function readBody(req: IncomingMessage): Promise<string | null> {
   });
 }
 
-function bearerOrQueryToken(req: IncomingMessage, url: URL): string | null {
+/**
+ * Bearer header ONLY — deliberately no ?token= fallback: the gateway logs the
+ * URL of every incoming request, so a query-string credential would end up in
+ * the logs.
+ */
+function bearerToken(req: IncomingMessage): string | null {
   const auth = req.headers['authorization'];
   const h = Array.isArray(auth) ? auth[0] : auth;
   const m = /^Bearer\s+(.+)$/i.exec((h ?? '').trim());
-  return m?.[1] ?? url.searchParams.get('token');
+  return m?.[1] ?? null;
 }
 
 /** Public (masked) endpoint shape. `secret` only rides on create/rotate. */
@@ -154,7 +159,7 @@ export function registerEventsApi(server: HttpServer, deps: EventsApiDeps): void
       return;
     }
 
-    const principal = authenticateToken(bearerOrQueryToken(req, url), req, {});
+    const principal = authenticateToken(bearerToken(req), req, {});
     if (!principal.ok) { err(res, 401, `unauthorized: ${principal.reason ?? 'bad token'}`); return; }
 
     handle(req, res, method, p, url).catch((e: unknown) => {
@@ -218,7 +223,8 @@ export function registerEventsApi(server: HttpServer, deps: EventsApiDeps): void
       const v = validateEndpointInput(raw, false);
       if (!v.ok) { err(res, 400, v.message); return; }
       const ep = store.createEndpoint(v.value as { name: string; url: string; description?: string; eventTypes: string[]; retryMax?: number; enabled?: boolean });
-      log.info({ id: ep.id, url: ep.url, eventTypes: ep.eventTypes }, 'webhook endpoint created');
+      // Log the host only — webhook URLs commonly embed credentials in the path.
+      log.info({ id: ep.id, urlHost: new URL(ep.url).host, eventTypes: ep.eventTypes }, 'webhook endpoint created');
       // The ONLY time the full secret is returned — store it now.
       sendJson(res, 201, { endpoint: endpointJson(ep, { revealSecret: true }) });
       return;
