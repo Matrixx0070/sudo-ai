@@ -1,0 +1,59 @@
+{
+  "version": "1",
+  "items": [
+    {
+      "id": "r3-fizzbuzz",
+      "input": "Write a JavaScript CommonJS module that exports a function `fizzbuzz(n)` returning \"Fizz\" for multiples of 3, \"Buzz\" for multiples of 5, \"FizzBuzz\" for multiples of both, else the number as a string. Use module.exports = { fizzbuzz }. Reply with only a fenced code block.",
+      "expect": {
+        "entry": "solution.js",
+        "command": "node test-suite.js",
+        "test": "const {fizzbuzz}=require('./solution.js');const a=require('assert');a.strictEqual(fizzbuzz(3),'Fizz');a.strictEqual(fizzbuzz(5),'Buzz');a.strictEqual(fizzbuzz(15),'FizzBuzz');a.strictEqual(fizzbuzz(7),'7');console.log('ok');"
+      }
+    },
+    {
+      "id": "r3-dedupe-stable",
+      "input": "Write a JavaScript CommonJS module exporting `dedupe(arr)` that removes duplicates while PRESERVING first-occurrence order. Use module.exports = { dedupe }. Reply with only a fenced code block.",
+      "expect": {
+        "entry": "solution.js",
+        "command": "node test-suite.js",
+        "test": "const {dedupe}=require('./solution.js');const a=require('assert');a.deepStrictEqual(dedupe([3,1,3,2,1]),[3,1,2]);a.deepStrictEqual(dedupe([]),[]);a.deepStrictEqual(dedupe(['a','a','b']),['a','b']);console.log('ok');"
+      }
+    },
+    {
+      "id": "r3-balanced-parens",
+      "input": "Write a JavaScript CommonJS module exporting `isBalanced(s)` returning true when (), [] and {} are correctly nested and closed. Use module.exports = { isBalanced }. Reply with only a fenced code block.",
+      "expect": {
+        "entry": "solution.js",
+        "command": "node test-suite.js",
+        "test": "const {isBalanced}=require('./solution.js');const a=require('assert');a.strictEqual(isBalanced('([]{})'),true);a.strictEqual(isBalanced('(]'),false);a.strictEqual(isBalanced('('),false);a.strictEqual(isBalanced(''),true);console.log('ok');"
+      }
+    },
+    {
+      "id": "r3-roman",
+      "input": "Write a JavaScript CommonJS module exporting `toRoman(n)` converting an integer 1-3999 to a Roman numeral. Use module.exports = { toRoman }. Reply with only a fenced code block.",
+      "expect": {
+        "entry": "solution.js",
+        "command": "node test-suite.js",
+        "test": "const {toRoman}=require('./solution.js');const a=require('assert');a.strictEqual(toRoman(4),'IV');a.strictEqual(toRoman(9),'IX');a.strictEqual(toRoman(1994),'MCMXCIV');a.strictEqual(toRoman(3999),'MMMCMXCIX');console.log('ok');"
+      }
+    },
+    {
+      "id": "r3-edge-empty-input",
+      "input": "Write a JavaScript CommonJS module exporting `mean(nums)` returning the arithmetic mean, and returning null for an empty array (do not divide by zero). Use module.exports = { mean }. Reply with only a fenced code block.",
+      "expect": {
+        "entry": "solution.js",
+        "command": "node test-suite.js",
+        "test": "const {mean}=require('./solution.js');const a=require('assert');a.strictEqual(mean([2,4,6]),4);a.strictEqual(mean([]),null);a.strictEqual(mean([5]),5);console.log('ok');"
+      }
+    },
+    {
+      "id": "r3-recursion-depth",
+      "input": "Write a JavaScript CommonJS module exporting `flatten(arr)` that deeply flattens nested arrays to a single level. Use module.exports = { flatten }. Reply with only a fenced code block.",
+      "expect": {
+        "entry": "solution.js",
+        "command": "node test-suite.js",
+        "test": "const {flatten}=require('./solution.js');const a=require('assert');a.deepStrictEqual(flatten([1,[2,[3,[4]]]]),[1,2,3,4]);a.deepStrictEqual(flatten([]),[]);a.deepStrictEqual(flatten([[],[1]]),[1]);console.log('ok');"
+      }
+    }
+  ]
+}

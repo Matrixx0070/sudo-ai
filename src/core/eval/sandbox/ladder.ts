@@ -23,6 +23,7 @@ import { estimateCostUsd } from '../../../llm/limits.js';
 import { isEmptyReply } from '../../channels/empty-reply.js';
 import type { IRContentBlock, IRTool } from '../../../../shared-types/ir/v1.js';
 import { gradeRung0, gradeRung1, gradeRung2, type GradeOutcome } from './ladder-graders.js';
+import { gradeRung3, type SandboxExec } from './ladder-rung3.js';
 
 const log = createLogger('eval:ladder');
 
@@ -56,7 +57,7 @@ export const RUNG_THRESHOLDS: Record<number, { passRate: number; minN: number }>
 };
 
 /** Rungs with a code-graded engine implemented here. */
-export const IMPLEMENTED_RUNGS = [0, 1, 2] as const;
+export const IMPLEMENTED_RUNGS = [0, 1, 2, 3] as const;
 
 export interface LadderItemResult {
   id: string;
@@ -247,6 +248,8 @@ export interface LadderRunOptions {
   cacheDbPath?: string;
   /** Skip the verdict cache write (tests / dry runs). */
   noCache?: boolean;
+  /** Injected sandbox executor for rung 3 (tests). Default: hardened Docker. */
+  sandboxExec?: SandboxExec;
 }
 
 async function defaultCallRoute(route: string, item: GoldenItem): Promise<LadderCallResult> {
@@ -264,7 +267,12 @@ async function defaultCallRoute(route: string, item: GoldenItem): Promise<Ladder
   return { blocks: res.blocks, usage: { in: res.usage.in, out: res.usage.out }, stopReason: res.stop_reason };
 }
 
-function gradeItem(rung: number, item: GoldenItem, call: LadderCallResult): GradeOutcome {
+async function gradeItem(
+  rung: number,
+  item: GoldenItem,
+  call: LadderCallResult,
+  sandboxExec?: SandboxExec,
+): Promise<GradeOutcome> {
   if (call.stopReason === 'error') {
     return { passed: false, detail: 'route returned stop_reason=error' };
   }
@@ -275,6 +283,13 @@ function gradeItem(rung: number, item: GoldenItem, call: LadderCallResult): Grad
       .map((b) => b.text)
       .join('\n');
   if (rung === 2) return gradeRung2(item.expect, textOf());
+  // Rung 3 executes the model's code in the hardened Docker tier — async, and
+  // the only rung that runs anything the model wrote.
+  if (rung === 3) {
+    return sandboxExec === undefined
+      ? gradeRung3(item.expect, textOf())
+      : gradeRung3(item.expect, textOf(), sandboxExec);
+  }
   // Rung 0 uses the delivery layer's OWN emptiness predicate (isEmptyReply —
   // the #751 content-filter empty-STRING class). Deliberately NOT
   // normalizeReplyText: that substitutes a fallback message for an empty
@@ -331,7 +346,7 @@ export async function runLadderRung(
       try {
         const res = await call(route, item);
         spentUsd += estimateCostUsd(route, res.usage.in, res.usage.out);
-        outcome = gradeItem(rung, item, res);
+        outcome = await gradeItem(rung, item, res, opts.sandboxExec);
       } catch (err) {
         // A failed call is a FAILED item, not a crashed run: an unreachable or
         // erroring route is exactly what admission must refuse.

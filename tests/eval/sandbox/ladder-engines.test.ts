@@ -150,8 +150,8 @@ describe('runLadderRung admission', () => {
     }
   });
 
-  it('returns notImplemented for rungs 3-5 instead of faking a verdict', async () => {
-    for (const rung of [3, 4, 5]) {
+  it('returns notImplemented for rungs 4-5 instead of faking a verdict', async () => {
+    for (const rung of [4, 5]) {
       const rep = await runLadderRung(rung, 'test/route', { cacheDbPath: cacheDbPath() });
       expect(rep.notImplemented).toBe(true);
       expect(rep.admitted).toBe(false);
