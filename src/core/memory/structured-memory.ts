@@ -17,6 +17,8 @@ import { DATA_DIR } from '../shared/paths.js';
 import { legacyTypeToTaxonomy } from './memory-taxonomy.js';
 import { guardMemoryWrite } from './injection-scanner.js';
 
+import { eventBus } from '../events/bus.js';
+
 const log = createLogger('memory:structured');
 
 // ---------------------------------------------------------------------------
@@ -204,9 +206,11 @@ export async function saveMemory(
 
   // If updating, preserve original createdAt.
   let createdAt = now;
+  let isUpdate = false;
   try {
     const existing = await getMemory(memory.type, id);
     createdAt = existing.createdAt;
+    isUpdate = true;
   } catch {
     // New record — use now.
   }
@@ -232,6 +236,12 @@ export async function saveMemory(
   const fp = filePath(memory.type, id);
   await fs.writeFile(fp, JSON.stringify(record, null, 2), 'utf-8');
   log.info({ type: memory.type, id, name: record.name }, 'Structured memory saved');
+
+  // Event bus: metadata only — memory CONTENT never rides the event lane
+  // (webhook payloads leave the machine; the store should not).
+  eventBus.publish(isUpdate ? 'memory.updated' : 'memory.created', {
+    memory_id: id, memory_type: memory.type, name: record.name,
+  });
 
   // Contradiction resolution (opt-in, SUDO_MEMORY_SUPERSEDE=1): a newer fact
   // about the same subject (same type+name) supersedes older active ones, so
@@ -357,6 +367,7 @@ export async function deleteMemory(type: MemoryType, id: string): Promise<boolea
   try {
     await fs.unlink(fp);
     log.info({ type, id }, 'Structured memory deleted');
+    eventBus.publish('memory.deleted', { memory_id: id, memory_type: type });
     return true;
   } catch {
     return false;
