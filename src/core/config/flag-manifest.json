@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 794,
+  "count": 795,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -258,6 +258,7 @@
     "SUDO_EVAL_RESULT",
     "SUDO_EVAL_RUN_ID",
     "SUDO_EVAL_SCENARIO",
+    "SUDO_EVAL_SEED_CREDS",
     "SUDO_EVAL_WORKSPACE",
     "SUDO_EVENT_ATTENTION",
     "SUDO_EXEC_BACKEND",

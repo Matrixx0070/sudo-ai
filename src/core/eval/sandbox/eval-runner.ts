@@ -142,6 +142,19 @@ export async function runEval(scenario: Scenario, opts: EvalRunOptions = {}): Pr
     copyFileSync(scenario.persistentMemory, join(dataDir, 'mind.db'));
   }
 
+  // Credential seeds: the brain's OAuth token stores live under DATA_DIR, so a
+  // clean-state data dir would strand the agent-under-test without any brain
+  // (live-proven: every claude-oauth profile fails "no usable token"). Clean
+  // state means clean MEMORY/session state, not credential amnesia. Copies are
+  // destroyed with the run dir; a token refresh inside a short eval racing the
+  // host store is an accepted residual risk (ADR-0007).
+  if (process.env['SUDO_EVAL_SEED_CREDS'] !== '0') {
+    for (const f of ['claude-oauth.json', 'xai-oauth.json', 'gemini-gpsoauth-seed.json']) {
+      const src = dataPath(f);
+      if (existsSync(src)) copyFileSync(src, join(dataDir, f));
+    }
+  }
+
   let mock: MockServiceHandle | null = null;
   if (scenario.mockService) mock = await startMockService(scenario.mockService);
 
