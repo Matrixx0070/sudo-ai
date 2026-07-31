@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 771,
+  "count": 776,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -66,6 +66,11 @@
     "SUDO_AUTO_APPROVE",
     "SUDO_AUTO_PLAN",
     "SUDO_BASH_ALLOWLIST_FASTPATH",
+    "SUDO_BENCH_NIGHTLY",
+    "SUDO_BENCH_NIGHTLY_ALERT_BELOW",
+    "SUDO_BENCH_NIGHTLY_CRON",
+    "SUDO_BENCH_NIGHTLY_MAX_TASKS",
+    "SUDO_BENCH_NIGHTLY_MAX_USD",
     "SUDO_BEST_OF_N_CANDIDATES",
     "SUDO_BG_SHELL",
     "SUDO_BG_SHELL_BUFFER_BYTES",

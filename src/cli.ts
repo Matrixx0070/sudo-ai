@@ -3399,6 +3399,9 @@ ${question}`, kb);
   // Hoisted so the cronRunner closure can call autoDream.runDream() when the
   // dream cron job fires. Section 9 assigns the real instance.
   let autoDream: AutoDream | null = null;
+  // Assigned when the Wave-10 BenchStore initialises (much later in boot);
+  // consumed by the bench:run cron event. Same late-wiring pattern as autoDream.
+  let benchStoreForCron: BenchStore | undefined;
 
   // Hoisted so the cronRunner closure can dispatch self-build sentinel messages.
   // Assigned after section 8.5 once finalAgentLoop is available.
@@ -3481,6 +3484,28 @@ ${question}`, kb);
     log.info({ jobId: job.id, jobName: job.name, payloadKind: payload.kind }, 'Cron job firing');
 
     if (payload.kind === 'systemEvent') {
+      if (payload.event === 'bench:run') {
+        // Nightly AgentBench sweep (invariant-10 budgets inside runNightlyBench;
+        // per-task spend additionally rides SUDO_AGENT_RUN_MAX_USD). Fail-soft:
+        // a broken bench never takes the cron loop down.
+        if (benchStoreForCron) {
+          try {
+            const { runNightlyBench } = await import('./core/eval/bench-nightly.js');
+            const { AgentBenchRunner } = await import('./core/eval/agent-bench-runner.js');
+            const summary = await runNightlyBench({
+              runner: new AgentBenchRunner({ bootstrap: {} }),
+              benchStore: benchStoreForCron,
+              notify: (title, body) => { proactiveNotifier.notify('alert', title, body, 'high'); },
+            });
+            log.info({ jobId: job.id, ...summary }, 'Nightly bench completed');
+          } catch (benchErr) {
+            log.warn({ err: String(benchErr) }, 'Nightly bench failed');
+          }
+        } else {
+          log.warn({ jobId: job.id }, 'BenchStore unavailable — skipping bench:run');
+        }
+        return;
+      }
       if (payload.event === 'dream:run') {
         if (autoDream) {
           try {
@@ -3860,6 +3885,33 @@ ${question}`, kb);
     log.info({ intervalMs: dreamMs, rescheduled: needsUpsert }, 'AutoDream scheduled');
   } catch (err) {
     log.warn({ err: String(err) }, 'AutoDream scheduling failed');
+  }
+
+  // Nightly AgentBench sweep (SUDO_BENCH_NIGHTLY=1; hour via SUDO_BENCH_NIGHTLY_CRON,
+  // default 04:00 UTC — after TX19's 03:00 window). Budgets live in bench-nightly.ts
+  // (invariant 10). Flag off → any existing job is disabled, not orphaned.
+  try {
+    const benchJobId = 'nightly-agent-bench';
+    if (process.env['SUDO_BENCH_NIGHTLY'] === '1') {
+      cronStore.upsert({
+        id: benchJobId,
+        name: 'Nightly AgentBench',
+        enabled: true,
+        schedule: { kind: 'cron', expr: process.env['SUDO_BENCH_NIGHTLY_CRON'] || '0 4 * * *', tz: 'UTC' },
+        payload: { kind: 'systemEvent', event: 'bench:run' },
+        sessionTarget: 'isolated',
+        consecutiveErrors: 0,
+      });
+      log.info({ jobId: benchJobId }, 'Nightly bench scheduled');
+    } else {
+      const existing = cronStore.get(benchJobId);
+      if (existing?.enabled) {
+        cronStore.upsert({ ...existing, enabled: false });
+        log.info({ jobId: benchJobId }, 'Nightly bench disabled (flag off)');
+      }
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Nightly bench scheduling failed');
   }
 
   // Nightly capability self-test — executes a curated slice of the builtin
@@ -5190,6 +5242,7 @@ ${question}`, kb);
       let wave10BenchStore: BenchStore | undefined;
       try {
         wave10BenchStore = new BenchStore('data/bench.db');
+        benchStoreForCron = wave10BenchStore;
         log.info('Wave 10: BenchStore initialised at data/bench.db');
       } catch (benchErr: unknown) {
         log.warn({ err: String(benchErr) }, 'Wave 10: BenchStore failed to initialise — bench routes will be unavailable');
