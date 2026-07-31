@@ -161,6 +161,30 @@ function parseUsage(u: unknown): IRUsage {
   };
 }
 
+/**
+ * xAI reports the AUTHORITATIVE per-call price as `usage.cost_in_usd_ticks`, in
+ * nano-dollars (1e9 ticks = 1 USD). Corroborated live 2026-07-31: a 281-token
+ * grok-4.5 call reported 6_724_000 ticks, and the 2026-07-24 probe session's
+ * ~13 calls at ~4.5M ticks each moved the console balance $8.42 -> $8.48
+ * (~$0.06) — both consistent with 1e-9 USD/tick.
+ *
+ * Why this matters: without it the gateway falls back to a token-count ESTIMATE
+ * keyed on model name, and an unpriced model estimates to 0 — which is exactly
+ * how the metered cli-chat-proxy lane looked free. A provider-reported cost is
+ * always preferred over our estimate (see withEstimatedCost in transport.ts).
+ *
+ * Returns undefined (not 0) when absent, so a missing field falls through to
+ * estimation instead of asserting a free call.
+ */
+const USD_PER_TICK = 1e-9;
+
+function parseCostUsd(u: unknown): number | undefined {
+  if (!isRec(u)) return undefined;
+  const ticks = u['cost_in_usd_ticks'];
+  if (typeof ticks !== 'number' || !Number.isFinite(ticks) || ticks < 0) return undefined;
+  return ticks * USD_PER_TICK;
+}
+
 /** reasoning item → thinking text (summary_text parts + content text parts). */
 function reasoningText(item: Rec): string {
   const parts: string[] = [];
@@ -186,6 +210,7 @@ function reasoningText(item: Rec): string {
 export function parseXaiResponsesResponse(json: unknown, trace_id: string): IRResponse {
   const j: Rec = isRec(json) ? json : {};
   const usage = parseUsage(j['usage']);
+  const costUsd = parseCostUsd(j['usage']);
   const output = Array.isArray(j['output']) ? j['output'] : [];
 
   const blocks: IRContentBlock[] = [];
@@ -249,6 +274,7 @@ export function parseXaiResponsesResponse(json: unknown, trace_id: string): IRRe
   }
 
   const res: IRResponse = { blocks, stop_reason: stopReason, usage, trace_id };
+  if (costUsd !== undefined) res.cost_usd = costUsd;
   if (Object.keys(extra).length > 0) res.extra = extra;
   return res;
 }
@@ -292,6 +318,8 @@ export function createXaiResponsesSSEMachine(): IRStreamMachine {
   /** function_call accumulation keyed by output_index. */
   const pending = new Map<number, PendingCall>();
   let usage: IRUsage = { in: 0, out: 0, cached_in: 0 };
+  /** Provider-reported price from the terminal event's usage; undefined until seen. */
+  let costUsd: number | undefined;
   let sawFunctionCall = false;
   let firstTokenEmitted = false;
   let terminated = false;
@@ -315,6 +343,7 @@ export function createXaiResponsesSSEMachine(): IRStreamMachine {
     type: 'message_end',
     stop_reason: stop,
     usage,
+    ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
   });
 
   const consume = (event: unknown): IRStreamEvent[] => {
@@ -376,6 +405,7 @@ export function createXaiResponsesSSEMachine(): IRStreamMachine {
       case 'response.incomplete': {
         const resp = isRec(event['response']) ? event['response'] : {};
         usage = parseUsage(resp['usage']);
+        costUsd = parseCostUsd(resp['usage']) ?? costUsd;
         out.push(...flushPending());
         let stop: IRResponse['stop_reason'];
         if (type === 'response.incomplete') {
@@ -392,7 +422,10 @@ export function createXaiResponsesSSEMachine(): IRStreamMachine {
         const err = isRec(resp['error']) ? resp['error'] : {};
         const msg = typeof err['message'] === 'string' ? err['message'] : 'xai responses stream failed';
         const u = resp['usage'];
-        if (u !== undefined) usage = parseUsage(u);
+        if (u !== undefined) {
+          usage = parseUsage(u);
+          costUsd = parseCostUsd(u) ?? costUsd;
+        }
         out.push({ type: 'stream_error', error: msg });
         out.push(terminal('error'));
         break;

@@ -930,6 +930,11 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
       tokensIn: value.res.usage.in,
       tokensOut: value.res.usage.out,
       tokensCached: value.res.usage.cached_in,
+      // A provider-reported price beats our token-count estimate: xAI returns
+      // the authoritative per-call cost (see parseCostUsd in the xai-responses
+      // adapter). Without this the estimate wins by default, and an unpriced
+      // model estimates to 0 — which is how a metered lane reads as free.
+      ...(typeof value.res.cost_usd === 'number' ? { costUsd: value.res.cost_usd } : {}),
     });
     return value.res;
   } catch (err) {
@@ -1226,8 +1231,9 @@ export async function* streamIR(
       // Provider closed its SSE stream without the documented terminal event.
       errorClass = 'provider_bug';
     }
+    const streamed = acc.toIRResponse();
     writeRow({
-      irResponse: acc.toIRResponse(),
+      irResponse: streamed,
       ...(errorClass !== undefined ? { errorClass } : {}),
       ...(terminal !== null
         ? {
@@ -1236,6 +1242,8 @@ export async function* streamIR(
             tokensCached: terminal.usage.cached_in,
           }
         : {}),
+      // Provider-reported price wins over the token estimate (see recordCall).
+      ...(typeof streamed.cost_usd === 'number' ? { costUsd: streamed.cost_usd } : {}),
     });
   } finally {
     // Consumer break / early return: abort the underlying fetch and still
@@ -1266,11 +1274,13 @@ export async function* streamIR(
     } catch {
       /* observer failures never break stream cleanup */
     }
+    const abandoned = acc.toIRResponse(partial);
     writeRow({
-      irResponse: acc.toIRResponse(partial),
+      irResponse: abandoned,
       tokensIn: partial.in,
       tokensOut: partial.out,
       tokensCached: partial.cached_in,
+      ...(typeof abandoned.cost_usd === 'number' ? { costUsd: abandoned.cost_usd } : {}),
     });
   }
 }

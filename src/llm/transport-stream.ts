@@ -96,7 +96,11 @@ export function createResponseAccumulator(traceId: string): {
 } {
   const blocks: IRResponse['blocks'] = [];
   const acc = {
-    terminal: null as { stop_reason: IRResponse['stop_reason']; usage: IRUsage } | null,
+    terminal: null as {
+      stop_reason: IRResponse['stop_reason'];
+      usage: IRUsage;
+      cost_usd?: number;
+    } | null,
     add(ev: IRStreamEvent): void {
       if (ev.type === 'text_delta') {
         const last = blocks[blocks.length - 1];
@@ -105,11 +109,15 @@ export function createResponseAccumulator(traceId: string): {
       } else if (ev.type === 'tool_use_end') {
         blocks.push({ type: 'tool_use', id: ev.id, name: ev.name, input: ev.input });
       } else if (ev.type === 'message_end') {
-        acc.terminal = { stop_reason: ev.stop_reason, usage: ev.usage };
+        acc.terminal = {
+          stop_reason: ev.stop_reason,
+          usage: ev.usage,
+          ...(ev.cost_usd !== undefined ? { cost_usd: ev.cost_usd } : {}),
+        };
       }
     },
     toIRResponse(partialUsage?: IRUsage): IRResponse {
-      return {
+      const res: IRResponse = {
         blocks,
         // Consumer abandoned the stream before the terminal event →
         // stop_reason 'error' on the partial (mirror brain's partial-usage
@@ -119,6 +127,11 @@ export function createResponseAccumulator(traceId: string): {
         usage: acc.terminal?.usage ?? partialUsage ?? { in: 0, out: 0, cached_in: 0 },
         trace_id: traceId,
       };
+      // Carry the provider's own price to the ledger row. An abandoned stream
+      // has no terminal → no cost_usd → the recorder estimates rather than
+      // asserting the call was free.
+      if (acc.terminal?.cost_usd !== undefined) res.cost_usd = acc.terminal.cost_usd;
+      return res;
     },
   };
   return acc;

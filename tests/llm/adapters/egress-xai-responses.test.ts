@@ -381,3 +381,81 @@ describe('createXaiResponsesSSEMachine', () => {
     ]);
   });
 });
+
+/**
+ * Provider-reported cost (cost_in_usd_ticks → cost_usd).
+ *
+ * Regression guard for a real incident: the metered cli-chat-proxy lane read as
+ * FREE in gateway.db for days because xAI's authoritative per-call price was
+ * discarded and the token-count estimator returned 0 for the unpriced model.
+ * The distinction that matters is undefined (no provider price → estimate) vs
+ * 0 (assert the call was free) — never collapse the two.
+ */
+describe('xai cost_in_usd_ticks → cost_usd', () => {
+  const withUsage = (usage: Record<string, unknown>) => ({
+    status: 'completed',
+    output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+    usage,
+  });
+
+  it('converts ticks to USD at 1e-9 (nano-dollars)', () => {
+    // 6_724_000 ticks is a real observed grok-4.5 call (2026-07-31).
+    const res = parseXaiResponsesResponse(
+      withUsage({ input_tokens: 200, output_tokens: 81, cost_in_usd_ticks: 6_724_000 }),
+      TRACE,
+    );
+    expect(res.cost_usd).toBeCloseTo(0.006724, 9);
+  });
+
+  it('leaves cost_usd UNDEFINED when the provider sends no price', () => {
+    const res = parseXaiResponsesResponse(
+      withUsage({ input_tokens: 10, output_tokens: 5 }),
+      TRACE,
+    );
+    // Not 0 — absent must fall through to estimation, not claim a free call.
+    expect(res.cost_usd).toBeUndefined();
+  });
+
+  it('ignores a malformed or negative tick count', () => {
+    for (const bad of ['6724000', -1, Number.NaN, null, {}]) {
+      const res = parseXaiResponsesResponse(
+        withUsage({ input_tokens: 1, output_tokens: 1, cost_in_usd_ticks: bad }),
+        TRACE,
+      );
+      expect(res.cost_usd).toBeUndefined();
+    }
+  });
+
+  it('a zero-tick call reports exactly 0 (a genuinely covered call)', () => {
+    const res = parseXaiResponsesResponse(
+      withUsage({ input_tokens: 3, output_tokens: 2, cost_in_usd_ticks: 0 }),
+      TRACE,
+    );
+    expect(res.cost_usd).toBe(0);
+  });
+
+  it('the SSE machine carries the price on the terminal event', () => {
+    const m = createXaiResponsesSSEMachine();
+    const events = m.push({
+      type: 'response.completed',
+      response: {
+        status: 'completed',
+        usage: { input_tokens: 12, output_tokens: 4, cost_in_usd_ticks: 2_804_000 },
+      },
+    });
+    const end = events.find((e) => e.type === 'message_end');
+    expect(end).toBeDefined();
+    expect((end as { cost_usd?: number }).cost_usd).toBeCloseTo(0.002804, 9);
+  });
+
+  it('the SSE terminal omits cost_usd when the provider sends none', () => {
+    const m = createXaiResponsesSSEMachine();
+    const events = m.push({
+      type: 'response.completed',
+      response: { status: 'completed', usage: { input_tokens: 12, output_tokens: 4 } },
+    });
+    const end = events.find((e) => e.type === 'message_end');
+    expect(end).toBeDefined();
+    expect((end as { cost_usd?: number }).cost_usd).toBeUndefined();
+  });
+});
