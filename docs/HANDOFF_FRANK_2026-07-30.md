@@ -12,6 +12,12 @@ the invariants none of it was self-approved.
    BM25/MiniLM (circuit breaker handling it; err-log noise every ~20 min).
 
 ## Flag activations (mechanisms built + tested, default OFF — your call)
+
+### Added 2026-07-31 (retrieval/memory campaign #1021-#1025)
+- **Nightly AgentBench cron** — NOT BUILT (corrected ledger: bench is on-demand only, bench.db empty). Wiring it = recurring model spend; needs your GO + a declared per-run/per-day budget (invariant 10).
+- **Retroactive memory surgery** (needs two-reader consensus + your GO, invariant 9): (a) semantic-compactor pass over the 263 existing >=0.95-cosine twin facts (SUDO_SEMANTIC_COMPACT); (b) retroactive is_evergreen marking of durable historical facts.
+- FYI activated autonomously (reversible/$0/observable, per your fully-autonomous directive): SUDO_MEMORY_NEAR_DUP=1 (write-time near-dup gate, uncommitted prod ecosystem.config.cjs edit). RAG decay half-life 30->90d + EVERGREEN sentinel shipped in #1025.
+- FIXED live outage: pptxgenjs missing from prod node_modules (pptx.create broken; nightly self-test 2/6 alert) — deploys adding deps MUST run pnpm install; done + daemons restarted.
 - `SUDO_AGENT_RUN_MAX_USD=<value>` — per-run spend halt (#990). Suggest 2–5.
 - `SUDO_TG_MISSION_CONTROL=1` (+ optional `TELEGRAM_MISSION_GROUP_ID` — create
   a topics-enabled supergroup, add the bot as admin) — TX9 mission cards.
