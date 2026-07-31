@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { gradeRung0, gradeRung1 } from '../../../src/core/eval/sandbox/ladder-graders.js';
+import { gradeRung0, gradeRung1, gradeRung2, extractNumber } from '../../../src/core/eval/sandbox/ladder-graders.js';
 import {
   RUNG_THRESHOLDS,
   cacheVerdict,
@@ -150,8 +150,8 @@ describe('runLadderRung admission', () => {
     }
   });
 
-  it('returns notImplemented for rungs 2-5 instead of faking a verdict', async () => {
-    for (const rung of [2, 3, 4, 5]) {
+  it('returns notImplemented for rungs 3-5 instead of faking a verdict', async () => {
+    for (const rung of [3, 4, 5]) {
       const rep = await runLadderRung(rung, 'test/route', { cacheDbPath: cacheDbPath() });
       expect(rep.notImplemented).toBe(true);
       expect(rep.admitted).toBe(false);
@@ -180,5 +180,45 @@ describe('runLadderRung admission', () => {
         '/nonexistent-dir-xyz/gateway.db',
       ),
     ).not.toThrow();
+  });
+});
+
+describe('rung-2 grader (math / numeric)', () => {
+  it('extracts numbers from the shapes models actually emit', () => {
+    expect(extractNumber('42')).toBe(42);
+    expect(extractNumber('The answer is 42.')).toBe(42);
+    expect(extractNumber('$1,234.50')).toBe(1234.5);
+    expect(extractNumber('-73')).toBe(-73);
+    expect(extractNumber('**0.875**')).toBe(0.875);
+    // Shows work → take the LAST standalone number (the result).
+    expect(extractNumber('17 * 23 = 391, minus 91 gives 300')).toBe(300);
+    expect(extractNumber('no digits here')).toBeNull();
+  });
+
+  it('grades exact and tolerance comparisons', () => {
+    expect(gradeRung2({ answer: 300, tolerance: 0 }, '300').passed).toBe(true);
+    expect(gradeRung2({ answer: 300, tolerance: 0 }, '301').passed).toBe(false);
+    expect(gradeRung2({ answer: 1.4142, tolerance: 0.0002 }, '1.41421356').passed).toBe(true);
+    expect(gradeRung2({ answer: 1.4142, tolerance: 0.0002 }, '1.4200').passed).toBe(false);
+    expect(gradeRung2({ answer: -73, tolerance: 0 }, 'The result is -73').passed).toBe(true);
+  });
+
+  it('fails on a missing number and on unknown expect keys', () => {
+    expect(gradeRung2({ answer: 1 }, 'I cannot compute that').passed).toBe(false);
+    const unknown = gradeRung2({ answer: 1, somethingElse: true }, '1');
+    expect(unknown.passed).toBe(false);
+    expect(unknown.detail).toContain('unknown rung-2 expect key');
+  });
+
+  it('runs rung 2 end-to-end with a stubbed route and gates on minN', async () => {
+    const rep = await runLadderRung(2, 'test/route', {
+      repeats: 1,
+      noCache: true,
+      callRoute: async (_r, item) => okText(String((item.expect as { answer: number }).answer)),
+    });
+    expect(rep.n).toBe(8);
+    expect(rep.passRate).toBe(1);
+    expect(rep.admitted).toBe(false); // n=8 < ADR minN 30
+    expect(rep.reason).toContain('insufficientSample');
   });
 });

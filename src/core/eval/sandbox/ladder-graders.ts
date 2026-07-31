@@ -91,6 +91,49 @@ export function gradeRung0(expect: Record<string, unknown>, text: string): Grade
   return { passed: true, detail: 'ok' };
 }
 
+/**
+ * Extract the model's numeric answer from a reply. Tolerates the shapes real
+ * models emit even when told "only the number": thousands separators, a
+ * trailing period, currency/unit adornment, LaTeX-ish wrappers, and a short
+ * prose lead-in ("The answer is 42."). Returns the LAST standalone number —
+ * models that show work state the result last.
+ */
+export function extractNumber(text: string): number | null {
+  const cleaned = text
+    .replace(/[$£€,]/g, '')
+    .replace(/\\\(|\\\)|\\\[|\\\]|\*\*/g, ' ')
+    .replace(/(\d)\s+(\d{3})\b/g, '$1$2'); // "1 234" → "1234"
+  const matches = cleaned.match(/-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/g);
+  if (matches === null || matches.length === 0) return null;
+  const n = Number(matches[matches.length - 1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Rung 2 — math / numeric: exact or tolerance compare against the golden
+ * answer. `tolerance: 0` means exact after numeric parsing.
+ */
+export function gradeRung2(expect: Record<string, unknown>, text: string): GradeOutcome {
+  const want = expect['answer'];
+  if (typeof want !== 'number') {
+    return { passed: false, detail: 'rung-2 expect.answer must be a number' };
+  }
+  const tolRaw = expect['tolerance'];
+  const tol = typeof tolRaw === 'number' && tolRaw >= 0 ? tolRaw : 0;
+  for (const key of Object.keys(expect)) {
+    if (key !== 'answer' && key !== 'tolerance') {
+      return { passed: false, detail: `unknown rung-2 expect key '${key}'` };
+    }
+  }
+  const got = extractNumber(text);
+  if (got === null) return { passed: false, detail: `no number in reply: ${text.slice(0, 60)}` };
+  const delta = Math.abs(got - want);
+  if (delta > tol) {
+    return { passed: false, detail: `got ${got}, expected ${want}${tol > 0 ? ` ±${tol}` : ''}` };
+  }
+  return { passed: true, detail: `ok (${got})` };
+}
+
 /** First tool_use block in an IR response, if any. */
 export function firstToolUse(blocks: IRContentBlock[]): IRToolUseBlock | null {
   for (const b of blocks) {
