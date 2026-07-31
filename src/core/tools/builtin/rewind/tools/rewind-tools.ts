@@ -50,6 +50,13 @@ export const rewindRestoreTool: ToolDefinition = {
   timeout: 30_000,
   parameters: {
     checkpointId: { type: 'number', required: true, description: 'Checkpoint id from rewind.list.' },
+    includeConversation: {
+      type: 'boolean',
+      required: false,
+      description:
+        'Also drop messages recorded after the checkpoint, so the transcript matches the restored files. '
+        + 'Default false — this deletes conversation history (archived to data/rewind/ first, so it is undoable).',
+    },
   },
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     const id = params['checkpointId'];
@@ -65,12 +72,23 @@ export const rewindRestoreTool: ToolDefinition = {
     }
 
     const r = restoreCheckpoint(id);
+    // Conversation half is OPT-IN: reverting files is cheap to undo, dropping
+    // transcript is not, so the caller must ask for it explicitly.
+    let convLine = '';
+    if (params['includeConversation'] === true) {
+      const { restoreConversation } = await import('../../../../rewind/index.js');
+      const c = restoreConversation(id);
+      convLine = c.ok
+        ? `Conversation: removed ${c.removed} message(s)${c.archivedTo ? ` (archived to ${c.archivedTo})` : ''}.`
+        : `Conversation: not rewound — ${c.reason}`;
+    }
     logger.info({ checkpoint: id, ...r }, 'rewind restore complete');
     const parts = [
       `Rewound to checkpoint #${id} (${ckpt.label}).`,
       r.restored.length > 0 ? `Restored ${r.restored.length}: ${r.restored.join(', ')}` : '',
       r.deleted.length > 0 ? `Deleted ${r.deleted.length} (did not exist before): ${r.deleted.join(', ')}` : '',
       r.skipped.length > 0 ? `Skipped ${r.skipped.length}: ${r.skipped.join(', ')}` : '',
+      convLine,
     ].filter((x) => x !== '');
     return { success: true, output: parts.join('\n'), data: { ...r, checkpointId: id } };
   },

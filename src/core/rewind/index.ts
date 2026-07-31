@@ -13,10 +13,16 @@
 
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { createLogger } from '../shared/logger.js';
+import { dataPath } from '../shared/paths.js';
 import {
   addSnapshot,
+  rewindRoot,
   createCheckpoint,
+  getMessageBoundary,
+  setMessageBoundary,
   getBlob,
   getCheckpoint,
   getSnapshots,
@@ -63,6 +69,7 @@ export function snapshotBeforeTool(
   toolName: string,
   params: Record<string, unknown>,
   sessionId: string,
+  mindDbPath?: string,
 ): number | null {
   if (!rewindEnabled()) return null;
   try {
@@ -70,6 +77,9 @@ export function snapshotBeforeTool(
     if (paths.length === 0) return null;
 
     const id = createCheckpoint(sessionId, `before ${toolName}`, toolName);
+    // Conversation half: remember where the transcript stood. Files alone are a
+    // half-undo — you revert the code but the model still "remembers" doing it.
+    setMessageBoundary(id, currentMessageBoundary(sessionId, mindDbPath));
     let captured = 0;
     for (const p of paths) {
       const existed = existsSync(p);
@@ -146,3 +156,75 @@ export function checkpointDiffers(checkpointId: number): boolean {
 }
 
 export { listCheckpoints, getCheckpoint, getSnapshots };
+
+
+// ---------------------------------------------------------------------------
+// Conversation rewind
+// ---------------------------------------------------------------------------
+
+/**
+ * Highest message id currently stored for a session, or null when unknown.
+ * Opens its own READ connection to the memory DB: the rewind store is
+ * standalone, and threading a live handle through the ToolRegistry hook would
+ * couple the choke point to memory internals for no gain (SQLite WAL supports
+ * concurrent readers).
+ */
+export function currentMessageBoundary(sessionId: string, mindDbPath?: string): number | null {
+  try {
+    const d = new Database(mindDbPath ?? dataPath('mind.db'), { readonly: true, fileMustExist: true });
+    try {
+      const row = d.prepare('SELECT MAX(id) AS m FROM messages WHERE session_id = ?').get(sessionId) as
+        | { m: number | null }
+        | undefined;
+      return row?.m ?? null;
+    } finally {
+      d.close();
+    }
+  } catch (err) {
+    log.debug({ err: String(err), sessionId }, 'message boundary unavailable (files-only checkpoint)');
+    return null;
+  }
+}
+
+export interface ConversationRestoreResult {
+  ok: boolean;
+  removed: number;
+  archivedTo?: string;
+  reason?: string;
+}
+
+/**
+ * Drop every message the session recorded AFTER the checkpoint, so the model's
+ * transcript matches the restored files.
+ *
+ * Removed messages are ARCHIVED to a blob first — a rewind must itself be
+ * undoable, or "undo" becomes the most destructive button in the product.
+ */
+export function restoreConversation(checkpointId: number, mindDbPath?: string): ConversationRestoreResult {
+  const ckpt = getCheckpoint(checkpointId);
+  if (!ckpt) return { ok: false, removed: 0, reason: `no checkpoint #${checkpointId}` };
+  const boundary = getMessageBoundary(checkpointId);
+  if (boundary === null) {
+    return { ok: false, removed: 0, reason: 'checkpoint has no conversation boundary (files-only)' };
+  }
+  try {
+    const d = new Database(mindDbPath ?? dataPath('mind.db'));
+    try {
+      const doomed = d
+        .prepare('SELECT * FROM messages WHERE session_id = ? AND id > ? ORDER BY id')
+        .all(ckpt.sessionId, boundary) as Array<Record<string, unknown>>;
+      if (doomed.length === 0) return { ok: true, removed: 0 };
+
+      const archivePath = join(rewindRoot(), `conv-${checkpointId}-${boundary}.json`);
+      writeFileSync(archivePath, JSON.stringify(doomed, null, 2));
+
+      d.prepare('DELETE FROM messages WHERE session_id = ? AND id > ?').run(ckpt.sessionId, boundary);
+      log.info({ checkpointId, removed: doomed.length, archivePath }, 'conversation rewound');
+      return { ok: true, removed: doomed.length, archivedTo: archivePath };
+    } finally {
+      d.close();
+    }
+  } catch (err) {
+    return { ok: false, removed: 0, reason: `conversation restore failed: ${String(err).slice(0, 160)}` };
+  }
+}

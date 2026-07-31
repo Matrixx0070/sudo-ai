@@ -50,6 +50,11 @@ function root(): string {
   return rootDir;
 }
 
+/** Directory the rewind store lives in (honours the test seam). */
+export function rewindRoot(): string {
+  return root();
+}
+
 export function getRewindDb(): Database.Database {
   if (db) return db;
   const d = new Database(join(root(), 'rewind.db'));
@@ -63,6 +68,10 @@ export function getRewindDb(): Database.Database {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_ckpt_session ON checkpoints(session_id, id DESC);
+    -- Conversation boundary: the highest message id that existed when the
+    -- checkpoint was taken. Restoring the conversation means dropping messages
+    -- ABOVE this id for the session. NULL = boundary unknown (older rows).
+    
     CREATE TABLE IF NOT EXISTS snapshots (
       checkpoint_id  INTEGER NOT NULL,
       path           TEXT NOT NULL,
@@ -114,6 +123,30 @@ export function putBlob(absPath: string): string | null {
 export function getBlob(sha: string): Buffer | null {
   const p = blobPath(sha);
   return existsSync(p) ? readFileSync(p) : null;
+}
+
+/** Idempotently add the conversation-boundary column to an existing store. */
+function ensureBoundaryColumn(d: Database.Database): void {
+  try {
+    d.exec('ALTER TABLE checkpoints ADD COLUMN message_boundary INTEGER');
+  } catch {
+    // already present
+  }
+}
+
+export function setMessageBoundary(checkpointId: number, boundary: number | null): void {
+  const d = getRewindDb();
+  ensureBoundaryColumn(d);
+  d.prepare('UPDATE checkpoints SET message_boundary = ? WHERE id = ?').run(boundary, checkpointId);
+}
+
+export function getMessageBoundary(checkpointId: number): number | null {
+  const d = getRewindDb();
+  ensureBoundaryColumn(d);
+  const row = d.prepare('SELECT message_boundary AS b FROM checkpoints WHERE id = ?').get(checkpointId) as
+    | { b: number | null }
+    | undefined;
+  return row?.b ?? null;
 }
 
 export function createCheckpoint(sessionId: string, label: string, tool?: string): number {
