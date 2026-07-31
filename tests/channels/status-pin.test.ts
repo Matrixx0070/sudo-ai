@@ -355,3 +355,34 @@ describe('renderStatusPinCard — brain chain health', () => {
     expect(out).not.toContain('· domains');
   });
 });
+
+describe('renderStatusPinCard — context pressure (statusline parity)', () => {
+  it('omits the context line entirely when unknown', () => {
+    expect(renderStatusPinCard(snap())).not.toContain('Context:');
+  });
+
+  it('renders percent and k-formatted usage', () => {
+    const text = renderStatusPinCard(snap({ context: { usedTokens: 120_000, windowTokens: 200_000 } }));
+    expect(text).toContain('🪟 Context: 60% (120k/200k)');
+  });
+
+  it('stays calm below 75% and escalates markers above it', () => {
+    expect(renderStatusPinCard(snap({ context: { usedTokens: 10, windowTokens: 100 } }))).toContain('Context: 10%');
+    expect(renderStatusPinCard(snap({ context: { usedTokens: 80, windowTokens: 100 } }))).toContain('⚠️ 80%');
+    expect(renderStatusPinCard(snap({ context: { usedTokens: 95, windowTokens: 100 } }))).toContain('🔴 95%');
+  });
+
+  it('never exceeds 100% or divides by zero', () => {
+    expect(renderStatusPinCard(snap({ context: { usedTokens: 500, windowTokens: 100 } }))).toContain('100%');
+    expect(renderStatusPinCard(snap({ context: { usedTokens: 5, windowTokens: 0 } }))).not.toContain('Context:');
+  });
+
+  it('keeps the card within its 12-line budget with context present', () => {
+    const text = renderStatusPinCard(snap({
+      context: { usedTokens: 1000, windowTokens: 200_000 },
+      activity: { activeCount: 2, oldestKey: 'telegram:1', oldestStartedAtMs: NOW - 60_000 },
+      cron: { enabledCount: 3, failingCount: 1, lastFailureName: 'job' },
+    }));
+    expect(text.split('\n').length).toBeLessThanOrEqual(12);
+  });
+});

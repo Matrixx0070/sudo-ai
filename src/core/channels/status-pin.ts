@@ -58,6 +58,16 @@ export interface StatusPinSnapshot {
     /** Name of one failing job (most recent scan order), if any. */
     lastFailureName?: string;
   };
+  /**
+   * Context-window pressure for the owner's live session. Claude Code's
+   * statusline surfaces this and ours did not — "how full is the window" is
+   * the number that predicts a compaction, so it belongs on the card.
+   * Omitted entirely when unknown: the card stays quiet rather than guessing.
+   */
+  context?: {
+    usedTokens: number;
+    windowTokens: number;
+  };
   spend: {
     /** Today's ledger USD; null when the ledger read failed. */
     todayUsd: number | null;
@@ -145,6 +155,16 @@ export function renderStatusPinCard(s: StatusPinSnapshot): string {
     } else {
       lines.push(`🧠 Brain: ${b.availableCount}/${b.profileCount} providers${domains}`);
     }
+  }
+
+  // Context pressure — only when known and meaningful.
+  if (s.context && s.context.windowTokens > 0 && s.context.usedTokens >= 0) {
+    const pct = Math.min(100, Math.round((s.context.usedTokens / s.context.windowTokens) * 100));
+    const k = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+    // Marker only once it actually matters — the card's whole design is to stay
+    // calm when things are normal.
+    const mark = pct >= 90 ? '🔴 ' : pct >= 75 ? '⚠️ ' : '';
+    lines.push(`🪟 Context: ${mark}${pct}% (${k(s.context.usedTokens)}/${k(s.context.windowTokens)})`);
   }
 
   // Background / cron
