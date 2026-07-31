@@ -7,7 +7,7 @@
  * seat-covered (no per-minute cost, no extra API key) and backed by Deepgram
  * Nova-3. Live-proven: PCM in → `{"type":"TranscriptText","data":...}` out.
  *
- *   wss://api.anthropic.com/api/ws/speech_to_text/voice_stream
+ *   (URL lives in src/llm/endpoints.ts -> claudeSeatSttWsUrl)
  *     ?encoding=linear16&sample_rate=16000&channels=1&language=en
  *     &transcription_engine=true&stt_provider=deepgram-nova3
  *
@@ -23,10 +23,10 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createLogger } from '../shared/logger.js';
+import { claudeSeatSttWsUrl } from '../../llm/endpoints.js';
 
 const log = createLogger('voice:stt-claude-seat');
 
-const VOICE_WS_PATH = '/api/ws/speech_to_text/voice_stream';
 /** Chunk size for the audio stream (~100ms of 16kHz mono linear16). */
 const CHUNK_BYTES = 3200;
 /** Wall-clock gap between chunks. MUST be ~real-time: this is a live-dictation
@@ -112,7 +112,6 @@ export interface SeatSttOutcome {
 
 /** Build the voice_stream URL (exported for tests — the param set is a contract). */
 export function buildVoiceStreamUrl(opts: SeatSttOptions = {}): string {
-  const base = (process.env['VOICE_STREAM_BASE_URL'] ?? 'wss://api.anthropic.com').replace(/\/+$/, '');
   const params = new URLSearchParams({
     encoding: 'linear16',
     sample_rate: '16000',
@@ -122,7 +121,7 @@ export function buildVoiceStreamUrl(opts: SeatSttOptions = {}): string {
     stt_provider: 'deepgram-nova3',
   });
   for (const k of opts.keyterms ?? []) params.append('keyterms', k);
-  return `${base}${VOICE_WS_PATH}?${params.toString()}`;
+  return `${claudeSeatSttWsUrl()}?${params.toString()}`;
 }
 
 /** True when the seat STT lane should be attempted. */
