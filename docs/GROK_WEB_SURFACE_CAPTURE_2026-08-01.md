@@ -152,6 +152,101 @@ a `Grok Teams` product with empty prices.
 
 ---
 
+## 7. Round 2 — the chat send, captured (Business seat)
+
+The composer finally driven. **`response.create` carried NO `castle_request_token`:**
+
+```json
+{"session_id":"5ebc2d1e-…","event":{"type":"response.create","event_id":"evt_resp_1785619414731"}}
+```
+
+Two keys. The companion doc records a **~14 KB `castle_request_token`** on every
+`response.create`; this capture has none, on the same seat, same host, same protocol.
+
+**This matters a lot**, because "the WS lane needs a second browser-bound Castle oracle"
+is the whole basis for *not* adopting it. If the token is conditional — first message of a
+fresh browser session, or risk-scored — then the WS lane may be reachable without a second
+oracle. **UNVERIFIED which condition triggers it**; two captures disagree and that is all
+that is established. Worth resolving before anyone re-litigates the WS decision.
+
+Full observed grammar (tx = client→server):
+
+```
+tx  session.create           {session:{model:"auto", x_grok:{…connector_ids, image_generation_count:2…}}}
+rx  session.created          echoes the session, assigns session_id == conversation uuid
+rx  conversation.attached    {conversation:{id,object:"realtime.conversation"}, mode:"new"}
+tx  conversation.item.create {item:{type:message, role:user, x_grok:{client_message_id, input_chunks:[{text:{text}}]}}}
+tx  response.create          {type, event_id}                      <-- no castle token here
+rx  conversation.queue.updated / conversation.item.added
+rx  response.created         {response:{id,status:"in_progress",output_modalities:["text"]}}
+rx  response.output_item.added / response.content_part.added
+rx  response.chunk           {chunk:{ui_layout:{reasoning_ui_layout,effort:"LOW",steer_model_id:"grok-4"}}}
+rx  response.chunk           {chunk:{text:{text,channel:"CHANNEL_ASSISTANT_NOTETAKER_HEADER"}}}
+rx  response.output_text.done / content_part.done / output_item.done
+rx  response.done            {response:{status:"completed", usage:{}}}
+rx  response.persisted       {status:"ok"}
+rx  conversation.title.updated {title:"Ping Response"}
+rx  response.chunk           {chunk:{follow_up_suggestions:{…tool_overrides:{image_gen:false}}}}
+tx/rx ping / pong            every ~3s
+```
+
+Two things fall out: mode `"auto"` resolves to **`steer_model_id:"grok-4"` with
+`effort:"LOW"`** (visible in-stream), and a real **`tool_overrides`** concept exists —
+`{"image_gen":false}` — appearing on follow-up suggestions.
+
+## 8. Driving the composer — what actually works
+
+The composer is a **Tiptap/ProseMirror** editor (`enableTiptapEditorForQueryBar:true` in
+user-settings). Three approaches fail and one works:
+
+| approach | result |
+|---|---|
+| `querySelector('textarea,[contenteditable]')` | **trap** — matches a hidden dummy `<textarea>` first in document order; you type into nothing |
+| `Input.insertText` (CDP) | text never reaches ProseMirror state |
+| per-character `Input.dispatchKeyEvent` | same |
+| coordinate click on the Submit button | misses — Submit sits at x=986 while the composer ends at x=856 |
+| **`el.focus()` + `document.execCommand('insertText',…)` then `button.click()` in JS** | **works** |
+
+Target `.ProseMirror` explicitly, and invoke the submit button via JS `.click()` rather
+than synthetic mouse coordinates.
+
+## 9. Workspace / team scoping is a QUERY PARAM, not a header
+
+```
+/rest/app-chat/conversations?pageSize=4&workspaceId=7844442f-…
+/rest/app-chat/conversations?pageSize=4&workspaceId=bd876760-…
+/rest/app-chat/conversations?pageSize=4&workspaceId=5742f8d0-…
+/rest/grok-for-teams/collections?teamId=56504cd4-…
+/rest/notifications/list?pageSize=50&teamId=56504cd4-…
+```
+
+Three workspaces under one team. For the SDK this is the useful form: workspace context is
+addressable per-request, no session state required.
+
+## 10. HARNESS BUG — the capture records no headers at all
+
+`scripts/capture/mitm-capture.py` declares a `KEEP_HEADERS` allowlist
+(`x-statsig-id`, `x-xai-request-id`, `content-type`, …) but the emitted records contain
+**zero** headers — `HEADERS KEPT: {}` across ~2,000 requests.
+
+Consequence: **no capture taken with this addon can show which endpoints carry
+`x-statsig-id`** — including the companion doc's claim about which calls are statsig-gated,
+which was necessarily inferred from other evidence. Fix the addon before relying on any
+header-level conclusion.
+
+## 11. Still NOT captured — honestly
+
+- **The personal workspace.** The account menu would not open under JS `.click()`, and the
+  banner's "Click here to switch" is a non-clickable `<p>`; clicking through it hit the
+  OneTrust cookie dialog instead. Business seat only. The `workspaceId` query param above
+  is probably the programmatic route in — untested.
+- File upload, Imagine generation, voice, project/automation creation.
+- The two non-grok.com WS subsystems (`imagine/listen`, `stream_audio`) — never opened
+  during this run, so still only known as URLs.
+- `/rest/rate-limits` returned `46/50` on all three reads and did **not** visibly decrement
+  after the WS send; all three may have come from one page-load batch. Whether WS chat
+  counts against that REST budget is **unresolved**.
+
 ## Reproducing
 
 `scripts/capture/mitm-capture.py` (unchanged) plus the two `systemd-run` commands above.
