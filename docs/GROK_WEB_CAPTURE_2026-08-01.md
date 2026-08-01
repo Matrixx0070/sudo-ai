@@ -238,3 +238,81 @@ The WS lane still requires a ~14 KB `castle_request_token` per `response.create`
 browser-bound oracle alongside statsig. So this remains a **capture/intel** win, not a migration
 target. Build the X trend source on the REST lane; use this capture rig when the wire protocol
 needs to be re-derived after a Grok-side change.
+
+---
+
+# ADDENDUM 2 — JS deobfuscation, and a CORRECTION to the castle-token conclusion
+
+Tools added at Frank's direction: **Wireshark 4.2.2** (+ `editcap`, `mergecap`; `tshark` was already
+present) and a JS reversing toolchain — **webcrack 2.16.0**, **restringer 2.2.0**,
+**js-beautify 2.0.3**, **prettier 3.9.6**.
+
+They immediately paid for themselves by **overturning a conclusion I had already written down**.
+
+## Method
+
+`curl` against grok.com returns **403** (Cloudflare), so the bundles were pulled from inside a real
+browser context via CDP — 112 JS responses, 92 bundles ≥20 KB saved. `castle_request_token` appears
+in exactly one: `2k4komllc5spp.js` (32 KB, minified into unreadability).
+
+`webcrack` unpacked it with **69 transform changes** (including `self-defending` and
+`debug-protection` removal), then `prettier` produced **2,140 readable lines**.
+
+## The correction
+
+**Previously (D-17) I wrote:** the WS lane requires a ~14 KB Castle token per `response.create`, so
+adopting it would mean a second browser-bound oracle alongside statsig, and was therefore not worth
+migrating to.
+
+**The deobfuscated source says otherwise:**
+
+```js
+let h = new Set(["response.create", "conversation.queue.add", "conversation.queue.interject"]);
+
+if (h.has(e.type) && getFeature(BOOLEAN_FLAGS.ENABLE_CASTLE_CHAT_MINTING)) {
+  return (r = t(), new Promise((e) => {
+      let t = setTimeout(() => e(undefined), 300);      // 300 ms budget
+      let n = (r) => { clearTimeout(t); e(r); };
+      r.then(n, () => n(undefined));                    // mint error -> undefined
+  })).then((t) =>
+    t === undefined
+      ? e                                               // <-- ships WITHOUT a token
+      : { ...e, castle_request_token: t });
+} else {
+  return e;                                             // <-- ships WITHOUT a token
+}
+```
+
+**The token is best-effort, not a gate.** The client itself ships the event with no token in three
+ordinary cases:
+1. the `ENABLE_CASTLE_CHAT_MINTING` feature flag is off;
+2. minting exceeds its **300 ms** budget;
+3. minting throws.
+
+Only three event types are ever eligible: `response.create`, `conversation.queue.add`,
+`conversation.queue.interject` — matching exactly what mitmproxy observed on the wire.
+
+**Consequence:** the castle token is a *risk signal*, comparable to a fraud score, not a
+statsig-style hard requirement. **The WS lane may well be usable without minting castle tokens at
+all** — which is the opposite of what D-17 concluded. This is UNVERIFIED against the server (it
+would need an actual token-less `response.create`), so it is a corrected hypothesis, not a proven
+capability. But the "needs a second oracle" objection is no longer supported by evidence.
+
+Related flags: `ENABLE_CASTLE_INTEGRATION` (auth minting) and `ENABLE_CASTLE_CHAT_MINTING` (chat
+minting) are independent; `CASTLE_PK` comes from the runtime environment config.
+
+## Why this matters beyond Grok
+
+The general lesson repeats the Reddit one from PASS 2: **reading a capture told me the token was
+always present; reading the source told me why it sometimes is not.** Wire capture shows what
+happened once; source shows what *can* happen. Both were needed, and the cheaper tool (grep over a
+minified bundle) would have found nothing without the deobfuscator.
+
+## Tooling verdict
+
+| Tool | Verdict |
+|---|---|
+| `webcrack` | **Earned its place.** Unpacked + de-self-defended the bundle that carried the answer. |
+| `prettier` / `js-beautify` | Essential companions — webcrack's output still needs formatting to read. |
+| `restringer` | Installed, not yet needed; keep for string-array/obfuscator.io style targets. |
+| Wireshark / tshark | Installed. **Not needed for this job** — mitmproxy already yields plaintext at the app layer. Its real use is traffic that does *not* traverse a proxy (QUIC, non-proxy-aware clients) or confirming nothing leaks off-proxy. Honest note: it has not yet been the tool that solved anything here. |
