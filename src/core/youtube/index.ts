@@ -9,3 +9,11 @@ export type { YouTubeComment, CommentStats } from './comment-types.js';
 
 export { ThumbnailABTester } from './thumbnail-ab.js';
 export type { ABTest, ThumbnailVariant } from './thumbnail-ab-schema.js';
+
+export {
+  getYouTubeAccessToken,
+  hasYouTubeCredential,
+  readAuthConfigFromEnv,
+  YouTubeAuthError,
+} from './auth.js';
+export type { TokenResult, YouTubeAuthConfig } from './auth.js';

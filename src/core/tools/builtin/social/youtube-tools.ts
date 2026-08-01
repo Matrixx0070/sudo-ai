@@ -7,8 +7,31 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { missingKey } from './helpers.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import { getYouTubeAccessToken, hasYouTubeCredential } from '../../../youtube/auth.js';
 
 const logger = createLogger('social-youtube');
+
+/**
+ * Resolve a usable access token, refreshing it if needed (GAP-01).
+ *
+ * Returns a ToolResult on failure so callers keep the existing "missing key"
+ * contract instead of throwing out of the tool boundary.
+ */
+async function resolveToken(
+  toolName: string,
+): Promise<{ token: string } | { error: ToolResult }> {
+  if (!hasYouTubeCredential()) {
+    return { error: missingKey('YOUTUBE_OAUTH_REFRESH_TOKEN (or legacy YOUTUBE_OAUTH_TOKEN)', toolName) };
+  }
+  try {
+    const { accessToken } = await getYouTubeAccessToken();
+    return { token: accessToken };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ tool: toolName, err: msg }, 'YouTube auth failed');
+    return { error: { success: false, output: `YouTube auth failed: ${msg}` } };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // social.youtube-upload
@@ -42,8 +65,9 @@ export const youtubeUploadTool: ToolDefinition = {
     if (!videoPath?.trim()) return { success: false, output: 'videoPath is required.' };
     if (!title?.trim()) return { success: false, output: 'title is required.' };
 
-    const oauthToken = process.env['YOUTUBE_OAUTH_TOKEN'];
-    if (!oauthToken) return missingKey('YOUTUBE_OAUTH_TOKEN', 'social.youtube-upload');
+    const auth = await resolveToken('social.youtube-upload');
+    if ('error' in auth) return auth.error;
+    const oauthToken = auth.token;
 
     logger.info({ session: ctx.sessionId, videoPath, title, privacyStatus }, 'social.youtube-upload invoked');
 
@@ -141,8 +165,9 @@ export const youtubeAnalyticsTool: ToolDefinition = {
     const report = params['report'] as string;
     const maxResults = (params['maxResults'] as number | undefined) ?? 10;
 
-    const oauthToken = process.env['YOUTUBE_OAUTH_TOKEN'];
-    if (!oauthToken) return missingKey('YOUTUBE_OAUTH_TOKEN', 'social.youtube-analytics');
+    const auth = await resolveToken('social.youtube-analytics');
+    if ('error' in auth) return auth.error;
+    const oauthToken = auth.token;
 
     const today = new Date();
     const defaultStart = new Date(today.getTime() - 28 * 86400 * 1000).toISOString().slice(0, 10);

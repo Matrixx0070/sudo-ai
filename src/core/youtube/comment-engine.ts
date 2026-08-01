@@ -22,6 +22,7 @@ import { createLogger } from '../shared/logger.js';
 import type { YouTubeComment, CommentStats } from './comment-types.js';
 import { analyzeSentiment, generateReplySuggestions, rowToComment } from './comment-helpers.js';
 import { fetchCommentThreads, fetchRecentVideoIds, postCommentReply } from './comment-api.js';
+import { getYouTubeAccessToken, hasYouTubeCredential } from './auth.js';
 
 export type { YouTubeComment, CommentStats } from './comment-types.js';
 
@@ -195,13 +196,22 @@ export class CommentEngine {
     if (!commentId?.trim()) return { success: false, message: 'commentId is required' };
     if (!text?.trim()) return { success: false, message: 'reply text is required' };
 
-    const oauthToken = process.env['YOUTUBE_OAUTH_TOKEN'];
-    if (!oauthToken) {
-      logger.warn({ commentId }, 'No YOUTUBE_OAUTH_TOKEN — reply stubbed (logged only)');
+    // GAP-01: resolve through the refreshing provider, not a static env token.
+    if (!hasYouTubeCredential()) {
+      logger.warn({ commentId }, 'No YouTube credential — reply stubbed (logged only)');
       return {
         success: false,
-        message: `[STUB] Would reply to comment ${commentId}: "${text.slice(0, 100)}". Set YOUTUBE_OAUTH_TOKEN to enable real replies.`,
+        message: `[STUB] Would reply to comment ${commentId}: "${text.slice(0, 100)}". Set YOUTUBE_OAUTH_CLIENT_ID/_SECRET/_REFRESH_TOKEN to enable real replies.`,
       };
+    }
+
+    let oauthToken: string;
+    try {
+      ({ accessToken: oauthToken } = await getYouTubeAccessToken());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ commentId, err: msg }, 'YouTube auth failed — reply not sent');
+      return { success: false, message: `YouTube auth failed: ${msg}` };
     }
 
     const result = await postCommentReply(commentId, text, this.apiKey, oauthToken);
