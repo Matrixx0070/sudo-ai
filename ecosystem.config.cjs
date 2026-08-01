@@ -134,6 +134,62 @@ module.exports = {
         // (untrusted turns fail closed until built — better than failing forever).
         SUDO_SANDBOX_AUTOBUILD: '1',
 
+        // Write-time near-dup admission control for dream facts (PR #1024):
+        // a >=0.95-cosine active twin suppresses the insert and bumps the
+        // twin's applied_count instead. Local embeds only, $0, fail-open.
+        // Activated 2026-07-31 — measured 41% twin rate before the gate.
+        SUDO_MEMORY_NEAR_DUP: '1',
+
+        // ADR-0007 Phase 3 (PR #1043/#1046): nightly eval-sandbox scenario
+        // sweep inside the existing SUDO_BENCH_NIGHTLY_MAX_USD $2 cap
+        // ($0.50 floor, baseline gate evals/sandbox/baseline.json).
+        // Activated 2026-07-31 — first fire 2026-08-01 04:00Z; verify bench.db
+        // rows agentId='eval-sandbox' + nightly report after that.
+        SUDO_EVAL_NIGHTLY: '1',
+
+        // ADR-0006 (PR #1035; Frank GO 2026-07-31): timer-driven KAIROS→
+        // arsenal repair loop demoted to demand-driven. The tick still
+        // observes; the ~80k-token analysis runs only on owner command or
+        // the weekly digest cron (Sun 05:00Z → kairos/digest-<date> branch,
+        // budget = SUDO_KAIROS_REPAIR_MAX_PER_DAY).
+        SUDO_KAIROS_REPAIR_DEMAND_ONLY: '1',
+        SUDO_KAIROS_WEEKLY_DIGEST: '1',
+
+        // Nightly AgentBench (PR #1029; Frank delegated 2026-07-31): 04:00 UTC
+        // sweep of ALL_AGENT_TASKS with invariant-10 budgets ($2/run cap,
+        // 10-task cap, alert below 70% pass). bench.db had sat empty forever.
+        SUDO_BENCH_NIGHTLY: '1',
+
+        // Seat fast mode OFF (Frank 2026-07-31): Anthropic now meters it
+        // ("Usage credits are required for fast mode") — disable outright
+        // rather than paying a 429+retry probe per model each TTL window.
+        // Re-enable by removing this line after buying fast-mode credits.
+        SUDO_FAST_MODE: '0',
+
+        // ADR-0004 self-heal engine (PR #1031; Frank activated 2026-07-31):
+        // watchdog fixes now disclose — category allowlist defaults to the
+        // three legacy fixes (log-rotation/disk-gc/memory-gc), 20 heals/day
+        // cap, ledger data/selfheal-log.jsonl, owner ping per heal.
+        SUDO_SELF_HEAL: '1',
+
+        // ---- Daily USD spend cap (invariant #10) — ACTIVATED 2026-07-31 ----
+        // The budget machinery in src/llm/policy.ts was fully built but DORMANT:
+        // neither var was ever set, so NO dollar ceiling existed on any metered
+        // provider. console.x.ai shows $161.27 invoiced over 30d on the Grok
+        // Business team with nothing to stop it.
+        //
+        // $5/day is ~23x the current run-rate (last 7d measured $0.22 total), so
+        // it will not touch normal operation — it only turns a runaway loop from
+        // a $161 month into a $5 day. Seat routes (claude-oauth, ollama) price $0
+        // and are unaffected; this binds the metered lanes (xai, openai,
+        // anthropic API key). Over budget: USER calls degrade, BACKGROUND calls
+        // fail closed, and the exhaustion alert fires to owner + Telemetry.
+        SUDO_LLM_GLOBAL_BUDGET_USD: '5',
+        // Per-caller ceilings for the callers that historically drove metered
+        // grok spend, so one runaway subsystem can't eat the whole global budget
+        // and starve everything else.
+        SUDO_LLM_BUDGETS: '{"memory-consensus-batch":1.0,"custom.codex":1.0}',
+
         // ---- GitHub connector tools (opt-in) ----
         // Enables the github.* agent tools (commit / push / open_pr / merge_pr /
         // pr_status) — see src/core/tools/builtin/github/. They wrap local git +
@@ -196,7 +252,23 @@ module.exports = {
         // WEB_BRAIN routes grok-web/* in transport.callIR; STATSIG_BROWSERLESS mints
         // the anti-bot token PURE-NODE (curl seed -> mintStatsigFromSeed, no browser).
         SUDO_GROK_WEB_BRAIN: process.env['SUDO_GROK_WEB_BRAIN'] || '1',
-        SUDO_GROK_STATSIG_BROWSERLESS: process.env['SUDO_GROK_STATSIG_BROWSERLESS'] || '1',
+        // 2026-08-01: DEFAULT FLIPPED TO '0'. grok changed the statsig algorithm —
+        // the pure-Node minter still MINTS but grok's anti-bot rejects the token
+        // (drift canary: pureNodeGate=403, oracleGate=200). Because minting does
+        // not *fail*, the browserless->oracle fallback never fires and the chat
+        // token pool just hands out another poisoned token ("rejected even after
+        // fresh mints"). This broke every statsig-gated capability in prod:
+        // app-chat text, video generation, RAG. Voice/TTS/STT are statsig-free
+        // and were unaffected. Restore '1' only after the scope-walk recovery
+        // re-derives the algorithm (docs/STATSIG_RERE_2026-07-25.md) AND the
+        // drift canary reports OK.
+        SUDO_GROK_STATSIG_BROWSERLESS: process.env['SUDO_GROK_STATSIG_BROWSERLESS'] || '0',
+        // The oracle mints in a HEADED browser. It cannot launch its own here
+        // (fails in 0.4s, no browser spawned), so it must attach to the warm
+        // browser over CDP — pm2 process `grok-warm-browser` (:10, profile
+        // /root/grok-warm-profile, NO automation flags so cf_clearance survives).
+        SUDO_GROK_ORACLE_CDP_URL:
+          process.env['SUDO_GROK_ORACLE_CDP_URL'] || 'http://127.0.0.1:9223',
         SUDO_XAI_OAUTH_SUBSCRIPTION: process.env['SUDO_XAI_OAUTH_SUBSCRIPTION'] || '1',
 
         // grok-web-mcp (ADR 0001) — FREE grok brain with NATIVE tool-calling.
@@ -284,9 +356,12 @@ module.exports = {
         // Semantic memory compaction (gap #8): at the end of each auto-dream cycle,
         // collapse same-source near-duplicate chunks (cosine >= 0.92) into one canonical
         // row — DELETES the younger duplicate and sums applied_count. Wired in PR #337;
-        // enabled on prod here 2026-06-20. Evergreen-protected, same-source-only, capped
-        // 500/run, fail-open. Requires OPENAI_API_KEY (no-op without; key lives in config/.env).
-        SUDO_SEMANTIC_COMPACT: '1',
+        // enabled on prod 2026-06-20. RETIRED 2026-07-31 (Frank delegated, Fable decision):
+        // auto-delete predates and violates invariant 9 (two-reader consensus for memory
+        // surgery); the #1024 write-time near-dup gate (SUDO_MEMORY_NEAR_DUP, live-proven)
+        // now prevents new dups without deleting anything. Historical twin cleanup goes
+        // through the consensus batch instead.
+        SUDO_SEMANTIC_COMPACT: '0',
 
         // Native tool correction (gap #7): when an MCP tool call fails, auto-correct to
         // the SUDO-AI native equivalent and re-dispatch (e.g. shell_execute -> system.exec,
