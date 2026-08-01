@@ -366,3 +366,33 @@ such: they exist to bound a runaway loop, where being 30% wrong still stops the 
 know the real figure pass `costUsd`.
 
 12 tests. Full suite 12,875 pass, same 6 pre-existing failures. **Phase A is now complete.**
+
+## D-22 | GAP-08 CLOSED — the search.list quota bomb, and a second call site the guard found
+`feedback/youtube-api.ts:75` paginated `search.list` at **100 quota units a page**, up to 200 ids —
+**400 units per invocation, 4% of the entire daily allowance**, on the default path of
+`youtube-analytics.ts:129`. It could starve the upload lane and surface only as a 403 hours later.
+
+Replaced with a two-tier ladder:
+1. **Channel RSS** (`youtube.com/feeds/videos.xml?channel_id=…`) — **0 units**, no API key,
+   ~15 most-recent videos, which satisfies most callers outright.
+2. **`playlistItems.list`** on the uploads playlist (channel id `UC…` → `UU…`) — **1 unit per 50**,
+   only when more depth is genuinely needed.
+
+Worst case **4 units where it was 400 — a 100× reduction**; typical case 0.
+
+**The grep guard paid for itself immediately.** Roadmap gate 9 requires "`search.list` is not
+called, verified by grep in CI", so I wrote `tests/youtube/no-search-list.test.ts` to scan all of
+`src/`. It failed on first run against a **second call site I had not found by reading**:
+`comment-api.ts:144 fetchRecentVideoIds`. Since `CommentEngine.fetchAllRecent()` calls it and then
+fetches comments per video, every comment sweep opened with 100 units before doing any useful work.
+Fixed the same way. The dead `YTSearchResponse`/`YTSearchItem` types were deleted with it so nothing
+can quietly reintroduce the call.
+
+`quota-ledger.ts` is the one allowlisted mention — it defines the cost and denies the method by
+default, so it must name it.
+
+Also fixed a bug I introduced while writing this: the log line compared `ids === rss.slice(...)`,
+an array identity check that is always false, so the `source` field would have always read
+`playlistItems`. Replaced with a tracked flag.
+
+3 guard tests. Full suite 12,878 pass, same 6 pre-existing failures.

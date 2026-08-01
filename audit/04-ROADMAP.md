@@ -161,3 +161,27 @@ precedes it, and behaviourally that block/hold/thin-script never reach the uploa
 mints a management key**. The generic `cost-tracker.checkBudget()` still has zero callers and still
 covers the video-generation APIs (Luma/Runway/Kling/TTS), which is where the real money risk is.
 That is the single highest-priority unstarted item.
+
+
+---
+
+## AMENDMENT 3 — 2026-08-01T23:10Z — Phase A complete, B-phase started
+
+**Phase A is done.** A1 GAP-01 · A2 GAP-02 · A3 GAP-04a · A4 GAP-03 (completed properly in
+Amendment 2) · A5 GAP-15 · **A6/B6 enforced spend caps — CLOSED**.
+
+B6 turned out to be two defects, not one: `checkBudget()` had zero callers *and* the paid media
+tools recorded nothing, so the cap would have been enforced against a number that was structurally
+always zero. `src/core/billing/media-spend.ts` records and enforces; gate 8 is satisfied by a test
+that drives a 100-iteration retry storm and asserts it halts after 5 calls.
+
+**B2 / GAP-08 — CLOSED.** `search.list` (100 units/page, up to 400 per call) replaced by channel RSS
+(0 units) → `playlistItems.list` (1 unit/50). **Gate 9 now passes** via a CI grep test, which
+immediately found a second call site in `comment-api.ts` that reading had missed.
+
+**Production-readiness gates now passing: 3, 4, 6, 7, 8, 9, 16.**
+Remaining open: 1, 2 (need a real refresh token), 5 (AI disclosure), 10, 11 (checkpointing/resume),
+12 (dashboard), 13 (YPP readiness = B3), 14, 15 (need real operation).
+
+**Next up:** B1 GAP-05 `videos.update` (metadata is write-once, so titles can never be revised —
+the cheapest experimentation actuator at 50 units) and B3 GAP-06 YPP readiness.

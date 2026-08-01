@@ -44,15 +44,6 @@ interface YTCommentThreadResponse {
   nextPageToken?: string;
 }
 
-interface YTSearchItem {
-  id?: { videoId?: string };
-}
-
-interface YTSearchResponse {
-  items?: YTSearchItem[];
-  nextPageToken?: string;
-}
-
 // ---------------------------------------------------------------------------
 // Generic HTTP helper
 // ---------------------------------------------------------------------------
@@ -133,23 +124,38 @@ export async function fetchCommentThreads(
 }
 
 /**
- * Fetch the most recent video IDs for a channel using the YouTube search endpoint.
+ * Fetch the most recent video IDs for a channel.
+ *
+ * GAP-08: this used `search.list` at **100 quota units a call**. Since
+ * `CommentEngine.fetchAllRecent()` calls it and then fetches comments per video,
+ * a single comment sweep opened with 100 units before doing any useful work.
+ *
+ * Now the zero-quota RSS feed first, falling back to `playlistItems.list`
+ * (1 unit per 50) only when the caller wants more than the ~15 videos RSS
+ * returns. Typical cost drops from 100 units to **0**.
  */
 export async function fetchRecentVideoIds(
   channelId: string,
   apiKey: string,
   videoCount: number,
 ): Promise<string[]> {
-  const url =
-    `${YT_DATA_BASE}/search?part=id&channelId=${encodeURIComponent(channelId)}` +
-    `&type=video&order=date&maxResults=${videoCount}&key=${apiKey}`;
+  const { listChannelVideoIdsViaRss, listChannelVideoIdsViaPlaylist } = await import(
+    '../feedback/youtube-api.js'
+  );
 
-  const data = await ytFetch<YTSearchResponse>(url, 'search.list');
-  const ids = (data.items ?? [])
-    .map(item => item.id?.videoId)
-    .filter((id): id is string => Boolean(id));
+  const rss = await listChannelVideoIdsViaRss(channelId);
+  let ids = rss.slice(0, videoCount);
+  let source: 'rss' | 'playlistItems' = 'rss';
 
-  logger.info({ channelId, count: ids.length }, 'Recent video IDs fetched');
+  if (ids.length < videoCount && apiKey) {
+    const viaApi = await listChannelVideoIdsViaPlaylist(channelId, apiKey, videoCount);
+    if (viaApi.length > ids.length) {
+      ids = viaApi;
+      source = 'playlistItems';
+    }
+  }
+
+  logger.info({ channelId, count: ids.length, source }, 'Recent video IDs fetched');
   return ids;
 }
 

@@ -28,8 +28,13 @@ interface YTVideosResponse {
   items?: YTVideoItem[];
 }
 
-interface YTSearchResponse {
-  items?: Array<{ id?: { videoId?: string } }>;
+/**
+ * `playlistItems.list` response. Replaced the old `YTSearchResponse`: the
+ * `search.list` path it belonged to is gone (GAP-08), and the type went with it
+ * so nothing can quietly reintroduce a 100-unit call.
+ */
+interface YTPlaylistItemsResponse {
+  items?: Array<{ contentDetails?: { videoId?: string } }>;
   nextPageToken?: string;
 }
 
@@ -66,20 +71,86 @@ async function fetchJson<T>(url: string, label: string, headers?: Record<string,
 // Public API functions
 // ---------------------------------------------------------------------------
 
-/** Fetch all video IDs for a channel (up to 200). */
-export async function listChannelVideoIds(channelId: string, apiKey: string): Promise<string[]> {
+/**
+ * Every channel's uploads live in an auto-generated playlist whose id is the
+ * channel id with the `UC` prefix swapped for `UU`. Listing that playlist costs
+ * **1 quota unit per 50 videos**; the `search.list` it replaces cost **100 units
+ * per 50**.
+ */
+export function uploadsPlaylistId(channelId: string): string {
+  return channelId.startsWith('UC') ? `UU${channelId.slice(2)}` : channelId;
+}
+
+/**
+ * Channel uploads via the public RSS feed — **zero quota units**, no API key.
+ *
+ * Capped by YouTube at ~15 most-recent videos, which covers the common
+ * "what has this channel published lately" case entirely for free.
+ */
+export async function listChannelVideoIdsViaRss(channelId: string): Promise<string[]> {
+  const url = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(channelId)}`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) {
+      logger.warn({ status: res.status, channelId }, 'Channel RSS feed returned non-OK');
+      return [];
+    }
+    const xml = await res.text();
+    return [...xml.matchAll(/<yt:videoId>([\w-]+)<\/yt:videoId>/g)].map((m) => m[1]!);
+  } catch (err) {
+    logger.warn({ err: String(err), channelId }, 'Channel RSS feed fetch failed');
+    return [];
+  }
+}
+
+/** Channel uploads via `playlistItems.list` — 1 quota unit per page of 50. */
+export async function listChannelVideoIdsViaPlaylist(
+  channelId: string,
+  apiKey: string,
+  max = 200,
+): Promise<string[]> {
+  const playlistId = uploadsPlaylistId(channelId);
   const ids: string[] = [];
   let pageToken = '';
   do {
     const pt = pageToken ? `&pageToken=${pageToken}` : '';
-    const url = `${YT_DATA_BASE}/search?part=id&channelId=${channelId}&type=video&maxResults=50&order=date${pt}&key=${apiKey}`;
-    const data = await fetchJson<YTSearchResponse>(url, 'search.list');
+    const url = `${YT_DATA_BASE}/playlistItems?part=contentDetails&playlistId=${playlistId}` +
+      `&maxResults=50${pt}&key=${apiKey}`;
+    const data = await fetchJson<YTPlaylistItemsResponse>(url, 'playlistItems.list');
     for (const item of data.items ?? []) {
-      if (item.id?.videoId) ids.push(item.id.videoId);
+      const id = item.contentDetails?.videoId;
+      if (id) ids.push(id);
     }
     pageToken = data.nextPageToken ?? '';
-  } while (pageToken && ids.length < 200);
-  return ids;
+  } while (pageToken && ids.length < max);
+  return ids.slice(0, max);
+}
+
+/**
+ * Fetch video IDs for a channel. **Never calls `search.list`** (GAP-08).
+ *
+ * This function previously paginated `search.list` at **100 quota units a page**
+ * — up to 400 units for 200 ids, i.e. 4% of the entire 10,000/day allowance per
+ * invocation, on the default path. It could silently starve the upload lane and
+ * surface only as a 403 hours later.
+ *
+ * Now: the zero-quota RSS feed first, which satisfies most callers outright, and
+ * `playlistItems.list` (1 unit/50) only when more depth is genuinely needed.
+ * Worst case is **4 units where it used to be 400 — a 100× reduction.**
+ */
+export async function listChannelVideoIds(
+  channelId: string,
+  apiKey: string,
+  max = 200,
+): Promise<string[]> {
+  const rss = await listChannelVideoIdsViaRss(channelId);
+  if (rss.length >= max) return rss.slice(0, max);
+
+  const viaApi = await listChannelVideoIdsViaPlaylist(channelId, apiKey, max);
+  if (viaApi.length > 0) return viaApi;
+
+  // playlistItems failed (bad key, private channel) — the free result still beats nothing.
+  return rss;
 }
 
 /** Fetch basic stats for a batch of video IDs (max 50 per call). */
