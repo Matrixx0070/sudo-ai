@@ -251,38 +251,30 @@ export class ThumbnailABTester {
     return rowToTest(row, variantRows.map(rowToVariant));
   }
 
+  /**
+   * Attempt to record real per-variant CTR.
+   *
+   * GAP-04a. This used to write a hardcoded `measured_ctr = 0.04` for every
+   * variant and `impressions = viewCount`, then log "CTR stub stored". Both
+   * numbers were inventions: the public `videos?part=statistics` endpoint
+   * exposes neither impressions nor CTR, and views are not impressions. The
+   * values landed in the same columns real measurements would occupy, so
+   * nothing downstream could tell them apart — a system that reports fabricated
+   * experiment results is worse than one with no experiments, because the
+   * fabrications get believed.
+   *
+   * It now records nothing it cannot measure. `measured_ctr` stays NULL, and
+   * selectWinner() correctly declines to pick a winner from no data.
+   *
+   * Real per-variant CTR needs the Analytics API (`impressions`,
+   * `impressionClickThroughRate`) plus a thumbnail deploy via `thumbnails.set`
+   * — neither exists yet. That is GAP-04b; see audit/03-GAPS.md.
+   */
   private async _fetchAndStoreCtr(test: ABTest): Promise<void> {
-    const apiKey = process.env['YOUTUBE_API_KEY'];
-    if (!apiKey) {
-      log.warn({ testId: test.id }, 'YOUTUBE_API_KEY not set — skipping live CTR fetch');
-      return;
-    }
-
-    for (const variant of test.variants) {
-      try {
-        const url = `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${encodeURIComponent(test.videoId)}&key=${encodeURIComponent(apiKey)}`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-        if (!resp.ok) {
-          log.warn({ status: resp.status }, 'YouTube API returned non-OK status');
-          continue;
-        }
-        const json = await resp.json() as { items?: Array<{ statistics?: { viewCount?: string } }> };
-        const stats = json.items?.[0]?.statistics;
-        if (!stats) continue;
-
-        // YouTube public stats don't expose CTR; approximate from view count
-        // Real CTR requires OAuth. Store views as impressions proxy.
-        const views = parseInt(stats.viewCount ?? '0', 10);
-        const stmt = this.db.prepare<[number, number, string]>(
-          `UPDATE ab_variants SET impressions = ?, measured_ctr = ? WHERE id = ?`,
-        );
-        // Stub CTR = 0.04 (industry avg) unless we have OAuth data
-        stmt.run(views, 0.04, variant.id);
-        log.info({ variantId: variant.id, views }, 'CTR stub stored (OAuth required for real CTR)');
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error({ variantId: variant.id, err: msg }, 'Failed to fetch CTR for variant');
-      }
-    }
+    log.warn(
+      { testId: test.id, videoId: test.videoId, variants: test.variants.length },
+      'Per-variant CTR is not measurable yet (needs Analytics API impressions + thumbnails.set — ' +
+        'GAP-04b). Recording no measurement rather than a fabricated one.',
+    );
   }
 }
