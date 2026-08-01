@@ -177,6 +177,42 @@ describe('runNightlyBench eval-sandbox sweep', () => {
     expect(s.evalReport).toContain('s-alpha: ok');
   });
 
+  it('REGRESSION #1: agent tasks exhausting their cap must NOT starve the sweep', async () => {
+    // Live 2026-08-01: agent bench spent $2.22 of its own $2 cap, and the sweep
+    // (then sharing that cap) skipped ALL scenarios — evalScenariosRun 0 every
+    // night. The sweep now has its own budget and must run regardless.
+    process.env['SUDO_EVAL_NIGHTLY'] = '1';
+    process.env['SUDO_BENCH_NIGHTLY_MAX_USD'] = '2';
+    const { store } = fakeStore();
+    const s = await runNightlyBench({
+      runner: fakeRunner({ passed: true, costUsd: 2.5 }), // blows the shared cap
+      benchStore: store,
+      evalSandbox: sweepDeps(async (sc) => fakeEvalReport(sc, 1)),
+    });
+    expect(s.budgetHalted).toBe(true);      // agent phase halted, as designed
+    expect(s.evalScenariosRun).toBe(2);      // ...but the sweep still ran
+    expect(s.evalScenariosSkipped).toBe(0);
+  });
+
+  it('sweep halts on its OWN budget and names what it skipped (no silent cap)', async () => {
+    process.env['SUDO_EVAL_NIGHTLY'] = '1';
+    const prev = process.env['SUDO_EVAL_NIGHTLY_MAX_USD'];
+    process.env['SUDO_EVAL_NIGHTLY_MAX_USD'] = '0.6'; // floor is 0.5
+    try {
+      const { store } = fakeStore();
+      const s = await runNightlyBench({
+        runner: fakeRunner({ passed: true, costUsd: 0 }), benchStore: store,
+        evalSandbox: sweepDeps(async (sc) => fakeEvalReport(sc, 1, 0.4)),
+      });
+      expect(s.evalScenariosRun).toBe(1);     // first runs ($0.40 spent)
+      expect(s.evalScenariosSkipped).toBe(1); // remaining $0.20 < $0.50 floor
+      expect(s.evalReport).toContain('not run (budget/flag)');
+    } finally {
+      if (prev === undefined) delete process.env['SUDO_EVAL_NIGHTLY_MAX_USD'];
+      else process.env['SUDO_EVAL_NIGHTLY_MAX_USD'] = prev;
+    }
+  });
+
   it('flags a regression when a scenario scores below its baseline minScore', async () => {
     process.env['SUDO_EVAL_NIGHTLY'] = '1';
     const { store } = fakeStore();
@@ -193,23 +229,23 @@ describe('runNightlyBench eval-sandbox sweep', () => {
     );
   });
 
-  it('respects the $0.50 budget floor: stops starting scenarios when remaining budget is low', async () => {
+  it('agent-task spend no longer suppresses the sweep (this test previously PINNED the bug)', async () => {
+    // Before the own-budget fix this asserted `run` was NEVER called when the
+    // agent tasks burned the shared cap — i.e. the suite encoded the starvation
+    // as correct, which is why it stayed green while the sweep never ran in
+    // production. The expectation is now inverted.
     process.env['SUDO_EVAL_NIGHTLY'] = '1';
     process.env['SUDO_BENCH_NIGHTLY_MAX_USD'] = '2';
     process.env['SUDO_BENCH_NIGHTLY_MAX_TASKS'] = '2';
     const { store } = fakeStore();
     const run = vi.fn(async (sc: Scenario) => fakeEvalReport(sc, 1));
-    // Agent tasks burn 1.6 of the $2 cap → remaining 0.4 < 0.5 floor.
     const s = await runNightlyBench({
       runner: fakeRunner({ passed: true, costUsd: 0.8 }), benchStore: store,
       evalSandbox: sweepDeps(run),
     });
-    expect(run).not.toHaveBeenCalled();
-    expect(s.evalScenariosRun).toBe(0);
-    expect(s.evalScenariosSkipped).toBe(2);
-    expect(s.budgetHalted).toBe(true);
-    // Skipped scenarios are reported, not regressed.
+    expect(run).toHaveBeenCalled();
+    expect(s.evalScenariosRun).toBe(2);
+    expect(s.evalScenariosSkipped).toBe(0);
     expect(s.evalRegressions).toEqual([]);
-    expect(s.evalReport).toContain('not run (budget/flag)');
   });
 });
