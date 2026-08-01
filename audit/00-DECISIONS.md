@@ -142,3 +142,53 @@ cheaper, more stable, and better-targeted than a global trending list. Logged as
 built — see 06-BUILD-REPORT next-actions.
 
 No dependency was added to the repo; the evaluation ran in /tmp and was cleaned up.
+
+## D-16 | Grok seat CAN do X search — live-proven, citations independently verified
+Frank's call. Probed the logged-in Grok web seat (app-chat lane) rather than theorising.
+
+**Finding 1 — no `toolOverrides` key is needed.** The UI's "X search" toggle does not map to a
+required payload field. Setting `disableSearch: false` on
+`/rest/app-chat/conversations/new` is sufficient; Grok auto-invokes X/web search when the query
+warrants it. The first variant tried (`toolOverrides: {}`) succeeded, so the other candidate keys
+(`xSearch`, `xPostAnalyze`, `xMediaSearch`) were never needed.
+
+**Finding 2 — the call natively invoked a tool, not narrated one.** The python bridge already
+records raw-frame markers for exactly this reason (`grok_web_replay.py`, `MARKER_KEYS`). Result:
+`toolMarkers: ["webSearchResults"]` — objective server-side proof. Response also carried
+`<grok:render card_type="citation_card">` inline citation cards.
+
+**Finding 3 — the citations are REAL, verified by an independent tool with a control.**
+Grok returned 5 structured `{handle, postUrl, topic}` records. I checked every post id with the
+guest-mode `@the-convocation/twitter-scraper` (a *different* lane), plus a deliberately fabricated
+id as a control:
+
+```
+REAL   stary_nick       author=@stary_nick     | "Bardzoo dobry pomysł ... AI o Powstaniu."
+REAL   oceanmindai      author=@oceanmindai    | "AI isn't just the future—it's revolutionizing..."
+REAL   SingleCharming   author=@SingleCharming | "AMAZON: REDEFINING COMMERCE, CLOUD ... AI"
+REAL   harari_yuval     author=@harari_yuval   | "The AI revolution has only just begun..."
+REAL   mfaisal_khatri   author=@mfaisal_khatri | "Free resources to learn AI: ..."
+ABSENT CONTROL-FAKE     (no tweet object returned)
+```
+5/5 resolved with matching authors and matching topics; the fabricated id did not resolve, so the
+test discriminates. **This is materially different from GAP-04a/GAP-15** — those invented data with
+no external referent; this returns externally verifiable artifacts.
+
+**Cost: $0.** Runs on the SuperGrok weekly pool seat already paid for. No scraping by us, no ToS
+exposure, and it removes the ~$7/month official-X-API argument entirely.
+
+**Caveats that must shape the design, not be waved away:**
+1. The *posts* are verifiable; Grok's **ranking claim ("5 most-discussed") is model judgment and is
+   NOT a measurement.** Store the post URLs and topics; never store the ordering as a metric.
+2. No engagement counts returned → cannot be scored numerically like HN/Reddit/YouTube items.
+3. ~2 minutes per call. A discovery source, never a hot-path one.
+4. Depends on the statsig oracle + `grok-warm-browser` pm2 process — the lane that drifted TODAY.
+   Already owned and monitored, but it is a real fragility.
+
+**Recommended design (NOT yet built — needs a call on the dependency):**
+Grok discovers → guest scraper verifies each cited post exists → only verified posts are admitted.
+That is two independent readers agreeing before admission, i.e. the `CLAUDE.md` invariant-9 pattern,
+and it is the only shape in which model-sourced trend data belongs in this system.
+Open question for Frank: admitting that design means adding a Twitter scraping library to
+production dependencies. I did not add it unilaterally — see D-15 for why I am cautious about that
+class of dependency.
