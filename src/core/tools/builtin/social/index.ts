@@ -6,6 +6,7 @@
  *   social.schedule-post      — Schedule posts with optimal timing
  *   social.youtube-upload     — Upload videos to YouTube with metadata
  *   social.youtube-analytics  — Pull YouTube channel analytics (Data API v3)
+ *   social.youtube-update-metadata — Revise title/description/tags post-publish (GAP-05)
  *   social.twitter-manager    — Tweet, reply, threads, DMs, schedule (API v2)
  *   social.trend-scanner      — Scan trending topics across platforms
  *
@@ -22,7 +23,7 @@ import { createLogger } from '../../../shared/logger.js';
 
 import { multiPostTool, schedulePostTool } from './platform-tools.js';
 import { twitterManagerTool, trendScannerTool } from './twitter-tools.js';
-import { youtubeUploadTool, youtubeAnalyticsTool } from './youtube-tools.js';
+import { youtubeUploadTool, youtubeAnalyticsTool, youtubeUpdateMetadataTool } from './youtube-tools.js';
 
 const logger = createLogger('social-builtin');
 
@@ -35,6 +36,7 @@ const SOCIAL_TOOLS: ToolDefinition[] = [
   schedulePostTool,
   youtubeUploadTool,
   youtubeAnalyticsTool,
+  youtubeUpdateMetadataTool,
   twitterManagerTool,
   trendScannerTool,
 ];

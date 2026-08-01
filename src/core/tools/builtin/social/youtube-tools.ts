@@ -281,3 +281,62 @@ export const youtubeAnalyticsTool: ToolDefinition = {
     }
   },
 };
+
+// ---------------------------------------------------------------------------
+// social.youtube-update-metadata
+// ---------------------------------------------------------------------------
+
+/**
+ * GAP-05. Metadata used to be write-once — set at upload and never changeable.
+ * At 50 quota units this is the cheapest experimentation actuator available:
+ * title A/B needs no Studio automation and no thumbnail deploy.
+ *
+ * The read-modify-write lives in `core/youtube/metadata.ts` precisely so no
+ * caller can construct a partial `videos.update` and blank the description.
+ */
+export const youtubeUpdateMetadataTool: ToolDefinition = {
+  name: 'social.youtube-update-metadata',
+  description:
+    'Revise a published video\'s title, description or tags via YouTube Data API videos.update. ' +
+    'Read-modify-write: fields you omit are PRESERVED, never blanked. Costs 51 quota units ' +
+    '(1 read + 50 write). Requires SUDO_YT_PUBLISH_ENABLED=1 — it edits a live channel.',
+  category: 'social',
+  timeout: 60_000,
+  requiresConfirmation: true,
+  parameters: {
+    videoId: { type: 'string', required: true, description: 'The video ID to update.' },
+    title: { type: 'string', description: 'New title (max 100 chars; rejected, not truncated).' },
+    description: { type: 'string', description: 'New description (max 5000 chars).' },
+    tags: { type: 'array', description: 'New tags (500 chars total).', items: { type: 'string', description: 'Tag.' } },
+  },
+
+  async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    const videoId = params['videoId'] as string | undefined;
+    if (!videoId?.trim()) return { success: false, output: 'videoId is required.' };
+
+    const patch: Record<string, unknown> = {};
+    if (typeof params['title'] === 'string') patch['title'] = params['title'];
+    if (typeof params['description'] === 'string') patch['description'] = params['description'];
+    if (Array.isArray(params['tags'])) patch['tags'] = params['tags'];
+    if (Object.keys(patch).length === 0) {
+      return { success: false, output: 'Nothing to update — supply at least one of title, description or tags.' };
+    }
+
+    logger.info({ session: ctx.sessionId, videoId, fields: Object.keys(patch) }, 'social.youtube-update-metadata invoked');
+
+    const { updateVideoMetadata } = await import('../../../youtube/metadata.js');
+    const out = await updateVideoMetadata(videoId, patch, undefined);
+
+    if (out.status === 'updated') {
+      return {
+        success: true,
+        output: `Updated ${videoId}. Title: "${out.before.title}" -> "${out.after.title}" (${out.quotaUnits} quota units).`,
+        data: { videoId, before: out.before, after: out.after, quotaUnits: out.quotaUnits },
+      };
+    }
+    if (out.status === 'unchanged') {
+      return { success: true, output: `No change for ${videoId}: ${out.reason}`, data: { videoId, unchanged: true } };
+    }
+    return { success: false, output: out.reason, data: { blockedBy: out.blockedBy } };
+  },
+};

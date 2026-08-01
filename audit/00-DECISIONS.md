@@ -396,3 +396,38 @@ an array identity check that is always false, so the `source` field would have a
 `playlistItems`. Replaced with a tracked flag.
 
 3 guard tests. Full suite 12,878 pass, same 6 pre-existing failures.
+
+## D-23 | GAP-05 CLOSED — videos.update, built around the footgun rather than exposing it
+Metadata was **write-once**: set at upload, never changeable, because no `videos.update` existed
+anywhere in the repo. Title iteration is among the highest-leverage YouTube optimisations and it was
+structurally unavailable. At 50 units it is also the cheapest experimentation actuator we have —
+title A/B needs no Studio automation and no thumbnail deploy.
+
+**The whole module is shaped by one hazard.** `videos.update` is a **full replace, not a patch**:
+sending `{snippet:{title}}` does not update the title, it replaces the snippet and **blanks the
+description, tags and categoryId**. Run over a channel, that destroys every description you have.
+`categoryId` compounds it — the API *requires* it on update, so omitting it fails outright.
+
+So `src/core/youtube/metadata.ts` never lets a caller build the request. It always
+read-modify-writes: `videos.list` (1 unit) → `mergeSnippet()` → `videos.update` (50 units) = 51
+total. **There is no exported path that skips the read**, and the test asserts the PUT body carries
+the full merged snippet including fields the caller never mentioned.
+
+Design decisions worth recording:
+- **Reject, never truncate.** A >100-char title errors with "this is not truncated for you". The
+  existing upload tool still does `title.slice(0,100)` — silent mangling — which is now the
+  inconsistent one; noted for a follow-up rather than changed under this commit.
+- **No-op detection**: a patch matching current metadata skips the 50-unit write and returns
+  `unchanged` after spending only the 1-unit read.
+- **Read failure ⇒ no write.** Never guess the current snippet.
+- **Validation before network** — an invalid patch costs zero quota and zero requests.
+- Clearing a description is still possible, but only by passing `description: ''` explicitly.
+  Deliberate, not accidental.
+- Gated by `SUDO_YT_PUBLISH_ENABLED` (default OFF) — one flag for "may touch the real channel",
+  rather than a second switch to forget.
+
+**Registered as a tool**, `social.youtube-update-metadata`, not left as a library. Three times today
+the defect has been "built but nothing calls it" (policy gate, checkBudget, and the media recorder);
+shipping a fourth would have been indefensible. Registration verified programmatically, not assumed.
+
+19 tests. Full suite 12,897 pass, same 6 pre-existing failures.
