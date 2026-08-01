@@ -101,6 +101,7 @@ import {
   type LiveStream,
 } from './transport-stream.js';
 import { getIRInterceptor } from './ir-interceptor.js';
+import { assertXaiSpendAllowed } from './xai-billing.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('llm-transport');
@@ -803,6 +804,30 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
       latencyMs: Date.now() - startedAt,
     });
     throw err;
+  }
+
+  // Measured money guard for the metered xAI lanes. `SUDO_XAI_TEXT_BLOCK` above is
+  // the blunt version (all-or-nothing); this is the metered one — it reads the
+  // authoritative amount owed from xAI's Management API and refuses once a cap is
+  // reached. Inactive unless XAI_MANAGEMENT_KEY + XAI_TEAM_ID are set, so it cannot
+  // break lanes that work today. Memoised for 120s, so no per-call round-trip.
+  // See src/llm/xai-billing.ts.
+  if (r.provider === 'xai' || r.provider === 'xai-oauth') {
+    try {
+      await assertXaiSpendAllowed();
+    } catch (err) {
+      recordCall({
+        traceId,
+        caller: ir.caller,
+        purpose: ir.purpose || 'callIR',
+        alias: ir.alias,
+        priority: ir.priority,
+        irRequest: ir,
+        errorClass: 'invalid_request',
+        latencyMs: Date.now() - startedAt,
+      });
+      throw invalidRequest(err instanceof Error ? err.message : 'xAI spend guard refused the call');
+    }
   }
 
   const record: LLMCallRecord = {

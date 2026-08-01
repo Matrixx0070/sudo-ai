@@ -261,3 +261,41 @@ are known. No credentials, balances or emails recorded.
 
 **Lesson, third instance today after Reddit and castle: check the vendor's documented API before
 reverse-engineering their UI.** Reverse engineering is the fallback, not the opening move.
+
+## D-19 | Money guard built on the DOCUMENTED Management API, not the console gRPC
+Frank asked me to decode console.x.ai's billing gRPC. I applied the lesson from D-18 first and
+checked for a documented API — **there is one**, so I did not decode the gRPC.
+
+`https://management-api.x.ai/v1/billing/teams/{team_id}/…` — paths **verified live** (they return
+401 "Please ensure you use a valid management key", not 404):
+`postpaid/invoice/preview` · `postpaid/spending-limits` · `prepaid/balance` · `prepaid/top-up` ·
+`invoices` · `billing-info` · `payment-method` · `usage`.
+
+Replaying `prod_mc_billing.UISvc/*` would have meant grpc-web+proto framing, cookie auth and no
+schema — brittle, and it breaks on the next console build. The REST API is the supported surface.
+
+**Built:** `src/llm/xai-billing.ts` + 22 tests. Semantics chosen deliberately:
+- **unconfigured ⇒ `inactive`** — must not break lanes that work today;
+- **configured but unreadable ⇒ `block`** — a guard that degrades to "allow" on an API error is
+  exactly how `cost-tracker.checkBudget()` fails; not repeating it;
+- **over the operator cap or xAI's hard limit ⇒ `block`**;
+- unrecognised response ⇒ `block`, never "$0 spent". `extractUsd` returns `null` rather than `0` so
+  "no amount found" and "amount is zero" can never be confused.
+
+**Wired, not just built.** `callIR` (`transport.ts`) now calls `assertXaiSpendAllowed()` on the
+`xai` / `xai-oauth` providers. A verdict nobody acts on was the whole complaint about `checkBudget`;
+shipping another one would have been indefensible. Memoised 120s, so no per-call HTTP round-trip —
+and a `block` verdict is cached too, so a billing outage cannot become a stampede.
+
+**Response field names are UNVERIFIED** — this project holds no management key, so shapes could not
+be exercised. Extraction tries several plausible names and fails closed on none matching. Honest
+status: the transport is proven, the parsing is not.
+
+**BLOCKER for Frank (owner-only):** create a management key at *xAI Console → Settings → Management
+Keys* (it is NOT `XAI_API_KEY`; the API key returns 401 here — verified). Then set
+`XAI_MANAGEMENT_KEY`, `XAI_TEAM_ID=56504cd4-01d0-49a9-9a6b-88ebbc2b36c7`, and optionally
+`SUDO_XAI_SPEND_CAP_USD`. Until then the guard is `inactive` and spend is NOT verified.
+
+**Caught by an existing test, correctly:** my first version imported `../core/shared/logger.js`,
+breaking `grok-extraction-boundary` — `src/llm/{grok,xai}-*.ts` must reach host services only via
+`grok-runtime.ts`. Fixed to use the seam. Good invariant; it did its job.
