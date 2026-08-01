@@ -99,6 +99,24 @@ export class GrokStatsigPool {
     await this.refill();
   }
 
+  /**
+   * Drop every buffered token. For tokens that are known-BAD rather than merely
+   * stale — today that means an algorithm drift was just detected, so the whole
+   * buffer was minted by the now-rejected pure-Node path.
+   *
+   * Demoting the MINTER alone is not enough: without this, `acquire()` keeps
+   * serving the already-buffered poisoned tokens (up to `target` of them, until
+   * the staleness eviction) and every one of those calls 403s.
+   *
+   * Returns the number dropped so the caller can log the real blast radius.
+   */
+  public purge(): number {
+    const dropped = this.buf.length;
+    this.buf = [];
+    if (dropped > 0) log.warn({ dropped }, 'purged buffered statsig tokens (known-bad, not stale)');
+    return dropped;
+  }
+
   private evictStale(): void {
     const cutoff = this.now() - this.maxAgeMs;
     if (this.buf.length && this.buf[0]!.born < cutoff) {
@@ -161,10 +179,25 @@ let singleton: GrokStatsigPool | null = null;
 let browserlessDemotedUntil = 0;
 const DEFAULT_DEMOTE_MS = 30 * 60_000;
 
-/** Skip the pure-Node minter and use the oracle for `cooldownMs` (default 30m). */
+/**
+ * Skip the pure-Node minter and use the oracle for `cooldownMs` (default 30m),
+ * AND purge the buffer.
+ *
+ * The purge is not optional bookkeeping: demoting only redirects FUTURE mints,
+ * while the buffer still holds up to `target` tokens minted by the drifted
+ * algorithm. Without dropping them, `acquire()` serves poisoned tokens for
+ * several more calls (they look fresh — the 403 is server-side, invisible in the
+ * token) and the lane keeps failing after it was supposed to have self-healed.
+ *
+ * Purges only an ALREADY-CONSTRUCTED pool; it never builds one as a side effect.
+ */
 export function demoteGrokBrowserlessStatsig(cooldownMs = DEFAULT_DEMOTE_MS): void {
   browserlessDemotedUntil = Date.now() + cooldownMs;
-  log.warn({ cooldownMs }, 'browserless statsig demoted — using oracle until cooldown (suspected algorithm drift)');
+  const dropped = singleton?.purge() ?? 0;
+  log.warn(
+    { cooldownMs, purged: dropped },
+    'browserless statsig demoted — using oracle until cooldown (suspected algorithm drift)',
+  );
 }
 
 /** True when pure-Node (browserless) minting is currently allowed (flag on + not demoted). */

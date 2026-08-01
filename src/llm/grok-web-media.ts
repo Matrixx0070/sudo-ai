@@ -26,7 +26,11 @@ import {
 import { wireGrokWebRefresher } from './grok-web-capture.js';
 import { callGrokWebBridge, type GrokWebCreds } from './grok-web-bridge.js';
 import { buildChatMessage, parseGrokReply } from './grok-web-tools.js';
-import { getGrokStatsigPool, demoteGrokBrowserlessStatsig } from './grok-statsig-pool.js';
+import {
+  getGrokStatsigPool,
+  demoteGrokBrowserlessStatsig,
+  isGrokBrowserlessActive,
+} from './grok-statsig-pool.js';
 import type { IRMessage, IRTool, IRContentBlock } from '../../shared-types/ir/v1.js';
 
 const log = createLogger('llm:grok-web-media');
@@ -527,6 +531,17 @@ export async function chatGrokWeb(
     if (r.ok && typeof r.text === 'string') break;
     if (r.status === 429) throw new GrokWebRateLimitedError('chat');
     if (r.errorClass === 'statsig' || r.status === 403) {
+      // Escalate on the FIRST rejection, not after the attempts are spent.
+      // A browserless-minted token that the gate rejects means the pure-Node
+      // algorithm has drifted — every token in the buffer shares that fault, so
+      // retrying without demoting just burns the remaining attempts on equally
+      // poisoned tokens (the "rejected even after fresh mints" failure). Demote
+      // + purge here and the NEXT iteration mints via the oracle, so this call
+      // recovers instead of the one after it.
+      if (!injectedMint && isGrokBrowserlessActive()) {
+        log.warn({ attempt: i + 1 }, 'grok-web chat: 403/statsig on a browserless token — demoting to oracle mid-retry');
+        demoteGrokBrowserlessStatsig();
+      }
       log.info({ attempt: i + 1 }, 'grok-web chat: 403/statsig — re-minting');
       continue;
     }
@@ -535,10 +550,11 @@ export async function chatGrokWeb(
   if (!r || !r.ok || typeof r.text !== 'string') {
     if (r && r.status === 429) throw new GrokWebRateLimitedError('chat');
     if (r && (r.errorClass === 'statsig' || r.status === 403)) {
-      // Persistent anti-bot 403 after fresh (pooled) mints: if browserless was in
-      // play, the pure-Node algorithm may have drifted → demote to the oracle so
-      // the next turns self-heal to browser-backed minting (drift canary alerts).
-      if (!injectedMint && process.env['SUDO_GROK_STATSIG_BROWSERLESS'] === '1') {
+      // Safety net: the retry loop above already demotes on the first rejection,
+      // so normally browserless is inactive by now and this is a no-op. Guard on
+      // isGrokBrowserlessActive() rather than the raw env flag so we don't demote
+      // twice (re-arming the 30m cooldown) for a single failed call.
+      if (!injectedMint && isGrokBrowserlessActive()) {
         demoteGrokBrowserlessStatsig();
       }
       throw new Error(
