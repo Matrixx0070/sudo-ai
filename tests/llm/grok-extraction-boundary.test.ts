@@ -35,9 +35,16 @@ const ALLOWED_CORE_IMPORTERS = new Set([
   'grok-statsig-oracle.ts',
 ]);
 
+/**
+ * Seat modules destined for extraction: the `grok-*` surface plus the `xai-*`
+ * OAuth lane (the sanctioned surface that ships first).
+ */
 function grokSources(): string[] {
   return readdirSync(LLM_DIR).filter(
-    (f) => f.startsWith('grok-') && f.endsWith('.ts') && !f.endsWith('.test.ts'),
+    (f) =>
+      (f.startsWith('grok-') || f.startsWith('xai-')) &&
+      f.endsWith('.ts') &&
+      !f.endsWith('.test.ts'),
   );
 }
 

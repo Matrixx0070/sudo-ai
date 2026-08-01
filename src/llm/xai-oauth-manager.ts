@@ -49,9 +49,9 @@ import {
   writeSync,
 } from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from '../core/shared/paths.js';
-import { writeFileAtomic } from '../core/shared/atomic-write.js';
-import { createLogger } from '../core/shared/logger.js';
+import { DATA_DIR } from './grok-runtime.js';
+import { writeFileAtomic } from './grok-runtime.js';
+import { createLogger } from './grok-runtime.js';
 import type { XaiModelEntry } from './xai-models.js';
 
 const log = createLogger('llm:xai-oauth');

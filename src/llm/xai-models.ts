@@ -20,7 +20,7 @@
  * The credential is NEVER logged (lengths/booleans only).
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 import { XAI_CLI_PROXY_MODELS_URL, XAI_MODELS_URL } from './endpoints.js';
 
 const log = createLogger('llm:xai-models');
