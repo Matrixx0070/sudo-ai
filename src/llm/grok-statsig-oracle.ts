@@ -16,9 +16,13 @@
  * `headers.set("x-statsig-id", t)` in the main app chunk), trigger a signed
  * request, and on pause `Debugger.evaluateOnCallFrame` to hoist the in-scope
  * minter fn onto `globalThis.__grokMint`. Then `Runtime.evaluate`
- * `globalThis.__grokMint(path, method)` mints a fresh 94-char token in <1s using
- * the live page's render fingerprint + current seed. Mint fresh per request; the
- * ~20–45s TTL is then irrelevant. Never replay, never store a token.
+ * `globalThis.__grokMint(path, method)` mints a fresh 94-char token in 1–72ms
+ * using the live page's render fingerprint + current seed. Mint fresh per
+ * request; never store a token.
+ *
+ * The "~20–45s TTL" this file used to claim was not real: measured 2026-08-01, a
+ * token first used 124.9s after minting was accepted. The actual limit is THREE
+ * uses per token (4th → 403/statsig). See grok-statsig-pool.ts.
  *
  * SELF-HEALING: chunk names/offsets change on any grok redeploy, so the signing
  * site is located at RUNTIME by searching the loaded chunk source for the stable

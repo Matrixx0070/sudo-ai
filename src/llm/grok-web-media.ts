@@ -506,7 +506,9 @@ export async function chatGrokWeb(
     : () => getGrokStatsigPool().acquire();
 
   const send = async (): Promise<import('./grok-web-bridge.js').GrokWebResponse> => {
-    // Fresh, validated, single-use token per send; never store/replay it.
+    // A fresh validated token per send. Measured 2026-08-01: a token actually
+    // survives three uses, so this is one-of-three — deliberately conservative,
+    // and it keeps each retry below independent of the last.
     const statsigId = await acquireStatsig();
     const req = {
       op: 'chat' as const,
