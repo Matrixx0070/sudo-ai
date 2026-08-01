@@ -313,6 +313,60 @@ on the web lane, **assume statsig is required unless the endpoint is one of thos
 That the `/ws/mgw/` upgrade carries no statsig is consistent with the WS lane being guarded
 by Castle instead — see §7, where the token was nonetheless absent.
 
+## 10c. PERSONAL vs BUSINESS — what the $30 actually buys
+
+Captured by switching workspaces in a **new tab of the production warm browser** (the only
+CF-cleared Chrome on this host; a freshly-launched one is challenged and never clears).
+Same account, same endpoint, same session — only the workspace differs:
+
+| workspace | `windowSizeSeconds` | `totalQueries` | effective |
+|---|---|---|---|
+| **Business ($30 seat)** | 7200 (2h) | **50** | up to **600/day** |
+| **Personal (free)** | 86400 (24h) | **30** | **30/day** |
+
+```json
+// personal
+{"windowSizeSeconds":86400,"remainingQueries":30,"totalQueries":30,...}
+// business
+{"windowSizeSeconds":7200,"remainingQueries":46,"totalQueries":50,...}
+```
+
+**The subscription is worth ~20× the free allowance**, and the difference is not just volume
+— the 2h window refills 12× a day, so burst capacity differs far more than the raw numbers
+suggest. Any budget logic in the SDK must read the window, not assume a daily quota.
+
+### Endpoints only the PERSONAL workspace calls
+
+```
+GET /rest/subscriptions                                  <- subscription state
+GET /rest/teams-where-user-has-active-sub                <- which teams carry the sub
+GET /rest/products?provider=SUBSCRIPTION_PROVIDER_STRIPE
+GET /rest/app-chat/conversations?pageSize=60&filterIsStarred=true
+```
+
+`teams-where-user-has-active-sub` is the direct answer to "does this seat cover me" and is
+worth wiring into the SDK's capability probe. Its body was not captured (not re-requested
+after reload) — **UNVERIFIED shape**.
+
+SuperGrok pricing confirmed from `/rest/products`: **$30/mo** (`3000`) or **$300/yr**
+(`30000`), with INR equivalents.
+
+### Switching workspaces — the UI mechanics
+
+The switcher is the account row at the **bottom-left** of the sidebar
+(`megastream / <team-name>`); the menu offers `Personal` and the team. It needs a **real
+CDP pointer event** at the element's coordinates — JS `.click()` opens nothing (Radix
+dropdowns bind pointer events). The OneTrust consent overlay intercepts clicks and must be
+removed first; removing the node avoids recording a consent choice on the user's behalf,
+unlike clicking Accept/Reject.
+
+### Safety of touching the production browser
+
+Done per the companion doc's rule: **a new tab, never the oracle's own page**. Verified
+after — oracle page target intact, own tab closed, target count back to 5, and a real
+`mint()` returned a 94-char token in 6.3s. `__grokMint` was already `undefined` before this
+work began, so the cold-path cost was pre-existing, not caused here.
+
 ## 11. Still NOT captured — honestly
 
 - **The personal workspace.** The account menu would not open under JS `.click()`, and the
