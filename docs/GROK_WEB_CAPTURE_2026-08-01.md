@@ -158,3 +158,83 @@ and already does X search.
 - The production `grok-warm-browser` (the statsig oracle) was **never touched** — all work used a
   throwaway profile on a separate debug port. Confirmed still online with CDP 9223 responding 200.
 - Temporary profile, capture Chrome, and mitmdump all torn down.
+
+---
+
+# ADDENDUM — full-fidelity capture, and the answer to "what more tools do you need?"
+
+**Nothing further needs installing.** `mitmproxy` was the one genuine gap and it is now in place.
+The earlier blind spot was not a missing tool, it was an incomplete addon: it logged only
+client→server WebSocket frames and no response bodies. Fixed and made reusable at
+`scripts/capture/mitm-capture.py`.
+
+## Tooling inventory (verified on this box, not assumed)
+
+| Tool | Status | What it covers |
+|---|---|---|
+| `mitmproxy` / `mitmdump` / `mitmweb` 12.2.3 | **installed** | HTTP req+res bodies, **WS both directions**, flow archive + replay |
+| `tshark` / `tcpdump` | present | packet level; pairs with Chrome `--ssl-key-log-file` for TLS decrypt |
+| `jq`, `openssl` | present | analysis |
+| Chrome `--log-net-log` | built in | netlog, captures below the worker layer |
+| Chrome `--disable-quic` | built in | forces h1/h2 so an explicit proxy sees everything |
+| `websocat` | absent | only needed to *speak* the mgw protocol directly — not to capture it |
+| `frida` | absent | only needed for cert-pinned native apps. grok.com does not pin in Chrome |
+
+## Proof of full fidelity (single run, 2026-08-01)
+
+```
+226  ws_rx     server -> client WebSocket frames   (previously invisible)
+207  res       HTTP responses WITH bodies          (previously invisible)
+207  req       HTTP requests
+ 11  ws_tx     client -> server WebSocket frames
+  1  ws_open
+flow archive: 11,306,314 bytes (replayable via mitmdump -r)
+```
+
+## What the server stream actually contains
+
+Complete server event grammar over `wss://grok.com/ws/mgw/`:
+
+```
+205  response.chunk              1  response.created        1  response.output_item.done
+  8  pong                        1  response.output_item.added  1  response.done
+  1  session.created             1  response.content_part.added 1  response.persisted
+  1  conversation.attached       1  response.output_text.done   1  conversation.title.updated
+  1  conversation.queue.updated  1  response.content_part.done
+  1  conversation.item.added
+```
+
+**Typed tool results** — objective server-side proof the X-search tool ran:
+
+```json
+{"chunk":{"metadata":{"step_id":0},
+  "tool_result":{"tool_call_id":"ec277f35-...","x_post":{}}}}
+```
+
+**Typed structured citations** — first-class objects with a `kind` discriminator, *not* prose to
+regex out of the answer text:
+
+```json
+{"chunk":{"metadata":{"step_id":3},
+  "render_citation":{"id":"407f7b","kind":"CITATION_KIND_X_POST",
+    "url":"https://x.com/ToonHive/status/2083580420990324809","citation_id":29}}}
+```
+
+Emitted this run:
+- `CITATION_KIND_X_POST` — `https://x.com/ToonHive/status/2083580420990324809`
+- `CITATION_KIND_X_POST` — `https://x.com/Ayzacoder/status/2083495849892712864`
+
+This is **strictly better data than the REST lane gives**, where post URLs had to be pattern-matched
+out of the reply text (D-16). Here every cited post arrives as a typed record with a `kind`, an id
+and a URL. It is the ideal shape for the "Grok discovers → verify → admit" design: `x_post`
+citations are exactly the externally checkable artifacts, cleanly separated from the model's prose.
+
+**Caveat unchanged:** the citations are verifiable; any *ranking* or "most discussed" claim in the
+prose is model judgment and must never be stored as a measurement.
+
+## Standing recommendation
+
+The WS lane still requires a ~14 KB `castle_request_token` per `response.create`, i.e. a second
+browser-bound oracle alongside statsig. So this remains a **capture/intel** win, not a migration
+target. Build the X trend source on the REST lane; use this capture rig when the wire protocol
+needs to be re-derived after a Grok-side change.
