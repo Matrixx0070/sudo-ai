@@ -151,11 +151,12 @@ export async function runNightlyBench(deps: NightlyBenchDeps): Promise<NightlyBe
     }
   }
 
-  // Eval-sandbox sweep (ADR-0007 Phase 3): flag-gated, rides the SAME
-  // SUDO_BENCH_NIGHTLY_MAX_USD accounting as the agent tasks above. Fail-soft.
+  // Eval-sandbox sweep (ADR-0007 Phase 3): flag-gated, with its OWN budget
+  // (SUDO_EVAL_NIGHTLY_MAX_USD) — it must NOT ride the agent tasks' cap above,
+  // which they routinely exhaust, starving the sweep to zero. Fail-soft.
   if (process.env['SUDO_EVAL_NIGHTLY'] === '1') {
     try {
-      await runEvalSandboxSweep(deps.evalSandbox ?? {}, summary, maxUsd);
+      await runEvalSandboxSweep(deps.evalSandbox ?? {}, summary);
     } catch (err) {
       log.warn({ runId, err: String(err) }, 'nightly bench: eval-sandbox sweep failed');
     }
@@ -185,16 +186,31 @@ export async function runNightlyBench(deps: NightlyBenchDeps): Promise<NightlyBe
 }
 
 /**
+ * The sweep's OWN per-run budget (SUDO_EVAL_NIGHTLY_MAX_USD, default $1.50).
+ *
+ * It deliberately does NOT share the agent bench's cap. Live-proven 2026-08-01:
+ * the agent bench spent $2.22 against its own $2 cap, so a sweep gated on the
+ * shared remainder hit the floor instantly and skipped all 7 scenarios — it
+ * would never have run on any night. Invariant 10: every recurring background
+ * job declares its own budget instead of scavenging another job's leftovers.
+ */
+export function evalSweepBudgetUsd(): number {
+  return envNum('SUDO_EVAL_NIGHTLY_MAX_USD', 1.5);
+}
+
+/**
  * Run every scenario in evals/sandbox/scenarios/ through the sandbox runner,
- * within the nightly USD budget: stop STARTING new scenarios once remaining
- * budget drops below {@link EVAL_SWEEP_BUDGET_FLOOR_USD}. Bench rows land in
- * bench.db via the runner; this only tracks spend + the baseline comparison.
+ * within the SWEEP'S OWN USD budget: stop STARTING new scenarios once its
+ * remaining budget drops below {@link EVAL_SWEEP_BUDGET_FLOOR_USD}. Bench rows
+ * land in bench.db via the runner; this tracks spend + the baseline comparison.
+ * Scenarios not run are named in the report — never a silent cap.
  */
 async function runEvalSandboxSweep(
   evalDeps: NightlyEvalSandboxDeps,
   summary: NightlyBenchSummary,
-  maxUsd: number,
 ): Promise<void> {
+  const evalMaxUsd = evalSweepBudgetUsd();
+  let evalSpentUsd = 0;
   const scenarioDir = evalDeps.scenarioDir ?? join(PROJECT_ROOT, 'evals', 'sandbox', 'scenarios');
   const baselinePath = evalDeps.baselinePath ?? join(PROJECT_ROOT, 'evals', 'sandbox', 'baseline.json');
   if (!existsSync(scenarioDir)) {
@@ -209,12 +225,11 @@ async function runEvalSandboxSweep(
 
   const results: SandboxScenarioResult[] = [];
   for (const [i, file] of files.entries()) {
-    if (maxUsd - summary.totalCostUsd < EVAL_SWEEP_BUDGET_FLOOR_USD) {
-      summary.budgetHalted = true;
+    if (evalMaxUsd - evalSpentUsd < EVAL_SWEEP_BUDGET_FLOOR_USD) {
       summary.evalScenariosSkipped = files.length - i;
       log.warn(
-        { spent: summary.totalCostUsd, maxUsd, skipped: summary.evalScenariosSkipped },
-        'eval-sandbox sweep: budget floor reached — halting gracefully',
+        { evalSpentUsd, evalMaxUsd, skipped: summary.evalScenariosSkipped },
+        'eval-sandbox sweep: own budget floor reached — halting gracefully',
       );
       break;
     }
@@ -222,7 +237,9 @@ async function runEvalSandboxSweep(
       const scenario = loadScenarioFile(join(scenarioDir, file));
       const report = await run(scenario);
       summary.evalScenariosRun++;
-      summary.totalCostUsd += report.turn.usd ?? 0;
+      const spent = report.turn.usd ?? 0;
+      evalSpentUsd += spent;
+      summary.totalCostUsd += spent; // reporting only — gating uses evalSpentUsd
       results.push({
         scenarioId: scenario.id,
         score: report.scores.checksTotal > 0 ? report.scores.checksPassed / report.scores.checksTotal : 0,
