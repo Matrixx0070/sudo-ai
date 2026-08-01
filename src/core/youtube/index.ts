@@ -17,3 +17,21 @@ export {
   YouTubeAuthError,
 } from './auth.js';
 export type { TokenResult, YouTubeAuthConfig } from './auth.js';
+
+export {
+  QuotaLedger,
+  QuotaExceededError,
+  SearchDeniedError,
+  QUOTA_COSTS,
+  pacificDay,
+} from './quota-ledger.js';
+export type { QuotaStatus, QuotaMethod } from './quota-ledger.js';
+
+export { assessPublishCandidate, mayPublish, similarity } from './policy-gate.js';
+export type {
+  PolicyAssessment,
+  PolicyVerdict,
+  PublishCandidate,
+  PublishedVideo,
+  JudgeVerdict,
+} from './policy-gate.js';

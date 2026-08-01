@@ -8,8 +8,26 @@ import { createLogger } from '../../../shared/logger.js';
 import { missingKey } from './helpers.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
 import { getYouTubeAccessToken, hasYouTubeCredential } from '../../../youtube/auth.js';
+import { QuotaLedger, QuotaExceededError } from '../../../youtube/quota-ledger.js';
 
 const logger = createLogger('social-youtube');
+
+/**
+ * Master publish kill switch (roadmap gate 16). Default OFF.
+ *
+ * Publishing to a real channel is irreversible and, once monetised, touches real
+ * money. It stays disabled until an operator turns it on deliberately. Read-only
+ * analytics is unaffected.
+ */
+function publishEnabled(): boolean {
+  return process.env['SUDO_YT_PUBLISH_ENABLED'] === '1';
+}
+
+function quotaLedger(): QuotaLedger {
+  return new QuotaLedger({
+    dbPath: process.env['SUDO_YT_QUOTA_DB'] ?? 'data/youtube-quota.db',
+  });
+}
 
 /**
  * Resolve a usable access token, refreshing it if needed (GAP-01).
@@ -65,9 +83,34 @@ export const youtubeUploadTool: ToolDefinition = {
     if (!videoPath?.trim()) return { success: false, output: 'videoPath is required.' };
     if (!title?.trim()) return { success: false, output: 'title is required.' };
 
+    if (!publishEnabled()) {
+      logger.warn({ session: ctx.sessionId, title }, 'Upload refused — publishing is disabled');
+      return {
+        success: false,
+        output:
+          'YouTube publishing is disabled. Uploading is irreversible and, on a monetised channel, ' +
+          'spends real money — so it is off by default. Set SUDO_YT_PUBLISH_ENABLED=1 to enable.',
+        data: { wouldUpload: { title, privacyStatus, videoPath }, blockedBy: 'SUDO_YT_PUBLISH_ENABLED' },
+      };
+    }
+
     const auth = await resolveToken('social.youtube-upload');
     if ('error' in auth) return auth.error;
     const oauthToken = auth.token;
+
+    // GAP-02: refuse before spending an hour uploading into an exhausted quota.
+    const ledger = quotaLedger();
+    try {
+      ledger.spend('videos.insert');
+    } catch (err) {
+      if (err instanceof QuotaExceededError) {
+        logger.warn({ remaining: err.remaining }, 'Upload refused — daily quota exhausted');
+        return { success: false, output: err.message, data: { blockedBy: 'quota' } };
+      }
+      throw err;
+    } finally {
+      ledger.close();
+    }
 
     logger.info({ session: ctx.sessionId, videoPath, title, privacyStatus }, 'social.youtube-upload invoked');
 
