@@ -101,3 +101,45 @@ describe('browserless self-heal (drift auto-demotion)', () => {
     else process.env['SUDO_GROK_STATSIG_BROWSERLESS'] = prev;
   });
 });
+
+/**
+ * Poisoned-buffer purge (2026-08-01 prod incident).
+ *
+ * On statsig algorithm drift the pure-Node minter yields length-VALID tokens the
+ * server rejects with 403. Demoting the minter alone only redirects FUTURE
+ * mints — the buffer still holds tokens made by the drifted algorithm, and they
+ * look perfectly fresh (the fault is server-side, invisible in the token). Those
+ * kept being served, so the lane went on failing after it was supposed to have
+ * self-healed: "rejected even after fresh mints".
+ */
+describe('purge drops known-bad buffered tokens', () => {
+  it('empties the buffer and reports how many were dropped', async () => {
+    const { mint } = mintFactory();
+    const pool = new GrokStatsigPool({ mint, target: 4 });
+    await pool.prime();
+    expect(pool.size()).toBe(4);
+
+    expect(pool.purge()).toBe(4);
+    expect(pool.size()).toBe(0);
+  });
+
+  it('purging an empty buffer is a no-op that drops nothing', async () => {
+    const { mint } = mintFactory();
+    const pool = new GrokStatsigPool({ mint, target: 2 });
+    expect(pool.purge()).toBe(0);
+  });
+
+  it('after a purge, acquire mints anew instead of serving a poisoned token', async () => {
+    const { mint, calls } = mintFactory();
+    const pool = new GrokStatsigPool({ mint, target: 2 });
+    await pool.prime();
+    const mintedDuringPrime = calls.count;
+
+    pool.purge();
+    const tok = await pool.acquire();
+
+    // The token handed out came from a mint AFTER the purge, not the buffer.
+    expect(tok.length).toBeGreaterThanOrEqual(80);
+    expect(calls.count).toBeGreaterThan(mintedDuringPrime);
+  });
+});
