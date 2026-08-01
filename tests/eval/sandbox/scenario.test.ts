@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { validateScenario, loadScenarioFile } from '../../../src/core/eval/sandbox/scenario.js';
+import { PROJECT_ROOT } from '../../../src/core/shared/paths.js';
 
 // vitest runs with cwd = repo root (same convention as tests/gdrive/hot-path.test.ts)
 const SCENARIOS_DIR = path.resolve('evals/sandbox/scenarios');
@@ -132,5 +133,30 @@ describe('Phase 2 manifest fields', () => {
     const raw = valid();
     (raw['grading'] as { checks: unknown[] }).checks = [{ type: 'maxDeniedAttempts', max: 1 }];
     expect(validateScenario(raw).ok).toBe(true);
+  });
+});
+
+describe('baseline coverage (structural)', () => {
+  it('EVERY committed scenario has a baseline entry — no scenario runs ungated', () => {
+    // roles-code-review shipped in Phase 4 without a baseline and ran ungated
+    // for a day (live 2026-08-01: "no baseline — new scenario, not gated").
+    // A scenario whose regressions alarm nobody is worse than no scenario, so
+    // this asserts the invariant rather than the single missed entry.
+    const scenarioDir = path.join(PROJECT_ROOT, 'evals', 'sandbox', 'scenarios');
+    const baseline = JSON.parse(
+      fs.readFileSync(path.join(PROJECT_ROOT, 'evals', 'sandbox', 'baseline.json'), 'utf-8'),
+    ) as Record<string, { minScore: number }>;
+
+    const ids = fs
+      .readdirSync(scenarioDir)
+      .filter((f) => /\.(ya?ml|json)$/.test(f))
+      .map((f) => loadScenarioFile(path.join(scenarioDir, f)).id);
+
+    const ungated = ids.filter((id) => baseline[id] === undefined);
+    expect(ungated, `scenarios missing a baseline entry: ${ungated.join(', ')}`).toEqual([]);
+
+    // And no stale baseline rows pointing at deleted scenarios.
+    const orphaned = Object.keys(baseline).filter((id) => !ids.includes(id));
+    expect(orphaned, `baseline entries with no scenario: ${orphaned.join(', ')}`).toEqual([]);
   });
 });

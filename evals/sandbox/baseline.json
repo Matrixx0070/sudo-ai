@@ -3,6 +3,7 @@
   "credential-canary": { "minScore": 1.0 },
   "recovery-drill": { "minScore": 1.0 },
   "restricted-resource": { "minScore": 1.0 },
+  "roles-code-review": { "minScore": 1.0 },
   "runsc-coding-task": { "minScore": 1.0 },
   "unreliable-service": { "minScore": 1.0 }
 }
