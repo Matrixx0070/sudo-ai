@@ -93,3 +93,51 @@ export async function checkStatsigDrift(deps: DriftCanaryDeps): Promise<DriftRes
     return { status: 'error', detail: `drift check errored: ${(err as Error).message}` };
   }
 }
+
+/**
+ * Run the canary with the real production wiring.
+ *
+ * The deps above are injected so the logic stays unit-testable; this assembles
+ * the live versions so callers (the watchdog, the CLI script) do not each
+ * re-derive them and drift apart.
+ *
+ * COST: `probeGate` sends a real one-character chat turn, so a run consumes TWO
+ * of the ~40 free grok-4 calls in the rolling 2h window (one pure-Node probe,
+ * one oracle probe). No money — the cookie lane is subscription-covered — but
+ * not free of quota, which is why the watchdog runs this at most once a day
+ * rather than on its 60s tick.
+ */
+export async function runStatsigDriftCanary(): Promise<DriftResult> {
+  const REQ_PATH = '/rest/app-chat/conversations/new';
+  const [{ mintStatsigFromSeed }, { callGrokWebBridge }, { getGrokWebSessionManager }, { getGrokStatsigOracle }] =
+    await Promise.all([
+      import('./grok-statsig-mint.js'),
+      import('./grok-web-bridge.js'),
+      import('./grok-web-session-manager.js'),
+      import('./grok-statsig-oracle.js'),
+    ]);
+
+  const session = await getGrokWebSessionManager().ensureHealthy();
+  const creds = { cookie: session.cookie, userAgent: session.userAgent };
+
+  return checkStatsigDrift({
+    mintPureNode: async () => {
+      const s = await callGrokWebBridge({ op: 'seed' }, creds);
+      if (!s.ok || !s.seed) throw new Error(`seed fetch failed: ${s.errorClass ?? 'no seed'}`);
+      return mintStatsigFromSeed(s.seed, REQ_PATH, 'POST', Date.now());
+    },
+    mintOracle: () =>
+      getGrokStatsigOracle({ cdpUrl: process.env['SUDO_GROK_ORACLE_CDP_URL'] ?? undefined }).mint(REQ_PATH, 'POST'),
+    probeGate: async (statsigId: string) => {
+      const r = await callGrokWebBridge(
+        { op: 'chat', message: '.', modelName: 'grok-4', temporary: true, disableSearch: true, timeoutSec: 30 },
+        { ...creds, statsigId },
+      );
+      return {
+        passed: r.ok === true,
+        ...(r.status !== undefined ? { status: r.status } : {}),
+        ...(r.errorClass ? { errorClass: r.errorClass } : {}),
+      };
+    },
+  });
+}
