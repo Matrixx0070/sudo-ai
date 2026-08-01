@@ -299,3 +299,34 @@ Keys* (it is NOT `XAI_API_KEY`; the API key returns 401 here — verified). Then
 **Caught by an existing test, correctly:** my first version imported `../core/shared/logger.js`,
 breaking `grok-extraction-boundary` — `src/llm/{grok,xai}-*.ts` must reach host services only via
 `grok-runtime.ts`. Fixed to use the seam. Good invariant; it did its job.
+
+## D-20 | Wired the policy gate onto the publish path — and found it was doubly inert
+Returning to the YouTube roadmap, next-action #1 was "wire the policy gate; it is a library nobody
+calls." Verified before building: grep for `assessPublishCandidate` outside its own file returned
+**only the re-export in index.ts**. Nobody called it.
+
+**Worse, and not in the original write-up:** there was **no store of published scripts**, so the
+gate's cross-video similarity check — the one that actually maps to YouTube's inauthentic-content
+policy — had an empty corpus, would score 0 against nothing, and would have passed every templated
+script even once wired. A gate nobody calls, checking against a corpus that does not exist, is not a
+gate. Both halves are now built (`src/core/youtube/publish.ts`).
+
+**The invariant is asserted, not asserted-in-a-comment.** Production-readiness gate 3 in
+`04-ROADMAP.md` demands a test proving no bypass exists. `publish.test.ts` includes a source-level
+check that `opts.upload(` appears **exactly once** and that the `verdict !== 'pass'` guard precedes
+it, plus behavioural tests that the uploader is never invoked on block, on hold (judge threw), or on
+a thin script.
+
+**Real bug found by the tests, fixed in source not in the test:** `recent()` ordered only by
+`published_at`, which has millisecond resolution — two videos recorded in the same millisecond came
+back in arbitrary order, silently changing *which* prior videos the similarity check sees once the
+corpus exceeds the limit. Added a `rowid DESC` tiebreaker.
+
+Layering is deliberate, outermost first: `SUDO_YT_PUBLISH_ENABLED` (default OFF) → GAP-02 quota
+reservation → policy gate (fails closed) → upload. `realUploader()` lazy-imports the tool so those
+guards stay the outer defences rather than being duplicated.
+
+Also: a failed upload does **not** record to the corpus — a video that never went live must not
+poison future similarity checks.
+
+18 new tests (71 across the youtube suites). Full suite 12,863 pass, same 6 pre-existing failures.

@@ -27,6 +27,9 @@ export {
 } from './quota-ledger.js';
 export type { QuotaStatus, QuotaMethod } from './quota-ledger.js';
 
+export { PublishStore, publishVideo, realUploader } from './publish.js';
+export type { PublishOutcome, PublishRequest, PublishOptions, Uploader } from './publish.js';
+
 export { assessPublishCandidate, mayPublish, similarity } from './policy-gate.js';
 export type {
   PolicyAssessment,

@@ -140,3 +140,24 @@ Two changes, both driven by evidence rather than opinion:
 Revised Phase A: A1 GAP-01 · A2 GAP-02 · A3 GAP-04a · A4 GAP-03 · **A5 GAP-15** · **A6 B6**.
 A1–A4 shipped in this run; A5 shipped as part of the pass-2 follow-up. **A6 remains open and is now
 the single highest-priority unstarted item in the roadmap.**
+
+
+---
+
+## AMENDMENT 2 — 2026-08-01T21:55Z
+
+**GAP-03 is now genuinely complete.** The earlier entry marked it shipped when only the *library*
+existed. On returning to it, two things were found:
+1. Nothing called `assessPublishCandidate` — confirmed by grep, only the index re-export.
+2. There was no published-script corpus, so the cross-video similarity check was inert regardless.
+
+`src/core/youtube/publish.ts` closes both: `PublishStore` (the corpus) + `publishVideo()` (assess →
+upload only on `pass` → record). Production-readiness **gate 3 now passes** — `publish.test.ts`
+asserts at source level that there is exactly one uploader call site and that the verdict guard
+precedes it, and behaviourally that block/hold/thin-script never reach the uploader.
+
+**Remaining open P0:** A6 / B6 — enforced spend caps. Partly addressed for the xAI lane by
+`src/llm/xai-billing.ts` (D-19), which is wired into `callIR` but **inactive until an operator
+mints a management key**. The generic `cost-tracker.checkBudget()` still has zero callers and still
+covers the video-generation APIs (Luma/Runway/Kling/TTS), which is where the real money risk is.
+That is the single highest-priority unstarted item.
