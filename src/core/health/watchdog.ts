@@ -31,6 +31,7 @@ import {
   checkConsciousness,
   checkDepsFreshness,
 } from './checks.js';
+import { checkGrokSeat } from './grok-seat-check.js';
 import { checkCacheDupRate } from '../../llm/cache/dup-watch.js';
 import { checkCacheHitRate } from '../../llm/cache/hit-rate.js';
 import { fixLogRotation, fixDiskSpace, fixMemory } from './fixes.js';
@@ -209,6 +210,9 @@ export class Watchdog {
       { name: 'cache_dup_rate', run: () => checkCacheDupRate() },
       { name: 'cache_hit_rate', run: () => checkCacheHitRate() },
       { name: 'deps_freshness', run: () => checkDepsFreshness() },
+      // Two-tier: cheap offline status each tick, live probe + statsig drift
+      // canary once a day (see checkGrokSeat). Never spends money.
+      { name: 'grok_seat', run: () => checkGrokSeat() },
     ];
     // Real brain-liveness probe (actually drives a call) — only when a probe
     // was attached. checkBrain() above only sees key PRESENCE; this catches an
