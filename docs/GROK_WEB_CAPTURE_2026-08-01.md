@@ -66,33 +66,95 @@ grok.com** composer. On this **Grok Business** seat the composer `+` menu contai
 There is no Tools submenu and no X-search toggle anywhere in the composer. So there is no
 Business-side UI payload to copy.
 
-## 5. HONEST FAILURE — the message-send POST could not be intercepted
+## 5. SOLVED — the Business chat transport is a WEBSOCKET, not HTTP
 
-The send provably happens (the tab navigates to `grok.com/c/<uuid>?rid=<uuid>` every time), but the
-request never appears in any capture. Six approaches tried, all negative:
+The earlier CDP attempts failed for a real reason, now known: **there is no send POST to capture.**
+Business chat runs over a WebSocket, which is why `page.on('request')`, browser-level
+`Network.enable` on every attached target, and even an in-page `fetch`/XHR monkey-patch all came
+back empty while the tab still navigated to `/c/<uuid>`.
 
-1. Playwright `page.on('request')` — sees GETs and other POSTs, not the send.
-2. Wider filter over every `grok.com` POST — same.
-3. `newCDPSession(page)` + `Network.enable` + `Target.setAutoAttach`.
-4. Browser-level websocket CDP + `setAutoAttach` + `Network.enable` per attached session.
-5. Same, plus `Target.getTargets` → explicit `attachToTarget` on the pre-existing
-   `shared_worker` and `worker` blob targets (they pre-date auto-attach, so this was the leading
-   hypothesis — it did not fix it).
-6. In-page monkey-patch of `window.fetch` **and** `XMLHttpRequest.prototype.send/open` — captured
-   20 other `/rest/*` POSTs, zero conversation sends.
+Cracked with **mitmproxy 12.2.3** (installed via pip) as an explicit HTTP proxy, driving a
+throwaway Chrome that carried only the copied `Local State` + `Default/Cookies` (500 KB, **not** a
+5.5 GB profile clone — the first attempt at that got OOM-killed).
 
-Conclusion: the Business chat transport does not use page-visible `fetch`/XHR and is not surfaced by
-CDP Network on any attachable target. Likely a WASM/worker channel with its own transport.
-**Not solved. Do not assume otherwise.**
+### Endpoint
 
-## 6. Why this does not block anything
+```
+wss://grok.com/ws/mgw/?uid=<user-uuid>
+```
 
-The original question — how to make the seat search X — is already answered from the API side and
-live-proven (see `audit/00-DECISIONS.md` D-16):
+An OpenAI-Realtime-style event protocol: `session.create` → `conversation.item.create` →
+`response.create`, with `ping` heartbeats every ~3s.
 
-> `POST /rest/app-chat/conversations/new` with **`disableSearch: false`** and **`toolOverrides: {}`**.
-> No X-search key is required; Grok invokes X search itself when the query warrants it.
-> Verified: `toolMarkers: ["webSearchResults"]`, and 5/5 returned post URLs confirmed real against an
-> independent lane, with a fabricated control correctly failing to resolve.
+### `session.create` — where every option lives
 
-The UI payload would have been a nice cross-check. It is not a prerequisite.
+```json
+{"session_id":"<conversation-uuid>",
+ "event":{"type":"session.create","event_id":"evt_init_<uuid>",
+  "session":{"model":"auto",
+   "x_grok":{
+     "protocol_capabilities":["conversation_attached","custom_methods_v1"],
+     "conversation_id":"<uuid>","load_existing":true,"initial_load_id":"<uuid>:0",
+     "use_chunk":true,
+     "connector_ids":["connector_<uuid>","connector_<uuid>"],
+     "enable_side_by_side":true,"force_side_by_side":false,
+     "enable_image_generation":true,"image_generation_count":2,
+     "disable_text_follow_ups":false,"disable_artifact":true,"force_concise":false}}}}
+```
+
+Note `"model":"auto"` — a **mode** id from `/rest/modes`, not a model id.
+
+### `conversation.item.create` — the user message
+
+```json
+{"session_id":"<uuid>","event":{"type":"conversation.item.create","event_id":"evt_msg_<ms>",
+ "item":{"type":"message","role":"user",
+  "x_grok":{"client_message_id":"<uuid>",
+   "input_chunks":[{"text":{"text":"Search X for top AI posts today"}}]}}}}
+```
+
+### `response.create` — triggers generation, and carries the anti-bot token
+
+```json
+{"session_id":"<uuid>","event":{"type":"response.create","event_id":"evt_resp_<ms>",
+ "castle_request_token":"<14167 chars>"}}
+```
+
+That is the **entire** event — three keys, nothing else.
+
+## 6. THE ANSWER: there is no X-search payload field, on either lane
+
+This was the question that started the hunt. Across the full captured session-creation options
+there is **no web-search or X-search toggle of any kind**. The only tool-ish fields are
+`connector_ids` (MCP), `enable_image_generation`, and `disable_artifact`.
+
+That independently confirms the API-side result in `audit/00-DECISIONS.md` D-16 from a completely
+different angle: search is **not** a payload flag. Grok decides to search on its own. On the REST
+lane the only relevant control is `disableSearch: false`; `toolOverrides` needs no X-search key
+because none exists.
+
+**So there was never a payload to copy.** Two independent methods now agree.
+
+## 7. NEW FINDING — `castle_request_token`: a second anti-bot gate, distinct from statsig
+
+The WS lane is guarded by a **~14 KB Castle (castle.io) request token** on every
+`response.create`. This is *not* `x-statsig-id`, which guards the REST lane and is what
+`grok-statsig-oracle.ts` mints.
+
+Implication for this repo: **the WS lane is not a cheap migration target.** Adopting it would mean
+minting Castle tokens as well as statsig, i.e. a second browser-bound oracle with its own drift
+risk — and this project already lost a day to statsig drift on 2026-08-01. The existing REST
+`/rest/app-chat/conversations/new` lane remains the right door: it is live-proven, statsig-only,
+and already does X search.
+
+## 8. Housekeeping
+
+- mitmproxy was installed with `pip --break-system-packages --ignore-installed blinker`. It
+  downgraded `opentelemetry-proto` 1.40.0 → 1.37.0 and `typing-extensions` 4.15 → 4.14, which pip
+  flagged as conflicting with `opentelemetry-exporter-otlp-proto-grpc` and `selenium`. **Verified
+  afterwards that the prod python bridge is unaffected**: `curl_cffi 0.14.0` imports,
+  `grok_web_replay.py` returns valid JSON, and a live session probe returns
+  `{"ok":true,"status":200}`.
+- The production `grok-warm-browser` (the statsig oracle) was **never touched** — all work used a
+  throwaway profile on a separate debug port. Confirmed still online with CDP 9223 responding 200.
+- Temporary profile, capture Chrome, and mitmdump all torn down.

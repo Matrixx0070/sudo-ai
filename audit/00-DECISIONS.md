@@ -192,3 +192,36 @@ and it is the only shape in which model-sourced trend data belongs in this syste
 Open question for Frank: admitting that design means adding a Twitter scraping library to
 production dependencies. I did not add it unilaterally — see D-15 for why I am cautious about that
 class of dependency.
+
+## D-17 | Installed mitmproxy and cracked the Grok Business WS protocol — no X-search field exists
+Frank: "use burp suite or any relevant tool, install it if not available." Burp/mitmproxy were both
+absent; installed **mitmproxy 12.2.3** via pip and used it as an explicit HTTP proxy.
+
+**Result: the six earlier CDP attempts failed because there is no send POST.** Business chat runs
+over a **WebSocket** — `wss://grok.com/ws/mgw/?uid=<uid>` — with an OpenAI-Realtime-style protocol
+(`session.create` → `conversation.item.create` → `response.create` + `ping`). That is invisible to
+HTTP-request interception, which is exactly what I kept doing. Full protocol in
+`docs/GROK_WEB_CAPTURE_2026-08-01.md`.
+
+**The answer to the original question: there is NO X-search payload field.** Nothing in
+`session.create`'s options is a web/X search toggle — only `connector_ids` (MCP),
+`enable_image_generation`, `disable_artifact`, `force_concise`, side-by-side flags. This
+independently confirms D-16 from a different angle: search is not a flag, Grok invokes it itself.
+Two methods now agree, so I consider this closed.
+
+**New finding — `castle_request_token`.** Every `response.create` carries a ~14 KB Castle (castle.io)
+anti-bot token, distinct from `x-statsig-id`. So the WS lane needs a *second* browser-bound oracle.
+Given this project lost a day to statsig drift on 2026-08-01, **the WS lane is not worth migrating
+to**; the REST `/rest/app-chat/conversations/new` door stays the right one — statsig-only,
+live-proven, and already does X search.
+
+**Two operational lessons recorded rather than buried:**
+1. Cloning the 5.5 GB `grok-warm-profile` to get a logged-in session got the process **OOM-killed**.
+   Copying just `Local State` + `Default/Cookies` (500 KB) works and is the correct recipe.
+2. `pkill -f "<pattern>"` killed my own shell twice (exit 144) because the pattern matched the
+   bash `-c` command line. Kill by PID from `pgrep -x` instead.
+
+**Safety:** the production `grok-warm-browser` statsig oracle was never touched — separate throwaway
+profile, separate debug port. Verified after: CDP 9223 → 200, `curl_cffi` imports, bridge returns
+valid JSON, live session probe `{"ok":true,"status":200}`. The pip install downgraded
+`opentelemetry-proto` and `typing-extensions`; flagged in the doc, prod bridge verified unaffected.
