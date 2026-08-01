@@ -82,3 +82,22 @@ Removing it would be the clean deletion, but the only caller is
 `src/core/tools/builtin/meta/competitor-tool.ts:99`, under a PROTECTED path I must not edit. Kept
 the parameter as `_brain` with a doc comment saying it is inert and when to drop it. Deletion
 deferred, not forgotten. Reversible: yes, once the protected caller is migrated.
+
+## D-13 | Built YouTube + X trend scanners; deliberately did NOT build TikTok
+Frank pointed out the scanners missed the platforms the business runs on. Decisions:
+- **YouTube: built and live-proven** against the real API with the real key. 1 quota unit via
+  `chart=mostPopular`, never `search.list`. Charged to the GAP-02 ledger.
+- **X: built but credential-gated.** X removed the free tier on 2026-02-06; trends are ~$0.010/call.
+  I will not commit Frank to recurring spend, so it no-ops without `X_API_BEARER_TOKEN`. The
+  response shape is UNVERIFIED (needs a paid token to exercise) and is labelled so in the source.
+- **TikTok: not built, on purpose.** No official trending/hashtag endpoints exist; the Research API
+  is approval-gated, academic-only and bans commercial use. The only implementable options were
+  scraping or asking a model to guess. Given GAP-04a and GAP-15, adding a third fabrication source
+  would have been the worst possible call. Documented in the module header instead.
+
+## D-14 | Fixed Reddit's silent death rather than restoring it
+The live probe found Reddit returns **403 Blocked** (datacenter IPs), so it contributed 0 of 64
+items while reporting success — every failure logged at `debug`. I made it loud (WARN naming the
+403 + the OAuth requirement) but did NOT restore it: that needs an OAuth app-only credential, which
+is Frank's to create. Making a dead source visible is mine; provisioning a credential is not.
+This also corrects my PASS 2 write-up, which called Reddit working based on reading the code.

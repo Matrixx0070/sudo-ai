@@ -497,3 +497,110 @@ because the output is varied and specific rather than an obvious constant.
 `viral_video` by measurement, drop `format_change`/`trend_shift` (unmeasurable, invented by nature).
 
 **Complexity:** Low (disable) / Low-Medium (rebuild). **Depends on:** GAP-08 shares the RSS client.
+
+---
+
+# VERIFICATION PASS 3 — trend sources: YouTube/TikTok/X, and a dead source found
+
+Added 2026-08-01T18:10Z, prompted by Frank's observation that the scanners covered Hacker News,
+Reddit and Google Trends but **not the platforms the business actually runs on**. Correct, and the
+gap was larger than it looked — one of the three existing sources turned out to be dead.
+
+## The three platforms, decided on evidence not vibes
+
+| Platform | Verdict | Cost | Why |
+|---|---|---|---|
+| **YouTube** | **BUILT + LIVE-PROVEN** | **1 quota unit/scan** | `videos.list?chart=mostPopular`. Free, cheap, and it is the actual platform. |
+| **X / Twitter** | **BUILT, credential-gated, off by default** | ~$0.010/call ≈ $7/mo hourly | Free tier removed for new developers 2026-02-06; pay-per-use only. Spending is the operator's call. |
+| **TikTok** | **DELIBERATELY NOT BUILT** | n/a | No viable route — see below. |
+
+### YouTube — `scanYouTubeTrending()`, live-proven against the real API
+
+`trend-radar-scanners.ts scanYouTubeTrending()`. Uses `videos.list?chart=mostPopular`, which costs
+**1 unit regardless of `maxResults`** — deliberately *not* `search.list` (100 units, the GAP-02
+quota bomb). One request per scan, never paginated. Charges the GAP-02 ledger before the call,
+because a request that fails still consumed quota. Self-skips without `YOUTUBE_API_KEY`.
+
+**Live probe, real key, real API (not mocks):**
+```
+quota spent BEFORE: 0
+quota spent AFTER : 1     (expect 1)
+items returned    : 4
+  [youtube] score=5,106,219  Ariana Grande - petal (official music video)
+  [youtube] score=  134,767  2FithyRicky - GMFU [Official Music Video]
+  ...
+breakdown: [{"method":"videos.list","units":1,"calls":1}]
+```
+And through the full orchestrator:
+```
+scanAll by source : {"hackernews":30,"google_trends":10,"youtube":24}
+quota charged     : 1 unit(s)
+niche matches     : 12 / 64
+```
+
+**Finding from the probe: the unfiltered chart is near-useless for a niche channel.** The US
+`mostPopular` chart is music videos and film trailers. Passing `videoCategoryId` fixes it — the
+same call with `categoryId=28` (Science & Tech) returned genuine niche content:
+`"I Built a Transparent Screen Into My PC Case"` (20.2M views), `"Storing The Entire Internet On
+One Hard Drive"` (3.4M). **Operators should always set a category**; the parameter is plumbed and
+the default is left unset because the right value is per-channel, not global.
+
+Also confirmed: the API returned **4 items for `maxResults=5`** — that is YouTube's own behaviour on
+the trending chart, verified by hitting the raw endpoint. Not a bug in the mapping.
+
+### X / Twitter — `scanXTrends()`, built but costs money, so it is opt-in
+
+As of **2026-02-06** X removed the free tier for new developers and moved to pay-per-use; trends
+bill at roughly **$0.010 per call**, so hourly polling is ~$7/month. Cheap, but non-zero, and
+spending is not the system's decision. With no `X_API_BEARER_TOKEN` the scanner returns `[]` and
+makes no request — asserted by test.
+
+**UNVERIFIED and labelled as such in the source:** the response shape is coded from X's documented
+v2 `trends/by/woeid` schema but has **not** been exercised against the live endpoint, because that
+needs a paid credential this project does not hold. The parser returns `[]` on any unrecognised
+shape, so schema drift degrades to "no trends" rather than to bad data.
+
+### TikTok — not built, and that is the right answer
+
+Checked 2026-08-01, not assumed. TikTok's official API exposes **no** trending-video, hashtag-
+analytics or discovery endpoints at all. The Research API that could approximate it is
+approval-gated (~4 weeks), restricted to accredited researchers and nonprofits with commercial
+applications typically rejected, capped at 1,000 req/day, and **contractually prohibits commercial
+use of the data** — which is exactly what a monetised channel is. Third-party scrapers are paid,
+ToS-grey and brittle.
+
+So a TikTok scanner would have to either scrape or ask a model to guess what is trending. This
+codebase has now been burned twice by the second option (GAP-04a fabricated CTR, GAP-15 fabricated
+competitor alerts). **No source beats an invented one.** If TikTok signal is genuinely wanted, it is
+a paid-vendor procurement decision, not an engineering task.
+
+## NEW FINDING — Reddit is dead in production, and was failing silently
+
+The live `scanAll` probe returned **zero Reddit items across all 8 subreddits**. Direct check:
+
+```
+GET https://www.reddit.com/r/technology/hot.json?limit=3
+→ 403 Blocked
+```
+
+Reddit now blocks datacenter IPs on the public `.json` endpoints. Every per-subreddit failure was
+logged at **`logger.debug`** (`trend-radar-scanners.ts`, old `:167`) and the function returned a
+clean empty array, so the scanner reported healthy while **one of three sources contributed
+nothing**. Nothing anywhere would have told an operator.
+
+This corrects my own PASS 2 assessment, which listed Reddit among the working sources on the
+strength of reading the code rather than running it. **Reading the code was not enough; the code was
+fine and the world had changed underneath it.** That is the general lesson from this pass.
+
+**Fixed:** a fully-blocked source now emits a `WARN` naming the 403 and the OAuth requirement.
+This does not restore Reddit — that needs an OAuth app-only credential, which is an operator
+decision — it makes the outage visible instead of silent.
+
+## REVISED SCORECARD DELTA
+
+| # | Capability | Pass 2 | Pass 3 | Why |
+|---|---|---|---|---|
+| 4 | Trend detection | EXISTS, real, L3 | **EXISTS, YouTube-aware, L3** | YouTube chart added + live-proven; X opt-in; Reddit found dead but now loud |
+
+Sources live today without new credentials: **Hacker News, Google Trends, YouTube.**
+Dead pending a credential: **Reddit** (OAuth). Opt-in paid: **X**. Not viable: **TikTok**.

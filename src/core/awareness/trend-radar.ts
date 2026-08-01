@@ -11,12 +11,19 @@
  * Companion modules:
  *   trend-radar-types.ts    — TrendItem / TrendAlert interfaces
  *   trend-radar-db.ts       — SQLite persistence layer
- *   trend-radar-scanners.ts — HN / Reddit / Google Trends HTTP scanners
+ *   trend-radar-scanners.ts — HN / Reddit / Google Trends / YouTube / X scanners
  */
 
 import { createLogger } from '../shared/logger.js';
 import { TrendRadarDB } from './trend-radar-db.js';
-import { scanHackerNews, scanReddit, scanGoogleTrends } from './trend-radar-scanners.js';
+import {
+  scanHackerNews,
+  scanReddit,
+  scanGoogleTrends,
+  scanYouTubeTrending,
+  scanXTrends,
+  type QuotaSpender,
+} from './trend-radar-scanners.js';
 import type { TrendItem, TrendAlert } from './trend-radar-types.js';
 
 export type { TrendItem, TrendAlert };
@@ -43,6 +50,14 @@ export class TrendRadar {
 
   /** Optional callback fired for every alert generated after a scan. */
   onTrendDetected?: (alert: TrendAlert) => void;
+
+  /**
+   * Optional YouTube quota ledger. Attach one (`src/core/youtube/quota-ledger.ts`)
+   * so trending scans are charged against the same 10,000-unit daily budget the
+   * publish lane draws on — otherwise a 15-minute scan interval spends 96
+   * unaccounted units a day and the upload lane cannot see it.
+   */
+  quotaLedger?: QuotaSpender;
 
   constructor(dbPath: string) {
     if (!dbPath || typeof dbPath !== 'string') {
@@ -96,16 +111,23 @@ export class TrendRadar {
     }
   }
 
-  /** Run all scanners in parallel, apply niche matching, persist, and return. */
+  /**
+   * Run all scanners in parallel, apply niche matching, persist, and return.
+   *
+   * YouTube and X self-skip when unconfigured (no `YOUTUBE_API_KEY` /
+   * `X_API_BEARER_TOKEN`), so this stays a no-op-safe call on a fresh install.
+   */
   async scanAll(): Promise<TrendItem[]> {
-    const [hn, reddit, google] = await Promise.allSettled([
+    const settled = await Promise.allSettled([
       this.scanHackerNews(),
       this.scanReddit(),
       this.scanGoogleTrends(),
+      this.scanYouTubeTrending(),
+      this.scanXTrends(),
     ]);
 
     const items: TrendItem[] = [];
-    for (const result of [hn, reddit, google]) {
+    for (const result of settled) {
       if (result.status === 'fulfilled') {
         items.push(...result.value);
       } else {
@@ -134,6 +156,31 @@ export class TrendRadar {
   /** Scan Google Trends RSS, apply niche matching, return items. */
   async scanGoogleTrends(): Promise<TrendItem[]> {
     const items = await scanGoogleTrends();
+    for (const item of items) item.matchesNiche = this.matchesNiche(item);
+    return items;
+  }
+
+  /**
+   * Scan the YouTube trending chart — the only source here that is actually
+   * YouTube. Costs 1 quota unit per scan when a ledger is attached; self-skips
+   * without `YOUTUBE_API_KEY`.
+   */
+  async scanYouTubeTrending(regionCode?: string, categoryId?: string): Promise<TrendItem[]> {
+    const items = await scanYouTubeTrending({
+      ...(regionCode ? { regionCode } : {}),
+      ...(categoryId ? { categoryId } : {}),
+      ...(this.quotaLedger ? { ledger: this.quotaLedger } : {}),
+    });
+    for (const item of items) item.matchesNiche = this.matchesNiche(item);
+    return items;
+  }
+
+  /**
+   * Scan X/Twitter trends. PAID endpoint — self-skips without
+   * `X_API_BEARER_TOKEN`, so it costs nothing unless the operator opts in.
+   */
+  async scanXTrends(woeid?: number): Promise<TrendItem[]> {
+    const items = await scanXTrends(woeid !== undefined ? { woeid } : {});
     for (const item of items) item.matchesNiche = this.matchesNiche(item);
     return items;
   }

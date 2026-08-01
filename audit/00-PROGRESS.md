@@ -73,3 +73,19 @@ Aggregate still L1 (trend up, competitor down, they cancel). 05-VERDICT unchange
 Commit f885732a pushed. 59 youtube tests; full suite 12,805 pass / same 6 pre-existing failures.
 
 COMPLETE (pass 2)
+
+## 2026-08-01T18:10Z — PASS 3: trend sources (Frank: "not including YouTube tiktok twitter/x")
+- **YouTube scanner BUILT + LIVE-PROVEN** with the real key: `videos.list?chart=mostPopular`,
+  1 quota unit, never `search.list`, charged to the GAP-02 ledger. scanAll now returns
+  {"hackernews":30,"google_trends":10,"youtube":24} for 1 unit.
+  Probe finding: unfiltered chart = music/trailers; `videoCategoryId=28` returns real tech content.
+- **X scanner BUILT, credential-gated OFF** — free tier removed 2026-02-06, ~$0.010/call.
+  Response shape UNVERIFIED (needs a paid token); labelled in source; fails to [] on drift.
+- **TikTok NOT built, on purpose** — no trending/hashtag endpoints exist; Research API is
+  approval-gated, academic-only, bans commercial use. Only options were scrape or hallucinate.
+- **NEW FINDING: Reddit is DEAD in prod — 403 Blocked** (datacenter IPs), contributing 0/64 items
+  while logging only at debug. Corrects my PASS 2 write-up. Made loud (WARN), not restored
+  (needs an OAuth credential = Frank's call).
+- 24 awareness tests. Full suite 12,823 pass / same 6 pre-existing failures. lint clean.
+
+COMPLETE (pass 3)
