@@ -45,6 +45,11 @@ export interface NightlyEvalSandboxDeps {
   /** Injected scenario runner for tests. Default: sandbox runEval (results
    * land in bench.db via the runner itself). */
   run?: (scenario: Scenario) => Promise<EvalRunReport>;
+  /**
+   * Last-run epoch ms per scenario id, for rotation. Default: bench.db
+   * eval-sandbox rows. Missing ids sort as never-run (highest priority).
+   */
+  lastRunAt?: () => Promise<Record<string, number>>;
 }
 
 export interface NightlyBenchDeps {
@@ -199,6 +204,40 @@ export function evalSweepBudgetUsd(): number {
 }
 
 /**
+ * Newest bench.db timestamp per eval-sandbox scenario id (epoch ms), for
+ * rotation. Read-only and fail-soft: any problem yields {} so the sweep falls
+ * back to alphabetical order rather than not running.
+ *
+ * NOTE: rotation keys on the scenario id, which is assumed to equal the
+ * manifest filename stem (as the sweep's own error path already assumes). A
+ * mismatch only makes that scenario look never-run, so it runs every night —
+ * degraded rotation, never a skipped scenario.
+ */
+async function defaultLastRunAt(): Promise<Record<string, number>> {
+  const { dataPath } = await import('../shared/paths.js');
+  const dbPath = dataPath('bench.db');
+  if (!existsSync(dbPath)) return {};
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const rows = db
+      .prepare(
+        `SELECT task_id AS id, MAX(timestamp) AS ts FROM bench_results
+         WHERE agent_id = 'eval-sandbox' GROUP BY task_id`,
+      )
+      .all() as Array<{ id: string; ts: string }>;
+    const out: Record<string, number> = {};
+    for (const r of rows) {
+      const t = Date.parse(r.ts);
+      if (Number.isFinite(t)) out[r.id] = t;
+    }
+    return out;
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * Run every scenario in evals/sandbox/scenarios/ through the sandbox runner,
  * within the SWEEP'S OWN USD budget: stop STARTING new scenarios once its
  * remaining budget drops below {@link EVAL_SWEEP_BUDGET_FLOOR_USD}. Bench rows
@@ -217,11 +256,29 @@ async function runEvalSandboxSweep(
     log.warn({ scenarioDir }, 'eval-sandbox sweep: scenario dir missing — skipping');
     return;
   }
-  const files = readdirSync(scenarioDir).filter((f) => /\.(ya?ml|json)$/.test(f)).sort();
+  const allFiles = readdirSync(scenarioDir).filter((f) => /\.(ya?ml|json)$/.test(f)).sort();
 
   // Lazy imports keep sandbox module load off every runNightlyBench call site.
   const { loadScenarioFile } = await import('./sandbox/scenario.js');
   const run = evalDeps.run ?? (await import('./sandbox/eval-runner.js')).runEval;
+
+  // ROTATION: the sweep's budget covers only a few scenarios per night, so a
+  // fixed alphabetical order would re-run the same head every night and gate
+  // the tail NEVER (live 2026-08-01: coding-task + credential-canary ran, the
+  // other 5 were permanently "not run"). Order least-recently-run first so
+  // successive nights cover the whole suite at unchanged spend. Never-run
+  // scenarios sort first; ties keep alphabetical order for determinism.
+  const lastRunAt = evalDeps.lastRunAt ?? defaultLastRunAt;
+  let lastRuns: Record<string, number> = {};
+  try {
+    lastRuns = await lastRunAt();
+  } catch (err) {
+    log.warn({ err: String(err) }, 'eval-sandbox sweep: last-run lookup failed — using file order');
+  }
+  const idOf = (file: string): string => file.replace(/\.(ya?ml|json)$/, '');
+  const files = [...allFiles].sort(
+    (a, b) => (lastRuns[idOf(a)] ?? 0) - (lastRuns[idOf(b)] ?? 0) || a.localeCompare(b),
+  );
 
   const results: SandboxScenarioResult[] = [];
   for (const [i, file] of files.entries()) {

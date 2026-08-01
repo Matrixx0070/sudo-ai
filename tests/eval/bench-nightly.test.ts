@@ -229,6 +229,37 @@ describe('runNightlyBench eval-sandbox sweep', () => {
     );
   });
 
+  it('rotates least-recently-run first so a budget-capped sweep still covers every scenario', async () => {
+    process.env['SUDO_EVAL_NIGHTLY'] = '1';
+    const { store } = fakeStore();
+    const ran: string[] = [];
+    // s-alpha ran recently, s-beta never → beta must go FIRST.
+    const s = await runNightlyBench({
+      runner: fakeRunner({ passed: true, costUsd: 0 }), benchStore: store,
+      evalSandbox: {
+        ...sweepDeps(async (sc) => { ran.push(sc.id); return fakeEvalReport(sc, 1); }),
+        lastRunAt: async () => ({ 's-alpha': Date.now() }),
+      },
+    });
+    expect(ran[0]).toBe('s-beta');
+    expect(s.evalScenariosRun).toBe(2);
+  });
+
+  it('falls back to file order when the last-run lookup fails (never blocks the sweep)', async () => {
+    process.env['SUDO_EVAL_NIGHTLY'] = '1';
+    const { store } = fakeStore();
+    const ran: string[] = [];
+    const s = await runNightlyBench({
+      runner: fakeRunner({ passed: true, costUsd: 0 }), benchStore: store,
+      evalSandbox: {
+        ...sweepDeps(async (sc) => { ran.push(sc.id); return fakeEvalReport(sc, 1); }),
+        lastRunAt: async () => { throw new Error('db gone'); },
+      },
+    });
+    expect(s.evalScenariosRun).toBe(2);
+    expect(ran).toEqual(['s-alpha', 's-beta']);
+  });
+
   it('agent-task spend no longer suppresses the sweep (this test previously PINNED the bug)', async () => {
     // Before the own-budget fix this asserted `run` was NEVER called when the
     // agent tasks burned the shared cap — i.e. the suite encoded the starvation
