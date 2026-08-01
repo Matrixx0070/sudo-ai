@@ -33,10 +33,36 @@ are the same team, not separate accounts.
 
 ~**$539 unpaid across three months.** Credits remaining `$149.97`; invoiced spend `$161.20`.
 
-This plausibly explains **`project-xai-free-lane-revoked`** (2026-07-31: `grok-4.5-build-free`
-began 404ing and the team "lost access"). Access revocation following three failed payments
-is the ordinary consequence. **Not proven** — no page stated a suspension reason — but the
-timing and the mechanism line up, and it is checkable by fixing payment and retrying.
+### RETRACTED — this did NOT cause the free-lane revocation
+
+An earlier revision said the failed invoices "plausibly explain"
+`project-xai-free-lane-revoked`. **Investigated, and that is wrong.**
+
+| date | event |
+|---|---|
+| 3 May / 4 Jun / 7 Jul | the three invoices fail |
+| **25 Jul** | `grok-4.5-build-free` **proven working at cost 0** |
+| 26 Jul – 1 Aug | **20,884 API requests served**, $0.26 |
+| 31 Jul | free variant 404s; `grok-4.5` meters |
+| 1 Aug | subscription **ACTIVE**, Tier 3, $149.97 credits |
+
+Two independent disproofs:
+
+1. **The free lane still worked on 25 July** — 18 days after the most recent failed invoice
+   and nearly three months after the largest. A revocation caused by those payments would
+   have landed in May, not late July.
+2. **The metered API kept serving 20,884 requests through 26 Jul–1 Aug**, i.e. after all
+   three failures, and the subscription still reports `SUBSCRIPTION_STATUS_ACTIVE` today. A
+   suspended account does not serve requests.
+
+So the original conclusion in `project-xai-free-lane-revoked` stands: this was an **xAI
+entitlement/product change** — a free-tier API grant that ended — not account punishment.
+The 404 text names whichever team the token belongs to, so *both* teams see it; it was never
+specific to one account's standing.
+
+**The unpaid invoices remain a real and separate problem.** ~$539 outstanding is its own
+risk, and the move from card invoices to prepaid credits is consistent with a card that
+stopped working. It simply is not the cause of the lane going away.
 
 ## Rate-limit tiers (metered lane)
 
