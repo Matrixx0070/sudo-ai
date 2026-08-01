@@ -99,6 +99,41 @@ Feature flags seen in the bundle: `api_keys_enabled:true`, `imagine_enabled:true
 `console_org_enabled:false`, `console_org_switcher_enabled:false`,
 `console_imagine_templates_enabled`.
 
+## Round 2 — full settings surface (Google-authenticated session)
+
+Real route slugs, read from the DOM rather than guessed (three earlier guesses 404'd):
+
+```
+/team/<id>/settings/{team, billing, rate-limits, observability, users,
+                     security, domains, audit, management-keys, account}
+```
+
+### CORRECTION to "the same team"
+
+The earlier claim that the $30 seat and the console are "one team" needs refining.
+The console team self-describes as **"Personal team to get started with the xAI API"**,
+and the Users page carries a distinct link: *"Looking for Grok Business? Manage your
+licenses and user's access to Grok Business."*
+
+So the team id is shared, but **Grok Business seat licensing is a separate surface** from
+the metered API team. Same entity, two billing relationships — not one merged account.
+
+### Findings
+
+- **Team** — created 1 Aug 2025, 2 members. **Zero Data Retention (ZDR) is available but
+  currently blocked**: *"Delete your collections to enable ZDR."* Directly relevant to this
+  repo's zone invariants — ZDR is reachable if collections are cleared.
+- **Users** — 2 members (a service-style account and the owner). No pending invitations.
+- **Security** — all three controls **off**: MFA not enforced, API-key restrictions not
+  required, no IP allowlist. Each is available to enable.
+- **Domains** — none verified.
+- **Audit log** — populated, filterable by Accounts / Models, with actor + operation +
+  entity per event. A real audit trail exists for anything the SDK does with a key.
+- **Management keys** — **none exist** (distinct from API keys; they administer the team).
+- **Observability** — E2E latency **p90/p50 22.72s**, TTFT **327ms**, avg request size
+  2.1K tokens (+600%). The 22.7s end-to-end against a 327ms first token means generation
+  length, not connection setup, dominates.
+
 ## Method notes
 
 Auth came from **`/root/chrome_profile`**, which holds the live `sso` + `sso-rw` cookies on
