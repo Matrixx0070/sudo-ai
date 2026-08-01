@@ -55,36 +55,64 @@ async (path, method) => {
   server's accept-window is checked against this offset, not Unix epoch directly.
 - `first16(hash)` — only the first 16 bytes of the SHA-256 are used.
 
-## The fingerprint (`Y`) — why a browser is mandatory
+## The fingerprint (`Y`)
 
-`animationFingerprint(seed)` is not a hash of static data. It:
+`animationFingerprint(seed)`:
 
 1. `document.createElement('div')` and appends it to `body`;
 2. derives CSS keyframes (color / transform / cubic-bezier easing) from seed bytes;
-3. runs `el.animate(keyframes, 4096)`, **pauses** it, and sets `currentTime`;
+3. runs `el.animate(keyframes, 4096)`, **pauses** it, and sets `currentTime` to a
+   seed-derived phase;
 4. reads it back with `getComputedStyle(el)` and extracts the numbers from
-   `computed.color + computed.transform` → hex;
-5. also reads an SVG path `d` attribute off a `.r-1olo0` element, and
-6. opens an `RTCPeerConnection` and folds bytes of its **`.sdp`** into the state.
+   `computed.color + computed.transform` → hex (`dHex`).
 
-So the signature depends on the **actual rendered output** of the browser's animation and
-layout engine plus its WebRTC stack. `jsdom`/Node implement none of these faithfully —
-`getComputedStyle` over a Web Animation returns nothing, and there is no `RTCPeerConnection`.
-That is the mechanical reason pure-Node minting produces correctly-shaped tokens the server
-rejects: the 16 hash bytes are computed over a fingerprint the Node environment cannot
-reproduce.
+## CORRECTION — a browser is NOT mandatory; I overclaimed
+
+An earlier revision of this file said this fingerprint makes pure-Node minting "impossible
+in principle." **That is wrong, and the proof is already in this repo.**
+
+Because the animation is *paused at a fixed, seed-derived `currentTime` with seed-derived
+keyframes*, its `getComputedStyle` output is a **pure function of the seed** — no wall-clock,
+no live rendering needed to know what a browser *would* compute. `grok-seat`'s
+`src/grok-statsig-mint.ts` reimplements exactly that in pure math (`computeDhex(color,
+transform)`) and its tests assert it **byte-exact against 16 live browser loads**
+(`computeDhex('rgb(58,139,186)','matrix(1,0,0,1,0,0)') === '3a8bba100100'`). A working
+byte-exact Node minter refutes "impossible."
+
+So the accurate statement:
+
+- The **oracle is the ROBUST path**, not a hard necessity. Its value is that it never has to
+  *track* the algorithm — the real browser recomputes it after every grok deploy for free.
+  The pure-Node minter is faster and browserless but must be kept in exact lockstep with this
+  module or it drifts.
+- Two elements in the current source are NOT (yet) shown to gate anything, and I should not
+  claim they do: the **`Math.random()*256` first body byte** (line 281) is a per-mint nonce —
+  random every call, so the server cannot be checking it — and the **`RTCPeerConnection.sdp`**
+  reads (lines 99, 221 of the restringed module) sit in `_0x`-named blocks restringer could
+  not clean, i.e. **possibly decoy/dead code** planted to mislead this exact analysis.
+  Whether either is folded into the verified hash is **UNVERIFIED**; the byte-exact Node
+  minter succeeding without them is evidence they are not.
+
+## The 08-01 statsig drift, explained
+
+This is the real payoff. `project-statsig-algorithm-drift-2026-08-01` records that the
+pure-Node minter began producing correctly-shaped tokens the gate 403s. This RE gives the
+mechanism: the Node reimplementation fell **out of lockstep** with a changed shipped
+algorithm — the seed→keyframe derivation, the seed byte indices, or the `currentTime` phase
+changed in a grok deploy, so `dHex` no longer matches. It was NEVER that browser-only
+state got added. The fix is not "abandon pure-Node"; it is **re-derive `computeDhex` from the
+current module 1645000** (webcrack+restringer, as here) and update the fixtures.
 
 ## Consequences for this repo
 
-- **`grok-statsig-oracle.ts` is the correct and only design.** A headed (or genuinely
-  rendering) browser is required by construction, not by accident. Keep it.
-- **Drift is now diagnosable, not mysterious.** If the token starts 403ing, diff this
-  module: the failure is almost always (a) the seed `<meta>` selector changing, (b) the
-  keyframe derivation changing, or (c) the salt rotating. Re-run
-  `webcrack`+`restringer` on `002cl82xplrx4.js` (module 1645000) and compare.
-- **The runtime signing-site locator stays necessary** — the chunk hashes
-  (`002cl82xplrx4` etc.) change every deploy; only the `x-statsig-id` string + the
-  `await <minter>(` shape are stable anchors.
+- **`grok-statsig-oracle.ts` remains the right default** — robustness without tracking.
+  `grok-statsig-mint.ts` (browserless) is the fast path and is viable, but only while its
+  fixtures match the live module.
+- **Drift is now diffable, not mysterious.** Compare module 1645000: seed `<meta>` selector,
+  the byte indices feeding keyframe/currentTime, the salt. Update the shared
+  `seed → dHex` fixtures.
+- **The runtime signing-site locator stays necessary** — chunk hashes (`002cl82xplrx4` etc.)
+  rotate every deploy; only the `x-statsig-id` string + `await <minter>(` shape are stable.
 
 ## Reproduce
 
