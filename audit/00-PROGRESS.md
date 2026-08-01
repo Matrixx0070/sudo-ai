@@ -54,3 +54,22 @@ Not claiming green. Detail in 06-BUILD-REPORT.md and D-07.
   02-CAPABILITIES, 03-GAPS, 04-ROADMAP, 05-VERDICT, 06-BUILD-REPORT.
 
 COMPLETE
+
+## 2026-08-01T17:35Z — VERIFICATION PASS 2 (follow-up on Frank's ask)
+Read the UNVERIFIED modules; results appended to 02-CAPABILITIES.md § VERIFICATION PASS 2.
+- #4 trend detection: **REAL** — trend-radar-scanners.ts hits Hacker News (:20), Reddit (:130) and
+  Google Trends RSS (:22); deterministic scoring, no model. My pass-1 suspicion was WRONG. L3.
+- #2 competitor intel: **FABRICATES** — competitor-monitor.ts:157 prompted for "realistic" alerts
+  and stored them as observations. New GAP-15, disabled same session (f885732a). L2 → L0.
+- #3 viral-hook: hardcoded Hinglish template generator; literally the Gate-4 demonetised pattern.
+- #16 revenue: two disconnected ledgers; real YT revenue lands in earning/tracker, P&L reads
+  finance/revenue-tracker, nothing bridges them.
+- cost control: **cost-tracker.ts:361 checkBudget() has ZERO callers.** No spend cap halts anything.
+  Confirms A-04. Roadmap B6 upgraded P1 → P0, now the top unstarted item.
+- cron scheduler is better than assumed (backoff + auto-disable); the real gap is per-stage
+  pipeline checkpointing, so B5 rescoped.
+- browser/auth.ts left UNVERIFIED deliberately — Gate 2 already rules Studio ops off the publish path.
+Aggregate still L1 (trend up, competitor down, they cancel). 05-VERDICT unchanged.
+Commit f885732a pushed. 59 youtube tests; full suite 12,805 pass / same 6 pre-existing failures.
+
+COMPLETE (pass 2)
