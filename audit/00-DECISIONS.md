@@ -101,3 +101,44 @@ items while reporting success — every failure logged at `debug`. I made it lou
 403 + the OAuth requirement) but did NOT restore it: that needs an OAuth app-only credential, which
 is Frank's to create. Making a dead source visible is mine; provisioning a credential is not.
 This also corrects my PASS 2 write-up, which called Reddit working based on reading the code.
+
+## D-15 | Evaluated headless X scraper repos for trends — REJECTED for trends, on evidence
+Frank asked whether the headless X libraries on GitHub would work for our case. I tested them
+rather than reading READMEs.
+
+**What I checked (npm, published source, live calls — 2026-08-01):**
+| Package | Version / last publish | Trends? |
+|---|---|---|
+| `@the-convocation/twitter-scraper` | 0.22.3, 2026-04-01 | `getTrends()` present |
+| `agent-twitter-client` (elizaOS family) | 0.0.18, **2025-06-15 — 14 months stale** | fork of the above |
+| `rettiwt-api` | 7.1.2, 2026-06-23 (actively maintained) | **no trends support at all** |
+
+`elizaOS/agent-twitter-client` 404s on GitHub. The many `agent-twitter-client-*` forks are all
+derivatives of `@the-convocation/twitter-scraper`.
+
+**Live test result — this is the decision:**
+- `getTrends()` → **HTTP 404**. It calls `api.x.com/2/guide.json`, which is retired
+  (raw curl also returns 400, not 401/403).
+- Same library, same session, `getProfile('elonmusk')` → **SUCCESS**, 241,106,917 followers.
+
+So guest auth works fine; **the trends endpoint specifically is gone.** The library is not broken —
+X removed the thing we wanted. Reaching trends now means the logged-in GraphQL explore endpoints,
+i.e. a real X account + `auth_token`/`ct0` cookies + probably residential proxies. Published
+reporting puts the breakage cadence at every 2–4 weeks as X rotates guest tokens and GraphQL ids,
+and the library's own README warns "any account you log into with this library is subject to being
+banned at any time."
+
+**Decision: do not adopt for trends.** The official endpoint I already built costs ~$0.010/call
+(~$7/month hourly). Paying $7 beats an unmaintained, ToS-violating, ban-risking lane that breaks
+monthly — and that does not even do trends without an account. This repo has already paid for this
+lesson twice: the Grok Cloudflare/Turnstile fight, and the statsig drift that broke a working
+minter in production **today**. Adding a third scraped lane on a hostile platform is repeating it.
+Also note the parser is positionally brittle by construction
+(`instructions[1].addEntries.entries[1].content.timelineModule.items`).
+
+**What IS worth taking from this:** guest-mode profile and tweet reading works, free, right now.
+If the goal is X signal rather than X *trends*, reading ~20 curated niche accounts as a guest is
+cheaper, more stable, and better-targeted than a global trending list. Logged as an option, not
+built — see 06-BUILD-REPORT next-actions.
+
+No dependency was added to the repo; the evaluation ran in /tmp and was cleaned up.
