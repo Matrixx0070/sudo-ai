@@ -16,7 +16,7 @@
  * which essential cookies are present) is surfaced.
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 import {
   getGrokWebSessionManager,
   type GrokWebSession,

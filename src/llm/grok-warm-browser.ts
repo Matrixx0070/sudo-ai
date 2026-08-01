@@ -16,7 +16,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
 import { resolveBrowserDisplay } from '../core/tools/builtin/browser/anti-detect.js';
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 
 const log = createLogger('llm:grok-warm-browser');
 

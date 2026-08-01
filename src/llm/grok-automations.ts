@@ -31,7 +31,7 @@
  * (default OFF). Secrets never logged; callers never see cookie material.
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 import {
   getGrokWebSessionManager,
   GrokWebReloginRequiredError,

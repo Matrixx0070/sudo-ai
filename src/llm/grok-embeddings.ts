@@ -26,7 +26,7 @@
  * only ids / statuses back — never cookie material. No Playwright, no statsig.
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 import {
   getGrokWebSessionManager,
   GrokWebReloginRequiredError,

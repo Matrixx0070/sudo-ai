@@ -20,8 +20,8 @@
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { PROJECT_ROOT } from '../core/shared/paths.js';
-import { createLogger } from '../core/shared/logger.js';
+import { PROJECT_ROOT } from './grok-runtime.js';
+import { createLogger } from './grok-runtime.js';
 
 const log = createLogger('llm:grok-web-bridge');
 

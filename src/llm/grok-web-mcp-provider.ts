@@ -20,7 +20,7 @@
 
 import type { IRRequest, IRResponse, IRContentBlock } from '../../shared-types/ir/v1.js';
 import { chatGrokWeb } from './grok-web-media.js';
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 
 const log = createLogger('llm:grok-web-mcp');
 

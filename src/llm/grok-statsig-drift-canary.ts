@@ -23,7 +23,7 @@
  * The runnable cron entry is scripts/grok-web/statsig_drift_canary.mjs.
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 
 const log = createLogger('llm:grok-statsig-canary');
 
