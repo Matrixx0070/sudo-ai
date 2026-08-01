@@ -330,3 +330,39 @@ Also: a failed upload does **not** record to the corpus — a video that never w
 poison future similarity checks.
 
 18 new tests (71 across the youtube suites). Full suite 12,863 pass, same 6 pre-existing failures.
+
+## D-21 | B6 CLOSED — media spend caps, and the half nobody had noticed
+B6 was scoped as "wire `cost-tracker.checkBudget()`, which has zero callers." On opening it, a
+second and worse defect: **the paid media tools recorded nothing at all.** `video-tools`,
+`factory-tools`, `image-tools` and `thumbnail-tool` each returned 0 hits for any cost-tracker
+reference. So a Luma/Runway/Kling retry loop could bill indefinitely while every meter in the
+system read $0 — wiring the check alone would have enforced a cap against a number that was
+structurally always zero.
+
+`src/core/billing/media-spend.ts` does both: **records** paid media calls into the cost tracker and
+**enforces** a per-job and per-day cap. Wired into `media.video-generate` (all three providers) and
+`media.shorts-factory` (DALL·E + TTS).
+
+**Caps default ON**, unlike `xai-billing` (D-19). The distinction is deliberate: there, being
+unconfigured means we genuinely cannot *measure*; here measurement is local SQLite and always
+available, so shipping disabled would be the exact failure being fixed. Defaults $10/day and
+$2/video — generous against the audit's ~$4.24/video estimate — with `SUDO_MEDIA_CAP_DISABLE=1` as
+a deliberately ugly escape hatch.
+
+**Gate 8 satisfied by execution, not by reading.** The roadmap demands "a test that drives it to the
+cap and asserts refusal". `media-spend.test.ts` runs a 100-iteration retry storm and asserts it is
+halted after **5** calls on the per-job cap and **2** on the daily cap, with recorded spend never
+exceeding either.
+
+Two design points worth recording:
+- Failures are recorded too. A generation that errored after the provider accepted it was still
+  billed, and an unrecorded spend is an unenforced cap on the retry that follows.
+- `shorts-factory` checks the whole projected cost (image + TTS) up front, so a run is refused
+  before the first paid call rather than halfway through with an orphaned billed image.
+- Unreadable spend ⇒ refuse, never "$0 spent" — same rule as D-19.
+
+The unit costs are **estimates from published pricing, not billed amounts**, and are documented as
+such: they exist to bound a runaway loop, where being 30% wrong still stops the storm. Callers that
+know the real figure pass `costUsd`.
+
+12 tests. Full suite 12,875 pass, same 6 pre-existing failures. **Phase A is now complete.**
