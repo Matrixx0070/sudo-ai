@@ -97,8 +97,15 @@ guessing; the real number is 50 and it is queryable.
 
 Direct consequence for `grok-web-media.ts`: the 3-attempt retry loop currently burns
 quota blind, and `GrokWebRateLimitedError` is only raised **after** a 429 has already been
-spent. A pre-flight `/rest/rate-limits` read (cookie-auth, and **statsig-free** — it is not
-on the gated path) would let the lane check its own budget before spending it.
+spent. A pre-flight `/rest/rate-limits` read would let the lane check its budget before
+spending it.
+
+**CORRECTION.** An earlier revision of this section called `/rest/rate-limits`
+"statsig-free". It is **not** — §10b shows it carrying `x-statsig-id` on 6 of 6 requests.
+A pre-flight check therefore costs one statsig mint (~2ms once the oracle is warm, per
+`grok-statsig-oracle.ts`), not zero. Still worth it against a 50-query budget, but the
+design must mint a token, and a budget check that fails closed on a mint failure would be
+worse than no check at all.
 
 ## 3. Media quota — separate 18h window
 
@@ -223,16 +230,43 @@ than synthetic mouse coordinates.
 Three workspaces under one team. For the SDK this is the useful form: workspace context is
 addressable per-request, no session state required.
 
-## 10. HARNESS BUG — the capture records no headers at all
+## 10. RETRACTED — there was no harness bug; the analysis was wrong
 
-`scripts/capture/mitm-capture.py` declares a `KEEP_HEADERS` allowlist
-(`x-statsig-id`, `x-xai-request-id`, `content-type`, …) but the emitted records contain
-**zero** headers — `HEADERS KEPT: {}` across ~2,000 requests.
+An earlier revision of this document claimed `mitm-capture.py` emitted no headers. **That
+was false and is withdrawn.** The addon writes them under the key **`hdrs`** (line 71); the
+analysis script read `headers`, got `None` every time, and reported an empty set.
 
-Consequence: **no capture taken with this addon can show which endpoints carry
-`x-statsig-id`** — including the companion doc's claim about which calls are statsig-gated,
-which was necessarily inferred from other evidence. Fix the addon before relying on any
-header-level conclusion.
+The headers were there all along: **303 of 2,085** requests in pass 1 carry `x-statsig-id`.
+The harness needs no fix. Recorded here rather than quietly deleted because the false claim
+was published in commit `3a2e7875`, and because it is the second time in this effort that a
+confident conclusion came from a bug in the measuring instrument rather than the thing
+measured.
+
+## 10b. SETTLED — exactly which endpoints carry `x-statsig-id`
+
+Observed, not inferred. Separation is perfectly clean: every endpoint is either always
+gated or never gated, with **no mixed cases** across both passes.
+
+**statsig-FREE — only four:**
+
+| endpoint | with / without |
+|---|---|
+| `POST /rest/connectors/list-v2` | 0 / 16 |
+| `POST /rest/connectors/list-available-v2` | 0 / 16 |
+| `POST /rest/onboarding/for-user` | 0 / 16 |
+| `GET /ws/mgw/` (the WS upgrade) | 0 / 3 |
+
+**Everything else is gated — 30 endpoints**, including all of `app-chat/*`, all `media/*`,
+`modes`, `skills`, `system-prompt/list`, `user-settings`, `user-skills`, `workspaces`,
+`products`, `notifications/list`, `suggestions/*`, `assets`, `automations`,
+`grok-for-teams/*`, `sharing/my-org-teams`, and `rate-limits`.
+
+This **confirms** the companion doc's claim that connector/MCP calls are cookie-only and
+statsig-free. It also means the practical rule is the inverse of what the codebase assumes:
+on the web lane, **assume statsig is required unless the endpoint is one of those four.**
+
+That the `/ws/mgw/` upgrade carries no statsig is consistent with the WS lane being guarded
+by Castle instead — see §7, where the token was nonetheless absent.
 
 ## 11. Still NOT captured — honestly
 
