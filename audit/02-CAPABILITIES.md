@@ -334,3 +334,166 @@ What is weak, named plainly:
 6. **`YOUTUBE_OAUTH_TOKEN` as a static env string** is the kind of shortcut that reads fine in a
    demo and makes unattended operation categorically impossible. It is one small module away from
    being fixed, and until it is, nothing else in this domain matters.
+
+---
+
+# VERIFICATION PASS 2 — the UNVERIFIED rows, closed
+
+Added 2026-08-01T17:40Z. Pass 1 left rows unread rather than guessed (D-04, subagent credits).
+This pass opened them. **Two results change the picture, and one of them is worse than anything in
+pass 1.** Each row below is now EXISTS/PARTIAL/ABSENT with citations, and nothing is left UNVERIFIED.
+
+## #4 Trend detection — **CLOSED: real. I was wrong to suspect otherwise.**
+
+`src/core/awareness/trend-radar-scanners.ts` makes genuine HTTP calls to three real, free,
+zero-auth sources:
+- **Hacker News** — `hacker-news.firebaseio.com/v0/topstories.json` (`:20`) then per-item fetches
+  (`:21`), in `scanHackerNews()` (`:70`).
+- **Reddit** — `reddit.com/r/{sub}/hot.json?limit=10` (`:130`) across `DEFAULT_SUBREDDITS` (`:24`),
+  in `scanReddit()` (`:115`).
+- **Google Trends** — `trends.google.com/trending/rss?geo=US` (`:22`), in `scanGoogleTrends()` (`:164`).
+
+`src/core/awareness/trend-radar.ts` wraps these with SQLite persistence (`storeTrends` `:193`), a
+real interval scheduler (`start()` `:60` → `_runScan()` `:83`), and **deterministic** severity
+banding (`:166-168`) and alert text (`:176`, `:186`). **No model is involved anywhere.** This is
+measured data, not invented data.
+
+Two real limits:
+1. `matchesNiche()` (`:146`) filters against a **hardcoded keyword list** at `trend-radar.ts:31` —
+   `'llm','openai','tech','india','pakistan','youtube','shorts'`. That is one person's interests
+   baked into source. A channel in another niche gets nothing. Needs to be config, not a literal.
+2. None of the three sources is YouTube. Useful for topic discovery, useless for "what is working
+   on YouTube right now".
+
+**Revised: PARTIAL→EXISTS, real. Current L3 (it runs on a schedule unattended) → Achievable L4.**
+This is the strongest non-YouTube capability in the audit and I under-rated it in pass 1.
+
+## #2 Niche & competitor intel — **CLOSED: fabrication, and worse than the CTR stub.**
+
+`src/core/competitive/competitor-monitor.ts:157 checkActivity()` makes **zero network calls**. It
+passes the competitor's stored name, URL, niche and notes to the model with this system prompt
+(`:169`):
+
+> *"You are a YouTube competitive intelligence analyst. Given competitor channel info, **generate
+> 1-3 realistic activity alerts** as a JSON array. Each item: { "type": one of
+> `new_upload`|`viral_video`|`format_change`|`milestone`|`trend_shift` … }"*
+
+The model's output is parsed (`:180`) and written straight into the alerts table via `_insertAlert`
+(`:189`) — the same table and same shape a real observation would occupy.
+
+**The word "realistic" is in the prompt.** The system asks a model to invent plausible competitor
+events — "they hit a milestone", "they had a viral video", "they changed format" — and stores them
+as competitive intelligence. Nothing downstream can distinguish an invented `new_upload` from an
+observed one. A human reading the alerts feed has no signal that none of it happened.
+
+This is the same defect class as `thumbnail-ab.ts:296` but strictly worse: the CTR stub at least
+wrote one obviously-constant number, whereas this generates varied, specific, plausible prose
+designed to read as observation. **New gap: GAP-15.**
+
+Credit for one thing: when the brain is absent or returns non-JSON it falls back (`:196`) to an
+honest `"Manual check recommended for X — visit <url>"`. The honest path exists; the model path
+overrides it.
+
+**Revised: PARTIAL→BROKEN (fabricates). Current L0 → Achievable L4** — real competitor tracking is
+easy and free via the channel RSS feed (0 quota) plus `videos.list` (1 unit), per GAP-08.
+
+## #3 Content strategy / #5 Scripting — **CLOSED: `viral-hook` is a hardcoded template generator.**
+
+`src/core/skills/content/viral-hook/index.ts` makes no network call and uses no model. It maps over
+a fixed `templates` array (`:58`) and appends two **hardcoded Hinglish strings** (`:67-68`):
+
+```
+`${localWord.toUpperCase()} — ${topic} ne mera dimaag hilaa diya! ${emojis[0]}`
+`Sach bol: kya tu sach mein ${topic} ke baare mein jaanta hai? ${emojis[1]}`
+```
+
+Two problems. It is hardcoded Hindi/Urdu phrasing with the topic slotted in, so it is unusable for
+an English-language finance/tech channel. And more importantly it is **literally the artifact Gate 4
+demonetises** — "made with a template with little to no variation across videos", one skeleton with
+a noun swapped. Nothing here should touch a real channel. Notably, the GAP-03 policy gate shipped in
+this run would **block** its output on the similarity check, which is a decent sanity test of the gate.
+
+**Revised: #3 ABSENT confirmed (this is not a strategy system). Current L0/L1 → Achievable L3.**
+
+## #16 Revenue optimization — **CLOSED: two disconnected ledgers, neither fed automatically.**
+
+- `src/core/finance/revenue-tracker.ts` is a **manual bookkeeping ledger** — SQLite only, no
+  network. `addRevenue()` (`:84`) has exactly **one caller in the whole repo**:
+  `src/core/tools/builtin/meta/finance-tracker.ts:83`, an agent tool. So revenue only exists there
+  if someone types it in.
+- `src/core/business/analytics.ts` is SQL-over-local-tables (`:176`, `:197`). No network, no model.
+- Meanwhile `src/core/earning/tracker.ts:104` pulls **real** `estimatedRevenue` from the Analytics
+  API into its **own separate** SQLite.
+
+So real YouTube revenue lands in one store, the P&L reads a different store, and **nothing bridges
+them**. That is a third duplication on top of the two Analytics clients (GAP-12).
+
+**Revised: PARTIAL confirmed, cause now known. Current L1 → Achievable L3.**
+
+## #20 Learning from history / system view — **CLOSED: cron has retry, pipelines have no checkpointing.**
+
+`src/core/cron/scheduler.ts` is more capable than pass 1 assumed: per-job consecutive-error
+tracking, exponential backoff (`backoffFor`, `:321`), and **auto-disable after
+`MAX_CONSECUTIVE_ERRORS`** (`:313`). That is real durability at the *job* level.
+
+What does **not** exist is per-stage checkpointing *within* a job. A publish pipeline
+(script → assets → render → upload) that dies at the render stage restarts from zero and re-pays
+for every completed stage. Roadmap item B5 stands as written, but should be scoped as
+"pipeline checkpointing", not "build a scheduler" — the scheduler is fine.
+
+## Cost control — **CLOSED, and this one is a finding, not a note.**
+
+`src/core/billing/cost-tracker.ts:361 checkBudget(dailyLimit)` computes `{ exceeded, current, limit }`
+correctly. **It has zero callers.** Grep across `src/` for `checkBudget|exceedsDailyBudget|isOverBudget|overBudget`:
+no call sites.
+
+So the daily spend budget is a **pure reporting function that nothing acts on**. There is no code
+path anywhere in this repo by which exceeding a spend limit stops work. Assumption A-04 in pass 1
+guessed this; it is now confirmed by grep.
+
+This directly violates `CLAUDE.md` invariant 10 ("every recurring background job declares per-run +
+per-day budgets; exhaustion halts gracefully"). Combined with a video pipeline that calls paid
+image, video and TTS APIs in retry loops, this is the fastest path to losing real money in the
+whole system. **Roadmap item B6 is upgraded P1 → P0.**
+
+## #11 Studio ops / browser — deferred, and honestly so
+
+`src/core/tools/builtin/browser/auth.ts` was not opened in this pass either. It does not change any
+verdict: Gate 2 already rules Studio automation off the publish path, and GAP-14 is last in the
+roadmap by design. **Left UNVERIFIED deliberately, not by omission.**
+
+---
+
+## REVISED SCORECARD DELTAS
+
+| # | Capability | Pass 1 | Pass 2 | Why |
+|---|---|---|---|---|
+| 2 | Niche & competitor intel | PARTIAL, L2 | **BROKEN (fabricates), L0** | `checkActivity` invents alerts |
+| 3 | Content strategy | ABSENT, L1 | ABSENT, **L0** | viral-hook is a Hinglish template |
+| 4 | Trend detection | UNVERIFIED | **EXISTS, real, L3** | 3 real sources, deterministic, scheduled |
+| 16 | Revenue optimization | PARTIAL, L1 | PARTIAL, L1 (cause found) | two disconnected ledgers |
+| 20 | Learning from history | PARTIAL, L1 | PARTIAL, L1 (scheduler is fine) | no pipeline checkpointing |
+| — | Cost control | assumed unenforced | **CONFIRMED unenforced** | `checkBudget` has no callers |
+
+**Aggregate today: still L1.** Trend detection went up, competitor intel went down; they cancel.
+The verdict in `05-VERDICT.md` is unchanged — but the *fabrication* theme is now a pattern with
+three instances (thumbnail CTR, competitor alerts, and templated hooks), not a one-off. That
+pattern, not any single bug, is the thing to watch in this codebase.
+
+---
+
+## NEW GAP
+
+### GAP-15 — `checkActivity` fabricates competitor intelligence **[P0 — disable; P1 — rebuild]**
+
+**Why it matters.** `competitor-monitor.ts:157` asks a model to "generate 1-3 realistic activity
+alerts" from a channel's stored metadata and writes them to the alerts table as observations. It is
+indistinguishable downstream from real intel and will be believed. Strictly worse than the CTR stub
+because the output is varied and specific rather than an obvious constant.
+
+**Approach.** *Now:* delete the brain branch (`:163-195`); keep the honest fallback at `:196`.
+*Then:* real monitoring via the channel RSS feed (`youtube.com/feeds/videos.xml?channel_id=…`,
+**0 quota**) for new uploads, plus `videos.list` (1 unit) for view counts — detect `new_upload` and
+`viral_video` by measurement, drop `format_change`/`trend_shift` (unmeasurable, invented by nature).
+
+**Complexity:** Low (disable) / Low-Medium (rebuild). **Depends on:** GAP-08 shares the RSS client.

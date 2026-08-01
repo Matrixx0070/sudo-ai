@@ -10,7 +10,7 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../shared/logger.js';
 import { BusinessError } from '../shared/errors.js';
-import { normalizeBrainText, type ToolBrain } from '../brain/brain-text.js';
+import { type ToolBrain } from '../brain/brain-text.js';
 import { DATA_DIR } from '../shared/paths.js';
 
 const log = createLogger('competitor-monitor');
@@ -61,8 +61,6 @@ interface AlertRow {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const VALID_ALERT_TYPES = new Set<string>(['new_upload', 'viral_video', 'format_change', 'milestone', 'trend_shift']);
-
 function rowToCompetitor(r: CompetitorRow): Competitor {
   return {
     id: r.id, channelName: r.channel_name, channelId: r.channel_id ?? undefined,
@@ -84,14 +82,20 @@ function rowToAlert(r: AlertRow): CompetitorAlert {
 
 export class CompetitorMonitor {
   private readonly db: Database.Database;
-  private brain?: ToolBrain;
 
-  constructor(dbPath: string = DEFAULT_DB_PATH, brain?: ToolBrain) {
+  /**
+   * @param brain Accepted but no longer used (GAP-15). The brain previously
+   *   generated fabricated competitor alerts; that path is gone. The parameter
+   *   is retained because the only caller,
+   *   `src/core/tools/builtin/meta/competitor-tool.ts:99`, lives under a
+   *   PROTECTED path and cannot be edited here. Drop it when that file is
+   *   migrated, alongside the real RSS-based monitoring in GAP-15.
+   */
+  constructor(dbPath: string = DEFAULT_DB_PATH, _brain?: ToolBrain) {
     mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
-    this.brain = brain;
     this._migrate();
     log.info({ dbPath }, 'CompetitorMonitor initialised');
   }
@@ -158,46 +162,30 @@ export class CompetitorMonitor {
     if (!competitor) throw new BusinessError(`Competitor not found: ${competitorId}`, 'not_found', { competitorId });
     log.info({ competitorId, name: competitor.channelName }, 'Checking competitor activity');
 
-    const newAlerts: CompetitorAlert[] = [];
-
-    if (this.brain) {
-      try {
-        const res = await this.brain.chat([
-          {
-            role: 'system',
-            content: `You are a YouTube competitive intelligence analyst. Given competitor channel info, generate 1-3 realistic activity alerts as a JSON array. Each item: { "type": one of "new_upload"|"viral_video"|"format_change"|"milestone"|"trend_shift", "description": one actionable sentence }. Return ONLY the JSON array.`,
-          },
-          {
-            role: 'user',
-            content: `Channel: ${competitor.channelName}\nURL: ${competitor.channelUrl}\nNiche: ${competitor.niche}\nSubscribers: ${competitor.subscriberCount ?? 'unknown'}\nNotes: ${competitor.notes || 'None'}`,
-          },
-        ]);
-
-        let parsed: Array<{ type: string; description: string }> = [];
-        try {
-          const raw = normalizeBrainText(res).trim();
-          const m = raw.match(/\[[\s\S]*\]/);
-          parsed = JSON.parse(m ? m[0] : raw) as typeof parsed;
-        } catch {
-          log.warn({ competitorId }, 'Brain returned non-JSON alert data — falling back');
-        }
-
-        for (const item of parsed) {
-          if (!item.type || !item.description) continue;
-          const type = VALID_ALERT_TYPES.has(item.type) ? (item.type as AlertType) : 'trend_shift';
-          newAlerts.push(this._insertAlert(competitorId, type, item.description));
-        }
-      } catch (err) {
-        log.error({ competitorId, err: err instanceof Error ? err.message : String(err) }, 'Brain check failed');
-      }
-    }
-
-    if (newAlerts.length === 0) {
-      newAlerts.push(this._insertAlert(
-        competitorId, 'trend_shift',
+    // GAP-15. This method used to pass the competitor's stored metadata to the
+    // brain with the instruction "generate 1-3 REALISTIC activity alerts", parse
+    // the reply, and _insertAlert() the results — into the same table, with the
+    // same shape, that a real observation would occupy. It made no network call.
+    // Nothing downstream could distinguish an invented `new_upload` or
+    // `milestone` from an observed one, and because the output was varied and
+    // specific rather than an obvious constant, it read as intelligence.
+    //
+    // Inventing observations is not a degraded form of monitoring; it is worse
+    // than no monitoring, because it gets believed. The honest fallback that
+    // already existed below is now the only path.
+    //
+    // Real monitoring is cheap and is tracked as GAP-15/GAP-08: the channel RSS
+    // feed (youtube.com/feeds/videos.xml?channel_id=…, 0 quota units) detects
+    // new uploads, and videos.list (1 unit) gives view counts for viral
+    // detection. `format_change` and `trend_shift` are dropped — they were never
+    // measurable and existed only because a model could produce the words.
+    const newAlerts: CompetitorAlert[] = [
+      this._insertAlert(
+        competitorId,
+        'trend_shift',
         `Manual check recommended for ${competitor.channelName} — visit ${competitor.channelUrl}`,
-      ));
-    }
+      ),
+    ];
 
     log.info({ competitorId, count: newAlerts.length }, 'Activity check complete');
     return newAlerts;

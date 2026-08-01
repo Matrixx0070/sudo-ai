@@ -120,3 +120,23 @@ with real money. Each is stated so it can be executed, not argued about.
 
 **Kill switch**
 16. A single flag stops all publishing immediately, and it is the default state on deploy.
+
+---
+
+## AMENDMENT — 2026-08-01T17:45Z, after VERIFICATION PASS 2
+
+Two changes, both driven by evidence rather than opinion:
+
+1. **B6 (enforced spend caps) is upgraded P1 → P0.** `cost-tracker.ts:361 checkBudget()` was
+   confirmed to have **zero callers** — the daily budget is reporting-only and nothing halts on
+   exhaustion. With a video pipeline that calls paid image/video/TTS APIs in retry loops, this is
+   the fastest path to losing real money in the system, and it violates `CLAUDE.md` invariant 10.
+   It belongs in Phase A next to the quota ledger, for the same reason.
+
+2. **GAP-15 (disable fabricated competitor alerts) added as P0**, alongside GAP-04a and for the
+   identical reason: a system that stores invented observations as measurements will be believed.
+   The disable is a deletion, not a build.
+
+Revised Phase A: A1 GAP-01 · A2 GAP-02 · A3 GAP-04a · A4 GAP-03 · **A5 GAP-15** · **A6 B6**.
+A1–A4 shipped in this run; A5 shipped as part of the pass-2 follow-up. **A6 remains open and is now
+the single highest-priority unstarted item in the roadmap.**

@@ -21,7 +21,15 @@ runway is a reasonable faceless-channel figure, **not a measurement**.
 **Damage if wrong:** the ~$400 pre-revenue figure could be 2–3× off. Still not fatal at that scale,
 which is why the gate passes regardless.
 
-## A-03 | Several capability rows in 02 are UNVERIFIED
+## A-03 | RESOLVED — closed in VERIFICATION PASS 2 (see 02-CAPABILITIES)
+Rows #2, #3, #4, #16, #20 and cost-control were all opened and closed on 2026-08-01T17:40Z.
+**My suspicion about trend-radar was wrong** — it makes real HTTP calls to Hacker News, Reddit and
+Google Trends with deterministic scoring and no model. But `competitor-monitor.ts:157` turned out to
+be a *worse* fabrication than the CTR stub (it prompts for "realistic" alerts and stores them as
+observations) → **GAP-15**. Only `browser/auth.ts` remains unread, deliberately: Gate 2 rules Studio
+automation off the publish path, so it changes no verdict.
+
+### Original text of A-03, kept for the audit trail
 Subagent fan-out died on credits (D-04), so I read the files that decide the verdict and left the
 rest explicitly unread rather than guessing. Specifically NOT opened:
 `src/core/awareness/trend-radar.ts` + `trend-radar-scanners.ts`, `competitive/competitor-monitor.ts`,
@@ -32,15 +40,19 @@ or does it prompt a model to imagine trends and return the text as data? Given `
 existed in this repo, I would not assume the former.
 **Damage if wrong:** capability #4 could be L0 rather than L4-achievable.
 
-## A-04 | I assumed the cost-tracker's daily budget does not actually halt execution
-`src/core/billing/cost-tracker.ts:360` has a daily-USD-budget *check*. I did not trace whether any
-caller acts on it. I wrote the roadmap as if it does not enforce.
-**Damage if wrong:** I over-scoped roadmap item B6. Cheap error.
+## A-04 | RESOLVED — CONFIRMED, and it is worse than an assumption
+`cost-tracker.ts:361 checkBudget()` computes `{ exceeded, current, limit }` correctly and **has zero
+callers**. Grep for `checkBudget|exceedsDailyBudget|isOverBudget|overBudget` across `src/`: no call
+sites. The daily spend budget is a pure reporting function nothing acts on — no code path stops work
+on exhaustion. Violates `CLAUDE.md` invariant 10. **Roadmap B6 upgraded P1 → P0.** Not an
+over-scope; an under-scope.
 
-## A-05 | I assumed no durable job queue backs the publish path
-No YouTube reference appeared in the `src/core/cron/` listing and I did not read the scheduler.
-The system view in 03 and roadmap item B5 both assume publishing is fire-and-forget.
-**Damage if wrong:** B5 is redundant. Cheap error.
+## A-05 | RESOLVED — partly wrong; the scheduler is better than I assumed
+`src/core/cron/scheduler.ts` has per-job consecutive-error tracking, exponential backoff
+(`backoffFor`, `:321`) and auto-disable after `MAX_CONSECUTIVE_ERRORS` (`:313`). Real durability at
+the *job* level. What is genuinely absent is **per-stage checkpointing within a job** — a pipeline
+that dies at render restarts from zero and re-pays for completed stages. B5 stands but is rescoped
+to "pipeline checkpointing", not "build a scheduler".
 
 ## A-06 | Quota costs are current
 `QUOTA_COSTS` uses Google's published figures (insert 1600, search 100, update 50, list 1,

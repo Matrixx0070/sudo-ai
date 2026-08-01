@@ -66,3 +66,19 @@ actually matters. Embeddings can be swapped in behind the same signature later.
 By the same logic as `veto-gate.ts`, a safety gate an agent can edit is not a safety gate. But
 `protected-paths.ts` is itself protected, so I cannot add it. Surfaced as a recommendation in
 `06-BUILD-REPORT.md`. **Requires Frank.**
+
+## D-11 | Verification pass 2 — closed the UNVERIFIED rows, and shipped GAP-15
+Frank asked for trend-radar to be read and the UNVERIFIED rows closed. Done; results in
+`02-CAPABILITIES.md` § VERIFICATION PASS 2. Two findings changed the roadmap:
+- `competitor-monitor.ts:157` prompted the model to "generate 1-3 **realistic** activity alerts"
+  and stored them as observations. Disabled immediately (GAP-15) rather than filed — same call as
+  GAP-04a, same reasoning: invented observations get believed.
+- `cost-tracker.ts:361 checkBudget()` has **zero callers**, confirming A-04. Roadmap B6 upgraded
+  P1 → P0; it is now the highest-priority unstarted item.
+I was wrong about trend-radar and said so in the doc: it makes real HTTP calls and uses no model.
+
+## D-12 | Kept the now-unused `brain` constructor param on CompetitorMonitor
+Removing it would be the clean deletion, but the only caller is
+`src/core/tools/builtin/meta/competitor-tool.ts:99`, under a PROTECTED path I must not edit. Kept
+the parameter as `_brain` with a doc comment saying it is inert and when to drop it. Deletion
+deferred, not forgotten. Reversible: yes, once the protected caller is migrated.
