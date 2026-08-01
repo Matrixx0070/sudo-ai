@@ -15,8 +15,8 @@
 
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { DATA_DIR } from '../core/shared/paths.js';
-import { createLogger } from '../core/shared/logger.js';
+import { DATA_DIR } from './grok-runtime.js';
+import { createLogger } from './grok-runtime.js';
 import {
   getGrokWebSessionManager,
   GrokWebReloginRequiredError,

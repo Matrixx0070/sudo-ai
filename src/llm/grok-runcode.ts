@@ -50,7 +50,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 import { XAI_CLI_PROXY_RESPONSES_URL } from './endpoints.js';
 import { getXaiOAuthManager } from './xai-oauth-manager.js';
 

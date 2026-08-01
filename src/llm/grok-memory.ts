@@ -26,7 +26,7 @@
  * cookie material. No Playwright, no statsig oracle needed.
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 import {
   getGrokWebSessionManager,
   GrokWebReloginRequiredError,

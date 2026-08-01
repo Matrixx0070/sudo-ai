@@ -27,7 +27,7 @@
 
 import { chromium, type BrowserContext, type Page } from 'playwright-core';
 import { buildLaunchArgs, resolveChromeExecutable, resolveBrowserDisplay } from '../core/tools/builtin/browser/anti-detect.js';
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 import {
   GrokWebReloginRequiredError,
   type GrokWebRefresher,

@@ -24,8 +24,8 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { PROJECT_ROOT } from '../core/shared/paths.js';
-import { createLogger } from '../core/shared/logger.js';
+import { PROJECT_ROOT } from './grok-runtime.js';
+import { createLogger } from './grok-runtime.js';
 import {
   getGrokWebSessionManager,
   GrokWebReloginRequiredError,

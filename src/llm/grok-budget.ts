@@ -18,7 +18,7 @@
  * the caller fails over (never a metered fallback, never a silent drain).
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 
 const log = createLogger('llm:grok-budget');
 

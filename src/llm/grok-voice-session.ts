@@ -18,8 +18,8 @@ import { spawn } from 'node:child_process';
 import { createInterface, type Interface } from 'node:readline';
 import { writeFile, readFile, rm, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { DATA_DIR, PROJECT_ROOT } from '../core/shared/paths.js';
-import { createLogger } from '../core/shared/logger.js';
+import { DATA_DIR, PROJECT_ROOT } from './grok-runtime.js';
+import { createLogger } from './grok-runtime.js';
 import { getGrokWebSessionManager, type GrokWebSessionManager } from './grok-web-session-manager.js';
 import { isGrokWebSessionEnabled, GrokWebDisabledError } from './grok-web-media.js';
 

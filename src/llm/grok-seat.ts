@@ -29,7 +29,7 @@
  * by issuing a generation call.
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 import { getGrokWebSessionManager, type GrokWebStatus } from './grok-web-session-manager.js';
 import { getXaiOAuthManager, type XaiOAuthStatus } from './xai-oauth-manager.js';
 import { isGrokBrowserlessActive } from './grok-statsig-pool.js';

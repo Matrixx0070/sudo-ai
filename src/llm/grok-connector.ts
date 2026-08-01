@@ -47,7 +47,7 @@ import {
 import type { GrokEmbedCollection, GrokEmbedDocument } from './grok-embeddings-bridge.js';
 import { getGrokStatsigPool, type GrokStatsigPool } from './grok-statsig-pool.js';
 import { GrokBudget, type GrokBudgetStatus } from './grok-budget.js';
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 
 const log = createLogger('llm:grok-connector');
 

@@ -24,7 +24,7 @@
  * is never served.
  */
 
-import { createLogger } from '../core/shared/logger.js';
+import { createLogger } from './grok-runtime.js';
 
 const log = createLogger('llm:grok-statsig-pool');
 
