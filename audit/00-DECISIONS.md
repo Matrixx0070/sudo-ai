@@ -225,3 +225,39 @@ live-proven, and already does X search.
 profile, separate debug port. Verified after: CDP 9223 → 200, `curl_cffi` imports, bridge returns
 valid JSON, live session probe `{"ok":true,"status":200}`. The pip install downgraded
 `opentelemetry-proto` and `typing-extensions`; flagged in the doc, prod bridge verified unaffected.
+
+## D-18 | Frank was right — `x_search` IS a real xAI API tool; I had been looking in the wrong place
+Frank: "So you did not find any x search tool or api endpoints? I think you're just capturing
+grok.com — also try console.x.ai." Correct on both counts.
+
+**Found and live-proven:** `POST https://api.x.ai/v1/responses` with
+`tools:[{type:"x_search", allowed_x_handles, excluded_x_handles, from_date, to_date,
+enable_image_understanding, enable_video_understanding}]`, model `grok-4.5`. One probe returned
+HTTP 200 with 3 real X post URLs + citations. The old Live Search (`search_parameters`) was retired
+2026-01-12 → 410 Gone; the Agent Tools API replaces it. Full detail:
+`docs/XAI_X_SEARCH_AND_CONSOLE_2026-08-01.md`.
+
+**Measured cost, not estimated:** $0.0442 for that one call (response self-reports
+`cost_in_usd_ticks`; 1 tick = 1e-10 USD, cross-checked against component math to within a cent).
+Rates: $5 per 1,000 tool invocations + $2/$6 per Mtok on grok-4.5. **The agent chose 4 `x_search`
+calls for ONE question**, so cost scales with model decisions, not request count — hourly polling
+≈ $32/month. Anything wiring this in must cap `max_tool_calls` and sit behind the enforced spend cap
+(B6, still the top open P0, because `checkBudget()` has zero callers).
+
+**This does not contradict D-16/D-17, it completes them.** grok.com's chat genuinely has no
+X-search payload field — that finding was right about the *seat lane*. I simply never asked whether
+the *metered API* exposed the tool explicitly. It does. Net result: two viable X sources — the seat
+lane at $0 marginal with no controls, and the API lane at ~$0.044/query with handle and date
+filtering (which is what competitor monitoring actually wants).
+
+**console.x.ai captured too.** Next.js RSC app; the real API is gRPC-web:
+`prod_mc_billing.UISvc/{AnalyzeBillingItems,GetAmountToPay,ListPrepaidBalanceChanges}` and
+`auth_mgmt.AuthManagement/{GetTeam,ListUserInvitations}`. Team id
+`56504cd4-…` matches the `scopeId` in grok.com's MCP connector calls — same tenant, confirmed.
+**`GetAmountToPay` breaks out "us-west-2 API grok-4.5 X searches" as its own billing line**, so
+x_search spend is independently observable — the exact hook the standing money guard needs.
+Decoding the proto frames programmatically is UNVERIFIED and unbuilt; endpoints and request shapes
+are known. No credentials, balances or emails recorded.
+
+**Lesson, third instance today after Reddit and castle: check the vendor's documented API before
+reverse-engineering their UI.** Reverse engineering is the fallback, not the opening move.
