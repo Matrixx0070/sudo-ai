@@ -198,6 +198,19 @@ export function demoteGrokBrowserlessStatsig(cooldownMs = DEFAULT_DEMOTE_MS): vo
     { cooldownMs, purged: dropped },
     'browserless statsig demoted — using oracle until cooldown (suspected algorithm drift)',
   );
+  // Demoting browserless is a NO-OP whenever browserless is already off (the
+  // current prod posture), and then this whole self-heal did nothing while the
+  // lane kept 403ing. The oracle can be the drifted source too: it adopts an
+  // in-page minter that may be closed over a rotated seed. Rebuild it as well —
+  // the oracle used to heal from this by accident, before adoption.
+  void (async () => {
+    try {
+      const { peekGrokStatsigOracle } = await import('./grok-statsig-oracle.js');
+      await peekGrokStatsigOracle()?.invalidateMinter();
+    } catch (err) {
+      log.warn({ detail: (err as Error).message }, 'could not invalidate the oracle minter');
+    }
+  })();
 }
 
 /** True when pure-Node (browserless) minting is currently allowed (flag on + not demoted). */

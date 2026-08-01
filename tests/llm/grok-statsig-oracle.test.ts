@@ -29,14 +29,42 @@ interface FakeHandle {
   closed: () => boolean;
   dropMinter: () => void;
   mintCalls: () => number;
+  /** How many times the breakpoint dance ran — 0 proves the minter was adopted. */
+  exposeCount: () => number;
+  minterPresent: () => boolean;
 }
 
-function makeFake(cfg: { chunkSource?: string; token?: string } = {}): FakeHandle {
+function makeFake(
+  cfg: {
+    chunkSource?: string;
+    token?: string;
+    /** Page already carries `__grokMint` from an earlier oracle instance. */
+    preHoisted?: boolean;
+    /**
+     * Which execution context can see the minter. `'default'` means only an
+     * un-pinned eval finds it — that reproduces the stale-pin bug, where the
+     * minter is alive but the PINNED context reports it absent.
+     */
+    minterCtx?: number | 'default';
+    /**
+     * `__grokMint` exists but yields nothing — a closure left over from a
+     * navigated page. `typeof` still says "function".
+     */
+    mintReturnsNull?: boolean;
+  } = {},
+): FakeHandle {
   const chunkSource = cfg.chunkSource ?? CHUNK_FIXTURE;
   const token = cfg.token ?? 'T'.repeat(94);
   let closed = false;
-  let minterPresent = false;
+  let minterPresent = cfg.preHoisted === true;
   let mintCalls = 0;
+  let exposeCount = 0;
+  let deadClosure = cfg.mintReturnsNull === true;
+  const visibleIn = (ctx: unknown): boolean => {
+    if (cfg.minterCtx === undefined) return true;
+    if (cfg.minterCtx === 'default') return ctx === undefined;
+    return ctx === cfg.minterCtx;
+  };
   const handlers = new Map<string, Set<(p: Record<string, unknown>) => void>>();
   const emit = (ev: string, p: Record<string, unknown>): void => {
     for (const h of handlers.get(ev) ?? []) h(p);
@@ -55,18 +83,27 @@ function makeFake(cfg: { chunkSource?: string; token?: string } = {}): FakeHandl
         case 'Debugger.getScriptSource':
           return { scriptSource: chunkSource };
         case 'Debugger.setBreakpointByUrl':
+          exposeCount++;
           return { breakpointId: 'bp1' };
         case 'Debugger.evaluateOnCallFrame':
           minterPresent = true; // hoisting __grokMint onto globalThis
+          deadClosure = false; // a fresh hoist replaces any stale closure
           return {};
         case 'Runtime.evaluate': {
           const expr = String(params?.['expression'] ?? '');
+          const ctx = params?.['contextId'];
+          if (expr.includes('delete globalThis.__grokMint')) {
+            minterPresent = false;
+            return {};
+          }
           if (expr.includes('__grokMint(')) {
             mintCalls++;
-            return minterPresent ? { result: { value: token } } : { result: { type: 'undefined' } };
+            return minterPresent && visibleIn(ctx) && !deadClosure
+              ? { result: { value: token } }
+              : { result: { type: 'undefined' } };
           }
           if (expr.includes("typeof globalThis.__grokMint")) {
-            return { result: { value: minterPresent } };
+            return { result: { value: minterPresent && visibleIn(ctx) } };
           }
           if (expr.includes('readyState')) {
             return { result: { value: 'complete|1' } };
@@ -123,6 +160,8 @@ function makeFake(cfg: { chunkSource?: string; token?: string } = {}): FakeHandl
       minterPresent = false;
     },
     mintCalls: () => mintCalls,
+    exposeCount: () => exposeCount,
+    minterPresent: () => minterPresent,
   };
 }
 
@@ -199,5 +238,67 @@ describe('GrokStatsigOracle', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('minter adoption (cold-path latency)', () => {
+  it('adopts an already-hoisted minter instead of re-running the breakpoint dance', async () => {
+    // The page outlives the oracle: in CDP-connect mode close() drops only our
+    // socket, so __grokMint survives the idle window. Measured live, rebuilding
+    // it cost ~13s per cold call for nothing.
+    const f = makeFake({ preHoisted: true });
+    const oracle = new GrokStatsigOracle({ profileDir: '/prof', launcher: f.launcher, idleMs: 0 });
+    const tok = await oracle.mint('/rest/app-chat/conversations/new', 'POST');
+    expect(tok).toHaveLength(94);
+    expect(f.exposeCount()).toBe(0);
+  });
+
+  it('falls back to the full expose when the page has no minter', async () => {
+    const f = makeFake();
+    const oracle = new GrokStatsigOracle({ profileDir: '/prof', launcher: f.launcher, idleMs: 0 });
+    expect(await oracle.mint('/p', 'POST')).toHaveLength(94);
+    expect(f.exposeCount()).toBeGreaterThan(0);
+  });
+
+  it('does not adopt a minter that returns nothing', async () => {
+    // A stale closure on a navigated page is still a function but mints null.
+    // Adopting on `typeof` alone would trade a slow path for a broken one.
+    const f = makeFake({ preHoisted: true, mintReturnsNull: true });
+    const oracle = new GrokStatsigOracle({ profileDir: '/prof', launcher: f.launcher, idleMs: 0 });
+    expect(await oracle.mint('/p', 'POST')).toHaveLength(94);
+    expect(f.exposeCount()).toBeGreaterThan(0);
+  });
+
+  it('treats a stale PINNED context as present, not absent', async () => {
+    // The real bug: the trigger navigation replaces the document, so the pinned
+    // context is dead while the minter is fine. Reporting "absent" threw away a
+    // warm oracle and re-exposed — 13s, measured.
+    const f = makeFake({ preHoisted: true, minterCtx: 'default' });
+    const oracle = new GrokStatsigOracle({ profileDir: '/prof', launcher: f.launcher, idleMs: 0 });
+    (oracle as unknown as { mintCtxId: number }).mintCtxId = 999; // a context that no longer exists
+    await oracle.mint('/p', 'POST');
+    expect(f.exposeCount()).toBe(0);
+  });
+});
+
+describe('invalidateMinter (drift self-heal)', () => {
+  it('deletes the in-page minter so the next mint rebuilds it', async () => {
+    // Adoption proves a minter RETURNS a token, never that the server ACCEPTS
+    // it. Without this the lane would wedge on a drifted seed with no recovery.
+    const f = makeFake({ preHoisted: true });
+    const oracle = new GrokStatsigOracle({ profileDir: '/prof', launcher: f.launcher, idleMs: 0 });
+    await oracle.mint('/p', 'POST');
+    expect(f.exposeCount()).toBe(0);
+
+    await oracle.invalidateMinter();
+    expect(f.minterPresent()).toBe(false);
+
+    expect(await oracle.mint('/p', 'POST')).toHaveLength(94);
+    expect(f.exposeCount()).toBeGreaterThan(0);
+  });
+
+  it('is safe before anything launched', async () => {
+    const oracle = new GrokStatsigOracle({ profileDir: '/prof', launcher: makeFake().launcher, idleMs: 0 });
+    await expect(oracle.invalidateMinter()).resolves.toBeUndefined();
   });
 });

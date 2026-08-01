@@ -55,6 +55,8 @@ const STATSIG_MARKER = 'x-statsig-id';
 const BACKSCAN_WINDOW = 600;
 /** Only these script URLs are candidates for the signing site. */
 const CHUNK_URL_RE = /_next\/static\/chunks\//;
+/** The statsig-gated path, used to prove an adopted minter still works. */
+const APP_CHAT_NEW_PATH = '/rest/app-chat/conversations/new';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -367,6 +369,8 @@ export class GrokStatsigOracle {
   private readonly now: () => number;
   /** Single-flight warm — concurrent minters share one launch+grab. */
   private warming: Promise<void> | null = null;
+  /** Path used only to prove an adopted minter actually works. */
+  private readonly probePath = APP_CHAT_NEW_PATH;
 
   constructor(opts: GrokStatsigOracleOptions = {}) {
     this.launcher = opts.launcher ?? defaultOracleLauncher(opts.cdpUrl);
@@ -409,7 +413,37 @@ export class GrokStatsigOracle {
       this.launch = await this.launcher(this.profileDir ?? '');
       log.info({ launchMs: this.now() - t0, headless: process.env['SUDO_GROK_ORACLE_HEADLESS'] === '1' }, 'grok statsig oracle launched');
     }
+    // A minter hoisted by an EARLIER oracle instance often survives: in connect
+    // mode `close()` only drops our socket, so the page — and `globalThis
+    // .__grokMint` on it — outlives the idle window. Re-running the breakpoint
+    // dance to recreate something already there costs ~13s per cold call.
+    //
+    // The check is a real mint, not `typeof`: a stale closure from a navigated
+    // page is still a function but returns null, and reusing that would trade a
+    // slow path for a broken one. A token proves it works.
+    if (await this.adoptLiveMinter()) return;
     await this.exposeMinter(this.launch);
+  }
+
+  /**
+   * Reuse an already-hoisted, still-working `__grokMint` if the page has one.
+   *
+   * Evaluates in the DEFAULT context and clears any pinned `mintCtxId`, because
+   * an adopted minter belongs to whatever document is live now, not to the
+   * context some earlier breakpoint tripped in.
+   */
+  private async adoptLiveMinter(): Promise<boolean> {
+    const pinned = this.mintCtxId;
+    this.mintCtxId = undefined;
+    const t0 = this.now();
+    const tok = await this.tryEval(this.probePath, 'POST');
+    if (tok) {
+      this.minterReady = true;
+      log.info({ ms: this.now() - t0 }, 'grok statsig oracle adopted a live in-page minter (skipped re-expose)');
+      return true;
+    }
+    this.mintCtxId = pinned;
+    return false;
   }
 
   /**
@@ -585,14 +619,33 @@ export class GrokStatsigOracle {
     }
   }
 
-  /** True if `globalThis.__grokMint` is a live function on the current page. */
+  /**
+   * True if `globalThis.__grokMint` is a live function on the current page.
+   *
+   * Checks the PINNED context first, then falls back to the default one and
+   * un-pins on success. `mintCtxId` goes stale routinely — the trigger
+   * navigation in `exposeMinter` replaces the document, so the context the
+   * breakpoint tripped in is gone while the minter itself is fine. Without the
+   * fallback this reports "absent" for a working minter and the caller throws
+   * away a warm oracle to rebuild it, which measured ~13s on every cold call.
+   */
   private async minterPresent(): Promise<boolean> {
     if (!this.launch) return false;
+    if (this.mintCtxId !== undefined && (await this.hasMinter(this.mintCtxId))) return true;
+    if (!(await this.hasMinter(undefined))) return false;
+    if (this.mintCtxId !== undefined) {
+      log.debug('grok statsig oracle: pinned mint context was stale — falling back to the default context');
+      this.mintCtxId = undefined;
+    }
+    return true;
+  }
+
+  private async hasMinter(contextId: number | undefined): Promise<boolean> {
     try {
-      const r = await this.launch.cdp.send('Runtime.evaluate', {
+      const r = await this.launch!.cdp.send('Runtime.evaluate', {
         expression: "typeof globalThis.__grokMint === 'function'",
         returnByValue: true,
-        ...(this.mintCtxId ? { contextId: this.mintCtxId } : {}),
+        ...(contextId !== undefined ? { contextId } : {}),
       });
       return (r['result'] as Record<string, unknown> | undefined)?.['value'] === true;
     } catch {
@@ -616,6 +669,31 @@ export class GrokStatsigOracle {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Drop the in-page minter and force a full re-expose on the next mint.
+   *
+   * Adoption proves a minter RETURNS a token, never that the server ACCEPTS it.
+   * A minter closure captured over a rotated page seed keeps producing
+   * correctly-shaped 94-char tokens that the gate 403s — indistinguishable
+   * locally, and the exact shape of the 2026-08-01 drift incident.
+   *
+   * Before adoption existed the oracle re-exposed on every cold call and so
+   * healed from this by accident. It no longer does, so the 403 path must say
+   * so explicitly. Deleting the global is what makes the next warm rebuild
+   * rather than re-adopt the same broken closure.
+   */
+  async invalidateMinter(): Promise<void> {
+    this.minterReady = false;
+    this.mintCtxId = undefined;
+    if (!this.launch) return;
+    await this.launch.cdp
+      .send('Runtime.evaluate', { expression: 'delete globalThis.__grokMint' })
+      .catch(() => {
+        /* page already gone — the next warm rebuilds anyway */
+      });
+    log.warn('grok statsig minter invalidated — next mint will re-expose from scratch');
   }
 
   /** Close the browser now. Safe to call repeatedly. */
@@ -655,6 +733,17 @@ let singleton: GrokStatsigOracle | null = null;
 /** Process-wide oracle, created lazily with the given profile dir. */
 export function getGrokStatsigOracle(opts: GrokStatsigOracleOptions = {}): GrokStatsigOracle {
   if (!singleton) singleton = new GrokStatsigOracle(opts);
+  return singleton;
+}
+
+/**
+ * The oracle if one already exists, else null.
+ *
+ * For self-heal callers: launching a browser as a side effect of *invalidating*
+ * something would be absurd, so this never constructs one (same rule as the
+ * pool's `purge`).
+ */
+export function peekGrokStatsigOracle(): GrokStatsigOracle | null {
   return singleton;
 }
 
