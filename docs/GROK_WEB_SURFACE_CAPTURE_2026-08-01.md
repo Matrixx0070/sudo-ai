@@ -201,6 +201,51 @@ Two things fall out: mode `"auto"` resolves to **`steer_model_id:"grok-4"` with
 `effort:"LOW"`** (visible in-stream), and a real **`tool_overrides`** concept exists —
 `{"image_gen":false}` — appearing on follow-up suggestions.
 
+## 7b. RESOLVED — `castle_request_token` is a FEATURE FLAG, and it is FAIL-OPEN
+
+Both captures were right. The token is **optional**, controlled by a flag, and the client
+omits it rather than blocking. From the app bundle (`cdn.grok.com/_next/static/chunks/`):
+
+```js
+<ENABLE_CA>STLE_CHAT_MINTING) ? (r=t(), new Promise(e=>{
+    let t=setTimeout(()=>e(void 0), 300),          // 300ms budget
+        n=r=>{clearTimeout(t), e(r)};
+    r.then(n, ()=>n(void 0))                        // mint rejects -> undefined
+  })).then(t => void 0===t ? e : {...e, castle_request_token: t})
+: e                                                 // flag OFF -> event unchanged
+```
+
+Flag names, verbatim from the bundle's flag map:
+
+```js
+ENABLE_CASTLE_INTEGRATION:   "enable_castle_integration"
+ENABLE_CASTLE_CHAT_MINTING:  "enable_castle_chat_minting"
+```
+
+So `response.create` ships **without** the token whenever the flag is off, **or** the mint
+takes >300ms, **or** the mint rejects. Three independent ways to omit it.
+
+Evidence this session had the flag off: **zero castle.io network flows — and zero *failed*
+ones.** A proxy-blocked SDK would leave failed attempts; none exist, so the SDK never ran.
+
+### What settles it for the WS-lane decision
+
+**The server accepted a `response.create` with no Castle token** — this capture got a
+complete answer, `response.done` with `status:"completed"` and `response.persisted ok`.
+The 300ms fail-open only proves the *client* tolerates absence; the successful response
+proves the *server* does.
+
+**Therefore the WS lane does NOT require a second browser-bound Castle oracle**, which was
+the entire basis for "don't migrate" in the companion doc. That conclusion should be
+reconsidered on the merits, not treated as blocked by Castle.
+
+**Caveats, and they are real.** Observed once, one account, one point in time. The flag is
+evidently ON for some populations (the companion capture saw a 14 KB token), so this is a
+rollout — and a rollout can complete. The server tolerating a missing token today is not a
+promise it will tomorrow, and a risk-scored session may be treated differently. Anything
+built on the WS lane should treat a Castle challenge as a live possibility, not an
+impossibility. What is now false is only the claim that Castle is a *hard prerequisite*.
+
 ## 8. Driving the composer — what actually works
 
 The composer is a **Tiptap/ProseMirror** editor (`enableTiptapEditorForQueryBar:true` in
