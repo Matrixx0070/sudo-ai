@@ -112,3 +112,17 @@ Totals: 8 new source files (2,002 lines), 13 new test files (164 tests), 4 tools
 lint clean; full suite 12,916 pass / 6 pre-existing failures (count unmoved all run).
 
 COMPLETE (build report refreshed)
+
+## 2026-08-02T05:05Z — GAP-04b closed; build report updated
+- **GAP-04b real thumbnail A/B** (81fb3da6): `thumbnails.ts` adds the two capabilities that never
+  existed — `setThumbnail()` (50 units, >2MB rejected before spending) and `fetchThumbnailCtr()`
+  (Analytics impressions + CTR). Statistics deliberately conservative: two-proportion z-test
+  p<0.05 AND >=1000 impressions/variant, else `inconclusive`; every winner carries the
+  sequential-confound caveat. GOTCHA: YouTube reports CTR as a percentage, not a fraction.
+- **06-BUILD-REPORT.md updated** — totals now 37 commits / 9 source files (2,294 lines) /
+  14 test files (183 tests); GAP-04b added to Phase B; removed from "still stubbed"; added the
+  "why the A/B declines to call winners" section and the known-flaky browser test note.
+- Full suite 12,935 pass / same 6 pre-existing failures. lint clean.
+
+STOPPING HERE at Frank's direction. Branch pushed and coherent to read cold.
+COMPLETE

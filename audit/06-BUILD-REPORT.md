@@ -1,12 +1,12 @@
 # 06 — BUILD REPORT
 
-**Branch:** `sudo-ai/yt-autonomy` · **Cut from:** `a928d526` · **HEAD:** `e1e96ebb`
-**Range:** `a928d526..e1e96ebb` — **35 commits**
-**Last refreshed:** 2026-08-02. *Supersedes the original version of this file, which described only
-the first four Phase-A items and had become actively misleading.*
+**Branch:** `sudo-ai/yt-autonomy` · **Cut from:** `a928d526` · **HEAD:** `81fb3da6`
+**Range:** `a928d526..81fb3da6` — **37 commits**
+**Last refreshed:** 2026-08-02 (GAP-04b). *Supersedes the original version of this file, which
+described only the first four Phase-A items and had become actively misleading.*
 
-**8 new source files (2,002 lines) · 13 new test files (164 tests) · 4 tools registered.**
-`pnpm lint` clean. Full suite **12,916 pass / 6 fail**, all six pre-existing and proven so.
+**9 new source files (2,294 lines) · 14 new test files (183 tests) · 4 tools registered.**
+`pnpm lint` clean. Full suite **12,935 pass / 6 fail**, all six pre-existing and proven so.
 
 ---
 
@@ -44,6 +44,7 @@ worse than its entry said, and the thing that found the extra defect was always 
 | **GAP-08** `search.list` quota bomb | `a3c5b4ce` | 400 quota units per invocation (100/page × 4) on the **default** path. Replaced by channel RSS (**0 units**) → `playlistItems.list` (1 unit/50). 100× reduction. |
 | **GAP-05** `videos.update` | `8e091a36` | Metadata was write-once; titles could never be revised. `metadata.ts` (245) always read-modify-writes because `videos.update` is a **full replace** that blanks omitted fields. |
 | **GAP-06** YPP readiness | `e1e96ebb` | `ypp-readiness.ts` (217). Three requirements have no API at all, so they are `human-verify` criteria and the model can never report `eligible` while any is unconfirmed. |
+| **GAP-04b** Real thumbnail A/B | `81fb3da6` | Both halves were missing: **no `thumbnails.set` call existed anywhere**, so a variant could not be deployed, and there was no impressions/CTR read. `thumbnails.ts` (292) adds deploy (50 units, >2 MB rejected *before* spending them) and Analytics measurement. The inference is deliberately conservative — see below. |
 | **B3 partial / trend sources** | `51a4ce4c` | YouTube trending scanner (1 quota unit, live-proven) + X scanner (paid, off by default). Found Reddit dead — 403 from datacenter IPs, failing silently at `debug`. |
 
 ### Supporting work
@@ -59,6 +60,35 @@ worse than its entry said, and the thing that found the extra defect was always 
 ~28s to ~30ms` (08-01 19:46) touches `grok-statsig-oracle.ts` / `grok-statsig-pool.ts`, files this
 run never edited, doing work this run never performed. It is present on the branch and its tests
 pass. Flagged rather than claimed.
+
+---
+
+## GAP-04b: why the A/B declines to call winners
+
+Worth its own note, because it is the one place where "working" and "correct" diverge.
+
+Studio's **Test & Compare** runs a *concurrent* split — same video, same hour, impressions randomly
+divided between thumbnails. **There is no API for that** (audit Gate 2). What the API permits is a
+**sequential** test: deploy A, wait, measure; deploy B, wait, measure. That is confounded by
+everything that moves with time — day of week, video age decay, whether the algorithm surfaced the
+video that week.
+
+GAP-04a removed a fabricated `0.04`. Replacing it with a real number that gets over-read would have
+been a lateral move, so the inference is deliberately conservative:
+
+- a winner requires a **two-proportion z-test at p < 0.05** *and* **≥1,000 impressions on both**
+  variants; otherwise the verdict is `inconclusive` **with the reason attached**;
+- every winner carries an explicit caveat naming the sequential confound;
+- `selectWinner()` now uses this instead of highest-CTR-wins, which would have crowned a variant on
+  100 impressions over one on 50,000.
+
+The test that captures the intent: **20% vs 4% CTR on 100 impressions returns `inconclusive`** — an
+enormous-looking gap that is simply noise at that sample size.
+
+Two implementation gotchas worth carrying: YouTube reports `impressionClickThroughRate` as a
+**percentage** (`4.7`), not a fraction — storing it raw overstates CTR 100×; and `deployed_at` is
+stamped only on a **confirmed** deploy, so a failed upload cannot open a measurement window that
+never ran.
 
 ---
 
@@ -106,6 +136,7 @@ From item 3 onward, registration was **verified programmatically**, not assumed.
 |---|---|
 | `tests/llm/xai-billing.test.ts` | 22 |
 | `tests/youtube/metadata.test.ts` | 19 |
+| `tests/youtube/thumbnails.test.ts` | 19 |
 | `tests/youtube/ypp-readiness.test.ts` | 19 |
 | `tests/awareness/trend-radar-youtube-x.test.ts` | 18 |
 | `tests/youtube/auth.test.ts` | 17 |
@@ -117,7 +148,7 @@ From item 3 onward, registration was **verified programmatically**, not assumed.
 | `tests/youtube/competitor-no-fabrication.test.ts` | 5 |
 | `tests/youtube/no-search-list.test.ts` | 3 |
 | `tests/youtube/thumbnail-ab-no-fabrication.test.ts` | 3 |
-| **Total** | **164** |
+| **Total** | **183** |
 
 The tests are behavioural, not shape-asserting — each drives the failure mode its code exists to
 prevent. Three found real bugs in my own code: same-millisecond corpus ordering (`publish.ts`), an
@@ -128,7 +159,7 @@ site that reading had missed (`comment-api.ts`).
 
 ## `pnpm verify` — RED, with zero regressions, unchanged from the original report
 
-`pnpm lint` (tsc) **passes clean**. `pnpm test`: **12,916 pass, 6 fail** across 5 files —
+`pnpm lint` (tsc) **passes clean**. `pnpm test`: **12,935 pass, 6 fail** across 5 files —
 `cw0-brief-instrumentation`, `system-prompt-inject-caps` (×2), `gdrive/cli`, `cw6-homeostat`,
 `llm/transport`.
 
@@ -138,7 +169,13 @@ identical `data/`, `workspace/` and the same uncommitted `src/llm/client.ts` pro
 on-disk xAI key fallback, which breaks its "missing API key" assertion. It belongs to another
 session; I left it alone throughout.
 
-The count has been re-checked after every commit in this run and has never moved off six.
+The count has been re-checked after every commit in this run and has never settled anywhere but six.
+
+**One known flaky test, established not assumed.** `tests/browser/history-and-wait.test.ts` failed
+once in a full run, passes **4/4 in isolation**, and did not recur on an immediate re-run (the
+skipped count moved 15→11, i.e. it had been partially skipped rather than genuinely failing). It
+launches a real Chrome and loses a race under parallel load. Expect it to appear occasionally; it is
+not a regression, and the way to confirm that is to re-run rather than to reason about it.
 
 ---
 
@@ -147,8 +184,6 @@ The count has been re-checked after every commit in this run and has never moved
 - **GAP-07 — long-form production.** The largest open item. `media.shorts-factory` still produces a
   static image with a voiceover — the audit's headline finding, and precisely the artifact Gate 4
   demonetises. `src/remotion/` compositions remain unwired.
-- **GAP-04b — real thumbnail A/B.** Honest but inert: it measures nothing and there is still **no
-  `thumbnails.set` call anywhere in the repo**, so a variant cannot be deployed.
 - **Comment replies** reach real code now but have no rate limiter and no safety filter.
 - **Upload** still `readFileSync`s the whole video and has no resume (GAP-11).
 - **Two Analytics clients** still exist and will drift (GAP-12).
@@ -189,15 +224,17 @@ The count has been re-checked after every commit in this run and has never moved
 
 ## EXACT NEXT THREE
 
-1. **GAP-04b — real thumbnail A/B.** Needs `thumbnails.set` (50 units) to deploy plus Analytics
-   `impressions` / `impressionClickThroughRate` to measure. The OAuth plumbing already exists; only
-   the metric names change. Turns a disabled fake into the second experimentation actuator.
-2. **Fix the upload tool's silent title truncation**, for consistency with GAP-05. Ten minutes.
-3. **GAP-07 — long-form orchestrator.** The big one. Before writing it, evaluate
+1. **Fix the upload tool's silent title truncation.** `social.youtube-upload` still does
+   `title.slice(0,100)` while the new metadata tool rejects over-length titles outright — the upload
+   tool is now the inconsistent one. Ten minutes.
+2. **GAP-07 — long-form orchestrator.** The big one. Before writing it, evaluate
    `digitalsamba/claude-code-video-toolkit` (1,883★, MIT, actively maintained) as a **reference
    architecture** — its economics land inside the audit's Gate 5 estimate and its output is
    multi-scene with motion and captions, i.e. the shape that does not trip Gate 4. Not a drop-in
    (Python + cloud GPU), but it may save a week of design.
+3. **Calibrate the 0.6 similarity threshold** against ~50 real scripts. It is the number most likely
+   to be wrong in a way that matters, and it has been flagged in every version of this report
+   without being closed.
 
 ---
 
