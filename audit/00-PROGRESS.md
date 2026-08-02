@@ -89,3 +89,26 @@ COMPLETE (pass 2)
 - 24 awareness tests. Full suite 12,823 pass / same 6 pre-existing failures. lint clean.
 
 COMPLETE (pass 3)
+
+## 2026-08-02T00:40Z — Phase B continued; 06-BUILD-REPORT.md refreshed
+Since the 17:14Z "COMPLETE" marker the run continued well past the original Phase-A scope:
+- **B6 enforced spend caps** (1386d621) — was TWO defects: checkBudget had no callers AND the paid
+  media tools recorded nothing, so a cap would have guarded a structurally-zero number.
+- **GAP-08 search.list** (a3c5b4ce) — 400 units/call → 0 via RSS, 1/50 via playlistItems. CI grep
+  guard found a 2nd call site in comment-api.ts that reading had missed.
+- **GAP-05 videos.update** (8e091a36) — metadata was write-once; read-modify-write only, because
+  videos.update is a full replace that blanks omitted fields.
+- **GAP-06 YPP readiness** (e1e96ebb) — 3 requirements have no API, so the model can never report
+  `eligible` while they are unconfirmed.
+- Plus: GAP-03 properly wired + corpus (b803c945), GAP-15 (f885732a), trend sources (51a4ce4c),
+  xai-billing (7b9c16bc), mitm capture rig (27020356).
+
+**06-BUILD-REPORT.md rewritten** — the previous version described only the first four items and had
+become actively misleading. Now covers all 35 commits, 164 new tests, gates passing/open, the
+5-instance "built but nothing calls it" pattern, the operator blockers, and one commit (559720bf)
+that I could NOT attribute to this run and flagged rather than claimed.
+
+Totals: 8 new source files (2,002 lines), 13 new test files (164 tests), 4 tools registered.
+lint clean; full suite 12,916 pass / 6 pre-existing failures (count unmoved all run).
+
+COMPLETE (build report refreshed)

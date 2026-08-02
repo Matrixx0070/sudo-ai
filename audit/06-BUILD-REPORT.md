@@ -1,206 +1,214 @@
 # 06 — BUILD REPORT
 
-**Branch:** `sudo-ai/yt-autonomy`
-**Cut from:** `a928d526` (HEAD of `feat/grok-web-chat-brain`, per the brief)
-**Commit range:** `a928d526..c938a23b` — 3 commits
-**Scope taken:** all four P0 items from `04-ROADMAP.md` Phase A. P1 not started (see "What I skipped").
+**Branch:** `sudo-ai/yt-autonomy` · **Cut from:** `a928d526` · **HEAD:** `e1e96ebb`
+**Range:** `a928d526..e1e96ebb` — **35 commits**
+**Last refreshed:** 2026-08-02. *Supersedes the original version of this file, which described only
+the first four Phase-A items and had become actively misleading.*
 
-```
-fbbb5bc1  feat(youtube): OAuth refresh provider (GAP-01)
-2149b120  feat(youtube): quota ledger + stop fabricating thumbnail CTR (GAP-02, GAP-04a)
-c938a23b  feat(youtube): pre-publish policy gate + publish kill switch (GAP-03)
-```
+**8 new source files (2,002 lines) · 13 new test files (164 tests) · 4 tools registered.**
+`pnpm lint` clean. Full suite **12,916 pass / 6 fail**, all six pre-existing and proven so.
 
 ---
 
-## WHAT I BUILT
+## THE ONE-PARAGRAPH VERSION
 
-### 1. `src/core/youtube/auth.ts` — OAuth refresh provider (GAP-01) · 283 lines
-The blocker. Every YouTube write read `process.env['YOUTUBE_OAUTH_TOKEN']` as a static access
-token; Google expires those in ~1 hour, so unattended operation was categorically impossible.
+The audit said the system was at **L1** — it could not complete two unattended operations in a row,
+could not account for the resources it spent, and could not tell you whether what it was about to
+publish would get the channel demonetised. All three are now false. Phase A is complete and four
+Phase-B items are done. What has *not* changed: the system still cannot produce a video worth
+publishing (GAP-07), and the verdict's ceiling of **L4** stands.
 
-Provides `getYouTubeAccessToken()`: refresh-token grant against `oauth2.googleapis.com/token`,
-in-memory + `0600` file cache, 60-second expiry skew, rotation-aware (a refresh token returned by
-Google supersedes the configured one and is carried forward across restarts). Fails loudly on
-`invalid_grant` with the "re-run consent" hint rather than returning a stale token.
-
-Mirrors the pattern already correct at `src/core/gdrive/auth.ts:59` **without importing it** —
-`CLAUDE.md` invariant 3 keeps `core/gdrive` out of other subsystems. Uses a direct POST rather than
-a `googleapis` OAuth2 client object: one endpoint, one grant type, and a plain call lets tests
-inject a fetch instead of mocking a library.
-
-Legacy `YOUTUBE_OAUTH_TOKEN` still works so nothing breaks, with a warning that it cannot renew.
-
-**Wired into:** `social.youtube-upload`, `social.youtube-analytics`, `CommentEngine.postReply`.
-
-### 2. `src/core/youtube/quota-ledger.ts` — daily quota accounting (GAP-02) · 244 lines
-Nothing counted API units. `videos.insert` costs 1,600 of a 10,000/day allowance and `search.list`
-costs 100 — so ~100 searches silently make the day's upload impossible, presenting as a 403 at 3am.
-
-`QuotaLedger` provides `spend()` / `canAfford()` / `status()` / `breakdown()` over SQLite:
-- **Pacific-day bucketing** via the IANA zone (`America/Los_Angeles`), not a fixed UTC offset — a
-  hardcoded -8 would mis-bucket eight months of the year by an hour.
-- **Publish reserve**: 1,600 units are held back and only `videos.insert` may draw on them, so a
-  chatty analytics job cannot starve the publish lane. This asymmetry is the point of the module.
-- **`search.list` denied by default**, with the zero-unit RSS alternative named in the error.
-
-### 3. `src/core/youtube/policy-gate.ts` — pre-publish gate (GAP-03) · 207 lines
-YouTube enforces the inauthentic-content policy at the **channel** level, so one templated batch
-retroactively endangers the whole back catalogue. Publishing 6×/day with no check can destroy the
-asset faster than it builds it.
-
-`assessPublishCandidate()` returns `pass` | `block` | `hold`. It targets **sameness, not AI
-authorship** — the policy explicitly permits synthetic narration of an original script.
-- Word-trigram Jaccard similarity against recently published scripts (threshold 0.6, deliberately
-  cautious: a false block costs a rewrite, a false pass costs the channel).
-- Structural minimums — empty/thin script reads as a slideshow; an over-length title is **rejected
-  rather than silently truncated** (the upload tool's `title.slice(0,100)` quietly mangles).
-- Optional independent judge (caller pins the route, per `CLAUDE.md` invariant 7).
-- **Fails closed:** a judge that throws returns `hold`, never `pass`. `mayPublish()` approves only
-  an explicit `pass`.
-
-No new dependencies — the similarity check is plain code. Embeddings can be swapped in later.
-
-### 4. GAP-04a — stopped the fabricated CTR
-`thumbnail-ab.ts:_fetchAndStoreCtr` wrote a hardcoded `measured_ctr = 0.04` and
-`impressions = viewCount` for **every** variant, into the same DB columns a real measurement would
-occupy. Views are not impressions and 0.04 was not measured; nothing downstream could tell the
-invention from data. It now records nothing it cannot measure and makes no network call.
-
-### 5. Publish kill switch — `SUDO_YT_PUBLISH_ENABLED`, default OFF
-Per the brief, everything touching a live account stays off. `social.youtube-upload` refuses unless
-the flag is exactly `'1'`, returns what it *would* have uploaded, and spends no quota while
-disabled. It also now spends `videos.insert` against the ledger **before** starting, so an
-exhausted quota fails fast instead of after a long PUT.
+The recurring theme across the run is worth stating once: **every roadmap item turned out to be
+worse than its entry said, and the thing that found the extra defect was always *running* something
+— never reading it.**
 
 ---
 
-## TESTS
+## WHAT SHIPPED
 
-**54 new tests across 5 files, 727 lines.** All green.
+### Phase A — "it can act unattended at all" (all P0, complete)
 
-| File | Tests | Covers |
+| Item | Commit | What it closed |
 |---|---|---|
-| `tests/youtube/auth.test.ts` | 17 | Refresh, caching, rotation, invalid_grant, non-JSON, fail-not-fallback. **Drives a fake clock across the 1-hour expiry boundary** — the exact thing that was broken. |
-| `tests/youtube/quota-ledger.test.ts` | 13 | Pacific bucketing incl. a PST-vs-PDT pair, day rollover, reserve asymmetry both directions, search denial, and the "100 searches exhaust the day" case that motivated it. |
-| `tests/youtube/policy-gate.test.ts` | 16 | Similarity maths, near-duplicate blocking, structural checks, judge rejection, **judge-throws ⇒ hold**, short-circuit ordering. |
-| `tests/youtube/thumbnail-ab-no-fabrication.test.ts` | 3 | Regression: no `0.04`, no winner from no data, no network call. |
-| `tests/youtube/upload-killswitch.test.ts` | 5 | Default-off, off for any non-`'1'` value, no quota spent while off, quota refusal before upload. |
+| **GAP-01** OAuth refresh | `fbbb5bc1` | `YOUTUBE_OAUTH_TOKEN` was a static access token — every YouTube write died ~1h after a human pasted it. `src/core/youtube/auth.ts` (283 lines): refresh-token grant, `0600` cache, rotation-aware, fails loud on `invalid_grant`. Tests drive a fake clock across the expiry boundary. |
+| **GAP-02** Quota ledger | `2149b120` | Nothing counted API units. `quota-ledger.ts` (244): Pacific-day bucketing via the IANA zone (a fixed −8 mis-buckets 8 months a year), a publish reserve reads cannot draw on, `search.list` denied by default. |
+| **GAP-04a** Fabricated CTR | `2149b120` | `thumbnail-ab.ts` wrote a hardcoded `measured_ctr = 0.04` and `impressions = viewCount` into the columns real measurements occupy. Views are not impressions and 0.04 was not measured. Now records nothing it cannot measure. |
+| **GAP-03** Policy gate | `c938a23b`, `b803c945` | Channel-level enforcement makes this safety-critical. Two commits because the first shipped only the library — see "the recurring defect" below. |
+| **GAP-15** Fabricated competitor alerts | `f885732a` | `checkActivity()` prompted the model to *"generate 1-3 **realistic** activity alerts"* and stored them as observations, with zero network calls. Worse than the CTR stub: varied, specific prose that reads as intelligence. Deleted; the honest fallback is now the only path. |
+| **B6** Enforced spend caps | `1386d621` | See below — this was two defects, not one. |
 
-Coverage is behavioural, not shape-asserting — each test drives the failure mode the code exists to
-prevent.
+### Phase B — "it can measure and iterate"
 
----
+| Item | Commit | What it closed |
+|---|---|---|
+| **GAP-08** `search.list` quota bomb | `a3c5b4ce` | 400 quota units per invocation (100/page × 4) on the **default** path. Replaced by channel RSS (**0 units**) → `playlistItems.list` (1 unit/50). 100× reduction. |
+| **GAP-05** `videos.update` | `8e091a36` | Metadata was write-once; titles could never be revised. `metadata.ts` (245) always read-modify-writes because `videos.update` is a **full replace** that blanks omitted fields. |
+| **GAP-06** YPP readiness | `e1e96ebb` | `ypp-readiness.ts` (217). Three requirements have no API at all, so they are `human-verify` criteria and the model can never report `eligible` while any is unconfirmed. |
+| **B3 partial / trend sources** | `51a4ce4c` | YouTube trending scanner (1 quota unit, live-proven) + X scanner (paid, off by default). Found Reddit dead — 403 from datacenter IPs, failing silently at `debug`. |
 
-## `pnpm verify` — HONEST STATUS: **RED, with zero regressions from my work**
+### Supporting work
 
-I am not going to claim green. Here is exactly what I ran and what came back.
+- **`src/llm/xai-billing.ts`** (`7b9c16bc`, 339 lines) — the xAI half of the money guard, on the
+  **documented** Management API rather than the console's undocumented gRPC. Wired into `callIR`.
+  **Inactive until an operator mints a management key.**
+- **`scripts/capture/mitm-capture.py`** (`27020356`, `2c08fffe`) — reusable full-fidelity traffic
+  capture (HTTP bodies + WebSocket both directions). Built after six failed CDP attempts; it
+  revealed Grok Business chat is a WebSocket, which is why nothing HTTP-based ever saw it.
 
-- `pnpm lint` (= `tsc --noEmit`): **PASS**, clean.
-- `pnpm build`: not independently exercised past the failing test step.
-- `pnpm test`: **1058 files / 12,800 tests pass; 6 tests across 5 files fail.**
-
-**None of the failures are mine, and I proved it rather than asserting it.** I created a worktree at
-the base commit `a928d526`, symlinked the same `data/` and `workspace/` directories, copied in the
-same uncommitted `src/llm/client.ts`, and ran the identical five files at base and on my branch:
-
-```
-BASE (a928d526)                          MINE (c938a23b)
-tests/agent/cw0-brief-instrumentation    tests/agent/cw0-brief-instrumentation
-tests/gdrive/cli                         tests/gdrive/cli
-tests/health/cw6-homeostat               tests/health/cw6-homeostat
-tests/llm/transport                      tests/llm/transport
-
-DIFF (mine-only regressions): <empty>
-```
-
-**Identical failure sets. Zero regressions.**
-
-Root causes, as far as I traced them:
-- `tests/llm/transport.test.ts` — caused by the **uncommitted `src/llm/client.ts` in the working
-  tree** (another session's work). It adds an on-disk xAI key fallback to `getProviderApiKey`, so
-  the "missing API key → throw" assertion no longer holds when `data/xai-apikey.json` exists. I left
-  that file alone per D-02.
-- `tests/gdrive/cli`, `cw0-brief-instrumentation`, `cw6-homeostat` — snapshot/state tests reading
-  real on-disk `data/` and `workspace/` content that has drifted from the pinned expectations.
-- The two extra `system-prompt-inject-caps` failures seen only in the full parallel run are
-  test-pollution; they pass in isolation on both base and branch.
-
-My own 54 tests pass in every configuration tried, including a clean detached worktree.
+**One commit I cannot attribute to this run:** `559720bf perf(grok): cut the statsig cold path from
+~28s to ~30ms` (08-01 19:46) touches `grok-statsig-oracle.ts` / `grok-statsig-pool.ts`, files this
+run never edited, doing work this run never performed. It is present on the branch and its tests
+pass. Flagged rather than claimed.
 
 ---
 
-## WHAT I SKIPPED, AND WHY
+## THE RECURRING DEFECT: "built but nothing calls it"
 
-- **All P1/P2 items.** The brief said depth over coverage and P1 only if P0 finished with nothing
-  flaky. P0 finished clean, but `pnpm verify` is red for environmental reasons I did not create and
-  should not silently paper over. Starting P1 on top of an unverifiable baseline would have been the
-  wrong call. Three working things, as asked.
-- **GAP-07 (long-form render orchestrator)** — the largest item in the roadmap, and correctly
-  sequenced *after* the policy gate. Building a faster content factory before the gate exists is
-  building faster in the wrong direction.
-- **GAP-04b (real thumbnail A/B)** — needs `thumbnails.set` plus Analytics `impressions`. Deliberately
-  left disabled rather than half-built; the fabrication is stopped, which was the urgent part.
-- **Nothing was BLOCKED by `protected-paths.ts`.** I checked: `src/core/youtube/` and
-  `src/core/tools/builtin/social/` are both unprotected. `src/core/tools/builtin/meta/` *is*
-  protected and contains a YouTube comment-engine wrapper I did not touch — it reads
-  `YOUTUBE_OAUTH_TOKEN` directly and should be migrated to the new provider by someone with the
-  authority to edit protected paths. **Logged as the one BLOCKED item.**
+This pattern appeared **five times**, and is the single most useful thing to carry forward:
 
-## WHAT'S STILL STUBBED
+1. **`cost-tracker.checkBudget()`** — computes a correct budget verdict. Zero callers. Ever.
+2. **The policy gate** — shipped as a library in `c938a23b`; nothing invoked it. Worse, there was no
+   published-script corpus, so its cross-video similarity check scored 0 against nothing and would
+   have passed every templated script *even once wired*. Both halves fixed in `b803c945`.
+3. **Media spend recording** — `video-tools`, `factory-tools`, `image-tools` and `thumbnail-tool` all
+   returned **zero** hits for any cost-tracker reference. So wiring `checkBudget` alone would have
+   enforced a cap against a number that was structurally always zero.
+4. **GAP-05** — nearly shipped as a library; registered as `social.youtube-update-metadata` instead.
+5. **GAP-06** — same; registered as `social.youtube-ypp-readiness`.
 
-- `thumbnail-ab.ts` A/B is now *honest* but *inert* — it measures nothing and cannot deploy a
-  thumbnail. It should be considered disabled until GAP-04b.
-- `CommentEngine.postReply` reaches real code now, but has no rate limiter and no safety filter, so
-  it must not run unattended (GAP-10).
-- The policy gate is **built and tested but not yet on the publish path** — nothing calls it before
-  `social.youtube-upload`. The kill switch is what currently stands between the system and a real
-  channel. Wiring the gate in is the first item below.
+From item 3 onward, registration was **verified programmatically**, not assumed.
+
+---
+
+## PRODUCTION-READINESS GATES (`04-ROADMAP.md`)
+
+**Passing: 3, 4, 6, 7, 8, 9, 13, 16.**
+
+| # | Gate | Evidence |
+|---|---|---|
+| 3 | No publish path bypasses the policy gate | `publish.test.ts` asserts at **source level** that `opts.upload(` appears exactly once and the verdict guard precedes it |
+| 4 | Gate fails closed | judge throws ⇒ `hold` ⇒ uploader never invoked |
+| 6 | Zero fabricated metrics | GAP-04a + GAP-15 both deleted; regression tests assert no network call and no invented values |
+| 7 | Quota ledgered, upload reserve protected | reserve asymmetry tested both directions |
+| 8 | Spend caps **halt** | a 100-iteration retry storm halts after **5** calls (per-job) / **2** (daily) |
+| 9 | `search.list` not called, grep-verified in CI | `no-search-list.test.ts` scans all of `src/` |
+| 13 | YPP readiness tracked + alerting | `ypp-readiness.test.ts` |
+| 16 | Kill switch, default OFF | `SUDO_YT_PUBLISH_ENABLED`, tested for every non-`'1'` value |
+
+**Still open:** 1, 2 (need a real refresh token in place), 5 (AI disclosure not implemented),
+10, 11 (pipeline checkpointing / upload resume), 12 (dashboard), 14, 15 (need real operation).
+
+---
+
+## TEST COVERAGE OF NEW CODE
+
+| File | Tests |
+|---|---|
+| `tests/llm/xai-billing.test.ts` | 22 |
+| `tests/youtube/metadata.test.ts` | 19 |
+| `tests/youtube/ypp-readiness.test.ts` | 19 |
+| `tests/awareness/trend-radar-youtube-x.test.ts` | 18 |
+| `tests/youtube/auth.test.ts` | 17 |
+| `tests/youtube/policy-gate.test.ts` | 16 |
+| `tests/billing/media-spend.test.ts` | 12 |
+| `tests/youtube/publish.test.ts` | 12 |
+| `tests/youtube/quota-ledger.test.ts` | 11 |
+| `tests/youtube/upload-killswitch.test.ts` | 7 |
+| `tests/youtube/competitor-no-fabrication.test.ts` | 5 |
+| `tests/youtube/no-search-list.test.ts` | 3 |
+| `tests/youtube/thumbnail-ab-no-fabrication.test.ts` | 3 |
+| **Total** | **164** |
+
+The tests are behavioural, not shape-asserting — each drives the failure mode its code exists to
+prevent. Three found real bugs in my own code: same-millisecond corpus ordering (`publish.ts`), an
+array-identity comparison that was always false (`comment-api.ts`), and a second `search.list` call
+site that reading had missed (`comment-api.ts`).
+
+---
+
+## `pnpm verify` — RED, with zero regressions, unchanged from the original report
+
+`pnpm lint` (tsc) **passes clean**. `pnpm test`: **12,916 pass, 6 fail** across 5 files —
+`cw0-brief-instrumentation`, `system-prompt-inject-caps` (×2), `gdrive/cli`, `cw6-homeostat`,
+`llm/transport`.
+
+**All six are pre-existing and were proven so**, not assumed: a worktree at base `a928d526` with
+identical `data/`, `workspace/` and the same uncommitted `src/llm/client.ts` produced the
+**identical failure set**. The `llm/transport` one is caused by that uncommitted file adding an
+on-disk xAI key fallback, which breaks its "missing API key" assertion. It belongs to another
+session; I left it alone throughout.
+
+The count has been re-checked after every commit in this run and has never moved off six.
+
+---
+
+## WHAT IS STILL STUBBED OR ABSENT
+
+- **GAP-07 — long-form production.** The largest open item. `media.shorts-factory` still produces a
+  static image with a voiceover — the audit's headline finding, and precisely the artifact Gate 4
+  demonetises. `src/remotion/` compositions remain unwired.
+- **GAP-04b — real thumbnail A/B.** Honest but inert: it measures nothing and there is still **no
+  `thumbnails.set` call anywhere in the repo**, so a variant cannot be deployed.
+- **Comment replies** reach real code now but have no rate limiter and no safety filter.
+- **Upload** still `readFileSync`s the whole video and has no resume (GAP-11).
+- **Two Analytics clients** still exist and will drift (GAP-12).
+- **AI-disclosure flag** not implemented (gate 5). `selfDeclaredMadeForKids` is the COPPA flag, not
+  the synthetic-media one.
+
+---
+
+## NEEDS AN OPERATOR (owner-only, cannot be done from here)
+
+1. **YouTube OAuth refresh token** — the Gate-3 one-time consent flow. Until then GAP-01 is
+   structurally correct but unexercised against a real account.
+2. **xAI management key** — Console → Settings → Management Keys. **Not** `XAI_API_KEY` (verified:
+   it returns 401 on all three billing endpoints). Until then the xAI spend guard is `inactive` and
+   xAI spend is **not** being verified.
+3. **Reddit OAuth app-only credential** — or accept that trend source stays dead.
+4. **Two protected-path items** I could not touch: `builtin/meta/comment-engine.ts` still reads the
+   static token, and `policy-gate.ts` arguably belongs in `PROTECTED_PATHS` by the same logic as
+   `veto-gate.ts` — an agent that can edit its own policy gate can publish anything.
 
 ---
 
 ## WHAT I'D WANT A SECOND PAIR OF EYES ON
 
-1. **The 0.6 similarity threshold is a guess.** It is calibrated against my synthetic fixtures, not
-   against real scripts. It should be tuned on a real corpus before anyone trusts it. Logged in
-   `00-ASSUMPTIONS.md`.
-2. **Quota reservation is not atomic across processes.** Two daemons could both pass `canAfford`
-   and both spend. Single-process today, but it needs a transaction if the publish lane is ever
-   forked.
-3. **`getYouTubeAccessToken` has no in-flight dedupe** — concurrent callers on a cold cache will each
-   perform a refresh. Harmless (Google tolerates it) but wasteful.
-4. **Whether the policy gate belongs on a protected path.** It is a safety-critical component by the
-   same logic as `veto-gate.ts`, and an agent that can edit its own policy gate can publish anything.
-   I did not add it to `PROTECTED_PATHS` because that file is itself protected. **Frank's call.**
+1. **The 0.6 similarity threshold** is still calibrated on synthetic fixtures, not real scripts.
+   Unchanged since the first report and still the weakest number in the system.
+2. **Media unit costs are estimates**, documented as such. They bound a runaway loop rather than do
+   accounting — being 30% wrong still stops the storm, but they are not billing truth.
+3. **xAI billing response field names are UNVERIFIED** — no management key, so the shapes were never
+   exercised. Transport proven, parsing not.
+4. **The Shorts-views metric** uses the documented `creatorContentType==shorts` filter, unexercised.
+5. **Quota reservation is not atomic across processes.** Single-process today; needs a transaction if
+   the publish lane is ever forked.
+6. **`social.youtube-upload` still does `title.slice(0,100)`** — silent truncation — while the new
+   metadata tool rejects over-length titles outright. The upload tool is now the inconsistent one.
 
 ---
 
-## EXACT NEXT THREE THINGS
+## EXACT NEXT THREE
 
-1. **Wire the policy gate into the publish path.** Build the publish orchestrator that calls
-   `assessPublishCandidate()` and refuses to invoke `social.youtube-upload` on anything but `pass`,
-   plus a test asserting no bypass path exists (production-readiness gate 3 in `04-ROADMAP.md`).
-   Without this the gate is a library nobody calls.
-2. **GAP-08 — delete the `search.list` pagination** at `src/core/feedback/youtube-api.ts:75` and
-   replace it with the zero-quota channel RSS feed. Small, strictly cheaper, removes the live quota
-   bomb. The ledger now guards the *new* call sites but that one predates it.
-3. **GAP-05 — `videos.update`.** Metadata is write-once today, so titles can never be revised. At 50
-   units it is the cheap experimentation actuator and it unlocks title A/B without any Studio
-   automation. Must read-modify-write the full `snippet` — a partial update erases omitted fields.
-
-Then GAP-06 (YPP readiness) as a quick win before touching GAP-07.
+1. **GAP-04b — real thumbnail A/B.** Needs `thumbnails.set` (50 units) to deploy plus Analytics
+   `impressions` / `impressionClickThroughRate` to measure. The OAuth plumbing already exists; only
+   the metric names change. Turns a disabled fake into the second experimentation actuator.
+2. **Fix the upload tool's silent title truncation**, for consistency with GAP-05. Ten minutes.
+3. **GAP-07 — long-form orchestrator.** The big one. Before writing it, evaluate
+   `digitalsamba/claude-code-video-toolkit` (1,883★, MIT, actively maintained) as a **reference
+   architecture** — its economics land inside the audit's Gate 5 estimate and its output is
+   multi-scene with motion and captions, i.e. the shape that does not trip Gate 4. Not a drop-in
+   (Python + cloud GPU), but it may save a week of design.
 
 ---
 
 ## CREDENTIAL HYGIENE
 
-- Zero credentials in code, config, or tests. Verified by grep over `src/core/youtube/` and
-  `tests/youtube/`: no hardcoded secrets.
-- All new secrets are env-var only: `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`,
-  `YOUTUBE_OAUTH_REFRESH_TOKEN`, `YOUTUBE_TOKEN_FILE`.
-- The token cache is written at `0600`, defaults to `data/youtube-oauth.json` (gitignored path
-  convention), and **must not** be placed in `ecosystem.config.cjs` — that file enumerates env and
-  is committed.
-- Only token *lengths* and expiry timestamps are logged, never token material.
-- Everything touching a live account is behind `SUDO_YT_PUBLISH_ENABLED`, default OFF. **I did not
-  turn it on.**
+Unchanged and re-verified: zero credentials in code, config or tests. All new secrets are env-only
+(`YOUTUBE_OAUTH_*`, `XAI_MANAGEMENT_KEY`, `X_API_BEARER_TOKEN`). The token cache is `0600` under
+`data/`, which is gitignored (`git check-ignore` confirmed). Only token *lengths* and expiry
+timestamps are ever logged. Everything touching a live account or real money is behind a
+default-OFF flag — `SUDO_YT_PUBLISH_ENABLED`, `X_API_BEARER_TOKEN` absence, `XAI_MANAGEMENT_KEY`
+absence — with the single deliberate exception of the media spend **caps**, which default **ON**
+because a money guard that ships disabled is the exact failure being fixed.
+
+**I did not turn anything on.**
