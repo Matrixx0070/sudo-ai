@@ -466,3 +466,40 @@ Registered as `social.youtube-ypp-readiness` and verified programmatically, not 
 fifth time this session that "built but nothing calls it" was the thing to avoid.
 
 19 tests. Full suite 12,916 pass, same 6 pre-existing failures.
+
+## D-25 | GAP-04b CLOSED — real thumbnail A/B, with statistics that refuse to overclaim
+GAP-04a stopped `thumbnail-ab.ts` fabricating a `0.04` CTR. The risk in replacing that was subtler:
+**real numbers, misinterpreted**. Both capabilities were missing — the repo had **no `thumbnails.set`
+call anywhere** (so a variant could not be deployed) and no impressions/CTR read.
+
+`src/core/youtube/thumbnails.ts` adds both:
+- `setThumbnail()` — 50 quota units, gated by `SUDO_YT_PUBLISH_ENABLED` (a viewer-visible change to
+  a live channel). Rejects >2 MB **before** spending the 50 units, since YouTube would refuse it.
+- `fetchThumbnailCtr()` — Analytics `impressions` + `impressionClickThroughRate`, not charged
+  against the Data API quota. **Gotcha handled:** YouTube reports CTR as a *percentage* (4.7), not a
+  fraction; storing it raw would overstate CTR 100×.
+
+**The honesty problem, and why it shaped the design.** Studio's "Test & Compare" runs a *concurrent*
+split — same video, same hour, impressions randomly divided. There is no API for that (Gate 2). The
+API only permits a **sequential** test: deploy A, measure, deploy B, measure — confounded by
+day-of-week, video age decay and algorithmic surfacing. A 15% gap between two sequential windows is
+not evidence one thumbnail is 15% better.
+
+So the inference is deliberately conservative. `compareVariants()` declares a winner only when a
+two-proportion z-test clears p < 0.05 **and** both variants have ≥1,000 impressions; otherwise the
+verdict is `inconclusive` with the reason. Every winner carries an explicit caveat naming the
+sequential confound. Tested: a 20% vs 4% gap on 100 impressions returns **inconclusive**, because on
+that sample it is noise. `selectWinner()` now uses this instead of highest-CTR-wins, which would
+have crowned a variant on 100 impressions over one on 50,000.
+
+Also added `deployVariant()`, which stamps `deployed_at` **only on a confirmed deploy**, so a failed
+upload cannot open a measurement window that never ran. Each variant is measured over its own
+window — deploy time to the next variant's deploy time — which is what makes the sequential
+structure explicit rather than implied.
+
+**A new test failure appeared and I chased it rather than assuming.** `browser/history-and-wait`
+failed in the full run; it passes 4/4 in isolation and did not recur on a second full run (skipped
+count 15→11). It launches a real Chrome and loses a race under parallel load. **Flaky, not a
+regression** — established by re-running, not by asserting.
+
+19 tests. Full suite 12,935 pass, same 6 pre-existing failures.

@@ -27,6 +27,9 @@ export {
 } from './quota-ledger.js';
 export type { QuotaStatus, QuotaMethod } from './quota-ledger.js';
 
+export { setThumbnail, fetchThumbnailCtr, compareVariants, twoProportionZTest } from './thumbnails.js';
+export type { CtrSample, VariantSample, ComparisonVerdict, DeployOutcome } from './thumbnails.js';
+
 export { assessYppReadiness, shouldAlert, daysToTarget } from './ypp-readiness.js';
 export type { YppReadiness, YppMetrics, Criterion } from './ypp-readiness.js';
 
