@@ -27,6 +27,9 @@ export {
 } from './quota-ledger.js';
 export type { QuotaStatus, QuotaMethod } from './quota-ledger.js';
 
+export { assessYppReadiness, shouldAlert, daysToTarget } from './ypp-readiness.js';
+export type { YppReadiness, YppMetrics, Criterion } from './ypp-readiness.js';
+
 export { updateVideoMetadata, mergeSnippet, validatePatch } from './metadata.js';
 export type { MetadataPatch, MetadataOutcome, VideoSnippet } from './metadata.js';
 

@@ -23,7 +23,7 @@ import { createLogger } from '../../../shared/logger.js';
 
 import { multiPostTool, schedulePostTool } from './platform-tools.js';
 import { twitterManagerTool, trendScannerTool } from './twitter-tools.js';
-import { youtubeUploadTool, youtubeAnalyticsTool, youtubeUpdateMetadataTool } from './youtube-tools.js';
+import { youtubeUploadTool, youtubeAnalyticsTool, youtubeUpdateMetadataTool, youtubeYppReadinessTool } from './youtube-tools.js';
 
 const logger = createLogger('social-builtin');
 
@@ -37,6 +37,7 @@ const SOCIAL_TOOLS: ToolDefinition[] = [
   youtubeUploadTool,
   youtubeAnalyticsTool,
   youtubeUpdateMetadataTool,
+  youtubeYppReadinessTool,
   twitterManagerTool,
   trendScannerTool,
 ];

@@ -340,3 +340,115 @@ export const youtubeUpdateMetadataTool: ToolDefinition = {
     return { success: false, output: out.reason, data: { blockedBy: out.blockedBy } };
   },
 };
+
+// ---------------------------------------------------------------------------
+// social.youtube-ypp-readiness
+// ---------------------------------------------------------------------------
+
+/** Analytics query helper — returns the first row's named metric, or null. */
+async function analyticsMetric(
+  token: string,
+  metric: string,
+  startDate: string,
+  endDate: string,
+  extra: Record<string, string> = {},
+): Promise<number | null> {
+  const qs = new URLSearchParams({ ids: 'channel==MINE', startDate, endDate, metrics: metric, ...extra });
+  try {
+    const res = await toolFetch(`https://youtubeanalytics.googleapis.com/v2/reports?${qs}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { rows?: Array<Array<string | number>> };
+    const v = data.rows?.[0]?.[0];
+    return typeof v === 'number' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+const dateNDaysAgo = (n: number): string =>
+  new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * GAP-06. Tracks distance to YouTube Partner Program eligibility.
+ *
+ * Read-only: 1 quota unit for `channels.list`; the Analytics API is not charged
+ * against the Data API quota. Three YPP requirements have no API at all, so they
+ * are surfaced as `human-verify` and this NEVER reports eligible without an
+ * explicit operator attestation — see core/youtube/ypp-readiness.ts.
+ */
+export const youtubeYppReadinessTool: ToolDefinition = {
+  name: 'social.youtube-ypp-readiness',
+  description:
+    'Track progress toward YouTube Partner Program monetisation: subscribers, watch hours, ' +
+    'Shorts views, plus the three requirements no API exposes (2SV, AdSense, strikes). ' +
+    'Returns per-criterion status, overall verdict, projected eligibility date and next action.',
+  category: 'social',
+  timeout: 60_000,
+  parameters: {
+    twoStepVerified: { type: 'boolean', description: 'Operator attestation: 2-step verification is enabled.' },
+    adsenseLinked: { type: 'boolean', description: 'Operator attestation: an AdSense account is linked.' },
+    noActiveStrikes: { type: 'boolean', description: 'Operator attestation: no active Community Guidelines strikes.' },
+  },
+
+  async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    const auth = await resolveToken('social.youtube-ypp-readiness');
+    if ('error' in auth) return auth.error;
+    const token = auth.token;
+
+    const ledger = quotaLedger();
+    let subscribers: number | null = null;
+    try {
+      ledger.spend('channels.list');
+      const res = await toolFetch(
+        'https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=true',
+        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+      );
+      if (res.ok) {
+        const d = await res.json() as { items?: Array<{ statistics?: { subscriberCount?: string } }> };
+        const raw = d.items?.[0]?.statistics?.subscriberCount;
+        if (raw !== undefined) subscribers = parseInt(raw, 10);
+      }
+    } catch (err) {
+      if (err instanceof QuotaExceededError) return { success: false, output: err.message, data: { blockedBy: 'quota' } };
+      logger.warn({ err: String(err) }, 'channels.list failed — subscribers unmeasured');
+    } finally {
+      ledger.close();
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const minutes12mo = await analyticsMetric(token, 'estimatedMinutesWatched', dateNDaysAgo(365), today);
+    // UNVERIFIED against a live token: the creatorContentType filter is documented
+    // but unexercised here. It nulls out cleanly if unsupported, which is correct —
+    // an unmeasured metric must not read as zero progress.
+    const shortsViews90d = await analyticsMetric(
+      token, 'views', dateNDaysAgo(90), today, { filters: 'creatorContentType==shorts' },
+    );
+    const subsGained30d = await analyticsMetric(token, 'subscribersGained', dateNDaysAgo(30), today);
+    const minutes30d = await analyticsMetric(token, 'estimatedMinutesWatched', dateNDaysAgo(30), today);
+
+    const { assessYppReadiness, shouldAlert } = await import('../../../youtube/ypp-readiness.js');
+    const readiness = assessYppReadiness({
+      subscribers,
+      watchHours12mo: minutes12mo === null ? null : Math.floor(minutes12mo / 60),
+      shortsViews90d,
+      uploads90d: null,
+      subscribersPerDay: subsGained30d === null ? null : subsGained30d / 30,
+      watchHoursPerDay: minutes30d === null ? null : minutes30d / 60 / 30,
+      ...(typeof params['twoStepVerified'] === 'boolean' ? { twoStepVerified: params['twoStepVerified'] } : {}),
+      ...(typeof params['adsenseLinked'] === 'boolean' ? { adsenseLinked: params['adsenseLinked'] } : {}),
+      ...(typeof params['noActiveStrikes'] === 'boolean' ? { noActiveStrikes: params['noActiveStrikes'] } : {}),
+    });
+
+    logger.info({ session: ctx.sessionId, verdict: readiness.verdict, progress: readiness.progress },
+      'social.youtube-ypp-readiness assessed');
+
+    const pct = (readiness.progress * 100).toFixed(0);
+    return {
+      success: true,
+      output: `YPP ${readiness.verdict.toUpperCase()} (${pct}% of thresholds). ${readiness.action}`,
+      data: { ...readiness, alert: shouldAlert(readiness) },
+    };
+  },
+};

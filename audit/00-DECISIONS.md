@@ -431,3 +431,38 @@ the defect has been "built but nothing calls it" (policy gate, checkBudget, and 
 shipping a fourth would have been indefensible. Registration verified programmatically, not assumed.
 
 19 tests. Full suite 12,897 pass, same 6 pre-existing failures.
+
+## D-24 | GAP-06 CLOSED — YPP readiness, designed around what the API cannot see
+Nothing tracked progress toward monetisation. Every input already existed in the working
+`social.youtube-analytics` tool; the missing piece was the model turning numbers into
+"how far, and when".
+
+**The design decision that makes this honest.** Three YPP requirements have **no API whatsoever**
+(audit Gate 2): two-step verification, a linked AdSense account, and no active Community Guidelines
+strikes. A readiness model that quietly assumed them satisfied would report ELIGIBLE for a channel
+YouTube will refuse — the worst possible outcome, because it sends a human to click Apply and be
+rejected. So they are first-class criteria with status `human-verify`, and **overall readiness can
+never reach `eligible` while any is unconfirmed**; the best it reports is `thresholds-met`, with the
+action naming exactly which ones to go check. Asserted by test for each of the three individually.
+
+Other deliberate choices:
+- **`null` ≠ `0`.** An unmeasured metric reports "not measured", never "no progress". Nothing
+  measured at all ⇒ verdict `unknown`, pointing at the credential rather than implying a dead channel.
+- **No fabricated projections.** Flat or unknown growth returns `null` for the eligibility date and
+  says "no projection", rather than inventing one. When both rates are known the projection uses the
+  **slower** constraint, since that is what actually binds.
+- Early access is reported separately and states plainly that it is **NOT ad revenue** — it unlocks
+  fan funding only, which is easy to misread as monetisation.
+- Thresholds carry the 2026-08-01 verified numbers: 1,000 subs + (4,000 watch hours/12mo OR 10M
+  Shorts views/90d); early access 500 subs + 3 uploads/90d + (3,000 hours OR 3M Shorts views).
+
+Cost: **1 quota unit** (`channels.list`). The Analytics API is not charged against the Data API quota.
+
+**UNVERIFIED:** the Shorts view count uses the documented `creatorContentType==shorts` Analytics
+filter, unexercised without a live token. It nulls out cleanly if unsupported — which is the correct
+failure, since an unmeasured metric must not read as zero.
+
+Registered as `social.youtube-ypp-readiness` and verified programmatically, not assumed — the
+fifth time this session that "built but nothing calls it" was the thing to avoid.
+
+19 tests. Full suite 12,916 pass, same 6 pre-existing failures.
