@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile, realpath } from 'node:fs/promises';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT, dataPath } from '../../../../shared/paths.js';
@@ -31,6 +31,23 @@ function isAllowedPath(p: string): boolean {
   return ALLOWED_DIRS.some((dir) => resolved.startsWith(dir + path.sep) || resolved === dir);
 }
 const ALLOWED_MSG = `must be under /tmp/ or ${PROJECT_ROOT}/data/docx/`;
+
+/**
+ * Symlink-safe allowlist check. `path.resolve` normalises `..` but does NOT
+ * dereference symlinks, so a symlink inside an allowed dir could point out of it.
+ * We realpath the actual target (for an existing input) or its parent dir (for a
+ * not-yet-created output) and re-check the allowlist on the real location.
+ */
+async function isRealPathAllowed(p: string, kind: 'input' | 'output'): Promise<boolean> {
+  try {
+    if (kind === 'input') return isAllowedPath(await realpath(p));
+    // output may not exist yet: resolve the parent's real path, then re-attach the basename.
+    const realParent = await realpath(path.dirname(p));
+    return isAllowedPath(path.join(realParent, path.basename(p)));
+  } catch {
+    return false;
+  }
+}
 
 async function py(script: string, args: string[], cwd?: string): Promise<string> {
   const { stdout } = await execFileAsync('python3', [script, ...args], {
@@ -81,6 +98,9 @@ async function validateInput(inputPath: string): Promise<string | null> {
   } catch {
     return `file not found: ${inputPath}`;
   }
+  if (!(await isRealPathAllowed(inputPath, 'input'))) {
+    return `inputPath resolves outside allowed dirs (symlink): ${inputPath}`;
+  }
   return null;
 }
 
@@ -129,6 +149,9 @@ export const docxReplaceTextTool: ToolDefinition = {
     const out = resolveOutput(inputPath, args);
     if ('error' in out) return { success: false, output: `docx.replace_text error: ${out.error}` };
     const dryRun = args['dryRun'] === true;
+    if (!dryRun && !(await isRealPathAllowed(out.outputPath, 'output'))) {
+      return { success: false, output: `docx.replace_text error: outputPath resolves outside allowed dirs: ${out.outputPath}` };
+    }
 
     let mapFile: string | undefined;
     try {
@@ -195,6 +218,9 @@ export const docxPatchTool: ToolDefinition = {
     const out = resolveOutput(inputPath, args);
     if ('error' in out) return { success: false, output: `docx.patch error: ${out.error}` };
     const dryRun = args['dryRun'] === true;
+    if (!dryRun && !(await isRealPathAllowed(out.outputPath, 'output'))) {
+      return { success: false, output: `docx.patch error: outputPath resolves outside allowed dirs: ${out.outputPath}` };
+    }
 
     let patchFile: string | undefined;
     try {
