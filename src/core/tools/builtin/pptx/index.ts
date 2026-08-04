@@ -3,14 +3,26 @@
  * @description PPTX toolkit — registers pptx tools into the ToolRegistry.
  *
  * Tools registered:
- *   pptx.create — Create a real .pptx PowerPoint deck (pptxgenjs, local/offline)
+ *   pptx.create    — Create a real .pptx PowerPoint deck (pptxgenjs, local/offline)
+ *   pptx.inspect   — Read structure/text/notes/media of an existing .pptx
+ *   pptx.unpack    — Unpack a .pptx to an editable OOXML directory
+ *   pptx.add_slide — Duplicate a slide or instantiate a layout in an unpacked dir
+ *   pptx.clean     — Remove orphaned slides/media/rels from an unpacked dir
+ *   pptx.pack      — Validate and repack an unpacked dir into a .pptx
  */
 
 import type { ToolRegistry } from '../../registry.js';
 import { pptxCreateTool } from './tools/create.js';
+import { pptxInspectTool } from './tools/inspect.js';
+import { pptxUnpackTool, pptxAddSlideTool, pptxCleanTool, pptxPackTool } from './tools/edit.js';
 
 export const PPTX_TOOLS = [
   pptxCreateTool,
+  pptxInspectTool,
+  pptxUnpackTool,
+  pptxAddSlideTool,
+  pptxCleanTool,
+  pptxPackTool,
 ] as const;
 
 /**
