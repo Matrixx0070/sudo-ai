@@ -8,6 +8,8 @@
 
 export { FileStore, computeSha256 } from './store.js';
 export { registerFileRoutes } from './routes.js';
+// Deep-learning content-type detection (Magika) — async, richer than detectMime.
+export { detectContentType, magikaLabels, type MagikaResult } from './magika/magika.js';
 export {
   FileStoreError,
   MAX_FILE_BYTES,
