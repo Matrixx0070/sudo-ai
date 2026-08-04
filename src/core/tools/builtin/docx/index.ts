@@ -3,17 +3,22 @@
  * @description DOCX toolkit — registers all docx tools into the ToolRegistry.
  *
  * Tools registered:
- *   docx.create  — Create a .docx Word document with title and sections
- *   docx.inspect — Read structure/text/theme/media of an existing .docx (vendored Python)
+ *   docx.create       — Create a .docx Word document with title and sections
+ *   docx.inspect      — Read structure/text/theme/media of an existing .docx
+ *   docx.replace_text — Find-and-replace text in an existing .docx (unpack→edit→pack)
+ *   docx.patch        — Apply a batch JSON patch to an existing .docx
  */
 
 import type { ToolRegistry } from '../../registry.js';
 import { docxCreateTool } from './tools/create.js';
 import { docxInspectTool } from './tools/inspect.js';
+import { docxReplaceTextTool, docxPatchTool } from './tools/edit.js';
 
 export const DOCX_TOOLS = [
   docxCreateTool,
   docxInspectTool,
+  docxReplaceTextTool,
+  docxPatchTool,
 ] as const;
 
 /**
