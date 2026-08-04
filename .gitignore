@@ -85,6 +85,7 @@ test-brain.ts
 !src/core/tools/builtin/pptx/scripts/**/*.py
 !src/core/tools/builtin/spreadsheet/scripts/*.py
 !src/core/tools/builtin/document/scripts/**/*.py
+!src/core/tools/builtin/media/scripts/**/*.py
 check_db.py
 heartbeat-check.py
 twitter_trends_sentiment.py
