@@ -13,7 +13,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT, dataPath } from '../../../../shared/paths.js';
@@ -37,6 +37,20 @@ async function isRealPathAllowed(p: string, kind: 'input' | 'output'): Promise<b
     return isAllowedPath(path.join(realParent, path.basename(p)));
   } catch {
     return false;
+  }
+}
+
+/**
+ * Symlink-safe check for an output *directory*: if it exists in any form
+ * (lstat — including as a dangling symlink) it must fully realpath inside the
+ * allowlist; only a genuinely absent path falls back to the parent-dir check.
+ */
+async function isDirReallyAllowed(dir: string): Promise<boolean> {
+  try {
+    await lstat(dir);
+    return isRealPathAllowed(dir, 'input');
+  } catch {
+    return isRealPathAllowed(dir, 'output');
   }
 }
 
@@ -110,6 +124,9 @@ export const docxConvertTool: ToolDefinition = {
 
     const outputDir = args['outputDir'] ? String(args['outputDir']) : path.dirname(path.resolve(inputPath));
     if (!isAllowedPath(outputDir)) return { success: false, output: `docx.convert error: outputDir ${ALLOWED_MSG}` };
+    if (!(await isDirReallyAllowed(outputDir))) {
+      return { success: false, output: `docx.convert error: outputDir resolves outside allowed dirs: ${outputDir}` };
+    }
 
     try {
       const out = await py(path.join(SCRIPTS, 'convert_doc.py'), [inputPath, '--to', to, '--outdir', outputDir]);

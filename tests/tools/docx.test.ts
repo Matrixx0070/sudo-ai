@@ -153,7 +153,7 @@ describe('docx.create', () => {
 // ---------------------------------------------------------------------------
 
 describe('docx tool registration', () => {
-  it('7. registerDocxTools registers docx.create + docx.inspect', async () => {
+  it('7. registerDocxTools registers all docx tools', async () => {
     const { registerDocxTools } = await import('../../src/core/tools/builtin/docx/index.js');
     const registered: string[] = [];
     const mockRegistry = {
@@ -164,7 +164,9 @@ describe('docx tool registration', () => {
     expect(registered).toContain('docx.inspect');
     expect(registered).toContain('docx.replace_text');
     expect(registered).toContain('docx.patch');
-    expect(registered.length).toBe(4);
+    expect(registered).toContain('docx.convert');
+    expect(registered).toContain('docx.render');
+    expect(registered.length).toBe(6);
   });
 });
 
