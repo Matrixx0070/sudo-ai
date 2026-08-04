@@ -128,8 +128,21 @@ describe('pptx edit tools — validation', () => {
     for (const n of ['pptx.delete_slide', 'pptx.set_text', 'pptx.inspect_slides', 'pptx.check_overlaps', 'pptx.render_slides']) {
       expect(names).toContain(n);
     }
-    expect(PPTX_TOOLS.length).toBe(12);
+    expect(PPTX_TOOLS.length).toBe(13);
   });
+
+  it('pptx.find_template searches the vendored taxonomy', async () => {
+    const { pptxFindTemplateTool } = await import('../../src/core/tools/builtin/pptx/tools/templates.js');
+    const empty = await pptxFindTemplateTool.execute({}, makeCtx());
+    expect(empty.success).toBe(false);
+    const r = await pptxFindTemplateTool.execute({ query: 'minimalist corporate', limit: 3 }, makeCtx());
+    expect(r.success).toBe(true);
+    const entries = (r.data as { entries: Array<{ stem: string; templatePath: string }> }).entries;
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.length).toBeLessThanOrEqual(3);
+    expect(entries[0]!.templatePath).toContain('/templates/');
+    expect(r.output).not.toContain('missing on disk');
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------

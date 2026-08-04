@@ -15,6 +15,7 @@
  *   pptx.inspect_slides — Placeholders/text/media of an unpacked dir
  *   pptx.check_overlaps — Geometric overlap/overflow QA (optional --fix)
  *   pptx.render_slides  — Per-slide images + contact sheet (LibreOffice)
+ *   pptx.find_template  — BM25 search over 193 vendored pptxgenjs deck templates
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -29,6 +30,7 @@ import {
   pptxCheckOverlapsTool,
   pptxRenderSlidesTool,
 } from './tools/slide-edit.js';
+import { pptxFindTemplateTool } from './tools/templates.js';
 
 export const PPTX_TOOLS = [
   pptxCreateTool,
@@ -43,6 +45,7 @@ export const PPTX_TOOLS = [
   pptxInspectSlidesTool,
   pptxCheckOverlapsTool,
   pptxRenderSlidesTool,
+  pptxFindTemplateTool,
 ] as const;
 
 /**
