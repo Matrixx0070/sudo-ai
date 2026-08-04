@@ -7,18 +7,23 @@
  *   docx.inspect      — Read structure/text/theme/media of an existing .docx
  *   docx.replace_text — Find-and-replace text in an existing .docx (unpack→edit→pack)
  *   docx.patch        — Apply a batch JSON patch to an existing .docx
+ *   docx.convert      — .doc/.dotx→.docx, .docx→pdf/images (LibreOffice)
+ *   docx.render       — Labeled page-grid JPEG for visual inspection (LibreOffice)
  */
 
 import type { ToolRegistry } from '../../registry.js';
 import { docxCreateTool } from './tools/create.js';
 import { docxInspectTool } from './tools/inspect.js';
 import { docxReplaceTextTool, docxPatchTool } from './tools/edit.js';
+import { docxConvertTool, docxRenderTool } from './tools/convert.js';
 
 export const DOCX_TOOLS = [
   docxCreateTool,
   docxInspectTool,
   docxReplaceTextTool,
   docxPatchTool,
+  docxConvertTool,
+  docxRenderTool,
 ] as const;
 
 /**
