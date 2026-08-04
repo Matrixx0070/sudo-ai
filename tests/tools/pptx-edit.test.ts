@@ -111,6 +111,25 @@ describe('pptx edit tools — validation', () => {
     const r = await pptxPackTool.execute({ dir: '/tmp/nope', outputPath: '/etc/x.pptx' }, makeCtx());
     expect(r.success).toBe(false);
   });
+
+  it('slide-edit v2 tools validate refs and register (12 pptx tools)', async () => {
+    const { pptxDeleteSlideTool, pptxSetTextTool } = await import(
+      '../../src/core/tools/builtin/pptx/tools/slide-edit.js'
+    );
+    const noRefs = await pptxDeleteSlideTool.execute({ dir: '/tmp/nope' }, makeCtx());
+    expect(noRefs.success).toBe(false);
+    const badRef = await pptxSetTextTool.execute(
+      { dir: '/tmp/nope', slide: '../evil.xml', placeholder: 'ctrTitle', text: 'x' },
+      makeCtx(),
+    );
+    expect(badRef.success).toBe(false);
+    const { PPTX_TOOLS } = await import('../../src/core/tools/builtin/pptx/index.js');
+    const names = PPTX_TOOLS.map((t) => t.name);
+    for (const n of ['pptx.delete_slide', 'pptx.set_text', 'pptx.inspect_slides', 'pptx.check_overlaps', 'pptx.render_slides']) {
+      expect(names).toContain(n);
+    }
+    expect(PPTX_TOOLS.length).toBe(12);
+  });
 });
 
 // ---------------------------------------------------------------------------

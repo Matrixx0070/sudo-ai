@@ -32,11 +32,11 @@ const UNPACK = path.join(OFFICE, 'unpack.py');
 const PACK = path.join(OFFICE, 'pack.py');
 
 const ALLOWED_DIRS = ['/tmp', dataPath('pptx')];
-function isAllowedPath(p: string): boolean {
+export function isAllowedPath(p: string): boolean {
   const resolved = path.resolve(p);
   return ALLOWED_DIRS.some((dir) => resolved.startsWith(dir + path.sep) || resolved === dir);
 }
-const ALLOWED_MSG = `must be under /tmp/ or ${PROJECT_ROOT}/data/pptx/`;
+export const ALLOWED_MSG = `must be under /tmp/ or ${PROJECT_ROOT}/data/pptx/`;
 
 /**
  * Symlink-safe allowlist check. `path.resolve` normalises `..` but does NOT
@@ -44,7 +44,7 @@ const ALLOWED_MSG = `must be under /tmp/ or ${PROJECT_ROOT}/data/pptx/`;
  * We realpath the actual target (for an existing input) or its parent dir (for a
  * not-yet-created output) and re-check the allowlist on the real location.
  */
-async function isRealPathAllowed(p: string, kind: 'input' | 'output'): Promise<boolean> {
+export async function isRealPathAllowed(p: string, kind: 'input' | 'output'): Promise<boolean> {
   try {
     if (kind === 'input') return isAllowedPath(await realpath(p));
     // output may not exist yet: resolve the parent's real path, then re-attach the basename.
@@ -78,7 +78,7 @@ async function py(script: string, args: string[]): Promise<string> {
 }
 
 /** Validate that `dir` is an allowed, existing unpacked-PPTX directory. */
-async function validateUnpackedDir(dir: string): Promise<string | null> {
+export async function validateUnpackedDir(dir: string): Promise<string | null> {
   if (!dir) return 'dir is required';
   if (!isAllowedPath(dir)) return `dir ${ALLOWED_MSG}`;
   try {

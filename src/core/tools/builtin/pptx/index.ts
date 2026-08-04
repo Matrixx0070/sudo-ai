@@ -10,6 +10,11 @@
  *   pptx.clean     — Remove orphaned slides/media/rels from an unpacked dir
  *   pptx.pack      — Validate and repack an unpacked dir into a .pptx
  *   pptx.thumbnail — Labeled slide-grid JPEG(s) for template analysis / visual QA
+ *   pptx.delete_slide   — Delete slides (or keep-list) with sldIdLst upkeep
+ *   pptx.set_text       — Set placeholder text preserving template formatting
+ *   pptx.inspect_slides — Placeholders/text/media of an unpacked dir
+ *   pptx.check_overlaps — Geometric overlap/overflow QA (optional --fix)
+ *   pptx.render_slides  — Per-slide images + contact sheet (LibreOffice)
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -17,6 +22,13 @@ import { pptxCreateTool } from './tools/create.js';
 import { pptxInspectTool } from './tools/inspect.js';
 import { pptxUnpackTool, pptxAddSlideTool, pptxCleanTool, pptxPackTool } from './tools/edit.js';
 import { pptxThumbnailTool } from './tools/thumbnail.js';
+import {
+  pptxDeleteSlideTool,
+  pptxSetTextTool,
+  pptxInspectSlidesTool,
+  pptxCheckOverlapsTool,
+  pptxRenderSlidesTool,
+} from './tools/slide-edit.js';
 
 export const PPTX_TOOLS = [
   pptxCreateTool,
@@ -26,6 +38,11 @@ export const PPTX_TOOLS = [
   pptxCleanTool,
   pptxPackTool,
   pptxThumbnailTool,
+  pptxDeleteSlideTool,
+  pptxSetTextTool,
+  pptxInspectSlidesTool,
+  pptxCheckOverlapsTool,
+  pptxRenderSlidesTool,
 ] as const;
 
 /**

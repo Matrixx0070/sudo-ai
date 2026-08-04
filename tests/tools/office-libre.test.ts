@@ -91,7 +91,7 @@ describe('LibreOffice skill-port tools — validation', () => {
     expect(DOCX_TOOLS.map((t) => t.name)).toContain('docx.accept_changes');
     expect(PPTX_TOOLS.map((t) => t.name)).toContain('pptx.thumbnail');
     expect(SPREADSHEET_TOOLS.map((t) => t.name)).toContain('spreadsheet.recalc');
-    expect(PPTX_TOOLS.length).toBe(7);
+    expect(PPTX_TOOLS.length).toBe(12);
     expect(DOCX_TOOLS.length).toBe(7);
   });
 });
