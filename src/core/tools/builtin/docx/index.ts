@@ -3,14 +3,17 @@
  * @description DOCX toolkit — registers all docx tools into the ToolRegistry.
  *
  * Tools registered:
- *   docx.create — Create a .docx Word document with title and sections
+ *   docx.create  — Create a .docx Word document with title and sections
+ *   docx.inspect — Read structure/text/theme/media of an existing .docx (vendored Python)
  */
 
 import type { ToolRegistry } from '../../registry.js';
 import { docxCreateTool } from './tools/create.js';
+import { docxInspectTool } from './tools/inspect.js';
 
 export const DOCX_TOOLS = [
   docxCreateTool,
+  docxInspectTool,
 ] as const;
 
 /**

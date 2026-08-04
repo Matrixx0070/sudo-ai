@@ -153,7 +153,7 @@ describe('docx.create', () => {
 // ---------------------------------------------------------------------------
 
 describe('docx tool registration', () => {
-  it('7. registerDocxTools registers docx.create', async () => {
+  it('7. registerDocxTools registers docx.create + docx.inspect', async () => {
     const { registerDocxTools } = await import('../../src/core/tools/builtin/docx/index.js');
     const registered: string[] = [];
     const mockRegistry = {
@@ -161,7 +161,8 @@ describe('docx tool registration', () => {
     };
     registerDocxTools(mockRegistry as never);
     expect(registered).toContain('docx.create');
-    expect(registered.length).toBe(1);
+    expect(registered).toContain('docx.inspect');
+    expect(registered.length).toBe(2);
   });
 });
 
@@ -234,5 +235,48 @@ describe('docx.create — richer formatting', () => {
     );
     expect(r.success).toBe(false);
     expect(r.output).toContain('at least one');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docx.inspect (read existing docx — wraps vendored Python)
+// ---------------------------------------------------------------------------
+
+import { execFileSync, spawnSync } from 'node:child_process';
+
+const pyDocxOk = (() => {
+  try {
+    return spawnSync('python3', ['-c', 'import docx'], { timeout: 10_000 }).status === 0;
+  } catch {
+    return false;
+  }
+})();
+
+describe('docx.inspect', () => {
+  it('rejects a non-.docx path (before spawning)', async () => {
+    const { docxInspectTool } = await import('../../src/core/tools/builtin/docx/tools/inspect.js');
+    const r = await docxInspectTool.execute({ inputPath: '/tmp/notes.txt' }, makeCtx());
+    expect(r.success).toBe(false);
+    expect(r.output).toMatch(/\.docx/);
+  });
+
+  it('rejects a path outside the allowed dirs', async () => {
+    const { docxInspectTool } = await import('../../src/core/tools/builtin/docx/tools/inspect.js');
+    const r = await docxInspectTool.execute({ inputPath: '/etc/x.docx' }, makeCtx());
+    expect(r.success).toBe(false);
+    expect(r.output).toMatch(/under \/tmp|data\/docx/);
+  });
+
+  (pyDocxOk ? it : it.skip)('inspects a real .docx (python-docx available)', async () => {
+    const { docxInspectTool } = await import('../../src/core/tools/builtin/docx/tools/inspect.js');
+    const out = path.join(TMP, `_inspect_${Date.now()}.docx`);
+    execFileSync('python3', [
+      '-c',
+      `from docx import Document; d=Document(); d.add_heading('Report',0); d.add_paragraph('Body.'); d.save(${JSON.stringify(out)})`,
+    ]);
+    const r = await docxInspectTool.execute({ inputPath: out, sections: true }, makeCtx());
+    expect(r.success).toBe(true);
+    expect(r.output).toContain('Document Info');
+    if (existsSync(out)) (await import('node:fs')).unlinkSync(out);
   });
 });

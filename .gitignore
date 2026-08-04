@@ -81,6 +81,7 @@ test-brain.ts
 *.py
 # …except the textproc pure-python fallback layer (Spec 10) — shipped product code
 !src/core/tools/builtin/textproc/fallbacks/*.py
+!src/core/tools/builtin/docx/scripts/**/*.py
 check_db.py
 heartbeat-check.py
 twitter_trends_sentiment.py
