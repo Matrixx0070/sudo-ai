@@ -83,6 +83,7 @@ test-brain.ts
 !src/core/tools/builtin/textproc/fallbacks/*.py
 !src/core/tools/builtin/docx/scripts/**/*.py
 !src/core/tools/builtin/pptx/scripts/**/*.py
+!src/core/tools/builtin/spreadsheet/scripts/*.py
 check_db.py
 heartbeat-check.py
 twitter_trends_sentiment.py

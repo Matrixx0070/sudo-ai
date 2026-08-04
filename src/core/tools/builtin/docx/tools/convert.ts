@@ -1,9 +1,11 @@
 /**
  * @file convert.ts
- * @description docx.convert + docx.render — LibreOffice-backed conversion for
- * Word documents, wrapping the vendored convert_doc.py / render_doc.py from
- * grok's docx skill. convert: .doc/.dotx→.docx, .docx→pdf, .docx→per-page JPEGs.
- * render: single labeled page-grid JPEG for visual inspection. Requires the
+ * @description docx.convert + docx.render + docx.accept_changes — LibreOffice-
+ * backed operations for Word documents, wrapping the vendored convert_doc.py /
+ * render_doc.py / accept_changes.py from grok's docx skill. convert:
+ * .doc/.dotx→.docx, .docx→pdf, .docx→per-page JPEGs. render: single labeled
+ * page-grid JPEG for visual inspection. accept_changes: flatten all tracked
+ * changes into a clean document. Requires the
  * system `soffice` binary (libreoffice-writer) and `pdftoppm` (poppler-utils);
  * both tools report a clear error if missing. Paths confined to /tmp or
  * data/docx, same as the other docx tools.
@@ -13,7 +15,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lstat, readdir, realpath, stat } from 'node:fs/promises';
+import os from 'node:os';
+import { lstat, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { createLogger } from '../../../../shared/logger.js';
 import { PROJECT_ROOT, dataPath } from '../../../../shared/paths.js';
@@ -146,6 +149,65 @@ export const docxConvertTool: ToolDefinition = {
       const msg = errMsg(err);
       logger.error({ inputPath, to, err: msg }, 'docx.convert error');
       return { success: false, output: `docx.convert error: ${msg}` };
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// docx.accept_changes
+// ---------------------------------------------------------------------------
+
+export const docxAcceptChangesTool: ToolDefinition = {
+  name: 'docx.accept_changes',
+  description:
+    'Accept all tracked changes (redlines) in a .docx/.dotx via LibreOffice, producing a clean ' +
+    'document with insertions applied and deletions removed. Writes to `outputPath` or ' +
+    'overwrites the input. Paths under /tmp/ or data/docx/.',
+  category: 'content',
+  timeout: PY_TIMEOUT + 10_000,
+  parameters: {
+    inputPath: { type: 'string', required: true, description: 'Existing .docx/.dotx with tracked changes.' },
+    outputPath: {
+      type: 'string',
+      required: false,
+      description: 'Where to write the clean file (.docx/.dotx). Omit to overwrite the input.',
+    },
+  },
+  async execute(args: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+    const inputPath = String(args['inputPath'] ?? '');
+    const invalid = await validateInput(inputPath, /\.(docx|dotx)$/i);
+    if (invalid) return { success: false, output: `docx.accept_changes error: ${invalid}` };
+
+    const outputPath = args['outputPath'] ? String(args['outputPath']) : inputPath;
+    if (!/\.(docx|dotx)$/i.test(outputPath)) {
+      return { success: false, output: 'docx.accept_changes error: outputPath must end in .docx or .dotx' };
+    }
+    if (!isAllowedPath(outputPath)) {
+      return { success: false, output: `docx.accept_changes error: outputPath ${ALLOWED_MSG}` };
+    }
+    if (!(await isRealPathAllowed(outputPath, 'output'))) {
+      return { success: false, output: `docx.accept_changes error: outputPath resolves outside allowed dirs: ${outputPath}` };
+    }
+
+    // The script requires distinct input/output; write to a temp file and move
+    // into place only on success, which also makes in-place overwrite safe.
+    const tmpOut = path.join(os.tmpdir(), `docxaccept-${process.pid}-${Date.now()}${path.extname(outputPath)}`);
+    try {
+      const out = await py(path.join(SCRIPTS, 'accept_changes.py'), [inputPath, tmpOut]);
+      await rename(tmpOut, outputPath);
+      logger.info({ inputPath, outputPath }, 'docx.accept_changes ok');
+      return {
+        success: true,
+        output: out.trim() || `accepted all tracked changes → ${outputPath}`,
+        data: { inputPath, outputPath },
+        artifacts: [{ path: outputPath, action: 'modified' as const }],
+      };
+    } catch (err) {
+      const msg = errMsg(err);
+      logger.error({ inputPath, err: msg }, 'docx.accept_changes error');
+      return { success: false, output: `docx.accept_changes error: ${msg}` };
+    } finally {
+      await rm(tmpOut, { force: true }).catch(() => {});
     }
   },
 };

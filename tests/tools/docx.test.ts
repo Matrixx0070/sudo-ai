@@ -166,7 +166,8 @@ describe('docx tool registration', () => {
     expect(registered).toContain('docx.patch');
     expect(registered).toContain('docx.convert');
     expect(registered).toContain('docx.render');
-    expect(registered.length).toBe(6);
+    expect(registered).toContain('docx.accept_changes');
+    expect(registered.length).toBe(7);
   });
 });
 

@@ -9,13 +9,14 @@
  *   docx.patch        — Apply a batch JSON patch to an existing .docx
  *   docx.convert      — .doc/.dotx→.docx, .docx→pdf/images (LibreOffice)
  *   docx.render       — Labeled page-grid JPEG for visual inspection (LibreOffice)
+ *   docx.accept_changes — Flatten all tracked changes into a clean document (LibreOffice)
  */
 
 import type { ToolRegistry } from '../../registry.js';
 import { docxCreateTool } from './tools/create.js';
 import { docxInspectTool } from './tools/inspect.js';
 import { docxReplaceTextTool, docxPatchTool } from './tools/edit.js';
-import { docxConvertTool, docxRenderTool } from './tools/convert.js';
+import { docxConvertTool, docxRenderTool, docxAcceptChangesTool } from './tools/convert.js';
 
 export const DOCX_TOOLS = [
   docxCreateTool,
@@ -24,6 +25,7 @@ export const DOCX_TOOLS = [
   docxPatchTool,
   docxConvertTool,
   docxRenderTool,
+  docxAcceptChangesTool,
 ] as const;
 
 /**
