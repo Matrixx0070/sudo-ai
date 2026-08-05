@@ -2898,6 +2898,7 @@ export class AgentLoop extends AgentLoopInjections {
             // previous assistant turn so consecutive cross-iteration loops
             // show a streak count instead of the same byte-identical reply.
             finalText = response.content || buildLoopFallbackReply(session.messages);
+            journalHalt(state.sessionId, journalRunId, `tool loop (${state.consecutiveToolIterations} consecutive tool iterations)`, state.iteration);
             session.messages.push({ role: 'assistant', content: finalText });
             emit({ type: 'message', content: finalText });
             break;
@@ -3776,13 +3777,10 @@ export class AgentLoop extends AgentLoopInjections {
       }
     } finally {
       state.isProcessing = false;
-      // A run that reached here without a halt record is finished — mark it so
-      // findResumableRun never offers it. (After a halt this is a no-op: the
-      // halt entry is already the last lifecycle record and `end` settles it,
-      // which is why the halt path records its digest BEFORE returning.)
-      if (!spendCapBreached && state.iteration < maxIterations) {
-        journalEnd(state.sessionId, journalRunId, state.iteration);
-      }
+      // Mark the run finished so findResumableRun never offers it. No-ops when
+      // the run already recorded a halt (idempotent in run-journal), so every
+      // abnormal exit — spend cap, iteration limit, tool loop — stays resumable.
+      journalEnd(state.sessionId, journalRunId, state.iteration);
     }
 
     return finalText;

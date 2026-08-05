@@ -167,7 +167,9 @@ describe('AgentLoop e2e: halt writes a journal, next run resumes', () => {
     const own = await sessions.getOrCreate('test-journal', 'e2e');
     const sid = own.id;
     // The loop writes to the load-time DATA_DIR, not this test's tmp override.
-    const liveFile = path.join(LIVE_DATA_DIR, 'run-journal', `${sid}.jsonl`);
+    // journalPath() sanitizes non [A-Za-z0-9_-] chars, so the on-disk name is
+    // NOT `${sid}.jsonl` — deleting the raw name silently left stale entries.
+    const liveFile = path.join(LIVE_DATA_DIR, 'run-journal', `${sid.replace(/[^A-Za-z0-9_-]/g, '_')}.jsonl`);
     rmSync(liveFile, { force: true });
 
     const brain1 = createMockBrain();
@@ -221,12 +223,19 @@ describe('AgentLoop seam (beginRun / journalStep / journalHalt / journalEnd)', (
     expect(j.beginRun('seam2', 'r3', 'continue')).toBe(''); // consumed
   });
 
-  it('journalEnd settles a run so it is never offered for resume', async () => {
+  it('journalEnd settles a run that did NOT halt', async () => {
     const j = await load();
     j.beginRun('seam3', 'r1', 'g');
-    j.journalHalt('seam3', 'r1', 'iteration limit (150)', 150);
-    j.journalEnd('seam3', 'r1', 150);
+    j.journalEnd('seam3', 'r1', 5);
     expect(j.beginRun('seam3', 'r2', 'next')).toBe('');
+  });
+
+  it('journalEnd does NOT settle a halted run (loop calls it unconditionally)', async () => {
+    const j = await load();
+    j.beginRun('seam3b', 'r1', 'g');
+    j.journalHalt('seam3b', 'r1', 'iteration limit (150)', 150);
+    j.journalEnd('seam3b', 'r1', 150);
+    expect(j.beginRun('seam3b', 'r2', 'next')).toContain('iteration limit (150)');
   });
 
   it('journalStep omits an empty note', async () => {
@@ -235,5 +244,25 @@ describe('AgentLoop seam (beginRun / journalStep / journalHalt / journalEnd)', (
     const step = j.readEntries('seam4')[0]!;
     expect(step.kind).toBe('step');
     expect((step as { note?: string }).note).toBeUndefined();
+  });
+});
+
+describe('journalEnd is idempotent vs halt (LoopGuard exit stays resumable)', () => {
+  it('does not settle a run that already halted', async () => {
+    const j = await load();
+    j.beginRun('idem1', 'r1', 'deep research goal');
+    j.journalStep('idem1', 'r1', 1, ['system.exec']);
+    j.journalHalt('idem1', 'r1', 'tool loop (50 consecutive tool iterations)', 50);
+    j.journalEnd('idem1', 'r1', 50); // loop's unconditional finally
+    expect(j.readEntries('idem1').some(e => e.kind === 'end')).toBe(false);
+    expect(j.beginRun('idem1', 'r2', 'next')).toContain('tool loop (50 consecutive tool iterations)');
+  });
+
+  it('still records end for a run that finished normally', async () => {
+    const j = await load();
+    j.beginRun('idem2', 'r1', 'g');
+    j.journalEnd('idem2', 'r1', 3);
+    expect(j.readEntries('idem2').some(e => e.kind === 'end')).toBe(true);
+    expect(j.beginRun('idem2', 'r2', 'next')).toBe('');
   });
 });
