@@ -20,6 +20,7 @@ import {
   createMission, listMissions, loadMission, saveMission, clearBlockers, recordHistory,
 } from '../../../agent/mission/store.js';
 import { progressLine, stallReason, type Mission } from '../../../agent/mission/types.js';
+import { requestMissionWake } from '../../../agent/mission/wake.js';
 
 const logger = createLogger('meta.mission');
 
@@ -88,11 +89,14 @@ export const missionTool: ToolDefinition = {
             maxSpendUsd: typeof params['maxSpendUsd'] === 'number' ? params['maxSpendUsd'] : null,
             deadline: typeof params['deadline'] === 'string' ? params['deadline'] : null,
           });
+          // Start it now if the machine is free, rather than waiting out the
+          // scheduler interval (the wake defers itself while a user turn runs).
+          requestMissionWake('mission-created');
           return {
             success: true,
             output:
               `Mission created: ${m.id}\nGoal: ${m.goal}\n` +
-              'It will be planned and advanced autonomously on the next mission tick. ' +
+              'Planning starts as soon as this conversation is idle. ' +
               'Use meta.mission action="status" to follow it.',
             data: { missionId: m.id },
           };
@@ -120,6 +124,7 @@ export const missionTool: ToolDefinition = {
           const note = typeof params['note'] === 'string' ? params['note'] : undefined;
           const cleared = clearBlockers(m, note);
           saveMission(m);
+          if (cleared > 0) requestMissionWake('mission-unblocked');
           return {
             success: true,
             output: cleared > 0
@@ -139,6 +144,7 @@ export const missionTool: ToolDefinition = {
           m.status = action === 'pause' ? 'paused' : action === 'resume' ? 'active' : 'cancelled';
           recordHistory(m, `owner ${action}${params['note'] ? `: ${String(params['note'])}` : ''}`);
           saveMission(m);
+          if (action === 'resume') requestMissionWake('mission-resumed');
           return { success: true, output: `Mission ${m.id} is now ${m.status}.` };
         }
 
