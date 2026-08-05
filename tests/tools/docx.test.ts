@@ -167,7 +167,10 @@ describe('docx tool registration', () => {
     expect(registered).toContain('docx.convert');
     expect(registered).toContain('docx.render');
     expect(registered).toContain('docx.accept_changes');
-    expect(registered.length).toBe(7);
+    expect(registered).toContain('docx.replace_field');
+    expect(registered).toContain('docx.delete_sections');
+    expect(registered).toContain('docx.comment');
+    expect(registered.length).toBe(10);
   });
 });
 
