@@ -729,9 +729,17 @@ module.exports = {
         // TX19 nightly gated self-improve → deploy card. Deploy taps only
         // record approval (AL8.6 auto-merge=NO); applying stays manual.
         SUDO_TX19_OVERNIGHT: process.env['SUDO_TX19_OVERNIGHT'] || '1',
-        // AL1 per-run spend halt (#990). $5: well above any legit turn seen in
-        // the ledger, far below a runaway loop's burn. Frank may retune.
-        SUDO_AGENT_RUN_MAX_USD: process.env['SUDO_AGENT_RUN_MAX_USD'] || '5',
+        // AL1 per-run spend halt (#990) — OFF by Frank's decision 2026-08-05.
+        // The $5 default assumed "well above any legit turn seen in the
+        // ledger"; that stopped being true once long autonomous runs became the
+        // goal (a real 38-iteration self-audit cost $5.12 and was killed AFTER
+        // the money was spent, returning nothing — the cap destroyed the value
+        // of spend rather than preventing it). Runaways stay bounded by
+        // agents.maxIterations:150 (~$20 at observed per-iteration cost) and the
+        // wallet by SUDO_DAILY_BUDGET_USD:150 above. 0 disables the halt; the
+        // code path stays live and tested, so SUDO_AGENT_RUN_MAX_USD=<n>
+        // re-arms it at any time.
+        SUDO_AGENT_RUN_MAX_USD: process.env['SUDO_AGENT_RUN_MAX_USD'] || '0',
         // AL9/AL10 (Frank GO'd in chat 2026-07-28; memos in the ledger):
         SUDO_AL_META: process.env['SUDO_AL_META'] || '1',
         SUDO_AL_FRONTIER: process.env['SUDO_AL_FRONTIER'] || '1',
