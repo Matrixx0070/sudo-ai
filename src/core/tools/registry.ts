@@ -25,6 +25,7 @@ import { ToolError } from '../shared/errors.js';
 import type { MCPAdapter, MCPAdapterLike, MCPToolDef } from './mcp-adapter.js';
 import { isReadOnlyTool } from '../agent/plan-mode-gate.js';
 import { NativeToolCorrection } from './native-tool-correction.js';
+import { lessonsForTool } from '../learning/repair-flywheel.js';
 
 const logger = createLogger('tool-registry');
 
@@ -342,6 +343,22 @@ export function coerceJsonSchemaPrimitives(
     }
   }
   return out ?? params;
+}
+
+/**
+ * Append distilled repair lessons to a tool's LLM-facing description at
+ * CALL-CONSTRUCTION time, so the model avoids a known-failing shape instead of
+ * paying for the failed call first (2026-08-05 autonomy audit blocker #8).
+ * Fail-open: a broken lessons module never blocks schema generation.
+ */
+function withRepairGuidance(toolName: string, description: string): string {
+  try {
+    const lessons = lessonsForTool(toolName);
+    if (lessons.length === 0) return description;
+    return `${description} KNOWN FAILURE TO AVOID: ${lessons.map((l) => l.guidance).join(' ')}`;
+  } catch {
+    return description;
+  }
 }
 
 function paramToJsonSchema(param: ToolDefinition['parameters'][string]): Record<string, unknown> {
@@ -747,7 +764,7 @@ export class ToolRegistry {
       type: 'function' as const,
       function: {
         name: tool.name,
-        description: tool.description,
+        description: withRepairGuidance(tool.name, tool.description),
         parameters: {
           type: 'object',
           properties: Object.fromEntries(
