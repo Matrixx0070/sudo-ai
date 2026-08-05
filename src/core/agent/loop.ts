@@ -78,7 +78,7 @@ import { AgentLoopInjections } from './loop-injections.js';
 import { getSteerBuffer } from './steer-buffer.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler, AgentRunResult } from './types.js';
 import { LoopGuard } from './loop-guard.js';
-import { buildLoopFallbackReply } from './loop-fallback.js';
+import { buildLoopFallbackReply, buildRunHaltReply, runHaltNotice, type RunHaltReason } from './loop-fallback.js';
 import { DoomLoopDetector } from './doom-loop.js';
 import { AgencyMonitor, captureExpectation } from './agency-monitor.js';
 import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
@@ -2332,6 +2332,27 @@ export class AgentLoop extends AgentLoopInjections {
           }
         }
 
+        // Blocker #3 (2026-08-05 autonomy audit): the model could not see its
+        // own run budget, so it couldn't triage the last dollar toward output
+        // (38 recon iterations, $5 cap hit, zero artifacts). Append an
+        // EPHEMERAL status line — rebuilt fresh each iteration with current
+        // numbers, never stored in the session — with spend, cap, and
+        // iteration counters plus a triage instruction.
+        {
+          const capPart = runMaxUsd > 0
+            ? `; spend $${runSpendUsd.toFixed(2)} of $${runMaxUsd.toFixed(2)} cap`
+            : '';
+          trimmed = [
+            ...trimmed,
+            {
+              role: 'system',
+              content:
+                `[Run status] iteration ${state.iteration + 1}/${maxIterations}${capPart}. `
+                + 'If the remaining budget or iterations are low, stop gathering and produce your best final answer from what you already have.',
+            },
+          ];
+        }
+
         // Hook: before_model_resolve — fires after messages are prepared, just before brain.call().
         void this.hooks?.emit('before_model_resolve', { event: 'before_model_resolve', sessionId: state.sessionId, modelName: model ?? '' });
 
@@ -3700,6 +3721,18 @@ export class AgentLoop extends AgentLoopInjections {
           throw new PipelineError(msg, 'pipeline_max_iterations', { sessionId: state.sessionId, maxIterations });
         }
         log.warn({ sessionId: state.sessionId, maxIterations, spendCapBreached }, `${spendCapBreached ? 'Spend cap' : 'Max iterations'} reached — finishing turn with fallback reply instead of throwing`);
+        // Blocker #2 (2026-08-05 autonomy audit): a budget/limit halt used the
+        // LoopGuard's "stuck in a loop" fallback, so the agent misreported its
+        // own stop cause. Build the reply from the STRUCTURED reason, and leave
+        // a durable system note so the NEXT turn knows why the run stopped and
+        // resumes instead of restarting.
+        const haltReason: RunHaltReason = spendCapBreached
+          ? { kind: 'spend_cap', spendUsd: runSpendUsd, capUsd: runMaxUsd, iterations: state.iteration }
+          : { kind: 'max_iterations', iterations: state.iteration };
+        session.messages.push({
+          role: 'system',
+          content: `[Run halted: ${msg} at iteration ${state.iteration}. Progress above is preserved — on the next user message, resume from where the run stopped instead of restarting.]`,
+        });
         if (!finalText.trim()) {
           let lastAssistantText = '';
           for (let i = session.messages.length - 1; i >= 0; i--) {
@@ -3712,7 +3745,9 @@ export class AgentLoop extends AgentLoopInjections {
               break;
             }
           }
-          finalText = lastAssistantText || buildLoopFallbackReply(session.messages);
+          finalText = lastAssistantText
+            ? `${lastAssistantText}\n\n${runHaltNotice(haltReason)}`
+            : buildRunHaltReply(haltReason);
           session.messages.push({ role: 'assistant', content: finalText });
           emit({ type: 'message', content: finalText });
         }

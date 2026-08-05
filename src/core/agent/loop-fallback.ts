@@ -17,6 +17,35 @@
 import type { BrainMessage } from '../brain/types.js';
 
 /**
+ * Structured reason a run halted at a hard cap. Distinct from the LoopGuard
+ * tool-loop: these are budget/limit stops, and reporting them as "stuck in a
+ * loop" made the agent confabulate its own failure cause in front of the user
+ * (2026-08-05: a 38-iteration recon run hit its $5 spend cap and reported a
+ * tool loop).
+ */
+export type RunHaltReason =
+  | { kind: 'spend_cap'; spendUsd: number; capUsd: number; iterations: number }
+  | { kind: 'max_iterations'; iterations: number };
+
+/** Honest user-facing reply for a budget/limit halt. */
+export function buildRunHaltReply(reason: RunHaltReason): string {
+  const cause =
+    reason.kind === 'spend_cap'
+      ? `this run hit its spend cap ($${reason.spendUsd.toFixed(2)} of $${reason.capUsd.toFixed(2)}) after ${reason.iterations} iterations`
+      : `this run hit its iteration limit (${reason.iterations})`;
+  return `I stopped because ${cause} — not because I was stuck. My progress so far is preserved in this conversation; say "continue" and I'll pick up where I left off.`;
+}
+
+/** Short halt notice appended when the model's own last text is used as the reply. */
+export function runHaltNotice(reason: RunHaltReason): string {
+  const cause =
+    reason.kind === 'spend_cap'
+      ? `spend cap $${reason.spendUsd.toFixed(2)}/$${reason.capUsd.toFixed(2)}`
+      : `iteration limit ${reason.iterations}`;
+  return `(Run halted early: ${cause}. Say "continue" to resume from here.)`;
+}
+
+/**
  * Plain-prose first hit. Kept stable so existing telemetry / dashboards that
  * count this exact line don't break. Streak text below uses a different
  * prefix so the two are distinguishable.
