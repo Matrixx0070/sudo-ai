@@ -79,6 +79,7 @@ import { getSteerBuffer } from './steer-buffer.js';
 import type { AgentConfig, AgentState, AgentEvent, AgentEventHandler, AgentRunResult } from './types.js';
 import { LoopGuard } from './loop-guard.js';
 import { buildLoopFallbackReply, buildRunHaltReply, runHaltNotice, type RunHaltReason } from './loop-fallback.js';
+import { beginRun, journalStep, journalHalt, journalEnd } from './run-journal.js';
 import { DoomLoopDetector } from './doom-loop.js';
 import { AgencyMonitor, captureExpectation } from './agency-monitor.js';
 import { WriteCycleDetector, PollingStagnationDetector } from './loop-pattern-extras.js';
@@ -2146,6 +2147,18 @@ export class AgentLoop extends AgentLoopInjections {
     state.isProcessing = true;
     const hooksHelper = this.hooks;
 
+    // Run journal (autonomy blocker #1): record the run so a hard halt is a
+    // PAUSE, not a restart. Best-effort — never fails the turn.
+    const journalRunId = `run-${Date.now()}-${state.iteration}`;
+    // beginRun also returns a digest when the PREVIOUS run halted at a cap, so
+    // this turn continues instead of starting cold (the artifact-loss blocker).
+    const resumeDigest = beginRun(state.sessionId, journalRunId,
+      String(session.messages.filter(m => m.role === 'user').at(-1)?.content ?? ''));
+    if (resumeDigest) {
+      session.messages.push({ role: 'system', content: resumeDigest });
+      log.info({ sessionId: state.sessionId }, 'Run journal: resume digest injected from a halted run');
+    }
+
     // Mythos Tier C — swarm-rescue (opt-in, default OFF). A per-turn latch: once
     // a task signal (StuckDetector repeated-error 'warn') fires, subsequent brain
     // calls in THIS turn escalate to a stronger strategy to break the rut. Reset
@@ -2714,6 +2727,10 @@ export class AgentLoop extends AgentLoopInjections {
 
         // AL1 spend halt: accumulate the run's estimated USD (0 for free lanes).
         runSpendUsd += response.usage?.estimatedCost ?? 0;
+
+        // Journal this iteration's work so an interrupted run can resume from it.
+        journalStep(state.sessionId, journalRunId, state.iteration,
+          (response.toolCalls ?? []).map(tc => tc.name), response.content);
 
         // Phase 2: TraceStore — record brain call (fail-open).
         try {
@@ -3733,6 +3750,11 @@ export class AgentLoop extends AgentLoopInjections {
           role: 'system',
           content: `[Run halted: ${msg} at iteration ${state.iteration}. Progress above is preserved — on the next user message, resume from where the run stopped instead of restarting.]`,
         });
+        // Blocker #1: the in-session note above dies with the session; the
+        // journal is the DURABLE half that survives a restart.
+        journalHalt(state.sessionId, journalRunId, spendCapBreached
+          ? `spend cap ($${runSpendUsd.toFixed(2)} of $${runMaxUsd.toFixed(2)})`
+          : `iteration limit (${maxIterations})`, state.iteration);
         if (!finalText.trim()) {
           let lastAssistantText = '';
           for (let i = session.messages.length - 1; i >= 0; i--) {
@@ -3754,6 +3776,13 @@ export class AgentLoop extends AgentLoopInjections {
       }
     } finally {
       state.isProcessing = false;
+      // A run that reached here without a halt record is finished — mark it so
+      // findResumableRun never offers it. (After a halt this is a no-op: the
+      // halt entry is already the last lifecycle record and `end` settles it,
+      // which is why the halt path records its digest BEFORE returning.)
+      if (!spendCapBreached && state.iteration < maxIterations) {
+        journalEnd(state.sessionId, journalRunId, state.iteration);
+      }
     }
 
     return finalText;
