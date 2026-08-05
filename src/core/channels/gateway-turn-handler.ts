@@ -19,6 +19,8 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { beginUserTurn } from '../agent/activity.js';
+import { requestMissionWake } from '../agent/mission/wake.js';
 import { getRunRegistry } from '../agent/run-registry.js';
 import { getRunLanes, type RunLane } from '../agent/run-lanes.js';
 import { getSteerBuffer } from '../agent/steer-buffer.js';
@@ -113,6 +115,10 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
     const convKey = `${msg.channel}:${msg.peerId}`;
     let laneRelease: (() => void) | null = null;
     let steerSessionId: string | null = null;
+    // Background mission work defers while ANY user turn is in flight — web and
+    // gateway channels included, not just Telegram (else a mission could fire a
+    // work turn while someone is talking to the agent on another surface).
+    const endUserTurn = beginUserTurn();
     try {
       const runGen = deps.runGenerations.current(convKey);
       const session = await deps.sessionManager.getOrCreate(msg.channel, msg.peerId);
@@ -169,6 +175,8 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
       log.error({ err: err instanceof Error ? err.message : String(err), channel: msg.channel, peerId: msg.peerId }, 'Agent turn failed');
       try { await deps.send(msg, errorText); } catch { /* best effort */ }
     } finally {
+      endUserTurn();
+      requestMissionWake('user-idle');
       if (laneRelease) laneRelease();
       getRunRegistry().endRun(convKey);
       // MEDIUM-1: drop any steer that landed after the loop's final iteration-boundary
