@@ -191,8 +191,18 @@ export function journalHalt(sessionId: string, runId: string, reason: string, it
   appendEntry(sessionId, { kind: 'halt', at: new Date().toISOString(), runId, reason, iterations });
 }
 
-/** Record a normally-finished run so it is never offered for resume. */
+/**
+ * Record a normally-finished run so it is never offered for resume.
+ * IDEMPOTENT vs halt: a run that already recorded a halt keeps it (an `end`
+ * would settle it and lose the resume). This lets the loop call it
+ * unconditionally in its finally block, so every abnormal exit — spend cap,
+ * iteration limit, or a LoopGuard tool loop — stays resumable without the
+ * loop threading a flag. Observed live 2026-08-05: a 50-iteration research
+ * turn ended via the LoopGuard and was journaled as a normal `end`, throwing
+ * away exactly the progress the journal exists to keep.
+ */
 export function journalEnd(sessionId: string, runId: string, iterations: number): void {
+  if (readEntries(sessionId).some((e) => e.kind === 'halt' && e.runId === runId)) return;
   appendEntry(sessionId, { kind: 'end', at: new Date().toISOString(), runId, iterations });
 }
 
