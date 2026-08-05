@@ -3422,6 +3422,7 @@ ${question}`, kb);
   // Execute an agent-turn payload in its dedicated session and mirror a summary
   // into the daily memory log. Returns the agent's response text so heartbeat
   // wrapping can inspect it for HEARTBEAT_OK suppression.
+  let lastCronSpendUsd = 0;
   const executeAgentTurn = async (
     payload: Extract<CronPayload, { kind: 'agentTurn' }>,
     job: CronJob,
@@ -3436,6 +3437,7 @@ ${question}`, kb);
         ? { ...(runOpts ?? {}), promptProfile: 'cron' as const }
         : runOpts;
     const cronResult = await finalAgentLoop.run(session.id, payload.message, undefined, effectiveOpts);
+    lastCronSpendUsd = cronResult?.spendUsd ?? 0;
     try {
       const cronTurnSummary = `**Cron (${job.name}):** ${payload.message.slice(0, 200)}\n**Agent:** ${(cronResult?.text ?? '').slice(0, 500)}`;
       await dailyLog.append(cronTurnSummary);
@@ -3466,6 +3468,15 @@ ${question}`, kb);
     // executeAgentTurn directly with the full prompt/tools.
     const { shouldSlimHeartbeatTurn } = await import('./core/cron/slim-heartbeat.js');
     return executeAgentTurn(payload, job, shouldSlimHeartbeatTurn(job.name) ? { slimHeartbeat: true } : undefined);
+  };
+
+  /** executeAgentTurn + the run's real spend (mission budgets need both). */
+  const executeAgentTurnResult = async (
+    payload: Extract<CronPayload, { kind: 'agentTurn' }>,
+    job: CronJob,
+  ): Promise<{ text: string; spendUsd: number }> => {
+    const text = await executeAgentTurn(payload, job);
+    return { text, spendUsd: lastCronSpendUsd };
   };
 
   // Assigned once the HeartbeatRunner is constructed (it owns wrapRunner). The
@@ -3830,16 +3841,13 @@ ${question}`, kb);
       schedule: { kind: 'interval', everyMs: 0 }, enabled: true,
       payload: { kind: 'agentTurn', message: '' }, sessionTarget: 'isolated',
     } as unknown as CronJob;
-    const { spendSince } = await import('./core/agent/mission/spend.js');
     let lastMissionCost = 0;
     const stopMissions = startMissionScheduler({
       executor: {
         run: async (prompt: string) => {
-          // Real cost from the gateway ledger, not a parallel counter.
-          const startedAt = new Date().toISOString();
-          const text = await executeAgentTurn({ kind: 'agentTurn', message: prompt }, missionJob);
-          lastMissionCost = spendSince(startedAt);
-          return text;
+          const res = await executeAgentTurnResult({ kind: 'agentTurn', message: prompt }, missionJob);
+          lastMissionCost = res.spendUsd; // real per-call usage, not a ledger column that is NULL
+          return res.text;
         },
         lastRunCostUsd: () => lastMissionCost,
       },

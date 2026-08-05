@@ -94,5 +94,9 @@ simply do not self-advance.
 - Verification is only as good as the `doneWhen` the planner wrote. A vague
   criterion produces a weak check; the parser enforces that one *exists*, not
   that it is excellent.
+- Mission spend comes from the agent run's own per-call usage
+  (`AgentRunResult.spendUsd`). It is deliberately NOT read from
+  `gateway.db llm_calls.cost_usd`: that column is NULL on the OAuth lanes, so a
+  ledger-derived meter reported $0 and `maxSpendUsd` could never fire.
 - Notifications ride the proactive notifier, so mission reports arrive on the
   configured channel, not necessarily the chat where the goal was given.

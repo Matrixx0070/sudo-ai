@@ -121,6 +121,14 @@ export interface AgentRunResult {
   /** Theme 2.2: reasoning recap (approach/steps/confidence) if SUDO_REASONING_SUMMARY is enabled. */
   reasoningSummary?: string;
   /**
+   * Estimated USD this run cost, summed from real per-call usage. Exposed
+   * because callers that govern a BUDGET across many runs (the mission spine)
+   * previously had no truthful source: gateway.db logs calls but leaves
+   * cost_usd NULL on the OAuth lanes, so a ledger-derived meter read $0 and a
+   * mission ceiling could never fire.
+   */
+  spendUsd?: number;
+  /**
    * Theme 2 step-tracking: APPROXIMATE coverage of the auto-plan's steps by this
    * turn's tool actions (present only when SUDO_AUTO_PLAN produced a plan).
    * `unaddressed` is a soft anti-"phantom-completion" signal, not a hard verdict.

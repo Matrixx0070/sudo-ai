@@ -383,3 +383,35 @@ describe('mission scheduler — armed explicitly, serial, crash-proof', () => {
     expect(s.loadMission(older.id)!.status).toBe('active'); // the OLDER one was served
   });
 });
+
+describe('mission budget meter is truthful (gateway cost_usd is NULL on OAuth lanes)', () => {
+  it('accumulates the executor-reported spend across execute AND verify calls', async () => {
+    const s = await store();
+    const r = await runner();
+    const m = s.createMission({ goal: 'g', maxSpendUsd: 10 });
+    let n = 0;
+    const deps = {
+      executor: {
+        run: vi.fn(async (p: string) => (p.includes('You are verifying whether') ? 'DONE: ok' : 'worked')),
+        lastRunCostUsd: () => { n += 1; return 0.5; }, // charged once per call
+      },
+      brain: { call: vi.fn().mockResolvedValue({ content: '[{"description":"s1","doneWhen":"c1"}]' }) },
+    };
+    await r.advanceMission(m, deps); // plan
+    await r.advanceMission(m, deps); // execute + verify
+    expect(n).toBe(2);               // both calls metered
+    expect(m.spendUsd).toBeCloseTo(1.0);
+  });
+
+  it('a mission that reaches its ceiling stops being scheduled', async () => {
+    const s = await store();
+    const t = await types();
+    const m = s.createMission({ goal: 'g', maxSpendUsd: 1 });
+    m.status = 'active';
+    m.spendUsd = 1.0;
+    s.saveMission(m);
+    expect(t.isAdvanceable(m)).toBe(false);
+    expect(s.nextAdvanceableMission()).toBeNull();
+    expect(t.stallReason(m)).toContain('mission budget reached');
+  });
+});

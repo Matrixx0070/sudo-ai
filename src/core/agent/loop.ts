@@ -180,6 +180,8 @@ export class AgentLoop extends AgentLoopInjections {
   // HookManager subscribers (F33 dead-ends drafting consumes it).
   private doomLoopDetector = new DoomLoopDetector();
   /** CW7 agency monitor — lazily built when SUDO_CAS_AGENCY=1 and a bias store is attached. */
+  /** Estimated USD of the most recent run (surfaced on AgentRunResult). */
+  private _lastRunSpendUsd = 0;
   private _agencyMonitor: AgencyMonitor | null = null;
   /** gap #23 — opt-in via SUDO_DOOM_LOOP_EXTRAS=1; both null when flag off. */
   private readonly writeCycleDetector: WriteCycleDetector | null =
@@ -2089,7 +2091,7 @@ export class AgentLoop extends AgentLoopInjections {
       save: () => this.sessionManager.save(session),
     });
 
-    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress, completionVerification: _completionVerification, committedOutbound: hasCommittedOutbound(sessionId) };
+    return { text: finalResponse, attachments, verificationSummary: _verificationSummary, reasoningSummary: _reasoningSummary, planProgress: _planProgress, completionVerification: _completionVerification, committedOutbound: hasCommittedOutbound(sessionId), spendUsd: this._lastRunSpendUsd };
   }
 
   /** Return the resolved config for this loop instance. */
@@ -2185,7 +2187,7 @@ export class AgentLoop extends AgentLoopInjections {
     // safe boundary and finishes the turn through the same graceful fallback
     // as max-iterations — never a hard throw mid-turn, and the current
     // response's tool calls still complete before the halt.
-    let runSpendUsd = 0;
+    let runSpendUsd = 0; this._lastRunSpendUsd = 0;
     let spendCapBreached = false;
     const _runMaxUsdRaw = Number(process.env['SUDO_AGENT_RUN_MAX_USD']);
     const runMaxUsd = Number.isFinite(_runMaxUsdRaw) && _runMaxUsdRaw > 0 ? _runMaxUsdRaw : 0;
@@ -2726,7 +2728,7 @@ export class AgentLoop extends AgentLoopInjections {
         );
 
         // AL1 spend halt: accumulate the run's estimated USD (0 for free lanes).
-        runSpendUsd += response.usage?.estimatedCost ?? 0;
+        runSpendUsd += response.usage?.estimatedCost ?? 0; this._lastRunSpendUsd = runSpendUsd;
 
         // Journal this iteration's work so an interrupted run can resume from it.
         journalStep(state.sessionId, journalRunId, state.iteration,
