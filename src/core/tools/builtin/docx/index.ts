@@ -10,6 +10,9 @@
  *   docx.convert      — .doc/.dotx→.docx, .docx→pdf/images (LibreOffice)
  *   docx.render       — Labeled page-grid JPEG for visual inspection (LibreOffice)
  *   docx.accept_changes — Flatten all tracked changes into a clean document (LibreOffice)
+ *   docx.replace_field   — Fill merge fields / content controls / bookmarks
+ *   docx.delete_sections — Delete document sections by index
+ *   docx.comment         — Add a review comment (returns anchor-marker XML)
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -17,6 +20,7 @@ import { docxCreateTool } from './tools/create.js';
 import { docxInspectTool } from './tools/inspect.js';
 import { docxReplaceTextTool, docxPatchTool } from './tools/edit.js';
 import { docxConvertTool, docxRenderTool, docxAcceptChangesTool } from './tools/convert.js';
+import { docxReplaceFieldTool, docxDeleteSectionsTool, docxCommentTool } from './tools/fields.js';
 
 export const DOCX_TOOLS = [
   docxCreateTool,
@@ -26,6 +30,9 @@ export const DOCX_TOOLS = [
   docxConvertTool,
   docxRenderTool,
   docxAcceptChangesTool,
+  docxReplaceFieldTool,
+  docxDeleteSectionsTool,
+  docxCommentTool,
 ] as const;
 
 /**

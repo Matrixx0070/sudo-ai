@@ -21,16 +21,16 @@ import { PROJECT_ROOT, dataPath } from '../../../../shared/paths.js';
 const logger = createLogger('docx:edit');
 const execFileAsync = promisify(execFile);
 
-const SCRIPTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts');
+export const SCRIPTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts');
 const UNPACK = path.join(SCRIPTS, 'office', 'unpack.py');
 const PACK = path.join(SCRIPTS, 'office', 'pack.py');
 
 const ALLOWED_DIRS = ['/tmp', dataPath('docx')];
-function isAllowedPath(p: string): boolean {
+export function isAllowedPath(p: string): boolean {
   const resolved = path.resolve(p);
   return ALLOWED_DIRS.some((dir) => resolved.startsWith(dir + path.sep) || resolved === dir);
 }
-const ALLOWED_MSG = `must be under /tmp/ or ${PROJECT_ROOT}/data/docx/`;
+export const ALLOWED_MSG = `must be under /tmp/ or ${PROJECT_ROOT}/data/docx/`;
 
 /**
  * Symlink-safe allowlist check. `path.resolve` normalises `..` but does NOT
@@ -38,7 +38,7 @@ const ALLOWED_MSG = `must be under /tmp/ or ${PROJECT_ROOT}/data/docx/`;
  * We realpath the actual target (for an existing input) or its parent dir (for a
  * not-yet-created output) and re-check the allowlist on the real location.
  */
-async function isRealPathAllowed(p: string, kind: 'input' | 'output'): Promise<boolean> {
+export async function isRealPathAllowed(p: string, kind: 'input' | 'output'): Promise<boolean> {
   try {
     if (kind === 'input') return isAllowedPath(await realpath(p));
     // output may not exist yet: resolve the parent's real path, then re-attach the basename.
@@ -58,10 +58,35 @@ async function py(script: string, args: string[], cwd?: string): Promise<string>
   return stdout;
 }
 
-interface EditOutcome {
+export interface EditOutcome {
   ok: boolean;
   output: string;
   outputPath?: string;
+}
+
+/**
+ * Unpack `inputPath`, run `<script> <unpackedDir> <args>`, and — when `pack` is
+ * given — pack the result to that path. Unlike {@link unpackEditPack} this
+ * appends no `--dry-run` flag and can skip packing entirely (for `--list` /
+ * read-only scripts). `script` is a bare filename resolved against SCRIPTS.
+ */
+export async function unpackRun(
+  inputPath: string,
+  script: string,
+  args: string[],
+  pack: { outputPath: string } | null,
+): Promise<EditOutcome> {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'docxedit-'));
+  const unpacked = path.join(tmp, 'unpacked');
+  try {
+    await py(UNPACK, [inputPath, unpacked]);
+    const out = await py(path.join(SCRIPTS, script), [unpacked, ...args]);
+    if (!pack) return { ok: true, output: out.trim() };
+    await py(PACK, [unpacked, pack.outputPath]);
+    return { ok: true, output: out.trim(), outputPath: pack.outputPath };
+  } finally {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /**
@@ -89,7 +114,7 @@ async function unpackEditPack(
   }
 }
 
-async function validateInput(inputPath: string): Promise<string | null> {
+export async function validateInput(inputPath: string): Promise<string | null> {
   if (!inputPath) return 'inputPath is required';
   if (!/\.(docx|dotx)$/i.test(inputPath)) return 'inputPath must end in .docx or .dotx';
   if (!isAllowedPath(inputPath)) return `inputPath ${ALLOWED_MSG}`;
@@ -105,7 +130,7 @@ async function validateInput(inputPath: string): Promise<string | null> {
 }
 
 /** Resolve the destination: explicit outputPath (validated) or in-place overwrite. */
-function resolveOutput(inputPath: string, args: Record<string, unknown>): { outputPath: string } | { error: string } {
+export function resolveOutput(inputPath: string, args: Record<string, unknown>): { outputPath: string } | { error: string } {
   const raw = args['outputPath'];
   if (raw === undefined || raw === null || raw === '') return { outputPath: inputPath };
   const out = String(raw);
