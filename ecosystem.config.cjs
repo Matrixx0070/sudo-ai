@@ -740,6 +740,14 @@ module.exports = {
         // code path stays live and tested, so SUDO_AGENT_RUN_MAX_USD=<n>
         // re-arms it at any time.
         SUDO_AGENT_RUN_MAX_USD: process.env['SUDO_AGENT_RUN_MAX_USD'] || '0',
+        // Mission spine (#1075): durable multi-day goals advanced unattended.
+        // ARMED 2026-08-05 — Frank's direction is long autonomous work, and the
+        // guardrails are per-mission budget/deadline, independent verification
+        // before any cursor move, 3-attempt/step + 6-failure aborts, typed
+        // owner blockers, plus the existing LoopGuard/maxIterations/daily cap.
+        // Inert until a mission exists. SUDO_MISSIONS=0 disarms.
+        SUDO_MISSIONS: process.env['SUDO_MISSIONS'] || '1',
+        SUDO_MISSION_TICK_MIN: process.env['SUDO_MISSION_TICK_MIN'] || '30',
         // AL9/AL10 (Frank GO'd in chat 2026-07-28; memos in the ledger):
         SUDO_AL_META: process.env['SUDO_AL_META'] || '1',
         SUDO_AL_FRONTIER: process.env['SUDO_AL_FRONTIER'] || '1',
