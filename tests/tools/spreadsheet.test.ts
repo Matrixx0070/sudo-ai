@@ -412,7 +412,7 @@ describe('spreadsheet.validate', () => {
 // ---------------------------------------------------------------------------
 
 describe('spreadsheet tool registration', () => {
-  it('21. registerSpreadsheetTools registers 5 tools', async () => {
+  it('21. registerSpreadsheetTools registers 6 tools', async () => {
     const { registerSpreadsheetTools } = await import('../../src/core/tools/builtin/spreadsheet/index.js');
     const registered: string[] = [];
     const mockRegistry = {
@@ -424,7 +424,8 @@ describe('spreadsheet tool registration', () => {
     expect(registered).toContain('spreadsheet.pivot');
     expect(registered).toContain('spreadsheet.chart');
     expect(registered).toContain('spreadsheet.validate');
-    expect(registered.length).toBe(5);
+    expect(registered).toContain('spreadsheet.recalc');
+    expect(registered.length).toBe(6);
   });
 });
 

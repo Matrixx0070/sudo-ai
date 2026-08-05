@@ -10,6 +10,11 @@ import type { ToolDefinition, ToolContext, ToolResult, ToolArtifact } from '../.
 import { createLogger } from '../../../shared/logger.js';
 import { ensureDir, missingKey } from './helpers.js';
 import { toolFetch } from '../../../security/guarded-fetch.js';
+import {
+  assertMediaSpendAllowed,
+  recordMediaSpend,
+  MediaSpendExceededError,
+} from '../../../billing/media-spend.js';
 
 const logger = createLogger('media-video');
 const execFileAsync = promisify(execFile);
@@ -137,6 +142,22 @@ export const videoGenerateTool: ToolDefinition = {
 
     logger.info({ session: ctx.sessionId, provider }, 'media.video-generate invoked');
 
+    // B6: these are paid, per-clip APIs called inside a polling loop — the
+    // fastest way to lose real money in this system. Refuse BEFORE the request
+    // when a cap would be breached, and record the spend after, so the next
+    // call sees it. Previously neither happened.
+    const spendOp = `${provider}:video`;
+    const jobId = (params['jobId'] as string | undefined) ?? ctx.sessionId;
+    try {
+      assertMediaSpendAllowed({ operation: spendOp, ...(jobId ? { jobId } : {}) });
+    } catch (err) {
+      if (err instanceof MediaSpendExceededError) {
+        logger.error({ provider, reason: err.message }, 'media.video-generate halted by spend cap');
+        return { success: false, output: err.message, data: { blockedBy: 'media-spend-cap', scope: err.scope } };
+      }
+      throw err;
+    }
+
     try {
       let videoUrl: string;
 
@@ -201,11 +222,16 @@ export const videoGenerateTool: ToolDefinition = {
       const vidBuf = Buffer.from(await vidRes.arrayBuffer());
       writeFileSync(outputPath, vidBuf);
       logger.info({ outputPath, provider }, 'Video generated and saved');
+      recordMediaSpend({ operation: spendOp, ...(jobId ? { jobId } : {}), success: true });
       const artifacts: ToolArtifact[] = [{ path: outputPath, action: 'created', size: vidBuf.length }];
       return { success: true, output: `Video generated with ${provider}. Saved to: ${outputPath}`, data: { provider, outputPath }, artifacts };
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Record on failure too: a generation that errored after the provider
+      // accepted it was still billed, and an unrecorded spend is an unenforced
+      // cap on the retry that follows.
+      recordMediaSpend({ operation: spendOp, ...(jobId ? { jobId } : {}), success: false });
       logger.error({ provider, err: msg }, 'media.video-generate failed');
       return { success: false, output: `Video generation failed: ${msg}` };
     }

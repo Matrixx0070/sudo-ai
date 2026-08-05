@@ -26,8 +26,31 @@ import {
   validateMimeMagic,
   validateFilename,
 } from './types.js';
+import { detectContentType } from './magika/magika.js';
 
 const log = createLogger('files:routes');
+
+/**
+ * Magika content-type enrichment for uploads: when the declared MIME is the
+ * generic `application/octet-stream` (browser/CLI didn't set a real type), run
+ * the deep-learning detector to recover the actual type (python/json/pdf/…).
+ * Fail-open — any error keeps the declared MIME. Disable with SUDO_MAGIKA_DETECT=0.
+ */
+const MAGIKA_ENRICH = process.env['SUDO_MAGIKA_DETECT'] !== '0';
+
+async function enrichMime(declaredMime: string, data: Buffer): Promise<string> {
+  if (!MAGIKA_ENRICH || declaredMime !== 'application/octet-stream' || data.length === 0) return declaredMime;
+  try {
+    const r = await detectContentType(data);
+    if (r.mimeType && r.mimeType !== 'application/octet-stream') {
+      log.info({ label: r.label, mime: r.mimeType, score: Number(r.score.toFixed(3)) }, 'magika enriched upload mime');
+      return r.mimeType;
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'magika enrich failed — keeping declared mime');
+  }
+  return declaredMime;
+}
 
 // ---------------------------------------------------------------------------
 // Auth helpers (self-contained — do not import from gateway)
@@ -166,6 +189,7 @@ async function handleUpload(
       });
 
       stream.on('end', () => {
+        void (async () => {
         if (limitExceeded) {
           finish(() => sendError(res, 413, `File exceeds ${MAX_FILE_BYTES / 1024 / 1024} MB limit`));
           return;
@@ -181,13 +205,16 @@ async function handleUpload(
           return;
         }
 
+        // Deep-learning content-type recovery when the declared MIME is generic.
+        const effective_mime = await enrichMime(declared_mime, data);
+
         let meta;
         let storagePath: string | undefined;
         try {
           storagePath = store.writeFileToDisk(`file_${sha256.slice(0, 16)}`, sha256, data);
           meta = store.create({
             filename:    safeFilename,
-            mime:        declared_mime,
+            mime:        effective_mime,
             size_bytes:  data.length,
             sha256,
             scope_id:    scopeId,
@@ -209,6 +236,7 @@ async function handleUpload(
         }
 
         finish(() => sendJson(res, 201, meta));
+        })();
       });
 
       stream.on('error', (err) => {

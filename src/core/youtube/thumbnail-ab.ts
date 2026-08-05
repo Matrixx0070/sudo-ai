@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { setThumbnail, fetchThumbnailCtr, compareVariants } from './thumbnails.js';
 import {
   initABSchema,
   rowToTest,
@@ -180,22 +181,29 @@ export class ThumbnailABTester {
       return null;
     }
 
-    const winner = withCtr.reduce((best, v) =>
-      (v.measuredCtr ?? 0) > (best.measuredCtr ?? 0) ? v : best,
+    // GAP-04b: decide with a two-proportion z-test over real impressions rather
+    // than by comparing CTR numbers directly. Highest-CTR-wins would crown a
+    // variant on 100 impressions over one on 50,000, and a sequential test is
+    // already confounded enough without adding small-sample noise on top.
+    const comparison = compareVariants(
+      withCtr.map(v => ({
+        variant: v.variant,
+        impressions: v.impressions ?? 0,
+        clicks: v.clicks ?? 0,
+        ctr: v.measuredCtr ?? 0,
+      })),
     );
 
-    // If multiple variants share the top CTR, the result is a tie and picking
-    // one arbitrarily (the reduce seed / first variant) would be misleading.
-    // Decline to declare a winner rather than crowning variant 'A' by default.
-    const bestCtr = winner.measuredCtr ?? 0;
-    const tiedForLead = withCtr.filter(v => (v.measuredCtr ?? 0) === bestCtr);
-    if (tiedForLead.length > 1) {
-      log.warn(
-        { testId, ctr: bestCtr, tied: tiedForLead.map(v => v.variant) },
-        'CTR is tied across variants — inconclusive, no winner selected',
-      );
+    if (comparison.verdict === 'inconclusive') {
+      log.warn({ testId, reason: comparison.reason, pValue: comparison.pValue },
+        'Thumbnail A/B inconclusive — no winner selected');
       return null;
     }
+
+    const winner = withCtr.find(v => v.variant === comparison.variant);
+    if (!winner) return null;
+    log.info({ testId, variant: winner.variant, pValue: comparison.pValue, caveat: comparison.caveat },
+      'Thumbnail A/B winner selected');
 
     const markWinner = this.db.prepare<[string]>(`UPDATE ab_variants SET is_winner = 1 WHERE id = ?`);
     const completeTest = this.db.prepare<[string, string, string]>(
@@ -251,38 +259,81 @@ export class ThumbnailABTester {
     return rowToTest(row, variantRows.map(rowToVariant));
   }
 
+  /**
+   * Record real per-variant CTR from the Analytics API (GAP-04b).
+   *
+   * History worth keeping: this once wrote a hardcoded `measured_ctr = 0.04` and
+   * `impressions = viewCount` for every variant. Both were inventions — the
+   * public statistics endpoint exposes neither impressions nor CTR, and views
+   * are not impressions — and they landed in the columns real measurements
+   * occupy, so nothing downstream could tell them apart. GAP-04a replaced that
+   * with nothing; this replaces the nothing with real data.
+   *
+   * Each variant is measured over **its own deployment window**: from when it
+   * was deployed until the next variant took over (or now, for the live one).
+   * That is what makes this a sequential test, with all the time-confounding
+   * that implies — recorded on the verdict by `compareVariants`, never hidden.
+   *
+   * A variant that was never deployed has no window and is skipped. A window
+   * with no Analytics data records **nothing**, not zero.
+   */
   private async _fetchAndStoreCtr(test: ABTest): Promise<void> {
-    const apiKey = process.env['YOUTUBE_API_KEY'];
-    if (!apiKey) {
-      log.warn({ testId: test.id }, 'YOUTUBE_API_KEY not set — skipping live CTR fetch');
+    const deployed = test.variants
+      .filter(v => v.deployedAt)
+      .sort((a, b) => (a.deployedAt! < b.deployedAt! ? -1 : 1));
+
+    if (deployed.length === 0) {
+      log.warn({ testId: test.id }, 'No variant has been deployed — nothing to measure');
       return;
     }
 
-    for (const variant of test.variants) {
-      try {
-        const url = `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${encodeURIComponent(test.videoId)}&key=${encodeURIComponent(apiKey)}`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-        if (!resp.ok) {
-          log.warn({ status: resp.status }, 'YouTube API returned non-OK status');
-          continue;
-        }
-        const json = await resp.json() as { items?: Array<{ statistics?: { viewCount?: string } }> };
-        const stats = json.items?.[0]?.statistics;
-        if (!stats) continue;
+    const day = (iso: string): string => iso.slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
 
-        // YouTube public stats don't expose CTR; approximate from view count
-        // Real CTR requires OAuth. Store views as impressions proxy.
-        const views = parseInt(stats.viewCount ?? '0', 10);
-        const stmt = this.db.prepare<[number, number, string]>(
-          `UPDATE ab_variants SET impressions = ?, measured_ctr = ? WHERE id = ?`,
-        );
-        // Stub CTR = 0.04 (industry avg) unless we have OAuth data
-        stmt.run(views, 0.04, variant.id);
-        log.info({ variantId: variant.id, views }, 'CTR stub stored (OAuth required for real CTR)');
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error({ variantId: variant.id, err: msg }, 'Failed to fetch CTR for variant');
+    const stmt = this.db.prepare<[number, number, number, string]>(
+      `UPDATE ab_variants SET impressions = ?, clicks = ?, measured_ctr = ? WHERE id = ?`,
+    );
+
+    for (let i = 0; i < deployed.length; i++) {
+      const v = deployed[i]!;
+      const start = day(v.deployedAt!);
+      // The window closes when the NEXT variant was deployed; the last one runs to today.
+      const next = deployed[i + 1];
+      const end = next ? day(next.deployedAt!) : today;
+
+      const sample = await fetchThumbnailCtr(test.videoId, start, end);
+      if (!sample) {
+        log.warn({ testId: test.id, variant: v.variant, start, end },
+          'No Analytics data for this variant window — recording nothing, not zero');
+        continue;
       }
+      stmt.run(sample.impressions, sample.clicks, sample.ctr, v.id);
+      log.info({ variant: v.variant, impressions: sample.impressions, ctr: sample.ctr },
+        'Real CTR recorded for variant window');
     }
+  }
+
+  /**
+   * Deploy a variant's thumbnail to the live video and stamp its window open.
+   *
+   * 50 quota units, and gated by `SUDO_YT_PUBLISH_ENABLED` inside
+   * {@link setThumbnail} — this is a viewer-visible change to a live channel.
+   * `deployedAt` is only written on a confirmed deploy, so a failed upload
+   * cannot open a measurement window that never actually ran.
+   */
+  async deployVariant(testId: string, variant: string): Promise<{ ok: boolean; message: string }> {
+    const test = this.getTestResults(testId);
+    if (!test) return { ok: false, message: `Test not found: ${testId}` };
+    const v = test.variants.find(x => x.variant === variant);
+    if (!v) return { ok: false, message: `Variant not found: ${variant}` };
+
+    const out = await setThumbnail(test.videoId, v.imagePath);
+    if (out.status !== 'deployed') return { ok: false, message: out.reason };
+
+    this.db
+      .prepare<[string, string]>(`UPDATE ab_variants SET deployed_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), v.id);
+    log.info({ testId, variant, videoId: test.videoId }, 'Variant deployed and window opened');
+    return { ok: true, message: `Variant ${variant} deployed to ${test.videoId} (50 quota units)` };
   }
 }

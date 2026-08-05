@@ -14,6 +14,11 @@ import { toolFetch } from '../../../security/guarded-fetch.js';
 // URL/key source only (caller 'tool:media-factory') — requests stay on toolFetch (SSRF guard).
 import { getProviderApiKey } from '../../../../llm/client.js';
 import { OPENAI_TTS_URL } from '../../../../llm/endpoints.js';
+import {
+  assertMediaSpendAllowed,
+  recordMediaSpend,
+  MediaSpendExceededError,
+} from '../../../billing/media-spend.js';
 
 const logger = createLogger('media-factory');
 const execFileAsync = promisify(execFile);
@@ -60,6 +65,23 @@ export const shortsFactoryTool: ToolDefinition = {
 
     logger.info({ session: ctx.sessionId, scriptLen: script.length, voiceId }, 'media.shorts-factory invoked');
 
+    // B6: this tool spends twice per run — a DALL·E image and an OpenAI TTS
+    // track — and is the tool most likely to be driven in a loop. Check the
+    // whole projected cost up front so a run is refused before the first paid
+    // call, not halfway through with an orphaned image already billed.
+    const jobId = (params['jobId'] as string | undefined) ?? ctx.sessionId;
+    const ttsUnits = Math.max(1, Math.ceil(script.length / 1000));
+    try {
+      assertMediaSpendAllowed({ operation: 'openai:image-dalle', ...(jobId ? { jobId } : {}) });
+      assertMediaSpendAllowed({ operation: 'openai:tts-1k-chars', units: ttsUnits, ...(jobId ? { jobId } : {}) });
+    } catch (err) {
+      if (err instanceof MediaSpendExceededError) {
+        logger.error({ reason: err.message }, 'media.shorts-factory halted by spend cap');
+        return { success: false, output: err.message, data: { blockedBy: 'media-spend-cap', scope: err.scope } };
+      }
+      throw err;
+    }
+
     try {
       ensureDir(path.dirname(outputPath));
       const tmpDir = path.dirname(outputPath);
@@ -79,6 +101,7 @@ export const shortsFactoryTool: ToolDefinition = {
         if (!imgResult.success) {
           return { success: false, output: `Shorts factory image step failed: ${imgResult.output}` };
         }
+        recordMediaSpend({ operation: 'openai:image-dalle', ...(jobId ? { jobId } : {}) });
         logger.info({ bgImagePath }, 'Background image generated');
       }
 
@@ -95,6 +118,7 @@ export const shortsFactoryTool: ToolDefinition = {
       }
       const audioBuf = Buffer.from(await ttsRes.arrayBuffer());
       writeFileSync(audioPath, audioBuf);
+      recordMediaSpend({ operation: 'openai:tts-1k-chars', units: ttsUnits, ...(jobId ? { jobId } : {}) });
       logger.info({ audioPath, audioBytes: audioBuf.length }, 'Voiceover generated');
 
       // Step 3: Assemble with ffmpeg — loop image over audio duration

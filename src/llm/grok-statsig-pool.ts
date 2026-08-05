@@ -1,10 +1,21 @@
 /**
  * @file grok-statsig-pool.ts
  * @description API-level statsig-token supply for the free grok.com app-chat
- * lane. x-statsig-id is SINGLE-USE (consumed per successful turn), so an
- * agentic brain needs a fresh token every call. Minting one on the hot path is
- * the bottleneck: the warm-browser oracle costs a one-time ~15s warm-up, then
- * ~0.5–1s per in-page `__grokMint` — fine, but serial and occasionally flaky.
+ * lane.
+ *
+ * MEASURED 2026-08-01 (this file previously asserted all three wrongly):
+ *   - a token is good for exactly THREE uses; the 4th returns 403/statsig
+ *     (2 of 2 trials, identical),
+ *   - it does NOT expire on wall-clock time — a token first used 124.9s after
+ *     minting returned 200, and uses spaced 30s apart both succeeded, so the
+ *     limit is a use COUNT, not a window,
+ *   - a warm in-page mint costs 1–72ms, not the ~0.5–1s claimed here.
+ *
+ * The pool still hands each token out ONCE. That is deliberate: one use out of
+ * a three-use budget is conservative, costs ~2ms, and needs no reasoning about
+ * how many times a given token has already been spent. Serving each token three
+ * times would cut mints by 3× and save single-digit milliseconds — not worth
+ * tracking per-token use counts for.
  *
  * This pool decouples SERVING from MINTING: it buffers a small set of
  * pre-minted, validated tokens and hands them out instantly, while a
@@ -19,9 +30,12 @@
  * server-side fingerprint needs the real in-page minter, verified live. So the
  * pool's `mint` is always the oracle; the win is pre-minting, not a cheaper mint.
  *
- * Freshness: tokens encode a per-second timestamp; the server accepts a recent
- * window. The pool evicts tokens older than `maxAgeMs` so a stale buffered token
- * is never served.
+ * Freshness: tokens encode a per-second timestamp, and the pool evicts buffered
+ * ones older than `maxAgeMs`. NOTE that the measurement above found no
+ * wall-clock expiry at all (a 124.9s-old token was accepted), so this eviction
+ * is not load-bearing — it is cheap insurance against a server-side window we
+ * have not observed, and re-minting what it drops costs ~2ms. Keep it unless
+ * that cost ever matters.
  */
 
 import { createLogger } from './grok-runtime.js';
@@ -198,6 +212,19 @@ export function demoteGrokBrowserlessStatsig(cooldownMs = DEFAULT_DEMOTE_MS): vo
     { cooldownMs, purged: dropped },
     'browserless statsig demoted — using oracle until cooldown (suspected algorithm drift)',
   );
+  // Demoting browserless is a NO-OP whenever browserless is already off (the
+  // current prod posture), and then this whole self-heal did nothing while the
+  // lane kept 403ing. The oracle can be the drifted source too: it adopts an
+  // in-page minter that may be closed over a rotated seed. Rebuild it as well —
+  // the oracle used to heal from this by accident, before adoption.
+  void (async () => {
+    try {
+      const { peekGrokStatsigOracle } = await import('./grok-statsig-oracle.js');
+      await peekGrokStatsigOracle()?.invalidateMinter();
+    } catch (err) {
+      log.warn({ detail: (err as Error).message }, 'could not invalidate the oracle minter');
+    }
+  })();
 }
 
 /** True when pure-Node (browserless) minting is currently allowed (flag on + not demoted). */

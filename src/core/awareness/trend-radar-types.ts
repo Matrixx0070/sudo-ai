@@ -5,7 +5,7 @@
 export interface TrendItem {
   id: string;
   title: string;
-  source: 'hackernews' | 'reddit' | 'google_trends';
+  source: 'hackernews' | 'reddit' | 'google_trends' | 'youtube' | 'x';
   url?: string;
   score: number;
   category?: string;

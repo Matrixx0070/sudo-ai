@@ -9,3 +9,41 @@ export type { YouTubeComment, CommentStats } from './comment-types.js';
 
 export { ThumbnailABTester } from './thumbnail-ab.js';
 export type { ABTest, ThumbnailVariant } from './thumbnail-ab-schema.js';
+
+export {
+  getYouTubeAccessToken,
+  hasYouTubeCredential,
+  readAuthConfigFromEnv,
+  YouTubeAuthError,
+} from './auth.js';
+export type { TokenResult, YouTubeAuthConfig } from './auth.js';
+
+export {
+  QuotaLedger,
+  QuotaExceededError,
+  SearchDeniedError,
+  QUOTA_COSTS,
+  pacificDay,
+} from './quota-ledger.js';
+export type { QuotaStatus, QuotaMethod } from './quota-ledger.js';
+
+export { setThumbnail, fetchThumbnailCtr, compareVariants, twoProportionZTest } from './thumbnails.js';
+export type { CtrSample, VariantSample, ComparisonVerdict, DeployOutcome } from './thumbnails.js';
+
+export { assessYppReadiness, shouldAlert, daysToTarget } from './ypp-readiness.js';
+export type { YppReadiness, YppMetrics, Criterion } from './ypp-readiness.js';
+
+export { updateVideoMetadata, mergeSnippet, validatePatch } from './metadata.js';
+export type { MetadataPatch, MetadataOutcome, VideoSnippet } from './metadata.js';
+
+export { PublishStore, publishVideo, realUploader } from './publish.js';
+export type { PublishOutcome, PublishRequest, PublishOptions, Uploader } from './publish.js';
+
+export { assessPublishCandidate, mayPublish, similarity } from './policy-gate.js';
+export type {
+  PolicyAssessment,
+  PolicyVerdict,
+  PublishCandidate,
+  PublishedVideo,
+  JudgeVerdict,
+} from './policy-gate.js';

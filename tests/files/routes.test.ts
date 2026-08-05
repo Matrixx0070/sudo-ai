@@ -124,6 +124,28 @@ function makeTextBuffer(): Buffer {
 }
 
 // ---------------------------------------------------------------------------
+// Magika content-type enrichment (RUN_MAGIKA=1 — loads the ONNX model)
+// ---------------------------------------------------------------------------
+
+const magikaDesc = process.env['RUN_MAGIKA'] === '1' ? describe : describe.skip;
+
+magikaDesc('POST /v1/files — Magika mime enrichment', () => {
+  const pySrc = Buffer.from('import os\nimport sys\n\ndef main():\n    print(sys.argv)\n\nif __name__ == "__main__":\n    main()\n');
+
+  it('recovers a real mime when the declared type is application/octet-stream', async () => {
+    const { status, json } = await upload('blob', 'application/octet-stream', pySrc);
+    expect(status).toBe(201);
+    expect((json as { mime: string }).mime).toBe('text/x-python');
+  });
+
+  it('does NOT override a specific declared mime', async () => {
+    const { status, json } = await upload('note.txt', 'text/plain', pySrc);
+    expect(status).toBe(201);
+    expect((json as { mime: string }).mime).toBe('text/plain'); // enrichment only fires for octet-stream
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POST /v1/files — upload
 // ---------------------------------------------------------------------------
 

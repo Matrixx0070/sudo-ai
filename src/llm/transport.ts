@@ -65,7 +65,7 @@ import {
   markFastModeUnavailable,
 } from './fast-mode.js';
 import { PROVIDER_BASE_URLS, XAI_RESPONSES_URL, XAI_CLI_PROXY_RESPONSES_URL, GOOGLE_OPENAI_COMPAT_URL } from './endpoints.js';
-import { getProviderApiKey, recordGatewayCall, type ProviderKeyName } from './client.js';
+import { getProviderApiKey, type ProviderKeyName } from './client.js';
 import { egressAnthropic, parseAnthropicResponse } from './adapters/egress-anthropic.js';
 import { egressOpenAI, parseOpenAIResponse } from './adapters/egress-openai.js';
 import {
@@ -75,13 +75,12 @@ import {
 } from './adapters/egress-xai-responses.js';
 import {
   classifyHttpError,
-  classifyThrown,
   classifyAnthropicResponse,
   classifyOpenAIResponse,
   LLMPolicyError,
   type LLMErrorClass,
 } from './errors.js';
-import { runWithPolicy, recordSpend } from './policy.js';
+import { runWithPolicy } from './policy.js';
 import { estimateCostUsd, estimateTokens, isReasoningModel, REASONING_MIN_OUTPUT_TOKENS } from './limits.js';
 import {
   streamIR as createSSEMachine,
@@ -97,13 +96,12 @@ import {
   createSSEParser,
   reverseEventToolName,
   createResponseAccumulator,
-  feedChunk, withProviderCost,
+  feedChunk,
   type LiveStream,
 } from './transport-stream.js';
+import { recordCall, classifyThrownSafe } from './transport-record.js';
 import { getIRInterceptor } from './ir-interceptor.js';
-import { createLogger } from '../core/shared/logger.js';
-
-const log = createLogger('llm-transport');
+import { assertXaiSpendAllowed } from './xai-billing.js';
 
 // ---------------------------------------------------------------------------
 // Wire constants (claude-oauth values mirror legacy claude-oauth-manager.ts /
@@ -805,6 +803,30 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
     throw err;
   }
 
+  // Measured money guard for the metered xAI lanes. `SUDO_XAI_TEXT_BLOCK` above is
+  // the blunt version (all-or-nothing); this is the metered one — it reads the
+  // authoritative amount owed from xAI's Management API and refuses once a cap is
+  // reached. Inactive unless XAI_MANAGEMENT_KEY + XAI_TEAM_ID are set, so it cannot
+  // break lanes that work today. Memoised for 120s, so no per-call round-trip.
+  // See src/llm/xai-billing.ts.
+  if (r.provider === 'xai' || r.provider === 'xai-oauth') {
+    try {
+      await assertXaiSpendAllowed();
+    } catch (err) {
+      recordCall({
+        traceId,
+        caller: ir.caller,
+        purpose: ir.purpose || 'callIR',
+        alias: ir.alias,
+        priority: ir.priority,
+        irRequest: ir,
+        errorClass: 'invalid_request',
+        latencyMs: Date.now() - startedAt,
+      });
+      throw invalidRequest(err instanceof Error ? err.message : 'xAI spend guard refused the call');
+    }
+  }
+
   const record: LLMCallRecord = {
     traceId,
     caller: ir.caller,
@@ -940,55 +962,6 @@ export async function callIR(ir: IRRequest, opts: CallIROptions = {}): Promise<I
     });
     throw err;
   }
-}
-
-/** classifyThrown that can never itself throw (logging is fail-open). */
-function classifyThrownSafe(err: unknown): LLMErrorClass {
-  try {
-    return classifyThrown(err);
-  } catch {
-    return 'unknown';
-  }
-}
-
-/** Fail-open llm_calls row — mirrors client.ts recordGatewayCall contract. */
-function recordCall(entry: LLMCallRecord): void {
-  try {
-    // GW-1: enrich with an ESTIMATED USD cost from token counts when the
-    // provider didn't hand us a real cost, so (a) gateway.db has a cost floor
-    // for boot-time day-spend derivation and (b) the in-memory budget counter
-    // in policy.ts actually accrues. Real provider cost, when present, wins.
-    const enriched = withEstimatedCost(withProviderCost(entry));
-    recordGatewayCall(enriched);
-    // Feed the asymmetric budget counter. Guard on >0 so error rows (no tokens)
-    // never move the needle; recordCall is the single per-call choke point
-    // (streaming writeRow is idempotent), so this counts each call exactly once.
-    if (typeof enriched.costUsd === 'number' && enriched.costUsd > 0) {
-      recordSpend(enriched.caller, enriched.costUsd);
-    }
-  } catch (err) {
-    log.warn({ err: err instanceof Error ? err.message : String(err) }, 'llm_calls record failed (fail-open)');
-  }
-}
-
-/**
- * GW-1: attach an estimated USD cost to a call record when one isn't already
- * set and token counts are available. Uses the resolved route (or alias) as the
- * pricing key. Never throws — a bad estimate must not block recording.
- */
-function withEstimatedCost(entry: LLMCallRecord): LLMCallRecord {
-  if (typeof entry.costUsd === 'number' && entry.costUsd > 0) return entry;
-  const tin = entry.tokensIn ?? 0;
-  const tout = entry.tokensOut ?? 0;
-  if (tin <= 0 && tout <= 0) return entry;
-  try {
-    const model = entry.route ?? entry.alias ?? '';
-    const usd = estimateCostUsd(model, tin, tout);
-    if (usd > 0) return { ...entry, costUsd: usd };
-  } catch {
-    /* estimation is best-effort */
-  }
-  return entry;
 }
 
 /**

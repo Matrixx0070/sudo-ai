@@ -8,6 +8,7 @@
  *   spreadsheet.pivot    — Compute pivot table from source sheet
  *   spreadsheet.chart    — Record chart metadata (exceljs limitation noted)
  *   spreadsheet.validate — Validate cells, check formula errors and broken refs
+ *   spreadsheet.recalc   — Recalculate formulas with LibreOffice, report formula errors
  */
 
 import type { ToolRegistry } from '../../registry.js';
@@ -16,6 +17,7 @@ import { spreadsheetReadTool } from './tools/read.js';
 import { spreadsheetPivotTool } from './tools/pivot.js';
 import { spreadsheetChartTool } from './tools/chart.js';
 import { spreadsheetValidateTool } from './tools/validate.js';
+import { spreadsheetRecalcTool } from './tools/recalc.js';
 
 export const SPREADSHEET_TOOLS = [
   spreadsheetCreateTool,
@@ -23,6 +25,7 @@ export const SPREADSHEET_TOOLS = [
   spreadsheetPivotTool,
   spreadsheetChartTool,
   spreadsheetValidateTool,
+  spreadsheetRecalcTool,
 ] as const;
 
 /**
