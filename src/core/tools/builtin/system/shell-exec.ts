@@ -32,7 +32,7 @@ import { clampHeadTail } from '../../../shared/head-tail-buffer.js';
 import {
   checkRepoCommand,
   repoExecEnabled,
-  runRepoArgv,
+  runRepoPipeline,
   auditExec,
 } from '../../../security/approval/repo-allowlist.js';
 
@@ -346,14 +346,14 @@ async function runRepoTarget(
     auditExec({ session: sessionId, command, allowed: false, reason: match.reason });
     return {
       success: false,
-      output: `Refused: ${match.reason}. target:"repo" allows only read/verify commands (pnpm/npm test|lint|build, read-only git, rg, ls, wc, read-only pm2).`,
+      output: `Refused: ${match.reason}. target:"repo" allows only read/verify commands (pnpm/npm test|lint|build, read-only git, rg, ls, wc, cat, head, tail, stat, sort, uniq, read-only pm2; pipes between them are OK; credential paths are always blocked).`,
       data: { repo: true, refused: true, reason: match.reason },
     };
   }
 
   const start = Date.now();
-  logger.info({ session: sessionId, argv: match.argv }, 'system.exec repo-target: running allowlisted command');
-  const { stdout, stderr, exitCode } = await runRepoArgv(match.argv, timeoutMs, signal);
+  logger.info({ session: sessionId, argv: match.argv, segments: match.pipeline?.length ?? 1 }, 'system.exec repo-target: running allowlisted command');
+  const { stdout, stderr, exitCode } = await runRepoPipeline(match.pipeline ?? [match.argv], timeoutMs, signal);
   const durationMs = Date.now() - start;
   const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
   const { text: output, truncated } = truncate(combined || '(no output)');
@@ -387,7 +387,9 @@ export const execTool: ToolDefinition = {
     'path. Do NOT use coder.write-file / meta.self-modify for throwaway runnable code — those ' +
     'write to the REAL repo which the sandbox cannot see; reserve them for actual repo edits. ' +
     'Set target:"repo" to run an allowlisted read/verify command (pnpm/npm test|lint|build, ' +
-    'read-only git, rg) against the REAL repo instead of the sandbox — gated by SUDO_REPO_EXEC.',
+    'read-only git, rg, cat/head/tail/stat, pipes between read-only commands) against the REAL ' +
+    'repo instead of the sandbox — gated by SUDO_REPO_EXEC. Absolute paths under the repo root ' +
+    'are auto-rewritten to repo-relative; credential files are always refused.',
   category: 'system',
   requiresConfirmation: true,
   // Raised from 120s: target:"repo" build/test runs legitimately take minutes.

@@ -44,6 +44,7 @@ describe('checkRepoCommand — allowed read/verify commands', () => {
     expect(checkRepoCommand('rg -n "as any|attach" src')).toEqual({
       allowed: true,
       argv: ['rg', '-n', 'as any|attach', 'src'],
+      pipeline: [['rg', '-n', 'as any|attach', 'src']],
     });
   });
 
@@ -51,6 +52,7 @@ describe('checkRepoCommand — allowed read/verify commands', () => {
     expect(checkRepoCommand('pnpm test tests/meta')).toEqual({
       allowed: true,
       argv: ['pnpm', 'test', 'tests/meta'],
+      pipeline: [['pnpm', 'test', 'tests/meta']],
     });
   });
 });
@@ -234,5 +236,86 @@ describe('repoExecEnabled — default OFF', () => {
     expect(repoExecEnabled()).toBe(false);
     process.env['SUDO_REPO_EXEC'] = '0';
     expect(repoExecEnabled()).toBe(false);
+  });
+});
+
+// --- 2026-08-05 autonomy audit blockers #4 + #5 -----------------------------
+
+import { PROJECT_ROOT } from '../../src/core/shared/paths.js';
+
+describe('absolute-path normalization (blocker #4)', () => {
+  it('rewrites an absolute path under PROJECT_ROOT to repo-relative', () => {
+    const m = checkRepoCommand(`wc -l ${PROJECT_ROOT}/src/cli.ts`);
+    expect(m.allowed).toBe(true);
+    expect(m.argv).toEqual(['wc', '-l', 'src/cli.ts']);
+  });
+  it('rewrites inside a --flag=value form', () => {
+    const m = checkRepoCommand(`rg -n foo --glob=${PROJECT_ROOT}/src/**`);
+    expect(m.allowed).toBe(false); // glob chars are still rejected at tokenize
+  });
+  it('still refuses absolute paths OUTSIDE the repo', () => {
+    const m = checkRepoCommand('cat /etc/passwd');
+    expect(m.allowed).toBe(false);
+    expect(m.reason).toContain('escapes the repo');
+  });
+  it('still refuses .. traversal', () => {
+    expect(checkRepoCommand('cat ../secrets.txt').allowed).toBe(false);
+  });
+});
+
+describe('read-only readers + secret-path deny (blocker #5)', () => {
+  it('allows cat/head/tail/stat on ordinary repo files', () => {
+    for (const cmd of ['cat package.json', 'head -50 src/cli.ts', 'tail -n 20 data/logs/x.log', 'stat pnpm-lock.yaml']) {
+      expect(checkRepoCommand(cmd).allowed, cmd).toBe(true);
+    }
+  });
+  it('refuses credential paths for EVERY command, including rg', () => {
+    for (const cmd of ['cat config/.env', 'head data/claude-oauth.json', 'rg . config/.env', 'cat data/xai-oauth.json', 'stat config/.env.backup']) {
+      const m = checkRepoCommand(cmd);
+      expect(m.allowed, cmd).toBe(false);
+      expect(m.reason, cmd).toContain('credential path');
+    }
+  });
+  it('refuses tail -f (would hold the slot until timeout)', () => {
+    expect(checkRepoCommand('tail -f data/logs/app.log').allowed).toBe(false);
+  });
+});
+
+describe('validated pipelines (blocker #5)', () => {
+  it('allows a pipe between allowlisted read-only commands', () => {
+    const m = checkRepoCommand('rg -n TODO src | head -20');
+    expect(m.allowed).toBe(true);
+    expect(m.pipeline).toEqual([['rg', '-n', 'TODO', 'src'], ['head', '-20']]);
+  });
+  it('validates EVERY segment — non-allowlisted downstream is refused', () => {
+    expect(checkRepoCommand('cat package.json | node').allowed).toBe(false);
+  });
+  it('refuses || chaining and empty segments', () => {
+    expect(checkRepoCommand('ls || rm -rf /').allowed).toBe(false);
+    expect(checkRepoCommand('ls | | wc').allowed).toBe(false);
+  });
+  it('secret deny applies to every segment', () => {
+    expect(checkRepoCommand('cat config/.env | wc -l').allowed).toBe(false);
+  });
+  it('caps segment count', () => {
+    expect(checkRepoCommand('ls | wc | wc | wc | wc').allowed).toBe(false);
+  });
+  it('quoted pipe chars inside an rg regex are still literal argument text', () => {
+    const m = checkRepoCommand('rg -n "foo|bar" src');
+    expect(m.allowed).toBe(true);
+    expect(m.pipeline).toHaveLength(1);
+  });
+});
+
+describe('runRepoPipeline (live, no shell)', () => {
+  it('chains stdout to stdin across validated segments', async () => {
+    const { runRepoPipeline } = await import('../../src/core/security/approval/repo-allowlist.js');
+    const m = checkRepoCommand('ls src | sort | head -3');
+    expect(m.allowed).toBe(true);
+    const res = await runRepoPipeline(m.pipeline!, 15_000);
+    expect(res.exitCode).toBe(0);
+    const lines = res.stdout.trim().split('\n');
+    expect(lines.length).toBeLessThanOrEqual(3);
+    expect(lines.length).toBeGreaterThan(0);
   });
 });

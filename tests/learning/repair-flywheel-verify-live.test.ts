@@ -60,7 +60,11 @@ describe('makeExecRepoRepair — true-to-prod guard predicate', () => {
     expect(repair.check('git status').ok).toBe(true);
     expect(repair.check('grep foo | cat').ok).toBe(false); // unquoted pipe
     expect(repair.check('pm2 restart sudo-ai-v5').ok).toBe(false); // restart not allowed
-    expect(repair.check('cat package.json').ok).toBe(false);       // cat not allowlisted
+    // cat is allowlisted since the 2026-08-05 repo-exec ergonomics change; the
+    // credential deny (not the command list) is what keeps secrets unreadable.
+    expect(repair.check('cat package.json').ok).toBe(true);
+    expect(repair.check('cat config/.env').ok).toBe(false);         // credential path
+    expect(repair.check('node -e 1').ok).toBe(false);               // node not allowlisted
   });
 });
 
@@ -68,7 +72,7 @@ describe('replayVerifyLive', () => {
   it('measures recovery over genuine refusals; already-ok and out-of-scope excluded', async () => {
     const inputs = [
       { command: 'grep foo | cat', target: 'repo' },        // recoverable → rg foo
-      { command: 'cat package.json', target: 'repo' },       // recoverable → ls package.json
+      { command: 'cat package.json', target: 'repo' },       // now already ok (cat allowlisted)
       { command: 'pm2 restart sudo-ai-v5', target: 'repo' }, // IMPOSSIBLE
       { command: 'bash -lc "x; y"', target: 'repo' },        // IMPOSSIBLE
       { command: 'rg already-fine', target: 'repo' },        // already ok
@@ -76,10 +80,10 @@ describe('replayVerifyLive', () => {
     ];
     const r = await replayVerifyLive(inputs, repair, fakeRewrite);
     expect(r.applicable).toBe(5);   // the 5 repo-target rows
-    expect(r.alreadyOk).toBe(1);    // rg already-fine
-    expect(r.recovered).toBe(2);    // grep|cat, cat→ls
+    expect(r.alreadyOk).toBe(2);    // rg already-fine, cat package.json
+    expect(r.recovered).toBe(1);    // grep|cat → rg foo
     expect(r.impossible).toBe(2);   // pm2, bash
-    expect(r.recoveryPct).toBe(50); // 2 / (5-1) genuine
+    expect(r.recoveryPct).toBe(33.3); // 1 / (5-2) genuine refusals
   });
 
   it('a rewrite that throws is fail-open (counts as not-recovered, never throws)', async () => {
