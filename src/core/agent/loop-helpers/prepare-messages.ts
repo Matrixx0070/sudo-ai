@@ -343,6 +343,22 @@ export async function prepareMessages(
   if (currentUserMsg && !windowedNonSystem.includes(currentUserMsg)) {
     windowedNonSystem = [currentUserMsg, ...windowedNonSystem];
   }
+  // AUTONOMOUS TURNS: a system-event-seeded session may contain NO user message
+  // at all, so the retention above has nothing to keep and the window degrades
+  // to pure assistant/tool traffic. Providers refuse that conversation shape
+  // (ollama glm-5.2:cloud sheds it with a silent 200/'load'; gemini rejects it
+  // as invalid_request — verified root cause of the 2026-08-04 all-providers
+  // outage), and the model has no instruction either way. Synthesize one.
+  if (!windowedNonSystem.some(m => m.role === 'user')) {
+    windowedNonSystem = [
+      {
+        role: 'user',
+        content:
+          '[Autonomous turn] Continue the current mission per the system instructions and the tool results so far.',
+      },
+      ...windowedNonSystem,
+    ];
+  }
   // LONG-TURN WORK ANCHOR: a turn with many tool calls evicts the agent's OWN
   // earlier file edits from the window, so it can lose track of work it already
   // did and disown it ("none of those files exist / no change was made") then

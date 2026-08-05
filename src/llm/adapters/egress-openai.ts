@@ -153,6 +153,23 @@ export function egressOpenAI(ir: IRRequest): Rec {
   }
   for (const msg of ir.messages) convertMessage(msg, messages);
 
+  // Providers on this wire refuse a conversation with NO user-role message:
+  // ollama's glm-5.2:cloud silently SHEDS it (HTTP 200, finish_reason 'load',
+  // zero usage, empty choices — looks exactly like provider overload) and
+  // Gemini's OpenAI-compat surface rejects it as invalid_request. A long
+  // agentic turn can window itself into pure assistant/tool traffic (verified
+  // root cause of the 2026-08-04 "all providers unavailable" outage), so
+  // guarantee at least one user message. Insert after any leading system
+  // message(s) so it reads as turn context, not as the latest instruction.
+  if (!messages.some((m) => m['role'] === 'user')) {
+    let insertAt = 0;
+    while (insertAt < messages.length && messages[insertAt]!['role'] === 'system') insertAt++;
+    messages.splice(insertAt, 0, {
+      role: 'user',
+      content: '[Continue the current task based on the conversation so far.]',
+    });
+  }
+
   const body: Rec = { model: resolveAlias(ir.alias), messages };
 
   if (ir.tools !== undefined && ir.tools.length > 0) {
@@ -237,6 +254,11 @@ export function parseOpenAIResponse(json: unknown, trace_id: string): IRResponse
     // 200-but-empty/garbage: no choices, or neither text nor tool calls.
     stopReason = 'error';
     extra['provider_bug'] = true;
+    // Keep the provider's own finish_reason — it names the cause where one
+    // exists (ollama returns 'load' when shedding under overload; without this
+    // the brain log shows only a naked stop_reason 'error').
+    const finish = choice?.['finish_reason'];
+    if (typeof finish === 'string' && finish !== '') extra['finish_reason'] = finish;
   } else {
     const finish = choice['finish_reason'];
     stopReason = openAIFinishReasonToIR(finish);

@@ -83,7 +83,10 @@ describe('egressOpenAI', () => {
       }),
     );
     const msgs = body['messages'] as Array<Record<string, unknown>>;
-    expect(msgs[0]).toEqual({
+    // msgs[0] is the injected no-user-message guard stub (this fixture has no
+    // user turn); the assistant conversion under test is msgs[1].
+    expect(msgs[0]!['role']).toBe('user');
+    expect(msgs[1]).toEqual({
       role: 'assistant',
       content: 'on it',
       tool_calls: [
@@ -311,5 +314,53 @@ describe('parseOpenAIResponse', () => {
     for (const wire of ['stop', 'length', 'tool_calls'] as const) {
       expect(irStopReasonToOpenAI(openAIFinishReasonToIR(wire))).toBe(wire);
     }
+  });
+});
+
+describe('no-user-message guard (2026-08-04 outage: glm silent 200/load shed, gemini invalid_request)', () => {
+  it('injects a stub user message after leading system when the conversation has none', () => {
+    const body = egressOpenAI(
+      baseIR({
+        system: 'Be helpful.',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'c1', name: 'get_time', input: {} }],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'c1', content: '12:00' }],
+          },
+        ],
+      }),
+    );
+    // tool_result becomes role:'tool' on this wire — NOT role:'user' — so the
+    // guard must still fire for a pure assistant/tool conversation.
+    const msgs = body['messages'] as Array<Record<string, unknown>>;
+    expect(msgs.map((m) => m['role'])).toEqual(['system', 'user', 'assistant', 'tool']);
+    expect(msgs[1]!['content']).toContain('[Continue the current task');
+  });
+
+  it('leaves a conversation that already has a user message byte-identical', () => {
+    const body = egressOpenAI(baseIR({ system: 'Be helpful.' }));
+    expect(body['messages']).toEqual([
+      { role: 'system', content: 'Be helpful.' },
+      { role: 'user', content: 'Hi' },
+    ]);
+  });
+});
+
+describe('provider_bug finish_reason surfacing', () => {
+  it("keeps ollama's 'load' shedding signal in extra.finish_reason on a 200-but-empty response", () => {
+    const res = parseOpenAIResponse(
+      {
+        choices: [{ finish_reason: 'load', message: { content: '' } }],
+        usage: { prompt_tokens: 0, completion_tokens: 0 },
+      },
+      't-load',
+    );
+    expect(res.stop_reason).toBe('error');
+    expect(res.extra?.['provider_bug']).toBe(true);
+    expect(res.extra?.['finish_reason']).toBe('load');
   });
 });
