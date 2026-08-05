@@ -3802,14 +3802,34 @@ ${question}`, kb);
     // suppression on top of runHeartbeatTurn (dedup guard + the agent turn).
     if (job.name === 'system.heartbeat') {
       const run = wrappedHeartbeat ?? runHeartbeatTurn;
-      await run(payload, job);
+      // ADR 0010 D1: wrapRunner already stripped HEARTBEAT_OK and returned the
+      // content it judged worth delivering — deliver it instead of dropping it.
+      const heartbeatText = await run(payload, job);
+      await deliverBackgroundTurn('Heartbeat', typeof heartbeatText === 'string' ? heartbeatText : '');
       return;
     }
 
     // Generic agent-turn payload (non-heartbeat). payload is narrowed to the
     // agentTurn variant here (systemEvent returned above).
     if (payload.kind === 'agentTurn') {
-      await executeAgentTurn(payload, job);
+      const cronText = await executeAgentTurn(payload, job);
+      await deliverBackgroundTurn(`Cron: ${job.name}`, cronText);
+    }
+  };
+
+  /**
+   * ADR 0010 D1 — the single place autonomous output reaches the owner.
+   * Previously every caller discarded it (cli.ts heartbeat/cron/goal/order),
+   * so anything the agent concluded on its own was thrown away.
+   */
+  const deliverBackgroundTurn = async (label: string, text: string): Promise<void> => {
+    try {
+      const { resolveDeliveryTarget, deliverBackgroundOutput } =
+        await import('./core/channels/background-delivery.js');
+      const target = resolveDeliveryTarget(process.env, telegramNotifier !== null);
+      await deliverBackgroundOutput({ target, sender: telegramNotifier, label, text });
+    } catch (err) {
+      log.warn({ label, err: String(err) }, 'background delivery failed (non-fatal)');
     }
   };
 
@@ -3848,6 +3868,21 @@ ${question}`, kb);
   heartbeat.start();
   registerShutdown(() => heartbeat.stop());
   log.info('HeartbeatRunner started (wrapRunner wired)');
+
+  // ADR 0010 D1 doctor: autonomous work that can never reach anyone is a
+  // misconfiguration, not a quiet default. Warn loudly at boot instead.
+  try {
+    const { describeBackgroundDeliveryIssues } = await import('./core/channels/background-delivery.js');
+    const activeJobs = ['heartbeat', ...(cronScheduler.listJobs().filter(j => j.enabled).map(j => j.name))];
+    for (const issue of describeBackgroundDeliveryIssues({
+      hasTransport: telegramNotifier !== null,
+      activeBackgroundJobs: activeJobs,
+    })) {
+      log.warn({ check: 'background-delivery' }, issue);
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'background-delivery doctor check failed (non-fatal)');
+  }
 
   // Mission spine — durable multi-day goals that survive session boundaries and
   // restarts. Its own clock (NOT the heartbeat checklist, which is scoped to
