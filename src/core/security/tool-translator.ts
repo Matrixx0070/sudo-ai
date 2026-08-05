@@ -58,10 +58,16 @@ const DEFAULT_OPENCLAW_MAPPINGS: ToolTranslatorEntry[] = [
 ];
 
 const DEFAULT_HERMES_MAPPINGS: ToolTranslatorEntry[] = [
-  { canonical: 'memory_read',   sudoName: 'memory.read',   paramMap: {} },
-  { canonical: 'memory_write',  sudoName: 'memory.write',  paramMap: {} },
+  // memory_read → memory.get (a real registered read tool). Previously this and
+  // the write/delete entries pointed at memory.read / memory.write / memory.delete,
+  // NONE of which are registered — so a translated call looked successful, then
+  // failed deep with "unknown tool memory.write". Only memory.get + memory.search
+  // exist (both read-only); there is no canonical memory-WRITE tool yet, so
+  // memory_write / memory_delete are intentionally left UNMAPPED (translate()
+  // returns translated:false → honest "unsupported", not a phantom). Restore the
+  // write mapping once the memory-consolidation ADR lands a single write tool.
+  { canonical: 'memory_read',   sudoName: 'memory.get',    paramMap: {} },
   { canonical: 'memory_search', sudoName: 'memory.search', paramMap: {} },
-  { canonical: 'memory_delete', sudoName: 'memory.delete', paramMap: {} },
   { canonical: 'file_read',     sudoName: 'coder.read-file',  paramMap: { path: 'path' } },
   { canonical: 'file_write',    sudoName: 'coder.write-file', paramMap: { path: 'path', content: 'content' } },
   { canonical: 'shell_exec',    sudoName: 'system.shell',     paramMap: { command: 'command' } },

@@ -18,6 +18,7 @@ import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { PATHS } from '../shared/constants.js';
 import type { NearDupFinder } from './near-dup.js';
+import { guardMemoryWrite, MemoryInjectionError } from './injection-scanner.js';
 
 /** Injected near-dup admission seam: finder + re-derivation recorder. */
 export interface NearDupDeps {
@@ -388,7 +389,25 @@ Output ONLY the JSON array, nothing else.`;
       ).trim();
       if (!factTrimmed) continue;
 
-      const hash = sha256(factTrimmed);
+      // Security: prompt-injection screen before persisting. Dream facts are
+      // synthesized from mixed-provenance session history (may echo external
+      // tool/browser text), so they must pass the SAME guard as any learning
+      // write — the raw INSERT below previously bypassed guardMemoryWrite,
+      // which MindDB.storeChunk runs and the codebase's "never raw SQL" rule
+      // requires. Full strictness (no role skip); a flagged fact is skipped,
+      // never aborts the dream.
+      let safeFact: string;
+      try {
+        safeFact = guardMemoryWrite(factTrimmed, 'auto-dream');
+      } catch (err) {
+        if (err instanceof MemoryInjectionError) {
+          log.warn({ err: err.message }, 'Phase 2: fact rejected by injection guard — skipped');
+          continue;
+        }
+        throw err;
+      }
+
+      const hash = sha256(safeFact);
       try {
         // Check for existing chunk with same hash
         const existing = this.db
@@ -401,7 +420,7 @@ Output ONLY the JSON array, nothing else.`;
         // fact already covers this one — record the re-derivation on the twin
         // instead of adding a redundant row. Fail-open: finder errors admit.
         if (this.nearDup) {
-          const twin = await this.nearDup.find(factTrimmed);
+          const twin = await this.nearDup.find(safeFact);
           if (twin) {
             this.nearDup.recordReDerivation(twin.chunkId);
             log.info(
@@ -416,7 +435,7 @@ Output ONLY the JSON array, nothing else.`;
           INSERT INTO chunks (text, path, source, hash, is_evergreen)
           VALUES (:text, :path, :source, :hash, :is_evergreen)
         `).run({
-          text: factTrimmed,
+          text: safeFact,
           path: 'memory/auto-dream',
           source: 'learning',
           hash,
