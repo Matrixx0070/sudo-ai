@@ -33,7 +33,7 @@ import { randomUUID } from 'node:crypto';
   }
 }
 import { createLogger } from './core/shared/logger.js';
-import { beginUserTurn, isServingUser } from './core/agent/activity.js';
+import { beginUserTurn, beginCronJob, isMachineBusy } from './core/agent/activity.js';
 import { requestMissionWake, setWakeDeps } from './core/agent/mission/wake.js';
 import { sanitizeUserFacingError } from './core/shared/sanitize-error.js';
 import { registerShutdown, runShutdown } from './core/cli/shutdown.js';
@@ -3504,6 +3504,15 @@ ${question}`, kb);
    *  - systemEvent  -> dispatches internal events (e.g. dream:run).
    */
   const cronRunner = async (payload: CronPayload, job: CronJob): Promise<void> => {
+    const endCronJob = beginCronJob();
+    try {
+      return await runCronPayload(payload, job);
+    } finally {
+      endCronJob();
+      requestMissionWake('user-idle');
+    }
+  };
+  const runCronPayload = async (payload: CronPayload, job: CronJob): Promise<void> => {
     log.info({ jobId: job.id, jobName: job.name, payloadKind: payload.kind }, 'Cron job firing');
 
     if (payload.kind === 'systemEvent') {
@@ -3878,7 +3887,7 @@ ${question}`, kb);
     const { missionTick } = await import('./core/agent/mission/scheduler.js');
     const teardownWake = setWakeDeps({
       tick: () => missionTick(missionDeps),
-      isBusy: () => isServingUser(),
+      isBusy: () => isMachineBusy(),
       hasWork: () => nextAdvanceableMission() !== null,
     });
     requestMissionWake('startup');

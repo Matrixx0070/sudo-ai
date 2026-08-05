@@ -502,6 +502,38 @@ describe('mission wake — event-driven, not a blind interval', () => {
   });
 });
 
+describe('busy signal covers every surface (user turns AND cron)', () => {
+  it('isMachineBusy is true for a cron job even with no user turn', async () => {
+    const a = await activity();
+    a.__resetActivityForTests();
+    const endCron = a.beginCronJob();
+    expect(a.isServingUser()).toBe(false);
+    expect(a.isCronActive()).toBe(true);
+    expect(a.isMachineBusy()).toBe(true);   // background work must still defer
+    endCron();
+    expect(a.isMachineBusy()).toBe(false);
+  });
+
+  it('user turns and cron jobs are tracked independently', async () => {
+    const a = await activity();
+    a.__resetActivityForTests();
+    const endUser = a.beginUserTurn();
+    const endCron = a.beginCronJob();
+    endUser();
+    expect(a.isMachineBusy()).toBe(true);   // cron still running
+    endCron();
+    expect(a.isMachineBusy()).toBe(false);
+  });
+
+  it('cron end is idempotent', async () => {
+    const a = await activity();
+    a.__resetActivityForTests();
+    const end = a.beginCronJob();
+    end(); end();
+    expect(a.isCronActive()).toBe(false);
+  });
+});
+
 describe('user-turn activity signal', () => {
   it('counts overlapping turns and clears only when all finish', async () => {
     const a = await activity();
