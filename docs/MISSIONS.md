@@ -37,7 +37,25 @@ data/missions/<id>.json
 
 ## How a mission advances
 
-One scheduler tick advances **one step of one mission** (the longest-waiting
+### When it wakes
+
+Advancement is **event-driven and busy-gated**, matching the OpenClaw heartbeat
+design this system's heartbeat came from (`heartbeat-wake`: `requestHeartbeat`
++ `requests-in-flight` / `cron-in-progress` / `lanes-busy` skips with retry).
+A plain interval was wrong in both directions — a mission created on an idle
+machine waited up to 30 minutes for no reason, and the timer could fire a work
+turn while the owner was mid-conversation.
+
+- A wake is **requested** on: mission created, unblocked, resumed, a user turn
+  finishing, startup, and after each productive step.
+- Bursts **coalesce** into one tick.
+- A wake while a user turn is in flight **defers and retries** — it is never
+  dropped, and never interrupts the owner.
+- A productive step **chains** into the next one, so an idle machine runs a
+  mission to completion instead of sleeping between steps.
+- The scheduler interval (`SUDO_MISSION_TICK_MIN`) remains only as a floor.
+
+One tick advances **one step of one mission** (the longest-waiting
 eligible one, so nothing starves):
 
 1. **Plan** (first tick) — the goal is decomposed into steps. A step without a

@@ -33,6 +33,8 @@ import { randomUUID } from 'node:crypto';
   }
 }
 import { createLogger } from './core/shared/logger.js';
+import { beginUserTurn, isServingUser } from './core/agent/activity.js';
+import { requestMissionWake, setWakeDeps } from './core/agent/mission/wake.js';
 import { sanitizeUserFacingError } from './core/shared/sanitize-error.js';
 import { registerShutdown, runShutdown } from './core/cli/shutdown.js';
 import { PROJECT_ROOT, DATA_DIR, WORKSPACE_DIR, projectPath } from './core/shared/paths.js';
@@ -2695,9 +2697,19 @@ ${question}`, kb);
     // SUDO_MSG_COALESCE_MS, default 1000 ms, 0 = flush on next tick.
     // handleTelegramTurn rejections propagate so the coalescer logs real failures.
     const coalesceWindowMs = Number(process.env['SUDO_MSG_COALESCE_MS']);
+    // Mark the machine "serving a person" for the whole user turn: background
+    // mission work defers while this is in flight (and is requested the moment
+    // it ends) instead of interrupting the owner mid-conversation.
+    const deliverUserTurn = (msg: UnifiedMessage): Promise<void> => {
+      const endUserTurn = beginUserTurn();
+      return handleTelegramTurn(msg).finally(() => {
+        endUserTurn();
+        requestMissionWake('user-idle');
+      });
+    };
     const telegramCoalescer = process.env['SUDO_MSG_COALESCE'] !== '0'
       ? new MessageCoalescer({
-          deliver: handleTelegramTurn,
+          deliver: deliverUserTurn,
           ...(process.env['SUDO_MSG_COALESCE_MS'] !== undefined && Number.isFinite(coalesceWindowMs) && coalesceWindowMs >= 0
             ? { debounceMs: coalesceWindowMs }
             : {}),
@@ -2773,7 +2785,7 @@ ${question}`, kb);
       } else {
         // MessageHandler contract: must not throw — catch here, not inside
         // handleTelegramTurn, so the coalescer path sees real rejections.
-        await handleTelegramTurn(msg).catch((err: unknown) => {
+        await deliverUserTurn(msg).catch((err: unknown) => {
           log.error({ err: String(err), peerId: msg.peerId }, 'Queued agent turn failed');
         });
       }
@@ -3842,7 +3854,7 @@ ${question}`, kb);
       payload: { kind: 'agentTurn', message: '' }, sessionTarget: 'isolated',
     } as unknown as CronJob;
     let lastMissionCost = 0;
-    const stopMissions = startMissionScheduler({
+    const missionDeps: import('./core/agent/mission/runner.js').AdvanceDeps = {
       executor: {
         run: async (prompt: string) => {
           const res = await executeAgentTurnResult({ kind: 'agentTurn', message: prompt }, missionJob);
@@ -3857,8 +3869,20 @@ ${question}`, kb);
           await proactiveNotifier?.notify('reminder', 'MISSION', `${message}\n\n(mission ${mission.id})`, 'high');
         } catch (err) { log.warn({ err: String(err) }, 'mission notify failed (non-fatal)'); }
       },
+    };
+    const stopMissions = startMissionScheduler(missionDeps);
+    // Event-driven wake: a mission starts as soon as there is a reason and the
+    // machine is free, instead of waiting out a blind interval; the scheduler
+    // interval above stays as a floor/fallback.
+    const { nextAdvanceableMission } = await import('./core/agent/mission/store.js');
+    const { missionTick } = await import('./core/agent/mission/scheduler.js');
+    const teardownWake = setWakeDeps({
+      tick: () => missionTick(missionDeps),
+      isBusy: () => isServingUser(),
+      hasWork: () => nextAdvanceableMission() !== null,
     });
-    registerShutdown(() => stopMissions());
+    requestMissionWake('startup');
+    registerShutdown(() => { teardownWake(); stopMissions(); });
   } catch (err) {
     log.warn({ err: String(err) }, 'Mission scheduler wiring failed — continuing without');
   }

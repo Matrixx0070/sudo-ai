@@ -415,3 +415,112 @@ describe('mission budget meter is truthful (gateway cost_usd is NULL on OAuth la
     expect(t.stallReason(m)).toContain('mission budget reached');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wake wiring (OpenClaw heartbeat semantics: event-driven + busy-gated)
+// ---------------------------------------------------------------------------
+
+const wake = () => import('../../src/core/agent/mission/wake.js');
+const activity = () => import('../../src/core/agent/activity.js');
+const settle = (ms = 40) => new Promise((r) => setTimeout(r, ms));
+
+describe('mission wake — event-driven, not a blind interval', () => {
+  it('a wake request runs a tick promptly instead of waiting out an interval', async () => {
+    const w = await wake();
+    const tick = vi.fn().mockResolvedValue({ kind: 'idle' });
+    w.setWakeDeps({ tick, isBusy: () => false, hasWork: () => true });
+    w.requestMissionWake('mission-created', 1);
+    await settle();
+    expect(tick).toHaveBeenCalledTimes(1);
+    w.__resetWakeForTests();
+  });
+
+  it('coalesces a burst of requests into ONE tick', async () => {
+    const w = await wake();
+    const tick = vi.fn().mockResolvedValue({ kind: 'idle' });
+    w.setWakeDeps({ tick, isBusy: () => false, hasWork: () => true });
+    for (let i = 0; i < 10; i++) w.requestMissionWake('mission-created', 1);
+    await settle();
+    expect(tick).toHaveBeenCalledTimes(1);
+    w.__resetWakeForTests();
+  });
+
+  it('DEFERS (does not drop) a wake while the owner is being served', async () => {
+    const w = await wake();
+    const tick = vi.fn().mockResolvedValue({ kind: 'idle' });
+    let busy = true;
+    w.setWakeDeps({ tick, isBusy: () => busy, hasWork: () => true });
+    w.requestMissionWake('mission-created', 1);
+    await settle();
+    expect(tick).not.toHaveBeenCalled();   // never interrupts the conversation
+    expect(w.hasPendingWake()).toBe(true); // but the wake survives
+    busy = false;
+    w.__resetWakeForTests();
+  });
+
+  it('does nothing when there is no advanceable mission', async () => {
+    const w = await wake();
+    const tick = vi.fn().mockResolvedValue({ kind: 'idle' });
+    w.setWakeDeps({ tick, isBusy: () => false, hasWork: () => false });
+    w.requestMissionWake('interval', 1);
+    await settle();
+    expect(tick).not.toHaveBeenCalled();
+    w.__resetWakeForTests();
+  });
+
+  it('CHAINS: a productive tick immediately requests the next one', async () => {
+    const w = await wake();
+    let calls = 0;
+    const tick = vi.fn(async () => ({ kind: calls++ < 2 ? 'advanced' : 'completed' }));
+    w.setWakeDeps({ tick, isBusy: () => false, hasWork: () => true });
+    w.requestMissionWake('mission-created', 1);
+    await settle(1200);
+    // advanced -> advanced -> completed: it kept going while idle rather than
+    // sleeping a full interval between steps.
+    expect(tick.mock.calls.length).toBeGreaterThanOrEqual(3);
+    w.__resetWakeForTests();
+  });
+
+  it('is inert before deps are installed (flag off / not wired)', async () => {
+    const w = await wake();
+    w.__resetWakeForTests();
+    w.requestMissionWake('mission-created', 1);
+    expect(w.hasPendingWake()).toBe(false);
+  });
+
+  it('a throwing tick does not wedge the wake loop', async () => {
+    const w = await wake();
+    const tick = vi.fn().mockRejectedValue(new Error('boom'));
+    w.setWakeDeps({ tick, isBusy: () => false, hasWork: () => true });
+    w.requestMissionWake('mission-created', 1);
+    await settle();
+    expect(tick).toHaveBeenCalled();
+    w.requestMissionWake('interval', 1); // still accepts work afterwards
+    await settle();
+    expect(tick).toHaveBeenCalledTimes(2);
+    w.__resetWakeForTests();
+  });
+});
+
+describe('user-turn activity signal', () => {
+  it('counts overlapping turns and clears only when all finish', async () => {
+    const a = await activity();
+    a.__resetActivityForTests();
+    expect(a.isServingUser()).toBe(false);
+    const end1 = a.beginUserTurn();
+    const end2 = a.beginUserTurn();
+    expect(a.activeUserTurnCount()).toBe(2);
+    end1();
+    expect(a.isServingUser()).toBe(true);  // still one in flight
+    end2();
+    expect(a.isServingUser()).toBe(false);
+  });
+
+  it('end is idempotent (a double-call cannot drive the count negative)', async () => {
+    const a = await activity();
+    a.__resetActivityForTests();
+    const end = a.beginUserTurn();
+    end(); end(); end();
+    expect(a.activeUserTurnCount()).toBe(0);
+  });
+});
