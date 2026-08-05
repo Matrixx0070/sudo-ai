@@ -185,6 +185,26 @@ export function isBillingBody(body: string): boolean {
 }
 
 /**
+ * A dead / expired / revoked credential — most importantly an OAuth *refresh*
+ * token that no longer refreshes (`invalid_grant`). Such failures surface with
+ * NO HTTP status of their own (a client-side "no usable token" LLMPolicyError,
+ * or a 400 invalid_grant from the token endpoint), so brain defaults them to
+ * 500 → the switch below calls them 'overloaded': a 60s transient hammer that
+ * re-burns an expensive failover every minute and hides the real "re-login
+ * needed" cause. Detect by body so they route to the long, self-healing
+ * AUTH_COOLDOWN instead. Distinct from isBillingBody (out-of-quota, not creds).
+ */
+export function isAuthTokenDeadBody(body: string): boolean {
+  return (
+    /no usable token/i.test(body) ||
+    /\binvalid_grant\b/i.test(body) ||
+    /refresh token (?:not found|is )?(?:not found|invalid|expired|revoked)/i.test(body) ||
+    /run `?sudo-ai [\w.-]+ login`?/i.test(body) ||
+    /\bre-?login required\b/i.test(body)
+  );
+}
+
+/**
  * Whether an error body is a transient infrastructure block — an HTML error page
  * or a Cloudflare/proxy challenge — rather than a real decision from the LLM
  * provider. These arrive with auth-ish statuses (401/403) but the credential is
@@ -235,6 +255,15 @@ export function categorizeError(status: number, body?: string): ErrorCategory {
   if (typeof status !== 'number') {
     return 'format';
   }
+
+  // A dead OAuth refresh token (invalid_grant) / "no usable token" arrives
+  // body-only — brain defaults it to a phantom 500 which the switch would call
+  // 'overloaded' (a 60s transient re-hammer that burns a failover every minute
+  // and masks the real cause). Route it to 'auth' (long AUTH_COOLDOWN, non-
+  // permanent → self-heals on the first success after re-login). Checked before
+  // the status switch since the status is meaningless here. Billing bodies are
+  // handled per-status below, and never match the auth-dead signatures.
+  if (body && isAuthTokenDeadBody(body)) return 'auth';
 
   switch (status) {
     case 402:

@@ -241,6 +241,31 @@ describe('categorizeError', () => {
     expect(categorizeError(503)).toBe('overloaded');
   });
 
+  // --- Dead-credential body detection (regression: was masked as overloaded) ---
+  // A dead OAuth refresh token arrives body-only → brain defaults status to 500.
+  // Before the fix, categorizeError(500, body) fell through to 'overloaded' (a
+  // 60s transient hammer that re-burned an expensive failover every minute).
+
+  it('maps a body-only "no usable token" (phantom 500) to auth, not overloaded', () => {
+    const body = '[llm-transport] claude-oauth: no usable token — run `sudo-ai claude-oauth login`';
+    expect(categorizeError(500, body)).toBe('auth');
+  });
+
+  it('maps an invalid_grant refresh failure to auth', () => {
+    const body = '{"error": "invalid_grant", "error_description": "Refresh token not found or invalid"}';
+    expect(categorizeError(500, body)).toBe('auth');
+    expect(categorizeError(400, body)).toBe('auth');
+  });
+
+  it('a plain 500 with an unrelated body is still overloaded (no false positive)', () => {
+    expect(categorizeError(500, 'internal server error')).toBe('overloaded');
+    expect(categorizeError(500)).toBe('overloaded');
+  });
+
+  it('a billing body is NOT mistaken for a dead credential', () => {
+    expect(categorizeError(429, 'insufficient_quota')).toBe('billing');
+  });
+
   it('should map 401 to auth', () => {
     expect(categorizeError(401)).toBe('auth');
   });
