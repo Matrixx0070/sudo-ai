@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentLoop } from '../../src/core/agent/loop.js';
+import { runHaltNotice } from '../../src/core/agent/loop-fallback.js';
 import {
   createMockBrain,
   createMockToolRegistry,
@@ -59,14 +60,15 @@ describe('SUDO_AGENT_RUN_MAX_USD — per-run spend halt', () => {
     // Cap check runs at the iteration boundary: call 1 ($0.60 < $1) proceeds,
     // call 2 ($1.20 >= $1) is the last, iteration 3 never dispatches.
     expect(calls()).toBe(2);
-    expect(result.text).toBe('working (step 2)'); // model's own last text
+    // Model's own last text + the honest spend-cap notice (autonomy blocker #2).
+    expect(result.text).toBe(`working (step 2)\n\n${runHaltNotice({ kind: 'spend_cap', spendUsd: 1.2, capUsd: 1, iterations: 2 })}`);
   });
 
   it('SPEND-2: no env → no cap (legacy behavior, runs to max-iterations)', async () => {
     const { brain, calls } = spendingBrain(100);
     const result = await makeLoop(brain, 3).run('test-session-id', 'do the thing');
     expect(calls()).toBe(3);
-    expect(result.text).toBe('working (step 3)');
+    expect(result.text).toBe(`working (step 3)\n\n${runHaltNotice({ kind: 'max_iterations', iterations: 3 })}`);
   });
 
   it('SPEND-3: zero/garbage env values disable the cap', async () => {

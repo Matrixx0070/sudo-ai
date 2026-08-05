@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentLoop } from '../../src/core/agent/loop.js';
-import { LOOP_FALLBACK_FIRST_HIT } from '../../src/core/agent/loop-fallback.js';
+import { buildRunHaltReply, runHaltNotice } from '../../src/core/agent/loop-fallback.js';
 import {
   createMockBrain,
   createMockToolRegistry,
@@ -55,13 +55,15 @@ describe('hard max-iterations fallback', () => {
   it('finishes the turn with the last assistant text instead of throwing', async () => {
     const brain = endlessToolBrain(n => `working on it (step ${n})`);
     const result = await makeLoop(brain, 3).run('test-session-id', 'do the thing');
-    expect(result.text).toBe('working on it (step 3)'); // model's own last text preferred
+    // Model's own last text preferred, PLUS the honest halt notice (2026-08-05
+    // autonomy audit blocker #2: a cap halt must not read as a tool loop).
+    expect(result.text).toBe(`working on it (step 3)\n\n${runHaltNotice({ kind: 'max_iterations', iterations: 3 })}`);
   });
 
   it('falls back to the canned LoopGuard reply when no assistant text exists', async () => {
     const brain = endlessToolBrain(() => '');
     const result = await makeLoop(brain, 3).run('test-session-id', 'do the thing');
-    expect(result.text).toBe(LOOP_FALLBACK_FIRST_HIT);
+    expect(result.text).toBe(buildRunHaltReply({ kind: 'max_iterations', iterations: 3 }));
   });
 
   it('kill-switch=0 restores the legacy PipelineError throw', async () => {
