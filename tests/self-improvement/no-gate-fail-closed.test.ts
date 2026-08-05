@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
+import Database from 'better-sqlite3';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -30,6 +31,26 @@ afterEach(() => {
   vi.resetModules();
 });
 
+/**
+ * Seed a minimal mind.db with a genuinely failing tool so pattern detection
+ * yields CONTENT. Since 2026-08-05 (autonomy audit blocker #7) an empty
+ * detection writes nothing at all, so a fixture with no data can no longer
+ * demonstrate the apply path — it would pass for the wrong reason.
+ */
+function seedMindDb(dir: string): void {
+  const db = new Database(join(dir, 'mind.db'));
+  db.exec(`CREATE TABLE messages (
+    id INTEGER PRIMARY KEY, role TEXT, content TEXT,
+    tool_name TEXT, tool_output TEXT, created_at TEXT
+  )`);
+  const now = new Date().toISOString();
+  const ins = db.prepare(
+    `INSERT INTO messages (role, content, tool_name, tool_output, created_at) VALUES ('tool','',?,?,?)`,
+  );
+  for (let i = 0; i < 4; i++) ins.run('flaky.tool', '{"success":false}', now);
+  db.close();
+}
+
 async function importEngine() {
   return await import('../../src/core/self-improvement/engine.js');
 }
@@ -44,6 +65,7 @@ describe('runSelfImprovement — absent HeldOutGate fails closed', () => {
   });
 
   it('NOGATE-2: with a PASSING gate, applies still happen (capability preserved)', async () => {
+    seedMindDb(tmpData);
     const { runSelfImprovement } = await importEngine();
     const gate = {
       evaluate: async (proposalId: string) => ({
