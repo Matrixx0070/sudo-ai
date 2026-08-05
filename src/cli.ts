@@ -3862,12 +3862,19 @@ ${question}`, kb);
       schedule: { kind: 'interval', everyMs: 0 }, enabled: true,
       payload: { kind: 'agentTurn', message: '' }, sessionTarget: 'isolated',
     } as unknown as CronJob;
+    const { meteredSpendSince } = await import('./core/agent/mission/spend.js');
     let lastMissionCost = 0;
     const missionDeps: import('./core/agent/mission/runner.js').AdvanceDeps = {
       executor: {
         run: async (prompt: string) => {
+          // REAL metered money only. AgentRunResult.spendUsd is the NOTIONAL
+          // list-price equivalent (brain/costs.ts prices the claude-oauth seat
+          // at Anthropic rates for reporting); denominating a budget in it
+          // parks missions for spending $0 — the same phantom-dollar bug that
+          // took the daily cap down twice (limits.ts:288).
+          const startedAt = new Date().toISOString();
           const res = await executeAgentTurnResult({ kind: 'agentTurn', message: prompt }, missionJob);
-          lastMissionCost = res.spendUsd; // real per-call usage, not a ledger column that is NULL
+          lastMissionCost = meteredSpendSince(startedAt);
           return res.text;
         },
         lastRunCostUsd: () => lastMissionCost,

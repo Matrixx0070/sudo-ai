@@ -384,7 +384,37 @@ describe('mission scheduler — armed explicitly, serial, crash-proof', () => {
   });
 });
 
-describe('mission budget meter is truthful (gateway cost_usd is NULL on OAuth lanes)', () => {
+describe('mission budget is denominated in REAL metered money', () => {
+  it('spend.ts sums the gateway ledger, which prices seat lanes at 0 by design', async () => {
+    // Seat lanes (claude-oauth/, ollama/) are priced 0 in limits.ts on purpose:
+    // they ride a flat subscription. Counting them as dollars produced ~$473 of
+    // phantom spend and a total product outage (limits.ts:288). A mission
+    // budget must therefore track ONLY what the ledger records as metered.
+    const { meteredSpendSince } = await import('../../src/core/agent/mission/spend.js');
+    // No gateway.db in the isolated DATA_DIR → 0, fail-open, never throws.
+    expect(meteredSpendSince(new Date().toISOString())).toBe(0);
+  });
+
+  it('seat-only work does not consume a mission budget', async () => {
+    const s = await store();
+    const r = await runner();
+    const t = await types();
+    const m = s.createMission({ goal: 'g', maxSpendUsd: 5 });
+    const deps = {
+      executor: {
+        run: vi.fn(async (p: string) => (p.includes('You are verifying whether') ? 'DONE: ok' : 'worked')),
+        lastRunCostUsd: () => 0, // everything ran on the seat: $0 real
+      },
+      brain: { call: vi.fn().mockResolvedValue({ content: '[{"description":"s1","doneWhen":"c1"}]' }) },
+    };
+    await r.advanceMission(m, deps);
+    await r.advanceMission(m, deps);
+    expect(m.spendUsd).toBe(0);
+    expect(t.isAdvanceable(m)).toBe(true); // free work never parks on budget
+  });
+});
+
+describe('mission budget meter accumulates what the executor reports', () => {
   it('accumulates the executor-reported spend across execute AND verify calls', async () => {
     const s = await store();
     const r = await runner();

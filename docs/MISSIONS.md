@@ -112,9 +112,16 @@ simply do not self-advance.
 - Verification is only as good as the `doneWhen` the planner wrote. A vague
   criterion produces a weak check; the parser enforces that one *exists*, not
   that it is excellent.
-- Mission spend comes from the agent run's own per-call usage
-  (`AgentRunResult.spendUsd`). It is deliberately NOT read from
-  `gateway.db llm_calls.cost_usd`: that column is NULL on the OAuth lanes, so a
-  ledger-derived meter reported $0 and `maxSpendUsd` could never fire.
+- `maxSpendUsd` counts **real metered money only**, read from the gateway
+  ledger. Flat-subscription lanes (`claude-oauth/`, `ollama/`) are priced at 0
+  in `limits.ts` **on purpose** — they ride a seat, not per-token billing.
+  Do not "fix" that zero: booking seat calls as dollars has taken this system
+  down twice (limits.ts:288 — 418 calls booked as "$51" blew a $50 cap; ollama
+  `:cloud` mispricing booked ~$473 of phantom spend and turned a spend cap into
+  a total outage). A mission that runs entirely on the seat therefore costs $0
+  and never parks on budget; its volume is bounded by the policy layer's daily
+  seat CALL ceiling, the plan length, and per-step attempt caps.
+  `AgentRunResult.spendUsd` is the NOTIONAL list-price equivalent — useful for
+  reporting, never for gating a dollar budget.
 - Notifications ride the proactive notifier, so mission reports arrive on the
   configured channel, not necessarily the chat where the goal was given.
