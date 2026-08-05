@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 817,
+  "count": 819,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -500,6 +500,8 @@
     "SUDO_MEMORY_SCAN_MODE",
     "SUDO_MEMORY_SUPERSEDE",
     "SUDO_MIDRUN_STEER",
+    "SUDO_MISSIONS",
+    "SUDO_MISSION_TICK_MIN",
     "SUDO_MODAL_",
     "SUDO_MODAL_APP",
     "SUDO_MODAL_BIN",

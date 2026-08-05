@@ -122,6 +122,7 @@ import { spawnTeamTool } from './spawn-team.js';
 import { forgeTool } from './forge.js';
 import { feedbackTool } from './feedback.js';
 import { selfImproveTool } from './self-improve.js';
+import { missionTool } from './mission.js';
 import { sessionsSpawnTool } from './sessions-spawn.js';
 import { agentCommandTool } from './agent-command.js';
 import { sessionsSendTool } from './sessions-send.js';
@@ -666,6 +667,7 @@ const META_TOOLS: ToolDefinition[] = [
   forgeTool,
   feedbackTool,
   selfImproveTool,
+  missionTool,
   // Dependency-injected meta tools
   sessionsSpawnTool,
   sessionsSendTool,

@@ -3817,6 +3817,44 @@ ${question}`, kb);
   registerShutdown(() => heartbeat.stop());
   log.info('HeartbeatRunner started (wrapRunner wired)');
 
+  // Mission spine — durable multi-day goals that survive session boundaries and
+  // restarts. Its own clock (NOT the heartbeat checklist, which is scoped to
+  // fixed health sections): one tick advances ONE step of the longest-waiting
+  // mission through the same executeAgentTurn seam cron uses, so a mission step
+  // is a real work turn with full tools. Default OFF — SUDO_MISSIONS=1 arms it,
+  // because this is the path that spends money with no human in the loop.
+  try {
+    const { startMissionScheduler } = await import('./core/agent/mission/scheduler.js');
+    const missionJob: CronJob = {
+      id: 'mission-advance', name: 'mission.advance',
+      schedule: { kind: 'interval', everyMs: 0 }, enabled: true,
+      payload: { kind: 'agentTurn', message: '' }, sessionTarget: 'isolated',
+    } as unknown as CronJob;
+    const { spendSince } = await import('./core/agent/mission/spend.js');
+    let lastMissionCost = 0;
+    const stopMissions = startMissionScheduler({
+      executor: {
+        run: async (prompt: string) => {
+          // Real cost from the gateway ledger, not a parallel counter.
+          const startedAt = new Date().toISOString();
+          const text = await executeAgentTurn({ kind: 'agentTurn', message: prompt }, missionJob);
+          lastMissionCost = spendSince(startedAt);
+          return text;
+        },
+        lastRunCostUsd: () => lastMissionCost,
+      },
+      brain,
+      notify: async (mission, message) => {
+        try {
+          await proactiveNotifier?.notify('reminder', 'MISSION', `${message}\n\n(mission ${mission.id})`, 'high');
+        } catch (err) { log.warn({ err: String(err) }, 'mission notify failed (non-fatal)'); }
+      },
+    });
+    registerShutdown(() => stopMissions());
+  } catch (err) {
+    log.warn({ err: String(err) }, 'Mission scheduler wiring failed — continuing without');
+  }
+
   // Commitment extractor — schedules inferred future follow-ups via the cron
   // store (fired by the scheduler above). Active only when SUDO_COMMITMENTS=1.
   try {
