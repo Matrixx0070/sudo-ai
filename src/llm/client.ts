@@ -30,6 +30,7 @@ import { brainRequestToIR, type ShadowBrainRequest } from './shadow.js';
 import { classifyThrown } from './errors.js';
 import { getGatewayCallLog, sha256Hex, type LLMCallRecord } from './logging.js';
 import { OLLAMA_EMBEDDINGS_URL, OPENAI_EMBEDDINGS_URL, PROVIDER_BASE_URLS, PROVIDER_HOSTNAMES } from './endpoints.js';
+import { getXaiApiKeyManager } from './xai-apikey-manager.js';
 
 const log = createLogger('llm-client');
 
@@ -126,6 +127,17 @@ export function getProviderApiKey(name: ProviderKeyName): string | null {
   // auth.google.envKey (and the deployed .env) use GOOGLE_API_KEY — accept
   // either so the wire-up doesn't silently find no key under the older name.
   if (name === 'google') return process.env['GOOGLE_API_KEY']?.trim() || null;
+  // xai: fall back to the on-disk key store (data/xai-apikey.json) so a key
+  // set via the admin UI / CLI after process start is picked up without a
+  // restart. The store reads from disk each call (no caching).
+  if (name === 'xai') {
+    try {
+      const stored = getXaiApiKeyManager().getApiKey();
+      if (stored) return stored;
+    } catch {
+      // module not loaded yet — fall through
+    }
+  }
   return null;
 }
 
