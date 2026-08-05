@@ -97,7 +97,7 @@ async function readLearnings(): Promise<string> {
   }
 }
 
-function buildNewLearningBlock(patterns: DetectedPatterns, brainAnalysis: string): string {
+export function buildNewLearningBlock(patterns: DetectedPatterns, brainAnalysis: string): string {
   const date = new Date().toISOString().slice(0, 10);
   const lines: string[] = [
     `## ${date} — Autonomous Improvement Run`,
@@ -139,6 +139,11 @@ function buildNewLearningBlock(patterns: DetectedPatterns, brainAnalysis: string
     lines.push(brainAnalysis.trim());
     lines.push('');
   }
+
+  // A header with no sections is noise, not a learning — empty detection runs
+  // wrote 13 hollow "0/100" blocks in 2026-08 (autonomy audit blocker #7).
+  const HEADER_LINES = 5; // title, blank, score, window, blank
+  if (lines.length <= HEADER_LINES) return '';
 
   lines.push(`---`);
   lines.push('');
@@ -382,24 +387,39 @@ export async function runSelfImprovement(options: {
   try {
     const existing = await readLearnings();
     const newBlock  = buildNewLearningBlock(patterns, brainAnalysis);
-    // Keep last 20 blocks to avoid bloat — truncate old entries
-    const blocks = (existing + newBlock).split(/^---$/m);
-    const kept   = blocks.slice(-20).join('---');
 
-    const learningsProposalId = `learnings-${Date.now()}`;
-    const shouldWrite = await shouldApply(learningsProposalId, 'Update LEARNINGS.md with new patterns and rules');
+    if (!newBlock) {
+      // Empty detection → nothing to learn. Record it LOUDLY — a run that
+      // produced no content is a signal the detection inputs are broken.
+      actions.push({
+        type: 'learnings_update',
+        description: 'SKIPPED: pattern detection produced no content — nothing written',
+        applied: false,
+        detail: `Health score: ${patterns.healthScore}/100 (0 = mind.db was not visible to this run)`,
+      });
+      log.warn({ healthScore: patterns.healthScore }, 'LEARNINGS.md: empty learning block — write skipped');
+    } else {
+      // Keep last 20 blocks to avoid bloat — truncate old entries
+      const blocks = (existing + newBlock).split(/^---$/m);
+      const kept   = blocks.slice(-20).join('---');
 
-    if (shouldWrite) {
-      await writeFile(LEARNINGS_PATH, kept, 'utf-8');
+      const learningsProposalId = `learnings-${Date.now()}`;
+      const shouldWrite = await shouldApply(learningsProposalId, 'Update LEARNINGS.md with new patterns and rules');
+
+      if (shouldWrite) {
+        await writeFile(LEARNINGS_PATH, kept, 'utf-8');
+      }
+
+      actions.push({
+        type: 'learnings_update',
+        description: shouldWrite
+          ? 'Updated LEARNINGS.md with new patterns and rules'
+          : `BLOCKED by HeldOutGate: LEARNINGS.md not written (${options.heldOutGate ? 'gate held or failed to evaluate' : 'no gate wired'})`,
+        applied: shouldWrite,
+        detail: `Health score: ${patterns.healthScore}/100`,
+      });
+      log.info({ applied: shouldWrite }, 'LEARNINGS.md update resolved');
     }
-
-    actions.push({
-      type: 'learnings_update',
-      description: 'Updated LEARNINGS.md with new patterns and rules',
-      applied: shouldWrite,
-      detail: `Health score: ${patterns.healthScore}/100`,
-    });
-    log.info({ applied: shouldWrite }, 'LEARNINGS.md update resolved');
   } catch (err) {
     log.error({ err: String(err) }, 'Failed to update LEARNINGS.md');
   }

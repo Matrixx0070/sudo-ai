@@ -88,9 +88,9 @@ export const REPAIR_LESSONS: RepairLesson[] = [
       /is not a repo-allowlisted command/i.test(m) ||
       /argument escapes the repo/i.test(m),
     guidance:
-      'When the exec target is the read-only "repo", use a single allowlisted read/verify ' +
-      'command with NO pipes, redirects, chaining, globs, or metacharacters — or use a ' +
-      'dedicated coder.* tool (read-file/glob) instead of shelling out.',
+      'When the exec target is the read-only "repo", use allowlisted read/verify commands ' +
+      '(pipes between read-only commands are OK) with NO redirects, chaining, globs, or ' +
+      'substitution — or use a dedicated coder.* tool (read-file/glob) instead of shelling out.',
     learnable: true,
   },
   {
@@ -114,6 +114,16 @@ export const REPAIR_LESSONS: RepairLesson[] = [
     learnable: false,
   },
 ];
+
+/**
+ * Learnable lessons for a tool, for injection at CALL-CONSTRUCTION time
+ * (2026-08-05 autonomy audit blocker #8: guidance that only arrives after a
+ * failure costs the failed call first — attaching it to the tool schema
+ * prevents the attempt instead of repairing it).
+ */
+export function lessonsForTool(tool: string): RepairLesson[] {
+  return REPAIR_LESSONS.filter((l) => l.learnable && l.tool === tool && l.guidance !== '');
+}
 
 /** Match a failure message to a distilled lesson, if any. */
 export function matchLesson(errorMessage: string): RepairLesson | undefined {
