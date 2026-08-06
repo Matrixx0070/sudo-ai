@@ -14,7 +14,7 @@
  *   await mgr.removeWorktree('session-abc');
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createLogger } from '../shared/logger.js';
@@ -45,20 +45,23 @@ export interface WorktreeInfo {
 // ---------------------------------------------------------------------------
 
 /**
- * Execute a git command synchronously, returning trimmed stdout.
- * Throws on non-zero exit code.
+ * Execute `git` synchronously with an argv ARRAY (no shell), returning trimmed
+ * stdout. Throws on non-zero exit code.
+ *
+ * Session ids, branch names and directory entries read off disk flow into these
+ * arguments, so they are passed as separate argv entries rather than spliced
+ * into a shell string: metacharacters stay inert data.
  */
-function gitExec(cmd: string, cwd: string): string {
-  return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+function gitExec(args: string[], cwd: string): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 }
 
 /**
- * Execute a git command synchronously, returning trimmed stdout or empty
- * string on failure (never throws).
+ * {@link gitExec} but returns an empty string on failure (never throws).
  */
-function gitTry(cmd: string, cwd: string): string {
+function gitTry(args: string[], cwd: string): string {
   try {
-    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch {
     return '';
   }
@@ -68,7 +71,7 @@ function gitTry(cmd: string, cwd: string): string {
  * Detect whether the given directory is inside a git repository.
  */
 function isInsideGitRepo(dir: string): boolean {
-  return gitTry('git rev-parse --is-inside-work-tree', dir) === 'true';
+  return gitTry(['rev-parse', '--is-inside-work-tree'], dir) === 'true';
 }
 
 /**
@@ -76,7 +79,7 @@ function isInsideGitRepo(dir: string): boolean {
  * Returns empty string if not inside a git repo.
  */
 function gitRepoRoot(dir: string): string {
-  return gitTry('git rev-parse --show-toplevel', dir);
+  return gitTry(['rev-parse', '--show-toplevel'], dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -152,8 +155,8 @@ export class WorktreeManager {
     // Prevent overwriting an existing directory on disk that we don't track.
     if (existsSync(worktreePath)) {
       // If it's a leftover from a previous process, try to prune it first.
-      gitTry(`git worktree remove --force ${worktreePath}`, this.repoRoot);
-      gitTry(`git branch -D ${branch}`, this.repoRoot);
+      gitTry(['worktree', 'remove', '--force', worktreePath], this.repoRoot);
+      gitTry(['branch', '-D', branch], this.repoRoot);
       try {
         if (existsSync(worktreePath)) rmSync(worktreePath, { recursive: true, force: true });
       } catch { /* best effort */ }
@@ -166,7 +169,7 @@ export class WorktreeManager {
 
     // Create the git worktree with a new branch from HEAD.
     try {
-      gitExec(`git worktree add -b ${branch} ${worktreePath} HEAD`, this.repoRoot);
+      gitExec(['worktree', 'add', '-b', branch, worktreePath, 'HEAD'], this.repoRoot);
     } catch (err) {
       throw new Error(
         `WorktreeManager: failed to create worktree for session "${sessionId}": ${String(err)}`,
@@ -203,7 +206,7 @@ export class WorktreeManager {
     }
 
     // Remove the git worktree (force to handle uncommitted changes).
-    const rmResult = gitTry(`git worktree remove --force ${info.path}`, this.repoRoot);
+    const rmResult = gitTry(['worktree', 'remove', '--force', info.path], this.repoRoot);
     if (rmResult === '' && existsSync(info.path)) {
       // git worktree remove may silently fail -- fall back to rmSync.
       try {
@@ -214,7 +217,7 @@ export class WorktreeManager {
     }
 
     // Delete the branch (best-effort -- may already be gone after worktree removal).
-    gitTry(`git branch -D ${info.branch}`, this.repoRoot);
+    gitTry(['branch', '-D', info.branch], this.repoRoot);
 
     this.registry.delete(sessionId);
     log.info({ sessionId, branch: info.branch, path: info.path }, 'Worktree removed');
@@ -286,8 +289,8 @@ export class WorktreeManager {
             const ageMs = now - stat.mtimeMs;
             if (ageMs > threshold && !this.registry.has(entry)) {
               // Orphaned directory -- remove it and the associated worktree/branch.
-              gitTry(`git worktree remove --force ${entryPath}`, this.repoRoot);
-              gitTry(`git branch -D wt/${entry}`, this.repoRoot);
+              gitTry(['worktree', 'remove', '--force', entryPath], this.repoRoot);
+              gitTry(['branch', '-D', `wt/${entry}`], this.repoRoot);
               try {
                 if (existsSync(entryPath)) rmSync(entryPath, { recursive: true, force: true });
               } catch { /* best effort */ }

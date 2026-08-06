@@ -20,7 +20,7 @@
  * tool — only the background job is wrong to use it.
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 import path from 'path';
@@ -28,7 +28,14 @@ import fs from 'fs/promises';
 import { createLogger } from '../shared/logger.js';
 
 const log = createLogger('self-build:git-worktree');
-const execAsync = promisify(exec);
+/**
+ * argv-array exec — NO shell. Every git invocation below passes user-influenced
+ * values (branch names derived from GitHub issue titles, worktree directory names
+ * read off disk with `readdir`) as separate argv entries, so shell metacharacters
+ * are inert data rather than syntax. This runs unattended on a half-hourly cron;
+ * it must not depend on a sanitiser regex staying correct forever.
+ */
+const execFileAsync = promisify(execFile);
 
 /** Directory-name prefix identifying worktrees this module owns. */
 export const WORKTREE_PREFIX = 'sudo-autofix-';
@@ -66,7 +73,7 @@ function defaultBaseDir(): string {
 
 async function resolveRepoRoot(opts?: WorktreeOptions): Promise<string> {
   if (opts?.repoRoot) return opts.repoRoot;
-  const { stdout } = await execAsync('git rev-parse --show-toplevel');
+  const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel']);
   return stdout.trim();
 }
 
@@ -82,7 +89,7 @@ export async function pruneAutoFixWorktrees(opts?: WorktreeOptions): Promise<num
   const baseDir = opts?.baseDir ?? defaultBaseDir();
 
   try {
-    await execAsync('git worktree prune', { cwd: repoRoot });
+    await execFileAsync('git', ['worktree', 'prune'], { cwd: repoRoot });
   } catch (err) {
     log.warn({ err: (err as Error).message }, 'prune: `git worktree prune` failed');
   }
@@ -116,12 +123,12 @@ export async function pruneAutoFixWorktrees(opts?: WorktreeOptions): Promise<num
 /** Best-effort teardown: `git worktree remove --force`, then rm -rf, then prune. */
 async function removeWorktree(repoRoot: string, dir: string): Promise<void> {
   try {
-    await execAsync(`git worktree remove "${dir}" --force`, { cwd: repoRoot });
+    await execFileAsync('git', ['worktree', 'remove', dir, '--force'], { cwd: repoRoot });
   } catch (err) {
     log.warn({ dir, err: (err as Error).message }, 'worktree remove failed — forcing rm');
   }
   await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  await execAsync('git worktree prune', { cwd: repoRoot }).catch(() => undefined);
+  await execFileAsync('git', ['worktree', 'prune'], { cwd: repoRoot }).catch(() => undefined);
 }
 
 /**
@@ -153,14 +160,14 @@ export async function withAutoFixWorktree<T>(
   );
 
   try {
-    await execAsync(`git worktree add "${dir}" -b ${safeBranch}`, { cwd: repoRoot });
+    await execFileAsync('git', ['worktree', 'add', dir, '-b', safeBranch], { cwd: repoRoot });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Branch names are semantic (`auto-fix/<issue>-<slug>`), so a retry of the
     // same fix collides. Re-use the existing branch instead of dead-ending.
     if (/already exists/i.test(message)) {
       try {
-        await execAsync(`git worktree add "${dir}" ${safeBranch}`, { cwd: repoRoot });
+        await execFileAsync('git', ['worktree', 'add', dir, safeBranch], { cwd: repoRoot });
       } catch (reuseErr) {
         const reuseMsg = reuseErr instanceof Error ? reuseErr.message : String(reuseErr);
         await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);

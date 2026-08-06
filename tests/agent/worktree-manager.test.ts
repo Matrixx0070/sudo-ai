@@ -4,6 +4,9 @@
  *
  * Since there is no real git repo in the test context, all git commands are
  * mocked via vi.mock of node:child_process. Filesystem operations use /tmp.
+ *
+ * The mock mirrors the REAL contract: WorktreeManager calls execFileSync('git',
+ * argvArray) — no shell — so the mock matches on the argv array, not a string.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -15,12 +18,12 @@ import { mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 // vi.hoisted ensures the mock function is available before vi.mock factory runs.
 // ---------------------------------------------------------------------------
 
-const { mockExecSync } = vi.hoisted(() => ({
-  mockExecSync: vi.fn((_cmd: string, _opts: unknown) => ''),
+const { mockExecFileSync } = vi.hoisted(() => ({
+  mockExecFileSync: vi.fn((_file: string, _args: string[], _opts: unknown) => ''),
 }));
 
 vi.mock('node:child_process', () => ({
-  execSync: mockExecSync,
+  execFileSync: mockExecFileSync,
 }));
 
 // Import after mock setup so WorktreeManager sees the mock.
@@ -42,8 +45,9 @@ let fakeRepoRoot: string;
  * - `git branch -D ...` => "" (success)
  */
 function setupGitMocks(repoRoot: string): void {
-  mockExecSync.mockImplementation((cmd: string, opts: any) => {
+  mockExecFileSync.mockImplementation((file: string, args: string[], opts: any) => {
     const cwd = opts?.cwd ?? process.cwd();
+    const cmd = [file, ...args].join(' ');
 
     if (cmd === 'git rev-parse --is-inside-work-tree') {
       return cwd.startsWith(repoRoot) ? 'true\n' : 'fatal: not a git repository\n';
@@ -51,25 +55,22 @@ function setupGitMocks(repoRoot: string): void {
     if (cmd === 'git rev-parse --show-toplevel') {
       return cwd.startsWith(repoRoot) ? `${repoRoot}\n` : '';
     }
-    // git worktree add -b <branch> <path> HEAD
-    if (cmd.startsWith('git worktree add')) {
-      const pathMatch = cmd.match(/git worktree add -b (\S+) (\S+) HEAD/);
-      if (pathMatch) {
-        const worktreePath = pathMatch[2];
-        mkdirSync(worktreePath, { recursive: true });
+    // ['worktree', 'add', '-b', <branch>, <path>, 'HEAD']
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      const worktreePath = args[4];
+      if (worktreePath) mkdirSync(worktreePath, { recursive: true });
+      return '';
+    }
+    // ['worktree', 'remove', '--force', <path>]
+    if (args[0] === 'worktree' && args[1] === 'remove') {
+      const target = args[3];
+      if (target) {
+        try { rmSync(target, { recursive: true, force: true }); } catch { /* ok */ }
       }
       return '';
     }
-    // git worktree remove --force <path>
-    if (cmd.startsWith('git worktree remove')) {
-      const pathMatch = cmd.match(/git worktree remove --force (\S+)/);
-      if (pathMatch) {
-        try { rmSync(pathMatch[1], { recursive: true, force: true }); } catch { /* ok */ }
-      }
-      return '';
-    }
-    // git branch -D <branch>
-    if (cmd.startsWith('git branch -D')) {
+    // ['branch', '-D', <branch>]
+    if (args[0] === 'branch' && args[1] === '-D') {
       return '';
     }
     return '';
@@ -85,7 +86,7 @@ describe('WorktreeManager', () => {
     // Create a fresh fake repo root for each test.
     fakeRepoRoot = `/tmp/sudo-ai-test-wt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     mkdirSync(fakeRepoRoot, { recursive: true });
-    mockExecSync.mockReset();
+    mockExecFileSync.mockReset();
     setupGitMocks(fakeRepoRoot);
   });
 
@@ -93,7 +94,7 @@ describe('WorktreeManager', () => {
     try {
       if (existsSync(fakeRepoRoot)) rmSync(fakeRepoRoot, { recursive: true, force: true });
     } catch { /* best effort */ }
-    mockExecSync.mockRestore();
+    mockExecFileSync.mockRestore();
   });
 
   // -----------------------------------------------------------------------
@@ -101,7 +102,7 @@ describe('WorktreeManager', () => {
   // -----------------------------------------------------------------------
 
   it('WM-1: throws if constructed outside a git repository', () => {
-    mockExecSync.mockImplementation(() => 'fatal: not a git repository\n');
+    mockExecFileSync.mockImplementation(() => 'fatal: not a git repository\n');
     expect(() => new WorktreeManager('/tmp/not-a-repo')).toThrow('not inside a git repository');
   });
 
