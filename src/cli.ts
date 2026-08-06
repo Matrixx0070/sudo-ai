@@ -3282,6 +3282,21 @@ ${question}`, kb);
   const { anyGatewayChannelEnabled, enabledChannelIds } = await import('./core/channels/channel-registry.js');
   const gatewayFinalize = anyGatewayChannelEnabled(process.env);
   if (gatewayFinalize) log.info({ channels: enabledChannelIds(process.env) }, 'Gateway channels enabled');
+  // Doctor: a config file that documents a token env key the runtime never
+  // reads is dead config — setting it does nothing, silently. (Discord shipped
+  // exactly that: json5 said DISCORD_BOT_TOKEN, the code read DISCORD_TOKEN.)
+  try {
+    const { describeChannelConfigIssues } = await import('./core/channels/channel-registry.js');
+    // Only channels the gateway registry governs. Telegram is wired on its own
+    // path, so feeding it here would raise a false "will never start".
+    for (const issue of describeChannelConfigIssues({
+      discord: config.channels?.discord?.tokenEnvKey,
+    })) {
+      log.warn({ check: 'channel-config' }, issue);
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'channel-config doctor failed (non-fatal)');
+  }
   if (gatewayFinalize) {
     try {
       const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
