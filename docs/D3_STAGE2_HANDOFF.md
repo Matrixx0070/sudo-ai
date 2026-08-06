@@ -128,7 +128,42 @@ layer up. The seam built for channels (`ChannelDeclaration.start()` +
 `AgentCapabilityDeclaration` with the same properties: declare it once, wire it
 from a registry, pin the wiring mode.
 
-Suggested approach, mirroring what worked:
+### CORRECTION (measured after writing the above — read this first)
+
+The claim that 6.5 is "twenty-plus independent capability wirings" and that the
+channel seam generalises to it is **wrong in emphasis**. Actual composition of
+the 1,435 lines:
+
+| | count |
+|---|---|
+| wiring calls (`loop.setX`) | **11** |
+| constructions (`new X`) | **27** |
+| blank / comment lines | **421** (29%) |
+
+There are only ELEVEN wiring calls in the entire section. An
+`AgentCapability` registry that moved just those would save roughly 40 lines,
+not 1,400. The 66 fail-open `try` blocks are mostly guards around
+CONSTRUCTION and varied setup logic, not a repeated wire-this-in pattern.
+
+So the channel analogy does **not** carry. What actually makes 6.5 large:
+
+- **27 subsystem constructions**, each with real dependencies on things built
+  earlier in boot. Extracting those is a genuine bootstrap refactor (build a
+  subsystem graph, resolve order), not a declaration table.
+- **421 blank/comment lines (29%)** — this codebase comments heavily and that
+  is a feature, not padding. Do not "shrink" 6.5 by deleting explanation.
+
+Honest consequence: **ADR 0010's `cli.ts` shrink criterion may not be
+achievable by the registry approach at all.** Before more extraction work,
+decide whether the goal is a smaller file or a file where adding a capability
+touches one place — those turned out to be different goals, and only the second
+was actually achieved for channels.
+
+The measurement above cost two commands. It should have been run before stage 2,
+and before this plan was written.
+
+Suggested approach IF the registry path is still wanted (superseded by the
+correction above, kept for context):
 
 1. Define `AgentCapability { id, flag, defaultOn, wire(deps) }` where `deps`
    carries the agent loop plus the shared handles those 66 blocks reach for.
