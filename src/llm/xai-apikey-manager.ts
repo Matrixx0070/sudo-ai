@@ -17,14 +17,14 @@
 
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './grok-runtime.js';
+import { identityPath } from './grok-runtime.js';
 import { writeFileAtomic } from './grok-runtime.js';
 import { createLogger } from './grok-runtime.js';
 import type { XaiModelEntry } from './xai-models.js';
 
 const log = createLogger('llm:xai-apikey');
 
-const DEFAULT_STORE_PATH = path.join(DATA_DIR, 'xai-apikey.json');
+const DEFAULT_STORE_PATH = identityPath('xai-apikey.json');
 
 /** On-disk shape. Unknown keys from older writers are dropped on next persist. */
 export interface XaiApiKeyStore {

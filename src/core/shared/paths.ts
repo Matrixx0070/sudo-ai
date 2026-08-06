@@ -39,6 +39,42 @@ export const DATA_DIR: string = process.env['DATA_DIR']
   ? path.resolve(process.env['DATA_DIR'])
   : path.join(PROJECT_ROOT, 'data');
 
+/**
+ * `<identity root>` — the PRINCIPAL's credential root: OAuth token stores,
+ * device identity, signing keys. ADR 0011.
+ *
+ * This is deliberately distinct from {@link DATA_DIR}, which is the INSTANCE's
+ * state root (21 dbs, journals, caches). The two have different lifetimes and
+ * different isolation policies:
+ *
+ *   - Isolating state is routine (SQLite lock/fsync avoidance, clean bench
+ *     runs). A caller that isolates state must NOT lose the principal.
+ *   - Isolating identity means the agent stops being itself. Only a
+ *     multi-principal caller (tenancy) should ever do it, and it must say so
+ *     explicitly by setting `SUDO_IDENTITY_DIR`.
+ *
+ * The default is `DATA_DIR`, **not** `PROJECT_ROOT/data`. Defaulting to the
+ * project root would silently repoint staging (ecosystem.config.cjs sets
+ * `DATA_DIR=<root>/data-staging` before the process starts) at PRODUCTION
+ * credentials. Identity therefore follows a `DATA_DIR` set BEFORE process
+ * start — a deployment decision — and ignores one reassigned mid-process,
+ * which is only ever a state-isolation request.
+ *
+ * An in-process caller that isolates state must pin identity first:
+ *
+ * ```ts
+ * process.env['SUDO_IDENTITY_DIR'] ??= DATA_DIR;  // pin the real root
+ * process.env['DATA_DIR'] = myPrivateStateDir;    // then isolate state
+ * ```
+ *
+ * That is correct under either import order: if `paths.ts` is already loaded,
+ * `IDENTITY_DIR` captured the real root; if it is not, the explicit pin is
+ * read when it loads. Pinned by `tests/core/shared/identity-root.test.ts`.
+ */
+export const IDENTITY_DIR: string = process.env['SUDO_IDENTITY_DIR']
+  ? path.resolve(process.env['SUDO_IDENTITY_DIR'])
+  : DATA_DIR;
+
 /** `<root>/workspace` — agent working area. */
 export const WORKSPACE_DIR: string = path.join(PROJECT_ROOT, 'workspace');
 
@@ -124,4 +160,15 @@ export function projectPath(...segments: string[]): string {
 /** Join one or more segments onto the data directory. */
 export function dataPath(...segments: string[]): string {
   return path.join(DATA_DIR, ...segments);
+}
+
+/**
+ * Join one or more segments onto the IDENTITY root ({@link IDENTITY_DIR}).
+ *
+ * Use for anything that identifies the PRINCIPAL — OAuth token stores, device
+ * identity, signing keys. Never for instance state; use {@link dataPath} for
+ * that. ADR 0011.
+ */
+export function identityPath(...segments: string[]): string {
+  return path.join(IDENTITY_DIR, ...segments);
 }

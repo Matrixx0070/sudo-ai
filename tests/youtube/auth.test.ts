@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { identityPath } from '../../src/core/shared/paths.js';
 import {
   canRefresh,
   getYouTubeAccessToken,
@@ -70,7 +71,11 @@ describe('readAuthConfigFromEnv', () => {
   it('defaults the token file and treats blank env vars as absent', () => {
     const cfg = readAuthConfigFromEnv({ YOUTUBE_OAUTH_CLIENT_ID: '   ' } as NodeJS.ProcessEnv);
     expect(cfg.clientId).toBeUndefined();
-    expect(cfg.tokenFile).toBe('data/youtube-oauth.json');
+    // ADR 0011: the OAuth cache is principal identity, so the default resolves
+    // through the identity root instead of the cwd-relative 'data/...' literal
+    // that ignored DATA_DIR (and so read prod credentials under staging).
+    expect(cfg.tokenFile).toBe(identityPath('youtube-oauth.json'));
+    expect(cfg.tokenFile).toMatch(/[/\\]youtube-oauth\.json$/);
     expect(canRefresh(cfg)).toBe(false);
   });
 

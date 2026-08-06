@@ -24,6 +24,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { isFrozenGuidancePath } from '../workspace/guidance-registry.js';
 import { SEED_SPECS, type SeedSpec } from './seeds.js';
+import { IDENTITY_DIR, PROJECT_ROOT } from '../shared/paths.js';
 import {
   writeFileAudited,
   removeFileAudited,
@@ -185,10 +186,35 @@ export function scanMachine(deps: OnboardDeps): ScanReport {
 // Plan (pure)
 // ---------------------------------------------------------------------------
 
+/**
+ * Credential reset targets, expressed ROOT-RELATIVE (ADR 0011).
+ *
+ * These were the literals `data/xai-oauth.json` / `data/oauth.json`, which
+ * ignored DATA_DIR — so `onboard --reset` run against staging deleted
+ * PRODUCTION credentials. They now track the identity root.
+ *
+ * They stay relative on purpose: every reset target is passed through
+ * `assertNotFrozen()` (which matches PROTECTED_PATHS on relative POSIX paths)
+ * and then `path.join(deps.rootDir, rel)`. An absolute path would defeat both.
+ * If the identity root lives OUTSIDE the project root, no relative expression
+ * is safe (`path.relative` would produce a `../` traversal past the frozen-path
+ * guard), so the credential targets are omitted entirely — reset then removes
+ * nothing rather than removing the wrong file. The target list is printed to
+ * the operator before any write (`onboard/index.ts:80`), so the omission is
+ * visible, and it is fail-safe: nothing is deleted.
+ */
+function credentialResetTargets(): string[] {
+  const rel = path.relative(PROJECT_ROOT, IDENTITY_DIR);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return [];
+  const dir = rel === '' ? '.' : rel;
+  return [path.posix.join(...dir.split(path.sep), 'xai-oauth.json'),
+          path.posix.join(...dir.split(path.sep), 'oauth.json')];
+}
+
 /** Root-relative POSIX paths that reset scopes may remove. Never frozen. */
 function resetTargets(scope: ResetScope): string[] {
   const configOnly = ['config/.env'];
-  const creds = ['data/xai-oauth.json', 'data/oauth.json'];
+  const creds = credentialResetTargets();
   const sessions = ['data/sessions.db'];
   const workspaceSeeds = SEED_SPECS.map((s) => s.relPath);
   if (scope === 'config') return configOnly;

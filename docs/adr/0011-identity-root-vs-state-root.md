@@ -410,3 +410,48 @@ a probe entry point).
 Step 5 changes nothing functionally today but makes tenant credential isolation
 explicit. Confirm that a tenant must **never** inherit the owner's OAuth tokens
 — the current code achieves this only as a side effect of `ENV_PASSTHROUGH`.
+
+## Implementation status
+
+**Steps 1–3 executed (2026-08-06).** Steps 0, 4, 5 remain open — they change
+behaviour (or need a maintenance window) and belong in separately reviewed
+changes.
+
+- Step 1 — `IDENTITY_DIR` + `identityPath()` added to `core/shared/paths.ts`,
+  defaulting to `DATA_DIR`. Pinned by `tests/core/shared/identity-root.test.ts`
+  (fresh-process sentinel protocol, with a discriminator case so a pass cannot
+  be vacuous).
+- Steps 2–3 — 12 identity sites migrated. Resolved paths verified unchanged
+  under the default root; the four ex-hardcoded `data/…` literals now follow
+  `DATA_DIR` under staging, which was the point.
+- `xai-*` token stores reach `identityPath` through `llm/grok-runtime.ts`, the
+  extraction seam, per the rule in that file.
+
+**Deviation from step 3 — `onboard.ts` reset targets stay RELATIVE.** The ADR
+listed `onboard.ts:191` alongside the other hardcoded literals, but its contract
+differs: every reset target is passed through `assertNotFrozen()` (which matches
+PROTECTED_PATHS on relative POSIX paths) and then `path.join(deps.rootDir, rel)`.
+An absolute `identityPath()` would defeat both — silently bypassing the
+frozen-path guard on a destructive path. The targets now track the identity root
+*relatively*; if the identity root is outside the project root, no safe relative
+expression exists, so the credential targets are omitted and reset deletes
+nothing rather than deleting the wrong file.
+
+**Correction found during migration — `cli.ts` device identity.** The call site
+read `process.env['DATA_DIR'] ?? '/tmp'`, so with `DATA_DIR` unset the device
+keypair landed in world-writable `/tmp`. That leak is real:
+`/tmp/device-identity.json` exists, dated 2026-06-14. It now resolves to
+`IDENTITY_DIR`. Behaviour is identical wherever `DATA_DIR` is set — prod and
+staging both set it in `ecosystem.config.cjs`.
+
+**Identity-adjacent sites deliberately NOT migrated** (surfaced by re-deriving
+the list; each needs its own decision, none is a `DATA_DIR`-vs-identity bug):
+
+| site | why not |
+|---|---|
+| `api/admin/security-helpers.ts:19` `api-tokens.json` | gateway API tokens — instance auth, not principal identity |
+| `tools/builtin/system/credential-manager.ts:38-40` vault + salt + hmac | user-managed secret vault; own lifecycle |
+| `security/key-rotation-store.ts:29` `data/keys/key-rotation.db` | a **db** (state) that happens to live under `keys/`; hardcoded, and out of scope here |
+| `brain/claude-token-manager.ts:18` `/root/.claude/.credentials.json` | external CLI's store, outside any sudo-ai root |
+| `security/vault-credentials.ts:33` `workspace/vault` | already has its own `SUDO_CRED_VAULT_DIR` override |
+| `gdrive/changes.ts:22` `changes-token.json` | a sync cursor, not a credential |

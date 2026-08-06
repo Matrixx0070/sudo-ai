@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { DATA_DIR } from '../../core/shared/paths.js';
+import { identityPath } from '../../core/shared/paths.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -172,7 +172,7 @@ export function detectLlmProvider(probe: LlmProviderProbe): CheckResult {
 function checkLlmProvider(projectRoot: string): CheckResult {
   return detectLlmProvider({
     env: process.env,
-    oauthStorePath: path.join(DATA_DIR, 'claude-oauth.json'),
+    oauthStorePath: identityPath('claude-oauth.json'),
     configPath: path.join(projectRoot, 'config', 'sudo-ai.json5'),
   });
 }

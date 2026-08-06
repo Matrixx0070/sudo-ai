@@ -20,6 +20,7 @@ import {
   untrustedInboundActive,
   type LintDeps,
 } from '../config/flag-lint.js';
+import { identityPath } from '../shared/paths.js';
 
 export type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 
@@ -124,10 +125,19 @@ const CRED_ENV_WITH_REF = [
   'WEB_CHAT_TOKEN',
 ] as const;
 
-/** Files that must be owner-only (0600). Checked for group/other readability. */
+/**
+ * Files that must be owner-only (0600). Checked for group/other readability.
+ *
+ * The two credential entries resolve through the identity root (ADR 0011); they
+ * were cwd-relative 'data/...' literals that ignored DATA_DIR, so under staging
+ * the audit graded prod's files and left staging's unchecked. `realDeps` and
+ * `applyFixes` in cli/commands/security-audit.ts already accept absolute paths
+ * (`path.isAbsolute(p) ? p : join(PROJECT_ROOT, p)`), so this is
+ * behaviour-identical wherever the identity root is the default <root>/data.
+ */
 export const SENSITIVE_FILES = [
-  'data/xai-oauth.json',
-  'data/oauth-creds.json',
+  identityPath('xai-oauth.json'),
+  identityPath('oauth-creds.json'),
   'data/gateway.db',
   '.env',
 ] as const;
