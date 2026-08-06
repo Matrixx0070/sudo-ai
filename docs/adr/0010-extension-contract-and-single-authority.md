@@ -126,6 +126,43 @@ Each registered capability owns a typed config schema (enabled, credentials key,
 - **Frozen surfaces are untouched.** Identity, constitution and `PROTECTED_PATHS` are not in scope; nothing here changes a memory-write lane (that is ADR 0009's territory).
 - **No capability is removed.** Dark capabilities are surfaced as recommendations with their real reachability status, per the standing rule that a blocked approach is never permission to cut.
 
+## Measured outcome (appended 2026-08-06, after D1-D3)
+
+An ADR that states a success criterion and is never updated against reality is
+itself the drift this document exists to remove. So, measured:
+
+| | claimed | actual |
+|---|---|---|
+| D1 background delivery | output reaches the owner | **done** — typed target + boot doctor; heartbeat/cron/goal output no longer discarded |
+| D2 one model catalog | one answer per model | **done** — 6 sources -> 1, seat class preserved, three ratchets each proven to fail on a planted violation |
+| D3 channels | `cli.ts` measurably smaller | **NOT met** — 6,476 -> 6,393 = **-83 lines, 1.3%** |
+
+**D3's criterion as written is not satisfied, and may not be reachable by this
+approach.** Section 6.5 (the largest, 1,434 lines / 22%) was profiled *after*
+the channel work: only **11** wiring calls, **27** subsystem constructions, and
+**421** comment/blank lines. A capability registry moving the wiring saves ~40
+lines. Shrinking `cli.ts` means untangling construction ORDER — a bootstrap
+refactor, not a declaration table.
+
+**The two goals were conflated.** "The file is smaller" and "adding a capability
+touches one place" are different, and only the second was achieved:
+
+- adding a channel is now ONE declaration (was two hand-synced edits, and the
+  drift between them shipped a real bug — #1090)
+- three latent regressions were caught pre-merge by diffing each block before
+  migrating (Slack's absent `setHookEmitter`, the extra four's router-only
+  wiring, WhatsApp's returned handle)
+- wiring mode is pinned, so it cannot drift silently
+
+**Open decision for the owner:** either restate D3's criterion as "one
+declaration per capability" (achieved, and arguably what mattered), or keep the
+size criterion and accept it needs a different technique. Do not quietly leave
+both — that is how a document stops being true.
+
+Process note worth keeping: the profiling that produced these numbers cost two
+shell commands and was run *after* nine migrations and one wrong plan. Measure
+the target before choosing the technique.
+
 ## Execution order
 
 1. **D1** — background delivery + doctor check.
