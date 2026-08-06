@@ -2910,7 +2910,8 @@ ${question}`, kb);
   // -------------------------------------------------------------------------
   // 7.2 Slack channel adapter (conditional)
   // -------------------------------------------------------------------------
-  if (process.env['SLACK_BOT_TOKEN']) {
+  // ADR 0010 D3 stage 2: enablement from the registry, not raw env.
+  if (channelOn(CHANNEL_DECLS.find((c) => c.id === 'slack')!, process.env)) {
     try {
       const { SlackAdapter } = await import('./core/channels/slack.js');
 
@@ -3218,7 +3219,7 @@ ${question}`, kb);
   // -------------------------------------------------------------------------
   // 7.6 Email channel adapter (conditional)
   // -------------------------------------------------------------------------
-  if (process.env['EMAIL_IMAP_USER']) {
+  if (channelOn(CHANNEL_DECLS.find((c) => c.id === 'email')!, process.env)) {
     try {
       const { EmailAdapter } = await import('./core/channels/email.js');
       const email = new EmailAdapter();
@@ -3244,7 +3245,7 @@ ${question}`, kb);
   // -------------------------------------------------------------------------
   // 7.7 SMS channel adapter (conditional)
   // -------------------------------------------------------------------------
-  if (process.env['TWILIO_ACCOUNT_SID']) {
+  if (channelOn(CHANNEL_DECLS.find((c) => c.id === 'sms')!, process.env)) {
     try {
       const { SmsAdapter } = await import('./core/channels/sms.js');
       const sms = new SmsAdapter();
