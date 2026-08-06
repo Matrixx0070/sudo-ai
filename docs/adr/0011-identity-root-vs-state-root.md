@@ -189,9 +189,51 @@ addresses the 5% effect, while the 280× effect sits untouched in both the share
 and the isolated copy. Step 0 (WAL) is the whole win; the isolation was never
 load-bearing.
 
-Justification for step 0 is therefore **write throughput**, not lock avoidance —
-a stronger case, applying to production today and independent of any TUI
-decision.
+### Sizing it: the workaround costs far more than the problem
+
+Measured the actual write rate from `trust_outcomes.ts` (ids are UUIDs, unique
+per event, so row count **is** write count — no writes hidden by
+`INSERT OR REPLACE`):
+
+| | |
+|---|---|
+| writes, last 1 h | 94 |
+| writes, last 24 h | 1,154 |
+| writes, last 7 d | 4,287 |
+| span | 2026-05-31 → 2026-08-06 (32,270 rows) |
+
+At 2.79 ms vs 0.01 ms per write:
+
+```
+delete cost/day : 3.22 s
+wal    cost/day : 0.012 s
+SAVING FROM WAL : 3.21 s/day
+```
+
+**Step 0's throughput justification collapses.** Converting a live database the
+daemon holds open needs a maintenance window; 3.2 seconds per day does not buy
+one. Apply WAL opportunistically — it is two lines matching what `mind.db`
+already does 24 lines later — but it is not a priority and must not be sold as
+a performance fix.
+
+The decisive conclusion is about the **workaround**, not the pragma:
+
+> A 3-second-per-day inefficiency prompted a `DATA_DIR` override, which forked
+> credential resolution, which let an 18-day-expired token silently serve turns
+> while the UI named a model that never ran.
+
+The isolation addresses ~5% of a 3.2 s/day cost and carries a credential
+hazard. That is a clear net loss, and it is now measured rather than argued.
+
+**Revised priority:**
+
+1. **Delete the TUI's `DATA_DIR` override** (`agent-loop-adapter.ts:82`) — it
+   buys ~0.16 s/day and costs correctness. Verify the TUI still runs cleanly
+   against a shared `data/`; the numbers above say it will.
+2. Keep `identityPath()` **only** for the two callers whose isolation is
+   genuine — the eval sandbox (child process) and tenancy (different principal).
+   Steps 2-3 shrink accordingly; the TUI and bench need nothing.
+3. WAL: opportunistic, unprioritised.
 
 It also surfaces the next layer down, out of scope here: **the state layer has no
 connection ownership model.** 12 connections to `mind.db` from one process is
