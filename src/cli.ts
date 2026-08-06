@@ -2944,8 +2944,10 @@ ${question}`, kb);
   //     WHATSAPP_TOKEN is an activation flag only; the adapter uses Baileys
   //     file-based auth stored in data/whatsapp-auth/ — no token is consumed.
   // -------------------------------------------------------------------------
-  const whatsAppOptIn = process.env['SUDO_WHATSAPP_ENABLE'] === '1';
-  if (whatsAppOptIn && process.env['WHATSAPP_TOKEN']) {
+  // ADR 0010 D3 stage 2: the last hand-written enablement gate. Same rule the
+  // registry already declares (enableFlag SUDO_WHATSAPP_ENABLE + WHATSAPP_TOKEN);
+  // the ToS warning below still fires only when the channel actually turns on.
+  if (channelOn(CHANNEL_DECLS.find((c) => c.id === 'whatsapp')!, process.env)) {
     log.warn(
       "WhatsApp channel enabled via SUDO_WHATSAPP_ENABLE=1 — this uses Baileys " +
         "(unofficial WhatsApp Web), which violates WhatsApp's Terms of Service and " +
