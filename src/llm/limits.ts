@@ -241,50 +241,9 @@ interface PriceRate {
   outUsdPerM: number;
 }
 
-const PRICE_TABLE: Record<string, PriceRate> = {
-  // xAI — fast tier (cheap, caches well)
-  'xai/grok-4-fast': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
-  'xai/grok-4-fast-reasoning': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
-  'xai/grok-4-fast-non-reasoning': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
-  'xai/grok-4-1-fast-reasoning': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
-  'xai/grok-4-1-fast-non-reasoning': { inUsdPerM: 0.2, outUsdPerM: 0.5 },
-  'xai/grok-4-0709': { inUsdPerM: 2.0, outUsdPerM: 6.0 },
-  // xAI — premium / failover landing (no caching → effectively ~10x, GW-2)
-  'xai/grok-4.5': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
-  'xai-oauth/grok-4.5': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
-  'xai/grok-3-fast': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
-  // xai-oauth subscription proxy (GX1). These were priced 0 on the premise that
-  // the lane was SEAT-COVERED. **That premise was DISPROVEN live 2026-07-31:**
-  // cli-chat-proxy meters on BOTH principals of this account — `grok-4.5`
-  // resolves server-side to `grok-4.5-build` and returned service_tier 'default'
-  // with cost_in_usd_ticks 7_444_000 (~$0.0074) on the SuperGrok-bearing team
-  // (56504cd4), 6_724_000 on the personal one. `grok-4.5-build-free` now 404s
-  // ("your team ... does not have access to it"). A $0 price told the budget
-  // counter this metered model was free, so nothing bounded it — console shows
-  // $161.27 invoiced over 30d.
-  //
-  // Priced at xAI's published grok-4.5 rate. Pre-flight ESTIMATE only, and a
-  // known FLOOR: observed effective cost runs ~3-4x this (reasoning tokens are
-  // billed but excluded from output_tokens). The authoritative figure is the
-  // provider's own cost_in_usd_ticks, recorded per call since PR #1052.
-  'xai-oauth/grok-build': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
-  'xai-oauth/grok-composer-2.5-fast': { inUsdPerM: 3.0, outUsdPerM: 15.0 },
-  // Anthropic (claude-oauth/* routes are seat-classified above and never
-  // reach this table; these rows cover the API-key lane).
-  'anthropic/claude-opus-5': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
-  'anthropic/claude-opus-4-8': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
-  'anthropic/claude-opus-4-7': { inUsdPerM: 5.0, outUsdPerM: 25.0 },
-  'anthropic/claude-haiku-4-5-20251001': { inUsdPerM: 1.0, outUsdPerM: 5.0 },
-  // OpenAI
-  'openai/gpt-4o': { inUsdPerM: 2.5, outUsdPerM: 10.0 },
-  'openai/gpt-4o-mini': { inUsdPerM: 0.15, outUsdPerM: 0.6 },
-  'openai/text-embedding-3-small': { inUsdPerM: 0.02, outUsdPerM: 0.0 },
-  // Local (free)
-  'ollama/llama3.2': { inUsdPerM: 0.0, outUsdPerM: 0.0 },
-};
 
-/** Conservative fallback when the model is unknown (ESTIMATE, mid-tier). */
-const DEFAULT_PRICE: PriceRate = { inUsdPerM: 3.0, outUsdPerM: 15.0 };
+// The unknown-model fallback now lives in model-catalog.ts CATALOG_DEFAULTS —
+// ONE default, instead of the $3/$15 here disagreeing with costs.ts' $5/$20.
 
 /**
  * Providers whose calls are covered by a flat subscription seat, never
