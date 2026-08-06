@@ -97,6 +97,52 @@ is **one channel per PR**, and the loop and the inline blocks coexist safely.
 - Boot log still shows the same enabled channels.
 - Full suite green (1,088+ files), `tsc` + `check:arch` clean.
 
+## Channels are DONE — aim at section 6.5 next
+
+All nine channels are migrated (`cli.ts` 6,476 -> 6,393, **-83**). That is
+**1.3%** of the file, so ADR 0010's "measurably smaller" criterion is still
+unmet — and finishing channels was never going to meet it. Measured section
+sizes say why:
+
+| section | lines | share |
+|---|---|---|
+| **6.5 Consciousness Layer** (1436-2870) | **1,434** | **22%** |
+| 7.5 Web chat adapter | 231 | 4% |
+| all nine channel blocks combined | ~300 | ~5% |
+
+**6.5 is not a monolith.** Profiled, it contains:
+
+- **66 fail-open `try` blocks** — the repeated "wire capability X into the
+  agent loop, log and continue on failure" shape
+- **49 distinct `SUDO_*` kill-switch flags**
+- **51 dynamic imports**
+
+i.e. roughly twenty-plus INDEPENDENT capability wirings (ConfidenceCalibration
+Tracker, verify-gate, InjectionDetector, SkillDiscovery, TaintTracker,
+ToolOutcomeLearner, outcome gating, TraceStore, …), each gated by its own flag
+and each already fail-open.
+
+That is **exactly the channel shape** — "if enabled, construct and wire" — one
+layer up. The seam built for channels (`ChannelDeclaration.start()` +
+`ChannelRuntimeDeps` + declared `wiring`) generalises to an
+`AgentCapabilityDeclaration` with the same properties: declare it once, wire it
+from a registry, pin the wiring mode.
+
+Suggested approach, mirroring what worked:
+
+1. Define `AgentCapability { id, flag, defaultOn, wire(deps) }` where `deps`
+   carries the agent loop plus the shared handles those 66 blocks reach for.
+2. Migrate ONE capability first and measure the delta before doing more —
+   channel 1 was net zero (it paid the one-time deps cost) and channel 2 was
+   -12. Expect the same curve here.
+3. Pin each capability's flag + default in a test, the way channel `wiring` is
+   pinned — 49 flags is exactly the population where a silent default flip hides.
+
+**Do not batch these.** Three of nine channel migrations would have changed
+behaviour despite looking interchangeable. With 66 blocks the base rate will
+not be better, and these wire security-relevant things (InjectionDetector,
+TaintTracker, verify-gate) where a silent no-op is worse than a crash.
+
 ## Also open
 
 - `COST_RATES` in `core/brain/costs.ts` is dead (nothing reads it; `estimateCost`
