@@ -75,6 +75,19 @@ export function isChannelEnabled(decl: ChannelDeclaration, env: NodeJS.ProcessEn
   return decl.tokenEnvKeys.some((k) => present(env, k));
 }
 
+/**
+ * Which token env key is ACTUALLY set for this channel, in declaration order.
+ * Adapters take the key NAME (not the value), so a channel with two accepted
+ * spellings must be told which one the operator used — otherwise enabling via
+ * the second spelling starts the router with an adapter reading the first.
+ */
+export function resolveTokenEnvKey(
+  decl: ChannelDeclaration,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  return decl.tokenEnvKeys.find((k) => present(env, k)) ?? null;
+}
+
 /** Ids of every enabled gateway channel. */
 export function enabledChannelIds(env: NodeJS.ProcessEnv = process.env): string[] {
   return GATEWAY_CHANNELS.filter((c) => isChannelEnabled(c, env)).map((c) => c.id);

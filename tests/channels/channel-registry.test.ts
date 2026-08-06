@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   GATEWAY_CHANNELS, isChannelEnabled, enabledChannelIds,
-  anyGatewayChannelEnabled, describeChannelConfigIssues,
+  anyGatewayChannelEnabled, describeChannelConfigIssues, resolveTokenEnvKey,
 } from '../../src/core/channels/channel-registry.js';
 
 const env = (o: Record<string, string>): NodeJS.ProcessEnv => o as NodeJS.ProcessEnv;
@@ -66,6 +66,32 @@ describe('the Discord config lie', () => {
   });
   it('still accepts the key the code has always read', () => {
     expect(isChannelEnabled(decl('discord'), env({ DISCORD_TOKEN: 'x' }))).toBe(true);
+  });
+});
+
+describe('resolveTokenEnvKey — adapters need the key NAME the operator used', () => {
+  it('returns the spelling that is actually set', () => {
+    expect(resolveTokenEnvKey(decl('discord'), env({ DISCORD_BOT_TOKEN: 'x' }))).toBe('DISCORD_BOT_TOKEN');
+    expect(resolveTokenEnvKey(decl('discord'), env({ DISCORD_TOKEN: 'x' }))).toBe('DISCORD_TOKEN');
+  });
+
+  it('prefers declaration order when both are set', () => {
+    expect(resolveTokenEnvKey(decl('discord'), env({ DISCORD_TOKEN: 'a', DISCORD_BOT_TOKEN: 'b' })))
+      .toBe('DISCORD_TOKEN');
+  });
+
+  it('returns null when none is set', () => {
+    expect(resolveTokenEnvKey(decl('discord'), env({}))).toBeNull();
+  });
+
+  it('every enabled token-based channel resolves a key — else the adapter reads the wrong var', () => {
+    for (const c of GATEWAY_CHANNELS) {
+      if (c.tokenEnvKeys.length === 0) continue;
+      const e: Record<string, string> = {};
+      if (c.enableFlag) e[c.enableFlag] = '1';
+      for (const k of c.requiresAllOf ?? c.tokenEnvKeys.slice(0, 1)) e[k] = 'set';
+      expect(resolveTokenEnvKey(c, env(e)), c.id).not.toBeNull();
+    }
   });
 });
 
