@@ -41,8 +41,9 @@ export type { ReasoningSummary, AgentAction } from './reasoning-summary.js';
 export { TaskTracker, taskTracker } from './task-tracker.js';
 export type { TrackedTask, TaskStatus } from './task-tracker.js';
 
-// Upgrade 24: Response Compressor
-export { compressResponse, removeFiller } from './response-compressor.js';
+// Upgrade 24: Response Compressor — REMOVED 2026-08-06, see
+// docs/SCAFFOLDING_AUDIT.md (S-U1). Dead filler-stripping regex chain: zero
+// call sites, zero tests, never wired into the loop.
 
 // Upgrade 25: Special User Requests
 export { detectSpecialRequest, getSpecialRequestHint } from './special-requests.js';
