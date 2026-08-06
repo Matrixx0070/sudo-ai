@@ -3251,18 +3251,6 @@ ${question}`, kb);
   //     opt-in model as Discord/Slack). One shared turn handler serves all
   //     three; the router serializes per chat and contains handler errors.
   // -------------------------------------------------------------------------
-  // ADR 0010 D3 stage 2: derived from the registry rather than restating each
-  // channel's key combination here. These four duplicated the registry's own
-  // requiresAllOf / enableFlag rules — two copies of the same logic is how the
-  // gatewayFinalize expression drifted from the adapter gates in the first
-  // place. (iMessage remains macOS-only + opt-in via SUDO_IMESSAGE_ENABLE; the
-  // adapter self-no-ops off-macOS. That rule now lives in the declaration.)
-  const extraChannelEnv = {
-    irc: channelOn(CHANNEL_DECLS.find((c) => c.id === 'irc')!, process.env),
-    matrix: channelOn(CHANNEL_DECLS.find((c) => c.id === 'matrix')!, process.env),
-    signal: channelOn(CHANNEL_DECLS.find((c) => c.id === 'signal')!, process.env),
-    imessage: channelOn(CHANNEL_DECLS.find((c) => c.id === 'imessage')!, process.env),
-  };
   // Gateway finalize — runs when ANY gateway-managed channel is enabled: the
   // extra channels (irc/matrix/signal/imessage) OR Discord/Slack/WhatsApp, which
   // registered themselves on the shared router above and are started here.
@@ -3337,21 +3325,13 @@ ${question}`, kb);
         return false;
       });
 
-      if (extraChannelEnv.irc) {
-        const { IRCAdapter } = await import('./core/channels/irc.js');
-        router.registerAdapter(new IRCAdapter());
-      }
-      if (extraChannelEnv.matrix) {
-        const { MatrixAdapter } = await import('./core/channels/matrix.js');
-        router.registerAdapter(new MatrixAdapter());
-      }
-      if (extraChannelEnv.signal) {
-        const { SignalAdapter } = await import('./core/channels/signal.js');
-        router.registerAdapter(new SignalAdapter());
-      }
-      if (extraChannelEnv.imessage) {
-        const { IMessageAdapter } = await import('./core/channels/imessage-adapter.js');
-        router.registerAdapter(new IMessageAdapter());
+      // ADR 0010 D3 stage 2: these four self-register from their declarations.
+      // They use registerRouterOnly (NOT wireAdapter) — approvals for them come
+      // from the generic router.registeredChannels loop just below, so full
+      // wiring would double-register. Order is preserved: still before that loop.
+      for (const id of ['irc', 'matrix', 'signal', 'imessage'] as const) {
+        const d = CHANNEL_DECLS.find((c) => c.id === id)!;
+        if (channelOn(d, process.env)) await d.start?.(channelRuntimeDeps, null);
       }
 
       if (chatApprovals) {

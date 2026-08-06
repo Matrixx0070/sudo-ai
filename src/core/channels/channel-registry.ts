@@ -83,6 +83,16 @@ async function registerOnGatewayRouter(adapter: WireableAdapter): Promise<void> 
   gw.registerAdapter(adapter);
 }
 
+/**
+ * Router-only registration. irc/matrix/signal/imessage deliberately do NOT get
+ * outbound registration, a hook emitter, or a direct approval-sender: approvals
+ * for them are handled by a generic loop over router.registeredChannels. Using
+ * wireAdapter() here would silently ADD wiring the inline blocks never did.
+ */
+export async function registerRouterOnly(adapter: ChannelAdapter): Promise<void> {
+  await registerOnGatewayRouter(adapter);
+}
+
 /** Shared wiring every channel does identically once its adapter exists. */
 async function wireAdapter(
   id: string,
@@ -134,12 +144,35 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
       deps.log.info('SMS registered on gateway router (started at gateway finalize)');
     },
   },
-  { id: 'irc', tokenEnvKeys: ['IRC_SERVER'], requiresAllOf: ['IRC_SERVER', 'IRC_NICK'] },
-  { id: 'matrix', tokenEnvKeys: ['MATRIX_HOMESERVER'], requiresAllOf: ['MATRIX_HOMESERVER', 'MATRIX_ACCESS_TOKEN'] },
-  { id: 'signal', tokenEnvKeys: ['SIGNAL_PHONE_NUMBER'] },
+  { id: 'irc', tokenEnvKeys: ['IRC_SERVER'], requiresAllOf: ['IRC_SERVER', 'IRC_NICK'],
+    async start(deps) {
+      const { IRCAdapter } = await import('./irc.js');
+      await registerRouterOnly(new IRCAdapter());
+      deps.log.info('irc registered on gateway router');
+    },
+  },
+  { id: 'matrix', tokenEnvKeys: ['MATRIX_HOMESERVER'], requiresAllOf: ['MATRIX_HOMESERVER', 'MATRIX_ACCESS_TOKEN'],
+    async start(deps) {
+      const { MatrixAdapter } = await import('./matrix.js');
+      await registerRouterOnly(new MatrixAdapter());
+      deps.log.info('matrix registered on gateway router');
+    },
+  },
+  { id: 'signal', tokenEnvKeys: ['SIGNAL_PHONE_NUMBER'],
+    async start(deps) {
+      const { SignalAdapter } = await import('./signal.js');
+      await registerRouterOnly(new SignalAdapter());
+      deps.log.info('signal registered on gateway router');
+    },
+  },
   {
     id: 'imessage', tokenEnvKeys: [], enableFlag: 'SUDO_IMESSAGE_ENABLE',
     note: 'macOS-only (polls chat.db, needs Full Disk Access); opt-in so it never auto-starts on the wrong host',
+    async start(deps) {
+      const { IMessageAdapter } = await import('./imessage-adapter.js');
+      await registerRouterOnly(new IMessageAdapter());
+      deps.log.info('imessage registered on gateway router');
+    },
   },
 ];
 
