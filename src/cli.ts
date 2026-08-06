@@ -3276,11 +3276,12 @@ ${question}`, kb);
   // Gateway finalize — runs when ANY gateway-managed channel is enabled: the
   // extra channels (irc/matrix/signal/imessage) OR Discord/Slack/WhatsApp, which
   // registered themselves on the shared router above and are started here.
-  const gatewayFinalize =
-    extraChannelEnv.irc || extraChannelEnv.matrix || extraChannelEnv.signal || extraChannelEnv.imessage ||
-    Boolean(process.env['DISCORD_TOKEN']) || Boolean(process.env['SLACK_BOT_TOKEN']) ||
-    (process.env['SUDO_WHATSAPP_ENABLE'] === '1' && Boolean(process.env['WHATSAPP_TOKEN'])) ||
-    Boolean(process.env['EMAIL_IMAP_USER']) || Boolean(process.env['TWILIO_ACCOUNT_SID']);
+  // ADR 0010 D3: derived from the channel registry, not restated here. The old
+  // hand-written expression had to be edited in lockstep with the adapter block
+  // above — miss it and a channel registers on the router and never starts.
+  const { anyGatewayChannelEnabled, enabledChannelIds } = await import('./core/channels/channel-registry.js');
+  const gatewayFinalize = anyGatewayChannelEnabled(process.env);
+  if (gatewayFinalize) log.info({ channels: enabledChannelIds(process.env) }, 'Gateway channels enabled');
   if (gatewayFinalize) {
     try {
       const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
