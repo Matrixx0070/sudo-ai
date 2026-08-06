@@ -241,9 +241,34 @@ Full accounting of the justification for isolating `DATA_DIR`:
 | `trust.db` | `delete`, 1,154 writes/day | 3.2 s/day total |
 | `veto-overrides.db` | `delete`, **0 rows, never written** | none |
 
-The stated reason for the workaround is, in full, 3.2 seconds per day
-attributable to a single database — and none of it to two of the three named.
-There is no remaining argument for the override.
+### Do not inherit the comment's framing — surveyed all 21 databases
+
+The accounting above trusts `agent-loop-adapter.ts:71` to have named the right
+databases. It did not. Surveying `PRAGMA journal_mode` across every DB in
+`data/` finds **six** in `delete` mode, and the comment names the two harmless
+ones while missing an active one:
+
+| `delete`-mode db | size | writes/day | cost @ 2.79 ms |
+|---|---|---|---|
+| `trust.db` | 3.6 MB | 1,154 | 3.22 s/day |
+| **`calibration.db`** | **1.5 MB** | **760** | **2.12 s/day** |
+| `resolutions.db` | 20 KB | ~0 (last write Jun 29) | 0 |
+| `veto-overrides.db` | 24 KB | 0 (never) | 0 |
+| `billing.db`, `cron.db` | **0 bytes** | 0 | 0 |
+
+`calibration.db` is written by `verify-gate.ts` on the **per-tool-call** path —
+squarely in the AgentLoop the TUI runs — and appears nowhere in the comment that
+justifies the isolation.
+
+**Corrected total: 1,914 writes/day ≈ 5.34 s/day** across all `delete`-mode
+stores, up from the 3.2 s/day figure derived from the comment's list.
+
+The conclusion survives the correction: 5.3 seconds per day still does not
+justify a workaround that forks credential resolution. Two of the six are 0-byte
+files, and one has never been written in 67 days.
+
+If WAL is ever applied opportunistically, apply it to `trust.db` **and
+`calibration.db`** — the comment's list would have missed 40% of the real cost.
 
 **Revised priority:**
 
