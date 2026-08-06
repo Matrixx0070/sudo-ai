@@ -16,7 +16,7 @@
  *   await agent.cleanup();
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, existsSync } from 'node:fs';
 import { createLogger } from '../shared/logger.js';
 
@@ -57,17 +57,21 @@ export interface IsolatedAgent {
 // ---------------------------------------------------------------------------
 
 /**
- * Run a shell command synchronously, capturing stdout.
+ * Run `git` synchronously with an argv ARRAY (no shell), capturing stdout.
  * Returns empty string on failure instead of throwing.
  *
- * @param cmd     - Shell command string.
+ * argv-array form means branch names and paths are inert data: a value
+ * containing `;`, backticks or `$(...)` reaches git as one literal argument
+ * and cannot start a second command.
+ *
+ * @param args    - git arguments, one per array entry.
  * @param cwd     - Working directory for the command.
  */
-function tryExec(cmd: string, cwd: string): string {
+function tryGit(args: string[], cwd: string): string {
   try {
-    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch (err) {
-    log.debug({ cmd, cwd, err: String(err) }, 'tryExec: command failed (non-fatal)');
+    log.debug({ args, cwd, err: String(err) }, 'tryGit: command failed (non-fatal)');
     return '';
   }
 }
@@ -78,7 +82,7 @@ function tryExec(cmd: string, cwd: string): string {
  * @param dir - Directory to test.
  */
 function isInsideGitRepo(dir: string): boolean {
-  const out = tryExec('git rev-parse --is-inside-work-tree', dir);
+  const out = tryGit(['rev-parse', '--is-inside-work-tree'], dir);
   return out === 'true';
 }
 
@@ -186,7 +190,7 @@ function _createWorktreeAgent(): IsolatedAgent {
   // Create the worktree — adds a new branch and checks it out in workdir.
   // We create the branch from HEAD so the sub-agent starts with a full copy.
   try {
-    execSync(`git worktree add -b ${branch} ${workdir} HEAD`, {
+    execFileSync('git', ['worktree', 'add', '-b', branch, workdir, 'HEAD'], {
       cwd,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -207,9 +211,9 @@ function _createWorktreeAgent(): IsolatedAgent {
       cleaned = true;
       try {
         // Remove the worktree — this also deletes the directory.
-        tryExec(`git worktree remove --force ${workdir}`, cwd);
+        tryGit(['worktree', 'remove', '--force', workdir], cwd);
         // Delete the branch (best-effort — it may already be gone).
-        tryExec(`git branch -D ${branch}`, cwd);
+        tryGit(['branch', '-D', branch], cwd);
         log.info({ branch, workdir }, 'Git worktree removed');
       } catch (err) {
         log.warn({ branch, workdir, err: String(err) }, 'Worktree cleanup failed — manual cleanup may be needed');

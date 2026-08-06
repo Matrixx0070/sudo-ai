@@ -48,6 +48,48 @@ afterEach(async () => {
   await fs.rm(path.dirname(repoRoot), { recursive: true, force: true }).catch(() => undefined);
 });
 
+describe('shell-metacharacter inertness (argv-array exec)', () => {
+  // The prune path builds a git argument from a directory name read off disk
+  // with readdir(). The base dir defaults under os.tmpdir(), which is
+  // world-writable, so that name is attacker-influenced. With shell-string
+  // exec, a crafted name closes the quote and runs a second command.
+  // NOTE: the payload must contain no '/', or path.join would turn it into
+  // nested directories and the readdir entry would be truncated.
+  it('does not execute a command embedded in a worktree directory name', async () => {
+    const evilDir = path.join(baseDir, `${WORKTREE_PREFIX}a"; touch PWNED_SENTINEL; echo "`);
+    await fs.mkdir(evilDir, { recursive: true });
+    // Age it past STALE_AFTER_MS (1h) so prune actually acts on it.
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    await fs.utimes(evilDir, old, old);
+
+    // Sanity: the entry survived on disk verbatim, so the payload really is
+    // present in the string prune feeds to git.
+    expect(await fs.readdir(baseDir)).toContain(`${WORKTREE_PREFIX}a"; touch PWNED_SENTINEL; echo "`);
+
+    const removed = await pruneAutoFixWorktrees({ repoRoot, baseDir });
+    expect(removed).toBe(1);
+
+    // removeWorktree runs git with cwd=repoRoot, so a shell would drop the file there.
+    await expect(fs.stat(path.join(repoRoot, 'PWNED_SENTINEL'))).rejects.toThrow();
+  });
+
+  it('passes a branch name containing metacharacters to git as one literal argument', async () => {
+    let branchInWorktree = '';
+    await withAutoFixWorktree(
+      'auto-fix/9-x; touch PWNED_BRANCH',
+      async ({ dir }) => {
+        const { stdout } = await sh('git rev-parse --abbrev-ref HEAD', { cwd: dir });
+        branchInWorktree = stdout.trim();
+      },
+      { repoRoot, baseDir },
+    );
+
+    // Sanitiser still collapses metacharacters to '-'; argv is the second wall.
+    expect(branchInWorktree).not.toContain(';');
+    await expect(fs.stat(path.join(repoRoot, 'PWNED_BRANCH'))).rejects.toThrow();
+  });
+});
+
 describe('withAutoFixWorktree', () => {
   it('creates a worktree on the requested branch and leaves main HEAD untouched', async () => {
     const before = await head();
