@@ -22,7 +22,7 @@ import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { writeFileAtomic } from '../core/shared/atomic-write.js';
 import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { dataPath } from '../core/shared/paths.js';
+import { credentialPath } from '../core/shared/paths.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('brain:claude-oauth');
@@ -77,7 +77,7 @@ const MODELS_TTL_MS = 24 * 60 * 60 * 1000;
  */
 const REFRESH_CLIENT_ID = CLAUDE_CODE_CLIENT_ID;
 
-const DEFAULT_STORE_PATH = dataPath('claude-oauth.json');
+const DEFAULT_STORE_PATH = credentialPath('claude-oauth.json');
 
 /** Refresh the token this many ms before it expires (10 minutes). */
 const REFRESH_BUFFER_MS = 10 * 60 * 1000;

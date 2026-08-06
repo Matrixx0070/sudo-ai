@@ -34,6 +34,7 @@ import {
 } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { CREDENTIAL_DIR } from '../shared/paths.js';
 
 /** On-disk shape of `device-identity.json`. */
 export interface PersistedDeviceIdentity {
@@ -61,8 +62,14 @@ export interface DeviceIdentity {
   verifyOwn(payload: Buffer | string, signatureB64Url: string): boolean;
 }
 
-/** Default file path under DATA_DIR. */
-export function defaultIdentityPath(dataDir: string): string {
+/**
+ * Default device-identity file path.
+ *
+ * Defaults to the IDENTITY root (ADR 0011) — this file IS the device's
+ * principal, so it must not follow a state-isolation override. Callers may
+ * still pass an explicit directory (tests, tooling).
+ */
+export function defaultIdentityPath(dataDir: string = CREDENTIAL_DIR): string {
   return path.join(dataDir, 'device-identity.json');
 }
 

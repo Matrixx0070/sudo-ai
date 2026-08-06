@@ -33,6 +33,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createLogger } from '../shared/logger.js';
+import { credentialPath } from '../shared/paths.js';
 
 const log = createLogger('youtube:auth');
 
@@ -41,7 +42,10 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 /** Refresh this many ms before the real expiry so an in-flight call never races it. */
 const EXPIRY_SKEW_MS = 60_000;
 
-const DEFAULT_TOKEN_FILE = 'data/youtube-oauth.json';
+// ADR 0011: the OAuth cache is principal identity, so it resolves through the
+// identity root instead of a cwd-relative 'data/...' literal that ignored
+// DATA_DIR entirely (and so read prod credentials under staging).
+const DEFAULT_TOKEN_FILE = credentialPath('youtube-oauth.json');
 
 /** Shape persisted to YOUTUBE_TOKEN_FILE. Never contains the client secret. */
 export interface YouTubeTokenCache {
