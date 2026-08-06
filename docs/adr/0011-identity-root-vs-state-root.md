@@ -144,9 +144,34 @@ SQLite locks are **per connection, not per process**. In rollback-journal
 `delete` mode — lets the daemon contend with itself, today, with no TUI
 involved.**
 
-This strengthens step 0 rather than changing it: the WAL + `busy_timeout` fix is
-worth doing on its own merits for intra-process contention in production,
-independent of whether the TUI ever shares `data/`.
+### Measured: the contention story is WRONG, the fix is still right
+
+Ran two concurrent writer processes against scratch DBs, mirroring `loop.ts:442`
+(plain `new Database()`, no explicit pragma), 300 transactions each:
+
+| journal_mode | solo | 2 concurrent | SQLITE_BUSY |
+|---|---|---|---|
+| `delete` | **879 ms** | 926 / 1763 ms | **0** |
+| `wal` | **2 ms** | 4 / 6 ms | **0** |
+
+Corrections this forces:
+
+- **No lock errors occur, in either mode.** better-sqlite3 defaults
+  `busy_timeout = 5000`, so writers *wait* rather than fail. The earlier claim
+  that these stores "have no busy_timeout" was wrong — they inherit the driver
+  default.
+- **Contention is not the dominant cost.** `delete` solo is already 879 ms with
+  no concurrency at all. The overhead is rollback-journal fsync per
+  transaction — **~440× slower per write than WAL** — not waiting on another
+  process. (Writers do serialize: B finishes at ~2× solo. But SQLite serialises
+  writers in WAL too, where it costs microseconds.)
+- **Therefore `DATA_DIR` isolation never addressed the real problem.** A private
+  copy of `trust.db` is still in `delete` mode and still pays 2.9 ms/write. The
+  isolation bought little and cost a credential-resolution hazard.
+
+So step 0 stands, but its justification changes: apply WAL for **write
+throughput**, not to prevent lock errors. That is a stronger argument — it
+improves production today and is independent of any TUI decision.
 
 It also surfaces the next layer down, out of scope here: **the state layer has no
 connection ownership model.** 12 connections to `mind.db` from one process is
