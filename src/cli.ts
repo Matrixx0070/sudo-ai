@@ -2876,6 +2876,15 @@ ${question}`, kb);
   const { GATEWAY_CHANNELS: CHANNEL_DECLS, isChannelEnabled: channelOn, resolveTokenEnvKey } =
     await import('./core/channels/channel-registry.js');
   const discordDecl = CHANNEL_DECLS.find((c) => c.id === 'discord')!;
+  // Runtime handles a self-starting channel needs. Threading THESE — not the
+  // adapters — is what kept construction stuck in cli.ts (D3 stage 2 handoff).
+  const channelRuntimeDeps = {
+    registerOutboundAdapter,
+    hooks,
+    chatApprovals,
+    approvalManager,
+    log,
+  };
   if (channelOn(discordDecl, process.env)) {
     try {
       const { DiscordAdapter } = await import('./core/channels/discord.js');
@@ -3221,22 +3230,13 @@ ${question}`, kb);
   // -------------------------------------------------------------------------
   // 7.6 Email channel adapter (conditional)
   // -------------------------------------------------------------------------
-  if (channelOn(CHANNEL_DECLS.find((c) => c.id === 'email')!, process.env)) {
+  // ADR 0010 D3 stage 2: FIRST channel whose construction lives in its own
+  // declaration rather than inline here. cli.ts no longer knows what an email
+  // adapter is — only that a declared channel is enabled and can start itself.
+  const emailDecl = CHANNEL_DECLS.find((c) => c.id === 'email')!;
+  if (channelOn(emailDecl, process.env)) {
     try {
-      const { EmailAdapter } = await import('./core/channels/email.js');
-      const email = new EmailAdapter();
-      registerOutboundAdapter(email);
-      email.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('email', email);
-
-      // Feature 1 — register Email FULLY on the shared gateway router (async,
-      // no streaming — fits the ONE handler cleanly). Started at gateway finalize.
-      {
-        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
-        const gw = getGlobalMessageRouter() ?? new MessageRouter();
-        setGlobalMessageRouter(gw);
-        gw.registerAdapter(email);
-      }
-      log.info('Email registered on gateway router (started at gateway finalize)');
+      await emailDecl.start?.(channelRuntimeDeps, resolveTokenEnvKey(emailDecl, process.env));
     } catch (err) {
       log.warn({ err: String(err) }, 'Email adapter failed to start (non-fatal)');
     }
