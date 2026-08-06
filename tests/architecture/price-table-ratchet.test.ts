@@ -118,6 +118,27 @@ describe('price-table ratchet — the catalog is the single source', () => {
   });
 });
 
+describe('seat-list ratchet — the pair whose disagreement caused two outages', () => {
+  /** A literal list of seat/subscription lane prefixes. */
+  const SEAT_LIST = /\[\s*['"]claude-oauth\//;
+
+  it('the seat lane list is declared in exactly ONE file', () => {
+    const files = [...countRows(process.cwd(), SEAT_LIST).keys()];
+    expect(
+      files,
+      `The seat list must exist once (model-catalog.ts SEAT_LANE_PREFIXES). Two ` +
+      `copies drifting is what priced flat-subscription calls as dollars twice: ` +
+      `418 calls booked as "$51" blew a $50 cap, and ollama :cloud mispricing ` +
+      `booked ~$473 of phantom spend and took the product down.`,
+    ).toEqual(['src/llm/model-catalog.ts']);
+  });
+
+  it('the seat detector catches a planted second list', () => {
+    expect(SEAT_LIST.test(`const SEAT = ['claude-oauth/', 'ollama/'] as const;`)).toBe(true);
+    expect(SEAT_LIST.test(`  if (isSeatLane(model)) return 0;`)).toBe(false);
+  });
+});
+
 describe('limit-table ratchet — context windows have one source too', () => {
   const counts = countRows(process.cwd(), LIMIT_ROW);
 

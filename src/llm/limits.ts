@@ -19,7 +19,7 @@
  */
 
 import { resolveAlias, SUDO_ALIASES, type SudoAlias } from './aliases.js';
-import { rateFor as catalogRateFor, meteredCostUsd } from './model-catalog.js';
+import { rateFor as catalogRateFor, meteredCostUsd, isSeatLane } from './model-catalog.js';
 import type { IRRequest, IRMessage, IRContentBlock } from '../../shared-types/ir/v1.js';
 
 export interface AliasLimits {
@@ -269,7 +269,10 @@ interface PriceRate {
 // spend cap into a total product outage. Seat classification also subjects
 // ollama to the policy layer's call-count ceiling, which is the brake that
 // actually matches a quota-based plan (dollars never bounded it).
-const SEAT_PROVIDERS = ['claude-oauth/', 'claude-oauth:', 'ollama/', 'ollama:'] as const;
+// The seat list itself now lives ONCE, in model-catalog.ts SEAT_LANE_PREFIXES.
+// Two copies of it was the highest-consequence drift left in the codebase:
+// this pair disagreeing is what priced seat calls as dollars twice (see the
+// incident notes above — "$51" phantom / ~$473 phantom + product outage).
 const SEAT_PRICE: PriceRate = { inUsdPerM: 0.0, outUsdPerM: 0.0 };
 
 /**
@@ -278,7 +281,7 @@ const SEAT_PRICE: PriceRate = { inUsdPerM: 0.0, outUsdPerM: 0.0 };
  * "counted against the seat ceiling" can never drift apart.
  */
 export function isSeatKey(key: string): boolean {
-  return SEAT_PROVIDERS.some((p) => key.startsWith(p));
+  return isSeatLane(key);
 }
 
 function priceFor(model: string): PriceRate {
