@@ -16,7 +16,9 @@
 import { createLogger } from '../shared/logger.js';
 import type { ErrorMemory } from '../health/error-memory.js';
 import type { GitHubRepo } from '../tools/builtin/dev/github-integration.js';
-import { createPR, createBranch, getRepoInfo } from '../tools/builtin/dev/github-integration.js';
+import { createPR, getRepoInfo } from '../tools/builtin/dev/github-integration.js';
+import { withAutoFixWorktree, WorktreeSetupError } from './git-worktree.js';
+import type { WorktreeOptions } from './git-worktree.js';
 
 const log = createLogger('self-build:auto-fix-trigger');
 
@@ -55,6 +57,11 @@ export interface AutoFixTriggerDeps {
     prepare<T = unknown>(sql: string): { run(params: Record<string, unknown>): { lastInsertRowid: number | bigint }; get(params: Record<string, unknown>): T | undefined; all(params: Record<string, unknown>): T[] };
     exec(sql: string): void;
   };
+  /**
+   * Override the git worktree location used by the unattended fix flow.
+   * Production leaves this unset (repo root auto-detected, OS temp dir).
+   */
+  worktreeOptions?: WorktreeOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +159,7 @@ export class AutoFixTrigger {
   private readonly metricsCollector: AutoFixTriggerDeps['metricsCollector'];
   private readonly mindDb?: AutoFixTriggerDeps['mindDb'];
   private readonly repoInfo: GitHubRepo | null;
+  private readonly worktreeOptions?: WorktreeOptions;
 
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private readonly pollIntervalMs: number;
@@ -161,6 +169,7 @@ export class AutoFixTrigger {
     this.errorMemory = deps.errorMemory;
     this.metricsCollector = deps.metricsCollector;
     this.mindDb = deps.mindDb;
+    this.worktreeOptions = deps.worktreeOptions;
     this.repoInfo = null; // Will be fetched on first run
     this.pollIntervalMs = pollIntervalMs;
 
@@ -351,19 +360,42 @@ export class AutoFixTrigger {
     errorPath: string,
     suggestedFix: string,
   ): Promise<{ success: boolean; reason?: string }> {
-    try {
-      // Create branch name
-      const shortDesc = slugify(issue.title, 30);
-      const branchName = `auto-fix/${issue.number}-${shortDesc}`;
+    // Create branch name
+    const shortDesc = slugify(issue.title, 30);
+    const branchName = `auto-fix/${issue.number}-${shortDesc}`;
 
-      // Create branch
-      const branchResult = await createBranch(branchName);
-      if (branchResult.startsWith('ERROR:')) {
-        log.error({ issueNumber: issue.number, err: branchResult }, '_triggerFix: branch creation failed');
+    try {
+      // This is an unattended cron path: it must NEVER `git checkout` in the
+      // shared working tree (that has corrupted a live test run and destroyed
+      // an in-progress merge). Everything branch-scoped happens in a linked
+      // worktree that is removed unconditionally afterwards.
+      return await withAutoFixWorktree(branchName, (worktree) =>
+        this._openFixPR(issue, severity, errorSignature, errorPath, suggestedFix, branchName, worktree.dir),
+        this.worktreeOptions,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof WorktreeSetupError) {
+        log.error({ issueNumber: issue.number, err: msg }, '_triggerFix: branch creation failed');
         return { success: false, reason: 'branch-failed' };
       }
+      log.error({ issueNumber: issue.number, err: msg }, '_triggerFix: unexpected error');
+      return { success: false, reason: 'unexpected-error' };
+    }
+  }
 
-      log.info({ branchName }, '_triggerFix: branch created');
+  /** PR half of {@link _triggerFix}, running entirely inside `worktreeDir`. */
+  private async _openFixPR(
+    issue: GitHubIssue,
+    severity: string,
+    errorSignature: string,
+    errorPath: string,
+    suggestedFix: string,
+    branchName: string,
+    worktreeDir: string,
+  ): Promise<{ success: boolean; reason?: string }> {
+    try {
+      log.info({ branchName, worktreeDir }, '_triggerFix: branch created in isolated worktree');
 
       // Persist attempt to database
       this._logAttempt({
@@ -395,6 +427,7 @@ export class AutoFixTrigger {
         body: prBody,
         branch: branchName,
         base: 'main',
+        cwd: worktreeDir,
       });
 
       if (prResult.startsWith('ERROR:')) {

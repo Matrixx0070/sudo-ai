@@ -26,6 +26,12 @@ export interface GitHubPR {
   branch: string;
   /** Target branch (defaults to 'main') */
   base?: string;
+  /**
+   * Directory to run `gh` in. Defaults to the process cwd (the main checkout).
+   * The unattended auto-fix flow passes its isolated worktree so that `gh`
+   * resolves the repo/branch from there instead of the shared working tree.
+   */
+  cwd?: string;
 }
 
 export interface GitHubRepo {
@@ -63,11 +69,12 @@ export async function createPR(pr: GitHubPR): Promise<string> {
   const safeBody = pr.body.replace(/"/g, '\\"');
   const safeBranch = sanitizeBranchName(pr.branch);
 
-  log.info({ title: pr.title, branch: safeBranch, base }, 'Creating PR');
+  log.info({ title: pr.title, branch: safeBranch, base, cwd: pr.cwd }, 'Creating PR');
 
   try {
     const { stdout } = await execAsync(
       `gh pr create --title "${safeTitle}" --body "${safeBody}" --head "${safeBranch}" --base "${base}"`,
+      { encoding: 'utf8', ...(pr.cwd ? { cwd: pr.cwd } : {}) },
     );
     const url = stdout.trim();
     log.info({ url }, 'PR created');
