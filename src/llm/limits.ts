@@ -19,6 +19,7 @@
  */
 
 import { resolveAlias, SUDO_ALIASES, type SudoAlias } from './aliases.js';
+import { rateFor as catalogRateFor, meteredCostUsd } from './model-catalog.js';
 import type { IRRequest, IRMessage, IRContentBlock } from '../../shared-types/ir/v1.js';
 
 export interface AliasLimits {
@@ -323,15 +324,12 @@ export function isSeatKey(key: string): boolean {
 
 function priceFor(model: string): PriceRate {
   const resolved = resolveAlias(model);
+  // ADR 0010 D2: the catalog is the single source. Seat lanes still resolve to
+  // $0 here — that is the rule two outages were caused by breaking
+  // (see the SEAT_PROVIDERS comment above and model-catalog.ts).
   if (isSeatKey(resolved) || isSeatKey(model)) return SEAT_PRICE;
-  const direct = PRICE_TABLE[resolved] ?? PRICE_TABLE[model];
-  if (direct) return direct;
-  // Bare-model match (provider prefix differs, e.g. xai-oauth vs xai).
-  const bare = bareModel(resolved);
-  for (const [k, v] of Object.entries(PRICE_TABLE)) {
-    if (bareModel(k) === bare) return v;
-  }
-  return DEFAULT_PRICE;
+  const rate = catalogRateFor(resolved);
+  return { inUsdPerM: rate.inUsdPerM, outUsdPerM: rate.outUsdPerM };
 }
 
 /**
@@ -341,10 +339,13 @@ function priceFor(model: string): PriceRate {
  * concrete `provider/model` id. Ollama / unknown-free models cost 0.
  */
 export function estimateCostUsd(model: string, tokensIn: number, tokensOut: number): number {
-  const rate = priceFor(model);
+  const resolved = resolveAlias(model);
   const tin = Number.isFinite(tokensIn) && tokensIn > 0 ? tokensIn : 0;
   const tout = Number.isFinite(tokensOut) && tokensOut > 0 ? tokensOut : 0;
-  return (tin / 1_000_000) * rate.inUsdPerM + (tout / 1_000_000) * rate.outUsdPerM;
+  // This feeds the DAILY BUDGET, so it must be REAL money: seat lanes are $0
+  // by classification (never by a $0 price), and tiered models are honoured.
+  if (isSeatKey(resolved) || isSeatKey(model)) return 0;
+  return meteredCostUsd(resolved, { inputTokens: tin, outputTokens: tout });
 }
 
 // ---------------------------------------------------------------------------

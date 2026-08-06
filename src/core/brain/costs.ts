@@ -23,6 +23,7 @@
  */
 
 import type { TokenUsage } from './types.js';
+import { notionalCostUsd } from '../../llm/model-catalog.js';
 import type { EnergyEstimate } from '../shared/wave10-types.js';
 
 // ---------------------------------------------------------------------------
@@ -232,13 +233,19 @@ export function estimateCost(
   cacheReadTokens = 0,
   cacheCreationTokens = 0,
 ): number {
-  const rate = resolveCostRate(modelId);
-  const cachedPortion = Math.max(0, cacheReadTokens) + Math.max(0, cacheCreationTokens);
-  const nonCachedInput = Math.max(0, promptTokens - cachedPortion);
-  return (nonCachedInput / 1_000_000) * rate.inputPerM +
-         (Math.max(0, cacheReadTokens) / 1_000_000) * rate.inputPerM * CACHE_READ_MULTIPLIER +
-         (Math.max(0, cacheCreationTokens) / 1_000_000) * rate.inputPerM * CACHE_WRITE_MULTIPLIER +
-         (outputTokens / 1_000_000) * rate.outputPerM;
+  // ADR 0010 D2: delegate to the single catalog. This is the NOTIONAL path
+  // (reporting): it deliberately prices a claude-oauth seat call at Anthropic
+  // list rates, which is why its result must never gate a budget — use
+  // limits.estimateCostUsd / meteredCostUsd for money. Delegating also fixes
+  // two live bugs this local table had: `ollama/*` had no row and fell to
+  // $5/$20 (the ~$473 phantom-spend pattern), and the judge's DATED id
+  // (claude-haiku-4-5-20251001) missed the BARE key here and was billed 5x.
+  return notionalCostUsd(modelId, {
+    inputTokens: Math.max(0, promptTokens),
+    outputTokens: Math.max(0, outputTokens),
+    cacheReadTokens: Math.max(0, cacheReadTokens),
+    cacheCreationTokens: Math.max(0, cacheCreationTokens),
+  });
 }
 
 /**
