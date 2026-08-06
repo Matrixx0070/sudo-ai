@@ -103,7 +103,17 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   // DISCORD_BOT_TOKEN is what config/sudo-ai.json5 documents; DISCORD_TOKEN is
   // what the code has always read. Accept both so the documented name works.
   { id: 'discord', tokenEnvKeys: ['DISCORD_TOKEN', 'DISCORD_BOT_TOKEN'] },
-  { id: 'slack', tokenEnvKeys: ['SLACK_BOT_TOKEN'] },
+  {
+    id: 'slack', tokenEnvKeys: ['SLACK_BOT_TOKEN'],
+    // SlackAdapter reads SLACK_BOT_TOKEN + SLACK_APP_TOKEN from env itself, and
+    // has NO setHookEmitter — wireAdapter's optional call is a no-op for it, so
+    // migrating adds no hook wiring the inline block did not do.
+    async start(deps) {
+      const { SlackAdapter } = await import('./slack.js');
+      await wireAdapter('slack', new SlackAdapter(), deps);
+      deps.log.info('Slack registered on gateway router (started at gateway finalize)');
+    },
+  },
   { id: 'whatsapp', tokenEnvKeys: ['WHATSAPP_TOKEN'], enableFlag: 'SUDO_WHATSAPP_ENABLE' },
   {
     id: 'email', tokenEnvKeys: ['EMAIL_IMAP_USER'],
