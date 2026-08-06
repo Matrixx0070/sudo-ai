@@ -22,6 +22,16 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+// Load-bearing: importing paths.js HERE captures the owner's real DATA_DIR at
+// module load, BEFORE _bootstrap() reassigns process.env['DATA_DIR'] below.
+// paths.js caches DATA_DIR at first import, and credential stores resolve
+// through it (`<DATA_DIR>/claude-oauth.json`), so if this module were the first
+// to pull paths.js the tokens would resolve inside the TUI's private state dir
+// — where a stale copy silently served turns from an 18-day-expired token.
+// This used to work only because App.tsx imports provider.js (which reaches
+// paths.js) first; that guarantee hung on one value import and is not a
+// contract anyone could see. Pinned by tests/cli/chat/adapter-data-dir.test.ts.
+import { DATA_DIR as OWNER_DATA_DIR } from '../../../core/shared/paths.js';
 import type { ProviderChunk } from './provider.js';
 import { dispatcher } from './dispatcher.js';
 import { toolNameToGerund } from './components/GerundSpinner.js';
@@ -79,6 +89,9 @@ export class TuiAgentAdapter {
 
     // Set DATA_DIR before constructing AgentLoop so all sub-modules that read it
     // (AuditTrail, VetoOverrideStore, TrustTierTracker, etc.) use the TUI-private path.
+    // Read OWNER_DATA_DIR before the override so the import above cannot be
+    // erased as unused — the capture it forces is the whole point.
+    process.stderr.write(`[tui-bootstrap] state=${tuiDataDir} identity=${OWNER_DATA_DIR}\n`);
     process.env['DATA_DIR'] = tuiDataDir;
 
     // --- Config ---
