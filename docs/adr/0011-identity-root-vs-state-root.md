@@ -225,6 +225,26 @@ The decisive conclusion is about the **workaround**, not the pragma:
 The isolation addresses ~5% of a 3.2 s/day cost and carries a credential
 hazard. That is a clear net loss, and it is now measured rather than argued.
 
+### Completeness: the third database has never been written
+
+`veto-overrides.db` — the other `delete`-mode store, and the third database the
+TUI comment names — holds **0 rows**, is 24 KB, and its mtime is
+**2026-05-31 22:24**, its creation date. Nothing has written it in 67 days. The
+daemon holds it open (confirmed via `/proc/<pid>/fd`), but an open connection
+that never writes takes no exclusive lock, so it contributes **zero** contention.
+
+Full accounting of the justification for isolating `DATA_DIR`:
+
+| db | state | contention contributed |
+|---|---|---|
+| `audit.db` | already `wal` | none |
+| `trust.db` | `delete`, 1,154 writes/day | 3.2 s/day total |
+| `veto-overrides.db` | `delete`, **0 rows, never written** | none |
+
+The stated reason for the workaround is, in full, 3.2 seconds per day
+attributable to a single database — and none of it to two of the three named.
+There is no remaining argument for the override.
+
 **Revised priority:**
 
 1. **Delete the TUI's `DATA_DIR` override** (`agent-loop-adapter.ts:82`) — it
