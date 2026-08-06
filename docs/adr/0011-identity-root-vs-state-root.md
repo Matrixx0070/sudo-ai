@@ -169,9 +169,29 @@ Corrections this forces:
   copy of `trust.db` is still in `delete` mode and still pays 2.9 ms/write. The
   isolation bought little and cost a credential-resolution hazard.
 
-So step 0 stands, but its justification changes: apply WAL for **write
-throughput**, not to prevent lock errors. That is a stronger argument — it
-improves production today and is independent of any TUI decision.
+Re-run against a **copy of the real `data/trust.db`** (3.6 MB, 32,270 rows, 1
+index, ext4 — the same filesystem as `data/`, so fsync behaviour matches):
+
+| journal_mode | solo | 2 concurrent | per write | SQLITE_BUSY |
+|---|---|---|---|---|
+| `delete` | 838 ms | 857 / 881 ms | **2.79 ms** | 0 |
+| `wal` | 4 ms | 7 / 23 ms | **0.01 ms** | 0 |
+
+The real-data run sharpens the conclusion:
+
+- **Concurrency costs 2–5%.** Two writer processes on the real DB finish in
+  857/881 ms against an 838 ms solo baseline. The synthetic run's apparent 2×
+  serialisation (1763 ms) did **not** reproduce — that was measurement noise.
+- **Journal mode costs ~280×** — 2.79 ms vs 0.01 ms per write.
+
+So the workaround and the problem are on different scales: `DATA_DIR` isolation
+addresses the 5% effect, while the 280× effect sits untouched in both the shared
+and the isolated copy. Step 0 (WAL) is the whole win; the isolation was never
+load-bearing.
+
+Justification for step 0 is therefore **write throughput**, not lock avoidance —
+a stronger case, applying to production today and independent of any TUI
+decision.
 
 It also surfaces the next layer down, out of scope here: **the state layer has no
 connection ownership model.** 12 connections to `mind.db` from one process is
