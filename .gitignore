@@ -77,22 +77,30 @@ test-hello.txt
 test-write-tmp.txt
 test-tools.ts
 test-brain.ts
-# Python scratch scripts (not part of the TS codebase)
-*.py
-# …except the textproc pure-python fallback layer (Spec 10) — shipped product code
-!src/core/tools/builtin/textproc/fallbacks/*.py
-!src/core/tools/builtin/docx/scripts/**/*.py
-!src/core/tools/builtin/pptx/scripts/**/*.py
-!src/core/tools/builtin/spreadsheet/scripts/*.py
-!src/core/tools/builtin/document/scripts/**/*.py
-!src/core/tools/builtin/media/scripts/**/*.py
-check_db.py
-heartbeat-check.py
-twitter_trends_sentiment.py
-hello.py
-# ...but the PTC-python harness IS part of the codebase (loaded as a runtime
-# asset by meta/ptc-python.ts and copied into dist by esbuild).
-!src/core/tools/builtin/code/ptc-python-harness.py
+# --- Python ---------------------------------------------------------------
+# Python SOURCE is tracked by default. Do NOT reintroduce a blanket `*.py`:
+# it used to require one `!` negation per vendored script tree (textproc
+# fallbacks, docx/pptx/spreadsheet/document/media scripts, the PTC harness,
+# grok-web, gemini-web), and a tree without a negation was silently dropped
+# from the shipped package. Ignore only genuine build/runtime artifacts plus
+# the four historical root scratch scripts, named by exact path.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Virtualenvs (data/ is already ignored wholesale; these cover other locations)
+.venv/
+venv/
+# Root-level scratch scripts, never product code.
+/check_db.py
+/heartbeat-check.py
+/twitter_trends_sentiment.py
+/hello.py
+# --------------------------------------------------------------------------
 temp_heartbeat_query.js
 # Raw text/html research dumps at root
 /*.html
@@ -184,13 +192,3 @@ gdrive-oauth-client*.json
 gdrive-oauth-token*.json
 brain-hmac.key
 brain-enc.key
-
-# GW2 grok-web replay bridge (python is the only impl lane; not a secret)
-!scripts/grok-web/*.py
-# gemini-web gpsoauth mint bridge (curl_cffi python; not a secret)
-!scripts/gemini-web/*.py
-
-# Python bytecode — never source. NB: line ~81 ignores *.py with negations
-# re-including vendored script trees; these two rules must not disturb that.
-__pycache__/
-*.pyc
